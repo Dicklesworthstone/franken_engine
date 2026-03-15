@@ -740,8 +740,9 @@ impl ArrayFastLaneEngine {
         if self.policy.emit_transition_receipts {
             let transition = lane.transitions.last().cloned().unwrap();
             let receipt = TransitionReceipt::new(array_id, transition, survived);
-            self.receipts.push(receipt.clone());
-            Some(receipt)
+            let result = receipt.clone();
+            self.receipts.push(receipt);
+            Some(result)
         } else {
             None
         }

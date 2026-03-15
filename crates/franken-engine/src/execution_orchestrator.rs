@@ -851,14 +851,20 @@ impl ExecutionOrchestrator {
             }
 
             if !entry.requires_operator_approval && !entry.receipt_linkage_required {
-                lattice
-                    .use_declassification(&entry.obligation_id, &artifact.trace_id)
-                    .map_err(|err| OrchestratorError::IfcRuntimeGuardBlocked {
+                if let Err(err) =
+                    lattice.use_declassification(&entry.obligation_id, &artifact.trace_id)
+                {
+                    // Clean up attempted receipts before returning error.
+                    for staged_key in attempted_receipt_keys {
+                        self.staged_declassification_receipts.remove(&staged_key);
+                    }
+                    return Err(OrchestratorError::IfcRuntimeGuardBlocked {
                         detail: format!(
                             "artifact {} declassification failed for {}: {}",
                             artifact.artifact_id, entry.obligation_id, err
                         ),
-                    })?;
+                    });
+                }
                 continue;
             }
 

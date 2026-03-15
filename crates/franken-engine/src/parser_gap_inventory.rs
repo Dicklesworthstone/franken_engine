@@ -189,7 +189,7 @@ impl ParserGapSiteId {
                 "still lowers comparisons, logical operators, and bitwise operators to an Add IR3 instruction placeholder"
             }
             Self::NonIdentifierAssignmentNopPlaceholder => {
-                "still lowers property and other non-identifier assignments to a Nop placeholder"
+                "historically lowered property and other non-identifier assignments to a Nop placeholder before member-target assignment was resolved to SetProperty"
             }
         }
     }
@@ -212,7 +212,7 @@ impl ParserGapSiteId {
                 "reject before IR3 lowering with FE-PARSER-GAP-BINARY-0001 instead of emitting an Add placeholder"
             }
             Self::NonIdentifierAssignmentNopPlaceholder => {
-                "reject before IR1 lowering with FE-PARSER-GAP-ASSIGN-0001 instead of emitting a Nop placeholder"
+                "resolved: FE-PARSER-GAP-ASSIGN-0001 is retained as the historical fail-closed contract reference, but shipped member-target assignment now lowers to SetProperty instead of emitting a Nop placeholder"
             }
         }
     }
@@ -258,7 +258,7 @@ impl ParserGapSiteId {
                 "non-arithmetic binary lowering is not implemented; fail-closed parser-gap contract must reject add placeholder lowering"
             }
             Self::NonIdentifierAssignmentNopPlaceholder => {
-                "non-identifier assignment lowering is not implemented; fail-closed parser-gap contract must reject nop placeholder lowering"
+                "member-target assignment lowering is resolved; fail-closed parser-gap contract FE-PARSER-GAP-ASSIGN-0001 is retained only as historical provenance, not active shipped behavior"
             }
         }
     }

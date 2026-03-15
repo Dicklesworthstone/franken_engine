@@ -1126,4 +1126,288 @@ mod tests {
         assert!(SIM_SCHEDULER_SCHEMA_VERSION.contains("deterministic-sim-scheduler"));
         assert_eq!(SIM_SCHEDULER_BEAD_ID, "bd-1lsy.9.3.3");
     }
+
+    // -----------------------------------------------------------------------
+    // Overflow events re-queue to next tick
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_overflow_events_dispatched_next_tick() {
+        let policy = SchedulerPolicy {
+            max_events_per_tick: 2,
+            ..SchedulerPolicy::default()
+        };
+        let mut sched = SimScheduler::new(policy, SecurityEpoch::GENESIS);
+        let id_a = sched.schedule(SimEventKind::CacheHit, SimPriority::Normal, 0, "a", 1);
+        let id_b = sched.schedule(SimEventKind::CacheMiss, SimPriority::Normal, 0, "b", 2);
+        let id_c = sched.schedule(SimEventKind::CacheEvict, SimPriority::Normal, 0, "c", 3);
+
+        let o0 = sched.advance_tick().unwrap();
+        assert_eq!(o0.events_dispatched, vec![id_a, id_b]);
+
+        let o1 = sched.advance_tick().unwrap();
+        assert_eq!(o1.events_dispatched, vec![id_c]);
+        assert_eq!(sched.pending_count(), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Microtask-first draining
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_microtask_first_drains_before_normal() {
+        let policy = SchedulerPolicy {
+            drain_microtasks_first: true,
+            ..SchedulerPolicy::default()
+        };
+        let mut sched = SimScheduler::new(policy, SecurityEpoch::GENESIS);
+
+        // Schedule normal first, then microtask
+        let normal_id = sched.schedule(SimEventKind::TimerFire, SimPriority::Normal, 0, "timer", 1);
+        let micro_id = sched.schedule(
+            SimEventKind::PromiseSettle,
+            SimPriority::Microtask,
+            0,
+            "promise",
+            2,
+        );
+
+        let outcome = sched.advance_tick().unwrap();
+        // Microtask should come first
+        assert_eq!(outcome.events_dispatched[0], micro_id);
+        assert_eq!(outcome.events_dispatched[1], normal_id);
+        assert_eq!(outcome.microtasks_drained, 1);
+    }
+
+    #[test]
+    fn test_microtask_first_disabled() {
+        let policy = SchedulerPolicy {
+            drain_microtasks_first: false,
+            ..SchedulerPolicy::default()
+        };
+        let mut sched = SimScheduler::new(policy, SecurityEpoch::GENESIS);
+
+        sched.schedule(SimEventKind::TimerFire, SimPriority::Normal, 0, "timer", 1);
+        sched.schedule(
+            SimEventKind::PromiseSettle,
+            SimPriority::Microtask,
+            0,
+            "promise",
+            2,
+        );
+
+        let outcome = sched.advance_tick().unwrap();
+        // Still priority-ordered (microtask first due to lower rank)
+        assert_eq!(outcome.events_dispatched.len(), 2);
+        assert_eq!(outcome.microtasks_drained, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Multiple priorities in single tick
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_all_priorities_dispatch_in_order() {
+        let mut sched = SimScheduler::new(SchedulerPolicy::default(), SecurityEpoch::GENESIS);
+
+        let idle = sched.schedule(SimEventKind::GcPause, SimPriority::Idle, 0, "gc", 1);
+        let low = sched.schedule(
+            SimEventKind::CacheEvict,
+            SimPriority::LowPriority,
+            0,
+            "cache",
+            2,
+        );
+        let normal = sched.schedule(SimEventKind::TimerFire, SimPriority::Normal, 0, "timer", 3);
+        let high = sched.schedule(
+            SimEventKind::ControllerDecision,
+            SimPriority::HighPriority,
+            0,
+            "ctrl",
+            4,
+        );
+        let micro = sched.schedule(
+            SimEventKind::MicrotaskDrain,
+            SimPriority::Microtask,
+            0,
+            "micro",
+            5,
+        );
+
+        let outcome = sched.advance_tick().unwrap();
+        assert_eq!(
+            outcome.events_dispatched,
+            vec![micro, high, normal, low, idle]
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Fast-forward to next tick with events
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_run_to_completion_fast_forwards_sparse_ticks() {
+        let mut sched = SimScheduler::new(SchedulerPolicy::default(), SecurityEpoch::GENESIS);
+        sched.schedule(SimEventKind::EventLoopTick, SimPriority::Normal, 0, "a", 1);
+        sched.schedule(SimEventKind::EventLoopTick, SimPriority::Normal, 50, "b", 2);
+
+        let summary = sched.run_to_completion();
+        assert_eq!(summary.total_events, 2);
+        // Should have fast-forwarded, not iterated through 50 empty ticks
+        assert!(sched.dispatch_log.len() <= 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // Run summary serde
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_run_summary_serde_roundtrip() {
+        let mut sched = SimScheduler::new(SchedulerPolicy::default(), SecurityEpoch::GENESIS);
+        sched.schedule(SimEventKind::CacheHit, SimPriority::Normal, 0, "x", 1);
+        sched.schedule(SimEventKind::CacheMiss, SimPriority::Normal, 1, "y", 2);
+        let summary = sched.run_to_completion();
+
+        let json = serde_json::to_string(&summary).unwrap();
+        let back: SimRunSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(summary.total_events, back.total_events);
+        assert_eq!(summary.total_ticks, back.total_ticks);
+        assert_eq!(summary.content_hash, back.content_hash);
+    }
+
+    // -----------------------------------------------------------------------
+    // TickOutcome serde
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_tick_outcome_serde_roundtrip() {
+        let outcome = TickOutcome {
+            tick: 42,
+            events_dispatched: vec![1, 2, 3],
+            microtasks_drained: 1,
+            pending_count: 5,
+        };
+        let json = serde_json::to_string(&outcome).unwrap();
+        let back: TickOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(outcome, back);
+    }
+
+    // -----------------------------------------------------------------------
+    // SimSpecimenFamily serde
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_specimen_family_serde_roundtrip() {
+        let families = [
+            SimSpecimenFamily::EventLoopDrain,
+            SimSpecimenFamily::ModuleLifecycle,
+            SimSpecimenFamily::CacheInteraction,
+            SimSpecimenFamily::ControllerFeedback,
+            SimSpecimenFamily::TimerCoalescing,
+            SimSpecimenFamily::MixedPriority,
+        ];
+        for fam in &families {
+            let json = serde_json::to_string(fam).unwrap();
+            let back: SimSpecimenFamily = serde_json::from_str(&json).unwrap();
+            assert_eq!(*fam, back);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Dispatch log grows with ticks
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_dispatch_log_grows_per_tick() {
+        let mut sched = SimScheduler::new(SchedulerPolicy::default(), SecurityEpoch::GENESIS);
+        sched.schedule(SimEventKind::EventLoopTick, SimPriority::Normal, 0, "a", 1);
+        sched.schedule(SimEventKind::EventLoopTick, SimPriority::Normal, 1, "b", 2);
+        sched.schedule(SimEventKind::EventLoopTick, SimPriority::Normal, 2, "c", 3);
+
+        assert_eq!(sched.dispatch_log.len(), 0);
+        sched.advance_tick();
+        assert_eq!(sched.dispatch_log.len(), 1);
+        sched.advance_tick();
+        assert_eq!(sched.dispatch_log.len(), 2);
+        sched.advance_tick();
+        assert_eq!(sched.dispatch_log.len(), 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // Pending count after dispatch
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_pending_decreases_after_dispatch() {
+        let mut sched = SimScheduler::new(SchedulerPolicy::default(), SecurityEpoch::GENESIS);
+        sched.schedule(SimEventKind::ModuleLoad, SimPriority::Normal, 0, "m", 1);
+        sched.schedule(SimEventKind::ModuleResolve, SimPriority::Normal, 0, "m", 2);
+        assert_eq!(sched.pending_count(), 2);
+
+        sched.advance_tick();
+        assert_eq!(sched.pending_count(), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Delayed events don't dispatch early
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_delayed_events_not_dispatched_early() {
+        let mut sched = SimScheduler::new(SchedulerPolicy::default(), SecurityEpoch::GENESIS);
+        sched.schedule(SimEventKind::TimerFire, SimPriority::Normal, 5, "t", 1);
+
+        let o = sched.advance_tick().unwrap(); // tick 0
+        assert!(o.events_dispatched.is_empty());
+        assert_eq!(sched.pending_count(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Large schedule with mixed delays
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_large_schedule_completes_deterministically() {
+        let run = || {
+            let mut sched = SimScheduler::new(SchedulerPolicy::default(), SecurityEpoch::GENESIS);
+            for i in 0..100u64 {
+                let kind = SimEventKind::ALL[(i as usize) % SimEventKind::ALL.len()];
+                let prio = SimPriority::ALL[(i as usize) % SimPriority::ALL.len()];
+                sched.schedule(kind, prio, i % 10, &format!("src-{i}"), i);
+            }
+            let summary = sched.run_to_completion();
+            (summary.total_events, summary.content_hash)
+        };
+
+        let (events1, hash1) = run();
+        let (events2, hash2) = run();
+        assert_eq!(events1, events2);
+        assert_eq!(hash1, hash2);
+        assert_eq!(events1, 100);
+    }
+
+    // -----------------------------------------------------------------------
+    // Replay log hash differs for different logs
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_replay_log_hash_differs() {
+        let mut log1 = SimReplayLog::default();
+        log1.push(SimReplayEntry {
+            tick: 0,
+            event_id: 1,
+            kind: SimEventKind::CacheHit,
+            priority: SimPriority::Normal,
+        });
+
+        let mut log2 = SimReplayLog::default();
+        log2.push(SimReplayEntry {
+            tick: 0,
+            event_id: 2,
+            kind: SimEventKind::CacheMiss,
+            priority: SimPriority::Normal,
+        });
+
+        assert_ne!(log1.content_hash(), log2.content_hash());
+    }
 }

@@ -1157,4 +1157,15 @@ fn enrichment_non_ident_assign_specific_values() {
     let site = ParserGapSiteId::NonIdentifierAssignmentNopPlaceholder;
     assert_eq!(site.diagnostic_code(), "FE-PARSER-GAP-ASSIGN-0001");
     assert_eq!(site.feature_family(), "member_assignment_expression");
+    assert!(
+        site.observed_fallback_behavior()
+            .contains("historically lowered")
+    );
+    assert!(site.observed_fallback_behavior().contains("SetProperty"));
+    assert!(
+        site.required_fail_closed_contract()
+            .contains("FE-PARSER-GAP-ASSIGN-0001")
+    );
+    assert!(site.required_fail_closed_contract().contains("SetProperty"));
+    assert!(site.message_template().contains("resolved"));
 }

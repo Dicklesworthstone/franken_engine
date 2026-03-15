@@ -677,9 +677,17 @@ impl EscalationPipeline {
             );
         }
 
-        // Below threshold: defer unless budget is generous
+        // Below threshold: defer unless budget is generous.
+        // Estimate cost using severity-adjusted costs (matching build_bundle).
         let content = self.policy.content_for_severity(severity);
-        let estimated_cost: u64 = content.iter().map(|c| c.base_cost_millionths()).sum();
+        let estimated_cost: u64 = content
+            .iter()
+            .map(|c| {
+                c.base_cost_millionths()
+                    .saturating_mul(severity.cost_multiplier_millionths())
+                    / MILLION
+            })
+            .sum();
         if estimated_cost <= self.remaining_budget_millionths {
             (
                 EscalationDecision::Escalate,

@@ -281,7 +281,7 @@ impl Exp3State {
         // ln(K) ≈ K for small K; use integer sqrt approximation.
         let ln_k = integer_ln_millionths(k as u64) as i128;
         let product = (t as i128).saturating_mul(k as i128).saturating_mul(ln_k) / MILLION as i128;
-        2 * integer_sqrt_millionths(product.min(i64::MAX as i128) as i64)
+        integer_sqrt_millionths(product.min(i64::MAX as i128) as i64).saturating_mul(2)
     }
 }
 
@@ -401,7 +401,7 @@ impl FtrlState {
         let k = self.num_arms as i64;
         let ln_k = integer_ln_millionths(k as u64) as i128;
         let product = (t as i128).saturating_mul(ln_k) / MILLION as i128;
-        2 * integer_sqrt_millionths(product.min(i64::MAX as i128) as i64)
+        integer_sqrt_millionths(product.min(i64::MAX as i128) as i64).saturating_mul(2)
     }
 }
 
@@ -1004,7 +1004,8 @@ fn integer_log2_millionths(n: u64) -> i64 {
 
 /// Integer approximation of ln(n) in millionths.
 fn integer_ln_millionths(n: u64) -> i64 {
-    integer_log2_millionths(n) * LN_2_MILLIONTHS / MILLION
+    // Multiply in i128 to avoid overflow when log2 is large (n near u64::MAX).
+    (integer_log2_millionths(n) as i128 * LN_2_MILLIONTHS as i128 / MILLION as i128) as i64
 }
 
 /// Integer approximation of √n in millionths.

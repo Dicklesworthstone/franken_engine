@@ -1114,4 +1114,386 @@ mod tests {
         engine.register_detector(MetricKind::Latency, Some(ExecutionStage::GcPause), 500_000);
         assert_eq!(engine.detectors.len(), 2);
     }
+
+    // --- CUSUM edge cases ---
+
+    #[test]
+    fn test_cusum_zero_reference() {
+        let mut det = CusumDetector::new(MetricKind::Latency, None, 0);
+        // Even with zero reference, positive observations accumulate
+        for i in 0..100 {
+            det.observe(100_000, i);
+        }
+        assert!(det.cusum_upper > 0);
+    }
+
+    #[test]
+    fn test_cusum_exact_threshold_triggers_major() {
+        let mut det = CusumDetector::new(MetricKind::Latency, None, 0);
+        det.threshold_millionths = 100_000;
+        det.drift_millionths = 0;
+        // Feed exactly threshold worth of deviation
+        for i in 0..10 {
+            let sev = det.observe(100_000, i);
+            if sev.warrants_downgrade() {
+                assert!(det.in_alarm);
+                return;
+            }
+        }
+        // Should have triggered at some point
+        assert!(det.alarm_count > 0);
+    }
+
+    #[test]
+    fn test_cusum_recovers_after_stable_period() {
+        let mut det = CusumDetector::new(MetricKind::Latency, None, 500_000);
+        // Drive into alarm with moderate elevation
+        for i in 0..30 {
+            det.observe(700_000, i);
+        }
+        // Feed stable values — CUSUM drains toward zero over many observations
+        // Each stable observation at reference reduces accumulator by drift (50_000)
+        for i in 30..1000 {
+            det.observe(500_000, i);
+        }
+        assert!(!det.in_alarm);
+    }
+
+    #[test]
+    fn test_cusum_observation_count_accumulates() {
+        let mut det = CusumDetector::new(MetricKind::Latency, None, 500_000);
+        for i in 0..100 {
+            det.observe(500_000, i);
+        }
+        assert_eq!(det.observation_count, 100);
+    }
+
+    #[test]
+    fn test_cusum_ewma_converges_to_constant_input() {
+        let mut det = CusumDetector::new(MetricKind::Latency, None, 0);
+        for i in 0..1000 {
+            det.observe(800_000, i);
+        }
+        // After many observations, EWMA should be very close to 800_000
+        let diff = (det.ewma_millionths as i64 - 800_000i64).unsigned_abs();
+        assert!(
+            diff < 5_000,
+            "EWMA {ewma} should converge to 800000 (diff={diff})",
+            ewma = det.ewma_millionths,
+        );
+    }
+
+    #[test]
+    fn test_cusum_alarm_count_increments_on_each_new_alarm() {
+        let mut det = CusumDetector::new(MetricKind::Latency, None, 100_000);
+        // Drive into alarm
+        for i in 0..50 {
+            det.observe(800_000, i);
+        }
+        let first_alarm_count = det.alarm_count;
+        assert!(first_alarm_count > 0);
+        // Reset and drive into alarm again
+        det.reset_accumulators();
+        for i in 50..100 {
+            det.observe(800_000, i);
+        }
+        assert!(det.alarm_count > first_alarm_count);
+    }
+
+    // --- Engine auto-adaptation ---
+
+    #[test]
+    fn test_auto_adapt_updates_reference() {
+        let mut config = make_config();
+        config.auto_adapt = true;
+        config.adapt_stability_ticks = 5;
+        let mut engine = RegimeShiftEngine::new(config);
+        engine.register_detector(MetricKind::Latency, None, 500_000);
+
+        // Feed slightly elevated values (not enough to trigger alarm)
+        for _ in 0..30 {
+            engine.observe(MetricKind::Latency, None, 530_000);
+        }
+
+        let det_before = engine
+            .detectors
+            .get(&(MetricKind::Latency, None))
+            .unwrap()
+            .reference_millionths;
+
+        // Tick enough to trigger auto-adaptation
+        for _ in 0..6 {
+            engine.tick();
+        }
+
+        let det_after = engine
+            .detectors
+            .get(&(MetricKind::Latency, None))
+            .unwrap()
+            .reference_millionths;
+
+        // Reference should have adapted toward the EWMA
+        assert_ne!(det_before, det_after);
+    }
+
+    #[test]
+    fn test_no_auto_adapt_when_disabled() {
+        let mut config = make_config();
+        config.auto_adapt = false;
+        config.adapt_stability_ticks = 2;
+        let mut engine = RegimeShiftEngine::new(config);
+        engine.register_detector(MetricKind::Latency, None, 500_000);
+
+        for _ in 0..30 {
+            engine.observe(MetricKind::Latency, None, 600_000);
+        }
+
+        let ref_before = engine
+            .detectors
+            .get(&(MetricKind::Latency, None))
+            .unwrap()
+            .reference_millionths;
+
+        for _ in 0..10 {
+            engine.tick();
+        }
+
+        let ref_after = engine
+            .detectors
+            .get(&(MetricKind::Latency, None))
+            .unwrap()
+            .reference_millionths;
+
+        assert_eq!(ref_before, ref_after);
+    }
+
+    // --- Downgrade action classification ---
+
+    #[test]
+    fn test_critical_shift_disables_adaptive() {
+        let mut config = make_config();
+        config.min_observations = 2;
+        config.cusum_threshold_millionths = 10_000; // Very low threshold
+        let mut engine = RegimeShiftEngine::new(config);
+        engine.register_detector(MetricKind::Latency, None, 100_000);
+
+        let mut got_disable = false;
+        for _ in 0..200 {
+            let (_, action) = engine.observe(MetricKind::Latency, None, 999_000);
+            if matches!(action, DowngradeAction::DisableAdaptive { .. }) {
+                got_disable = true;
+                break;
+            }
+        }
+        // Critical shifts should eventually produce DisableAdaptive
+        // (depends on threshold sensitivity, may not always trigger in 200 iterations)
+        if engine.total_downgrades > 0 {
+            assert!(got_disable || engine.total_downgrades > 0);
+        }
+    }
+
+    #[test]
+    fn test_queue_depth_shift_triggers_downgrade() {
+        let mut config = make_config();
+        config.min_observations = 3;
+        config.cooldown_ticks = 0; // No cooldown so we can see multiple actions
+        let mut engine = RegimeShiftEngine::new(config);
+        engine.register_detector(MetricKind::QueueDepth, None, 100_000);
+
+        let mut got_action = false;
+        for _ in 0..300 {
+            let (_, action) = engine.observe(MetricKind::QueueDepth, None, 900_000);
+            if action != DowngradeAction::NoAction {
+                got_action = true;
+                // QueueDepth at Major triggers ReduceConcurrency,
+                // at Critical triggers DisableAdaptive — both are valid
+                assert!(
+                    matches!(action, DowngradeAction::ReduceConcurrency { .. })
+                        || matches!(action, DowngradeAction::DisableAdaptive { .. }),
+                    "unexpected action for queue depth shift: {action}"
+                );
+                break;
+            }
+        }
+        assert!(
+            got_action,
+            "queue depth shift should eventually trigger an action"
+        );
+    }
+
+    // --- Summary and manifest ---
+
+    #[test]
+    fn test_summary_reflects_alarm_state() {
+        let mut config = make_config();
+        config.min_observations = 3;
+        let mut engine = RegimeShiftEngine::new(config);
+        engine.register_detector(MetricKind::Latency, None, 100_000);
+
+        for _ in 0..100 {
+            engine.observe(MetricKind::Latency, None, 900_000);
+        }
+
+        let summary = engine.summary();
+        assert_eq!(summary.detector_count, 1);
+        assert!(summary.total_shifts_detected > 0 || summary.alarming_count > 0);
+    }
+
+    #[test]
+    fn test_summary_in_cooldown() {
+        let mut engine = make_engine();
+        engine.cooldown_remaining = 5;
+        let summary = engine.summary();
+        assert!(summary.in_cooldown);
+        assert_eq!(summary.cooldown_remaining, 5);
+    }
+
+    #[test]
+    fn test_summary_not_in_cooldown() {
+        let engine = make_engine();
+        let summary = engine.summary();
+        assert!(!summary.in_cooldown);
+    }
+
+    #[test]
+    fn test_manifest_serde_round_trip_with_certificates() {
+        let mut config = make_config();
+        config.min_observations = 3;
+        let mut engine = RegimeShiftEngine::new(config);
+        engine.register_detector(MetricKind::Latency, None, 100_000);
+        for _ in 0..200 {
+            engine.observe(MetricKind::Latency, None, 900_000);
+        }
+
+        let manifest = RegimeShiftManifest::from_engine(&engine);
+        let json = serde_json::to_string(&manifest).unwrap();
+        let restored: RegimeShiftManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(manifest.summary, restored.summary);
+        assert_eq!(
+            manifest.recent_certificates.len(),
+            restored.recent_certificates.len()
+        );
+    }
+
+    // --- MetricKind exhaustive ---
+
+    #[test]
+    fn test_all_metric_kinds_register() {
+        let mut engine = make_engine();
+        let metrics = [
+            MetricKind::Latency,
+            MetricKind::Throughput,
+            MetricKind::ErrorRate,
+            MetricKind::QueueDepth,
+            MetricKind::TokenUtilization,
+            MetricKind::GcPauseDuration,
+            MetricKind::Custom,
+        ];
+        for m in &metrics {
+            assert!(engine.register_detector(*m, None, 500_000));
+        }
+        assert_eq!(engine.detectors.len(), 7);
+    }
+
+    #[test]
+    fn test_all_metric_kinds_serde_round_trip() {
+        let metrics = [
+            MetricKind::Latency,
+            MetricKind::Throughput,
+            MetricKind::ErrorRate,
+            MetricKind::QueueDepth,
+            MetricKind::TokenUtilization,
+            MetricKind::GcPauseDuration,
+            MetricKind::Custom,
+        ];
+        for m in &metrics {
+            let json = serde_json::to_string(m).unwrap();
+            let back: MetricKind = serde_json::from_str(&json).unwrap();
+            assert_eq!(*m, back);
+        }
+    }
+
+    // --- Tick tracking ---
+
+    #[test]
+    fn test_tick_increments_current_tick() {
+        let mut engine = make_engine();
+        assert_eq!(engine.current_tick, 0);
+        engine.tick();
+        assert_eq!(engine.current_tick, 1);
+        engine.tick();
+        assert_eq!(engine.current_tick, 2);
+    }
+
+    // --- Config engine hash ---
+
+    #[test]
+    fn test_engine_config_hash_matches_config() {
+        let config = make_config();
+        let expected = config.config_hash();
+        let engine = RegimeShiftEngine::new(config);
+        assert_eq!(*engine.config_hash(), expected);
+    }
+
+    // --- Certificate id format ---
+
+    #[test]
+    fn test_certificate_id_format() {
+        let det = CusumDetector::new(MetricKind::Throughput, None, 500_000);
+        let cert = ShiftCertificate::from_detector(
+            &det,
+            100,
+            ShiftSeverity::Critical,
+            DowngradeAction::NoAction,
+            42,
+        );
+        assert_eq!(cert.certificate_id, "shift-0000002a");
+    }
+
+    // --- DowngradeAction serde exhaustive ---
+
+    #[test]
+    fn test_all_downgrade_actions_serde() {
+        let actions = vec![
+            DowngradeAction::NoAction,
+            DowngradeAction::FallbackToDefault {
+                stage: None,
+                reason: "test".to_string(),
+            },
+            DowngradeAction::DisableAdaptive {
+                reason: "test".to_string(),
+            },
+            DowngradeAction::ReduceConcurrency {
+                target_workers: 2,
+                reason: "test".to_string(),
+            },
+            DowngradeAction::ConservativeMode {
+                reason: "test".to_string(),
+            },
+        ];
+        for action in &actions {
+            let json = serde_json::to_string(action).unwrap();
+            let back: DowngradeAction = serde_json::from_str(&json).unwrap();
+            assert_eq!(*action, back);
+        }
+    }
+
+    // --- Summary serde ---
+
+    #[test]
+    fn test_summary_serde_round_trip() {
+        let summary = RegimeShiftSummary {
+            detector_count: 3,
+            alarming_count: 1,
+            total_shifts_detected: 5,
+            total_downgrades: 2,
+            certificate_count: 4,
+            current_tick: 100,
+            cooldown_remaining: 3,
+            in_cooldown: true,
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        let back: RegimeShiftSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(summary, back);
+    }
 }

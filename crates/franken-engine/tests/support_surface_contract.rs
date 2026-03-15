@@ -335,6 +335,87 @@ fn rgc_911b_non_shipped_rows_have_guidance_and_target_only_language() {
 }
 
 #[test]
+fn rgc_911b_callback_stdlib_gap_row_matches_runtime_contract() {
+    let contract = parse_contract();
+    let row = contract
+        .surface_rows
+        .iter()
+        .find(|row| row.surface_id == "runtime.callback_stdlib_collection_callbacks")
+        .expect("callback stdlib row must exist");
+
+    assert_eq!(row.area, "runtime");
+    assert_eq!(row.support_status, "unsupported");
+    assert_eq!(row.claim_language_state, "target_only");
+    assert_eq!(row.fallback_policy.fallback_mode, "fail_closed_type_error");
+    assert!(row.fallback_policy.waiver_required);
+    assert_eq!(row.fallback_policy.max_waiver_age_hours, Some(168));
+
+    let evidence_sources: BTreeSet<_> = row.evidence_sources.iter().map(String::as_str).collect();
+    for source in [
+        "crates/franken-engine/src/stdlib.rs",
+        "crates/franken-engine/src/callback_stdlib_dispatch.rs",
+    ] {
+        assert!(
+            evidence_sources.contains(source),
+            "callback stdlib row missing evidence source {source}"
+        );
+    }
+
+    let fallback_reasons: BTreeSet<_> = row
+        .linked_fallback_reasons
+        .as_ref()
+        .expect("callback stdlib row should link fallback reasons")
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert!(
+        fallback_reasons.contains("requires_callback_or_heap_access_use_interpreter_dispatch"),
+        "callback stdlib row must expose the fail-closed fallback reason"
+    );
+
+    let diag = row
+        .user_visible_diagnostic
+        .as_ref()
+        .expect("callback stdlib row must include a user-visible diagnostic");
+    assert_eq!(diag.diagnostic_surface, "runtime stdlib builtin dispatch");
+    assert!(
+        diag.message_template
+            .contains("requires callback or heap access (use interpreter dispatch)"),
+        "callback stdlib diagnostic must preserve the shipped fail-closed message"
+    );
+}
+
+#[test]
+fn rgc_911b_callback_stdlib_gap_tracks_shipped_fail_closed_builtin_text() {
+    let stdlib = read_to_string(&repo_root().join("crates/franken-engine/src/stdlib.rs"));
+
+    for builtin in [
+        "BuiltinId::ArrayPrototypeMap",
+        "BuiltinId::ArrayPrototypeFilter",
+        "BuiltinId::ArrayPrototypeReduce",
+        "BuiltinId::ArrayPrototypeReduceRight",
+        "BuiltinId::ArrayPrototypeForEach",
+        "BuiltinId::ArrayPrototypeSome",
+        "BuiltinId::ArrayPrototypeEvery",
+        "BuiltinId::ArrayPrototypeFind",
+        "BuiltinId::ArrayPrototypeFindIndex",
+        "BuiltinId::ArrayPrototypeSort",
+        "BuiltinId::MapPrototypeForEach",
+        "BuiltinId::SetPrototypeForEach",
+    ] {
+        assert!(
+            stdlib.contains(builtin),
+            "stdlib.rs must continue to install/dispatch {builtin}"
+        );
+    }
+
+    assert!(
+        stdlib.contains("requires callback or heap access (use interpreter dispatch)"),
+        "stdlib.rs must retain the shipped fail-closed callback/heap access diagnostic"
+    );
+}
+
+#[test]
 fn rgc_911b_react_rows_reference_real_capability_ids() {
     let contract = parse_contract();
     let react_contract = parse_react_contract();
@@ -747,8 +828,8 @@ fn rgc_911b_contract_row_count_matches_expected() {
     let contract = parse_contract();
     assert_eq!(
         contract.surface_rows.len(),
-        12,
-        "contract must declare exactly 12 surface rows"
+        13,
+        "contract must declare exactly 13 surface rows"
     );
 }
 

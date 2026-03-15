@@ -1134,6 +1134,26 @@ fn classify_no_label_with_runtime_binding_named_type_keeps_javascript() {
         classify_source_language(None, "import type from './foo';"),
         SourceLanguage::JavaScript
     );
+    assert_eq!(
+        classify_source_language(None, "import type, { keep } from './foo';"),
+        SourceLanguage::JavaScript
+    );
+}
+
+#[test]
+fn classify_no_label_ignores_strings_and_comments_with_ts_keywords() {
+    assert_eq!(
+        classify_source_language(None, "const note = \"interface Foo { bar: string }\";"),
+        SourceLanguage::JavaScript
+    );
+    assert_eq!(
+        classify_source_language(None, "// enum Status { Ready }\nconst value = 1;"),
+        SourceLanguage::JavaScript
+    );
+    assert_eq!(
+        classify_source_language(None, "class Message { note = \" implements \"; }"),
+        SourceLanguage::JavaScript
+    );
 }
 
 #[test]
@@ -1242,6 +1262,25 @@ fn prepare_source_entry_js_runtime_binding_named_type_stays_javascript() {
         "t-rt-type",
         "d-rt-type",
         "p-rt-type",
+    )
+    .unwrap();
+    assert_eq!(
+        prepared.source_ingestion.source_language,
+        SourceLanguage::JavaScript
+    );
+    assert!(!prepared.source_ingestion.normalization_applied);
+    assert_eq!(prepared.prepared_source, source);
+}
+
+#[test]
+fn prepare_source_entry_js_runtime_default_import_named_type_with_named_clause_stays_javascript() {
+    let source = "import type, { keep } from './pkg';\nconst value = type ?? keep;";
+    let prepared = prepare_source_entry_for_public_entrypoints(
+        source,
+        "runtime_type_default_binding.js",
+        "t-rt-type-default",
+        "d-rt-type-default",
+        "p-rt-type-default",
     )
     .unwrap();
     assert_eq!(
@@ -1983,6 +2022,17 @@ fn normalize_runtime_default_import_named_type_is_preserved() {
     let source = "import type from 'pkg';\nconst x = type;";
     let output = normalize(source).unwrap();
     assert!(output.normalized_source.contains("import type from 'pkg';"));
+}
+
+#[test]
+fn normalize_runtime_default_import_named_type_with_named_clause_is_preserved() {
+    let source = "import type, { keep } from 'pkg';\nconst x = type ?? keep;";
+    let output = normalize(source).unwrap();
+    assert!(
+        output
+            .normalized_source
+            .contains("import type, { keep } from 'pkg';")
+    );
 }
 
 #[test]

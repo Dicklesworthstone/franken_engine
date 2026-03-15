@@ -760,8 +760,10 @@ impl FlowEnvelopeSynthesizer {
 
         // 4. Compute confidence (ablation-only: excludes statically-safe flows).
         let n_trials = static_result.removable_flows.len() as u32;
-        let n_essential =
-            (dynamic_result.required_flows.len() - static_result.required_flows.len()) as u32;
+        let n_essential = dynamic_result
+            .required_flows
+            .len()
+            .saturating_sub(static_result.required_flows.len()) as u32;
         let confidence = FlowConfidenceInterval {
             lower_millionths: if n_trials > 0 {
                 ((n_essential as i64) * 1_000_000) / (n_trials as i64)

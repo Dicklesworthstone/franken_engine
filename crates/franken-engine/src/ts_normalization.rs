@@ -777,9 +777,6 @@ fn source_looks_typescript(source: &str) -> bool {
     if source_contains_type_only_import_export_syntax(source)
         || source.contains(" as const")
         || source.contains("!:")
-        || source.contains("interface ")
-        || source.contains("enum ")
-        || source.contains(" implements ")
     {
         return true;
     }
@@ -790,7 +787,11 @@ fn source_looks_typescript(source: &str) -> bool {
 fn line_looks_like_typescript_construct(line: &str) -> bool {
     let trimmed = line.trim_start();
     if statement_uses_type_only_import_export_syntax(trimmed)
+        || trimmed.starts_with("interface ")
         || trimmed.starts_with("export interface ")
+        || trimmed.starts_with("enum ")
+        || trimmed.starts_with("export enum ")
+        || class_declaration_uses_implements_clause(trimmed)
     {
         return true;
     }
@@ -847,6 +848,53 @@ fn looks_like_typed_variable_declaration(line: &str) -> bool {
                     '_' | '$' | '<' | '>' | '[' | ']' | '|' | '&' | '?' | ',' | '.' | ' '
                 )
         })
+}
+
+fn class_declaration_uses_implements_clause(statement: &str) -> bool {
+    let Some(start) = next_code_token_index(statement, 0) else {
+        return false;
+    };
+
+    let class_index = if starts_with_keyword(statement, start, "class") {
+        start
+    } else if starts_with_keyword(statement, start, "export") {
+        let Some(after_export) = next_code_token_index(statement, start + "export".len()) else {
+            return false;
+        };
+        let candidate = if starts_with_keyword(statement, after_export, "default") {
+            let Some(after_default) =
+                next_code_token_index(statement, after_export + "default".len())
+            else {
+                return false;
+            };
+            after_default
+        } else {
+            after_export
+        };
+        if starts_with_keyword(statement, candidate, "class") {
+            candidate
+        } else {
+            return false;
+        }
+    } else {
+        return false;
+    };
+
+    let Some(body_start) = find_top_level_char(statement, class_index, '{') else {
+        return false;
+    };
+    let mut cursor = class_index + "class".len();
+    let mut state = LexicalRewriteState::Code;
+    while let Some((index, _)) = next_code_scan_char(statement, &mut cursor, &mut state) {
+        if index >= body_start {
+            break;
+        }
+        if starts_with_keyword(statement, index, "implements") {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn normalize_spacing(source: String) -> String {
@@ -1096,8 +1144,7 @@ fn rewrite_type_only_import_export_statement(statement: &str) -> Option<String> 
     if starts_with_keyword(statement, start, "import") {
         let after_import = next_code_token_index(statement, start + "import".len())?;
         if starts_with_keyword(statement, after_import, "type")
-            && next_code_token_index(statement, after_import + "type".len())
-                .is_some_and(|index| !starts_with_keyword(statement, index, "from"))
+            && import_type_keyword_uses_type_only_syntax(statement, after_import)
         {
             return Some(String::new());
         }
@@ -1688,6 +1735,21 @@ fn next_code_token_index(source: &str, start: usize) -> Option<usize> {
     None
 }
 
+fn import_type_keyword_uses_type_only_syntax(statement: &str, type_index: usize) -> bool {
+    let Some(next_index) = next_code_token_index(statement, type_index + "type".len()) else {
+        return false;
+    };
+
+    let Some(next_char) = statement[next_index..].chars().next() else {
+        return false;
+    };
+    if next_char == ',' || starts_with_keyword(statement, next_index, "from") {
+        return false;
+    }
+
+    true
+}
+
 fn statement_uses_type_only_import_export_syntax(statement: &str) -> bool {
     let Some(start) = next_code_token_index(statement, 0) else {
         return false;
@@ -1698,8 +1760,7 @@ fn statement_uses_type_only_import_export_syntax(statement: &str) -> bool {
             return false;
         };
         if starts_with_keyword(statement, after_import, "type") {
-            return next_code_token_index(statement, after_import + "type".len())
-                .is_some_and(|index| !starts_with_keyword(statement, index, "from"));
+            return import_type_keyword_uses_type_only_syntax(statement, after_import);
         }
     } else if starts_with_keyword(statement, start, "export") {
         let Some(after_export) = next_code_token_index(statement, start + "export".len()) else {
@@ -3223,6 +3284,13 @@ abstract class Base { }"#;
     }
 
     #[test]
+    fn elide_type_only_imports_preserves_runtime_default_import_named_type_with_named_clause() {
+        let source = "import type, { keep } from \"pkg\";";
+        let result = elide_type_only_imports(source);
+        assert_eq!(result, source);
+    }
+
+    #[test]
     fn elide_type_only_imports_rewrites_mixed_named_export_specifiers() {
         let source = "export { type Foo, bar, type Baz as Qux } from \"pkg\";";
         let result = elide_type_only_imports(source);
@@ -3702,6 +3770,26 @@ abstract class Base { }"#;
         );
         assert_eq!(
             classify_source_language(None, "import type from './foo';"),
+            SourceLanguage::JavaScript
+        );
+        assert_eq!(
+            classify_source_language(None, "import type, { keep } from './foo';"),
+            SourceLanguage::JavaScript
+        );
+    }
+
+    #[test]
+    fn classify_source_language_ignores_strings_and_comments_with_ts_keywords() {
+        assert_eq!(
+            classify_source_language(None, "const note = \"interface Foo { bar: string }\";"),
+            SourceLanguage::JavaScript
+        );
+        assert_eq!(
+            classify_source_language(None, "// enum Status { Ready }\nconst value = 1;"),
+            SourceLanguage::JavaScript
+        );
+        assert_eq!(
+            classify_source_language(None, "class Message { note = \" implements \"; }"),
             SourceLanguage::JavaScript
         );
     }

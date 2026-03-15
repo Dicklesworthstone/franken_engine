@@ -537,3 +537,36 @@ fn all_regression_test_hints_are_nonempty() {
         );
     }
 }
+
+#[test]
+fn resolved_member_assignment_metadata_matches_shipped_set_property_path() {
+    let site = LoweringGapSiteId::NonIdentifierAssignmentNopPlaceholder;
+    assert!(
+        site.target_replacement_strategy().contains("resolved"),
+        "member assignment strategy should record the resolved state"
+    );
+    assert!(
+        site.target_replacement_strategy().contains("SetProperty"),
+        "member assignment strategy should mention SetProperty"
+    );
+    assert_eq!(
+        site.regression_test_hint(),
+        "lower_computed_member_assignment_uses_dynamic_key_without_nop"
+    );
+}
+
+#[test]
+fn resolved_regression_hints_point_at_current_lowering_pipeline_tests() {
+    assert_eq!(
+        LoweringGapSiteId::BinaryNonArithmeticAddPlaceholder.regression_test_hint(),
+        "lower_non_arithmetic_binary_emits_typed_instruction"
+    );
+    assert_eq!(
+        LoweringGapSiteId::NewExpressionCallPlaceholder.regression_test_hint(),
+        "lower_new_expression_emits_construct"
+    );
+    assert_eq!(
+        LoweringGapSiteId::TemplateLiteralRawPlaceholder.regression_test_hint(),
+        "lower_template_literal_emits_template_op"
+    );
+}

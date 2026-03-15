@@ -743,7 +743,7 @@ pub fn validate_typed_array(validation: &TypedArrayValidation) -> Result<(), Fas
     }
 
     let element_size = compute_element_size(&validation.kind);
-    if validation.byte_offset % element_size != 0 {
+    if !validation.byte_offset.is_multiple_of(element_size) {
         return Err(FastLaneError::MisalignedByteOffset {
             offset: validation.byte_offset,
             alignment: element_size,

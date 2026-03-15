@@ -210,7 +210,7 @@ impl LoweringGapSiteId {
                 "add allocation-aware constructor lowering with explicit this/prototype initialization semantics"
             }
             Self::NonIdentifierAssignmentNopPlaceholder => {
-                "replace nop store placeholder with explicit member/element write lowering and alias-aware mutation effects"
+                "resolved: member/element writes now lower through SetProperty with alias-aware mutation effects"
             }
             Self::TemplateLiteralRawPlaceholder => {
                 "lower template quasis and expressions into concatenation/coercion-aware IR instead of raw-string fallback"
@@ -244,15 +244,15 @@ impl LoweringGapSiteId {
     pub const fn regression_test_hint(self) -> &'static str {
         match self {
             Self::BinaryNonArithmeticAddPlaceholder => {
-                "lower_non_arithmetic_binary_currently_collapses_to_add_placeholder"
+                "lower_non_arithmetic_binary_emits_typed_instruction"
             }
             Self::ForInStatementPlaceholder => "lower_for_in_statement_produces_ir1_ops",
             Self::ForOfStatementPlaceholder => "lower_for_of_statement_produces_ir1_ops",
-            Self::NewExpressionCallPlaceholder => "lower_new_expression_fails_closed",
+            Self::NewExpressionCallPlaceholder => "lower_new_expression_emits_construct",
             Self::NonIdentifierAssignmentNopPlaceholder => {
-                "lower_member_assignment_currently_emits_nop_placeholder"
+                "lower_computed_member_assignment_uses_dynamic_key_without_nop"
             }
-            Self::TemplateLiteralRawPlaceholder => "lower_template_literal_fails_closed",
+            Self::TemplateLiteralRawPlaceholder => "lower_template_literal_emits_template_op",
         }
     }
 }

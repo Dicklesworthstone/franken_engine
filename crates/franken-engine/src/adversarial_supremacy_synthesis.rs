@@ -863,10 +863,15 @@ pub fn synthesize_batch(
     }
 
     // Compute coverage fraction: how much of the archetype x strategy space
-    // was explored relative to the full budget.
+    // was explored relative to the actual reachable space.
+    let actual_space = config
+        .max_generations
+        .saturating_mul(archetypes.len() as u64)
+        .saturating_mul(strategies.len() as u64);
+    let coverage_denominator = max_total.min(actual_space).max(1);
     let coverage_fraction = workloads_tested
         .saturating_mul(MILLIONTHS)
-        .checked_div(max_total.max(1))
+        .checked_div(coverage_denominator)
         .unwrap_or(0);
 
     let search_budget_used = workloads_tested

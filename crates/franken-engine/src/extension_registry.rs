@@ -1102,10 +1102,11 @@ impl ExtensionRegistry {
             errors.push("publisher revoked or not found".to_string());
         }
 
-        let publisher_key_matches_registry = self
-            .get_publisher(&pkg.manifest.publisher_id)
-            .is_some_and(|publisher| publisher.verification_key == pkg.manifest.publisher_key);
-        if !publisher_key_matches_registry {
+        let publisher = self.get_publisher(&pkg.manifest.publisher_id);
+        let publisher_key_matches_registry = publisher
+            .map(|publisher| publisher.verification_key == pkg.manifest.publisher_key)
+            .unwrap_or(true);
+        if publisher.is_some() && !publisher_key_matches_registry {
             errors
                 .push("manifest publisher key does not match registered publisher key".to_string());
         }
@@ -2480,6 +2481,53 @@ mod tests {
         assert_eq!(last_event.package_id, Some(package_id));
         assert_eq!(last_event.publisher_id, Some(pub_id));
         assert_eq!(last_event.version, Some(v));
+    }
+
+    #[test]
+    fn verify_missing_publisher_does_not_report_key_mismatch() {
+        let mut reg = ExtensionRegistry::new(DeterministicTimestamp(1));
+        let fake_pub_id = EngineObjectId([42; 32]);
+        let sk = second_signing_key();
+        let vk = test_verification_key_from(&sk);
+        let v = PackageVersion::new(1, 0, 0);
+        let manifest = build_manifest("testorg", "ext", v, &fake_pub_id, &vk);
+        let package_id = SignedPackage::derive_package_id(&manifest).unwrap();
+        let signature = sign_preimage(&sk, &manifest.unsigned_bytes()).unwrap();
+
+        reg.package_index.push((
+            package_id.clone(),
+            PackageKey {
+                scope: "testorg".to_string(),
+                name: "ext".to_string(),
+                version: v,
+            },
+        ));
+        reg.packages.push(SignedPackage {
+            manifest,
+            signature,
+            package_id,
+            published_at: reg.current_tick,
+            revoked: false,
+            revoked_at: None,
+            revocation_reason: None,
+        });
+
+        let result = reg.verify_package("testorg", "ext", v).unwrap();
+        assert!(!result.valid);
+        assert!(result.signature_valid);
+        assert!(!result.publisher_active);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|error| error.contains("publisher revoked or not found"))
+        );
+        assert!(
+            result
+                .errors
+                .iter()
+                .all(|error| !error.contains("publisher key does not match"))
+        );
     }
 
     #[test]

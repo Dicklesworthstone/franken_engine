@@ -841,6 +841,10 @@ fresh-operator reruns do not depend on fragile `/tmp` worker state.
 ./scripts/e2e/parser_operator_developer_runbook_replay.sh drill
 ```
 
+The replay wrapper prints the latest complete artifact bundle and warns when it
+has to skip a newer incomplete run directory, so fresh operators do not
+accidentally triage against partial output.
+
 Contract and vectors:
 
 - [`docs/PARSER_OPERATOR_DEVELOPER_RUNBOOK.md`](./docs/PARSER_OPERATOR_DEVELOPER_RUNBOOK.md)

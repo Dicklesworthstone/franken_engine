@@ -101,6 +101,12 @@ One-command replay wrapper:
 ./scripts/e2e/parser_operator_developer_runbook_replay.sh drill
 ```
 
+The replay wrapper reruns the selected lane and then prints the latest complete
+artifact bundle (`run_manifest.json`, `events.jsonl`, `commands.txt`, and
+`step_logs/step_000.log`). If the newest artifact directory is incomplete, it
+warns and falls back to the latest complete directory; if no complete bundle
+exists, it fails non-zero instead of presenting a partial run as trustworthy.
+
 ## Escalation And Rollback Posture
 
 - If diagnostics, recovery, or compatibility drills fail, treat parser promotion

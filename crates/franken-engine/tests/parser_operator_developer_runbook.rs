@@ -57,6 +57,11 @@ fn load_script() -> String {
     fs::read_to_string(path).expect("read parser operator/developer runbook script")
 }
 
+fn load_replay_script() -> String {
+    let path = Path::new("../../scripts/e2e/parser_operator_developer_runbook_replay.sh");
+    fs::read_to_string(path).expect("read parser operator/developer runbook replay script")
+}
+
 fn load_readme() -> String {
     fs::read_to_string(Path::new("../../README.md"))
         .expect("read repository README for runbook references")
@@ -123,6 +128,7 @@ fn parser_operator_runbook_doc_has_required_sections() {
         "step_logs/step_*.log",
         "./scripts/run_parser_operator_developer_runbook.sh ci",
         "./scripts/e2e/parser_operator_developer_runbook_replay.sh drill",
+        "latest complete directory",
     ] {
         assert!(
             doc.contains(section),
@@ -295,6 +301,14 @@ fn readme_references_operator_runbook_gate_and_replay() {
     assert!(
         readme.contains("./scripts/e2e/parser_operator_developer_runbook_replay.sh drill"),
         "README missing parser operator/developer runbook drill replay command"
+    );
+    assert!(
+        readme.contains("latest complete artifact bundle"),
+        "README missing parser operator/developer runbook latest-complete replay guidance"
+    );
+    assert!(
+        readme.contains("skip a newer incomplete run directory"),
+        "README missing parser operator/developer runbook incomplete-directory warning guidance"
     );
 }
 
@@ -583,6 +597,28 @@ fn parser_operator_runbook_doc_references_cli_commands() {
         assert!(
             doc.contains(cli),
             "runbook doc missing CLI command reference: {cli}"
+        );
+    }
+}
+
+#[test]
+fn parser_operator_runbook_replay_wrapper_surfaces_latest_complete_bundle() {
+    let replay_script = load_replay_script();
+    for marker in [
+        "artifact_root=",
+        "latest_artifact_dir()",
+        "latest_complete_run_dir()",
+        "missing_bundle_exit_code()",
+        "newest directory ${latest_artifact_dir_path} is incomplete",
+        "[parser-operator-runbook] latest manifest:",
+        "[parser-operator-runbook] latest events:",
+        "[parser-operator-runbook] latest commands:",
+        "[parser-operator-runbook] latest first step log:",
+        "step_logs/step_000.log",
+    ] {
+        assert!(
+            replay_script.contains(marker),
+            "replay wrapper missing required marker: {marker}"
         );
     }
 }

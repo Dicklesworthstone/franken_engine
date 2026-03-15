@@ -257,7 +257,7 @@ write_manifest() {
     echo "    \"manifest\": \"${manifest_path}\","
     echo "    \"events\": \"${events_path}\","
     echo "    \"commands\": \"${commands_path}\","
-    echo "    \"step_logs\": \"${step_logs_dir}\","
+    echo '    "step_logs": "'"${step_logs_dir}"'",'
     echo '    "contract_doc": "docs/PARSER_PERFORMANCE_PROMOTION_GATE.md",'
     echo '    "gate_fixture": "crates/franken-engine/tests/fixtures/parser_performance_promotion_gate_v1.json",'
     echo '    "gate_tests": "crates/franken-engine/tests/parser_performance_promotion_gate.rs",'

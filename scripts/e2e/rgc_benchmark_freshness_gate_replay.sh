@@ -4,14 +4,11 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root_dir"
 
-source "${root_dir}/scripts/e2e/parser_deterministic_env.sh"
-parser_frontier_bootstrap_env
-
-artifact_root="${PARSER_OPERATOR_DEVELOPER_RUNBOOK_ARTIFACT_ROOT:-artifacts/parser_operator_developer_runbook}"
 mode="${1:-ci}"
+artifact_root="${RGC_BENCHMARK_FRESHNESS_GATE_ARTIFACT_ROOT:-${root_dir}/artifacts/benchmark_freshness_gate}"
 main_exit=0
 
-./scripts/run_parser_operator_developer_runbook.sh "$mode" || main_exit=$?
+"${root_dir}/scripts/run_rgc_benchmark_freshness_gate.sh" "${mode}" || main_exit=$?
 
 latest_artifact_dir() {
   if [[ ! -d "${artifact_root}" ]]; then
@@ -30,6 +27,13 @@ latest_complete_run_dir() {
     [[ -f "${candidate}/run_manifest.json" ]] || continue
     [[ -f "${candidate}/events.jsonl" ]] || continue
     [[ -f "${candidate}/commands.txt" ]] || continue
+    [[ -f "${candidate}/trace_ids.json" ]] || continue
+    [[ -f "${candidate}/summary.md" ]] || continue
+    [[ -f "${candidate}/env.json" ]] || continue
+    [[ -f "${candidate}/repro.lock" ]] || continue
+    [[ -f "${candidate}/benchmark_freshness_state.json" ]] || continue
+    [[ -f "${candidate}/freshness_downgrade_reasons.jsonl" ]] || continue
+    [[ -f "${candidate}/freshness_remediation_plan.json" ]] || continue
     [[ -f "${candidate}/step_logs/step_000.log" ]] || continue
     printf '%s\n' "${candidate}"
   done | tail -n 1
@@ -49,24 +53,18 @@ latest_artifact_dir_path="$(latest_artifact_dir)"
 latest_run_dir="$(latest_complete_run_dir)"
 if [[ -z "${latest_run_dir}" ]]; then
   if [[ -n "${latest_artifact_dir_path}" ]]; then
-    echo "parser operator/developer runbook replay could not locate a complete run directory under ${artifact_root}; newest directory ${latest_artifact_dir_path} is incomplete" >&2
+    echo "benchmark freshness gate replay could not locate a complete run directory under ${artifact_root}; newest directory ${latest_artifact_dir_path} is incomplete" >&2
   else
-    echo "parser operator/developer runbook replay could not locate a complete run directory under ${artifact_root}" >&2
+    echo "benchmark freshness gate replay could not locate a complete run directory under ${artifact_root}" >&2
   fi
   exit "$(missing_bundle_exit_code "${main_exit:-1}")"
 fi
 
 if [[ -n "${latest_artifact_dir_path}" && "${latest_artifact_dir_path}" != "${latest_run_dir}" ]]; then
-  echo "[parser-operator-runbook] newest directory ${latest_artifact_dir_path} is incomplete; using latest complete run directory ${latest_run_dir}" >&2
+  echo "[rgc-benchmark-freshness-gate] newest directory ${latest_artifact_dir_path} is incomplete; using latest complete run directory ${latest_run_dir}" >&2
 fi
 
-echo "[parser-operator-runbook] latest manifest: ${latest_run_dir}/run_manifest.json"
-cat "${latest_run_dir}/run_manifest.json"
-echo "[parser-operator-runbook] latest events: ${latest_run_dir}/events.jsonl"
-cat "${latest_run_dir}/events.jsonl"
-echo "[parser-operator-runbook] latest commands: ${latest_run_dir}/commands.txt"
-cat "${latest_run_dir}/commands.txt"
-echo "[parser-operator-runbook] latest first step log: ${latest_run_dir}/step_logs/step_000.log"
-cat "${latest_run_dir}/step_logs/step_000.log"
+echo "benchmark freshness gate replay manifest: ${latest_run_dir}/run_manifest.json"
+echo "benchmark freshness gate replay summary: ${latest_run_dir}/summary.md"
 
 exit "$main_exit"

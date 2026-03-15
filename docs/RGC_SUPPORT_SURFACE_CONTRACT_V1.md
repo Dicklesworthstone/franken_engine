@@ -15,6 +15,7 @@ The contract exists so the public story is derived from the same evidence that
 already governs:
 
 - shipped `frankenctl` help and README surfaces
+- callback-heavy stdlib collection/runtime gaps on the shipped execution path
 - React capability rows and fail-closed diagnostics
 - TypeScript normalization subset limits
 - module-resolution fallback semantics
@@ -49,6 +50,7 @@ Current notable rows:
 
 - `runtime.frankenctl_core_workflows`: shipped
 - `runtime.doctor_support_bundle_export`: shipped, but lossless-mode bound
+- `runtime.callback_stdlib_collection_callbacks`: unsupported and fail-closed
 - `runtime.react_compile_contract`: deferred and fail-closed
 - `runtime.react_execution_entrypoints`: unsupported and fail-closed
 - `typescript.normalization_subset`: shipped only for the documented subset

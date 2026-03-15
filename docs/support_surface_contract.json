@@ -13,7 +13,9 @@
     "docs/rgc_module_resolution_index_v1.json",
     "docs/rgc_cross_platform_matrix_v1.json",
     "docs/rgc_observability_channel_policy_v1.json",
-    "crates/franken-engine/src/bin/frankenctl.rs"
+    "crates/franken-engine/src/bin/frankenctl.rs",
+    "crates/franken-engine/src/stdlib.rs",
+    "crates/franken-engine/src/callback_stdlib_dispatch.rs"
   ],
   "allowed_support_statuses": [
     "shipped",
@@ -174,6 +176,37 @@
         "waiver_required": false,
         "max_waiver_age_hours": null,
         "user_visible_diagnostics_required": false,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": null
+      }
+    },
+    {
+      "surface_id": "runtime.callback_stdlib_collection_callbacks",
+      "area": "runtime",
+      "entry_surface": "Array/Map/Set callback-heavy prototype methods on the shipped runtime path",
+      "support_status": "unsupported",
+      "claim_language_state": "target_only",
+      "current_behavior": "Callback-heavy collection methods are installed publicly in stdlib surface setup, but the shipped runtime path still fail-closes them at builtin dispatch time with the generic `requires callback or heap access (use interpreter dispatch)` error instead of executing user callbacks through the runtime.",
+      "evidence_sources": [
+        "crates/franken-engine/src/stdlib.rs",
+        "crates/franken-engine/src/callback_stdlib_dispatch.rs"
+      ],
+      "linked_fallback_reasons": [
+        "requires_callback_or_heap_access_use_interpreter_dispatch"
+      ],
+      "mode_matrix_row_id": null,
+      "user_visible_diagnostic": {
+        "error_code": null,
+        "diagnostic_surface": "runtime stdlib builtin dispatch",
+        "message_template": "Array/Map/Set callback-heavy prototype methods are not yet shipped on the executable runtime path and currently fail closed with `requires callback or heap access (use interpreter dispatch)`.",
+        "remediation": "Treat callback-heavy Array/Map/Set methods as unsupported on the shipped runtime path; narrow the workload to currently supported non-callback builtins or wait for the callback-dispatch runtime lane to ship before claiming support.",
+        "remediation_bead": "bd-1lsy.10.11.2"
+      },
+      "fallback_policy": {
+        "fallback_mode": "fail_closed_type_error",
+        "waiver_required": true,
+        "max_waiver_age_hours": 168,
+        "user_visible_diagnostics_required": true,
         "remediation_bead": "bd-1lsy.10.11.2",
         "target_milestone": null
       }

@@ -8,7 +8,12 @@
 //! - full integration
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fmt;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +22,17 @@ use crate::hash_tiers::ContentHash;
 
 const CONTROL_PLANE_BENCHMARK_SPLIT_DOMAIN: &[u8] =
     b"FrankenEngine.ControlPlaneBenchmarkSplitGate.v1";
+pub const CONTROL_PLANE_REAL_CONTEXT_OVERHEAD_REPORT_FILE: &str =
+    "control_plane_real_context_overhead_report.json";
+pub const BENCHMARK_SPLIT_DELTA_REPORT_FILE: &str = "benchmark_split_delta_report.json";
+pub const CONTROL_PLANE_REAL_CONTEXT_OVERHEAD_REPORT_SCHEMA_VERSION: &str =
+    "franken-engine.control-plane-benchmark-split.real-context-overhead-report.v1";
+pub const BENCHMARK_SPLIT_DELTA_REPORT_SCHEMA_VERSION: &str =
+    "franken-engine.control-plane-benchmark-split.delta-report.v1";
+pub const CONTROL_PLANE_BENCHMARK_SPLIT_REPORT_COMPONENT: &str =
+    "control_plane_benchmark_split_gate";
+
+static NEXT_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(0);
 
 fn hash_bytes(data: &[u8]) -> [u8; 32] {
     *ContentHash::compute(data).as_bytes()
@@ -282,6 +298,178 @@ pub struct BenchmarkSplitGateDecision {
     pub findings: Vec<BenchmarkSplitFinding>,
     pub logs: Vec<BenchmarkSplitLogEvent>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BenchmarkImpactVisibility {
+    UserVisible,
+    OperatorVisible,
+    Mixed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BenchmarkImpactSeverity {
+    Transparent,
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BenchmarkImpactClass {
+    Transparent,
+    Noticeable,
+    ActionRequired,
+    ReleaseBlocking,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BenchmarkDeltaReferenceKind {
+    PreviousStage,
+    ShortcutBaseline,
+    PreviousSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BenchmarkBaselineStabilityReport {
+    pub observed_run_count: usize,
+    pub required_run_count: usize,
+    pub observed_cv_millionths: Option<u64>,
+    pub max_cv_millionths: u64,
+    pub pass: bool,
+    pub severity: BenchmarkImpactSeverity,
+    pub operator_impact_class: BenchmarkImpactClass,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BenchmarkSplitDeltaSummary {
+    pub reference_kind: BenchmarkDeltaReferenceKind,
+    pub reference_split: BenchmarkSplit,
+    pub candidate_split: BenchmarkSplit,
+    pub throughput_ops_per_sec_delta: i64,
+    pub throughput_regression_millionths: u64,
+    pub latency_p95_ns_delta: i64,
+    pub latency_p95_regression_millionths: u64,
+    pub latency_p99_ns_delta: i64,
+    pub latency_p99_regression_millionths: u64,
+    pub peak_rss_delta_bytes: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BenchmarkOverheadComponentAttribution {
+    pub component_id: String,
+    pub visibility: BenchmarkImpactVisibility,
+    pub reference_split: BenchmarkSplit,
+    pub candidate_split: BenchmarkSplit,
+    pub throughput_ops_per_sec_delta: i64,
+    pub throughput_regression_millionths: u64,
+    pub latency_p95_ns_delta: i64,
+    pub latency_p95_regression_millionths: u64,
+    pub latency_p99_ns_delta: i64,
+    pub latency_p99_regression_millionths: u64,
+    pub peak_rss_delta_bytes: i64,
+    pub primary_threshold_metric: Option<String>,
+    pub primary_threshold_millionths: Option<u64>,
+    pub threshold_exceeded: bool,
+    pub severity: BenchmarkImpactSeverity,
+    pub impact_class: BenchmarkImpactClass,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlPlaneRealContextOverheadReport {
+    pub schema_version: String,
+    pub component: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub previous_snapshot_id: String,
+    pub candidate_snapshot_id: String,
+    pub shortcut_reference_split: BenchmarkSplit,
+    pub corrected_real_context_split: BenchmarkSplit,
+    pub bounded_overhead: bool,
+    pub rollback_required: bool,
+    pub severity: BenchmarkImpactSeverity,
+    pub user_impact_class: BenchmarkImpactClass,
+    pub operator_impact_class: BenchmarkImpactClass,
+    pub baseline_stability: BenchmarkBaselineStabilityReport,
+    pub corrected_path_delta_vs_shortcut: BenchmarkSplitDeltaSummary,
+    pub user_visible_delta: BenchmarkSplitDeltaSummary,
+    pub operator_visible_delta: BenchmarkSplitDeltaSummary,
+    pub corrected_path_components: Vec<BenchmarkOverheadComponentAttribution>,
+    pub findings: Vec<BenchmarkSplitFinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BenchmarkSplitDeltaEntry {
+    pub reference_kind: BenchmarkDeltaReferenceKind,
+    pub visibility: BenchmarkImpactVisibility,
+    pub reference_split: BenchmarkSplit,
+    pub candidate_split: BenchmarkSplit,
+    pub throughput_ops_per_sec_delta: i64,
+    pub throughput_regression_millionths: u64,
+    pub latency_p95_ns_delta: i64,
+    pub latency_p95_regression_millionths: u64,
+    pub latency_p99_ns_delta: i64,
+    pub latency_p99_regression_millionths: u64,
+    pub peak_rss_delta_bytes: i64,
+    pub severity: BenchmarkImpactSeverity,
+    pub user_impact_class: BenchmarkImpactClass,
+    pub operator_impact_class: BenchmarkImpactClass,
+    pub finding_codes: Vec<BenchmarkSplitFailureCode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BenchmarkSplitDeltaReport {
+    pub schema_version: String,
+    pub component: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub bounded_overhead: bool,
+    pub rollback_required: bool,
+    pub severity: BenchmarkImpactSeverity,
+    pub user_impact_class: BenchmarkImpactClass,
+    pub operator_impact_class: BenchmarkImpactClass,
+    pub previous_stage_deltas: Vec<BenchmarkSplitDeltaEntry>,
+    pub shortcut_baseline_deltas: Vec<BenchmarkSplitDeltaEntry>,
+    pub previous_snapshot_deltas: Vec<BenchmarkSplitDeltaEntry>,
+    pub failing_findings: Vec<BenchmarkSplitFinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlPlaneBenchmarkSplitReportArtifacts {
+    pub out_dir: PathBuf,
+    pub control_plane_real_context_overhead_report_path: PathBuf,
+    pub benchmark_split_delta_report_path: PathBuf,
+    pub decision_id: String,
+    pub pass: bool,
+    pub rollback_required: bool,
+}
+
+#[derive(Debug)]
+pub enum ControlPlaneBenchmarkSplitReportWriteError {
+    Io { path: PathBuf, source: io::Error },
+    Json { path: PathBuf, reason: String },
+}
+
+impl fmt::Display for ControlPlaneBenchmarkSplitReportWriteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io { path, source } => {
+                write!(f, "I/O error for {}: {source}", path.display())
+            }
+            Self::Json { path, reason } => {
+                write!(f, "failed to serialize {}: {reason}", path.display())
+            }
+        }
+    }
+}
+
+impl std::error::Error for ControlPlaneBenchmarkSplitReportWriteError {}
 
 fn throughput_regression_millionths(reference: u64, candidate: u64) -> u64 {
     if reference == 0 {
@@ -860,6 +1048,811 @@ pub fn evaluate_control_plane_benchmark_split(
         findings,
         logs,
     }
+}
+
+/// Deterministic fixture used by the benchmark split suite to emit bead-specific
+/// report artifacts without depending on non-deterministic local measurements.
+pub fn control_plane_benchmark_split_report_fixture_input() -> BenchmarkSplitGateInput {
+    let previous_snapshot = BenchmarkSplitSnapshot {
+        snapshot_id: "report-fixture-previous-snapshot".to_string(),
+        benchmark_run_id: "report-fixture-previous-run".to_string(),
+        split_metrics: BTreeMap::from([
+            (
+                BenchmarkSplit::Baseline,
+                SplitBenchmarkMetrics {
+                    throughput_ops_per_sec: 1_002_000,
+                    latency_ns: LatencyStatsNs {
+                        p50_ns: 950_000,
+                        p95_ns: 1_000_000,
+                        p99_ns: 1_050_000,
+                    },
+                    peak_rss_delta_bytes: 0,
+                },
+            ),
+            (
+                BenchmarkSplit::CxThreading,
+                SplitBenchmarkMetrics {
+                    throughput_ops_per_sec: 997_000,
+                    latency_ns: LatencyStatsNs {
+                        p50_ns: 960_000,
+                        p95_ns: 1_008_000,
+                        p99_ns: 1_060_000,
+                    },
+                    peak_rss_delta_bytes: 8 * 1024 * 1024,
+                },
+            ),
+            (
+                BenchmarkSplit::DecisionContracts,
+                SplitBenchmarkMetrics {
+                    throughput_ops_per_sec: 994_000,
+                    latency_ns: LatencyStatsNs {
+                        p50_ns: 970_000,
+                        p95_ns: 1_052_000,
+                        p99_ns: 1_098_000,
+                    },
+                    peak_rss_delta_bytes: 16 * 1024 * 1024,
+                },
+            ),
+            (
+                BenchmarkSplit::EvidenceEmission,
+                SplitBenchmarkMetrics {
+                    throughput_ops_per_sec: 976_000,
+                    latency_ns: LatencyStatsNs {
+                        p50_ns: 980_000,
+                        p95_ns: 1_068_000,
+                        p99_ns: 1_116_000,
+                    },
+                    peak_rss_delta_bytes: 24 * 1024 * 1024,
+                },
+            ),
+            (
+                BenchmarkSplit::FullIntegration,
+                SplitBenchmarkMetrics {
+                    throughput_ops_per_sec: 958_000,
+                    latency_ns: LatencyStatsNs {
+                        p50_ns: 990_000,
+                        p95_ns: 1_080_000,
+                        p99_ns: 1_130_000,
+                    },
+                    peak_rss_delta_bytes: 30 * 1024 * 1024,
+                },
+            ),
+        ]),
+        baseline_throughput_runs_ops_per_sec: vec![
+            1_000_100, 1_000_250, 999_950, 1_000_000, 1_000_150, 1_000_300, 999_975, 1_000_050,
+            1_000_125, 1_000_225,
+        ],
+    };
+
+    let candidate_snapshot = BenchmarkSplitSnapshot {
+        snapshot_id: "report-fixture-candidate-snapshot".to_string(),
+        benchmark_run_id: "report-fixture-candidate-run".to_string(),
+        split_metrics: BTreeMap::from([
+            (
+                BenchmarkSplit::Baseline,
+                SplitBenchmarkMetrics {
+                    throughput_ops_per_sec: 1_000_000,
+                    latency_ns: LatencyStatsNs {
+                        p50_ns: 950_000,
+                        p95_ns: 1_000_000,
+                        p99_ns: 1_050_000,
+                    },
+                    peak_rss_delta_bytes: 0,
+                },
+            ),
+            (
+                BenchmarkSplit::CxThreading,
+                SplitBenchmarkMetrics {
+                    throughput_ops_per_sec: 995_000,
+                    latency_ns: LatencyStatsNs {
+                        p50_ns: 962_000,
+                        p95_ns: 1_008_000,
+                        p99_ns: 1_060_000,
+                    },
+                    peak_rss_delta_bytes: 8 * 1024 * 1024,
+                },
+            ),
+            (
+                BenchmarkSplit::DecisionContracts,
+                SplitBenchmarkMetrics {
+                    throughput_ops_per_sec: 993_500,
+                    latency_ns: LatencyStatsNs {
+                        p50_ns: 972_000,
+                        p95_ns: 1_055_000,
+                        p99_ns: 1_100_000,
+                    },
+                    peak_rss_delta_bytes: 16 * 1024 * 1024,
+                },
+            ),
+            (
+                BenchmarkSplit::EvidenceEmission,
+                SplitBenchmarkMetrics {
+                    throughput_ops_per_sec: 975_000,
+                    latency_ns: LatencyStatsNs {
+                        p50_ns: 980_000,
+                        p95_ns: 1_068_000,
+                        p99_ns: 1_115_000,
+                    },
+                    peak_rss_delta_bytes: 24 * 1024 * 1024,
+                },
+            ),
+            (
+                BenchmarkSplit::FullIntegration,
+                SplitBenchmarkMetrics {
+                    throughput_ops_per_sec: 955_000,
+                    latency_ns: LatencyStatsNs {
+                        p50_ns: 990_000,
+                        p95_ns: 1_080_000,
+                        p99_ns: 1_130_000,
+                    },
+                    peak_rss_delta_bytes: 30 * 1024 * 1024,
+                },
+            ),
+        ]),
+        baseline_throughput_runs_ops_per_sec: vec![
+            1_000_100, 1_000_250, 999_950, 1_000_000, 1_000_150, 1_000_300, 999_975, 1_000_050,
+            1_000_125, 1_000_225,
+        ],
+    };
+
+    BenchmarkSplitGateInput {
+        trace_id: "trace-bd-3nr-1-5-2-report-fixture".to_string(),
+        policy_id: "policy-bd-3nr-1-5-2-report-fixture".to_string(),
+        previous_snapshot,
+        candidate_snapshot,
+    }
+}
+
+pub fn build_control_plane_real_context_overhead_report(
+    input: &BenchmarkSplitGateInput,
+    thresholds: &BenchmarkSplitThresholds,
+    decision: &BenchmarkSplitGateDecision,
+) -> ControlPlaneRealContextOverheadReport {
+    let baseline_stability = build_baseline_stability_report(input, thresholds, decision);
+    let corrected_path_delta_vs_shortcut = build_delta_summary(
+        BenchmarkDeltaReferenceKind::ShortcutBaseline,
+        BenchmarkSplit::Baseline,
+        BenchmarkSplit::FullIntegration,
+        input,
+    );
+    let user_visible_delta = build_delta_summary(
+        BenchmarkDeltaReferenceKind::ShortcutBaseline,
+        BenchmarkSplit::Baseline,
+        BenchmarkSplit::EvidenceEmission,
+        input,
+    );
+    let operator_visible_delta = build_delta_summary(
+        BenchmarkDeltaReferenceKind::PreviousStage,
+        BenchmarkSplit::EvidenceEmission,
+        BenchmarkSplit::FullIntegration,
+        input,
+    );
+
+    let corrected_path_components = vec![
+        build_component_attribution(
+            "cx_threading",
+            BenchmarkImpactVisibility::UserVisible,
+            BenchmarkSplit::Baseline,
+            BenchmarkSplit::CxThreading,
+            input,
+            thresholds,
+            decision,
+        ),
+        build_component_attribution(
+            "decision_contracts",
+            BenchmarkImpactVisibility::UserVisible,
+            BenchmarkSplit::CxThreading,
+            BenchmarkSplit::DecisionContracts,
+            input,
+            thresholds,
+            decision,
+        ),
+        build_component_attribution(
+            "evidence_emission",
+            BenchmarkImpactVisibility::UserVisible,
+            BenchmarkSplit::DecisionContracts,
+            BenchmarkSplit::EvidenceEmission,
+            input,
+            thresholds,
+            decision,
+        ),
+        build_component_attribution(
+            "full_integration_gate_runtime",
+            BenchmarkImpactVisibility::OperatorVisible,
+            BenchmarkSplit::EvidenceEmission,
+            BenchmarkSplit::FullIntegration,
+            input,
+            thresholds,
+            decision,
+        ),
+    ];
+
+    let user_severity = corrected_path_components
+        .iter()
+        .filter(|component| {
+            matches!(
+                component.visibility,
+                BenchmarkImpactVisibility::UserVisible | BenchmarkImpactVisibility::Mixed
+            )
+        })
+        .fold(
+            BenchmarkImpactSeverity::Transparent,
+            |severity, component| severity.max(component.severity),
+        );
+    let operator_severity = corrected_path_components
+        .iter()
+        .filter(|component| {
+            matches!(
+                component.visibility,
+                BenchmarkImpactVisibility::OperatorVisible | BenchmarkImpactVisibility::Mixed
+            )
+        })
+        .fold(baseline_stability.severity, |severity, component| {
+            severity.max(component.severity)
+        });
+    let severity = user_severity.max(operator_severity);
+
+    ControlPlaneRealContextOverheadReport {
+        schema_version: CONTROL_PLANE_REAL_CONTEXT_OVERHEAD_REPORT_SCHEMA_VERSION.to_string(),
+        component: CONTROL_PLANE_BENCHMARK_SPLIT_REPORT_COMPONENT.to_string(),
+        trace_id: input.trace_id.clone(),
+        decision_id: decision.decision_id.clone(),
+        policy_id: input.policy_id.clone(),
+        previous_snapshot_id: input.previous_snapshot.snapshot_id.clone(),
+        candidate_snapshot_id: input.candidate_snapshot.snapshot_id.clone(),
+        shortcut_reference_split: BenchmarkSplit::Baseline,
+        corrected_real_context_split: BenchmarkSplit::FullIntegration,
+        bounded_overhead: decision.pass,
+        rollback_required: decision.rollback_required,
+        severity,
+        user_impact_class: impact_class_from_severity(user_severity),
+        operator_impact_class: impact_class_from_severity(operator_severity),
+        baseline_stability,
+        corrected_path_delta_vs_shortcut,
+        user_visible_delta,
+        operator_visible_delta,
+        corrected_path_components,
+        findings: decision.findings.clone(),
+    }
+}
+
+pub fn build_benchmark_split_delta_report(
+    input: &BenchmarkSplitGateInput,
+    decision: &BenchmarkSplitGateDecision,
+) -> BenchmarkSplitDeltaReport {
+    let previous_stage_deltas = vec![
+        build_delta_entry(
+            BenchmarkDeltaReferenceKind::PreviousStage,
+            BenchmarkSplit::Baseline,
+            BenchmarkSplit::CxThreading,
+            input,
+            decision,
+        ),
+        build_delta_entry(
+            BenchmarkDeltaReferenceKind::PreviousStage,
+            BenchmarkSplit::CxThreading,
+            BenchmarkSplit::DecisionContracts,
+            input,
+            decision,
+        ),
+        build_delta_entry(
+            BenchmarkDeltaReferenceKind::PreviousStage,
+            BenchmarkSplit::DecisionContracts,
+            BenchmarkSplit::EvidenceEmission,
+            input,
+            decision,
+        ),
+        build_delta_entry(
+            BenchmarkDeltaReferenceKind::PreviousStage,
+            BenchmarkSplit::EvidenceEmission,
+            BenchmarkSplit::FullIntegration,
+            input,
+            decision,
+        ),
+    ];
+    let shortcut_baseline_deltas = vec![
+        build_delta_entry(
+            BenchmarkDeltaReferenceKind::ShortcutBaseline,
+            BenchmarkSplit::Baseline,
+            BenchmarkSplit::CxThreading,
+            input,
+            decision,
+        ),
+        build_delta_entry(
+            BenchmarkDeltaReferenceKind::ShortcutBaseline,
+            BenchmarkSplit::Baseline,
+            BenchmarkSplit::DecisionContracts,
+            input,
+            decision,
+        ),
+        build_delta_entry(
+            BenchmarkDeltaReferenceKind::ShortcutBaseline,
+            BenchmarkSplit::Baseline,
+            BenchmarkSplit::EvidenceEmission,
+            input,
+            decision,
+        ),
+        build_delta_entry(
+            BenchmarkDeltaReferenceKind::ShortcutBaseline,
+            BenchmarkSplit::Baseline,
+            BenchmarkSplit::FullIntegration,
+            input,
+            decision,
+        ),
+    ];
+    let previous_snapshot_deltas = vec![
+        build_delta_entry(
+            BenchmarkDeltaReferenceKind::PreviousSnapshot,
+            BenchmarkSplit::Baseline,
+            BenchmarkSplit::Baseline,
+            input,
+            decision,
+        ),
+        build_delta_entry(
+            BenchmarkDeltaReferenceKind::PreviousSnapshot,
+            BenchmarkSplit::CxThreading,
+            BenchmarkSplit::CxThreading,
+            input,
+            decision,
+        ),
+        build_delta_entry(
+            BenchmarkDeltaReferenceKind::PreviousSnapshot,
+            BenchmarkSplit::DecisionContracts,
+            BenchmarkSplit::DecisionContracts,
+            input,
+            decision,
+        ),
+        build_delta_entry(
+            BenchmarkDeltaReferenceKind::PreviousSnapshot,
+            BenchmarkSplit::EvidenceEmission,
+            BenchmarkSplit::EvidenceEmission,
+            input,
+            decision,
+        ),
+        build_delta_entry(
+            BenchmarkDeltaReferenceKind::PreviousSnapshot,
+            BenchmarkSplit::FullIntegration,
+            BenchmarkSplit::FullIntegration,
+            input,
+            decision,
+        ),
+    ];
+
+    let user_severity = previous_stage_deltas
+        .iter()
+        .filter(|delta| {
+            matches!(
+                delta.visibility,
+                BenchmarkImpactVisibility::UserVisible | BenchmarkImpactVisibility::Mixed
+            )
+        })
+        .fold(BenchmarkImpactSeverity::Transparent, |severity, delta| {
+            severity.max(delta.severity)
+        });
+    let operator_severity = previous_stage_deltas
+        .iter()
+        .filter(|delta| {
+            matches!(
+                delta.visibility,
+                BenchmarkImpactVisibility::OperatorVisible | BenchmarkImpactVisibility::Mixed
+            )
+        })
+        .fold(BenchmarkImpactSeverity::Transparent, |severity, delta| {
+            severity.max(delta.severity)
+        });
+    let severity = user_severity.max(operator_severity);
+
+    BenchmarkSplitDeltaReport {
+        schema_version: BENCHMARK_SPLIT_DELTA_REPORT_SCHEMA_VERSION.to_string(),
+        component: CONTROL_PLANE_BENCHMARK_SPLIT_REPORT_COMPONENT.to_string(),
+        trace_id: input.trace_id.clone(),
+        decision_id: decision.decision_id.clone(),
+        policy_id: input.policy_id.clone(),
+        bounded_overhead: decision.pass,
+        rollback_required: decision.rollback_required,
+        severity,
+        user_impact_class: impact_class_from_severity(user_severity),
+        operator_impact_class: impact_class_from_severity(operator_severity),
+        previous_stage_deltas,
+        shortcut_baseline_deltas,
+        previous_snapshot_deltas,
+        failing_findings: decision.findings.clone(),
+    }
+}
+
+pub fn write_control_plane_benchmark_split_reports(
+    out_dir: &Path,
+) -> Result<ControlPlaneBenchmarkSplitReportArtifacts, ControlPlaneBenchmarkSplitReportWriteError> {
+    let input = control_plane_benchmark_split_report_fixture_input();
+    let thresholds = BenchmarkSplitThresholds::default();
+    let decision = evaluate_control_plane_benchmark_split(&input, &thresholds);
+    let overhead_report =
+        build_control_plane_real_context_overhead_report(&input, &thresholds, &decision);
+    let delta_report = build_benchmark_split_delta_report(&input, &decision);
+
+    let control_plane_real_context_overhead_report_path =
+        out_dir.join(CONTROL_PLANE_REAL_CONTEXT_OVERHEAD_REPORT_FILE);
+    let benchmark_split_delta_report_path = out_dir.join(BENCHMARK_SPLIT_DELTA_REPORT_FILE);
+    let overhead_bytes = json_pretty_bytes(
+        &overhead_report,
+        &control_plane_real_context_overhead_report_path,
+    )?;
+    let delta_bytes = json_pretty_bytes(&delta_report, &benchmark_split_delta_report_path)?;
+
+    write_atomic(
+        &control_plane_real_context_overhead_report_path,
+        &overhead_bytes,
+    )?;
+    write_atomic(&benchmark_split_delta_report_path, &delta_bytes)?;
+
+    Ok(ControlPlaneBenchmarkSplitReportArtifacts {
+        out_dir: out_dir.to_path_buf(),
+        control_plane_real_context_overhead_report_path,
+        benchmark_split_delta_report_path,
+        decision_id: decision.decision_id,
+        pass: decision.pass,
+        rollback_required: decision.rollback_required,
+    })
+}
+
+fn build_baseline_stability_report(
+    input: &BenchmarkSplitGateInput,
+    thresholds: &BenchmarkSplitThresholds,
+    decision: &BenchmarkSplitGateDecision,
+) -> BenchmarkBaselineStabilityReport {
+    let observed_run_count = input
+        .candidate_snapshot
+        .baseline_throughput_runs_ops_per_sec
+        .len();
+    let threshold_exceeded = decision.findings.iter().any(|finding| {
+        finding.split == Some(BenchmarkSplit::Baseline)
+            && finding.metric.as_deref() == Some("baseline_cv")
+    });
+    let severity = if threshold_exceeded {
+        if observed_run_count < thresholds.min_baseline_runs {
+            BenchmarkImpactSeverity::Critical
+        } else {
+            BenchmarkImpactSeverity::High
+        }
+    } else {
+        BenchmarkImpactSeverity::Transparent
+    };
+
+    BenchmarkBaselineStabilityReport {
+        observed_run_count,
+        required_run_count: thresholds.min_baseline_runs,
+        observed_cv_millionths: decision.baseline_cv_millionths,
+        max_cv_millionths: thresholds.max_baseline_cv_millionths,
+        pass: !threshold_exceeded,
+        severity,
+        operator_impact_class: impact_class_from_severity(severity),
+    }
+}
+
+fn build_component_attribution(
+    component_id: &str,
+    visibility: BenchmarkImpactVisibility,
+    reference_split: BenchmarkSplit,
+    candidate_split: BenchmarkSplit,
+    input: &BenchmarkSplitGateInput,
+    thresholds: &BenchmarkSplitThresholds,
+    decision: &BenchmarkSplitGateDecision,
+) -> BenchmarkOverheadComponentAttribution {
+    let summary = build_delta_summary(
+        BenchmarkDeltaReferenceKind::PreviousStage,
+        reference_split,
+        candidate_split,
+        input,
+    );
+    let finding_codes = finding_codes_for_split(&decision.findings, candidate_split);
+    let threshold_exceeded = !finding_codes.is_empty();
+    let (primary_threshold_metric, primary_threshold_millionths) =
+        component_threshold(candidate_split, thresholds);
+    let primary_regression = match candidate_split {
+        BenchmarkSplit::DecisionContracts => summary
+            .latency_p95_regression_millionths
+            .max(summary.latency_p99_regression_millionths),
+        _ => summary.throughput_regression_millionths,
+    };
+    let severity = severity_from_regression(
+        primary_regression,
+        primary_threshold_millionths,
+        threshold_exceeded,
+    );
+
+    BenchmarkOverheadComponentAttribution {
+        component_id: component_id.to_string(),
+        visibility,
+        reference_split,
+        candidate_split,
+        throughput_ops_per_sec_delta: summary.throughput_ops_per_sec_delta,
+        throughput_regression_millionths: summary.throughput_regression_millionths,
+        latency_p95_ns_delta: summary.latency_p95_ns_delta,
+        latency_p95_regression_millionths: summary.latency_p95_regression_millionths,
+        latency_p99_ns_delta: summary.latency_p99_ns_delta,
+        latency_p99_regression_millionths: summary.latency_p99_regression_millionths,
+        peak_rss_delta_bytes: summary.peak_rss_delta_bytes,
+        primary_threshold_metric: primary_threshold_metric.map(str::to_string),
+        primary_threshold_millionths,
+        threshold_exceeded,
+        severity,
+        impact_class: impact_class_from_severity(severity),
+    }
+}
+
+fn build_delta_entry(
+    reference_kind: BenchmarkDeltaReferenceKind,
+    reference_split: BenchmarkSplit,
+    candidate_split: BenchmarkSplit,
+    input: &BenchmarkSplitGateInput,
+    decision: &BenchmarkSplitGateDecision,
+) -> BenchmarkSplitDeltaEntry {
+    let summary = build_delta_summary(reference_kind, reference_split, candidate_split, input);
+    let visibility = delta_visibility(reference_kind, candidate_split);
+    let finding_codes = finding_codes_for_split(&decision.findings, candidate_split);
+    let threshold_exceeded = !finding_codes.is_empty();
+    let primary_regression = summary
+        .throughput_regression_millionths
+        .max(summary.latency_p95_regression_millionths)
+        .max(summary.latency_p99_regression_millionths);
+    let severity = severity_from_regression(primary_regression, None, threshold_exceeded);
+    let user_impact_class = match visibility {
+        BenchmarkImpactVisibility::OperatorVisible => BenchmarkImpactClass::Transparent,
+        BenchmarkImpactVisibility::UserVisible | BenchmarkImpactVisibility::Mixed => {
+            impact_class_from_severity(severity)
+        }
+    };
+    let operator_impact_class = match visibility {
+        BenchmarkImpactVisibility::UserVisible => BenchmarkImpactClass::Transparent,
+        BenchmarkImpactVisibility::OperatorVisible | BenchmarkImpactVisibility::Mixed => {
+            impact_class_from_severity(severity)
+        }
+    };
+
+    BenchmarkSplitDeltaEntry {
+        reference_kind,
+        visibility,
+        reference_split,
+        candidate_split,
+        throughput_ops_per_sec_delta: summary.throughput_ops_per_sec_delta,
+        throughput_regression_millionths: summary.throughput_regression_millionths,
+        latency_p95_ns_delta: summary.latency_p95_ns_delta,
+        latency_p95_regression_millionths: summary.latency_p95_regression_millionths,
+        latency_p99_ns_delta: summary.latency_p99_ns_delta,
+        latency_p99_regression_millionths: summary.latency_p99_regression_millionths,
+        peak_rss_delta_bytes: summary.peak_rss_delta_bytes,
+        severity,
+        user_impact_class,
+        operator_impact_class,
+        finding_codes,
+    }
+}
+
+fn build_delta_summary(
+    reference_kind: BenchmarkDeltaReferenceKind,
+    reference_split: BenchmarkSplit,
+    candidate_split: BenchmarkSplit,
+    input: &BenchmarkSplitGateInput,
+) -> BenchmarkSplitDeltaSummary {
+    let (reference_metrics, candidate_metrics) = match reference_kind {
+        BenchmarkDeltaReferenceKind::PreviousSnapshot => (
+            input
+                .previous_snapshot
+                .split_metrics
+                .get(&reference_split)
+                .expect("previous snapshot split metrics"),
+            input
+                .candidate_snapshot
+                .split_metrics
+                .get(&candidate_split)
+                .expect("candidate snapshot split metrics"),
+        ),
+        BenchmarkDeltaReferenceKind::PreviousStage
+        | BenchmarkDeltaReferenceKind::ShortcutBaseline => (
+            input
+                .candidate_snapshot
+                .split_metrics
+                .get(&reference_split)
+                .expect("candidate reference split metrics"),
+            input
+                .candidate_snapshot
+                .split_metrics
+                .get(&candidate_split)
+                .expect("candidate split metrics"),
+        ),
+    };
+
+    BenchmarkSplitDeltaSummary {
+        reference_kind,
+        reference_split,
+        candidate_split,
+        throughput_ops_per_sec_delta: signed_delta(
+            reference_metrics.throughput_ops_per_sec,
+            candidate_metrics.throughput_ops_per_sec,
+        ),
+        throughput_regression_millionths: throughput_regression_millionths(
+            reference_metrics.throughput_ops_per_sec,
+            candidate_metrics.throughput_ops_per_sec,
+        ),
+        latency_p95_ns_delta: signed_delta(
+            reference_metrics.latency_ns.p95_ns,
+            candidate_metrics.latency_ns.p95_ns,
+        ),
+        latency_p95_regression_millionths: latency_regression_millionths(
+            reference_metrics.latency_ns.p95_ns,
+            candidate_metrics.latency_ns.p95_ns,
+        ),
+        latency_p99_ns_delta: signed_delta(
+            reference_metrics.latency_ns.p99_ns,
+            candidate_metrics.latency_ns.p99_ns,
+        ),
+        latency_p99_regression_millionths: latency_regression_millionths(
+            reference_metrics.latency_ns.p99_ns,
+            candidate_metrics.latency_ns.p99_ns,
+        ),
+        peak_rss_delta_bytes: signed_delta(
+            reference_metrics.peak_rss_delta_bytes,
+            candidate_metrics.peak_rss_delta_bytes,
+        ),
+    }
+}
+
+fn component_threshold(
+    candidate_split: BenchmarkSplit,
+    thresholds: &BenchmarkSplitThresholds,
+) -> (Option<&'static str>, Option<u64>) {
+    match candidate_split {
+        BenchmarkSplit::CxThreading => (
+            Some("throughput_ops_per_sec"),
+            Some(thresholds.max_cx_throughput_regression_millionths),
+        ),
+        BenchmarkSplit::DecisionContracts => (
+            Some("latency_ns.p95_p99"),
+            Some(thresholds.max_decision_latency_regression_millionths),
+        ),
+        BenchmarkSplit::EvidenceEmission => (
+            Some("throughput_ops_per_sec"),
+            Some(thresholds.max_evidence_throughput_regression_millionths),
+        ),
+        BenchmarkSplit::FullIntegration => (None, None),
+        BenchmarkSplit::Baseline => (None, None),
+    }
+}
+
+fn finding_codes_for_split(
+    findings: &[BenchmarkSplitFinding],
+    split: BenchmarkSplit,
+) -> Vec<BenchmarkSplitFailureCode> {
+    findings
+        .iter()
+        .filter(|finding| finding.split == Some(split))
+        .map(|finding| finding.code)
+        .collect()
+}
+
+fn delta_visibility(
+    reference_kind: BenchmarkDeltaReferenceKind,
+    candidate_split: BenchmarkSplit,
+) -> BenchmarkImpactVisibility {
+    match (reference_kind, candidate_split) {
+        (BenchmarkDeltaReferenceKind::PreviousStage, BenchmarkSplit::FullIntegration) => {
+            BenchmarkImpactVisibility::OperatorVisible
+        }
+        (BenchmarkDeltaReferenceKind::PreviousSnapshot, BenchmarkSplit::Baseline) => {
+            BenchmarkImpactVisibility::OperatorVisible
+        }
+        (BenchmarkDeltaReferenceKind::PreviousSnapshot, BenchmarkSplit::FullIntegration)
+        | (BenchmarkDeltaReferenceKind::ShortcutBaseline, BenchmarkSplit::FullIntegration) => {
+            BenchmarkImpactVisibility::Mixed
+        }
+        _ => BenchmarkImpactVisibility::UserVisible,
+    }
+}
+
+fn impact_class_from_severity(severity: BenchmarkImpactSeverity) -> BenchmarkImpactClass {
+    match severity {
+        BenchmarkImpactSeverity::Transparent => BenchmarkImpactClass::Transparent,
+        BenchmarkImpactSeverity::Low | BenchmarkImpactSeverity::Medium => {
+            BenchmarkImpactClass::Noticeable
+        }
+        BenchmarkImpactSeverity::High => BenchmarkImpactClass::ActionRequired,
+        BenchmarkImpactSeverity::Critical => BenchmarkImpactClass::ReleaseBlocking,
+    }
+}
+
+fn severity_from_regression(
+    observed_millionths: u64,
+    threshold_millionths: Option<u64>,
+    threshold_exceeded: bool,
+) -> BenchmarkImpactSeverity {
+    if observed_millionths == 0 {
+        return BenchmarkImpactSeverity::Transparent;
+    }
+
+    if threshold_exceeded {
+        if let Some(threshold) = threshold_millionths {
+            if observed_millionths > threshold.saturating_mul(2) {
+                return BenchmarkImpactSeverity::Critical;
+            }
+        }
+        return BenchmarkImpactSeverity::High;
+    }
+
+    match threshold_millionths {
+        Some(threshold) if threshold > 0 => {
+            if observed_millionths.saturating_mul(4) < threshold {
+                BenchmarkImpactSeverity::Low
+            } else {
+                BenchmarkImpactSeverity::Medium
+            }
+        }
+        _ if observed_millionths < 5_000 => BenchmarkImpactSeverity::Low,
+        _ if observed_millionths < 20_000 => BenchmarkImpactSeverity::Medium,
+        _ if observed_millionths < 50_000 => BenchmarkImpactSeverity::High,
+        _ => BenchmarkImpactSeverity::Critical,
+    }
+}
+
+fn signed_delta(reference: u64, candidate: u64) -> i64 {
+    let delta = candidate as i128 - reference as i128;
+    if delta > i64::MAX as i128 {
+        i64::MAX
+    } else if delta < i64::MIN as i128 {
+        i64::MIN
+    } else {
+        delta as i64
+    }
+}
+
+fn json_pretty_bytes<T: Serialize>(
+    value: &T,
+    path: &Path,
+) -> Result<Vec<u8>, ControlPlaneBenchmarkSplitReportWriteError> {
+    serde_json::to_vec_pretty(value).map_err(|error| {
+        ControlPlaneBenchmarkSplitReportWriteError::Json {
+            path: path.to_path_buf(),
+            reason: error.to_string(),
+        }
+    })
+}
+
+fn write_atomic(
+    path: &Path,
+    bytes: &[u8],
+) -> Result<(), ControlPlaneBenchmarkSplitReportWriteError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| {
+            ControlPlaneBenchmarkSplitReportWriteError::Io {
+                path: parent.to_path_buf(),
+                source,
+            }
+        })?;
+    }
+
+    let temp_path = unique_temp_path(path);
+    fs::write(&temp_path, bytes).map_err(|source| {
+        ControlPlaneBenchmarkSplitReportWriteError::Io {
+            path: temp_path.clone(),
+            source,
+        }
+    })?;
+    fs::rename(&temp_path, path).map_err(|source| ControlPlaneBenchmarkSplitReportWriteError::Io {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+fn unique_temp_path(path: &Path) -> PathBuf {
+    let sequence = NEXT_TEMP_FILE_ID.fetch_add(1, Ordering::Relaxed);
+    let mut temp_name = OsString::from(".");
+    match path.file_name() {
+        Some(file_name) => temp_name.push(file_name),
+        None => temp_name.push("artifact"),
+    }
+    temp_name.push(format!(".{}.{}.tmp", std::process::id(), sequence));
+    path.parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(temp_name)
 }
 
 #[cfg(test)]

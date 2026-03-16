@@ -182,6 +182,35 @@ fn zero_placeholder_scan_gate_script_uses_unique_artifact_dir_namespace() {
 }
 
 #[test]
+fn zero_placeholder_scan_replay_wrapper_resolves_latest_complete_bundle_and_prints_artifacts() {
+    let script = read_repo_text("scripts/e2e/rgc_zero_placeholder_scan_replay.sh");
+    for marker in [
+        "latest_complete_run_dir()",
+        "could not locate a complete run directory under ${artifact_root}",
+        "newest directory ${latest_artifact_dir_path} is incomplete",
+        "zero_placeholder_inventory.json",
+        "trace_ids.json",
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+    ] {
+        assert!(
+            script.contains(marker),
+            "replay wrapper missing required marker: {marker}"
+        );
+    }
+}
+
+#[test]
+fn zero_placeholder_scan_replay_wrapper_uses_absolute_artifact_root_default() {
+    let script = read_repo_text("scripts/e2e/rgc_zero_placeholder_scan_replay.sh");
+    assert!(
+        script.contains("${root_dir}/artifacts/rgc_zero_placeholder_scan"),
+        "replay wrapper should default artifact_root under the repo root"
+    );
+}
+
+#[test]
 fn zero_placeholder_inventory_counts_match_expectations() {
     let inventory = zscan::zero_placeholder_scan_inventory();
     assert_eq!(

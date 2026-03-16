@@ -16,10 +16,12 @@ use std::fs;
 use std::path::PathBuf;
 
 use frankenengine_engine::control_plane_benchmark_split_gate::{
-    BenchmarkSplit, BenchmarkSplitFailureCode, BenchmarkSplitFinding, BenchmarkSplitGateDecision,
-    BenchmarkSplitGateInput, BenchmarkSplitLogEvent, BenchmarkSplitSnapshot,
-    BenchmarkSplitThresholds, LatencyStatsNs, SplitBenchmarkEvaluation, SplitBenchmarkMetrics,
-    evaluate_control_plane_benchmark_split,
+    BenchmarkImpactClass, BenchmarkImpactVisibility, BenchmarkSplit,
+    BenchmarkSplitDeltaReferenceKind, BenchmarkSplitFailureCode, BenchmarkSplitFinding,
+    BenchmarkSplitGateDecision, BenchmarkSplitGateInput, BenchmarkSplitLogEvent,
+    BenchmarkSplitSnapshot, BenchmarkSplitThresholds, LatencyStatsNs, SplitBenchmarkEvaluation,
+    SplitBenchmarkMetrics, build_benchmark_split_delta_report,
+    build_control_plane_real_context_overhead_report, evaluate_control_plane_benchmark_split,
 };
 
 fn repo_root() -> PathBuf {
@@ -292,6 +294,10 @@ fn control_plane_benchmark_doc_uses_rch_only_repo_local_target_dir_and_replay_wr
         "doc must reference the suite runner"
     );
     assert!(
+        doc.contains("./scripts/run_control_plane_benchmark_split_gate_suite.sh bundle"),
+        "doc must reference bundle mode for artifact emission"
+    );
+    assert!(
         doc.contains("./scripts/e2e/control_plane_benchmark_split_gate_replay.sh test"),
         "doc must reference the replay wrapper"
     );
@@ -308,6 +314,8 @@ fn control_plane_benchmark_doc_uses_rch_only_repo_local_target_dir_and_replay_wr
         "doc must not advertise local fallback for heavy commands"
     );
     for artifact in [
+        "control_plane_real_context_overhead_report.json",
+        "benchmark_split_delta_report.json",
         "step_logs/step_*.log",
         "env.json",
         "summary.md",
@@ -358,6 +366,26 @@ fn control_plane_benchmark_script_uses_repo_local_target_dir_and_hardened_artifa
         "run manifest should publish the trace_ids artifact path"
     );
     assert!(
+        script.contains("\"control_plane_real_context_overhead_report\":"),
+        "run manifest should publish the real-context overhead report path"
+    );
+    assert!(
+        script.contains("\"benchmark_split_delta_report\":"),
+        "run manifest should publish the split delta report path"
+    );
+    assert!(
+        script.contains("franken_control_plane_benchmark_split_report -- --out-dir"),
+        "suite script should emit bead-specific reports through the dedicated report binary"
+    );
+    assert!(
+        script.contains("\"scenario_id\":"),
+        "suite script events should carry scenario_id"
+    );
+    assert!(
+        script.contains("\"seed\":"),
+        "suite script events should carry seed"
+    );
+    assert!(
         script.contains("cat ${step_logs_dir}/step_000.log"),
         "operator verification should include a retained step log"
     );
@@ -372,6 +400,87 @@ fn control_plane_benchmark_script_uses_repo_local_target_dir_and_hardened_artifa
     assert!(
         !script.contains("warning: rch not found; running locally for this environment"),
         "suite script must not allow local fallback"
+    );
+}
+
+#[test]
+fn real_context_overhead_report_attributes_user_and_operator_costs() {
+    let gate_input = input(previous_snapshot(), candidate_snapshot(0, true));
+    let thresholds = BenchmarkSplitThresholds::default();
+    let decision = evaluate_control_plane_benchmark_split(&gate_input, &thresholds);
+    let report =
+        build_control_plane_real_context_overhead_report(&gate_input, &thresholds, &decision);
+
+    assert!(report.bounded_overhead);
+    assert_eq!(report.shortcut_reference_split, BenchmarkSplit::Baseline);
+    assert_eq!(
+        report.corrected_real_context_split,
+        BenchmarkSplit::FullIntegration
+    );
+    assert_eq!(
+        report.corrected_path_delta_vs_shortcut.reference_split,
+        BenchmarkSplit::Baseline
+    );
+    assert_eq!(
+        report.corrected_path_delta_vs_shortcut.candidate_split,
+        BenchmarkSplit::FullIntegration
+    );
+    assert_eq!(
+        report.user_visible_delta.candidate_split,
+        BenchmarkSplit::EvidenceEmission
+    );
+    assert_eq!(
+        report.operator_visible_delta.reference_split,
+        BenchmarkSplit::EvidenceEmission
+    );
+    assert_eq!(report.corrected_path_components.len(), 4);
+    assert_eq!(report.user_impact_class, BenchmarkImpactClass::Noticeable);
+    assert_eq!(
+        report.operator_impact_class,
+        BenchmarkImpactClass::ActionRequired
+    );
+
+    let operator_component = report
+        .corrected_path_components
+        .iter()
+        .find(|component| component.candidate_split == BenchmarkSplit::FullIntegration)
+        .expect("full integration component");
+    assert_eq!(
+        operator_component.visibility,
+        BenchmarkImpactVisibility::OperatorVisible
+    );
+}
+
+#[test]
+fn benchmark_split_delta_report_covers_stage_baseline_and_previous_snapshot_views() {
+    let gate_input = input(previous_snapshot(), candidate_snapshot(0, true));
+    let thresholds = BenchmarkSplitThresholds::default();
+    let decision = evaluate_control_plane_benchmark_split(&gate_input, &thresholds);
+    let report = build_benchmark_split_delta_report(&gate_input, &decision);
+
+    assert!(report.bounded_overhead);
+    assert_eq!(report.previous_stage_deltas.len(), 4);
+    assert_eq!(report.shortcut_baseline_deltas.len(), 4);
+    assert_eq!(report.previous_snapshot_deltas.len(), 5);
+    assert!(
+        report
+            .previous_stage_deltas
+            .iter()
+            .all(|delta| delta.reference_kind == BenchmarkSplitDeltaReferenceKind::PreviousStage)
+    );
+    assert!(
+        report
+            .shortcut_baseline_deltas
+            .iter()
+            .all(|delta| delta.reference_kind
+                == BenchmarkSplitDeltaReferenceKind::ShortcutBaseline)
+    );
+    assert!(
+        report.previous_snapshot_deltas.iter().any(|delta| {
+            delta.reference_kind == BenchmarkSplitDeltaReferenceKind::PreviousSnapshot
+                && delta.candidate_split == BenchmarkSplit::FullIntegration
+        }),
+        "delta report should include previous-snapshot comparison for full integration"
     );
 }
 

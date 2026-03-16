@@ -927,4 +927,248 @@ mod tests {
             assert!(seqs[i] > seqs[i - 1], "sequence not monotonic");
         }
     }
+
+    #[test]
+    fn test_severity_as_str_matches_serde() {
+        for sev in [
+            DiagnosticSeverity::Info,
+            DiagnosticSeverity::Warning,
+            DiagnosticSeverity::Error,
+            DiagnosticSeverity::Critical,
+        ] {
+            let json: String = serde_json::from_str(&serde_json::to_string(&sev).unwrap()).unwrap();
+            assert_eq!(json, sev.as_str());
+        }
+    }
+
+    #[test]
+    fn test_category_serde_roundtrip() {
+        for cat in [
+            DiagnosticCategory::BudgetPropagation,
+            DiagnosticCategory::CapabilityNarrowing,
+            DiagnosticCategory::OutcomePropagation,
+            DiagnosticCategory::MockSeamLeakage,
+            DiagnosticCategory::ContextThreading,
+        ] {
+            let json = serde_json::to_string(&cat).unwrap();
+            let back: DiagnosticCategory = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, cat);
+        }
+    }
+
+    #[test]
+    fn test_category_as_str_distinct() {
+        let strs: BTreeSet<&str> = [
+            DiagnosticCategory::BudgetPropagation,
+            DiagnosticCategory::CapabilityNarrowing,
+            DiagnosticCategory::OutcomePropagation,
+            DiagnosticCategory::MockSeamLeakage,
+            DiagnosticCategory::ContextThreading,
+        ]
+        .iter()
+        .map(|c| c.as_str())
+        .collect();
+        assert_eq!(strs.len(), 5);
+    }
+
+    #[test]
+    fn test_error_code_budget_format() {
+        let code = DiagnosticErrorCode::budget("042", DiagnosticSeverity::Warning);
+        assert!(code.code.starts_with("CP-BUDGET-"));
+        assert_eq!(code.category, DiagnosticCategory::BudgetPropagation);
+    }
+
+    #[test]
+    fn test_error_code_capability_format() {
+        let code = DiagnosticErrorCode::capability("007", DiagnosticSeverity::Critical);
+        assert!(code.code.starts_with("CP-CAP-"));
+        assert_eq!(code.category, DiagnosticCategory::CapabilityNarrowing);
+    }
+
+    #[test]
+    fn test_error_code_outcome_format() {
+        let code = DiagnosticErrorCode::outcome("003", DiagnosticSeverity::Error);
+        assert!(code.code.starts_with("CP-OUTCOME-"));
+        assert_eq!(code.category, DiagnosticCategory::OutcomePropagation);
+    }
+
+    #[test]
+    fn test_error_code_mock_seam_format() {
+        let code = DiagnosticErrorCode::mock_seam("001", DiagnosticSeverity::Info);
+        assert!(code.code.starts_with("CP-MOCK-"));
+        assert_eq!(code.category, DiagnosticCategory::MockSeamLeakage);
+    }
+
+    #[test]
+    fn test_error_code_serde_roundtrip() {
+        let code = DiagnosticErrorCode::budget("001", DiagnosticSeverity::Error);
+        let json = serde_json::to_string(&code).unwrap();
+        let back: DiagnosticErrorCode = serde_json::from_str(&json).unwrap();
+        assert_eq!(code, back);
+    }
+
+    #[test]
+    fn test_emitter_starts_empty() {
+        let emitter = DiagnosticEmitter::with_defaults();
+        assert!(emitter.diagnostics().is_empty());
+        assert_eq!(emitter.max_severity(), None);
+        assert!(!emitter.has_release_blockers());
+    }
+
+    #[test]
+    fn test_emitter_new_with_custom_epoch() {
+        let emitter = DiagnosticEmitter::new(SecurityEpoch::from_raw(42));
+        let report = emitter.build_report();
+        assert_eq!(report.epoch, SecurityEpoch::from_raw(42));
+    }
+
+    #[test]
+    fn test_emitter_budget_child_exceeds_parent() {
+        let mut emitter = DiagnosticEmitter::with_defaults();
+        let err = BudgetPropagationError::ChildExceedsParent {
+            child_ms: 100,
+            parent_ms: 50,
+        };
+        emitter.emit_budget_error(&err, "trace-child-exceeds");
+
+        let diag = &emitter.diagnostics()[0];
+        assert_eq!(diag.error_code.code, "CP-BUDGET-005");
+        assert_eq!(diag.error_code.severity, DiagnosticSeverity::Critical);
+        assert!(diag.message.contains("100ms"));
+        assert!(diag.message.contains("50ms"));
+    }
+
+    #[test]
+    fn test_diagnostics_trace_ids_populated() {
+        let mut emitter = DiagnosticEmitter::with_defaults();
+        let err = BudgetPropagationError::ParentExhausted {
+            boundary: BudgetBoundaryKind::ParentToChildExtension,
+            parent_remaining_ms: 0,
+        };
+        emitter.emit_budget_error(&err, "trace-populated");
+
+        let diag = &emitter.diagnostics()[0];
+        assert_eq!(diag.trace_ids, vec!["trace-populated"]);
+    }
+
+    #[test]
+    fn test_narrowing_violation_boundary_label_propagated() {
+        let mut emitter = DiagnosticEmitter::with_defaults();
+        let violation = NarrowingViolation::UnknownOutcomeNotFailClosed {
+            boundary_label: "my_boundary".to_owned(),
+        };
+        emitter.emit_narrowing_violation(&violation, "trace-boundary");
+
+        let diag = &emitter.diagnostics()[0];
+        assert_eq!(diag.boundary_label.as_deref(), Some("my_boundary"));
+    }
+
+    #[test]
+    fn test_report_schema_version_matches_constant() {
+        let emitter = DiagnosticEmitter::with_defaults();
+        let report = emitter.build_report();
+        assert_eq!(report.schema_version, DIAGNOSTIC_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn test_report_content_hash_changes_with_data() {
+        let clean_report = DiagnosticEmitter::with_defaults().build_report();
+
+        let mut emitter = DiagnosticEmitter::with_defaults();
+        let err = BudgetPropagationError::ParentExhausted {
+            boundary: BudgetBoundaryKind::ParentToChildExtension,
+            parent_remaining_ms: 0,
+        };
+        emitter.emit_budget_error(&err, "trace");
+        let dirty_report = emitter.build_report();
+
+        assert_ne!(clean_report.content_hash, dirty_report.content_hash);
+    }
+
+    #[test]
+    fn test_diagnostics_at_severity_info_returns_all() {
+        let mut emitter = DiagnosticEmitter::with_defaults();
+        let err = BudgetPropagationError::CleanupExceedsParent {
+            cleanup_total_ms: 200,
+            parent_remaining_ms: 100,
+        };
+        emitter.emit_budget_error(&err, "trace1");
+        let err2 = BudgetPropagationError::NoRuleForBoundary {
+            boundary: BudgetBoundaryKind::OrchestratorToCellClose,
+        };
+        emitter.emit_budget_error(&err2, "trace2");
+
+        let all = emitter.diagnostics_at_severity(DiagnosticSeverity::Info);
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn test_diagnostics_at_severity_critical_filters_lower() {
+        let mut emitter = DiagnosticEmitter::with_defaults();
+        let err = BudgetPropagationError::CleanupExceedsParent {
+            cleanup_total_ms: 200,
+            parent_remaining_ms: 100,
+        };
+        emitter.emit_budget_error(&err, "trace1"); // Warning
+        let err2 = BudgetPropagationError::NoRuleForBoundary {
+            boundary: BudgetBoundaryKind::OrchestratorToCellClose,
+        };
+        emitter.emit_budget_error(&err2, "trace2"); // Critical
+
+        let critical_only = emitter.diagnostics_at_severity(DiagnosticSeverity::Critical);
+        assert_eq!(critical_only.len(), 1);
+        assert_eq!(
+            critical_only[0].error_code.severity,
+            DiagnosticSeverity::Critical
+        );
+    }
+
+    #[test]
+    fn test_emitter_serde_roundtrip() {
+        let mut emitter = DiagnosticEmitter::with_defaults();
+        let err = BudgetPropagationError::ParentExhausted {
+            boundary: BudgetBoundaryKind::ParentToChildExtension,
+            parent_remaining_ms: 0,
+        };
+        emitter.emit_budget_error(&err, "trace-serde");
+
+        let json = serde_json::to_string(&emitter).unwrap();
+        let back: DiagnosticEmitter = serde_json::from_str(&json).unwrap();
+        assert_eq!(emitter.diagnostics().len(), back.diagnostics().len());
+    }
+
+    #[test]
+    fn test_remediation_always_has_steps() {
+        let mut emitter = DiagnosticEmitter::with_defaults();
+        for boundary in [
+            BudgetBoundaryKind::ParentToChildExtension,
+            BudgetBoundaryKind::ParentToChildSession,
+            BudgetBoundaryKind::OrchestratorToCellClose,
+        ] {
+            let err = BudgetPropagationError::InsufficientBudget {
+                boundary,
+                derived_ms: 1,
+                minimum_ms: 10,
+                parent_remaining_ms: 5,
+            };
+            emitter.emit_budget_error(&err, "trace");
+        }
+        for diag in emitter.diagnostics() {
+            assert!(
+                !diag.remediation.steps.is_empty(),
+                "diagnostic {} should have remediation steps",
+                diag.error_code.code
+            );
+            assert!(
+                !diag.remediation.summary.is_empty(),
+                "diagnostic {} should have summary",
+                diag.error_code.code
+            );
+            assert!(
+                !diag.remediation.doc_refs.is_empty(),
+                "diagnostic {} should have doc_refs",
+                diag.error_code.code
+            );
+        }
+    }
 }

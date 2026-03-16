@@ -350,6 +350,48 @@ fn rgc_911a_operator_verification_uses_repo_local_target_dir_examples() {
     );
 }
 
+#[test]
+fn rgc_911a_replay_wrapper_resolves_latest_complete_bundle_and_prints_artifacts() {
+    let path = repo_root().join("scripts/e2e/rgc_docs_help_surface_audit_replay.sh");
+    let script = read_to_string(&path);
+
+    for marker in [
+        "latest_complete_run_dir",
+        "newest directory ${latest_artifact_dir_path} is incomplete",
+        "docs_help_surface_report.json",
+        "frankenctl_help.txt",
+        "step_logs/step_000.log",
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+    ] {
+        assert!(
+            script.contains(marker),
+            "replay wrapper missing required marker in {}: {marker}",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn rgc_911a_doc_mentions_replay_wrapper_bundle_outputs() {
+    let path = repo_root().join("docs/RGC_DOCS_HELP_SURFACE_AUDIT_V1.md");
+    let doc = read_to_string(&path);
+
+    for fragment in [
+        "latest complete run directory",
+        "docs_help_surface_report.json",
+        "frankenctl_help.txt",
+        "step_logs/step_000.log",
+    ] {
+        assert!(
+            doc.contains(fragment),
+            "docs/help audit doc missing replay-wrapper artifact fragment in {}: {fragment}",
+            path.display()
+        );
+    }
+}
+
 // ── Contract field-level assertions ──────────────────────────────────
 
 #[test]

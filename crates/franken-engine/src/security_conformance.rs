@@ -1863,6 +1863,21 @@ label_sha256 = "{bad_hash}"
         assert!(upper > 0.50 && upper < 0.65);
     }
 
+    #[test]
+    fn clopper_pearson_99_of_100_matches_reference_interval() {
+        let ci = clopper_pearson_interval(99, 100, 0.95).unwrap();
+        assert!(
+            ci.lower_millionths.abs_diff(945_541) <= 1,
+            "unexpected lower bound: {}",
+            ci.lower_millionths
+        );
+        assert!(
+            ci.upper_millionths.abs_diff(999_747) <= 1,
+            "unexpected upper bound: {}",
+            ci.upper_millionths
+        );
+    }
+
     // ---- default_observation_from_label ----
 
     #[test]
@@ -2113,6 +2128,94 @@ label_sha256 = "{bad_hash}"
         .unwrap();
         assert_eq!(result.summary.false_negative_count, 1);
         assert_eq!(result.summary.true_positive_count, 0);
+    }
+
+    #[test]
+    fn evaluate_tpr_boundary_passes_at_exact_lower_ci_and_fails_one_tick_above() {
+        let mut records = Vec::new();
+        let mut observations = Vec::new();
+
+        for i in 0..100 {
+            let id = format!("b-{i}");
+            records.push(make_record(
+                &id,
+                SecurityCorpus::Benign,
+                None,
+                SecurityOutcome::Allow,
+            ));
+            observations.push(make_obs(&id, SecurityOutcome::Allow, 1_000));
+        }
+
+        for i in 0..100 {
+            let id = format!("m-{i}");
+            records.push(make_record(
+                &id,
+                SecurityCorpus::Malicious,
+                Some(SecurityAttackTaxonomy::Exfil),
+                SecurityOutcome::Contain,
+            ));
+            let outcome = if i == 99 {
+                SecurityOutcome::Allow
+            } else {
+                SecurityOutcome::Contain
+            };
+            observations.push(make_obs(&id, outcome, 5_000));
+        }
+
+        let mut thresholds = SecurityConformanceThresholds {
+            tpr_min: millionths_to_string(0),
+            fpr_max: millionths_to_string(1_000_000),
+            ..SecurityConformanceThresholds::default()
+        };
+        let boundary_probe =
+            evaluate_security_conformance(&records, &observations, &thresholds).unwrap();
+        let lower_bound = boundary_probe.summary.tpr_ci.lower_millionths;
+
+        assert_eq!(boundary_probe.summary.true_positive_count, 99);
+        assert_eq!(boundary_probe.summary.false_negative_count, 1);
+        assert_eq!(lower_bound, 945_541);
+        assert!(boundary_probe.summary.gate_pass);
+
+        thresholds.tpr_min = millionths_to_string(lower_bound);
+        let exact_boundary =
+            evaluate_security_conformance(&records, &observations, &thresholds).unwrap();
+        assert!(
+            exact_boundary.summary.gate_pass,
+            "exact lower-CI threshold should pass: {:?}",
+            exact_boundary.summary.gate_failure_reasons
+        );
+
+        thresholds.tpr_min = millionths_to_string(lower_bound + 1);
+        let failing_boundary =
+            evaluate_security_conformance(&records, &observations, &thresholds).unwrap();
+        assert!(!failing_boundary.summary.gate_pass);
+        assert!(
+            failing_boundary
+                .summary
+                .gate_failure_reasons
+                .iter()
+                .any(|reason| reason.contains("TPR lower CI bound")),
+            "missing TPR failure reason: {:?}",
+            failing_boundary.summary.gate_failure_reasons
+        );
+        assert!(
+            !failing_boundary
+                .summary
+                .gate_failure_reasons
+                .iter()
+                .any(|reason| reason.contains("FPR upper CI bound")),
+            "unexpected FPR failure reason: {:?}",
+            failing_boundary.summary.gate_failure_reasons
+        );
+        assert!(
+            !failing_boundary
+                .summary
+                .gate_failure_reasons
+                .iter()
+                .any(|reason| reason.contains("latency")),
+            "unexpected latency failure reason: {:?}",
+            failing_boundary.summary.gate_failure_reasons
+        );
     }
 
     // ---- normalize_relative_path ----

@@ -1209,4 +1209,271 @@ mod tests {
             "bundle lock should be released after failure",
         );
     }
+
+    // --- Enrichment tests (PearlTower 2026-03-16) ---
+
+    #[test]
+    fn parser_gap_site_id_as_str_distinct() {
+        let strs: std::collections::BTreeSet<&str> =
+            ParserGapSiteId::ALL.iter().map(|s| s.as_str()).collect();
+        assert_eq!(strs.len(), ParserGapSiteId::ALL.len());
+    }
+
+    #[test]
+    fn parser_gap_site_id_diagnostic_codes_distinct() {
+        let codes: std::collections::BTreeSet<&str> = ParserGapSiteId::ALL
+            .iter()
+            .map(|s| s.diagnostic_code())
+            .collect();
+        assert_eq!(codes.len(), ParserGapSiteId::ALL.len());
+    }
+
+    #[test]
+    fn parser_gap_site_id_syntax_shapes_non_empty() {
+        for site in ParserGapSiteId::ALL {
+            assert!(
+                !site.syntax_shape().is_empty(),
+                "{:?} has empty syntax_shape",
+                site
+            );
+        }
+    }
+
+    #[test]
+    fn parser_gap_site_id_api_surfaces_valid() {
+        for site in ParserGapSiteId::ALL {
+            let surface = site.api_surface();
+            assert!(
+                surface == "lower_ir0_to_ir1" || surface == "lower_ir1_to_ir3",
+                "{:?} has unexpected api_surface: {surface}",
+                site
+            );
+        }
+    }
+
+    #[test]
+    fn parser_gap_site_id_observed_fallback_non_empty() {
+        for site in ParserGapSiteId::ALL {
+            assert!(
+                !site.observed_fallback_behavior().is_empty(),
+                "{:?} has empty fallback behavior",
+                site
+            );
+        }
+    }
+
+    #[test]
+    fn parser_gap_site_id_required_fail_closed_non_empty() {
+        for site in ParserGapSiteId::ALL {
+            assert!(
+                !site.required_fail_closed_contract().is_empty(),
+                "{:?} has empty fail_closed_contract",
+                site
+            );
+        }
+    }
+
+    #[test]
+    fn parser_gap_site_id_execution_consequence_mentions_resolved() {
+        for site in ParserGapSiteId::ALL {
+            let consequence = site.execution_consequence();
+            assert!(
+                consequence.contains("resolved"),
+                "{:?} execution_consequence should mention resolved: {consequence}",
+                site
+            );
+        }
+    }
+
+    #[test]
+    fn parser_gap_site_id_user_visible_divergence_mentions_resolved() {
+        for site in ParserGapSiteId::ALL {
+            let div = site.user_visible_divergence();
+            assert!(
+                div.contains("resolved"),
+                "{:?} user_visible_divergence should mention resolved: {div}",
+                site
+            );
+        }
+    }
+
+    #[test]
+    fn parser_gap_site_id_target_replacement_non_empty() {
+        for site in ParserGapSiteId::ALL {
+            assert!(
+                !site.target_replacement_strategy().is_empty(),
+                "{:?} has empty target_replacement_strategy",
+                site
+            );
+        }
+    }
+
+    #[test]
+    fn parser_gap_site_id_emitted_ir_shape_non_empty() {
+        for site in ParserGapSiteId::ALL {
+            assert!(
+                !site.emitted_ir_shape().is_empty(),
+                "{:?} has empty emitted_ir_shape",
+                site
+            );
+        }
+    }
+
+    #[test]
+    fn parser_gap_site_id_emitted_ir_shapes_distinct() {
+        let shapes: std::collections::BTreeSet<&str> = ParserGapSiteId::ALL
+            .iter()
+            .map(|s| s.emitted_ir_shape())
+            .collect();
+        assert_eq!(shapes.len(), ParserGapSiteId::ALL.len());
+    }
+
+    #[test]
+    fn parser_gap_stage_as_str_distinct() {
+        assert_ne!(
+            ParserGapStage::Ir0ToIr1.as_str(),
+            ParserGapStage::Ir1ToIr3.as_str()
+        );
+    }
+
+    #[test]
+    fn parser_gap_remediation_status_as_str_distinct() {
+        let strs: std::collections::BTreeSet<&str> = [
+            ParserGapRemediationStatus::FailClosed,
+            ParserGapRemediationStatus::OpenPlaceholder,
+            ParserGapRemediationStatus::Resolved,
+        ]
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+        assert_eq!(strs.len(), 3);
+    }
+
+    #[test]
+    fn parser_gap_inventory_serde_roundtrip() {
+        let inventory = parser_gap_inventory();
+        let json = serde_json::to_string(&inventory).unwrap();
+        let back: ParserGapInventory = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.schema_version, inventory.schema_version);
+        assert_eq!(back.sites.len(), inventory.sites.len());
+    }
+
+    #[test]
+    fn parser_gap_inventory_all_sites_resolved() {
+        let inventory = parser_gap_inventory();
+        for site in &inventory.sites {
+            assert_eq!(
+                site.remediation_status,
+                ParserGapRemediationStatus::Resolved,
+                "site {} not resolved",
+                site.site_id
+            );
+        }
+    }
+
+    #[test]
+    fn parser_gap_inventory_source_references_non_empty() {
+        let inventory = parser_gap_inventory();
+        for site in &inventory.sites {
+            assert!(
+                !site.source_reference.is_empty(),
+                "site {} has empty source_reference",
+                site.site_id
+            );
+        }
+    }
+
+    #[test]
+    fn parser_gap_site_descriptor_for_all_sites() {
+        for site_id in ParserGapSiteId::ALL {
+            let desc = ParserGapSiteDescriptor::from_site(site_id);
+            assert_eq!(desc.site_id, site_id.as_str());
+            assert_eq!(desc.diagnostic_code, site_id.diagnostic_code());
+            assert_eq!(desc.stage, site_id.stage());
+            assert_eq!(desc.remediation_status, site_id.remediation_status());
+            assert_eq!(desc.owner, site_id.owner());
+            assert_eq!(desc.feature_family, site_id.feature_family());
+            assert_eq!(desc.api_surface, site_id.api_surface());
+        }
+    }
+
+    #[test]
+    fn unsupported_syntax_diagnostic_from_all_sites() {
+        for site in ParserGapSiteId::ALL {
+            let diag = UnsupportedSyntaxDiagnostic::from_site(site, "test", Some(span()));
+            assert_eq!(diag.diagnostic_code, site.diagnostic_code());
+            assert_eq!(diag.source_ref, "test");
+            assert!(diag.canonical_hash().len() > 20);
+        }
+    }
+
+    #[test]
+    fn unsupported_syntax_diagnostic_hash_varies_by_site() {
+        let d1 = UnsupportedSyntaxDiagnostic::from_site(
+            ParserGapSiteId::ForInStatementPlaceholder,
+            "src",
+            None,
+        );
+        let d2 = UnsupportedSyntaxDiagnostic::from_site(
+            ParserGapSiteId::ForOfStatementPlaceholder,
+            "src",
+            None,
+        );
+        assert_ne!(d1.canonical_hash(), d2.canonical_hash());
+    }
+
+    #[test]
+    fn unsupported_syntax_diagnostic_hash_varies_by_source() {
+        let d1 = UnsupportedSyntaxDiagnostic::from_site(
+            ParserGapSiteId::ForInStatementPlaceholder,
+            "src_a",
+            None,
+        );
+        let d2 = UnsupportedSyntaxDiagnostic::from_site(
+            ParserGapSiteId::ForInStatementPlaceholder,
+            "src_b",
+            None,
+        );
+        assert_ne!(d1.canonical_hash(), d2.canonical_hash());
+    }
+
+    #[test]
+    fn sha256_hex_produces_64_hex_chars() {
+        let hash = sha256_hex(b"test data");
+        assert_eq!(hash.len(), 64);
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn sha256_hex_deterministic() {
+        let a = sha256_hex(b"hello world");
+        let b = sha256_hex(b"hello world");
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn sha256_hex_varies_with_input() {
+        let a = sha256_hex(b"input_a");
+        let b = sha256_hex(b"input_b");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn bundle_inventory_hash_is_64_hex() {
+        let out_dir = unique_temp_dir("parser-gap-hash-len");
+        let cmds = vec!["test".to_string()];
+        let arts = write_parser_gap_inventory_bundle(&out_dir, &cmds).expect("write");
+        assert_eq!(arts.inventory_hash.len(), 64);
+        assert!(arts.inventory_hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn bundle_inventory_hash_deterministic() {
+        let out1 = unique_temp_dir("parser-gap-det1");
+        let out2 = unique_temp_dir("parser-gap-det2");
+        let cmds = vec!["test".to_string()];
+        let a1 = write_parser_gap_inventory_bundle(&out1, &cmds).expect("w1");
+        let a2 = write_parser_gap_inventory_bundle(&out2, &cmds).expect("w2");
+        assert_eq!(a1.inventory_hash, a2.inventory_hash);
+    }
 }

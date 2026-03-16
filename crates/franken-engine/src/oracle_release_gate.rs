@@ -1085,4 +1085,386 @@ mod tests {
         let bundle = build_triage_bundle(&report, &conditions);
         assert!(bundle.verify_integrity());
     }
+
+    // --- Enrichment tests (PearlTower 2026-03-16) ---
+
+    #[test]
+    fn oracle_kind_serde_roundtrip() {
+        for kind in OracleKind::all() {
+            let json = serde_json::to_string(kind).unwrap();
+            let parsed: OracleKind = serde_json::from_str(&json).unwrap();
+            assert_eq!(*kind, parsed);
+        }
+    }
+
+    #[test]
+    fn oracle_kind_as_str_distinct() {
+        let strs: BTreeSet<&str> = OracleKind::all().iter().map(|k| k.as_str()).collect();
+        assert_eq!(strs.len(), OracleKind::all().len());
+    }
+
+    #[test]
+    fn oracle_kind_evidence_and_obligation_display() {
+        assert_eq!(OracleKind::Evidence.to_string(), "evidence");
+        assert_eq!(OracleKind::Obligation.to_string(), "obligation");
+    }
+
+    #[test]
+    fn threshold_direction_serde_roundtrip() {
+        for dir in [
+            ThresholdDirection::AtLeast,
+            ThresholdDirection::AtMost,
+            ThresholdDirection::Exactly,
+        ] {
+            let json = serde_json::to_string(&dir).unwrap();
+            let parsed: ThresholdDirection = serde_json::from_str(&json).unwrap();
+            assert_eq!(dir, parsed);
+        }
+    }
+
+    #[test]
+    fn threshold_direction_as_str_distinct() {
+        let at_least = ThresholdDirection::AtLeast.as_str();
+        let at_most = ThresholdDirection::AtMost.as_str();
+        let exactly = ThresholdDirection::Exactly.as_str();
+        assert_ne!(at_least, at_most);
+        assert_ne!(at_most, exactly);
+        assert_ne!(at_least, exactly);
+    }
+
+    #[test]
+    fn threshold_direction_display() {
+        assert_eq!(ThresholdDirection::AtLeast.to_string(), "at_least");
+        assert_eq!(ThresholdDirection::AtMost.to_string(), "at_most");
+        assert_eq!(ThresholdDirection::Exactly.to_string(), "exactly");
+    }
+
+    #[test]
+    fn threshold_boundary_zero() {
+        assert!(ThresholdDirection::AtLeast.passes(0, 0));
+        assert!(ThresholdDirection::AtMost.passes(0, 0));
+        assert!(ThresholdDirection::Exactly.passes(0, 0));
+    }
+
+    #[test]
+    fn threshold_boundary_max() {
+        assert!(ThresholdDirection::AtLeast.passes(u64::MAX, u64::MAX));
+        assert!(ThresholdDirection::AtMost.passes(u64::MAX, u64::MAX));
+        assert!(ThresholdDirection::Exactly.passes(u64::MAX, u64::MAX));
+    }
+
+    #[test]
+    fn threshold_at_least_one_below() {
+        assert!(!ThresholdDirection::AtLeast.passes(99, 100));
+    }
+
+    #[test]
+    fn threshold_at_most_one_above() {
+        assert!(!ThresholdDirection::AtMost.passes(101, 100));
+    }
+
+    #[test]
+    fn blocker_threshold_soft_advisory() {
+        let t = BlockerThreshold {
+            name: "soft".to_string(),
+            threshold_value: 50,
+            direction: ThresholdDirection::AtMost,
+            is_hard_blocker: false,
+        };
+        assert!(t.evaluate(50));
+        assert!(t.evaluate(0));
+        assert!(!t.evaluate(51));
+    }
+
+    #[test]
+    fn gate_verdict_serde_roundtrip() {
+        for v in [
+            GateVerdict::Pass,
+            GateVerdict::Fail,
+            GateVerdict::Advisory,
+            GateVerdict::Inconclusive,
+        ] {
+            let json = serde_json::to_string(&v).unwrap();
+            let restored: GateVerdict = serde_json::from_str(&json).unwrap();
+            assert_eq!(restored, v);
+        }
+    }
+
+    #[test]
+    fn gate_verdict_as_str_distinct() {
+        let strs: BTreeSet<&str> = [
+            GateVerdict::Pass,
+            GateVerdict::Fail,
+            GateVerdict::Advisory,
+            GateVerdict::Inconclusive,
+        ]
+        .iter()
+        .map(|v| v.as_str())
+        .collect();
+        assert_eq!(strs.len(), 4);
+    }
+
+    #[test]
+    fn evaluate_condition_with_evidence_and_replay() {
+        let condition = OracleGateCondition {
+            condition_id: "test".to_string(),
+            description: "test".to_string(),
+            oracle_kind: OracleKind::Evidence,
+            threshold: BlockerThreshold {
+                name: "gap_count".to_string(),
+                threshold_value: 0,
+                direction: ThresholdDirection::Exactly,
+                is_hard_blocker: true,
+            },
+            policy_ref: POLICY_ID.to_string(),
+            bead_ref: Some("bd-test".to_string()),
+        };
+        let eval = evaluate_condition(&condition, 0, Some("ev-123"), Some("replay-cmd"));
+        assert_eq!(eval.verdict, GateVerdict::Pass);
+        assert_eq!(eval.evidence_ref, Some("ev-123".to_string()));
+        assert_eq!(eval.replay_ref, Some("replay-cmd".to_string()));
+        assert_eq!(eval.margin_millionths, 0);
+    }
+
+    #[test]
+    fn evaluate_margin_at_least_positive() {
+        let condition = OracleGateCondition {
+            condition_id: "m".to_string(),
+            description: "m".to_string(),
+            oracle_kind: OracleKind::Metric,
+            threshold: BlockerThreshold {
+                name: "rate".to_string(),
+                threshold_value: 100,
+                direction: ThresholdDirection::AtLeast,
+                is_hard_blocker: true,
+            },
+            policy_ref: POLICY_ID.to_string(),
+            bead_ref: None,
+        };
+        let eval = evaluate_condition(&condition, 150, None, None);
+        assert_eq!(eval.margin_millionths, 50);
+    }
+
+    #[test]
+    fn evaluate_margin_exactly_failing() {
+        let condition = OracleGateCondition {
+            condition_id: "r".to_string(),
+            description: "r".to_string(),
+            oracle_kind: OracleKind::Replay,
+            threshold: BlockerThreshold {
+                name: "divergences".to_string(),
+                threshold_value: 0,
+                direction: ThresholdDirection::Exactly,
+                is_hard_blocker: true,
+            },
+            policy_ref: POLICY_ID.to_string(),
+            bead_ref: None,
+        };
+        let eval = evaluate_condition(&condition, 3, None, None);
+        assert_eq!(eval.verdict, GateVerdict::Fail);
+        assert_eq!(eval.margin_millionths, -3);
+    }
+
+    #[test]
+    fn report_with_inconclusive_blocks() {
+        let evals = vec![GateEvaluation {
+            condition_id: "a".to_string(),
+            observed_value: 0,
+            threshold_value: 0,
+            verdict: GateVerdict::Inconclusive,
+            evidence_ref: None,
+            replay_ref: None,
+            margin_millionths: 0,
+        }];
+        let report = build_report(SecurityEpoch::from_raw(1), "rc-1", evals);
+        assert_eq!(report.overall_verdict, GateVerdict::Fail);
+        assert!(report.blocks_release());
+        assert_eq!(report.inconclusive_count, 1);
+    }
+
+    #[test]
+    fn report_advisory_only_no_block() {
+        let evals = vec![GateEvaluation {
+            condition_id: "a".to_string(),
+            observed_value: 100,
+            threshold_value: 50,
+            verdict: GateVerdict::Advisory,
+            evidence_ref: None,
+            replay_ref: None,
+            margin_millionths: -50,
+        }];
+        let report = build_report(SecurityEpoch::from_raw(1), "rc-1", evals);
+        assert_eq!(report.overall_verdict, GateVerdict::Advisory);
+        assert!(!report.blocks_release());
+    }
+
+    #[test]
+    fn report_empty_evaluations_pass() {
+        let report = build_report(SecurityEpoch::from_raw(1), "rc-empty", vec![]);
+        assert_eq!(report.overall_verdict, GateVerdict::Pass);
+        assert_eq!(report.total_evaluations(), 0);
+    }
+
+    #[test]
+    fn report_content_hash_varies_with_epoch() {
+        let evals = vec![GateEvaluation {
+            condition_id: "a".to_string(),
+            observed_value: 100,
+            threshold_value: 100,
+            verdict: GateVerdict::Pass,
+            evidence_ref: None,
+            replay_ref: None,
+            margin_millionths: 0,
+        }];
+        let r1 = build_report(SecurityEpoch::from_raw(1), "rc-1", evals.clone());
+        let r2 = build_report(SecurityEpoch::from_raw(2), "rc-1", evals);
+        assert_ne!(r1.content_hash, r2.content_hash);
+    }
+
+    #[test]
+    fn report_verify_integrity_detects_tamper() {
+        let evals = vec![GateEvaluation {
+            condition_id: "a".to_string(),
+            observed_value: 100,
+            threshold_value: 100,
+            verdict: GateVerdict::Pass,
+            evidence_ref: None,
+            replay_ref: None,
+            margin_millionths: 0,
+        }];
+        let mut report = build_report(SecurityEpoch::from_raw(1), "rc-1", evals);
+        assert!(report.verify_integrity());
+        report.release_candidate_id = "tampered".to_string();
+        assert!(!report.verify_integrity());
+    }
+
+    #[test]
+    fn default_conditions_unique_ids() {
+        let conditions = default_gate_conditions();
+        let ids: BTreeSet<&str> = conditions.iter().map(|c| c.condition_id.as_str()).collect();
+        assert_eq!(ids.len(), conditions.len());
+    }
+
+    #[test]
+    fn default_conditions_have_policy_refs() {
+        for c in &default_gate_conditions() {
+            assert!(!c.policy_ref.is_empty());
+        }
+    }
+
+    #[test]
+    fn triage_bundle_unknown_condition() {
+        let conditions = default_gate_conditions();
+        let evals = vec![GateEvaluation {
+            condition_id: "unknown".to_string(),
+            observed_value: 0,
+            threshold_value: 100,
+            verdict: GateVerdict::Fail,
+            evidence_ref: None,
+            replay_ref: None,
+            margin_millionths: -100,
+        }];
+        let report = build_report(SecurityEpoch::from_raw(1), "rc-1", evals);
+        let bundle = build_triage_bundle(&report, &conditions);
+        assert_eq!(bundle.entries.len(), 1);
+        assert!(bundle.entries[0].summary.contains("Unknown"));
+    }
+
+    #[test]
+    fn gate_event_blocker_count() {
+        let evals = vec![
+            GateEvaluation {
+                condition_id: "a".to_string(),
+                observed_value: 0,
+                threshold_value: 100,
+                verdict: GateVerdict::Fail,
+                evidence_ref: None,
+                replay_ref: None,
+                margin_millionths: -100,
+            },
+            GateEvaluation {
+                condition_id: "b".to_string(),
+                observed_value: 0,
+                threshold_value: 0,
+                verdict: GateVerdict::Inconclusive,
+                evidence_ref: None,
+                replay_ref: None,
+                margin_millionths: 0,
+            },
+        ];
+        let report = build_report(SecurityEpoch::from_raw(1), "rc-1", evals);
+        let event = build_gate_event("t-1", "d-1", &report);
+        assert_eq!(event.blockers, 2);
+        assert_eq!(event.conditions_evaluated, 2);
+    }
+
+    #[test]
+    fn gate_event_serde_roundtrip() {
+        let report = build_report(SecurityEpoch::from_raw(1), "rc-1", vec![]);
+        let event = build_gate_event("t-1", "d-1", &report);
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: OracleReleaseGateEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, parsed);
+    }
+
+    #[test]
+    fn gate_condition_serde_roundtrip() {
+        let condition = OracleGateCondition {
+            condition_id: "test".to_string(),
+            description: "Test".to_string(),
+            oracle_kind: OracleKind::Contract,
+            threshold: BlockerThreshold {
+                name: "pass".to_string(),
+                threshold_value: MILLIONTHS,
+                direction: ThresholdDirection::AtLeast,
+                is_hard_blocker: true,
+            },
+            policy_ref: POLICY_ID.to_string(),
+            bead_ref: Some("bd-test".to_string()),
+        };
+        let json = serde_json::to_string(&condition).unwrap();
+        let parsed: OracleGateCondition = serde_json::from_str(&json).unwrap();
+        assert_eq!(condition, parsed);
+    }
+
+    #[test]
+    fn triage_severity_serde_roundtrip() {
+        for sev in [
+            TriageSeverity::Blocker,
+            TriageSeverity::Warning,
+            TriageSeverity::Info,
+        ] {
+            let json = serde_json::to_string(&sev).unwrap();
+            let parsed: TriageSeverity = serde_json::from_str(&json).unwrap();
+            assert_eq!(sev, parsed);
+        }
+    }
+
+    #[test]
+    fn report_schema_fields_correct() {
+        let report = build_report(SecurityEpoch::from_raw(1), "rc-1", vec![]);
+        assert_eq!(report.schema_version, SCHEMA_VERSION);
+        assert_eq!(report.bead_id, BEAD_ID);
+        assert_eq!(report.policy_id, POLICY_ID);
+        assert_eq!(report.component, COMPONENT);
+    }
+
+    #[test]
+    fn default_conditions_metric_is_soft() {
+        let metric = default_gate_conditions()
+            .into_iter()
+            .find(|c| c.oracle_kind == OracleKind::Metric);
+        assert!(metric.is_some());
+        assert!(!metric.unwrap().threshold.is_hard_blocker);
+    }
+
+    #[test]
+    fn empty_triage_bundle_integrity() {
+        let conditions = default_gate_conditions();
+        let report = build_report(SecurityEpoch::from_raw(1), "rc-clean", vec![]);
+        let bundle = build_triage_bundle(&report, &conditions);
+        assert!(bundle.verify_integrity());
+        assert!(!bundle.has_blockers());
+        assert_eq!(bundle.total_entries(), 0);
+    }
 }

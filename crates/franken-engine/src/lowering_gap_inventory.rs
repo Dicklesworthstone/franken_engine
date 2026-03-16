@@ -944,6 +944,230 @@ mod tests {
     }
 
     #[test]
+    fn lowering_gap_stage_as_str_matches_serde_name() {
+        let ir0 = LoweringGapStage::Ir0ToIr1;
+        let ir1 = LoweringGapStage::Ir1ToIr3;
+        let json0: String = serde_json::from_str(&serde_json::to_string(&ir0).unwrap()).unwrap();
+        let json1: String = serde_json::from_str(&serde_json::to_string(&ir1).unwrap()).unwrap();
+        assert_eq!(json0, ir0.as_str());
+        assert_eq!(json1, ir1.as_str());
+    }
+
+    #[test]
+    fn lowering_gap_status_as_str_matches_serde_name() {
+        for status in [
+            LoweringGapStatus::FailClosed,
+            LoweringGapStatus::OpenPlaceholder,
+            LoweringGapStatus::Resolved,
+        ] {
+            let json: String =
+                serde_json::from_str(&serde_json::to_string(&status).unwrap()).unwrap();
+            assert_eq!(json, status.as_str());
+        }
+    }
+
+    #[test]
+    fn site_id_stage_assignment_is_deterministic() {
+        assert_eq!(
+            LoweringGapSiteId::BinaryNonArithmeticAddPlaceholder.stage(),
+            LoweringGapStage::Ir1ToIr3
+        );
+        for site in [
+            LoweringGapSiteId::ForInStatementPlaceholder,
+            LoweringGapSiteId::ForOfStatementPlaceholder,
+            LoweringGapSiteId::NewExpressionCallPlaceholder,
+            LoweringGapSiteId::NonIdentifierAssignmentNopPlaceholder,
+            LoweringGapSiteId::TemplateLiteralRawPlaceholder,
+        ] {
+            assert_eq!(site.stage(), LoweringGapStage::Ir0ToIr1);
+        }
+    }
+
+    #[test]
+    fn diagnostic_codes_follow_naming_convention() {
+        for site in LoweringGapSiteId::ALL {
+            let code = site.diagnostic_code();
+            assert!(
+                code.starts_with("FE-PARSER-GAP-"),
+                "code must start with FE-PARSER-GAP-: {code}"
+            );
+            assert!(code.ends_with("-0001"), "code must end with -0001: {code}");
+        }
+    }
+
+    #[test]
+    fn source_references_point_to_lowering_pipeline() {
+        for site in LoweringGapSiteId::ALL {
+            let reference = site.source_reference();
+            assert!(
+                reference.contains("lowering_pipeline.rs"),
+                "source_reference must mention lowering_pipeline.rs: {reference}"
+            );
+        }
+    }
+
+    #[test]
+    fn execution_consequences_contain_resolved_prefix() {
+        for site in LoweringGapSiteId::ALL {
+            let consequence = site.execution_consequence();
+            assert!(
+                consequence.starts_with("resolved:"),
+                "all sites are resolved so consequence must start with 'resolved:': {consequence}"
+            );
+        }
+    }
+
+    #[test]
+    fn emitted_ir_shapes_reference_valid_ir_levels() {
+        for site in LoweringGapSiteId::ALL {
+            let shape = site.emitted_ir_shape();
+            assert!(
+                shape.starts_with("ir1.") || shape.starts_with("ir3."),
+                "emitted_ir_shape must reference ir1 or ir3: {shape}"
+            );
+        }
+    }
+
+    #[test]
+    fn inventory_content_hash_is_deterministic() {
+        let artifacts_a = {
+            let out_dir = unique_temp_dir("lowering-gap-hash-a");
+            write_lowering_gap_inventory_bundle(&out_dir, &[]).unwrap()
+        };
+        let artifacts_b = {
+            let out_dir = unique_temp_dir("lowering-gap-hash-b");
+            write_lowering_gap_inventory_bundle(&out_dir, &[]).unwrap()
+        };
+        assert_eq!(artifacts_a.inventory_hash, artifacts_b.inventory_hash);
+        assert_eq!(artifacts_a.site_count, artifacts_b.site_count);
+    }
+
+    #[test]
+    fn inventory_hash_is_64_hex_chars() {
+        let out_dir = unique_temp_dir("lowering-gap-hash-len");
+        let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &[]).unwrap();
+        assert_eq!(artifacts.inventory_hash.len(), 64);
+        assert!(
+            artifacts
+                .inventory_hash
+                .chars()
+                .all(|c| c.is_ascii_hexdigit())
+        );
+    }
+
+    #[test]
+    fn build_inventory_events_has_start_sites_and_end() {
+        let inventory = lowering_gap_inventory();
+        let events = build_inventory_events(&inventory, "t1", "d1");
+        assert_eq!(events.len(), inventory.sites.len() + 2);
+        assert_eq!(events.first().unwrap().event, "inventory_started");
+        assert_eq!(events.last().unwrap().event, "inventory_completed");
+        for event in &events[1..events.len() - 1] {
+            assert_eq!(event.event, "gap_site_recorded");
+            assert!(event.site_id.is_some());
+            assert!(event.diagnostic_code.is_some());
+        }
+    }
+
+    #[test]
+    fn event_trace_and_decision_ids_are_consistent() {
+        let inventory = lowering_gap_inventory();
+        let events = build_inventory_events(&inventory, "trace-abc", "decision-xyz");
+        for event in &events {
+            assert_eq!(event.trace_id, "trace-abc");
+            assert_eq!(event.decision_id, "decision-xyz");
+            assert_eq!(event.policy_id, LOWERING_GAP_POLICY_ID);
+            assert_eq!(event.component, LOWERING_GAP_COMPONENT);
+        }
+    }
+
+    #[test]
+    fn descriptor_serde_roundtrip_preserves_all_fields() {
+        for site in LoweringGapSiteId::ALL {
+            let desc = LoweringGapSiteDescriptor::from_site(site);
+            let json = serde_json::to_string(&desc).unwrap();
+            let back: LoweringGapSiteDescriptor = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, desc);
+        }
+    }
+
+    #[test]
+    fn inventory_schema_version_embedded_correctly() {
+        let inventory = lowering_gap_inventory();
+        assert_eq!(
+            inventory.schema_version,
+            LOWERING_GAP_INVENTORY_SCHEMA_VERSION
+        );
+        assert_eq!(inventory.component, LOWERING_GAP_COMPONENT);
+    }
+
+    #[test]
+    fn regression_test_hints_are_distinct() {
+        let hints: std::collections::BTreeSet<&str> = LoweringGapSiteId::ALL
+            .iter()
+            .map(|site| site.regression_test_hint())
+            .collect();
+        assert_eq!(hints.len(), LoweringGapSiteId::ALL.len());
+    }
+
+    #[test]
+    fn site_id_ordering_is_stable() {
+        let mut sorted = LoweringGapSiteId::ALL.to_vec();
+        sorted.sort();
+        assert_eq!(sorted, LoweringGapSiteId::ALL.to_vec());
+    }
+
+    #[test]
+    fn sha256_hex_produces_correct_length_and_format() {
+        let hash = sha256_hex(b"test input");
+        assert_eq!(hash.len(), 64);
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn sha256_hex_is_deterministic() {
+        assert_eq!(sha256_hex(b"hello"), sha256_hex(b"hello"));
+        assert_ne!(sha256_hex(b"hello"), sha256_hex(b"world"));
+    }
+
+    #[test]
+    fn empty_commands_produce_empty_commands_txt() {
+        let out_dir = unique_temp_dir("lowering-gap-empty-cmds");
+        let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &[]).unwrap();
+        let commands_txt = fs::read_to_string(&artifacts.commands_path).unwrap();
+        assert!(commands_txt.is_empty());
+    }
+
+    #[test]
+    fn manifest_trace_id_embeds_inventory_hash_prefix() {
+        let out_dir = unique_temp_dir("lowering-gap-trace-prefix");
+        let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &[]).unwrap();
+        let manifest: LoweringGapInventoryRunManifest =
+            serde_json::from_slice(&fs::read(&artifacts.run_manifest_path).unwrap()).unwrap();
+        let short_hash = &artifacts.inventory_hash[..16];
+        assert!(
+            manifest.trace_id.contains(short_hash),
+            "trace_id should embed first 16 chars of inventory hash"
+        );
+        assert!(
+            manifest.decision_id.contains(short_hash),
+            "decision_id should embed first 16 chars of inventory hash"
+        );
+    }
+
+    #[test]
+    fn artifact_paths_in_manifest_are_relative() {
+        let out_dir = unique_temp_dir("lowering-gap-rel-paths");
+        let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &[]).unwrap();
+        let manifest: LoweringGapInventoryRunManifest =
+            serde_json::from_slice(&fs::read(&artifacts.run_manifest_path).unwrap()).unwrap();
+        assert!(!manifest.artifact_paths.lowering_gap_inventory.contains('/'));
+        assert!(!manifest.artifact_paths.run_manifest.contains('/'));
+        assert!(!manifest.artifact_paths.events_jsonl.contains('/'));
+        assert!(!manifest.artifact_paths.commands_txt.contains('/'));
+    }
+
+    #[test]
     fn failed_rewrite_removes_stale_manifest_commit_marker() {
         let out_dir = unique_temp_dir("lowering-gap-stale-manifest");
         fs::create_dir_all(&out_dir).expect("create out dir");

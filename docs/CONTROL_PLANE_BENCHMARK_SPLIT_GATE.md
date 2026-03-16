@@ -5,6 +5,24 @@ Deterministic benchmark gate for Section 10.13 item 17.
 This gate enforces that control-plane integrations remain bounded while VM hot-loop
 performance stays decoupled from control-plane overhead.
 
+The verification bundle now emits the bead-specific reports required by
+`bd-3nr.1.5.2`:
+
+- `control_plane_real_context_overhead_report.json`
+- `benchmark_split_delta_report.json`
+
+The first report attributes cost to corrected-path components instead of a single
+aggregate number. It separates:
+
+- user-visible path overhead (`baseline` -> `evidence_emission`)
+- operator-visible gate/runtime overhead (`evidence_emission` -> `full_integration`)
+
+The delta report publishes deterministic split-by-split comparisons for:
+
+- previous stage deltas
+- shortcut-baseline deltas
+- previous snapshot deltas
+
 ## Split Model
 
 Required benchmark splits:
@@ -99,6 +117,7 @@ env CARGO_TARGET_DIR="$PWD/target_rch_control_plane_benchmark_split_gate_verify"
 
 Supported modes:
 
+- `bundle`
 - `check`
 - `test`
 - `clippy`
@@ -109,6 +128,8 @@ Supported modes:
 Each run writes:
 
 - `artifacts/control_plane_benchmark_split_gate/<timestamp>/commands.txt`
+- `artifacts/control_plane_benchmark_split_gate/<timestamp>/control_plane_real_context_overhead_report.json`
+- `artifacts/control_plane_benchmark_split_gate/<timestamp>/benchmark_split_delta_report.json`
 - `artifacts/control_plane_benchmark_split_gate/<timestamp>/events.jsonl`
 - `artifacts/control_plane_benchmark_split_gate/<timestamp>/run_manifest.json`
 - `artifacts/control_plane_benchmark_split_gate/<timestamp>/step_logs/step_*.log`
@@ -118,6 +139,8 @@ Each run writes:
 - `artifacts/control_plane_benchmark_split_gate/<timestamp>/trace_ids`
 
 `run_manifest.json` includes operator verification commands and artifact pointers.
+`events.jsonl` includes stable `scenario_id` and `seed` fields for replay and
+triage.
 The replay wrapper prefers the suite entrypoint directly:
 
 ```bash

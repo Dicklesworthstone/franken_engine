@@ -215,6 +215,9 @@ serving as roadmap/library surfaces until dedicated CLI beads land them.
 
 The shipped CLI contract above is guarded by an explicit docs/help audit pack so
 README examples do not drift back toward aspirational subcommands.
+The replay wrapper resolves the latest complete audit bundle, warns on
+incomplete newest runs, and prints the manifest, events, commands, report,
+captured help output, and first step log.
 
 - `docs/RGC_DOCS_HELP_SURFACE_AUDIT_V1.md`
 - `docs/rgc_docs_help_surface_audit_v1.json`

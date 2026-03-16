@@ -69,6 +69,16 @@ Replay wrapper:
 
 - `scripts/e2e/rgc_docs_help_surface_audit_replay.sh`
 
+The replay wrapper must resolve the latest complete run directory, warn when
+the newest artifact directory is incomplete, and print:
+
+- `run_manifest.json`
+- `events.jsonl`
+- `commands.txt`
+- `docs_help_surface_report.json`
+- `frankenctl_help.txt`
+- `step_logs/step_000.log`
+
 Supported modes:
 
 - `check`, `test`, `clippy`, `ci`

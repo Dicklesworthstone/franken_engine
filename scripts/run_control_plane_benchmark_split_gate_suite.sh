@@ -21,12 +21,16 @@ summary_path="$run_dir/summary.md"
 repro_lock_path="$run_dir/repro.lock"
 trace_ids_path="$run_dir/trace_ids"
 step_logs_dir="$run_dir/step_logs"
+control_plane_real_context_overhead_report_path="$run_dir/control_plane_real_context_overhead_report.json"
+benchmark_split_delta_report_path="$run_dir/benchmark_split_delta_report.json"
 
 trace_id="trace-cp-benchmark-split-${timestamp}"
 decision_id="decision-cp-benchmark-split-${timestamp}"
 policy_id="policy-cp-benchmark-split-v1"
 component="control_plane_benchmark_split_gate_suite"
+scenario_id="bd-3nr.1.5.2"
 replay_command="./scripts/e2e/control_plane_benchmark_split_gate_replay.sh ${mode}"
+report_command="cargo run -p frankenengine-engine --bin franken_control_plane_benchmark_split_report -- --out-dir ${run_dir}"
 
 mkdir -p "$run_dir" "$step_logs_dir"
 
@@ -112,26 +116,38 @@ run_step() {
 
 run_mode() {
   case "$mode" in
+    bundle)
+      run_step "${report_command}" \
+        cargo run -p frankenengine-engine --bin franken_control_plane_benchmark_split_report -- --out-dir "${run_dir}"
+      ;;
     check)
+      run_step "${report_command}" \
+        cargo run -p frankenengine-engine --bin franken_control_plane_benchmark_split_report -- --out-dir "${run_dir}"
       run_step "cargo check -p frankenengine-engine --lib" \
         cargo check -p frankenengine-engine --lib
       ;;
     test)
+      run_step "${report_command}" \
+        cargo run -p frankenengine-engine --bin franken_control_plane_benchmark_split_report -- --out-dir "${run_dir}"
       run_step "cargo test -p frankenengine-engine --test control_plane_benchmark_split_gate" \
         cargo test -p frankenengine-engine --test control_plane_benchmark_split_gate
       ;;
     clippy)
+      run_step "${report_command}" \
+        cargo run -p frankenengine-engine --bin franken_control_plane_benchmark_split_report -- --out-dir "${run_dir}"
       run_step "cargo clippy -p frankenengine-engine --test control_plane_benchmark_split_gate -- -D warnings" \
         cargo clippy -p frankenengine-engine --test control_plane_benchmark_split_gate -- -D warnings
       ;;
     ci)
+      run_step "${report_command}" \
+        cargo run -p frankenengine-engine --bin franken_control_plane_benchmark_split_report -- --out-dir "${run_dir}"
       run_step "cargo check -p frankenengine-engine --lib" \
         cargo check -p frankenengine-engine --lib
       run_step "cargo test -p frankenengine-engine --test control_plane_benchmark_split_gate" \
         cargo test -p frankenengine-engine --test control_plane_benchmark_split_gate
       ;;
     *)
-      echo "usage: $0 [check|test|clippy|ci]" >&2
+      echo "usage: $0 [bundle|check|test|clippy|ci]" >&2
       exit 2
       ;;
   esac
@@ -168,12 +184,14 @@ write_manifest() {
 {
   "schema_version": "franken-engine.control-plane-benchmark-split.env.v1",
   "mode": "${mode}",
+  "scenario_id": "${scenario_id}",
   "seed": "${seed}",
   "toolchain": "${toolchain}",
   "cargo_target_dir": "${target_dir}",
   "trace_id": "${trace_id}",
   "decision_id": "${decision_id}",
-  "policy_id": "${policy_id}"
+  "policy_id": "${policy_id}",
+  "report_command": "${report_command}"
 }
 EOF
 
@@ -184,12 +202,16 @@ EOF
 - mode: ${mode}
 - trace_id: ${trace_id}
 - decision_id: ${decision_id}
+- scenario_id: ${scenario_id}
 - replay_command: ${replay_command}
+- control_plane_real_context_overhead_report: ${control_plane_real_context_overhead_report_path}
+- benchmark_split_delta_report: ${benchmark_split_delta_report_path}
 EOF
 
   cat >"$repro_lock_path" <<EOF
 schema_version=franken-engine.control-plane-benchmark-split.repro-lock.v1
 mode=${mode}
+scenario_id=${scenario_id}
 seed=${seed}
 toolchain=${toolchain}
 cargo_target_dir=${target_dir}
@@ -197,10 +219,12 @@ trace_id=${trace_id}
 decision_id=${decision_id}
 policy_id=${policy_id}
 replay_command=${replay_command}
+report_command=${report_command}
 EOF
 
   {
-    echo "{\"trace_id\":\"${trace_id}\",\"decision_id\":\"${decision_id}\",\"policy_id\":\"${policy_id}\",\"component\":\"${component}\",\"event\":\"suite_completed\",\"outcome\":\"${outcome}\",\"error_code\":${error_code_json}}"
+    echo "{\"trace_id\":\"${trace_id}\",\"decision_id\":\"${decision_id}\",\"policy_id\":\"${policy_id}\",\"component\":\"${component}\",\"scenario_id\":\"${scenario_id}\",\"seed\":\"${seed}\",\"event\":\"report_artifacts_emitted\",\"outcome\":\"${outcome}\",\"error_code\":${error_code_json},\"control_plane_real_context_overhead_report\":\"${control_plane_real_context_overhead_report_path}\",\"benchmark_split_delta_report\":\"${benchmark_split_delta_report_path}\"}"
+    echo "{\"trace_id\":\"${trace_id}\",\"decision_id\":\"${decision_id}\",\"policy_id\":\"${policy_id}\",\"component\":\"${component}\",\"scenario_id\":\"${scenario_id}\",\"seed\":\"${seed}\",\"event\":\"suite_completed\",\"outcome\":\"${outcome}\",\"error_code\":${error_code_json}}"
   } >"$events_path"
 
   {
@@ -208,6 +232,7 @@ EOF
     echo '  "schema_version": "franken-engine.control-plane-benchmark-split.run-manifest.v1",'
     echo '  "component": "'"${component}"'",'
     echo '  "mode": "'"${mode}"'",'
+    echo '  "scenario_id": "'"${scenario_id}"'",'
     echo '  "seed": "'"${seed}"'",'
     echo '  "toolchain": "'"${toolchain}"'",'
     echo '  "cargo_target_dir": "'"${target_dir}"'",'
@@ -239,6 +264,8 @@ EOF
     echo '    "summary": "'"${summary_path}"'",'
     echo '    "repro_lock": "'"${repro_lock_path}"'",'
     echo '    "trace_ids": "'"${trace_ids_path}"'",'
+    echo '    "control_plane_real_context_overhead_report": "'"${control_plane_real_context_overhead_report_path}"'",'
+    echo '    "benchmark_split_delta_report": "'"${benchmark_split_delta_report_path}"'",'
     echo '    "contract_doc": "docs/CONTROL_PLANE_BENCHMARK_SPLIT_GATE.md",'
     echo '    "replay_wrapper": "scripts/e2e/control_plane_benchmark_split_gate_replay.sh"'
     echo '  },'
@@ -246,6 +273,8 @@ EOF
     echo "    \"cat ${manifest_path}\","
     echo "    \"cat ${events_path}\","
     echo "    \"cat ${commands_path}\","
+    echo "    \"cat ${control_plane_real_context_overhead_report_path}\","
+    echo "    \"cat ${benchmark_split_delta_report_path}\","
     echo "    \"cat ${step_logs_dir}/step_000.log\","
     echo "    \"${replay_command}\""
     echo '  ]'

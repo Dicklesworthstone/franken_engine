@@ -886,4 +886,181 @@ mod tests {
             extensions
         );
     }
+
+    // ── enrichment tests (PearlTower 2026-03-16) ──────────────────
+
+    #[test]
+    fn shipped_path_expected_outcome_serde_roundtrip() {
+        for outcome in [
+            ShippedPathExpectedOutcome::ExecuteSuccess,
+            ShippedPathExpectedOutcome::NormalizationFailure,
+            ShippedPathExpectedOutcome::ParseFailure,
+        ] {
+            let json = serde_json::to_string(&outcome).unwrap();
+            let back: ShippedPathExpectedOutcome = serde_json::from_str(&json).unwrap();
+            assert_eq!(outcome, back);
+        }
+    }
+
+    #[test]
+    fn shipped_path_actual_outcome_serde_roundtrip() {
+        for outcome in [
+            ShippedPathActualOutcome::ExecuteSuccess,
+            ShippedPathActualOutcome::NormalizationFailure,
+            ShippedPathActualOutcome::ParseFailure,
+            ShippedPathActualOutcome::OtherFailure,
+        ] {
+            let json = serde_json::to_string(&outcome).unwrap();
+            let back: ShippedPathActualOutcome = serde_json::from_str(&json).unwrap();
+            assert_eq!(outcome, back);
+        }
+    }
+
+    #[test]
+    fn shipped_path_verdict_variants_distinct() {
+        assert_ne!(ShippedPathVerdict::Pass, ShippedPathVerdict::Fail);
+    }
+
+    #[test]
+    fn corpus_specimen_descriptions_non_empty() {
+        for specimen in &shipped_path_corpus() {
+            assert!(
+                !specimen.description.is_empty(),
+                "specimen {} has empty description",
+                specimen.specimen_id
+            );
+            assert!(
+                !specimen.source.is_empty(),
+                "specimen {} has empty source",
+                specimen.specimen_id
+            );
+        }
+    }
+
+    #[test]
+    fn all_evidence_verdicts_are_pass() {
+        let inv = run_shipped_path_corpus();
+        for ev in &inv.evidence {
+            assert_eq!(
+                ev.verdict,
+                ShippedPathVerdict::Pass,
+                "specimen {} has unexpected verdict",
+                ev.specimen_id
+            );
+        }
+    }
+
+    #[test]
+    fn evidence_specimen_ids_match_corpus() {
+        let corpus = shipped_path_corpus();
+        let inv = run_shipped_path_corpus();
+        let corpus_ids: std::collections::BTreeSet<&str> =
+            corpus.iter().map(|s| s.specimen_id.as_str()).collect();
+        let evidence_ids: std::collections::BTreeSet<&str> =
+            inv.evidence.iter().map(|e| e.specimen_id.as_str()).collect();
+        assert_eq!(corpus_ids, evidence_ids);
+    }
+
+    #[test]
+    fn js_and_ts_counts_sum_to_specimen_count() {
+        let inv = run_shipped_path_corpus();
+        assert_eq!(inv.js_count + inv.ts_count, inv.specimen_count);
+    }
+
+    #[test]
+    fn inventory_has_both_js_and_ts() {
+        let inv = run_shipped_path_corpus();
+        assert!(inv.js_count > 0, "expected at least one JS specimen");
+        assert!(inv.ts_count > 0, "expected at least one TS specimen");
+    }
+
+    #[test]
+    fn write_bundle_creates_all_artifacts() {
+        let out = std::env::temp_dir().join(format!(
+            "ts-shipped-path-bundle-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let cmds = vec!["test".to_string()];
+        let arts = write_shipped_path_evidence_bundle(&out, &cmds).expect("write");
+        assert!(arts.inventory_path.exists());
+        assert!(arts.run_manifest_path.exists());
+        assert!(arts.events_path.exists());
+        assert!(arts.commands_path.exists());
+        let _ = std::fs::remove_dir_all(&out);
+    }
+
+    #[test]
+    fn bundle_hash_is_64_hex() {
+        let out = std::env::temp_dir().join(format!(
+            "ts-shipped-path-hex-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let cmds = vec!["test".to_string()];
+        let arts = write_shipped_path_evidence_bundle(&out, &cmds).expect("write");
+        assert_eq!(arts.inventory_hash.len(), 64);
+        assert!(arts.inventory_hash.chars().all(|c| c.is_ascii_hexdigit()));
+        let _ = std::fs::remove_dir_all(&out);
+    }
+
+    #[test]
+    fn bundle_hash_deterministic() {
+        let out1 = std::env::temp_dir().join(format!(
+            "ts-shipped-det1-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let out2 = std::env::temp_dir().join(format!(
+            "ts-shipped-det2-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let cmds = vec!["test".to_string()];
+        let a1 = write_shipped_path_evidence_bundle(&out1, &cmds).expect("w1");
+        let a2 = write_shipped_path_evidence_bundle(&out2, &cmds).expect("w2");
+        assert_eq!(a1.inventory_hash, a2.inventory_hash);
+        let _ = std::fs::remove_dir_all(&out1);
+        let _ = std::fs::remove_dir_all(&out2);
+    }
+
+    #[test]
+    fn shipped_path_specimen_serde_roundtrip() {
+        let specimen = ShippedPathSpecimen {
+            specimen_id: "test_specimen".to_string(),
+            description: "test desc".to_string(),
+            source: "let x = 1".to_string(),
+            source_file: Some("test.ts".to_string()),
+            expected_language: SourceLanguage::TypeScript,
+            expected_normalization: true,
+            expected_outcome: ShippedPathExpectedOutcome::ExecuteSuccess,
+        };
+        let json = serde_json::to_string(&specimen).unwrap();
+        let back: ShippedPathSpecimen = serde_json::from_str(&json).unwrap();
+        assert_eq!(specimen, back);
+    }
+
+    #[test]
+    fn shipped_path_evidence_event_serde_roundtrip() {
+        let event = ShippedPathEvidenceEvent {
+            schema_version: TS_SHIPPED_PATH_EVENT_SCHEMA_VERSION.to_string(),
+            component: TS_SHIPPED_PATH_COMPONENT.to_string(),
+            event: "specimen_evaluated".to_string(),
+            policy_id: TS_SHIPPED_PATH_POLICY_ID.to_string(),
+            specimen_id: Some("test".to_string()),
+            verdict: Some("pass".to_string()),
+            detail: None,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: ShippedPathEvidenceEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, back);
+    }
 }

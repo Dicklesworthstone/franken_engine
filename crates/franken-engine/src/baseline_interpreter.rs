@@ -4259,7 +4259,16 @@ mod tests {
             }],
         );
 
-        assert_both_lanes_value(&m, Value::Bool(true));
+        // r0 must be pre-set to Function(0) since there is no LoadFunction instruction.
+        for config in [
+            InterpreterConfig::quickjs_defaults(),
+            InterpreterConfig::v8_defaults(),
+        ] {
+            let mut core = InterpreterCore::new(config, "test");
+            core.registers[0] = Value::Function(0);
+            let result = core.execute(&m).unwrap();
+            assert_eq!(result.value, Value::Bool(true));
+        }
     }
 
     #[test]
@@ -4313,7 +4322,16 @@ mod tests {
             }],
         );
 
-        assert_both_lanes_value(&m, Value::Bool(false));
+        // r0 must be pre-set to Function(0) — instanceof needs a function as rhs.
+        for config in [
+            InterpreterConfig::quickjs_defaults(),
+            InterpreterConfig::v8_defaults(),
+        ] {
+            let mut core = InterpreterCore::new(config, "test");
+            core.registers[0] = Value::Function(0);
+            let result = core.execute(&m).unwrap();
+            assert_eq!(result.value, Value::Bool(false));
+        }
     }
 
     // -- TemplateLiteral tests -------------------------------------------

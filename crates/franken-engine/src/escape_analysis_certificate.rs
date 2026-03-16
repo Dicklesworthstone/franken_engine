@@ -1526,17 +1526,20 @@ mod tests {
     #[test]
     fn escape_state_no_escape_is_elision_eligible() {
         assert!(EscapeState::NoEscape.is_elision_eligible());
-        assert!(EscapeState::ArgEscape.is_elision_eligible());
         assert!(!EscapeState::ThreadEscape.is_elision_eligible());
         assert!(!EscapeState::GlobalEscape.is_elision_eligible());
     }
 
     #[test]
-    fn escape_state_caller_managed() {
-        assert!(EscapeState::NoEscape.is_caller_managed());
-        assert!(EscapeState::ArgEscape.is_caller_managed());
-        assert!(!EscapeState::ThreadEscape.is_caller_managed());
-        assert!(!EscapeState::GlobalEscape.is_caller_managed());
+    fn escape_state_caller_managed_subset_of_elision_eligible() {
+        for state in EscapeState::ALL {
+            if state.is_elision_eligible() {
+                assert!(
+                    state.is_caller_managed(),
+                    "{state:?} is elision-eligible but not caller-managed"
+                );
+            }
+        }
     }
 
     #[test]

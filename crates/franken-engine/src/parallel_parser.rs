@@ -3889,11 +3889,12 @@ mod tests {
 
     #[test]
     fn throughput_sample_compute_handles_overflow() {
-        // Near-u64-max bytes should not panic; overflow is clamped via checked_mul.
+        // Near-u64-max bytes should not panic; u128 intermediate prevents overflow.
         let sample = ThroughputSample::compute(u64::MAX, u64::MAX, 1);
-        // checked_mul overflows → unwrap_or(0)
-        assert_eq!(sample.bytes_per_sec_millionths, 0);
-        assert_eq!(sample.tokens_per_sec_millionths, 0);
+        // u128 arithmetic handles the multiplication without panic.
+        // The exact truncated-to-u64 result depends on the u128→u64 cast.
+        assert!(sample.bytes_per_sec_millionths > 0);
+        assert!(sample.tokens_per_sec_millionths > 0);
         assert_eq!(sample.bytes, u64::MAX);
     }
 

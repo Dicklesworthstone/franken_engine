@@ -1001,15 +1001,15 @@ mod tests {
     #[test]
     fn overlap_map_lookup() {
         let map = default_overlap_map();
-        let r = map.restriction_for(EngineSurface::Cli, EngineSurface::Runtime);
-        assert_eq!(r, Some(OverlapRestriction::Exclusive));
+        let r = map.restriction_for(EngineSurface::Parser, EngineSurface::Lowering);
+        assert_eq!(r, Some(OverlapRestriction::DelegationRequired));
     }
 
     #[test]
     fn overlap_map_lookup_reverse_order() {
         let map = default_overlap_map();
-        let r = map.restriction_for(EngineSurface::Runtime, EngineSurface::Cli);
-        assert_eq!(r, Some(OverlapRestriction::Exclusive));
+        let r = map.restriction_for(EngineSurface::Lowering, EngineSurface::Parser);
+        assert_eq!(r, Some(OverlapRestriction::DelegationRequired));
     }
 
     #[test]
@@ -1181,15 +1181,22 @@ mod tests {
 
     #[test]
     fn detect_exclusive_violation() {
-        // CLI and Runtime both claim support → exclusive violation
+        // Parser and Lowering both claim support with an exclusive restriction → violation
         let features = vec![make_feature(
             "shared",
             &[
-                (EngineSurface::Cli, SupportStatus::Supported),
-                (EngineSurface::Runtime, SupportStatus::Supported),
+                (EngineSurface::Parser, SupportStatus::Supported),
+                (EngineSurface::Lowering, SupportStatus::Supported),
             ],
         )];
-        let map = default_overlap_map();
+        let exclusive_entry = OverlapEntry {
+            surface_a: EngineSurface::Parser,
+            surface_b: EngineSurface::Lowering,
+            restriction: OverlapRestriction::Exclusive,
+            scope_prefix: None,
+            rationale: "Test exclusive restriction".into(),
+        };
+        let map = OverlapRestrictionMap::new(vec![exclusive_entry]);
         let cover = SemanticCover::new(features, map, test_epoch());
         let violations = detect_overlap_violations(&cover);
         assert_eq!(violations.len(), 1);

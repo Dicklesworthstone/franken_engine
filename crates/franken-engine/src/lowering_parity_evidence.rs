@@ -830,4 +830,151 @@ mod tests {
             manifest.artifact_paths.parity_evidence_inventory
         );
     }
+
+    // ── enrichment tests (PearlTower 2026-03-16) ──────────────────
+
+    #[test]
+    fn parity_verdict_serde_roundtrip_all_variants() {
+        for verdict in [
+            ParityVerdict::Covered,
+            ParityVerdict::FailClosedAgreed,
+            ParityVerdict::ParserLeadsLowering,
+            ParityVerdict::LoweringLeadsParser,
+            ParityVerdict::OpenGap,
+        ] {
+            let json = serde_json::to_string(&verdict).unwrap();
+            let back: ParityVerdict = serde_json::from_str(&json).unwrap();
+            assert_eq!(verdict, back);
+        }
+    }
+
+    #[test]
+    fn parity_verdict_as_str_matches_serde() {
+        for verdict in [
+            ParityVerdict::Covered,
+            ParityVerdict::FailClosedAgreed,
+            ParityVerdict::ParserLeadsLowering,
+            ParityVerdict::LoweringLeadsParser,
+            ParityVerdict::OpenGap,
+        ] {
+            let json: String =
+                serde_json::from_str(&serde_json::to_string(&verdict).unwrap()).unwrap();
+            assert_eq!(json, verdict.as_str());
+        }
+    }
+
+    #[test]
+    fn parity_verdict_as_str_distinct() {
+        let strs: std::collections::BTreeSet<&str> = [
+            ParityVerdict::Covered,
+            ParityVerdict::FailClosedAgreed,
+            ParityVerdict::ParserLeadsLowering,
+            ParityVerdict::LoweringLeadsParser,
+            ParityVerdict::OpenGap,
+        ]
+        .iter()
+        .map(|v| v.as_str())
+        .collect();
+        assert_eq!(strs.len(), 5);
+    }
+
+    #[test]
+    fn only_parser_leads_lowering_is_violation() {
+        assert!(!ParityVerdict::Covered.is_parity_violation());
+        assert!(!ParityVerdict::FailClosedAgreed.is_parity_violation());
+        assert!(ParityVerdict::ParserLeadsLowering.is_parity_violation());
+        assert!(!ParityVerdict::LoweringLeadsParser.is_parity_violation());
+        assert!(!ParityVerdict::OpenGap.is_parity_violation());
+    }
+
+    #[test]
+    fn parity_evidence_inventory_has_correct_schema() {
+        let inv = parity_evidence_inventory();
+        assert_eq!(inv.schema_version, PARITY_EVIDENCE_SCHEMA_VERSION);
+        assert_eq!(inv.component, PARITY_EVIDENCE_COMPONENT);
+    }
+
+    #[test]
+    fn parity_evidence_inventory_counts_are_consistent() {
+        let inv = parity_evidence_inventory();
+        let total = inv.covered_count()
+            + inv.fail_closed_agreed_count()
+            + inv.parity_violation_count()
+            + inv.open_gap_count();
+        assert_eq!(
+            total,
+            inv.findings.len(),
+            "verdict counts must sum to total findings"
+        );
+    }
+
+    #[test]
+    fn parity_evidence_inventory_findings_non_empty() {
+        let inv = parity_evidence_inventory();
+        assert!(!inv.findings.is_empty());
+    }
+
+    #[test]
+    fn parity_evidence_event_serde_roundtrip() {
+        let event = ParityEvidenceEvent {
+            schema_version: PARITY_EVIDENCE_EVENT_SCHEMA_VERSION.to_string(),
+            component: PARITY_EVIDENCE_COMPONENT.to_string(),
+            event: "finding_recorded".to_string(),
+            policy_id: PARITY_EVIDENCE_POLICY_ID.to_string(),
+            site_id: Some("test_family".to_string()),
+            verdict: Some("covered".to_string()),
+            detail: Some("test detail".to_string()),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: ParityEvidenceEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, back);
+    }
+
+    #[test]
+    fn parity_finding_serde_roundtrip() {
+        let finding = ParityFinding {
+            site_id: "test_family".to_string(),
+            feature_family: "expression".to_string(),
+            diagnostic_code: "FE-TEST-0001".to_string(),
+            parser_status: "resolved".to_string(),
+            lowering_status: "resolved".to_string(),
+            verdict: ParityVerdict::Covered,
+        };
+        let json = serde_json::to_string(&finding).unwrap();
+        let back: ParityFinding = serde_json::from_str(&json).unwrap();
+        assert_eq!(finding, back);
+    }
+
+    #[test]
+    fn schema_constants_are_non_empty() {
+        assert!(!PARITY_EVIDENCE_SCHEMA_VERSION.is_empty());
+        assert!(!PARITY_EVIDENCE_MANIFEST_SCHEMA_VERSION.is_empty());
+        assert!(!PARITY_EVIDENCE_EVENT_SCHEMA_VERSION.is_empty());
+        assert!(!PARITY_EVIDENCE_COMPONENT.is_empty());
+        assert!(!PARITY_EVIDENCE_POLICY_ID.is_empty());
+    }
+
+    #[test]
+    fn schema_versions_all_distinct() {
+        let versions = [
+            PARITY_EVIDENCE_SCHEMA_VERSION,
+            PARITY_EVIDENCE_MANIFEST_SCHEMA_VERSION,
+            PARITY_EVIDENCE_EVENT_SCHEMA_VERSION,
+        ];
+        let set: std::collections::BTreeSet<&str> = versions.iter().copied().collect();
+        assert_eq!(set.len(), versions.len());
+    }
+
+    #[test]
+    fn parity_artifact_paths_serde_roundtrip() {
+        let paths = ParityEvidenceArtifactPaths {
+            parity_evidence_inventory: "inventory.json".to_string(),
+            run_manifest: "manifest.json".to_string(),
+            events_jsonl: "events.jsonl".to_string(),
+            commands_txt: "commands.txt".to_string(),
+        };
+        let json = serde_json::to_string(&paths).unwrap();
+        let back: ParityEvidenceArtifactPaths = serde_json::from_str(&json).unwrap();
+        assert_eq!(paths, back);
+    }
 }

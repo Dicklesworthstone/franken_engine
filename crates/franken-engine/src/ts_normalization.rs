@@ -2303,38 +2303,139 @@ fn class_header_precedes_implements(source: &str, index: usize) -> bool {
 
 fn strip_type_annotations(source: &str) -> String {
     let mut output = String::new();
-    let mut chars = source.chars().peekable();
-    let mut in_single_quote = false;
-    let mut in_double_quote = false;
+    let bytes = source.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
 
-    while let Some(ch) = chars.next() {
-        if ch == '\'' && !in_double_quote {
-            in_single_quote = !in_single_quote;
-            output.push(ch);
+    // Track string/comment/template-literal state to avoid stripping colons
+    // inside literal contexts.
+    #[derive(PartialEq)]
+    enum Ctx {
+        Code,
+        SingleQuote,
+        DoubleQuote,
+        TemplateLiteral,
+        LineComment,
+        BlockComment,
+    }
+
+    let mut ctx = Ctx::Code;
+
+    while i < len {
+        let ch = bytes[i];
+
+        match ctx {
+            Ctx::LineComment => {
+                output.push(ch as char);
+                if ch == b'\n' {
+                    ctx = Ctx::Code;
+                }
+                i += 1;
+                continue;
+            }
+            Ctx::BlockComment => {
+                output.push(ch as char);
+                if ch == b'*' && i + 1 < len && bytes[i + 1] == b'/' {
+                    output.push('/');
+                    i += 2;
+                    ctx = Ctx::Code;
+                } else {
+                    i += 1;
+                }
+                continue;
+            }
+            Ctx::SingleQuote => {
+                output.push(ch as char);
+                if ch == b'\\' && i + 1 < len {
+                    output.push(bytes[i + 1] as char);
+                    i += 2;
+                } else if ch == b'\'' {
+                    ctx = Ctx::Code;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+                continue;
+            }
+            Ctx::DoubleQuote => {
+                output.push(ch as char);
+                if ch == b'\\' && i + 1 < len {
+                    output.push(bytes[i + 1] as char);
+                    i += 2;
+                } else if ch == b'"' {
+                    ctx = Ctx::Code;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+                continue;
+            }
+            Ctx::TemplateLiteral => {
+                output.push(ch as char);
+                if ch == b'\\' && i + 1 < len {
+                    output.push(bytes[i + 1] as char);
+                    i += 2;
+                } else if ch == b'`' {
+                    ctx = Ctx::Code;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+                continue;
+            }
+            Ctx::Code => {}
+        }
+
+        // In code context: detect string/comment openings.
+        if ch == b'\'' {
+            ctx = Ctx::SingleQuote;
+            output.push(ch as char);
+            i += 1;
             continue;
         }
-        if ch == '"' && !in_single_quote {
-            in_double_quote = !in_double_quote;
-            output.push(ch);
+        if ch == b'"' {
+            ctx = Ctx::DoubleQuote;
+            output.push(ch as char);
+            i += 1;
             continue;
         }
-
-        if in_single_quote || in_double_quote {
-            output.push(ch);
+        if ch == b'`' {
+            ctx = Ctx::TemplateLiteral;
+            output.push(ch as char);
+            i += 1;
             continue;
         }
+        if ch == b'/' && i + 1 < len {
+            if bytes[i + 1] == b'/' {
+                ctx = Ctx::LineComment;
+                output.push('/');
+                output.push('/');
+                i += 2;
+                continue;
+            }
+            if bytes[i + 1] == b'*' {
+                ctx = Ctx::BlockComment;
+                output.push('/');
+                output.push('*');
+                i += 2;
+                continue;
+            }
+        }
 
-        if ch == ':' {
-            while let Some(next) = chars.peek() {
-                if matches!(next, ',' | ')' | '=' | ';' | '{' | '}' | '\n') {
+        // Strip type annotations: skip from colon until the next delimiter.
+        if ch == b':' {
+            i += 1;
+            while i < len {
+                if matches!(bytes[i], b',' | b')' | b'=' | b';' | b'{' | b'}' | b'\n') {
                     break;
                 }
-                let _ = chars.next();
+                i += 1;
             }
             continue;
         }
 
-        output.push(ch);
+        output.push(ch as char);
+        i += 1;
     }
 
     output

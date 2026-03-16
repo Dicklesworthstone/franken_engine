@@ -635,3 +635,351 @@ fn full_lifecycle_build_validate_snapshot_ledger() {
     let back: SemanticTwinSpecification = serde_json::from_str(&json).unwrap();
     assert_eq!(back.deterministic_digest(), spec.deterministic_digest());
 }
+
+// ===========================================================================
+// 13. Enum ordering tests
+// ===========================================================================
+
+#[test]
+fn twin_state_domain_ordering() {
+    assert!(TwinStateDomain::Workload < TwinStateDomain::Risk);
+    assert!(TwinStateDomain::Risk < TwinStateDomain::Policy);
+    assert!(TwinStateDomain::Lane < TwinStateDomain::Outcome);
+    assert!(TwinStateDomain::Outcome < TwinStateDomain::Regime);
+    assert!(TwinStateDomain::Resource < TwinStateDomain::Replay);
+    assert!(TwinStateDomain::Replay < TwinStateDomain::Calibration);
+}
+
+#[test]
+fn twin_signal_source_ordering() {
+    assert!(TwinSignalSource::RuntimeDecisionCore < TwinSignalSource::RuntimeDecisionTheory);
+    assert!(TwinSignalSource::RuntimeDecisionTheory < TwinSignalSource::CausalReplay);
+    assert!(TwinSignalSource::FrirIr2 < TwinSignalSource::FrirIr3);
+    assert!(TwinSignalSource::EvidenceLedger < TwinSignalSource::OperatorInput);
+}
+
+#[test]
+fn twin_phase_ordering() {
+    assert!(TwinPhase::ObserveWorkload < TwinPhase::UpdateRiskBelief);
+    assert!(TwinPhase::UpdateRiskBelief < TwinPhase::SelectLane);
+    assert!(TwinPhase::SelectLane < TwinPhase::ExecuteLane);
+    assert!(TwinPhase::ExecuteLane < TwinPhase::RecordOutcome);
+    assert!(TwinPhase::RecordOutcome < TwinPhase::EvaluateFallback);
+    assert!(TwinPhase::EvaluateFallback < TwinPhase::SafeMode);
+}
+
+#[test]
+fn twin_transition_trigger_ordering() {
+    assert!(TwinTransitionTrigger::ObservationCommitted < TwinTransitionTrigger::PosteriorUpdated);
+    assert!(TwinTransitionTrigger::PosteriorUpdated < TwinTransitionTrigger::DecisionCommitted);
+    assert!(TwinTransitionTrigger::GuardrailTriggered < TwinTransitionTrigger::OperatorOverride);
+}
+
+// ===========================================================================
+// 14. Snapshot deterministic digest varies with metadata fields
+// ===========================================================================
+
+#[test]
+fn snapshot_digest_varies_with_trace_id() {
+    let mut s1 = TwinStateSnapshot::new("trace-a", "d", "p", 1, 1);
+    s1.upsert_value("x", 42);
+    let mut s2 = TwinStateSnapshot::new("trace-b", "d", "p", 1, 1);
+    s2.upsert_value("x", 42);
+    assert_ne!(s1.deterministic_digest(), s2.deterministic_digest());
+}
+
+#[test]
+fn snapshot_digest_varies_with_decision_id() {
+    let mut s1 = TwinStateSnapshot::new("t", "dec-a", "p", 1, 1);
+    s1.upsert_value("x", 42);
+    let mut s2 = TwinStateSnapshot::new("t", "dec-b", "p", 1, 1);
+    s2.upsert_value("x", 42);
+    assert_ne!(s1.deterministic_digest(), s2.deterministic_digest());
+}
+
+#[test]
+fn snapshot_digest_varies_with_epoch() {
+    let mut s1 = TwinStateSnapshot::new("t", "d", "p", 1, 1);
+    s1.upsert_value("x", 42);
+    let mut s2 = TwinStateSnapshot::new("t", "d", "p", 2, 1);
+    s2.upsert_value("x", 42);
+    assert_ne!(s1.deterministic_digest(), s2.deterministic_digest());
+}
+
+#[test]
+fn snapshot_digest_varies_with_tick() {
+    let mut s1 = TwinStateSnapshot::new("t", "d", "p", 1, 10);
+    s1.upsert_value("x", 42);
+    let mut s2 = TwinStateSnapshot::new("t", "d", "p", 1, 20);
+    s2.upsert_value("x", 42);
+    assert_ne!(s1.deterministic_digest(), s2.deterministic_digest());
+}
+
+// ===========================================================================
+// 15. Snapshot clone preserves digest
+// ===========================================================================
+
+#[test]
+fn snapshot_clone_preserves_digest() {
+    let mut snap = TwinStateSnapshot::new("t", "d", "p", 5, 50);
+    snap.upsert_value("a", 100);
+    snap.upsert_value("b", 200);
+    let cloned = snap.clone();
+    assert_eq!(snap, cloned);
+    assert_eq!(snap.deterministic_digest(), cloned.deterministic_digest());
+}
+
+// ===========================================================================
+// 16. Snapshot with many variables — determinism
+// ===========================================================================
+
+#[test]
+fn snapshot_many_variables_deterministic_digest() {
+    let build = || {
+        let mut snap = TwinStateSnapshot::new("trace", "dec", "pol", 1, 1);
+        for i in 0..20 {
+            snap.upsert_value(&format!("var_{i:03}"), i * 50_000);
+        }
+        snap.deterministic_digest()
+    };
+    assert_eq!(build(), build());
+}
+
+// ===========================================================================
+// 17. Spec clone preserves digest
+// ===========================================================================
+
+#[test]
+fn spec_clone_preserves_digest() {
+    let spec = SemanticTwinSpecification::lane_decision_default().unwrap();
+    let cloned = spec.clone();
+    assert_eq!(spec, cloned);
+    assert_eq!(spec.deterministic_digest(), cloned.deterministic_digest());
+}
+
+// ===========================================================================
+// 18. Validate — invalid monitor trigger_count
+// ===========================================================================
+
+#[test]
+fn validate_invalid_monitor_trigger_count() {
+    let mut spec = SemanticTwinSpecification::lane_decision_default().unwrap();
+    spec.falsification_hooks.push(TwinFalsificationHook {
+        monitor_id: "bad_count_monitor".into(),
+        assumption_id: spec.assumptions[0].id.clone(),
+        variable_id: spec.variables[0].id.clone(),
+        kind: MonitorKind::Invariant,
+        op: MonitorOp::Ge,
+        threshold_millionths: 0,
+        trigger_count: 0, // invalid: 0 triggers
+    });
+    let err = spec.validate().unwrap_err();
+    assert!(matches!(
+        err,
+        TwinSpecError::InvalidMonitorTriggerCount { .. }
+    ));
+}
+
+// ===========================================================================
+// 19. Validate snapshot — value exactly at range boundaries
+// ===========================================================================
+
+#[test]
+fn validate_snapshot_at_exact_boundaries() {
+    let spec = SemanticTwinSpecification::lane_decision_default().unwrap();
+    let mut snap = make_valid_snapshot(&spec);
+    // workload_complexity: min=0, max=1_000_000
+    // Set to exact min.
+    snap.upsert_value("workload_complexity", 0);
+    spec.validate_snapshot(&snap).unwrap();
+    // Set to exact max.
+    snap.upsert_value("workload_complexity", 1_000_000);
+    spec.validate_snapshot(&snap).unwrap();
+}
+
+#[test]
+fn validate_snapshot_one_past_max_fails() {
+    let spec = SemanticTwinSpecification::lane_decision_default().unwrap();
+    let mut snap = make_valid_snapshot(&spec);
+    snap.upsert_value("workload_complexity", 1_000_001);
+    let err = spec.validate_snapshot(&snap).unwrap_err();
+    assert!(matches!(err, TwinSpecError::OutOfRangeSnapshotValue { .. }));
+}
+
+#[test]
+fn validate_snapshot_negative_value_fails() {
+    let spec = SemanticTwinSpecification::lane_decision_default().unwrap();
+    let mut snap = make_valid_snapshot(&spec);
+    // workload_complexity: min=0, so -1 is out of range.
+    snap.upsert_value("workload_complexity", -1);
+    let err = spec.validate_snapshot(&snap).unwrap_err();
+    assert!(matches!(err, TwinSpecError::OutOfRangeSnapshotValue { .. }));
+}
+
+// ===========================================================================
+// 20. Ledger — multiple sequential observations
+// ===========================================================================
+
+#[test]
+fn ledger_multiple_observations_accumulate_violations() {
+    let spec = SemanticTwinSpecification::lane_decision_default().unwrap();
+    let mut ledger = spec.to_assumption_ledger("dec-1", 7).unwrap();
+
+    // First observation: nominal — no violation.
+    let actions = ledger.observe("nondeterminism_log_completeness", 1_000_000, 7, 100);
+    assert!(actions.is_empty());
+    assert_eq!(ledger.violated_count(), 0);
+
+    // Second observation: bad value — triggers violation.
+    let actions = ledger.observe("nondeterminism_log_completeness", 0, 7, 101);
+    assert!(!actions.is_empty());
+    assert!(ledger.violated_count() > 0);
+}
+
+// ===========================================================================
+// 21. Spec default — causal model present
+// ===========================================================================
+
+#[test]
+fn lane_decision_default_has_causal_model_nodes() {
+    let spec = SemanticTwinSpecification::lane_decision_default().unwrap();
+    // Causal model should have nodes from the variable set.
+    assert!(!spec.causal_model.nodes().is_empty());
+}
+
+// ===========================================================================
+// 22. Error serde round-trips for all variants
+// ===========================================================================
+
+#[test]
+fn spec_error_serde_all_variants() {
+    let errors: Vec<TwinSpecError> = vec![
+        TwinSpecError::DuplicateVariable("v".into()),
+        TwinSpecError::UnknownVariable("u".into()),
+        TwinSpecError::InvalidSchemaVersion("bad".into()),
+        TwinSpecError::DuplicateTransition("t".into()),
+        TwinSpecError::DuplicateAssumption("a".into()),
+        TwinSpecError::DuplicateMonitor("m".into()),
+        TwinSpecError::InvalidMonitorTriggerCount {
+            monitor_id: "m".into(),
+        },
+        TwinSpecError::InvalidMeasurementRange {
+            variable_id: "v".into(),
+        },
+        TwinSpecError::MissingTreatmentVariable("t".into()),
+        TwinSpecError::MissingOutcomeVariable("o".into()),
+        TwinSpecError::MissingSnapshotValue {
+            variable_id: "v".into(),
+        },
+        TwinSpecError::OutOfRangeSnapshotValue {
+            variable_id: "v".into(),
+            value: 999,
+            min: Some(0),
+            max: Some(100),
+        },
+    ];
+    for err in &errors {
+        let json = serde_json::to_string(err).unwrap();
+        let back: TwinSpecError = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, *err);
+    }
+}
+
+// ===========================================================================
+// 23. Snapshot deterministic_digest format
+// ===========================================================================
+
+#[test]
+fn snapshot_digest_format_sha256_prefix() {
+    let snap = TwinStateSnapshot::new("t", "d", "p", 1, 1);
+    let digest = snap.deterministic_digest();
+    assert!(
+        digest.starts_with("sha256:"),
+        "snapshot digest should start with 'sha256:', got: {}",
+        digest
+    );
+    // The hex portion should be 64 chars (SHA-256).
+    let hex_part = &digest["sha256:".len()..];
+    assert_eq!(
+        hex_part.len(),
+        64,
+        "SHA-256 hex should be 64 chars, got {}",
+        hex_part.len()
+    );
+}
+
+// ===========================================================================
+// 24. Spec serde preserves all fields
+// ===========================================================================
+
+#[test]
+fn spec_serde_preserves_all_fields() {
+    let spec = SemanticTwinSpecification::lane_decision_default().unwrap();
+    let json = serde_json::to_string(&spec).unwrap();
+    let back: SemanticTwinSpecification = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(back.schema_version, spec.schema_version);
+    assert_eq!(back.component, spec.component);
+    assert_eq!(back.states, spec.states);
+    assert_eq!(back.variables.len(), spec.variables.len());
+    assert_eq!(back.transitions.len(), spec.transitions.len());
+    assert_eq!(
+        back.measurement_contracts.len(),
+        spec.measurement_contracts.len()
+    );
+    assert_eq!(back.assumptions.len(), spec.assumptions.len());
+    assert_eq!(
+        back.falsification_hooks.len(),
+        spec.falsification_hooks.len()
+    );
+    assert_eq!(back.treatment_variable, spec.treatment_variable);
+    assert_eq!(back.outcome_variable, spec.outcome_variable);
+    assert_eq!(
+        back.recommended_adjustment_set,
+        spec.recommended_adjustment_set
+    );
+}
+
+// ===========================================================================
+// 25. BTreeMap ordering determinism in snapshot values
+// ===========================================================================
+
+#[test]
+fn snapshot_values_btreemap_ordered() {
+    let mut snap = TwinStateSnapshot::new("t", "d", "p", 1, 1);
+    // Insert in reverse alphabetical order.
+    snap.upsert_value("z_var", 100);
+    snap.upsert_value("a_var", 200);
+    snap.upsert_value("m_var", 300);
+
+    let keys: Vec<&String> = snap.values_millionths.keys().collect();
+    // BTreeMap should maintain sorted order.
+    assert_eq!(keys[0], "a_var");
+    assert_eq!(keys[1], "m_var");
+    assert_eq!(keys[2], "z_var");
+}
+
+// ===========================================================================
+// 26. Spec default states are 7 lifecycle phases
+// ===========================================================================
+
+#[test]
+fn lane_decision_default_all_phases_present() {
+    let spec = SemanticTwinSpecification::lane_decision_default().unwrap();
+    let phases = [
+        TwinPhase::ObserveWorkload,
+        TwinPhase::UpdateRiskBelief,
+        TwinPhase::SelectLane,
+        TwinPhase::ExecuteLane,
+        TwinPhase::RecordOutcome,
+        TwinPhase::EvaluateFallback,
+        TwinPhase::SafeMode,
+    ];
+    for phase in &phases {
+        assert!(
+            spec.states.contains(phase),
+            "phase {:?} should be in states",
+            phase
+        );
+    }
+}

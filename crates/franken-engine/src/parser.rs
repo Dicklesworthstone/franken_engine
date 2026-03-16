@@ -2080,6 +2080,9 @@ struct ParseExecutionContext<'a> {
     source_bytes: u64,
     token_count: u64,
     max_recursion_observed: u64,
+    /// Current statement nesting depth (if/for/while/try/switch/function bodies).
+    /// Guards against stack overflow from deeply nested statements.
+    statement_depth: u64,
 }
 
 impl<'a> ParseExecutionContext<'a> {
@@ -2229,6 +2232,7 @@ fn parse_source(
         source_bytes,
         token_count,
         max_recursion_observed: 0,
+        statement_depth: 0,
     };
 
     if source_bytes > options.budget.max_source_bytes {
@@ -2323,7 +2327,7 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
         }
 
         match ch {
-            '\'' | '"' => in_quote = Some(ch),
+            '\'' | '"' | '`' => in_quote = Some(ch),
             '(' => paren_depth = paren_depth.saturating_add(1),
             ')' => paren_depth = paren_depth.saturating_sub(1),
             '[' => bracket_depth = bracket_depth.saturating_add(1),
@@ -2405,6 +2409,31 @@ fn span_for_segment(
 }
 
 fn parse_statement(
+    statement: &str,
+    goal: ParseGoal,
+    span: SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+) -> ParseResult<Statement> {
+    // Guard against stack overflow from deeply nested statements (if/for/while/try/switch/fn).
+    context.statement_depth += 1;
+    if context.statement_depth > context.options.budget.max_recursion_depth {
+        context.statement_depth -= 1;
+        return Err(ParseError::new(
+            ParseErrorCode::BudgetExceeded,
+            format!(
+                "statement nesting budget exceeded: depth={} max={}",
+                context.statement_depth, context.options.budget.max_recursion_depth
+            ),
+            context.source_label.to_string(),
+            Some(span),
+        ));
+    }
+    let result = parse_statement_inner(statement, goal, span, context);
+    context.statement_depth -= 1;
+    result
+}
+
+fn parse_statement_inner(
     statement: &str,
     goal: ParseGoal,
     span: SourceSpan,
@@ -3233,7 +3262,7 @@ fn split_var_declarator_segments(source: &str) -> Vec<&str> {
         }
 
         match ch {
-            '\'' | '"' => in_quote = Some(ch),
+            '\'' | '"' | '`' => in_quote = Some(ch),
             '(' => paren_depth = paren_depth.saturating_add(1),
             ')' => paren_depth = paren_depth.saturating_sub(1),
             '[' => bracket_depth = bracket_depth.saturating_add(1),
@@ -3745,10 +3774,29 @@ fn parse_template_literal(
 
     while i < bytes.len() {
         if bytes[i] == b'\\' && i + 1 < bytes.len() {
-            // Escaped character — include literally for now.
-            current_quasi.push(bytes[i] as char);
-            current_quasi.push(bytes[i + 1] as char);
-            i += 2;
+            // Escaped character — include literally. Advance past the
+            // full UTF-8 codepoint that follows the backslash so we
+            // don't split multi-byte characters.
+            let esc_start = i;
+            i += 1; // skip backslash
+            // Advance past the full character after the backslash.
+            if bytes[i] < 0x80 {
+                i += 1;
+            } else {
+                // Decode the UTF-8 lead byte to find the codepoint length.
+                let cp_len = if bytes[i] & 0xE0 == 0xC0 {
+                    2
+                } else if bytes[i] & 0xF0 == 0xE0 {
+                    3
+                } else {
+                    4
+                };
+                i += cp_len;
+            }
+            // Safety: inner is valid UTF-8, and esc_start..i spans
+            // a backslash followed by a complete codepoint.
+            let end = i.min(inner.len());
+            current_quasi.push_str(&inner[esc_start..end]);
             continue;
         }
         if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
@@ -3806,8 +3854,22 @@ fn parse_template_literal(
             i += 1; // skip closing `}`
             continue;
         }
-        current_quasi.push(bytes[i] as char);
-        i += 1;
+        // Advance by a full UTF-8 codepoint, not a single byte.
+        if bytes[i] < 0x80 {
+            current_quasi.push(bytes[i] as char);
+            i += 1;
+        } else {
+            let cp_len = if bytes[i] & 0xE0 == 0xC0 {
+                2
+            } else if bytes[i] & 0xF0 == 0xE0 {
+                3
+            } else {
+                4
+            };
+            let end = (i + cp_len).min(inner.len());
+            current_quasi.push_str(&inner[i..end]);
+            i = end;
+        }
     }
     quasis.push(current_quasi);
 

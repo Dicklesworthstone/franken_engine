@@ -749,15 +749,7 @@ impl InterpreterCore {
 
                     match obj_val {
                         Value::Object(oid) => {
-                            let heap_obj = self
-                                .heap
-                                .get(oid.0 as usize)
-                                .ok_or(InterpreterError::ObjectNotFound { id: oid.0 })?;
-                            let prop = heap_obj
-                                .properties
-                                .get(&key_str)
-                                .cloned()
-                                .unwrap_or(Value::Undefined);
+                            let prop = self.prototype_chain_get(oid, &key_str)?;
                             self.write_reg(dst, prop)?;
                         }
                         _ => {
@@ -1042,47 +1034,55 @@ impl InterpreterCore {
             (Value::Str(x), Value::Str(y)) => Ok(Value::Str(format!("{x}{y}"))),
             (Value::Str(x), other) => Ok(Value::Str(format!("{x}{other}"))),
             (other, Value::Str(y)) => Ok(Value::Str(format!("{other}{y}"))),
-            _ => Err(InterpreterError::TypeError {
-                expected: "number or string".to_string(),
-                got: format!("{} + {}", a.type_name(), b.type_name()),
-            }),
+            _ => {
+                // JS coercion: non-string primitives coerce to number for +.
+                let x = Self::coerce_to_number(&a).ok_or(InterpreterError::TypeError {
+                    expected: "number or string".to_string(),
+                    got: format!("{} + {}", a.type_name(), b.type_name()),
+                })?;
+                let y = Self::coerce_to_number(&b).ok_or(InterpreterError::TypeError {
+                    expected: "number or string".to_string(),
+                    got: format!("{} + {}", a.type_name(), b.type_name()),
+                })?;
+                Ok(Value::Int(x.wrapping_add(y)))
+            }
         }
     }
 
     fn eval_arith(&self, lhs: u32, rhs: u32, op: &str) -> Result<Value, InterpreterError> {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
-        match (&a, &b) {
-            (Value::Int(x), Value::Int(y)) => {
-                let result = match op {
-                    "sub" => x.wrapping_sub(*y),
-                    "mul" => x.wrapping_mul(*y),
-                    _ => unreachable!(),
-                };
-                Ok(Value::Int(result))
-            }
-            _ => Err(InterpreterError::TypeError {
-                expected: "number".to_string(),
-                got: format!("{} {} {}", a.type_name(), op, b.type_name()),
-            }),
-        }
+        let x = Self::coerce_to_number(&a).ok_or(InterpreterError::TypeError {
+            expected: "number".to_string(),
+            got: format!("{} {} {}", a.type_name(), op, b.type_name()),
+        })?;
+        let y = Self::coerce_to_number(&b).ok_or(InterpreterError::TypeError {
+            expected: "number".to_string(),
+            got: format!("{} {} {}", a.type_name(), op, b.type_name()),
+        })?;
+        let result = match op {
+            "sub" => x.wrapping_sub(y),
+            "mul" => x.wrapping_mul(y),
+            _ => unreachable!(),
+        };
+        Ok(Value::Int(result))
     }
 
     fn eval_div(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
-        match (&a, &b) {
-            (Value::Int(x), Value::Int(y)) => {
-                if *y == 0 {
-                    return Err(InterpreterError::DivisionByZero);
-                }
-                Ok(Value::Int(x.wrapping_div(*y)))
-            }
-            _ => Err(InterpreterError::TypeError {
-                expected: "number".to_string(),
-                got: format!("{} / {}", a.type_name(), b.type_name()),
-            }),
+        let x = Self::coerce_to_number(&a).ok_or(InterpreterError::TypeError {
+            expected: "number".to_string(),
+            got: format!("{} / {}", a.type_name(), b.type_name()),
+        })?;
+        let y = Self::coerce_to_number(&b).ok_or(InterpreterError::TypeError {
+            expected: "number".to_string(),
+            got: format!("{} / {}", a.type_name(), b.type_name()),
+        })?;
+        if y == 0 {
+            return Err(InterpreterError::DivisionByZero);
         }
+        Ok(Value::Int(x.wrapping_div(y)))
     }
 
     fn eval_mod(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
@@ -1392,6 +1392,34 @@ impl InterpreterCore {
         }
 
         Ok(false)
+    }
+
+    /// Walk the prototype chain to find a property value.
+    fn prototype_chain_get(
+        &self,
+        object_id: ObjectId,
+        key: &str,
+    ) -> Result<Value, InterpreterError> {
+        let mut current = Some(object_id);
+        let mut depth = 0u32;
+        let mut visited = BTreeSet::new();
+
+        while let Some(id) = current {
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
+                return Ok(Value::Undefined);
+            }
+            let object = self
+                .heap
+                .get(id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
+            if let Some(val) = object.properties.get(key) {
+                return Ok(val.clone());
+            }
+            current = object.prototype;
+            depth += 1;
+        }
+
+        Ok(Value::Undefined)
     }
 
     fn prototype_chain_has_key(
@@ -2150,7 +2178,8 @@ mod tests {
     }
 
     #[test]
-    fn add_type_error() {
+    fn add_coerces_bool_and_null_to_number() {
+        // JS semantics: true + null = 1 + 0 = 1
         let m = test_module(vec![
             Ir3Instruction::LoadBool {
                 dst: 1,
@@ -2163,8 +2192,8 @@ mod tests {
                 rhs: 2,
             },
         ]);
-        let err = quickjs_execute(&m).unwrap_err();
-        assert!(matches!(err, InterpreterError::TypeError { .. }));
+        let result = quickjs_execute(&m).unwrap();
+        assert_eq!(result.value, Value::Int(1));
     }
 
     // -----------------------------------------------------------------------
@@ -3419,7 +3448,8 @@ mod tests {
     }
 
     #[test]
-    fn mul_type_error() {
+    fn mul_coerces_bool_to_number() {
+        // JS semantics: true * 3 = 1 * 3 = 3
         let m = test_module(vec![
             Ir3Instruction::LoadBool {
                 dst: 1,
@@ -3432,8 +3462,8 @@ mod tests {
                 rhs: 2,
             },
         ]);
-        let err = quickjs_execute(&m).unwrap_err();
-        assert!(matches!(err, InterpreterError::TypeError { .. }));
+        let result = quickjs_execute(&m).unwrap();
+        assert_eq!(result.value, Value::Int(3));
     }
 
     #[test]

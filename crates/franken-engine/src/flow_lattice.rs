@@ -328,7 +328,7 @@ impl DeclassificationObligation {
                 obligation_id: self.obligation_id.clone(),
             });
         }
-        self.use_count += 1;
+        self.use_count = self.use_count.saturating_add(1);
         Ok(())
     }
 }
@@ -586,7 +586,13 @@ impl Ir2FlowLattice {
         }
     }
 
-    /// Exercise a declassification obligation.
+    /// Exercise a declassification obligation without receipt verification.
+    ///
+    /// # Security
+    /// This method performs NO authorization check — the caller is responsible
+    /// for verifying that the declassification is authorized before calling.
+    /// Prefer `use_declassification_with_receipt` for all external/untrusted
+    /// code paths.
     pub fn use_declassification(
         &mut self,
         obligation_id: &str,

@@ -219,17 +219,20 @@ impl CusumDetector {
                     .unwrap_or(0),
             );
 
-        // CUSUM update
-        let deviation = value_millionths as i64 - self.reference_millionths as i64;
-        let drift = self.drift_millionths as i64;
+        // CUSUM update — use i128 intermediaries to avoid silent wrapping
+        // when u64 values exceed i64::MAX.
+        let deviation = value_millionths as i128 - self.reference_millionths as i128;
+        let drift = self.drift_millionths as i128;
 
         // Upper CUSUM: detects upward shifts
-        self.cusum_upper = (self.cusum_upper + deviation - drift).max(0);
+        let upper = (self.cusum_upper as i128 + deviation - drift).max(0);
+        self.cusum_upper = upper.min(i64::MAX as i128) as i64;
         // Lower CUSUM: detects downward shifts
-        self.cusum_lower = (self.cusum_lower - deviation - drift).max(0);
+        let lower = (self.cusum_lower as i128 - deviation - drift).max(0);
+        self.cusum_lower = lower.min(i64::MAX as i128) as i64;
 
         let max_cusum = self.cusum_upper.max(self.cusum_lower);
-        let threshold = self.threshold_millionths as i64;
+        let threshold = (self.threshold_millionths as i128).min(i64::MAX as i128) as i64;
 
         let severity = if max_cusum >= threshold.saturating_mul(2) {
             ShiftSeverity::Critical
@@ -554,8 +557,10 @@ impl RegimeShiftEngine {
             return (severity, DowngradeAction::NoAction);
         }
 
-        // In cooldown — suppress action
+        // In cooldown — suppress action but still reset the shift timer
+        // so auto-adapt does not assume stability during suppressed shifts.
         if self.cooldown_remaining > 0 {
+            self.ticks_since_last_shift = 0;
             return (severity, DowngradeAction::NoAction);
         }
 
@@ -642,9 +647,10 @@ impl RegimeShiftEngine {
         }
     }
 
-    /// Config hash for audit.
-    pub fn config_hash(&self) -> &ContentHash {
-        &self.config_hash
+    /// Config hash for audit. Computed from current config state to avoid
+    /// stale hash if config fields are mutated after construction.
+    pub fn config_hash(&self) -> ContentHash {
+        self.config.config_hash()
     }
 }
 
@@ -1432,7 +1438,7 @@ mod tests {
         let config = make_config();
         let expected = config.config_hash();
         let engine = RegimeShiftEngine::new(config);
-        assert_eq!(*engine.config_hash(), expected);
+        assert_eq!(engine.config_hash(), expected);
     }
 
     // --- Certificate id format ---

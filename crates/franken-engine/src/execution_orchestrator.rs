@@ -657,7 +657,8 @@ impl ExecutionOrchestrator {
     }
 
     fn package_fingerprint(package: &ExtensionPackage) -> ContentHash {
-        let encoded = serde_json::to_vec(package).unwrap_or_default();
+        let encoded = serde_json::to_vec(package)
+            .expect("ExtensionPackage serialization must not fail — all fields are plain data");
         ContentHash::compute(&encoded)
     }
 

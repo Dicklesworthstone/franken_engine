@@ -566,11 +566,15 @@ impl SimScheduler {
                 break;
             }
             // Fast-forward to next tick with events if the queue is sparse.
-            if let Some(&next_tick) = self.event_queue.keys().next()
-                && next_tick > self.current_tick
-                && next_tick < self.policy.max_ticks
-            {
-                self.current_tick = next_tick;
+            // Break early if all remaining events are beyond max_ticks
+            // (unreachable), avoiding O(max_ticks) empty dispatch log entries.
+            if let Some(&next_tick) = self.event_queue.keys().next() {
+                if next_tick >= self.policy.max_ticks {
+                    break; // all remaining events are beyond the horizon
+                }
+                if next_tick > self.current_tick {
+                    self.current_tick = next_tick;
+                }
             }
             self.advance_tick();
         }

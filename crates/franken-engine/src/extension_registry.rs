@@ -59,6 +59,8 @@ const MAX_NAME_LEN: usize = 128;
 pub enum RegistryError {
     /// Publisher not found in the registry.
     PublisherNotFound { publisher_id: EngineObjectId },
+    /// Publisher with this identity already exists (prevents re-registration after revocation).
+    PublisherAlreadyExists { publisher_id: EngineObjectId },
     /// Publisher key has been revoked.
     PublisherRevoked { publisher_id: EngineObjectId },
     /// Manifest-embedded publisher key does not match the registered publisher key.
@@ -109,6 +111,9 @@ impl fmt::Display for RegistryError {
         match self {
             Self::PublisherNotFound { publisher_id } => {
                 write!(f, "publisher not found: {publisher_id}")
+            }
+            Self::PublisherAlreadyExists { publisher_id } => {
+                write!(f, "publisher already registered: {publisher_id}")
             }
             Self::PublisherRevoked { publisher_id } => {
                 write!(f, "publisher revoked: {publisher_id}")
@@ -685,9 +690,13 @@ impl ExtensionRegistry {
         }
     }
 
-    /// Advance the logical clock.
+    /// Advance the logical clock. The tick must be monotonically non-decreasing
+    /// to preserve audit log temporal integrity.
     pub fn advance_tick(&mut self, tick: DeterministicTimestamp) {
-        self.current_tick = tick;
+        if tick.0 >= self.current_tick.0 {
+            self.current_tick = tick;
+        }
+        // Silently ignore backward ticks to preserve monotonicity.
     }
 
     /// Access the audit event log.
@@ -725,6 +734,14 @@ impl ExtensionRegistry {
         .map_err(|e| RegistryError::SignatureInvalid {
             reason: format!("failed to derive publisher ID: {e}"),
         })?;
+
+        // Reject duplicate publisher registration to prevent re-registration
+        // of revoked publishers (which would create a second active entry).
+        if self.publishers.iter().any(|p| p.id == publisher_id) {
+            return Err(RegistryError::PublisherAlreadyExists {
+                publisher_id: publisher_id.clone(),
+            });
+        }
 
         let identity = PublisherIdentity {
             id: publisher_id.clone(),
@@ -1013,7 +1030,9 @@ impl ExtensionRegistry {
             .packages
             .iter()
             .filter(|pkg| {
-                if !query.include_revoked && pkg.revoked {
+                if !query.include_revoked
+                    && (pkg.revoked || !self.is_publisher_active(&pkg.manifest.publisher_id))
+                {
                     return false;
                 }
                 if let Some(ref scope) = query.scope
@@ -1116,9 +1135,13 @@ impl ExtensionRegistry {
             errors.push("package has been revoked".to_string());
         }
 
+        // Verify signature against the registry's publisher key when available,
+        // not the manifest-embedded key, to detect manifest key tampering.
+        let verification_key = publisher
+            .map(|p| &p.verification_key)
+            .unwrap_or(&pkg.manifest.publisher_key);
         let unsigned = pkg.manifest.unsigned_bytes();
-        let signature_valid =
-            verify_signature(&pkg.manifest.publisher_key, &unsigned, &pkg.signature).is_ok();
+        let signature_valid = verify_signature(verification_key, &unsigned, &pkg.signature).is_ok();
         if !signature_valid {
             errors.push("signature verification failed".to_string());
         }
@@ -1242,11 +1265,14 @@ impl ExtensionRegistry {
     }
 
     /// Check if a package is revoked (directly or transitively via publisher).
+    ///
+    /// Returns `true` (fail-closed) for packages not found in the registry,
+    /// since an unknown package should not be treated as trusted.
     pub fn is_package_revoked(&self, scope: &str, name: &str, version: PackageVersion) -> bool {
         match self.packages.iter().find(|p| {
             p.manifest.scope == scope && p.manifest.name == name && p.manifest.version == version
         }) {
-            None => false,
+            None => true, // fail-closed: unknown packages are treated as revoked
             Some(pkg) => {
                 // Direct package revocation.
                 if pkg.revoked {
@@ -2462,18 +2488,15 @@ mod tests {
 
         let result = reg.verify_package("testorg", "ext", v).unwrap();
         assert!(!result.valid);
-        assert!(!result.signature_valid);
+        // Signature is verified against the REGISTRY key (not the manifest's rogue key),
+        // so signature_valid is true because we signed with the matching sk.
+        assert!(result.signature_valid);
         assert_eq!(result.publisher_key, rogue_vk);
+        // The key mismatch should still be reported.
         assert!(
             result.errors.iter().any(
                 |error| error.contains("publisher key does not match registered publisher key")
             )
-        );
-        assert!(
-            result
-                .errors
-                .iter()
-                .any(|error| error.contains("signature verification failed"))
         );
         let last_event = reg.export_audit_log().last().unwrap();
         assert_eq!(last_event.event_type, RegistryEventType::VerificationFailed);
@@ -2574,9 +2597,10 @@ mod tests {
     }
 
     #[test]
-    fn is_package_revoked_returns_false_for_unknown() {
+    fn is_package_revoked_returns_true_for_unknown() {
         let reg = ExtensionRegistry::new(DeterministicTimestamp(1));
-        assert!(!reg.is_package_revoked("nope", "nope", PackageVersion::new(0, 0, 0)));
+        // Fail-closed: unknown packages are treated as revoked.
+        assert!(reg.is_package_revoked("nope", "nope", PackageVersion::new(0, 0, 0)));
     }
 
     #[test]

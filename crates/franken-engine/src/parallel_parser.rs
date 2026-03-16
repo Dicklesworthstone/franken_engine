@@ -1202,18 +1202,15 @@ impl ThroughputSample {
     /// Compute a throughput sample from raw measurements.
     pub fn compute(bytes: u64, tokens: u64, elapsed_us: u64) -> Self {
         let bytes_per_sec_millionths = if elapsed_us > 0 {
-            bytes
-                .checked_mul(1_000_000_000_000)
-                .and_then(|n| n.checked_div(elapsed_us))
-                .unwrap_or(0)
+            // Use u128 intermediate to avoid overflow for inputs > ~18 MB.
+            let numerator = (bytes as u128) * 1_000_000_000_000_u128;
+            (numerator / elapsed_us as u128) as u64
         } else {
             0
         };
         let tokens_per_sec_millionths = if elapsed_us > 0 {
-            tokens
-                .checked_mul(1_000_000_000_000)
-                .and_then(|n| n.checked_div(elapsed_us))
-                .unwrap_or(0)
+            let numerator = (tokens as u128) * 1_000_000_000_000_u128;
+            (numerator / elapsed_us as u128) as u64
         } else {
             0
         };

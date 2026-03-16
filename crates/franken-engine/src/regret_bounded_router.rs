@@ -691,8 +691,11 @@ impl RegretBoundedRouter {
 
         // Squared coefficient of variation (CV^2) in millionths:
         // variance / mean^2
+        // Clamp variance to non-negative: fixed-point truncation in Welford's
+        // algorithm can produce slightly negative m2, yielding negative variance.
+        let variance_clamped = variance.max(0);
         let mean_sq = ((mean as i128 * mean as i128) / MILLION as i128).max(1);
-        let cv_sq = (variance as i128 * MILLION as i128 / mean_sq) as i64;
+        let cv_sq = (variance_clamped as i128 * MILLION as i128 / mean_sq) as i64;
 
         // If CV² < 0.5 → stochastic; else → adversarial.
         let new_regime = if cv_sq < 500_000 {

@@ -31,6 +31,18 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn load_control_plane_benchmark_doc() -> String {
+    let path = repo_root().join("docs/CONTROL_PLANE_BENCHMARK_SPLIT_GATE.md");
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
+fn load_control_plane_benchmark_script() -> String {
+    let path = repo_root().join("scripts/run_control_plane_benchmark_split_gate_suite.sh");
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
 fn metrics(
     throughput_ops_per_sec: u64,
     p50_ns: u64,
@@ -268,6 +280,98 @@ fn version_matrix_workflow_runs_control_plane_benchmark_split_gate_suite() {
     assert!(
         workflow.contains("./scripts/run_control_plane_benchmark_split_gate_suite.sh ci"),
         "version_matrix_conformance workflow must run control-plane benchmark split gate suite"
+    );
+}
+
+#[test]
+fn control_plane_benchmark_doc_uses_rch_only_repo_local_target_dir_and_replay_wrapper() {
+    let doc = load_control_plane_benchmark_doc();
+
+    assert!(
+        doc.contains("./scripts/run_control_plane_benchmark_split_gate_suite.sh ci"),
+        "doc must reference the suite runner"
+    );
+    assert!(
+        doc.contains("./scripts/e2e/control_plane_benchmark_split_gate_replay.sh test"),
+        "doc must reference the replay wrapper"
+    );
+    assert!(
+        doc.contains("$PWD/target_rch_control_plane_benchmark_split_gate_verify"),
+        "doc must show the repo-local target dir example"
+    );
+    assert!(
+        !doc.contains("/tmp/rch_target_franken_engine_cp_benchmark_split_gate"),
+        "doc must not reference stale /tmp target dirs"
+    );
+    assert!(
+        !doc.contains("falls back to local Cargo execution"),
+        "doc must not advertise local fallback for heavy commands"
+    );
+    for artifact in [
+        "step_logs/step_*.log",
+        "env.json",
+        "summary.md",
+        "repro.lock",
+        "trace_ids",
+    ] {
+        assert!(
+            doc.contains(artifact),
+            "doc must advertise artifact: {artifact}"
+        );
+    }
+}
+
+#[test]
+fn control_plane_benchmark_script_uses_repo_local_target_dir_and_hardened_artifacts() {
+    let script = load_control_plane_benchmark_script();
+
+    assert!(
+        script.contains("${root_dir}/target_rch_control_plane_benchmark_split_gate_"),
+        "suite script should use a repo-local, namespaced remote target dir"
+    );
+    assert!(
+        !script.contains("/tmp/rch_target_franken_engine_cp_benchmark_split_gate"),
+        "suite script must not route heavy remote builds through /tmp"
+    );
+    assert!(
+        script.contains("step_logs_dir=\"$run_dir/step_logs\""),
+        "suite script should retain per-step rch logs for operator triage"
+    );
+    assert!(
+        script.contains("\"step_logs\":"),
+        "run manifest should publish the step log bundle path"
+    );
+    assert!(
+        script.contains("\"env\":"),
+        "run manifest should publish the env artifact path"
+    );
+    assert!(
+        script.contains("\"summary\":"),
+        "run manifest should publish the summary artifact path"
+    );
+    assert!(
+        script.contains("\"repro_lock\":"),
+        "run manifest should publish the repro lock artifact path"
+    );
+    assert!(
+        script.contains("\"trace_ids\":"),
+        "run manifest should publish the trace_ids artifact path"
+    );
+    assert!(
+        script.contains("cat ${step_logs_dir}/step_000.log"),
+        "operator verification should include a retained step log"
+    );
+    assert!(
+        script.contains("scripts/e2e/control_plane_benchmark_split_gate_replay.sh"),
+        "suite script should point at the replay wrapper"
+    );
+    assert!(
+        script.contains("rch is required for control-plane benchmark split heavy commands"),
+        "suite script should fail closed when rch is missing"
+    );
+    assert!(
+        !script.contains("warning: rch not found; running locally for this environment"),
+        "suite script must not allow local fallback"
     );
 }
 

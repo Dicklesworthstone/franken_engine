@@ -1461,11 +1461,25 @@ impl WitnessStore {
         let wid = witness.witness_id.clone();
         if witness.lifecycle_state == LifecycleState::Active {
             let ext_id = witness.extension_id.clone();
-            // Update or insert the active pair.
-            if let Some(pair) = self.active_pairs.iter_mut().find(|(e, _)| *e == ext_id) {
-                pair.1 = wid.clone();
-            } else {
+            // Supersede the previous active witness for this extension (if any).
+            let prev_wid = self
+                .active_pairs
+                .iter_mut()
+                .find(|(e, _)| *e == ext_id)
+                .map(|pair| {
+                    let old = pair.1.clone();
+                    pair.1 = wid.clone();
+                    old
+                });
+            if prev_wid.is_none() {
                 self.active_pairs.push((ext_id, wid.clone()));
+            }
+            if let Some(prev_wid) = prev_wid
+                && prev_wid != wid
+                && let Some(prev) = self.witnesses.iter_mut().find(|w| w.witness_id == prev_wid)
+                && prev.lifecycle_state == LifecycleState::Active
+            {
+                prev.lifecycle_state = LifecycleState::Superseded;
             }
         }
         // Replace existing witness with same ID, or append.

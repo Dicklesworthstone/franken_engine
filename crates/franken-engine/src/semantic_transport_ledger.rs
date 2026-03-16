@@ -1025,7 +1025,10 @@ impl SemanticTransportAnalyzer {
                     &format!(
                         "Unchanged verdict for '{}' but {}/{} invariants unverified.",
                         entry.fragment_name,
-                        entry.required_invariants.len() - entry.verified_invariants.len(),
+                        entry
+                            .required_invariants
+                            .len()
+                            .saturating_sub(entry.verified_invariants.len()),
                         entry.required_invariants.len(),
                     ),
                     400_000, // Medium risk.

@@ -14,11 +14,34 @@
 )]
 
 use std::collections::BTreeMap;
+use std::fs;
+use std::path::PathBuf;
 
 use frankenengine_engine::acquisition_experiment_oracle::{
     self, AcquisitionError, AcquisitionSignal, BEAD_ID, COMPONENT, ExperimentKind,
     ExperimentProposal, MILLIONTHS, POLICY_ID, SCHEMA_VERSION,
 };
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("workspace root")
+        .parent()
+        .expect("repo root")
+        .to_path_buf()
+}
+
+fn load_acquisition_suite_script() -> String {
+    let path = repo_root().join("scripts/run_acquisition_experiment_oracle_suite.sh");
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
+fn load_acquisition_replay_script() -> String {
+    let path = repo_root().join("scripts/e2e/acquisition_experiment_oracle_replay.sh");
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -562,6 +585,81 @@ fn test_manifest_deterministic() {
     let b = acquisition_experiment_oracle::franken_engine_acquisition_manifest();
     assert_eq!(a.plan_id, b.plan_id);
     assert_eq!(a.content_hash, b.content_hash);
+}
+
+#[test]
+fn acquisition_oracle_suite_script_is_rch_only_and_emits_contract_artifacts() {
+    let script = load_acquisition_suite_script();
+
+    assert!(
+        script.contains("${root_dir}/target_rch_acquisition_experiment_oracle_"),
+        "suite script should use a repo-local namespaced remote target dir"
+    );
+    assert!(
+        script.contains(
+            "cargo test -p frankenengine-engine --test acquisition_experiment_oracle_integration"
+        ),
+        "suite script must run the acquisition oracle integration target"
+    );
+    assert!(
+        script.contains("step_logs_dir=\"${run_dir}/step_logs\""),
+        "suite script should retain per-step rch logs"
+    );
+    assert!(
+        script.contains("\"acquisition_candidate_pool\":"),
+        "run manifest must publish acquisition_candidate_pool"
+    );
+    assert!(
+        script.contains("\"acquisition_score_ledger\":"),
+        "run manifest must publish acquisition_score_ledger"
+    );
+    assert!(
+        script.contains("\"acquisition_selection_report\":"),
+        "run manifest must publish acquisition_selection_report"
+    );
+    assert!(
+        script.contains("\"board_expansion_budget_report\":"),
+        "run manifest must publish board_expansion_budget_report"
+    );
+    assert!(
+        script.contains("\"trace_ids\":"),
+        "run manifest must publish trace_ids"
+    );
+    assert!(
+        script.contains("\"summary\":"),
+        "run manifest must publish summary"
+    );
+    assert!(script.contains("\"env\":"), "run manifest must publish env");
+    assert!(
+        script.contains("\"repro_lock\":"),
+        "run manifest must publish repro_lock"
+    );
+    assert!(
+        script.contains("scripts/e2e/acquisition_experiment_oracle_replay.sh"),
+        "suite script should point at the replay wrapper"
+    );
+    assert!(
+        script.contains("rch is required for acquisition experiment oracle heavy commands"),
+        "suite script should fail closed when rch is missing"
+    );
+    assert!(
+        !script.contains("warning: rch not found; running locally for this environment"),
+        "suite script must not allow local fallback"
+    );
+}
+
+#[test]
+fn acquisition_oracle_replay_wrapper_calls_suite() {
+    let script = load_acquisition_replay_script();
+
+    assert!(
+        script.contains("scripts/run_acquisition_experiment_oracle_suite.sh"),
+        "replay wrapper must route through the suite script"
+    );
+    assert!(
+        script.contains("mode=\"${1:-test}\""),
+        "replay wrapper should default to test mode"
+    );
 }
 
 // ===========================================================================
@@ -1880,15 +1978,15 @@ fn enrichment_calibrate_oracle_multiple_outcomes() {
         200_000,
     );
     let o1 = acquisition_experiment_oracle::record_outcome(&p1, 400_000); // 100k off
-    let o2 = acquisition_experiment_oracle::record_outcome(&p2, 700_000); // 100k off (under-prediction)
+    let o2 = acquisition_experiment_oracle::record_outcome(&p2, 700_000); // 300k off (under-prediction)
     let cal = acquisition_experiment_oracle::calibrate_oracle(&[o1, o2], &[p1, p2]);
     assert_eq!(cal.predictions_count, 2);
-    assert_eq!(cal.mean_absolute_error_millionths, 100_000);
+    assert_eq!(cal.mean_absolute_error_millionths, 200_000);
 }
 
 #[test]
 fn enrichment_calibrate_oracle_bias_cancellation() {
-    // One over-predicts by X, one under-predicts by X => bias ~ 0
+    // One over-predicts by 300k, one under-predicts by 400k => average bias -50k
     let p1 = make_proposal(
         "bias-a",
         ExperimentKind::BoardCellProbe,
@@ -1906,9 +2004,9 @@ fn enrichment_calibrate_oracle_bias_cancellation() {
         100_000,
     );
     let o1 = acquisition_experiment_oracle::record_outcome(&p1, 300_000); // over-predicted by 300k
-    let o2 = acquisition_experiment_oracle::record_outcome(&p2, 800_000); // under-predicted by 300k
+    let o2 = acquisition_experiment_oracle::record_outcome(&p2, 800_000); // under-predicted by 400k
     let cal = acquisition_experiment_oracle::calibrate_oracle(&[o1, o2], &[p1, p2]);
-    assert_eq!(cal.bias_millionths, 0, "biases should cancel out");
+    assert_eq!(cal.bias_millionths, -50_000);
 }
 
 #[test]
@@ -2026,8 +2124,8 @@ fn enrichment_information_density_high_gain_low_cost() {
         10_000,
     );
     let density = acquisition_experiment_oracle::information_density(&p);
-    // 1_000_000 * 1_000_000 / 10_000 = 100_000_000_000
-    assert_eq!(density, 100_000_000_000);
+    // 1_000_000 * 1_000_000 / 10_000 = 100_000_000
+    assert_eq!(density, 100_000_000);
 }
 
 #[test]

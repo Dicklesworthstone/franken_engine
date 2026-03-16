@@ -86,7 +86,7 @@ impl fmt::Display for IfcSchemaVersion {
 ///
 /// Labels are ordered: `Public < Internal < Confidential < Secret < TopSecret`.
 /// Custom labels use the `Custom` variant with explicit level for ordering.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Label {
     /// Public data — lowest sensitivity.
     Public,
@@ -100,6 +100,31 @@ pub enum Label {
     TopSecret,
     /// Custom label with explicit lattice level (0 = lowest).
     Custom { name: String, level: u32 },
+}
+
+// Manual Ord implementation based on level() to ensure security-correct
+// ordering. The derived Ord would order by discriminant, placing Custom
+// (discriminant 5) above TopSecret regardless of its level, which breaks
+// IFC invariants when Custom labels have level < 5.
+impl Ord for Label {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.level().cmp(&other.level()).then_with(|| {
+            // Tiebreak for same-level labels: named variants before Custom,
+            // and Custom labels ordered by name for BTreeMap determinism.
+            match (self, other) {
+                (Self::Custom { name: a, .. }, Self::Custom { name: b, .. }) => a.cmp(b),
+                (Self::Custom { .. }, _) => std::cmp::Ordering::Greater,
+                (_, Self::Custom { .. }) => std::cmp::Ordering::Less,
+                _ => std::cmp::Ordering::Equal,
+            }
+        })
+    }
+}
+
+impl PartialOrd for Label {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl Label {

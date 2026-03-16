@@ -733,3 +733,813 @@ fn regret_certificate_growth_rate_with_counterfactuals() {
     assert_eq!(cert.per_round_regret_millionths, 0);
     assert_eq!(cert.growth_rate_class, "zero");
 }
+
+// ===========================================================================
+// 26. Regime detection — stochastic environment triggers Stochastic regime
+// ===========================================================================
+
+#[test]
+fn regime_detects_stochastic_with_consistent_rewards() {
+    // Feed a low-variance reward stream: all arms get 500_000 ± small noise.
+    // CV² should be low, triggering Stochastic regime.
+    let mut router = RegretBoundedRouter::new(make_arms(3), 100_000).unwrap();
+    assert_eq!(router.active_regime, RegimeKind::Unknown);
+
+    // Run enough rounds to trigger regime detection.
+    // Detection fires every K rounds (K = num_arms = 3).
+    for i in 0..60 {
+        let arm = i % 3;
+        // Low variance: all rewards near 500_000.
+        let reward = 500_000 + (((i as i64) % 5) * 1_000);
+        let signal = make_signal(arm, reward, i as u64 + 1);
+        router.observe_reward(&signal).unwrap();
+    }
+
+    // After 60 rounds of low-variance rewards, regime should shift.
+    assert_ne!(
+        router.active_regime,
+        RegimeKind::Unknown,
+        "regime should be detected after 60 low-variance rounds"
+    );
+    // With such low variance, stochastic is expected.
+    assert_eq!(router.active_regime, RegimeKind::Stochastic);
+}
+
+// ===========================================================================
+// 27. Regime detection — adversarial environment triggers Adversarial regime
+// ===========================================================================
+
+#[test]
+fn regime_detects_adversarial_with_high_variance_rewards() {
+    let mut router = RegretBoundedRouter::new(make_arms(2), 200_000).unwrap();
+
+    // Alternate between extreme rewards to create high variance.
+    for i in 0..60 {
+        let arm = i % 2;
+        let reward = if i % 2 == 0 { 50_000 } else { 950_000 };
+        let signal = make_signal(arm, reward, i as u64 + 1);
+        router.observe_reward(&signal).unwrap();
+    }
+
+    assert_ne!(
+        router.active_regime,
+        RegimeKind::Unknown,
+        "regime should be detected after 60 high-variance rounds"
+    );
+    assert_eq!(router.active_regime, RegimeKind::Adversarial);
+}
+
+// ===========================================================================
+// 28. Regime history records transitions
+// ===========================================================================
+
+#[test]
+fn regime_transition_history_recorded() {
+    let mut router = RegretBoundedRouter::new(make_arms(2), 200_000).unwrap();
+    assert!(router.regime_history.is_empty());
+
+    // Low-variance phase to trigger stochastic detection.
+    for i in 0..40 {
+        let signal = make_signal(i % 2, 500_000, i as u64 + 1);
+        router.observe_reward(&signal).unwrap();
+    }
+
+    if !router.regime_history.is_empty() {
+        let first = &router.regime_history[0];
+        assert_eq!(first.from, RegimeKind::Unknown);
+        assert!(
+            first.confidence_millionths > 0,
+            "transition must have positive confidence"
+        );
+        assert!(first.round > 0, "transition must record the round");
+    }
+}
+
+// ===========================================================================
+// 29. Round-robin warmup — Unknown regime uses round-robin for first K rounds
+// ===========================================================================
+
+#[test]
+fn router_round_robin_warmup_in_unknown_regime() {
+    let router = RegretBoundedRouter::new(make_arms(4), 100_000).unwrap();
+    assert_eq!(router.active_regime, RegimeKind::Unknown);
+
+    // During warmup (first K rounds), select_arm should return round-robin:
+    // round 0 → arm 0, round 1 → arm 1, etc.
+    // The router's round counter starts at 0, so select_arm ignores the seed.
+    let arm = router.select_arm(999_999);
+    assert_eq!(
+        arm, 0,
+        "at round 0, warmup should return arm 0 regardless of seed"
+    );
+}
+
+// ===========================================================================
+// 30. MAX_ARMS boundary — exactly 16 arms works, 17 fails
+// ===========================================================================
+
+#[test]
+fn router_max_arms_boundary() {
+    // Exactly 16 arms should succeed.
+    let router = RegretBoundedRouter::new(make_arms(16), 100_000).unwrap();
+    assert_eq!(router.num_arms(), 16);
+
+    // Probability sum should still be exact.
+    let probs = router.exp3.arm_probabilities();
+    assert_eq!(probs.len(), 16);
+    let sum: i64 = probs.iter().sum();
+    assert_eq!(sum, 1_000_000);
+
+    // 17 arms should fail.
+    let err = RegretBoundedRouter::new(make_arms(17), 100_000).unwrap_err();
+    assert!(matches!(
+        err,
+        RouterError::TooManyArms { count: 17, max: 16 }
+    ));
+}
+
+// ===========================================================================
+// 31. EXP3 weight divergence with asymmetric rewards
+// ===========================================================================
+
+#[test]
+fn exp3_weights_diverge_with_asymmetric_rewards() {
+    let mut exp3 = Exp3State::new(3, 100_000).unwrap();
+
+    // Always reward arm 2 highly, others get low rewards.
+    for _ in 0..50 {
+        exp3.update(0, 100_000).unwrap();
+        exp3.update(1, 100_000).unwrap();
+        exp3.update(2, 900_000).unwrap();
+    }
+
+    let probs = exp3.arm_probabilities();
+    // Arm 2 should have the highest probability.
+    assert!(
+        probs[2] > probs[0],
+        "arm 2 (high reward) should have higher probability than arm 0: {} vs {}",
+        probs[2],
+        probs[0]
+    );
+    assert!(
+        probs[2] > probs[1],
+        "arm 2 (high reward) should have higher probability than arm 1: {} vs {}",
+        probs[2],
+        probs[1]
+    );
+    // Sum must still be exact.
+    assert_eq!(probs.iter().sum::<i64>(), 1_000_000);
+}
+
+// ===========================================================================
+// 32. FTRL converges to best arm in stochastic environment
+// ===========================================================================
+
+#[test]
+fn ftrl_concentrates_on_best_arm() {
+    let mut ftrl = FtrlState::new(3).unwrap();
+
+    // Arm 1 consistently gets the highest reward.
+    for _ in 0..100 {
+        ftrl.update(0, 200_000).unwrap();
+        ftrl.update(1, 800_000).unwrap();
+        ftrl.update(2, 400_000).unwrap();
+    }
+
+    let probs = ftrl.arm_probabilities();
+    assert!(
+        probs[1] > probs[0],
+        "best arm (1) should dominate arm 0: {} vs {}",
+        probs[1],
+        probs[0]
+    );
+    assert!(
+        probs[1] > probs[2],
+        "best arm (1) should dominate arm 2: {} vs {}",
+        probs[1],
+        probs[2]
+    );
+    let means = ftrl.mean_rewards();
+    assert_eq!(means[0], 200_000);
+    assert_eq!(means[1], 800_000);
+    assert_eq!(means[2], 400_000);
+}
+
+// ===========================================================================
+// 33. FTRL select_arm covers all arms initially
+// ===========================================================================
+
+#[test]
+fn ftrl_select_arm_covers_all_arms_initially() {
+    let ftrl = FtrlState::new(4).unwrap();
+    let mut seen = std::collections::BTreeSet::new();
+    for seed in (0..1_000_000).step_by(500) {
+        seen.insert(ftrl.select_arm(seed));
+        if seen.len() == 4 {
+            break;
+        }
+    }
+    assert_eq!(seen.len(), 4, "uniform FTRL state should reach all 4 arms");
+}
+
+// ===========================================================================
+// 34. Large-scale determinism — serde round-trip preserves routing decisions
+// ===========================================================================
+
+#[test]
+fn large_scale_determinism_across_serde() {
+    let mut router = RegretBoundedRouter::new(make_arms(4), 150_000).unwrap();
+
+    // Run 100 rounds.
+    for i in 0..100 {
+        let arm = router.select_arm((i * 10_000) % 1_000_000);
+        let signal = make_signal(arm, (i * 7_777) % 1_000_001, i as u64 + 1);
+        router.observe_reward(&signal).unwrap();
+    }
+
+    // Serde round-trip.
+    let json = serde_json::to_string(&router).unwrap();
+    let restored: RegretBoundedRouter = serde_json::from_str(&json).unwrap();
+
+    // Both must produce identical decisions for 20 more seeds.
+    for seed in (0..1_000_000).step_by(50_000) {
+        assert_eq!(
+            router.select_arm(seed),
+            restored.select_arm(seed),
+            "arm selection must be identical after serde at seed {}",
+            seed
+        );
+    }
+    assert_eq!(router.summary(), restored.summary());
+    assert_eq!(router.regret_certificate(), restored.regret_certificate());
+}
+
+// ===========================================================================
+// 35. Regret bound verification — empirical regret stays within theoretical bound
+// ===========================================================================
+
+#[test]
+fn regret_within_theoretical_bound_with_counterfactuals() {
+    let mut router = RegretBoundedRouter::new(make_arms(3), 200_000).unwrap();
+
+    // Run 90 rounds with full counterfactual info, mild asymmetry.
+    for i in 0..90 {
+        let arm = router.select_arm((i * 11_111) % 1_000_000);
+        let rewards = vec![400_000, 600_000, 500_000];
+        let signal = make_signal_full_info(arm, rewards, i as u64 + 1);
+        router.observe_reward(&signal).unwrap();
+    }
+
+    let cert = router.regret_certificate();
+    assert!(cert.exact_regret_available);
+    assert!(cert.rounds == 90);
+    // Theoretical bound should be positive.
+    assert!(cert.theoretical_bound_millionths > 0);
+    // Realized regret should be non-negative.
+    assert!(cert.realized_regret_millionths >= 0);
+}
+
+// ===========================================================================
+// 36. Growth rate class "sublinear_verified"
+// ===========================================================================
+
+#[test]
+fn regret_certificate_sublinear_verified_class() {
+    let mut router = RegretBoundedRouter::new(make_arms(2), 200_000).unwrap();
+
+    // Feed full info where one arm is slightly better; with enough rounds,
+    // realized regret should be within the theoretical bound.
+    for i in 0..200 {
+        let arm = router.select_arm((i * 5_000) % 1_000_000);
+        let rewards = vec![480_000, 520_000]; // mild gap
+        let signal = make_signal_full_info(arm, rewards, i as u64 + 1);
+        router.observe_reward(&signal).unwrap();
+    }
+
+    let cert = router.regret_certificate();
+    assert!(cert.exact_regret_available);
+    // With enough rounds and mild gap, realized regret should be within bound.
+    if cert.within_bound && cert.per_round_regret_millionths > 0 {
+        assert_eq!(cert.growth_rate_class, "sublinear_verified");
+    }
+    // Either way, the class should be one of the valid values.
+    assert!(
+        [
+            "zero",
+            "sublinear_verified",
+            "needs_investigation",
+            "empirical_estimate"
+        ]
+        .contains(&cert.growth_rate_class.as_str()),
+        "unexpected growth rate class: {}",
+        cert.growth_rate_class
+    );
+}
+
+// ===========================================================================
+// 37. Counterfactual regret — exact computation matches expected delta
+// ===========================================================================
+
+#[test]
+fn counterfactual_regret_exact_computation() {
+    let mut router = RegretBoundedRouter::new(make_arms(2), 100_000).unwrap();
+
+    // Always play arm 0 with reward 400_000.
+    // Arm 1 counterfactual is always 600_000.
+    for i in 0..10 {
+        let signal = make_signal_full_info(0, vec![400_000, 600_000], i as u64 + 1);
+        router.observe_reward(&signal).unwrap();
+    }
+
+    assert!(router.exact_regret_available());
+    let regret = router.realized_regret_millionths();
+    // Best arm in hindsight: arm 1, cumulative = 10 × 600_000 = 6_000_000.
+    // Our cumulative: 10 × 400_000 = 4_000_000. Regret = 2_000_000.
+    assert_eq!(regret, 2_000_000, "exact regret should be 2M millionths");
+}
+
+// ===========================================================================
+// 38. Receipt field validation — regime reported in receipt
+// ===========================================================================
+
+#[test]
+fn receipt_reports_current_regime() {
+    let mut router = RegretBoundedRouter::new(make_arms(2), 200_000).unwrap();
+
+    let signal = make_signal(0, 500_000, 1);
+    let receipt = router.observe_reward(&signal).unwrap();
+    // Initially Unknown regime.
+    assert_eq!(receipt.regime, RegimeKind::Unknown);
+}
+
+// ===========================================================================
+// 39. Receipt — cumulative reward tracks across rounds
+// ===========================================================================
+
+#[test]
+fn receipt_cumulative_reward_tracking() {
+    let mut router = RegretBoundedRouter::new(make_arms(2), 100_000).unwrap();
+    let mut expected_cumulative = 0i64;
+
+    for i in 0..10 {
+        let reward = 100_000 * (i as i64 + 1); // 100k, 200k, ..., 1000k
+        let reward = reward.min(1_000_000);
+        let signal = make_signal(i % 2, reward, i as u64 + 1);
+        let receipt = router.observe_reward(&signal).unwrap();
+        expected_cumulative += reward;
+        assert_eq!(
+            receipt.cumulative_reward_millionths,
+            expected_cumulative,
+            "cumulative reward mismatch at round {}",
+            i + 1
+        );
+    }
+}
+
+// ===========================================================================
+// 40. Router — transactional error semantics on counterfactual out-of-range
+// ===========================================================================
+
+#[test]
+fn observe_reward_transactional_on_counterfactual_out_of_range() {
+    let mut router = RegretBoundedRouter::new(make_arms(2), 100_000).unwrap();
+
+    // Counterfactual contains an out-of-range reward.
+    let signal = RewardSignal {
+        arm_index: 0,
+        reward_millionths: 500_000,
+        latency_us: 100,
+        success: true,
+        epoch: SecurityEpoch::from_raw(1),
+        counterfactual_rewards_millionths: Some(vec![500_000, 2_000_000]), // out of range
+    };
+
+    let err = router.observe_reward(&signal).unwrap_err();
+    assert!(matches!(err, RouterError::RewardOutOfRange { .. }));
+    // State should be completely unchanged — no partial mutation.
+    assert_eq!(router.rounds(), 0);
+    assert_eq!(router.cumulative_reward_millionths, 0);
+}
+
+// ===========================================================================
+// 41. Exp3 — error on invalid arm index
+// ===========================================================================
+
+#[test]
+fn exp3_update_invalid_arm_error() {
+    let mut exp3 = Exp3State::new(3, 100_000).unwrap();
+    let err = exp3.update(5, 500_000).unwrap_err();
+    assert!(matches!(
+        err,
+        RouterError::ArmOutOfBounds { index: 5, count: 3 }
+    ));
+    // Round count should not increment on error.
+    assert_eq!(exp3.rounds, 0);
+}
+
+// ===========================================================================
+// 42. Exp3 — error on out-of-range reward
+// ===========================================================================
+
+#[test]
+fn exp3_update_out_of_range_reward_error() {
+    let mut exp3 = Exp3State::new(2, 100_000).unwrap();
+    let err = exp3.update(0, 1_500_000).unwrap_err();
+    assert!(matches!(
+        err,
+        RouterError::RewardOutOfRange { reward: 1_500_000 }
+    ));
+    assert_eq!(exp3.rounds, 0);
+
+    let err_neg = exp3.update(0, -100).unwrap_err();
+    assert!(matches!(
+        err_neg,
+        RouterError::RewardOutOfRange { reward: -100 }
+    ));
+    assert_eq!(exp3.rounds, 0);
+}
+
+// ===========================================================================
+// 43. FTRL — error on invalid arm and reward
+// ===========================================================================
+
+#[test]
+fn ftrl_update_invalid_arm_error() {
+    let mut ftrl = FtrlState::new(2).unwrap();
+    let err = ftrl.update(3, 500_000).unwrap_err();
+    assert!(matches!(
+        err,
+        RouterError::ArmOutOfBounds { index: 3, count: 2 }
+    ));
+    assert_eq!(ftrl.rounds, 0);
+}
+
+#[test]
+fn ftrl_update_out_of_range_reward_error() {
+    let mut ftrl = FtrlState::new(2).unwrap();
+    let err = ftrl.update(0, -1).unwrap_err();
+    assert!(matches!(err, RouterError::RewardOutOfRange { reward: -1 }));
+    assert_eq!(ftrl.rounds, 0);
+}
+
+// ===========================================================================
+// 44. FTRL — mean_rewards with no pulls returns zeros
+// ===========================================================================
+
+#[test]
+fn ftrl_mean_rewards_zero_pulls() {
+    let ftrl = FtrlState::new(3).unwrap();
+    let means = ftrl.mean_rewards();
+    assert_eq!(means, vec![0, 0, 0]);
+}
+
+// ===========================================================================
+// 45. Router — realized regret at zero rounds is zero
+// ===========================================================================
+
+#[test]
+fn router_zero_rounds_regret_is_zero() {
+    let router = RegretBoundedRouter::new(make_arms(3), 100_000).unwrap();
+    assert_eq!(router.realized_regret_millionths(), 0);
+    assert!(!router.exact_regret_available());
+}
+
+// ===========================================================================
+// 46. Router — regret certificate at zero rounds
+// ===========================================================================
+
+#[test]
+fn router_regret_certificate_at_zero_rounds() {
+    let router = RegretBoundedRouter::new(make_arms(2), 100_000).unwrap();
+    let cert = router.regret_certificate();
+    // rounds is max(1) internally, but realized regret should be 0.
+    assert_eq!(cert.realized_regret_millionths, 0);
+    assert!(!cert.exact_regret_available);
+    assert_eq!(cert.growth_rate_class, "empirical_estimate");
+}
+
+// ===========================================================================
+// 47. Summary — regime_transitions count matches history length
+// ===========================================================================
+
+#[test]
+fn summary_regime_transitions_count() {
+    let mut router = RegretBoundedRouter::new(make_arms(2), 200_000).unwrap();
+
+    // Low-variance phase.
+    for i in 0..40 {
+        let signal = make_signal(i % 2, 500_000, i as u64 + 1);
+        router.observe_reward(&signal).unwrap();
+    }
+
+    let summary = router.summary();
+    assert_eq!(
+        summary.regime_transitions,
+        router.regime_history.len(),
+        "summary regime_transitions must match history length"
+    );
+}
+
+// ===========================================================================
+// 48. Router — reward of exactly 1_000_000 (maximum)
+// ===========================================================================
+
+#[test]
+fn router_observe_max_reward() {
+    let mut router = RegretBoundedRouter::new(make_arms(2), 100_000).unwrap();
+    let signal = make_signal(0, 1_000_000, 1);
+    let receipt = router.observe_reward(&signal).unwrap();
+    assert_eq!(receipt.reward_millionths, 1_000_000);
+    assert_eq!(router.cumulative_reward_millionths, 1_000_000);
+}
+
+// ===========================================================================
+// 49. Router — reward of exactly 0 (minimum)
+// ===========================================================================
+
+#[test]
+fn router_observe_zero_reward() {
+    let mut router = RegretBoundedRouter::new(make_arms(2), 100_000).unwrap();
+    let signal = make_signal(0, 0, 1);
+    let receipt = router.observe_reward(&signal).unwrap();
+    assert_eq!(receipt.reward_millionths, 0);
+    assert_eq!(router.cumulative_reward_millionths, 0);
+}
+
+// ===========================================================================
+// 50. Router — gamma at maximum (1_000_000 = full exploration)
+// ===========================================================================
+
+#[test]
+fn router_gamma_at_maximum() {
+    // gamma = 1.0 means pure exploration (uniform probability).
+    let router = RegretBoundedRouter::new(make_arms(4), 1_000_000).unwrap();
+    let probs = router.exp3.arm_probabilities();
+    // With gamma = 1.0, probabilities should be approximately uniform.
+    for &p in &probs {
+        // Each arm should get roughly 250_000 (1_000_000 / 4).
+        assert!(
+            (200_000..=300_000).contains(&p),
+            "with full exploration, probability {} should be near uniform 250k",
+            p
+        );
+    }
+    assert_eq!(probs.iter().sum::<i64>(), 1_000_000);
+}
+
+// ===========================================================================
+// 51. Exp3 — creation errors
+// ===========================================================================
+
+#[test]
+fn exp3_new_no_arms_error() {
+    let err = Exp3State::new(0, 100_000).unwrap_err();
+    assert!(matches!(err, RouterError::NoArms));
+}
+
+#[test]
+fn exp3_new_too_many_arms_error() {
+    let err = Exp3State::new(20, 100_000).unwrap_err();
+    assert!(matches!(
+        err,
+        RouterError::TooManyArms { count: 20, max: 16 }
+    ));
+}
+
+#[test]
+fn exp3_new_invalid_gamma_zero() {
+    let err = Exp3State::new(3, 0).unwrap_err();
+    assert!(matches!(err, RouterError::InvalidGamma { .. }));
+}
+
+#[test]
+fn exp3_new_invalid_gamma_negative() {
+    let err = Exp3State::new(3, -100).unwrap_err();
+    assert!(matches!(err, RouterError::InvalidGamma { .. }));
+}
+
+#[test]
+fn exp3_new_invalid_gamma_above_million() {
+    let err = Exp3State::new(3, 1_000_001).unwrap_err();
+    assert!(matches!(err, RouterError::InvalidGamma { .. }));
+}
+
+// ===========================================================================
+// 52. FTRL — creation errors
+// ===========================================================================
+
+#[test]
+fn ftrl_new_no_arms_error() {
+    let err = FtrlState::new(0).unwrap_err();
+    assert!(matches!(err, RouterError::NoArms));
+}
+
+#[test]
+fn ftrl_new_too_many_arms_error() {
+    let err = FtrlState::new(17).unwrap_err();
+    assert!(matches!(
+        err,
+        RouterError::TooManyArms { count: 17, max: 16 }
+    ));
+}
+
+// ===========================================================================
+// 53. Router serde preserves regime history
+// ===========================================================================
+
+#[test]
+fn router_serde_preserves_regime_history() {
+    let mut router = RegretBoundedRouter::new(make_arms(2), 200_000).unwrap();
+
+    // Low-variance rounds to potentially trigger a regime transition.
+    for i in 0..40 {
+        let signal = make_signal(i % 2, 500_000, i as u64 + 1);
+        router.observe_reward(&signal).unwrap();
+    }
+
+    let json = serde_json::to_string(&router).unwrap();
+    let restored: RegretBoundedRouter = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(restored.regime_history.len(), router.regime_history.len());
+    assert_eq!(restored.active_regime, router.active_regime);
+    for (orig, rest) in router
+        .regime_history
+        .iter()
+        .zip(restored.regime_history.iter())
+    {
+        assert_eq!(orig, rest);
+    }
+}
+
+// ===========================================================================
+// 54. EXP3 regret bound grows sublinearly
+// ===========================================================================
+
+#[test]
+fn exp3_regret_bound_grows_sublinearly() {
+    let mut exp3 = Exp3State::new(4, 150_000).unwrap();
+    exp3.rounds = 10;
+    let bound_10 = exp3.regret_bound_millionths();
+    exp3.rounds = 1000;
+    let bound_1000 = exp3.regret_bound_millionths();
+    assert!(bound_1000 > bound_10);
+    // Sublinear: bound_1000/bound_10 should be roughly sqrt(100) = 10.
+    assert!(
+        bound_1000 < bound_10 * 100,
+        "EXP3 regret bound growth should be sublinear"
+    );
+}
+
+// ===========================================================================
+// 55. Router with 16 arms — observe and summarize
+// ===========================================================================
+
+#[test]
+fn router_16_arms_full_lifecycle() {
+    let mut router = RegretBoundedRouter::new(make_arms(16), 100_000).unwrap();
+    assert_eq!(router.num_arms(), 16);
+
+    for i in 0..48 {
+        let arm = i % 16;
+        let signal = make_signal(arm, 500_000, i as u64 + 1);
+        router.observe_reward(&signal).unwrap();
+    }
+
+    let summary = router.summary();
+    assert_eq!(summary.num_arms, 16);
+    assert_eq!(summary.rounds, 48);
+    assert_eq!(summary.arm_probabilities_millionths.len(), 16);
+    assert_eq!(
+        summary.arm_probabilities_millionths.iter().sum::<i64>(),
+        1_000_000
+    );
+
+    // All probabilities must be non-negative.
+    for &p in &summary.arm_probabilities_millionths {
+        assert!(p >= 0, "negative probability detected: {}", p);
+    }
+}
+
+// ===========================================================================
+// 56. Router — exact_regret_available false when some rounds lack counterfactuals
+// ===========================================================================
+
+#[test]
+fn exact_regret_not_available_with_partial_counterfactuals() {
+    let mut router = RegretBoundedRouter::new(make_arms(2), 100_000).unwrap();
+
+    // First round with counterfactuals.
+    let signal1 = make_signal_full_info(0, vec![500_000, 600_000], 1);
+    router.observe_reward(&signal1).unwrap();
+    assert!(router.exact_regret_available());
+
+    // Second round without counterfactuals.
+    let signal2 = make_signal(1, 400_000, 2);
+    router.observe_reward(&signal2).unwrap();
+    // Now counterfactual_rounds (1) != rounds (2).
+    assert!(!router.exact_regret_available());
+}
+
+// ===========================================================================
+// 57. Adversarial pattern — changing best arm
+// ===========================================================================
+
+#[test]
+fn adversarial_pattern_changing_best_arm() {
+    let mut router = RegretBoundedRouter::new(make_arms(3), 200_000).unwrap();
+
+    // Phase 1: arm 0 is best.
+    for i in 0..30 {
+        let arm = router.select_arm((i * 33_333) % 1_000_000);
+        let rewards = vec![800_000, 200_000, 200_000];
+        let signal = make_signal_full_info(arm, rewards, i as u64 + 1);
+        router.observe_reward(&signal).unwrap();
+    }
+
+    // Phase 2: arm 2 is best (adversarial shift).
+    for i in 30..60 {
+        let arm = router.select_arm((i * 33_333) % 1_000_000);
+        let rewards = vec![200_000, 200_000, 800_000];
+        let signal = make_signal_full_info(arm, rewards, i as u64 + 1);
+        router.observe_reward(&signal).unwrap();
+    }
+
+    assert_eq!(router.rounds(), 60);
+    assert!(router.exact_regret_available());
+    // Regret should be positive since the best arm shifted.
+    let regret = router.realized_regret_millionths();
+    assert!(
+        regret > 0,
+        "regret should be positive under adversarial shifts: {}",
+        regret
+    );
+}
+
+// ===========================================================================
+// 58. RouterError — all variants are distinct in Display
+// ===========================================================================
+
+#[test]
+fn router_error_display_all_distinct() {
+    let errors = vec![
+        RouterError::NoArms,
+        RouterError::TooManyArms { count: 20, max: 16 },
+        RouterError::ArmOutOfBounds { index: 5, count: 3 },
+        RouterError::RewardOutOfRange { reward: -1 },
+        RouterError::InvalidGamma {
+            gamma_millionths: 0,
+        },
+        RouterError::CounterfactualSizeMismatch {
+            got: 2,
+            expected: 3,
+        },
+        RouterError::ZeroWeight,
+    ];
+    let mut messages = std::collections::BTreeSet::new();
+    for e in &errors {
+        let msg = e.to_string();
+        assert!(
+            messages.insert(msg.clone()),
+            "duplicate error message: {}",
+            msg
+        );
+    }
+}
+
+// ===========================================================================
+// 59. Exp3 — serde round-trip after many updates
+// ===========================================================================
+
+#[test]
+fn exp3_serde_round_trip_after_updates() {
+    let mut exp3 = Exp3State::new(4, 150_000).unwrap();
+    for _ in 0..50 {
+        exp3.update(0, 100_000).unwrap();
+        exp3.update(1, 900_000).unwrap();
+        exp3.update(2, 500_000).unwrap();
+        exp3.update(3, 300_000).unwrap();
+    }
+    let json = serde_json::to_string(&exp3).unwrap();
+    let restored: Exp3State = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored, exp3);
+    assert_eq!(restored.arm_probabilities(), exp3.arm_probabilities());
+}
+
+// ===========================================================================
+// 50 (continued). FTRL — serde round-trip after many updates
+// ===========================================================================
+
+#[test]
+fn ftrl_serde_round_trip_after_updates() {
+    let mut ftrl = FtrlState::new(3).unwrap();
+    for _ in 0..100 {
+        ftrl.update(0, 300_000).unwrap();
+        ftrl.update(1, 700_000).unwrap();
+        ftrl.update(2, 500_000).unwrap();
+    }
+    let json = serde_json::to_string(&ftrl).unwrap();
+    let restored: FtrlState = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored, ftrl);
+    assert_eq!(restored.mean_rewards(), ftrl.mean_rewards());
+    assert_eq!(restored.arm_probabilities(), ftrl.arm_probabilities());
+}

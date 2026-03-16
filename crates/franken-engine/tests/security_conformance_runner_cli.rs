@@ -689,6 +689,55 @@ fn security_conformance_replay_wrapper_defaults_to_run_mode() {
     );
 }
 
+#[test]
+fn security_conformance_replay_wrapper_selects_latest_complete_bundle() {
+    let script =
+        fs::read_to_string(repo_root().join("scripts/e2e/security_conformance_runner_replay.sh"))
+            .expect("security conformance replay wrapper should be readable");
+
+    for expected in [
+        "latest_complete_run_dir()",
+        "\"${candidate}/run_manifest.json\"",
+        "\"${candidate}/events.jsonl\"",
+        "\"${candidate}/commands.txt\"",
+        "\"${candidate}/runner.stdout.log\"",
+        "latest_artifact_dir_path",
+        "newest directory ${latest_artifact_dir_path} is incomplete",
+        "using latest complete run directory ${latest_run_dir}",
+        "missing_bundle_exit_code",
+    ] {
+        assert!(
+            script.contains(expected),
+            "replay wrapper should contain complete-bundle contract fragment `{expected}`"
+        );
+    }
+}
+
+#[test]
+fn security_conformance_replay_wrapper_prints_canonical_artifacts() {
+    let script =
+        fs::read_to_string(repo_root().join("scripts/e2e/security_conformance_runner_replay.sh"))
+            .expect("security conformance replay wrapper should be readable");
+
+    for expected in [
+        "[security-conformance] latest manifest:",
+        "cat \"${latest_run_dir}/run_manifest.json\"",
+        "[security-conformance] latest events:",
+        "cat \"${latest_run_dir}/events.jsonl\"",
+        "[security-conformance] latest commands:",
+        "cat \"${latest_run_dir}/commands.txt\"",
+        "[security-conformance] latest runner stdout:",
+        "cat \"${latest_run_dir}/runner.stdout.log\"",
+        "[security-conformance] latest runner output tree:",
+        "ls -R \"${runner_output_dir}\"",
+    ] {
+        assert!(
+            script.contains(expected),
+            "replay wrapper should print canonical artifact fragment `{expected}`"
+        );
+    }
+}
+
 // ---------- sha256_hex edge cases ----------
 
 #[test]

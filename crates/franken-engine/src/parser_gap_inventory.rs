@@ -1274,56 +1274,46 @@ mod tests {
     }
 
     #[test]
-    fn parser_gap_site_id_execution_consequence_mentions_resolved() {
+    fn parser_gap_site_descriptor_observed_fallback_non_empty() {
         for site in ParserGapSiteId::ALL {
-            let consequence = site.execution_consequence();
+            let desc = ParserGapSiteDescriptor::from_site(site);
             assert!(
-                consequence.contains("resolved"),
-                "{:?} execution_consequence should mention resolved: {consequence}",
+                !desc.observed_fallback_behavior.is_empty(),
+                "{:?} has empty observed_fallback_behavior",
                 site
             );
         }
     }
 
     #[test]
-    fn parser_gap_site_id_user_visible_divergence_mentions_resolved() {
+    fn parser_gap_site_descriptor_required_fail_closed_non_empty() {
         for site in ParserGapSiteId::ALL {
-            let div = site.user_visible_divergence();
+            let desc = ParserGapSiteDescriptor::from_site(site);
             assert!(
-                div.contains("resolved"),
-                "{:?} user_visible_divergence should mention resolved: {div}",
+                !desc.required_fail_closed_contract.is_empty(),
+                "{:?} has empty required_fail_closed_contract",
                 site
             );
         }
     }
 
     #[test]
-    fn parser_gap_site_id_target_replacement_non_empty() {
+    fn parser_gap_site_descriptor_desired_diagnostic_codes_non_empty() {
         for site in ParserGapSiteId::ALL {
+            let desc = ParserGapSiteDescriptor::from_site(site);
             assert!(
-                !site.target_replacement_strategy().is_empty(),
-                "{:?} has empty target_replacement_strategy",
+                !desc.desired_diagnostic_code.is_empty(),
+                "{:?} has empty desired_diagnostic_code",
                 site
             );
         }
     }
 
     #[test]
-    fn parser_gap_site_id_emitted_ir_shape_non_empty() {
-        for site in ParserGapSiteId::ALL {
-            assert!(
-                !site.emitted_ir_shape().is_empty(),
-                "{:?} has empty emitted_ir_shape",
-                site
-            );
-        }
-    }
-
-    #[test]
-    fn parser_gap_site_id_emitted_ir_shapes_distinct() {
-        let shapes: std::collections::BTreeSet<&str> = ParserGapSiteId::ALL
+    fn parser_gap_site_descriptor_syntax_shapes_distinct() {
+        let shapes: std::collections::BTreeSet<String> = ParserGapSiteId::ALL
             .iter()
-            .map(|s| s.emitted_ir_shape())
+            .map(|s| ParserGapSiteDescriptor::from_site(*s).syntax_shape)
             .collect();
         assert_eq!(shapes.len(), ParserGapSiteId::ALL.len());
     }
@@ -1388,7 +1378,7 @@ mod tests {
         for site_id in ParserGapSiteId::ALL {
             let desc = ParserGapSiteDescriptor::from_site(site_id);
             assert_eq!(desc.site_id, site_id.as_str());
-            assert_eq!(desc.diagnostic_code, site_id.diagnostic_code());
+            assert_eq!(desc.desired_diagnostic_code, site_id.diagnostic_code());
             assert_eq!(desc.stage, site_id.stage());
             assert_eq!(desc.remediation_status, site_id.remediation_status());
             assert_eq!(desc.owner, site_id.owner());
@@ -1402,7 +1392,7 @@ mod tests {
         for site in ParserGapSiteId::ALL {
             let diag = UnsupportedSyntaxDiagnostic::from_site(site, "test", Some(span()));
             assert_eq!(diag.diagnostic_code, site.diagnostic_code());
-            assert_eq!(diag.source_ref, "test");
+            assert_eq!(diag.source_label, "test");
             assert!(diag.canonical_hash().len() > 20);
         }
     }

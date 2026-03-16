@@ -1560,4 +1560,118 @@ mod tests {
         };
         assert!(!chart.is_stable());
     }
+
+    // --- Enrichment tests (PearlTower 2026-03-16) ---
+
+    #[test]
+    fn regime_label_serde_roundtrip_classified() {
+        for regime in [Regime::Normal, Regime::Degraded, Regime::Recovery] {
+            let label = RegimeLabel::Classified(regime);
+            let json = serde_json::to_string(&label).unwrap();
+            let back: RegimeLabel = serde_json::from_str(&json).unwrap();
+            assert_eq!(label, back);
+        }
+    }
+
+    #[test]
+    fn regime_label_serde_roundtrip_abstention() {
+        let label = RegimeLabel::Abstention;
+        let json = serde_json::to_string(&label).unwrap();
+        let back: RegimeLabel = serde_json::from_str(&json).unwrap();
+        assert_eq!(label, back);
+    }
+
+    #[test]
+    fn hex_encode_deterministic() {
+        let a = hex_encode(&[0xde, 0xad, 0xbe, 0xef]);
+        let b = hex_encode(&[0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!(a, b);
+        assert_eq!(a, "deadbeef");
+    }
+
+    #[test]
+    fn hex_encode_empty() {
+        assert_eq!(hex_encode(&[]), "");
+    }
+
+    #[test]
+    fn max_signature_dim_positive() {
+        assert!(MAX_SIGNATURE_DIM > 0);
+    }
+
+    #[test]
+    fn min_trace_length_positive() {
+        assert!(MIN_TRACE_LENGTH > 0);
+    }
+
+    #[test]
+    fn feature_to_bucket_distinct_for_different_names() {
+        let a = feature_to_bucket("alpha", MAX_SIGNATURE_DIM);
+        let b = feature_to_bucket("beta", MAX_SIGNATURE_DIM);
+        // Different names may collide but shouldn't always
+        let c = feature_to_bucket("gamma", MAX_SIGNATURE_DIM);
+        let all_same = a == b && b == c;
+        assert!(!all_same, "all three features hashed to same bucket");
+    }
+
+    #[test]
+    fn signature_config_default_has_valid_max_dim() {
+        let config = SignatureConfig::default();
+        assert!(config.max_dim > 0);
+        assert!(config.max_dim <= MAX_SIGNATURE_DIM);
+    }
+
+    #[test]
+    fn short_trace_produces_invalid_signature() {
+        let config = SignatureConfig::default();
+        let trace = make_trace("test", "cpu", &[500_000], 1);
+        let sig = extract_signature(&trace, &config);
+        assert!(!sig.valid, "short trace should produce invalid signature");
+    }
+
+    #[test]
+    fn cosine_similarity_orthogonal_near_zero() {
+        let config = SignatureConfig::default();
+        let trace_a = make_trace("a", "cpu", &[1_000_000, 0, 1_000_000, 0], 1);
+        let trace_b = make_trace("b", "mem", &[0, 1_000_000, 0, 1_000_000], 1);
+        let sig_a = extract_signature(&trace_a, &config);
+        let sig_b = extract_signature(&trace_b, &config);
+        let cos = sig_a.cosine_similarity(&sig_b);
+        assert!(
+            cos < 500_000,
+            "orthogonal vectors should have low similarity: {cos}"
+        );
+    }
+
+    #[test]
+    fn regime_state_chart_with_abstentions_not_stable() {
+        let chart = RegimeStateChart {
+            schema_version: REGIME_SIG_SCHEMA_VERSION.to_string(),
+            entries: vec![],
+            transition_count: 0,
+            abstention_count: 1,
+            label_distribution: BTreeMap::new(),
+            chart_hash: "h".to_string(),
+        };
+        assert!(!chart.is_stable());
+    }
+
+    #[test]
+    fn regime_state_entry_serde_roundtrip() {
+        let entry = RegimeStateEntry {
+            seq: 42,
+            label: RegimeLabel::Classified(Regime::Normal),
+            confidence_millionths: 950_000,
+            centroid_distance_millionths: 50_000,
+            trace_id: "trace-abc".to_string(),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let back: RegimeStateEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(entry, back);
+    }
+
+    #[test]
+    fn regime_sig_component_constant() {
+        assert_eq!(REGIME_SIG_COMPONENT, "regime_signature_feature");
+    }
 }

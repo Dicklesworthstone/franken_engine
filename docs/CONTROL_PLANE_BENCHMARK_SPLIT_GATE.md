@@ -101,6 +101,7 @@ Implemented tests include:
 All heavy Rust commands are offloaded through `rch` in the suite runner:
 
 ```bash
+./scripts/run_control_plane_benchmark_split_gate_suite.sh bundle
 ./scripts/run_control_plane_benchmark_split_gate_suite.sh ci
 ./scripts/e2e/control_plane_benchmark_split_gate_replay.sh test
 ```

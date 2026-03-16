@@ -1406,4 +1406,102 @@ mod tests {
             assert_eq!(summary.resolved_finding_count, 0);
         }
     }
+
+    // --- Enrichment tests (PearlTower 2026-03-16) ---
+
+    #[test]
+    fn zero_placeholder_subsystem_serde_roundtrip() {
+        for s in ZeroPlaceholderSubsystem::ALL {
+            let json = serde_json::to_string(&s).unwrap();
+            let back: ZeroPlaceholderSubsystem = serde_json::from_str(&json).unwrap();
+            assert_eq!(s, back);
+        }
+    }
+
+    #[test]
+    fn zero_placeholder_subsystem_as_str_distinct() {
+        let strs: std::collections::BTreeSet<&str> = ZeroPlaceholderSubsystem::ALL
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+        assert_eq!(strs.len(), ZeroPlaceholderSubsystem::ALL.len());
+    }
+
+    #[test]
+    fn zero_placeholder_status_serde_roundtrip() {
+        for s in [
+            ZeroPlaceholderStatus::OpenPlaceholder,
+            ZeroPlaceholderStatus::FailClosed,
+            ZeroPlaceholderStatus::Resolved,
+        ] {
+            let json = serde_json::to_string(&s).unwrap();
+            let back: ZeroPlaceholderStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(s, back);
+        }
+    }
+
+    #[test]
+    fn zero_placeholder_severity_serde_roundtrip() {
+        for s in [
+            ZeroPlaceholderSeverity::Low,
+            ZeroPlaceholderSeverity::Medium,
+            ZeroPlaceholderSeverity::High,
+        ] {
+            let json = serde_json::to_string(&s).unwrap();
+            let back: ZeroPlaceholderSeverity = serde_json::from_str(&json).unwrap();
+            assert_eq!(s, back);
+        }
+    }
+
+    #[test]
+    fn schema_version_constants_non_empty() {
+        assert!(!ZERO_PLACEHOLDER_SCAN_SCHEMA_VERSION.is_empty());
+        assert!(!ZERO_PLACEHOLDER_SCAN_TRACE_IDS_SCHEMA_VERSION.is_empty());
+        assert!(!ZERO_PLACEHOLDER_SCAN_RUN_MANIFEST_SCHEMA_VERSION.is_empty());
+        assert!(!ZERO_PLACEHOLDER_SCAN_EVENT_SCHEMA_VERSION.is_empty());
+        assert!(!ZERO_PLACEHOLDER_SCAN_COMPONENT.is_empty());
+        assert!(!ZERO_PLACEHOLDER_SCAN_POLICY_ID.is_empty());
+    }
+
+    #[test]
+    fn subsystem_all_has_four_variants() {
+        assert_eq!(ZeroPlaceholderSubsystem::ALL.len(), 4);
+    }
+
+    #[test]
+    fn cli_docs_truth_guard_resolves_clean_input() {
+        let contract = DocsHelpSurfaceAuditContract {
+            policy_id: "test".to_string(),
+            required_help_fragments: vec![],
+            banned_help_fragments: vec![],
+            required_readme_fragments: vec![],
+            banned_readme_fragments: vec![],
+        };
+        let (status, severity, _) = evaluate_cli_docs_truth_guard(&contract, "clean", "clean");
+        assert_eq!(status, ZeroPlaceholderStatus::Resolved);
+        assert_eq!(severity, ZeroPlaceholderSeverity::Low);
+    }
+
+    #[test]
+    fn cli_docs_truth_guard_detects_banned_help_fragment() {
+        let contract = DocsHelpSurfaceAuditContract {
+            policy_id: "test".to_string(),
+            required_help_fragments: vec![],
+            banned_help_fragments: vec!["obsolete_cmd".to_string()],
+            required_readme_fragments: vec![],
+            banned_readme_fragments: vec![],
+        };
+        let (status, _, detail) = evaluate_cli_docs_truth_guard(
+            &contract,
+            "clean readme",
+            "help contains obsolete_cmd here",
+        );
+        assert_eq!(status, ZeroPlaceholderStatus::FailClosed);
+        assert!(detail.contains("banned"));
+    }
+
+    #[test]
+    fn finding_count_sixteen() {
+        assert_eq!(ZERO_PLACEHOLDER_SCAN_FINDING_COUNT, 16);
+    }
 }

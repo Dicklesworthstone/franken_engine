@@ -2252,4 +2252,214 @@ mod tests {
 
         let _ = fs::remove_dir_all(&artifact_dir);
     }
+
+    // --- Enrichment tests (PearlTower 2026-03-16) ---
+
+    #[test]
+    fn candidate_disposition_serde_roundtrip() {
+        for d in [
+            CandidateDisposition::Accept,
+            CandidateDisposition::Conditional,
+            CandidateDisposition::Reject,
+        ] {
+            let json = serde_json::to_string(&d).unwrap();
+            let back: CandidateDisposition = serde_json::from_str(&json).unwrap();
+            assert_eq!(d, back);
+        }
+    }
+
+    #[test]
+    fn surface_area_serde_roundtrip() {
+        for s in [
+            SurfaceArea::GovernanceState,
+            SurfaceArea::OfflineArtifact,
+            SurfaceArea::OperatorProjection,
+            SurfaceArea::PolicyState,
+            SurfaceArea::RuntimeMetadata,
+            SurfaceArea::Telemetry,
+        ] {
+            let json = serde_json::to_string(&s).unwrap();
+            let back: SurfaceArea = serde_json::from_str(&json).unwrap();
+            assert_eq!(s, back);
+        }
+    }
+
+    #[test]
+    fn baseline_strategy_serde_roundtrip() {
+        for b in [
+            BaselineStrategy::CloneSnapshot,
+            BaselineStrategy::ExternalJoinProjection,
+            BaselineStrategy::ImmutableValueObject,
+            BaselineStrategy::MutableSnapshotSideEffect,
+            BaselineStrategy::OfflineSummary,
+            BaselineStrategy::QueryAppendOnly,
+        ] {
+            let json = serde_json::to_string(&b).unwrap();
+            let back: BaselineStrategy = serde_json::from_str(&json).unwrap();
+            assert_eq!(b, back);
+        }
+    }
+
+    #[test]
+    fn tearing_risk_serde_roundtrip() {
+        for t in [
+            TearingRisk::None,
+            TearingRisk::Low,
+            TearingRisk::Medium,
+            TearingRisk::High,
+        ] {
+            let json = serde_json::to_string(&t).unwrap();
+            let back: TearingRisk = serde_json::from_str(&json).unwrap();
+            assert_eq!(t, back);
+        }
+    }
+
+    #[test]
+    fn write_profile_serde_roundtrip() {
+        for w in [
+            WriteProfile::Rare,
+            WriteProfile::Moderate,
+            WriteProfile::Bursty,
+            WriteProfile::HotPath,
+        ] {
+            let json = serde_json::to_string(&w).unwrap();
+            let back: WriteProfile = serde_json::from_str(&json).unwrap();
+            assert_eq!(w, back);
+        }
+    }
+
+    #[test]
+    fn tearing_risk_ordering() {
+        assert!(TearingRisk::None < TearingRisk::Low);
+        assert!(TearingRisk::Low < TearingRisk::Medium);
+        assert!(TearingRisk::Medium < TearingRisk::High);
+    }
+
+    #[test]
+    fn write_profile_ordering() {
+        assert!(WriteProfile::Rare < WriteProfile::Moderate);
+        assert!(WriteProfile::Moderate < WriteProfile::Bursty);
+        assert!(WriteProfile::Bursty < WriteProfile::HotPath);
+    }
+
+    #[test]
+    fn candidate_counts_default() {
+        let counts = CandidateCounts::default();
+        assert_eq!(counts.accept, 0);
+        assert_eq!(counts.conditional, 0);
+        assert_eq!(counts.reject, 0);
+    }
+
+    #[test]
+    fn candidate_counts_serde_roundtrip() {
+        let counts = CandidateCounts {
+            accept: 5,
+            conditional: 2,
+            reject: 1,
+        };
+        let json = serde_json::to_string(&counts).unwrap();
+        let back: CandidateCounts = serde_json::from_str(&json).unwrap();
+        assert_eq!(counts, back);
+    }
+
+    #[test]
+    fn simulated_seqlock_stable_read_no_retries() {
+        let policy = accepted_policy(3);
+        let plan = [ReadInterference::Stable];
+        let mut seqlock = SimulatedSeqlock::new("v1");
+        let outcome = seqlock.read_with_interference(&policy, &plan);
+        assert_eq!(outcome.resolution, ReadResolution::Optimistic);
+        assert_eq!(outcome.retries, 0);
+        assert_eq!(outcome.value, "v1");
+        assert_eq!(outcome.fallback_reason, None);
+    }
+
+    #[test]
+    fn simulated_seqlock_zero_retry_budget_fallback() {
+        let policy = accepted_policy(0);
+        let plan = [ReadInterference::WriterActive];
+        let mut seqlock = SimulatedSeqlock::new("v1");
+        let outcome = seqlock.read_with_interference(&policy, &plan);
+        assert_eq!(outcome.resolution, ReadResolution::IncumbentFallback);
+        assert_eq!(
+            outcome.fallback_reason,
+            Some(FallbackReason::RetryBudgetExhausted)
+        );
+    }
+
+    #[test]
+    fn simulated_seqlock_begin_then_commit_then_begin_again() {
+        let mut seqlock = SimulatedSeqlock::new("v1");
+        seqlock.begin_write().expect("acquire writer");
+        seqlock.commit_write("v2").expect("commit");
+        // After commit, should be able to write again
+        seqlock.begin_write().expect("re-acquire after commit");
+        seqlock.commit_write("v3").expect("second commit");
+    }
+
+    #[test]
+    fn simulated_seqlock_read_after_multiple_writes() {
+        let policy = accepted_policy(3);
+        let mut seqlock = SimulatedSeqlock::new("v1");
+        seqlock.begin_write().unwrap();
+        seqlock.commit_write("v2").unwrap();
+        seqlock.begin_write().unwrap();
+        seqlock.commit_write("v3").unwrap();
+
+        let plan = [ReadInterference::Stable];
+        let outcome = seqlock.read_with_interference(&policy, &plan);
+        assert_eq!(outcome.value, "v3");
+        assert_eq!(outcome.retries, 0);
+    }
+
+    #[test]
+    fn schema_version_constants_non_empty() {
+        assert!(!INVENTORY_SCHEMA_VERSION.is_empty());
+        assert!(!RETRY_SAFETY_SCHEMA_VERSION.is_empty());
+        assert!(!BASELINE_COMPARATOR_SCHEMA_VERSION.is_empty());
+        assert!(!READER_WRITER_CONTRACT_SCHEMA_VERSION.is_empty());
+        assert!(!RETRY_BUDGET_POLICY_SCHEMA_VERSION.is_empty());
+        assert!(!INCUMBENT_FALLBACK_MATRIX_SCHEMA_VERSION.is_empty());
+        assert!(!TRACE_IDS_SCHEMA_VERSION.is_empty());
+        assert!(!RUN_MANIFEST_SCHEMA_VERSION.is_empty());
+    }
+
+    #[test]
+    fn bead_and_component_constants() {
+        assert!(!BEAD_ID.is_empty());
+        assert!(!PREDECESSOR_BEAD_ID.is_empty());
+        assert!(!COMPONENT.is_empty());
+        assert_ne!(BEAD_ID, PREDECESSOR_BEAD_ID);
+    }
+
+    #[test]
+    fn fallback_reason_serde_roundtrip() {
+        for r in [
+            FallbackReason::RetryBudgetExhausted,
+            FallbackReason::ExternalJoinBoundary,
+        ] {
+            let json = serde_json::to_string(&r).unwrap();
+            let back: FallbackReason = serde_json::from_str(&json).unwrap();
+            assert_eq!(r, back);
+        }
+    }
+
+    #[test]
+    fn read_resolution_serde_roundtrip() {
+        for r in [
+            ReadResolution::Optimistic,
+            ReadResolution::IncumbentFallback,
+        ] {
+            let json = serde_json::to_string(&r).unwrap();
+            let back: ReadResolution = serde_json::from_str(&json).unwrap();
+            assert_eq!(r, back);
+        }
+    }
+
+    #[test]
+    fn simulated_seqlock_counters_start_at_zero() {
+        let seqlock = SimulatedSeqlock::new("v1");
+        assert_eq!(seqlock.fallback_reads(), 0);
+        assert_eq!(seqlock.write_pressure_violations(), 0);
+    }
 }

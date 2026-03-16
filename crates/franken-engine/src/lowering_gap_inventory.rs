@@ -851,7 +851,7 @@ mod tests {
         assert!(descriptor.user_visible_divergence.contains("resolved"));
         assert_eq!(
             descriptor.regression_test_hint,
-            "lower_non_arithmetic_binary_currently_collapses_to_add_placeholder"
+            "lower_non_arithmetic_binary_emits_typed_instruction"
         );
     }
 

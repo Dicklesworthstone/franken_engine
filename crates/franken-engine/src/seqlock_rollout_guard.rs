@@ -953,8 +953,11 @@ impl FileArtifact {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArtifactContext, DOCS_CONTRACT_SCHEMA_VERSION, FastPathFallbackReason, FastPathReadSource,
-        GuardEvidenceVerdict, accepted_candidates, build_docs_contract_fixture,
+        ArtifactContext, COMPONENT, DOCS_CONTRACT_SCHEMA_VERSION, FastPathFallbackReason,
+        FastPathReadSource, GuardEvidenceVerdict, ROLLOUT_GUARD_SCHEMA_VERSION,
+        SAFETY_CASE_SCHEMA_VERSION, STARVATION_REPORT_SCHEMA_VERSION,
+        SeqlockRolloutGuardRow, SeqlockSafetyCaseRow, StarvationMicrobenchReportArtifact,
+        StarvationMicrobenchRow, accepted_candidates, build_docs_contract_fixture,
         build_missing_model_check_row, build_safety_case_row, emit_default_rollout_bundle,
         render_summary, run_starvation_microbench,
     };
@@ -1377,5 +1380,146 @@ mod tests {
                 .disable_reasons
                 .contains(&"model_check_evidence_missing".to_string())
         );
+    }
+
+    // ── enrichment tests (PearlTower 2026-03-16) ──────────────────
+
+    #[test]
+    fn guard_evidence_verdict_variants_are_distinct() {
+        assert_ne!(GuardEvidenceVerdict::Pass, GuardEvidenceVerdict::Missing);
+        assert_ne!(GuardEvidenceVerdict::Missing, GuardEvidenceVerdict::Fail);
+        assert_ne!(GuardEvidenceVerdict::Pass, GuardEvidenceVerdict::Fail);
+    }
+
+    #[test]
+    fn guard_evidence_verdict_serde_roundtrip_all() {
+        for verdict in [
+            GuardEvidenceVerdict::Pass,
+            GuardEvidenceVerdict::Missing,
+            GuardEvidenceVerdict::Fail,
+        ] {
+            let json = serde_json::to_string(&verdict).unwrap();
+            let back: GuardEvidenceVerdict = serde_json::from_str(&json).unwrap();
+            assert_eq!(verdict, back);
+        }
+    }
+
+    #[test]
+    fn starvation_microbench_row_serde_roundtrip() {
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        let row = run_starvation_microbench(&candidates[0]);
+        let json = serde_json::to_string(&row).unwrap();
+        let back: StarvationMicrobenchRow = serde_json::from_str(&json).unwrap();
+        assert_eq!(row.candidate_id, back.candidate_id);
+        assert_eq!(row.verdict, back.verdict);
+    }
+
+    #[test]
+    fn safety_case_row_serde_roundtrip() {
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        let starvation = run_starvation_microbench(&candidates[0]);
+        let model_check = build_missing_model_check_row(&candidates[0]);
+        let safety = build_safety_case_row(&candidates[0], &starvation, &model_check);
+        let json = serde_json::to_string(&safety).unwrap();
+        let back: SeqlockSafetyCaseRow = serde_json::from_str(&json).unwrap();
+        assert_eq!(safety.candidate_id, back.candidate_id);
+        assert_eq!(safety.rollout_allowed, back.rollout_allowed);
+    }
+
+    #[test]
+    fn rollout_guard_row_serde_roundtrip() {
+        let row = SeqlockRolloutGuardRow {
+            candidate_id: "test_candidate".to_string(),
+            enabled: false,
+            fallback_target: "mutex".to_string(),
+            required_artifacts: vec!["safety_case.json".to_string()],
+            disable_reasons: vec!["model_check_missing".to_string()],
+        };
+        let json = serde_json::to_string(&row).unwrap();
+        let back: SeqlockRolloutGuardRow = serde_json::from_str(&json).unwrap();
+        assert_eq!(row, back);
+    }
+
+    #[test]
+    fn candidate_rollout_input_fields_non_empty() {
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        for c in &candidates {
+            assert!(!c.candidate_id.is_empty());
+            assert!(!c.surface_name.is_empty());
+        }
+    }
+
+    #[test]
+    fn starvation_microbench_observations_non_empty() {
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        let row = run_starvation_microbench(&candidates[0]);
+        assert!(!row.observations.is_empty());
+    }
+
+    #[test]
+    fn all_candidates_have_distinct_ids() {
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        let ids: std::collections::BTreeSet<&str> =
+            candidates.iter().map(|c| c.candidate_id.as_str()).collect();
+        assert_eq!(ids.len(), candidates.len());
+    }
+
+    #[test]
+    fn starvation_microbench_report_via_bundle_has_correct_schema() {
+        let artifact_dir = temp_dir("enrichment-starvation-schema");
+        let mut context = ArtifactContext::new(&artifact_dir);
+        context.generated_at_utc = "2026-03-06T00:00:00Z".to_string();
+        let bundle = emit_default_rollout_bundle(&context).expect("bundle");
+        assert_eq!(
+            bundle.starvation_report.schema_version,
+            STARVATION_REPORT_SCHEMA_VERSION
+        );
+        let _ = std::fs::remove_dir_all(&artifact_dir);
+    }
+
+    #[test]
+    fn emit_default_bundle_creates_safety_case_with_correct_schema() {
+        let artifact_dir = temp_dir("enrichment-schema");
+        let mut context = ArtifactContext::new(&artifact_dir);
+        context.generated_at_utc = "2026-03-06T00:00:00Z".to_string();
+        let bundle = emit_default_rollout_bundle(&context).expect("bundle");
+        assert_eq!(
+            bundle.safety_case.schema_version,
+            SAFETY_CASE_SCHEMA_VERSION
+        );
+        assert_eq!(
+            bundle.rollout_guard.schema_version,
+            ROLLOUT_GUARD_SCHEMA_VERSION
+        );
+        let _ = std::fs::remove_dir_all(&artifact_dir);
+    }
+
+    #[test]
+    fn emit_default_bundle_produces_written_files() {
+        let artifact_dir = temp_dir("enrichment-files");
+        let mut context = ArtifactContext::new(&artifact_dir);
+        context.generated_at_utc = "2026-03-06T00:00:00Z".to_string();
+        let bundle = emit_default_rollout_bundle(&context).expect("bundle");
+        assert!(!bundle.written_files.is_empty());
+        for (name, hash) in &bundle.written_files {
+            assert!(!name.is_empty(), "artifact name should be non-empty");
+            assert!(!hash.is_empty(), "artifact hash should be non-empty for {name}");
+        }
+        let _ = std::fs::remove_dir_all(&artifact_dir);
+    }
+
+    #[test]
+    fn manifest_artifact_reference_has_sha256_hash() {
+        let artifact_dir = temp_dir("enrichment-hash");
+        let mut context = ArtifactContext::new(&artifact_dir);
+        context.generated_at_utc = "2026-03-06T00:00:00Z".to_string();
+        let bundle = emit_default_rollout_bundle(&context).expect("bundle");
+        for (_name, hash) in &bundle.written_files {
+            assert!(
+                hash.starts_with("sha256:"),
+                "hash should start with sha256: prefix: {hash}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&artifact_dir);
     }
 }

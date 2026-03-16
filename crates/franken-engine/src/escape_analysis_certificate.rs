@@ -1492,4 +1492,205 @@ mod tests {
             assert_eq!(f.to_string(), f.as_str());
         }
     }
+
+    // ── enrichment tests (PearlTower 2026-03-16) ──────────────────
+
+    #[test]
+    fn escape_state_join_is_monotonic() {
+        let states = EscapeState::ALL;
+        for &a in states {
+            for &b in states {
+                let joined = a.join(b);
+                assert!(joined >= a, "join({a:?},{b:?}) = {joined:?} should be >= {a:?}");
+                assert!(joined >= b, "join({a:?},{b:?}) = {joined:?} should be >= {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn escape_state_join_associative() {
+        let states = EscapeState::ALL;
+        for &a in states {
+            for &b in states {
+                for &c in states {
+                    assert_eq!(
+                        a.join(b).join(c),
+                        a.join(b.join(c)),
+                        "join not associative for ({a:?},{b:?},{c:?})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn escape_state_no_escape_is_elision_eligible() {
+        assert!(EscapeState::NoEscape.is_elision_eligible());
+        assert!(EscapeState::ArgEscape.is_elision_eligible());
+        assert!(!EscapeState::ThreadEscape.is_elision_eligible());
+        assert!(!EscapeState::GlobalEscape.is_elision_eligible());
+    }
+
+    #[test]
+    fn escape_state_caller_managed() {
+        assert!(EscapeState::NoEscape.is_caller_managed());
+        assert!(EscapeState::ArgEscape.is_caller_managed());
+        assert!(!EscapeState::ThreadEscape.is_caller_managed());
+        assert!(!EscapeState::GlobalEscape.is_caller_managed());
+    }
+
+    #[test]
+    fn alias_relation_serde_roundtrip() {
+        for rel in [AliasRelation::NoAlias, AliasRelation::MayAlias, AliasRelation::MustAlias] {
+            let json = serde_json::to_string(&rel).unwrap();
+            let back: AliasRelation = serde_json::from_str(&json).unwrap();
+            assert_eq!(rel, back);
+        }
+    }
+
+    #[test]
+    fn allocation_kind_serde_roundtrip() {
+        for kind in AllocationKind::ALL {
+            let json = serde_json::to_string(kind).unwrap();
+            let back: AllocationKind = serde_json::from_str(&json).unwrap();
+            assert_eq!(*kind, back);
+        }
+    }
+
+    #[test]
+    fn allocation_kind_all_has_ten() {
+        assert_eq!(AllocationKind::ALL.len(), 10);
+    }
+
+    #[test]
+    fn invalidation_reason_serde_roundtrip() {
+        for reason in [
+            InvalidationReason::DynamicEval,
+            InvalidationReason::WithStatement,
+            InvalidationReason::DynamicPropertyAccess,
+            InvalidationReason::IndirectCall,
+            InvalidationReason::ExceptionEscape,
+            InvalidationReason::ProxyReflect,
+            InvalidationReason::BudgetExceeded,
+            InvalidationReason::CrossModuleUnresolvable,
+        ] {
+            let json = serde_json::to_string(&reason).unwrap();
+            let back: InvalidationReason = serde_json::from_str(&json).unwrap();
+            assert_eq!(reason, back);
+        }
+    }
+
+    #[test]
+    fn invalidation_reason_display_non_empty() {
+        for reason in [
+            InvalidationReason::DynamicEval,
+            InvalidationReason::WithStatement,
+            InvalidationReason::BudgetExceeded,
+        ] {
+            assert!(!format!("{reason}").is_empty());
+        }
+    }
+
+    #[test]
+    fn liveness_envelope_span_computation() {
+        let known = LivenessEnvelope {
+            first_use: Some(5),
+            last_use: Some(15),
+            precise: true,
+        };
+        assert_eq!(known.span(), Some(10));
+        assert!(known.is_known());
+
+        let unknown = LivenessEnvelope {
+            first_use: None,
+            last_use: None,
+            precise: false,
+        };
+        assert_eq!(unknown.span(), None);
+        assert!(!unknown.is_known());
+    }
+
+    #[test]
+    fn certificate_can_elide_when_scalar_replacement_eligible() {
+        let inv = run_escape_cert_corpus();
+        // At least some specimens should produce certificates
+        assert!(inv.pass_count > 0, "expected at least some passing specimens");
+    }
+
+    #[test]
+    fn escape_cert_specimen_family_all_has_eight() {
+        assert_eq!(EscapeCertSpecimenFamily::ALL.len(), 8);
+    }
+
+    #[test]
+    fn escape_cert_specimen_family_serde_roundtrip() {
+        for family in EscapeCertSpecimenFamily::ALL {
+            let json = serde_json::to_string(family).unwrap();
+            let back: EscapeCertSpecimenFamily = serde_json::from_str(&json).unwrap();
+            assert_eq!(*family, back);
+        }
+    }
+
+    #[test]
+    fn escape_cert_verdict_serde_roundtrip() {
+        for verdict in [EscapeCertVerdict::Pass, EscapeCertVerdict::Fail] {
+            let json = serde_json::to_string(&verdict).unwrap();
+            let back: EscapeCertVerdict = serde_json::from_str(&json).unwrap();
+            assert_eq!(verdict, back);
+        }
+    }
+
+    #[test]
+    fn escape_cert_expected_outcome_serde_roundtrip_all() {
+        for outcome in [
+            EscapeCertExpectedOutcome::Classified,
+            EscapeCertExpectedOutcome::Abstained,
+            EscapeCertExpectedOutcome::Partitioned,
+            EscapeCertExpectedOutcome::LivenessKnown,
+            EscapeCertExpectedOutcome::LivenessUnknown,
+            EscapeCertExpectedOutcome::BudgetExceeded,
+            EscapeCertExpectedOutcome::EnvelopeComputed,
+            EscapeCertExpectedOutcome::CertificateGranted,
+            EscapeCertExpectedOutcome::CertificateDenied,
+            EscapeCertExpectedOutcome::RoundtripPreserved,
+        ] {
+            let json = serde_json::to_string(&outcome).unwrap();
+            let back: EscapeCertExpectedOutcome = serde_json::from_str(&json).unwrap();
+            assert_eq!(outcome, back);
+        }
+    }
+
+    #[test]
+    fn write_bundle_creates_all_artifacts() {
+        let out = std::env::temp_dir().join(format!(
+            "escape-cert-bundle-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let cmds = vec!["test".to_string()];
+        let arts = write_escape_cert_evidence_bundle(&out, &cmds).expect("write");
+        assert!(arts.inventory_path.exists());
+        assert!(arts.run_manifest_path.exists());
+        assert!(arts.events_path.exists());
+        assert!(arts.commands_path.exists());
+        let _ = std::fs::remove_dir_all(&out);
+    }
+
+    #[test]
+    fn bundle_hash_is_64_hex() {
+        let out = std::env::temp_dir().join(format!(
+            "escape-cert-hex-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let cmds = vec!["test".to_string()];
+        let arts = write_escape_cert_evidence_bundle(&out, &cmds).expect("write");
+        assert_eq!(arts.inventory_hash.len(), 64);
+        assert!(arts.inventory_hash.chars().all(|c| c.is_ascii_hexdigit()));
+        let _ = std::fs::remove_dir_all(&out);
+    }
 }

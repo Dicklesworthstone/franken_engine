@@ -14,14 +14,20 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::control_plane_benchmark_split_gate::{
-    BenchmarkImpactClass, BenchmarkImpactVisibility, BenchmarkSplit,
-    BenchmarkSplitDeltaReferenceKind, BenchmarkSplitFailureCode, BenchmarkSplitFinding,
+    BENCHMARK_SPLIT_DELTA_REPORT_FILE, BENCHMARK_SPLIT_DELTA_REPORT_SCHEMA_VERSION,
+    BenchmarkDeltaReferenceKind, BenchmarkImpactClass, BenchmarkImpactVisibility, BenchmarkSplit,
+    BenchmarkSplitDeltaReport, BenchmarkSplitFailureCode, BenchmarkSplitFinding,
     BenchmarkSplitGateDecision, BenchmarkSplitGateInput, BenchmarkSplitLogEvent,
-    BenchmarkSplitSnapshot, BenchmarkSplitThresholds, LatencyStatsNs, SplitBenchmarkEvaluation,
+    BenchmarkSplitSnapshot, BenchmarkSplitThresholds,
+    CONTROL_PLANE_REAL_CONTEXT_OVERHEAD_REPORT_FILE,
+    CONTROL_PLANE_REAL_CONTEXT_OVERHEAD_REPORT_SCHEMA_VERSION,
+    ControlPlaneRealContextOverheadReport, LatencyStatsNs, SplitBenchmarkEvaluation,
     SplitBenchmarkMetrics, build_benchmark_split_delta_report,
     build_control_plane_real_context_overhead_report, evaluate_control_plane_benchmark_split,
+    write_control_plane_benchmark_split_reports,
 };
 
 fn repo_root() -> PathBuf {
@@ -43,6 +49,21 @@ fn load_control_plane_benchmark_script() -> String {
     let path = repo_root().join("scripts/run_control_plane_benchmark_split_gate_suite.sh");
     fs::read_to_string(&path)
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
+fn unique_temp_dir(prefix: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before unix epoch")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "franken_engine_{prefix}_{}_{}",
+        std::process::id(),
+        nanos
+    ));
+    fs::create_dir_all(&path)
+        .unwrap_or_else(|err| panic!("failed to create {}: {err}", path.display()));
+    path
 }
 
 fn metrics(
@@ -411,7 +432,8 @@ fn real_context_overhead_report_attributes_user_and_operator_costs() {
     let report =
         build_control_plane_real_context_overhead_report(&gate_input, &thresholds, &decision);
 
-    assert!(report.bounded_overhead);
+    assert!(!report.bounded_overhead);
+    assert!(report.rollback_required);
     assert_eq!(report.shortcut_reference_split, BenchmarkSplit::Baseline);
     assert_eq!(
         report.corrected_real_context_split,
@@ -434,7 +456,10 @@ fn real_context_overhead_report_attributes_user_and_operator_costs() {
         BenchmarkSplit::EvidenceEmission
     );
     assert_eq!(report.corrected_path_components.len(), 4);
-    assert_eq!(report.user_impact_class, BenchmarkImpactClass::Noticeable);
+    assert_eq!(
+        report.user_impact_class,
+        BenchmarkImpactClass::ActionRequired
+    );
     assert_eq!(
         report.operator_impact_class,
         BenchmarkImpactClass::ActionRequired
@@ -458,7 +483,8 @@ fn benchmark_split_delta_report_covers_stage_baseline_and_previous_snapshot_view
     let decision = evaluate_control_plane_benchmark_split(&gate_input, &thresholds);
     let report = build_benchmark_split_delta_report(&gate_input, &decision);
 
-    assert!(report.bounded_overhead);
+    assert!(!report.bounded_overhead);
+    assert!(report.rollback_required);
     assert_eq!(report.previous_stage_deltas.len(), 4);
     assert_eq!(report.shortcut_baseline_deltas.len(), 4);
     assert_eq!(report.previous_snapshot_deltas.len(), 5);
@@ -466,22 +492,65 @@ fn benchmark_split_delta_report_covers_stage_baseline_and_previous_snapshot_view
         report
             .previous_stage_deltas
             .iter()
-            .all(|delta| delta.reference_kind == BenchmarkSplitDeltaReferenceKind::PreviousStage)
+            .all(|delta| delta.reference_kind == BenchmarkDeltaReferenceKind::PreviousStage)
     );
     assert!(
         report
             .shortcut_baseline_deltas
             .iter()
-            .all(|delta| delta.reference_kind
-                == BenchmarkSplitDeltaReferenceKind::ShortcutBaseline)
+            .all(|delta| delta.reference_kind == BenchmarkDeltaReferenceKind::ShortcutBaseline)
     );
     assert!(
         report.previous_snapshot_deltas.iter().any(|delta| {
-            delta.reference_kind == BenchmarkSplitDeltaReferenceKind::PreviousSnapshot
+            delta.reference_kind == BenchmarkDeltaReferenceKind::PreviousSnapshot
                 && delta.candidate_split == BenchmarkSplit::FullIntegration
         }),
         "delta report should include previous-snapshot comparison for full integration"
     );
+}
+
+#[test]
+fn report_writer_emits_decision_linked_json_artifacts() {
+    let out_dir = unique_temp_dir("control_plane_benchmark_split_writer");
+    let artifacts = write_control_plane_benchmark_split_reports(&out_dir)
+        .expect("writer should emit report artifacts");
+
+    assert_eq!(artifacts.out_dir, out_dir);
+    assert_eq!(
+        artifacts.control_plane_real_context_overhead_report_path,
+        out_dir.join(CONTROL_PLANE_REAL_CONTEXT_OVERHEAD_REPORT_FILE)
+    );
+    assert_eq!(
+        artifacts.benchmark_split_delta_report_path,
+        out_dir.join(BENCHMARK_SPLIT_DELTA_REPORT_FILE)
+    );
+
+    let overhead_bytes = fs::read(&artifacts.control_plane_real_context_overhead_report_path)
+        .expect("read overhead report");
+    let delta_bytes =
+        fs::read(&artifacts.benchmark_split_delta_report_path).expect("read delta report");
+
+    let overhead: ControlPlaneRealContextOverheadReport =
+        serde_json::from_slice(&overhead_bytes).expect("decode overhead report");
+    let delta: BenchmarkSplitDeltaReport =
+        serde_json::from_slice(&delta_bytes).expect("decode delta report");
+
+    assert_eq!(
+        overhead.schema_version,
+        CONTROL_PLANE_REAL_CONTEXT_OVERHEAD_REPORT_SCHEMA_VERSION
+    );
+    assert_eq!(
+        delta.schema_version,
+        BENCHMARK_SPLIT_DELTA_REPORT_SCHEMA_VERSION
+    );
+    assert_eq!(overhead.decision_id, artifacts.decision_id);
+    assert_eq!(delta.decision_id, artifacts.decision_id);
+    assert_eq!(overhead.trace_id, "trace-bd-3nr-1-5-2-report-fixture");
+    assert_eq!(delta.policy_id, "policy-bd-3nr-1-5-2-report-fixture");
+    assert_eq!(overhead.bounded_overhead, artifacts.pass);
+    assert_eq!(delta.bounded_overhead, artifacts.pass);
+    assert_eq!(overhead.rollback_required, artifacts.rollback_required);
+    assert_eq!(delta.rollback_required, artifacts.rollback_required);
 }
 
 // ────────────────────────────────────────────────────────────

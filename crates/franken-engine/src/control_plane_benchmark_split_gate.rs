@@ -1770,10 +1770,10 @@ fn severity_from_regression(
     }
 
     if threshold_exceeded {
-        if let Some(threshold) = threshold_millionths {
-            if observed_millionths > threshold.saturating_mul(2) {
-                return BenchmarkImpactSeverity::Critical;
-            }
+        if let Some(threshold) = threshold_millionths
+            && observed_millionths > threshold.saturating_mul(2)
+        {
+            return BenchmarkImpactSeverity::Critical;
         }
         return BenchmarkImpactSeverity::High;
     }

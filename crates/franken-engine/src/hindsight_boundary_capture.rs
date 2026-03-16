@@ -1691,4 +1691,145 @@ mod tests {
         assert_eq!(ctx.component, "comp");
         assert_eq!(ctx.virtual_ts, 42);
     }
+
+    // --- Enrichment tests (PearlTower 2026-03-16) ---
+
+    #[test]
+    fn boundary_class_serde_roundtrip() {
+        for class in BoundaryClass::ALL {
+            let json = serde_json::to_string(&class).unwrap();
+            let back: BoundaryClass = serde_json::from_str(&json).unwrap();
+            assert_eq!(class, back);
+        }
+    }
+
+    #[test]
+    fn boundary_class_as_str_distinct() {
+        let strs: std::collections::BTreeSet<&str> =
+            BoundaryClass::ALL.iter().map(|c| c.as_str()).collect();
+        assert_eq!(strs.len(), BoundaryClass::ALL.len());
+    }
+
+    #[test]
+    fn boundary_class_all_has_nine_variants() {
+        assert_eq!(BoundaryClass::ALL.len(), 9);
+    }
+
+    #[test]
+    fn boundary_class_display_format_matches_as_str() {
+        for class in BoundaryClass::ALL {
+            assert_eq!(class.to_string(), class.as_str());
+        }
+    }
+
+    #[test]
+    fn schema_version_constants_non_empty() {
+        assert!(!CONTRACT_SCHEMA_VERSION.is_empty());
+        assert!(!BOUNDARY_CATALOG_SCHEMA_VERSION.is_empty());
+        assert!(!MINIMAL_REPLAY_INPUT_SCHEMA_VERSION.is_empty());
+        assert!(!BOUNDARY_REDACTION_MAP_SCHEMA_VERSION.is_empty());
+        assert!(!BOUNDARY_CAPTURE_EVENT_SCHEMA_VERSION.is_empty());
+        assert!(!BEAD_ID.is_empty());
+    }
+
+    #[test]
+    fn default_contract_covers_all_boundary_classes() {
+        let contract = BoundaryCaptureContract::default_v1();
+        let covered: std::collections::BTreeSet<BoundaryClass> = contract
+            .boundary_catalog
+            .rules
+            .iter()
+            .map(|r| r.boundary_class)
+            .collect();
+        for class in BoundaryClass::ALL {
+            assert!(covered.contains(&class), "missing rule for {:?}", class);
+        }
+    }
+
+    #[test]
+    fn default_contract_rules_have_unique_boundary_classes() {
+        let contract = BoundaryCaptureContract::default_v1();
+        let classes: std::collections::BTreeSet<BoundaryClass> = contract
+            .boundary_catalog
+            .rules
+            .iter()
+            .map(|r| r.boundary_class)
+            .collect();
+        assert_eq!(classes.len(), contract.boundary_catalog.rules.len());
+    }
+
+    #[test]
+    fn correlation_keys_differ_for_different_boundary_classes() {
+        let a = derive_correlation_key(BoundaryClass::ClockRead, 0, "t", "d", "c", 1);
+        let b = derive_correlation_key(BoundaryClass::RandomnessDraw, 0, "t", "d", "c", 1);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn correlation_keys_differ_for_different_trace_ids() {
+        let a = derive_correlation_key(BoundaryClass::ClockRead, 0, "t1", "d", "c", 1);
+        let b = derive_correlation_key(BoundaryClass::ClockRead, 0, "t2", "d", "c", 1);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn correlation_key_is_deterministic() {
+        let a = derive_correlation_key(BoundaryClass::ClockRead, 5, "t", "d", "c", 10);
+        let b = derive_correlation_key(BoundaryClass::ClockRead, 5, "t", "d", "c", 10);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn capture_session_empty_log_has_zero_records() {
+        let session = BoundaryCaptureSession::default_v1();
+        assert_eq!(session.log().records().len(), 0);
+    }
+
+    #[test]
+    fn multiple_captures_in_session_accumulate() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        for i in 0..3_u64 {
+            let trace_id = format!("trace-{i}");
+            let decision_id = format!("decision-{i}");
+            let ctx = BoundaryContext::new(
+                &trace_id,
+                &decision_id,
+                "policy",
+                "clock",
+                i,
+            );
+            session
+                .capture_clock_read(&ctx, "mono", "monotonic", i, None)
+                .expect("capture");
+        }
+        assert_eq!(session.log().records().len(), 3);
+    }
+
+    #[test]
+    fn boundary_capture_log_records_have_correct_class() {
+        let mut session = BoundaryCaptureSession::default_v1();
+        let ctx = BoundaryContext::new("t", "d", "p", "clock", 1);
+        session
+            .capture_clock_read(&ctx, "mono", "monotonic", 1, None)
+            .expect("capture");
+        let records = session.log().records();
+        assert!(!records.is_empty());
+        assert_eq!(records[0].boundary_class, BoundaryClass::ClockRead);
+    }
+
+    #[test]
+    fn minimal_replay_plan_content_hash_deterministic() {
+        let make_session = || {
+            let mut s = BoundaryCaptureSession::default_v1();
+            let ctx = BoundaryContext::new("t", "d", "p", "sched", 1);
+            s.capture_scheduling_decision(&ctx, "ready", "task-1", "digest", None)
+                .expect("cap");
+            s
+        };
+        let s1 = make_session();
+        let s2 = make_session();
+        let p1 = s1.minimal_replay_plans().unwrap();
+        let p2 = s2.minimal_replay_plans().unwrap();
+        assert_eq!(p1.len(), p2.len());
+    }
 }

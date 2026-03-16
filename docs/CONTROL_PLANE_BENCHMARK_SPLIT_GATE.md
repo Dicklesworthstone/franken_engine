@@ -84,10 +84,18 @@ All heavy Rust commands are offloaded through `rch` in the suite runner:
 
 ```bash
 ./scripts/run_control_plane_benchmark_split_gate_suite.sh ci
+./scripts/e2e/control_plane_benchmark_split_gate_replay.sh test
 ```
 
-If `rch` is unavailable (for example in GitHub-hosted workflow runners), the
-script falls back to local Cargo execution with the same command set.
+The runner is fail-closed for heavy commands:
+
+- `rch` is required; there is no local fallback path for Cargo-heavy verification.
+- default remote target dirs are repo-local and namespaced, for example:
+
+```bash
+env CARGO_TARGET_DIR="$PWD/target_rch_control_plane_benchmark_split_gate_verify" \
+  ./scripts/run_control_plane_benchmark_split_gate_suite.sh test
+```
 
 Supported modes:
 
@@ -103,5 +111,16 @@ Each run writes:
 - `artifacts/control_plane_benchmark_split_gate/<timestamp>/commands.txt`
 - `artifacts/control_plane_benchmark_split_gate/<timestamp>/events.jsonl`
 - `artifacts/control_plane_benchmark_split_gate/<timestamp>/run_manifest.json`
+- `artifacts/control_plane_benchmark_split_gate/<timestamp>/step_logs/step_*.log`
+- `artifacts/control_plane_benchmark_split_gate/<timestamp>/env.json`
+- `artifacts/control_plane_benchmark_split_gate/<timestamp>/summary.md`
+- `artifacts/control_plane_benchmark_split_gate/<timestamp>/repro.lock`
+- `artifacts/control_plane_benchmark_split_gate/<timestamp>/trace_ids`
 
 `run_manifest.json` includes operator verification commands and artifact pointers.
+The replay wrapper prefers the suite entrypoint directly:
+
+```bash
+./scripts/e2e/control_plane_benchmark_split_gate_replay.sh test
+cat artifacts/control_plane_benchmark_split_gate/<timestamp>/step_logs/step_000.log
+```

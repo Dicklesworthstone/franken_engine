@@ -584,6 +584,65 @@ fn comparison_result_artifact_hash_deterministic() {
     assert_eq!(r1.artifact_hash, r2.artifact_hash);
 }
 
+#[test]
+fn policy_report_artifact_hash_tracks_public_report_content() {
+    let trace = simple_trace();
+    let mut engine_a = default_engine();
+    let mut engine_b = default_engine();
+    let policy_a = vec![make_alternate_policy("alt", "description-a")];
+    let policy_b = vec![make_alternate_policy("alt", "description-b")];
+
+    let result_a = engine_a
+        .compare(
+            std::slice::from_ref(&trace),
+            &policy_a,
+            &default_scope(),
+            None,
+        )
+        .unwrap();
+    let result_b = engine_b
+        .compare(
+            std::slice::from_ref(&trace),
+            &policy_b,
+            &default_scope(),
+            None,
+        )
+        .unwrap();
+
+    assert_ne!(
+        result_a.policy_reports[0].alternate_description,
+        result_b.policy_reports[0].alternate_description
+    );
+    assert_ne!(
+        result_a.policy_reports[0].artifact_hash,
+        result_b.policy_reports[0].artifact_hash
+    );
+}
+
+#[test]
+fn comparison_result_artifact_hash_tracks_scope_payload() {
+    let trace = simple_trace();
+    let policies = vec![make_alternate_policy("alt", "d")];
+    let mut engine_a = default_engine();
+    let mut engine_b = default_engine();
+    let scope_a = default_scope();
+    let mut scope_b = default_scope();
+    scope_b.start_tick = 100;
+
+    let result_a = engine_a
+        .compare(std::slice::from_ref(&trace), &policies, &scope_a, None)
+        .unwrap();
+    let result_b = engine_b
+        .compare(&[trace], &policies, &scope_b, None)
+        .unwrap();
+
+    assert_eq!(result_a.total_decisions, result_b.total_decisions);
+    assert_eq!(result_a.trace_count, result_b.trace_count);
+    assert_eq!(result_a.policy_reports, result_b.policy_reports);
+    assert_ne!(result_a.scope, result_b.scope);
+    assert_ne!(result_a.artifact_hash, result_b.artifact_hash);
+}
+
 // ===========================================================================
 // 15. Scoped replay
 // ===========================================================================

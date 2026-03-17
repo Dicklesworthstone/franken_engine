@@ -1,0 +1,81 @@
+{
+  "schema_version": "franken-engine.rgc-react-parity-gate.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-1lsy.9.7",
+  "generated_by": "bd-1lsy.9.7",
+  "generated_at_utc": "2026-03-16T00:00:00Z",
+  "track": {
+    "id": "RGC-807",
+    "name": "React Parity Gate"
+  },
+  "downstream_consumers": [
+    "docs",
+    "benchmarks",
+    "advisories",
+    "support_surface_contract"
+  ],
+  "child_beads": [
+    {
+      "bead_id": "bd-1lsy.9.7.1",
+      "policy_id": "RGC-807A",
+      "component": "react_compile_verification",
+      "report_artifact": "react_compile_parity_report.json",
+      "integration_test": "react_compile_verification_integration",
+      "owner_route_bead": "bd-1lsy.9.7.1"
+    },
+    {
+      "bead_id": "bd-1lsy.9.7.2",
+      "policy_id": "RGC-807B",
+      "component": "react_ssr_verification",
+      "report_artifact": "react_ssr_client_parity_report.json",
+      "integration_test": "react_ssr_verification_integration",
+      "owner_route_bead": "bd-1lsy.9.7.2"
+    },
+    {
+      "bead_id": "bd-1lsy.9.7.3",
+      "policy_id": "RGC-807C",
+      "component": "react_mismatch_catalog",
+      "report_artifact": "react_mismatch_catalog.json",
+      "integration_test": "react_mismatch_catalog_integration",
+      "owner_route_bead": "bd-1lsy.9.7.3"
+    }
+  ],
+  "required_structured_log_fields": [
+    "schema_version",
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "runtime_lane",
+    "seed",
+    "outcome",
+    "error_code"
+  ],
+  "required_artifacts": [
+    "run_manifest.json",
+    "trace_ids.json",
+    "events.jsonl",
+    "commands.txt",
+    "react_parity_gate_index.json",
+    "react_compile_parity_report.json",
+    "react_ssr_client_parity_report.json",
+    "react_mismatch_catalog.json",
+    "rgc_react_parity_gate_v1.json",
+    "step_logs/step_000.log"
+  ],
+  "gate_runner": {
+    "script": "scripts/run_rgc_react_parity_gate.sh",
+    "replay_wrapper": "scripts/e2e/rgc_react_parity_gate_replay.sh",
+    "strict_mode": "fail_closed_on_rch_local_fallback",
+    "manifest_schema_version": "franken-engine.rgc-react-parity-gate.run-manifest.v1"
+  },
+  "operator_verification": [
+    "jq empty docs/rgc_react_parity_gate_v1.json",
+    "bash -n scripts/run_rgc_react_parity_gate.sh",
+    "bash -n scripts/e2e/rgc_react_parity_gate_replay.sh",
+    "./scripts/run_rgc_react_parity_gate.sh ci",
+    "env CARGO_TARGET_DIR=/data/projects/franken_engine/target_rch_rgc_react_parity_gate_verify rch exec -- cargo test -p frankenengine-engine --test rgc_react_parity_gate",
+    "./scripts/e2e/rgc_react_parity_gate_replay.sh ci"
+  ]
+}

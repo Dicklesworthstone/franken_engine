@@ -612,9 +612,10 @@ impl AntiReplayLedger {
         }
 
         // Above ceiling + window_width — too far ahead, reject.
-        if self.window_ceiling > 0
-            && sequence > self.window_ceiling.saturating_add(self.window_width)
-        {
+        // This check applies even when ceiling is 0 (fresh ledger): an attacker
+        // injecting a near-u64::MAX sequence would otherwise permanently lock
+        // out all normal sequence numbers by advancing the floor.
+        if sequence > self.window_ceiling.saturating_add(self.window_width) {
             return ReplayVerdict::AboveCeiling;
         }
 
@@ -869,6 +870,11 @@ pub enum ProtocolError {
         messages_used: u64,
         messages_limit: u64,
     },
+    /// Key schedule identity does not match the session (session fixation).
+    IdentityMismatch {
+        expected_session: String,
+        got_session: String,
+    },
 }
 
 impl fmt::Display for ProtocolError {
@@ -907,6 +913,13 @@ impl fmt::Display for ProtocolError {
             } => write!(
                 f,
                 "degraded-mode budget exhausted: {messages_used}/{messages_limit}"
+            ),
+            Self::IdentityMismatch {
+                expected_session,
+                got_session,
+            } => write!(
+                f,
+                "key schedule session identity mismatch: expected {expected_session}, got {got_session}"
             ),
         }
     }
@@ -1022,6 +1035,10 @@ impl SessionProtocolState {
     }
 
     /// Attach a key schedule after handshake completion.
+    ///
+    /// Validates that the key schedule's bound identities match this session
+    /// to prevent session-fixation attacks where a schedule from session A
+    /// is attached to session B.
     pub fn attach_key_schedule(
         &mut self,
         schedule: SessionKeySchedule,
@@ -1031,11 +1048,23 @@ impl SessionProtocolState {
                 stages_derived: schedule.derived_stages.len(),
             });
         }
+        if schedule.session_id != self.session_id
+            || schedule.extension_id != self.extension_id
+            || schedule.host_id != self.host_id
+        {
+            return Err(ProtocolError::IdentityMismatch {
+                expected_session: self.session_id.clone(),
+                got_session: schedule.session_id.clone(),
+            });
+        }
         self.key_schedule = Some(schedule);
         Ok(())
     }
 
     /// Enter degraded mode with the specified severity.
+    ///
+    /// Sets the degraded policy/counter/tick AFTER the phase transition
+    /// succeeds to avoid leaving inconsistent state on transition failure.
     pub fn enter_degraded(
         &mut self,
         severity: DegradedSeverity,
@@ -1043,14 +1072,16 @@ impl SessionProtocolState {
         tick: u64,
     ) -> Result<(), ProtocolError> {
         let policy = DegradedModePolicy::for_severity(severity);
-        self.degraded_policy = Some(policy);
-        self.degraded_messages = 0;
-        self.degraded_entered_tick = Some(tick);
         self.transition(
             SessionPhaseTag::DegradedOpen,
             TransitionTrigger::SecurityDegradation { reason },
             tick,
-        )
+        )?;
+        // Only set degraded state after transition succeeds.
+        self.degraded_policy = Some(policy);
+        self.degraded_messages = 0;
+        self.degraded_entered_tick = Some(tick);
+        Ok(())
     }
 
     /// Check whether an operation is permitted in the current phase.

@@ -34,7 +34,7 @@ use crate::security_epoch::SecurityEpoch;
 /// Monotonic degradation rule: trust can only decrease via automated
 /// processes; upgrades require explicit operator action with signed
 /// justification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TrustLevel {
     /// No trust history; extension is new to the graph.
     Unknown,
@@ -52,6 +52,22 @@ pub enum TrustLevel {
     Revoked,
 }
 
+// Manual Ord: trust ordering must place degraded states BELOW positive
+// states. Derived Ord would use discriminant order, placing Suspicious(4)
+// above Trusted(3), which is semantically inverted for trust comparisons.
+// Order: Revoked < Compromised < Suspicious < Unknown < Provisional < Established < Trusted
+impl Ord for TrustLevel {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.trust_rank().cmp(&other.trust_rank())
+    }
+}
+
+impl PartialOrd for TrustLevel {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl TrustLevel {
     /// All variants in definition order.
     pub const ALL: [Self; 7] = [
@@ -63,6 +79,21 @@ impl TrustLevel {
         Self::Compromised,
         Self::Revoked,
     ];
+
+    /// Numeric rank for Ord: higher = more trusted.
+    /// Revoked(0) < Compromised(1) < Suspicious(2) < Unknown(3) <
+    /// Provisional(4) < Established(5) < Trusted(6)
+    fn trust_rank(self) -> u8 {
+        match self {
+            Self::Revoked => 0,
+            Self::Compromised => 1,
+            Self::Suspicious => 2,
+            Self::Unknown => 3,
+            Self::Provisional => 4,
+            Self::Established => 5,
+            Self::Trusted => 6,
+        }
+    }
 
     /// Whether this level represents a degraded (negative) state.
     pub fn is_degraded(self) -> bool {
@@ -674,14 +705,23 @@ impl ReputationGraph {
         &mut self,
         input: OperatorOverrideInput,
     ) -> Result<TrustTransition, ReputationGraphError> {
-        let ext = self.extensions.get(&input.extension_id).ok_or_else(|| {
-            ReputationGraphError::ExtensionNotFound {
+        let old_level = self
+            .extensions
+            .get(&input.extension_id)
+            .ok_or_else(|| ReputationGraphError::ExtensionNotFound {
                 extension_id: input.extension_id.clone(),
-            }
-        })?;
+            })?
+            .current_trust_level;
 
-        let old_level = ext.current_trust_level;
-        self.transition_counter += 1;
+        // Operator overrides require non-empty justification for audit trail.
+        if input.justification.trim().is_empty() {
+            return Err(ReputationGraphError::AutoUpgradeDenied {
+                extension_id: input.extension_id.clone(),
+                current: old_level,
+                attempted: input.new_level,
+            });
+        }
+        self.transition_counter = self.transition_counter.saturating_add(1);
 
         let transition = TrustTransition {
             transition_id: format!("tt-{:08}", self.transition_counter),
@@ -1221,6 +1261,39 @@ mod tests {
         assert_eq!(
             graph.get_extension("ext-1").unwrap().current_trust_level,
             TrustLevel::Provisional
+        );
+    }
+
+    #[test]
+    fn operator_override_blank_justification_reports_actual_current_level() {
+        let mut graph = ReputationGraph::new();
+        let mut ext = test_extension("ext-1", "pub-1");
+        ext.current_trust_level = TrustLevel::Compromised;
+        graph.register_extension(ext).unwrap();
+
+        let err = graph
+            .operator_trust_override(OperatorOverrideInput {
+                extension_id: "ext-1".into(),
+                new_level: TrustLevel::Provisional,
+                justification: "   ".into(),
+                evidence_ids: vec!["ev-resolution".into()],
+                policy_version: 2,
+                epoch: SecurityEpoch::from_raw(2),
+                timestamp_ns: 4_000_000_000,
+            })
+            .expect_err("blank justification must be rejected");
+
+        assert_eq!(
+            err,
+            ReputationGraphError::AutoUpgradeDenied {
+                extension_id: "ext-1".into(),
+                current: TrustLevel::Compromised,
+                attempted: TrustLevel::Provisional,
+            }
+        );
+        assert_eq!(
+            graph.get_extension("ext-1").unwrap().current_trust_level,
+            TrustLevel::Compromised
         );
     }
 
@@ -2812,6 +2885,24 @@ mod tests {
             extension_id: "no-such-ext".into(),
             new_level: TrustLevel::Trusted,
             justification: "test".into(),
+            evidence_ids: vec![],
+            policy_version: 1,
+            epoch: SecurityEpoch::from_raw(1),
+            timestamp_ns: 0,
+        });
+        assert!(matches!(
+            result,
+            Err(ReputationGraphError::ExtensionNotFound { .. })
+        ));
+    }
+
+    #[test]
+    fn operator_override_blank_justification_does_not_mask_missing_extension() {
+        let mut graph = ReputationGraph::new();
+        let result = graph.operator_trust_override(OperatorOverrideInput {
+            extension_id: "no-such-ext".into(),
+            new_level: TrustLevel::Trusted,
+            justification: "   ".into(),
             evidence_ids: vec![],
             policy_version: 1,
             epoch: SecurityEpoch::from_raw(1),

@@ -642,7 +642,13 @@ impl InterpreterCore {
 
                             let mut arg_vals = Vec::new();
                             for i in 0..args.count.min(func.arity) {
-                                arg_vals.push(self.read_reg(args.start + i)?);
+                                let reg = args.start.checked_add(i).ok_or(
+                                    InterpreterError::RegisterOutOfBounds {
+                                        register: u32::MAX,
+                                        max: self.config.max_registers,
+                                    },
+                                )?;
+                                arg_vals.push(self.read_reg(reg)?);
                             }
 
                             // Push frame.
@@ -961,7 +967,13 @@ impl InterpreterCore {
 
                             let mut arg_vals = Vec::new();
                             for i in 0..args.count.min(func.arity) {
-                                arg_vals.push(self.read_reg(args.start + i)?);
+                                let reg = args.start.checked_add(i).ok_or(
+                                    InterpreterError::RegisterOutOfBounds {
+                                        register: u32::MAX,
+                                        max: self.config.max_registers,
+                                    },
+                                )?;
+                                arg_vals.push(self.read_reg(reg)?);
                             }
 
                             // Push constructor frame with `construct_this`.
@@ -1001,7 +1013,13 @@ impl InterpreterCore {
                 Ir3Instruction::TemplateLiteral { parts, dst } => {
                     let mut result = String::new();
                     for i in 0..parts.count {
-                        let val = self.read_reg(parts.start + i)?;
+                        let reg = parts.start.checked_add(i).ok_or(
+                            InterpreterError::RegisterOutOfBounds {
+                                register: u32::MAX,
+                                max: self.config.max_registers,
+                            },
+                        )?;
+                        let val = self.read_reg(reg)?;
                         match val {
                             Value::Str(s) => result.push_str(&s),
                             Value::Int(n) => result.push_str(&n.to_string()),
@@ -1485,6 +1503,10 @@ impl InterpreterCore {
             | (Value::Function(_), Value::Function(_))
             | (Value::Iterator(_), Value::Iterator(_)) => a == b,
             (Value::Null, Value::Undefined) | (Value::Undefined, Value::Null) => true,
+            // ES2020 §7.2.14: null/undefined are only == to each other, never
+            // to numbers, strings, or booleans via numeric coercion.
+            (Value::Null, _) | (_, Value::Null) => false,
+            (Value::Undefined, _) | (_, Value::Undefined) => false,
             _ => match (Self::coerce_to_number(a), Self::coerce_to_number(b)) {
                 (Some(lhs), Some(rhs)) => lhs == rhs,
                 _ => false,
@@ -4603,5 +4625,60 @@ mod tests {
             vec!["0".to_string()],
         );
         assert_eq!(quickjs_execute(&closed).unwrap().value, Value::Int(1));
+    }
+
+    // -- ES2020 §7.2.14 abstract equality: null/undefined isolation ----------
+
+    #[test]
+    fn abstract_eq_null_only_equals_null_and_undefined() {
+        assert!(InterpreterCore::abstract_eq_values(
+            &Value::Null,
+            &Value::Null
+        ));
+        assert!(InterpreterCore::abstract_eq_values(
+            &Value::Null,
+            &Value::Undefined
+        ));
+        assert!(InterpreterCore::abstract_eq_values(
+            &Value::Undefined,
+            &Value::Null
+        ));
+        // null must NOT coerce to 0 for abstract equality
+        assert!(!InterpreterCore::abstract_eq_values(
+            &Value::Null,
+            &Value::Int(0)
+        ));
+        assert!(!InterpreterCore::abstract_eq_values(
+            &Value::Int(0),
+            &Value::Null
+        ));
+        assert!(!InterpreterCore::abstract_eq_values(
+            &Value::Null,
+            &Value::Bool(false)
+        ));
+        assert!(!InterpreterCore::abstract_eq_values(
+            &Value::Null,
+            &Value::Str(String::new())
+        ));
+    }
+
+    #[test]
+    fn abstract_eq_undefined_only_equals_null_and_undefined() {
+        assert!(InterpreterCore::abstract_eq_values(
+            &Value::Undefined,
+            &Value::Undefined
+        ));
+        assert!(!InterpreterCore::abstract_eq_values(
+            &Value::Undefined,
+            &Value::Int(0)
+        ));
+        assert!(!InterpreterCore::abstract_eq_values(
+            &Value::Undefined,
+            &Value::Bool(false)
+        ));
+        assert!(!InterpreterCore::abstract_eq_values(
+            &Value::Undefined,
+            &Value::Str(String::new())
+        ));
     }
 }

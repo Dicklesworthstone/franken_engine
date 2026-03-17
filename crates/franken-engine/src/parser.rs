@@ -4529,6 +4529,12 @@ fn try_parse_unary_prefix(
         let (op, rest) = match expr.as_bytes()[0] {
             b'!' if expr.as_bytes()[1] != b'=' => (Some(UnaryOperator::LogicalNot), &expr[1..]),
             b'~' => (Some(UnaryOperator::BitwiseNot), &expr[1..]),
+            b'-' if !expr.as_bytes()[1].is_ascii_digit() => {
+                (Some(UnaryOperator::Negate), &expr[1..])
+            }
+            b'+' if !expr.as_bytes()[1].is_ascii_digit() => {
+                (Some(UnaryOperator::UnaryPlus), &expr[1..])
+            }
             _ => (None, expr),
         };
         if let Some(op) = op {

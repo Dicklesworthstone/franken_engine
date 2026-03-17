@@ -206,18 +206,14 @@ impl CusumDetector {
 
         // Update EWMA
         // ewma = alpha * value + (1 - alpha) * ewma
-        let alpha = self.ewma_alpha_millionths;
-        let one_minus_alpha = MILLIONTHS.saturating_sub(alpha);
-        self.ewma_millionths = alpha
-            .saturating_mul(value_millionths)
-            .checked_div(MILLIONTHS)
-            .unwrap_or(0)
-            .saturating_add(
-                one_minus_alpha
-                    .saturating_mul(self.ewma_millionths)
-                    .checked_div(MILLIONTHS)
-                    .unwrap_or(0),
-            );
+        // Use u128 intermediaries to avoid overflow for values above ~20M
+        // (u64 saturating_mul silently corrupts the EWMA at moderate scales).
+        let alpha = self.ewma_alpha_millionths as u128;
+        let one_minus_alpha = (MILLIONTHS as u128).saturating_sub(alpha);
+        let millionths_wide = MILLIONTHS as u128;
+        let term_a = alpha * value_millionths as u128 / millionths_wide;
+        let term_b = one_minus_alpha * self.ewma_millionths as u128 / millionths_wide;
+        self.ewma_millionths = term_a.saturating_add(term_b).min(u64::MAX as u128) as u64;
 
         // CUSUM update — use i128 intermediaries to avoid silent wrapping
         // when u64 values exceed i64::MAX.
@@ -1291,10 +1287,14 @@ mod tests {
                 break;
             }
         }
-        // Critical shifts should eventually produce DisableAdaptive
-        // (depends on threshold sensitivity, may not always trigger in 200 iterations)
+        // Critical shifts should eventually produce DisableAdaptive.
+        // With very low threshold (10_000) and extreme input (999_000 vs 100_000 ref),
+        // a downgrade should be reached within 200 iterations.
         if engine.total_downgrades > 0 {
-            assert!(got_disable || engine.total_downgrades > 0);
+            assert!(
+                got_disable,
+                "downgrades occurred but none were DisableAdaptive"
+            );
         }
     }
 

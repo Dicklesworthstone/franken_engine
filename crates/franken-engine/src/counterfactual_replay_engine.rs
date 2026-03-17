@@ -276,6 +276,80 @@ pub struct ReplayComparisonResult {
     pub artifact_hash: ContentHash,
 }
 
+#[derive(Serialize)]
+struct PolicyComparisonReportHashView<'a> {
+    schema_version: &'a str,
+    baseline_policy_id: &'a PolicyId,
+    alternate_policy_id: &'a PolicyId,
+    alternate_description: &'a str,
+    decisions_evaluated: u64,
+    divergence_count: u64,
+    total_original_outcome_millionths: i64,
+    total_counterfactual_outcome_millionths: i64,
+    net_improvement_millionths: i64,
+    regime_breakdown: &'a BTreeMap<String, i64>,
+    confidence_envelope: &'a ConfidenceEnvelope,
+    safety_status: &'a EnvelopeStatus,
+    divergent_decisions: &'a [DecisionComparison],
+    assumptions: &'a [AssumptionCard],
+}
+
+#[derive(Serialize)]
+struct ReplayComparisonResultHashView<'a> {
+    schema_version: &'a str,
+    trace_count: u64,
+    total_decisions: u64,
+    scope: &'a ReplayScope,
+    policy_reports: &'a [PolicyComparisonReport],
+    ranked_recommendations: &'a [Recommendation],
+    global_assumptions: &'a [AssumptionCard],
+    causal_effects: &'a [CausalEffect],
+}
+
+fn compute_artifact_hash<T: Serialize>(value: &T, artifact_name: &str) -> ContentHash {
+    let canonical_bytes = serde_json::to_vec(value)
+        .unwrap_or_else(|_| panic!("failed to serialize {artifact_name} for artifact hash"));
+    ContentHash::compute(&canonical_bytes)
+}
+
+fn compute_policy_report_artifact_hash(report: &PolicyComparisonReport) -> ContentHash {
+    compute_artifact_hash(
+        &PolicyComparisonReportHashView {
+            schema_version: &report.schema_version,
+            baseline_policy_id: &report.baseline_policy_id,
+            alternate_policy_id: &report.alternate_policy_id,
+            alternate_description: &report.alternate_description,
+            decisions_evaluated: report.decisions_evaluated,
+            divergence_count: report.divergence_count,
+            total_original_outcome_millionths: report.total_original_outcome_millionths,
+            total_counterfactual_outcome_millionths: report.total_counterfactual_outcome_millionths,
+            net_improvement_millionths: report.net_improvement_millionths,
+            regime_breakdown: &report.regime_breakdown,
+            confidence_envelope: &report.confidence_envelope,
+            safety_status: &report.safety_status,
+            divergent_decisions: &report.divergent_decisions,
+            assumptions: &report.assumptions,
+        },
+        "policy comparison report",
+    )
+}
+
+fn compute_replay_result_artifact_hash(result: &ReplayComparisonResult) -> ContentHash {
+    compute_artifact_hash(
+        &ReplayComparisonResultHashView {
+            schema_version: &result.schema_version,
+            trace_count: result.trace_count,
+            total_decisions: result.total_decisions,
+            scope: &result.scope,
+            policy_reports: &result.policy_reports,
+            ranked_recommendations: &result.ranked_recommendations,
+            global_assumptions: &result.global_assumptions,
+            causal_effects: &result.causal_effects,
+        },
+        "replay comparison result",
+    )
+}
+
 // ── Recommendation ───────────────────────────────────────────────────────
 
 /// A ranked policy recommendation from the replay engine.
@@ -509,21 +583,9 @@ impl CounterfactualReplayEngine {
             Vec::new()
         };
 
-        // Compute overall artifact hash
-        let artifact_hash = {
-            let mut buf = Vec::new();
-            buf.extend_from_slice(REPLAY_ENGINE_SCHEMA_VERSION.as_bytes());
-            buf.extend_from_slice(&total_decisions.to_le_bytes());
-            buf.extend_from_slice(&trace_count.to_le_bytes());
-            for report in &policy_reports {
-                buf.extend_from_slice(report.artifact_hash.as_bytes());
-            }
-            ContentHash::compute(&buf)
-        };
-
         self.replay_count += 1;
 
-        Ok(ReplayComparisonResult {
+        let mut result = ReplayComparisonResult {
             schema_version: REPLAY_ENGINE_SCHEMA_VERSION.to_string(),
             trace_count,
             total_decisions,
@@ -532,8 +594,11 @@ impl CounterfactualReplayEngine {
             ranked_recommendations,
             global_assumptions,
             causal_effects,
-            artifact_hash,
-        })
+            artifact_hash: ContentHash::compute(b""),
+        };
+        result.artifact_hash = compute_replay_result_artifact_hash(&result);
+
+        Ok(result)
     }
 
     // ── Internal: Collect scoped decisions ────────────────────────
@@ -674,18 +739,7 @@ impl CounterfactualReplayEngine {
         // Build assumption cards
         let assumptions = self.build_comparison_assumptions(&alt.policy_id);
 
-        // Artifact hash
-        let artifact_hash = {
-            let mut buf = Vec::new();
-            buf.extend_from_slice(REPLAY_ENGINE_SCHEMA_VERSION.as_bytes());
-            buf.extend_from_slice(alt.policy_id.0.as_bytes());
-            buf.extend_from_slice(&n.to_le_bytes());
-            buf.extend_from_slice(&net_improvement.to_le_bytes());
-            buf.extend_from_slice(&divergence_count.to_le_bytes());
-            ContentHash::compute(&buf)
-        };
-
-        Ok(PolicyComparisonReport {
+        let mut report = PolicyComparisonReport {
             schema_version: REPLAY_ENGINE_SCHEMA_VERSION.to_string(),
             baseline_policy_id: self.config.baseline_policy_id.clone(),
             alternate_policy_id: alt.policy_id.clone(),
@@ -700,8 +754,11 @@ impl CounterfactualReplayEngine {
             safety_status,
             divergent_decisions,
             assumptions,
-            artifact_hash,
-        })
+            artifact_hash: ContentHash::compute(b""),
+        };
+        report.artifact_hash = compute_policy_report_artifact_hash(&report);
+
+        Ok(report)
     }
 
     // ── Internal: Compute counterfactual ──────────────────────────
@@ -1450,6 +1507,61 @@ mod tests {
             r1.policy_reports[0].net_improvement_millionths,
             r2.policy_reports[0].net_improvement_millionths
         );
+    }
+
+    #[test]
+    fn policy_report_hash_changes_when_report_payload_changes() {
+        let trace = make_trace(vec![make_decision(0, "native", 500_000)]);
+        let mut engine_a = default_engine();
+        let mut engine_b = default_engine();
+        let alt_a = make_alternate_policy("alt-1", "description-a");
+        let alt_b = make_alternate_policy("alt-1", "description-b");
+
+        let result_a = engine_a
+            .compare(&[trace.clone()], &[alt_a], &default_scope(), None)
+            .unwrap();
+        let result_b = engine_b
+            .compare(&[trace], &[alt_b], &default_scope(), None)
+            .unwrap();
+
+        assert_ne!(
+            result_a.policy_reports[0].alternate_description,
+            result_b.policy_reports[0].alternate_description
+        );
+        assert_ne!(
+            result_a.policy_reports[0].artifact_hash,
+            result_b.policy_reports[0].artifact_hash
+        );
+    }
+
+    #[test]
+    fn replay_result_hash_changes_when_scope_payload_changes() {
+        let trace = make_trace(vec![
+            make_decision(0, "native", 500_000),
+            make_decision(1, "native", 500_000),
+        ]);
+        let alt = make_alternate_policy("alt-1", "test");
+        let mut engine_a = default_engine();
+        let mut engine_b = default_engine();
+        let scope_a = default_scope();
+        let mut scope_b = default_scope();
+        scope_b.start_tick = 100;
+
+        let result_a = engine_a
+            .compare(
+                std::slice::from_ref(&trace),
+                std::slice::from_ref(&alt),
+                &scope_a,
+                None,
+            )
+            .unwrap();
+        let result_b = engine_b.compare(&[trace], &[alt], &scope_b, None).unwrap();
+
+        assert_eq!(result_a.total_decisions, result_b.total_decisions);
+        assert_eq!(result_a.trace_count, result_b.trace_count);
+        assert_eq!(result_a.policy_reports, result_b.policy_reports);
+        assert_ne!(result_a.scope, result_b.scope);
+        assert_ne!(result_a.artifact_hash, result_b.artifact_hash);
     }
 
     // ── Confidence envelope tests ────────────────────────────────

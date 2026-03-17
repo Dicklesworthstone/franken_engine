@@ -2087,8 +2087,10 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(dst);
             }
             Ir1Op::Throw => {
-                let value = value_stack.pop().unwrap_or(0);
-                ir3.instructions.push(Ir3Instruction::Return { value });
+                // Throw halts execution — the runtime does not yet model
+                // exception propagation, so fail-closed via Halt.
+                let _value = value_stack.pop().unwrap_or(0);
+                ir3.instructions.push(Ir3Instruction::Halt);
             }
             Ir1Op::LoadThis => {
                 let dst = alloc_register(&mut register_cursor);
@@ -2189,11 +2191,18 @@ pub fn lower_ir2_to_ir3(
                 arg_regs.reverse();
                 let callee = value_stack.pop().unwrap_or(0);
                 let dst = alloc_register(&mut register_cursor);
+                // Copy args into contiguous registers so RegRange is valid.
                 let args = if arg_regs.is_empty() {
                     RegRange { start: 0, count: 0 }
                 } else {
+                    let start_reg = register_cursor;
+                    for &src in &arg_regs {
+                        let contiguous_dst = alloc_register(&mut register_cursor);
+                        ir3.instructions
+                            .push(Ir3Instruction::Move { dst: contiguous_dst, src });
+                    }
                     RegRange {
-                        start: arg_regs[0],
+                        start: start_reg,
                         count: arg_regs.len() as u32,
                     }
                 };
@@ -2221,8 +2230,15 @@ pub fn lower_ir2_to_ir3(
                     ir3.instructions
                         .push(Ir3Instruction::Move { dst, src: dst });
                 } else {
+                    // Copy parts into contiguous registers so RegRange is valid.
+                    let start_reg = register_cursor;
+                    for &src in &part_regs {
+                        let contiguous_dst = alloc_register(&mut register_cursor);
+                        ir3.instructions
+                            .push(Ir3Instruction::Move { dst: contiguous_dst, src });
+                    }
                     let parts = RegRange {
-                        start: part_regs[0],
+                        start: start_reg,
                         count: part_regs.len() as u32,
                     };
                     ir3.instructions
@@ -3371,6 +3387,7 @@ fn lower_expression_to_ir1(
             ops.push(Ir1Op::LoadThis);
         }
         Expression::ArrayLiteral(elements) => {
+            let mut non_hole_count = 0u32;
             for elem in elements.iter().flatten() {
                 lower_expression_to_ir1(
                     elem,
@@ -3381,9 +3398,10 @@ fn lower_expression_to_ir1(
                     root_scope_id,
                     label_counter,
                 )?;
+                non_hole_count += 1;
             }
             ops.push(Ir1Op::NewArray {
-                count: elements.len() as u32,
+                count: non_hole_count,
             });
         }
         Expression::ObjectLiteral(properties) => {
@@ -6173,12 +6191,14 @@ mod tests {
             Some(Expression::NumericLiteral(3)),
         ]));
         let result = lower_ir0_to_ir1(&ir0).expect("array should lower");
+        // Only non-hole elements are lowered (flatten skips None);
+        // count reflects the actual pushed values, not total slots.
         assert!(
             result
                 .module
                 .ops
                 .iter()
-                .any(|op| matches!(op, Ir1Op::NewArray { count: 3 }))
+                .any(|op| matches!(op, Ir1Op::NewArray { count: 2 }))
         );
     }
 

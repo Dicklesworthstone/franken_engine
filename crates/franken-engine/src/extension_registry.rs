@@ -364,8 +364,15 @@ impl ExtensionManifest {
         buf.extend_from_slice(self.artifacts_root_hash.as_bytes());
         buf.extend_from_slice(self.build.content_hash().as_bytes());
         buf.extend_from_slice(self.description.as_bytes());
-        if let Some(ref lic) = self.license {
-            buf.extend_from_slice(lic.as_bytes());
+        buf.push(0); // separator between description and license
+        match &self.license {
+            Some(lic) => {
+                buf.push(1); // present marker
+                buf.extend_from_slice(lic.as_bytes());
+            }
+            None => {
+                buf.push(0); // absent marker
+            }
         }
         for (dep_name, dep_ver) in &self.dependencies {
             buf.extend_from_slice(dep_name.as_bytes());

@@ -749,6 +749,46 @@ fn merge_snapshot_adopts_newer_versions() {
 }
 
 #[test]
+fn merge_snapshot_prefers_policy_and_trust_newness_over_source_hash_ordering() {
+    let c = ctx();
+    let mut local = ModuleCache::new();
+    let mut remote = ModuleCache::new();
+
+    let local_version = ModuleVersionFingerprint::new(ContentHash::from_bytes([0xff; 32]), 1, 1);
+    let remote_version = ModuleVersionFingerprint::new(ContentHash::from_bytes([0x00; 32]), 2, 2);
+
+    insert_module(
+        &mut local,
+        "mod:merge-order",
+        local_version.clone(),
+        "local-artifact",
+        "/merge-order.js",
+    )
+    .unwrap();
+    insert_module(
+        &mut remote,
+        "mod:merge-order",
+        remote_version.clone(),
+        "remote-artifact",
+        "/merge-order.js",
+    )
+    .unwrap();
+
+    local.merge_snapshot(&remote.snapshot(), &c);
+
+    assert!(local.get("mod:merge-order", &local_version).is_none());
+    assert!(local.get("mod:merge-order", &remote_version).is_some());
+    assert_eq!(
+        local
+            .snapshot()
+            .latest_versions
+            .get("mod:merge-order")
+            .cloned(),
+        Some(remote_version)
+    );
+}
+
+#[test]
 fn merge_snapshot_converges_revocation() {
     let c = ctx();
     let mut a = ModuleCache::new();

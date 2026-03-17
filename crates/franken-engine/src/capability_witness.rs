@@ -272,6 +272,10 @@ impl ConfidenceInterval {
             };
         }
 
+        // Clamp successes to trials — more successes than trials is
+        // nonsensical and would produce mathematically invalid intervals.
+        let n_successes = n_successes.min(n_trials);
+
         // Wilson score interval in fixed-point millionths.
         // z = 1.96 ≈ 196/100.  z^2 ≈ 38416/10000.
         let n = n_trials as i64;
@@ -688,6 +692,13 @@ impl CapabilityWitness {
         if let Some(ref rt) = self.rollback_token {
             buf.push(1);
             buf.extend_from_slice(rt.previous_witness_hash.as_bytes());
+            if let Some(ref prev_id) = rt.previous_witness_id {
+                buf.push(1);
+                buf.extend_from_slice(prev_id.as_bytes());
+            } else {
+                buf.push(0);
+            }
+            buf.extend_from_slice(&rt.created_epoch.as_u64().to_be_bytes());
             buf.extend_from_slice(&rt.sequence.to_be_bytes());
         } else {
             buf.push(0);

@@ -48,8 +48,16 @@ pub const SIGNATURE_SENTINEL: [u8; SIGNATURE_LEN] = [0u8; SIGNATURE_LEN];
 // ---------------------------------------------------------------------------
 
 /// A signing key (private).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Debug output is redacted to prevent key material leakage in logs.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SigningKey(pub [u8; SIGNING_KEY_LEN]);
+
+impl std::fmt::Debug for SigningKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("SigningKey").field(&"[REDACTED]").finish()
+    }
+}
 
 /// A verification key (public).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -65,7 +73,7 @@ impl SigningKey {
     pub fn verification_key(&self) -> VerificationKey {
         // De novo derivation: hash the signing key with a domain separator
         // to produce the public verification key.
-        let mut preimage = Vec::with_capacity(8 + SIGNING_KEY_LEN);
+        let mut preimage = Vec::with_capacity(b"vk-derive:".len() + SIGNING_KEY_LEN);
         preimage.extend_from_slice(b"vk-derive:");
         preimage.extend_from_slice(&self.0);
         let hash = ContentHash::compute(&preimage);

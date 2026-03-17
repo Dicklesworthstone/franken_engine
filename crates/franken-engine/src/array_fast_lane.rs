@@ -133,9 +133,10 @@ impl ElementKind {
         )
     }
 
-    /// Whether this kind is immutable (frozen/sealed).
+    /// Whether this kind is fully immutable (frozen only; sealed arrays
+    /// have fixed length but values remain mutable).
     pub fn is_immutable(&self) -> bool {
-        matches!(self, Self::Frozen | Self::Sealed)
+        matches!(self, Self::Frozen)
     }
 
     /// Byte width per element for typed arrays, None for regular arrays.
@@ -313,8 +314,11 @@ impl ArrayLaneDescriptor {
         self.store_count += 1;
     }
 
-    /// Record an out-of-bounds access.
+    /// Record an out-of-bounds access. This is also counted as an access
+    /// so that the OOB rate denominator is correct (an OOB-only array
+    /// would otherwise never trigger the OOB deopt threshold).
     pub fn record_oob(&mut self) {
+        self.access_count += 1;
         self.oob_count += 1;
     }
 
@@ -973,7 +977,8 @@ mod tests {
     #[test]
     fn test_element_kind_is_immutable() {
         assert!(ElementKind::Frozen.is_immutable());
-        assert!(ElementKind::Sealed.is_immutable());
+        // Sealed has fixed length but values remain mutable (not immutable).
+        assert!(!ElementKind::Sealed.is_immutable());
         assert!(!ElementKind::PackedSmi.is_immutable());
     }
 
@@ -1078,9 +1083,12 @@ mod tests {
             lane.record_access();
         }
         for _ in 0..10 {
-            lane.record_oob();
+            lane.record_oob(); // also increments access_count
         }
-        assert_eq!(lane.oob_rate_millionths(), 100_000); // 10%
+        // 10 OOB out of 110 total accesses = 10/110 * 1_000_000 = 90_909
+        assert_eq!(lane.oob_rate_millionths(), 90_909);
+        assert_eq!(lane.access_count, 110);
+        assert_eq!(lane.oob_count, 10);
     }
 
     #[test]

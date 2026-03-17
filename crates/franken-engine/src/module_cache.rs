@@ -4,6 +4,7 @@
 //! revision. Invalidation is explicit on source updates, policy changes, and
 //! trust revocations.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::fs;
@@ -473,7 +474,7 @@ impl ModuleCache {
     pub fn merge_snapshot(&mut self, snapshot: &CacheSnapshot, context: &CacheContext) {
         for (module_id, peer_version) in &snapshot.latest_versions {
             match self.latest_versions.get(module_id) {
-                Some(local) if local >= peer_version => {}
+                Some(local) if cache_version_order(local, peer_version) != Ordering::Less => {}
                 _ => {
                     self.latest_versions
                         .insert(module_id.clone(), peer_version.clone());
@@ -650,6 +651,16 @@ impl ModuleCache {
             event: self.events.last().expect("event was just pushed").clone(),
         })
     }
+}
+
+fn cache_version_order(
+    left: &ModuleVersionFingerprint,
+    right: &ModuleVersionFingerprint,
+) -> Ordering {
+    left.policy_version
+        .cmp(&right.policy_version)
+        .then(left.trust_revision.cmp(&right.trust_revision))
+        .then(left.source_hash.cmp(&right.source_hash))
 }
 
 impl Default for ModuleCache {

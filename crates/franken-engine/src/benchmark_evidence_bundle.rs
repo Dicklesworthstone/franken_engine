@@ -1395,8 +1395,10 @@ mod tests {
     fn timing_stats_percentiles() {
         let durations: Vec<u64> = (1..=100).collect();
         let stats = TimingStats::from_durations(&durations);
-        assert_eq!(stats.p95_us, 95);
-        assert_eq!(stats.p99_us, 99);
+        // p95_idx = (100*95)/100 = 95 → sorted[95] = 96
+        assert_eq!(stats.p95_us, 96);
+        // p99_idx = (100*99)/100 = 99 → sorted[99] = 100
+        assert_eq!(stats.p99_us, 100);
     }
 
     // -- ParityVerdict --

@@ -78,6 +78,11 @@ fn parse_contract() -> Rgc061Contract {
         .expect("RGC CLI/operator workflow verification contract must parse")
 }
 
+fn read_replay_script() -> String {
+    let path = repo_root().join("scripts/e2e/rgc_cli_operator_workflow_verification_pack_replay.sh");
+    read_to_string(&path)
+}
+
 fn unique_temp_path(prefix: &str, extension: &str) -> PathBuf {
     let mut path = std::env::temp_dir();
     let nonce = SystemTime::now()
@@ -906,6 +911,36 @@ fn rgc_061_lane_script_preserves_step_logs_and_failure_classification() {
             path.display()
         );
     }
+}
+
+#[test]
+fn rgc_061_replay_wrapper_uses_latest_complete_bundle() {
+    let script = read_replay_script();
+
+    assert!(
+        script.contains("latest_complete_run_dir()"),
+        "replay wrapper should locate the latest complete artifact directory"
+    );
+    assert!(
+        script.contains("newest directory ${latest_artifact_dir_path} is incomplete"),
+        "replay wrapper should warn when it skips an incomplete newest directory"
+    );
+    assert!(
+        script.contains("latest manifest: ${latest_run_dir}/run_manifest.json"),
+        "replay wrapper should print the latest run manifest"
+    );
+    assert!(
+        script.contains("latest events: ${latest_run_dir}/events.jsonl"),
+        "replay wrapper should print the latest event log"
+    );
+    assert!(
+        script.contains("latest commands: ${latest_run_dir}/commands.txt"),
+        "replay wrapper should print the recorded command list"
+    );
+    assert!(
+        script.contains("latest first step log: ${latest_run_dir}/step_000.log"),
+        "replay wrapper should print the first step log for operator triage"
+    );
 }
 
 // ---------- contract and doc files exist ----------

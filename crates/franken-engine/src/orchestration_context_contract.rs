@@ -1113,7 +1113,7 @@ mod tests {
     #[test]
     fn derive_child_depth_exceeded() {
         let mut parent = root_ctx("parent", 10_000);
-        parent.depth = 63;
+        parent.depth = 64;
         let rule = default_rule();
         let err = derive_child_context(
             &mut parent,

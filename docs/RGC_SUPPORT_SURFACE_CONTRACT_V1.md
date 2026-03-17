@@ -110,6 +110,10 @@ Gate runs emit:
 
 under `artifacts/rgc_support_surface_contract/<UTC_TIMESTAMP>/`.
 
+The replay wrapper resolves the latest complete artifact bundle, warns when a
+newer run directory is incomplete, and prints the selected manifest, report,
+copied contract artifacts, replayable commands, trace IDs, and first step log.
+
 ## Operator Verification
 
 ```bash

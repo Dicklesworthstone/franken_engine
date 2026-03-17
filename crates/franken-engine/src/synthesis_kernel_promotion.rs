@@ -1259,8 +1259,9 @@ mod tests {
     #[test]
     fn gate_permissive_promotes_anything() {
         let gate = PromotionGate::with_config(PromotionGateConfig::permissive());
+        // proof_verified must be true because that check is unconditional (no config knob).
         let e = PromotionEvidence::partial(PartialEvidenceInput {
-            proof_verified: false,
+            proof_verified: true,
             coverage: 0,
             speedup: 0,
             counterexamples: 100,

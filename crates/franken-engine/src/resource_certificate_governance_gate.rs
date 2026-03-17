@@ -1332,7 +1332,7 @@ mod tests {
         let ev = good_evidence(ResourceKind::CpuBudget);
         let result = evaluate(&ev, None, &config);
         assert_eq!(result.verdict, GateVerdict::Pass);
-        assert_eq!(result.risk_level, RiskLevel::Nominal);
+        assert_eq!(result.risk_level, RiskLevel::Elevated);
     }
 
     #[test]

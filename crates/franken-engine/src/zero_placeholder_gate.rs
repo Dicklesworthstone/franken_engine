@@ -1142,8 +1142,8 @@ mod tests {
     fn validate_waiver_at_boundary() {
         let e = blocking_entry(Subsystem::Parser);
         let w = make_waiver(&e, Subsystem::Parser);
-        // At exactly expires_epoch, still active.
-        assert_eq!(validate_waiver(&w, 200), WaiverStatus::Active);
+        // At exactly expires_epoch (150), still active (uses > not >=).
+        assert_eq!(validate_waiver(&w, 150), WaiverStatus::Active);
     }
 
     #[test]

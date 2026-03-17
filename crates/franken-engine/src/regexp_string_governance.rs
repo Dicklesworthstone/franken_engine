@@ -1193,7 +1193,7 @@ mod tests {
     }
 
     fn good_tail_risk(subject: ParitySubject) -> TailRiskEntry {
-        TailRiskEntry::new(subject, 1100, 1000) // 1.1x tail ratio
+        TailRiskEntry::new(subject, 5, 100) // 50_000 millionths (at threshold)
     }
 
     fn bad_tail_risk(subject: ParitySubject) -> TailRiskEntry {

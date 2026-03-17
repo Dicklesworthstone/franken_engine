@@ -30,6 +30,27 @@ fn temp_dir(name: &str) -> PathBuf {
     path
 }
 
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("workspace root")
+        .parent()
+        .expect("repo root")
+        .to_path_buf()
+}
+
+fn load_shape_lattice_runner_script() -> String {
+    let path = repo_root().join("scripts/run_rgc_shape_transition_lattice.sh");
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
+fn load_shape_lattice_replay_script() -> String {
+    let path = repo_root().join("scripts/e2e/rgc_shape_transition_lattice_replay.sh");
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
 #[test]
 fn shape_transition_lattice_binary_emits_required_bundle() {
     let out_dir = temp_dir("franken_shape_lattice_bundle");
@@ -138,4 +159,66 @@ fn shape_transition_lattice_binary_emits_required_bundle() {
     assert!(commands.contains("franken_shape_lattice_bundle"));
     assert!(commands.contains("shape_lattice_manifest.json"));
     assert!(commands.contains("rgc_shape_transition_lattice_replay.sh"));
+}
+
+#[test]
+fn shape_transition_lattice_runner_is_rch_only_and_uses_repo_local_target_dir() {
+    let script = load_shape_lattice_runner_script();
+
+    assert!(
+        script.contains("command -v rch"),
+        "runner must fail closed when rch is unavailable"
+    );
+    assert!(
+        script.contains("${root_dir}/target_rch_rgc_shape_transition_lattice"),
+        "runner must default to a repo-local target dir"
+    );
+    assert!(
+        script.contains("step_logs_dir=\"${run_dir}/step_logs\""),
+        "runner should retain per-step logs for operator triage"
+    );
+    assert!(
+        script.contains("rch reported local fallback; refusing local execution for heavy command"),
+        "runner must reject local fallback for heavy commands"
+    );
+    assert!(
+        script.contains("franken_shape_lattice_bundle -- --out-dir ${run_dir}"),
+        "runner must publish the bundle emission command with the deterministic run directory"
+    );
+}
+
+#[test]
+fn shape_transition_lattice_replay_uses_latest_complete_bundle() {
+    let script = load_shape_lattice_replay_script();
+
+    assert!(
+        script.contains("latest_complete_run_dir()"),
+        "replay wrapper should locate the latest complete artifact directory"
+    );
+    assert!(
+        script.contains("newest directory ${latest_artifact_dir_path} is incomplete"),
+        "replay wrapper should warn when it skips an incomplete newest directory"
+    );
+    assert!(
+        script.contains("latest manifest: ${latest_run_dir}/run_manifest.json"),
+        "replay wrapper should print the latest run manifest"
+    );
+    assert!(
+        script.contains(
+            "latest shape lattice manifest: ${latest_run_dir}/shape_lattice_manifest.json"
+        ),
+        "replay wrapper should print the shape lattice manifest"
+    );
+    assert!(
+        script.contains("latest events: ${latest_run_dir}/events.jsonl"),
+        "replay wrapper should print the emitted events"
+    );
+    assert!(
+        script.contains("latest commands: ${latest_run_dir}/commands.txt"),
+        "replay wrapper should print the replayable commands"
+    );
+    assert!(
+        script.contains("latest trace ids: ${latest_run_dir}/trace_ids.json"),
+        "replay wrapper should print the trace identifiers"
+    );
 }

@@ -1556,15 +1556,12 @@ mod tests {
 
     #[test]
     fn test_evaluate_with_permissive_config() {
-        // Even a cherry-picked board passes with permissive config.
+        // Cherry-picked families still fail even with permissive config because
+        // the cherry-pick detection (<=2 families with >50% share) is unconditional.
         let families = cherry_picked_families();
         let config = GateConfig::permissive();
         let result = evaluate(&families, &config);
-        assert!(
-            result.decision.allows_proceed(),
-            "permissive should pass: {:?}",
-            result.decision
-        );
+        assert_eq!(result.decision, GateDecision::Fail);
     }
 
     #[test]

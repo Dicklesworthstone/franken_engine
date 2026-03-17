@@ -18,6 +18,7 @@ events_path="${run_dir}/ifc_release_gate_events.jsonl"
 commands_path="${run_dir}/commands.txt"
 logs_dir="${run_dir}/logs"
 ifc_output_root="${run_dir}/ifc_conformance"
+replay_command="./scripts/e2e/ifc_release_gate_replay.sh ${mode}"
 
 trace_id="trace-ifc-release-gate-${timestamp}"
 decision_id="decision-ifc-release-gate-${timestamp}"
@@ -227,6 +228,13 @@ run_gate() {
   validate_thresholds
 }
 
+handle_signal() {
+  local signal="$1"
+  failed_command="${failed_command:-./scripts/run_ifc_release_gate.sh ${mode} (signal:${signal})}"
+  write_manifest 130
+  exit 130
+}
+
 run_mode() {
   case "$mode" in
     check)
@@ -248,6 +256,7 @@ run_mode() {
       run_clippy
       ;;
     *)
+      failed_command="./scripts/run_ifc_release_gate.sh ${mode}"
       echo "usage: $0 [check|test|clippy|gate|ci]" >&2
       return 2
       ;;
@@ -268,6 +277,9 @@ write_manifest() {
     error_code_json="null"
   else
     outcome="fail"
+    if [[ -z "$failed_command" ]]; then
+      failed_command="./scripts/run_ifc_release_gate.sh ${mode}"
+    fi
     case "$failed_command" in
       ifc_release_gate_threshold_validation)
         error_code_json='"FE-IFCR-1001"'
@@ -350,6 +362,7 @@ JSONL
     echo "    \"commands\": \"$(json_escape "$commands_path")\","
     echo "    \"ifc_summary\": \"$(json_escape "$summary_path")\","
     echo '    "suite_script": "scripts/run_ifc_release_gate.sh",'
+    echo "    \"suite_replay\": \"$(json_escape "$replay_command")\","
     echo '    "gate_test": "crates/franken-engine/tests/ifc_release_gate.rs",'
     echo '    "runtime_guard_source": "crates/franken-engine/src/execution_orchestrator.rs",'
     echo '    "runner_bin": "crates/franken-engine/src/bin/franken_ifc_conformance_runner.rs",'
@@ -360,6 +373,7 @@ JSONL
     echo "    \"cat $(json_escape "$events_path")\","
     echo "    \"cat $(json_escape "$commands_path")\","
     echo '    "./scripts/run_ifc_release_gate.sh test",'
+    echo "    \"$(json_escape "$replay_command")\","
     echo "    \"${0} gate\""
     echo '  ]'
     echo "}"
@@ -369,5 +383,7 @@ JSONL
   echo "ifc release gate events: ${events_path}"
 }
 
+trap 'handle_signal INT' INT
+trap 'handle_signal TERM' TERM
 trap 'write_manifest $?' EXIT
 run_mode

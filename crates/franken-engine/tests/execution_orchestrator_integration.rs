@@ -42,7 +42,7 @@ use frankenengine_engine::ifc_artifacts::{
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
 
-const TEST_DECLASS_ROUTE_ID: &str = "declass-secret-public";
+const TEST_DECLASS_ROUTE_ID: &str = "declassify.audit";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -176,7 +176,10 @@ fn approved_receipt_for_prepared_declassification(
         extension_id: pkg.extension_id.clone(),
         code_location: "execution_orchestrator_integration::declassify".to_string(),
         trace_id: prepared.trace_id.clone(),
-        requested_route_id: TEST_DECLASS_ROUTE_ID.to_string(),
+        requested_route_id: obligation
+            .declassification_route_ref
+            .clone()
+            .unwrap_or_else(|| TEST_DECLASS_ROUTE_ID.to_string()),
         decision_contract_id: prepared.decision_id.clone(),
         is_emergency: false,
         timestamp_ms: 1_700_000_010_000,
@@ -190,6 +193,13 @@ fn approved_receipt_for_prepared_declassification(
             signing_key,
         )
         .expect("declassification request should be approved");
+    assert_eq!(
+        receipt.declassification_route_ref.as_str(),
+        obligation
+            .declassification_route_ref
+            .as_deref()
+            .unwrap_or(TEST_DECLASS_ROUTE_ID)
+    );
 
     orch.trust_declassification_authorizer_for_contract(
         prepared.decision_id.clone(),
@@ -279,10 +289,18 @@ fn staged_receipt_allows_public_orchestrator_declassification_without_internal_g
     let obligation = &prepared.ir2_flow_proof_artifact.required_declassifications[0];
     assert_eq!(obligation.capability.as_deref(), Some("declassify.audit"));
     assert_eq!(obligation.decision_contract_id, prepared.decision_id);
+    assert_eq!(
+        obligation.declassification_route_ref.as_deref(),
+        Some(TEST_DECLASS_ROUTE_ID)
+    );
 
     let signing_key = SigningKey::from_bytes([23u8; 32]);
     let (obligation_id, receipt) =
         approved_receipt_for_prepared_declassification(&mut orch, &pkg, &prepared, &signing_key);
+    assert_eq!(
+        receipt.declassification_route_ref.as_str(),
+        TEST_DECLASS_ROUTE_ID
+    );
     orch.stage_declassification_receipt_for_obligation(
         prepared.trace_id.clone(),
         obligation_id,
@@ -297,6 +315,54 @@ fn staged_receipt_allows_public_orchestrator_declassification_without_internal_g
     assert_eq!(result.decision_id, prepared.decision_id);
     assert_eq!(result.execution_value, "undefined");
     assert!(result.instructions_executed > 0);
+}
+
+#[test]
+fn staged_receipt_with_route_mismatch_fails_closed_after_preflight() {
+    let mut orch = default_orch();
+    let pkg = package_with_caps(
+        "ext-declassify-route-mismatch",
+        r#""hostcall<\"declassify.audit\"> secret_token";"#,
+        &["declassify.audit"],
+    );
+
+    let prepared = orch
+        .prepare_next_runtime_flow_guards(&pkg)
+        .expect("preflight should expose the declassification obligation");
+    let obligation = prepared
+        .ir2_flow_proof_artifact
+        .required_declassifications
+        .first()
+        .expect("preflight should expose one declassification obligation");
+    assert_eq!(
+        obligation.declassification_route_ref.as_deref(),
+        Some(TEST_DECLASS_ROUTE_ID)
+    );
+
+    let signing_key = SigningKey::from_bytes([41u8; 32]);
+    let (obligation_id, receipt) =
+        approved_receipt_for_prepared_declassification(&mut orch, &pkg, &prepared, &signing_key);
+    let mut wrong_route_receipt = receipt.clone();
+    wrong_route_receipt.declassification_route_ref = "declassify.other".to_string();
+    wrong_route_receipt
+        .sign(&signing_key)
+        .expect("mutated route receipt should be re-signed");
+    orch.stage_declassification_receipt_for_obligation(
+        prepared.trace_id.clone(),
+        obligation_id,
+        wrong_route_receipt,
+    );
+
+    let err = orch
+        .execute(&pkg)
+        .expect_err("route-mismatched staged receipt must fail closed");
+    match err {
+        OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
+            assert!(detail.contains("receipt-linked declassification failed"));
+            assert!(detail.contains("route"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]

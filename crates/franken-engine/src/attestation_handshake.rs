@@ -1154,7 +1154,10 @@ mod tests {
         let err = verifier
             .verify_and_authorize(&challenge, &response, &root, 1000)
             .unwrap_err();
-        assert!(matches!(err, HandshakeError::ResponseSignatureInvalid));
+        assert!(matches!(
+            err,
+            HandshakeError::QuoteVerificationFailed { .. }
+        ));
     }
 
     #[test]

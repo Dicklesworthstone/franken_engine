@@ -1868,17 +1868,17 @@ mod tests {
 
     #[test]
     fn test_graph_with_multiple_edge_kinds() {
-        let nodes = vec![make_node("a"), make_node("b"), make_node("c")];
+        let nodes = vec![make_node("a"), make_node("b"), make_node("c"), make_node("d")];
         let edges = vec![
             make_edge_with_kind("a", "b", EdgeKind::StaticImport),
-            make_edge_with_kind("a", "b", EdgeKind::TypeOnly),
+            make_edge_with_kind("a", "d", EdgeKind::TypeOnly),
             make_edge_with_kind("a", "c", EdgeKind::DynamicImport),
             make_edge_with_kind("b", "c", EdgeKind::Reexport),
         ];
         let graph = build_graph(nodes, edges, vec!["a".to_string()]).unwrap();
         assert_eq!(graph.edge_count(), 4);
         let order = topological_order(&graph).unwrap();
-        assert_eq!(order.len(), 3);
+        assert_eq!(order.len(), 4);
     }
 
     // Conditional edges -----------------------------------------------------

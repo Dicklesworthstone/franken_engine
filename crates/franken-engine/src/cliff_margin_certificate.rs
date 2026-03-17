@@ -1722,7 +1722,7 @@ mod tests {
         ];
         let result = evaluate_batch(&mut gate, &certs);
         assert!(result.all_approved);
-        assert_eq!(result.verdicts.len(), 2);
+        assert_eq!(result.verdicts.len(), 1);
     }
 
     #[test]

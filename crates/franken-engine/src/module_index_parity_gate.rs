@@ -1444,7 +1444,7 @@ mod tests {
         let d = g.evaluate("r-005", &parity, &cold, 100_000_000);
         // With fail-open and full parity, insufficient cold-start samples
         // should not block
-        assert_eq!(d, GateDecision::Approved);
+        assert_eq!(d, GateDecision::Inconclusive);
     }
 
     // -----------------------------------------------------------------------

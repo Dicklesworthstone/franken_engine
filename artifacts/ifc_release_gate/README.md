@@ -41,6 +41,9 @@ Run from repo root (`/data/projects/franken_engine`):
 # execute corpus and apply release thresholds
 ./scripts/run_ifc_release_gate.sh gate
 
+# replay the latest complete gate bundle while re-running the selected mode
+./scripts/e2e/ifc_release_gate_replay.sh gate
+
 # full lane (check + test + gate + clippy)
 ./scripts/run_ifc_release_gate.sh ci
 ```
@@ -58,6 +61,9 @@ Primary artifacts are emitted under:
 - `FE-IFCR-1003`: command execution failure (release blocked, fail-closed).
 
 Any non-zero script exit code is a release-blocking result.
+
+`INT`/`TERM` interruptions emit fail-closed manifest and event artifacts with
+`FE-IFCR-1003` rather than leaving a misleading pass bundle behind.
 
 ## Rollback/Fallback Activation
 

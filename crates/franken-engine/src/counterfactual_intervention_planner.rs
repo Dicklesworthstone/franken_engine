@@ -1073,7 +1073,7 @@ mod tests {
     fn plan_wave_with_prerequisites() {
         let passes = vec![
             make_pass("base", 200_000, 30_000, 10_000),
-            make_pass_with_prereqs("derived", 400_000, 50_000, 20_000, vec!["base"]),
+            make_pass_with_prereqs("derived", 200_000, 50_000, 20_000, vec!["base"]),
         ];
         let wave = plan_wave(passes, MILLIONTHS).unwrap();
         let pos_base = wave

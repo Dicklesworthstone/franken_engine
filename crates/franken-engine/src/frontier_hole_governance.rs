@@ -1243,7 +1243,7 @@ mod tests {
         let claims = vec![(ClaimCategory::Supremacy, "parser".to_string())];
         let ratchet = RatchetState::new();
         let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config()).unwrap();
-        assert_eq!(report.outcome, GovernanceOutcome::Suppressed);
+        assert_eq!(report.outcome, GovernanceOutcome::FullSuppression);
     }
 
     #[test]

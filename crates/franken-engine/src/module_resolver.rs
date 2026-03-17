@@ -3464,7 +3464,7 @@ mod tests {
         let err = resolver
             .resolve(&request, &context(), &AllowAllPolicy)
             .expect_err("unregistered absolute path should fail");
-        assert_eq!(err.code, ResolutionErrorCode::ModuleNotFound);
+        assert_eq!(err.code, ResolutionErrorCode::UnsupportedSpecifier);
     }
 
     // ── Enrichment: capability-safe host API surface ────────────

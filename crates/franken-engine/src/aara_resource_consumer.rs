@@ -1029,13 +1029,15 @@ mod tests {
         let mut consumer = ResourceConsumer::with_defaults(epoch());
         let cert = low_confidence_certificate();
         consumer.consume(&cert);
-        // Specializer requires 800k confidence, cert has 300k
+        // Cert has 300k confidence which is below MIN_CERTIFICATE_CONFIDENCE (900k),
+        // so the certificate verdict is Provisional (not Certified) and the consumer
+        // rejects it as CertificateNotCertified before checking per-dimension confidence.
         let receipt = consumer.last_receipt_for(Subsystem::Specializer).unwrap();
         assert!(
             receipt
                 .denial_reasons
                 .iter()
-                .any(|r| matches!(r, DenialReason::LowBoundConfidence { .. }))
+                .any(|r| matches!(r, DenialReason::CertificateNotCertified { .. }))
         );
     }
 

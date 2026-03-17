@@ -164,6 +164,11 @@ fn read_gate_script() -> String {
     read_to_string(&path)
 }
 
+fn read_replay_script() -> String {
+    let path = repo_root().join("scripts/e2e/rgc_support_surface_contract_replay.sh");
+    read_to_string(&path)
+}
+
 fn parse_contract() -> SupportSurfaceContract {
     serde_json::from_str(CONTRACT_JSON).expect("support surface contract must parse")
 }
@@ -692,6 +697,44 @@ fn rgc_911b_gate_script_manifest_reuses_contract_operator_verification_commands(
     assert!(
         script.contains("] + $contract_operator_verification"),
         "gate manifest should append the published operator verification commands"
+    );
+}
+
+#[test]
+fn rgc_911b_replay_wrapper_uses_latest_complete_bundle() {
+    let script = read_replay_script();
+
+    assert!(
+        script.contains("latest_complete_run_dir()"),
+        "replay wrapper should locate the latest complete artifact directory"
+    );
+    assert!(
+        script.contains("newest directory ${latest_artifact_dir_path} is incomplete"),
+        "replay wrapper should warn when it skips an incomplete newest directory"
+    );
+    assert!(
+        script.contains("latest manifest: ${latest_run_dir}/run_manifest.json"),
+        "replay wrapper should print the latest run manifest"
+    );
+    assert!(
+        script.contains("latest trace ids: ${latest_run_dir}/trace_ids.json"),
+        "replay wrapper should print the trace identifiers"
+    );
+    assert!(
+        script.contains("latest report: ${latest_run_dir}/support_surface_contract_report.json"),
+        "replay wrapper should print the support-surface report"
+    );
+    assert!(
+        script.contains("latest contract: ${latest_run_dir}/support_surface_contract.json"),
+        "replay wrapper should print the copied support-surface contract"
+    );
+    assert!(
+        script.contains("latest mode matrix: ${latest_run_dir}/support_surface_mode_matrix.json"),
+        "replay wrapper should print the copied mode matrix"
+    );
+    assert!(
+        script.contains("latest first step log: ${latest_run_dir}/step_logs/step_000.log"),
+        "replay wrapper should print the first step log for operator triage"
     );
 }
 

@@ -939,6 +939,7 @@ impl ExecutionOrchestrator {
                     source_label: LabelClass::from_label(&entry.source_label),
                     target_clearance: Self::artifact_sink_label_to_clearance(&entry.sink_clearance),
                     decision_contract_id: entry.decision_contract_id.clone(),
+                    declassification_route_ref: entry.declassification_route_ref.clone(),
                     requires_operator_approval: entry.requires_operator_approval,
                     max_uses: 0,
                     use_count: 0,
@@ -1630,6 +1631,7 @@ mod tests {
                 capability: Some("declassify.audit".to_string()),
                 obligation_id: obligation_id.to_string(),
                 decision_contract_id: decision_contract_id.to_string(),
+                declassification_route_ref: Some("declassify.audit".to_string()),
                 requires_operator_approval: true,
                 receipt_linkage_required: true,
                 replay_command_hint: format!(

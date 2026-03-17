@@ -41,6 +41,7 @@ fn make_obligation(
         source_label: source,
         target_clearance: target,
         decision_contract_id: format!("contract-{id}"),
+        declassification_route_ref: None,
         requires_operator_approval: false,
         max_uses,
         use_count: 0,

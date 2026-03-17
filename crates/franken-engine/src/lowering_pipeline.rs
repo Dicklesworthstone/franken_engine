@@ -179,6 +179,8 @@ pub struct RequiredDeclassificationArtifactEntry {
     pub obligation_id: String,
     #[serde(default)]
     pub decision_contract_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declassification_route_ref: Option<String>,
     #[serde(default)]
     pub requires_operator_approval: bool,
     #[serde(default)]
@@ -2450,6 +2452,7 @@ fn build_ir2_flow_proof_artifact(
                         source_label: source_class.clone(),
                         target_clearance: sink_clearance.clone(),
                         decision_contract_id: context.decision_id.clone(),
+                        declassification_route_ref: capability.clone(),
                         requires_operator_approval: true,
                         max_uses: 0,
                         use_count: 0,
@@ -2508,6 +2511,7 @@ fn build_ir2_flow_proof_artifact(
                         capability,
                         obligation_id,
                         decision_contract_id: obligation.decision_contract_id.clone(),
+                        declassification_route_ref: obligation.declassification_route_ref.clone(),
                         requires_operator_approval: obligation.requires_operator_approval,
                         receipt_linkage_required: true,
                         replay_command_hint: format!(
@@ -4322,6 +4326,12 @@ mod tests {
         assert_eq!(
             artifact.required_declassifications[0].decision_contract_id,
             "decision-declass"
+        );
+        assert_eq!(
+            artifact.required_declassifications[0]
+                .declassification_route_ref
+                .as_deref(),
+            Some("declassify.audit")
         );
         assert!(artifact.required_declassifications[0].requires_operator_approval);
         assert!(artifact.required_declassifications[0].receipt_linkage_required);
@@ -7392,6 +7402,7 @@ mod tests {
             capability: Some("ifc.declassify".to_string()),
             obligation_id: "obl-42".to_string(),
             decision_contract_id: "decision-42".to_string(),
+            declassification_route_ref: Some("route-42".to_string()),
             requires_operator_approval: true,
             receipt_linkage_required: true,
             replay_command_hint: "frankenctl replay run --trace trace-42 --obligation obl-42"

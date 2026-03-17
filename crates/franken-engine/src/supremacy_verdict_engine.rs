@@ -1422,7 +1422,12 @@ mod tests {
         config.min_effect_size = 10_000;
         config.max_cv = MILLIONTHS;
         let mut measurements = Vec::new();
-        for _ in 0..30 {
+        // Need enough observations so cumulative LLR crosses the SPRT upper boundary.
+        // Each observation contributes increment = (baseline - treatment) * MILLIONTHS / baseline
+        // = (1000 - 500) * 1_000_000 / 1000 = 500_000 per observation.
+        // Upper boundary = (1_000_000 - beta) * 1_000_000 / alpha = 800_000 * 1_000_000 / 50_000 = 16_000_000
+        // Need >= 32 observations per cell to reach 16_000_000.
+        for _ in 0..35 {
             measurements.push(make_measurement("cell_a", 500, 1000));
             measurements.push(make_measurement("cell_b", 500, 1000));
         }

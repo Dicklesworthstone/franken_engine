@@ -1581,6 +1581,8 @@ mod tests {
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         enforcer.install_certificate("ext-1", digest).unwrap();
 
+        // GcPressure has no budget in the certificate and fail_closed_on_missing
+        // is true, so the enforcer rejects with MissingBudgetDimensions.
         let receipt = enforcer.enforce(
             "ext-1",
             EnforcementScope::GcPacing {
@@ -1588,7 +1590,7 @@ mod tests {
             },
             &[(EnforcedDimension::GcPressure, 1_000)],
         );
-        assert!(matches!(receipt.decision, EnforcementDecision::Allow));
+        assert!(matches!(receipt.decision, EnforcementDecision::Reject { .. }));
     }
 
     #[test]
@@ -1597,6 +1599,8 @@ mod tests {
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         enforcer.install_certificate("ext-1", digest).unwrap();
 
+        // ModuleLoadCount has no budget in the certificate and fail_closed_on_missing
+        // is true, so the enforcer rejects with MissingBudgetDimensions.
         let receipt = enforcer.enforce(
             "ext-1",
             EnforcementScope::ModuleLoad {
@@ -1604,7 +1608,7 @@ mod tests {
             },
             &[(EnforcedDimension::ModuleLoadCount, 1_000_000)],
         );
-        assert!(matches!(receipt.decision, EnforcementDecision::Allow));
+        assert!(matches!(receipt.decision, EnforcementDecision::Reject { .. }));
     }
 
     #[test]

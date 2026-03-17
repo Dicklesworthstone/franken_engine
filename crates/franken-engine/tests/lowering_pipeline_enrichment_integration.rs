@@ -1314,6 +1314,7 @@ fn enrichment_required_declass_nondefault_serde_roundtrip() {
         capability: Some("ifc.declassify".to_string()),
         obligation_id: "oblig-1".to_string(),
         decision_contract_id: "contract-42".to_string(),
+        declassification_route_ref: Some("ifc.declassify".to_string()),
         requires_operator_approval: true,
         receipt_linkage_required: true,
         replay_command_hint: "frankenctl replay --id oblig-1".to_string(),

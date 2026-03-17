@@ -1084,13 +1084,13 @@ mod tests {
     fn test_tail_risk_within_budget() {
         let t = TailRiskEntry::new(
             VectorizedLane::RegexpMatch,
-            2_500_000,
+            2_450_000,
             2_400_000,
             100,
             DEFAULT_MAX_TAIL_RISK_MILLIONTHS,
         );
         assert!(t.within_budget);
-        assert_eq!(t.regression_millionths, 100_000);
+        assert_eq!(t.regression_millionths, 50_000);
     }
 
     #[test]

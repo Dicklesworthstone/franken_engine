@@ -720,7 +720,7 @@ mod tests {
     #[test]
     fn test_capability_token_all() {
         let all = CapabilityToken::all();
-        assert_eq!(all.len(), 12);
+        assert_eq!(all.len(), 13);
         for token in all {
             assert!(!token.as_str().is_empty());
         }
@@ -737,7 +737,7 @@ mod tests {
     #[test]
     fn test_capability_grant_full() {
         let grant = CapabilityGrant::full();
-        assert_eq!(grant.len(), 12);
+        assert_eq!(grant.len(), 13);
         assert!(grant.has(CapabilityToken::NetworkAccess));
         assert!(grant.has(CapabilityToken::FileSystemWrite));
     }

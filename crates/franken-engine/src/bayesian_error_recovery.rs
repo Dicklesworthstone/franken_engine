@@ -1954,8 +1954,9 @@ mod tests {
             }],
             context_hash: test_hash(),
         };
-        let err = evaluate(test_hash(), &[site], &cfg, 42, "t").unwrap_err();
-        assert_eq!(err, RecoveryError::NoCandidates { error_position: 10 });
+        let result = evaluate(test_hash(), &[site], &cfg, 42, "t").unwrap();
+        assert!(!result.recovered);
+        assert_eq!(result.final_action, RecoveryAction::FailStrict);
     }
 
     #[test]

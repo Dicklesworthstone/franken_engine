@@ -136,6 +136,7 @@ fn runtime_lattice_emits_receipt_linkage_for_authorized_declassification() {
             source_label: LabelClass::Secret,
             target_clearance: Clearance::NeverSink,
             decision_contract_id: "decision-contract-ifc".to_string(),
+            declassification_route_ref: None,
             requires_operator_approval: true,
             max_uses: 4,
             use_count: 0,
@@ -204,6 +205,7 @@ fn runtime_lattice_rejects_denied_receipt_and_keeps_obligation_unused() {
             source_label: LabelClass::Secret,
             target_clearance: Clearance::NeverSink,
             decision_contract_id: "decision-contract-ifc".to_string(),
+            declassification_route_ref: None,
             requires_operator_approval: true,
             max_uses: 1,
             use_count: 0,
@@ -265,6 +267,7 @@ fn runtime_lattice_rejects_tampered_allow_receipt_signature() {
             source_label: LabelClass::Secret,
             target_clearance: Clearance::NeverSink,
             decision_contract_id: "decision-contract-ifc".to_string(),
+            declassification_route_ref: None,
             requires_operator_approval: true,
             max_uses: 1,
             use_count: 0,
@@ -426,6 +429,7 @@ fn obligation_max_uses_enforced_after_exhaustion() {
             source_label: LabelClass::Secret,
             target_clearance: Clearance::NeverSink,
             decision_contract_id: "decision-contract-ifc".to_string(),
+            declassification_route_ref: None,
             requires_operator_approval: true,
             max_uses: 1,
             use_count: 0,
@@ -473,6 +477,7 @@ fn runtime_lattice_rejects_untrusted_receipt_authorizer() {
             source_label: LabelClass::Secret,
             target_clearance: Clearance::NeverSink,
             decision_contract_id: "decision-contract-ifc".to_string(),
+            declassification_route_ref: None,
             requires_operator_approval: true,
             max_uses: 1,
             use_count: 0,
@@ -521,6 +526,7 @@ fn runtime_lattice_rejects_authorizer_trusted_for_other_contract() {
             source_label: LabelClass::Secret,
             target_clearance: Clearance::NeverSink,
             decision_contract_id: "decision-contract-ifc".to_string(),
+            declassification_route_ref: None,
             requires_operator_approval: true,
             max_uses: 1,
             use_count: 0,
@@ -574,6 +580,7 @@ fn runtime_lattice_rejects_receipt_for_other_contract_even_with_same_signer() {
             source_label: LabelClass::Secret,
             target_clearance: Clearance::NeverSink,
             decision_contract_id: "decision-contract-ifc".to_string(),
+            declassification_route_ref: None,
             requires_operator_approval: true,
             max_uses: 1,
             use_count: 0,
@@ -632,6 +639,7 @@ fn runtime_lattice_rejects_cross_trace_receipt_replay() {
             source_label: LabelClass::Secret,
             target_clearance: Clearance::NeverSink,
             decision_contract_id: "decision-contract-ifc".to_string(),
+            declassification_route_ref: None,
             requires_operator_approval: true,
             max_uses: 1,
             use_count: 0,
@@ -677,6 +685,132 @@ fn runtime_lattice_rejects_cross_trace_receipt_replay() {
 }
 
 #[test]
+fn runtime_lattice_accepts_receipt_with_matching_route_binding() {
+    let mut lattice = Ir2FlowLattice::new("policy-ifc-runtime");
+    lattice
+        .register_obligation(DeclassificationObligation {
+            obligation_id: "obl-secret-egress".to_string(),
+            source_label: LabelClass::Secret,
+            target_clearance: Clearance::NeverSink,
+            decision_contract_id: "decision-contract-ifc".to_string(),
+            declassification_route_ref: Some(RUNTIME_ROUTE_ID.to_string()),
+            requires_operator_approval: true,
+            max_uses: 1,
+            use_count: 0,
+        })
+        .expect("register obligation");
+
+    let flow_check = lattice.check_flow(
+        &LabelClass::Secret,
+        &Clearance::NeverSink,
+        "trace-ifc-runtime",
+    );
+    assert!(matches!(
+        flow_check,
+        FlowCheckResult::RequiresDeclassification { .. }
+    ));
+
+    let mut pipeline = DeclassificationPipeline::default();
+    let signing_key = SigningKey::from_bytes([34u8; 32]);
+    let receipt = pipeline
+        .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
+        .expect("allow receipt");
+    assert_eq!(
+        receipt.declassification_route_ref.as_str(),
+        RUNTIME_ROUTE_ID
+    );
+    lattice.trust_receipt_authorizer_for_contract(
+        "decision-contract-ifc",
+        signing_key.verification_key(),
+    );
+
+    lattice
+        .use_declassification_with_receipt("obl-secret-egress", &receipt, "trace-ifc-runtime")
+        .expect("matching route receipt should succeed");
+
+    let last_event = lattice.events().last().expect("success event");
+    assert_eq!(last_event.event, "use_declassification");
+    assert_eq!(last_event.outcome, "ok");
+    assert_eq!(
+        last_event.obligation_id.as_deref(),
+        Some("obl-secret-egress")
+    );
+    assert_eq!(
+        last_event.decision_contract_id.as_deref(),
+        Some("decision-contract-ifc")
+    );
+    assert_eq!(
+        last_event.receipt_id.as_deref(),
+        Some(receipt.receipt_id.as_str())
+    );
+    assert_eq!(
+        lattice
+            .obligation("obl-secret-egress")
+            .map(|ob| ob.use_count),
+        Some(1)
+    );
+}
+
+#[test]
+fn runtime_lattice_rejects_receipt_with_route_mismatch() {
+    let mut lattice = Ir2FlowLattice::new("policy-ifc-runtime");
+    lattice
+        .register_obligation(DeclassificationObligation {
+            obligation_id: "obl-secret-egress".to_string(),
+            source_label: LabelClass::Secret,
+            target_clearance: Clearance::NeverSink,
+            decision_contract_id: "decision-contract-ifc".to_string(),
+            declassification_route_ref: Some(RUNTIME_ROUTE_ID.to_string()),
+            requires_operator_approval: true,
+            max_uses: 1,
+            use_count: 0,
+        })
+        .expect("register obligation");
+
+    let mut mismatch_policy = make_policy();
+    mismatch_policy.declassification_routes[0].route_id = "declass-secret-public-alt".to_string();
+
+    let mut request = make_request();
+    request.requested_route_id = "declass-secret-public-alt".to_string();
+
+    let mut pipeline = DeclassificationPipeline::default();
+    let signing_key = SigningKey::from_bytes([33u8; 32]);
+    let receipt = pipeline
+        .process(&request, &mismatch_policy, &low_loss(), &signing_key)
+        .expect("allow receipt");
+    lattice.trust_receipt_authorizer_for_contract(
+        "decision-contract-ifc",
+        signing_key.verification_key(),
+    );
+
+    let err = lattice
+        .use_declassification_with_receipt("obl-secret-egress", &receipt, "trace-ifc-runtime")
+        .expect_err("route mismatch must fail closed");
+    match err {
+        FlowLatticeError::FlowBlocked { detail } => {
+            assert!(
+                detail.contains("route"),
+                "unexpected error detail: {detail}"
+            );
+        }
+        other => panic!("expected FlowBlocked for route mismatch, got {other:?}"),
+    }
+    assert_last_blocked_receipt_event(
+        &lattice,
+        "trace-ifc-runtime",
+        "obl-secret-egress",
+        "decision-contract-ifc",
+        receipt.receipt_id.as_str(),
+    );
+    assert_eq!(
+        lattice
+            .obligation("obl-secret-egress")
+            .map(|ob| ob.use_count),
+        Some(0)
+    );
+}
+
+#[test]
 fn runtime_lattice_rejects_receipt_with_sink_clearance_mismatch() {
     let mut lattice = Ir2FlowLattice::new("policy-ifc-runtime");
     lattice
@@ -685,6 +819,7 @@ fn runtime_lattice_rejects_receipt_with_sink_clearance_mismatch() {
             source_label: LabelClass::Secret,
             target_clearance: Clearance::NeverSink,
             decision_contract_id: "decision-contract-ifc".to_string(),
+            declassification_route_ref: None,
             requires_operator_approval: true,
             max_uses: 1,
             use_count: 0,
@@ -1069,6 +1204,7 @@ fn duplicate_obligation_registration_rejected() {
         source_label: LabelClass::Secret,
         target_clearance: Clearance::NeverSink,
         decision_contract_id: "dc".to_string(),
+        declassification_route_ref: None,
         requires_operator_approval: false,
         max_uses: 5,
         use_count: 0,

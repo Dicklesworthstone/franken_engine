@@ -794,7 +794,7 @@ mod tests {
     #[test]
     fn test_motif_kind_ordering() {
         assert!(MotifKind::ArithmeticChain < MotifKind::BranchPattern);
-        assert!(MotifKind::HostcallSequence > MotifKind::GuardChain);
+        assert!(MotifKind::HostcallSequence < MotifKind::GuardChain);
     }
 
     // -- SideEffectKind --

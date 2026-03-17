@@ -15,11 +15,15 @@
 mod conformance_harness;
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use conformance_harness::{
     ConformanceLogEvent, ConformanceRunResult, ConformanceRunner, ConformanceWaiverSet,
 };
+use serde_json::Value;
 
 const IFC_RELEASE_GATE_ERROR: &str = "FE-IFCR-1001";
 const REQUIRED_FLOW_PATH_TYPES: [&str; 5] =
@@ -66,6 +70,65 @@ fn run_ifc_corpus() -> ConformanceRunResult {
     ConformanceRunner::default()
         .run(manifest_path(), &ConformanceWaiverSet::default())
         .expect("ifc corpus should execute")
+}
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("workspace root")
+        .parent()
+        .expect("repo root")
+        .to_path_buf()
+}
+
+fn temp_dir(label: &str) -> PathBuf {
+    let mut path = std::env::temp_dir();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be after unix epoch")
+        .as_nanos();
+    path.push(format!("{label}_{}_{}", std::process::id(), nonce));
+    fs::create_dir_all(&path).expect("temp dir should be creatable");
+    path
+}
+
+fn latest_run_dir(root: &Path) -> PathBuf {
+    let mut dirs: Vec<PathBuf> = fs::read_dir(root)
+        .expect("artifact root should be readable")
+        .map(|entry| entry.expect("entry should be readable").path())
+        .filter(|path| path.is_dir())
+        .collect();
+    dirs.sort();
+    dirs.pop().expect("expected at least one run directory")
+}
+
+fn write_complete_ifc_replay_fixture(root: &Path, stamp: &str, marker: &str) -> PathBuf {
+    let run_dir = root.join(stamp);
+    let evidence_dir = run_dir.join("ifc_conformance").join("fixture-run");
+    fs::create_dir_all(&evidence_dir).expect("fixture evidence dir should be creatable");
+    fs::write(
+        run_dir.join("run_manifest.json"),
+        format!(
+            "{{\"schema_version\":\"fixture\",\"marker\":\"{marker}\",\"outcome\":\"pass\"}}\n"
+        ),
+    )
+    .expect("fixture manifest should be writable");
+    fs::write(
+        run_dir.join("ifc_release_gate_events.jsonl"),
+        format!("{{\"event\":\"fixture\",\"marker\":\"{marker}\"}}\n"),
+    )
+    .expect("fixture events should be writable");
+    fs::write(
+        run_dir.join("commands.txt"),
+        format!("fixture-command {marker}\n"),
+    )
+    .expect("fixture commands should be writable");
+    fs::write(
+        evidence_dir.join("ifc_conformance_evidence.jsonl"),
+        format!("{{\"evidence\":\"fixture\",\"marker\":\"{marker}\"}}\n"),
+    )
+    .expect("fixture evidence should be writable");
+    run_dir
 }
 
 fn event_has_required_fields(event: &ConformanceLogEvent) -> bool {
@@ -506,6 +569,107 @@ fn ifc_release_gate_clean_metrics() {
 #[test]
 fn ifc_manifest_path_exists() {
     assert!(manifest_path().exists());
+}
+
+#[test]
+fn ifc_release_gate_suite_script_uses_replay_wrapper_contract() {
+    let script = fs::read_to_string(repo_root().join("scripts/run_ifc_release_gate.sh"))
+        .expect("ifc release gate script should be readable");
+
+    for expected in [
+        "replay_command=\"./scripts/e2e/ifc_release_gate_replay.sh ${mode}\"",
+        "\"suite_replay\":",
+        "\"cat $(json_escape \\\"$manifest_path\\\")\"",
+        "\"cat $(json_escape \\\"$events_path\\\")\"",
+        "\"cat $(json_escape \\\"$commands_path\\\")\"",
+        "\"$(json_escape \\\"$replay_command\\\")\"",
+    ] {
+        assert!(
+            script.contains(expected),
+            "suite script should contain contract fragment `{expected}`"
+        );
+    }
+}
+
+#[test]
+fn ifc_release_gate_suite_script_fail_closes_on_interrupt_signal() {
+    let script = fs::read_to_string(repo_root().join("scripts/run_ifc_release_gate.sh"))
+        .expect("ifc release gate script should be readable");
+
+    for expected in [
+        "handle_signal()",
+        "failed_command=\"${failed_command:-./scripts/run_ifc_release_gate.sh ${mode} (signal:${signal})}\"",
+        "write_manifest 130",
+        "trap 'handle_signal INT' INT",
+        "trap 'handle_signal TERM' TERM",
+    ] {
+        assert!(
+            script.contains(expected),
+            "suite script should fail closed on signal with fragment `{expected}`"
+        );
+    }
+}
+
+#[test]
+fn ifc_release_gate_replay_wrapper_defaults_to_gate_mode() {
+    let script = fs::read_to_string(repo_root().join("scripts/e2e/ifc_release_gate_replay.sh"))
+        .expect("ifc release gate replay wrapper should be readable");
+
+    assert!(
+        script.contains("mode=\"${1:-gate}\""),
+        "replay wrapper should default to gate mode"
+    );
+    assert!(
+        script.contains("\"${root_dir}/scripts/run_ifc_release_gate.sh\" \"${mode}\""),
+        "replay wrapper should delegate to the suite script with the selected mode"
+    );
+}
+
+#[test]
+fn ifc_release_gate_replay_wrapper_selects_latest_complete_bundle() {
+    let script = fs::read_to_string(repo_root().join("scripts/e2e/ifc_release_gate_replay.sh"))
+        .expect("ifc release gate replay wrapper should be readable");
+
+    for expected in [
+        "latest_complete_run_dir()",
+        "\"${candidate}/run_manifest.json\"",
+        "\"${candidate}/ifc_release_gate_events.jsonl\"",
+        "\"${candidate}/commands.txt\"",
+        "\"${candidate}/ifc_conformance\"",
+        "latest_artifact_dir_path",
+        "newest directory ${latest_artifact_dir_path} is incomplete",
+        "using latest complete run directory ${latest_run_dir}",
+        "missing_bundle_exit_code",
+    ] {
+        assert!(
+            script.contains(expected),
+            "replay wrapper should contain complete-bundle contract fragment `{expected}`"
+        );
+    }
+}
+
+#[test]
+fn ifc_release_gate_replay_wrapper_prints_canonical_artifacts() {
+    let script = fs::read_to_string(repo_root().join("scripts/e2e/ifc_release_gate_replay.sh"))
+        .expect("ifc release gate replay wrapper should be readable");
+
+    for expected in [
+        "[ifc-release-gate] latest manifest:",
+        "cat \"${latest_run_dir}/run_manifest.json\"",
+        "[ifc-release-gate] latest events:",
+        "cat \"${latest_run_dir}/ifc_release_gate_events.jsonl\"",
+        "[ifc-release-gate] latest commands:",
+        "cat \"${latest_run_dir}/commands.txt\"",
+        "[ifc-release-gate] latest evidence:",
+        "cat \"${latest_evidence_path}\"",
+        "[ifc-release-gate] latest conformance output tree:",
+        "ls -R \"${latest_run_dir}/ifc_conformance\"",
+    ] {
+        assert!(
+            script.contains(expected),
+            "replay wrapper should print canonical artifact fragment `{expected}`"
+        );
+    }
 }
 
 // ---------- gate blocks on missing evidence_id for exfil ----------
@@ -1465,4 +1629,91 @@ fn ifc_release_gate_blocks_when_categorized_event_has_whitespace_trace_id() {
             .iter()
             .any(|b| b.contains("missing required structured log fields"))
     );
+}
+
+#[test]
+fn ifc_release_gate_replay_wrapper_executes_latest_complete_fixture_bundle() {
+    let artifact_root = temp_dir("ifc_release_gate_replay_fixture");
+    let complete_run_dir =
+        write_complete_ifc_replay_fixture(&artifact_root, "20250101T000000Z", "older-complete");
+
+    let output = Command::new(repo_root().join("scripts/e2e/ifc_release_gate_replay.sh"))
+        .current_dir(repo_root())
+        .env("IFC_RELEASE_GATE_ARTIFACT_ROOT", &artifact_root)
+        .arg("unsupported-mode")
+        .output()
+        .expect("replay wrapper should execute");
+
+    assert_eq!(output.status.code(), Some(2));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stderr.contains("newest directory")
+            && stderr.contains("using latest complete run directory"),
+        "stderr should explain incomplete newest bundle selection: {stderr}"
+    );
+    assert!(
+        !stderr.contains("No such file or directory"),
+        "wrapper should avoid noisy missing-file errors: {stderr}"
+    );
+    assert!(stdout.contains(&format!(
+        "[ifc-release-gate] latest manifest: {}/run_manifest.json",
+        complete_run_dir.display()
+    )));
+    assert!(stdout.contains("older-complete"));
+    assert!(stdout.contains("fixture-command older-complete"));
+    assert!(stdout.contains("ifc_conformance_evidence.jsonl"));
+}
+
+#[test]
+fn ifc_release_gate_replay_wrapper_fails_closed_without_complete_bundle() {
+    let artifact_root = temp_dir("ifc_release_gate_replay_fail_closed");
+
+    let output = Command::new(repo_root().join("scripts/e2e/ifc_release_gate_replay.sh"))
+        .current_dir(repo_root())
+        .env("IFC_RELEASE_GATE_ARTIFACT_ROOT", &artifact_root)
+        .arg("unsupported-mode")
+        .output()
+        .expect("replay wrapper should execute");
+
+    assert_eq!(output.status.code(), Some(2));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stderr.contains("could not locate a complete run directory under"),
+        "stderr should explain why the wrapper failed closed: {stderr}"
+    );
+    assert!(
+        !stderr.contains("No such file or directory"),
+        "wrapper should avoid noisy missing-file errors: {stderr}"
+    );
+    assert!(
+        !stdout.contains("[ifc-release-gate] latest manifest:"),
+        "wrapper should not print canonical artifacts when no complete bundle exists"
+    );
+
+    let newest_run_dir = latest_run_dir(&artifact_root);
+    let manifest: Value = serde_json::from_slice(
+        &fs::read(newest_run_dir.join("run_manifest.json"))
+            .expect("fail-closed manifest should exist"),
+    )
+    .expect("fail-closed manifest should parse");
+    assert_eq!(manifest["outcome"].as_str(), Some("fail"));
+    assert_eq!(
+        manifest["failed_command"].as_str(),
+        Some("./scripts/run_ifc_release_gate.sh unsupported-mode")
+    );
+    assert_eq!(
+        manifest["artifacts"]["suite_replay"].as_str(),
+        Some("./scripts/e2e/ifc_release_gate_replay.sh unsupported-mode")
+    );
+
+    let events = fs::read_to_string(newest_run_dir.join("ifc_release_gate_events.jsonl"))
+        .expect("fail-closed events should exist");
+    assert!(events.contains("\"outcome\":\"fail\""));
+    assert!(events.contains("\"error_code\":\"FE-IFCR-1003\""));
 }

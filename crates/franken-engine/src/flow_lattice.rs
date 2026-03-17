@@ -307,6 +307,9 @@ pub struct DeclassificationObligation {
     pub target_clearance: Clearance,
     /// Decision contract ID that must approve this declassification.
     pub decision_contract_id: String,
+    /// Specific declassification route the receipt must reference, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declassification_route_ref: Option<String>,
     /// Whether the obligation requires operator approval.
     pub requires_operator_approval: bool,
     /// Maximum number of times this declassification can be used (0 = unlimited).
@@ -647,6 +650,10 @@ impl Ir2FlowLattice {
             .expect("checked above");
         let (decision_contract_id, obligation_source_label, obligation_target_clearance) =
             decision_contract_id;
+        let obligation_route_ref = self
+            .obligations
+            .get(obligation_id)
+            .and_then(|obligation| obligation.declassification_route_ref.clone());
 
         let authorizer_is_trusted = self
             .trusted_receipt_authorizers
@@ -724,6 +731,23 @@ impl Ir2FlowLattice {
                 detail: format!(
                     "receipt {} source label does not match obligation {obligation_id}",
                     receipt.receipt_id
+                ),
+            });
+        }
+
+        if let Some(route_ref) = obligation_route_ref.as_deref()
+            && receipt.declassification_route_ref != route_ref
+        {
+            self.emit_receipt_blocked_event(
+                trace_id,
+                obligation_id,
+                &decision_contract_id,
+                receipt,
+            );
+            return Err(FlowLatticeError::FlowBlocked {
+                detail: format!(
+                    "receipt {} route {} does not match obligation {obligation_id} route {}",
+                    receipt.receipt_id, receipt.declassification_route_ref, route_ref
                 ),
             });
         }
@@ -1258,6 +1282,7 @@ mod tests {
                 source_label: LabelClass::Secret,
                 target_clearance: Clearance::NeverSink,
                 decision_contract_id: "contract-1".to_string(),
+                declassification_route_ref: None,
                 requires_operator_approval: false,
                 max_uses: 0,
                 use_count: 0,
@@ -1282,6 +1307,7 @@ mod tests {
                 source_label: LabelClass::Secret,
                 target_clearance: Clearance::NeverSink,
                 decision_contract_id: "contract-1".to_string(),
+                declassification_route_ref: None,
                 requires_operator_approval: false,
                 max_uses: 1,
                 use_count: 1, // already used
@@ -1305,6 +1331,7 @@ mod tests {
                 source_label: LabelClass::Secret,
                 target_clearance: Clearance::NeverSink,
                 decision_contract_id: "c1".to_string(),
+                declassification_route_ref: None,
                 requires_operator_approval: true,
                 max_uses: 3,
                 use_count: 0,
@@ -1334,6 +1361,7 @@ mod tests {
                 source_label: LabelClass::Secret,
                 target_clearance: Clearance::NeverSink,
                 decision_contract_id: "c1".to_string(),
+                declassification_route_ref: None,
                 requires_operator_approval: false,
                 max_uses: 0, // unlimited
                 use_count: 0,
@@ -1355,6 +1383,7 @@ mod tests {
             source_label: LabelClass::Secret,
             target_clearance: Clearance::NeverSink,
             decision_contract_id: "c1".to_string(),
+            declassification_route_ref: None,
             requires_operator_approval: false,
             max_uses: 0,
             use_count: 0,
@@ -1507,6 +1536,7 @@ mod tests {
                 source_label: LabelClass::Secret,
                 target_clearance: Clearance::NeverSink,
                 decision_contract_id: "decision-1".to_string(),
+                declassification_route_ref: None,
                 requires_operator_approval: true,
                 max_uses: 0,
                 use_count: 0,
@@ -1539,6 +1569,7 @@ mod tests {
                 source_label: LabelClass::Secret,
                 target_clearance: Clearance::NeverSink,
                 decision_contract_id: "decision-2".to_string(),
+                declassification_route_ref: None,
                 requires_operator_approval: true,
                 max_uses: 0,
                 use_count: 0,
@@ -1588,6 +1619,7 @@ mod tests {
                 source_label: LabelClass::Secret,
                 target_clearance: Clearance::NeverSink,
                 decision_contract_id: "decision-3".to_string(),
+                declassification_route_ref: None,
                 requires_operator_approval: true,
                 max_uses: 1,
                 use_count: 0,
@@ -1640,6 +1672,7 @@ mod tests {
                 source_label: LabelClass::Secret,
                 target_clearance: Clearance::NeverSink,
                 decision_contract_id: "decision-4".to_string(),
+                declassification_route_ref: None,
                 requires_operator_approval: true,
                 max_uses: 1,
                 use_count: 0,
@@ -1701,6 +1734,7 @@ mod tests {
                 source_label: LabelClass::Secret,
                 target_clearance: Clearance::NeverSink,
                 decision_contract_id: "decision-5".to_string(),
+                declassification_route_ref: None,
                 requires_operator_approval: true,
                 max_uses: 1,
                 use_count: 0,
@@ -1754,6 +1788,7 @@ mod tests {
                 source_label: LabelClass::Secret,
                 target_clearance: Clearance::NeverSink,
                 decision_contract_id: "decision-6".to_string(),
+                declassification_route_ref: None,
                 requires_operator_approval: true,
                 max_uses: 1,
                 use_count: 0,
@@ -1840,6 +1875,7 @@ mod tests {
             source_label: LabelClass::Secret,
             target_clearance: Clearance::NeverSink,
             decision_contract_id: "c1".to_string(),
+            declassification_route_ref: None,
             requires_operator_approval: true,
             max_uses: 5,
             use_count: 2,
@@ -1933,6 +1969,7 @@ mod tests {
                 source_label: LabelClass::Secret,
                 target_clearance: Clearance::NeverSink,
                 decision_contract_id: "api-auth-contract".to_string(),
+                declassification_route_ref: None,
                 requires_operator_approval: false,
                 max_uses: 0,
                 use_count: 0,
@@ -2346,6 +2383,7 @@ mod tests {
             source_label: LabelClass::Public,
             target_clearance: Clearance::OpenSink,
             decision_contract_id: "c".into(),
+            declassification_route_ref: None,
             requires_operator_approval: false,
             max_uses: 0,
             use_count: u64::MAX,
@@ -2358,6 +2396,7 @@ mod tests {
             source_label: LabelClass::Public,
             target_clearance: Clearance::OpenSink,
             decision_contract_id: "c".into(),
+            declassification_route_ref: None,
             requires_operator_approval: false,
             max_uses: 1,
             use_count: 0,
@@ -2370,6 +2409,7 @@ mod tests {
             source_label: LabelClass::Public,
             target_clearance: Clearance::OpenSink,
             decision_contract_id: "c".into(),
+            declassification_route_ref: None,
             requires_operator_approval: false,
             max_uses: 1,
             use_count: 1,
@@ -2382,6 +2422,7 @@ mod tests {
             source_label: LabelClass::Public,
             target_clearance: Clearance::OpenSink,
             decision_contract_id: "c".into(),
+            declassification_route_ref: None,
             requires_operator_approval: false,
             max_uses: 1_000_000,
             use_count: 1_000_000,
@@ -2396,6 +2437,7 @@ mod tests {
             source_label: LabelClass::Internal,
             target_clearance: Clearance::RestrictedSink,
             decision_contract_id: "c".into(),
+            declassification_route_ref: None,
             requires_operator_approval: false,
             max_uses: 5,
             use_count: 0,
@@ -2440,6 +2482,7 @@ mod tests {
                 source_label: LabelClass::TopSecret,
                 target_clearance: Clearance::NeverSink,
                 decision_contract_id: "c-a".into(),
+                declassification_route_ref: None,
                 requires_operator_approval: false,
                 max_uses: 1,
                 use_count: 0,
@@ -2451,6 +2494,7 @@ mod tests {
                 source_label: LabelClass::TopSecret,
                 target_clearance: Clearance::NeverSink,
                 decision_contract_id: "c-b".into(),
+                declassification_route_ref: None,
                 requires_operator_approval: false,
                 max_uses: 0,
                 use_count: 0,
@@ -2488,6 +2532,7 @@ mod tests {
                 source_label: LabelClass::TopSecret,
                 target_clearance: Clearance::NeverSink,
                 decision_contract_id: "c-a".into(),
+                declassification_route_ref: None,
                 requires_operator_approval: false,
                 max_uses: 0,
                 use_count: 0,
@@ -2499,6 +2544,7 @@ mod tests {
                 source_label: LabelClass::TopSecret,
                 target_clearance: Clearance::NeverSink,
                 decision_contract_id: "c-b".into(),
+                declassification_route_ref: None,
                 requires_operator_approval: false,
                 max_uses: 0,
                 use_count: 0,
@@ -2528,6 +2574,7 @@ mod tests {
                 source_label: LabelClass::Secret,
                 target_clearance: Clearance::NeverSink,
                 decision_contract_id: "dc-m".into(),
+                declassification_route_ref: None,
                 requires_operator_approval: false,
                 max_uses: 0,
                 use_count: 0,
@@ -2574,6 +2621,7 @@ mod tests {
                 source_label: LabelClass::Secret,
                 target_clearance: Clearance::NeverSink,
                 decision_contract_id: "dc-sink".into(),
+                declassification_route_ref: None,
                 requires_operator_approval: false,
                 max_uses: 0,
                 use_count: 0,
@@ -2624,6 +2672,7 @@ mod tests {
                 source_label: LabelClass::Secret,
                 target_clearance: Clearance::OpenSink,
                 decision_contract_id: "dc-custom".into(),
+                declassification_route_ref: None,
                 requires_operator_approval: false,
                 max_uses: 0,
                 use_count: 0,
@@ -2677,6 +2726,7 @@ mod tests {
                 source_label: LabelClass::Secret,
                 target_clearance: Clearance::NeverSink,
                 decision_contract_id: "dc-expected".into(),
+                declassification_route_ref: None,
                 requires_operator_approval: false,
                 max_uses: 0,
                 use_count: 0,
@@ -2727,6 +2777,7 @@ mod tests {
                 source_label: LabelClass::Secret,
                 target_clearance: Clearance::NeverSink,
                 decision_contract_id: "dc-expected".into(),
+                declassification_route_ref: None,
                 requires_operator_approval: false,
                 max_uses: 0,
                 use_count: 0,
@@ -2776,6 +2827,7 @@ mod tests {
             source_label: LabelClass::Public,
             target_clearance: Clearance::OpenSink,
             decision_contract_id: "dc".into(),
+            declassification_route_ref: Some("route-json".into()),
             requires_operator_approval: true,
             max_uses: 10,
             use_count: 3,
@@ -2785,6 +2837,7 @@ mod tests {
         assert!(json.contains("\"source_label\""));
         assert!(json.contains("\"target_clearance\""));
         assert!(json.contains("\"decision_contract_id\""));
+        assert!(json.contains("\"declassification_route_ref\""));
         assert!(json.contains("\"requires_operator_approval\""));
         assert!(json.contains("\"max_uses\""));
         assert!(json.contains("\"use_count\""));

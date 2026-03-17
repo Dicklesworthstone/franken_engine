@@ -99,6 +99,10 @@ Each run emits:
 
 under `artifacts/rgc_cli_operator_workflow_verification_pack/<UTC_TIMESTAMP>/`.
 
+The replay wrapper resolves the latest complete artifact bundle, warns when a
+newer run directory is incomplete, and prints the selected manifest, events,
+commands, and first step log for operator replay and triage.
+
 ## Operator Verification
 
 ```bash

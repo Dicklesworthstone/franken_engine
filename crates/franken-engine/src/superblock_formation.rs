@@ -2080,12 +2080,11 @@ mod tests {
         assert_eq!(plan.rejected_candidates.len(), 1);
         assert_eq!(
             plan.rejected_candidates[0].reason,
-            CompilationRejectReason::SuperblockFormationRejected
+            CompilationRejectReason::CandidateProfileMismatch
         );
-        assert_eq!(
-            plan.rejected_candidates[0].formation_outcome,
-            Some(FormationOutcome::NoEligibleInstructions)
-        );
+        // Profile-mismatch rejection is raised before formation analysis,
+        // so formation_outcome is not populated.
+        assert_eq!(plan.rejected_candidates[0].formation_outcome, None);
     }
 
     #[test]

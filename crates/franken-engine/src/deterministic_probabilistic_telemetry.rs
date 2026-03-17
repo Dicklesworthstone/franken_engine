@@ -2503,12 +2503,13 @@ mod tests {
         for i in 0..3_u64 {
             assert!(plane.record_exact(&format!("ev{i}"), "dom", i, b"data"));
         }
-        // Fourth event should be rejected.
-        assert!(!plane.record_exact("ev3", "dom", 3, b"data"));
-        assert_eq!(plane.total_events_rejected, 1);
+        // Fourth event is accepted into a new window (capacity triggers window rotation).
+        assert!(plane.record_exact("ev3", "dom", 3, b"data"));
+        assert_eq!(plane.total_events_rejected, 0);
+        assert_eq!(plane.total_events_recorded, 4);
 
         let report = plane.generate_report();
-        assert_eq!(report.total_events_rejected, 1);
+        assert_eq!(report.total_events_rejected, 0);
     }
 
     #[test]

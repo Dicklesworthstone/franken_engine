@@ -1,5 +1,0 @@
-cargo check -p frankenengine-engine --test ifc_release_gate
-cargo check -p frankenengine-engine --bin franken_ifc_conformance_runner
-cargo test -p frankenengine-engine --test ifc_release_gate
-cargo run -p frankenengine-engine --bin franken_ifc_conformance_runner -- --manifest crates/franken-engine/tests/conformance/ifc_corpus/ifc_conformance_assets.json --output-root artifacts/ifc_release_gate/20260222T075617Z/ifc_conformance
-cargo clippy -p frankenengine-engine --test ifc_release_gate -- -D warnings

@@ -410,6 +410,8 @@ pub struct FlowLatticeEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision_contract_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declassification_route_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receipt_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receipt_replay_command: Option<String>,
@@ -528,8 +530,13 @@ impl Ir2FlowLattice {
                     && obligation.target_clearance == *sink
                     && obligation.has_remaining_uses()
             }) {
-                let decision_contract_id =
-                    preferred_obligation.map(|obligation| obligation.decision_contract_id.clone());
+                let (decision_contract_id, declassification_route_ref) = preferred_obligation
+                    .map_or((None, None), |obligation| {
+                        (
+                            Some(obligation.decision_contract_id.clone()),
+                            obligation.declassification_route_ref.clone(),
+                        )
+                    });
                 self.emit_event_with_metadata(
                     trace_id,
                     "check_flow",
@@ -537,6 +544,7 @@ impl Ir2FlowLattice {
                     None,
                     Some(obligation_id.to_string()),
                     decision_contract_id,
+                    declassification_route_ref,
                     None,
                     None,
                 );
@@ -564,10 +572,15 @@ impl Ir2FlowLattice {
             .map(|(id, _)| id.clone());
 
         if let Some(obligation_id) = matching_obligation {
-            let decision_contract_id = self
+            let (decision_contract_id, declassification_route_ref) = self
                 .obligations
                 .get(&obligation_id)
-                .map(|obligation| obligation.decision_contract_id.clone());
+                .map_or((None, None), |obligation| {
+                    (
+                        Some(obligation.decision_contract_id.clone()),
+                        obligation.declassification_route_ref.clone(),
+                    )
+                });
             self.emit_event_with_metadata(
                 trace_id,
                 "check_flow",
@@ -575,6 +588,7 @@ impl Ir2FlowLattice {
                 None,
                 Some(obligation_id.clone()),
                 decision_contract_id,
+                declassification_route_ref,
                 None,
                 None,
             );
@@ -601,10 +615,15 @@ impl Ir2FlowLattice {
         obligation_id: &str,
         trace_id: &str,
     ) -> Result<(), FlowLatticeError> {
-        let decision_contract_id = self
+        let (decision_contract_id, declassification_route_ref) = self
             .obligations
             .get(obligation_id)
-            .map(|obligation| obligation.decision_contract_id.clone());
+            .map_or((None, None), |obligation| {
+                (
+                    Some(obligation.decision_contract_id.clone()),
+                    obligation.declassification_route_ref.clone(),
+                )
+            });
         let obligation = self.obligations.get_mut(obligation_id).ok_or_else(|| {
             FlowLatticeError::ObligationNotFound {
                 obligation_id: obligation_id.to_string(),
@@ -619,6 +638,7 @@ impl Ir2FlowLattice {
             None,
             Some(obligation_id.to_string()),
             decision_contract_id,
+            declassification_route_ref,
             None,
             None,
         );
@@ -806,6 +826,7 @@ impl Ir2FlowLattice {
             None,
             Some(obligation_id.to_string()),
             Some(decision_contract_id),
+            Some(receipt.declassification_route_ref.clone()),
             Some(receipt.receipt_id.clone()),
             Some(receipt.replay_command()),
         );
@@ -828,7 +849,9 @@ impl Ir2FlowLattice {
     }
 
     fn emit_event(&mut self, trace_id: &str, event: &str, outcome: &str, error_code: Option<&str>) {
-        self.emit_event_with_metadata(trace_id, event, outcome, error_code, None, None, None, None);
+        self.emit_event_with_metadata(
+            trace_id, event, outcome, error_code, None, None, None, None, None,
+        );
     }
 
     fn emit_receipt_blocked_event(
@@ -845,6 +868,7 @@ impl Ir2FlowLattice {
             Some(RECEIPT_BLOCKED_ERROR_CODE),
             Some(obligation_id.to_string()),
             Some(decision_contract_id.to_string()),
+            Some(receipt.declassification_route_ref.clone()),
             Some(receipt.receipt_id.clone()),
             Some(receipt.replay_command()),
         );
@@ -859,6 +883,7 @@ impl Ir2FlowLattice {
         error_code: Option<&str>,
         obligation_id: Option<String>,
         decision_contract_id: Option<String>,
+        declassification_route_ref: Option<String>,
         receipt_id: Option<String>,
         receipt_replay_command: Option<String>,
     ) {
@@ -872,6 +897,7 @@ impl Ir2FlowLattice {
             error_code: error_code.map(String::from),
             obligation_id,
             decision_contract_id,
+            declassification_route_ref,
             receipt_id,
             receipt_replay_command,
         });
@@ -893,6 +919,7 @@ mod tests {
         obligation_id: &str,
         decision_contract_id: &str,
         receipt_id: &str,
+        declassification_route_ref: &str,
     ) {
         let event = lattice.events().last().expect("blocked event");
         assert_eq!(event.trace_id, trace_id);
@@ -909,6 +936,10 @@ mod tests {
             Some(decision_contract_id)
         );
         assert_eq!(event.receipt_id.as_deref(), Some(receipt_id));
+        assert_eq!(
+            event.declassification_route_ref.as_deref(),
+            Some(declassification_route_ref)
+        );
         assert!(
             event
                 .receipt_replay_command
@@ -1514,6 +1545,7 @@ mod tests {
         assert_eq!(event.component, "flow_lattice");
         assert!(event.obligation_id.is_none());
         assert!(event.decision_contract_id.is_none());
+        assert!(event.declassification_route_ref.is_none());
         assert!(event.receipt_id.is_none());
         assert!(event.receipt_replay_command.is_none());
     }
@@ -1536,7 +1568,7 @@ mod tests {
                 source_label: LabelClass::Secret,
                 target_clearance: Clearance::NeverSink,
                 decision_contract_id: "decision-1".to_string(),
-                declassification_route_ref: None,
+                declassification_route_ref: Some("route-1".to_string()),
                 requires_operator_approval: true,
                 max_uses: 0,
                 use_count: 0,
@@ -1556,6 +1588,7 @@ mod tests {
         assert_eq!(event.outcome, "requires_declassification");
         assert_eq!(event.obligation_id.as_deref(), Some("obl-1"));
         assert_eq!(event.decision_contract_id.as_deref(), Some("decision-1"));
+        assert_eq!(event.declassification_route_ref.as_deref(), Some("route-1"));
         assert!(event.receipt_id.is_none());
         assert!(event.receipt_replay_command.is_none());
     }
@@ -1603,6 +1636,10 @@ mod tests {
         assert_eq!(event.outcome, "ok");
         assert_eq!(event.obligation_id.as_deref(), Some("obl-2"));
         assert_eq!(event.decision_contract_id.as_deref(), Some("decision-2"));
+        assert_eq!(
+            event.declassification_route_ref.as_deref(),
+            Some("declass-2")
+        );
         assert_eq!(event.receipt_id.as_deref(), Some("rcpt-2"));
         assert_eq!(
             event.receipt_replay_command.as_deref(),
@@ -1655,6 +1692,7 @@ mod tests {
             "obl-3",
             "decision-3",
             "rcpt-deny",
+            denied_receipt.declassification_route_ref.as_str(),
         );
         assert_eq!(
             lattice.obligation("obl-3").map(|ob| ob.use_count),
@@ -1721,6 +1759,7 @@ mod tests {
             "obl-4",
             "decision-4",
             "rcpt-tampered",
+            tampered_receipt.declassification_route_ref.as_str(),
         );
         assert_eq!(lattice.obligation("obl-4").map(|ob| ob.use_count), Some(0));
     }
@@ -1775,6 +1814,7 @@ mod tests {
             "obl-5",
             "decision-5",
             "rcpt-untrusted",
+            receipt.declassification_route_ref.as_str(),
         );
         assert_eq!(lattice.obligation("obl-5").map(|ob| ob.use_count), Some(0));
     }
@@ -1830,6 +1870,7 @@ mod tests {
             "obl-6",
             "decision-6",
             "rcpt-cross-trace",
+            receipt.declassification_route_ref.as_str(),
         );
         assert_eq!(lattice.obligation("obl-6").map(|ob| ob.use_count), Some(0));
     }
@@ -2272,6 +2313,7 @@ mod tests {
             error_code: None,
             obligation_id: Some("obl-1".into()),
             decision_contract_id: Some("dc-1".into()),
+            declassification_route_ref: Some("route-1".into()),
             receipt_id: None,
             receipt_replay_command: None,
         };
@@ -2292,6 +2334,7 @@ mod tests {
             error_code: None,
             obligation_id: None,
             decision_contract_id: None,
+            declassification_route_ref: None,
             receipt_id: None,
             receipt_replay_command: None,
         };
@@ -2299,6 +2342,7 @@ mod tests {
         // Optional fields with skip_serializing_if should not appear
         assert!(!json.contains("obligation_id"));
         assert!(!json.contains("decision_contract_id"));
+        assert!(!json.contains("declassification_route_ref"));
         assert!(!json.contains("receipt_id"));
         assert!(!json.contains("receipt_replay_command"));
         // But required fields must be present
@@ -2319,12 +2363,14 @@ mod tests {
             error_code: Some("ERR_1".into()),
             obligation_id: Some("obl-x".into()),
             decision_contract_id: Some("dc-x".into()),
+            declassification_route_ref: Some("route-x".into()),
             receipt_id: Some("rcpt-x".into()),
             receipt_replay_command: Some("cmd".into()),
         };
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"obligation_id\""));
         assert!(json.contains("\"decision_contract_id\""));
+        assert!(json.contains("\"declassification_route_ref\""));
         assert!(json.contains("\"receipt_id\""));
         assert!(json.contains("\"receipt_replay_command\""));
         assert!(json.contains("\"error_code\""));
@@ -2607,7 +2653,14 @@ mod tests {
         assert!(matches!(err, FlowLatticeError::FlowBlocked { .. }));
         let msg = format!("{err}");
         assert!(msg.contains("source label does not match"));
-        assert_last_blocked_receipt_event(&lattice, "trace-m", "obl-m", "dc-m", "rcpt-m");
+        assert_last_blocked_receipt_event(
+            &lattice,
+            "trace-m",
+            "obl-m",
+            "dc-m",
+            "rcpt-m",
+            receipt.declassification_route_ref.as_str(),
+        );
         // Obligation use_count should not be advanced
         assert_eq!(lattice.obligation("obl-m").unwrap().use_count, 0);
     }
@@ -2659,6 +2712,7 @@ mod tests {
             "obl-sink",
             "dc-sink",
             "rcpt-sink",
+            receipt.declassification_route_ref.as_str(),
         );
         assert_eq!(lattice.obligation("obl-sink").unwrap().use_count, 0);
     }
@@ -2713,6 +2767,7 @@ mod tests {
             "obl-custom",
             "dc-custom",
             "rcpt-custom",
+            receipt.declassification_route_ref.as_str(),
         );
         assert_eq!(lattice.obligation("obl-custom").unwrap().use_count, 0);
     }
@@ -2764,6 +2819,7 @@ mod tests {
             "obl-contract",
             "dc-expected",
             "rcpt-contract",
+            receipt.declassification_route_ref.as_str(),
         );
         assert_eq!(lattice.obligation("obl-contract").unwrap().use_count, 0);
     }
@@ -2816,6 +2872,7 @@ mod tests {
             "obl-binding",
             "dc-expected",
             "rcpt-binding",
+            receipt.declassification_route_ref.as_str(),
         );
         assert_eq!(lattice.obligation("obl-binding").unwrap().use_count, 0);
     }

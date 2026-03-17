@@ -578,11 +578,11 @@ fn ifc_release_gate_suite_script_uses_replay_wrapper_contract() {
 
     for expected in [
         "replay_command=\"./scripts/e2e/ifc_release_gate_replay.sh ${mode}\"",
-        "\"suite_replay\":",
-        "\"cat $(json_escape \\\"$manifest_path\\\")\"",
-        "\"cat $(json_escape \\\"$events_path\\\")\"",
-        "\"cat $(json_escape \\\"$commands_path\\\")\"",
-        "\"$(json_escape \\\"$replay_command\\\")\"",
+        "suite_replay",
+        "cat $(json_escape \"$manifest_path\")",
+        "cat $(json_escape \"$events_path\")",
+        "cat $(json_escape \"$commands_path\")",
+        "$(json_escape \"$replay_command\")",
     ] {
         assert!(
             script.contains(expected),

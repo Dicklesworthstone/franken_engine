@@ -106,6 +106,7 @@ fn assert_last_blocked_receipt_event(
     obligation_id: &str,
     decision_contract_id: &str,
     receipt_id: &str,
+    declassification_route_ref: &str,
 ) {
     let event = lattice.events().last().expect("blocked event");
     assert_eq!(event.trace_id, trace_id);
@@ -119,6 +120,10 @@ fn assert_last_blocked_receipt_event(
         Some(decision_contract_id)
     );
     assert_eq!(event.receipt_id.as_deref(), Some(receipt_id));
+    assert_eq!(
+        event.declassification_route_ref.as_deref(),
+        Some(declassification_route_ref)
+    );
     assert!(
         event
             .receipt_replay_command
@@ -179,6 +184,10 @@ fn runtime_lattice_emits_receipt_linkage_for_authorized_declassification() {
     assert_eq!(
         last_event.decision_contract_id.as_deref(),
         Some("decision-contract-ifc")
+    );
+    assert_eq!(
+        last_event.declassification_route_ref.as_deref(),
+        Some(receipt.declassification_route_ref.as_str())
     );
     assert_eq!(
         last_event.receipt_id.as_deref(),
@@ -249,6 +258,7 @@ fn runtime_lattice_rejects_denied_receipt_and_keeps_obligation_unused() {
         "obl-secret-egress",
         "decision-contract-ifc",
         denied_receipt.receipt_id.as_str(),
+        denied_receipt.declassification_route_ref.as_str(),
     );
     assert_eq!(
         lattice
@@ -309,6 +319,7 @@ fn runtime_lattice_rejects_tampered_allow_receipt_signature() {
         "obl-secret-egress",
         "decision-contract-ifc",
         tampered_receipt.receipt_id.as_str(),
+        tampered_receipt.declassification_route_ref.as_str(),
     );
     assert_eq!(
         lattice
@@ -508,6 +519,7 @@ fn runtime_lattice_rejects_untrusted_receipt_authorizer() {
         "obl-secret-egress",
         "decision-contract-ifc",
         receipt.receipt_id.as_str(),
+        receipt.declassification_route_ref.as_str(),
     );
     assert_eq!(
         lattice
@@ -562,6 +574,7 @@ fn runtime_lattice_rejects_authorizer_trusted_for_other_contract() {
         "obl-secret-egress",
         "decision-contract-ifc",
         receipt.receipt_id.as_str(),
+        receipt.declassification_route_ref.as_str(),
     );
     assert_eq!(
         lattice
@@ -621,6 +634,7 @@ fn runtime_lattice_rejects_receipt_for_other_contract_even_with_same_signer() {
         "obl-secret-egress",
         "decision-contract-ifc",
         receipt.receipt_id.as_str(),
+        receipt.declassification_route_ref.as_str(),
     );
     assert_eq!(
         lattice
@@ -675,6 +689,7 @@ fn runtime_lattice_rejects_cross_trace_receipt_replay() {
         "obl-secret-egress",
         "decision-contract-ifc",
         receipt.receipt_id.as_str(),
+        receipt.declassification_route_ref.as_str(),
     );
     assert_eq!(
         lattice
@@ -740,6 +755,10 @@ fn runtime_lattice_accepts_receipt_with_matching_route_binding() {
         Some("decision-contract-ifc")
     );
     assert_eq!(
+        last_event.declassification_route_ref.as_deref(),
+        Some(receipt.declassification_route_ref.as_str())
+    );
+    assert_eq!(
         last_event.receipt_id.as_deref(),
         Some(receipt.receipt_id.as_str())
     );
@@ -801,6 +820,7 @@ fn runtime_lattice_rejects_receipt_with_route_mismatch() {
         "obl-secret-egress",
         "decision-contract-ifc",
         receipt.receipt_id.as_str(),
+        receipt.declassification_route_ref.as_str(),
     );
     assert_eq!(
         lattice
@@ -862,6 +882,7 @@ fn runtime_lattice_rejects_receipt_with_sink_clearance_mismatch() {
         "obl-secret-egress",
         "decision-contract-ifc",
         receipt.receipt_id.as_str(),
+        receipt.declassification_route_ref.as_str(),
     );
     assert_eq!(
         lattice

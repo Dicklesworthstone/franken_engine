@@ -1614,9 +1614,8 @@ mod tests {
     }
 
     #[test]
-    fn certificate_can_elide_when_scalar_replacement_eligible() {
+    fn corpus_has_passing_specimens() {
         let inv = run_escape_cert_corpus();
-        // At least some specimens should produce certificates
         assert!(inv.pass_count > 0, "expected at least some passing specimens");
     }
 

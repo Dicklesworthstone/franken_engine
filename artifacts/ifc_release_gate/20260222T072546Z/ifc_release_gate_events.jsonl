@@ -1,1 +1,0 @@
-{"trace_id":"trace-ifc-release-gate-20260222T072546Z","decision_id":"decision-ifc-release-gate-20260222T072546Z","policy_id":"policy-ifc-release-gate-v1","component":"ifc_release_gate","event":"suite_completed","outcome":"pass","error_code":null,"ci_blocking_failures":-1,"false_positive_count":-1,"false_negative_direct_indirect_count":-1}

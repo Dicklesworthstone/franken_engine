@@ -27,12 +27,12 @@ policy_id="policy-ifc-release-gate-v1"
 mkdir -p "$logs_dir"
 mkdir -p "$ifc_output_root"
 
-if ! command -v rch >/dev/null 2>&1; then
-  echo "rch is required for IFC release gate heavy commands" >&2
-  exit 2
-fi
-
 run_rch() {
+  if ! command -v rch >/dev/null 2>&1; then
+    echo "rch is required for IFC release gate heavy commands" >&2
+    return 2
+  fi
+
   timeout "${rch_timeout_seconds}" \
     rch exec -q -- env "RUSTUP_TOOLCHAIN=${toolchain}" "CARGO_TARGET_DIR=${target_dir}" "$@"
 }

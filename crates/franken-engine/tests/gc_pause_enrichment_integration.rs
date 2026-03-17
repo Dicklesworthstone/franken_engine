@@ -16,7 +16,7 @@
 use frankenengine_engine::gc::{GcEvent, GcPhase};
 use frankenengine_engine::gc_pause::{
     BudgetViolation, PAUSE_DISTRIBUTION_REPORT_SCHEMA, PauseBudget, PauseBudgetPolicyState,
-    PauseDistributionReport, PauseRecord, PauseTracker, Percentile, PercentileSnapshot,
+    PauseDistributionReport, PauseRecord, PauseTracker, Percentile,
 };
 
 fn make_event(seq: u64, ext: &str, pause_ns: u64) -> GcEvent {

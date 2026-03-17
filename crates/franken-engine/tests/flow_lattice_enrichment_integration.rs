@@ -703,6 +703,7 @@ fn enrichment_flow_lattice_event_serde_roundtrip() {
         error_code: None,
         obligation_id: Some("ob-1".into()),
         decision_contract_id: Some("dc-1".into()),
+        declassification_route_ref: None,
         receipt_id: None,
         receipt_replay_command: None,
     };

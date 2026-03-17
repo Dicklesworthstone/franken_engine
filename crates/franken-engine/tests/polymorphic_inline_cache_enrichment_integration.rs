@@ -17,12 +17,12 @@
 use std::collections::BTreeMap;
 
 use frankenengine_engine::polymorphic_inline_cache::{
-    BEAD_ID, BailoutDecision, BailoutVerdict, COMPONENT, DEFAULT_COLD_PRUNE_THRESHOLD,
-    DEFAULT_MAX_POLY_ENTRIES, DEFAULT_MEGAMORPHIC_THRESHOLD, DEFAULT_MIN_ACCESS_COUNT,
-    DEFAULT_MIN_WARM_HIT_RATE, IcPolicyConfig, IcReplayLog, IcScopeProfile, IcSiteKind,
-    IcSiteProfile, IcSiteState, PIC_DECISION_SCHEMA_VERSION, PIC_PROFILE_SCHEMA_VERSION,
-    PIC_REPLAY_SCHEMA_VERSION, PIC_SCHEMA_VERSION, PicEvidenceInventory, PicExpectedOutcome,
-    PicSpecimenFamily, PicSpecimenResult, PicVerdict, decide_bailout,
+    BEAD_ID, BailoutVerdict, COMPONENT, DEFAULT_COLD_PRUNE_THRESHOLD, DEFAULT_MAX_POLY_ENTRIES,
+    DEFAULT_MEGAMORPHIC_THRESHOLD, DEFAULT_MIN_ACCESS_COUNT, DEFAULT_MIN_WARM_HIT_RATE,
+    IcPolicyConfig, IcReplayLog, IcScopeProfile, IcSiteKind, IcSiteProfile, IcSiteState,
+    PIC_DECISION_SCHEMA_VERSION, PIC_PROFILE_SCHEMA_VERSION, PIC_REPLAY_SCHEMA_VERSION,
+    PIC_SCHEMA_VERSION, PicEvidenceInventory, PicExpectedOutcome, PicSpecimenFamily,
+    PicSpecimenResult, PicVerdict, decide_bailout,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -255,11 +255,8 @@ fn config_non_sticky_megamorphic() {
         p.record_access(1);
     }
     let decision = decide_bailout(&p, &config, epoch());
-    // With non-sticky config, mega site should get promoted (shapes > threshold)
-    assert!(
-        decision.verdict == BailoutVerdict::PromoteToMegamorphic
-            || decision.verdict == BailoutVerdict::Continue
-    );
+    // With non-sticky config, 5 observed shapes > 4 max_poly_entries → PromoteToMegamorphic
+    assert_eq!(decision.verdict, BailoutVerdict::PromoteToMegamorphic);
 }
 
 #[test]
@@ -271,11 +268,9 @@ fn config_very_high_hit_rate_threshold() {
     let p = warm_mono_profile(0, "fn_high_hr", 1);
     // The transition from uninit→mono counts as a miss
     let decision = decide_bailout(&p, &config, epoch());
-    // With only 100 accesses and 1 transition, hit rate = 990000 < 999999
-    assert!(
-        decision.verdict == BailoutVerdict::PruneColdEntries
-            || decision.verdict == BailoutVerdict::Recompile
-    );
+    // With 100 accesses and 1 transition: hit_rate = 990_000 < 999_999.
+    // transition_count = 1 which is NOT > 3, so PruneColdEntries (not Recompile).
+    assert_eq!(decision.verdict, BailoutVerdict::PruneColdEntries);
 }
 
 // =========================================================================
@@ -343,14 +338,10 @@ fn bailout_low_hit_rate_with_many_transitions_recompiles() {
         ..IcPolicyConfig::default()
     };
     let decision = decide_bailout(&p, &config, epoch());
-    // transition_count = 3 (uninit→mono, mono→poly, poly→mega) but with custom
-    // config keeping us in poly. With > 3 transitions and low hit rate → Recompile
-    assert!(
-        decision.verdict == BailoutVerdict::Recompile
-            || decision.verdict == BailoutVerdict::PruneColdEntries,
-        "expected Recompile or PruneColdEntries, got {:?}",
-        decision.verdict
-    );
+    // With custom config: 6 shapes within poly limit (100), no mega transition.
+    // transition_count = 2 (uninit→mono, mono→poly) which is NOT > 3,
+    // so low hit rate → PruneColdEntries (not Recompile).
+    assert_eq!(decision.verdict, BailoutVerdict::PruneColdEntries);
 }
 
 #[test]

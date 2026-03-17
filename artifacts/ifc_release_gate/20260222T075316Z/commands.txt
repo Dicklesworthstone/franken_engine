@@ -1,1 +1,0 @@
-cargo run -p frankenengine-engine --bin franken_ifc_conformance_runner -- --manifest crates/franken-engine/tests/conformance/ifc_corpus/ifc_conformance_assets.json --output-root artifacts/ifc_release_gate/20260222T075316Z/ifc_conformance

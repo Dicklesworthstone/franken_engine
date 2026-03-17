@@ -953,10 +953,10 @@ impl FileArtifact {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArtifactContext, COMPONENT, DOCS_CONTRACT_SCHEMA_VERSION, FastPathFallbackReason,
+        ArtifactContext, DOCS_CONTRACT_SCHEMA_VERSION, FastPathFallbackReason,
         FastPathReadSource, GuardEvidenceVerdict, ROLLOUT_GUARD_SCHEMA_VERSION,
         SAFETY_CASE_SCHEMA_VERSION, STARVATION_REPORT_SCHEMA_VERSION,
-        SeqlockRolloutGuardRow, SeqlockSafetyCaseRow, StarvationMicrobenchReportArtifact,
+        SeqlockRolloutGuardRow, SeqlockSafetyCaseRow,
         StarvationMicrobenchRow, accepted_candidates, build_docs_contract_fixture,
         build_missing_model_check_row, build_safety_case_row, emit_default_rollout_bundle,
         render_summary, run_starvation_microbench,

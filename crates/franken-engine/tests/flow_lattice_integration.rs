@@ -964,6 +964,7 @@ fn flow_lattice_event_serde_roundtrip() {
         error_code: Some("NONE".to_string()),
         obligation_id: None,
         decision_contract_id: None,
+        declassification_route_ref: None,
         receipt_id: None,
         receipt_replay_command: None,
     };

@@ -1489,6 +1489,13 @@ positive model-check coverage exists for the accepted candidates.
 ./scripts/e2e/seqlock_rollout_guard_replay.sh ci
 ```
 
+`run_seqlock_rollout_guard_suite.sh` defaults `CARGO_TARGET_DIR` to the stable
+external path `/data/tmp/rch_target_franken_engine_seqlock_rollout_guard` so
+`rch` workers can reuse incremental artifacts without syncing the build tree
+back through the workspace. The replay wrapper prints the latest complete suite
+manifest, runner manifest, rollout-guard artifact, commands, trace IDs, and
+step-log paths, and warns if the newest artifact directory is incomplete.
+
 Contract and vectors:
 
 - [`docs/RGC_SEQLOCK_ROLLOUT_GUARD_V1.md`](./docs/RGC_SEQLOCK_ROLLOUT_GUARD_V1.md)

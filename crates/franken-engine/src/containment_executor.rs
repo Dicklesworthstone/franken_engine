@@ -365,10 +365,14 @@ impl ContainmentExecutor {
 
         let previous_state = ext.state;
 
-        // Idempotency: if already in target state, return last receipt.
+        // Idempotency: if already in target state AND the last receipt matches
+        // the current decision context, return it. Otherwise fall through to
+        // create a fresh receipt so the audit trail is never stale.
         let target_state = action_target_state(action);
         if ext.state == target_state
             && let Some(last) = ext.receipts.last()
+            && last.epoch == context.epoch
+            && last.metadata.get("decision_id").map(String::as_str) == Some(&context.decision_id)
         {
             return Ok(last.clone());
         }
@@ -480,7 +484,11 @@ impl ContainmentExecutor {
             .collect()
     }
 
-    /// Resume a suspended extension back to Running.
+    /// Resume a suspended extension.
+    ///
+    /// If the extension had an active sandbox policy when suspended,
+    /// it resumes into `Sandboxed` (not `Running`) to prevent a
+    /// suspend/resume bypass of containment.
     pub fn resume(
         &mut self,
         extension_id: &str,
@@ -502,7 +510,14 @@ impl ContainmentExecutor {
         }
 
         let previous_state = ext.state;
-        ext.state = ContainmentState::Running;
+        // Resume to Sandboxed (not Running) if the extension had an active
+        // sandbox policy when it was suspended, to prevent sandbox escape.
+        let resume_target = if ext.sandbox_policy.is_some() {
+            ContainmentState::Sandboxed
+        } else {
+            ContainmentState::Running
+        };
+        ext.state = resume_target;
 
         let receipt_id = format!("cr-{:08x}", self.next_receipt_id);
         self.next_receipt_id += 1;
@@ -512,11 +527,11 @@ impl ContainmentExecutor {
             action: ContainmentAction::Allow,
             target_extension_id: extension_id.to_string(),
             previous_state,
-            new_state: ContainmentState::Running,
+            new_state: resume_target,
             timestamp_ns: context.timestamp_ns,
             duration_ns: 0,
             success: true,
-            cooperative: false,
+            cooperative: true,
             evidence_refs: context.evidence_refs.clone(),
             epoch: context.epoch,
             content_hash: ContentHash::compute(b"placeholder"),

@@ -65,6 +65,7 @@ fn declass_receipt(
         decision,
         source_label: src,
         sink_clearance: sink,
+        declassification_route_ref: format!("route-{id}"),
         timestamp_ms: 2000,
     }
 }
@@ -742,6 +743,7 @@ fn enrichment_insert_and_get_declass_receipt() {
     let got = idx.get_declass_receipt("r1", &ctx).unwrap().unwrap();
     assert_eq!(got.receipt_id, "r1");
     assert_eq!(got.decision, DeclassificationDecision::Allow);
+    assert_eq!(got.declassification_route_ref, "route-r1");
 }
 
 #[test]
@@ -1426,6 +1428,10 @@ fn enrichment_join_events_with_matching_receipt() {
     assert_eq!(joined.len(), 1);
     assert!(joined[0].1.is_some());
     assert_eq!(joined[0].1.as_ref().unwrap().receipt_id, "r1");
+    assert_eq!(
+        joined[0].1.as_ref().unwrap().declassification_route_ref,
+        "route-r1"
+    );
 }
 
 #[test]
@@ -1911,6 +1917,7 @@ fn enrichment_json_fields_declass_receipt() {
     assert!(v.get("decision").is_some());
     assert!(v.get("source_label").is_some());
     assert!(v.get("sink_clearance").is_some());
+    assert!(v.get("declassification_route_ref").is_some());
     assert!(v.get("timestamp_ms").is_some());
 }
 

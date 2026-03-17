@@ -10,7 +10,7 @@ rch_exec_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 rch_build_timeout_sec="${RCH_BUILD_TIMEOUT_SEC:-${RCH_BUILD_TIMEOUT_SECONDS:-1800}}"
 artifact_root="${SEQLOCK_ROLLOUT_GUARD_ARTIFACT_ROOT:-artifacts/seqlock_rollout_guard}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-target_dir="${CARGO_TARGET_DIR:-/var/tmp/rch_target_franken_engine_seqlock_rollout_guard}"
+target_dir="${CARGO_TARGET_DIR:-/data/tmp/rch_target_franken_engine_seqlock_rollout_guard}"
 cargo_build_jobs="${CARGO_BUILD_JOBS:-2}"
 generated_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 run_dir="${artifact_root}/${timestamp}"
@@ -23,18 +23,10 @@ run_id="run-seqlock-rollout-guard-${timestamp}"
 source_commit="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
 suite_commands_path="${run_dir}/suite_commands.txt"
 step_logs_dir="${run_dir}/step_logs"
+suite_invocation="./scripts/run_seqlock_rollout_guard_suite.sh ${mode}"
+replay_invocation="./scripts/e2e/seqlock_rollout_guard_replay.sh ${mode}"
 
 mkdir -p "$run_dir" "$step_logs_dir"
-
-if ! command -v rch >/dev/null 2>&1; then
-  echo "rch is required for seqlock rollout guard heavy commands" >&2
-  exit 2
-fi
-
-if ! command -v timeout >/dev/null 2>&1; then
-  echo "timeout is required to fail closed on seqlock rollout guard rch steps" >&2
-  exit 2
-fi
 
 run_rch() {
   RCH_BUILD_TIMEOUT_SEC="${rch_build_timeout_sec}" \
@@ -96,6 +88,20 @@ failed_command=""
 failed_step_log_path=""
 manifest_written=false
 step_counter=0
+
+require_heavy_command_prerequisites() {
+  if ! command -v rch >/dev/null 2>&1; then
+    echo "rch is required for seqlock rollout guard heavy commands" >&2
+    failed_command="${suite_invocation}"
+    return 2
+  fi
+
+  if ! command -v timeout >/dev/null 2>&1; then
+    echo "timeout is required to fail closed on seqlock rollout guard rch steps" >&2
+    failed_command="${suite_invocation}"
+    return 2
+  fi
+}
 
 run_step() {
   local command_text="$1"
@@ -239,24 +245,28 @@ verify_bundle() {
 run_mode() {
   case "$mode" in
     check)
+      require_heavy_command_prerequisites || return $?
       run_step "cargo check -p frankenengine-engine --bin franken_seqlock_rollout_guard" \
         cargo check -p frankenengine-engine --bin franken_seqlock_rollout_guard
       run_step "cargo check -p frankenengine-engine --test seqlock_rollout_guard" \
         cargo check -p frankenengine-engine --test seqlock_rollout_guard
       ;;
     test)
+      require_heavy_command_prerequisites || return $?
       run_step "cargo test -p frankenengine-engine --lib seqlock_rollout_guard" \
         cargo test -p frankenengine-engine --lib seqlock_rollout_guard
       run_step "cargo test -p frankenengine-engine --test seqlock_rollout_guard" \
         cargo test -p frankenengine-engine --test seqlock_rollout_guard
       ;;
     clippy)
+      require_heavy_command_prerequisites || return $?
       run_step "cargo clippy -p frankenengine-engine --bin franken_seqlock_rollout_guard -- -D warnings" \
         cargo clippy -p frankenengine-engine --bin franken_seqlock_rollout_guard -- -D warnings
       run_step "cargo clippy -p frankenengine-engine --test seqlock_rollout_guard -- -D warnings" \
         cargo clippy -p frankenengine-engine --test seqlock_rollout_guard -- -D warnings
       ;;
     run)
+      require_heavy_command_prerequisites || return $?
       run_step "cargo run -p frankenengine-engine --bin franken_seqlock_rollout_guard -- --artifact-dir ${run_dir} --trace-id ${trace_id} --decision-id ${decision_id} --policy-id ${policy_id} --run-id ${run_id} --generated-at-utc ${generated_at_utc} --source-commit ${source_commit} --toolchain ${toolchain} --summary" \
         cargo run -p frankenengine-engine --bin franken_seqlock_rollout_guard -- \
           --artifact-dir "${run_dir}" \
@@ -271,6 +281,7 @@ run_mode() {
       verify_bundle
       ;;
     ci)
+      require_heavy_command_prerequisites || return $?
       run_step "cargo check -p frankenengine-engine --bin franken_seqlock_rollout_guard" \
         cargo check -p frankenengine-engine --bin franken_seqlock_rollout_guard
       run_step "cargo check -p frankenengine-engine --test seqlock_rollout_guard" \
@@ -297,8 +308,9 @@ run_mode() {
       verify_bundle
       ;;
     *)
+      failed_command="${suite_invocation}"
       echo "usage: $0 [check|test|clippy|run|ci]" >&2
-      exit 2
+      return 2
       ;;
   esac
 }
@@ -380,7 +392,8 @@ write_manifest() {
     echo "    \"cat ${events_path}\","
     echo "    \"cat ${manifest_path}\","
     echo "    \"ls -1 ${step_logs_dir}\","
-    echo "    \"${0} ci\""
+    echo "    \"${replay_invocation}\","
+    echo "    \"${suite_invocation}\""
     echo '  ]'
     echo "}"
   } >"${manifest_path}"

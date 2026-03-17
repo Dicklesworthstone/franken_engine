@@ -940,7 +940,7 @@ impl FlowAnnotation {
         let mut map = BTreeMap::new();
         map.insert(
             "data_label".to_string(),
-            CanonicalValue::String(format!("{:?}", self.data_label)),
+            CanonicalValue::String(format!("{}", self.data_label)),
         );
         map.insert(
             "declassification_required".to_string(),
@@ -948,7 +948,7 @@ impl FlowAnnotation {
         );
         map.insert(
             "sink_clearance".to_string(),
-            CanonicalValue::String(format!("{:?}", self.sink_clearance)),
+            CanonicalValue::String(format!("{}", self.sink_clearance)),
         );
         CanonicalValue::Map(map)
     }

@@ -1501,8 +1501,14 @@ mod tests {
         for &a in states {
             for &b in states {
                 let joined = a.join(b);
-                assert!(joined >= a, "join({a:?},{b:?}) = {joined:?} should be >= {a:?}");
-                assert!(joined >= b, "join({a:?},{b:?}) = {joined:?} should be >= {b:?}");
+                assert!(
+                    joined >= a,
+                    "join({a:?},{b:?}) = {joined:?} should be >= {a:?}"
+                );
+                assert!(
+                    joined >= b,
+                    "join({a:?},{b:?}) = {joined:?} should be >= {b:?}"
+                );
             }
         }
     }
@@ -1544,7 +1550,11 @@ mod tests {
 
     #[test]
     fn alias_relation_serde_roundtrip() {
-        for rel in [AliasRelation::NoAlias, AliasRelation::MayAlias, AliasRelation::MustAlias] {
+        for rel in [
+            AliasRelation::NoAlias,
+            AliasRelation::MayAlias,
+            AliasRelation::MustAlias,
+        ] {
             let json = serde_json::to_string(&rel).unwrap();
             let back: AliasRelation = serde_json::from_str(&json).unwrap();
             assert_eq!(rel, back);
@@ -1616,7 +1626,10 @@ mod tests {
     #[test]
     fn corpus_has_passing_specimens() {
         let inv = run_escape_cert_corpus();
-        assert!(inv.pass_count > 0, "expected at least some passing specimens");
+        assert!(
+            inv.pass_count > 0,
+            "expected at least some passing specimens"
+        );
     }
 
     #[test]

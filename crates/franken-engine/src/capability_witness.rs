@@ -1422,11 +1422,16 @@ impl WitnessValidator {
             errors.push(e);
         }
 
-        // Confidence threshold.
-        if !witness
+        // Confidence threshold — require both non-zero trials and sufficient
+        // confidence. Zero trials means no empirical evidence, which must not
+        // bypass the confidence floor.
+        if witness.confidence.n_trials == 0 {
+            errors.push(WitnessError::InvalidConfidence {
+                reason: "zero ablation trials — no empirical evidence".to_string(),
+            });
+        } else if !witness
             .confidence
             .meets_threshold(self.min_confidence_millionths)
-            && witness.confidence.n_trials > 0
         {
             errors.push(WitnessError::InvalidConfidence {
                 reason: format!(
@@ -7635,7 +7640,7 @@ mod tests {
     }
 
     #[test]
-    fn validator_passes_zero_trial_confidence() {
+    fn validator_rejects_zero_trial_confidence() {
         let cap = Capability::new("read");
         let witness = WitnessBuilder::new(
             test_extension_id(),
@@ -7651,11 +7656,12 @@ mod tests {
         .unwrap();
         let validator = WitnessValidator::new();
         let errors = validator.validate(&witness);
+        // Zero trials means no empirical evidence — must fail validation.
         assert!(
-            !errors
+            errors
                 .iter()
                 .any(|e| matches!(e, WitnessError::InvalidConfidence { .. })),
-            "zero-trial confidence must not trigger InvalidConfidence"
+            "zero-trial confidence must trigger InvalidConfidence"
         );
     }
 

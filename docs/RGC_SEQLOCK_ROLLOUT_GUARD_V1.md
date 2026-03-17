@@ -50,6 +50,14 @@ All three remain disabled by default until positive model-check evidence exists.
 The suite is `rch`-backed and emits the required 621C bundle under
 `artifacts/seqlock_rollout_guard/<timestamp>/`.
 
+The suite defaults `CARGO_TARGET_DIR` to the stable external path
+`/data/tmp/rch_target_franken_engine_seqlock_rollout_guard` so remote workers
+can reuse incremental artifacts without syncing the build tree back through the
+workspace. The replay wrapper re-runs the suite for the requested mode, then
+prints the latest complete suite/runner manifests, rollout-guard artifact,
+commands, trace IDs, and step-log paths. If the newest artifact directory is
+incomplete, it warns and falls back to the latest complete bundle instead.
+
 The wrapper fails closed if:
 
 - `rch` falls back to local execution for any heavy cargo step

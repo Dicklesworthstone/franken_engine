@@ -953,10 +953,9 @@ impl FileArtifact {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArtifactContext, DOCS_CONTRACT_SCHEMA_VERSION, FastPathFallbackReason,
-        FastPathReadSource, GuardEvidenceVerdict, ROLLOUT_GUARD_SCHEMA_VERSION,
-        SAFETY_CASE_SCHEMA_VERSION, STARVATION_REPORT_SCHEMA_VERSION,
-        SeqlockRolloutGuardRow, SeqlockSafetyCaseRow,
+        ArtifactContext, DOCS_CONTRACT_SCHEMA_VERSION, FastPathFallbackReason, FastPathReadSource,
+        GuardEvidenceVerdict, ROLLOUT_GUARD_SCHEMA_VERSION, SAFETY_CASE_SCHEMA_VERSION,
+        STARVATION_REPORT_SCHEMA_VERSION, SeqlockRolloutGuardRow, SeqlockSafetyCaseRow,
         StarvationMicrobenchRow, accepted_candidates, build_docs_contract_fixture,
         build_missing_model_check_row, build_safety_case_row, emit_default_rollout_bundle,
         render_summary, run_starvation_microbench,
@@ -1503,7 +1502,10 @@ mod tests {
         assert!(!bundle.written_files.is_empty());
         for (name, hash) in &bundle.written_files {
             assert!(!name.is_empty(), "artifact name should be non-empty");
-            assert!(!hash.is_empty(), "artifact hash should be non-empty for {name}");
+            assert!(
+                !hash.is_empty(),
+                "artifact hash should be non-empty for {name}"
+            );
         }
         let _ = std::fs::remove_dir_all(&artifact_dir);
     }

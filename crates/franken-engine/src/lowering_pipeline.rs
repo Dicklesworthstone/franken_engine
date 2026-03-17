@@ -2198,8 +2198,10 @@ pub fn lower_ir2_to_ir3(
                     let start_reg = register_cursor;
                     for &src in &arg_regs {
                         let contiguous_dst = alloc_register(&mut register_cursor);
-                        ir3.instructions
-                            .push(Ir3Instruction::Move { dst: contiguous_dst, src });
+                        ir3.instructions.push(Ir3Instruction::Move {
+                            dst: contiguous_dst,
+                            src,
+                        });
                     }
                     RegRange {
                         start: start_reg,
@@ -2234,8 +2236,10 @@ pub fn lower_ir2_to_ir3(
                     let start_reg = register_cursor;
                     for &src in &part_regs {
                         let contiguous_dst = alloc_register(&mut register_cursor);
-                        ir3.instructions
-                            .push(Ir3Instruction::Move { dst: contiguous_dst, src });
+                        ir3.instructions.push(Ir3Instruction::Move {
+                            dst: contiguous_dst,
+                            src,
+                        });
                     }
                     let parts = RegRange {
                         start: start_reg,

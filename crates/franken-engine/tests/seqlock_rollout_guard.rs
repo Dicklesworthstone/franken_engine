@@ -14,7 +14,8 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use frankenengine_engine::seqlock_rollout_guard::{
     ArtifactContext, BEAD_ID, BundleWriteReport, COMPONENT, DOCS_CONTRACT_SCHEMA_VERSION,
@@ -39,6 +40,114 @@ fn temp_dir(label: &str) -> PathBuf {
     ));
     fs::create_dir_all(&path).expect("create temp dir");
     path
+}
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("workspace root")
+        .parent()
+        .expect("repo root")
+        .to_path_buf()
+}
+
+fn load_rollout_guard_runner_script() -> String {
+    let path = repo_root().join("scripts/run_seqlock_rollout_guard_suite.sh");
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
+fn load_rollout_guard_replay_script() -> String {
+    let path = repo_root().join("scripts/e2e/seqlock_rollout_guard_replay.sh");
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
+fn latest_run_dir(artifact_root: &Path) -> PathBuf {
+    let mut runs: Vec<PathBuf> = fs::read_dir(artifact_root)
+        .expect("artifact root should be readable")
+        .map(|entry| entry.expect("directory entry should be readable").path())
+        .filter(|path| path.is_dir())
+        .collect();
+    runs.sort();
+    runs.pop()
+        .expect("artifact root should contain a run directory")
+}
+
+fn write_json_fixture(path: &Path, value: &serde_json::Value) {
+    fs::write(
+        path,
+        serde_json::to_vec_pretty(value).expect("fixture json should serialize"),
+    )
+    .unwrap_or_else(|err| panic!("failed to write {}: {err}", path.display()));
+}
+
+fn write_text_fixture(path: &Path, contents: &str) {
+    fs::write(path, contents)
+        .unwrap_or_else(|err| panic!("failed to write {}: {err}", path.display()));
+}
+
+fn seed_complete_rollout_bundle(artifact_root: &Path, name: &str) -> PathBuf {
+    let run_dir = artifact_root.join(name);
+    fs::create_dir_all(run_dir.join("step_logs"))
+        .expect("complete fixture dir should be creatable");
+
+    write_json_fixture(
+        &run_dir.join("suite_run_manifest.json"),
+        &serde_json::json!({"fixture": name, "outcome": "pass"}),
+    );
+    write_json_fixture(
+        &run_dir.join("run_manifest.json"),
+        &serde_json::json!({"fixture": name, "outcome": "pass"}),
+    );
+    write_json_fixture(
+        &run_dir.join("seqlock_rollout_guard.json"),
+        &serde_json::json!({"fixture": name, "rows": []}),
+    );
+    write_json_fixture(
+        &run_dir.join("seqlock_safety_case.json"),
+        &serde_json::json!({"fixture": name}),
+    );
+    write_json_fixture(
+        &run_dir.join("starvation_microbench_report.json"),
+        &serde_json::json!({"fixture": name}),
+    );
+    write_json_fixture(
+        &run_dir.join("loom_schedule_coverage_report.json"),
+        &serde_json::json!({"fixture": name}),
+    );
+    write_json_fixture(
+        &run_dir.join("trace_ids.json"),
+        &serde_json::json!({"fixture": name, "trace_ids": [name]}),
+    );
+    write_text_fixture(
+        &run_dir.join("events.jsonl"),
+        &format!("{{\"fixture\":\"{name}\",\"event\":\"suite_completed\"}}\n"),
+    );
+    write_text_fixture(
+        &run_dir.join("suite_commands.txt"),
+        &format!("suite-command {name}\n"),
+    );
+    write_text_fixture(
+        &run_dir.join("commands.txt"),
+        &format!("bundle-command {name}\n"),
+    );
+    write_text_fixture(
+        &run_dir.join("step_logs/step_1.log"),
+        &format!("step-log {name}\n"),
+    );
+
+    run_dir
+}
+
+fn seed_incomplete_rollout_bundle(artifact_root: &Path, name: &str) -> PathBuf {
+    let run_dir = artifact_root.join(name);
+    fs::create_dir_all(&run_dir).expect("incomplete fixture dir should be creatable");
+    write_json_fixture(
+        &run_dir.join("suite_run_manifest.json"),
+        &serde_json::json!({"fixture": name, "outcome": "fail"}),
+    );
+    run_dir
 }
 
 fn make_context(label: &str) -> (PathBuf, ArtifactContext) {
@@ -899,4 +1008,164 @@ fn manifest_artifact_reference_serde_round_trip() {
     let json = serde_json::to_string(&reference).expect("serialize");
     let deser: ManifestArtifactReference = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(reference, deser);
+}
+
+#[test]
+fn seqlock_rollout_guard_suite_script_is_rch_only_and_uses_external_target_dir() {
+    let script = load_rollout_guard_runner_script();
+
+    assert!(
+        script.contains("command -v rch"),
+        "runner must fail closed when rch is unavailable"
+    );
+    assert!(
+        script.contains("/data/tmp/rch_target_franken_engine_seqlock_rollout_guard"),
+        "runner must default to the stable external target dir"
+    );
+    assert!(
+        script.contains("step_logs_dir=\"${run_dir}/step_logs\""),
+        "runner should retain per-step logs for operator triage"
+    );
+    assert!(
+        script.contains("failed_command=\"${suite_invocation}\""),
+        "runner should record the suite invocation on fail-closed prereq and usage paths"
+    );
+    assert!(
+        script.contains("\"${replay_invocation}\""),
+        "suite manifest should point operators at the replay wrapper"
+    );
+}
+
+#[test]
+fn seqlock_rollout_guard_replay_wrapper_selects_latest_complete_bundle() {
+    let script = load_rollout_guard_replay_script();
+
+    assert!(
+        script.contains("latest_complete_run_dir()"),
+        "replay wrapper should locate the latest complete artifact directory"
+    );
+    assert!(
+        script.contains("newest directory ${latest_artifact_dir_path} is incomplete"),
+        "replay wrapper should warn when the newest artifact directory is incomplete"
+    );
+    assert!(
+        script.contains(
+            "[seqlock-rollout-guard] latest suite manifest: ${latest_run_dir}/suite_run_manifest.json"
+        ),
+        "replay wrapper should print the latest suite manifest"
+    );
+    assert!(
+        script.contains(
+            "[seqlock-rollout-guard] latest runner manifest: ${latest_run_dir}/run_manifest.json"
+        ),
+        "replay wrapper should print the latest runner manifest"
+    );
+    assert!(
+        script.contains(
+            "[seqlock-rollout-guard] latest rollout guard: ${latest_run_dir}/seqlock_rollout_guard.json"
+        ),
+        "replay wrapper should print the rollout-guard artifact"
+    );
+    assert!(
+        script.contains(
+            "[seqlock-rollout-guard] latest suite commands: ${latest_run_dir}/suite_commands.txt"
+        ),
+        "replay wrapper should print the suite command log"
+    );
+    assert!(
+        script.contains(
+            "[seqlock-rollout-guard] latest bundle commands: ${latest_run_dir}/commands.txt"
+        ),
+        "replay wrapper should print the bundle command log"
+    );
+    assert!(
+        script.contains("[seqlock-rollout-guard] latest step logs: ${latest_run_dir}/step_logs"),
+        "replay wrapper should print the step-log directory"
+    );
+}
+
+#[test]
+fn seqlock_rollout_guard_replay_wrapper_executes_latest_complete_fixture_bundle() {
+    let artifact_root = temp_dir("seqlock_rollout_guard_replay_latest");
+    let complete_run_dir = seed_complete_rollout_bundle(&artifact_root, "older-complete");
+    seed_incomplete_rollout_bundle(&artifact_root, "zzz-newest-incomplete");
+
+    let output = Command::new(repo_root().join("scripts/e2e/seqlock_rollout_guard_replay.sh"))
+        .current_dir(repo_root())
+        .env("SEQLOCK_ROLLOUT_GUARD_ARTIFACT_ROOT", &artifact_root)
+        .arg("unsupported-mode")
+        .output()
+        .expect("replay wrapper should execute");
+
+    assert_eq!(output.status.code(), Some(2));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stderr.contains("using latest complete run directory"),
+        "stderr should explain incomplete newest bundle selection: {stderr}"
+    );
+    assert!(stdout.contains(&format!(
+        "[seqlock-rollout-guard] latest suite manifest: {}/suite_run_manifest.json",
+        complete_run_dir.display()
+    )));
+    assert!(stdout.contains("older-complete"));
+    assert!(stdout.contains("suite-command older-complete"));
+    assert!(stdout.contains("bundle-command older-complete"));
+    assert!(stdout.contains("step_1.log"));
+}
+
+#[test]
+fn seqlock_rollout_guard_replay_wrapper_fails_closed_without_complete_bundle() {
+    let artifact_root = temp_dir("seqlock_rollout_guard_replay_fail_closed");
+
+    let output = Command::new(repo_root().join("scripts/e2e/seqlock_rollout_guard_replay.sh"))
+        .current_dir(repo_root())
+        .env("SEQLOCK_ROLLOUT_GUARD_ARTIFACT_ROOT", &artifact_root)
+        .arg("unsupported-mode")
+        .output()
+        .expect("replay wrapper should execute");
+
+    assert_eq!(output.status.code(), Some(2));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stderr.contains("could not locate a complete run directory under"),
+        "stderr should explain why the wrapper failed closed: {stderr}"
+    );
+    assert!(
+        !stdout.contains("[seqlock-rollout-guard] latest suite manifest:"),
+        "wrapper should not print canonical artifacts when no complete bundle exists"
+    );
+
+    let newest_run_dir = latest_run_dir(&artifact_root);
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &fs::read(newest_run_dir.join("suite_run_manifest.json"))
+            .expect("fail-closed manifest should exist"),
+    )
+    .expect("fail-closed manifest should parse");
+    assert_eq!(manifest["outcome"].as_str(), Some("fail"));
+    assert_eq!(
+        manifest["failed_command"].as_str(),
+        Some("./scripts/run_seqlock_rollout_guard_suite.sh unsupported-mode")
+    );
+    assert!(
+        manifest["operator_verification"]
+            .as_array()
+            .expect("operator verification should be an array")
+            .iter()
+            .any(|entry| {
+                entry.as_str()
+                    == Some("./scripts/e2e/seqlock_rollout_guard_replay.sh unsupported-mode")
+            }),
+        "suite manifest should reference the replay wrapper for operator triage"
+    );
+
+    let events = fs::read_to_string(newest_run_dir.join("events.jsonl"))
+        .expect("fail-closed events should exist");
+    assert!(events.contains("\"outcome\":\"fail\""));
+    assert!(events.contains("\"error_code\":\"FE-RGC-621C-SUITE-0001\""));
 }

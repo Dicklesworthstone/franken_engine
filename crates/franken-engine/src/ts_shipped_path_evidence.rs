@@ -956,8 +956,11 @@ mod tests {
         let inv = run_shipped_path_corpus();
         let corpus_ids: std::collections::BTreeSet<&str> =
             corpus.iter().map(|s| s.specimen_id.as_str()).collect();
-        let evidence_ids: std::collections::BTreeSet<&str> =
-            inv.evidence.iter().map(|e| e.specimen_id.as_str()).collect();
+        let evidence_ids: std::collections::BTreeSet<&str> = inv
+            .evidence
+            .iter()
+            .map(|e| e.specimen_id.as_str())
+            .collect();
         assert_eq!(corpus_ids, evidence_ids);
     }
 

@@ -179,11 +179,13 @@ impl Posterior {
             return;
         }
 
-        // Scale each proportionally.
-        self.p_benign = self.p_benign * MILLION / total;
-        self.p_anomalous = self.p_anomalous * MILLION / total;
-        self.p_malicious = self.p_malicious * MILLION / total;
-        self.p_unknown = self.p_unknown * MILLION / total;
+        // Scale each proportionally (use i128 to avoid i64 overflow).
+        let t = total as i128;
+        let m = MILLION as i128;
+        self.p_benign = (self.p_benign as i128 * m / t) as i64;
+        self.p_anomalous = (self.p_anomalous as i128 * m / t) as i64;
+        self.p_malicious = (self.p_malicious as i128 * m / t) as i64;
+        self.p_unknown = (self.p_unknown as i128 * m / t) as i64;
 
         // Distribute remainder to the largest to maintain exact sum.
         let remainder = MILLION - self.sum();

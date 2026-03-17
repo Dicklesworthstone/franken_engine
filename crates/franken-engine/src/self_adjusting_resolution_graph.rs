@@ -1868,7 +1868,12 @@ mod tests {
 
     #[test]
     fn test_graph_with_multiple_edge_kinds() {
-        let nodes = vec![make_node("a"), make_node("b"), make_node("c"), make_node("d")];
+        let nodes = vec![
+            make_node("a"),
+            make_node("b"),
+            make_node("c"),
+            make_node("d"),
+        ];
         let edges = vec![
             make_edge_with_kind("a", "b", EdgeKind::StaticImport),
             make_edge_with_kind("a", "d", EdgeKind::TypeOnly),

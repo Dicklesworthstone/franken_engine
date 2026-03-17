@@ -1590,7 +1590,10 @@ mod tests {
             },
             &[(EnforcedDimension::GcPressure, 1_000)],
         );
-        assert!(matches!(receipt.decision, EnforcementDecision::Reject { .. }));
+        assert!(matches!(
+            receipt.decision,
+            EnforcementDecision::Reject { .. }
+        ));
     }
 
     #[test]
@@ -1608,7 +1611,10 @@ mod tests {
             },
             &[(EnforcedDimension::ModuleLoadCount, 1_000_000)],
         );
-        assert!(matches!(receipt.decision, EnforcementDecision::Reject { .. }));
+        assert!(matches!(
+            receipt.decision,
+            EnforcementDecision::Reject { .. }
+        ));
     }
 
     #[test]

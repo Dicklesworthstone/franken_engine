@@ -88,6 +88,9 @@ pub struct DeclassReceiptRecord {
     pub decision: DeclassificationDecision,
     pub source_label: Label,
     pub sink_clearance: Label,
+    /// Governing policy route; defaults empty for pre-route legacy receipts.
+    #[serde(default)]
+    pub declassification_route_ref: String,
     pub timestamp_ms: u64,
 }
 
@@ -892,6 +895,7 @@ mod tests {
             decision,
             source_label: src,
             sink_clearance: sink,
+            declassification_route_ref: format!("route-{id}"),
             timestamp_ms: 2000,
         }
     }
@@ -1373,6 +1377,10 @@ mod tests {
         assert_eq!(joined.len(), 1);
         assert!(joined[0].1.is_some());
         assert_eq!(joined[0].1.as_ref().unwrap().receipt_id, "r1");
+        assert_eq!(
+            joined[0].1.as_ref().unwrap().declassification_route_ref,
+            "route-r1"
+        );
     }
 
     #[test]
@@ -1430,6 +1438,25 @@ mod tests {
         let json = serde_json::to_string(&receipt).unwrap();
         let deser: DeclassReceiptRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(receipt, deser);
+    }
+
+    #[test]
+    fn declass_receipt_record_legacy_serde_defaults_route_ref() {
+        let mut value = serde_json::to_value(declass_receipt(
+            "r1",
+            "ext-a",
+            Label::Secret,
+            Label::Public,
+            DeclassificationDecision::Allow,
+        ))
+        .unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("declassification_route_ref");
+        let deser: DeclassReceiptRecord = serde_json::from_value(value).unwrap();
+        assert_eq!(deser.receipt_id, "r1");
+        assert!(deser.declassification_route_ref.is_empty());
     }
 
     #[test]

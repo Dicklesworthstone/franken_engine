@@ -79,7 +79,8 @@ fn parse_contract() -> Rgc061Contract {
 }
 
 fn read_replay_script() -> String {
-    let path = repo_root().join("scripts/e2e/rgc_cli_operator_workflow_verification_pack_replay.sh");
+    let path =
+        repo_root().join("scripts/e2e/rgc_cli_operator_workflow_verification_pack_replay.sh");
     read_to_string(&path)
 }
 

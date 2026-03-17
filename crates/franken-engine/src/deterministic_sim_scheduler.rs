@@ -523,13 +523,11 @@ impl SimScheduler {
         if dispatched_ids.len() < events.len() {
             let dispatched_set: std::collections::BTreeSet<u64> =
                 dispatched_ids.iter().copied().collect();
+            // Re-enqueue without mutating scheduled_tick so audit trails
+            // preserve the original scheduling intent.
             let remaining: Vec<SimEvent> = events
                 .into_iter()
                 .filter(|ev| !dispatched_set.contains(&ev.id))
-                .map(|mut ev| {
-                    ev.scheduled_tick = tick + 1;
-                    ev
-                })
                 .collect();
             if !remaining.is_empty() {
                 self.event_queue

@@ -294,6 +294,8 @@ pub enum SagaError {
         active_count: usize,
         max_concurrent: usize,
     },
+    /// A saga with this ID already exists.
+    SagaAlreadyExists { saga_id: String },
 }
 
 impl fmt::Display for SagaError {
@@ -343,6 +345,9 @@ impl fmt::Display for SagaError {
                     f,
                     "concurrency limit reached: {active_count} active sagas (max {max_concurrent})"
                 )
+            }
+            Self::SagaAlreadyExists { saga_id } => {
+                write!(f, "saga {saga_id} already exists")
             }
         }
     }
@@ -446,6 +451,11 @@ impl SagaOrchestrator {
         });
         self.record_count("saga_created");
 
+        if self.sagas.contains_key(saga_id) {
+            return Err(SagaError::SagaAlreadyExists {
+                saga_id: saga_id.to_string(),
+            });
+        }
         self.sagas.insert(saga_id.to_string(), saga);
         Ok(id)
     }
@@ -782,7 +792,10 @@ impl SagaOrchestrator {
             self.record_count("saga_epoch_invalidated");
         }
 
-        self.current_epoch = new_epoch;
+        // Enforce epoch monotonicity — never regress.
+        if new_epoch.as_u64() > self.current_epoch.as_u64() {
+            self.current_epoch = new_epoch;
+        }
         invalidated
     }
 

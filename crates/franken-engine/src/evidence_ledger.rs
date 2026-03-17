@@ -331,7 +331,11 @@ impl EvidenceEntryBuilder {
         };
         // Serialize the entry with empty hash fields to form the canonical hash input.
         // This ensures all metadata, constraints, candidates, and witnesses are cryptographically bound.
-        let hash_input = serde_json::to_string(&temp_entry).unwrap_or_default();
+        let hash_input = serde_json::to_string(&temp_entry).map_err(|e| {
+            LedgerError::SchemaValidationFailed {
+                reason: format!("evidence entry serialization failed: {e}"),
+            }
+        })?;
         let evidence_hash = deterministic_hash(&hash_input);
         let entry_id = format!("ev-{}", &evidence_hash[..16]);
 
@@ -342,18 +346,14 @@ impl EvidenceEntryBuilder {
     }
 }
 
-/// Simple deterministic hash for content addressing.
+/// Deterministic cryptographic hash for content addressing.
 ///
-/// Production should use SHA-256; this uses a portable, deterministic
-/// hash function for the initial implementation.
+/// Uses SHA-256 for collision resistance and tamper detection.
 fn deterministic_hash(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a offset basis
-    for &b in bytes {
-        h ^= u64::from(b);
-        h = h.wrapping_mul(0x0100_0000_01b3); // FNV-1a prime
-    }
-    format!("{h:016x}")
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    let digest = hasher.finalize();
+    hex::encode(digest)
 }
 
 // ---------------------------------------------------------------------------
@@ -2228,9 +2228,10 @@ mod tests {
     }
 
     #[test]
-    fn evidence_hash_is_16_hex_chars() {
+    fn evidence_hash_is_sha256_hex() {
         let entry = sample_entry();
-        assert_eq!(entry.evidence_hash.len(), 16);
+        // SHA-256 produces 64 hex characters.
+        assert_eq!(entry.evidence_hash.len(), 64);
         assert!(entry.evidence_hash.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
@@ -2358,7 +2359,7 @@ mod tests {
         let h1 = deterministic_hash("");
         let h2 = deterministic_hash("");
         assert_eq!(h1, h2);
-        assert_eq!(h1.len(), 16);
+        assert_eq!(h1.len(), 64); // SHA-256
     }
 
     #[test]
@@ -3081,7 +3082,7 @@ mod tests {
         let h1 = deterministic_hash(&long_input);
         let h2 = deterministic_hash(&long_input);
         assert_eq!(h1, h2);
-        assert_eq!(h1.len(), 16);
+        assert_eq!(h1.len(), 64); // SHA-256
     }
 
     #[test]

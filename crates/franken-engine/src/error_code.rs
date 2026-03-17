@@ -850,7 +850,8 @@ impl HasErrorCode for SagaError {
             | SagaError::EmptySteps
             | SagaError::InvalidSagaId { .. }
             | SagaError::CompensationFailed { .. }
-            | SagaError::ConcurrencyLimitReached { .. } => FrankenErrorCode::SagaExecutionError,
+            | SagaError::ConcurrencyLimitReached { .. }
+            | SagaError::SagaAlreadyExists { .. } => FrankenErrorCode::SagaExecutionError,
         }
     }
 }

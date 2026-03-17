@@ -758,7 +758,7 @@ impl ForInStatement {
             "binding_kind".to_string(),
             self.binding_kind
                 .as_ref()
-                .map(|k| CanonicalValue::String(format!("{k:?}")))
+                .map(|k| CanonicalValue::String(k.as_str().to_string()))
                 .unwrap_or(CanonicalValue::Null),
         );
         map.insert("object".to_string(), self.object.canonical_value());
@@ -785,7 +785,7 @@ impl ForOfStatement {
             "binding_kind".to_string(),
             self.binding_kind
                 .as_ref()
-                .map(|k| CanonicalValue::String(format!("{k:?}")))
+                .map(|k| CanonicalValue::String(k.as_str().to_string()))
                 .unwrap_or(CanonicalValue::Null),
         );
         map.insert("iterable".to_string(), self.iterable.canonical_value());

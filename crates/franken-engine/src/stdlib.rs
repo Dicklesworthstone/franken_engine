@@ -752,7 +752,7 @@ pub fn exec_math(builtin: BuiltinId, args: &[JsValue]) -> Result<JsValue, Stdlib
     match builtin {
         BuiltinId::MathAbs => {
             let n = require_int("Math.abs", args, 0)?;
-            Ok(JsValue::Int(n.abs()))
+            Ok(JsValue::Int(n.saturating_abs()))
         }
         BuiltinId::MathCeil => {
             let n = require_int("Math.ceil", args, 0)?;
@@ -2231,8 +2231,11 @@ pub fn exec_string_method(
         BuiltinId::StringPrototypeSplit => {
             let separator = require_str("String.prototype.split", args, 0)?;
             let limit = opt_int_arg(args, 1).map(|n| (n / FP_SCALE).max(0) as usize);
+            // JS split with limit returns the first N elements of the full
+            // split, NOT splitn semantics (which keeps remainder in the last).
             let parts: Vec<JsValue> = if let Some(lim) = limit {
-                this.splitn(lim, separator.as_str())
+                this.split(separator.as_str())
+                    .take(lim)
                     .map(|s| JsValue::Str(s.to_string()))
                     .collect()
             } else {
@@ -2397,12 +2400,13 @@ pub fn exec_number_method(
             }
             let units = this_val / FP_SCALE;
             let frac = (this_val % FP_SCALE).abs();
+            let sign = if this_val < 0 && units == 0 { "-" } else { "" };
             if digits == 0 {
-                Ok(JsValue::Str(format!("{units}")))
+                Ok(JsValue::Str(format!("{sign}{}", units.abs())))
             } else {
                 let frac_str = format!("{frac:06}");
                 let trimmed = &frac_str[..digits.min(6) as usize];
-                Ok(JsValue::Str(format!("{units}.{trimmed}")))
+                Ok(JsValue::Str(format!("{sign}{}.{trimmed}", units.abs())))
             }
         }
         BuiltinId::NumberPrototypeToString => {
@@ -2414,7 +2418,8 @@ pub fn exec_number_method(
                 let frac_abs = frac.abs();
                 let frac_str = format!("{frac_abs:06}");
                 let trimmed = frac_str.trim_end_matches('0');
-                Ok(JsValue::Str(format!("{units}.{trimmed}")))
+                let sign = if this_val < 0 && units == 0 { "-" } else { "" };
+                Ok(JsValue::Str(format!("{sign}{units}.{trimmed}")))
             }
         }
         BuiltinId::NumberPrototypeValueOf => Ok(JsValue::Int(this_val)),
@@ -2673,7 +2678,13 @@ fn coerce_to_string(value: &JsValue) -> String {
                 let frac_abs = frac.abs();
                 let frac_str = format!("{frac_abs:06}");
                 let trimmed = frac_str.trim_end_matches('0');
-                format!("{units}.{trimmed}")
+                // Preserve negative sign for values in (-1, 0) where
+                // integer division truncates the sign away.
+                if *n < 0 && units == 0 {
+                    format!("-{units}.{trimmed}")
+                } else {
+                    format!("{units}.{trimmed}")
+                }
             }
         }
         JsValue::Str(s) => s.clone(),
@@ -2784,23 +2795,26 @@ fn percent_encode(input: &str, component: bool) -> String {
 }
 
 /// Percent-decode a string for URI decoding.
+///
+/// Decodes `%XX` sequences into bytes, then reconstructs valid UTF-8.
 fn percent_decode(input: &str) -> String {
-    let mut result = String::with_capacity(input.len());
+    let mut decoded_bytes: Vec<u8> = Vec::with_capacity(input.len());
     let bytes = input.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
             let hex = &input[i + 1..i + 3];
             if let Ok(byte) = u8::from_str_radix(hex, 16) {
-                result.push(byte as char);
+                decoded_bytes.push(byte);
                 i += 3;
                 continue;
             }
         }
-        result.push(bytes[i] as char);
+        decoded_bytes.push(bytes[i]);
         i += 1;
     }
-    result
+    String::from_utf8(decoded_bytes)
+        .unwrap_or_else(|_| String::from_utf8_lossy(input.as_bytes()).into_owned())
 }
 
 fn is_uri_unreserved(b: u8) -> bool {

@@ -1791,13 +1791,7 @@ mod tests {
         for i in 0..3_u64 {
             let trace_id = format!("trace-{i}");
             let decision_id = format!("decision-{i}");
-            let ctx = BoundaryContext::new(
-                &trace_id,
-                &decision_id,
-                "policy",
-                "clock",
-                i,
-            );
+            let ctx = BoundaryContext::new(&trace_id, &decision_id, "policy", "clock", i);
             session
                 .capture_clock_read(&ctx, "mono", "monotonic", i, None)
                 .expect("capture");

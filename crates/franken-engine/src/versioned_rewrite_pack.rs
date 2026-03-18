@@ -1139,4 +1139,175 @@ mod tests {
         let back: RewriteRuleEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(rule, back);
     }
+
+    // -----------------------------------------------------------------------
+    // Deep enrichment tests (PearlTower 2026-03-18)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn version_compatibility_same_version() {
+        let v = PackVersion::CURRENT;
+        assert!(v.is_compatible_with(&v));
+    }
+
+    #[test]
+    fn version_compatibility_zero() {
+        let zero = PackVersion { major: 0, minor: 0 };
+        assert!(zero.is_compatible_with(&zero));
+    }
+
+    #[test]
+    fn cost_class_display_all() {
+        for class in InstructionCostClass::ALL {
+            assert!(!class.to_string().is_empty());
+        }
+    }
+
+    #[test]
+    fn cost_class_all_count() {
+        assert!(InstructionCostClass::ALL.len() >= 8);
+    }
+
+    #[test]
+    fn cost_model_different_ids_different_hash() {
+        let m1 = DeterministicCostModel::default_baseline("model-a");
+        let m2 = DeterministicCostModel::default_baseline("model-b");
+        assert_ne!(m1.content_hash, m2.content_hash);
+    }
+
+    #[test]
+    fn category_all_display_unique() {
+        let names: BTreeSet<String> = [
+            RewriteCategory::AlgebraicSimplification,
+            RewriteCategory::DeadCodeElimination,
+            RewriteCategory::CommonSubexpression,
+            RewriteCategory::PartialEvaluation,
+            RewriteCategory::EffectHoisting,
+            RewriteCategory::ShapeSpecialization,
+            RewriteCategory::ReactRenderOptimization,
+            RewriteCategory::StringFusion,
+            RewriteCategory::ArrayOptimization,
+            RewriteCategory::Custom,
+        ]
+        .iter()
+        .map(|c| c.to_string())
+        .collect();
+        assert_eq!(names.len(), 10);
+    }
+
+    #[test]
+    fn interference_for_rule_symmetric() {
+        let entries = vec![test_interference(
+            "r1",
+            "r2",
+            RuleInterferenceKind::PatternConflict,
+        )];
+        let meta = InterferenceMetadata::build(entries);
+        assert_eq!(meta.for_rule("r1").len(), 1);
+        assert_eq!(meta.for_rule("r2").len(), 1);
+    }
+
+    #[test]
+    fn pack_schema_version_correct() {
+        let pack = test_pack("schema", vec![]);
+        assert_eq!(pack.schema_version, PACK_SCHEMA_VERSION);
+        assert_eq!(pack.bead_id, BEAD_ID);
+    }
+
+    #[test]
+    fn pack_content_hash_changes_with_rules() {
+        let p1 = test_pack("same", vec![]);
+        let p2 = test_pack("same", vec![test_rule("r1", RewriteCategory::Custom, true)]);
+        assert_ne!(p1.content_hash, p2.content_hash);
+    }
+
+    #[test]
+    fn pack_disabled_rule_not_in_enabled_count() {
+        let mut rule = test_rule("dis", RewriteCategory::Custom, true);
+        rule.enabled = false;
+        let pack = test_pack("disabled", vec![rule]);
+        assert_eq!(pack.rule_count(), 1);
+        assert_eq!(pack.enabled_count(), 0);
+    }
+
+    #[test]
+    fn pack_soundness_rate_all_sound() {
+        let rules = vec![
+            test_rule("s1", RewriteCategory::Custom, true),
+            test_rule("s2", RewriteCategory::Custom, true),
+        ];
+        let pack = test_pack("all-sound", rules);
+        assert_eq!(pack.soundness_rate_millionths(), MILLION);
+    }
+
+    #[test]
+    fn pack_soundness_rate_none_sound() {
+        let rules = vec![
+            test_rule("s1", RewriteCategory::Custom, false),
+            test_rule("s2", RewriteCategory::Custom, false),
+        ];
+        let pack = test_pack("none-sound", rules);
+        assert_eq!(pack.soundness_rate_millionths(), 0);
+    }
+
+    #[test]
+    fn catalog_deterministic_hash() {
+        let c1 = PackCatalog::new("det");
+        let c2 = PackCatalog::new("det");
+        assert_eq!(c1.catalog_hash, c2.catalog_hash);
+    }
+
+    #[test]
+    fn catalog_schema_version() {
+        let catalog = PackCatalog::new("test");
+        assert_eq!(catalog.schema_version, CATALOG_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn schema_constants_non_empty() {
+        assert!(!COMPONENT.is_empty());
+        assert!(!BEAD_ID.is_empty());
+        assert!(!PACK_SCHEMA_VERSION.is_empty());
+        assert!(!CATALOG_SCHEMA_VERSION.is_empty());
+        assert!(!COST_MODEL_SCHEMA_VERSION.is_empty());
+        assert!(!INTERFERENCE_SCHEMA_VERSION.is_empty());
+    }
+
+    #[test]
+    fn max_rules_per_pack_positive() {
+        assert!(MAX_RULES_PER_PACK > 0);
+    }
+
+    #[test]
+    fn max_interference_entries_positive() {
+        assert!(MAX_INTERFERENCE_ENTRIES > 0);
+    }
+
+    #[test]
+    fn interference_kind_ordering() {
+        assert!(RuleInterferenceKind::None < RuleInterferenceKind::PatternConflict);
+        assert!(RuleInterferenceKind::PatternConflict < RuleInterferenceKind::OrderDependent);
+    }
+
+    #[test]
+    fn catalog_multiple_packs() {
+        let mut catalog = PackCatalog::new("multi");
+        for i in 0..5 {
+            let pack = test_pack(
+                &format!("pack-{i}"),
+                vec![test_rule(&format!("r{i}"), RewriteCategory::Custom, true)],
+            );
+            assert!(catalog.register(pack));
+        }
+        assert_eq!(catalog.pack_count(), 5);
+        assert_eq!(catalog.total_rule_count, 5);
+    }
+
+    #[test]
+    fn rule_interference_serde() {
+        let interf = test_interference("a", "b", RuleInterferenceKind::BudgetContention);
+        let json = serde_json::to_string(&interf).unwrap();
+        let back: RuleInterference = serde_json::from_str(&json).unwrap();
+        assert_eq!(interf, back);
+    }
 }

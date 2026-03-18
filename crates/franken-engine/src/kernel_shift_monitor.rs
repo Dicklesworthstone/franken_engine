@@ -995,4 +995,182 @@ mod tests {
     fn million_value() {
         assert_eq!(MILLION, 1_000_000);
     }
+
+    // -----------------------------------------------------------------------
+    // Deep enrichment tests (PearlTower 2026-03-18)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn mmd_exact_threshold_is_significant() {
+        let config = default_config(WorkloadDimension::ComputeIntensity);
+        let r = MmdResult::compute(
+            WorkloadDimension::ComputeIntensity,
+            config.mmd_threshold_millionths,
+            &config,
+            256,
+            256,
+        );
+        assert_eq!(r.verdict, ShiftVerdict::SignificantShift);
+    }
+
+    #[test]
+    fn mmd_just_below_threshold() {
+        let config = default_config(WorkloadDimension::ComputeIntensity);
+        let r = MmdResult::compute(
+            WorkloadDimension::ComputeIntensity,
+            config.mmd_threshold_millionths - 1,
+            &config,
+            256,
+            256,
+        );
+        assert_ne!(r.verdict, ShiftVerdict::SignificantShift);
+    }
+
+    #[test]
+    fn mmd_zero_is_no_shift() {
+        let config = default_config(WorkloadDimension::ComputeIntensity);
+        let r = MmdResult::compute(WorkloadDimension::ComputeIntensity, 0, &config, 256, 256);
+        assert_eq!(r.verdict, ShiftVerdict::NoShift);
+    }
+
+    #[test]
+    fn mmd_deterministic() {
+        let config = default_config(WorkloadDimension::AllocationPattern);
+        let r1 = MmdResult::compute(
+            WorkloadDimension::AllocationPattern,
+            75_000,
+            &config,
+            100,
+            200,
+        );
+        let r2 = MmdResult::compute(
+            WorkloadDimension::AllocationPattern,
+            75_000,
+            &config,
+            100,
+            200,
+        );
+        assert_eq!(r1, r2);
+    }
+
+    #[test]
+    fn aggregate_mixed_measured_and_abstained() {
+        let results = vec![
+            make_measured(WorkloadDimension::ComputeIntensity, 5_000),
+            make_abstained(WorkloadDimension::AllocationPattern),
+            make_measured(WorkloadDimension::ModuleGraphShape, 200_000),
+        ];
+        let report = AggregateShiftReport::new(test_epoch(), results);
+        assert_eq!(report.measured_count(), 2);
+        assert_eq!(report.abstained_count, 1);
+        assert_eq!(report.significant_count, 1);
+    }
+
+    #[test]
+    fn aggregate_coverage_partial() {
+        let results = vec![
+            make_measured(WorkloadDimension::ComputeIntensity, 5_000),
+            make_abstained(WorkloadDimension::AllocationPattern),
+        ];
+        let report = AggregateShiftReport::new(test_epoch(), results);
+        // 1 measured out of 2 total = 500_000 millionths
+        assert_eq!(report.coverage_millionths(), 500_000);
+    }
+
+    #[test]
+    fn aggregate_significantly_shifted_empty_when_no_shift() {
+        let results = vec![make_measured(WorkloadDimension::ComputeIntensity, 5_000)];
+        let report = AggregateShiftReport::new(test_epoch(), results);
+        assert!(report.significantly_shifted_dimensions().is_empty());
+    }
+
+    #[test]
+    fn config_different_dimensions_same_structure() {
+        let c1 = MonitorConfig::default_for(WorkloadDimension::ComputeIntensity);
+        let c2 = MonitorConfig::default_for(WorkloadDimension::GcPressureProfile);
+        // Same default structure, just different dimension
+        assert_eq!(c1.kernel, c2.kernel);
+        assert_eq!(c1.window_size, c2.window_size);
+        assert_ne!(c1.dimension, c2.dimension);
+    }
+
+    #[test]
+    fn kernel_display_matches_as_str() {
+        for k in KernelKind::ALL {
+            assert_eq!(k.to_string(), k.as_str());
+        }
+    }
+
+    #[test]
+    fn verdict_display_matches_as_str() {
+        for v in ShiftVerdict::ALL {
+            assert_eq!(v.to_string(), v.as_str());
+        }
+    }
+
+    #[test]
+    fn report_hash_changes_with_different_results() {
+        let r1 = AggregateShiftReport::new(
+            test_epoch(),
+            vec![make_measured(WorkloadDimension::ComputeIntensity, 5_000)],
+        );
+        let r2 = AggregateShiftReport::new(
+            test_epoch(),
+            vec![make_measured(WorkloadDimension::ComputeIntensity, 200_000)],
+        );
+        assert_ne!(r1.content_hash, r2.content_hash);
+    }
+
+    #[test]
+    fn report_schema_version() {
+        let report = AggregateShiftReport::new(test_epoch(), vec![]);
+        assert_eq!(report.schema_version, SCHEMA_VERSION);
+        assert_eq!(report.bead_id, BEAD_ID);
+    }
+
+    #[test]
+    fn abstention_insufficient_samples_display() {
+        let r = MonitorAbstention::InsufficientSamples {
+            available: 10,
+            required: 32,
+        };
+        let s = r.to_string();
+        assert!(s.contains("10"));
+        assert!(s.contains("32"));
+    }
+
+    #[test]
+    fn abstention_disabled_by_policy_tag() {
+        let r = MonitorAbstention::DisabledByPolicy;
+        assert_eq!(r.tag(), "disabled_by_policy");
+    }
+
+    #[test]
+    fn abstention_empty_reference_tag() {
+        let r = MonitorAbstention::EmptyReferenceDistribution;
+        assert_eq!(r.tag(), "empty_reference_distribution");
+    }
+
+    #[test]
+    fn all_dimensions_have_default_configs() {
+        for d in WorkloadDimension::ALL {
+            let c = MonitorConfig::default_for(*d);
+            assert_eq!(c.dimension, *d);
+            assert!(c.window_size >= MIN_WINDOW_SIZE);
+        }
+    }
+
+    #[test]
+    fn mmd_result_display() {
+        let config = default_config(WorkloadDimension::ComputeIntensity);
+        let r = MmdResult::compute(
+            WorkloadDimension::ComputeIntensity,
+            50_000,
+            &config,
+            100,
+            100,
+        );
+        let s = format!("{r}");
+        assert!(!s.is_empty());
+    }
 }

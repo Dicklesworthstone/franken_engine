@@ -1253,4 +1253,924 @@ mod tests {
         assert!(summary.dedup_saved_bytes > 0);
         assert_eq!(summary.dedup_count, 3);
     }
+
+    // -----------------------------------------------------------------------
+    // Additional tests — edge cases, boundary conditions, error paths
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn refusal_at_exact_boundary_63_bytes() {
+        let mut pipeline = CompressionPipeline::new(epoch(1));
+        let d = descriptor(
+            "boundary-63",
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            63,
+            None,
+        );
+        pipeline.process_artifact(&d);
+        assert_eq!(pipeline.refusals.len(), 1);
+        assert!(pipeline.results.is_empty());
+        match &pipeline.refusals[0].1 {
+            CompressionRefusalReason::TooSmall {
+                size_bytes,
+                min_bytes,
+            } => {
+                assert_eq!(*size_bytes, 63);
+                assert_eq!(*min_bytes, 64);
+            }
+            other => panic!("expected TooSmall, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn acceptance_at_exact_boundary_64_bytes() {
+        let mut pipeline = CompressionPipeline::new(epoch(1));
+        let d = descriptor(
+            "boundary-64",
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            64,
+            None,
+        );
+        pipeline.process_artifact(&d);
+        assert!(pipeline.refusals.is_empty());
+        assert_eq!(pipeline.results.len(), 1);
+    }
+
+    #[test]
+    fn refusal_zero_byte_artifact() {
+        let mut pipeline = CompressionPipeline::new(epoch(1));
+        let d = descriptor(
+            "zero-bytes",
+            ArtifactDomain::Aot,
+            ArtifactFamily::BytecodeArtifact,
+            0,
+            None,
+        );
+        pipeline.process_artifact(&d);
+        assert_eq!(pipeline.refusals.len(), 1);
+        assert!(pipeline.results.is_empty());
+    }
+
+    #[test]
+    fn refusal_one_byte_artifact() {
+        let mut pipeline = CompressionPipeline::new(epoch(1));
+        let d = descriptor(
+            "one-byte",
+            ArtifactDomain::Evidence,
+            ArtifactFamily::EvidenceRecord,
+            1,
+            None,
+        );
+        pipeline.process_artifact(&d);
+        assert_eq!(pipeline.refusals.len(), 1);
+    }
+
+    #[test]
+    fn pipeline_process_batch_empty_slice() {
+        let mut pipeline = CompressionPipeline::new(epoch(5));
+        let hash_before = pipeline.pipeline_hash;
+        pipeline.process_batch(&[]);
+        // Hash may change because recompute_hash is called, but counts stay zero.
+        assert!(pipeline.results.is_empty());
+        assert!(pipeline.receipts.is_empty());
+        // Hash should still be recomputed (though inputs are the same).
+        let _ = hash_before;
+    }
+
+    #[test]
+    fn pipeline_batch_sorts_results_by_artifact_id() {
+        let mut pipeline = CompressionPipeline::new(epoch(1));
+        let descriptors = vec![
+            descriptor(
+                "zzz",
+                ArtifactDomain::Cache,
+                ArtifactFamily::CacheEntry,
+                200,
+                None,
+            ),
+            descriptor(
+                "aaa",
+                ArtifactDomain::Cache,
+                ArtifactFamily::CacheEntry,
+                200,
+                None,
+            ),
+            descriptor(
+                "mmm",
+                ArtifactDomain::Cache,
+                ArtifactFamily::CacheEntry,
+                200,
+                None,
+            ),
+        ];
+        pipeline.process_batch(&descriptors);
+        let ids: Vec<&str> = pipeline
+            .results
+            .iter()
+            .map(|r| r.artifact_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["aaa", "mmm", "zzz"]);
+    }
+
+    #[test]
+    fn pipeline_batch_sorts_receipts_by_receipt_id() {
+        let mut pipeline = CompressionPipeline::new(epoch(1));
+        let descriptors = vec![
+            descriptor(
+                "zzz",
+                ArtifactDomain::Aot,
+                ArtifactFamily::BytecodeArtifact,
+                200,
+                None,
+            ),
+            descriptor(
+                "aaa",
+                ArtifactDomain::Aot,
+                ArtifactFamily::BytecodeArtifact,
+                200,
+                None,
+            ),
+        ];
+        pipeline.process_batch(&descriptors);
+        let ids: Vec<&str> = pipeline
+            .receipts
+            .iter()
+            .map(|r| r.receipt_id.as_str())
+            .collect();
+        // Receipt IDs are "receipt-{artifact_id}"
+        assert_eq!(ids, vec!["receipt-aaa", "receipt-zzz"]);
+    }
+
+    #[test]
+    fn result_for_missing_returns_none() {
+        let pipeline = CompressionPipeline::new(epoch(1));
+        assert!(pipeline.result_for("nonexistent").is_none());
+    }
+
+    #[test]
+    fn receipt_for_missing_returns_none() {
+        let pipeline = CompressionPipeline::new(epoch(1));
+        assert!(pipeline.receipt_for("nonexistent").is_none());
+    }
+
+    #[test]
+    fn dedup_entries_for_canonical_empty_pipeline() {
+        let pipeline = CompressionPipeline::new(epoch(1));
+        let canonical = ContentHash::compute(b"nothing");
+        assert!(pipeline.dedup_entries_for_canonical(&canonical).is_empty());
+    }
+
+    #[test]
+    fn dedup_entries_for_canonical_filters_correctly() {
+        let mut pipeline = CompressionPipeline::new(epoch(1));
+        let canon_a = b"canon-group-a";
+        let canon_b = b"canon-group-b";
+        for i in 0..3 {
+            pipeline.process_artifact(&descriptor(
+                &format!("ga-{i}"),
+                ArtifactDomain::Cache,
+                ArtifactFamily::CacheEntry,
+                500,
+                Some(canon_a),
+            ));
+        }
+        for i in 0..2 {
+            pipeline.process_artifact(&descriptor(
+                &format!("gb-{i}"),
+                ArtifactDomain::Cache,
+                ArtifactFamily::CacheEntry,
+                500,
+                Some(canon_b),
+            ));
+        }
+        let canonical_a_hash = ContentHash::compute(canon_a);
+        let canonical_b_hash = ContentHash::compute(canon_b);
+        let entries_a = pipeline.dedup_entries_for_canonical(&canonical_a_hash);
+        let entries_b = pipeline.dedup_entries_for_canonical(&canonical_b_hash);
+        // First of each group is the representative, rest are dedup entries
+        assert_eq!(entries_a.len(), 2);
+        assert_eq!(entries_b.len(), 1);
+    }
+
+    #[test]
+    fn result_bytes_saved_saturates_at_zero() {
+        let r = CompressionResult {
+            artifact_id: "sat".to_string(),
+            strategy: CompressionStrategy::Identity,
+            original_size_bytes: 100,
+            compressed_size_bytes: 200, // artificially larger
+            ratio_millionths: 2_000_000,
+            compressed_hash: ContentHash::compute(b"sat"),
+            dedup_representative_id: None,
+            result_hash: ContentHash::compute(b"placeholder"),
+        };
+        // saturating_sub should yield 0, not underflow
+        assert_eq!(r.bytes_saved(), 0);
+    }
+
+    #[test]
+    fn result_hash_changes_when_artifact_id_differs() {
+        let mut r1 = CompressionResult {
+            artifact_id: "alpha".to_string(),
+            strategy: CompressionStrategy::Identity,
+            original_size_bytes: 100,
+            compressed_size_bytes: 100,
+            ratio_millionths: MILLION,
+            compressed_hash: ContentHash::compute(b"same"),
+            dedup_representative_id: None,
+            result_hash: ContentHash::compute(b"placeholder"),
+        };
+        let mut r2 = r1.clone();
+        r2.artifact_id = "beta".to_string();
+        r1.recompute_hash();
+        r2.recompute_hash();
+        assert_ne!(r1.result_hash, r2.result_hash);
+    }
+
+    #[test]
+    fn result_hash_changes_when_dedup_rep_differs() {
+        let mut r1 = CompressionResult {
+            artifact_id: "same".to_string(),
+            strategy: CompressionStrategy::Dedup,
+            original_size_bytes: 100,
+            compressed_size_bytes: 0,
+            ratio_millionths: 0,
+            compressed_hash: ContentHash::compute(b"x"),
+            dedup_representative_id: Some("rep-a".to_string()),
+            result_hash: ContentHash::compute(b"placeholder"),
+        };
+        let mut r2 = r1.clone();
+        r2.dedup_representative_id = Some("rep-b".to_string());
+        r1.recompute_hash();
+        r2.recompute_hash();
+        assert_ne!(r1.result_hash, r2.result_hash);
+    }
+
+    #[test]
+    fn result_hash_differs_none_vs_some_dedup_rep() {
+        let mut r1 = CompressionResult {
+            artifact_id: "same".to_string(),
+            strategy: CompressionStrategy::Dedup,
+            original_size_bytes: 100,
+            compressed_size_bytes: 0,
+            ratio_millionths: 0,
+            compressed_hash: ContentHash::compute(b"x"),
+            dedup_representative_id: None,
+            result_hash: ContentHash::compute(b"placeholder"),
+        };
+        let mut r2 = r1.clone();
+        r2.dedup_representative_id = Some("rep".to_string());
+        r1.recompute_hash();
+        r2.recompute_hash();
+        assert_ne!(r1.result_hash, r2.result_hash);
+    }
+
+    #[test]
+    fn receipt_hash_changes_with_canonical_id_presence() {
+        let mut r1 = CompressionReceipt {
+            receipt_id: "r".to_string(),
+            artifact_id: "a".to_string(),
+            original_hash: ContentHash::compute(b"o"),
+            compressed_hash: ContentHash::compute(b"c"),
+            canonical_id: None,
+            strategy: CompressionStrategy::Dedup,
+            domain: ArtifactDomain::Cache,
+            restoration_verified: true,
+            receipt_epoch: epoch(1),
+            receipt_hash: ContentHash::compute(b"placeholder"),
+        };
+        let mut r2 = r1.clone();
+        r2.canonical_id = Some(ContentHash::compute(b"canonical"));
+        r1.recompute_hash();
+        r2.recompute_hash();
+        assert_ne!(r1.receipt_hash, r2.receipt_hash);
+    }
+
+    #[test]
+    fn receipt_hash_changes_with_restoration_verified_flag() {
+        let mut r1 = CompressionReceipt {
+            receipt_id: "r".to_string(),
+            artifact_id: "a".to_string(),
+            original_hash: ContentHash::compute(b"o"),
+            compressed_hash: ContentHash::compute(b"c"),
+            canonical_id: None,
+            strategy: CompressionStrategy::Identity,
+            domain: ArtifactDomain::Evidence,
+            restoration_verified: true,
+            receipt_epoch: epoch(5),
+            receipt_hash: ContentHash::compute(b"placeholder"),
+        };
+        let mut r2 = r1.clone();
+        r2.restoration_verified = false;
+        r1.recompute_hash();
+        r2.recompute_hash();
+        assert_ne!(r1.receipt_hash, r2.receipt_hash);
+    }
+
+    #[test]
+    fn receipt_hash_changes_with_epoch() {
+        let mut r1 = CompressionReceipt {
+            receipt_id: "r".to_string(),
+            artifact_id: "a".to_string(),
+            original_hash: ContentHash::compute(b"o"),
+            compressed_hash: ContentHash::compute(b"c"),
+            canonical_id: None,
+            strategy: CompressionStrategy::Dedup,
+            domain: ArtifactDomain::Cache,
+            restoration_verified: true,
+            receipt_epoch: epoch(1),
+            receipt_hash: ContentHash::compute(b"placeholder"),
+        };
+        let mut r2 = r1.clone();
+        r2.receipt_epoch = epoch(2);
+        r1.recompute_hash();
+        r2.recompute_hash();
+        assert_ne!(r1.receipt_hash, r2.receipt_hash);
+    }
+
+    #[test]
+    fn strategy_expected_ratios_ordered() {
+        // Dedup should have the best ratio, then Delta, then Dictionary, then Identity
+        assert!(
+            CompressionStrategy::Dedup.expected_ratio_millionths()
+                < CompressionStrategy::DeltaEncoding.expected_ratio_millionths()
+        );
+        assert!(
+            CompressionStrategy::DeltaEncoding.expected_ratio_millionths()
+                < CompressionStrategy::DictionaryCompression.expected_ratio_millionths()
+        );
+        assert!(
+            CompressionStrategy::DictionaryCompression.expected_ratio_millionths()
+                < CompressionStrategy::Identity.expected_ratio_millionths()
+        );
+    }
+
+    #[test]
+    fn strategy_all_ratios_below_or_equal_million() {
+        for s in CompressionStrategy::ALL {
+            assert!(s.expected_ratio_millionths() <= MILLION);
+        }
+    }
+
+    #[test]
+    fn evidence_domain_uses_dictionary_compression() {
+        let mut pipeline = CompressionPipeline::new(epoch(1));
+        let d = descriptor(
+            "ev-1",
+            ArtifactDomain::Evidence,
+            ArtifactFamily::EvidenceRecord,
+            1000,
+            None,
+        );
+        pipeline.process_artifact(&d);
+        let result = pipeline.result_for("ev-1").unwrap();
+        assert_eq!(result.strategy, CompressionStrategy::DictionaryCompression);
+    }
+
+    #[test]
+    fn canonical_id_forces_dedup_strategy_regardless_of_domain() {
+        for domain in ArtifactDomain::ALL {
+            let mut pipeline = CompressionPipeline::new(epoch(1));
+            let d = descriptor(
+                &format!("canon-{domain}"),
+                *domain,
+                ArtifactFamily::CacheEntry,
+                1000,
+                Some(b"has-canonical"),
+            );
+            pipeline.process_artifact(&d);
+            let result = pipeline.result_for(&format!("canon-{domain}")).unwrap();
+            assert_eq!(
+                result.strategy,
+                CompressionStrategy::Dedup,
+                "domain {domain} with canonical_id should use Dedup"
+            );
+        }
+    }
+
+    #[test]
+    fn dictionary_compression_produces_smaller_output() {
+        let mut pipeline = CompressionPipeline::new(epoch(1));
+        let d = descriptor(
+            "dict-test",
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            10_000,
+            None,
+        );
+        pipeline.process_artifact(&d);
+        let result = pipeline.result_for("dict-test").unwrap();
+        // 350_000 millionths = 35% of original
+        assert_eq!(result.compressed_size_bytes, 3500);
+        assert_eq!(result.ratio_millionths, 350_000);
+    }
+
+    #[test]
+    fn delta_encoding_produces_smaller_output() {
+        let mut pipeline = CompressionPipeline::new(epoch(1));
+        let d = descriptor(
+            "delta-test",
+            ArtifactDomain::Aot,
+            ArtifactFamily::BytecodeArtifact,
+            10_000,
+            None,
+        );
+        pipeline.process_artifact(&d);
+        let result = pipeline.result_for("delta-test").unwrap();
+        // 200_000 millionths = 20% of original
+        assert_eq!(result.compressed_size_bytes, 2000);
+        assert_eq!(result.ratio_millionths, 200_000);
+    }
+
+    #[test]
+    fn compressed_size_at_least_one_for_non_dedup_strategies() {
+        // Even a very small artifact (at boundary) should produce compressed_size >= 1
+        let mut pipeline = CompressionPipeline::new(epoch(1));
+        let d = descriptor(
+            "tiny-compress",
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            64, // minimum accepted size
+            None,
+        );
+        pipeline.process_artifact(&d);
+        let result = pipeline.result_for("tiny-compress").unwrap();
+        assert!(result.compressed_size_bytes >= 1);
+    }
+
+    #[test]
+    fn pipeline_new_has_correct_schema_and_bead() {
+        let pipeline = CompressionPipeline::new(epoch(42));
+        assert_eq!(pipeline.schema_version, COMPRESSION_SCHEMA_VERSION);
+        assert_eq!(pipeline.bead_id, COMPRESSION_BEAD_ID);
+        assert_eq!(pipeline.pipeline_epoch, epoch(42));
+    }
+
+    #[test]
+    fn pipeline_hash_deterministic_same_inputs() {
+        let p1 = CompressionPipeline::new(epoch(7));
+        let p2 = CompressionPipeline::new(epoch(7));
+        assert_eq!(p1.pipeline_hash, p2.pipeline_hash);
+    }
+
+    #[test]
+    fn pipeline_hash_differs_with_different_epoch() {
+        let p1 = CompressionPipeline::new(epoch(1));
+        let p2 = CompressionPipeline::new(epoch(2));
+        assert_ne!(p1.pipeline_hash, p2.pipeline_hash);
+    }
+
+    #[test]
+    fn dedup_representative_is_first_artifact() {
+        let mut pipeline = CompressionPipeline::new(epoch(1));
+        let canonical = b"rep-test";
+        pipeline.process_artifact(&descriptor(
+            "first",
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            1000,
+            Some(canonical),
+        ));
+        pipeline.process_artifact(&descriptor(
+            "second",
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            1000,
+            Some(canonical),
+        ));
+        let r_second = pipeline.result_for("second").unwrap();
+        assert_eq!(r_second.dedup_representative_id.as_deref(), Some("first"));
+    }
+
+    #[test]
+    fn dedup_first_occurrence_retains_original_size() {
+        let mut pipeline = CompressionPipeline::new(epoch(1));
+        pipeline.process_artifact(&descriptor(
+            "only-one",
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            5000,
+            Some(b"sole-canonical"),
+        ));
+        let result = pipeline.result_for("only-one").unwrap();
+        // First occurrence with canonical ID keeps full size (no dedup partner yet)
+        assert_eq!(result.compressed_size_bytes, 5000);
+        assert!(result.dedup_representative_id.is_none());
+    }
+
+    #[test]
+    fn dedup_entry_records_domain_correctly() {
+        let mut pipeline = CompressionPipeline::new(epoch(1));
+        let canonical = b"domain-check";
+        pipeline.process_artifact(&descriptor(
+            "d-aot-1",
+            ArtifactDomain::Aot,
+            ArtifactFamily::BytecodeArtifact,
+            1000,
+            Some(canonical),
+        ));
+        pipeline.process_artifact(&descriptor(
+            "d-aot-2",
+            ArtifactDomain::Aot,
+            ArtifactFamily::BytecodeArtifact,
+            1000,
+            Some(canonical),
+        ));
+        assert_eq!(pipeline.dedup_entries.len(), 1);
+        assert_eq!(pipeline.dedup_entries[0].domain, ArtifactDomain::Aot);
+        assert_eq!(pipeline.dedup_entries[0].size_saved_bytes, 1000);
+    }
+
+    #[test]
+    fn summary_by_domain_counts_all_domains() {
+        let mut pipeline = CompressionPipeline::new(epoch(1));
+        for (i, domain) in ArtifactDomain::ALL.iter().enumerate() {
+            pipeline.process_artifact(&descriptor(
+                &format!("dom-{i}"),
+                *domain,
+                ArtifactFamily::CacheEntry,
+                200,
+                None,
+            ));
+        }
+        let summary = pipeline.summary_report();
+        assert_eq!(summary.by_domain.len(), 3);
+        for (_domain, count) in &summary.by_domain {
+            assert_eq!(*count, 1);
+        }
+    }
+
+    #[test]
+    fn summary_by_strategy_breakdown_correct() {
+        let mut pipeline = CompressionPipeline::new(epoch(1));
+        // Two cache (DictionaryCompression), one AOT (DeltaEncoding)
+        pipeline.process_artifact(&descriptor(
+            "c1",
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            1000,
+            None,
+        ));
+        pipeline.process_artifact(&descriptor(
+            "c2",
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            2000,
+            None,
+        ));
+        pipeline.process_artifact(&descriptor(
+            "a1",
+            ArtifactDomain::Aot,
+            ArtifactFamily::BytecodeArtifact,
+            3000,
+            None,
+        ));
+        let summary = pipeline.summary_report();
+        assert_eq!(summary.by_strategy.len(), 2);
+        let dict_breakdown = summary
+            .by_strategy
+            .iter()
+            .find(|b| b.strategy == CompressionStrategy::DictionaryCompression)
+            .unwrap();
+        assert_eq!(dict_breakdown.artifact_count, 2);
+        assert_eq!(dict_breakdown.original_bytes, 3000);
+        let delta_breakdown = summary
+            .by_strategy
+            .iter()
+            .find(|b| b.strategy == CompressionStrategy::DeltaEncoding)
+            .unwrap();
+        assert_eq!(delta_breakdown.artifact_count, 1);
+        assert_eq!(delta_breakdown.original_bytes, 3000);
+    }
+
+    #[test]
+    fn summary_overall_ratio_for_empty_pipeline_is_million() {
+        let pipeline = CompressionPipeline::new(epoch(1));
+        let summary = pipeline.summary_report();
+        // Division by zero case: checked_div returns None, unwrap_or(MILLION)
+        assert_eq!(summary.overall_ratio_millionths, MILLION);
+    }
+
+    #[test]
+    fn summary_serde_roundtrip() {
+        let mut pipeline = CompressionPipeline::new(epoch(3));
+        pipeline.process_artifact(&descriptor(
+            "s-1",
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            500,
+            None,
+        ));
+        let summary = pipeline.summary_report();
+        let json = serde_json::to_string(&summary).unwrap();
+        let back: CompressionSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(summary, back);
+    }
+
+    #[test]
+    fn refusal_display_replay_contract_violation() {
+        let r = CompressionRefusalReason::ReplayContractViolation {
+            detail: "ordering lost".to_string(),
+        };
+        let s = r.to_string();
+        assert!(s.contains("replay contract violation"));
+        assert!(s.contains("ordering lost"));
+    }
+
+    #[test]
+    fn refusal_display_epoch_mismatch() {
+        let r = CompressionRefusalReason::EpochMismatch {
+            artifact_epoch: 5,
+            reference_epoch: 10,
+        };
+        let s = r.to_string();
+        assert!(s.contains("5"));
+        assert!(s.contains("10"));
+        assert!(s.contains("epoch mismatch"));
+    }
+
+    #[test]
+    fn refusal_display_suspicious_ratio() {
+        let r = CompressionRefusalReason::SuspiciousRatio {
+            ratio_millionths: 999,
+        };
+        let s = r.to_string();
+        assert!(s.contains("999"));
+        assert!(s.contains("suspicious"));
+    }
+
+    #[test]
+    fn refusal_display_domain_strategy_mismatch() {
+        let r = CompressionRefusalReason::DomainStrategyMismatch {
+            domain: ArtifactDomain::Aot,
+            strategy: CompressionStrategy::Dedup,
+        };
+        let s = r.to_string();
+        assert!(s.contains("aot"));
+        assert!(s.contains("dedup"));
+    }
+
+    #[test]
+    fn refusal_display_unsupported_family() {
+        let r = CompressionRefusalReason::UnsupportedFamily {
+            family: ArtifactFamily::Ir1Fragment,
+        };
+        let s = r.to_string();
+        assert!(s.contains("unsupported artifact family"));
+    }
+
+    #[test]
+    fn error_display_restoration_failed_contains_hashes() {
+        let e = CompressionError::RestorationFailed {
+            artifact_id: "art-99".to_string(),
+            expected_hash: "0xabc".to_string(),
+            actual_hash: "0xdef".to_string(),
+        };
+        let s = e.to_string();
+        assert!(s.contains("art-99"));
+        assert!(s.contains("0xabc"));
+        assert!(s.contains("0xdef"));
+    }
+
+    #[test]
+    fn error_display_strategy_not_applicable() {
+        let e = CompressionError::StrategyNotApplicable {
+            strategy: CompressionStrategy::DictionaryCompression,
+            reason: "no dictionary".to_string(),
+        };
+        let s = e.to_string();
+        assert!(s.contains("dictionary_compression"));
+        assert!(s.contains("no dictionary"));
+    }
+
+    #[test]
+    fn pipeline_refusals_tracked_alongside_results() {
+        let mut pipeline = CompressionPipeline::new(epoch(1));
+        // One too-small (refused), one acceptable
+        pipeline.process_artifact(&descriptor(
+            "small",
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            10,
+            None,
+        ));
+        pipeline.process_artifact(&descriptor(
+            "ok",
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            1000,
+            None,
+        ));
+        assert_eq!(pipeline.results.len(), 1);
+        assert_eq!(pipeline.refusals.len(), 1);
+        assert_eq!(pipeline.refusals[0].0, "small");
+        let summary = pipeline.summary_report();
+        assert_eq!(summary.refusal_count, 1);
+        assert_eq!(summary.total_artifacts, 1);
+    }
+
+    #[test]
+    fn pipeline_receipt_links_to_artifact() {
+        let mut pipeline = CompressionPipeline::new(epoch(7));
+        let d = descriptor(
+            "linked",
+            ArtifactDomain::Evidence,
+            ArtifactFamily::EvidenceRecord,
+            2000,
+            None,
+        );
+        pipeline.process_artifact(&d);
+        let receipt = pipeline.receipt_for("linked").unwrap();
+        assert_eq!(receipt.artifact_id, "linked");
+        assert_eq!(receipt.receipt_id, "receipt-linked");
+        assert_eq!(receipt.domain, ArtifactDomain::Evidence);
+        assert_eq!(receipt.strategy, CompressionStrategy::DictionaryCompression);
+        assert!(receipt.restoration_verified);
+        assert_eq!(receipt.receipt_epoch, epoch(7));
+    }
+
+    #[test]
+    fn pipeline_receipt_preserves_original_content_hash() {
+        let mut pipeline = CompressionPipeline::new(epoch(1));
+        let d = descriptor(
+            "hash-check",
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            500,
+            None,
+        );
+        let original_hash = d.content_hash;
+        pipeline.process_artifact(&d);
+        let receipt = pipeline.receipt_for("hash-check").unwrap();
+        assert_eq!(receipt.original_hash, original_hash);
+    }
+
+    #[test]
+    fn pipeline_hash_incorporates_refusals() {
+        let mut p1 = CompressionPipeline::new(epoch(1));
+        let mut p2 = CompressionPipeline::new(epoch(1));
+        // p1: one refusal
+        p1.process_artifact(&descriptor(
+            "tiny",
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            10,
+            None,
+        ));
+        // p2: no refusal (accepted)
+        p2.process_artifact(&descriptor(
+            "big",
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            1000,
+            None,
+        ));
+        assert_ne!(p1.pipeline_hash, p2.pipeline_hash);
+    }
+
+    #[test]
+    fn dedup_entry_serde_roundtrip() {
+        let entry = DedupEntry {
+            artifact_id: "dup-1".to_string(),
+            representative_id: "rep-1".to_string(),
+            canonical_id: ContentHash::compute(b"canon"),
+            domain: ArtifactDomain::Evidence,
+            size_saved_bytes: 4096,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let back: DedupEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(entry, back);
+    }
+
+    #[test]
+    fn strategy_breakdown_serde_roundtrip() {
+        let breakdown = StrategyBreakdown {
+            strategy: CompressionStrategy::DeltaEncoding,
+            artifact_count: 42,
+            original_bytes: 100_000,
+            compressed_bytes: 20_000,
+        };
+        let json = serde_json::to_string(&breakdown).unwrap();
+        let back: StrategyBreakdown = serde_json::from_str(&json).unwrap();
+        assert_eq!(breakdown, back);
+    }
+
+    #[test]
+    fn artifact_descriptor_serde_roundtrip() {
+        let d = descriptor(
+            "serde-desc",
+            ArtifactDomain::Aot,
+            ArtifactFamily::RewritePack,
+            9999,
+            Some(b"canonical-bytes"),
+        );
+        let json = serde_json::to_string(&d).unwrap();
+        let back: ArtifactDescriptor = serde_json::from_str(&json).unwrap();
+        assert_eq!(d, back);
+    }
+
+    #[test]
+    fn constants_are_correct() {
+        assert_eq!(
+            COMPRESSION_SCHEMA_VERSION,
+            "franken-engine.proof-backed-compression.v1"
+        );
+        assert_eq!(COMPRESSION_BEAD_ID, "bd-1lsy.7.18.2");
+        assert_eq!(COMPONENT, "proof_backed_compression");
+    }
+
+    #[test]
+    fn domain_ordering_is_stable() {
+        // Ord derived, so Cache < Aot < Evidence in declaration order
+        assert!(ArtifactDomain::Cache < ArtifactDomain::Aot);
+        assert!(ArtifactDomain::Aot < ArtifactDomain::Evidence);
+    }
+
+    #[test]
+    fn strategy_ordering_is_stable() {
+        // Ord derived in declaration order: Dedup < DictionaryCompression < DeltaEncoding < Identity
+        assert!(CompressionStrategy::Dedup < CompressionStrategy::DictionaryCompression);
+        assert!(CompressionStrategy::DictionaryCompression < CompressionStrategy::DeltaEncoding);
+        assert!(CompressionStrategy::DeltaEncoding < CompressionStrategy::Identity);
+    }
+
+    #[test]
+    fn large_artifact_compression_no_overflow() {
+        let mut pipeline = CompressionPipeline::new(epoch(1));
+        // Use a large size to test that saturating arithmetic works
+        let d = descriptor(
+            "huge",
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            u64::MAX / 2,
+            None,
+        );
+        pipeline.process_artifact(&d);
+        let result = pipeline.result_for("huge").unwrap();
+        // Should not panic from overflow; compressed_size uses saturating_mul
+        assert!(result.compressed_size_bytes > 0);
+    }
+
+    #[test]
+    fn multiple_refusals_accumulate() {
+        let mut pipeline = CompressionPipeline::new(epoch(1));
+        for i in 0..10 {
+            pipeline.process_artifact(&descriptor(
+                &format!("tiny-{i}"),
+                ArtifactDomain::Cache,
+                ArtifactFamily::CacheEntry,
+                i as u64, // all below 64 threshold
+                None,
+            ));
+        }
+        assert_eq!(pipeline.refusals.len(), 10);
+        assert!(pipeline.results.is_empty());
+        let summary = pipeline.summary_report();
+        assert_eq!(summary.refusal_count, 10);
+        assert_eq!(summary.total_artifacts, 0);
+    }
+
+    #[test]
+    fn mixed_canonical_and_non_canonical_artifacts() {
+        let mut pipeline = CompressionPipeline::new(epoch(1));
+        // Two with same canonical (dedup), one without canonical (dict compression)
+        let canon = b"mixed-canon";
+        pipeline.process_artifact(&descriptor(
+            "c1",
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            1000,
+            Some(canon),
+        ));
+        pipeline.process_artifact(&descriptor(
+            "c2",
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            1000,
+            Some(canon),
+        ));
+        pipeline.process_artifact(&descriptor(
+            "nc1",
+            ArtifactDomain::Cache,
+            ArtifactFamily::CacheEntry,
+            1000,
+            None,
+        ));
+        assert_eq!(pipeline.results.len(), 3);
+        assert_eq!(
+            pipeline.result_for("c1").unwrap().strategy,
+            CompressionStrategy::Dedup
+        );
+        assert_eq!(
+            pipeline.result_for("c2").unwrap().strategy,
+            CompressionStrategy::Dedup
+        );
+        assert_eq!(
+            pipeline.result_for("nc1").unwrap().strategy,
+            CompressionStrategy::DictionaryCompression
+        );
+        assert_eq!(pipeline.dedup_entries.len(), 1);
+    }
 }

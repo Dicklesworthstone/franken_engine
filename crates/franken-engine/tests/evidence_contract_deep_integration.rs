@@ -104,7 +104,12 @@ fn deep_ev_tier_display() {
 
 #[test]
 fn deep_ev_tier_serde_roundtrip() {
-    let tiers = [EvTier::Reject, EvTier::Marginal, EvTier::Positive, EvTier::HighImpact];
+    let tiers = [
+        EvTier::Reject,
+        EvTier::Marginal,
+        EvTier::Positive,
+        EvTier::HighImpact,
+    ];
     for tier in tiers {
         let json = serde_json::to_string(&tier).unwrap();
         let decoded: EvTier = serde_json::from_str(&json).unwrap();
@@ -126,7 +131,12 @@ fn deep_rollout_stage_display() {
 
 #[test]
 fn deep_rollout_stage_serde_roundtrip() {
-    let stages = [RolloutStage::Shadow, RolloutStage::Canary, RolloutStage::Ramp, RolloutStage::Default];
+    let stages = [
+        RolloutStage::Shadow,
+        RolloutStage::Canary,
+        RolloutStage::Ramp,
+        RolloutStage::Default,
+    ];
     for stage in stages {
         let json = serde_json::to_string(&stage).unwrap();
         let decoded: RolloutStage = serde_json::from_str(&json).unwrap();
@@ -229,9 +239,11 @@ fn deep_ev_nan_fails() {
     let mut contract = valid_contract();
     contract.ev_score = f64::NAN;
     let errors = contract.validate().unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|e| matches!(e, ContractValidationError::InvalidEvScore)));
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ContractValidationError::InvalidEvScore))
+    );
 }
 
 #[test]
@@ -239,9 +251,11 @@ fn deep_ev_positive_infinity_fails() {
     let mut contract = valid_contract();
     contract.ev_score = f64::INFINITY;
     let errors = contract.validate().unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|e| matches!(e, ContractValidationError::InvalidEvScore)));
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ContractValidationError::InvalidEvScore))
+    );
 }
 
 #[test]
@@ -249,9 +263,11 @@ fn deep_ev_negative_infinity_fails() {
     let mut contract = valid_contract();
     contract.ev_score = f64::NEG_INFINITY;
     let errors = contract.validate().unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|e| matches!(e, ContractValidationError::InvalidEvScore)));
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ContractValidationError::InvalidEvScore))
+    );
 }
 
 #[test]
@@ -260,9 +276,11 @@ fn deep_ev_tier_mismatch_detected() {
     contract.ev_score = 3.0; // should be Positive
     contract.ev_tier = EvTier::HighImpact; // wrong
     let errors = contract.validate().unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|e| matches!(e, ContractValidationError::EvTierMismatch { .. })));
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ContractValidationError::EvTierMismatch { .. }))
+    );
 }
 
 #[test]
@@ -271,9 +289,11 @@ fn deep_ev_below_threshold_detected() {
     contract.ev_score = 1.5;
     contract.ev_tier = EvTier::Marginal;
     let errors = contract.validate().unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|e| matches!(e, ContractValidationError::EvBelowThreshold { .. })));
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ContractValidationError::EvBelowThreshold { .. }))
+    );
 }
 
 #[test]
@@ -282,9 +302,11 @@ fn deep_ev_reject_tier_below_threshold() {
     contract.ev_score = 0.5;
     contract.ev_tier = EvTier::Reject;
     let errors = contract.validate().unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|e| matches!(e, ContractValidationError::EvBelowThreshold { .. })));
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ContractValidationError::EvBelowThreshold { .. }))
+    );
 }
 
 #[test]
@@ -312,9 +334,11 @@ fn deep_empty_rollout_fails() {
     let mut contract = valid_contract();
     contract.rollout_stages.clear();
     let errors = contract.validate().unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|e| matches!(e, ContractValidationError::EmptyRolloutStages)));
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ContractValidationError::EmptyRolloutStages))
+    );
 }
 
 #[test]
@@ -344,9 +368,11 @@ fn deep_wrong_ordering_fails() {
         RolloutStage::Shadow, // wrong: shadow after canary
     ];
     let errors = contract.validate().unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|e| matches!(e, ContractValidationError::InvalidRolloutOrder { .. })));
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ContractValidationError::InvalidRolloutOrder { .. }))
+    );
 }
 
 #[test]
@@ -366,9 +392,11 @@ fn deep_incompatible_version_detected() {
     let mut contract = valid_contract();
     contract.version = ContractVersion::new(2, 0);
     let errors = contract.validate().unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|e| matches!(e, ContractValidationError::IncompatibleVersion { .. })));
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ContractValidationError::IncompatibleVersion { .. }))
+    );
 }
 
 #[test]
@@ -470,18 +498,34 @@ fn deep_multiple_errors_accumulated() {
         version: ContractVersion::new(2, 0), // incompatible
         change_summary: String::new(),       // missing
         hotspot_evidence: "ok".to_string(),
-        ev_score: 0.5,                       // below threshold
+        ev_score: 0.5, // below threshold
         ev_tier: EvTier::Reject,
         expected_loss_model: "ok".to_string(),
         fallback_trigger: "ok".to_string(),
-        rollout_stages: vec![],              // empty
+        rollout_stages: vec![], // empty
         rollback_command: "ok".to_string(),
         benchmark_artifacts: "ok".to_string(),
     };
     let errors = contract.validate().unwrap_err();
-    assert!(errors.len() >= 3, "Should have multiple errors: {:?}", errors);
+    assert!(
+        errors.len() >= 3,
+        "Should have multiple errors: {:?}",
+        errors
+    );
     // Should include: IncompatibleVersion, MissingField, EvBelowThreshold, EmptyRolloutStages
-    assert!(errors.iter().any(|e| matches!(e, ContractValidationError::IncompatibleVersion { .. })));
-    assert!(errors.iter().any(|e| matches!(e, ContractValidationError::MissingField { .. })));
-    assert!(errors.iter().any(|e| matches!(e, ContractValidationError::EmptyRolloutStages)));
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ContractValidationError::IncompatibleVersion { .. }))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ContractValidationError::MissingField { .. }))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, ContractValidationError::EmptyRolloutStages))
+    );
 }

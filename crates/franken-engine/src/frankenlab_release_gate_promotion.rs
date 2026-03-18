@@ -1709,7 +1709,7 @@ mod tests {
 
     #[test]
     fn registry_gate_lookup_returns_none_when_not_present() {
-        let reg = ReleaseGatePromotionRegistry::new(test_epoch());
+        let mut reg = ReleaseGatePromotionRegistry::new(test_epoch());
         // Empty registry — no gates
         assert!(reg.gate(PromotedGateKind::LifecycleScenarios).is_none());
         assert!(reg.gate_mut(PromotedGateKind::LifecycleScenarios).is_none());

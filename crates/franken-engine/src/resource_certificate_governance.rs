@@ -1031,4 +1031,615 @@ mod tests {
         assert_eq!(receipt.verdict, GovernanceVerdict::InsufficientCoverage);
         assert_eq!(receipt.dimensions_missing.len(), 10);
     }
+
+    // -------------------------------------------------------------------
+    // Additional edge-case, serde, formatting, and governance chain tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_certificate_zero_budget_zero_usage() {
+        // Both budget and usage are zero: utilisation should be 0 (not FIXED_ONE).
+        let c = CertificateEvidence::new(
+            ResourceDimension::CpuTime,
+            "w_zero".into(),
+            0,
+            0,
+            50,
+            DEFAULT_MAX_UTILISATION_MILLIONTHS,
+        );
+        assert_eq!(c.utilisation_millionths, 0);
+        assert!(c.within_budget);
+    }
+
+    #[test]
+    fn test_certificate_exact_threshold_boundary() {
+        // Utilisation exactly equals the max threshold => within_budget is true (<= check).
+        let c = CertificateEvidence::new(
+            ResourceDimension::WallTime,
+            "boundary".into(),
+            1000,
+            900, // 900_000 millionths == DEFAULT_MAX_UTILISATION_MILLIONTHS
+            50,
+            DEFAULT_MAX_UTILISATION_MILLIONTHS,
+        );
+        assert_eq!(c.utilisation_millionths, DEFAULT_MAX_UTILISATION_MILLIONTHS);
+        assert!(c.within_budget);
+    }
+
+    #[test]
+    fn test_certificate_one_over_threshold() {
+        // Usage one unit over to make utilisation just exceed threshold.
+        let c = CertificateEvidence::new(
+            ResourceDimension::WallTime,
+            "just_over".into(),
+            1000,
+            901,
+            50,
+            DEFAULT_MAX_UTILISATION_MILLIONTHS,
+        );
+        assert!(c.utilisation_millionths > DEFAULT_MAX_UTILISATION_MILLIONTHS);
+        assert!(!c.within_budget);
+    }
+
+    #[test]
+    fn test_certificate_hash_differs_with_dimension() {
+        let a = CertificateEvidence::new(
+            ResourceDimension::CpuTime,
+            "w1".into(),
+            1000,
+            500,
+            50,
+            DEFAULT_MAX_UTILISATION_MILLIONTHS,
+        );
+        let b = CertificateEvidence::new(
+            ResourceDimension::HeapMemory,
+            "w1".into(),
+            1000,
+            500,
+            50,
+            DEFAULT_MAX_UTILISATION_MILLIONTHS,
+        );
+        assert_ne!(a.evidence_hash, b.evidence_hash);
+    }
+
+    #[test]
+    fn test_certificate_hash_differs_with_workload() {
+        let a = CertificateEvidence::new(
+            ResourceDimension::CpuTime,
+            "alpha".into(),
+            1000,
+            500,
+            50,
+            DEFAULT_MAX_UTILISATION_MILLIONTHS,
+        );
+        let b = CertificateEvidence::new(
+            ResourceDimension::CpuTime,
+            "beta".into(),
+            1000,
+            500,
+            50,
+            DEFAULT_MAX_UTILISATION_MILLIONTHS,
+        );
+        assert_ne!(a.evidence_hash, b.evidence_hash);
+    }
+
+    #[test]
+    fn test_regression_zero_previous_nonzero_current() {
+        // previous_usage = 0, current_usage > 0 => division by zero path, fallback to FIXED_ONE.
+        let r = RegressionEntry::new(
+            ResourceDimension::CpuTime,
+            "w1".into(),
+            0,
+            100,
+            DEFAULT_MAX_REGRESSION_MILLIONTHS,
+        );
+        assert_eq!(r.regression_millionths, FIXED_ONE);
+        assert!(!r.within_budget);
+    }
+
+    #[test]
+    fn test_regression_zero_both() {
+        // Both previous and current = 0 => saturating_sub gives 0, then 0 / 0 fallback = 0.
+        let r = RegressionEntry::new(
+            ResourceDimension::CpuTime,
+            "w1".into(),
+            0,
+            0,
+            DEFAULT_MAX_REGRESSION_MILLIONTHS,
+        );
+        assert_eq!(r.regression_millionths, 0);
+        assert!(r.within_budget);
+    }
+
+    #[test]
+    fn test_regression_exact_threshold() {
+        // 5% regression exactly at DEFAULT_MAX_REGRESSION (50_000 = 5%).
+        let r = RegressionEntry::new(
+            ResourceDimension::CpuTime,
+            "w1".into(),
+            1000,
+            1050,
+            DEFAULT_MAX_REGRESSION_MILLIONTHS,
+        );
+        assert_eq!(r.regression_millionths, 50_000);
+        assert!(r.within_budget);
+    }
+
+    #[test]
+    fn test_regression_hash_deterministic() {
+        let a = RegressionEntry::new(
+            ResourceDimension::HeapMemory,
+            "w1".into(),
+            500,
+            600,
+            DEFAULT_MAX_REGRESSION_MILLIONTHS,
+        );
+        let b = RegressionEntry::new(
+            ResourceDimension::HeapMemory,
+            "w1".into(),
+            500,
+            600,
+            DEFAULT_MAX_REGRESSION_MILLIONTHS,
+        );
+        assert_eq!(a.entry_hash, b.entry_hash);
+    }
+
+    #[test]
+    fn test_tail_risk_zero_drift() {
+        // tail == baseline => drift = 0.
+        let t = TailRiskEntry::new(
+            ResourceDimension::GcPause,
+            "w1".into(),
+            2_000_000,
+            2_000_000,
+            DEFAULT_MAX_TAIL_RISK_MILLIONTHS,
+        );
+        assert_eq!(t.drift_millionths, 0);
+        assert!(t.within_budget);
+    }
+
+    #[test]
+    fn test_tail_risk_improvement_saturates_to_zero() {
+        // tail < baseline => saturating_sub gives 0 (improved).
+        let t = TailRiskEntry::new(
+            ResourceDimension::GcPause,
+            "w1".into(),
+            1_500_000,
+            2_000_000,
+            DEFAULT_MAX_TAIL_RISK_MILLIONTHS,
+        );
+        assert_eq!(t.drift_millionths, 0);
+        assert!(t.within_budget);
+    }
+
+    #[test]
+    fn test_tail_risk_exact_threshold() {
+        let t = TailRiskEntry::new(
+            ResourceDimension::IoOperations,
+            "w1".into(),
+            2_100_000,
+            2_000_000,
+            DEFAULT_MAX_TAIL_RISK_MILLIONTHS,
+        );
+        assert_eq!(t.drift_millionths, DEFAULT_MAX_TAIL_RISK_MILLIONTHS);
+        assert!(t.within_budget);
+    }
+
+    #[test]
+    fn test_tail_risk_hash_differs_by_workload() {
+        let a = TailRiskEntry::new(
+            ResourceDimension::CpuTime,
+            "w1".into(),
+            3_000_000,
+            2_000_000,
+            DEFAULT_MAX_TAIL_RISK_MILLIONTHS,
+        );
+        let b = TailRiskEntry::new(
+            ResourceDimension::CpuTime,
+            "w2".into(),
+            3_000_000,
+            2_000_000,
+            DEFAULT_MAX_TAIL_RISK_MILLIONTHS,
+        );
+        assert_ne!(a.entry_hash, b.entry_hash);
+    }
+
+    #[test]
+    fn test_resource_dimension_display_all_variants() {
+        let expected = [
+            "cpu_time",
+            "wall_time",
+            "heap_memory",
+            "stack_depth",
+            "allocation_count",
+            "io_operations",
+            "network_bandwidth",
+            "file_descriptors",
+            "gc_pause",
+            "instruction_count",
+        ];
+        for (dim, label) in ResourceDimension::all().iter().zip(expected.iter()) {
+            assert_eq!(dim.to_string(), *label);
+        }
+    }
+
+    #[test]
+    fn test_verdict_display_all_variants() {
+        let cases = [
+            (GovernanceVerdict::Approved, "approved"),
+            (
+                GovernanceVerdict::UtilisationExceeded,
+                "utilisation_exceeded",
+            ),
+            (GovernanceVerdict::RegressionDetected, "regression_detected"),
+            (GovernanceVerdict::TailRiskExceeded, "tail_risk_exceeded"),
+            (
+                GovernanceVerdict::InsufficientCoverage,
+                "insufficient_coverage",
+            ),
+            (
+                GovernanceVerdict::InsufficientSamples,
+                "insufficient_samples",
+            ),
+            (GovernanceVerdict::MultipleViolations, "multiple_violations"),
+        ];
+        for (v, expected) in &cases {
+            assert_eq!(v.to_string(), *expected);
+        }
+    }
+
+    #[test]
+    fn test_verdict_blocks_publication_all_non_approved() {
+        let blocking = [
+            GovernanceVerdict::UtilisationExceeded,
+            GovernanceVerdict::RegressionDetected,
+            GovernanceVerdict::TailRiskExceeded,
+            GovernanceVerdict::InsufficientCoverage,
+            GovernanceVerdict::InsufficientSamples,
+            GovernanceVerdict::MultipleViolations,
+        ];
+        for v in &blocking {
+            assert!(v.blocks_publication(), "{v} should block publication");
+        }
+    }
+
+    #[test]
+    fn test_verdict_ordering() {
+        // Approved is the smallest variant by derive(Ord) order.
+        assert!(GovernanceVerdict::Approved < GovernanceVerdict::MultipleViolations);
+        assert!(GovernanceVerdict::UtilisationExceeded < GovernanceVerdict::MultipleViolations);
+    }
+
+    #[test]
+    fn test_serde_roundtrip_resource_dimension() {
+        for dim in ResourceDimension::all() {
+            let json = serde_json::to_string(dim).unwrap();
+            let back: ResourceDimension = serde_json::from_str(&json).unwrap();
+            assert_eq!(*dim, back);
+        }
+    }
+
+    #[test]
+    fn test_serde_roundtrip_governance_verdict() {
+        let verdicts = [
+            GovernanceVerdict::Approved,
+            GovernanceVerdict::UtilisationExceeded,
+            GovernanceVerdict::RegressionDetected,
+            GovernanceVerdict::TailRiskExceeded,
+            GovernanceVerdict::InsufficientCoverage,
+            GovernanceVerdict::InsufficientSamples,
+            GovernanceVerdict::MultipleViolations,
+        ];
+        for v in &verdicts {
+            let json = serde_json::to_string(v).unwrap();
+            let back: GovernanceVerdict = serde_json::from_str(&json).unwrap();
+            assert_eq!(*v, back);
+        }
+    }
+
+    #[test]
+    fn test_serde_roundtrip_publication_policy() {
+        let strict = PublicationPolicy::strict();
+        let json = serde_json::to_string(&strict).unwrap();
+        let back: PublicationPolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(strict, back);
+    }
+
+    #[test]
+    fn test_serde_roundtrip_certificate_evidence() {
+        let c = CertificateEvidence::new(
+            ResourceDimension::StackDepth,
+            "serde_test".into(),
+            5000,
+            2500,
+            100,
+            DEFAULT_MAX_UTILISATION_MILLIONTHS,
+        );
+        let json = serde_json::to_string(&c).unwrap();
+        let back: CertificateEvidence = serde_json::from_str(&json).unwrap();
+        assert_eq!(c, back);
+    }
+
+    #[test]
+    fn test_serde_roundtrip_governance_receipt() {
+        let mut eval = GovernanceEvaluator::new(PublicationPolicy::relaxed());
+        eval.add_certificate(ResourceDimension::CpuTime, "w1".into(), 1000, 500, 50);
+        eval.add_regression(ResourceDimension::HeapMemory, "w1".into(), 1000, 1010);
+        let receipt = eval.evaluate(epoch());
+        let json = serde_json::to_string(&receipt).unwrap();
+        let back: GovernanceReceipt = serde_json::from_str(&json).unwrap();
+        assert_eq!(receipt, back);
+    }
+
+    #[test]
+    fn test_policy_default_equals_relaxed() {
+        assert_eq!(PublicationPolicy::default(), PublicationPolicy::relaxed());
+    }
+
+    #[test]
+    fn test_strict_policy_tighter_than_relaxed() {
+        let strict = PublicationPolicy::strict();
+        let relaxed = PublicationPolicy::relaxed();
+        assert!(strict.max_regression_millionths < relaxed.max_regression_millionths);
+        assert!(strict.max_tail_risk_millionths < relaxed.max_tail_risk_millionths);
+        assert!(strict.max_utilisation_millionths < relaxed.max_utilisation_millionths);
+        assert!(strict.min_samples > relaxed.min_samples);
+        assert!(strict.min_observability_coverage > relaxed.min_observability_coverage);
+    }
+
+    #[test]
+    fn test_evaluator_covered_dimensions_from_tail_risk_only() {
+        let mut eval = GovernanceEvaluator::new(PublicationPolicy::relaxed());
+        eval.add_tail_risk(
+            ResourceDimension::NetworkBandwidth,
+            "w1".into(),
+            2_050_000,
+            2_000_000,
+        );
+        let receipt = eval.evaluate(epoch());
+        assert!(
+            receipt
+                .dimensions_evaluated
+                .contains(&ResourceDimension::NetworkBandwidth)
+        );
+        assert_eq!(receipt.dimensions_evaluated.len(), 1);
+    }
+
+    #[test]
+    fn test_evaluator_required_dim_satisfied_by_regression() {
+        // Regression evidence alone should satisfy a required dimension.
+        let mut policy = PublicationPolicy::relaxed();
+        policy
+            .required_dimensions
+            .insert(ResourceDimension::HeapMemory);
+        let mut eval = GovernanceEvaluator::new(policy);
+        eval.add_regression(ResourceDimension::HeapMemory, "w1".into(), 1000, 1000);
+        let receipt = eval.evaluate(epoch());
+        assert!(receipt.dimensions_missing.is_empty());
+        assert_eq!(receipt.verdict, GovernanceVerdict::Approved);
+    }
+
+    #[test]
+    fn test_evaluator_required_dim_satisfied_by_tail_risk() {
+        let mut policy = PublicationPolicy::relaxed();
+        policy
+            .required_dimensions
+            .insert(ResourceDimension::GcPause);
+        let mut eval = GovernanceEvaluator::new(policy);
+        eval.add_tail_risk(
+            ResourceDimension::GcPause,
+            "w1".into(),
+            2_000_000,
+            2_000_000,
+        );
+        let receipt = eval.evaluate(epoch());
+        assert!(receipt.dimensions_missing.is_empty());
+        assert_eq!(receipt.verdict, GovernanceVerdict::Approved);
+    }
+
+    #[test]
+    fn test_evaluator_insufficient_samples_and_utilisation_gives_multiple() {
+        // Low samples + over utilisation => two violation categories => MultipleViolations.
+        let mut eval = GovernanceEvaluator::new(PublicationPolicy::relaxed());
+        eval.add_certificate(ResourceDimension::CpuTime, "w1".into(), 1000, 950, 5);
+        let receipt = eval.evaluate(epoch());
+        assert_eq!(receipt.verdict, GovernanceVerdict::MultipleViolations);
+        assert_eq!(receipt.violations.len(), 2);
+    }
+
+    #[test]
+    fn test_evaluator_multiple_workloads_same_dimension() {
+        let mut eval = GovernanceEvaluator::new(PublicationPolicy::relaxed());
+        eval.add_certificate(ResourceDimension::CpuTime, "w1".into(), 1000, 500, 50);
+        eval.add_certificate(ResourceDimension::CpuTime, "w2".into(), 1000, 400, 50);
+        let receipt = eval.evaluate(epoch());
+        assert_eq!(receipt.verdict, GovernanceVerdict::Approved);
+        assert_eq!(receipt.certificates.len(), 2);
+    }
+
+    #[test]
+    fn test_evaluator_receipt_epoch_preserved() {
+        let eval = GovernanceEvaluator::new(PublicationPolicy::relaxed());
+        let custom_epoch = SecurityEpoch::from_raw(999);
+        let receipt = eval.evaluate(custom_epoch);
+        assert_eq!(receipt.epoch, custom_epoch);
+    }
+
+    #[test]
+    fn test_receipt_hash_changes_with_epoch() {
+        let eval = GovernanceEvaluator::new(PublicationPolicy::relaxed());
+        let r1 = eval.evaluate(SecurityEpoch::from_raw(1));
+        let r2 = eval.evaluate(SecurityEpoch::from_raw(2));
+        assert_ne!(r1.content_hash, r2.content_hash);
+    }
+
+    #[test]
+    fn test_receipt_hash_changes_with_verdict() {
+        // One receipt approved, another with violations => different hashes.
+        let eval_ok = GovernanceEvaluator::new(PublicationPolicy::relaxed());
+        let r_ok = eval_ok.evaluate(epoch());
+
+        let mut eval_bad = GovernanceEvaluator::new(PublicationPolicy::relaxed());
+        eval_bad.add_certificate(ResourceDimension::CpuTime, "w1".into(), 1000, 950, 50);
+        let r_bad = eval_bad.evaluate(epoch());
+
+        assert_ne!(r_ok.content_hash, r_bad.content_hash);
+    }
+
+    #[test]
+    fn test_violation_detail_fields_for_utilisation() {
+        let mut eval = GovernanceEvaluator::new(PublicationPolicy::relaxed());
+        eval.add_certificate(ResourceDimension::CpuTime, "w_util".into(), 1000, 950, 50);
+        let receipt = eval.evaluate(epoch());
+        assert_eq!(receipt.violations.len(), 1);
+        let v = &receipt.violations[0];
+        assert_eq!(v.dimension, ResourceDimension::CpuTime);
+        assert_eq!(v.workload_id, "w_util");
+        assert_eq!(v.category, GovernanceVerdict::UtilisationExceeded);
+        assert_eq!(v.threshold_millionths, DEFAULT_MAX_UTILISATION_MILLIONTHS);
+        assert!(v.measured_millionths > DEFAULT_MAX_UTILISATION_MILLIONTHS);
+    }
+
+    #[test]
+    fn test_violation_detail_fields_for_coverage() {
+        let mut policy = PublicationPolicy::relaxed();
+        policy
+            .required_dimensions
+            .insert(ResourceDimension::FileDescriptors);
+        let eval = GovernanceEvaluator::new(policy);
+        let receipt = eval.evaluate(epoch());
+        assert_eq!(receipt.violations.len(), 1);
+        let v = &receipt.violations[0];
+        assert_eq!(v.dimension, ResourceDimension::FileDescriptors);
+        assert_eq!(v.category, GovernanceVerdict::InsufficientCoverage);
+        assert!(v.workload_id.is_empty());
+        assert!(v.summary.contains("FileDescriptors") || v.summary.contains("file_descriptors"));
+    }
+
+    #[test]
+    fn test_strict_policy_all_dims_covered_all_pass() {
+        let mut eval = GovernanceEvaluator::new(PublicationPolicy::strict());
+        // Cover every required dimension with passing evidence.
+        for dim in ResourceDimension::all() {
+            eval.add_certificate(*dim, "bench".into(), 10_000, 5_000, 200);
+        }
+        let receipt = eval.evaluate(epoch());
+        assert_eq!(receipt.verdict, GovernanceVerdict::Approved);
+        assert!(receipt.dimensions_missing.is_empty());
+        assert_eq!(receipt.dimensions_evaluated.len(), 10);
+    }
+
+    #[test]
+    fn test_evaluator_serde_roundtrip() {
+        let mut eval = GovernanceEvaluator::new(PublicationPolicy::strict());
+        eval.add_certificate(ResourceDimension::CpuTime, "w1".into(), 1000, 500, 200);
+        eval.add_regression(ResourceDimension::HeapMemory, "w1".into(), 1000, 1005);
+        eval.add_tail_risk(
+            ResourceDimension::GcPause,
+            "w1".into(),
+            2_010_000,
+            2_000_000,
+        );
+        let json = serde_json::to_string(&eval).unwrap();
+        let back: GovernanceEvaluator = serde_json::from_str(&json).unwrap();
+        assert_eq!(eval, back);
+    }
+
+    #[test]
+    fn test_regression_large_values_no_overflow() {
+        // With large values, saturating_mul prevents overflow.
+        let r = RegressionEntry::new(
+            ResourceDimension::InstructionCount,
+            "big".into(),
+            u64::MAX / 2,
+            u64::MAX / 2 + 1,
+            DEFAULT_MAX_REGRESSION_MILLIONTHS,
+        );
+        // Should not panic; regression_millionths is computed via saturating ops.
+        assert!(r.regression_millionths <= FIXED_ONE || r.regression_millionths == FIXED_ONE);
+    }
+
+    #[test]
+    fn test_certificate_large_budget_no_overflow() {
+        let c = CertificateEvidence::new(
+            ResourceDimension::AllocationCount,
+            "big".into(),
+            u64::MAX / FIXED_ONE,
+            u64::MAX / FIXED_ONE - 1,
+            100,
+            DEFAULT_MAX_UTILISATION_MILLIONTHS,
+        );
+        // Should compute without panic.
+        assert!(c.within_budget);
+    }
+
+    #[test]
+    fn test_fixed_one_constant() {
+        assert_eq!(FIXED_ONE, 1_000_000);
+    }
+
+    #[test]
+    fn test_resource_dimension_all_unique() {
+        let all = ResourceDimension::all();
+        let set: BTreeSet<ResourceDimension> = all.iter().copied().collect();
+        assert_eq!(set.len(), all.len());
+    }
+
+    #[test]
+    fn test_multiple_violations_three_categories() {
+        // Three distinct violation categories => MultipleViolations.
+        let mut policy = PublicationPolicy::relaxed();
+        policy
+            .required_dimensions
+            .insert(ResourceDimension::GcPause);
+        let mut eval = GovernanceEvaluator::new(policy);
+        // Utilisation exceeded
+        eval.add_certificate(ResourceDimension::CpuTime, "w1".into(), 1000, 960, 50);
+        // Regression detected
+        eval.add_regression(ResourceDimension::HeapMemory, "w1".into(), 1000, 1200);
+        // GcPause required but not covered => InsufficientCoverage
+        let receipt = eval.evaluate(epoch());
+        assert_eq!(receipt.verdict, GovernanceVerdict::MultipleViolations);
+        assert!(receipt.violations.len() >= 3);
+    }
+
+    #[test]
+    fn test_same_category_violations_not_multiple() {
+        // Two violations of the same category => single verdict, NOT MultipleViolations.
+        let mut eval = GovernanceEvaluator::new(PublicationPolicy::relaxed());
+        eval.add_certificate(ResourceDimension::CpuTime, "w1".into(), 1000, 950, 50);
+        eval.add_certificate(ResourceDimension::HeapMemory, "w2".into(), 1000, 960, 50);
+        let receipt = eval.evaluate(epoch());
+        assert_eq!(receipt.verdict, GovernanceVerdict::UtilisationExceeded);
+        assert_eq!(receipt.violations.len(), 2);
+    }
+
+    #[test]
+    fn test_receipt_contains_all_input_certificates() {
+        let mut eval = GovernanceEvaluator::new(PublicationPolicy::relaxed());
+        eval.add_certificate(ResourceDimension::CpuTime, "w1".into(), 1000, 500, 50);
+        eval.add_certificate(ResourceDimension::HeapMemory, "w2".into(), 2000, 1000, 60);
+        eval.add_certificate(ResourceDimension::StackDepth, "w3".into(), 500, 100, 70);
+        let receipt = eval.evaluate(epoch());
+        assert_eq!(receipt.certificates.len(), 3);
+        assert_eq!(receipt.regressions.len(), 0);
+        assert_eq!(receipt.tail_risks.len(), 0);
+    }
+
+    #[test]
+    fn test_receipt_contains_all_regressions_and_tail_risks() {
+        let mut eval = GovernanceEvaluator::new(PublicationPolicy::relaxed());
+        eval.add_regression(ResourceDimension::CpuTime, "w1".into(), 100, 100);
+        eval.add_regression(ResourceDimension::HeapMemory, "w1".into(), 200, 200);
+        eval.add_tail_risk(
+            ResourceDimension::GcPause,
+            "w1".into(),
+            2_000_000,
+            2_000_000,
+        );
+        let receipt = eval.evaluate(epoch());
+        assert_eq!(receipt.regressions.len(), 2);
+        assert_eq!(receipt.tail_risks.len(), 1);
+        assert_eq!(receipt.verdict, GovernanceVerdict::Approved);
+    }
 }

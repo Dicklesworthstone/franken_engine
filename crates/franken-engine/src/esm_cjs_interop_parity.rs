@@ -2316,4 +2316,765 @@ mod tests {
         let back: InteropParityArtifactPaths = serde_json::from_str(&json).unwrap();
         assert_eq!(paths, back);
     }
+
+    // -----------------------------------------------------------------------
+    // Additional enrichment tests (PearlTower 2026-03-18 batch 2)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn evidence_hashes_unique_across_specimens() {
+        let inv = run_interop_parity_corpus();
+        let hashes: BTreeSet<&str> = inv
+            .evidence
+            .iter()
+            .filter_map(|e| e.evidence_hash.as_deref())
+            .collect();
+        assert_eq!(
+            hashes.len(),
+            inv.evidence.len(),
+            "evidence hashes should be unique per specimen"
+        );
+    }
+
+    #[test]
+    fn evidence_hash_determinism_for_same_input() {
+        let input = EvidenceHashInput {
+            specimen_id: "test_determinism",
+            actual_outcome: InteropActualOutcome::Success,
+            compatibility_disposition: InteropCompatibilityDisposition::Supported,
+            guidance_code: "no_remediation_required",
+            binding_count: 2,
+            async_count: 0,
+            linked_count: 3,
+            cycle_count: 0,
+        };
+        let h1 = compute_evidence_hash(&input);
+        let h2 = compute_evidence_hash(&input);
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn evidence_hash_changes_with_different_specimen_id() {
+        let h1 = compute_evidence_hash(&EvidenceHashInput {
+            specimen_id: "alpha",
+            actual_outcome: InteropActualOutcome::Success,
+            compatibility_disposition: InteropCompatibilityDisposition::Supported,
+            guidance_code: "no_remediation_required",
+            binding_count: 0,
+            async_count: 0,
+            linked_count: 1,
+            cycle_count: 0,
+        });
+        let h2 = compute_evidence_hash(&EvidenceHashInput {
+            specimen_id: "beta",
+            actual_outcome: InteropActualOutcome::Success,
+            compatibility_disposition: InteropCompatibilityDisposition::Supported,
+            guidance_code: "no_remediation_required",
+            binding_count: 0,
+            async_count: 0,
+            linked_count: 1,
+            cycle_count: 0,
+        });
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn evidence_hash_changes_with_different_outcome() {
+        let h1 = compute_evidence_hash(&EvidenceHashInput {
+            specimen_id: "specimen_x",
+            actual_outcome: InteropActualOutcome::Success,
+            compatibility_disposition: InteropCompatibilityDisposition::Supported,
+            guidance_code: "g",
+            binding_count: 0,
+            async_count: 0,
+            linked_count: 1,
+            cycle_count: 0,
+        });
+        let h2 = compute_evidence_hash(&EvidenceHashInput {
+            specimen_id: "specimen_x",
+            actual_outcome: InteropActualOutcome::LinkFailure,
+            compatibility_disposition: InteropCompatibilityDisposition::Supported,
+            guidance_code: "g",
+            binding_count: 0,
+            async_count: 0,
+            linked_count: 1,
+            cycle_count: 0,
+        });
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn compatibility_disposition_as_str_roundtrip() {
+        for d in [
+            InteropCompatibilityDisposition::Supported,
+            InteropCompatibilityDisposition::Degraded,
+            InteropCompatibilityDisposition::Unsupported,
+        ] {
+            let s = d.as_str();
+            assert!(!s.is_empty());
+            assert_eq!(format!("{d}"), s);
+        }
+    }
+
+    #[test]
+    fn compatibility_disposition_display_distinct_values() {
+        let strs: BTreeSet<String> = [
+            InteropCompatibilityDisposition::Supported,
+            InteropCompatibilityDisposition::Degraded,
+            InteropCompatibilityDisposition::Unsupported,
+        ]
+        .iter()
+        .map(|d| format!("{d}"))
+        .collect();
+        assert_eq!(strs.len(), 3);
+    }
+
+    #[test]
+    fn interop_family_ord_is_consistent() {
+        assert!(InteropFamily::EsmOnly < InteropFamily::CjsOnly);
+        assert!(InteropFamily::CjsOnly < InteropFamily::EsmImportsCjs);
+        assert!(InteropFamily::EsmImportsCjs < InteropFamily::CjsRequiresEsm);
+    }
+
+    #[test]
+    fn interop_family_clone_eq() {
+        for f in InteropFamily::ALL {
+            let cloned = *f;
+            assert_eq!(*f, cloned);
+        }
+    }
+
+    #[test]
+    fn corpus_entry_points_present_in_modules() {
+        for s in &interop_parity_corpus() {
+            let module_specifiers: BTreeSet<&str> =
+                s.modules.iter().map(|m| m.specifier.as_str()).collect();
+            assert!(
+                module_specifiers.contains(s.entry_point.as_str()),
+                "specimen {} entry_point '{}' not found in modules",
+                s.specimen_id,
+                s.entry_point
+            );
+        }
+    }
+
+    #[test]
+    fn corpus_expected_binding_specifiers_match_modules() {
+        for s in &interop_parity_corpus() {
+            let module_specifiers: BTreeSet<&str> =
+                s.modules.iter().map(|m| m.specifier.as_str()).collect();
+            for b in &s.expected_binding_states {
+                assert!(
+                    module_specifiers.contains(b.module_specifier.as_str()),
+                    "specimen {}: expected binding for '{}' references unknown module '{}'",
+                    s.specimen_id,
+                    b.export_name,
+                    b.module_specifier
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn corpus_expected_async_specifiers_match_modules() {
+        for s in &interop_parity_corpus() {
+            let module_specifiers: BTreeSet<&str> =
+                s.modules.iter().map(|m| m.specifier.as_str()).collect();
+            for a in &s.expected_async_phases {
+                assert!(
+                    module_specifiers.contains(a.module_specifier.as_str()),
+                    "specimen {}: expected async phase for '{}' references unknown module",
+                    s.specimen_id,
+                    a.module_specifier
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn run_single_specimen_esm_only_returns_pass() {
+        let specimen = interop_parity_corpus()
+            .into_iter()
+            .find(|s| s.specimen_id == "esm_single_module")
+            .unwrap();
+        let evidence = run_single_specimen(&specimen);
+        assert_eq!(evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
+        assert_eq!(evidence.module_count, 1);
+        assert_eq!(evidence.linked_count, 1);
+        assert_eq!(evidence.cycle_count, 0);
+    }
+
+    #[test]
+    fn run_single_specimen_cycle_detected() {
+        let specimen = interop_parity_corpus()
+            .into_iter()
+            .find(|s| s.specimen_id == "cycle_esm_esm")
+            .unwrap();
+        let evidence = run_single_specimen(&specimen);
+        assert_eq!(evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(evidence.actual_outcome, InteropActualOutcome::CycleDetected);
+        assert!(evidence.cycle_count > 0);
+    }
+
+    #[test]
+    fn run_single_specimen_async_rejection() {
+        let specimen = interop_parity_corpus()
+            .into_iter()
+            .find(|s| s.specimen_id == "async_rejection_propagation")
+            .unwrap();
+        let evidence = run_single_specimen(&specimen);
+        assert_eq!(evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(evidence.actual_outcome, InteropActualOutcome::EvalFailure);
+        assert_eq!(
+            evidence.compatibility_disposition,
+            InteropCompatibilityDisposition::Degraded
+        );
+    }
+
+    #[test]
+    fn run_single_specimen_mixed_diamond_binding_verdicts() {
+        let specimen = interop_parity_corpus()
+            .into_iter()
+            .find(|s| s.specimen_id == "mixed_diamond_graph")
+            .unwrap();
+        let evidence = run_single_specimen(&specimen);
+        assert_eq!(evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(evidence.binding_verdicts.len(), 3);
+        assert!(evidence.binding_verdicts.iter().all(|v| v.pass));
+    }
+
+    #[test]
+    fn classify_compatibility_fail_verdict_always_unsupported() {
+        let specimen = InteropSpecimen {
+            specimen_id: "test_fail".into(),
+            description: "test".into(),
+            family: InteropFamily::EsmOnly,
+            modules: vec![],
+            entry_point: "e.mjs".into(),
+            expected_outcome: InteropExpectedOutcome::Success,
+            expected_linked_count: None,
+            expected_binding_states: vec![],
+            expected_async_phases: vec![],
+        };
+        let (disp, guidance) = classify_compatibility(
+            &specimen,
+            InteropActualOutcome::Success,
+            InteropVerdict::Fail,
+        );
+        assert_eq!(disp, InteropCompatibilityDisposition::Unsupported);
+        assert_eq!(guidance.guidance_code, "interop_contract_violation");
+        assert!(guidance.message.contains("test_fail"));
+    }
+
+    #[test]
+    fn classify_compatibility_success_gives_supported() {
+        let specimen = InteropSpecimen {
+            specimen_id: "test_pass".into(),
+            description: "test".into(),
+            family: InteropFamily::EsmOnly,
+            modules: vec![],
+            entry_point: "e.mjs".into(),
+            expected_outcome: InteropExpectedOutcome::Success,
+            expected_linked_count: None,
+            expected_binding_states: vec![],
+            expected_async_phases: vec![],
+        };
+        let (disp, guidance) = classify_compatibility(
+            &specimen,
+            InteropActualOutcome::Success,
+            InteropVerdict::Pass,
+        );
+        assert_eq!(disp, InteropCompatibilityDisposition::Supported);
+        assert_eq!(guidance.guidance_code, "no_remediation_required");
+    }
+
+    #[test]
+    fn classify_compatibility_eval_failure_gives_degraded() {
+        let specimen = InteropSpecimen {
+            specimen_id: "test_eval".into(),
+            description: "test".into(),
+            family: InteropFamily::AsyncEvaluation,
+            modules: vec![],
+            entry_point: "e.mjs".into(),
+            expected_outcome: InteropExpectedOutcome::EvalFailure,
+            expected_linked_count: None,
+            expected_binding_states: vec![],
+            expected_async_phases: vec![],
+        };
+        let (disp, guidance) = classify_compatibility(
+            &specimen,
+            InteropActualOutcome::EvalFailure,
+            InteropVerdict::Pass,
+        );
+        assert_eq!(disp, InteropCompatibilityDisposition::Degraded);
+        assert_eq!(guidance.guidance_code, "stabilize_async_boundary");
+    }
+
+    #[test]
+    fn classify_compatibility_cycle_detected_gives_unsupported() {
+        let specimen = InteropSpecimen {
+            specimen_id: "test_cycle".into(),
+            description: "test".into(),
+            family: InteropFamily::CyclicInterop,
+            modules: vec![],
+            entry_point: "e.mjs".into(),
+            expected_outcome: InteropExpectedOutcome::CycleDetected,
+            expected_linked_count: None,
+            expected_binding_states: vec![],
+            expected_async_phases: vec![],
+        };
+        let (disp, guidance) = classify_compatibility(
+            &specimen,
+            InteropActualOutcome::CycleDetected,
+            InteropVerdict::Pass,
+        );
+        assert_eq!(disp, InteropCompatibilityDisposition::Unsupported);
+        assert_eq!(guidance.guidance_code, "break_mixed_module_cycle");
+    }
+
+    #[test]
+    fn classify_compatibility_link_failure_gives_unsupported() {
+        let specimen = InteropSpecimen {
+            specimen_id: "test_link".into(),
+            description: "test".into(),
+            family: InteropFamily::MixedGraph,
+            modules: vec![],
+            entry_point: "e.mjs".into(),
+            expected_outcome: InteropExpectedOutcome::LinkFailure,
+            expected_linked_count: None,
+            expected_binding_states: vec![],
+            expected_async_phases: vec![],
+        };
+        let (disp, guidance) = classify_compatibility(
+            &specimen,
+            InteropActualOutcome::LinkFailure,
+            InteropVerdict::Pass,
+        );
+        assert_eq!(disp, InteropCompatibilityDisposition::Unsupported);
+        assert_eq!(guidance.guidance_code, "repair_link_boundary");
+    }
+
+    #[test]
+    fn early_return_evidence_outcome_match_gives_pass() {
+        let specimen = InteropSpecimen {
+            specimen_id: "er_test".into(),
+            description: "test".into(),
+            family: InteropFamily::EsmOnly,
+            modules: vec![],
+            entry_point: "e.mjs".into(),
+            expected_outcome: InteropExpectedOutcome::LinkFailure,
+            expected_linked_count: None,
+            expected_binding_states: vec![],
+            expected_async_phases: vec![],
+        };
+        let ev = early_return_evidence(
+            &specimen,
+            InteropActualOutcome::LinkFailure,
+            2,
+            0,
+            0,
+            Some("link error".into()),
+        );
+        assert_eq!(ev.verdict, InteropVerdict::Pass);
+        assert_eq!(ev.module_count, 2);
+        assert_eq!(ev.error_detail.as_deref(), Some("link error"));
+        assert!(ev.evidence_hash.is_some());
+    }
+
+    #[test]
+    fn early_return_evidence_outcome_mismatch_gives_fail() {
+        let specimen = InteropSpecimen {
+            specimen_id: "er_mismatch".into(),
+            description: "test".into(),
+            family: InteropFamily::EsmOnly,
+            modules: vec![],
+            entry_point: "e.mjs".into(),
+            expected_outcome: InteropExpectedOutcome::Success,
+            expected_linked_count: None,
+            expected_binding_states: vec![],
+            expected_async_phases: vec![],
+        };
+        let ev = early_return_evidence(
+            &specimen,
+            InteropActualOutcome::GraphConstructionFailure,
+            0,
+            0,
+            0,
+            Some("graph build failed".into()),
+        );
+        assert_eq!(ev.verdict, InteropVerdict::Fail);
+        assert_eq!(
+            ev.compatibility_disposition,
+            InteropCompatibilityDisposition::Unsupported
+        );
+    }
+
+    #[test]
+    fn build_esm_module_preserves_specifier_and_syntax() {
+        let sm = SpecimenModule {
+            specifier: "test.mjs".into(),
+            syntax: ModuleSyntax::EsModule,
+            source: "export const x = 1;".into(),
+            imports: vec![],
+            exports: vec![ExportEntry::direct("x", "x")],
+            has_default_export: true,
+            has_top_level_await: false,
+        };
+        let esm = build_esm_module(&sm);
+        assert_eq!(esm.specifier, "test.mjs");
+        assert_eq!(esm.syntax, ModuleSyntax::EsModule);
+        assert!(esm.has_default_export);
+        assert_eq!(esm.exports.len(), 1);
+    }
+
+    #[test]
+    fn build_esm_module_cjs_syntax() {
+        let sm = SpecimenModule {
+            specifier: "lib.cjs".into(),
+            syntax: ModuleSyntax::CommonJs,
+            source: "module.exports = {};".into(),
+            imports: vec![ImportEntry::new("dep.cjs", "x", "x")],
+            exports: vec![ExportEntry::direct("default", "default")],
+            has_default_export: true,
+            has_top_level_await: false,
+        };
+        let esm = build_esm_module(&sm);
+        assert_eq!(esm.syntax, ModuleSyntax::CommonJs);
+        assert_eq!(esm.imports.len(), 1);
+    }
+
+    #[test]
+    fn hex_encode_all_byte_values_lowercase() {
+        let bytes: Vec<u8> = (0..=255).collect();
+        let hex = hex_encode(&bytes);
+        assert_eq!(hex.len(), 512);
+        assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));
+        // Ensure lowercase hex
+        assert!(hex.chars().all(|c| !c.is_ascii_uppercase()));
+        // Spot-check boundaries
+        assert!(hex.starts_with("00"));
+        assert!(hex.ends_with("ff"));
+    }
+
+    #[test]
+    fn hex_encode_single_byte() {
+        assert_eq!(hex_encode(&[0x0a]), "0a");
+        assert_eq!(hex_encode(&[0xfe]), "fe");
+        assert_eq!(hex_encode(&[0x00]), "00");
+        assert_eq!(hex_encode(&[0xff]), "ff");
+    }
+
+    #[test]
+    fn binding_verdict_serde_roundtrip() {
+        let bv = BindingVerdict {
+            module_specifier: "mod.mjs".into(),
+            export_name: "x".into(),
+            expected_state: BindingCellState::Initialized,
+            actual_state: BindingCellState::Dead,
+            pass: false,
+        };
+        let json = serde_json::to_string(&bv).unwrap();
+        let back: BindingVerdict = serde_json::from_str(&json).unwrap();
+        assert_eq!(bv, back);
+        assert!(!back.pass);
+    }
+
+    #[test]
+    fn async_phase_verdict_serde_roundtrip() {
+        let apv = AsyncPhaseVerdict {
+            module_specifier: "async.mjs".into(),
+            expected_phase: AsyncModulePhase::Settled,
+            actual_phase: AsyncModulePhase::Rejected,
+            pass: false,
+        };
+        let json = serde_json::to_string(&apv).unwrap();
+        let back: AsyncPhaseVerdict = serde_json::from_str(&json).unwrap();
+        assert_eq!(apv, back);
+    }
+
+    #[test]
+    fn expected_binding_state_serde_roundtrip() {
+        for state in [
+            BindingCellState::Uninitialized,
+            BindingCellState::Initialized,
+            BindingCellState::Dead,
+        ] {
+            let ebs = ExpectedBindingState {
+                module_specifier: "m.mjs".into(),
+                export_name: "val".into(),
+                expected_state: state,
+            };
+            let json = serde_json::to_string(&ebs).unwrap();
+            let back: ExpectedBindingState = serde_json::from_str(&json).unwrap();
+            assert_eq!(ebs, back);
+        }
+    }
+
+    #[test]
+    fn expected_async_phase_serde_roundtrip() {
+        for phase in [
+            AsyncModulePhase::Synchronous,
+            AsyncModulePhase::Suspended,
+            AsyncModulePhase::AwaitingDependencies,
+            AsyncModulePhase::Settled,
+            AsyncModulePhase::Rejected,
+        ] {
+            let eap = ExpectedAsyncPhase {
+                module_specifier: "a.mjs".into(),
+                expected_phase: phase,
+            };
+            let json = serde_json::to_string(&eap).unwrap();
+            let back: ExpectedAsyncPhase = serde_json::from_str(&json).unwrap();
+            assert_eq!(eap, back);
+        }
+    }
+
+    #[test]
+    fn interop_family_serde_snake_case_format() {
+        let json = serde_json::to_string(&InteropFamily::EsmImportsCjs).unwrap();
+        assert_eq!(json, "\"esm_imports_cjs\"");
+        let json = serde_json::to_string(&InteropFamily::CjsRequiresEsm).unwrap();
+        assert_eq!(json, "\"cjs_requires_esm\"");
+        let json = serde_json::to_string(&InteropFamily::DefaultNamespace).unwrap();
+        assert_eq!(json, "\"default_namespace\"");
+    }
+
+    #[test]
+    fn interop_expected_outcome_serde_snake_case_format() {
+        let json = serde_json::to_string(&InteropExpectedOutcome::LinkFailure).unwrap();
+        assert_eq!(json, "\"link_failure\"");
+        let json = serde_json::to_string(&InteropExpectedOutcome::EvalFailure).unwrap();
+        assert_eq!(json, "\"eval_failure\"");
+        let json = serde_json::to_string(&InteropExpectedOutcome::CycleDetected).unwrap();
+        assert_eq!(json, "\"cycle_detected\"");
+    }
+
+    #[test]
+    fn interop_actual_outcome_serde_snake_case_format() {
+        let json = serde_json::to_string(&InteropActualOutcome::GraphConstructionFailure).unwrap();
+        assert_eq!(json, "\"graph_construction_failure\"");
+    }
+
+    #[test]
+    fn inventory_json_contains_expected_fields() {
+        let inv = run_interop_parity_corpus();
+        let json = serde_json::to_string_pretty(&inv).unwrap();
+        assert!(json.contains("schema_version"));
+        assert!(json.contains("component"));
+        assert!(json.contains("specimen_count"));
+        assert!(json.contains("family_coverage"));
+        assert!(json.contains("evidence"));
+    }
+
+    #[test]
+    fn corpus_no_duplicate_module_specifiers_within_specimen() {
+        for s in &interop_parity_corpus() {
+            let specifiers: BTreeSet<&str> =
+                s.modules.iter().map(|m| m.specifier.as_str()).collect();
+            assert_eq!(
+                specifiers.len(),
+                s.modules.len(),
+                "specimen {} has duplicate module specifiers",
+                s.specimen_id
+            );
+        }
+    }
+
+    #[test]
+    fn corpus_cycle_specimens_have_no_expected_linked_count() {
+        for s in &interop_parity_corpus() {
+            if s.expected_outcome == InteropExpectedOutcome::CycleDetected {
+                assert!(
+                    s.expected_linked_count.is_none(),
+                    "specimen {} expects cycle but has expected_linked_count",
+                    s.specimen_id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn corpus_success_specimens_have_expected_linked_count() {
+        for s in &interop_parity_corpus() {
+            if s.expected_outcome == InteropExpectedOutcome::Success {
+                assert!(
+                    s.expected_linked_count.is_some(),
+                    "specimen {} expects success but missing expected_linked_count",
+                    s.specimen_id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn event_with_none_fields_serde_roundtrip() {
+        let ev = InteropParityEvent {
+            schema_version: INTEROP_PARITY_EVENT_SCHEMA_VERSION.to_string(),
+            component: INTEROP_PARITY_COMPONENT.to_string(),
+            event: "start".to_string(),
+            policy_id: INTEROP_PARITY_POLICY_ID.to_string(),
+            specimen_id: None,
+            verdict: None,
+            detail: None,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: InteropParityEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(ev, back);
+        assert!(back.specimen_id.is_none());
+        assert!(back.verdict.is_none());
+        assert!(back.detail.is_none());
+    }
+
+    #[test]
+    fn specimen_module_serde_roundtrip() {
+        let sm = SpecimenModule {
+            specifier: "test.mjs".into(),
+            syntax: ModuleSyntax::EsModule,
+            source: "export const x = 1;".into(),
+            imports: vec![ImportEntry::new("dep.mjs", "y", "y")],
+            exports: vec![
+                ExportEntry::direct("x", "x"),
+                ExportEntry::re_export("z", "other.mjs", "z"),
+            ],
+            has_default_export: false,
+            has_top_level_await: true,
+        };
+        let json = serde_json::to_string(&sm).unwrap();
+        let back: SpecimenModule = serde_json::from_str(&json).unwrap();
+        assert_eq!(sm, back);
+    }
+
+    #[test]
+    fn evidence_with_empty_binding_and_async_verdicts() {
+        let specimen = interop_parity_corpus()
+            .into_iter()
+            .find(|s| s.specimen_id == "async_tla_single")
+            .unwrap();
+        let evidence = run_single_specimen(&specimen);
+        // async_tla_single has no expected_binding_states
+        assert!(evidence.binding_verdicts.is_empty());
+        // but does have async phase verdicts
+        assert!(!evidence.async_phase_verdicts.is_empty());
+        assert!(evidence.async_phase_verdicts.iter().all(|v| v.pass));
+    }
+
+    #[test]
+    fn contract_satisfied_with_all_pass_and_nonzero() {
+        let inv = InteropParityInventory {
+            schema_version: INTEROP_PARITY_SCHEMA_VERSION.to_string(),
+            component: INTEROP_PARITY_COMPONENT.to_string(),
+            specimen_count: 5,
+            pass_count: 5,
+            fail_count: 0,
+            supported_count: 4,
+            degraded_count: 1,
+            unsupported_count: 0,
+            family_coverage: BTreeMap::new(),
+            esm_only_count: 2,
+            cjs_only_count: 1,
+            mixed_count: 2,
+            evidence: vec![],
+        };
+        assert!(inv.contract_satisfied());
+    }
+
+    #[test]
+    fn family_coverage_has_all_represented_families() {
+        let inv = run_interop_parity_corpus();
+        for f in InteropFamily::ALL {
+            assert!(
+                inv.family_coverage.contains_key(f.as_str()),
+                "family {} not in coverage map",
+                f.as_str()
+            );
+            assert!(
+                *inv.family_coverage.get(f.as_str()).unwrap() > 0,
+                "family {} has zero coverage",
+                f.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn re_export_chain_evidence_has_correct_linked_count() {
+        let inv = run_interop_parity_corpus();
+        let re_export_ev = inv
+            .evidence
+            .iter()
+            .find(|e| e.specimen_id == "re_export_esm_through_cjs")
+            .unwrap();
+        assert_eq!(re_export_ev.linked_count, 3);
+        assert_eq!(re_export_ev.module_count, 3);
+    }
+
+    #[test]
+    fn star_re_export_specimen_passes_with_correct_bindings() {
+        let specimen = interop_parity_corpus()
+            .into_iter()
+            .find(|s| s.specimen_id == "star_re_export_across_boundary")
+            .unwrap();
+        let evidence = run_single_specimen(&specimen);
+        assert_eq!(evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(evidence.binding_verdicts.len(), 2);
+        for bv in &evidence.binding_verdicts {
+            assert!(bv.pass, "binding {} failed", bv.export_name);
+            assert_eq!(bv.actual_state, BindingCellState::Initialized);
+        }
+    }
+
+    #[test]
+    fn async_mixed_tla_chain_phase_verdicts() {
+        let specimen = interop_parity_corpus()
+            .into_iter()
+            .find(|s| s.specimen_id == "async_mixed_tla_chain")
+            .unwrap();
+        let evidence = run_single_specimen(&specimen);
+        assert_eq!(evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(evidence.async_phase_verdicts.len(), 2);
+        let sync_verdict = evidence
+            .async_phase_verdicts
+            .iter()
+            .find(|v| v.module_specifier == "sync.cjs")
+            .unwrap();
+        assert_eq!(sync_verdict.actual_phase, AsyncModulePhase::Synchronous);
+        assert!(sync_verdict.pass);
+    }
+
+    #[test]
+    fn live_binding_esm_mutation_has_two_bindings() {
+        let specimen = interop_parity_corpus()
+            .into_iter()
+            .find(|s| s.specimen_id == "live_binding_esm_mutation")
+            .unwrap();
+        let evidence = run_single_specimen(&specimen);
+        assert_eq!(evidence.binding_verdicts.len(), 2);
+        let count_bv = evidence
+            .binding_verdicts
+            .iter()
+            .find(|v| v.export_name == "count")
+            .unwrap();
+        assert!(count_bv.pass);
+        let increment_bv = evidence
+            .binding_verdicts
+            .iter()
+            .find(|v| v.export_name == "increment")
+            .unwrap();
+        assert!(increment_bv.pass);
+    }
+
+    #[test]
+    fn default_export_esm_to_cjs_pass_and_disposition() {
+        let inv = run_interop_parity_corpus();
+        let ev = inv
+            .evidence
+            .iter()
+            .find(|e| e.specimen_id == "default_export_esm_to_cjs")
+            .unwrap();
+        assert_eq!(ev.verdict, InteropVerdict::Pass);
+        assert_eq!(
+            ev.compatibility_disposition,
+            InteropCompatibilityDisposition::Supported
+        );
+    }
 }

@@ -4,8 +4,8 @@
 //! evaluation verdicts, tier serde roundtrips, and verdict classification.
 
 use frankenengine_engine::claim_envelope_contract::{
-    ClaimEnvelopeContract, ClaimEnvelopeScenario, ClaimEnvelopeTier, ClaimEnvelopeVerdict,
-    CLAIM_ENVELOPE_CONTRACT_SCHEMA_VERSION, MAX_PUBLISHABLE_STALENESS_HOURS,
+    CLAIM_ENVELOPE_CONTRACT_SCHEMA_VERSION, ClaimEnvelopeContract, ClaimEnvelopeScenario,
+    ClaimEnvelopeTier, ClaimEnvelopeVerdict, MAX_PUBLISHABLE_STALENESS_HOURS,
 };
 
 // ---------------------------------------------------------------------------
@@ -199,7 +199,9 @@ fn deep_evaluate_publishable_scoped_all_met() {
     let scenario = ClaimEnvelopeScenario {
         scenario_id: "deep-scoped-pass".to_string(),
         requested_class: ClaimEnvelopeTier::PublishableScoped,
-        phrase_text: "FrankenEngine outperforms V8 on deterministic workloads within the supported surface".to_string(),
+        phrase_text:
+            "FrankenEngine outperforms V8 on deterministic workloads within the supported surface"
+                .to_string(),
         declared_scope_complete: true,
         declared_board_complete: true,
         evidence_complete: true,
@@ -220,7 +222,9 @@ fn deep_evaluate_publishable_scoped_stale_downgrade() {
     let scenario = ClaimEnvelopeScenario {
         scenario_id: "deep-scoped-stale".to_string(),
         requested_class: ClaimEnvelopeTier::PublishableScoped,
-        phrase_text: "FrankenEngine outperforms V8 on deterministic workloads within the supported surface".to_string(),
+        phrase_text:
+            "FrankenEngine outperforms V8 on deterministic workloads within the supported surface"
+                .to_string(),
         declared_scope_complete: true,
         declared_board_complete: true,
         evidence_complete: true,

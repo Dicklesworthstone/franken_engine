@@ -172,6 +172,9 @@ struct SecurityWorkloadLine {
     event: String,
     outcome: String,
     error_code: Option<String>,
+    corpus_manifest_hash: String,
+    policy_snapshot_hash: String,
+    environment_fingerprint: String,
     workload_id: String,
     corpus: String,
     attack_taxonomy: Option<String>,
@@ -227,6 +230,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut lines = String::new();
     let summary = &evaluation.summary;
+    let environment_fingerprint = environment_fingerprint();
     let summary_line = SecuritySummaryLine {
         schema_version: SECURITY_CONFORMANCE_SCHEMA_VERSION.to_string(),
         trace_id: deterministic_trace_id(&run_id, "summary"),
@@ -247,7 +251,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         run_id: run_id.clone(),
         corpus_manifest_hash: summary.corpus_manifest_hash.clone(),
         policy_snapshot_hash: args.policy_snapshot_hash.clone(),
-        environment_fingerprint: environment_fingerprint(),
+        environment_fingerprint: environment_fingerprint.clone(),
         benign_total: summary.benign_total,
         malicious_total: summary.malicious_total,
         true_positive_count: summary.true_positive_count,
@@ -285,6 +289,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             event: "workload_result".to_string(),
             outcome: outcome.to_string(),
             error_code: observation.error_code.clone(),
+            corpus_manifest_hash: summary.corpus_manifest_hash.clone(),
+            policy_snapshot_hash: args.policy_snapshot_hash.clone(),
+            environment_fingerprint: environment_fingerprint.clone(),
             workload_id: record.label.workload_id.clone(),
             corpus: match record.label.corpus {
                 SecurityCorpus::Benign => "benign".to_string(),

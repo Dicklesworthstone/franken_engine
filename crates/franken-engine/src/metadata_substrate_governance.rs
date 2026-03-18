@@ -1000,4 +1000,683 @@ mod tests {
         assert_eq!(receipt.verdict, GovernanceVerdict::TargetsMissing);
         assert_eq!(receipt.targets_missing.len(), 7);
     }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: serde round-trips
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_locality_dimension_serde_roundtrip() {
+        for dim in LocalityDimension::all() {
+            let json = serde_json::to_string(dim).unwrap();
+            let back: LocalityDimension = serde_json::from_str(&json).unwrap();
+            assert_eq!(*dim, back);
+        }
+    }
+
+    #[test]
+    fn test_portability_target_serde_roundtrip() {
+        for target in PortabilityTarget::all() {
+            let json = serde_json::to_string(target).unwrap();
+            let back: PortabilityTarget = serde_json::from_str(&json).unwrap();
+            assert_eq!(*target, back);
+        }
+    }
+
+    #[test]
+    fn test_governance_verdict_serde_roundtrip() {
+        let verdicts = [
+            GovernanceVerdict::Approved,
+            GovernanceVerdict::CacheMissExceeded,
+            GovernanceVerdict::NumaRemoteExceeded,
+            GovernanceVerdict::PortabilityInsufficient,
+            GovernanceVerdict::TargetsMissing,
+            GovernanceVerdict::MultipleViolations,
+        ];
+        for v in &verdicts {
+            let json = serde_json::to_string(v).unwrap();
+            let back: GovernanceVerdict = serde_json::from_str(&json).unwrap();
+            assert_eq!(*v, back);
+        }
+    }
+
+    #[test]
+    fn test_governance_config_serde_roundtrip() {
+        let config = GovernanceConfig::strict();
+        let json = serde_json::to_string(&config).unwrap();
+        let back: GovernanceConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(config, back);
+    }
+
+    #[test]
+    fn test_cache_miss_entry_serde_roundtrip() {
+        let entry = CacheMissEntry::new(
+            LocalityDimension::Tlb,
+            "tlb_walk".into(),
+            50000,
+            1500,
+            100,
+            DEFAULT_MAX_CACHE_MISS_RATE,
+        );
+        let json = serde_json::to_string(&entry).unwrap();
+        let back: CacheMissEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(entry, back);
+    }
+
+    #[test]
+    fn test_numa_entry_serde_roundtrip() {
+        let entry = NumaEntry::new(
+            "remote_scan".into(),
+            80000,
+            4000,
+            4,
+            DEFAULT_MAX_NUMA_REMOTE_RATIO,
+        );
+        let json = serde_json::to_string(&entry).unwrap();
+        let back: NumaEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(entry, back);
+    }
+
+    #[test]
+    fn test_portability_entry_serde_roundtrip() {
+        let entry = PortabilityEntry::new(
+            "cross_compile".into(),
+            PortabilityTarget::Arm64Windows,
+            true,
+            850_000,
+        );
+        let json = serde_json::to_string(&entry).unwrap();
+        let back: PortabilityEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(entry, back);
+    }
+
+    #[test]
+    fn test_governance_receipt_serde_roundtrip() {
+        let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
+        eval.add_cache_miss(LocalityDimension::L1Data, "op1".into(), 10000, 200, 50);
+        eval.add_numa("op1".into(), 10000, 500, 2);
+        eval.add_portability("op1".into(), PortabilityTarget::X64Linux, true, FIXED_ONE);
+        let receipt = eval.evaluate(epoch());
+        let json = serde_json::to_string(&receipt).unwrap();
+        let back: GovernanceReceipt = serde_json::from_str(&json).unwrap();
+        assert_eq!(receipt, back);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: Display formatting
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_locality_dimension_display_all_variants() {
+        let expected = [
+            (LocalityDimension::L1Data, "l1_data"),
+            (LocalityDimension::L1Instruction, "l1_instruction"),
+            (LocalityDimension::L2Unified, "l2_unified"),
+            (LocalityDimension::L3LastLevel, "l3_last_level"),
+            (LocalityDimension::Tlb, "tlb"),
+            (LocalityDimension::PageTableWalk, "page_table_walk"),
+            (LocalityDimension::MemoryBus, "memory_bus"),
+            (LocalityDimension::PrefetchEfficiency, "prefetch_efficiency"),
+        ];
+        for (dim, label) in &expected {
+            assert_eq!(dim.to_string(), *label);
+        }
+    }
+
+    #[test]
+    fn test_portability_target_display_all_variants() {
+        let expected = [
+            (PortabilityTarget::X64Linux, "x64_linux"),
+            (PortabilityTarget::X64Macos, "x64_macos"),
+            (PortabilityTarget::Arm64Linux, "arm64_linux"),
+            (PortabilityTarget::Arm64Macos, "arm64_macos"),
+            (PortabilityTarget::X64Windows, "x64_windows"),
+            (PortabilityTarget::Arm64Windows, "arm64_windows"),
+            (PortabilityTarget::Wasm, "wasm"),
+        ];
+        for (target, label) in &expected {
+            assert_eq!(target.to_string(), *label);
+        }
+    }
+
+    #[test]
+    fn test_verdict_display_all_variants() {
+        let expected = [
+            (GovernanceVerdict::Approved, "approved"),
+            (GovernanceVerdict::CacheMissExceeded, "cache_miss_exceeded"),
+            (
+                GovernanceVerdict::NumaRemoteExceeded,
+                "numa_remote_exceeded",
+            ),
+            (
+                GovernanceVerdict::PortabilityInsufficient,
+                "portability_insufficient",
+            ),
+            (GovernanceVerdict::TargetsMissing, "targets_missing"),
+            (GovernanceVerdict::MultipleViolations, "multiple_violations"),
+        ];
+        for (v, label) in &expected {
+            assert_eq!(v.to_string(), *label);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: hash determinism and differentiation
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_cache_miss_hash_differs_on_dimension() {
+        let a = CacheMissEntry::new(
+            LocalityDimension::L1Data,
+            "op1".into(),
+            5000,
+            100,
+            30,
+            DEFAULT_MAX_CACHE_MISS_RATE,
+        );
+        let b = CacheMissEntry::new(
+            LocalityDimension::L3LastLevel,
+            "op1".into(),
+            5000,
+            100,
+            30,
+            DEFAULT_MAX_CACHE_MISS_RATE,
+        );
+        assert_ne!(a.entry_hash, b.entry_hash);
+    }
+
+    #[test]
+    fn test_cache_miss_hash_differs_on_operation_id() {
+        let a = CacheMissEntry::new(
+            LocalityDimension::L1Data,
+            "op_alpha".into(),
+            5000,
+            100,
+            30,
+            DEFAULT_MAX_CACHE_MISS_RATE,
+        );
+        let b = CacheMissEntry::new(
+            LocalityDimension::L1Data,
+            "op_beta".into(),
+            5000,
+            100,
+            30,
+            DEFAULT_MAX_CACHE_MISS_RATE,
+        );
+        assert_ne!(a.entry_hash, b.entry_hash);
+    }
+
+    #[test]
+    fn test_numa_hash_deterministic() {
+        let a = NumaEntry::new("scan".into(), 20000, 1000, 2, DEFAULT_MAX_NUMA_REMOTE_RATIO);
+        let b = NumaEntry::new("scan".into(), 20000, 1000, 2, DEFAULT_MAX_NUMA_REMOTE_RATIO);
+        assert_eq!(a.entry_hash, b.entry_hash);
+    }
+
+    #[test]
+    fn test_numa_hash_differs_on_node_count() {
+        let a = NumaEntry::new("scan".into(), 20000, 1000, 2, DEFAULT_MAX_NUMA_REMOTE_RATIO);
+        let b = NumaEntry::new("scan".into(), 20000, 1000, 4, DEFAULT_MAX_NUMA_REMOTE_RATIO);
+        assert_ne!(a.entry_hash, b.entry_hash);
+    }
+
+    #[test]
+    fn test_portability_entry_hash_deterministic() {
+        let a = PortabilityEntry::new("op".into(), PortabilityTarget::Wasm, true, 800_000);
+        let b = PortabilityEntry::new("op".into(), PortabilityTarget::Wasm, true, 800_000);
+        assert_eq!(a.entry_hash, b.entry_hash);
+    }
+
+    #[test]
+    fn test_portability_entry_hash_differs_on_functional() {
+        let a = PortabilityEntry::new("op".into(), PortabilityTarget::Wasm, true, 800_000);
+        let b = PortabilityEntry::new("op".into(), PortabilityTarget::Wasm, false, 800_000);
+        assert_ne!(a.entry_hash, b.entry_hash);
+    }
+
+    #[test]
+    fn test_portability_entry_hash_differs_on_target() {
+        let a = PortabilityEntry::new("op".into(), PortabilityTarget::X64Linux, true, FIXED_ONE);
+        let b = PortabilityEntry::new("op".into(), PortabilityTarget::Arm64Linux, true, FIXED_ONE);
+        assert_ne!(a.entry_hash, b.entry_hash);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: governance policy edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_cache_miss_boundary_exactly_at_threshold() {
+        // Exactly at threshold should be within budget (<=).
+        let c = CacheMissEntry::new(
+            LocalityDimension::L1Data,
+            "boundary_op".into(),
+            10000,
+            500,
+            50,
+            DEFAULT_MAX_CACHE_MISS_RATE,
+        );
+        // 500/10000 = 5% = 50_000 millionths = DEFAULT_MAX_CACHE_MISS_RATE
+        assert_eq!(c.miss_rate_millionths, 50_000);
+        assert!(c.within_budget);
+    }
+
+    #[test]
+    fn test_cache_miss_boundary_one_over_threshold() {
+        let c = CacheMissEntry::new(
+            LocalityDimension::L1Data,
+            "boundary_op".into(),
+            10000,
+            501,
+            50,
+            DEFAULT_MAX_CACHE_MISS_RATE,
+        );
+        // 501/10000 = 50_100 millionths > 50_000
+        assert_eq!(c.miss_rate_millionths, 50_100);
+        assert!(!c.within_budget);
+    }
+
+    #[test]
+    fn test_numa_boundary_exactly_at_threshold() {
+        let n = NumaEntry::new(
+            "boundary".into(),
+            10000,
+            1000,
+            2,
+            DEFAULT_MAX_NUMA_REMOTE_RATIO,
+        );
+        // 1000/10000 = 10% = 100_000 millionths = DEFAULT_MAX_NUMA_REMOTE_RATIO
+        assert_eq!(n.remote_ratio_millionths, 100_000);
+        assert!(n.within_budget);
+    }
+
+    #[test]
+    fn test_numa_boundary_one_over_threshold() {
+        let n = NumaEntry::new(
+            "boundary".into(),
+            10000,
+            1001,
+            2,
+            DEFAULT_MAX_NUMA_REMOTE_RATIO,
+        );
+        assert_eq!(n.remote_ratio_millionths, 100_100);
+        assert!(!n.within_budget);
+    }
+
+    #[test]
+    fn test_cache_miss_saturating_mul_large_values() {
+        // Large cache_misses that would overflow without saturating_mul.
+        let c = CacheMissEntry::new(
+            LocalityDimension::MemoryBus,
+            "huge_load".into(),
+            u64::MAX,
+            u64::MAX,
+            100,
+            DEFAULT_MAX_CACHE_MISS_RATE,
+        );
+        // saturating_mul clamps to u64::MAX, divided by u64::MAX -> 1_000_000 (or near it).
+        // The key is no panic happens.
+        assert!(c.miss_rate_millionths > 0);
+    }
+
+    #[test]
+    fn test_numa_saturating_mul_large_values() {
+        let n = NumaEntry::new(
+            "huge".into(),
+            u64::MAX,
+            u64::MAX,
+            8,
+            DEFAULT_MAX_NUMA_REMOTE_RATIO,
+        );
+        assert!(n.remote_ratio_millionths > 0);
+    }
+
+    #[test]
+    fn test_evaluator_portability_score_empty_returns_fixed_one() {
+        let eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
+        // Empty portability entries should give FIXED_ONE by default.
+        let receipt = eval.evaluate(epoch());
+        assert_eq!(receipt.portability_score_millionths, FIXED_ONE);
+    }
+
+    #[test]
+    fn test_evaluator_portability_all_nonfunctional() {
+        let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
+        eval.add_portability("op".into(), PortabilityTarget::X64Linux, false, 0);
+        eval.add_portability("op".into(), PortabilityTarget::Arm64Linux, false, 0);
+        eval.add_portability("op".into(), PortabilityTarget::Wasm, false, 0);
+        let receipt = eval.evaluate(epoch());
+        assert_eq!(receipt.portability_score_millionths, 0);
+        assert_eq!(receipt.verdict, GovernanceVerdict::PortabilityInsufficient);
+    }
+
+    #[test]
+    fn test_evaluator_covered_targets_only_functional() {
+        let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
+        eval.add_portability("op".into(), PortabilityTarget::X64Linux, true, FIXED_ONE);
+        eval.add_portability("op".into(), PortabilityTarget::Arm64Linux, false, 0);
+        eval.add_portability("op".into(), PortabilityTarget::Wasm, true, FIXED_ONE);
+        let receipt = eval.evaluate(epoch());
+        assert!(
+            receipt
+                .targets_covered
+                .contains(&PortabilityTarget::X64Linux)
+        );
+        assert!(receipt.targets_covered.contains(&PortabilityTarget::Wasm));
+        assert!(
+            !receipt
+                .targets_covered
+                .contains(&PortabilityTarget::Arm64Linux)
+        );
+    }
+
+    #[test]
+    fn test_evaluator_targets_missing_partial() {
+        let mut config = GovernanceConfig::relaxed();
+        config.required_targets.insert(PortabilityTarget::X64Linux);
+        config.required_targets.insert(PortabilityTarget::Wasm);
+        let mut eval = GovernanceEvaluator::new(config);
+        // Only cover X64Linux.
+        eval.add_portability("op".into(), PortabilityTarget::X64Linux, true, FIXED_ONE);
+        let receipt = eval.evaluate(epoch());
+        assert_eq!(receipt.verdict, GovernanceVerdict::TargetsMissing);
+        assert!(receipt.targets_missing.contains(&PortabilityTarget::Wasm));
+        assert!(
+            !receipt
+                .targets_missing
+                .contains(&PortabilityTarget::X64Linux)
+        );
+    }
+
+    #[test]
+    fn test_evaluator_targets_all_satisfied() {
+        let mut config = GovernanceConfig::relaxed();
+        config.required_targets.insert(PortabilityTarget::X64Linux);
+        config.required_targets.insert(PortabilityTarget::Wasm);
+        let mut eval = GovernanceEvaluator::new(config);
+        eval.add_portability("op".into(), PortabilityTarget::X64Linux, true, FIXED_ONE);
+        eval.add_portability("op".into(), PortabilityTarget::Wasm, true, FIXED_ONE);
+        let receipt = eval.evaluate(epoch());
+        assert_eq!(receipt.verdict, GovernanceVerdict::Approved);
+        assert!(receipt.targets_missing.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: multiple violations and violation details
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_multiple_cache_miss_violations_single_category() {
+        let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
+        eval.add_cache_miss(LocalityDimension::L1Data, "op_a".into(), 1000, 200, 50);
+        eval.add_cache_miss(LocalityDimension::L2Unified, "op_b".into(), 1000, 300, 50);
+        let receipt = eval.evaluate(epoch());
+        // Both exceed the 5% threshold. Same category -> CacheMissExceeded (not MultipleViolations).
+        assert_eq!(receipt.verdict, GovernanceVerdict::CacheMissExceeded);
+        assert_eq!(receipt.violations.len(), 2);
+    }
+
+    #[test]
+    fn test_cache_miss_plus_targets_missing_gives_multiple() {
+        let mut config = GovernanceConfig::relaxed();
+        config.required_targets.insert(PortabilityTarget::Wasm);
+        let mut eval = GovernanceEvaluator::new(config);
+        eval.add_cache_miss(LocalityDimension::L1Data, "op1".into(), 10000, 1000, 50);
+        let receipt = eval.evaluate(epoch());
+        assert_eq!(receipt.verdict, GovernanceVerdict::MultipleViolations);
+    }
+
+    #[test]
+    fn test_numa_plus_portability_gives_multiple() {
+        let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
+        eval.add_numa("op1".into(), 10000, 2000, 2);
+        eval.add_portability("op1".into(), PortabilityTarget::X64Linux, false, 0);
+        eval.add_portability("op1".into(), PortabilityTarget::Wasm, false, 0);
+        let receipt = eval.evaluate(epoch());
+        assert_eq!(receipt.verdict, GovernanceVerdict::MultipleViolations);
+    }
+
+    #[test]
+    fn test_violation_detail_measured_and_threshold() {
+        let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
+        eval.add_cache_miss(LocalityDimension::L1Data, "op1".into(), 10000, 800, 50);
+        let receipt = eval.evaluate(epoch());
+        assert_eq!(receipt.violations.len(), 1);
+        let v = &receipt.violations[0];
+        assert_eq!(v.category, GovernanceVerdict::CacheMissExceeded);
+        assert_eq!(v.measured_millionths, 80_000);
+        assert_eq!(v.threshold_millionths, DEFAULT_MAX_CACHE_MISS_RATE);
+    }
+
+    #[test]
+    fn test_violation_detail_numa_summary_contains_op_id() {
+        let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
+        eval.add_numa("my_special_op".into(), 10000, 5000, 4);
+        let receipt = eval.evaluate(epoch());
+        assert_eq!(receipt.violations.len(), 1);
+        assert!(receipt.violations[0].summary.contains("my_special_op"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: GovernanceConfig default and strict details
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_config_default_is_relaxed() {
+        let def = GovernanceConfig::default();
+        let rel = GovernanceConfig::relaxed();
+        assert_eq!(def, rel);
+    }
+
+    #[test]
+    fn test_config_strict_values() {
+        let c = GovernanceConfig::strict();
+        assert_eq!(c.max_cache_miss_rate, 20_000);
+        assert_eq!(c.max_numa_remote_ratio, 50_000);
+        assert_eq!(c.min_portability_score, 950_000);
+        assert_eq!(c.min_samples, 100);
+        assert_eq!(c.min_observability_coverage, 950_000);
+    }
+
+    #[test]
+    fn test_config_relaxed_values() {
+        let c = GovernanceConfig::relaxed();
+        assert_eq!(c.max_cache_miss_rate, DEFAULT_MAX_CACHE_MISS_RATE);
+        assert_eq!(c.max_numa_remote_ratio, DEFAULT_MAX_NUMA_REMOTE_RATIO);
+        assert_eq!(c.min_portability_score, DEFAULT_MIN_PORTABILITY_SCORE);
+        assert_eq!(c.min_samples, DEFAULT_MIN_SAMPLES);
+        assert_eq!(
+            c.min_observability_coverage,
+            DEFAULT_MIN_OBSERVABILITY_COVERAGE
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: receipt content verification
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_receipt_epoch_propagated() {
+        let eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
+        let receipt = eval.evaluate(SecurityEpoch::from_raw(999));
+        assert_eq!(receipt.epoch.as_u64(), 999);
+    }
+
+    #[test]
+    fn test_receipt_different_epochs_different_hashes() {
+        let eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
+        let r1 = eval.evaluate(SecurityEpoch::from_raw(1));
+        let r2 = eval.evaluate(SecurityEpoch::from_raw(2));
+        assert_ne!(r1.content_hash, r2.content_hash);
+    }
+
+    #[test]
+    fn test_receipt_entries_cloned_into_receipt() {
+        let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
+        eval.add_cache_miss(LocalityDimension::L1Data, "a".into(), 10000, 100, 50);
+        eval.add_cache_miss(LocalityDimension::L2Unified, "b".into(), 10000, 100, 50);
+        eval.add_numa("c".into(), 10000, 100, 2);
+        eval.add_portability("d".into(), PortabilityTarget::Wasm, true, FIXED_ONE);
+        let receipt = eval.evaluate(epoch());
+        assert_eq!(receipt.cache_miss_entries.len(), 2);
+        assert_eq!(receipt.numa_entries.len(), 1);
+        assert_eq!(receipt.portability_entries.len(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: blocks_publication for all verdict variants
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_verdict_blocks_publication_all_variants() {
+        assert!(!GovernanceVerdict::Approved.blocks_publication());
+        assert!(GovernanceVerdict::CacheMissExceeded.blocks_publication());
+        assert!(GovernanceVerdict::NumaRemoteExceeded.blocks_publication());
+        assert!(GovernanceVerdict::PortabilityInsufficient.blocks_publication());
+        assert!(GovernanceVerdict::TargetsMissing.blocks_publication());
+        assert!(GovernanceVerdict::MultipleViolations.blocks_publication());
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: evaluator with strict config
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_strict_config_tighter_cache_miss_threshold() {
+        // 3% miss rate passes relaxed (5%) but fails strict (2%).
+        let mut eval = GovernanceEvaluator::new(GovernanceConfig::strict());
+        eval.add_cache_miss(LocalityDimension::L1Data, "op".into(), 10000, 300, 100);
+        // Also supply all targets so target-missing doesn't dominate.
+        for target in PortabilityTarget::all() {
+            eval.add_portability("op".into(), *target, true, FIXED_ONE);
+        }
+        eval.add_numa("op".into(), 10000, 100, 2);
+        let receipt = eval.evaluate(epoch());
+        // 30_000 > strict threshold 20_000 -> violation
+        assert!(
+            receipt
+                .violations
+                .iter()
+                .any(|v| v.category == GovernanceVerdict::CacheMissExceeded)
+        );
+    }
+
+    #[test]
+    fn test_strict_config_all_pass() {
+        let mut eval = GovernanceEvaluator::new(GovernanceConfig::strict());
+        eval.add_cache_miss(LocalityDimension::L1Data, "op".into(), 100000, 1000, 100);
+        eval.add_numa("op".into(), 100000, 1000, 2);
+        for target in PortabilityTarget::all() {
+            eval.add_portability("op".into(), *target, true, FIXED_ONE);
+        }
+        let receipt = eval.evaluate(epoch());
+        // 1% miss rate, 1% remote ratio, all targets functional at 100%
+        assert_eq!(receipt.verdict, GovernanceVerdict::Approved);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: evaluator serde roundtrip
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_evaluator_serde_roundtrip() {
+        let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
+        eval.add_cache_miss(LocalityDimension::L1Data, "op".into(), 10000, 200, 50);
+        eval.add_numa("op".into(), 10000, 500, 2);
+        eval.add_portability("op".into(), PortabilityTarget::X64Linux, true, FIXED_ONE);
+        let json = serde_json::to_string(&eval).unwrap();
+        let back: GovernanceEvaluator = serde_json::from_str(&json).unwrap();
+        assert_eq!(eval, back);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: portability score edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_portability_score_one_third_functional() {
+        let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
+        eval.add_portability("a".into(), PortabilityTarget::X64Linux, true, FIXED_ONE);
+        eval.add_portability("b".into(), PortabilityTarget::Arm64Linux, false, 0);
+        eval.add_portability("c".into(), PortabilityTarget::Wasm, false, 0);
+        let receipt = eval.evaluate(epoch());
+        // 1/3 = 333_333
+        assert_eq!(receipt.portability_score_millionths, 333_333);
+    }
+
+    #[test]
+    fn test_portability_score_single_functional() {
+        let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
+        eval.add_portability("op".into(), PortabilityTarget::X64Linux, true, FIXED_ONE);
+        let receipt = eval.evaluate(epoch());
+        assert_eq!(receipt.portability_score_millionths, FIXED_ONE);
+        assert_eq!(receipt.verdict, GovernanceVerdict::Approved);
+    }
+
+    #[test]
+    fn test_portability_score_single_nonfunctional() {
+        let mut eval = GovernanceEvaluator::new(GovernanceConfig::relaxed());
+        eval.add_portability("op".into(), PortabilityTarget::X64Linux, false, 0);
+        let receipt = eval.evaluate(epoch());
+        assert_eq!(receipt.portability_score_millionths, 0);
+        assert_eq!(receipt.verdict, GovernanceVerdict::PortabilityInsufficient);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: verdict ordering
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_verdict_ord() {
+        // GovernanceVerdict derives Ord; verify the declared ordering is stable.
+        let mut verdicts = vec![
+            GovernanceVerdict::MultipleViolations,
+            GovernanceVerdict::Approved,
+            GovernanceVerdict::NumaRemoteExceeded,
+            GovernanceVerdict::CacheMissExceeded,
+        ];
+        verdicts.sort();
+        assert_eq!(verdicts[0], GovernanceVerdict::Approved);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: constants
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_fixed_one_value() {
+        assert_eq!(FIXED_ONE, 1_000_000);
+    }
+
+    #[test]
+    fn test_default_thresholds_relative_ordering() {
+        // Portability and observability thresholds should be >= 80%.
+        assert!(DEFAULT_MIN_PORTABILITY_SCORE >= 800_000);
+        assert!(DEFAULT_MIN_OBSERVABILITY_COVERAGE >= 800_000);
+        // Cache miss and NUMA thresholds should be small fractions.
+        assert!(DEFAULT_MAX_CACHE_MISS_RATE <= 100_000);
+        assert!(DEFAULT_MAX_NUMA_REMOTE_RATIO <= 200_000);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: locality dimension set membership
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_locality_dimensions_btreeset_dedup() {
+        let mut set = BTreeSet::new();
+        for dim in LocalityDimension::all() {
+            assert!(set.insert(*dim), "duplicate dimension: {dim}");
+        }
+        assert_eq!(set.len(), 8);
+    }
+
+    #[test]
+    fn test_portability_targets_btreeset_dedup() {
+        let mut set = BTreeSet::new();
+        for target in PortabilityTarget::all() {
+            assert!(set.insert(*target), "duplicate target: {target}");
+        }
+        assert_eq!(set.len(), 7);
+    }
 }

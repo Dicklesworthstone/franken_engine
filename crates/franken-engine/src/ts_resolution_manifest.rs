@@ -1658,4 +1658,779 @@ mod tests {
         let (_, inventory, _) = run_manifest_corpus();
         assert!(inventory.evidence_hash.starts_with("sha256:"));
     }
+
+    // -----------------------------------------------------------------------
+    // Additional edge-case, boundary, and coverage tests
+    // -----------------------------------------------------------------------
+
+    // --- Empty manifest / zero-length edge cases ---
+
+    #[test]
+    fn test_replay_index_build_empty_entries() {
+        let index = TsResolutionReplayIndex::build(
+            Vec::new(),
+            "empty-hash",
+            TsModuleResolutionMode::Bundler,
+            "2026-03-18T00:00:00Z",
+        );
+        assert_eq!(index.entry_count(), 0);
+        assert!(index.index_hash.starts_with("sha256:"));
+        assert_eq!(index.schema_version, TS_REPLAY_INDEX_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn test_replay_entry_empty_specifier() {
+        let entry = TsResolutionReplayEntry {
+            specifier: String::new(),
+            referrer: None,
+            style: TsRequestStyle::Import,
+            resolved_path: String::new(),
+            package_name: None,
+            selected_condition: None,
+            resolved_content_hash: None,
+            probe_count: 0,
+        };
+        let key = entry.lookup_key();
+        // Key should still be well-formed: "|...|Import"
+        assert!(key.contains("Import"));
+        assert!(key.starts_with('|'));
+    }
+
+    #[test]
+    fn test_validation_both_empty_path_no_entry_in_index() {
+        // When no entry in index and actual path is empty, should be Matched
+        // (both sides agree resolution failed).
+        let index =
+            TsResolutionReplayIndex::build(Vec::new(), "h", TsModuleResolutionMode::NodeNext, "t");
+        let status = index.validate_resolution("missing", None, TsRequestStyle::Import, "", None);
+        assert_eq!(status, ReplayValidationStatus::Matched);
+    }
+
+    #[test]
+    fn test_validation_unexpected_success_no_entry() {
+        // No entry in index but actual path is non-empty -> UnexpectedSuccess
+        let index =
+            TsResolutionReplayIndex::build(Vec::new(), "h", TsModuleResolutionMode::NodeNext, "t");
+        let status = index.validate_resolution(
+            "new-module",
+            None,
+            TsRequestStyle::Import,
+            "/found.ts",
+            None,
+        );
+        assert_eq!(status, ReplayValidationStatus::UnexpectedSuccess);
+    }
+
+    #[test]
+    fn test_validation_unexpected_success_recorded_empty() {
+        // Entry recorded empty path but actual path is non-empty -> UnexpectedSuccess
+        let entries = vec![TsResolutionReplayEntry {
+            specifier: "./fail".into(),
+            referrer: None,
+            style: TsRequestStyle::Import,
+            resolved_path: String::new(),
+            package_name: None,
+            selected_condition: None,
+            resolved_content_hash: None,
+            probe_count: 5,
+        }];
+        let index =
+            TsResolutionReplayIndex::build(entries, "h", TsModuleResolutionMode::NodeNext, "t");
+        let status = index.validate_resolution(
+            "./fail",
+            None,
+            TsRequestStyle::Import,
+            "/actually/found.ts",
+            None,
+        );
+        assert_eq!(status, ReplayValidationStatus::UnexpectedSuccess);
+    }
+
+    #[test]
+    fn test_validation_content_drift_with_matching_path() {
+        // Path matches but content hash changed -> ContentDrift
+        let entries = vec![TsResolutionReplayEntry {
+            specifier: "./m".into(),
+            referrer: Some("./ref.ts".into()),
+            style: TsRequestStyle::Require,
+            resolved_path: "/m.js".into(),
+            package_name: None,
+            selected_condition: None,
+            resolved_content_hash: Some("sha256:aaa".into()),
+            probe_count: 1,
+        }];
+        let index =
+            TsResolutionReplayIndex::build(entries, "h", TsModuleResolutionMode::Node16, "t");
+        let status = index.validate_resolution(
+            "./m",
+            Some("./ref.ts"),
+            TsRequestStyle::Require,
+            "/m.js",
+            Some("sha256:bbb"),
+        );
+        assert_eq!(status, ReplayValidationStatus::ContentDrift);
+    }
+
+    #[test]
+    fn test_validation_matched_when_content_hash_none_on_both() {
+        // No recorded hash, no actual hash -> Matched (no drift detectable)
+        let entries = vec![TsResolutionReplayEntry {
+            specifier: "./z".into(),
+            referrer: None,
+            style: TsRequestStyle::Import,
+            resolved_path: "/z.ts".into(),
+            package_name: None,
+            selected_condition: None,
+            resolved_content_hash: None,
+            probe_count: 1,
+        }];
+        let index =
+            TsResolutionReplayIndex::build(entries, "h", TsModuleResolutionMode::NodeNext, "t");
+        let status = index.validate_resolution("./z", None, TsRequestStyle::Import, "/z.ts", None);
+        assert_eq!(status, ReplayValidationStatus::Matched);
+    }
+
+    #[test]
+    fn test_validation_matched_when_recorded_hash_none_actual_present() {
+        // Recorded hash is None but actual is present -> still Matched (let-chain short-circuits)
+        let entries = vec![TsResolutionReplayEntry {
+            specifier: "./w".into(),
+            referrer: None,
+            style: TsRequestStyle::Import,
+            resolved_path: "/w.ts".into(),
+            package_name: None,
+            selected_condition: None,
+            resolved_content_hash: None,
+            probe_count: 1,
+        }];
+        let index =
+            TsResolutionReplayIndex::build(entries, "h", TsModuleResolutionMode::NodeNext, "t");
+        let status = index.validate_resolution(
+            "./w",
+            None,
+            TsRequestStyle::Import,
+            "/w.ts",
+            Some("sha256:xyz"),
+        );
+        assert_eq!(status, ReplayValidationStatus::Matched);
+    }
+
+    // --- Hash determinism across different inputs ---
+
+    #[test]
+    fn test_tsconfig_strict_flag_affects_hash() {
+        let mut s1 = TsconfigSnapshot::default();
+        s1.strict = true;
+        let mut s2 = TsconfigSnapshot::default();
+        s2.strict = false;
+        assert_ne!(s1.content_hash(), s2.content_hash());
+    }
+
+    #[test]
+    fn test_tsconfig_target_affects_hash() {
+        let mut s1 = TsconfigSnapshot::default();
+        s1.target = "es2020".to_string();
+        let mut s2 = TsconfigSnapshot::default();
+        s2.target = "es2022".to_string();
+        assert_ne!(s1.content_hash(), s2.content_hash());
+    }
+
+    #[test]
+    fn test_tsconfig_custom_conditions_affects_hash() {
+        let mut s1 = TsconfigSnapshot::default();
+        s1.custom_conditions = vec!["development".into()];
+        let s2 = TsconfigSnapshot::default();
+        assert_ne!(s1.content_hash(), s2.content_hash());
+    }
+
+    #[test]
+    fn test_tsconfig_module_resolution_mode_affects_hash() {
+        let mut s1 = TsconfigSnapshot::default();
+        s1.module_resolution = TsModuleResolutionMode::Bundler;
+        let s2 = TsconfigSnapshot::default(); // NodeNext by default
+        assert_ne!(s1.content_hash(), s2.content_hash());
+    }
+
+    #[test]
+    fn test_replay_index_hash_differs_for_different_tsconfig_hashes() {
+        let entries = vec![TsResolutionReplayEntry {
+            specifier: "./a".into(),
+            referrer: None,
+            style: TsRequestStyle::Import,
+            resolved_path: "/a.ts".into(),
+            package_name: None,
+            selected_condition: None,
+            resolved_content_hash: None,
+            probe_count: 1,
+        }];
+        let i1 = TsResolutionReplayIndex::build(
+            entries.clone(),
+            "hash-A",
+            TsModuleResolutionMode::NodeNext,
+            "t",
+        );
+        let i2 = TsResolutionReplayIndex::build(
+            entries,
+            "hash-B",
+            TsModuleResolutionMode::NodeNext,
+            "t",
+        );
+        assert_ne!(i1.index_hash, i2.index_hash);
+    }
+
+    #[test]
+    fn test_replay_index_hash_differs_for_different_modes() {
+        let entries = vec![TsResolutionReplayEntry {
+            specifier: "./b".into(),
+            referrer: None,
+            style: TsRequestStyle::Import,
+            resolved_path: "/b.ts".into(),
+            package_name: None,
+            selected_condition: None,
+            resolved_content_hash: None,
+            probe_count: 1,
+        }];
+        let i1 = TsResolutionReplayIndex::build(
+            entries.clone(),
+            "h",
+            TsModuleResolutionMode::NodeNext,
+            "t",
+        );
+        let i2 = TsResolutionReplayIndex::build(entries, "h", TsModuleResolutionMode::Bundler, "t");
+        assert_ne!(i1.index_hash, i2.index_hash);
+    }
+
+    // --- Multi-module dependency scenarios ---
+
+    #[test]
+    fn test_replay_index_multiple_entries_distinct_keys() {
+        let entries = vec![
+            TsResolutionReplayEntry {
+                specifier: "react".into(),
+                referrer: Some("./app.tsx".into()),
+                style: TsRequestStyle::Import,
+                resolved_path: "node_modules/react/index.js".into(),
+                package_name: Some("react".into()),
+                selected_condition: Some("import".into()),
+                resolved_content_hash: None,
+                probe_count: 1,
+            },
+            TsResolutionReplayEntry {
+                specifier: "react-dom".into(),
+                referrer: Some("./app.tsx".into()),
+                style: TsRequestStyle::Import,
+                resolved_path: "node_modules/react-dom/index.js".into(),
+                package_name: Some("react-dom".into()),
+                selected_condition: Some("import".into()),
+                resolved_content_hash: None,
+                probe_count: 2,
+            },
+            TsResolutionReplayEntry {
+                specifier: "./utils".into(),
+                referrer: Some("./app.tsx".into()),
+                style: TsRequestStyle::Import,
+                resolved_path: "./src/utils.ts".into(),
+                package_name: None,
+                selected_condition: None,
+                resolved_content_hash: Some("sha256:util_hash".into()),
+                probe_count: 1,
+            },
+        ];
+        let index = TsResolutionReplayIndex::build(
+            entries,
+            "multi-hash",
+            TsModuleResolutionMode::NodeNext,
+            "2026-03-18T00:00:00Z",
+        );
+        assert_eq!(index.entry_count(), 3);
+
+        let react = index.lookup("react", Some("./app.tsx"), TsRequestStyle::Import);
+        assert!(react.is_some());
+        assert_eq!(react.unwrap().resolved_path, "node_modules/react/index.js");
+
+        let dom = index.lookup("react-dom", Some("./app.tsx"), TsRequestStyle::Import);
+        assert!(dom.is_some());
+
+        let utils = index.lookup("./utils", Some("./app.tsx"), TsRequestStyle::Import);
+        assert!(utils.is_some());
+        assert_eq!(
+            utils.unwrap().resolved_content_hash.as_deref(),
+            Some("sha256:util_hash")
+        );
+    }
+
+    #[test]
+    fn test_replay_index_same_specifier_different_referrer() {
+        let entries = vec![
+            TsResolutionReplayEntry {
+                specifier: "./shared".into(),
+                referrer: Some("./a.ts".into()),
+                style: TsRequestStyle::Import,
+                resolved_path: "/src/shared_a.ts".into(),
+                package_name: None,
+                selected_condition: None,
+                resolved_content_hash: None,
+                probe_count: 1,
+            },
+            TsResolutionReplayEntry {
+                specifier: "./shared".into(),
+                referrer: Some("./b.ts".into()),
+                style: TsRequestStyle::Import,
+                resolved_path: "/src/shared_b.ts".into(),
+                package_name: None,
+                selected_condition: None,
+                resolved_content_hash: None,
+                probe_count: 1,
+            },
+        ];
+        let index =
+            TsResolutionReplayIndex::build(entries, "h", TsModuleResolutionMode::NodeNext, "t");
+        assert_eq!(index.entry_count(), 2);
+
+        let from_a = index.lookup("./shared", Some("./a.ts"), TsRequestStyle::Import);
+        let from_b = index.lookup("./shared", Some("./b.ts"), TsRequestStyle::Import);
+        assert!(from_a.is_some());
+        assert!(from_b.is_some());
+        assert_ne!(from_a.unwrap().resolved_path, from_b.unwrap().resolved_path);
+    }
+
+    #[test]
+    fn test_replay_index_same_specifier_different_style() {
+        let entries = vec![
+            TsResolutionReplayEntry {
+                specifier: "lodash".into(),
+                referrer: None,
+                style: TsRequestStyle::Import,
+                resolved_path: "node_modules/lodash/lodash.mjs".into(),
+                package_name: Some("lodash".into()),
+                selected_condition: Some("import".into()),
+                resolved_content_hash: None,
+                probe_count: 1,
+            },
+            TsResolutionReplayEntry {
+                specifier: "lodash".into(),
+                referrer: None,
+                style: TsRequestStyle::Require,
+                resolved_path: "node_modules/lodash/lodash.js".into(),
+                package_name: Some("lodash".into()),
+                selected_condition: Some("require".into()),
+                resolved_content_hash: None,
+                probe_count: 1,
+            },
+        ];
+        let index =
+            TsResolutionReplayIndex::build(entries, "h", TsModuleResolutionMode::NodeNext, "t");
+        assert_eq!(index.entry_count(), 2);
+
+        let esm = index.lookup("lodash", None, TsRequestStyle::Import);
+        let cjs = index.lookup("lodash", None, TsRequestStyle::Require);
+        assert!(esm.is_some());
+        assert!(cjs.is_some());
+        assert_ne!(esm.unwrap().resolved_path, cjs.unwrap().resolved_path);
+    }
+
+    #[test]
+    fn test_replay_index_duplicate_entries_last_wins() {
+        // Two entries with the same lookup key: the last one inserted wins
+        // because BTreeMap::insert replaces.
+        let entries = vec![
+            TsResolutionReplayEntry {
+                specifier: "./dup".into(),
+                referrer: None,
+                style: TsRequestStyle::Import,
+                resolved_path: "/first.ts".into(),
+                package_name: None,
+                selected_condition: None,
+                resolved_content_hash: None,
+                probe_count: 1,
+            },
+            TsResolutionReplayEntry {
+                specifier: "./dup".into(),
+                referrer: None,
+                style: TsRequestStyle::Import,
+                resolved_path: "/second.ts".into(),
+                package_name: None,
+                selected_condition: None,
+                resolved_content_hash: None,
+                probe_count: 2,
+            },
+        ];
+        let index =
+            TsResolutionReplayIndex::build(entries, "h", TsModuleResolutionMode::NodeNext, "t");
+        // Only one entry because same key
+        assert_eq!(index.entry_count(), 1);
+        let found = index.lookup("./dup", None, TsRequestStyle::Import).unwrap();
+        assert_eq!(found.resolved_path, "/second.ts");
+    }
+
+    // --- Serde round-trip for additional types ---
+
+    #[test]
+    fn test_replay_validation_status_serde_roundtrip() {
+        for status in ReplayValidationStatus::ALL {
+            let json = serde_json::to_string(status).unwrap();
+            let rt: ReplayValidationStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(*status, rt);
+        }
+    }
+
+    #[test]
+    fn test_manifest_feature_family_serde_roundtrip() {
+        for family in ManifestFeatureFamily::ALL {
+            let json = serde_json::to_string(family).unwrap();
+            let rt: ManifestFeatureFamily = serde_json::from_str(&json).unwrap();
+            assert_eq!(*family, rt);
+        }
+    }
+
+    #[test]
+    fn test_manifest_verdict_serde_roundtrip() {
+        let pass_json = serde_json::to_string(&ManifestVerdict::Pass).unwrap();
+        let fail_json = serde_json::to_string(&ManifestVerdict::Fail).unwrap();
+        let pass_rt: ManifestVerdict = serde_json::from_str(&pass_json).unwrap();
+        let fail_rt: ManifestVerdict = serde_json::from_str(&fail_json).unwrap();
+        assert_eq!(pass_rt, ManifestVerdict::Pass);
+        assert_eq!(fail_rt, ManifestVerdict::Fail);
+    }
+
+    #[test]
+    fn test_normalization_lineage_serde_roundtrip() {
+        let lineage = NormalizationLineage {
+            source_hash: "sha256:src".into(),
+            normalized_hash: "sha256:norm".into(),
+            compiler_options_hash: "sha256:opts".into(),
+            normalization_applied: true,
+        };
+        let json = serde_json::to_string(&lineage).unwrap();
+        let rt: NormalizationLineage = serde_json::from_str(&json).unwrap();
+        assert_eq!(lineage, rt);
+    }
+
+    #[test]
+    fn test_resolution_lineage_serde_roundtrip() {
+        let lineage = ResolutionLineage {
+            decision_count: 42,
+            resolved_count: 40,
+            failed_count: 2,
+            drift_class: TsResolutionDriftClass::CandidateOrderMismatch,
+            replay_index_hash: Some("sha256:idx".into()),
+        };
+        let json = serde_json::to_string(&lineage).unwrap();
+        let rt: ResolutionLineage = serde_json::from_str(&json).unwrap();
+        assert_eq!(lineage, rt);
+    }
+
+    #[test]
+    fn test_ir_pipeline_lineage_serde_roundtrip() {
+        let lineage = IrPipelineLineage {
+            ir0_hash: "sha256:ir0".into(),
+            ir1_hash: Some("sha256:ir1".into()),
+            ir2_hash: None,
+            ir3_hash: Some("sha256:ir3".into()),
+        };
+        let json = serde_json::to_string(&lineage).unwrap();
+        let rt: IrPipelineLineage = serde_json::from_str(&json).unwrap();
+        assert_eq!(lineage, rt);
+    }
+
+    #[test]
+    fn test_replay_validation_report_serde_roundtrip() {
+        let report = ReplayValidationReport::from_statuses(&[
+            ReplayValidationStatus::Matched,
+            ReplayValidationStatus::PathMismatch,
+            ReplayValidationStatus::UnexpectedFailure,
+        ]);
+        let json = serde_json::to_string(&report).unwrap();
+        let rt: ReplayValidationReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(report, rt);
+    }
+
+    #[test]
+    fn test_manifest_specimen_evidence_serde_roundtrip() {
+        let evidence = ManifestSpecimenEvidence {
+            specimen_id: "test_spec".into(),
+            feature_family: ManifestFeatureFamily::ReplayIndex,
+            verdict: ManifestVerdict::Pass,
+        };
+        let json = serde_json::to_string(&evidence).unwrap();
+        let rt: ManifestSpecimenEvidence = serde_json::from_str(&json).unwrap();
+        assert_eq!(evidence, rt);
+    }
+
+    // --- Display / formatting correctness ---
+
+    #[test]
+    fn test_replay_validation_status_display_matches_as_str() {
+        for status in ReplayValidationStatus::ALL {
+            assert_eq!(format!("{}", status), status.as_str());
+        }
+    }
+
+    #[test]
+    fn test_manifest_feature_family_display_matches_as_str() {
+        for family in ManifestFeatureFamily::ALL {
+            assert_eq!(format!("{}", family), family.as_str());
+        }
+    }
+
+    #[test]
+    fn test_replay_validation_status_is_ok() {
+        assert!(ReplayValidationStatus::Matched.is_ok());
+        assert!(!ReplayValidationStatus::PathMismatch.is_ok());
+        assert!(!ReplayValidationStatus::SelectionMismatch.is_ok());
+        assert!(!ReplayValidationStatus::UnexpectedSuccess.is_ok());
+        assert!(!ReplayValidationStatus::UnexpectedFailure.is_ok());
+        assert!(!ReplayValidationStatus::ContentDrift.is_ok());
+    }
+
+    #[test]
+    fn test_manifest_verdict_as_str() {
+        assert_eq!(ManifestVerdict::Pass.as_str(), "pass");
+        assert_eq!(ManifestVerdict::Fail.as_str(), "fail");
+    }
+
+    #[test]
+    fn test_manifest_expected_outcome_as_str() {
+        assert_eq!(ManifestExpectedOutcome::Valid.as_str(), "valid");
+        assert_eq!(
+            ManifestExpectedOutcome::ReplayMatch.as_str(),
+            "replay_match"
+        );
+        assert_eq!(
+            ManifestExpectedOutcome::ReplayMismatch.as_str(),
+            "replay_mismatch"
+        );
+        assert_eq!(
+            ManifestExpectedOutcome::ManifestComplete.as_str(),
+            "manifest_complete"
+        );
+    }
+
+    // --- ReplayValidationReport edge cases ---
+
+    #[test]
+    fn test_report_empty_statuses() {
+        let report = ReplayValidationReport::from_statuses(&[]);
+        assert!(report.passed); // 0 matched == 0 total -> passes
+        assert_eq!(report.total_entries, 0);
+        assert_eq!(report.matched_count, 0);
+        assert_eq!(report.path_mismatch_count, 0);
+        assert_eq!(report.selection_mismatch_count, 0);
+        assert_eq!(report.content_drift_count, 0);
+        assert_eq!(report.unexpected_count, 0);
+    }
+
+    #[test]
+    fn test_report_all_status_variants_counted() {
+        let statuses = vec![
+            ReplayValidationStatus::Matched,
+            ReplayValidationStatus::PathMismatch,
+            ReplayValidationStatus::SelectionMismatch,
+            ReplayValidationStatus::UnexpectedSuccess,
+            ReplayValidationStatus::UnexpectedFailure,
+            ReplayValidationStatus::ContentDrift,
+        ];
+        let report = ReplayValidationReport::from_statuses(&statuses);
+        assert!(!report.passed);
+        assert_eq!(report.total_entries, 6);
+        assert_eq!(report.matched_count, 1);
+        assert_eq!(report.path_mismatch_count, 1);
+        assert_eq!(report.selection_mismatch_count, 1);
+        assert_eq!(report.content_drift_count, 1);
+        // Both UnexpectedSuccess and UnexpectedFailure count as unexpected
+        assert_eq!(report.unexpected_count, 2);
+    }
+
+    // --- Execution manifest determinism and edge cases ---
+
+    #[test]
+    fn test_execution_manifest_hash_deterministic() {
+        let make_input = || ManifestBuildInput {
+            trace_id: "t1".into(),
+            decision_id: "d1".into(),
+            policy_id: "p1".into(),
+            tsconfig_hash: "h1".into(),
+            source_path: "./main.ts".into(),
+            source_language: "typescript".into(),
+            normalization: NormalizationLineage {
+                source_hash: "sha256:s".into(),
+                normalized_hash: "sha256:n".into(),
+                compiler_options_hash: "sha256:c".into(),
+                normalization_applied: true,
+            },
+            resolution: ResolutionLineage {
+                decision_count: 2,
+                resolved_count: 2,
+                failed_count: 0,
+                drift_class: TsResolutionDriftClass::NoDrift,
+                replay_index_hash: None,
+            },
+            ir_pipeline: IrPipelineLineage {
+                ir0_hash: "sha256:ir0".into(),
+                ir1_hash: None,
+                ir2_hash: None,
+                ir3_hash: None,
+            },
+            generated_at_utc: "2026-01-01T00:00:00Z".into(),
+        };
+        let m1 = TsExecutionManifest::build(make_input());
+        let m2 = TsExecutionManifest::build(make_input());
+        assert_eq!(m1.manifest_hash, m2.manifest_hash);
+    }
+
+    #[test]
+    fn test_execution_manifest_not_fully_resolved_with_drift() {
+        // Even with zero failures, drift class != NoDrift means not fully resolved
+        let manifest = TsExecutionManifest::build(ManifestBuildInput {
+            trace_id: "t".into(),
+            decision_id: "d".into(),
+            policy_id: "p".into(),
+            tsconfig_hash: "h".into(),
+            source_path: "./x.ts".into(),
+            source_language: "typescript".into(),
+            normalization: NormalizationLineage {
+                source_hash: "a".into(),
+                normalized_hash: "b".into(),
+                compiler_options_hash: "c".into(),
+                normalization_applied: true,
+            },
+            resolution: ResolutionLineage {
+                decision_count: 3,
+                resolved_count: 3,
+                failed_count: 0,
+                drift_class: TsResolutionDriftClass::FullMismatch,
+                replay_index_hash: None,
+            },
+            ir_pipeline: IrPipelineLineage {
+                ir0_hash: "ir0".into(),
+                ir1_hash: None,
+                ir2_hash: None,
+                ir3_hash: None,
+            },
+            generated_at_utc: "t".into(),
+        });
+        assert!(!manifest.is_fully_resolved());
+    }
+
+    #[test]
+    fn test_execution_manifest_different_trace_ids_produce_different_hashes() {
+        let make = |trace: &str| {
+            TsExecutionManifest::build(ManifestBuildInput {
+                trace_id: trace.into(),
+                decision_id: "d".into(),
+                policy_id: "p".into(),
+                tsconfig_hash: "h".into(),
+                source_path: "./x.ts".into(),
+                source_language: "typescript".into(),
+                normalization: NormalizationLineage {
+                    source_hash: "s".into(),
+                    normalized_hash: "n".into(),
+                    compiler_options_hash: "c".into(),
+                    normalization_applied: true,
+                },
+                resolution: ResolutionLineage {
+                    decision_count: 1,
+                    resolved_count: 1,
+                    failed_count: 0,
+                    drift_class: TsResolutionDriftClass::NoDrift,
+                    replay_index_hash: None,
+                },
+                ir_pipeline: IrPipelineLineage {
+                    ir0_hash: "ir0".into(),
+                    ir1_hash: None,
+                    ir2_hash: None,
+                    ir3_hash: None,
+                },
+                generated_at_utc: "t".into(),
+            })
+        };
+        assert_ne!(make("trace-A").manifest_hash, make("trace-B").manifest_hash);
+    }
+
+    // --- Corpus evidence event structure ---
+
+    #[test]
+    fn test_evidence_events_have_correct_schema_and_component() {
+        let (_, _, events) = run_manifest_corpus();
+        for event in &events {
+            assert_eq!(event.schema_version, TS_MANIFEST_EVENT_SCHEMA_VERSION);
+            assert_eq!(event.component, TS_MANIFEST_COMPONENT);
+        }
+    }
+
+    #[test]
+    fn test_run_manifest_policy_and_component() {
+        let (manifest, inventory, _) = run_manifest_corpus();
+        assert_eq!(manifest.policy_id, TS_MANIFEST_POLICY_ID);
+        assert_eq!(manifest.component, TS_MANIFEST_COMPONENT);
+        assert_eq!(inventory.policy_id, TS_MANIFEST_POLICY_ID);
+        assert_eq!(inventory.component, TS_MANIFEST_COMPONENT);
+    }
+
+    #[test]
+    fn test_family_coverage_map_has_all_used_families() {
+        let (_, inventory, _) = run_manifest_corpus();
+        let corpus = manifest_corpus();
+        let expected_families: std::collections::BTreeSet<String> = corpus
+            .iter()
+            .map(|s| s.feature_family.as_str().to_string())
+            .collect();
+        for fam in &expected_families {
+            assert!(
+                inventory.family_coverage.contains_key(fam),
+                "family_coverage missing: {}",
+                fam
+            );
+        }
+    }
+
+    // --- TsconfigSnapshot with complex paths ---
+
+    #[test]
+    fn test_tsconfig_multiple_path_aliases_hash() {
+        let mut snap = TsconfigSnapshot::default();
+        snap.paths
+            .insert("@core/*".into(), vec!["./src/core/*".into()]);
+        snap.paths.insert(
+            "@utils/*".into(),
+            vec!["./src/utils/*".into(), "./src/shared/utils/*".into()],
+        );
+        let h1 = snap.content_hash();
+
+        // Swap the order of values in @utils/* alias
+        let mut snap2 = TsconfigSnapshot::default();
+        snap2
+            .paths
+            .insert("@core/*".into(), vec!["./src/core/*".into()]);
+        snap2.paths.insert(
+            "@utils/*".into(),
+            vec!["./src/shared/utils/*".into(), "./src/utils/*".into()],
+        );
+        let h2 = snap2.content_hash();
+
+        // Different order of values should produce different hashes
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_tsconfig_jsx_affects_hash() {
+        let mut s1 = TsconfigSnapshot::default();
+        s1.jsx = "preserve".to_string();
+        let s2 = TsconfigSnapshot::default(); // "react-jsx" by default
+        assert_ne!(s1.content_hash(), s2.content_hash());
+    }
+
+    #[test]
+    fn test_tsconfig_default_field_values() {
+        let snap = TsconfigSnapshot::default();
+        assert_eq!(snap.root_dir, ".");
+        assert_eq!(snap.base_url, ".");
+        assert_eq!(snap.module_resolution, TsModuleResolutionMode::NodeNext);
+        assert!(snap.paths.is_empty());
+        assert_eq!(snap.target, "es2020");
+        assert_eq!(snap.module_system, "esnext");
+        assert_eq!(snap.jsx, "react-jsx");
+        assert!(snap.strict);
+        assert!(snap.custom_conditions.is_empty());
+    }
 }

@@ -1085,9 +1085,11 @@ mod tests {
         assert_eq!(finding.owner_bead_id, ITERATOR_RUNTIME_BEAD_ID);
         assert!(finding.source_reference.contains("lowering_pipeline"));
         assert!(finding.source_reference.contains("baseline_interpreter"));
-        assert!(finding
-            .observed_behavior
-            .contains("dedicated IR3 iterator instructions"));
+        assert!(
+            finding
+                .observed_behavior
+                .contains("dedicated IR3 iterator instructions")
+        );
     }
 
     #[test]

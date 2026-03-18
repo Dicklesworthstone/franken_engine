@@ -4,8 +4,8 @@
 //! serde roundtrips, ALL constant coverage, and manifest structure.
 
 use frankenengine_engine::runtime_image_contract::{
-    ImageIntegrityStatus, ImageKind, ImageState, WarmStartMode,
-    RUNTIME_IMAGE_BEAD_ID, RUNTIME_IMAGE_SCHEMA_VERSION,
+    ImageIntegrityStatus, ImageKind, ImageState, RUNTIME_IMAGE_BEAD_ID,
+    RUNTIME_IMAGE_SCHEMA_VERSION, WarmStartMode,
 };
 
 // ---------------------------------------------------------------------------
@@ -129,7 +129,10 @@ fn deep_integrity_display_all() {
     let expected = [
         (ImageIntegrityStatus::Verified, "Verified"),
         (ImageIntegrityStatus::Unverified, "Unverified"),
-        (ImageIntegrityStatus::CorruptionDetected, "CorruptionDetected"),
+        (
+            ImageIntegrityStatus::CorruptionDetected,
+            "CorruptionDetected",
+        ),
         (ImageIntegrityStatus::Expired, "Expired"),
     ];
     for (status, name) in expected {

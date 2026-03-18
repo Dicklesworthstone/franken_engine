@@ -189,6 +189,12 @@ pub struct RequiredDeclassificationArtifactEntry {
     pub replay_command_hint: String,
 }
 
+// Lowering can point operators at the shipped replay surface, but it does not
+// know a concrete trace artifact path and there is no shipped `--obligation`
+// selector on `frankenctl replay run`.
+const REQUIRED_DECLASSIFICATION_REPLAY_COMMAND_HINT: &str =
+    "frankenctl replay run --trace <trace.json> --mode strict";
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct RuntimeCheckpointArtifactEntry {
     pub op_index: u64,
@@ -2534,10 +2540,8 @@ fn build_ir2_flow_proof_artifact(
                         declassification_route_ref: obligation.declassification_route_ref.clone(),
                         requires_operator_approval: obligation.requires_operator_approval,
                         receipt_linkage_required: true,
-                        replay_command_hint: format!(
-                            "frankenctl replay run --trace {} --obligation {}",
-                            context.trace_id, obligation.obligation_id
-                        ),
+                        replay_command_hint: REQUIRED_DECLASSIFICATION_REPLAY_COMMAND_HINT
+                            .to_string(),
                     });
             }
             LatticeFlowCheckResult::Blocked { .. } => {
@@ -4359,7 +4363,12 @@ mod tests {
         assert!(artifact.required_declassifications[0].receipt_linkage_required);
         assert_eq!(
             artifact.required_declassifications[0].replay_command_hint,
-            "frankenctl replay run --trace trace-declass --obligation declass-op-0"
+            REQUIRED_DECLASSIFICATION_REPLAY_COMMAND_HINT
+        );
+        assert!(
+            !artifact.required_declassifications[0]
+                .replay_command_hint
+                .contains("--obligation")
         );
     }
 
@@ -7429,8 +7438,7 @@ mod tests {
             declassification_route_ref: Some("route-42".to_string()),
             requires_operator_approval: true,
             receipt_linkage_required: true,
-            replay_command_hint: "frankenctl replay run --trace trace-42 --obligation obl-42"
-                .to_string(),
+            replay_command_hint: REQUIRED_DECLASSIFICATION_REPLAY_COMMAND_HINT.to_string(),
         };
         let json = serde_json::to_string(&entry).unwrap();
         let back: RequiredDeclassificationArtifactEntry = serde_json::from_str(&json).unwrap();

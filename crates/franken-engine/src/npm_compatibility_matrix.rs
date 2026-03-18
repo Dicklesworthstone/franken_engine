@@ -2846,4 +2846,739 @@ mod tests {
         assert!(MAX_PACKAGES_PER_COHORT > 0);
         assert!(MAX_INCOMPATIBILITIES_PER_PACKAGE > 0);
     }
+
+    // -----------------------------------------------------------------------
+    // Additional enrichment tests (PearlTower 2026-03-18, batch 2)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn hash_changes_when_content_differs() {
+        let mut m1 = NpmCompatibilityMatrix::new();
+        m1.add_package(sample_package("a", CohortTier::Tier1Critical))
+            .unwrap();
+        let h1 = m1.normalize_and_hash();
+
+        let mut m2 = NpmCompatibilityMatrix::new();
+        m2.add_package(sample_package("b", CohortTier::Tier1Critical))
+            .unwrap();
+        let h2 = m2.normalize_and_hash();
+
+        assert_ne!(h1, h2, "different content must produce different hashes");
+    }
+
+    #[test]
+    fn hash_changes_when_incompatibility_added() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_package(sample_package("a", CohortTier::Tier1Critical))
+            .unwrap();
+        let h_before = m.normalize_and_hash();
+
+        m.add_incompatibility(sample_incompatibility(
+            "INC-001",
+            "a",
+            IncompatibilitySeverity::Minor,
+        ))
+        .unwrap();
+        let h_after = m.normalize_and_hash();
+
+        assert_ne!(h_before, h_after);
+    }
+
+    #[test]
+    fn hash_changes_when_test_result_recorded() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_package(sample_package("a", CohortTier::Tier1Critical))
+            .unwrap();
+        let h_before = m.normalize_and_hash();
+
+        m.record_test_result(sample_test_result(
+            "a",
+            PackageTestOutcome::Compatible,
+            10,
+            10,
+        ))
+        .unwrap();
+        let h_after = m.normalize_and_hash();
+
+        assert_ne!(h_before, h_after);
+    }
+
+    #[test]
+    fn hash_changes_when_snapshot_epoch_differs() {
+        let mut m1 = NpmCompatibilityMatrix::new();
+        m1.snapshot_epoch = 100;
+        let h1 = m1.normalize_and_hash();
+
+        let mut m2 = NpmCompatibilityMatrix::new();
+        m2.snapshot_epoch = 200;
+        let h2 = m2.normalize_and_hash();
+
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn serde_round_trip_full_matrix_with_all_fields() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.snapshot_epoch = 42;
+
+        let mut pkg = sample_package("express", CohortTier::Tier1Critical);
+        pkg.category = PackageCategory::HttpNetworking;
+        pkg.module_system = ModuleSystemReq::CjsOnly;
+        pkg.weekly_downloads = 30_000_000;
+        pkg.dependency_fanout = 30;
+        pkg.node_api_deps.insert("http".to_string());
+        pkg.node_api_deps.insert("path".to_string());
+        pkg.types_only = false;
+        m.add_package(pkg).unwrap();
+
+        let mut result =
+            sample_test_result("express", PackageTestOutcome::PartiallyCompatible, 100, 75);
+        result.output_hash = Some("sha256:abcdef".to_string());
+        result.test_epoch = 99;
+        m.record_test_result(result).unwrap();
+
+        let mut inc = sample_incompatibility(
+            "INC-express-001",
+            "express",
+            IncompatibilitySeverity::Blocker,
+        );
+        inc.root_cause = IncompatibilityRootCause::CjsRequireDivergence;
+        inc.owner = "PearlTower".to_string();
+        inc.related_beads.insert("bd-1lsy.5.4".to_string());
+        inc.discovered_epoch = 10;
+        inc.last_updated_epoch = 20;
+        m.add_incompatibility(inc).unwrap();
+
+        let json = serde_json::to_string_pretty(&m).unwrap();
+        let back: NpmCompatibilityMatrix = serde_json::from_str(&json).unwrap();
+        assert_eq!(m, back);
+        assert_eq!(back.snapshot_epoch, 42);
+        assert_eq!(back.packages[0].node_api_deps.len(), 2);
+        assert_eq!(back.incompatibilities[0].owner, "PearlTower");
+        assert!(
+            back.incompatibilities[0]
+                .related_beads
+                .contains("bd-1lsy.5.4")
+        );
+    }
+
+    #[test]
+    fn serde_round_trip_cohort_summary() {
+        let summary = CohortSummary {
+            tier: CohortTier::Tier2Popular,
+            total_packages: 50,
+            compatible_count: 40,
+            partially_compatible_count: 5,
+            incompatible_count: 3,
+            skipped_count: 1,
+            untested_count: 1,
+            compatibility_rate_millionths: 816_326,
+            unblock_threshold_millionths: 900_000,
+            unblocked: false,
+            open_incompatibilities: 8,
+            blocker_count: 2,
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        let back: CohortSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(summary, back);
+    }
+
+    #[test]
+    fn serde_round_trip_error_all_variants() {
+        let errors = vec![
+            NpmCompatibilityError::DuplicatePackage {
+                name: "x".to_string(),
+            },
+            NpmCompatibilityError::DuplicateIncompatibility {
+                id: "y".to_string(),
+            },
+            NpmCompatibilityError::PackageNotFound {
+                name: "z".to_string(),
+            },
+            NpmCompatibilityError::IncompatibilityNotFound {
+                id: "w".to_string(),
+            },
+            NpmCompatibilityError::CohortOverflow {
+                tier: CohortTier::Tier3LongTail,
+                count: 600,
+            },
+            NpmCompatibilityError::IncompatibilityOverflow {
+                package: "big".to_string(),
+                count: 200,
+            },
+            NpmCompatibilityError::InvalidStateTransition {
+                id: "INC-001".to_string(),
+                from: RemediationState::Discovered,
+                to: RemediationState::Verified,
+            },
+            NpmCompatibilityError::SnapshotHashMismatch {
+                expected: "aaa".to_string(),
+                actual: "bbb".to_string(),
+            },
+        ];
+        for err in &errors {
+            let json = serde_json::to_string(err).unwrap();
+            let back: NpmCompatibilityError = serde_json::from_str(&json).unwrap();
+            assert_eq!(*err, back);
+        }
+    }
+
+    #[test]
+    fn pass_rate_all_pass() {
+        let result = sample_test_result("x", PackageTestOutcome::Compatible, 1000, 1000);
+        assert_eq!(result.pass_rate_millionths(), 1_000_000);
+    }
+
+    #[test]
+    fn pass_rate_none_pass() {
+        let result = sample_test_result("x", PackageTestOutcome::Incompatible, 50, 0);
+        assert_eq!(result.pass_rate_millionths(), 0);
+    }
+
+    #[test]
+    fn pass_rate_single_test_pass() {
+        let result = sample_test_result("x", PackageTestOutcome::Compatible, 1, 1);
+        assert_eq!(result.pass_rate_millionths(), 1_000_000);
+    }
+
+    #[test]
+    fn pass_rate_single_test_fail() {
+        let result = sample_test_result("x", PackageTestOutcome::Incompatible, 1, 0);
+        assert_eq!(result.pass_rate_millionths(), 0);
+    }
+
+    #[test]
+    fn cohort_summary_partially_compatible_counted_separately() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_package(sample_package("a", CohortTier::Tier2Popular))
+            .unwrap();
+        m.add_package(sample_package("b", CohortTier::Tier2Popular))
+            .unwrap();
+        m.add_package(sample_package("c", CohortTier::Tier2Popular))
+            .unwrap();
+        m.record_test_result(sample_test_result(
+            "a",
+            PackageTestOutcome::Compatible,
+            10,
+            10,
+        ))
+        .unwrap();
+        m.record_test_result(sample_test_result(
+            "b",
+            PackageTestOutcome::PartiallyCompatible,
+            10,
+            5,
+        ))
+        .unwrap();
+        m.record_test_result(sample_test_result(
+            "c",
+            PackageTestOutcome::Incompatible,
+            10,
+            0,
+        ))
+        .unwrap();
+
+        let summary = m.cohort_summary(CohortTier::Tier2Popular);
+        assert_eq!(summary.compatible_count, 1);
+        assert_eq!(summary.partially_compatible_count, 1);
+        assert_eq!(summary.incompatible_count, 1);
+        // Only Compatible counts: 1/3 = 333_333
+        assert_eq!(summary.compatibility_rate_millionths, 333_333);
+        assert!(!summary.unblocked);
+    }
+
+    #[test]
+    fn verdict_exactly_at_threshold_is_unblocked() {
+        // Tier3LongTail threshold is 750_000 (75%).
+        // 3 compatible out of 4 = 750_000 exactly.
+        let mut m = NpmCompatibilityMatrix::new();
+        for name in &["a", "b", "c", "d"] {
+            m.add_package(sample_package(name, CohortTier::Tier3LongTail))
+                .unwrap();
+        }
+        for name in &["a", "b", "c"] {
+            m.record_test_result(sample_test_result(
+                name,
+                PackageTestOutcome::Compatible,
+                10,
+                10,
+            ))
+            .unwrap();
+        }
+        m.record_test_result(sample_test_result(
+            "d",
+            PackageTestOutcome::Incompatible,
+            10,
+            0,
+        ))
+        .unwrap();
+        let summary = m.cohort_summary(CohortTier::Tier3LongTail);
+        assert_eq!(summary.compatibility_rate_millionths, 750_000);
+        assert!(summary.unblocked, "rate equal to threshold should unblock");
+    }
+
+    #[test]
+    fn verdict_just_below_threshold_is_blocked() {
+        // Tier1 threshold is 950_000 (95%).
+        // 19 compatible + 2 incompatible out of 21 = 904_761 < 950_000.
+        let mut m = NpmCompatibilityMatrix::new();
+        for i in 0..21 {
+            m.add_package(sample_package(
+                &format!("pkg-{i:03}"),
+                CohortTier::Tier1Critical,
+            ))
+            .unwrap();
+        }
+        for i in 0..19 {
+            m.record_test_result(sample_test_result(
+                &format!("pkg-{i:03}"),
+                PackageTestOutcome::Compatible,
+                10,
+                10,
+            ))
+            .unwrap();
+        }
+        for i in 19..21 {
+            m.record_test_result(sample_test_result(
+                &format!("pkg-{i:03}"),
+                PackageTestOutcome::Incompatible,
+                10,
+                0,
+            ))
+            .unwrap();
+        }
+        let summary = m.cohort_summary(CohortTier::Tier1Critical);
+        assert!(summary.compatibility_rate_millionths < 950_000);
+        assert!(!summary.unblocked);
+    }
+
+    #[test]
+    fn verdict_insufficient_data_exactly_half_untested() {
+        // >50% untested means insufficient. Exactly 50% is NOT insufficient.
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_package(sample_package("a", CohortTier::Tier1Critical))
+            .unwrap();
+        m.add_package(sample_package("b", CohortTier::Tier1Critical))
+            .unwrap();
+        m.record_test_result(sample_test_result(
+            "a",
+            PackageTestOutcome::Compatible,
+            10,
+            10,
+        ))
+        .unwrap();
+        // b is untested: 1 untested out of 2 = 50%, which is NOT >50%
+        // untested_count * 2 > total_packages => 1*2 > 2 => false
+        let verdict = m.verdict();
+        assert_ne!(
+            verdict,
+            MatrixVerdict::InsufficientData,
+            "exactly 50% untested should not be insufficient"
+        );
+    }
+
+    #[test]
+    fn top_blockers_severity_weighted_scoring() {
+        let mut m = NpmCompatibilityMatrix::new();
+        // Package "minor-many" has 3 Minor incompatibilities: 3 * 100_000 = 300_000
+        for i in 0..3 {
+            m.add_incompatibility(sample_incompatibility(
+                &format!("INC-minor-{i}"),
+                "minor-many",
+                IncompatibilitySeverity::Minor,
+            ))
+            .unwrap();
+        }
+        // Package "blocker-one" has 1 Blocker: 1_000_000
+        m.add_incompatibility(sample_incompatibility(
+            "INC-blocker-0",
+            "blocker-one",
+            IncompatibilitySeverity::Blocker,
+        ))
+        .unwrap();
+        // Package "cosmetic-many" has 5 Cosmetic: 5 * 10_000 = 50_000
+        for i in 0..5 {
+            m.add_incompatibility(sample_incompatibility(
+                &format!("INC-cosmetic-{i}"),
+                "cosmetic-many",
+                IncompatibilitySeverity::Cosmetic,
+            ))
+            .unwrap();
+        }
+
+        let top = m.top_blockers(10);
+        assert_eq!(top.len(), 3);
+        assert_eq!(top[0].0, "blocker-one");
+        assert_eq!(top[0].1, 1_000_000);
+        assert_eq!(top[1].0, "minor-many");
+        assert_eq!(top[1].1, 300_000);
+        assert_eq!(top[2].0, "cosmetic-many");
+        assert_eq!(top[2].1, 50_000);
+    }
+
+    #[test]
+    fn packages_by_downloads_empty_matrix() {
+        let m = NpmCompatibilityMatrix::new();
+        assert!(m.packages_by_downloads().is_empty());
+    }
+
+    #[test]
+    fn packages_by_downloads_same_count_stable() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_package(PackageRecord {
+            weekly_downloads: 5000,
+            ..sample_package("alpha", CohortTier::Tier1Critical)
+        })
+        .unwrap();
+        m.add_package(PackageRecord {
+            weekly_downloads: 5000,
+            ..sample_package("beta", CohortTier::Tier1Critical)
+        })
+        .unwrap();
+        let sorted = m.packages_by_downloads();
+        assert_eq!(sorted.len(), 2);
+        // Both have the same download count; just verify both are present
+        let names: BTreeSet<&str> = sorted.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains("alpha"));
+        assert!(names.contains("beta"));
+    }
+
+    #[test]
+    fn cohort_summary_cross_tier_isolation() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_package(sample_package("t1", CohortTier::Tier1Critical))
+            .unwrap();
+        m.add_package(sample_package("t2", CohortTier::Tier2Popular))
+            .unwrap();
+        m.record_test_result(sample_test_result(
+            "t1",
+            PackageTestOutcome::Compatible,
+            10,
+            10,
+        ))
+        .unwrap();
+        m.record_test_result(sample_test_result(
+            "t2",
+            PackageTestOutcome::Incompatible,
+            10,
+            0,
+        ))
+        .unwrap();
+
+        let s1 = m.cohort_summary(CohortTier::Tier1Critical);
+        assert_eq!(s1.compatible_count, 1);
+        assert_eq!(s1.incompatible_count, 0);
+
+        let s2 = m.cohort_summary(CohortTier::Tier2Popular);
+        assert_eq!(s2.compatible_count, 0);
+        assert_eq!(s2.incompatible_count, 1);
+    }
+
+    #[test]
+    fn cohort_summary_open_incompatibilities_cross_tier() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_package(sample_package("t1-pkg", CohortTier::Tier1Critical))
+            .unwrap();
+        m.add_package(sample_package("t2-pkg", CohortTier::Tier2Popular))
+            .unwrap();
+        m.add_incompatibility(sample_incompatibility(
+            "INC-t1",
+            "t1-pkg",
+            IncompatibilitySeverity::Blocker,
+        ))
+        .unwrap();
+        m.add_incompatibility(sample_incompatibility(
+            "INC-t2",
+            "t2-pkg",
+            IncompatibilitySeverity::Major,
+        ))
+        .unwrap();
+
+        let s1 = m.cohort_summary(CohortTier::Tier1Critical);
+        assert_eq!(s1.open_incompatibilities, 1);
+        assert_eq!(s1.blocker_count, 1);
+
+        let s2 = m.cohort_summary(CohortTier::Tier2Popular);
+        assert_eq!(s2.open_incompatibilities, 1);
+        assert_eq!(s2.blocker_count, 0);
+    }
+
+    #[test]
+    fn wont_fix_to_anything_invalid() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_incompatibility(sample_incompatibility(
+            "INC-001",
+            "foo",
+            IncompatibilitySeverity::Minor,
+        ))
+        .unwrap();
+        m.transition_remediation("INC-001", RemediationState::Triaged, 2)
+            .unwrap();
+        m.transition_remediation("INC-001", RemediationState::WontFix, 3)
+            .unwrap();
+        // WontFix is terminal
+        let err = m
+            .transition_remediation("INC-001", RemediationState::Discovered, 4)
+            .unwrap_err();
+        assert!(matches!(
+            *err,
+            NpmCompatibilityError::InvalidStateTransition { .. }
+        ));
+    }
+
+    #[test]
+    fn discovered_to_discovered_invalid() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_incompatibility(sample_incompatibility(
+            "INC-001",
+            "foo",
+            IncompatibilitySeverity::Minor,
+        ))
+        .unwrap();
+        let err = m
+            .transition_remediation("INC-001", RemediationState::Discovered, 2)
+            .unwrap_err();
+        assert!(matches!(
+            *err,
+            NpmCompatibilityError::InvalidStateTransition { .. }
+        ));
+    }
+
+    #[test]
+    fn triaged_to_discovered_invalid() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_incompatibility(sample_incompatibility(
+            "INC-001",
+            "foo",
+            IncompatibilitySeverity::Minor,
+        ))
+        .unwrap();
+        m.transition_remediation("INC-001", RemediationState::Triaged, 2)
+            .unwrap();
+        let err = m
+            .transition_remediation("INC-001", RemediationState::Discovered, 3)
+            .unwrap_err();
+        assert!(matches!(
+            *err,
+            NpmCompatibilityError::InvalidStateTransition { .. }
+        ));
+    }
+
+    #[test]
+    fn error_display_contains_relevant_details() {
+        let err = NpmCompatibilityError::CohortOverflow {
+            tier: CohortTier::Tier2Popular,
+            count: 501,
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("tier_2_popular"));
+        assert!(msg.contains("501"));
+
+        let err2 = NpmCompatibilityError::InvalidStateTransition {
+            id: "INC-xyz".to_string(),
+            from: RemediationState::Discovered,
+            to: RemediationState::Verified,
+        };
+        let msg2 = format!("{err2}");
+        assert!(msg2.contains("INC-xyz"));
+        assert!(msg2.contains("discovered"));
+        assert!(msg2.contains("verified"));
+    }
+
+    #[test]
+    fn seed_tier1_has_expected_packages() {
+        let packages = seed_tier1_critical_packages();
+        let names: BTreeSet<String> = packages.iter().map(|p| p.name.clone()).collect();
+        assert!(names.contains("express"));
+        assert!(names.contains("typescript"));
+        assert!(names.contains("lodash"));
+        assert!(names.contains("axios"));
+        assert!(names.contains("chalk"));
+        assert!(names.contains("uuid"));
+        assert!(names.contains("commander"));
+        assert!(names.contains("dotenv"));
+        assert!(names.contains("zod"));
+        assert!(names.contains("date-fns"));
+        assert_eq!(packages.len(), 10);
+    }
+
+    #[test]
+    fn seed_tier1_express_has_node_api_deps() {
+        let packages = seed_tier1_critical_packages();
+        let express = packages.iter().find(|p| p.name == "express").unwrap();
+        assert!(express.node_api_deps.contains("http"));
+        assert!(express.node_api_deps.contains("path"));
+        assert!(express.node_api_deps.contains("fs"));
+        assert!(express.node_api_deps.contains("stream"));
+        assert!(express.node_api_deps.contains("events"));
+        assert_eq!(express.category, PackageCategory::HttpNetworking);
+        assert_eq!(express.module_system, ModuleSystemReq::CjsOnly);
+    }
+
+    #[test]
+    fn seed_tier2_has_expected_packages() {
+        let packages = seed_tier2_popular_packages();
+        let names: BTreeSet<String> = packages.iter().map(|p| p.name.clone()).collect();
+        assert!(names.contains("fastify"));
+        assert!(names.contains("vitest"));
+        assert!(names.contains("prisma"));
+        assert!(names.contains("ws"));
+        assert_eq!(packages.len(), 10);
+    }
+
+    #[test]
+    fn packages_requiring_api_across_tiers() {
+        let mut m = NpmCompatibilityMatrix::new();
+        for pkg in seed_tier1_critical_packages() {
+            m.add_package(pkg).unwrap();
+        }
+        for pkg in seed_tier2_popular_packages() {
+            m.add_package(pkg).unwrap();
+        }
+        // "fs" is used by many packages across both tiers
+        let fs_pkgs = m.packages_requiring_api("fs");
+        assert!(
+            fs_pkgs.len() >= 2,
+            "expected at least 2 packages needing fs, got {}",
+            fs_pkgs.len()
+        );
+        // "crypto" is used by at least uuid (tier1) and jsonwebtoken (tier2)
+        let crypto_pkgs = m.packages_requiring_api("crypto");
+        assert!(
+            crypto_pkgs.len() >= 2,
+            "expected at least 2 packages needing crypto"
+        );
+        // Nonexistent API returns empty
+        assert!(m.packages_requiring_api("imaginary_api").is_empty());
+    }
+
+    #[test]
+    fn matrix_clone_equality() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_package(sample_package("a", CohortTier::Tier1Critical))
+            .unwrap();
+        m.add_incompatibility(sample_incompatibility(
+            "INC-001",
+            "a",
+            IncompatibilitySeverity::Major,
+        ))
+        .unwrap();
+        m.record_test_result(sample_test_result(
+            "a",
+            PackageTestOutcome::Compatible,
+            10,
+            10,
+        ))
+        .unwrap();
+        let cloned = m.clone();
+        assert_eq!(m, cloned);
+    }
+
+    #[test]
+    fn incompatibilities_by_root_cause_empty_for_unused_cause() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_incompatibility(sample_incompatibility(
+            "INC-001",
+            "a",
+            IncompatibilitySeverity::Minor,
+        ))
+        .unwrap();
+        // Default root cause is MissingNodeApi
+        assert!(
+            m.incompatibilities_by_root_cause(IncompatibilityRootCause::NativeAddon)
+                .is_empty()
+        );
+        assert!(
+            m.incompatibilities_by_root_cause(IncompatibilityRootCause::V8SpecificApi)
+                .is_empty()
+        );
+        assert_eq!(
+            m.incompatibilities_by_root_cause(IncompatibilityRootCause::MissingNodeApi)
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn severity_weight_exact_values() {
+        assert_eq!(
+            IncompatibilitySeverity::Blocker.weight_millionths(),
+            1_000_000
+        );
+        assert_eq!(IncompatibilitySeverity::Major.weight_millionths(), 500_000);
+        assert_eq!(IncompatibilitySeverity::Minor.weight_millionths(), 100_000);
+        assert_eq!(
+            IncompatibilitySeverity::Cosmetic.weight_millionths(),
+            10_000
+        );
+    }
+
+    #[test]
+    fn test_result_skipped_tests_field() {
+        let mut result = sample_test_result("x", PackageTestOutcome::Compatible, 20, 15);
+        result.skipped_tests = 3;
+        // failed_tests was set by sample helper as 20-15=5
+        assert_eq!(result.failed_tests, 5);
+        assert_eq!(result.skipped_tests, 3);
+        // pass_rate is still based on passed/total
+        assert_eq!(result.pass_rate_millionths(), 750_000);
+    }
+
+    #[test]
+    fn canonical_value_cohort_summary_field_values() {
+        let summary = CohortSummary {
+            tier: CohortTier::Tier3LongTail,
+            total_packages: 3,
+            compatible_count: 2,
+            partially_compatible_count: 0,
+            incompatible_count: 1,
+            skipped_count: 0,
+            untested_count: 0,
+            compatibility_rate_millionths: 666_666,
+            unblock_threshold_millionths: 750_000,
+            unblocked: false,
+            open_incompatibilities: 1,
+            blocker_count: 0,
+        };
+        let cv = summary.canonical_value();
+        if let CanonicalValue::Map(map) = cv {
+            assert!(matches!(
+                &map["tier"],
+                CanonicalValue::String(s) if s == "tier_3_long_tail"
+            ));
+            assert!(matches!(map["total_packages"], CanonicalValue::I64(3)));
+            assert!(matches!(map["unblocked"], CanonicalValue::Bool(false)));
+        } else {
+            panic!("expected Map");
+        }
+    }
+
+    #[test]
+    fn cohort_tier_ord_ordering() {
+        assert!(CohortTier::Tier1Critical < CohortTier::Tier2Popular);
+        assert!(CohortTier::Tier2Popular < CohortTier::Tier3LongTail);
+    }
+
+    #[test]
+    fn incompatibility_severity_ord_ordering() {
+        assert!(IncompatibilitySeverity::Blocker < IncompatibilitySeverity::Major);
+        assert!(IncompatibilitySeverity::Major < IncompatibilitySeverity::Minor);
+        assert!(IncompatibilitySeverity::Minor < IncompatibilitySeverity::Cosmetic);
+    }
+
+    #[test]
+    fn remediation_state_ord_ordering() {
+        assert!(RemediationState::Discovered < RemediationState::Triaged);
+        assert!(RemediationState::Triaged < RemediationState::InProgress);
+        assert!(RemediationState::InProgress < RemediationState::FixLanded);
+        assert!(RemediationState::FixLanded < RemediationState::Verified);
+        assert!(RemediationState::Verified < RemediationState::WontFix);
+    }
+
+    #[test]
+    fn matrix_verdict_ord_ordering() {
+        assert!(MatrixVerdict::AllCohortsUnblocked < MatrixVerdict::PartiallyUnblocked);
+        assert!(MatrixVerdict::PartiallyUnblocked < MatrixVerdict::Blocked);
+        assert!(MatrixVerdict::Blocked < MatrixVerdict::InsufficientData);
+    }
 }

@@ -2057,4 +2057,698 @@ mod tests {
         let back: AdjustmentSet = serde_json::from_str(&json).unwrap();
         assert_eq!(adj, back);
     }
+
+    // -----------------------------------------------------------------------
+    // Additional enrichment tests (PearlTower 2026-03-18, batch 2)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_self_loop_detected_as_cycle() {
+        let mut b = CausalDagBuilder::new();
+        b.add_variable(make_var(1, "A", VariableDomain::Treatment))
+            .unwrap();
+        b.add_edge(make_edge(1, 1)); // self-loop
+        assert!(matches!(
+            b.build(),
+            Err(CausalDagError::CycleDetected { .. })
+        ));
+    }
+
+    #[test]
+    fn test_two_node_cycle_detected() {
+        let mut b = CausalDagBuilder::new();
+        b.add_variable(make_var(1, "A", VariableDomain::Treatment))
+            .unwrap();
+        b.add_variable(make_var(2, "B", VariableDomain::Outcome))
+            .unwrap();
+        b.add_edge(make_edge(1, 2));
+        b.add_edge(make_edge(2, 1));
+        assert!(matches!(
+            b.build(),
+            Err(CausalDagError::CycleDetected { .. })
+        ));
+    }
+
+    #[test]
+    fn test_unknown_variable_in_edge_from() {
+        let mut b = CausalDagBuilder::new();
+        b.add_variable(make_var(1, "A", VariableDomain::Treatment))
+            .unwrap();
+        b.add_edge(CausalEdge {
+            from: 99,
+            to: 1,
+            kind: EdgeKind::Direct,
+            confidence: EdgeConfidence::Structural,
+            mechanism: String::new(),
+        });
+        assert!(matches!(
+            b.build(),
+            Err(CausalDagError::UnknownVariable { id: 99 })
+        ));
+    }
+
+    #[test]
+    fn test_identify_effect_latent_outcome() {
+        let mut b = CausalDagBuilder::new();
+        b.add_variable(make_var(1, "T", VariableDomain::Treatment))
+            .unwrap();
+        b.add_variable(CausalVariable {
+            id: 2,
+            name: "Y".to_string(),
+            domain: VariableDomain::Outcome,
+            observability: Observability::Latent,
+            scale: MeasurementScale::Continuous,
+            description: String::new(),
+            subsystem: "test".to_string(),
+        })
+        .unwrap();
+        b.add_edge(make_edge(1, 2));
+        let dag = b.build().unwrap();
+        let cert = dag.identify_effect(1, 2);
+        assert!(
+            cert.unidentifiable_reasons
+                .contains(&UnidentifiableReason::OutcomeNotObservable)
+        );
+    }
+
+    #[test]
+    fn test_front_door_latent_mediator_skipped() {
+        // T -> M -> Y with M latent => front-door should fail
+        let mut b = CausalDagBuilder::new();
+        b.add_variable(make_var(1, "T", VariableDomain::Treatment))
+            .unwrap();
+        b.add_variable(make_var(2, "Y", VariableDomain::Outcome))
+            .unwrap();
+        b.add_variable(CausalVariable {
+            id: 3,
+            name: "M".to_string(),
+            domain: VariableDomain::Mediator,
+            observability: Observability::Latent,
+            scale: MeasurementScale::Continuous,
+            description: String::new(),
+            subsystem: "test".to_string(),
+        })
+        .unwrap();
+        b.add_edge(make_edge(1, 3));
+        b.add_edge(make_edge(3, 2));
+        let dag = b.build().unwrap();
+        assert!(dag.front_door_mediator(1, 2).is_none());
+    }
+
+    #[test]
+    fn test_front_door_non_mediator_domain_skipped() {
+        // T -> C -> Y, C is Confounder domain (not Mediator), so front-door fails
+        let mut b = CausalDagBuilder::new();
+        b.add_variable(make_var(1, "T", VariableDomain::Treatment))
+            .unwrap();
+        b.add_variable(make_var(2, "Y", VariableDomain::Outcome))
+            .unwrap();
+        b.add_variable(make_var(3, "C", VariableDomain::Confounder))
+            .unwrap();
+        b.add_edge(make_edge(1, 3));
+        b.add_edge(make_edge(3, 2));
+        let dag = b.build().unwrap();
+        assert!(dag.front_door_mediator(1, 2).is_none());
+    }
+
+    #[test]
+    fn test_instrument_with_direct_outcome_path_rejected() {
+        // Z -> T -> Y, but also Z -> Y directly => instrument invalid
+        let mut b = CausalDagBuilder::new();
+        b.add_variable(make_var(1, "T", VariableDomain::Treatment))
+            .unwrap();
+        b.add_variable(make_var(2, "Y", VariableDomain::Outcome))
+            .unwrap();
+        b.add_variable(make_var(3, "Z", VariableDomain::Instrument))
+            .unwrap();
+        b.add_edge(make_edge(3, 1)); // Z -> T
+        b.add_edge(make_edge(1, 2)); // T -> Y
+        b.add_edge(make_edge(3, 2)); // Z -> Y (violates exclusion restriction)
+        let dag = b.build().unwrap();
+        assert!(dag.find_instrument(1, 2).is_none());
+    }
+
+    #[test]
+    fn test_instrument_latent_rejected() {
+        // Z (latent) -> T -> Y: instrument is latent so should be rejected
+        let mut b = CausalDagBuilder::new();
+        b.add_variable(make_var(1, "T", VariableDomain::Treatment))
+            .unwrap();
+        b.add_variable(make_var(2, "Y", VariableDomain::Outcome))
+            .unwrap();
+        b.add_variable(CausalVariable {
+            id: 3,
+            name: "Z".to_string(),
+            domain: VariableDomain::Instrument,
+            observability: Observability::Latent,
+            scale: MeasurementScale::Binary,
+            description: String::new(),
+            subsystem: "test".to_string(),
+        })
+        .unwrap();
+        b.add_edge(make_edge(3, 1));
+        b.add_edge(make_edge(1, 2));
+        let dag = b.build().unwrap();
+        assert!(dag.find_instrument(1, 2).is_none());
+    }
+
+    #[test]
+    fn test_identify_effect_falls_through_to_instrumental() {
+        // Latent confounder U -> T, U -> Y (no backdoor), no mediator,
+        // but instrument Z -> T available
+        let mut b = CausalDagBuilder::new();
+        b.add_variable(make_var(1, "T", VariableDomain::Treatment))
+            .unwrap();
+        b.add_variable(make_var(2, "Y", VariableDomain::Outcome))
+            .unwrap();
+        b.add_variable(CausalVariable {
+            id: 3,
+            name: "U".to_string(),
+            domain: VariableDomain::Confounder,
+            observability: Observability::Latent,
+            scale: MeasurementScale::Continuous,
+            description: String::new(),
+            subsystem: "test".to_string(),
+        })
+        .unwrap();
+        b.add_variable(make_var(4, "Z", VariableDomain::Instrument))
+            .unwrap();
+        b.add_edge(make_edge(1, 2)); // T -> Y
+        b.add_edge(CausalEdge {
+            from: 3,
+            to: 1,
+            kind: EdgeKind::Confounding,
+            confidence: EdgeConfidence::Structural,
+            mechanism: "U -> T".to_string(),
+        });
+        b.add_edge(CausalEdge {
+            from: 3,
+            to: 2,
+            kind: EdgeKind::Confounding,
+            confidence: EdgeConfidence::Structural,
+            mechanism: "U -> Y".to_string(),
+        });
+        b.add_edge(CausalEdge {
+            from: 4,
+            to: 1,
+            kind: EdgeKind::Instrumental,
+            confidence: EdgeConfidence::Structural,
+            mechanism: "Z -> T".to_string(),
+        });
+        let dag = b.build().unwrap();
+        let cert = dag.identify_effect(1, 2);
+        assert!(cert.is_identifiable);
+        assert_eq!(cert.strategy, IdentificationStrategy::Instrumental);
+        assert_eq!(cert.instrument, Some(4));
+    }
+
+    #[test]
+    fn test_certificate_schema_version() {
+        let dag = simple_dag();
+        let cert = dag.identify_effect(1, 2);
+        assert_eq!(cert.schema_version, CAUSAL_DAG_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn test_evidence_manifest_serde_roundtrip() {
+        let manifest = run_causal_dag_evidence();
+        let json = serde_json::to_string(&manifest).unwrap();
+        let back: CausalDagEvidenceManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(manifest, back);
+    }
+
+    #[test]
+    fn test_backdoor_multiple_confounders() {
+        // Two observable confounders: C1 -> T, C1 -> Y, C2 -> T, C2 -> Y
+        let mut b = CausalDagBuilder::new();
+        b.add_variable(make_var(1, "T", VariableDomain::Treatment))
+            .unwrap();
+        b.add_variable(make_var(2, "Y", VariableDomain::Outcome))
+            .unwrap();
+        b.add_variable(make_var(3, "C1", VariableDomain::Confounder))
+            .unwrap();
+        b.add_variable(make_var(4, "C2", VariableDomain::Confounder))
+            .unwrap();
+        b.add_edge(make_edge(1, 2));
+        b.add_edge(CausalEdge {
+            from: 3,
+            to: 1,
+            kind: EdgeKind::Confounding,
+            confidence: EdgeConfidence::Structural,
+            mechanism: "C1 -> T".to_string(),
+        });
+        b.add_edge(CausalEdge {
+            from: 3,
+            to: 2,
+            kind: EdgeKind::Confounding,
+            confidence: EdgeConfidence::Structural,
+            mechanism: "C1 -> Y".to_string(),
+        });
+        b.add_edge(CausalEdge {
+            from: 4,
+            to: 1,
+            kind: EdgeKind::Confounding,
+            confidence: EdgeConfidence::Structural,
+            mechanism: "C2 -> T".to_string(),
+        });
+        b.add_edge(CausalEdge {
+            from: 4,
+            to: 2,
+            kind: EdgeKind::Confounding,
+            confidence: EdgeConfidence::Structural,
+            mechanism: "C2 -> Y".to_string(),
+        });
+        let dag = b.build().unwrap();
+        let adj = dag.backdoor_adjustment(1, 2);
+        assert!(adj.is_valid);
+        assert!(adj.variables.contains(&3));
+        assert!(adj.variables.contains(&4));
+        assert_eq!(adj.variables.len(), 2);
+    }
+
+    #[test]
+    fn test_collider_domain_present_in_dag() {
+        let mut b = CausalDagBuilder::new();
+        b.add_variable(make_var(1, "T", VariableDomain::Treatment))
+            .unwrap();
+        b.add_variable(make_var(2, "Y", VariableDomain::Outcome))
+            .unwrap();
+        b.add_variable(make_var(3, "Col", VariableDomain::Collider))
+            .unwrap();
+        b.add_edge(make_edge(1, 3)); // T -> Col
+        b.add_edge(make_edge(2, 3)); // Y -> Col (collider)
+        b.add_edge(make_edge(1, 2)); // T -> Y
+        let dag = b.build().unwrap();
+        let colliders = dag.variables_by_domain(VariableDomain::Collider);
+        assert_eq!(colliders, vec![3]);
+        // Collider should not appear in backdoor adjustment
+        let adj = dag.backdoor_adjustment(1, 2);
+        assert!(!adj.variables.contains(&3));
+    }
+
+    #[test]
+    fn test_ancestors_disconnected_node() {
+        let mut b = CausalDagBuilder::new();
+        b.add_variable(make_var(1, "A", VariableDomain::Treatment))
+            .unwrap();
+        b.add_variable(make_var(2, "B", VariableDomain::Outcome))
+            .unwrap();
+        b.add_variable(make_var(3, "C", VariableDomain::Confounder))
+            .unwrap();
+        b.add_edge(make_edge(1, 2));
+        // Node 3 is disconnected
+        let dag = b.build().unwrap();
+        assert!(dag.ancestors(3).is_empty());
+        assert!(dag.descendants(3).is_empty());
+        // Node 3 is not reachable from 1 or 2
+        assert!(!dag.has_path(1, 3));
+        assert!(!dag.has_path(3, 2));
+    }
+
+    #[test]
+    fn test_parallel_edges_same_nodes() {
+        // Two edges from 1 -> 2 with different kinds
+        let mut b = CausalDagBuilder::new();
+        b.add_variable(make_var(1, "T", VariableDomain::Treatment))
+            .unwrap();
+        b.add_variable(make_var(2, "Y", VariableDomain::Outcome))
+            .unwrap();
+        b.add_edge(CausalEdge {
+            from: 1,
+            to: 2,
+            kind: EdgeKind::Direct,
+            confidence: EdgeConfidence::Structural,
+            mechanism: "direct".to_string(),
+        });
+        b.add_edge(CausalEdge {
+            from: 1,
+            to: 2,
+            kind: EdgeKind::Mediated,
+            confidence: EdgeConfidence::Empirical,
+            mechanism: "mediated".to_string(),
+        });
+        let dag = b.build().unwrap();
+        assert_eq!(dag.edge_count(), 2);
+        // Children adjacency deduplicates (BTreeSet)
+        let children_of_1 = dag.children.get(&1).unwrap();
+        assert_eq!(children_of_1.len(), 1);
+    }
+
+    #[test]
+    fn test_variables_by_domain_multiple_matches() {
+        let mut b = CausalDagBuilder::new();
+        b.add_variable(make_var(1, "T1", VariableDomain::Treatment))
+            .unwrap();
+        b.add_variable(make_var(2, "T2", VariableDomain::Treatment))
+            .unwrap();
+        b.add_variable(make_var(3, "T3", VariableDomain::Treatment))
+            .unwrap();
+        b.add_variable(make_var(10, "Y", VariableDomain::Outcome))
+            .unwrap();
+        b.add_edge(make_edge(1, 10));
+        let dag = b.build().unwrap();
+        let treatments = dag.variables_by_domain(VariableDomain::Treatment);
+        assert_eq!(treatments, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_dag_hash_changes_with_variable_name() {
+        let mut b1 = CausalDagBuilder::new();
+        b1.add_variable(make_var(1, "Alpha", VariableDomain::Treatment))
+            .unwrap();
+        let dag1 = b1.build().unwrap();
+
+        let mut b2 = CausalDagBuilder::new();
+        b2.add_variable(make_var(1, "Beta", VariableDomain::Treatment))
+            .unwrap();
+        let dag2 = b2.build().unwrap();
+
+        assert_ne!(dag1.structure_hash, dag2.structure_hash);
+    }
+
+    #[test]
+    fn test_error_no_path_display() {
+        let e = CausalDagError::NoPath { from: 10, to: 20 };
+        let display = format!("{e}");
+        assert!(display.contains("no path"));
+        assert!(display.contains("10"));
+        assert!(display.contains("20"));
+    }
+
+    #[test]
+    fn test_error_duplicate_variable_display() {
+        let e = CausalDagError::DuplicateVariable { id: 7 };
+        let display = format!("{e}");
+        assert!(display.contains("duplicate"));
+        assert!(display.contains("7"));
+    }
+
+    #[test]
+    fn test_unidentifiable_cert_structure() {
+        // Build a fully unidentifiable scenario: latent confounder, no mediator,
+        // no instrument
+        let mut b = CausalDagBuilder::new();
+        b.add_variable(make_var(1, "T", VariableDomain::Treatment))
+            .unwrap();
+        b.add_variable(make_var(2, "Y", VariableDomain::Outcome))
+            .unwrap();
+        b.add_variable(CausalVariable {
+            id: 3,
+            name: "U".to_string(),
+            domain: VariableDomain::Confounder,
+            observability: Observability::Latent,
+            scale: MeasurementScale::Continuous,
+            description: String::new(),
+            subsystem: "test".to_string(),
+        })
+        .unwrap();
+        b.add_edge(make_edge(1, 2));
+        b.add_edge(CausalEdge {
+            from: 3,
+            to: 1,
+            kind: EdgeKind::Confounding,
+            confidence: EdgeConfidence::Structural,
+            mechanism: "U -> T".to_string(),
+        });
+        b.add_edge(CausalEdge {
+            from: 3,
+            to: 2,
+            kind: EdgeKind::Confounding,
+            confidence: EdgeConfidence::Structural,
+            mechanism: "U -> Y".to_string(),
+        });
+        let dag = b.build().unwrap();
+        let cert = dag.identify_effect(1, 2);
+        assert!(!cert.is_identifiable);
+        assert_eq!(cert.strategy, IdentificationStrategy::Unidentifiable);
+        assert!(cert.adjustment_set.is_none());
+        assert!(cert.front_door_mediator.is_none());
+        assert!(cert.instrument.is_none());
+        // Should accumulate multiple unidentifiable reasons
+        assert!(cert.unidentifiable_reasons.len() >= 3);
+        assert!(
+            cert.unidentifiable_reasons
+                .contains(&UnidentifiableReason::NoBackdoorSet)
+        );
+        assert!(
+            cert.unidentifiable_reasons
+                .contains(&UnidentifiableReason::NoFrontDoorPath)
+        );
+        assert!(
+            cert.unidentifiable_reasons
+                .contains(&UnidentifiableReason::NoInstrument)
+        );
+    }
+
+    #[test]
+    fn test_backdoor_proxy_confounder_included() {
+        // Proxy observability confounders should be included in adjustment set
+        let mut b = CausalDagBuilder::new();
+        b.add_variable(make_var(1, "T", VariableDomain::Treatment))
+            .unwrap();
+        b.add_variable(make_var(2, "Y", VariableDomain::Outcome))
+            .unwrap();
+        b.add_variable(CausalVariable {
+            id: 3,
+            name: "P".to_string(),
+            domain: VariableDomain::Confounder,
+            observability: Observability::Proxy,
+            scale: MeasurementScale::Continuous,
+            description: String::new(),
+            subsystem: "test".to_string(),
+        })
+        .unwrap();
+        b.add_edge(make_edge(1, 2));
+        b.add_edge(CausalEdge {
+            from: 3,
+            to: 1,
+            kind: EdgeKind::Confounding,
+            confidence: EdgeConfidence::Structural,
+            mechanism: "P -> T".to_string(),
+        });
+        b.add_edge(CausalEdge {
+            from: 3,
+            to: 2,
+            kind: EdgeKind::Confounding,
+            confidence: EdgeConfidence::Structural,
+            mechanism: "P -> Y".to_string(),
+        });
+        let dag = b.build().unwrap();
+        let adj = dag.backdoor_adjustment(1, 2);
+        assert!(adj.is_valid);
+        assert!(adj.variables.contains(&3));
+    }
+
+    #[test]
+    fn test_wide_fan_out_topology() {
+        // 1 -> 2, 1 -> 3, 1 -> 4, 1 -> 5, 1 -> 6
+        let mut b = CausalDagBuilder::new();
+        b.add_variable(make_var(1, "root", VariableDomain::Treatment))
+            .unwrap();
+        for id in 2..=6 {
+            b.add_variable(make_var(id, &format!("leaf{id}"), VariableDomain::Outcome))
+                .unwrap();
+            b.add_edge(make_edge(1, id));
+        }
+        let dag = b.build().unwrap();
+        let desc = dag.descendants(1);
+        assert_eq!(desc.len(), 5);
+        for id in 2..=6 {
+            assert!(desc.contains(&id));
+            assert!(dag.has_path(1, id));
+        }
+    }
+
+    #[test]
+    fn test_wide_fan_in_topology() {
+        // 1 -> 6, 2 -> 6, 3 -> 6, 4 -> 6, 5 -> 6
+        let mut b = CausalDagBuilder::new();
+        for id in 1..=5 {
+            b.add_variable(make_var(
+                id,
+                &format!("src{id}"),
+                VariableDomain::Confounder,
+            ))
+            .unwrap();
+            b.add_edge(make_edge(id, 6));
+        }
+        b.add_variable(make_var(6, "sink", VariableDomain::Outcome))
+            .unwrap();
+        let dag = b.build().unwrap();
+        let anc = dag.ancestors(6);
+        assert_eq!(anc.len(), 5);
+        for id in 1..=5 {
+            assert!(anc.contains(&id));
+        }
+        let parents_of_6 = dag.parents.get(&6).unwrap();
+        assert_eq!(parents_of_6.len(), 5);
+    }
+
+    #[test]
+    fn test_frankenengine_dag_has_instrument() {
+        let dag = frankenengine_optimization_dag().unwrap();
+        let instruments = dag.variables_by_domain(VariableDomain::Instrument);
+        assert!(!instruments.is_empty());
+        assert!(instruments.contains(&40));
+    }
+
+    #[test]
+    fn test_frankenengine_dag_has_mediators() {
+        let dag = frankenengine_optimization_dag().unwrap();
+        let mediators = dag.variables_by_domain(VariableDomain::Mediator);
+        assert!(mediators.len() >= 2);
+    }
+
+    #[test]
+    fn test_frankenengine_dag_confounders_affect_treatments() {
+        let dag = frankenengine_optimization_dag().unwrap();
+        // workload_type (10) should be an ancestor of tiering_level (1)
+        let ancestors_of_tier = dag.ancestors(1);
+        assert!(ancestors_of_tier.contains(&10)); // workload_type
+    }
+
+    #[test]
+    fn test_certificate_dag_hash_matches_dag_structure_hash() {
+        let dag = simple_dag();
+        let cert = dag.identify_effect(1, 2);
+        assert_eq!(cert.dag_hash, dag.structure_hash);
+    }
+
+    #[test]
+    fn test_different_treatment_outcome_pairs_different_certs() {
+        let dag = frankenengine_optimization_dag().unwrap();
+        let cert1 = dag.identify_effect(1, 30); // tiering -> p99
+        let cert2 = dag.identify_effect(2, 31); // cache -> throughput
+        assert_ne!(cert1.certificate_hash, cert2.certificate_hash);
+        assert_eq!(cert1.dag_hash, cert2.dag_hash);
+    }
+
+    #[test]
+    fn test_unidentifiable_reason_all_variants_serde() {
+        let reasons = [
+            UnidentifiableReason::NoBackdoorSet,
+            UnidentifiableReason::NoFrontDoorPath,
+            UnidentifiableReason::NoInstrument,
+            UnidentifiableReason::NotConnected,
+            UnidentifiableReason::AllConfoundersLatent,
+            UnidentifiableReason::TreatmentNotObservable,
+            UnidentifiableReason::OutcomeNotObservable,
+        ];
+        for reason in &reasons {
+            let json = serde_json::to_string(reason).unwrap();
+            let back: UnidentifiableReason = serde_json::from_str(&json).unwrap();
+            assert_eq!(*reason, back);
+        }
+    }
+
+    #[test]
+    fn test_error_all_variants_serde_roundtrip() {
+        let errors = [
+            CausalDagError::UnknownVariable { id: 42 },
+            CausalDagError::CycleDetected { from: 1, to: 2 },
+            CausalDagError::DuplicateVariable { id: 5 },
+            CausalDagError::NoPath { from: 10, to: 20 },
+            CausalDagError::EmptyDag,
+        ];
+        for err in &errors {
+            let json = serde_json::to_string(err).unwrap();
+            let back: CausalDagError = serde_json::from_str(&json).unwrap();
+            assert_eq!(*err, back);
+        }
+    }
+
+    #[test]
+    fn test_evidence_manifest_schema_version() {
+        let manifest = run_causal_dag_evidence();
+        assert_eq!(manifest.schema_version, CAUSAL_DAG_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn test_evidence_manifest_covers_all_treatment_outcome_pairs() {
+        let dag = frankenengine_optimization_dag().unwrap();
+        let treatments = dag.variables_by_domain(VariableDomain::Treatment);
+        let outcomes = dag.variables_by_domain(VariableDomain::Outcome);
+        let manifest = run_causal_dag_evidence();
+        assert_eq!(
+            manifest.certificates_generated,
+            (treatments.len() * outcomes.len()) as u32
+        );
+    }
+
+    #[test]
+    fn test_front_door_with_confounded_mediator_rejected() {
+        // T -> M -> Y, U -> M (confounder directly to mediator, not through T)
+        // This violates the front-door condition
+        let mut b = CausalDagBuilder::new();
+        b.add_variable(make_var(1, "T", VariableDomain::Treatment))
+            .unwrap();
+        b.add_variable(make_var(2, "Y", VariableDomain::Outcome))
+            .unwrap();
+        b.add_variable(make_var(3, "M", VariableDomain::Mediator))
+            .unwrap();
+        b.add_variable(make_var(4, "U", VariableDomain::Confounder))
+            .unwrap();
+        b.add_edge(make_edge(1, 3)); // T -> M
+        b.add_edge(make_edge(3, 2)); // M -> Y
+        b.add_edge(make_edge(4, 3)); // U -> M (confounds mediator directly)
+        let dag = b.build().unwrap();
+        // U is a parent of M but U is NOT reachable from T
+        // so all_m_parents_from_treatment should be false
+        assert!(dag.front_door_mediator(1, 2).is_none());
+    }
+
+    #[test]
+    fn test_complex_four_node_cycle_detected() {
+        // 1 -> 2 -> 3 -> 4 -> 1
+        let mut b = CausalDagBuilder::new();
+        for id in 1..=4 {
+            b.add_variable(make_var(id, &format!("V{id}"), VariableDomain::Treatment))
+                .unwrap();
+        }
+        b.add_edge(make_edge(1, 2));
+        b.add_edge(make_edge(2, 3));
+        b.add_edge(make_edge(3, 4));
+        b.add_edge(make_edge(4, 1));
+        assert!(matches!(
+            b.build(),
+            Err(CausalDagError::CycleDetected { .. })
+        ));
+    }
+
+    #[test]
+    fn test_backdoor_instrument_parent_excluded() {
+        // Instrument Z -> T -> Y, Z is a parent of T but is an Instrument domain,
+        // so backdoor validation should consider it valid even if Z is not in
+        // the adjustment set
+        let mut b = CausalDagBuilder::new();
+        b.add_variable(make_var(1, "T", VariableDomain::Treatment))
+            .unwrap();
+        b.add_variable(make_var(2, "Y", VariableDomain::Outcome))
+            .unwrap();
+        b.add_variable(make_var(3, "Z", VariableDomain::Instrument))
+            .unwrap();
+        b.add_edge(make_edge(3, 1)); // Z -> T
+        b.add_edge(make_edge(1, 2)); // T -> Y
+        b.add_edge(make_edge(3, 2)); // Z -> Y (but instrument, so allowed)
+        let dag = b.build().unwrap();
+        let adj = dag.backdoor_adjustment(1, 2);
+        // Instrument parent with path to outcome: the validation code exempts
+        // instruments from requiring adjustment
+        assert!(adj.is_valid);
+    }
+
+    #[test]
+    fn test_adjustment_set_with_reason_serde() {
+        let adj = AdjustmentSet {
+            treatment: 1,
+            outcome: 2,
+            variables: BTreeSet::new(),
+            is_valid: false,
+            reason: Some("Latent confounders present".to_string()),
+        };
+        let json = serde_json::to_string(&adj).unwrap();
+        let back: AdjustmentSet = serde_json::from_str(&json).unwrap();
+        assert_eq!(adj, back);
+        assert!(back.reason.is_some());
+    }
 }

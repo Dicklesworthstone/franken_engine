@@ -5,9 +5,9 @@
 //! content-hash determinism for evidence entries.
 
 use frankenengine_engine::resource_certificate_governance::{
-    CertificateEvidence, ResourceDimension, BEAD_ID, COMPONENT, DEFAULT_MAX_REGRESSION_MILLIONTHS,
+    BEAD_ID, COMPONENT, CertificateEvidence, DEFAULT_MAX_REGRESSION_MILLIONTHS,
     DEFAULT_MAX_TAIL_RISK_MILLIONTHS, DEFAULT_MAX_UTILISATION_MILLIONTHS, DEFAULT_MIN_SAMPLES,
-    FIXED_ONE, POLICY_ID, SCHEMA_VERSION,
+    FIXED_ONE, POLICY_ID, ResourceDimension, SCHEMA_VERSION,
 };
 
 // ---------------------------------------------------------------------------

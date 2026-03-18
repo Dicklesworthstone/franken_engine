@@ -2690,8 +2690,7 @@ mod tests {
             fused_opcode: "load_prop_and_add".into(),
             estimated_speedup_millionths: 1_300_000,
         }];
-        let decision =
-            QuickeningDecision::build(&profile, &policy, transitions, candidates);
+        let decision = QuickeningDecision::build(&profile, &policy, transitions, candidates);
         let json = serde_json::to_string(&decision).unwrap();
         let back: QuickeningDecision = serde_json::from_str(&json).unwrap();
         assert_eq!(decision, back);
@@ -2820,10 +2819,7 @@ mod tests {
         profile.evaluate_all(&policy);
         profile.evaluate_all(&policy);
         profile.evaluate_all(&policy);
-        assert_eq!(
-            profile.get(0).unwrap().level,
-            QuickeningLevel::Quickened
-        );
+        assert_eq!(profile.get(0).unwrap().level, QuickeningLevel::Quickened);
         profile.record_deopt(0, &policy);
         assert_eq!(profile.get(0).unwrap().level, QuickeningLevel::Warm);
     }
@@ -2849,14 +2845,17 @@ mod tests {
     fn default_patterns_unique_pattern_ids() {
         let patterns = default_superinstruction_patterns();
         let ids: BTreeSet<&str> = patterns.iter().map(|p| p.pattern_id.as_str()).collect();
-        assert_eq!(ids.len(), patterns.len(), "all pattern IDs should be unique");
+        assert_eq!(
+            ids.len(),
+            patterns.len(),
+            "all pattern IDs should be unique"
+        );
     }
 
     #[test]
     fn default_patterns_unique_fused_opcodes() {
         let patterns = default_superinstruction_patterns();
-        let fused: BTreeSet<&str> =
-            patterns.iter().map(|p| p.fused_opcode.as_str()).collect();
+        let fused: BTreeSet<&str> = patterns.iter().map(|p| p.fused_opcode.as_str()).collect();
         assert_eq!(
             fused.len(),
             patterns.len(),

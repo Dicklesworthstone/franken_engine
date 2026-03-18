@@ -864,4 +864,703 @@ mod tests {
             ClaimEnvelopeVerdict::DowngradeToHypothesis
         );
     }
+
+    #[test]
+    fn validate_rejects_duplicate_input_ids() {
+        let mut contract = minimal_contract();
+        let dup = contract.contract_inputs[0].clone();
+        contract.contract_inputs.push(dup);
+        let errors = contract.validate().expect_err("should fail");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("duplicate contract input"))
+        );
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_channel_ids() {
+        let mut contract = minimal_contract();
+        let dup = contract.consumer_channels[0].clone();
+        contract.consumer_channels.push(dup);
+        let errors = contract.validate().expect_err("should fail");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("duplicate consumer channel"))
+        );
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_downgrade_rule_ids() {
+        let mut contract = minimal_contract();
+        let dup = contract.downgrade_rules[0].clone();
+        contract.downgrade_rules.push(dup);
+        let errors = contract.validate().expect_err("should fail");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("duplicate downgrade rule"))
+        );
+    }
+
+    #[test]
+    fn validate_rejects_missing_react_input_specifically() {
+        let mut contract = minimal_contract();
+        contract
+            .contract_inputs
+            .retain(|i| i.bead_id != "bd-1lsy.1.6.1");
+        let errors = contract.validate().expect_err("should fail");
+        assert!(errors.iter().any(|e| e.contains("React capability")));
+    }
+
+    #[test]
+    fn validate_rejects_missing_v8_input_specifically() {
+        let mut contract = minimal_contract();
+        contract
+            .contract_inputs
+            .retain(|i| i.bead_id != "bd-1lsy.1.6.2");
+        let errors = contract.validate().expect_err("should fail");
+        assert!(errors.iter().any(|e| e.contains("V8 supremacy")));
+    }
+
+    #[test]
+    fn validate_rejects_missing_claim_class_for_each_tier() {
+        for tier in [
+            ClaimEnvelopeTier::FrontierObjective,
+            ClaimEnvelopeTier::PublishableUniversal,
+            ClaimEnvelopeTier::PublishableScoped,
+            ClaimEnvelopeTier::Target,
+            ClaimEnvelopeTier::Hypothesis,
+        ] {
+            let mut contract = minimal_contract();
+            contract.claim_classes.retain(|c| c.tier != tier);
+            let errors = contract
+                .validate()
+                .expect_err("should fail for missing tier");
+            assert!(
+                errors
+                    .iter()
+                    .any(|e| e.contains("missing claim class for tier"))
+            );
+        }
+    }
+
+    #[test]
+    fn validate_accumulates_multiple_errors() {
+        let mut contract = minimal_contract();
+        contract.schema_version = "wrong".to_string();
+        contract.track.id = "wrong".to_string();
+        contract.operator_verification.clear();
+        let errors = contract.validate().expect_err("should fail");
+        assert!(
+            errors.len() >= 3,
+            "expected at least 3 errors, got {}",
+            errors.len()
+        );
+        assert!(errors.iter().any(|e| e.contains("schema_version")));
+        assert!(errors.iter().any(|e| e.contains("track id")));
+        assert!(errors.iter().any(|e| e.contains("operator verification")));
+    }
+
+    #[test]
+    fn tier_ordering_matches_declaration_order() {
+        assert!(ClaimEnvelopeTier::FrontierObjective < ClaimEnvelopeTier::PublishableUniversal);
+        assert!(ClaimEnvelopeTier::PublishableUniversal < ClaimEnvelopeTier::PublishableScoped);
+        assert!(ClaimEnvelopeTier::PublishableScoped < ClaimEnvelopeTier::Target);
+        assert!(ClaimEnvelopeTier::Target < ClaimEnvelopeTier::Hypothesis);
+    }
+
+    #[test]
+    fn tier_serde_uses_snake_case() {
+        let json = serde_json::to_string(&ClaimEnvelopeTier::FrontierObjective).unwrap();
+        assert_eq!(json, "\"frontier_objective\"");
+        let json = serde_json::to_string(&ClaimEnvelopeTier::PublishableUniversal).unwrap();
+        assert_eq!(json, "\"publishable_universal\"");
+        let json = serde_json::to_string(&ClaimEnvelopeTier::PublishableScoped).unwrap();
+        assert_eq!(json, "\"publishable_scoped\"");
+        let json = serde_json::to_string(&ClaimEnvelopeTier::Target).unwrap();
+        assert_eq!(json, "\"target\"");
+        let json = serde_json::to_string(&ClaimEnvelopeTier::Hypothesis).unwrap();
+        assert_eq!(json, "\"hypothesis\"");
+    }
+
+    #[test]
+    fn verdict_serde_uses_snake_case() {
+        let json = serde_json::to_string(&ClaimEnvelopeVerdict::AllowRequested).unwrap();
+        assert_eq!(json, "\"allow_requested\"");
+        let json = serde_json::to_string(&ClaimEnvelopeVerdict::DowngradeToScoped).unwrap();
+        assert_eq!(json, "\"downgrade_to_scoped\"");
+        let json = serde_json::to_string(&ClaimEnvelopeVerdict::DowngradeToTarget).unwrap();
+        assert_eq!(json, "\"downgrade_to_target\"");
+        let json = serde_json::to_string(&ClaimEnvelopeVerdict::DowngradeToHypothesis).unwrap();
+        assert_eq!(json, "\"downgrade_to_hypothesis\"");
+        let json = serde_json::to_string(&ClaimEnvelopeVerdict::Forbid).unwrap();
+        assert_eq!(json, "\"forbid\"");
+    }
+
+    #[test]
+    fn phrase_empty_string_matches_empty_term() {
+        assert!(phrase_contains_required_term("", ""));
+    }
+
+    #[test]
+    fn phrase_nonempty_matches_empty_term() {
+        assert!(phrase_contains_required_term("anything at all", ""));
+    }
+
+    #[test]
+    fn phrase_empty_does_not_match_nonempty_term() {
+        assert!(!phrase_contains_required_term("", "required"));
+    }
+
+    #[test]
+    fn phrase_partial_substring_match() {
+        assert!(phrase_contains_required_term(
+            "this is a universally accepted claim",
+            "universal"
+        ));
+    }
+
+    #[test]
+    fn evaluate_scoped_downgrades_to_hypothesis_when_stale_and_not_ready() {
+        let contract = minimal_contract();
+        let mut scenario = scenario_all_ready(ClaimEnvelopeTier::PublishableScoped, "scoped claim");
+        scenario.shipped_path = false;
+        scenario.stale_contract_hours = MAX_PUBLISHABLE_STALENESS_HOURS + 1;
+        assert_eq!(
+            contract.evaluate(&scenario),
+            ClaimEnvelopeVerdict::DowngradeToHypothesis
+        );
+    }
+
+    #[test]
+    fn evaluate_universal_downgrades_to_target_when_scope_incomplete() {
+        let contract = minimal_contract();
+        let mut scenario =
+            scenario_all_ready(ClaimEnvelopeTier::PublishableUniversal, "universal claim");
+        scenario.declared_scope_complete = false;
+        assert_eq!(
+            contract.evaluate(&scenario),
+            ClaimEnvelopeVerdict::DowngradeToTarget
+        );
+    }
+
+    #[test]
+    fn evaluate_universal_downgrades_to_target_when_shipped_path_false() {
+        let contract = minimal_contract();
+        let mut scenario =
+            scenario_all_ready(ClaimEnvelopeTier::PublishableUniversal, "universal claim");
+        scenario.shipped_path = false;
+        assert_eq!(
+            contract.evaluate(&scenario),
+            ClaimEnvelopeVerdict::DowngradeToTarget
+        );
+    }
+
+    #[test]
+    fn evaluate_frontier_allowed_with_any_phrase() {
+        let contract = minimal_contract();
+        let scenario = scenario_all_ready(
+            ClaimEnvelopeTier::FrontierObjective,
+            "completely unrelated words",
+        );
+        assert_eq!(
+            contract.evaluate(&scenario),
+            ClaimEnvelopeVerdict::AllowRequested
+        );
+    }
+
+    #[test]
+    fn evaluate_target_allowed_with_any_phrase() {
+        let contract = minimal_contract();
+        let scenario = scenario_all_ready(ClaimEnvelopeTier::Target, "completely unrelated words");
+        assert_eq!(
+            contract.evaluate(&scenario),
+            ClaimEnvelopeVerdict::AllowRequested
+        );
+    }
+
+    #[test]
+    fn evaluate_hypothesis_allowed_with_any_phrase() {
+        let contract = minimal_contract();
+        let scenario =
+            scenario_all_ready(ClaimEnvelopeTier::Hypothesis, "completely unrelated words");
+        assert_eq!(
+            contract.evaluate(&scenario),
+            ClaimEnvelopeVerdict::AllowRequested
+        );
+    }
+
+    #[test]
+    fn evaluate_forbids_scoped_when_phrase_lacks_qualifier() {
+        let contract = minimal_contract();
+        let scenario = scenario_all_ready(
+            ClaimEnvelopeTier::PublishableScoped,
+            "this has no matching qualifier",
+        );
+        assert_eq!(contract.evaluate(&scenario), ClaimEnvelopeVerdict::Forbid);
+    }
+
+    #[test]
+    fn class_for_tier_returns_none_when_missing() {
+        let mut contract = minimal_contract();
+        contract
+            .claim_classes
+            .retain(|c| c.tier != ClaimEnvelopeTier::Target);
+        assert!(contract.class_for_tier(ClaimEnvelopeTier::Target).is_none());
+    }
+
+    #[test]
+    fn phrase_satisfies_class_returns_false_when_tier_missing() {
+        let mut contract = minimal_contract();
+        contract.claim_classes.clear();
+        assert!(!contract.phrase_satisfies_class("anything", ClaimEnvelopeTier::Target));
+    }
+
+    #[test]
+    fn evaluate_forbids_when_all_classes_removed() {
+        let mut contract = minimal_contract();
+        contract.claim_classes.clear();
+        let scenario =
+            scenario_all_ready(ClaimEnvelopeTier::PublishableUniversal, "universal claim");
+        assert_eq!(contract.evaluate(&scenario), ClaimEnvelopeVerdict::Forbid);
+    }
+
+    #[test]
+    fn evaluate_staleness_boundary_exact_for_universal() {
+        let contract = minimal_contract();
+        let mut at_boundary =
+            scenario_all_ready(ClaimEnvelopeTier::PublishableUniversal, "universal claim");
+        at_boundary.stale_contract_hours = MAX_PUBLISHABLE_STALENESS_HOURS;
+        assert_eq!(
+            contract.evaluate(&at_boundary),
+            ClaimEnvelopeVerdict::AllowRequested
+        );
+
+        let mut over_boundary =
+            scenario_all_ready(ClaimEnvelopeTier::PublishableUniversal, "universal claim");
+        over_boundary.stale_contract_hours = MAX_PUBLISHABLE_STALENESS_HOURS + 1;
+        over_boundary.evidence_complete = false;
+        assert_eq!(
+            contract.evaluate(&over_boundary),
+            ClaimEnvelopeVerdict::DowngradeToHypothesis
+        );
+    }
+
+    #[test]
+    fn evaluate_zero_staleness_hours() {
+        let contract = minimal_contract();
+        let mut scenario =
+            scenario_all_ready(ClaimEnvelopeTier::PublishableUniversal, "universal claim");
+        scenario.stale_contract_hours = 0;
+        assert_eq!(
+            contract.evaluate(&scenario),
+            ClaimEnvelopeVerdict::AllowRequested
+        );
+    }
+
+    #[test]
+    fn evaluate_max_u64_staleness_hours_downgrades() {
+        let contract = minimal_contract();
+        let mut scenario = scenario_all_ready(ClaimEnvelopeTier::PublishableScoped, "scoped claim");
+        scenario.stale_contract_hours = u64::MAX;
+        scenario.shipped_path = false;
+        assert_eq!(
+            contract.evaluate(&scenario),
+            ClaimEnvelopeVerdict::DowngradeToHypothesis
+        );
+    }
+
+    #[test]
+    fn collect_unique_ids_empty_iterator_no_errors() {
+        let mut errors = Vec::new();
+        let result = collect_unique_ids(std::iter::empty(), "test", &mut errors);
+        assert!(result.is_empty());
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn collect_unique_ids_single_item() {
+        let mut errors = Vec::new();
+        let result = collect_unique_ids(["alpha"].into_iter(), "test", &mut errors);
+        assert_eq!(result.len(), 1);
+        assert!(result.contains("alpha"));
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn collect_unique_ids_reports_all_duplicates() {
+        let mut errors = Vec::new();
+        let ids = vec!["a", "b", "a", "c", "b"];
+        let result = collect_unique_ids(ids.into_iter(), "item", &mut errors);
+        assert_eq!(result.len(), 3);
+        assert_eq!(errors.len(), 2);
+        assert!(errors.iter().any(|e| e.contains("duplicate item id `a`")));
+        assert!(errors.iter().any(|e| e.contains("duplicate item id `b`")));
+    }
+
+    #[test]
+    fn multiple_qualifier_terms_must_all_match() {
+        let mut contract = minimal_contract();
+        for class in &mut contract.claim_classes {
+            if class.tier == ClaimEnvelopeTier::PublishableUniversal {
+                class.required_qualifier_terms =
+                    vec!["universal".to_string(), "verified".to_string()];
+            }
+        }
+        let scenario_both = scenario_all_ready(
+            ClaimEnvelopeTier::PublishableUniversal,
+            "universal verified claim",
+        );
+        assert_eq!(
+            contract.evaluate(&scenario_both),
+            ClaimEnvelopeVerdict::AllowRequested
+        );
+
+        let scenario_one_only = scenario_all_ready(
+            ClaimEnvelopeTier::PublishableUniversal,
+            "universal claim only",
+        );
+        assert_eq!(
+            contract.evaluate(&scenario_one_only),
+            ClaimEnvelopeVerdict::Forbid
+        );
+    }
+
+    #[test]
+    fn validate_missing_both_react_and_v8_with_other_inputs() {
+        let mut contract = minimal_contract();
+        contract.contract_inputs = vec![ContractInput {
+            input_id: "input-other".to_string(),
+            bead_id: "bd-other".to_string(),
+            contract_doc: "other.md".to_string(),
+            contract_json: "other.json".to_string(),
+            role: "other".to_string(),
+        }];
+        let errors = contract.validate().expect_err("should fail");
+        assert!(errors.iter().any(|e| e.contains("React capability")));
+        assert!(errors.iter().any(|e| e.contains("V8 supremacy")));
+    }
+
+    #[test]
+    fn validate_all_required_artifacts_missing() {
+        let mut contract = minimal_contract();
+        contract.required_artifacts.clear();
+        let errors = contract.validate().expect_err("should fail");
+        for artifact in [
+            "claim_envelope_contract.json",
+            "run_manifest.json",
+            "events.jsonl",
+            "commands.txt",
+            "trace_ids.json",
+        ] {
+            assert!(
+                errors.iter().any(|e| e.contains(artifact)),
+                "missing error for artifact `{artifact}`"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_all_required_log_fields_missing() {
+        let mut contract = minimal_contract();
+        contract.required_structured_log_fields.clear();
+        let errors = contract.validate().expect_err("should fail");
+        for field in [
+            "schema_version",
+            "scenario_id",
+            "trace_id",
+            "decision_id",
+            "policy_id",
+            "component",
+            "event",
+            "outcome",
+            "error_code",
+            "requested_class",
+            "verdict",
+        ] {
+            assert!(
+                errors.iter().any(|e| e.contains(field)),
+                "missing error for log field `{field}`"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_all_board_families_missing() {
+        let mut contract = minimal_contract();
+        contract.board_linkage.declared_board_families.clear();
+        let errors = contract.validate().expect_err("should fail");
+        assert!(errors.len() >= 7, "expected errors for all 7 families");
+    }
+
+    #[test]
+    fn validate_all_board_dimensions_missing() {
+        let mut contract = minimal_contract();
+        contract.board_linkage.declared_board_dimensions.clear();
+        let errors = contract.validate().expect_err("should fail");
+        assert!(errors.len() >= 5, "expected errors for all 5 dimensions");
+    }
+
+    #[test]
+    fn contract_input_serde_round_trip() {
+        let input = ContractInput {
+            input_id: "test-input".to_string(),
+            bead_id: "bd-test".to_string(),
+            contract_doc: "doc.md".to_string(),
+            contract_json: "contract.json".to_string(),
+            role: "test role".to_string(),
+        };
+        let json = serde_json::to_string(&input).expect("serialize");
+        let restored: ContractInput = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored, input);
+    }
+
+    #[test]
+    fn board_linkage_serde_round_trip() {
+        let linkage = BoardLinkage {
+            supremacy_contract_doc: "s.md".to_string(),
+            supremacy_contract_json: "s.json".to_string(),
+            react_contract_doc: "r.md".to_string(),
+            react_contract_json: "r.json".to_string(),
+            declared_board_dimensions: vec!["dim1".to_string()],
+            declared_board_families: vec!["fam1".to_string()],
+            frontier_gap_artifact: "gap.json".to_string(),
+            frontier_gap_bead: "bd-gap".to_string(),
+        };
+        let json = serde_json::to_string(&linkage).expect("serialize");
+        let restored: BoardLinkage = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored, linkage);
+    }
+
+    #[test]
+    fn downgrade_rule_serde_round_trip() {
+        let rule = DowngradeRule {
+            rule_id: "test-rule".to_string(),
+            when_condition: "always".to_string(),
+            resulting_class: ClaimEnvelopeTier::Hypothesis,
+            rationale: "because".to_string(),
+        };
+        let json = serde_json::to_string(&rule).expect("serialize");
+        let restored: DowngradeRule = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored, rule);
+    }
+
+    #[test]
+    fn consumer_channel_serde_round_trip() {
+        let channel = ConsumerChannel {
+            channel_id: "ch-1".to_string(),
+            consumer_bead: "bd-consumer".to_string(),
+            allowed_classes: vec!["universal".to_string(), "scoped".to_string()],
+            requires_artifacts: vec!["artifact.json".to_string()],
+            rationale: "testing".to_string(),
+        };
+        let json = serde_json::to_string(&channel).expect("serialize");
+        let restored: ConsumerChannel = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored, channel);
+    }
+
+    #[test]
+    fn claim_class_spec_serde_round_trip() {
+        let spec = ClaimClassSpec {
+            class_id: "test-class".to_string(),
+            tier: ClaimEnvelopeTier::PublishableScoped,
+            publishable: true,
+            description: "test".to_string(),
+            required_qualifier_terms: vec!["alpha".to_string(), "beta".to_string()],
+            allowed_surfaces: vec!["docs".to_string()],
+        };
+        let json = serde_json::to_string(&spec).expect("serialize");
+        let restored: ClaimClassSpec = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored, spec);
+    }
+
+    #[test]
+    fn contract_track_serde_round_trip() {
+        let track = ContractTrack {
+            id: "RGC-016C".to_string(),
+            name: "claim envelope".to_string(),
+        };
+        let json = serde_json::to_string(&track).expect("serialize");
+        let restored: ContractTrack = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored, track);
+    }
+
+    #[test]
+    fn tier_debug_format() {
+        assert_eq!(
+            format!("{:?}", ClaimEnvelopeTier::FrontierObjective),
+            "FrontierObjective"
+        );
+        assert_eq!(
+            format!("{:?}", ClaimEnvelopeTier::PublishableUniversal),
+            "PublishableUniversal"
+        );
+    }
+
+    #[test]
+    fn verdict_debug_format() {
+        assert_eq!(
+            format!("{:?}", ClaimEnvelopeVerdict::AllowRequested),
+            "AllowRequested"
+        );
+        assert_eq!(format!("{:?}", ClaimEnvelopeVerdict::Forbid), "Forbid");
+    }
+
+    #[test]
+    fn contract_clone_is_independent() {
+        let contract = minimal_contract();
+        let mut cloned = contract.clone();
+        cloned.schema_version = "modified".to_string();
+        assert_ne!(contract.schema_version, cloned.schema_version);
+        assert_eq!(
+            contract.schema_version,
+            CLAIM_ENVELOPE_CONTRACT_SCHEMA_VERSION
+        );
+    }
+
+    #[test]
+    fn evaluate_universal_stale_but_all_else_ready_downgrades_to_hypothesis() {
+        let contract = minimal_contract();
+        let mut scenario =
+            scenario_all_ready(ClaimEnvelopeTier::PublishableUniversal, "universal claim");
+        scenario.stale_contract_hours = MAX_PUBLISHABLE_STALENESS_HOURS + 100;
+        // All other flags are true, but contract_is_fresh is false.
+        // publishable_scoped_ready requires contract_is_fresh, so it's false.
+        // Falls through to DowngradeToHypothesis.
+        assert_eq!(
+            contract.evaluate(&scenario),
+            ClaimEnvelopeVerdict::DowngradeToHypothesis
+        );
+    }
+
+    #[test]
+    fn evaluate_scoped_stale_but_all_else_ready_downgrades_to_hypothesis() {
+        let contract = minimal_contract();
+        let mut scenario = scenario_all_ready(ClaimEnvelopeTier::PublishableScoped, "scoped claim");
+        scenario.stale_contract_hours = MAX_PUBLISHABLE_STALENESS_HOURS + 1;
+        // contract_is_fresh is false, so publishable_scoped_ready is false,
+        // and contract_is_fresh branch also false -> DowngradeToHypothesis
+        assert_eq!(
+            contract.evaluate(&scenario),
+            ClaimEnvelopeVerdict::DowngradeToHypothesis
+        );
+    }
+
+    #[test]
+    fn validate_consumer_channel_with_all_unknown_classes() {
+        let mut contract = minimal_contract();
+        contract.consumer_channels = vec![ConsumerChannel {
+            channel_id: "bad-ch".to_string(),
+            consumer_bead: "bd-x".to_string(),
+            allowed_classes: vec!["fake1".to_string(), "fake2".to_string()],
+            requires_artifacts: vec![],
+            rationale: "test".to_string(),
+        }];
+        let errors = contract.validate().expect_err("should fail");
+        assert!(errors.iter().any(|e| e.contains("fake1")));
+        assert!(errors.iter().any(|e| e.contains("fake2")));
+    }
+
+    #[test]
+    fn validate_consumer_channel_empty_allowed_classes_passes() {
+        let mut contract = minimal_contract();
+        contract.consumer_channels = vec![ConsumerChannel {
+            channel_id: "empty-ch".to_string(),
+            consumer_bead: "bd-y".to_string(),
+            allowed_classes: vec![],
+            requires_artifacts: vec![],
+            rationale: "test".to_string(),
+        }];
+        // Empty allowed_classes does not reference any unknown class, so no error from that check.
+        contract.validate().expect("should pass");
+    }
+
+    #[test]
+    fn validate_no_consumer_channels_passes() {
+        let mut contract = minimal_contract();
+        contract.consumer_channels.clear();
+        contract.validate().expect("no channels is still valid");
+    }
+
+    #[test]
+    fn validate_no_downgrade_rules_passes() {
+        let mut contract = minimal_contract();
+        contract.downgrade_rules.clear();
+        contract
+            .validate()
+            .expect("no downgrade rules is still valid");
+    }
+
+    #[test]
+    fn tier_copy_semantics() {
+        let tier = ClaimEnvelopeTier::PublishableUniversal;
+        let copied = tier;
+        assert_eq!(tier, copied);
+    }
+
+    #[test]
+    fn verdict_copy_semantics() {
+        let verdict = ClaimEnvelopeVerdict::DowngradeToScoped;
+        let copied = verdict;
+        assert_eq!(verdict, copied);
+    }
+
+    #[test]
+    fn evaluate_universal_all_flags_false_downgrades_to_hypothesis_when_stale() {
+        let contract = minimal_contract();
+        let scenario = ClaimEnvelopeScenario {
+            scenario_id: "all-false".to_string(),
+            requested_class: ClaimEnvelopeTier::PublishableUniversal,
+            phrase_text: "universal claim".to_string(),
+            declared_scope_complete: false,
+            declared_board_complete: false,
+            evidence_complete: false,
+            shipped_path: false,
+            frontier_gap_open: true,
+            stale_contract_hours: MAX_PUBLISHABLE_STALENESS_HOURS + 1,
+            replay_command: "none".to_string(),
+        };
+        assert_eq!(
+            contract.evaluate(&scenario),
+            ClaimEnvelopeVerdict::DowngradeToHypothesis
+        );
+    }
+
+    #[test]
+    fn evaluate_universal_all_flags_false_but_fresh_downgrades_to_target() {
+        let contract = minimal_contract();
+        let scenario = ClaimEnvelopeScenario {
+            scenario_id: "fresh-but-incomplete".to_string(),
+            requested_class: ClaimEnvelopeTier::PublishableUniversal,
+            phrase_text: "universal claim".to_string(),
+            declared_scope_complete: false,
+            declared_board_complete: false,
+            evidence_complete: false,
+            shipped_path: false,
+            frontier_gap_open: true,
+            stale_contract_hours: 0,
+            replay_command: "none".to_string(),
+        };
+        assert_eq!(
+            contract.evaluate(&scenario),
+            ClaimEnvelopeVerdict::DowngradeToTarget
+        );
+    }
+
+    #[test]
+    fn embedded_contract_json_is_nonempty() {
+        assert!(
+            !CLAIM_ENVELOPE_CONTRACT_JSON.is_empty(),
+            "embedded contract JSON should not be empty"
+        );
+    }
+
+    #[test]
+    fn embedded_contract_json_parses_as_valid_json() {
+        let value: serde_json::Value =
+            serde_json::from_str(CLAIM_ENVELOPE_CONTRACT_JSON).expect("should parse as JSON");
+        assert!(value.is_object(), "top-level must be a JSON object");
+    }
 }

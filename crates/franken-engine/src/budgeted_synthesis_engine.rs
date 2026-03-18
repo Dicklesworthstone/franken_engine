@@ -919,4 +919,715 @@ mod tests {
         let back: CounterexampleArchive = serde_json::from_str(&json).unwrap();
         assert_eq!(a, back);
     }
+
+    // -----------------------------------------------------------------------
+    // Additional tests — edge cases, boundaries, determinism, coverage
+    // -----------------------------------------------------------------------
+
+    // --- ProofStatus ordering ---
+
+    #[test]
+    fn proof_status_ord_verified_is_least() {
+        // Verified < Refuted < TimedOut < Skipped by derive(Ord) on variant order
+        assert!(ProofStatus::Verified < ProofStatus::Refuted);
+        assert!(ProofStatus::Refuted < ProofStatus::TimedOut);
+        assert!(ProofStatus::TimedOut < ProofStatus::Skipped);
+    }
+
+    #[test]
+    fn proof_status_skipped_not_verified_not_terminal() {
+        assert!(!ProofStatus::Skipped.is_verified());
+        assert!(!ProofStatus::Skipped.is_terminal());
+    }
+
+    #[test]
+    fn proof_status_timed_out_not_verified() {
+        assert!(!ProofStatus::TimedOut.is_verified());
+    }
+
+    // --- CandidateOrigin ordering ---
+
+    #[test]
+    fn origin_ord_follows_definition_order() {
+        assert!(CandidateOrigin::Enumerative < CandidateOrigin::Stochastic);
+        assert!(CandidateOrigin::Stochastic < CandidateOrigin::TemplateBased);
+        assert!(CandidateOrigin::TemplateBased < CandidateOrigin::AlgebraicSimplification);
+        assert!(CandidateOrigin::AlgebraicSimplification < CandidateOrigin::Manual);
+    }
+
+    #[test]
+    fn origin_serde_snake_case_format() {
+        let json = serde_json::to_string(&CandidateOrigin::AlgebraicSimplification).unwrap();
+        assert_eq!(json, "\"algebraic_simplification\"");
+        let json2 = serde_json::to_string(&CandidateOrigin::TemplateBased).unwrap();
+        assert_eq!(json2, "\"template_based\"");
+    }
+
+    // --- EquivalenceProof edge cases ---
+
+    #[test]
+    fn proof_coverage_zero_classes_returns_zero() {
+        // When input_classes_tested is 0, checked_div returns None → 0
+        let p = EquivalenceProof::verified(0, 100_000);
+        assert_eq!(p.coverage_millionths(), 0);
+    }
+
+    #[test]
+    fn proof_coverage_partial() {
+        let p = EquivalenceProof::refuted(4, 1, 200_000);
+        // 1/4 * 1_000_000 = 250_000
+        assert_eq!(p.coverage_millionths(), 250_000);
+    }
+
+    #[test]
+    fn proof_coverage_one_of_one() {
+        let p = EquivalenceProof::verified(1, 50_000);
+        assert_eq!(p.coverage_millionths(), MILLION);
+    }
+
+    #[test]
+    fn proof_verified_hash_deterministic() {
+        let p1 = EquivalenceProof::verified(10, 500_000);
+        let p2 = EquivalenceProof::verified(10, 500_000);
+        assert_eq!(p1.content_hash, p2.content_hash);
+    }
+
+    #[test]
+    fn proof_verified_hash_differs_on_different_input() {
+        let p1 = EquivalenceProof::verified(10, 500_000);
+        let p2 = EquivalenceProof::verified(11, 500_000);
+        assert_ne!(p1.content_hash, p2.content_hash);
+    }
+
+    #[test]
+    fn proof_refuted_hash_differs_from_verified() {
+        let p1 = EquivalenceProof::verified(10, 500_000);
+        let p2 = EquivalenceProof::refuted(10, 10, 500_000);
+        assert_ne!(p1.content_hash, p2.content_hash);
+    }
+
+    #[test]
+    fn proof_timed_out_hash_deterministic() {
+        let p1 = EquivalenceProof::timed_out(5, 3, 1_000_000);
+        let p2 = EquivalenceProof::timed_out(5, 3, 1_000_000);
+        assert_eq!(p1.content_hash, p2.content_hash);
+    }
+
+    #[test]
+    fn proof_timed_out_coverage() {
+        let p = EquivalenceProof::timed_out(10, 6, 1_000_000);
+        assert_eq!(p.coverage_millionths(), 600_000);
+    }
+
+    #[test]
+    fn proof_refuted_serde_roundtrip() {
+        let p = EquivalenceProof::refuted(20, 15, 750_000);
+        let json = serde_json::to_string(&p).unwrap();
+        let back: EquivalenceProof = serde_json::from_str(&json).unwrap();
+        assert_eq!(p, back);
+        assert_eq!(back.status, ProofStatus::Refuted);
+        assert_eq!(back.input_classes_tested, 20);
+        assert_eq!(back.input_classes_verified, 15);
+    }
+
+    #[test]
+    fn proof_timed_out_serde_roundtrip() {
+        let p = EquivalenceProof::timed_out(8, 4, 999_999);
+        let json = serde_json::to_string(&p).unwrap();
+        let back: EquivalenceProof = serde_json::from_str(&json).unwrap();
+        assert_eq!(p, back);
+    }
+
+    // --- CostEstimate ---
+
+    #[test]
+    fn cost_estimate_new_stores_fields() {
+        let c = CostEstimate::new("gpu-a100", 2_000_000, 300_000, 5_000_000);
+        assert_eq!(c.hardware_id, "gpu-a100");
+        assert_eq!(c.cycles_millionths, 2_000_000);
+        assert_eq!(c.memory_pressure_millionths, 300_000);
+        assert_eq!(c.throughput_millionths, 5_000_000);
+    }
+
+    #[test]
+    fn cost_estimate_serde_roundtrip() {
+        let c = CostEstimate::new("arm-neon", 150_000, 25_000, 900_000);
+        let json = serde_json::to_string(&c).unwrap();
+        let back: CostEstimate = serde_json::from_str(&json).unwrap();
+        assert_eq!(c, back);
+    }
+
+    #[test]
+    fn cost_estimate_ord_by_hardware_then_cycles() {
+        let c1 = CostEstimate::new("aarch64", 100_000, 50_000, 800_000);
+        let c2 = CostEstimate::new("x86_64", 100_000, 50_000, 800_000);
+        // Ord derived: hardware_id is String, "aarch64" < "x86_64"
+        assert!(c1 < c2);
+    }
+
+    // --- SynthesisCandidate edge cases ---
+
+    #[test]
+    fn candidate_at_exact_speedup_threshold() {
+        // Exactly at the threshold: MILLION + MIN_SPEEDUP_THRESHOLD = 1_050_000
+        let c = verified_candidate("c-edge", 1_050_000);
+        assert!(c.is_verified());
+        assert!(c.meets_speedup_threshold());
+        assert!(c.is_admissible());
+    }
+
+    #[test]
+    fn candidate_one_below_speedup_threshold() {
+        // One below the threshold
+        let c = verified_candidate("c-below", 1_049_999);
+        assert!(c.is_verified());
+        assert!(!c.meets_speedup_threshold());
+        assert!(!c.is_admissible());
+    }
+
+    #[test]
+    fn candidate_zero_speedup_not_admissible() {
+        let c = verified_candidate("c-zero", 0);
+        assert!(c.is_verified());
+        assert!(!c.meets_speedup_threshold());
+        assert!(!c.is_admissible());
+    }
+
+    #[test]
+    fn candidate_hash_differs_on_id() {
+        let c1 = verified_candidate("alpha", 1_200_000);
+        let c2 = verified_candidate("beta", 1_200_000);
+        assert_ne!(c1.content_hash, c2.content_hash);
+    }
+
+    #[test]
+    fn candidate_hash_differs_on_speedup() {
+        let c1 = verified_candidate("c1", 1_100_000);
+        let c2 = verified_candidate("c1", 1_200_000);
+        assert_ne!(c1.content_hash, c2.content_hash);
+    }
+
+    #[test]
+    fn candidate_with_multiple_cost_estimates() {
+        let costs = vec![
+            CostEstimate::new("hw-a", 100_000, 50_000, 800_000),
+            CostEstimate::new("hw-b", 200_000, 60_000, 600_000),
+            CostEstimate::new("hw-c", 80_000, 40_000, 1_200_000),
+        ];
+        let c = SynthesisCandidate::new(
+            "multi-hw",
+            "kernel-2",
+            CandidateOrigin::TemplateBased,
+            15,
+            EquivalenceProof::verified(20, 800_000),
+            Vec::new(),
+            costs,
+            1_150_000,
+        );
+        assert_eq!(c.cost_estimates.len(), 3);
+        assert!(c.is_admissible());
+    }
+
+    #[test]
+    fn candidate_with_multiple_counterexamples() {
+        let cxs: Vec<Counterexample> = (0..5)
+            .map(|i| Counterexample {
+                input_class: format!("class-{i}"),
+                expected_output_hash: ContentHash::compute(format!("exp-{i}").as_bytes()),
+                actual_output_hash: ContentHash::compute(format!("act-{i}").as_bytes()),
+                description: format!("divergence-{i}"),
+            })
+            .collect();
+        let c = SynthesisCandidate::new(
+            "cx-heavy",
+            "kernel-3",
+            CandidateOrigin::Stochastic,
+            20,
+            EquivalenceProof::refuted(10, 5, 400_000),
+            cxs,
+            Vec::new(),
+            1_300_000,
+        );
+        assert_eq!(c.counterexamples.len(), 5);
+        assert!(!c.is_admissible()); // refuted
+    }
+
+    #[test]
+    fn candidate_manual_origin() {
+        let c = SynthesisCandidate::new(
+            "manual-1",
+            "kernel-1",
+            CandidateOrigin::Manual,
+            5,
+            EquivalenceProof::verified(3, 100_000),
+            Vec::new(),
+            Vec::new(),
+            1_500_000,
+        );
+        assert_eq!(c.origin, CandidateOrigin::Manual);
+        assert!(c.is_admissible());
+    }
+
+    #[test]
+    fn candidate_algebraic_origin() {
+        let c = SynthesisCandidate::new(
+            "alg-1",
+            "kernel-1",
+            CandidateOrigin::AlgebraicSimplification,
+            3,
+            EquivalenceProof::verified(8, 200_000),
+            Vec::new(),
+            Vec::new(),
+            2_000_000, // 2x speedup
+        );
+        assert_eq!(c.origin, CandidateOrigin::AlgebraicSimplification);
+        assert!(c.is_admissible());
+    }
+
+    // --- SynthesisBudget edge cases ---
+
+    #[test]
+    fn budget_default_trait_matches_method() {
+        let b1 = SynthesisBudget::default();
+        let b2 = SynthesisBudget::default_budget();
+        assert_eq!(b1, b2);
+    }
+
+    #[test]
+    fn budget_custom_zero_candidates() {
+        let b = SynthesisBudget::custom(0, 0, 0);
+        assert_eq!(b.max_candidates, 0);
+        assert_eq!(b.search_time_millionths, 0);
+        assert_eq!(b.proof_time_per_candidate_millionths, 0);
+    }
+
+    #[test]
+    fn budget_custom_large_values() {
+        let b = SynthesisBudget::custom(u32::MAX, u64::MAX, u64::MAX);
+        assert_eq!(b.max_candidates, u32::MAX);
+        assert_eq!(b.search_time_millionths, u64::MAX);
+        assert_eq!(b.proof_time_per_candidate_millionths, u64::MAX);
+    }
+
+    // --- SynthesisReport edge cases ---
+
+    #[test]
+    fn report_admission_rate_all_admissible() {
+        let candidates = vec![
+            verified_candidate("c1", 1_100_000),
+            verified_candidate("c2", 1_200_000),
+        ];
+        let r = SynthesisReport::new(epoch(), "k1", SynthesisBudget::default(), candidates);
+        assert_eq!(r.admission_rate(), MILLION); // 100%
+    }
+
+    #[test]
+    fn report_admission_rate_half() {
+        let candidates = vec![verified_candidate("c1", 1_100_000), refuted_candidate("c2")];
+        let r = SynthesisReport::new(epoch(), "k1", SynthesisBudget::default(), candidates);
+        assert_eq!(r.admission_rate(), 500_000); // 50%
+    }
+
+    #[test]
+    fn report_total_search_time_sums_correctly() {
+        // Each verified_candidate has proof_time = 500_000, refuted has 300_000
+        let candidates = vec![
+            verified_candidate("c1", 1_100_000),
+            verified_candidate("c2", 1_200_000),
+            refuted_candidate("c3"),
+        ];
+        let r = SynthesisReport::new(epoch(), "k1", SynthesisBudget::default(), candidates);
+        assert_eq!(r.total_search_time_millionths, 500_000 + 500_000 + 300_000);
+    }
+
+    #[test]
+    fn report_total_counterexamples_counts_all() {
+        let candidates = vec![refuted_candidate("c1"), refuted_candidate("c2")];
+        let r = SynthesisReport::new(epoch(), "k1", SynthesisBudget::default(), candidates);
+        // Each refuted candidate has 1 counterexample
+        assert_eq!(r.total_counterexamples, 2);
+    }
+
+    #[test]
+    fn report_timed_out_count() {
+        let timed_out_c = SynthesisCandidate::new(
+            "to-1",
+            "kernel-1",
+            CandidateOrigin::Enumerative,
+            10,
+            EquivalenceProof::timed_out(5, 2, 1_000_000),
+            Vec::new(),
+            Vec::new(),
+            1_100_000,
+        );
+        let candidates = vec![
+            verified_candidate("c1", 1_100_000),
+            timed_out_c,
+            refuted_candidate("c3"),
+        ];
+        let r = SynthesisReport::new(epoch(), "k1", SynthesisBudget::default(), candidates);
+        assert_eq!(r.timed_out_count, 1);
+        assert_eq!(r.refuted_count, 1);
+        assert_eq!(r.admissible_count, 1);
+    }
+
+    #[test]
+    fn report_best_candidate_is_none_when_no_admissible() {
+        let timed_out_c = SynthesisCandidate::new(
+            "to-1",
+            "kernel-1",
+            CandidateOrigin::Enumerative,
+            10,
+            EquivalenceProof::timed_out(5, 2, 1_000_000),
+            Vec::new(),
+            Vec::new(),
+            1_500_000,
+        );
+        let r = SynthesisReport::new(
+            epoch(),
+            "k1",
+            SynthesisBudget::default(),
+            vec![timed_out_c, refuted_candidate("c2")],
+        );
+        assert!(r.best_candidate().is_none());
+        assert!(!r.has_result());
+    }
+
+    #[test]
+    fn report_hash_differs_on_epoch() {
+        let candidates = vec![verified_candidate("c1", 1_100_000)];
+        let r1 = SynthesisReport::new(
+            SecurityEpoch::from_raw(1),
+            "k1",
+            SynthesisBudget::default(),
+            candidates.clone(),
+        );
+        let r2 = SynthesisReport::new(
+            SecurityEpoch::from_raw(2),
+            "k1",
+            SynthesisBudget::default(),
+            candidates,
+        );
+        assert_ne!(r1.content_hash, r2.content_hash);
+    }
+
+    #[test]
+    fn report_hash_differs_on_target_schema() {
+        let candidates = vec![verified_candidate("c1", 1_100_000)];
+        let r1 = SynthesisReport::new(
+            epoch(),
+            "kernel-a",
+            SynthesisBudget::default(),
+            candidates.clone(),
+        );
+        let r2 = SynthesisReport::new(epoch(), "kernel-b", SynthesisBudget::default(), candidates);
+        assert_ne!(r1.content_hash, r2.content_hash);
+    }
+
+    #[test]
+    fn report_verified_below_threshold_not_admissible() {
+        // Candidate is verified but speedup below threshold — should NOT appear as best
+        let candidates = vec![verified_candidate("c1", 1_020_000)];
+        let r = SynthesisReport::new(epoch(), "k1", SynthesisBudget::default(), candidates);
+        assert_eq!(r.admissible_count, 0);
+        assert!(!r.has_result());
+        assert!(r.best_candidate().is_none());
+    }
+
+    // --- CounterexampleArchive edge cases ---
+
+    #[test]
+    fn archive_ingest_multiple_schemas() {
+        let mut archive = CounterexampleArchive::new();
+        let r1 = SynthesisReport::new(
+            epoch(),
+            "kernel-a",
+            SynthesisBudget::default(),
+            vec![refuted_candidate("c1")],
+        );
+        let r2 = SynthesisReport::new(
+            epoch(),
+            "kernel-b",
+            SynthesisBudget::default(),
+            vec![refuted_candidate("c2")],
+        );
+        archive.ingest(&r1);
+        archive.ingest(&r2);
+        assert_eq!(archive.schema_count(), 2);
+        assert_eq!(archive.total_count, 2);
+        assert_eq!(archive.for_schema("kernel-a").len(), 1);
+        assert_eq!(archive.for_schema("kernel-b").len(), 1);
+    }
+
+    #[test]
+    fn archive_ingest_same_schema_accumulates() {
+        let mut archive = CounterexampleArchive::new();
+        let r1 = SynthesisReport::new(
+            epoch(),
+            "kernel-a",
+            SynthesisBudget::default(),
+            vec![refuted_candidate("c1")],
+        );
+        let r2 = SynthesisReport::new(
+            epoch(),
+            "kernel-a",
+            SynthesisBudget::default(),
+            vec![refuted_candidate("c2")],
+        );
+        archive.ingest(&r1);
+        archive.ingest(&r2);
+        assert_eq!(archive.schema_count(), 1);
+        assert_eq!(archive.total_count, 2);
+        assert_eq!(archive.for_schema("kernel-a").len(), 2);
+    }
+
+    #[test]
+    fn archive_respects_max_counterexamples_cap() {
+        let mut archive = CounterexampleArchive::new();
+        // Create a report whose candidate has many counterexamples
+        let cxs: Vec<Counterexample> = (0..MAX_COUNTEREXAMPLES + 10)
+            .map(|i| Counterexample {
+                input_class: format!("class-{i}"),
+                expected_output_hash: ContentHash::compute(format!("exp-{i}").as_bytes()),
+                actual_output_hash: ContentHash::compute(format!("act-{i}").as_bytes()),
+                description: format!("div-{i}"),
+            })
+            .collect();
+        let c = SynthesisCandidate::new(
+            "cx-flood",
+            "kernel-flood",
+            CandidateOrigin::Stochastic,
+            20,
+            EquivalenceProof::refuted(50, 10, 500_000),
+            cxs,
+            Vec::new(),
+            1_200_000,
+        );
+        let r = SynthesisReport::new(epoch(), "kernel-flood", SynthesisBudget::default(), vec![c]);
+        archive.ingest(&r);
+        // Should cap at MAX_COUNTEREXAMPLES
+        assert_eq!(
+            archive.for_schema("kernel-flood").len(),
+            MAX_COUNTEREXAMPLES
+        );
+        assert_eq!(archive.total_count, MAX_COUNTEREXAMPLES);
+    }
+
+    #[test]
+    fn archive_ingest_report_with_no_counterexamples() {
+        let mut archive = CounterexampleArchive::new();
+        let r = SynthesisReport::new(
+            epoch(),
+            "kernel-clean",
+            SynthesisBudget::default(),
+            vec![verified_candidate("c1", 1_200_000)],
+        );
+        archive.ingest(&r);
+        // Verified candidates have no counterexamples, so nothing is added
+        assert_eq!(archive.schema_count(), 0);
+        assert_eq!(archive.total_count, 0);
+    }
+
+    // --- Counterexample ---
+
+    #[test]
+    fn counterexample_ord_by_input_class() {
+        let cx1 = Counterexample {
+            input_class: "alpha".into(),
+            expected_output_hash: ContentHash::compute(b"e1"),
+            actual_output_hash: ContentHash::compute(b"a1"),
+            description: "d1".into(),
+        };
+        let cx2 = Counterexample {
+            input_class: "beta".into(),
+            expected_output_hash: ContentHash::compute(b"e2"),
+            actual_output_hash: ContentHash::compute(b"a2"),
+            description: "d2".into(),
+        };
+        assert!(cx1 < cx2);
+    }
+
+    #[test]
+    fn counterexample_serde_roundtrip() {
+        let cx = Counterexample {
+            input_class: "float-array".into(),
+            expected_output_hash: ContentHash::compute(b"expected-data"),
+            actual_output_hash: ContentHash::compute(b"actual-data"),
+            description: "precision loss in accumulator".into(),
+        };
+        let json = serde_json::to_string(&cx).unwrap();
+        let back: Counterexample = serde_json::from_str(&json).unwrap();
+        assert_eq!(cx, back);
+    }
+
+    #[test]
+    fn counterexample_clone_eq() {
+        let cx = Counterexample {
+            input_class: "test".into(),
+            expected_output_hash: ContentHash::compute(b"e"),
+            actual_output_hash: ContentHash::compute(b"a"),
+            description: "desc".into(),
+        };
+        let cx2 = cx.clone();
+        assert_eq!(cx, cx2);
+    }
+
+    // --- Policy constant ---
+
+    #[test]
+    fn policy_id_format() {
+        assert!(POLICY_ID.starts_with("RGC-"));
+    }
+
+    // --- Full pipeline scenario ---
+
+    #[test]
+    fn full_synthesis_pipeline_mixed_candidates() {
+        // Simulate a realistic session with all candidate types
+        let skipped_proof = EquivalenceProof {
+            status: ProofStatus::Skipped,
+            input_classes_tested: 0,
+            input_classes_verified: 0,
+            proof_time_millionths: 0,
+            content_hash: ContentHash::compute(b"skipped"),
+        };
+        let skipped_c = SynthesisCandidate::new(
+            "c-skipped",
+            "kernel-mix",
+            CandidateOrigin::Enumerative,
+            8,
+            skipped_proof,
+            Vec::new(),
+            Vec::new(),
+            1_300_000,
+        );
+        let timed_out_c = SynthesisCandidate::new(
+            "c-timeout",
+            "kernel-mix",
+            CandidateOrigin::Stochastic,
+            14,
+            EquivalenceProof::timed_out(10, 7, 1_000_000),
+            Vec::new(),
+            Vec::new(),
+            1_150_000,
+        );
+        let candidates = vec![
+            verified_candidate("c-fast", 1_400_000),
+            verified_candidate("c-slow", 1_020_000), // below threshold
+            refuted_candidate("c-bad"),
+            timed_out_c,
+            skipped_c,
+        ];
+        let budget = SynthesisBudget::custom(100, 10_000_000, 2_000_000);
+        let r = SynthesisReport::new(epoch(), "kernel-mix", budget, candidates);
+
+        assert_eq!(r.candidate_count(), 5);
+        assert_eq!(r.admissible_count, 1); // only c-fast
+        assert_eq!(r.refuted_count, 1);
+        assert_eq!(r.timed_out_count, 1);
+        assert_eq!(r.best_candidate_id.as_deref(), Some("c-fast"));
+        assert!(r.has_result());
+
+        let best = r.best_candidate().unwrap();
+        assert_eq!(best.speedup_millionths, 1_400_000);
+        assert!(best.is_admissible());
+    }
+
+    #[test]
+    fn report_serde_roundtrip_with_all_statuses() {
+        let skipped_proof = EquivalenceProof {
+            status: ProofStatus::Skipped,
+            input_classes_tested: 0,
+            input_classes_verified: 0,
+            proof_time_millionths: 0,
+            content_hash: ContentHash::compute(b"skip"),
+        };
+        let candidates = vec![
+            verified_candidate("c1", 1_200_000),
+            refuted_candidate("c2"),
+            SynthesisCandidate::new(
+                "c3",
+                "kernel-1",
+                CandidateOrigin::TemplateBased,
+                7,
+                EquivalenceProof::timed_out(5, 2, 900_000),
+                Vec::new(),
+                Vec::new(),
+                1_100_000,
+            ),
+            SynthesisCandidate::new(
+                "c4",
+                "kernel-1",
+                CandidateOrigin::Manual,
+                3,
+                skipped_proof,
+                Vec::new(),
+                Vec::new(),
+                1_050_000,
+            ),
+        ];
+        let r = SynthesisReport::new(epoch(), "k-all", SynthesisBudget::default(), candidates);
+        let json = serde_json::to_string_pretty(&r).unwrap();
+        let back: SynthesisReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(r, back);
+        assert_eq!(back.candidate_count(), 4);
+    }
+
+    #[test]
+    fn archive_cap_across_multiple_ingests() {
+        let mut archive = CounterexampleArchive::new();
+        // Ingest many small reports for the same schema until cap
+        for i in 0..MAX_COUNTEREXAMPLES + 5 {
+            let cx = Counterexample {
+                input_class: format!("class-{i}"),
+                expected_output_hash: ContentHash::compute(format!("e-{i}").as_bytes()),
+                actual_output_hash: ContentHash::compute(format!("a-{i}").as_bytes()),
+                description: format!("d-{i}"),
+            };
+            let c = SynthesisCandidate::new(
+                format!("c-{i}"),
+                "kernel-cap",
+                CandidateOrigin::Stochastic,
+                10,
+                EquivalenceProof::refuted(5, 3, 200_000),
+                vec![cx],
+                Vec::new(),
+                1_100_000,
+            );
+            let r =
+                SynthesisReport::new(epoch(), "kernel-cap", SynthesisBudget::default(), vec![c]);
+            archive.ingest(&r);
+        }
+        assert_eq!(archive.for_schema("kernel-cap").len(), MAX_COUNTEREXAMPLES);
+        assert_eq!(archive.total_count, MAX_COUNTEREXAMPLES);
+    }
+
+    #[test]
+    fn candidate_serde_with_counterexamples_and_costs() {
+        let cx = Counterexample {
+            input_class: "wide-vector".into(),
+            expected_output_hash: ContentHash::compute(b"exp-wide"),
+            actual_output_hash: ContentHash::compute(b"act-wide"),
+            description: "SIMD lane mismatch".into(),
+        };
+        let costs = vec![
+            CostEstimate::new("avx512", 50_000, 20_000, 2_000_000),
+            CostEstimate::new("neon", 80_000, 30_000, 1_500_000),
+        ];
+        let c = SynthesisCandidate::new(
+            "full-c",
+            "kernel-full",
+            CandidateOrigin::Stochastic,
+            18,
+            EquivalenceProof::refuted(12, 9, 600_000),
+            vec![cx],
+            costs,
+            1_250_000,
+        );
+        let json = serde_json::to_string(&c).unwrap();
+        let back: SynthesisCandidate = serde_json::from_str(&json).unwrap();
+        assert_eq!(c, back);
+        assert_eq!(back.counterexamples.len(), 1);
+        assert_eq!(back.cost_estimates.len(), 2);
+    }
 }

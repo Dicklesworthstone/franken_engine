@@ -4,8 +4,8 @@
 //! hot path sample properties, and decision structure.
 
 use frankenengine_engine::tier_up_profiler::{
-    HotPathProfile, HotPathSample, TierUpCandidate, TierUpDecisionEvent, TierUpPolicy,
-    TierUpRejection, TIER_UP_POLICY_SCHEMA_VERSION,
+    HotPathProfile, HotPathSample, TIER_UP_POLICY_SCHEMA_VERSION, TierUpCandidate,
+    TierUpDecisionEvent, TierUpPolicy, TierUpRejection,
 };
 
 // ---------------------------------------------------------------------------

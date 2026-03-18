@@ -28,11 +28,11 @@ use frankenengine_engine::regime_signature_feature::{
     ABSTENTION_THRESHOLD_MILLIONTHS, MAX_SIGNATURE_DIM, MIN_TRACE_LENGTH, REGIME_SIG_COMPONENT,
     REGIME_SIG_EVENT_SCHEMA_VERSION, REGIME_SIG_MANIFEST_SCHEMA_VERSION, REGIME_SIG_POLICY_ID,
     REGIME_SIG_SCHEMA_VERSION, RegimeCentroid, RegimeLabel, RegimeStateChart, RegimeStateEntry,
-    RuntimeTrace, SignatureArtifactPaths, SignatureConfig,
-    SignatureEvidenceEvent, SignatureEvidenceInventory, SignatureExpectedOutcome,
-    SignatureRunManifest, SignatureSpecimen, SignatureSpecimenEvidence, SignatureSpecimenFamily,
-    SignatureVerdict, TraceObservation, TraceSignature, build_regime_state_chart, classify_regime,
-    extract_signature, run_signature_corpus, signature_corpus, write_signature_evidence_bundle,
+    RuntimeTrace, SignatureArtifactPaths, SignatureConfig, SignatureEvidenceEvent,
+    SignatureEvidenceInventory, SignatureExpectedOutcome, SignatureRunManifest, SignatureSpecimen,
+    SignatureSpecimenEvidence, SignatureSpecimenFamily, SignatureVerdict, TraceObservation,
+    TraceSignature, build_regime_state_chart, classify_regime, extract_signature,
+    run_signature_corpus, signature_corpus, write_signature_evidence_bundle,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -314,7 +314,12 @@ fn extract_large_trace_1000_observations() {
 fn extract_signature_hash_changes_with_very_different_data() {
     let config = SignatureConfig::default();
     // Use drastically different data to ensure different bucket distributions
-    let t1 = make_trace("same-id", "feature_a", &[1_000_000, 1_000_000, 1_000_000, 1_000_000], 1);
+    let t1 = make_trace(
+        "same-id",
+        "feature_a",
+        &[1_000_000, 1_000_000, 1_000_000, 1_000_000],
+        1,
+    );
     let t2 = make_trace("same-id", "feature_b", &[0, 0, 0, 0], 1);
     let s1 = extract_signature(&t1, &config);
     let s2 = extract_signature(&t2, &config);

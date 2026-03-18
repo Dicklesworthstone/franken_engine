@@ -366,6 +366,80 @@ fn staged_receipt_with_route_mismatch_fails_closed_after_preflight() {
 }
 
 #[test]
+fn failed_staged_receipt_with_decision_contract_mismatch_allows_clean_retry() {
+    let mut orch = default_orch();
+    let pkg = package_with_caps(
+        "ext-declassify-contract-mismatch",
+        r#""hostcall<\"declassify.audit\"> secret_token";"#,
+        &["declassify.audit"],
+    );
+
+    let first_prepared = orch
+        .prepare_next_runtime_flow_guards(&pkg)
+        .expect("initial preflight should succeed");
+    let first_obligation = first_prepared
+        .ir2_flow_proof_artifact
+        .required_declassifications
+        .first()
+        .expect("initial preflight should expose a declassification obligation");
+
+    let bad_signing_key = SigningKey::from_bytes([26u8; 32]);
+    let (_, bad_receipt) = approved_receipt_for_prepared_declassification(
+        &mut orch,
+        &pkg,
+        &first_prepared,
+        &bad_signing_key,
+    );
+    let mut wrong_contract_receipt = bad_receipt.clone();
+    wrong_contract_receipt.decision_contract_id = "decision-other".to_string();
+    wrong_contract_receipt
+        .sign(&bad_signing_key)
+        .expect("mutated receipt should be re-signed for a valid contract-mismatch test");
+    orch.stage_declassification_receipt_for_obligation(
+        first_prepared.trace_id.clone(),
+        first_obligation.obligation_id.clone(),
+        wrong_contract_receipt,
+    );
+
+    let first_err = orch
+        .execute(&pkg)
+        .expect_err("contract-mismatched staged receipt should fail closed");
+    match first_err {
+        OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
+            assert!(detail.contains("receipt-linked declassification failed"));
+            assert!(detail.contains("decision contract"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let second_prepared = orch
+        .prepare_next_runtime_flow_guards(&pkg)
+        .expect("fresh preflight should still succeed after the failed attempt");
+    assert_ne!(second_prepared.trace_id, first_prepared.trace_id);
+    assert_ne!(second_prepared.decision_id, first_prepared.decision_id);
+
+    let good_signing_key = SigningKey::from_bytes([27u8; 32]);
+    let (second_obligation_id, good_receipt) = approved_receipt_for_prepared_declassification(
+        &mut orch,
+        &pkg,
+        &second_prepared,
+        &good_signing_key,
+    );
+    orch.stage_declassification_receipt_for_obligation(
+        second_prepared.trace_id.clone(),
+        second_obligation_id,
+        good_receipt,
+    );
+
+    let result = orch
+        .execute(&pkg)
+        .expect("fresh preflight and valid receipt should recover after contract mismatch");
+    assert_eq!(result.trace_id, second_prepared.trace_id);
+    assert_eq!(result.decision_id, second_prepared.decision_id);
+    assert_eq!(result.execution_value, "undefined");
+}
+
+#[test]
 fn failed_staged_receipt_allows_clean_retry_via_fresh_preflight_and_receipt() {
     let mut orch = default_orch();
     let pkg = package_with_caps(

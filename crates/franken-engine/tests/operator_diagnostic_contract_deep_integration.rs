@@ -4,8 +4,8 @@
 //! user/operator impact classification, Display impls, serde roundtrips.
 
 use frankenengine_engine::operator_diagnostic_contract::{
-    DiagnosticSeverity, InternalFailureKind, OperatorImpact, UserImpact,
-    BEAD_ID, COMPONENT, POLICY_ID, SCHEMA_VERSION,
+    BEAD_ID, COMPONENT, DiagnosticSeverity, InternalFailureKind, OperatorImpact, POLICY_ID,
+    SCHEMA_VERSION, UserImpact,
 };
 
 // ---------------------------------------------------------------------------
@@ -38,9 +38,15 @@ fn deep_failure_kind_as_str_all() {
         (InternalFailureKind::CapabilityDenial, "capability_denial"),
         (InternalFailureKind::PolicyDenial, "policy_denial"),
         (InternalFailureKind::PanicClass, "panic_class"),
-        (InternalFailureKind::CompatibilityDrift, "compatibility_drift"),
+        (
+            InternalFailureKind::CompatibilityDrift,
+            "compatibility_drift",
+        ),
         (InternalFailureKind::DomainError, "domain_error"),
-        (InternalFailureKind::InfrastructureFailure, "infrastructure_failure"),
+        (
+            InternalFailureKind::InfrastructureFailure,
+            "infrastructure_failure",
+        ),
         (InternalFailureKind::Unknown, "unknown"),
     ];
     for (kind, name) in expected {
@@ -144,14 +150,24 @@ fn deep_user_impact_as_str() {
 
 #[test]
 fn deep_user_impact_display() {
-    assert_eq!(format!("{}", UserImpact::OperationFailed), "operation_failed");
-    assert_eq!(format!("{}", UserImpact::DegradedQuality), "degraded_quality");
+    assert_eq!(
+        format!("{}", UserImpact::OperationFailed),
+        "operation_failed"
+    );
+    assert_eq!(
+        format!("{}", UserImpact::DegradedQuality),
+        "degraded_quality"
+    );
     assert_eq!(format!("{}", UserImpact::None), "none");
 }
 
 #[test]
 fn deep_user_impact_serde_roundtrip() {
-    for impact in [UserImpact::OperationFailed, UserImpact::DegradedQuality, UserImpact::None] {
+    for impact in [
+        UserImpact::OperationFailed,
+        UserImpact::DegradedQuality,
+        UserImpact::None,
+    ] {
         let json = serde_json::to_string(&impact).unwrap();
         let decoded: UserImpact = serde_json::from_str(&json).unwrap();
         assert_eq!(impact, decoded);

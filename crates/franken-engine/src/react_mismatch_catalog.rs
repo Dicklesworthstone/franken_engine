@@ -295,7 +295,17 @@ impl MismatchEntry {
         hasher.update(self.summary.as_bytes());
         hasher.update(self.expected_behavior.as_bytes());
         hasher.update(self.actual_behavior.as_bytes());
+        hasher.update(self.reproduction.as_bytes());
+        hasher.update(self.remediation.as_str().as_bytes());
+        hasher.update(self.advisory.as_bytes());
+        hasher.update(self.react_version_range.as_bytes());
         hasher.update(self.evidence_hash.as_bytes());
+        hasher.update(self.detected_epoch.as_u64().to_le_bytes());
+        hasher.update(self.verified_epoch.as_u64().to_le_bytes());
+        for tag in &self.tags {
+            hasher.update((tag.len() as u64).to_le_bytes());
+            hasher.update(tag.as_bytes());
+        }
         ContentHash::compute(&hasher.finalize())
     }
 
@@ -1724,6 +1734,25 @@ mod tests {
     fn test_content_hash_varies() {
         let e1 = test_entry("m1", MismatchDomain::CompileOutput, MismatchSeverity::Error);
         let e2 = test_entry("m2", MismatchDomain::CompileOutput, MismatchSeverity::Error);
+        assert_ne!(e1.content_hash(), e2.content_hash());
+    }
+
+    #[test]
+    fn test_content_hash_changes_on_remediation_update() {
+        let e1 = test_entry_full(
+            "m1",
+            MismatchDomain::CompileOutput,
+            MismatchSeverity::Error,
+            ComparisonTarget::NodeJs,
+            RemediationStatus::None,
+        );
+        let e2 = test_entry_full(
+            "m1",
+            MismatchDomain::CompileOutput,
+            MismatchSeverity::Error,
+            ComparisonTarget::NodeJs,
+            RemediationStatus::Resolved,
+        );
         assert_ne!(e1.content_hash(), e2.content_hash());
     }
 

@@ -3,7 +3,9 @@
 //! Covers: probe kind Display, probe state VOI scoring, staleness tracking,
 //! scheduler config regime budgets, and serde roundtrips.
 
-use frankenengine_engine::monitor_scheduler::{ProbeConfig, ProbeKind, ProbeState, SchedulerConfig};
+use frankenengine_engine::monitor_scheduler::{
+    ProbeConfig, ProbeKind, ProbeState, SchedulerConfig,
+};
 
 // ---------------------------------------------------------------------------
 // ProbeKind

@@ -689,8 +689,8 @@ impl ConsumptionManifest {
 mod tests {
     use super::*;
     use crate::aara_resource_certificate::{
-        AbstentionPoint, AbstentionReason, CertificateInput, EffectEntry, EffectSummary,
-        ResourceBound,
+        AbstentionPoint, AbstentionReason, AssumptionKind, CertificateAssumption, CertificateInput,
+        EffectEntry, EffectSummary, ResourceBound,
     };
 
     fn epoch() -> SecurityEpoch {
@@ -1261,5 +1261,719 @@ mod tests {
         let back: ConsumptionManifest = serde_json::from_str(&json).unwrap();
         assert_eq!(manifest.schema_version, back.schema_version);
         assert_eq!(manifest.manifest_hash, back.manifest_hash);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests — edge cases, error paths, boundary conditions
+    // -----------------------------------------------------------------------
+
+    /// Helper to create a certificate with critical assumptions.
+    fn critical_assumption_certificate() -> ResourceCertificate {
+        let bounds = make_bounds();
+        let input = CertificateInput {
+            certificate_id: "test-critical-assumptions".to_string(),
+            region_id: "main".to_string(),
+            epoch: epoch(),
+            bounds,
+            effect_summary: make_effect_summary(vec![]),
+            assumptions: vec![CertificateAssumption {
+                key: "bounded-iter".to_string(),
+                kind: AssumptionKind::BoundedIteration,
+                description: "loop bound depends on input".to_string(),
+                is_critical: true,
+            }],
+            abstention_points: vec![],
+            potentials: vec![],
+        };
+        ResourceCertificate::new(input)
+    }
+
+    /// Helper to make a certificate with exact boundary values for a single
+    /// subsystem's minimum requirements.
+    fn boundary_scheduler_certificate() -> ResourceCertificate {
+        let bounds: Vec<ResourceBound> = ResourceDimension::ALL
+            .iter()
+            .map(|dim| {
+                let upper = match dim {
+                    // Exactly at scheduler minimum (100_000)
+                    ResourceDimension::Time => 100_000,
+                    // Exactly at scheduler minimum (50_000)
+                    ResourceDimension::StackDepth => 50_000,
+                    _ => 500_000,
+                };
+                ResourceBound {
+                    dimension: *dim,
+                    upper_bound_millionths: upper,
+                    is_tight: true,
+                    confidence_millionths: 900_000,
+                }
+            })
+            .collect();
+        let input = CertificateInput {
+            certificate_id: "test-boundary-sched".to_string(),
+            region_id: "main".to_string(),
+            epoch: epoch(),
+            bounds,
+            effect_summary: make_effect_summary(vec![]),
+            assumptions: vec![],
+            abstention_points: vec![],
+            potentials: vec![],
+        };
+        ResourceCertificate::new(input)
+    }
+
+    #[test]
+    fn test_critical_assumptions_deny_specializer_only() {
+        let mut consumer = ResourceConsumer::with_defaults(epoch());
+        let cert = critical_assumption_certificate();
+        consumer.consume(&cert);
+        // Specializer has reject_critical_assumptions = true, so denied.
+        let spec_receipt = consumer.last_receipt_for(Subsystem::Specializer).unwrap();
+        assert_eq!(spec_receipt.decision, BudgetDecision::Denied);
+        assert!(
+            spec_receipt
+                .denial_reasons
+                .iter()
+                .any(|r| matches!(r, DenialReason::CriticalAssumptions))
+        );
+        // Scheduler does NOT reject critical assumptions.
+        let sched_receipt = consumer.last_receipt_for(Subsystem::Scheduler).unwrap();
+        assert_eq!(sched_receipt.decision, BudgetDecision::FullBudget);
+    }
+
+    #[test]
+    fn test_critical_assumptions_gc_module_hostcall_unaffected() {
+        let mut consumer = ResourceConsumer::with_defaults(epoch());
+        let cert = critical_assumption_certificate();
+        consumer.consume(&cert);
+        for subsys in [
+            Subsystem::GarbageCollector,
+            Subsystem::ModuleLoader,
+            Subsystem::HostcallGate,
+        ] {
+            let receipt = consumer.last_receipt_for(subsys).unwrap();
+            assert!(
+                receipt.decision.is_granted(),
+                "{subsys} should still be granted with critical assumptions"
+            );
+        }
+    }
+
+    #[test]
+    fn test_zero_bound_certificate_causes_bound_too_low() {
+        // All bounds at zero — should produce BoundTooLow for any subsystem
+        // that has a non-zero minimum requirement.
+        let bounds: Vec<ResourceBound> = ResourceDimension::ALL
+            .iter()
+            .map(|dim| ResourceBound {
+                dimension: *dim,
+                upper_bound_millionths: 0,
+                is_tight: true,
+                confidence_millionths: 900_000,
+            })
+            .collect();
+        let input = CertificateInput {
+            certificate_id: "test-zero-bounds".to_string(),
+            region_id: "main".to_string(),
+            epoch: epoch(),
+            bounds,
+            effect_summary: make_effect_summary(vec![]),
+            assumptions: vec![],
+            abstention_points: vec![],
+            potentials: vec![],
+        };
+        let cert = ResourceCertificate::new(input);
+        let mut consumer = ResourceConsumer::with_defaults(epoch());
+        consumer.consume(&cert);
+        let sched = consumer.last_receipt_for(Subsystem::Scheduler).unwrap();
+        assert!(
+            sched
+                .denial_reasons
+                .iter()
+                .any(|r| matches!(r, DenialReason::BoundTooLow { .. }))
+        );
+    }
+
+    #[test]
+    fn test_boundary_exact_minimum_scheduler_passes() {
+        let mut consumer = ResourceConsumer::with_defaults(epoch());
+        let cert = boundary_scheduler_certificate();
+        consumer.consume(&cert);
+        let receipt = consumer.last_receipt_for(Subsystem::Scheduler).unwrap();
+        // Bounds are exactly equal to required — should be FullBudget (>= not >).
+        assert_eq!(receipt.decision, BudgetDecision::FullBudget);
+    }
+
+    #[test]
+    fn test_boundary_one_below_minimum_scheduler_reduced() {
+        let bounds: Vec<ResourceBound> = ResourceDimension::ALL
+            .iter()
+            .map(|dim| {
+                let upper = match dim {
+                    ResourceDimension::Time => 99_999, // one below 100_000
+                    _ => 500_000,
+                };
+                ResourceBound {
+                    dimension: *dim,
+                    upper_bound_millionths: upper,
+                    is_tight: true,
+                    confidence_millionths: 900_000,
+                }
+            })
+            .collect();
+        let input = CertificateInput {
+            certificate_id: "test-one-below".to_string(),
+            region_id: "main".to_string(),
+            epoch: epoch(),
+            bounds,
+            effect_summary: make_effect_summary(vec![]),
+            assumptions: vec![],
+            abstention_points: vec![],
+            potentials: vec![],
+        };
+        let cert = ResourceCertificate::new(input);
+        let mut consumer = ResourceConsumer::with_defaults(epoch());
+        consumer.consume(&cert);
+        let receipt = consumer.last_receipt_for(Subsystem::Scheduler).unwrap();
+        // Time bound is one below minimum → reduced (bound too low but
+        // no forbidden effect or critical assumption).
+        assert_eq!(receipt.decision, BudgetDecision::ReducedBudget);
+    }
+
+    #[test]
+    fn test_consumer_with_no_requirements_produces_no_decisions() {
+        let mut consumer = ResourceConsumer::new(vec![], epoch());
+        let cert = good_certificate();
+        let decisions = consumer.consume(&cert);
+        assert!(decisions.is_empty());
+        assert!(consumer.receipts().is_empty());
+    }
+
+    #[test]
+    fn test_empty_consumer_receipts_for_returns_empty() {
+        let consumer = ResourceConsumer::with_defaults(epoch());
+        assert!(consumer.receipts_for(Subsystem::Scheduler).is_empty());
+    }
+
+    #[test]
+    fn test_last_receipt_for_none_before_consumption() {
+        let consumer = ResourceConsumer::with_defaults(epoch());
+        assert!(consumer.last_receipt_for(Subsystem::Scheduler).is_none());
+    }
+
+    #[test]
+    fn test_multiple_consumptions_receipt_counter_continues() {
+        let mut consumer = ResourceConsumer::with_defaults(epoch());
+        let cert = good_certificate();
+        consumer.consume(&cert);
+        consumer.consume(&cert);
+        // 5 subsystems * 2 consumptions = 10 receipts
+        assert_eq!(consumer.receipts().len(), 10);
+        assert_eq!(consumer.receipts()[9].receipt_id, "rc-rcpt-10");
+    }
+
+    #[test]
+    fn test_last_receipt_for_returns_most_recent() {
+        let mut consumer = ResourceConsumer::with_defaults(epoch());
+        let good = good_certificate();
+        let bad = uncertified_certificate();
+        consumer.consume(&good);
+        consumer.consume(&bad);
+        // last_receipt_for should return the second consumption's receipt
+        let receipt = consumer.last_receipt_for(Subsystem::Scheduler).unwrap();
+        assert_eq!(receipt.certificate_id, "test-uncertified");
+        assert_eq!(receipt.decision, BudgetDecision::Denied);
+    }
+
+    #[test]
+    fn test_receipt_hash_differs_for_different_inputs() {
+        let h1 = ConsumptionReceipt::compute_hash(
+            "r1",
+            "c1",
+            &Subsystem::Scheduler,
+            &BudgetDecision::FullBudget,
+            &epoch(),
+        );
+        let h2 = ConsumptionReceipt::compute_hash(
+            "r1",
+            "c1",
+            &Subsystem::GarbageCollector,
+            &BudgetDecision::FullBudget,
+            &epoch(),
+        );
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_receipt_hash_differs_on_decision() {
+        let h1 = ConsumptionReceipt::compute_hash(
+            "r1",
+            "c1",
+            &Subsystem::Scheduler,
+            &BudgetDecision::FullBudget,
+            &epoch(),
+        );
+        let h2 = ConsumptionReceipt::compute_hash(
+            "r1",
+            "c1",
+            &Subsystem::Scheduler,
+            &BudgetDecision::Denied,
+            &epoch(),
+        );
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_receipt_hash_differs_on_epoch() {
+        let e1 = SecurityEpoch::from_raw(1);
+        let e2 = SecurityEpoch::from_raw(2);
+        let h1 = ConsumptionReceipt::compute_hash(
+            "r1",
+            "c1",
+            &Subsystem::Scheduler,
+            &BudgetDecision::FullBudget,
+            &e1,
+        );
+        let h2 = ConsumptionReceipt::compute_hash(
+            "r1",
+            "c1",
+            &Subsystem::Scheduler,
+            &BudgetDecision::FullBudget,
+            &e2,
+        );
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_summary_all_denied() {
+        let mut consumer = ResourceConsumer::with_defaults(epoch());
+        let cert = uncertified_certificate();
+        consumer.consume(&cert);
+        let summary = consumer.summary();
+        assert_eq!(summary.total_decisions, 5);
+        assert_eq!(summary.denied_count, 5);
+        assert_eq!(summary.full_budget_count, 0);
+        assert_eq!(summary.reduced_count, 0);
+        assert_eq!(summary.abstain_count, 0);
+        assert_eq!(summary.grant_rate_millionths, 0);
+    }
+
+    #[test]
+    fn test_summary_denial_reason_counts_populated() {
+        let mut consumer = ResourceConsumer::with_defaults(epoch());
+        let cert = uncertified_certificate();
+        consumer.consume(&cert);
+        let summary = consumer.summary();
+        // All 5 subsystems get CertificateNotCertified denial
+        assert!(!summary.denial_reason_counts.is_empty());
+        let total_denial_reasons: u64 = summary.denial_reason_counts.values().sum();
+        assert!(total_denial_reasons >= 5);
+    }
+
+    #[test]
+    fn test_summary_hash_deterministic() {
+        let mut c1 = ResourceConsumer::with_defaults(epoch());
+        let mut c2 = ResourceConsumer::with_defaults(epoch());
+        let cert = good_certificate();
+        c1.consume(&cert);
+        c2.consume(&cert);
+        let s1 = c1.summary();
+        let s2 = c2.summary();
+        assert_eq!(s1.summary_hash, s2.summary_hash);
+    }
+
+    #[test]
+    fn test_summary_hash_differs_for_different_decisions() {
+        let mut c1 = ResourceConsumer::with_defaults(epoch());
+        let mut c2 = ResourceConsumer::with_defaults(epoch());
+        c1.consume(&good_certificate());
+        c2.consume(&uncertified_certificate());
+        let s1 = c1.summary();
+        let s2 = c2.summary();
+        assert_ne!(s1.summary_hash, s2.summary_hash);
+    }
+
+    #[test]
+    fn test_manifest_empty_consumer() {
+        let consumer = ResourceConsumer::with_defaults(epoch());
+        let manifest = ConsumptionManifest::from_consumer(&consumer);
+        assert_eq!(manifest.schema_version, SCHEMA_VERSION);
+        assert_eq!(manifest.component, COMPONENT);
+        assert_eq!(manifest.policy_id, POLICY_ID);
+        assert!(manifest.receipts.is_empty());
+        assert_eq!(manifest.summary.total_decisions, 0);
+    }
+
+    #[test]
+    fn test_manifest_full_serde_roundtrip_with_denials() {
+        let mut consumer = ResourceConsumer::with_defaults(epoch());
+        consumer.consume(&good_certificate());
+        consumer.consume(&uncertified_certificate());
+        consumer.consume(&dynamic_code_gen_certificate());
+        let manifest = ConsumptionManifest::from_consumer(&consumer);
+        let json = serde_json::to_string_pretty(&manifest).unwrap();
+        let back: ConsumptionManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(manifest, back);
+    }
+
+    #[test]
+    fn test_denial_reason_serde_roundtrip_all_variants() {
+        let reasons = vec![
+            DenialReason::MissingDimension {
+                dimension: ResourceDimension::Time,
+            },
+            DenialReason::BoundTooLow {
+                dimension: ResourceDimension::HeapMemory,
+                bound_millionths: 10_000,
+                required_millionths: 200_000,
+            },
+            DenialReason::CertificateNotCertified {
+                verdict: CertificateVerdict::Provisional,
+            },
+            DenialReason::ForbiddenEffect {
+                effect: EffectKind::DynamicCodeGen,
+            },
+            DenialReason::LowBoundConfidence {
+                dimension: ResourceDimension::GcPressure,
+                confidence_millionths: 400_000,
+                required_millionths: 700_000,
+            },
+            DenialReason::CriticalAssumptions,
+        ];
+        for reason in &reasons {
+            let json = serde_json::to_string(reason).unwrap();
+            let back: DenialReason = serde_json::from_str(&json).unwrap();
+            assert_eq!(*reason, back);
+        }
+    }
+
+    #[test]
+    fn test_denial_reason_low_confidence_display_format() {
+        let reason = DenialReason::LowBoundConfidence {
+            dimension: ResourceDimension::StackDepth,
+            confidence_millionths: 300_000,
+            required_millionths: 800_000,
+        };
+        let s = format!("{reason}");
+        assert!(s.contains("low confidence"));
+        assert!(s.contains("stack_depth"));
+        assert!(s.contains("300000"));
+        assert!(s.contains("800000"));
+    }
+
+    #[test]
+    fn test_budget_decision_reduced_display() {
+        assert_eq!(BudgetDecision::ReducedBudget.to_string(), "reduced_budget");
+        assert_eq!(BudgetDecision::Abstain.to_string(), "abstain");
+    }
+
+    #[test]
+    fn test_subsystem_ordering_is_deterministic() {
+        // BTreeMap/BTreeSet usage relies on Ord being deterministic.
+        let mut subsystems = vec![
+            Subsystem::HostcallGate,
+            Subsystem::Scheduler,
+            Subsystem::GarbageCollector,
+            Subsystem::Specializer,
+            Subsystem::ModuleLoader,
+        ];
+        subsystems.sort();
+        // Verify consistent ordering across runs.
+        let mut subsystems2 = subsystems.clone();
+        subsystems2.sort();
+        assert_eq!(subsystems, subsystems2);
+    }
+
+    #[test]
+    fn test_consumer_serde_roundtrip() {
+        let mut consumer = ResourceConsumer::with_defaults(epoch());
+        consumer.consume(&good_certificate());
+        let json = serde_json::to_string(&consumer).unwrap();
+        let back: ResourceConsumer = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.receipts().len(), consumer.receipts().len());
+        assert_eq!(back.epoch, consumer.epoch);
+    }
+
+    #[test]
+    fn test_consumption_receipt_serde_roundtrip() {
+        let mut consumer = ResourceConsumer::with_defaults(epoch());
+        consumer.consume(&good_certificate());
+        for receipt in consumer.receipts() {
+            let json = serde_json::to_string(receipt).unwrap();
+            let back: ConsumptionReceipt = serde_json::from_str(&json).unwrap();
+            assert_eq!(*receipt, back);
+        }
+    }
+
+    #[test]
+    fn test_subsystem_requirement_serde_roundtrip() {
+        let req = SubsystemRequirement::specializer();
+        let json = serde_json::to_string(&req).unwrap();
+        let back: SubsystemRequirement = serde_json::from_str(&json).unwrap();
+        assert_eq!(req, back);
+    }
+
+    #[test]
+    fn test_content_hash_from_parts_determinism() {
+        let h1 = content_hash_from_parts(&[b"hello", b"world"]);
+        let h2 = content_hash_from_parts(&[b"hello", b"world"]);
+        assert_eq!(h1, h2);
+        // Different input must differ.
+        let h3 = content_hash_from_parts(&[b"hello", b"worl!"]);
+        assert_ne!(h1, h3);
+    }
+
+    #[test]
+    fn test_content_hash_from_parts_empty() {
+        let h1 = content_hash_from_parts(&[]);
+        let h2 = content_hash_from_parts(&[]);
+        assert_eq!(h1, h2);
+        // Empty-slice hash differs from non-empty.
+        let h3 = content_hash_from_parts(&[b"x"]);
+        assert_ne!(h1, h3);
+    }
+
+    #[test]
+    fn test_violated_certificate_denied() {
+        // Negative bound triggers Violated verdict.
+        let bounds = vec![ResourceBound {
+            dimension: ResourceDimension::Time,
+            upper_bound_millionths: -1,
+            is_tight: true,
+            confidence_millionths: 1_000_000,
+        }];
+        let input = CertificateInput {
+            certificate_id: "test-violated".to_string(),
+            region_id: "main".to_string(),
+            epoch: epoch(),
+            bounds,
+            effect_summary: make_effect_summary(vec![]),
+            assumptions: vec![],
+            abstention_points: vec![],
+            potentials: vec![],
+        };
+        let cert = ResourceCertificate::new(input);
+        assert_eq!(cert.verdict, CertificateVerdict::Violated);
+        let mut consumer = ResourceConsumer::with_defaults(epoch());
+        let decisions = consumer.consume(&cert);
+        for d in &decisions {
+            assert_eq!(*d, BudgetDecision::Denied);
+        }
+    }
+
+    #[test]
+    fn test_provisional_certificate_denied() {
+        // Empty bounds → Provisional verdict.
+        let input = CertificateInput {
+            certificate_id: "test-provisional".to_string(),
+            region_id: "main".to_string(),
+            epoch: epoch(),
+            bounds: vec![],
+            effect_summary: make_effect_summary(vec![]),
+            assumptions: vec![],
+            abstention_points: vec![],
+            potentials: vec![],
+        };
+        let cert = ResourceCertificate::new(input);
+        assert_eq!(cert.verdict, CertificateVerdict::Provisional);
+        let mut consumer = ResourceConsumer::with_defaults(epoch());
+        let decisions = consumer.consume(&cert);
+        for d in &decisions {
+            assert_eq!(*d, BudgetDecision::Denied);
+        }
+    }
+
+    #[test]
+    fn test_multiple_forbidden_effects_all_reported() {
+        // Certificate with DynamicCodeGen AND Hostcall effects.
+        let bounds = make_bounds();
+        let effect_summary = make_effect_summary(vec![
+            EffectEntry {
+                kind: EffectKind::DynamicCodeGen,
+                program_point: "eval:1".to_string(),
+                worst_case_count_millionths: 1_000_000,
+                is_exact: false,
+            },
+            EffectEntry {
+                kind: EffectKind::Hostcall,
+                program_point: "call:2".to_string(),
+                worst_case_count_millionths: 500_000,
+                is_exact: true,
+            },
+        ]);
+        let input = CertificateInput {
+            certificate_id: "test-multi-effects".to_string(),
+            region_id: "main".to_string(),
+            epoch: epoch(),
+            bounds,
+            effect_summary,
+            assumptions: vec![],
+            abstention_points: vec![],
+            potentials: vec![],
+        };
+        let cert = ResourceCertificate::new(input);
+
+        // Build custom requirement that forbids both effects.
+        let mut forbidden = BTreeSet::new();
+        forbidden.insert(EffectKind::DynamicCodeGen);
+        forbidden.insert(EffectKind::Hostcall);
+        let req = SubsystemRequirement {
+            subsystem: Subsystem::Specializer,
+            min_bounds: BTreeMap::new(),
+            forbidden_effects: forbidden,
+            min_confidence_millionths: 0,
+            reject_critical_assumptions: false,
+        };
+        let mut consumer = ResourceConsumer::new(vec![req], epoch());
+        consumer.consume(&cert);
+        let receipt = consumer.last_receipt_for(Subsystem::Specializer).unwrap();
+        assert_eq!(receipt.decision, BudgetDecision::Denied);
+        let forbidden_count = receipt
+            .denial_reasons
+            .iter()
+            .filter(|r| matches!(r, DenialReason::ForbiddenEffect { .. }))
+            .count();
+        assert_eq!(forbidden_count, 2);
+    }
+
+    #[test]
+    fn test_allocated_budgets_populated_on_full_grant() {
+        let mut consumer = ResourceConsumer::with_defaults(epoch());
+        let cert = good_certificate();
+        consumer.consume(&cert);
+        let receipt = consumer.last_receipt_for(Subsystem::Scheduler).unwrap();
+        assert_eq!(receipt.decision, BudgetDecision::FullBudget);
+        // Scheduler needs Time and StackDepth → both should be allocated.
+        assert!(
+            receipt
+                .allocated_budgets
+                .contains_key(&ResourceDimension::Time)
+        );
+        assert!(
+            receipt
+                .allocated_budgets
+                .contains_key(&ResourceDimension::StackDepth)
+        );
+        // Values should match the certificate bounds (500_000 from make_bounds).
+        assert_eq!(receipt.allocated_budgets[&ResourceDimension::Time], 500_000);
+    }
+
+    #[test]
+    fn test_allocated_budgets_empty_on_denial() {
+        let mut consumer = ResourceConsumer::with_defaults(epoch());
+        let cert = uncertified_certificate();
+        consumer.consume(&cert);
+        let receipt = consumer.last_receipt_for(Subsystem::Scheduler).unwrap();
+        assert_eq!(receipt.decision, BudgetDecision::Denied);
+        // On an early CertificateNotCertified return, allocated is empty.
+        assert!(receipt.allocated_budgets.is_empty());
+    }
+
+    #[test]
+    fn test_summary_subsystem_decisions_grouped() {
+        let mut consumer = ResourceConsumer::with_defaults(epoch());
+        consumer.consume(&good_certificate());
+        consumer.consume(&uncertified_certificate());
+        let summary = consumer.summary();
+        // Should have decisions from both consumptions.
+        assert_eq!(summary.total_decisions, 10);
+        // Granted from good + denied from uncertified. Grant rate between 0 and 1.
+        assert!(summary.grant_rate_millionths > 0);
+        assert!(summary.grant_rate_millionths < MILLIONTHS);
+    }
+
+    #[test]
+    fn test_module_loader_requirement_dimensions() {
+        let req = SubsystemRequirement::module_loader();
+        assert_eq!(req.subsystem, Subsystem::ModuleLoader);
+        assert!(
+            req.min_bounds
+                .contains_key(&ResourceDimension::ModuleLoadCount)
+        );
+        assert!(
+            req.min_bounds
+                .contains_key(&ResourceDimension::IoOperationCount)
+        );
+        assert_eq!(req.min_confidence_millionths, 600_000);
+        assert!(!req.reject_critical_assumptions);
+    }
+
+    #[test]
+    fn test_specializer_high_confidence_threshold() {
+        // Certificate with enough bound but confidence at 799_999 (one below 800_000).
+        let bounds: Vec<ResourceBound> = ResourceDimension::ALL
+            .iter()
+            .map(|dim| ResourceBound {
+                dimension: *dim,
+                upper_bound_millionths: 500_000,
+                is_tight: true,
+                // Exactly one below the specializer's confidence threshold.
+                // But must still meet certificate-level confidence (900_000).
+                confidence_millionths: 900_000,
+            })
+            .collect();
+        let input = CertificateInput {
+            certificate_id: "test-spec-conf-edge".to_string(),
+            region_id: "main".to_string(),
+            epoch: epoch(),
+            bounds,
+            effect_summary: make_effect_summary(vec![]),
+            assumptions: vec![],
+            abstention_points: vec![],
+            potentials: vec![],
+        };
+        let cert = ResourceCertificate::new(input);
+        assert_eq!(cert.verdict, CertificateVerdict::Certified);
+
+        // Custom specializer with confidence threshold at 900_001
+        let mut min_bounds = BTreeMap::new();
+        min_bounds.insert(ResourceDimension::Time, 100_000);
+        let req = SubsystemRequirement {
+            subsystem: Subsystem::Specializer,
+            min_bounds,
+            forbidden_effects: BTreeSet::new(),
+            min_confidence_millionths: 900_001,
+            reject_critical_assumptions: false,
+        };
+        let mut consumer = ResourceConsumer::new(vec![req], epoch());
+        consumer.consume(&cert);
+        let receipt = consumer.last_receipt_for(Subsystem::Specializer).unwrap();
+        // Confidence 900_000 < required 900_001 → reduced budget.
+        assert_eq!(receipt.decision, BudgetDecision::ReducedBudget);
+        assert!(
+            receipt
+                .denial_reasons
+                .iter()
+                .any(|r| matches!(r, DenialReason::LowBoundConfidence { .. }))
+        );
+    }
+
+    #[test]
+    fn test_receipt_certificate_id_matches() {
+        let mut consumer = ResourceConsumer::with_defaults(epoch());
+        let cert = good_certificate();
+        consumer.consume(&cert);
+        for receipt in consumer.receipts() {
+            assert_eq!(receipt.certificate_id, "test-cert-001");
+        }
+    }
+
+    #[test]
+    fn test_receipt_epoch_matches_consumer_epoch() {
+        let e = SecurityEpoch::from_raw(999);
+        let mut consumer = ResourceConsumer::with_defaults(e);
+        let cert = good_certificate();
+        consumer.consume(&cert);
+        for receipt in consumer.receipts() {
+            assert_eq!(receipt.epoch.as_u64(), 999);
+        }
+    }
+
+    #[test]
+    fn test_constants_are_correct() {
+        assert_eq!(SCHEMA_VERSION, "franken-engine.aara_resource_consumer.v1");
+        assert_eq!(BEAD_ID, "bd-1lsy.7.25.2");
+        assert_eq!(COMPONENT, "aara_resource_consumer");
+        assert_eq!(POLICY_ID, "RGC-625B");
     }
 }

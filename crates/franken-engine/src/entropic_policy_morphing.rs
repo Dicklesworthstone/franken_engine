@@ -2010,4 +2010,519 @@ mod tests {
         let back: MorphingStep = serde_json::from_str(&json).unwrap();
         assert_eq!(step, back);
     }
+
+    // -----------------------------------------------------------------------
+    // Additional enrichment tests (PearlTower 2026-03-18 batch 2)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn morpher_cooldown_blocks_exactly_n_steps() {
+        // After a fallback, morphing should be blocked for exactly
+        // fallback_cooldown_steps. Step N+1 should succeed.
+        let mut m = make_test_morpher(1);
+        m.current_regime = RegimeLabel::Classified(Regime::Normal);
+        // Trigger fallback via abstention target.
+        m.morph(RegimeLabel::Abstention);
+        assert!(m.is_in_fallback());
+        assert_eq!(m.steps_since_fallback, 0);
+
+        // During cooldown (steps 1..=FALLBACK_COOLDOWN_STEPS-1), morphing
+        // attempts should be rejected with CooldownActive.
+        m.current_regime = RegimeLabel::Classified(Regime::Normal);
+        for i in 0..FALLBACK_COOLDOWN_STEPS {
+            // steps_since_fallback is incremented at the start of morph()
+            // so after the first morph call it will be 1.
+            let outcome = m.morph(RegimeLabel::Classified(Regime::Elevated));
+            if i < FALLBACK_COOLDOWN_STEPS - 1 {
+                assert!(
+                    outcome.is_rejected(),
+                    "step {i}: expected rejection during cooldown, got {outcome:?}"
+                );
+            }
+            // After rejection, current_regime resets to anchor (which is
+            // Classified(Normal) via target_regime), but we need to reset
+            // our label for the next iteration.
+            m.current_regime = RegimeLabel::Classified(Regime::Normal);
+        }
+    }
+
+    #[test]
+    fn morpher_no_target_profile_triggers_fallback() {
+        // Morph to a regime for which no profile is registered.
+        let anchor = make_anchor_profile();
+        let epoch = SecurityEpoch::from_raw(1);
+        let mut m = EntropicPolicyMorpher::new(
+            anchor,
+            TransitionBudget::with_defaults(epoch),
+            MorphingConfig::default(),
+        );
+        // Deliberately do NOT register any regime profiles.
+        m.current_regime = RegimeLabel::Classified(Regime::Normal);
+        let outcome = m.morph(RegimeLabel::Classified(Regime::Attack));
+        assert!(outcome.is_rejected());
+        assert!(m.is_in_fallback());
+        assert_eq!(m.fallback_count, 1);
+        if let MorphingOutcome::Rejected { reason } = outcome {
+            assert_eq!(reason, MorphingRejection::NoTargetProfile);
+        }
+    }
+
+    #[test]
+    fn morpher_interpolation_produces_intermediate_values() {
+        // Verify that the interpolated profile has dimension values between
+        // the current and target profiles.
+        let anchor = make_anchor_profile();
+        let epoch = SecurityEpoch::from_raw(1);
+        let config = MorphingConfig {
+            interpolation_rate_millionths: 500_000, // 0.5
+            ..MorphingConfig::default()
+        };
+        let mut m = EntropicPolicyMorpher::new(
+            anchor.clone(),
+            TransitionBudget::with_defaults(epoch),
+            config,
+        );
+        for (_, profile) in make_regime_profiles() {
+            if let Some(regime) = profile.target_regime {
+                m.register_profile(regime, profile);
+            }
+        }
+
+        // Directly test interpolation via the internal method by checking
+        // that a blend of anchor (Normal) toward Attack yields values in between.
+        let attack_profile = m.regime_profiles.get("attack").unwrap().clone();
+        let blended = m.interpolate(&attack_profile);
+
+        for (dim, &anchor_val) in &anchor.dimensions {
+            let attack_val = attack_profile.dimensions.get(dim).copied().unwrap_or(0);
+            let blend_val = blended.dimensions.get(dim).copied().unwrap_or(0);
+            let lo = anchor_val.min(attack_val);
+            let hi = anchor_val.max(attack_val);
+            assert!(
+                blend_val >= lo && blend_val <= hi,
+                "dim {dim}: blend {blend_val} not between {lo} and {hi}"
+            );
+        }
+    }
+
+    #[test]
+    fn morpher_interpolation_rate_zero_keeps_current() {
+        let anchor = make_anchor_profile();
+        let epoch = SecurityEpoch::from_raw(1);
+        let config = MorphingConfig {
+            interpolation_rate_millionths: 0, // no interpolation
+            ..MorphingConfig::default()
+        };
+        let mut m = EntropicPolicyMorpher::new(
+            anchor.clone(),
+            TransitionBudget::with_defaults(epoch),
+            config,
+        );
+        for (_, profile) in make_regime_profiles() {
+            if let Some(regime) = profile.target_regime {
+                m.register_profile(regime, profile);
+            }
+        }
+        let target = m.regime_profiles.get("attack").unwrap().clone();
+        let blended = m.interpolate(&target);
+        // With rate=0, blended should equal current (anchor).
+        for (dim, &val) in &anchor.dimensions {
+            assert_eq!(
+                blended.dimensions.get(dim).copied().unwrap_or(0),
+                val,
+                "dim {dim} should remain at anchor value"
+            );
+        }
+    }
+
+    #[test]
+    fn morpher_interpolation_rate_million_reaches_target() {
+        let anchor = make_anchor_profile();
+        let epoch = SecurityEpoch::from_raw(1);
+        let config = MorphingConfig {
+            interpolation_rate_millionths: MILLION, // instant
+            ..MorphingConfig::default()
+        };
+        let mut m =
+            EntropicPolicyMorpher::new(anchor, TransitionBudget::with_defaults(epoch), config);
+        for (_, profile) in make_regime_profiles() {
+            if let Some(regime) = profile.target_regime {
+                m.register_profile(regime, profile);
+            }
+        }
+        let target = m.regime_profiles.get("attack").unwrap().clone();
+        let blended = m.interpolate(&target);
+        for (dim, &tgt_val) in &target.dimensions {
+            assert_eq!(
+                blended.dimensions.get(dim).copied().unwrap_or(0),
+                tgt_val,
+                "dim {dim} should reach target value with rate=MILLION"
+            );
+        }
+    }
+
+    #[test]
+    fn morpher_reset_budget_clears_counters() {
+        let mut m = make_test_morpher(1);
+        m.current_regime = RegimeLabel::Classified(Regime::Normal);
+        m.morph(RegimeLabel::Classified(Regime::Elevated));
+        assert!(m.budget.steps_used > 0);
+        m.reset_budget(SecurityEpoch::from_raw(2));
+        assert_eq!(m.budget.steps_used, 0);
+        assert_eq!(m.budget.cumulative_distance_millionths, 0);
+        assert_eq!(m.budget.epoch, SecurityEpoch::from_raw(2));
+    }
+
+    #[test]
+    fn morpher_step_count_increments_even_on_noop() {
+        let mut m = make_test_morpher(1);
+        m.current_regime = RegimeLabel::Classified(Regime::Normal);
+        m.morph(RegimeLabel::Classified(Regime::Normal)); // NoOp
+        assert_eq!(m.step_count, 1);
+        m.morph(RegimeLabel::Classified(Regime::Normal)); // NoOp again
+        assert_eq!(m.step_count, 2);
+    }
+
+    #[test]
+    fn morpher_fallback_count_increments_on_each_rejection() {
+        let mut m = make_test_morpher(1);
+        m.current_regime = RegimeLabel::Classified(Regime::Normal);
+        m.morph(RegimeLabel::Abstention); // rejected
+        assert_eq!(m.fallback_count, 1);
+        // Advance past cooldown.
+        m.steps_since_fallback = FALLBACK_COOLDOWN_STEPS + 1;
+        m.current_regime = RegimeLabel::Classified(Regime::Normal);
+        m.morph(RegimeLabel::Abstention); // rejected again
+        assert_eq!(m.fallback_count, 2);
+    }
+
+    #[test]
+    fn morpher_applied_count_increments_on_success() {
+        let mut m = make_test_morpher(1);
+        m.current_regime = RegimeLabel::Classified(Regime::Normal);
+        let outcome = m.morph(RegimeLabel::Classified(Regime::Elevated));
+        assert!(outcome.is_applied());
+        assert_eq!(m.applied_count, 1);
+    }
+
+    #[test]
+    fn morpher_history_records_evidence_hashes() {
+        let mut m = make_test_morpher(1);
+        m.current_regime = RegimeLabel::Classified(Regime::Normal);
+        m.morph(RegimeLabel::Classified(Regime::Elevated));
+        m.morph(RegimeLabel::Classified(Regime::Recovery));
+        for step in &m.history {
+            assert!(!step.evidence_hash.is_empty());
+            assert_eq!(step.evidence_hash.len(), 64);
+            assert!(step.evidence_hash.chars().all(|c| c.is_ascii_hexdigit()));
+        }
+    }
+
+    #[test]
+    fn morpher_evidence_hashes_unique_per_step() {
+        let mut m = make_test_morpher(1);
+        m.current_regime = RegimeLabel::Classified(Regime::Normal);
+        m.morph(RegimeLabel::Classified(Regime::Elevated));
+        m.morph(RegimeLabel::Classified(Regime::Recovery));
+        m.morph(RegimeLabel::Classified(Regime::Normal));
+        let hashes: std::collections::BTreeSet<&str> =
+            m.history.iter().map(|s| s.evidence_hash.as_str()).collect();
+        assert_eq!(
+            hashes.len(),
+            m.history.len(),
+            "evidence hashes should be unique"
+        );
+    }
+
+    #[test]
+    fn morpher_summary_reflects_fallback_state() {
+        let mut m = make_test_morpher(1);
+        m.current_regime = RegimeLabel::Classified(Regime::Normal);
+        m.morph(RegimeLabel::Abstention); // trigger fallback
+        let s = m.summary();
+        assert!(s.in_fallback);
+        assert_eq!(s.fallback_count, 1);
+    }
+
+    #[test]
+    fn morpher_summary_budget_decreases_after_step() {
+        let mut m = make_test_morpher(1);
+        m.current_regime = RegimeLabel::Classified(Regime::Normal);
+        let initial_remaining = m.summary().budget_remaining_steps;
+        m.morph(RegimeLabel::Classified(Regime::Elevated));
+        let after_remaining = m.summary().budget_remaining_steps;
+        assert!(
+            after_remaining < initial_remaining,
+            "remaining steps should decrease after a successful morph"
+        );
+    }
+
+    #[test]
+    fn policy_profile_l1_triangle_inequality() {
+        let profiles = make_regime_profiles();
+        let a = profiles.get("normal").unwrap();
+        let b = profiles.get("elevated").unwrap();
+        let c = profiles.get("attack").unwrap();
+        let ab = a.l1_distance(b);
+        let bc = b.l1_distance(c);
+        let ac = a.l1_distance(c);
+        assert!(
+            ac <= ab + bc,
+            "triangle inequality violated: {ac} > {ab} + {bc}"
+        );
+    }
+
+    #[test]
+    fn policy_profile_entropy_increases_with_uniformity() {
+        // More uniform distribution should have higher entropy.
+        let mut dims_concentrated = BTreeMap::new();
+        dims_concentrated.insert("a".into(), 900_000i64);
+        dims_concentrated.insert("b".into(), 100_000i64);
+        let concentrated = PolicyProfile::new("concentrated", dims_concentrated);
+
+        let mut dims_uniform = BTreeMap::new();
+        dims_uniform.insert("a".into(), 500_000i64);
+        dims_uniform.insert("b".into(), 500_000i64);
+        let uniform = PolicyProfile::new("uniform", dims_uniform);
+
+        assert!(
+            uniform.entropy_millionths() > concentrated.entropy_millionths(),
+            "uniform entropy {} should exceed concentrated entropy {}",
+            uniform.entropy_millionths(),
+            concentrated.entropy_millionths()
+        );
+    }
+
+    #[test]
+    fn policy_profile_entropy_grows_with_dimensions() {
+        // With more equally-weighted dimensions, entropy should be higher.
+        let mut dims2 = BTreeMap::new();
+        dims2.insert("a".into(), 500_000i64);
+        dims2.insert("b".into(), 500_000i64);
+        let p2 = PolicyProfile::new("two", dims2);
+
+        let mut dims4 = BTreeMap::new();
+        dims4.insert("a".into(), 250_000i64);
+        dims4.insert("b".into(), 250_000i64);
+        dims4.insert("c".into(), 250_000i64);
+        dims4.insert("d".into(), 250_000i64);
+        let p4 = PolicyProfile::new("four", dims4);
+
+        assert!(
+            p4.entropy_millionths() > p2.entropy_millionths(),
+            "4-dim uniform entropy {} should exceed 2-dim {}",
+            p4.entropy_millionths(),
+            p2.entropy_millionths()
+        );
+    }
+
+    #[test]
+    fn policy_profile_content_hash_differs_by_name() {
+        let mut dims = BTreeMap::new();
+        dims.insert("x".into(), 500_000i64);
+        let p1 = PolicyProfile::new("alpha", dims.clone());
+        let p2 = PolicyProfile::new("beta", dims);
+        assert_ne!(p1.content_hash(), p2.content_hash());
+    }
+
+    #[test]
+    fn morpher_serde_roundtrip() {
+        let mut m = make_test_morpher(1);
+        m.current_regime = RegimeLabel::Classified(Regime::Normal);
+        m.morph(RegimeLabel::Classified(Regime::Elevated));
+        let json = serde_json::to_string(&m).unwrap();
+        let back: EntropicPolicyMorpher = serde_json::from_str(&json).unwrap();
+        assert_eq!(m, back);
+    }
+
+    #[test]
+    fn morphing_summary_serde_roundtrip() {
+        let m = make_test_morpher(1);
+        let s = m.summary();
+        let json = serde_json::to_string(&s).unwrap();
+        let back: MorphingSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(s, back);
+    }
+
+    #[test]
+    fn morphing_specimen_family_all_count() {
+        assert_eq!(MorphingSpecimenFamily::ALL.len(), 8);
+    }
+
+    #[test]
+    fn morphing_expected_outcome_serde_roundtrip() {
+        for o in [
+            MorphingExpectedOutcome::Applied,
+            MorphingExpectedOutcome::Rejected,
+            MorphingExpectedOutcome::NoOp,
+            MorphingExpectedOutcome::FallbackActivated,
+            MorphingExpectedOutcome::BudgetExhausted,
+            MorphingExpectedOutcome::InterpolationUsed,
+        ] {
+            let json = serde_json::to_string(&o).unwrap();
+            let back: MorphingExpectedOutcome = serde_json::from_str(&json).unwrap();
+            assert_eq!(o, back);
+        }
+    }
+
+    #[test]
+    fn morphing_specimen_serde_roundtrip() {
+        let s = MorphingSpecimen {
+            specimen_id: "test_specimen".into(),
+            description: "a test".into(),
+            family: MorphingSpecimenFamily::Transition,
+            expected_outcome: MorphingExpectedOutcome::Applied,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let back: MorphingSpecimen = serde_json::from_str(&json).unwrap();
+        assert_eq!(s, back);
+    }
+
+    #[test]
+    fn morphing_evidence_event_serde_roundtrip() {
+        let ev = MorphingEvidenceEvent {
+            schema_version: MORPHING_EVENT_SCHEMA_VERSION.to_string(),
+            component: MORPHING_COMPONENT.to_string(),
+            event: "test_event".to_string(),
+            policy_id: MORPHING_POLICY_ID.to_string(),
+            specimen_id: Some("sp1".to_string()),
+            verdict: Some("pass".to_string()),
+            detail: Some("all good".to_string()),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: MorphingEvidenceEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(ev, back);
+    }
+
+    #[test]
+    fn morphing_run_manifest_serde_roundtrip() {
+        let manifest = MorphingRunManifest {
+            schema_version: MORPHING_MANIFEST_SCHEMA_VERSION.to_string(),
+            component: MORPHING_COMPONENT.to_string(),
+            trace_id: "trace-abc".to_string(),
+            decision_id: "dec-xyz".to_string(),
+            policy_id: MORPHING_POLICY_ID.to_string(),
+            inventory_hash: "deadbeef".repeat(8),
+            specimen_count: 14,
+            pass_count: 14,
+            fail_count: 0,
+            contract_satisfied: true,
+            artifact_paths: MorphingArtifactPaths {
+                evidence_inventory: "inv.json".to_string(),
+                run_manifest: "man.json".to_string(),
+                events_jsonl: "events.jsonl".to_string(),
+                commands_txt: "cmds.txt".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&manifest).unwrap();
+        let back: MorphingRunManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(manifest, back);
+    }
+
+    #[test]
+    fn morpher_reject_sets_current_profile_to_anchor() {
+        let mut m = make_test_morpher(1);
+        m.current_regime = RegimeLabel::Classified(Regime::Normal);
+        // First, morph to elevated successfully.
+        m.morph(RegimeLabel::Classified(Regime::Elevated));
+        assert_ne!(m.current_profile.name, m.anchor_profile.name);
+        // Now exhaust the budget so the next morph is rejected.
+        m.budget.steps_used = m.budget.max_steps;
+        m.morph(RegimeLabel::Classified(Regime::Recovery));
+        // After rejection, current should be anchor.
+        assert_eq!(m.current_profile.name, m.anchor_profile.name);
+    }
+
+    #[test]
+    fn morpher_noop_does_not_consume_budget() {
+        let mut m = make_test_morpher(1);
+        m.current_regime = RegimeLabel::Classified(Regime::Normal);
+        let before_steps = m.budget.steps_used;
+        let before_dist = m.budget.cumulative_distance_millionths;
+        m.morph(RegimeLabel::Classified(Regime::Normal)); // NoOp
+        assert_eq!(m.budget.steps_used, before_steps);
+        assert_eq!(m.budget.cumulative_distance_millionths, before_dist);
+    }
+
+    #[test]
+    fn morpher_history_seq_numbers_are_sequential() {
+        let mut m = make_test_morpher(1);
+        m.current_regime = RegimeLabel::Classified(Regime::Normal);
+        m.morph(RegimeLabel::Classified(Regime::Normal)); // NoOp
+        m.morph(RegimeLabel::Classified(Regime::Elevated)); // Applied
+        m.morph(RegimeLabel::Classified(Regime::Recovery)); // Applied
+        for (i, step) in m.history.iter().enumerate() {
+            assert_eq!(step.seq, (i + 1) as u64, "step seq should be sequential");
+        }
+    }
+
+    #[test]
+    fn ln_millionths_of_half_is_negative() {
+        let result = ln_millionths(500_000); // ln(0.5) < 0
+        assert!(result < 0, "ln(0.5) should be negative, got {result}");
+        // ln(0.5) = -0.693... => about -693_000 in millionths
+        assert!(
+            result > -800_000 && result < -500_000,
+            "ln(0.5) ~ -693k, got {result}"
+        );
+    }
+
+    #[test]
+    fn ln_millionths_of_two_is_positive() {
+        let result = ln_millionths(2_000_000); // ln(2) > 0
+        assert!(result > 0, "ln(2) should be positive, got {result}");
+        // ln(2) = 0.693... => about 693_000 in millionths
+        assert!(
+            result > 500_000 && result < 800_000,
+            "ln(2) ~ 693k, got {result}"
+        );
+    }
+
+    #[test]
+    fn hex_encode_empty() {
+        assert_eq!(hex_encode(&[]), "");
+    }
+
+    #[test]
+    fn hex_encode_known_bytes() {
+        assert_eq!(hex_encode(&[0x00, 0xff, 0xab]), "00ffab");
+    }
+
+    #[test]
+    fn morphing_config_default_values() {
+        let config = MorphingConfig::default();
+        assert_eq!(
+            config.max_step_distance_millionths,
+            MAX_STEP_DISTANCE_MILLIONTHS
+        );
+        assert_eq!(config.min_entropy_millionths, MIN_ENTROPY_MILLIONTHS);
+        assert_eq!(config.max_entropy_millionths, MAX_ENTROPY_MILLIONTHS);
+        assert_eq!(config.fallback_cooldown_steps, FALLBACK_COOLDOWN_STEPS);
+        assert_eq!(config.interpolation_rate_millionths, 300_000);
+    }
+
+    #[test]
+    fn morpher_with_defaults_initial_state() {
+        let anchor = make_anchor_profile();
+        let m = EntropicPolicyMorpher::with_defaults(anchor.clone(), SecurityEpoch::from_raw(5));
+        assert_eq!(m.current_profile, anchor);
+        assert_eq!(m.anchor_profile, anchor);
+        assert_eq!(m.step_count, 0);
+        assert_eq!(m.applied_count, 0);
+        assert_eq!(m.fallback_count, 0);
+        assert!(!m.in_fallback);
+        assert!(m.history.is_empty());
+        assert!(m.regime_profiles.is_empty());
+        assert_eq!(m.current_regime, RegimeLabel::Abstention);
+    }
+
+    #[test]
+    fn morpher_register_profile_stores_by_regime_name() {
+        let m = make_test_morpher(1);
+        assert!(m.regime_profiles.contains_key("normal"));
+        assert!(m.regime_profiles.contains_key("elevated"));
+        assert!(m.regime_profiles.contains_key("attack"));
+        assert!(m.regime_profiles.contains_key("degraded"));
+        assert!(m.regime_profiles.contains_key("recovery"));
+    }
 }

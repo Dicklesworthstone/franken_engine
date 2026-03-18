@@ -249,6 +249,26 @@ fn runner_writes_summary_and_workload_evidence_lines() {
         summary["policy_snapshot_hash"],
         fixture.policy_snapshot_hash
     );
+    let summary_corpus_manifest_hash = summary["corpus_manifest_hash"]
+        .as_str()
+        .expect("summary corpus_manifest_hash");
+    assert_eq!(summary_corpus_manifest_hash.len(), 64);
+    assert!(
+        summary_corpus_manifest_hash
+            .chars()
+            .all(|c| c.is_ascii_hexdigit()),
+        "summary corpus_manifest_hash must contain only hex digits"
+    );
+    let summary_environment_fingerprint = summary["environment_fingerprint"]
+        .as_str()
+        .expect("summary environment_fingerprint");
+    assert_eq!(summary_environment_fingerprint.len(), 64);
+    assert!(
+        summary_environment_fingerprint
+            .chars()
+            .all(|c| c.is_ascii_hexdigit()),
+        "summary environment_fingerprint must contain only hex digits"
+    );
     assert_eq!(summary["error_code"], "FE-SECURITY-CONFORMANCE-GATE");
     assert!(
         summary["gate_failure_reasons"]
@@ -271,6 +291,18 @@ fn runner_writes_summary_and_workload_evidence_lines() {
         assert_eq!(workload["event"], "workload_result");
         assert_eq!(workload["component"], "security_conformance_runner");
         assert_eq!(workload["outcome"], "pass");
+        assert_eq!(
+            workload["corpus_manifest_hash"],
+            summary["corpus_manifest_hash"]
+        );
+        assert_eq!(
+            workload["policy_snapshot_hash"],
+            summary["policy_snapshot_hash"]
+        );
+        assert_eq!(
+            workload["environment_fingerprint"],
+            summary["environment_fingerprint"]
+        );
         assert!(
             workload["trace_id"]
                 .as_str()

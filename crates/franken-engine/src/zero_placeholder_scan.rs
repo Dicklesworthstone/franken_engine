@@ -1085,11 +1085,9 @@ mod tests {
         assert_eq!(finding.owner_bead_id, ITERATOR_RUNTIME_BEAD_ID);
         assert!(finding.source_reference.contains("lowering_pipeline"));
         assert!(finding.source_reference.contains("baseline_interpreter"));
-        assert!(
-            finding
-                .observed_behavior
-                .contains("dedicated IR3 iterator instructions")
-        );
+        assert!(finding
+            .observed_behavior
+            .contains("dedicated IR3 iterator instructions"));
     }
 
     #[test]
@@ -1503,5 +1501,642 @@ mod tests {
     #[test]
     fn finding_count_sixteen() {
         assert_eq!(ZERO_PLACEHOLDER_SCAN_FINDING_COUNT, 16);
+    }
+
+    // --- Deep enrichment tests (PearlTower 2026-03-18) ---
+
+    #[test]
+    fn subsystem_serde_json_value_matches_as_str() {
+        for subsystem in ZeroPlaceholderSubsystem::ALL {
+            let json = serde_json::to_string(&subsystem).unwrap();
+            let expected = format!("\"{}\"", subsystem.as_str());
+            assert_eq!(
+                json, expected,
+                "serde JSON for {subsystem:?} must match as_str"
+            );
+        }
+    }
+
+    #[test]
+    fn status_serde_json_value_matches_as_str() {
+        for status in [
+            ZeroPlaceholderStatus::OpenPlaceholder,
+            ZeroPlaceholderStatus::FailClosed,
+            ZeroPlaceholderStatus::Resolved,
+        ] {
+            let json = serde_json::to_string(&status).unwrap();
+            let expected = format!("\"{}\"", status.as_str());
+            assert_eq!(
+                json, expected,
+                "serde JSON for {status:?} must match as_str"
+            );
+        }
+    }
+
+    #[test]
+    fn severity_serde_json_value_matches_as_str() {
+        for severity in [
+            ZeroPlaceholderSeverity::High,
+            ZeroPlaceholderSeverity::Medium,
+            ZeroPlaceholderSeverity::Low,
+        ] {
+            let json = serde_json::to_string(&severity).unwrap();
+            let expected = format!("\"{}\"", severity.as_str());
+            assert_eq!(
+                json, expected,
+                "serde JSON for {severity:?} must match as_str"
+            );
+        }
+    }
+
+    #[test]
+    fn subsystem_ordering_matches_all_array_order() {
+        let all = ZeroPlaceholderSubsystem::ALL;
+        for window in all.windows(2) {
+            assert!(
+                window[0] < window[1],
+                "ALL array must be in Ord order: {window:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn status_ordering_is_total() {
+        let statuses = [
+            ZeroPlaceholderStatus::OpenPlaceholder,
+            ZeroPlaceholderStatus::FailClosed,
+            ZeroPlaceholderStatus::Resolved,
+        ];
+        for a in &statuses {
+            for b in &statuses {
+                if a == b {
+                    assert!(a.cmp(b) == std::cmp::Ordering::Equal);
+                } else {
+                    assert!(a.cmp(b) != std::cmp::Ordering::Equal);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn severity_ordering_is_total() {
+        let sevs = [
+            ZeroPlaceholderSeverity::High,
+            ZeroPlaceholderSeverity::Medium,
+            ZeroPlaceholderSeverity::Low,
+        ];
+        for a in &sevs {
+            for b in &sevs {
+                if a == b {
+                    assert!(a.cmp(b) == std::cmp::Ordering::Equal);
+                } else {
+                    assert!(a.cmp(b) != std::cmp::Ordering::Equal);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn write_error_display_json_variant() {
+        let source = serde_json::from_str::<i32>("not_json").unwrap_err();
+        let err = ZeroPlaceholderScanWriteError::Json {
+            path: "/tmp/test.json".to_string(),
+            source,
+        };
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("failed to serialize"),
+            "Json error Display must mention serialization: {msg}"
+        );
+        assert!(msg.contains("/tmp/test.json"), "must contain path: {msg}");
+    }
+
+    #[test]
+    fn write_error_display_io_variant() {
+        let source = io::Error::new(ErrorKind::PermissionDenied, "denied");
+        let err = ZeroPlaceholderScanWriteError::Io {
+            path: "/tmp/test.bin".to_string(),
+            source,
+        };
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("failed to write"),
+            "Io error Display must mention write: {msg}"
+        );
+        assert!(msg.contains("/tmp/test.bin"), "must contain path: {msg}");
+    }
+
+    #[test]
+    fn write_error_display_busy_variant() {
+        let err = ZeroPlaceholderScanWriteError::Busy {
+            path: "/tmp/lock".to_string(),
+        };
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("already locked"),
+            "Busy error Display must mention lock: {msg}"
+        );
+        assert!(msg.contains("/tmp/lock"), "must contain path: {msg}");
+    }
+
+    #[test]
+    fn sha256_hex_deterministic_for_same_input() {
+        let h1 = sha256_hex(b"hello world");
+        let h2 = sha256_hex(b"hello world");
+        assert_eq!(h1, h2);
+        assert_eq!(h1.len(), 64, "SHA-256 hex digest must be 64 chars");
+    }
+
+    #[test]
+    fn sha256_hex_empty_input_is_known_digest() {
+        let h = sha256_hex(b"");
+        // SHA-256("") = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        assert_eq!(
+            h,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn sha256_hex_different_inputs_differ() {
+        let h1 = sha256_hex(b"input_a");
+        let h2 = sha256_hex(b"input_b");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn canonical_json_bytes_deterministic() {
+        let finding = ZeroPlaceholderFinding {
+            finding_id: "det::test".to_string(),
+            subsystem: ZeroPlaceholderSubsystem::Parser,
+            status: ZeroPlaceholderStatus::Resolved,
+            severity: ZeroPlaceholderSeverity::Low,
+            owner: "owner".to_string(),
+            owner_bead_id: "bd-det".to_string(),
+            subject_area: "det.area".to_string(),
+            source_reference: "src/det.rs".to_string(),
+            observed_behavior: "obs".to_string(),
+            required_behavior: "req".to_string(),
+            diagnostic_code: Some("DET-001".to_string()),
+        };
+        let path = Path::new("/tmp/det.json");
+        let bytes1 = canonical_json_bytes(&finding, path).unwrap();
+        let bytes2 = canonical_json_bytes(&finding, path).unwrap();
+        assert_eq!(bytes1, bytes2, "canonical JSON must be deterministic");
+        let hash1 = sha256_hex(&bytes1);
+        let hash2 = sha256_hex(&bytes2);
+        assert_eq!(hash1, hash2, "deterministic bytes => deterministic hash");
+    }
+
+    #[test]
+    fn inventory_counts_mixed_statuses() {
+        let findings = vec![
+            ZeroPlaceholderFinding {
+                finding_id: "a".to_string(),
+                subsystem: ZeroPlaceholderSubsystem::Parser,
+                status: ZeroPlaceholderStatus::OpenPlaceholder,
+                severity: ZeroPlaceholderSeverity::High,
+                owner: "o".to_string(),
+                owner_bead_id: "b".to_string(),
+                subject_area: "s".to_string(),
+                source_reference: "r".to_string(),
+                observed_behavior: "obs".to_string(),
+                required_behavior: "req".to_string(),
+                diagnostic_code: None,
+            },
+            ZeroPlaceholderFinding {
+                finding_id: "b".to_string(),
+                subsystem: ZeroPlaceholderSubsystem::Lowering,
+                status: ZeroPlaceholderStatus::FailClosed,
+                severity: ZeroPlaceholderSeverity::Medium,
+                owner: "o".to_string(),
+                owner_bead_id: "b".to_string(),
+                subject_area: "s".to_string(),
+                source_reference: "r".to_string(),
+                observed_behavior: "obs".to_string(),
+                required_behavior: "req".to_string(),
+                diagnostic_code: None,
+            },
+            ZeroPlaceholderFinding {
+                finding_id: "c".to_string(),
+                subsystem: ZeroPlaceholderSubsystem::Runtime,
+                status: ZeroPlaceholderStatus::Resolved,
+                severity: ZeroPlaceholderSeverity::Low,
+                owner: "o".to_string(),
+                owner_bead_id: "b".to_string(),
+                subject_area: "s".to_string(),
+                source_reference: "r".to_string(),
+                observed_behavior: "obs".to_string(),
+                required_behavior: "req".to_string(),
+                diagnostic_code: None,
+            },
+            ZeroPlaceholderFinding {
+                finding_id: "d".to_string(),
+                subsystem: ZeroPlaceholderSubsystem::Parser,
+                status: ZeroPlaceholderStatus::Resolved,
+                severity: ZeroPlaceholderSeverity::Low,
+                owner: "o".to_string(),
+                owner_bead_id: "b".to_string(),
+                subject_area: "s".to_string(),
+                source_reference: "r".to_string(),
+                observed_behavior: "obs".to_string(),
+                required_behavior: "req".to_string(),
+                diagnostic_code: None,
+            },
+        ];
+        let inventory = ZeroPlaceholderInventory {
+            schema_version: ZERO_PLACEHOLDER_SCAN_SCHEMA_VERSION.to_string(),
+            component: ZERO_PLACEHOLDER_SCAN_COMPONENT.to_string(),
+            findings,
+        };
+        assert_eq!(inventory.open_placeholder_finding_count(), 1);
+        assert_eq!(inventory.fail_closed_finding_count(), 1);
+        assert_eq!(inventory.resolved_finding_count(), 2);
+        let summaries = inventory.subsystem_summaries();
+        let parser_summary = summaries
+            .iter()
+            .find(|s| s.subsystem == ZeroPlaceholderSubsystem::Parser)
+            .unwrap();
+        assert_eq!(parser_summary.finding_count, 2);
+        assert_eq!(parser_summary.open_placeholder_finding_count, 1);
+        assert_eq!(parser_summary.resolved_finding_count, 1);
+        let cli_docs_summary = summaries
+            .iter()
+            .find(|s| s.subsystem == ZeroPlaceholderSubsystem::CliDocs)
+            .unwrap();
+        assert_eq!(cli_docs_summary.finding_count, 0);
+    }
+
+    #[test]
+    fn build_inventory_events_bookends_and_per_finding() {
+        let inventory = ZeroPlaceholderInventory {
+            schema_version: ZERO_PLACEHOLDER_SCAN_SCHEMA_VERSION.to_string(),
+            component: ZERO_PLACEHOLDER_SCAN_COMPONENT.to_string(),
+            findings: vec![
+                ZeroPlaceholderFinding {
+                    finding_id: "evt::a".to_string(),
+                    subsystem: ZeroPlaceholderSubsystem::Runtime,
+                    status: ZeroPlaceholderStatus::Resolved,
+                    severity: ZeroPlaceholderSeverity::Low,
+                    owner: "o".to_string(),
+                    owner_bead_id: "b".to_string(),
+                    subject_area: "s".to_string(),
+                    source_reference: "r".to_string(),
+                    observed_behavior: "obs_a".to_string(),
+                    required_behavior: "req".to_string(),
+                    diagnostic_code: None,
+                },
+                ZeroPlaceholderFinding {
+                    finding_id: "evt::b".to_string(),
+                    subsystem: ZeroPlaceholderSubsystem::Parser,
+                    status: ZeroPlaceholderStatus::OpenPlaceholder,
+                    severity: ZeroPlaceholderSeverity::High,
+                    owner: "o".to_string(),
+                    owner_bead_id: "b".to_string(),
+                    subject_area: "s".to_string(),
+                    source_reference: "r".to_string(),
+                    observed_behavior: "obs_b".to_string(),
+                    required_behavior: "req".to_string(),
+                    diagnostic_code: None,
+                },
+            ],
+        };
+        let events = build_inventory_events(&inventory, "trace-t", "decision-d");
+        assert_eq!(events.len(), 4, "start + 2 findings + end");
+        assert_eq!(events[0].event, "inventory_started");
+        assert_eq!(events[0].outcome, "started");
+        assert!(events[0].subsystem.is_none());
+        assert_eq!(events[1].event, "finding_recorded");
+        assert_eq!(events[1].outcome, "resolved");
+        assert_eq!(events[1].finding_id.as_deref(), Some("evt::a"));
+        assert_eq!(events[2].event, "finding_recorded");
+        assert_eq!(events[2].outcome, "open_placeholder");
+        assert_eq!(events[2].finding_id.as_deref(), Some("evt::b"));
+        assert_eq!(events[3].event, "inventory_completed");
+        assert_eq!(events[3].outcome, "completed");
+        assert!(events[3].detail.as_ref().unwrap().contains("2 findings"));
+    }
+
+    #[test]
+    fn build_inventory_events_empty_findings() {
+        let inventory = ZeroPlaceholderInventory {
+            schema_version: ZERO_PLACEHOLDER_SCAN_SCHEMA_VERSION.to_string(),
+            component: ZERO_PLACEHOLDER_SCAN_COMPONENT.to_string(),
+            findings: vec![],
+        };
+        let events = build_inventory_events(&inventory, "t", "d");
+        assert_eq!(events.len(), 2, "start + end, no finding events");
+        assert_eq!(events[0].event, "inventory_started");
+        assert_eq!(events[1].event, "inventory_completed");
+        assert!(events[1].detail.as_ref().unwrap().contains("0 findings"));
+    }
+
+    #[test]
+    fn unique_temp_path_preserves_parent_dir() {
+        let path = Path::new("/some/dir/artifact.json");
+        let tmp = unique_temp_path(path);
+        assert_eq!(tmp.parent().unwrap(), Path::new("/some/dir"));
+        let name = tmp.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with('.'), "temp file must be hidden: {name}");
+        assert!(
+            name.ends_with(".tmp"),
+            "temp file must end with .tmp: {name}"
+        );
+        assert!(
+            name.contains("artifact.json"),
+            "temp file must embed original name: {name}"
+        );
+    }
+
+    #[test]
+    fn unique_temp_path_no_parent_uses_dot() {
+        let path = Path::new("standalone.bin");
+        let tmp = unique_temp_path(path);
+        assert_eq!(tmp.parent().unwrap(), Path::new("."));
+    }
+
+    #[test]
+    fn map_parser_status_covers_all_variants() {
+        assert_eq!(
+            map_parser_status(ParserGapRemediationStatus::OpenPlaceholder),
+            ZeroPlaceholderStatus::OpenPlaceholder
+        );
+        assert_eq!(
+            map_parser_status(ParserGapRemediationStatus::FailClosed),
+            ZeroPlaceholderStatus::FailClosed
+        );
+        assert_eq!(
+            map_parser_status(ParserGapRemediationStatus::Resolved),
+            ZeroPlaceholderStatus::Resolved
+        );
+    }
+
+    #[test]
+    fn map_lowering_status_covers_all_variants() {
+        assert_eq!(
+            map_lowering_status(LoweringGapStatus::OpenPlaceholder),
+            ZeroPlaceholderStatus::OpenPlaceholder
+        );
+        assert_eq!(
+            map_lowering_status(LoweringGapStatus::FailClosed),
+            ZeroPlaceholderStatus::FailClosed
+        );
+        assert_eq!(
+            map_lowering_status(LoweringGapStatus::Resolved),
+            ZeroPlaceholderStatus::Resolved
+        );
+    }
+
+    #[test]
+    fn severity_for_status_exhaustive_roundtrip() {
+        let pairs = [
+            (
+                ZeroPlaceholderStatus::OpenPlaceholder,
+                ZeroPlaceholderSeverity::High,
+            ),
+            (
+                ZeroPlaceholderStatus::FailClosed,
+                ZeroPlaceholderSeverity::Medium,
+            ),
+            (
+                ZeroPlaceholderStatus::Resolved,
+                ZeroPlaceholderSeverity::Low,
+            ),
+        ];
+        for (status, expected_severity) in pairs {
+            let computed = severity_for_status(status);
+            assert_eq!(computed, expected_severity);
+            assert_eq!(computed.as_str(), expected_severity.as_str());
+        }
+    }
+
+    #[test]
+    fn cli_docs_truth_guard_empty_contract_always_resolves() {
+        let contract = DocsHelpSurfaceAuditContract {
+            policy_id: "empty".to_string(),
+            required_help_fragments: vec![],
+            banned_help_fragments: vec![],
+            required_readme_fragments: vec![],
+            banned_readme_fragments: vec![],
+        };
+        let (status, _, _) = evaluate_cli_docs_truth_guard(&contract, "", "");
+        assert_eq!(status, ZeroPlaceholderStatus::Resolved);
+        let (status2, _, _) = evaluate_cli_docs_truth_guard(&contract, "anything", "anything else");
+        assert_eq!(status2, ZeroPlaceholderStatus::Resolved);
+    }
+
+    #[test]
+    fn cli_docs_truth_guard_multiple_required_all_present() {
+        let contract = DocsHelpSurfaceAuditContract {
+            policy_id: "multi".to_string(),
+            required_help_fragments: vec!["alpha".to_string(), "beta".to_string()],
+            banned_help_fragments: vec![],
+            required_readme_fragments: vec!["gamma".to_string(), "delta".to_string()],
+            banned_readme_fragments: vec![],
+        };
+        let readme = "gamma and delta are here";
+        let help = "alpha and beta are here";
+        let (status, severity, detail) = evaluate_cli_docs_truth_guard(&contract, readme, help);
+        assert_eq!(status, ZeroPlaceholderStatus::Resolved);
+        assert_eq!(severity, ZeroPlaceholderSeverity::Low);
+        assert!(detail.contains("2 required README fragments"));
+        assert!(detail.contains("2 required help fragments"));
+    }
+
+    #[test]
+    fn cli_docs_truth_guard_partial_required_yields_failclosed() {
+        let contract = DocsHelpSurfaceAuditContract {
+            policy_id: "partial".to_string(),
+            required_help_fragments: vec!["present".to_string(), "missing_frag".to_string()],
+            banned_help_fragments: vec![],
+            required_readme_fragments: vec![],
+            banned_readme_fragments: vec![],
+        };
+        let (status, _, detail) = evaluate_cli_docs_truth_guard(&contract, "", "present here");
+        assert_eq!(status, ZeroPlaceholderStatus::FailClosed);
+        assert!(detail.contains("missing help fragment"));
+        assert!(detail.contains("missing_frag"));
+    }
+
+    #[test]
+    fn subsystem_summary_serde_round_trip() {
+        let summary = ZeroPlaceholderSubsystemSummary {
+            subsystem: ZeroPlaceholderSubsystem::Runtime,
+            finding_count: 5,
+            open_placeholder_finding_count: 2,
+            fail_closed_finding_count: 1,
+            resolved_finding_count: 2,
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        let back: ZeroPlaceholderSubsystemSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, summary);
+    }
+
+    #[test]
+    fn artifact_paths_serde_round_trip() {
+        let paths = ZeroPlaceholderScanArtifactPaths {
+            zero_placeholder_inventory: "inv.json".to_string(),
+            trace_ids: "trace.json".to_string(),
+            run_manifest: "manifest.json".to_string(),
+            events_jsonl: "events.jsonl".to_string(),
+            commands_txt: "commands.txt".to_string(),
+        };
+        let json = serde_json::to_string(&paths).unwrap();
+        let back: ZeroPlaceholderScanArtifactPaths = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, paths);
+    }
+
+    #[test]
+    fn trace_ids_serde_round_trip() {
+        let trace_ids = ZeroPlaceholderScanTraceIds {
+            schema_version: ZERO_PLACEHOLDER_SCAN_TRACE_IDS_SCHEMA_VERSION.to_string(),
+            component: ZERO_PLACEHOLDER_SCAN_COMPONENT.to_string(),
+            trace_id: "trace-abc".to_string(),
+            decision_id: "decision-abc".to_string(),
+            policy_id: ZERO_PLACEHOLDER_SCAN_POLICY_ID.to_string(),
+            inventory_hash: "deadbeef".to_string(),
+        };
+        let json = serde_json::to_string(&trace_ids).unwrap();
+        let back: ZeroPlaceholderScanTraceIds = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, trace_ids);
+    }
+
+    #[test]
+    fn run_manifest_serde_round_trip() {
+        let manifest = ZeroPlaceholderScanRunManifest {
+            schema_version: ZERO_PLACEHOLDER_SCAN_RUN_MANIFEST_SCHEMA_VERSION.to_string(),
+            component: ZERO_PLACEHOLDER_SCAN_COMPONENT.to_string(),
+            trace_id: "trace-m".to_string(),
+            decision_id: "decision-m".to_string(),
+            policy_id: ZERO_PLACEHOLDER_SCAN_POLICY_ID.to_string(),
+            inventory_hash: "aabb".to_string(),
+            finding_count: 3,
+            open_placeholder_finding_count: 1,
+            fail_closed_finding_count: 1,
+            resolved_finding_count: 1,
+            subsystem_summaries: vec![ZeroPlaceholderSubsystemSummary {
+                subsystem: ZeroPlaceholderSubsystem::Parser,
+                finding_count: 3,
+                open_placeholder_finding_count: 1,
+                fail_closed_finding_count: 1,
+                resolved_finding_count: 1,
+            }],
+            artifact_paths: ZeroPlaceholderScanArtifactPaths {
+                zero_placeholder_inventory: "i.json".to_string(),
+                trace_ids: "t.json".to_string(),
+                run_manifest: "m.json".to_string(),
+                events_jsonl: "e.jsonl".to_string(),
+                commands_txt: "c.txt".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&manifest).unwrap();
+        let back: ZeroPlaceholderScanRunManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, manifest);
+    }
+
+    #[test]
+    fn inventory_serde_round_trip_full() {
+        let inventory = ZeroPlaceholderInventory {
+            schema_version: ZERO_PLACEHOLDER_SCAN_SCHEMA_VERSION.to_string(),
+            component: ZERO_PLACEHOLDER_SCAN_COMPONENT.to_string(),
+            findings: vec![ZeroPlaceholderFinding {
+                finding_id: "serde::a".to_string(),
+                subsystem: ZeroPlaceholderSubsystem::Lowering,
+                status: ZeroPlaceholderStatus::FailClosed,
+                severity: ZeroPlaceholderSeverity::Medium,
+                owner: "owner".to_string(),
+                owner_bead_id: "bd-serde".to_string(),
+                subject_area: "area".to_string(),
+                source_reference: "ref".to_string(),
+                observed_behavior: "obs".to_string(),
+                required_behavior: "req".to_string(),
+                diagnostic_code: Some("CODE".to_string()),
+            }],
+        };
+        let json = serde_json::to_string(&inventory).unwrap();
+        let back: ZeroPlaceholderInventory = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, inventory);
+    }
+
+    #[test]
+    fn lowering_family_bead_ids_symmetric_with_parser() {
+        // statement.for_in <=> for_in_statement map to same bead
+        assert_eq!(
+            bead_id_for_parser_feature("for_in_statement"),
+            bead_id_for_lowering_family("statement.for_in")
+        );
+        assert_eq!(
+            bead_id_for_parser_feature("for_of_statement"),
+            bead_id_for_lowering_family("statement.for_of")
+        );
+        assert_eq!(
+            bead_id_for_parser_feature("new_expression"),
+            bead_id_for_lowering_family("expression.new")
+        );
+        assert_eq!(
+            bead_id_for_parser_feature("template_literal"),
+            bead_id_for_lowering_family("expression.template_literal")
+        );
+        assert_eq!(
+            bead_id_for_parser_feature("binary_non_arithmetic_expression"),
+            bead_id_for_lowering_family("expression.binary_non_arithmetic")
+        );
+        assert_eq!(
+            bead_id_for_parser_feature("member_assignment_expression"),
+            bead_id_for_lowering_family("expression.assignment_member_target")
+        );
+    }
+
+    #[test]
+    fn subsystem_deserialize_rejects_unknown_variant() {
+        let result = serde_json::from_str::<ZeroPlaceholderSubsystem>("\"unknown_subsystem\"");
+        assert!(result.is_err(), "unknown variant must fail deserialization");
+    }
+
+    #[test]
+    fn status_deserialize_rejects_unknown_variant() {
+        let result = serde_json::from_str::<ZeroPlaceholderStatus>("\"not_a_status\"");
+        assert!(result.is_err(), "unknown status must fail deserialization");
+    }
+
+    #[test]
+    fn severity_deserialize_rejects_unknown_variant() {
+        let result = serde_json::from_str::<ZeroPlaceholderSeverity>("\"critical\"");
+        assert!(
+            result.is_err(),
+            "unknown severity must fail deserialization"
+        );
+    }
+
+    #[test]
+    fn event_schema_version_propagated_in_build_events() {
+        let inventory = ZeroPlaceholderInventory {
+            schema_version: ZERO_PLACEHOLDER_SCAN_SCHEMA_VERSION.to_string(),
+            component: ZERO_PLACEHOLDER_SCAN_COMPONENT.to_string(),
+            findings: vec![ZeroPlaceholderFinding {
+                finding_id: "ev::schema".to_string(),
+                subsystem: ZeroPlaceholderSubsystem::CliDocs,
+                status: ZeroPlaceholderStatus::Resolved,
+                severity: ZeroPlaceholderSeverity::Low,
+                owner: "o".to_string(),
+                owner_bead_id: "b".to_string(),
+                subject_area: "s".to_string(),
+                source_reference: "r".to_string(),
+                observed_behavior: "obs".to_string(),
+                required_behavior: "req".to_string(),
+                diagnostic_code: None,
+            }],
+        };
+        let events = build_inventory_events(&inventory, "t-schema", "d-schema");
+        for event in &events {
+            assert_eq!(
+                event.schema_version,
+                ZERO_PLACEHOLDER_SCAN_EVENT_SCHEMA_VERSION
+            );
+            assert_eq!(event.policy_id, ZERO_PLACEHOLDER_SCAN_POLICY_ID);
+            assert_eq!(event.component, ZERO_PLACEHOLDER_SCAN_COMPONENT);
+            assert_eq!(event.trace_id, "t-schema");
+            assert_eq!(event.decision_id, "d-schema");
+        }
     }
 }

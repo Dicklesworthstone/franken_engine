@@ -1092,4 +1092,579 @@ mod tests {
         assert!(BoundaryOutcome::Timeout.is_budget_related());
         assert!(!BoundaryOutcome::Cancelled.is_budget_related());
     }
+
+    // -----------------------------------------------------------------------
+    // Deep tests — enum serde roundtrips
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_capability_token_serde_roundtrip_all_variants() {
+        for token in CapabilityToken::all() {
+            let json = serde_json::to_string(token).unwrap();
+            let round: CapabilityToken = serde_json::from_str(&json).unwrap();
+            assert_eq!(*token, round, "serde roundtrip failed for {:?}", token);
+        }
+    }
+
+    #[test]
+    fn test_narrowing_direction_serde_roundtrip() {
+        for dir in [
+            NarrowingDirection::Narrowed,
+            NarrowingDirection::Preserved,
+            NarrowingDirection::Widened,
+        ] {
+            let json = serde_json::to_string(&dir).unwrap();
+            let round: NarrowingDirection = serde_json::from_str(&json).unwrap();
+            assert_eq!(dir, round, "serde roundtrip failed for {:?}", dir);
+        }
+    }
+
+    #[test]
+    fn test_outcome_propagation_rule_serde_roundtrip_all_variants() {
+        let rules = [
+            OutcomePropagationRule::Preserve,
+            OutcomePropagationRule::CollapseToFailure,
+            OutcomePropagationRule::SeverityThreshold { min_severity: 0 },
+            OutcomePropagationRule::SeverityThreshold { min_severity: 3 },
+            OutcomePropagationRule::EscalateToMostSevere,
+        ];
+        for rule in &rules {
+            let json = serde_json::to_string(rule).unwrap();
+            let round: OutcomePropagationRule = serde_json::from_str(&json).unwrap();
+            assert_eq!(*rule, round, "serde roundtrip failed for {:?}", rule);
+        }
+    }
+
+    #[test]
+    fn test_narrowing_violation_serde_roundtrip_all_variants() {
+        let violations = vec![
+            NarrowingViolation::CapabilityWidening {
+                boundary_label: "b1".to_owned(),
+                widened_tokens: {
+                    let mut s = BTreeSet::new();
+                    s.insert(CapabilityToken::NetworkAccess);
+                    s.insert(CapabilityToken::CryptoAccess);
+                    s
+                },
+            },
+            NarrowingViolation::OutcomeUpgrade {
+                boundary_label: "b2".to_owned(),
+                child_outcome: BoundaryOutcome::Cancelled,
+                propagated_outcome: BoundaryOutcome::Failure,
+            },
+            NarrowingViolation::UnknownOutcomeNotFailClosed {
+                boundary_label: "b3".to_owned(),
+            },
+        ];
+        for v in &violations {
+            let json = serde_json::to_string(v).unwrap();
+            let round: NarrowingViolation = serde_json::from_str(&json).unwrap();
+            assert_eq!(*v, round, "serde roundtrip failed for {:?}", v);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests — Display / as_str consistency
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_boundary_outcome_display_matches_as_str() {
+        for outcome in [
+            BoundaryOutcome::Success,
+            BoundaryOutcome::Failure,
+            BoundaryOutcome::Timeout,
+            BoundaryOutcome::Cancelled,
+        ] {
+            assert_eq!(
+                outcome.to_string(),
+                outcome.as_str(),
+                "Display and as_str disagree for {:?}",
+                outcome
+            );
+        }
+    }
+
+    #[test]
+    fn test_narrowing_direction_display_values() {
+        assert_eq!(NarrowingDirection::Narrowed.to_string(), "narrowed");
+        assert_eq!(NarrowingDirection::Preserved.to_string(), "preserved");
+        assert_eq!(NarrowingDirection::Widened.to_string(), "widened");
+    }
+
+    #[test]
+    fn test_capability_token_as_str_unique_per_variant() {
+        let all = CapabilityToken::all();
+        let labels: BTreeSet<&str> = all.iter().map(|t| t.as_str()).collect();
+        assert_eq!(
+            labels.len(),
+            all.len(),
+            "duplicate as_str values among CapabilityToken variants"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests — error Display formatting
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_outcome_upgrade_violation_display_format() {
+        let v = NarrowingViolation::OutcomeUpgrade {
+            boundary_label: "spawn_ext".to_owned(),
+            child_outcome: BoundaryOutcome::Cancelled,
+            propagated_outcome: BoundaryOutcome::Failure,
+        };
+        let msg = v.to_string();
+        assert!(msg.contains("outcome upgrade at spawn_ext"));
+        assert!(msg.contains("cancelled"));
+        assert!(msg.contains("failure"));
+        // Verify arrow separator
+        assert!(msg.contains("→"));
+    }
+
+    #[test]
+    fn test_unknown_outcome_not_fail_closed_display() {
+        let v = NarrowingViolation::UnknownOutcomeNotFailClosed {
+            boundary_label: "external_gateway".to_owned(),
+        };
+        let msg = v.to_string();
+        assert_eq!(msg, "unknown outcome not fail-closed at external_gateway");
+    }
+
+    #[test]
+    fn test_capability_widening_display_multiple_tokens() {
+        let mut widened = BTreeSet::new();
+        widened.insert(CapabilityToken::FileSystemRead);
+        widened.insert(CapabilityToken::FileSystemWrite);
+        widened.insert(CapabilityToken::NetworkAccess);
+        let v = NarrowingViolation::CapabilityWidening {
+            boundary_label: "bad_spawn".to_owned(),
+            widened_tokens: widened,
+        };
+        let msg = v.to_string();
+        // BTreeSet ordering: FileSystemRead < FileSystemWrite < NetworkAccess
+        assert!(msg.contains("fs_read"));
+        assert!(msg.contains("fs_write"));
+        assert!(msg.contains("network"));
+        assert!(msg.contains("bad_spawn"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests — edge cases (empty inputs, boundary values)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_intersect_empty_with_full_yields_empty() {
+        let empty = CapabilityGrant::none();
+        let full = CapabilityGrant::full();
+        let result = empty.intersect(&full);
+        assert!(result.is_empty());
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_intersect_full_with_full_yields_full() {
+        let full1 = CapabilityGrant::full();
+        let full2 = CapabilityGrant::full();
+        let result = full1.intersect(&full2);
+        assert_eq!(result.len(), 13);
+        assert!(result.is_subset_of(&full1));
+    }
+
+    #[test]
+    fn test_difference_identical_grants_is_empty() {
+        let sandbox = CapabilityGrant::sandbox();
+        let diff = sandbox.difference(&sandbox);
+        assert!(diff.is_empty());
+    }
+
+    #[test]
+    fn test_difference_empty_from_anything_is_empty() {
+        let empty = CapabilityGrant::none();
+        let full = CapabilityGrant::full();
+        let diff = empty.difference(&full);
+        assert!(diff.is_empty());
+    }
+
+    #[test]
+    fn test_severity_threshold_zero_passes_everything() {
+        let rule = OutcomePropagationRule::SeverityThreshold { min_severity: 0 };
+        for outcome in [
+            BoundaryOutcome::Success,
+            BoundaryOutcome::Failure,
+            BoundaryOutcome::Timeout,
+            BoundaryOutcome::Cancelled,
+        ] {
+            let result = rule.apply(outcome, BoundaryOutcome::Failure);
+            assert_eq!(
+                result, outcome,
+                "threshold 0 should pass through {:?}",
+                outcome
+            );
+        }
+    }
+
+    #[test]
+    fn test_severity_threshold_max_blocks_everything_except_cancelled() {
+        let rule = OutcomePropagationRule::SeverityThreshold { min_severity: 3 };
+        // Only Cancelled (severity 3) meets the threshold
+        assert_eq!(
+            rule.apply(BoundaryOutcome::Success, BoundaryOutcome::Success),
+            BoundaryOutcome::Success
+        );
+        assert_eq!(
+            rule.apply(BoundaryOutcome::Failure, BoundaryOutcome::Success),
+            BoundaryOutcome::Success
+        );
+        assert_eq!(
+            rule.apply(BoundaryOutcome::Timeout, BoundaryOutcome::Success),
+            BoundaryOutcome::Success
+        );
+        assert_eq!(
+            rule.apply(BoundaryOutcome::Cancelled, BoundaryOutcome::Success),
+            BoundaryOutcome::Cancelled
+        );
+    }
+
+    #[test]
+    fn test_severity_threshold_above_all_blocks_everything() {
+        let rule = OutcomePropagationRule::SeverityThreshold { min_severity: 255 };
+        for outcome in [
+            BoundaryOutcome::Success,
+            BoundaryOutcome::Failure,
+            BoundaryOutcome::Timeout,
+            BoundaryOutcome::Cancelled,
+        ] {
+            let result = rule.apply(outcome, BoundaryOutcome::Success);
+            assert_eq!(
+                result,
+                BoundaryOutcome::Success,
+                "threshold 255 should block {:?}",
+                outcome
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests — state machine transitions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_validator_sequence_numbers_increment_monotonically() {
+        let mut validator = CapabilityNarrowingValidator::with_defaults();
+        let parent = CapabilityGrant::full();
+        let child = CapabilityGrant::sandbox();
+
+        for i in 0..5 {
+            validator.validate_narrowing(
+                &format!("p{}", i),
+                &format!("c{}", i),
+                &format!("b{}", i),
+                &parent,
+                &child,
+            );
+        }
+
+        let sequences: Vec<u64> = validator.transitions().iter().map(|t| t.sequence).collect();
+        assert_eq!(sequences, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_outcome_propagation_updates_last_matching_transition() {
+        let mut validator = CapabilityNarrowingValidator::with_defaults();
+        let parent = CapabilityGrant::full();
+        let child = CapabilityGrant::sandbox();
+
+        validator.validate_narrowing("p1", "c1", "boundary_a", &parent, &child);
+        validator.validate_narrowing("p2", "c2", "boundary_b", &parent, &child);
+
+        // Record outcome for boundary_b (last transition)
+        validator.record_outcome_propagation(
+            "boundary_b",
+            BoundaryOutcome::Timeout,
+            BoundaryOutcome::Success,
+        );
+
+        // boundary_a should NOT have outcome set
+        assert_eq!(validator.transitions()[0].child_outcome, None);
+        assert_eq!(validator.transitions()[0].propagated_outcome, None);
+
+        // boundary_b should have outcome set
+        assert_eq!(
+            validator.transitions()[1].child_outcome,
+            Some(BoundaryOutcome::Timeout)
+        );
+        assert_eq!(
+            validator.transitions()[1].propagated_outcome,
+            Some(BoundaryOutcome::Timeout)
+        );
+    }
+
+    #[test]
+    fn test_outcome_propagation_non_matching_boundary_leaves_transitions_unchanged() {
+        let mut validator = CapabilityNarrowingValidator::with_defaults();
+        let parent = CapabilityGrant::full();
+        let child = CapabilityGrant::sandbox();
+
+        validator.validate_narrowing("p", "c", "boundary_x", &parent, &child);
+
+        // Record for a different boundary label
+        validator.record_outcome_propagation(
+            "boundary_y",
+            BoundaryOutcome::Failure,
+            BoundaryOutcome::Success,
+        );
+
+        // The transition should NOT be updated because labels don't match
+        let t = &validator.transitions()[0];
+        assert_eq!(t.child_outcome, None);
+        assert_eq!(t.propagated_outcome, None);
+    }
+
+    #[test]
+    fn test_escalate_same_severity_keeps_parent() {
+        let rule = OutcomePropagationRule::EscalateToMostSevere;
+        // When child and parent have the same severity, parent_current wins
+        assert_eq!(
+            rule.apply(BoundaryOutcome::Failure, BoundaryOutcome::Failure),
+            BoundaryOutcome::Failure
+        );
+        assert_eq!(
+            rule.apply(BoundaryOutcome::Success, BoundaryOutcome::Success),
+            BoundaryOutcome::Success
+        );
+    }
+
+    #[test]
+    fn test_collapse_to_failure_preserves_success_exactly() {
+        let rule = OutcomePropagationRule::CollapseToFailure;
+        assert_eq!(
+            rule.apply(BoundaryOutcome::Success, BoundaryOutcome::Cancelled),
+            BoundaryOutcome::Success
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests — canonical hash determinism
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_report_content_hash_changes_with_different_transitions() {
+        let report_a = {
+            let mut v = CapabilityNarrowingValidator::with_defaults();
+            v.validate_narrowing(
+                "p",
+                "c",
+                "a",
+                &CapabilityGrant::full(),
+                &CapabilityGrant::sandbox(),
+            );
+            v.build_report()
+        };
+
+        let report_b = {
+            let mut v = CapabilityNarrowingValidator::with_defaults();
+            v.validate_narrowing(
+                "p",
+                "c",
+                "a",
+                &CapabilityGrant::full(),
+                &CapabilityGrant::sandbox(),
+            );
+            // Add a widening violation to change the violation count
+            v.validate_narrowing(
+                "p",
+                "c",
+                "b",
+                &CapabilityGrant::sandbox(),
+                &CapabilityGrant::full(),
+            );
+            v.build_report()
+        };
+
+        assert_ne!(
+            report_a.content_hash, report_b.content_hash,
+            "reports with different transitions should have different hashes"
+        );
+    }
+
+    #[test]
+    fn test_report_content_hash_stable_across_repeated_builds() {
+        let mut v = CapabilityNarrowingValidator::with_defaults();
+        v.validate_narrowing(
+            "p",
+            "c",
+            "test",
+            &CapabilityGrant::full(),
+            &CapabilityGrant::compute_only(),
+        );
+        v.record_outcome_propagation("test", BoundaryOutcome::Failure, BoundaryOutcome::Success);
+
+        let r1 = v.build_report();
+        let r2 = v.build_report();
+        assert_eq!(r1.content_hash, r2.content_hash);
+        assert_eq!(r1, r2);
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests — validator serde roundtrip
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_validator_serde_roundtrip_preserves_state() {
+        let mut validator = CapabilityNarrowingValidator::new(
+            OutcomePropagationRule::EscalateToMostSevere,
+            SecurityEpoch::from_raw(42),
+        );
+        let parent = CapabilityGrant::full();
+        let child = CapabilityGrant::sandbox();
+
+        validator.validate_narrowing("p1", "c1", "b1", &parent, &child);
+        validator.record_outcome_propagation(
+            "b1",
+            BoundaryOutcome::Timeout,
+            BoundaryOutcome::Success,
+        );
+
+        // Also trigger a widening violation
+        validator.validate_narrowing("c1", "c2", "b2", &child, &parent);
+
+        let json = serde_json::to_string(&validator).unwrap();
+        let round: CapabilityNarrowingValidator = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(round.transitions().len(), 2);
+        assert_eq!(round.violations().len(), 1);
+        assert!(round.has_violations());
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests — intersect label composition
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_intersect_label_composed_from_parents() {
+        let sandbox = CapabilityGrant::sandbox();
+        let compute = CapabilityGrant::compute_only();
+        let result = sandbox.intersect(&compute);
+        assert_eq!(result.label, "sandbox∩compute_only");
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests — full outcome severity matrix
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_escalate_full_severity_matrix() {
+        let rule = OutcomePropagationRule::EscalateToMostSevere;
+        let outcomes = [
+            BoundaryOutcome::Success,
+            BoundaryOutcome::Failure,
+            BoundaryOutcome::Timeout,
+            BoundaryOutcome::Cancelled,
+        ];
+
+        for &child in &outcomes {
+            for &parent in &outcomes {
+                let result = rule.apply(child, parent);
+                // The result should always be the one with higher severity
+                assert!(
+                    result.severity() >= child.severity() || result.severity() >= parent.severity()
+                );
+                // More precisely: result == max(child, parent) by severity
+                let expected_severity = std::cmp::max(child.severity(), parent.severity());
+                assert_eq!(
+                    result.severity(),
+                    expected_severity,
+                    "escalate({:?}, {:?}) produced {:?} with severity {}, expected severity {}",
+                    child,
+                    parent,
+                    result,
+                    result.severity(),
+                    expected_severity
+                );
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests — report outcome counts reflect recorded propagations
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_report_outcome_counts_populated() {
+        let mut v = CapabilityNarrowingValidator::with_defaults();
+        let parent = CapabilityGrant::full();
+        let child = CapabilityGrant::sandbox();
+
+        // Transition 1 with outcome
+        v.validate_narrowing("p1", "c1", "b1", &parent, &child);
+        v.record_outcome_propagation("b1", BoundaryOutcome::Success, BoundaryOutcome::Success);
+
+        // Transition 2 with outcome
+        v.validate_narrowing("p2", "c2", "b2", &parent, &child);
+        v.record_outcome_propagation("b2", BoundaryOutcome::Failure, BoundaryOutcome::Success);
+
+        // Transition 3 with outcome
+        v.validate_narrowing("p3", "c3", "b3", &parent, &child);
+        v.record_outcome_propagation("b3", BoundaryOutcome::Failure, BoundaryOutcome::Success);
+
+        let report = v.build_report();
+        assert_eq!(report.total_transitions, 3);
+        assert_eq!(*report.outcome_counts.get("success").unwrap_or(&0), 1);
+        assert_eq!(*report.outcome_counts.get("failure").unwrap_or(&0), 2);
+        assert!(report.is_clean());
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests — compute_only is subset of sandbox
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_compute_only_subset_of_sandbox_tokens() {
+        let compute = CapabilityGrant::compute_only();
+        let sandbox = CapabilityGrant::sandbox();
+        // compute_only: Compute, TelemetryEmit, TimerAccess
+        // sandbox: Compute, TelemetryEmit, TimerAccess, HostcallInvoke, ModuleLoad
+        assert!(compute.is_subset_of(&sandbox));
+        assert!(!sandbox.is_subset_of(&compute));
+        // sandbox has exactly 2 more tokens
+        let extra = sandbox.difference(&compute);
+        assert_eq!(extra.len(), 2);
+        assert!(extra.contains(&CapabilityToken::HostcallInvoke));
+        assert!(extra.contains(&CapabilityToken::ModuleLoad));
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests — empty validator report
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_empty_validator_report() {
+        let v = CapabilityNarrowingValidator::with_defaults();
+        let report = v.build_report();
+        assert!(report.is_clean());
+        assert_eq!(report.total_transitions, 0);
+        assert!(report.direction_counts.is_empty());
+        assert!(report.outcome_counts.is_empty());
+        assert!(report.violations.is_empty());
+        assert_eq!(report.epoch, SecurityEpoch::from_raw(1));
+    }
+
+    #[test]
+    fn test_outcome_severity_values_are_contiguous() {
+        let outcomes = [
+            BoundaryOutcome::Success,
+            BoundaryOutcome::Failure,
+            BoundaryOutcome::Timeout,
+            BoundaryOutcome::Cancelled,
+        ];
+        for (i, outcome) in outcomes.iter().enumerate() {
+            assert_eq!(
+                outcome.severity(),
+                i as u8,
+                "severity for {:?} should be {}",
+                outcome,
+                i
+            );
+        }
+    }
 }

@@ -1050,4 +1050,148 @@ mod tests {
         let round: OracleMigrationEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(entry, round);
     }
+
+    // -----------------------------------------------------------------------
+    // Deep enrichment tests (PearlTower 2026-03-18)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn migration_status_display_all() {
+        for status in [
+            MigrationStatus::LocalOnly,
+            MigrationStatus::InProgress,
+            MigrationStatus::Migrated,
+            MigrationStatus::Verified,
+            MigrationStatus::Deferred,
+        ] {
+            assert!(!format!("{status}").is_empty());
+        }
+    }
+
+    #[test]
+    fn lifecycle_scenario_id_serde_all() {
+        for id in LifecycleScenarioId::ALL {
+            let json = serde_json::to_string(id).unwrap();
+            let back: LifecycleScenarioId = serde_json::from_str(&json).unwrap();
+            assert_eq!(*id, back);
+        }
+    }
+
+    #[test]
+    fn lifecycle_scenario_id_display_all() {
+        for id in LifecycleScenarioId::ALL {
+            assert!(!id.to_string().is_empty());
+        }
+    }
+
+    #[test]
+    fn containment_test_kind_serde_all() {
+        for kind in ContainmentTestKind::ALL {
+            let json = serde_json::to_string(kind).unwrap();
+            let back: ContainmentTestKind = serde_json::from_str(&json).unwrap();
+            assert_eq!(*kind, back);
+        }
+    }
+
+    #[test]
+    fn containment_test_kind_display_all() {
+        for kind in ContainmentTestKind::ALL {
+            assert!(!kind.to_string().is_empty());
+        }
+    }
+
+    #[test]
+    fn scenario_entry_all_oracles_bridged_when_empty() {
+        let entry = ScenarioMigrationEntry::local_only(LifecycleScenarioId::Startup, "test");
+        // No oracles → vacuously true
+        assert!(entry.all_oracles_bridged());
+    }
+
+    #[test]
+    fn scenario_entry_bridge_oracle_fraction_zero_with_no_bridge() {
+        let mut entry = ScenarioMigrationEntry::local_only(LifecycleScenarioId::Startup, "test");
+        entry.local_oracles.insert("safety".to_owned());
+        assert_eq!(entry.bridge_oracle_fraction_millionths(), 0);
+    }
+
+    #[test]
+    fn scenario_entry_bridge_oracle_fraction_full() {
+        let mut entry = ScenarioMigrationEntry::local_only(LifecycleScenarioId::Startup, "test");
+        entry.bridge_oracles.insert("safety".to_owned());
+        assert_eq!(entry.bridge_oracle_fraction_millionths(), SCALE);
+    }
+
+    #[test]
+    fn containment_entry_zero_local_tests() {
+        let entry = ContainmentTestEntry::new(ContainmentTestKind::RegionIsolation, "test", 0);
+        assert_eq!(entry.migration_coverage_millionths(), 0);
+    }
+
+    #[test]
+    fn containment_entry_fully_migrated_requires_status() {
+        let mut entry =
+            ContainmentTestEntry::new(ContainmentTestKind::BudgetEnforcement, "test", 10);
+        entry.upstream_test_count = 10;
+        // Status is still LocalOnly, so not fully migrated
+        assert!(!entry.fully_migrated());
+    }
+
+    #[test]
+    fn registry_scenario_mut_exists() {
+        let mut reg = HarnessMigrationRegistry::with_default_scenarios(test_epoch());
+        assert!(reg.scenario_mut(LifecycleScenarioId::Quarantine).is_some());
+    }
+
+    #[test]
+    fn registry_containment_test_mut_exists() {
+        let mut reg = HarnessMigrationRegistry::with_default_scenarios(test_epoch());
+        assert!(
+            reg.containment_test_mut(ContainmentTestKind::RegionIsolation)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn registry_scenario_not_found() {
+        let reg = HarnessMigrationRegistry::new(test_epoch());
+        assert!(reg.scenario(LifecycleScenarioId::Startup).is_none());
+    }
+
+    #[test]
+    fn report_schema_version() {
+        let reg = HarnessMigrationRegistry::with_default_scenarios(test_epoch());
+        let report = reg.build_report();
+        assert_eq!(report.schema_version, HARNESS_MIGRATION_SCHEMA_VERSION);
+        assert_eq!(report.bead_id, HARNESS_MIGRATION_BEAD_ID);
+    }
+
+    #[test]
+    fn schema_constants_non_empty() {
+        assert!(!HARNESS_MIGRATION_SCHEMA_VERSION.is_empty());
+        assert!(!HARNESS_MIGRATION_BEAD_ID.is_empty());
+        assert!(HARNESS_MIGRATION_SCHEMA_VERSION.starts_with("franken-engine."));
+    }
+
+    #[test]
+    fn oracle_entry_mark_cross_validated() {
+        let mut entry = OracleMigrationEntry::local_only("test");
+        assert!(!entry.cross_validated);
+        entry.mark_cross_validated();
+        assert!(entry.cross_validated);
+    }
+
+    #[test]
+    fn registry_content_hash_deterministic() {
+        let r1 = HarnessMigrationRegistry::with_default_scenarios(test_epoch());
+        let r2 = HarnessMigrationRegistry::with_default_scenarios(test_epoch());
+        assert_eq!(r1.content_hash, r2.content_hash);
+    }
+
+    #[test]
+    fn scenario_entry_deferred() {
+        let mut entry = ScenarioMigrationEntry::local_only(LifecycleScenarioId::Startup, "test");
+        entry.status = MigrationStatus::Deferred;
+        assert!(!entry.status.needs_work());
+        assert!(!entry.status.is_upstream_backed());
+    }
 }

@@ -1524,4 +1524,551 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&artifact_dir);
     }
+
+    // ── deep enrichment tests (PearlTower 2026-03-18) ─────────────
+
+    #[test]
+    fn guard_evidence_verdict_serde_snake_case_encoding() {
+        // Verify that serde(rename_all = "snake_case") produces expected JSON strings
+        assert_eq!(
+            serde_json::to_string(&GuardEvidenceVerdict::Pass).unwrap(),
+            "\"pass\""
+        );
+        assert_eq!(
+            serde_json::to_string(&GuardEvidenceVerdict::Missing).unwrap(),
+            "\"missing\""
+        );
+        assert_eq!(
+            serde_json::to_string(&GuardEvidenceVerdict::Fail).unwrap(),
+            "\"fail\""
+        );
+    }
+
+    #[test]
+    fn guard_evidence_verdict_rejects_invalid_json() {
+        let result = serde_json::from_str::<GuardEvidenceVerdict>("\"unknown_variant\"");
+        assert!(result.is_err());
+        let result2 = serde_json::from_str::<GuardEvidenceVerdict>("42");
+        assert!(result2.is_err());
+        let result3 = serde_json::from_str::<GuardEvidenceVerdict>("\"\"");
+        assert!(result3.is_err());
+    }
+
+    #[test]
+    fn verdict_label_matches_serde_encoding() {
+        // verdict_label output must agree with the serde snake_case encoding
+        for verdict in [
+            GuardEvidenceVerdict::Pass,
+            GuardEvidenceVerdict::Missing,
+            GuardEvidenceVerdict::Fail,
+        ] {
+            let label = super::verdict_label(verdict);
+            let serde_str = serde_json::to_string(&verdict).unwrap();
+            // serde_str is "\"pass\"", strip quotes to get "pass"
+            let serde_str_trimmed = serde_str.trim_matches('"');
+            assert_eq!(
+                label, serde_str_trimmed,
+                "verdict_label and serde encoding must agree for {verdict:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn policy_for_candidate_error_includes_candidate_name() {
+        let cases = [
+            "",
+            " ",
+            "GOVERNANCE-LEDGER-HEAD-VIEW",
+            "governance-ledger-head-view-extra",
+            "unknown\nnewline",
+        ];
+        for name in &cases {
+            let err = super::policy_for_candidate(name).unwrap_err();
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+            assert!(
+                err.to_string().contains(name),
+                "error message should contain the candidate name `{name}`"
+            );
+        }
+    }
+
+    #[test]
+    fn policy_for_candidate_known_candidates_return_ok() {
+        let known = [
+            "governance-ledger-head-view",
+            "guardplane-calibration-snapshot",
+            "module-cache-snapshot",
+        ];
+        for name in &known {
+            assert!(
+                super::policy_for_candidate(name).is_ok(),
+                "policy_for_candidate should succeed for `{name}`"
+            );
+        }
+    }
+
+    #[test]
+    fn digest_json_deterministic_for_identical_input() {
+        let value1 = serde_json::json!({"rows": [1, 2, 3]});
+        let value2 = serde_json::json!({"rows": [1, 2, 3]});
+        let hash1 = super::digest_json(&value1);
+        let hash2 = super::digest_json(&value2);
+        assert_eq!(hash1, hash2, "identical JSON should produce identical hash");
+    }
+
+    #[test]
+    fn digest_json_differs_for_different_input() {
+        let value1 = serde_json::json!({"rows": [1, 2, 3]});
+        let value2 = serde_json::json!({"rows": [1, 2, 4]});
+        let hash1 = super::digest_json(&value1);
+        let hash2 = super::digest_json(&value2);
+        assert_ne!(hash1, hash2, "different JSON must produce different hashes");
+    }
+
+    #[test]
+    fn sha256_hex_returns_64_hex_chars() {
+        let hash = super::sha256_hex(b"hello world");
+        assert_eq!(hash.len(), 64, "SHA-256 hex must be 64 characters");
+        assert!(
+            hash.chars().all(|c| c.is_ascii_hexdigit()),
+            "hash must be valid hex"
+        );
+    }
+
+    #[test]
+    fn sha256_hex_empty_input_is_known_constant() {
+        // SHA-256 of empty byte slice is the well-known constant
+        let hash = super::sha256_hex(b"");
+        assert_eq!(
+            hash,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn sha256_hex_deterministic_across_calls() {
+        let input = b"seqlock rollout guard determinism test";
+        let hash1 = super::sha256_hex(input);
+        let hash2 = super::sha256_hex(input);
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn safety_case_row_allows_rollout_when_both_verdicts_pass() {
+        let candidate = accepted_candidates("2026-03-06T00:00:00Z")
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let passing_starvation = super::StarvationMicrobenchRow {
+            candidate_id: candidate.candidate_id.clone(),
+            retry_budget_policy: candidate.retry_budget_policy,
+            burst_writes: 3,
+            observations: Vec::new(),
+            telemetry: frankenengine_engine::seqlock_fastpath::FastPathTelemetry {
+                total_reads: 6,
+                fast_path_reads: 3,
+                fallback_reads: 3,
+                total_retries: 0,
+                writer_pressure_observations: 3,
+                retry_budget_fallbacks: 0,
+                uninitialized_fallbacks: 0,
+                writer_pressure_fallbacks: 3,
+                writes: 3,
+            },
+            verdict: GuardEvidenceVerdict::Pass,
+            notes: Vec::new(),
+        };
+        let passing_model_check = super::LoomScheduleCoverageRow {
+            candidate_id: candidate.candidate_id.clone(),
+            manual_schedule_cases: vec!["case1".to_string()],
+            loom_schedule_count: 100,
+            verdict: GuardEvidenceVerdict::Pass,
+            notes: Vec::new(),
+        };
+        let safety = build_safety_case_row(&candidate, &passing_starvation, &passing_model_check);
+        assert!(
+            safety.rollout_allowed,
+            "rollout should be allowed when both verdicts pass"
+        );
+        assert!(
+            safety.disable_reasons.is_empty(),
+            "no disable reasons when both verdicts pass"
+        );
+    }
+
+    #[test]
+    fn safety_case_row_both_verdicts_fail_produces_two_disable_reasons() {
+        let candidate = accepted_candidates("2026-03-06T00:00:00Z")
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let failing_starvation = super::StarvationMicrobenchRow {
+            candidate_id: candidate.candidate_id.clone(),
+            retry_budget_policy: candidate.retry_budget_policy,
+            burst_writes: 3,
+            observations: Vec::new(),
+            telemetry: frankenengine_engine::seqlock_fastpath::FastPathTelemetry {
+                total_reads: 0,
+                fast_path_reads: 0,
+                fallback_reads: 0,
+                total_retries: 0,
+                writer_pressure_observations: 0,
+                retry_budget_fallbacks: 0,
+                uninitialized_fallbacks: 0,
+                writer_pressure_fallbacks: 0,
+                writes: 0,
+            },
+            verdict: GuardEvidenceVerdict::Fail,
+            notes: Vec::new(),
+        };
+        let missing_model_check = super::LoomScheduleCoverageRow {
+            candidate_id: candidate.candidate_id.clone(),
+            manual_schedule_cases: Vec::new(),
+            loom_schedule_count: 0,
+            verdict: GuardEvidenceVerdict::Missing,
+            notes: Vec::new(),
+        };
+        let safety = build_safety_case_row(&candidate, &failing_starvation, &missing_model_check);
+        assert!(!safety.rollout_allowed);
+        assert_eq!(
+            safety.disable_reasons.len(),
+            2,
+            "should have exactly two disable reasons"
+        );
+        assert!(
+            safety
+                .disable_reasons
+                .contains(&"starvation_microbench_failed".to_string())
+        );
+        assert!(
+            safety
+                .disable_reasons
+                .contains(&"model_check_evidence_missing".to_string())
+        );
+    }
+
+    #[test]
+    fn render_summary_disabled_section_lists_candidates_with_reasons() {
+        let artifact_dir = temp_dir("deep-summary-disabled");
+        let mut context = ArtifactContext::new(&artifact_dir);
+        context.generated_at_utc = "2026-03-06T00:00:00Z".to_string();
+        context.command_invocation = "test".to_string();
+        let bundle = emit_default_rollout_bundle(&context).expect("bundle");
+        let summary = render_summary(&bundle.safety_case, &bundle.rollout_guard);
+        // All candidates should be listed under Disabled since model check is missing
+        for row in &bundle.rollout_guard.rows {
+            assert!(
+                summary.contains(&row.candidate_id),
+                "summary should mention disabled candidate `{}`",
+                row.candidate_id
+            );
+        }
+        let _ = std::fs::remove_dir_all(&artifact_dir);
+    }
+
+    #[test]
+    fn render_summary_with_enabled_candidate_omits_fail_closed_message() {
+        // Build a custom rollout_guard with one enabled candidate
+        let safety = super::SeqlockSafetyCaseArtifact {
+            schema_version: SAFETY_CASE_SCHEMA_VERSION.to_string(),
+            bead_id: super::BEAD_ID.to_string(),
+            predecessor_bead_id: super::PREDECESSOR_BEAD_ID.to_string(),
+            component: super::COMPONENT.to_string(),
+            generated_at_utc: "2026-03-06T00:00:00Z".to_string(),
+            safety_case_hash: "abc123".to_string(),
+            rows: vec![super::SeqlockSafetyCaseRow {
+                candidate_id: "test-candidate".to_string(),
+                surface_name: "test_surface".to_string(),
+                inventory_disposition:
+                    frankenengine_engine::seqlock_candidate_inventory::CandidateDisposition::Accept,
+                starvation_verdict: GuardEvidenceVerdict::Pass,
+                model_check_verdict: GuardEvidenceVerdict::Pass,
+                rollout_allowed: true,
+                disable_reasons: Vec::new(),
+                incumbent_baseline: "rwlock".to_string(),
+            }],
+        };
+        let guard = super::SeqlockRolloutGuardArtifact {
+            schema_version: ROLLOUT_GUARD_SCHEMA_VERSION.to_string(),
+            bead_id: super::BEAD_ID.to_string(),
+            predecessor_bead_id: super::PREDECESSOR_BEAD_ID.to_string(),
+            component: super::COMPONENT.to_string(),
+            generated_at_utc: "2026-03-06T00:00:00Z".to_string(),
+            guard_hash: "def456".to_string(),
+            all_candidates_disabled: false,
+            rows: vec![super::SeqlockRolloutGuardRow {
+                candidate_id: "test-candidate".to_string(),
+                enabled: true,
+                fallback_target: "rwlock".to_string(),
+                required_artifacts: vec!["safety_case.json".to_string()],
+                disable_reasons: Vec::new(),
+            }],
+        };
+        let summary = render_summary(&safety, &guard);
+        assert!(
+            !summary.contains("fail-closed"),
+            "summary should not mention fail-closed when a candidate is enabled"
+        );
+        assert!(summary.contains("`test-candidate`"));
+    }
+
+    #[test]
+    fn render_summary_empty_rows_shows_fail_closed() {
+        let safety = super::SeqlockSafetyCaseArtifact {
+            schema_version: SAFETY_CASE_SCHEMA_VERSION.to_string(),
+            bead_id: super::BEAD_ID.to_string(),
+            predecessor_bead_id: super::PREDECESSOR_BEAD_ID.to_string(),
+            component: super::COMPONENT.to_string(),
+            generated_at_utc: "2026-03-06T00:00:00Z".to_string(),
+            safety_case_hash: "empty".to_string(),
+            rows: Vec::new(),
+        };
+        let guard = super::SeqlockRolloutGuardArtifact {
+            schema_version: ROLLOUT_GUARD_SCHEMA_VERSION.to_string(),
+            bead_id: super::BEAD_ID.to_string(),
+            predecessor_bead_id: super::PREDECESSOR_BEAD_ID.to_string(),
+            component: super::COMPONENT.to_string(),
+            generated_at_utc: "2026-03-06T00:00:00Z".to_string(),
+            guard_hash: "empty".to_string(),
+            all_candidates_disabled: true,
+            rows: Vec::new(),
+        };
+        let summary = render_summary(&safety, &guard);
+        assert!(summary.contains("fail-closed"));
+    }
+
+    #[test]
+    fn unique_temp_path_produces_distinct_paths() {
+        let base = std::path::Path::new("/tmp/test_artifact.json");
+        let p1 = super::unique_temp_path(base);
+        let p2 = super::unique_temp_path(base);
+        assert_ne!(p1, p2, "consecutive unique_temp_path calls must differ");
+        assert!(
+            p1.file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with(".test_artifact.json."),
+            "temp path should start with dot-prefixed original name"
+        );
+        assert!(
+            p1.file_name().unwrap().to_str().unwrap().ends_with(".tmp"),
+            "temp path should end with .tmp"
+        );
+    }
+
+    #[test]
+    fn unique_temp_path_with_no_filename_uses_artifact_fallback() {
+        let base = std::path::Path::new("/");
+        let p = super::unique_temp_path(base);
+        let name = p.file_name().unwrap().to_str().unwrap();
+        assert!(
+            name.starts_with(".artifact."),
+            "when no file_name exists, fallback to 'artifact'"
+        );
+    }
+
+    #[test]
+    fn starvation_microbench_report_artifact_serde_roundtrip() {
+        let artifact = super::StarvationMicrobenchReportArtifact {
+            schema_version: super::STARVATION_REPORT_SCHEMA_VERSION.to_string(),
+            bead_id: super::BEAD_ID.to_string(),
+            predecessor_bead_id: super::PREDECESSOR_BEAD_ID.to_string(),
+            component: super::COMPONENT.to_string(),
+            generated_at_utc: "2026-03-06T00:00:00Z".to_string(),
+            report_hash: "abc".to_string(),
+            rows: Vec::new(),
+        };
+        let json = serde_json::to_string_pretty(&artifact).unwrap();
+        let back: super::StarvationMicrobenchReportArtifact = serde_json::from_str(&json).unwrap();
+        assert_eq!(artifact, back);
+    }
+
+    #[test]
+    fn loom_schedule_coverage_report_artifact_serde_roundtrip() {
+        let artifact = super::LoomScheduleCoverageReportArtifact {
+            schema_version: super::LOOM_COVERAGE_SCHEMA_VERSION.to_string(),
+            bead_id: super::BEAD_ID.to_string(),
+            predecessor_bead_id: super::PREDECESSOR_BEAD_ID.to_string(),
+            component: super::COMPONENT.to_string(),
+            generated_at_utc: "2026-03-06T00:00:00Z".to_string(),
+            report_hash: "def".to_string(),
+            rows: Vec::new(),
+        };
+        let json = serde_json::to_string_pretty(&artifact).unwrap();
+        let back: super::LoomScheduleCoverageReportArtifact = serde_json::from_str(&json).unwrap();
+        assert_eq!(artifact, back);
+    }
+
+    #[test]
+    fn seqlock_safety_case_artifact_serde_roundtrip() {
+        let artifact = super::SeqlockSafetyCaseArtifact {
+            schema_version: super::SAFETY_CASE_SCHEMA_VERSION.to_string(),
+            bead_id: super::BEAD_ID.to_string(),
+            predecessor_bead_id: super::PREDECESSOR_BEAD_ID.to_string(),
+            component: super::COMPONENT.to_string(),
+            generated_at_utc: "2026-03-06T00:00:00Z".to_string(),
+            safety_case_hash: "hash123".to_string(),
+            rows: Vec::new(),
+        };
+        let json = serde_json::to_string_pretty(&artifact).unwrap();
+        let back: super::SeqlockSafetyCaseArtifact = serde_json::from_str(&json).unwrap();
+        assert_eq!(artifact, back);
+    }
+
+    #[test]
+    fn seqlock_rollout_guard_artifact_serde_roundtrip() {
+        let artifact = super::SeqlockRolloutGuardArtifact {
+            schema_version: super::ROLLOUT_GUARD_SCHEMA_VERSION.to_string(),
+            bead_id: super::BEAD_ID.to_string(),
+            predecessor_bead_id: super::PREDECESSOR_BEAD_ID.to_string(),
+            component: super::COMPONENT.to_string(),
+            generated_at_utc: "2026-03-06T00:00:00Z".to_string(),
+            guard_hash: "ghash".to_string(),
+            all_candidates_disabled: true,
+            rows: Vec::new(),
+        };
+        let json = serde_json::to_string_pretty(&artifact).unwrap();
+        let back: super::SeqlockRolloutGuardArtifact = serde_json::from_str(&json).unwrap();
+        assert_eq!(artifact, back);
+    }
+
+    #[test]
+    fn docs_contract_fixture_serde_roundtrip() {
+        let fixture = build_docs_contract_fixture();
+        let json = serde_json::to_string_pretty(&fixture).unwrap();
+        let back: super::DocsContractFixture = serde_json::from_str(&json).unwrap();
+        assert_eq!(fixture.schema_version, back.schema_version);
+        assert_eq!(fixture.bead_id, back.bead_id);
+        assert_eq!(
+            fixture.default_disabled_candidates,
+            back.default_disabled_candidates
+        );
+        assert_eq!(fixture.required_artifacts, back.required_artifacts);
+    }
+
+    #[test]
+    fn bundle_write_report_all_candidates_disabled_flag_is_true() {
+        let artifact_dir = temp_dir("deep-all-disabled");
+        let mut context = ArtifactContext::new(&artifact_dir);
+        context.generated_at_utc = "2026-03-06T00:00:00Z".to_string();
+        context.command_invocation = "test".to_string();
+        let bundle = emit_default_rollout_bundle(&context).expect("bundle");
+        // Since model check is always missing, all candidates must be disabled
+        assert!(
+            bundle.rollout_guard.all_candidates_disabled,
+            "all_candidates_disabled should be true when model check is missing"
+        );
+        for row in &bundle.rollout_guard.rows {
+            assert!(
+                !row.enabled,
+                "candidate {} should be disabled",
+                row.candidate_id
+            );
+        }
+        let _ = std::fs::remove_dir_all(&artifact_dir);
+    }
+
+    #[test]
+    fn bundle_written_files_contain_all_required_artifacts() {
+        let artifact_dir = temp_dir("deep-required-arts");
+        let mut context = ArtifactContext::new(&artifact_dir);
+        context.generated_at_utc = "2026-03-06T00:00:00Z".to_string();
+        context.command_invocation = "test".to_string();
+        let bundle = emit_default_rollout_bundle(&context).expect("bundle");
+        let required = super::required_artifact_names();
+        for name in &required {
+            assert!(
+                bundle.written_files.contains_key(name),
+                "written_files should contain required artifact `{name}`"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&artifact_dir);
+    }
+
+    #[test]
+    fn digest_json_empty_object_is_deterministic() {
+        let empty = serde_json::json!({});
+        let h1 = super::digest_json(&empty);
+        let h2 = super::digest_json(&empty);
+        assert_eq!(h1, h2);
+        assert_eq!(h1.len(), 64);
+    }
+
+    #[test]
+    fn digest_json_key_order_matters() {
+        // serde_json::json! with object keys produces ordered output for
+        // Value::Object (BTreeMap), so identical keys in different insertion
+        // order still produce the same hash.
+        let a = serde_json::json!({"alpha": 1, "beta": 2});
+        let b = serde_json::json!({"beta": 2, "alpha": 1});
+        let ha = super::digest_json(&a);
+        let hb = super::digest_json(&b);
+        assert_eq!(
+            ha, hb,
+            "serde_json::Value object keys are sorted, so order should not matter"
+        );
+    }
+
+    #[test]
+    fn starvation_burst_observation_serde_roundtrip() {
+        let obs = super::StarvationBurstObservation {
+            burst_index: 0,
+            committed_value: 42,
+            during_write_source: FastPathReadSource::Fallback,
+            during_write_fallback_reason: Some(FastPathFallbackReason::WriterPressure),
+            during_write_writer_pressure_observations: 1,
+            post_publish_source: FastPathReadSource::FastPath,
+            post_publish_value: 42,
+        };
+        let json = serde_json::to_string(&obs).unwrap();
+        let back: super::StarvationBurstObservation = serde_json::from_str(&json).unwrap();
+        assert_eq!(obs, back);
+    }
+
+    #[test]
+    fn starvation_burst_observation_with_no_fallback_reason() {
+        let obs = super::StarvationBurstObservation {
+            burst_index: 5,
+            committed_value: 100,
+            during_write_source: FastPathReadSource::FastPath,
+            during_write_fallback_reason: None,
+            during_write_writer_pressure_observations: 0,
+            post_publish_source: FastPathReadSource::FastPath,
+            post_publish_value: 100,
+        };
+        let json = serde_json::to_string(&obs).unwrap();
+        let back: super::StarvationBurstObservation = serde_json::from_str(&json).unwrap();
+        assert_eq!(obs, back);
+        assert!(json.contains("null"), "None should serialize as null");
+    }
+
+    #[test]
+    fn manifest_artifact_reference_serde_roundtrip() {
+        let reference = super::ManifestArtifactReference {
+            path: "seqlock_safety_case.json".to_string(),
+            sha256: "sha256:abcdef0123456789".to_string(),
+        };
+        let json = serde_json::to_string(&reference).unwrap();
+        let back: super::ManifestArtifactReference = serde_json::from_str(&json).unwrap();
+        assert_eq!(reference, back);
+    }
+
+    #[test]
+    fn safety_case_row_preserves_incumbent_baseline() {
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        for candidate in &candidates {
+            let starvation = run_starvation_microbench(candidate);
+            let model_check = build_missing_model_check_row(candidate);
+            let safety = build_safety_case_row(candidate, &starvation, &model_check);
+            assert_eq!(
+                safety.incumbent_baseline, candidate.incumbent_baseline,
+                "safety row should preserve incumbent baseline for {}",
+                candidate.candidate_id
+            );
+            assert_eq!(safety.surface_name, candidate.surface_name);
+        }
+    }
 }

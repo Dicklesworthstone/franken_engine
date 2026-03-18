@@ -1037,4 +1037,206 @@ mod tests {
         let back: GateReport = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
     }
+
+    // -----------------------------------------------------------------------
+    // Deep enrichment tests (PearlTower 2026-03-18)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn cert_hash_changes_with_surface() {
+        let c1 = clean_cert(SupportSurface::Latency);
+        let c2 = clean_cert(SupportSurface::Memory);
+        assert_ne!(c1.content_hash, c2.content_hash);
+    }
+
+    #[test]
+    fn cert_hash_changes_with_coverage() {
+        let c1 = DescentCertificate::new(
+            "cert-a",
+            SupportSurface::Latency,
+            980_000,
+            900_000,
+            Vec::new(),
+            BTreeSet::new(),
+        );
+        let c2 = DescentCertificate::new(
+            "cert-a",
+            SupportSurface::Latency,
+            500_000,
+            900_000,
+            Vec::new(),
+            BTreeSet::new(),
+        );
+        assert_ne!(c1.content_hash, c2.content_hash);
+    }
+
+    #[test]
+    fn cert_meets_confidence_boundary() {
+        let c = DescentCertificate::new(
+            "cert-exact",
+            SupportSurface::Latency,
+            980_000,
+            850_000, // exactly MIN_DESCENT_CONFIDENCE
+            Vec::new(),
+            BTreeSet::new(),
+        );
+        assert!(c.meets_confidence_threshold(850_000));
+        assert!(!c.meets_confidence_threshold(850_001));
+    }
+
+    #[test]
+    fn cert_meets_coverage_boundary() {
+        let c = DescentCertificate::new(
+            "cert-cov",
+            SupportSurface::Latency,
+            950_000, // exactly MIN_DESCENT_COVERAGE
+            900_000,
+            Vec::new(),
+            BTreeSet::new(),
+        );
+        assert!(c.meets_coverage_threshold(950_000));
+        assert!(!c.meets_coverage_threshold(950_001));
+    }
+
+    #[test]
+    fn obstruction_serde() {
+        let obs = Obstruction {
+            kind: ObstructionKind::LocalMinimum,
+            surface: SupportSurface::Throughput,
+            region: "hot-loop".into(),
+            severity_millionths: 200_000,
+            description: "stuck".into(),
+        };
+        let json = serde_json::to_string(&obs).unwrap();
+        let back: Obstruction = serde_json::from_str(&json).unwrap();
+        assert_eq!(obs, back);
+    }
+
+    #[test]
+    fn support_claim_serde() {
+        let claim = latency_claim();
+        let json = serde_json::to_string(&claim).unwrap();
+        let back: SupportClaim = serde_json::from_str(&json).unwrap();
+        assert_eq!(claim, back);
+    }
+
+    #[test]
+    fn gate_verdict_no_cert_variant() {
+        let v = GateVerdict::NoCertificate {
+            claim_id: "test".into(),
+        };
+        let json = serde_json::to_string(&v).unwrap();
+        let back: GateVerdict = serde_json::from_str(&json).unwrap();
+        assert_eq!(v, back);
+    }
+
+    #[test]
+    fn gate_with_defaults_thresholds() {
+        let gate = DescentGate::with_defaults();
+        assert_eq!(gate.min_coverage_millionths, MIN_DESCENT_COVERAGE);
+        assert_eq!(gate.min_confidence_millionths, MIN_DESCENT_CONFIDENCE);
+        assert_eq!(gate.max_obstructions, MAX_OBSTRUCTIONS_ALLOWED);
+    }
+
+    #[test]
+    fn gate_rejects_low_confidence() {
+        let gate = DescentGate::with_defaults();
+        let cert = DescentCertificate::new(
+            "cert-low-conf",
+            SupportSurface::Latency,
+            980_000,
+            500_000, // below 850_000 threshold
+            Vec::new(),
+            BTreeSet::new(),
+        );
+        let v = gate.evaluate(&latency_claim(), Some(&cert), false);
+        assert!(v.is_rejected());
+    }
+
+    #[test]
+    fn report_mixed_verdicts() {
+        let verdicts = vec![
+            GateVerdict::Supported {
+                claim_id: "a".into(),
+                certificate_id: "c1".into(),
+            },
+            GateVerdict::Rejected {
+                claim_id: "b".into(),
+                reasons: vec![GateRejection::NoCertificate],
+            },
+        ];
+        let r = GateReport::new(epoch(), verdicts);
+        assert!(!r.all_supported());
+        assert_eq!(r.total_count(), 2);
+        assert_eq!(r.support_rate(), 500_000); // 50%
+    }
+
+    #[test]
+    fn report_schema_version() {
+        let r = GateReport::new(epoch(), vec![]);
+        assert_eq!(r.schema_version, SCHEMA_VERSION);
+        assert_eq!(r.bead_id, BEAD_ID);
+    }
+
+    #[test]
+    fn rejection_all_variants_display() {
+        let rejections = [
+            GateRejection::NoCertificate,
+            GateRejection::SurfaceMismatch {
+                claim_surface: SupportSurface::Latency,
+                cert_surface: SupportSurface::Memory,
+            },
+            GateRejection::InsufficientCoverage {
+                coverage_millionths: 800_000,
+                threshold_millionths: 950_000,
+            },
+            GateRejection::InsufficientConfidence {
+                confidence_millionths: 700_000,
+                threshold_millionths: 850_000,
+            },
+            GateRejection::ActiveObstructions { count: 2 },
+            GateRejection::UncoveredRegions {
+                regions: BTreeSet::from(["r1".to_string()]),
+            },
+            GateRejection::NoParityEvidence,
+        ];
+        for r in &rejections {
+            assert!(!r.to_string().is_empty());
+        }
+    }
+
+    #[test]
+    fn rejection_serde_all_variants() {
+        for r in [
+            GateRejection::NoCertificate,
+            GateRejection::NoParityEvidence,
+            GateRejection::ActiveObstructions { count: 5 },
+        ] {
+            let json = serde_json::to_string(&r).unwrap();
+            let back: GateRejection = serde_json::from_str(&json).unwrap();
+            assert_eq!(r, back);
+        }
+    }
+
+    #[test]
+    fn cert_with_covered_regions() {
+        let regions = BTreeSet::from(["region-a".to_string(), "region-b".to_string()]);
+        let c = DescentCertificate::new(
+            "cert-reg",
+            SupportSurface::Latency,
+            980_000,
+            900_000,
+            Vec::new(),
+            regions.clone(),
+        );
+        assert_eq!(c.covered_regions, regions);
+    }
+
+    #[test]
+    fn gate_serde() {
+        let gate = DescentGate::with_defaults();
+        let json = serde_json::to_string(&gate).unwrap();
+        let back: DescentGate = serde_json::from_str(&json).unwrap();
+        assert_eq!(gate, back);
+    }
 }

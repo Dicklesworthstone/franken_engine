@@ -1118,4 +1118,733 @@ mod tests {
             .collect();
         assert!(!critical_findings.is_empty());
     }
+
+    // =====================================================================
+    // Deep enrichment tests
+    // =====================================================================
+
+    // -- Enum serde roundtrip exhaustive --
+
+    #[test]
+    fn promoted_gate_kind_serde_snake_case_values() {
+        // Verify the exact JSON representation (snake_case from #[serde(rename_all)])
+        let expected = [
+            (
+                PromotedGateKind::LifecycleScenarios,
+                "\"lifecycle_scenarios\"",
+            ),
+            (
+                PromotedGateKind::ReplayDeterminism,
+                "\"replay_determinism\"",
+            ),
+            (
+                PromotedGateKind::ObligationResolution,
+                "\"obligation_resolution\"",
+            ),
+            (
+                PromotedGateKind::EvidenceCompleteness,
+                "\"evidence_completeness\"",
+            ),
+            (
+                PromotedGateKind::BudgetPropagation,
+                "\"budget_propagation\"",
+            ),
+            (
+                PromotedGateKind::CapabilityNarrowing,
+                "\"capability_narrowing\"",
+            ),
+            (PromotedGateKind::MockSeamAbsence, "\"mock_seam_absence\""),
+            (
+                PromotedGateKind::OutcomePropagation,
+                "\"outcome_propagation\"",
+            ),
+        ];
+        for (variant, json_str) in expected {
+            let serialized = serde_json::to_string(&variant).unwrap();
+            assert_eq!(serialized, json_str, "mismatch for {variant:?}");
+            let deserialized: PromotedGateKind = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(deserialized, variant);
+        }
+    }
+
+    #[test]
+    fn promotion_status_serde_snake_case_values() {
+        let expected = [
+            (PromotionStatus::AssertionBased, "\"assertion_based\""),
+            (PromotionStatus::OracleWired, "\"oracle_wired\""),
+            (PromotionStatus::OracleBacked, "\"oracle_backed\""),
+            (PromotionStatus::FullyPromoted, "\"fully_promoted\""),
+        ];
+        for (variant, json_str) in expected {
+            let serialized = serde_json::to_string(&variant).unwrap();
+            assert_eq!(serialized, json_str, "mismatch for {variant:?}");
+            let deserialized: PromotionStatus = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(deserialized, variant);
+        }
+    }
+
+    #[test]
+    fn triage_severity_serde_snake_case_values() {
+        let expected = [
+            (TriageSeverity::Info, "\"info\""),
+            (TriageSeverity::Warning, "\"warning\""),
+            (TriageSeverity::Error, "\"error\""),
+            (TriageSeverity::Critical, "\"critical\""),
+        ];
+        for (variant, json_str) in expected {
+            let serialized = serde_json::to_string(&variant).unwrap();
+            assert_eq!(serialized, json_str, "mismatch for {variant:?}");
+            let deserialized: TriageSeverity = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(deserialized, variant);
+        }
+    }
+
+    // -- Display / as_str consistency --
+
+    #[test]
+    fn promoted_gate_kind_display_matches_serde() {
+        // Display output should match the serde snake_case string (without quotes)
+        for gate in PromotedGateKind::ALL {
+            let display = gate.to_string();
+            let serde_str = serde_json::to_string(&gate).unwrap();
+            // serde_str is e.g. "\"lifecycle_scenarios\"", strip quotes
+            let serde_inner = &serde_str[1..serde_str.len() - 1];
+            assert_eq!(
+                display, serde_inner,
+                "Display vs serde mismatch for {gate:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn promotion_status_display_matches_serde() {
+        for status in [
+            PromotionStatus::AssertionBased,
+            PromotionStatus::OracleWired,
+            PromotionStatus::OracleBacked,
+            PromotionStatus::FullyPromoted,
+        ] {
+            let display = status.to_string();
+            let serde_str = serde_json::to_string(&status).unwrap();
+            let serde_inner = &serde_str[1..serde_str.len() - 1];
+            assert_eq!(
+                display, serde_inner,
+                "Display vs serde mismatch for {status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn triage_severity_display_matches_serde() {
+        for severity in [
+            TriageSeverity::Info,
+            TriageSeverity::Warning,
+            TriageSeverity::Error,
+            TriageSeverity::Critical,
+        ] {
+            let display = severity.to_string();
+            let serde_str = serde_json::to_string(&severity).unwrap();
+            let serde_inner = &serde_str[1..serde_str.len() - 1];
+            assert_eq!(
+                display, serde_inner,
+                "Display vs serde mismatch for {severity:?}"
+            );
+        }
+    }
+
+    // -- Error Display formatting --
+
+    #[test]
+    fn triage_bundle_display_with_no_findings() {
+        let bundle = TriageBundle::from_findings(vec![]);
+        let s = format!("{bundle}");
+        assert!(s.contains("findings=0"));
+        assert!(s.contains("blockers=0"));
+        assert!(s.contains("max_severity=none"));
+        assert!(s.contains("gates=0"));
+    }
+
+    #[test]
+    fn triage_bundle_display_with_mixed_findings() {
+        let findings = vec![
+            TriageFinding {
+                gate: PromotedGateKind::LifecycleScenarios,
+                severity: TriageSeverity::Info,
+                summary: "a".to_owned(),
+                detail: String::new(),
+                remediation_steps: vec![],
+                scenario_id: None,
+                oracle_invariant: None,
+            },
+            TriageFinding {
+                gate: PromotedGateKind::BudgetPropagation,
+                severity: TriageSeverity::Critical,
+                summary: "b".to_owned(),
+                detail: String::new(),
+                remediation_steps: vec![],
+                scenario_id: None,
+                oracle_invariant: None,
+            },
+        ];
+        let bundle = TriageBundle::from_findings(findings);
+        let s = format!("{bundle}");
+        assert!(s.contains("findings=2"));
+        assert!(s.contains("blockers=1"));
+        assert!(s.contains("max_severity=critical"));
+        assert!(s.contains("gates=2"));
+    }
+
+    #[test]
+    fn report_display_includes_all_fields() {
+        let mut reg = ReleaseGatePromotionRegistry::with_defaults(test_epoch());
+        let gate = reg.gate_mut(PromotedGateKind::LifecycleScenarios).unwrap();
+        let mut inv = BTreeSet::new();
+        inv.insert("inv_a".to_owned());
+        gate.wire_oracles(inv);
+        gate.promote_to_oracle_backed();
+        gate.record_run(true);
+
+        let report = reg.build_report();
+        let s = format!("{report}");
+        assert!(s.contains("oracle-backed"));
+        assert!(s.contains("progress="));
+        assert!(s.contains("runs="));
+        assert!(s.contains("findings="));
+        assert!(s.contains("blocked="));
+    }
+
+    // -- Edge cases: empty inputs, boundary values --
+
+    #[test]
+    fn registry_empty_has_zero_progress() {
+        let reg = ReleaseGatePromotionRegistry::new(test_epoch());
+        assert_eq!(reg.gates.len(), 0);
+        assert_eq!(reg.promotion_progress_millionths(), 0);
+        assert_eq!(reg.oracle_backed_count(), 0);
+    }
+
+    #[test]
+    fn registry_empty_evaluate_and_triage_clean() {
+        let reg = ReleaseGatePromotionRegistry::new(test_epoch());
+        let bundle = reg.evaluate_and_triage();
+        assert!(bundle.is_clean());
+    }
+
+    #[test]
+    fn registry_empty_report_not_fully_promoted() {
+        let reg = ReleaseGatePromotionRegistry::new(test_epoch());
+        let report = reg.build_report();
+        assert!(!report.fully_promoted());
+        assert_eq!(report.total_gates, 0);
+        assert!(!report.release_blocked);
+    }
+
+    #[test]
+    fn gate_entry_pass_rate_zero_runs() {
+        let entry = GatePromotionEntry::assertion_based(PromotedGateKind::MockSeamAbsence);
+        assert_eq!(entry.pass_rate_millionths(), 0);
+    }
+
+    #[test]
+    fn gate_entry_pass_rate_all_passing() {
+        let mut entry = GatePromotionEntry::assertion_based(PromotedGateKind::OutcomePropagation);
+        for _ in 0..100 {
+            entry.record_run(true);
+        }
+        assert_eq!(entry.pass_rate_millionths(), SCALE);
+    }
+
+    #[test]
+    fn gate_entry_pass_rate_all_failing() {
+        let mut entry = GatePromotionEntry::assertion_based(PromotedGateKind::EvidenceCompleteness);
+        for _ in 0..50 {
+            entry.record_run(false);
+        }
+        assert_eq!(entry.pass_rate_millionths(), 0);
+        assert_eq!(entry.evaluation_runs, 50);
+        assert_eq!(entry.passing_runs, 0);
+    }
+
+    #[test]
+    fn gate_entry_pass_rate_boundary_one_run_pass() {
+        let mut entry = GatePromotionEntry::assertion_based(PromotedGateKind::ReplayDeterminism);
+        entry.record_run(true);
+        assert_eq!(entry.pass_rate_millionths(), SCALE);
+    }
+
+    #[test]
+    fn gate_entry_pass_rate_boundary_one_run_fail() {
+        let mut entry = GatePromotionEntry::assertion_based(PromotedGateKind::ReplayDeterminism);
+        entry.record_run(false);
+        assert_eq!(entry.pass_rate_millionths(), 0);
+    }
+
+    #[test]
+    fn blocker_threshold_would_block_boundary_exact_threshold() {
+        let t = BlockerThreshold::strict(PromotedGateKind::LifecycleScenarios);
+        // Exact threshold: pass_rate == min_pass_rate, failures == max_failures
+        assert!(!t.would_block(SCALE, 0));
+        // Just below threshold
+        assert!(t.would_block(SCALE - 1, 0));
+    }
+
+    #[test]
+    fn blocker_threshold_relaxed_boundary_exact_pass_rate() {
+        let t = BlockerThreshold::relaxed(PromotedGateKind::CapabilityNarrowing);
+        // Exactly at min pass rate with max failures => should NOT block
+        assert!(!t.would_block(DEFAULT_MIN_ORACLE_PASS_RATE, 2));
+        // One below pass rate => blocks
+        assert!(t.would_block(DEFAULT_MIN_ORACLE_PASS_RATE - 1, 2));
+        // One above max failures => blocks
+        assert!(t.would_block(SCALE, 3));
+    }
+
+    #[test]
+    fn blocker_threshold_with_rationale_preserves_fields() {
+        let t = BlockerThreshold::strict(PromotedGateKind::MockSeamAbsence)
+            .with_rationale("no mock seams in production");
+        assert_eq!(t.rationale, "no mock seams in production");
+        assert_eq!(t.gate, PromotedGateKind::MockSeamAbsence);
+        assert!(t.infra_errors_block);
+        assert!(t.timeouts_block);
+    }
+
+    // -- State machine transitions --
+
+    #[test]
+    fn gate_promotion_state_machine_full_lifecycle() {
+        let mut entry = GatePromotionEntry::assertion_based(PromotedGateKind::ObligationResolution);
+
+        // Start: AssertionBased
+        assert_eq!(entry.status, PromotionStatus::AssertionBased);
+        assert!(!entry.status.is_oracle_backed());
+        assert!(!entry.cross_validated);
+
+        // Step 1: Wire oracles -> OracleWired
+        let mut inv = BTreeSet::new();
+        inv.insert("obligation_inv_1".to_owned());
+        inv.insert("obligation_inv_2".to_owned());
+        entry.wire_oracles(inv.clone());
+        assert_eq!(entry.status, PromotionStatus::OracleWired);
+        assert!(!entry.status.is_oracle_backed());
+        assert_eq!(entry.oracle_invariants.len(), 2);
+
+        // Step 2: Promote to oracle-backed
+        entry.promote_to_oracle_backed();
+        assert_eq!(entry.status, PromotionStatus::OracleBacked);
+        assert!(entry.status.is_oracle_backed());
+        assert!(!entry.cross_validated);
+
+        // Step 3: Fully promote
+        entry.promote_fully();
+        assert_eq!(entry.status, PromotionStatus::FullyPromoted);
+        assert!(entry.status.is_oracle_backed());
+        assert!(entry.cross_validated);
+    }
+
+    #[test]
+    fn gate_entry_wire_oracles_replaces_previous_invariants() {
+        let mut entry = GatePromotionEntry::assertion_based(PromotedGateKind::BudgetPropagation);
+        let mut inv1 = BTreeSet::new();
+        inv1.insert("old_invariant".to_owned());
+        entry.wire_oracles(inv1);
+        assert_eq!(entry.oracle_invariants.len(), 1);
+        assert!(entry.oracle_invariants.contains("old_invariant"));
+
+        let mut inv2 = BTreeSet::new();
+        inv2.insert("new_a".to_owned());
+        inv2.insert("new_b".to_owned());
+        entry.wire_oracles(inv2);
+        assert_eq!(entry.oracle_invariants.len(), 2);
+        assert!(!entry.oracle_invariants.contains("old_invariant"));
+        assert!(entry.oracle_invariants.contains("new_a"));
+        assert!(entry.oracle_invariants.contains("new_b"));
+        assert_eq!(entry.status, PromotionStatus::OracleWired);
+    }
+
+    #[test]
+    fn gate_entry_blocks_release_relaxed_threshold_passing() {
+        let mut entry = GatePromotionEntry::assertion_based(PromotedGateKind::OutcomePropagation);
+        entry.threshold = BlockerThreshold::relaxed(PromotedGateKind::OutcomePropagation);
+        // 98 pass, 2 fail => pass rate = 980_000, failures = 2
+        for _ in 0..98 {
+            entry.record_run(true);
+        }
+        for _ in 0..2 {
+            entry.record_run(false);
+        }
+        // Pass rate 980_000 >= 950_000, failures 2 <= 2 => not blocking
+        assert!(!entry.blocks_release());
+    }
+
+    #[test]
+    fn gate_entry_blocks_release_relaxed_threshold_failing() {
+        let mut entry = GatePromotionEntry::assertion_based(PromotedGateKind::OutcomePropagation);
+        entry.threshold = BlockerThreshold::relaxed(PromotedGateKind::OutcomePropagation);
+        // 94 pass, 6 fail => pass rate = 940_000, failures = 6
+        for _ in 0..94 {
+            entry.record_run(true);
+        }
+        for _ in 0..6 {
+            entry.record_run(false);
+        }
+        // Pass rate 940_000 < 950_000 => blocking
+        assert!(entry.blocks_release());
+    }
+
+    // -- Canonical hash determinism --
+
+    #[test]
+    fn triage_bundle_content_hash_deterministic() {
+        let make_bundle = || {
+            let findings = vec![
+                TriageFinding {
+                    gate: PromotedGateKind::LifecycleScenarios,
+                    severity: TriageSeverity::Warning,
+                    summary: "warn".to_owned(),
+                    detail: "d".to_owned(),
+                    remediation_steps: vec!["step".to_owned()],
+                    scenario_id: Some("s1".to_owned()),
+                    oracle_invariant: Some("inv1".to_owned()),
+                },
+                TriageFinding {
+                    gate: PromotedGateKind::BudgetPropagation,
+                    severity: TriageSeverity::Error,
+                    summary: "err".to_owned(),
+                    detail: "e".to_owned(),
+                    remediation_steps: vec![],
+                    scenario_id: None,
+                    oracle_invariant: None,
+                },
+            ];
+            TriageBundle::from_findings(findings)
+        };
+        let b1 = make_bundle();
+        let b2 = make_bundle();
+        assert_eq!(b1.content_hash, b2.content_hash);
+    }
+
+    #[test]
+    fn triage_bundle_content_hash_changes_with_different_findings() {
+        let f1 = vec![TriageFinding {
+            gate: PromotedGateKind::LifecycleScenarios,
+            severity: TriageSeverity::Info,
+            summary: "a".to_owned(),
+            detail: String::new(),
+            remediation_steps: vec![],
+            scenario_id: None,
+            oracle_invariant: None,
+        }];
+        let f2 = vec![TriageFinding {
+            gate: PromotedGateKind::LifecycleScenarios,
+            severity: TriageSeverity::Critical,
+            summary: "a".to_owned(),
+            detail: String::new(),
+            remediation_steps: vec![],
+            scenario_id: None,
+            oracle_invariant: None,
+        }];
+        let b1 = TriageBundle::from_findings(f1);
+        let b2 = TriageBundle::from_findings(f2);
+        assert_ne!(b1.content_hash, b2.content_hash);
+    }
+
+    #[test]
+    fn report_content_hash_changes_with_promotion() {
+        let reg1 = ReleaseGatePromotionRegistry::with_defaults(test_epoch());
+        let r1 = reg1.build_report();
+
+        let mut reg2 = ReleaseGatePromotionRegistry::with_defaults(test_epoch());
+        let gate = reg2.gate_mut(PromotedGateKind::LifecycleScenarios).unwrap();
+        gate.promote_to_oracle_backed();
+        let r2 = reg2.build_report();
+
+        assert_ne!(r1.content_hash, r2.content_hash);
+    }
+
+    // -- Registry promotion progress --
+
+    #[test]
+    fn registry_promotion_progress_partial() {
+        let mut reg = ReleaseGatePromotionRegistry::with_defaults(test_epoch());
+        // Promote 2 of 8 gates
+        for kind in [
+            PromotedGateKind::LifecycleScenarios,
+            PromotedGateKind::ReplayDeterminism,
+        ] {
+            let gate = reg.gate_mut(kind).unwrap();
+            gate.promote_to_oracle_backed();
+        }
+        assert_eq!(reg.oracle_backed_count(), 2);
+        // 2/8 = 250_000
+        assert_eq!(reg.promotion_progress_millionths(), 250_000);
+    }
+
+    #[test]
+    fn registry_promotion_progress_full() {
+        let mut reg = ReleaseGatePromotionRegistry::with_defaults(test_epoch());
+        for kind in PromotedGateKind::ALL {
+            let gate = reg.gate_mut(kind).unwrap();
+            gate.promote_fully();
+        }
+        assert_eq!(reg.oracle_backed_count(), 8);
+        assert_eq!(reg.promotion_progress_millionths(), SCALE);
+    }
+
+    #[test]
+    fn report_fully_promoted_requires_all_gates() {
+        let mut reg = ReleaseGatePromotionRegistry::with_defaults(test_epoch());
+        // Promote 7 out of 8
+        for kind in &PromotedGateKind::ALL[..7] {
+            let gate = reg.gate_mut(*kind).unwrap();
+            gate.promote_to_oracle_backed();
+        }
+        let report = reg.build_report();
+        assert!(!report.fully_promoted());
+
+        // Promote the last one
+        let gate = reg.gate_mut(PromotedGateKind::ALL[7]).unwrap();
+        gate.promote_to_oracle_backed();
+        let report = reg.build_report();
+        assert!(report.fully_promoted());
+    }
+
+    #[test]
+    fn report_overall_pass_rate_zero_when_no_runs() {
+        let reg = ReleaseGatePromotionRegistry::with_defaults(test_epoch());
+        let report = reg.build_report();
+        assert_eq!(report.overall_pass_rate_millionths(), 0);
+    }
+
+    #[test]
+    fn report_overall_pass_rate_aggregates_all_gates() {
+        let mut reg = ReleaseGatePromotionRegistry::with_defaults(test_epoch());
+        // Gate 1: 3 pass / 4 total
+        let g1 = reg.gate_mut(PromotedGateKind::LifecycleScenarios).unwrap();
+        for _ in 0..3 {
+            g1.record_run(true);
+        }
+        g1.record_run(false);
+
+        // Gate 2: 2 pass / 2 total
+        let g2 = reg.gate_mut(PromotedGateKind::ReplayDeterminism).unwrap();
+        g2.record_run(true);
+        g2.record_run(true);
+
+        let report = reg.build_report();
+        assert_eq!(report.total_evaluation_runs, 6);
+        assert_eq!(report.total_passing_runs, 5);
+        // 5/6 * 1_000_000 = 833_333
+        assert_eq!(report.overall_pass_rate_millionths(), 833_333);
+    }
+
+    // -- Triage advanced scenarios --
+
+    #[test]
+    fn triage_error_finding_when_gate_blocks_release() {
+        let mut reg = ReleaseGatePromotionRegistry::with_defaults(test_epoch());
+        let gate = reg.gate_mut(PromotedGateKind::LifecycleScenarios).unwrap();
+        // strict threshold: 0 failures allowed
+        gate.record_run(true);
+        gate.record_run(false);
+
+        let bundle = reg.evaluate_and_triage();
+        assert!(bundle.has_blockers());
+        assert_eq!(bundle.blocking_count, 1);
+        let err_findings: Vec<_> = bundle
+            .findings
+            .iter()
+            .filter(|f| f.severity == TriageSeverity::Error)
+            .collect();
+        assert_eq!(err_findings.len(), 1);
+        assert!(err_findings[0].summary.contains("blocks release"));
+    }
+
+    #[test]
+    fn triage_combined_warning_and_critical_for_oracle_backed_empty_invariants_no_runs() {
+        let mut reg = ReleaseGatePromotionRegistry::with_defaults(test_epoch());
+        let gate = reg
+            .gate_mut(PromotedGateKind::EvidenceCompleteness)
+            .unwrap();
+        // Force oracle-backed without invariants and without runs
+        gate.status = PromotionStatus::OracleBacked;
+
+        let bundle = reg.evaluate_and_triage();
+        // Should get both: Warning (no runs) + Critical (no invariants)
+        let warnings: Vec<_> = bundle
+            .findings
+            .iter()
+            .filter(|f| f.severity == TriageSeverity::Warning)
+            .collect();
+        let criticals: Vec<_> = bundle
+            .findings
+            .iter()
+            .filter(|f| f.severity == TriageSeverity::Critical)
+            .collect();
+        assert!(!warnings.is_empty(), "expected warning for no runs");
+        assert!(!criticals.is_empty(), "expected critical for no invariants");
+        assert!(bundle.has_blockers());
+    }
+
+    #[test]
+    fn registry_status_counts_reflect_mixed_statuses() {
+        let mut reg = ReleaseGatePromotionRegistry::with_defaults(test_epoch());
+        // Default: all 8 assertion_based
+        let counts = reg.status_counts();
+        assert_eq!(counts.get("assertion_based"), Some(&8));
+
+        // Promote 2 to different statuses
+        reg.gate_mut(PromotedGateKind::LifecycleScenarios)
+            .unwrap()
+            .promote_to_oracle_backed();
+        reg.gate_mut(PromotedGateKind::ReplayDeterminism)
+            .unwrap()
+            .promote_fully();
+
+        let counts = reg.status_counts();
+        assert_eq!(counts.get("assertion_based"), Some(&6));
+        assert_eq!(counts.get("oracle_backed"), Some(&1));
+        assert_eq!(counts.get("fully_promoted"), Some(&1));
+    }
+
+    #[test]
+    fn registry_gate_lookup_returns_none_when_not_present() {
+        let reg = ReleaseGatePromotionRegistry::new(test_epoch());
+        // Empty registry — no gates
+        assert!(reg.gate(PromotedGateKind::LifecycleScenarios).is_none());
+        assert!(reg.gate_mut(PromotedGateKind::LifecycleScenarios).is_none());
+    }
+
+    #[test]
+    fn triage_findings_for_gate_with_multiple_findings_same_gate() {
+        let findings = vec![
+            TriageFinding {
+                gate: PromotedGateKind::LifecycleScenarios,
+                severity: TriageSeverity::Info,
+                summary: "first".to_owned(),
+                detail: String::new(),
+                remediation_steps: vec![],
+                scenario_id: None,
+                oracle_invariant: None,
+            },
+            TriageFinding {
+                gate: PromotedGateKind::LifecycleScenarios,
+                severity: TriageSeverity::Error,
+                summary: "second".to_owned(),
+                detail: String::new(),
+                remediation_steps: vec![],
+                scenario_id: None,
+                oracle_invariant: None,
+            },
+            TriageFinding {
+                gate: PromotedGateKind::BudgetPropagation,
+                severity: TriageSeverity::Warning,
+                summary: "third".to_owned(),
+                detail: String::new(),
+                remediation_steps: vec![],
+                scenario_id: None,
+                oracle_invariant: None,
+            },
+        ];
+        let bundle = TriageBundle::from_findings(findings);
+        let lc_findings = bundle.findings_for_gate(PromotedGateKind::LifecycleScenarios);
+        assert_eq!(lc_findings.len(), 2);
+        let bp_findings = bundle.findings_for_gate(PromotedGateKind::BudgetPropagation);
+        assert_eq!(bp_findings.len(), 1);
+    }
+
+    #[test]
+    fn triage_severity_ordering_is_total() {
+        let severities = [
+            TriageSeverity::Info,
+            TriageSeverity::Warning,
+            TriageSeverity::Error,
+            TriageSeverity::Critical,
+        ];
+        for i in 0..severities.len() {
+            for j in (i + 1)..severities.len() {
+                assert!(
+                    severities[i] < severities[j],
+                    "{:?} should be less than {:?}",
+                    severities[i],
+                    severities[j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn promoted_gate_kind_ordering_is_deterministic() {
+        // ALL array is in deterministic order; verify Ord agrees
+        for i in 0..PromotedGateKind::ALL.len() {
+            for j in (i + 1)..PromotedGateKind::ALL.len() {
+                assert!(
+                    PromotedGateKind::ALL[i] < PromotedGateKind::ALL[j],
+                    "{:?} should be less than {:?}",
+                    PromotedGateKind::ALL[i],
+                    PromotedGateKind::ALL[j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn schema_version_constant_is_correct() {
+        assert_eq!(
+            RELEASE_GATE_PROMOTION_SCHEMA_VERSION,
+            "franken-engine.frankenlab-release-gate-promotion.v1"
+        );
+    }
+
+    #[test]
+    fn bead_id_constant_is_correct() {
+        assert_eq!(RELEASE_GATE_PROMOTION_BEAD_ID, "bd-3nr.1.4.3");
+    }
+
+    #[test]
+    fn registry_new_uses_correct_schema_version() {
+        let reg = ReleaseGatePromotionRegistry::new(test_epoch());
+        assert_eq!(reg.schema_version, RELEASE_GATE_PROMOTION_SCHEMA_VERSION);
+        assert_eq!(reg.epoch, test_epoch());
+    }
+
+    #[test]
+    fn report_release_blocked_when_any_gate_blocks() {
+        let mut reg = ReleaseGatePromotionRegistry::with_defaults(test_epoch());
+        // All gates pass except one
+        for kind in PromotedGateKind::ALL {
+            let gate = reg.gate_mut(kind).unwrap();
+            gate.threshold = BlockerThreshold::relaxed(kind);
+            for _ in 0..10 {
+                gate.record_run(true);
+            }
+        }
+        // Make one gate fail
+        let gate = reg.gate_mut(PromotedGateKind::MockSeamAbsence).unwrap();
+        gate.threshold = BlockerThreshold::strict(PromotedGateKind::MockSeamAbsence);
+        gate.record_run(false);
+
+        let report = reg.build_report();
+        assert!(report.release_blocked);
+    }
+
+    #[test]
+    fn gate_entry_serde_roundtrip_with_runs_and_invariants() {
+        let mut entry = GatePromotionEntry::assertion_based(PromotedGateKind::CapabilityNarrowing);
+        let mut inv = BTreeSet::new();
+        inv.insert("narrowing_a".to_owned());
+        inv.insert("narrowing_b".to_owned());
+        entry.wire_oracles(inv);
+        entry.promote_to_oracle_backed();
+        entry.record_run(true);
+        entry.record_run(true);
+        entry.record_run(false);
+
+        let json = serde_json::to_string(&entry).unwrap();
+        let round: GatePromotionEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(entry, round);
+        assert_eq!(round.evaluation_runs, 3);
+        assert_eq!(round.passing_runs, 2);
+        assert_eq!(round.oracle_invariants.len(), 2);
+    }
 }

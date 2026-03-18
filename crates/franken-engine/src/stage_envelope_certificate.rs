@@ -1227,4 +1227,253 @@ mod tests {
             RemediationAction::SplitStage
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Deep enrichment tests (PearlTower 2026-03-18)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn percentile_serde_all() {
+        for p in [
+            LatencyPercentile::P50,
+            LatencyPercentile::P95,
+            LatencyPercentile::P99,
+            LatencyPercentile::P999,
+        ] {
+            let json = serde_json::to_string(&p).unwrap();
+            let back: LatencyPercentile = serde_json::from_str(&json).unwrap();
+            assert_eq!(p, back);
+        }
+    }
+
+    #[test]
+    fn percentile_rank_ordering() {
+        assert!(
+            LatencyPercentile::P50.rank_millionths() < LatencyPercentile::P95.rank_millionths()
+        );
+        assert!(
+            LatencyPercentile::P95.rank_millionths() < LatencyPercentile::P99.rank_millionths()
+        );
+        assert!(
+            LatencyPercentile::P99.rank_millionths() < LatencyPercentile::P999.rank_millionths()
+        );
+    }
+
+    #[test]
+    fn severity_serde_all() {
+        for s in [
+            ViolationSeverity::Minor,
+            ViolationSeverity::Moderate,
+            ViolationSeverity::Severe,
+            ViolationSeverity::Catastrophic,
+        ] {
+            let json = serde_json::to_string(&s).unwrap();
+            let back: ViolationSeverity = serde_json::from_str(&json).unwrap();
+            assert_eq!(s, back);
+        }
+    }
+
+    #[test]
+    fn remediation_serde_all() {
+        for r in [
+            RemediationAction::Monitor,
+            RemediationAction::IncreaseBudget,
+            RemediationAction::ReduceWorkload,
+            RemediationAction::DeferToBackground,
+            RemediationAction::SplitStage,
+            RemediationAction::Downgrade,
+        ] {
+            let json = serde_json::to_string(&r).unwrap();
+            let back: RemediationAction = serde_json::from_str(&json).unwrap();
+            assert_eq!(r, back);
+        }
+    }
+
+    #[test]
+    fn certificate_schema_version_correct() {
+        let env = default_envelope(ExecutionStage::Parse);
+        let obs = compliant_observation(ExecutionStage::Parse);
+        let cert = issue_stage_certificate(&env, &obs, "cert-v", 0, vec![]);
+        assert_eq!(cert.schema_version, STAGE_ENVELOPE_SCHEMA_VERSION);
+        assert_eq!(cert.bead_id, STAGE_ENVELOPE_BEAD_ID);
+    }
+
+    #[test]
+    fn certificate_preserves_evidence_ids() {
+        let env = default_envelope(ExecutionStage::Parse);
+        let obs = compliant_observation(ExecutionStage::Parse);
+        let ids = vec!["ev-1".to_string(), "ev-2".to_string()];
+        let cert = issue_stage_certificate(&env, &obs, "cert-ev", 0, ids.clone());
+        assert_eq!(cert.evidence_ids, ids);
+    }
+
+    #[test]
+    fn certificate_preserves_epoch() {
+        let env = default_envelope(ExecutionStage::Parse);
+        let obs = compliant_observation(ExecutionStage::Parse);
+        let cert = issue_stage_certificate(&env, &obs, "cert-ep", 42, vec![]);
+        assert_eq!(cert.issued_epoch, 42);
+    }
+
+    #[test]
+    fn violation_overshoot_zero_budget() {
+        let mut violations = Vec::new();
+        check_percentile(LatencyPercentile::P99, 1000, 0, &mut violations);
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].overshoot_ns, 1000);
+    }
+
+    #[test]
+    fn bundle_near_limit_verdict() {
+        let envelopes = vec![default_envelope(ExecutionStage::Parse)];
+        let observations = vec![near_limit_observation(ExecutionStage::Parse)];
+        let bundle = build_envelope_bundle(&envelopes, &observations, 0);
+        assert_eq!(bundle.overall_verdict, EnvelopeVerdict::NearLimit);
+        assert_eq!(bundle.near_limit_count, 1);
+    }
+
+    #[test]
+    fn bundle_budget_share_sums() {
+        let stages = [
+            ExecutionStage::Parse,
+            ExecutionStage::Lower,
+            ExecutionStage::GcPause,
+        ];
+        let envelopes: Vec<_> = stages.iter().map(|s| default_envelope(*s)).collect();
+        let observations: Vec<_> = stages.iter().map(|s| compliant_observation(*s)).collect();
+        let bundle = build_envelope_bundle(&envelopes, &observations, 0);
+        let expected_sum: u64 = envelopes.iter().map(|e| e.budget_share_millionths).sum();
+        assert_eq!(bundle.total_budget_share_millionths, expected_sum);
+    }
+
+    #[test]
+    fn bundle_mixed_verdicts() {
+        let envelopes = vec![
+            default_envelope(ExecutionStage::Parse),
+            default_envelope(ExecutionStage::Lower),
+            default_envelope(ExecutionStage::GcPause),
+        ];
+        let observations = vec![
+            compliant_observation(ExecutionStage::Parse),
+            near_limit_observation(ExecutionStage::Lower),
+            violating_observation(ExecutionStage::GcPause),
+        ];
+        let bundle = build_envelope_bundle(&envelopes, &observations, 0);
+        assert_eq!(bundle.overall_verdict, EnvelopeVerdict::Violated);
+        assert_eq!(bundle.compliant_count, 1);
+        assert_eq!(bundle.near_limit_count, 1);
+        assert_eq!(bundle.violated_count, 1);
+    }
+
+    #[test]
+    fn default_envelope_custom_stage_uses_default_constants() {
+        let env = default_envelope(ExecutionStage::Custom);
+        assert_eq!(env.p99_budget_ns, DEFAULT_P99_BUDGET_NS);
+        assert_eq!(env.p999_budget_ns, DEFAULT_P999_BUDGET_NS);
+    }
+
+    #[test]
+    fn default_envelope_stage_label_is_none() {
+        for stage in [
+            ExecutionStage::Parse,
+            ExecutionStage::GcPause,
+            ExecutionStage::Custom,
+        ] {
+            let env = default_envelope(stage);
+            assert!(env.stage_label.is_none());
+        }
+    }
+
+    #[test]
+    fn schema_constants_non_empty() {
+        assert!(!STAGE_ENVELOPE_SCHEMA_VERSION.is_empty());
+        assert!(!STAGE_ENVELOPE_BEAD_ID.is_empty());
+        assert!(!VIOLATION_REPORT_SCHEMA_VERSION.is_empty());
+        assert!(!ENVELOPE_BUNDLE_SCHEMA_VERSION.is_empty());
+    }
+
+    #[test]
+    fn min_observation_count_positive() {
+        assert!(MIN_OBSERVATION_COUNT > 0);
+    }
+
+    #[test]
+    fn default_budgets_positive() {
+        assert!(DEFAULT_P99_BUDGET_NS > 0);
+        assert!(DEFAULT_P999_BUDGET_NS > DEFAULT_P99_BUDGET_NS);
+    }
+
+    #[test]
+    fn severity_boundary_values() {
+        // Exact boundary: 100_000 = 10% -> Moderate (not Minor)
+        assert_eq!(classify_severity(99_999), ViolationSeverity::Minor);
+        assert_eq!(classify_severity(100_000), ViolationSeverity::Moderate);
+        // Exact boundary: 500_000 = 50% -> Severe
+        assert_eq!(classify_severity(499_999), ViolationSeverity::Moderate);
+        assert_eq!(classify_severity(500_000), ViolationSeverity::Severe);
+    }
+
+    #[test]
+    fn percentile_violation_serde() {
+        let v = PercentileViolation {
+            percentile: LatencyPercentile::P99,
+            observed_ns: 20_000_000,
+            budget_ns: 10_000_000,
+            overshoot_ns: 10_000_000,
+            overshoot_fraction_millionths: 1_000_000,
+        };
+        let json = serde_json::to_string(&v).unwrap();
+        let back: PercentileViolation = serde_json::from_str(&json).unwrap();
+        assert_eq!(v, back);
+    }
+
+    #[test]
+    fn observation_serde() {
+        let obs = compliant_observation(ExecutionStage::Parse);
+        let json = serde_json::to_string(&obs).unwrap();
+        let back: StageLatencyObservation = serde_json::from_str(&json).unwrap();
+        assert_eq!(obs, back);
+    }
+
+    #[test]
+    fn violation_report_schema_version() {
+        let env = default_envelope(ExecutionStage::GcPause);
+        let obs = violating_observation(ExecutionStage::GcPause);
+        let cert = issue_stage_certificate(&env, &obs, "v-cert", 0, vec![]);
+        let report = generate_violation_report(&cert, "rpt").unwrap();
+        assert_eq!(report.schema_version, VIOLATION_REPORT_SCHEMA_VERSION);
+        assert_eq!(report.bead_id, STAGE_ENVELOPE_BEAD_ID);
+    }
+
+    #[test]
+    fn minor_recommends_monitor() {
+        assert_eq!(
+            recommend_remediation(ExecutionStage::Parse, &ViolationSeverity::Minor),
+            RemediationAction::Monitor
+        );
+    }
+
+    #[test]
+    fn all_stages_default_envelopes_have_positive_share() {
+        let stages = [
+            ExecutionStage::Parse,
+            ExecutionStage::Lower,
+            ExecutionStage::CompileBaseline,
+            ExecutionStage::CompileOptimized,
+            ExecutionStage::GcPause,
+            ExecutionStage::ModuleLoad,
+            ExecutionStage::SandboxInit,
+            ExecutionStage::ExecutionQuantum,
+            ExecutionStage::CacheLookup,
+            ExecutionStage::AotLoad,
+            ExecutionStage::Custom,
+        ];
+        for stage in stages {
+            let env = default_envelope(stage);
+            assert!(
+                env.budget_share_millionths > 0,
+                "stage {stage} has zero budget share"
+            );
+        }
+    }
 }

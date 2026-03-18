@@ -1267,4 +1267,1203 @@ mod tests {
         assert_eq!(ev.specimen_id, recovered.specimen_id);
         assert_eq!(ev.verdict, recovered.verdict);
     }
+
+    // ===================================================================
+    // Deep tests: enum variant serde roundtrips
+    // ===================================================================
+
+    #[test]
+    fn corpus_tier_individual_serde_core() {
+        let json = serde_json::to_string(&CorpusTier::Core).unwrap();
+        assert_eq!(json, "\"core\"");
+        let recovered: CorpusTier = serde_json::from_str(&json).unwrap();
+        assert_eq!(recovered, CorpusTier::Core);
+    }
+
+    #[test]
+    fn corpus_tier_individual_serde_edge() {
+        let json = serde_json::to_string(&CorpusTier::Edge).unwrap();
+        assert_eq!(json, "\"edge\"");
+        let recovered: CorpusTier = serde_json::from_str(&json).unwrap();
+        assert_eq!(recovered, CorpusTier::Edge);
+    }
+
+    #[test]
+    fn corpus_tier_individual_serde_adversarial() {
+        let json = serde_json::to_string(&CorpusTier::Adversarial).unwrap();
+        assert_eq!(json, "\"adversarial\"");
+        let recovered: CorpusTier = serde_json::from_str(&json).unwrap();
+        assert_eq!(recovered, CorpusTier::Adversarial);
+    }
+
+    #[test]
+    fn tamper_kind_individual_serde_none() {
+        let json = serde_json::to_string(&TamperKind::None).unwrap();
+        assert_eq!(json, "\"none\"");
+        let recovered: TamperKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(recovered, TamperKind::None);
+    }
+
+    #[test]
+    fn tamper_kind_individual_serde_statement_hash() {
+        let json = serde_json::to_string(&TamperKind::StatementHash).unwrap();
+        assert_eq!(json, "\"statement_hash\"");
+        let recovered: TamperKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(recovered, TamperKind::StatementHash);
+    }
+
+    #[test]
+    fn tamper_kind_individual_serde_event_deletion() {
+        let json = serde_json::to_string(&TamperKind::EventDeletion).unwrap();
+        assert_eq!(json, "\"event_deletion\"");
+        let recovered: TamperKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(recovered, TamperKind::EventDeletion);
+    }
+
+    #[test]
+    fn tamper_kind_individual_serde_sequence_reorder() {
+        let json = serde_json::to_string(&TamperKind::SequenceReorder).unwrap();
+        assert_eq!(json, "\"sequence_reorder\"");
+        let recovered: TamperKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(recovered, TamperKind::SequenceReorder);
+    }
+
+    #[test]
+    fn equivalence_verdict_serde_pass_json_string() {
+        let json = serde_json::to_string(&EquivalenceVerdict::Pass).unwrap();
+        assert_eq!(json, "\"pass\"");
+    }
+
+    #[test]
+    fn equivalence_verdict_serde_fail_json_string() {
+        let json = serde_json::to_string(&EquivalenceVerdict::Fail).unwrap();
+        assert_eq!(json, "\"fail\"");
+    }
+
+    // ===================================================================
+    // Deep tests: Display/as_str consistency
+    // ===================================================================
+
+    #[test]
+    fn corpus_tier_display_matches_as_str_for_all() {
+        for tier in CorpusTier::ALL {
+            assert_eq!(
+                format!("{}", tier),
+                tier.as_str(),
+                "Display != as_str for {:?}",
+                tier
+            );
+        }
+    }
+
+    #[test]
+    fn tamper_kind_display_matches_as_str_for_all() {
+        for kind in TamperKind::ALL {
+            assert_eq!(
+                format!("{}", kind),
+                kind.as_str(),
+                "Display != as_str for {:?}",
+                kind
+            );
+        }
+    }
+
+    #[test]
+    fn equivalence_verdict_display_matches_as_str() {
+        assert_eq!(format!("{}", EquivalenceVerdict::Pass), "pass");
+        assert_eq!(format!("{}", EquivalenceVerdict::Fail), "fail");
+        assert_eq!(
+            format!("{}", EquivalenceVerdict::Pass),
+            EquivalenceVerdict::Pass.as_str()
+        );
+        assert_eq!(
+            format!("{}", EquivalenceVerdict::Fail),
+            EquivalenceVerdict::Fail.as_str()
+        );
+    }
+
+    // ===================================================================
+    // Deep tests: canonical value / hash determinism
+    // ===================================================================
+
+    #[test]
+    fn specimen_evidence_canonical_bytes_non_empty() {
+        let corpus = equivalence_corpus();
+        let ev = evaluate_specimen(&corpus[0]);
+        let bytes = ev.canonical_bytes();
+        assert!(!bytes.is_empty(), "canonical bytes should not be empty");
+    }
+
+    #[test]
+    fn specimen_evidence_canonical_value_has_all_keys() {
+        let corpus = equivalence_corpus();
+        let ev = evaluate_specimen(&corpus[0]);
+        let cv = ev.canonical_value();
+        if let CanonicalValue::Map(map) = &cv {
+            let expected_keys = [
+                "corpus_tier",
+                "event_ir_hash",
+                "hash_parity",
+                "materialization_error_code",
+                "materialized_ast_hash",
+                "original_ast_hash",
+                "parse_error_code",
+                "replay_stable",
+                "specimen_id",
+                "statement_count",
+                "tamper_kind",
+                "verdict",
+            ];
+            for key in &expected_keys {
+                assert!(
+                    map.contains_key(*key),
+                    "missing key in canonical_value: {key}"
+                );
+            }
+            assert_eq!(map.len(), expected_keys.len());
+        } else {
+            panic!("canonical_value should be a Map");
+        }
+    }
+
+    #[test]
+    fn inventory_canonical_value_has_all_top_level_keys() {
+        let inventory = run_equivalence_corpus();
+        let cv = inventory.canonical_value();
+        if let CanonicalValue::Map(map) = &cv {
+            let expected_keys = [
+                "component",
+                "evidence",
+                "failed",
+                "parity_verified",
+                "per_tier",
+                "passed",
+                "policy_id",
+                "replay_stable_count",
+                "schema_version",
+                "tamper_detected",
+                "total",
+            ];
+            for key in &expected_keys {
+                assert!(
+                    map.contains_key(*key),
+                    "missing key in inventory canonical_value: {key}"
+                );
+            }
+            assert_eq!(map.len(), expected_keys.len());
+        } else {
+            panic!("inventory canonical_value should be a Map");
+        }
+    }
+
+    #[test]
+    fn manifest_canonical_value_has_all_keys() {
+        let inventory = run_equivalence_corpus();
+        let manifest = build_manifest(
+            &inventory,
+            "trace-42",
+            "decision-42",
+            vec!["path/a.json".to_string(), "path/b.json".to_string()],
+        );
+        let cv = manifest.canonical_value();
+        if let CanonicalValue::Map(map) = &cv {
+            let expected_keys = [
+                "artifact_paths",
+                "bead_id",
+                "component",
+                "decision_id",
+                "inventory_hash",
+                "policy_id",
+                "schema_version",
+                "trace_id",
+            ];
+            for key in &expected_keys {
+                assert!(
+                    map.contains_key(*key),
+                    "missing key in manifest canonical_value: {key}"
+                );
+            }
+            assert_eq!(map.len(), expected_keys.len());
+        } else {
+            panic!("manifest canonical_value should be a Map");
+        }
+    }
+
+    #[test]
+    fn different_evidence_produces_different_canonical_hashes() {
+        let corpus = equivalence_corpus();
+        let ev0 = evaluate_specimen(&corpus[0]);
+        // Pick the last specimen which has a different tier/tamper
+        let ev_last = evaluate_specimen(corpus.last().unwrap());
+        assert_ne!(
+            ev0.canonical_hash(),
+            ev_last.canonical_hash(),
+            "different specimens should produce different hashes"
+        );
+    }
+
+    #[test]
+    fn manifest_hash_changes_with_different_inputs() {
+        let inventory = run_equivalence_corpus();
+        let m1 = build_manifest(
+            &inventory,
+            "trace-A",
+            "decision-A",
+            vec!["a.json".to_string()],
+        );
+        let m2 = build_manifest(
+            &inventory,
+            "trace-B",
+            "decision-B",
+            vec!["b.json".to_string()],
+        );
+        assert_ne!(
+            m1.canonical_hash(),
+            m2.canonical_hash(),
+            "different manifest inputs should produce different hashes"
+        );
+    }
+
+    #[test]
+    fn inventory_canonical_hash_starts_with_sha256() {
+        let inventory = run_equivalence_corpus();
+        let hash = inventory.canonical_hash();
+        assert!(
+            hash.starts_with("sha256:"),
+            "hash should start with sha256: prefix"
+        );
+        // sha256 hex is 64 chars
+        assert_eq!(
+            hash.len(),
+            "sha256:".len() + 64,
+            "sha256 hash should be 7+64 chars long"
+        );
+    }
+
+    #[test]
+    fn manifest_canonical_hash_starts_with_sha256() {
+        let inventory = run_equivalence_corpus();
+        let manifest = build_manifest(&inventory, "t1", "d1", vec![]);
+        let hash = manifest.canonical_hash();
+        assert!(hash.starts_with("sha256:"));
+        assert_eq!(hash.len(), "sha256:".len() + 64);
+    }
+
+    // ===================================================================
+    // Deep tests: edge cases (empty inputs, boundary values)
+    // ===================================================================
+
+    #[test]
+    fn corpus_all_non_tamper_parity_specimens_have_source() {
+        let corpus = equivalence_corpus();
+        for spec in &corpus {
+            if spec.expect_parity {
+                assert!(
+                    !spec.source.is_empty(),
+                    "parity specimen {} should have non-empty source",
+                    spec.specimen_id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn corpus_failure_specimens_have_expected_errors() {
+        let corpus = equivalence_corpus();
+        for spec in &corpus {
+            if spec.expected_parse_error.is_some() {
+                assert!(
+                    !spec.expect_parity,
+                    "failure specimen {} should not expect parity",
+                    spec.specimen_id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn corpus_tamper_specimens_expect_no_parity() {
+        let corpus = equivalence_corpus();
+        for spec in &corpus {
+            if spec.tamper_kind != TamperKind::None {
+                assert!(
+                    !spec.expect_parity,
+                    "tamper specimen {} should not expect parity",
+                    spec.specimen_id
+                );
+                assert!(
+                    spec.expected_materialization_error.is_some(),
+                    "tamper specimen {} should expect a materialization error",
+                    spec.specimen_id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn corpus_statement_count_zero_for_tamper_and_failure() {
+        let corpus = equivalence_corpus();
+        for spec in &corpus {
+            if spec.tamper_kind != TamperKind::None || spec.expected_parse_error.is_some() {
+                assert_eq!(
+                    spec.expected_statement_count, 0,
+                    "tamper/failure specimen {} should expect 0 statements",
+                    spec.specimen_id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fixed_one_constant_is_one_million() {
+        assert_eq!(FIXED_ONE, 1_000_000);
+    }
+
+    // ===================================================================
+    // Deep tests: inventory contract_satisfied logic
+    // ===================================================================
+
+    #[test]
+    fn contract_satisfied_false_for_empty_inventory() {
+        let inventory = EquivalenceInventory {
+            schema_version: SCHEMA_VERSION.to_string(),
+            component: COMPONENT.to_string(),
+            policy_id: POLICY_ID.to_string(),
+            total: 0,
+            passed: 0,
+            failed: 0,
+            parity_verified: 0,
+            tamper_detected: 0,
+            replay_stable_count: 0,
+            per_tier: BTreeMap::new(),
+            evidence: vec![],
+        };
+        assert!(
+            !inventory.contract_satisfied(),
+            "empty inventory should not satisfy contract"
+        );
+    }
+
+    #[test]
+    fn contract_satisfied_false_with_failures() {
+        let inventory = EquivalenceInventory {
+            schema_version: SCHEMA_VERSION.to_string(),
+            component: COMPONENT.to_string(),
+            policy_id: POLICY_ID.to_string(),
+            total: 5,
+            passed: 4,
+            failed: 1,
+            parity_verified: 4,
+            tamper_detected: 0,
+            replay_stable_count: 5,
+            per_tier: BTreeMap::new(),
+            evidence: vec![],
+        };
+        assert!(
+            !inventory.contract_satisfied(),
+            "inventory with failures should not satisfy contract"
+        );
+    }
+
+    #[test]
+    fn contract_satisfied_false_when_replay_unstable() {
+        let inventory = EquivalenceInventory {
+            schema_version: SCHEMA_VERSION.to_string(),
+            component: COMPONENT.to_string(),
+            policy_id: POLICY_ID.to_string(),
+            total: 5,
+            passed: 5,
+            failed: 0,
+            parity_verified: 5,
+            tamper_detected: 0,
+            replay_stable_count: 4, // one fewer than total
+            per_tier: BTreeMap::new(),
+            evidence: vec![],
+        };
+        assert!(
+            !inventory.contract_satisfied(),
+            "inventory with unstable replays should not satisfy contract"
+        );
+    }
+
+    #[test]
+    fn contract_satisfied_true_when_all_pass_and_stable() {
+        let inventory = EquivalenceInventory {
+            schema_version: SCHEMA_VERSION.to_string(),
+            component: COMPONENT.to_string(),
+            policy_id: POLICY_ID.to_string(),
+            total: 3,
+            passed: 3,
+            failed: 0,
+            parity_verified: 2,
+            tamper_detected: 1,
+            replay_stable_count: 3,
+            per_tier: BTreeMap::new(),
+            evidence: vec![],
+        };
+        assert!(
+            inventory.contract_satisfied(),
+            "all-pass, all-stable should satisfy contract"
+        );
+    }
+
+    // ===================================================================
+    // Deep tests: evaluate specimen edge cases
+    // ===================================================================
+
+    #[test]
+    fn evaluate_multi_statement_specimen_correct_count() {
+        let corpus = equivalence_corpus();
+        let spec = corpus
+            .iter()
+            .find(|s| s.specimen_id == "core_multi_statement")
+            .expect("missing core_multi_statement");
+        let ev = evaluate_specimen(spec);
+        assert_eq!(ev.statement_count, 3, "should have 3 statements");
+        assert!(ev.hash_parity);
+    }
+
+    #[test]
+    fn evaluate_module_specimen_passes() {
+        let corpus = equivalence_corpus();
+        let spec = corpus
+            .iter()
+            .find(|s| s.specimen_id == "core_module_import_export")
+            .expect("missing core_module_import_export");
+        let ev = evaluate_specimen(spec);
+        assert_eq!(ev.verdict, EquivalenceVerdict::Pass);
+        assert_eq!(ev.statement_count, 2);
+    }
+
+    #[test]
+    fn evaluate_function_declaration_specimen_passes() {
+        let corpus = equivalence_corpus();
+        let spec = corpus
+            .iter()
+            .find(|s| s.specimen_id == "core_function_declaration")
+            .expect("missing core_function_declaration");
+        let ev = evaluate_specimen(spec);
+        assert_eq!(ev.verdict, EquivalenceVerdict::Pass);
+        assert_eq!(ev.statement_count, 1);
+        assert!(ev.hash_parity);
+        assert!(ev.replay_stable);
+    }
+
+    #[test]
+    fn evaluate_edge_arrow_with_body_passes() {
+        let corpus = equivalence_corpus();
+        let spec = corpus
+            .iter()
+            .find(|s| s.specimen_id == "edge_arrow_with_body")
+            .expect("missing edge_arrow_with_body");
+        let ev = evaluate_specimen(spec);
+        assert_eq!(ev.verdict, EquivalenceVerdict::Pass);
+        assert_eq!(ev.corpus_tier, CorpusTier::Edge);
+    }
+
+    #[test]
+    fn evaluate_edge_if_else_chain_passes() {
+        let corpus = equivalence_corpus();
+        let spec = corpus
+            .iter()
+            .find(|s| s.specimen_id == "edge_if_else_chain")
+            .expect("missing edge_if_else_chain");
+        let ev = evaluate_specimen(spec);
+        assert_eq!(ev.verdict, EquivalenceVerdict::Pass);
+    }
+
+    #[test]
+    fn evaluate_edge_try_catch_passes() {
+        let corpus = equivalence_corpus();
+        let spec = corpus
+            .iter()
+            .find(|s| s.specimen_id == "edge_try_catch")
+            .expect("missing edge_try_catch");
+        let ev = evaluate_specimen(spec);
+        assert_eq!(ev.verdict, EquivalenceVerdict::Pass);
+    }
+
+    // ===================================================================
+    // Deep tests: event generation details
+    // ===================================================================
+
+    #[test]
+    fn generated_events_specimen_ids_match_evidence() {
+        let inventory = run_equivalence_corpus();
+        let events = generate_events(&inventory);
+        for (i, event) in events.iter().enumerate() {
+            assert_eq!(
+                event.specimen_id, inventory.evidence[i].specimen_id,
+                "event[{i}] specimen_id mismatch"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_events_outcome_is_pass_or_fail() {
+        let inventory = run_equivalence_corpus();
+        let events = generate_events(&inventory);
+        for event in &events {
+            assert!(
+                event.outcome == "pass" || event.outcome == "fail",
+                "unexpected outcome: {}",
+                event.outcome
+            );
+        }
+    }
+
+    #[test]
+    fn generated_events_corpus_tier_is_valid() {
+        let inventory = run_equivalence_corpus();
+        let events = generate_events(&inventory);
+        let valid_tiers: std::collections::BTreeSet<&str> =
+            CorpusTier::ALL.iter().map(|t| t.as_str()).collect();
+        for event in &events {
+            assert!(
+                valid_tiers.contains(event.corpus_tier.as_str()),
+                "invalid corpus_tier in event: {}",
+                event.corpus_tier
+            );
+        }
+    }
+
+    #[test]
+    fn generated_events_error_code_present_for_failure_specimens() {
+        let inventory = run_equivalence_corpus();
+        let events = generate_events(&inventory);
+        for (event, ev) in events.iter().zip(inventory.evidence.iter()) {
+            // If the evidence has a materialization or parse error code, the event should too
+            if ev.materialization_error_code.is_some() || ev.parse_error_code.is_some() {
+                assert!(
+                    event.error_code.is_some(),
+                    "event for {} should have an error_code",
+                    event.specimen_id
+                );
+            }
+        }
+    }
+
+    // ===================================================================
+    // Deep tests: serde for complex types
+    // ===================================================================
+
+    #[test]
+    fn equivalence_specimen_serde_round_trip() {
+        let corpus = equivalence_corpus();
+        for spec in &corpus {
+            let json = serde_json::to_string(spec).expect("serialize specimen");
+            let recovered: EquivalenceSpecimen =
+                serde_json::from_str(&json).expect("deserialize specimen");
+            assert_eq!(spec.specimen_id, recovered.specimen_id);
+            assert_eq!(spec.corpus_tier, recovered.corpus_tier);
+            assert_eq!(spec.tamper_kind, recovered.tamper_kind);
+            assert_eq!(spec.expect_parity, recovered.expect_parity);
+            assert_eq!(
+                spec.expected_statement_count,
+                recovered.expected_statement_count
+            );
+            assert_eq!(spec.expected_parse_error, recovered.expected_parse_error);
+            assert_eq!(
+                spec.expected_materialization_error,
+                recovered.expected_materialization_error
+            );
+        }
+    }
+
+    #[test]
+    fn equivalence_event_serde_round_trip() {
+        let inventory = run_equivalence_corpus();
+        let events = generate_events(&inventory);
+        for event in &events {
+            let json = serde_json::to_string(event).expect("serialize event");
+            let recovered: EquivalenceEvent =
+                serde_json::from_str(&json).expect("deserialize event");
+            assert_eq!(event.schema_version, recovered.schema_version);
+            assert_eq!(event.specimen_id, recovered.specimen_id);
+            assert_eq!(event.outcome, recovered.outcome);
+            assert_eq!(event.error_code, recovered.error_code);
+        }
+    }
+
+    #[test]
+    fn tier_summary_serde_round_trip() {
+        let summary = TierSummary {
+            total: 10,
+            passed: 8,
+            failed: 2,
+        };
+        let json = serde_json::to_string(&summary).expect("serialize");
+        let recovered: TierSummary = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(summary, recovered);
+    }
+
+    #[test]
+    fn equivalence_run_manifest_serde_full_round_trip() {
+        let inventory = run_equivalence_corpus();
+        let manifest = build_manifest(
+            &inventory,
+            "trace-full",
+            "decision-full",
+            vec!["alpha.json".to_string(), "beta.json".to_string()],
+        );
+        let json = serde_json::to_string(&manifest).expect("serialize manifest");
+        let recovered: EquivalenceRunManifest =
+            serde_json::from_str(&json).expect("deserialize manifest");
+        assert_eq!(manifest, recovered);
+    }
+
+    // ===================================================================
+    // Deep tests: ordering and Ord traits
+    // ===================================================================
+
+    #[test]
+    fn corpus_tier_ord_core_lt_edge_lt_adversarial() {
+        assert!(CorpusTier::Core < CorpusTier::Edge);
+        assert!(CorpusTier::Edge < CorpusTier::Adversarial);
+        assert!(CorpusTier::Core < CorpusTier::Adversarial);
+    }
+
+    #[test]
+    fn tamper_kind_ord_none_lt_all_others() {
+        assert!(TamperKind::None < TamperKind::StatementHash);
+        assert!(TamperKind::StatementHash < TamperKind::EventDeletion);
+        assert!(TamperKind::EventDeletion < TamperKind::SequenceReorder);
+    }
+
+    #[test]
+    fn equivalence_verdict_ord_pass_lt_fail() {
+        assert!(EquivalenceVerdict::Pass < EquivalenceVerdict::Fail);
+    }
+
+    // ===================================================================
+    // Deep tests: manifest builder validation
+    // ===================================================================
+
+    #[test]
+    fn manifest_builder_uses_correct_constants() {
+        let inventory = run_equivalence_corpus();
+        let manifest = build_manifest(&inventory, "t", "d", vec![]);
+        assert_eq!(manifest.schema_version, MANIFEST_SCHEMA_VERSION);
+        assert_eq!(manifest.policy_id, POLICY_ID);
+        assert_eq!(manifest.component, COMPONENT);
+        assert_eq!(manifest.bead_id, BEAD_ID);
+    }
+
+    #[test]
+    fn manifest_builder_empty_artifact_paths() {
+        let inventory = run_equivalence_corpus();
+        let manifest = build_manifest(&inventory, "t", "d", vec![]);
+        assert!(manifest.artifact_paths.is_empty());
+        // Canonical hash should still work
+        let hash = manifest.canonical_hash();
+        assert!(hash.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn manifest_builder_preserves_trace_and_decision_ids() {
+        let inventory = run_equivalence_corpus();
+        let manifest = build_manifest(
+            &inventory,
+            "trace-xyz-123",
+            "decision-abc-456",
+            vec!["out.json".to_string()],
+        );
+        assert_eq!(manifest.trace_id, "trace-xyz-123");
+        assert_eq!(manifest.decision_id, "decision-abc-456");
+    }
+
+    // ===================================================================
+    // Deep tests: inventory per_tier correctness
+    // ===================================================================
+
+    #[test]
+    fn inventory_per_tier_keys_match_corpus_tiers() {
+        let inventory = run_equivalence_corpus();
+        let corpus = equivalence_corpus();
+        let expected_tiers: std::collections::BTreeSet<String> = corpus
+            .iter()
+            .map(|s| s.corpus_tier.as_str().to_string())
+            .collect();
+        let actual_tiers: std::collections::BTreeSet<String> =
+            inventory.per_tier.keys().cloned().collect();
+        assert_eq!(expected_tiers, actual_tiers);
+    }
+
+    #[test]
+    fn inventory_per_tier_each_total_is_passed_plus_failed() {
+        let inventory = run_equivalence_corpus();
+        for (tier_name, summary) in &inventory.per_tier {
+            assert_eq!(
+                summary.total,
+                summary.passed + summary.failed,
+                "tier {tier_name}: total != passed + failed"
+            );
+        }
+    }
+
+    #[test]
+    fn inventory_total_equals_passed_plus_failed() {
+        let inventory = run_equivalence_corpus();
+        assert_eq!(inventory.total, inventory.passed + inventory.failed);
+    }
+
+    #[test]
+    fn inventory_evidence_length_matches_total() {
+        let inventory = run_equivalence_corpus();
+        assert_eq!(inventory.evidence.len(), inventory.total);
+    }
+
+    // ===================================================================
+    // Deep tests: corpus structural invariants
+    // ===================================================================
+
+    #[test]
+    fn corpus_all_specimen_ids_are_non_empty_and_alphanumeric_underscore() {
+        let corpus = equivalence_corpus();
+        for spec in &corpus {
+            assert!(!spec.specimen_id.is_empty());
+            assert!(
+                spec.specimen_id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_'),
+                "specimen_id {} contains invalid chars",
+                spec.specimen_id
+            );
+        }
+    }
+
+    #[test]
+    fn corpus_each_tamper_kind_covered_at_least_once() {
+        let corpus = equivalence_corpus();
+        let tamper_kinds: std::collections::BTreeSet<TamperKind> =
+            corpus.iter().map(|s| s.tamper_kind).collect();
+        for kind in TamperKind::ALL {
+            assert!(
+                tamper_kinds.contains(kind),
+                "missing tamper kind: {:?}",
+                kind
+            );
+        }
+    }
+
+    #[test]
+    fn corpus_parity_specimens_have_positive_statement_count() {
+        let corpus = equivalence_corpus();
+        for spec in &corpus {
+            if spec.expect_parity {
+                assert!(
+                    spec.expected_statement_count > 0,
+                    "parity specimen {} should expect >0 statements",
+                    spec.specimen_id
+                );
+            }
+        }
+    }
+
+    // ===================================================================
+    // Deep tests: evidence field consistency for evaluated specimens
+    // ===================================================================
+
+    #[test]
+    fn all_corpus_specimens_evaluate_with_consistent_ids() {
+        let corpus = equivalence_corpus();
+        for spec in &corpus {
+            let ev = evaluate_specimen(spec);
+            assert_eq!(ev.specimen_id, spec.specimen_id);
+            assert_eq!(ev.corpus_tier, spec.corpus_tier);
+            assert_eq!(ev.tamper_kind, spec.tamper_kind);
+        }
+    }
+
+    #[test]
+    fn passing_evidence_event_ir_hash_non_empty() {
+        let corpus = equivalence_corpus();
+        for spec in &corpus {
+            let ev = evaluate_specimen(spec);
+            assert!(
+                !ev.event_ir_hash.is_empty(),
+                "event_ir_hash for {} should be non-empty",
+                ev.specimen_id
+            );
+        }
+    }
+
+    // ===================================================================
+    // Additional deep tests: boundary, error paths, hash, round-trips
+    // ===================================================================
+
+    #[test]
+    fn generate_events_on_empty_inventory_yields_empty() {
+        let inv = EquivalenceInventory {
+            schema_version: SCHEMA_VERSION.to_string(),
+            component: COMPONENT.to_string(),
+            policy_id: POLICY_ID.to_string(),
+            total: 0,
+            passed: 0,
+            failed: 0,
+            parity_verified: 0,
+            tamper_detected: 0,
+            replay_stable_count: 0,
+            per_tier: BTreeMap::new(),
+            evidence: Vec::new(),
+        };
+        let events = generate_events(&inv);
+        assert!(
+            events.is_empty(),
+            "empty inventory should produce zero events"
+        );
+    }
+
+    #[test]
+    fn evidence_hash_length_is_sha256_hex() {
+        let corpus = equivalence_corpus();
+        for spec in &corpus {
+            let ev = evaluate_specimen(spec);
+            let hash = ev.canonical_hash();
+            assert!(hash.starts_with("sha256:"));
+            // sha256 hex encoding = 64 characters
+            let hex_part = &hash["sha256:".len()..];
+            assert_eq!(
+                hex_part.len(),
+                64,
+                "evidence hash hex for {} should be 64 chars, got {}",
+                spec.specimen_id,
+                hex_part.len()
+            );
+            assert!(
+                hex_part.chars().all(|c| c.is_ascii_hexdigit()),
+                "hash hex for {} should be all hex digits",
+                spec.specimen_id
+            );
+        }
+    }
+
+    #[test]
+    fn event_ir_hash_is_sha256_format() {
+        let corpus = equivalence_corpus();
+        for spec in &corpus {
+            let ev = evaluate_specimen(spec);
+            assert!(
+                ev.event_ir_hash.starts_with("sha256:"),
+                "event_ir_hash for {} should start with sha256:",
+                spec.specimen_id
+            );
+            let hex_part = &ev.event_ir_hash["sha256:".len()..];
+            assert_eq!(hex_part.len(), 64);
+        }
+    }
+
+    #[test]
+    fn synthetic_evidence_with_none_optionals_canonical_value_uses_null() {
+        let ev = SpecimenEvidence {
+            specimen_id: "synth_nulls".to_string(),
+            corpus_tier: CorpusTier::Core,
+            tamper_kind: TamperKind::None,
+            verdict: EquivalenceVerdict::Pass,
+            event_ir_hash: "sha256:0000".to_string(),
+            materialized_ast_hash: None,
+            original_ast_hash: None,
+            parse_error_code: None,
+            materialization_error_code: None,
+            statement_count: 0,
+            hash_parity: false,
+            replay_stable: true,
+        };
+        let cv = ev.canonical_value();
+        if let CanonicalValue::Map(map) = &cv {
+            assert_eq!(map["materialized_ast_hash"], CanonicalValue::Null);
+            assert_eq!(map["original_ast_hash"], CanonicalValue::Null);
+            assert_eq!(map["parse_error_code"], CanonicalValue::Null);
+            assert_eq!(map["materialization_error_code"], CanonicalValue::Null);
+        } else {
+            panic!("expected Map");
+        }
+    }
+
+    #[test]
+    fn synthetic_evidence_with_some_optionals_canonical_value_uses_string() {
+        let ev = SpecimenEvidence {
+            specimen_id: "synth_somes".to_string(),
+            corpus_tier: CorpusTier::Edge,
+            tamper_kind: TamperKind::StatementHash,
+            verdict: EquivalenceVerdict::Fail,
+            event_ir_hash: "sha256:abcd".to_string(),
+            materialized_ast_hash: Some("sha256:1111".to_string()),
+            original_ast_hash: Some("sha256:2222".to_string()),
+            parse_error_code: Some("empty_source".to_string()),
+            materialization_error_code: Some("statement_hash_mismatch".to_string()),
+            statement_count: 5,
+            hash_parity: true,
+            replay_stable: false,
+        };
+        let cv = ev.canonical_value();
+        if let CanonicalValue::Map(map) = &cv {
+            assert_eq!(
+                map["materialized_ast_hash"],
+                CanonicalValue::String("sha256:1111".to_string())
+            );
+            assert_eq!(
+                map["original_ast_hash"],
+                CanonicalValue::String("sha256:2222".to_string())
+            );
+            assert_eq!(
+                map["parse_error_code"],
+                CanonicalValue::String("empty_source".to_string())
+            );
+            assert_eq!(
+                map["materialization_error_code"],
+                CanonicalValue::String("statement_hash_mismatch".to_string())
+            );
+            assert_eq!(map["statement_count"], CanonicalValue::U64(5));
+            assert_eq!(map["hash_parity"], CanonicalValue::Bool(true));
+            assert_eq!(map["replay_stable"], CanonicalValue::Bool(false));
+        } else {
+            panic!("expected Map");
+        }
+    }
+
+    #[test]
+    fn canonical_bytes_change_when_evidence_field_changes() {
+        let ev1 = SpecimenEvidence {
+            specimen_id: "bytes_test".to_string(),
+            corpus_tier: CorpusTier::Core,
+            tamper_kind: TamperKind::None,
+            verdict: EquivalenceVerdict::Pass,
+            event_ir_hash: "sha256:aaaa".to_string(),
+            materialized_ast_hash: None,
+            original_ast_hash: None,
+            parse_error_code: None,
+            materialization_error_code: None,
+            statement_count: 0,
+            hash_parity: false,
+            replay_stable: true,
+        };
+        let mut ev2 = ev1.clone();
+        ev2.statement_count = 1;
+        assert_ne!(
+            ev1.canonical_bytes(),
+            ev2.canonical_bytes(),
+            "changing statement_count should change canonical_bytes"
+        );
+    }
+
+    #[test]
+    fn canonical_bytes_change_when_verdict_changes() {
+        let ev1 = SpecimenEvidence {
+            specimen_id: "verdict_bytes_test".to_string(),
+            corpus_tier: CorpusTier::Core,
+            tamper_kind: TamperKind::None,
+            verdict: EquivalenceVerdict::Pass,
+            event_ir_hash: "sha256:bbbb".to_string(),
+            materialized_ast_hash: None,
+            original_ast_hash: None,
+            parse_error_code: None,
+            materialization_error_code: None,
+            statement_count: 0,
+            hash_parity: false,
+            replay_stable: true,
+        };
+        let mut ev2 = ev1.clone();
+        ev2.verdict = EquivalenceVerdict::Fail;
+        assert_ne!(ev1.canonical_hash(), ev2.canonical_hash());
+    }
+
+    #[test]
+    fn serde_rejects_unknown_corpus_tier() {
+        let result = serde_json::from_str::<CorpusTier>("\"unknown_tier\"");
+        assert!(
+            result.is_err(),
+            "unknown corpus tier should fail deserialization"
+        );
+    }
+
+    #[test]
+    fn serde_rejects_unknown_tamper_kind() {
+        let result = serde_json::from_str::<TamperKind>("\"bogus_tamper\"");
+        assert!(
+            result.is_err(),
+            "unknown tamper kind should fail deserialization"
+        );
+    }
+
+    #[test]
+    fn serde_rejects_unknown_verdict() {
+        let result = serde_json::from_str::<EquivalenceVerdict>("\"maybe\"");
+        assert!(
+            result.is_err(),
+            "unknown verdict should fail deserialization"
+        );
+    }
+
+    #[test]
+    fn serde_rejects_integer_for_corpus_tier() {
+        let result = serde_json::from_str::<CorpusTier>("42");
+        assert!(
+            result.is_err(),
+            "integer should not deserialize as CorpusTier"
+        );
+    }
+
+    #[test]
+    fn corpus_tier_clone_and_copy_equivalence() {
+        let tier = CorpusTier::Edge;
+        let cloned = tier.clone();
+        let copied = tier;
+        assert_eq!(tier, cloned);
+        assert_eq!(tier, copied);
+        assert_eq!(cloned, copied);
+    }
+
+    #[test]
+    fn tamper_kind_clone_and_copy_equivalence() {
+        let kind = TamperKind::SequenceReorder;
+        let cloned = kind.clone();
+        let copied = kind;
+        assert_eq!(kind, cloned);
+        assert_eq!(kind, copied);
+    }
+
+    #[test]
+    fn verdict_clone_and_copy_equivalence() {
+        let v = EquivalenceVerdict::Fail;
+        let cloned = v.clone();
+        let copied = v;
+        assert_eq!(v, cloned);
+        assert_eq!(v, copied);
+    }
+
+    #[test]
+    fn inventory_evidence_order_matches_corpus_order() {
+        let corpus = equivalence_corpus();
+        let inventory = run_equivalence_corpus();
+        assert_eq!(inventory.evidence.len(), corpus.len());
+        for (i, (ev, spec)) in inventory.evidence.iter().zip(corpus.iter()).enumerate() {
+            assert_eq!(
+                ev.specimen_id, spec.specimen_id,
+                "evidence[{i}] id should match corpus[{i}] id"
+            );
+        }
+    }
+
+    #[test]
+    fn inventory_serde_full_equality_round_trip() {
+        let inventory = run_equivalence_corpus();
+        let json = serde_json::to_string_pretty(&inventory).expect("serialize");
+        let recovered: EquivalenceInventory = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(inventory, recovered);
+    }
+
+    #[test]
+    fn manifest_with_many_artifact_paths_hashes_deterministically() {
+        let inventory = run_equivalence_corpus();
+        let paths: Vec<String> = (0..50).map(|i| format!("artifact_{i}.json")).collect();
+        let m1 = build_manifest(&inventory, "t", "d", paths.clone());
+        let m2 = build_manifest(&inventory, "t", "d", paths);
+        assert_eq!(m1.canonical_hash(), m2.canonical_hash());
+    }
+
+    #[test]
+    fn manifest_artifact_paths_order_matters_for_hash() {
+        let inventory = run_equivalence_corpus();
+        let m1 = build_manifest(
+            &inventory,
+            "t",
+            "d",
+            vec!["a.json".to_string(), "b.json".to_string()],
+        );
+        let m2 = build_manifest(
+            &inventory,
+            "t",
+            "d",
+            vec!["b.json".to_string(), "a.json".to_string()],
+        );
+        assert_ne!(
+            m1.canonical_hash(),
+            m2.canonical_hash(),
+            "reordering artifact paths should change the hash"
+        );
+    }
+
+    #[test]
+    fn evaluate_specimen_with_wrong_materialization_error_yields_fail() {
+        let spec = EquivalenceSpecimen {
+            specimen_id: "synth_wrong_mat_error".to_string(),
+            source: "const val = 99;\n".to_string(),
+            goal: ParseGoal::Script,
+            corpus_tier: CorpusTier::Adversarial,
+            tamper_kind: TamperKind::StatementHash,
+            expect_parity: false,
+            expected_parse_error: None,
+            // Expect the wrong error code
+            expected_materialization_error: Some(
+                ParseEventMaterializationErrorCode::StatementCountMismatch,
+            ),
+            expected_statement_count: 0,
+        };
+        let ev = evaluate_specimen(&spec);
+        // StatementHash tamper should cause StatementHashMismatch, not StatementCountMismatch
+        assert_eq!(
+            ev.verdict,
+            EquivalenceVerdict::Fail,
+            "wrong expected_materialization_error should yield Fail"
+        );
+    }
+
+    #[test]
+    fn evaluate_specimen_empty_source_module_has_replay_stability() {
+        let spec = EquivalenceSpecimen {
+            specimen_id: "synth_empty_module_replay".to_string(),
+            source: String::new(),
+            goal: ParseGoal::Module,
+            corpus_tier: CorpusTier::Core,
+            tamper_kind: TamperKind::None,
+            expect_parity: false,
+            expected_parse_error: Some(ParseErrorCode::EmptySource),
+            expected_materialization_error: Some(
+                ParseEventMaterializationErrorCode::ParseFailedEventStream,
+            ),
+            expected_statement_count: 0,
+        };
+        let ev = evaluate_specimen(&spec);
+        assert!(
+            ev.replay_stable,
+            "empty source module should be replay-stable"
+        );
+    }
+
+    #[test]
+    fn tamper_kind_hash_trait_in_btree_set() {
+        let mut set = std::collections::BTreeSet::new();
+        for kind in TamperKind::ALL {
+            assert!(set.insert(*kind), "should insert {:?}", kind);
+        }
+        assert_eq!(set.len(), TamperKind::ALL.len());
+        // Duplicate insertion should fail
+        assert!(!set.insert(TamperKind::None));
+    }
+
+    #[test]
+    fn corpus_tier_hash_trait_in_btree_set() {
+        let mut set = std::collections::BTreeSet::new();
+        for tier in CorpusTier::ALL {
+            assert!(set.insert(*tier));
+        }
+        assert_eq!(set.len(), CorpusTier::ALL.len());
+        assert!(!set.insert(CorpusTier::Core));
+    }
+
+    #[test]
+    fn inventory_canonical_bytes_non_empty() {
+        let inventory = run_equivalence_corpus();
+        let bytes = inventory.canonical_bytes();
+        assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn manifest_canonical_bytes_non_empty() {
+        let inventory = run_equivalence_corpus();
+        let manifest = build_manifest(&inventory, "t", "d", vec!["x.json".to_string()]);
+        let bytes = manifest.canonical_bytes();
+        assert!(!bytes.is_empty());
+    }
 }

@@ -1281,4 +1281,1621 @@ mod tests {
         assert!(warm.contains(&0));
         assert!(warm.contains(&4));
     }
+
+    // -----------------------------------------------------------------------
+    // Deep tests: enum variant serde roundtrips
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn observed_type_serde_roundtrip_all_variants() {
+        let all = [
+            ObservedType::Undefined,
+            ObservedType::Null,
+            ObservedType::Boolean,
+            ObservedType::Integer,
+            ObservedType::Float,
+            ObservedType::String,
+            ObservedType::Object,
+            ObservedType::Symbol,
+            ObservedType::BigInt,
+        ];
+        for variant in &all {
+            let json = serde_json::to_string(variant).unwrap();
+            let back: ObservedType = serde_json::from_str(&json).unwrap();
+            assert_eq!(*variant, back, "roundtrip failed for {variant}");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests: Display / as_str consistency
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn observed_type_display_all_variants() {
+        assert_eq!(format!("{}", ObservedType::Undefined), "undefined");
+        assert_eq!(format!("{}", ObservedType::Null), "null");
+        assert_eq!(format!("{}", ObservedType::Boolean), "boolean");
+        assert_eq!(format!("{}", ObservedType::Integer), "int");
+        assert_eq!(format!("{}", ObservedType::Float), "float");
+        assert_eq!(format!("{}", ObservedType::String), "string");
+        assert_eq!(format!("{}", ObservedType::Object), "object");
+        assert_eq!(format!("{}", ObservedType::Symbol), "symbol");
+        assert_eq!(format!("{}", ObservedType::BigInt), "bigint");
+    }
+
+    #[test]
+    fn quickening_level_is_quickened_all_variants() {
+        assert!(!QuickeningLevel::Cold.is_quickened());
+        assert!(!QuickeningLevel::Warm.is_quickened());
+        assert!(!QuickeningLevel::Hot.is_quickened());
+        assert!(QuickeningLevel::Quickened.is_quickened());
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests: TypeFeedbackSlot edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn type_feedback_slot_stability_zero_observations() {
+        let slot = TypeFeedbackSlot::new(0, 0);
+        assert_eq!(slot.stability_millionths(), 0);
+        assert!(slot.is_unobserved());
+        assert!(!slot.is_monomorphic());
+        assert!(!slot.is_polymorphic());
+        assert_eq!(slot.monomorphic_type(), None);
+    }
+
+    #[test]
+    fn type_feedback_slot_stability_scales_with_type_count() {
+        let mut slot = TypeFeedbackSlot::new(0, 0);
+        slot.record(ObservedType::Integer);
+        assert_eq!(slot.stability_millionths(), 1_000_000);
+
+        slot.record(ObservedType::Float);
+        assert_eq!(slot.stability_millionths(), 500_000);
+
+        slot.record(ObservedType::String);
+        assert_eq!(slot.stability_millionths(), 333_333);
+
+        slot.record(ObservedType::Object);
+        assert_eq!(slot.stability_millionths(), 250_000);
+    }
+
+    #[test]
+    fn type_feedback_slot_duplicate_type_does_not_increase_type_count() {
+        let mut slot = TypeFeedbackSlot::new(0, 0);
+        slot.record(ObservedType::Integer);
+        slot.record(ObservedType::Integer);
+        slot.record(ObservedType::Integer);
+        assert!(slot.is_monomorphic());
+        assert_eq!(slot.observation_count, 3);
+        assert_eq!(slot.observed_types.len(), 1);
+        assert_eq!(slot.stability_millionths(), 1_000_000);
+    }
+
+    #[test]
+    fn type_feedback_slot_observation_count_saturates() {
+        let mut slot = TypeFeedbackSlot::new(0, 0);
+        slot.observation_count = u64::MAX;
+        slot.record(ObservedType::Integer);
+        assert_eq!(slot.observation_count, u64::MAX);
+    }
+
+    #[test]
+    fn type_feedback_slot_display_empty() {
+        let slot = TypeFeedbackSlot::new(42, 3);
+        let display = format!("{slot}");
+        assert!(display.contains("42"));
+        assert!(display.contains("3"));
+        assert!(display.contains("n=0"));
+        assert!(display.contains("{}"));
+    }
+
+    #[test]
+    fn type_feedback_slot_display_polymorphic() {
+        let mut slot = TypeFeedbackSlot::new(0, 0);
+        slot.record(ObservedType::Integer);
+        slot.record(ObservedType::Float);
+        let display = format!("{slot}");
+        assert!(display.contains("int"));
+        assert!(display.contains("float"));
+        assert!(display.contains("n=2"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests: QuickeningPolicy edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn quickening_policy_different_configs_different_hashes() {
+        let p1 = QuickeningPolicy::default();
+        let p2 = QuickeningPolicy {
+            warm_threshold: 100,
+            ..QuickeningPolicy::default()
+        };
+        assert_ne!(p1.policy_hash(), p2.policy_hash());
+    }
+
+    #[test]
+    fn quickening_policy_serde_roundtrip() {
+        let policy = QuickeningPolicy::default();
+        let json = serde_json::to_string(&policy).unwrap();
+        let back: QuickeningPolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(policy, back);
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests: InstructionFeedback edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn instruction_feedback_deopt_resets_to_warm_when_configured() {
+        let policy = QuickeningPolicy {
+            deopt_resets_to_cold: false,
+            warm_threshold: 1,
+            hot_threshold: 2,
+            ..QuickeningPolicy::default()
+        };
+        let mut fb = InstructionFeedback::new(0, "add");
+        for _ in 0..10 {
+            fb.record_execution();
+        }
+        fb.evaluate(&policy); // Cold -> Warm
+        fb.evaluate(&policy); // Warm -> Hot
+
+        fb.quickened_opcode = Some("fast_add".to_string());
+        fb.record_deopt(&policy);
+        assert_eq!(fb.level, QuickeningLevel::Warm);
+        assert!(fb.quickened_opcode.is_none());
+        assert_eq!(fb.deopt_count, 1);
+    }
+
+    #[test]
+    fn instruction_feedback_quickening_blocked_by_polymorphism() {
+        let policy = QuickeningPolicy {
+            warm_threshold: 1,
+            hot_threshold: 2,
+            min_stability_millionths: 500_000,
+            min_ic_hit_rate_millionths: 0,
+            max_polymorphic_types: 1,
+            deopt_resets_to_cold: true,
+        };
+        let mut fb = InstructionFeedback::new(0, "add");
+        for _ in 0..10 {
+            fb.record_execution();
+        }
+        // Record multiple types so stability is low and types exceed max
+        fb.record_type(0, ObservedType::Integer);
+        fb.record_type(0, ObservedType::Float);
+
+        fb.evaluate(&policy); // Cold -> Warm
+        fb.evaluate(&policy); // Warm -> Hot
+        let t = fb.evaluate(&policy); // Hot -> should NOT advance
+        assert!(!t.advanced);
+        assert_eq!(fb.level, QuickeningLevel::Hot);
+    }
+
+    #[test]
+    fn instruction_feedback_quickening_blocked_by_low_ic_hit_rate() {
+        let policy = QuickeningPolicy {
+            warm_threshold: 1,
+            hot_threshold: 2,
+            min_stability_millionths: 0,
+            min_ic_hit_rate_millionths: 900_000,
+            max_polymorphic_types: 5,
+            deopt_resets_to_cold: true,
+        };
+        let mut fb = InstructionFeedback::new(0, "add");
+        for _ in 0..10 {
+            fb.record_execution();
+            fb.record_type(0, ObservedType::Integer);
+        }
+        fb.update_ic_hit_rate(100_000); // Low IC rate
+
+        fb.evaluate(&policy); // Cold -> Warm
+        fb.evaluate(&policy); // Warm -> Hot
+        let t = fb.evaluate(&policy); // Hot -> should NOT advance
+        assert!(!t.advanced);
+        assert_eq!(fb.level, QuickeningLevel::Hot);
+    }
+
+    #[test]
+    fn instruction_feedback_hot_to_quickened_with_no_type_slots() {
+        let policy = QuickeningPolicy {
+            warm_threshold: 1,
+            hot_threshold: 2,
+            min_stability_millionths: 500_000,
+            min_ic_hit_rate_millionths: 900_000,
+            max_polymorphic_types: 3,
+            deopt_resets_to_cold: true,
+        };
+        let mut fb = InstructionFeedback::new(0, "nop");
+        for _ in 0..10 {
+            fb.record_execution();
+        }
+
+        fb.evaluate(&policy); // Cold -> Warm
+        fb.evaluate(&policy); // Warm -> Hot
+        let t = fb.evaluate(&policy); // Hot -> Quickened
+        assert!(t.advanced);
+        assert_eq!(fb.level, QuickeningLevel::Quickened);
+    }
+
+    #[test]
+    fn instruction_feedback_execution_count_saturates() {
+        let mut fb = InstructionFeedback::new(0, "add");
+        fb.execution_count = u64::MAX;
+        fb.record_execution();
+        assert_eq!(fb.execution_count, u64::MAX);
+    }
+
+    #[test]
+    fn instruction_feedback_deopt_count_saturates() {
+        let policy = QuickeningPolicy::default();
+        let mut fb = InstructionFeedback::new(0, "add");
+        fb.deopt_count = u32::MAX;
+        fb.record_deopt(&policy);
+        assert_eq!(fb.deopt_count, u32::MAX);
+    }
+
+    #[test]
+    fn instruction_feedback_min_stability_with_multiple_slots() {
+        let mut fb = InstructionFeedback::new(0, "add");
+        fb.record_type(0, ObservedType::Integer);
+        fb.record_type(1, ObservedType::Integer);
+        fb.record_type(1, ObservedType::Float);
+
+        assert_eq!(fb.min_stability_millionths(), 500_000);
+    }
+
+    #[test]
+    fn instruction_feedback_min_stability_no_slots() {
+        let fb = InstructionFeedback::new(0, "add");
+        assert_eq!(fb.min_stability_millionths(), 0);
+    }
+
+    #[test]
+    fn instruction_feedback_record_type_creates_new_slot() {
+        let mut fb = InstructionFeedback::new(0, "add");
+        assert!(fb.type_slots.is_empty());
+
+        fb.record_type(0, ObservedType::Integer);
+        assert_eq!(fb.type_slots.len(), 1);
+        assert_eq!(fb.type_slots[0].operand_index, 0);
+
+        fb.record_type(1, ObservedType::Float);
+        assert_eq!(fb.type_slots.len(), 2);
+        assert_eq!(fb.type_slots[1].operand_index, 1);
+    }
+
+    #[test]
+    fn instruction_feedback_record_type_updates_existing_slot() {
+        let mut fb = InstructionFeedback::new(0, "add");
+        fb.record_type(0, ObservedType::Integer);
+        fb.record_type(0, ObservedType::Float);
+        assert_eq!(fb.type_slots.len(), 1);
+        assert!(fb.type_slots[0].is_polymorphic());
+        assert_eq!(fb.type_slots[0].observation_count, 2);
+    }
+
+    #[test]
+    fn instruction_feedback_evaluate_no_advance_from_cold_below_threshold() {
+        let policy = QuickeningPolicy::default();
+        let mut fb = InstructionFeedback::new(0, "add");
+        for _ in 0..7 {
+            fb.record_execution();
+        }
+        let t = fb.evaluate(&policy);
+        assert!(!t.advanced);
+        assert_eq!(fb.level, QuickeningLevel::Cold);
+    }
+
+    #[test]
+    fn instruction_feedback_evaluate_stays_quickened() {
+        let policy = QuickeningPolicy {
+            warm_threshold: 1,
+            hot_threshold: 2,
+            min_stability_millionths: 0,
+            min_ic_hit_rate_millionths: 0,
+            max_polymorphic_types: 10,
+            deopt_resets_to_cold: true,
+        };
+        let mut fb = InstructionFeedback::new(0, "nop");
+        for _ in 0..10 {
+            fb.record_execution();
+        }
+        fb.evaluate(&policy);
+        fb.evaluate(&policy);
+        fb.evaluate(&policy);
+
+        let t = fb.evaluate(&policy);
+        assert!(!t.advanced);
+        assert_eq!(t.from, QuickeningLevel::Quickened);
+        assert_eq!(t.to, QuickeningLevel::Quickened);
+    }
+
+    #[test]
+    fn instruction_feedback_serde_roundtrip() {
+        let mut fb = InstructionFeedback::new(42, "load_const");
+        fb.record_execution();
+        fb.record_type(0, ObservedType::Integer);
+        fb.update_ic_hit_rate(750_000);
+        fb.quickened_opcode = Some("fast_load_const".to_string());
+        fb.deopt_count = 3;
+
+        let json = serde_json::to_string(&fb).unwrap();
+        let back: InstructionFeedback = serde_json::from_str(&json).unwrap();
+        assert_eq!(fb, back);
+    }
+
+    #[test]
+    fn instruction_feedback_display_format() {
+        let mut fb = InstructionFeedback::new(10, "sub");
+        fb.execution_count = 50;
+        fb.deopt_count = 2;
+        fb.ic_hit_rate_millionths = 800_000;
+        fb.level = QuickeningLevel::Hot;
+
+        let display = format!("{fb}");
+        assert!(display.contains("sub@10"));
+        assert!(display.contains("level=hot"));
+        assert!(display.contains("execs=50"));
+        assert!(display.contains("deopts=2"));
+        assert!(display.contains("ic_rate=800000"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests: SuperInstructionPattern edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn superinstruction_pattern_sequence_length() {
+        let p = SuperInstructionPattern {
+            pattern_id: "test".into(),
+            opcode_sequence: vec!["a".into(), "b".into(), "c".into()],
+            fused_opcode: "abc".into(),
+            type_constraints: BTreeMap::new(),
+            requires_monomorphic_ic: false,
+            estimated_speedup_millionths: 1_000_000,
+        };
+        assert_eq!(p.sequence_length(), 3);
+    }
+
+    #[test]
+    fn superinstruction_pattern_serde_roundtrip_with_type_constraints() {
+        let mut constraints = BTreeMap::new();
+        constraints.insert(0, ObservedType::Integer);
+        constraints.insert(1, ObservedType::Float);
+
+        let p = SuperInstructionPattern {
+            pattern_id: "test-typed".into(),
+            opcode_sequence: vec!["add".into(), "store".into()],
+            fused_opcode: "add_and_store".into(),
+            type_constraints: constraints,
+            requires_monomorphic_ic: true,
+            estimated_speedup_millionths: 1_600_000,
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        let back: SuperInstructionPattern = serde_json::from_str(&json).unwrap();
+        assert_eq!(p, back);
+    }
+
+    #[test]
+    fn superinstruction_pattern_display_speedup_formatting() {
+        let p = SuperInstructionPattern {
+            pattern_id: "test".into(),
+            opcode_sequence: vec!["a".into(), "b".into()],
+            fused_opcode: "fused_ab".into(),
+            type_constraints: BTreeMap::new(),
+            requires_monomorphic_ic: false,
+            estimated_speedup_millionths: 2_750_000,
+        };
+        let display = format!("{p}");
+        assert!(display.contains("fused_ab"));
+        assert!(display.contains("2.750x"));
+    }
+
+    #[test]
+    fn superinstruction_pattern_hash_differs_for_different_patterns() {
+        let p1 = SuperInstructionPattern {
+            pattern_id: "p1".into(),
+            opcode_sequence: vec!["add".into()],
+            fused_opcode: "fast_add".into(),
+            type_constraints: BTreeMap::new(),
+            requires_monomorphic_ic: false,
+            estimated_speedup_millionths: 1_100_000,
+        };
+        let p2 = SuperInstructionPattern {
+            pattern_id: "p2".into(),
+            opcode_sequence: vec!["sub".into()],
+            fused_opcode: "fast_sub".into(),
+            type_constraints: BTreeMap::new(),
+            requires_monomorphic_ic: false,
+            estimated_speedup_millionths: 1_100_000,
+        };
+        assert_ne!(p1.pattern_hash(), p2.pattern_hash());
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests: SuperInstructionCatalog edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn superinstruction_catalog_empty() {
+        let catalog = SuperInstructionCatalog::new(vec![]);
+        assert_eq!(catalog.pattern_count(), 0);
+        assert!(catalog.find_matching(&["add"]).is_empty());
+        assert!(catalog.patterns_starting_with("add").is_empty());
+    }
+
+    #[test]
+    fn superinstruction_catalog_find_matching_no_match() {
+        let catalog = SuperInstructionCatalog::default();
+        let matches = catalog.find_matching(&["nonexistent_opcode", "another"]);
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn superinstruction_catalog_find_matching_length_mismatch() {
+        let catalog = SuperInstructionCatalog::default();
+        let matches = catalog.find_matching(&["load_prop_cached"]);
+        assert!(matches.is_empty());
+        let matches = catalog.find_matching(&["load_prop_cached", "add", "store"]);
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn superinstruction_catalog_add_pattern_sorts_and_rehashes() {
+        let mut catalog = SuperInstructionCatalog::new(vec![]);
+        let hash_empty = catalog.catalog_hash.clone();
+
+        catalog.add_pattern(SuperInstructionPattern {
+            pattern_id: "z-last".into(),
+            opcode_sequence: vec!["z".into()],
+            fused_opcode: "fused_z".into(),
+            type_constraints: BTreeMap::new(),
+            requires_monomorphic_ic: false,
+            estimated_speedup_millionths: 1_000_000,
+        });
+        catalog.add_pattern(SuperInstructionPattern {
+            pattern_id: "a-first".into(),
+            opcode_sequence: vec!["a".into()],
+            fused_opcode: "fused_a".into(),
+            type_constraints: BTreeMap::new(),
+            requires_monomorphic_ic: false,
+            estimated_speedup_millionths: 1_000_000,
+        });
+
+        assert_eq!(catalog.patterns[0].pattern_id, "a-first");
+        assert_eq!(catalog.patterns[1].pattern_id, "z-last");
+        assert_ne!(catalog.catalog_hash, hash_empty);
+        assert_eq!(catalog.catalog_version, 3);
+    }
+
+    #[test]
+    fn superinstruction_catalog_hash_deterministic() {
+        let c1 = SuperInstructionCatalog::default();
+        let c2 = SuperInstructionCatalog::default();
+        assert_eq!(c1.catalog_hash, c2.catalog_hash);
+    }
+
+    #[test]
+    fn superinstruction_catalog_schema_version() {
+        let catalog = SuperInstructionCatalog::default();
+        assert_eq!(
+            catalog.schema_version,
+            SUPERINSTRUCTION_CATALOG_SCHEMA_VERSION
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests: QuickeningProfile edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn quickening_profile_empty_summary() {
+        let profile = QuickeningProfile::new("empty");
+        let summary = profile.summary();
+        assert_eq!(summary.total_sites, 0);
+        assert_eq!(summary.cold_count, 0);
+        assert_eq!(summary.warm_count, 0);
+        assert_eq!(summary.hot_count, 0);
+        assert_eq!(summary.quickened_count, 0);
+        assert_eq!(summary.total_executions, 0);
+        assert_eq!(summary.total_deopts, 0);
+        assert_eq!(summary.evaluation_epoch, 0);
+    }
+
+    #[test]
+    fn quickening_profile_evaluation_epoch_increments() {
+        let policy = QuickeningPolicy::default();
+        let mut profile = QuickeningProfile::new("epoch_test");
+        assert_eq!(profile.evaluation_epoch, 0);
+
+        profile.evaluate_all(&policy);
+        assert_eq!(profile.evaluation_epoch, 1);
+
+        profile.evaluate_all(&policy);
+        assert_eq!(profile.evaluation_epoch, 2);
+
+        profile.evaluate_all(&policy);
+        assert_eq!(profile.evaluation_epoch, 3);
+    }
+
+    #[test]
+    fn quickening_profile_deopt_on_nonexistent_offset() {
+        let policy = QuickeningPolicy::default();
+        let mut profile = QuickeningProfile::new("no_offset");
+        profile.record_deopt(999, &policy);
+        assert_eq!(profile.total_deopts, 0);
+    }
+
+    #[test]
+    fn quickening_profile_get_or_create_idempotent_opcode() {
+        let mut profile = QuickeningProfile::new("idempotent");
+        profile.get_or_create(0, "add");
+        profile.get_or_create(0, "add");
+        assert_eq!(profile.entry_count(), 1);
+    }
+
+    #[test]
+    fn quickening_profile_multiple_instructions_different_levels() {
+        let policy = QuickeningPolicy {
+            warm_threshold: 1,
+            hot_threshold: 5,
+            min_stability_millionths: 0,
+            min_ic_hit_rate_millionths: 0,
+            max_polymorphic_types: 10,
+            deopt_resets_to_cold: true,
+        };
+        let mut profile = QuickeningProfile::new("multi");
+
+        profile.record_execution(0, "add");
+
+        for _ in 0..10 {
+            profile.record_execution(4, "sub");
+        }
+
+        let t1 = profile.evaluate_all(&policy);
+        assert_eq!(t1.len(), 2);
+
+        let t2 = profile.evaluate_all(&policy);
+        assert_eq!(t2.len(), 1);
+        assert_eq!(profile.get(4).unwrap().level, QuickeningLevel::Hot);
+        assert_eq!(profile.get(0).unwrap().level, QuickeningLevel::Warm);
+
+        let t3 = profile.evaluate_all(&policy);
+        assert_eq!(t3.len(), 1);
+        assert_eq!(profile.get(4).unwrap().level, QuickeningLevel::Quickened);
+        assert_eq!(profile.total_quickened, 1);
+
+        let summary = profile.summary();
+        assert_eq!(summary.warm_count, 1);
+        assert_eq!(summary.quickened_count, 1);
+    }
+
+    #[test]
+    fn quickening_profile_total_executions_saturates() {
+        let mut profile = QuickeningProfile::new("saturate");
+        profile.total_executions = u64::MAX;
+        profile.record_execution(0, "add");
+        assert_eq!(profile.total_executions, u64::MAX);
+    }
+
+    #[test]
+    fn quickening_profile_get_returns_none_for_missing() {
+        let profile = QuickeningProfile::new("empty");
+        assert!(profile.get(42).is_none());
+    }
+
+    #[test]
+    fn quickening_profile_instructions_at_level_empty() {
+        let profile = QuickeningProfile::new("empty");
+        assert!(
+            profile
+                .instructions_at_level(QuickeningLevel::Cold)
+                .is_empty()
+        );
+        assert!(
+            profile
+                .instructions_at_level(QuickeningLevel::Quickened)
+                .is_empty()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests: SuperInstruction candidates with type constraints
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn superinstruction_candidates_type_constraint_mismatch() {
+        let policy = QuickeningPolicy {
+            warm_threshold: 1,
+            hot_threshold: 2,
+            min_stability_millionths: 0,
+            min_ic_hit_rate_millionths: 0,
+            max_polymorphic_types: 5,
+            deopt_resets_to_cold: true,
+        };
+
+        let catalog = SuperInstructionCatalog::new(vec![SuperInstructionPattern {
+            pattern_id: "si-add-branch-typed".into(),
+            opcode_sequence: vec!["add".into(), "jump_if_false".into()],
+            fused_opcode: "add_and_branch".into(),
+            type_constraints: {
+                let mut m = BTreeMap::new();
+                m.insert(0, ObservedType::Integer);
+                m
+            },
+            requires_monomorphic_ic: false,
+            estimated_speedup_millionths: 1_400_000,
+        }]);
+
+        let mut profile = QuickeningProfile::new("type_mismatch");
+        for _ in 0..10 {
+            profile.record_execution(0, "add");
+            profile.record_execution(4, "jump_if_false");
+        }
+        profile.record_type(0, "add", 0, ObservedType::Float);
+
+        profile.evaluate_all(&policy);
+        profile.evaluate_all(&policy);
+
+        let candidates = profile.find_superinstruction_candidates(&catalog);
+        assert!(
+            candidates.is_empty(),
+            "should not match due to type constraint mismatch"
+        );
+    }
+
+    #[test]
+    fn superinstruction_candidates_ic_requirement_blocks() {
+        let policy = QuickeningPolicy {
+            warm_threshold: 1,
+            hot_threshold: 2,
+            min_stability_millionths: 0,
+            min_ic_hit_rate_millionths: 0,
+            max_polymorphic_types: 5,
+            deopt_resets_to_cold: true,
+        };
+
+        let catalog = SuperInstructionCatalog::default();
+        let mut profile = QuickeningProfile::new("ic_block");
+        for _ in 0..10 {
+            profile.record_execution(0, "load_prop_cached");
+            profile.record_execution(4, "add");
+        }
+
+        profile.evaluate_all(&policy);
+        profile.evaluate_all(&policy);
+
+        // After getting to Hot, set low IC hit rate
+        profile
+            .get_or_create(0, "load_prop_cached")
+            .update_ic_hit_rate(500_000);
+
+        let candidates = profile.find_superinstruction_candidates(&catalog);
+        let load_add: Vec<_> = candidates
+            .iter()
+            .filter(|c| c.fused_opcode == "load_prop_and_add")
+            .collect();
+        assert!(
+            load_add.is_empty(),
+            "should be blocked by low IC hit rate for monomorphic IC pattern"
+        );
+    }
+
+    #[test]
+    fn superinstruction_candidates_not_eligible_when_cold() {
+        let policy = QuickeningPolicy::default();
+        let catalog = SuperInstructionCatalog::default();
+        let mut profile = QuickeningProfile::new("cold_check");
+
+        profile.record_execution(0, "load_prop_cached");
+        profile.record_execution(4, "add");
+
+        let candidates = profile.find_superinstruction_candidates(&catalog);
+        assert!(
+            candidates.is_empty(),
+            "cold instructions should not be candidates"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests: serde roundtrips for remaining types
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn quickening_transition_serde_roundtrip() {
+        let t = QuickeningTransition {
+            instruction_offset: 42,
+            from: QuickeningLevel::Warm,
+            to: QuickeningLevel::Hot,
+            execution_count: 999,
+            advanced: true,
+        };
+        let json = serde_json::to_string(&t).unwrap();
+        let back: QuickeningTransition = serde_json::from_str(&json).unwrap();
+        assert_eq!(t, back);
+    }
+
+    #[test]
+    fn superinstruction_candidate_serde_roundtrip() {
+        let c = SuperInstructionCandidate {
+            start_offset: 10,
+            pattern_id: "si-load-add".into(),
+            fused_opcode: "load_prop_and_add".into(),
+            estimated_speedup_millionths: 1_300_000,
+        };
+        let json = serde_json::to_string(&c).unwrap();
+        let back: SuperInstructionCandidate = serde_json::from_str(&json).unwrap();
+        assert_eq!(c, back);
+    }
+
+    #[test]
+    fn quickening_summary_serde_roundtrip() {
+        let s = QuickeningSummary {
+            total_sites: 10,
+            cold_count: 3,
+            warm_count: 2,
+            hot_count: 4,
+            quickened_count: 1,
+            total_executions: 1000,
+            total_deopts: 5,
+            evaluation_epoch: 7,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let back: QuickeningSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(s, back);
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests: QuickeningDecision determinism and hash
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn quickening_decision_hash_deterministic() {
+        let policy = QuickeningPolicy::default();
+        let profile = QuickeningProfile::new("fn_det");
+        let d1 = QuickeningDecision::build(&profile, &policy, vec![], vec![]);
+        let d2 = QuickeningDecision::build(&profile, &policy, vec![], vec![]);
+        assert_eq!(d1.decision_hash, d2.decision_hash);
+    }
+
+    #[test]
+    fn quickening_decision_schema_version() {
+        let policy = QuickeningPolicy::default();
+        let profile = QuickeningProfile::new("fn_schema");
+        let decision = QuickeningDecision::build(&profile, &policy, vec![], vec![]);
+        assert_eq!(decision.schema_version, QUICKENING_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn quickening_decision_includes_transitions_and_candidates() {
+        let policy = QuickeningPolicy::default();
+        let profile = QuickeningProfile::new("fn_full");
+        let transitions = vec![QuickeningTransition {
+            instruction_offset: 0,
+            from: QuickeningLevel::Cold,
+            to: QuickeningLevel::Warm,
+            execution_count: 10,
+            advanced: true,
+        }];
+        let candidates = vec![SuperInstructionCandidate {
+            start_offset: 0,
+            pattern_id: "si-load-add".into(),
+            fused_opcode: "load_prop_and_add".into(),
+            estimated_speedup_millionths: 1_300_000,
+        }];
+        let decision =
+            QuickeningDecision::build(&profile, &policy, transitions.clone(), candidates.clone());
+        assert_eq!(decision.transitions, transitions);
+        assert_eq!(decision.superinstruction_candidates, candidates);
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests: Constants
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn constants_are_well_formed() {
+        assert_eq!(COMPONENT, "quickening_feedback_lattice");
+        assert!(QUICKENING_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(SUPERINSTRUCTION_CATALOG_SCHEMA_VERSION.starts_with("franken-engine."));
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests: default_superinstruction_patterns coverage
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn default_patterns_cover_expected_fusions() {
+        let patterns = default_superinstruction_patterns();
+        let fused_opcodes: BTreeSet<String> =
+            patterns.iter().map(|p| p.fused_opcode.clone()).collect();
+        assert!(fused_opcodes.contains("load_prop_and_add"));
+        assert!(fused_opcodes.contains("load_prop_and_sub"));
+        assert!(fused_opcodes.contains("store_prop_and_jump"));
+        assert!(fused_opcodes.contains("add_and_branch"));
+        assert!(fused_opcodes.contains("load_prop_pair"));
+    }
+
+    #[test]
+    fn default_patterns_all_have_positive_speedup() {
+        for p in default_superinstruction_patterns() {
+            assert!(
+                p.estimated_speedup_millionths > 1_000_000,
+                "pattern {} speedup should be > 1.0x",
+                p.pattern_id
+            );
+        }
+    }
+
+    #[test]
+    fn default_patterns_all_have_nonempty_sequences() {
+        for p in default_superinstruction_patterns() {
+            assert!(
+                p.sequence_length() >= 2,
+                "pattern {} should have at least 2 opcodes",
+                p.pattern_id
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests: observed type ordering (BTreeSet determinism)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn observed_type_ordering_deterministic() {
+        let mut set1 = BTreeSet::new();
+        set1.insert(ObservedType::Float);
+        set1.insert(ObservedType::Integer);
+        set1.insert(ObservedType::Undefined);
+
+        let mut set2 = BTreeSet::new();
+        set2.insert(ObservedType::Integer);
+        set2.insert(ObservedType::Undefined);
+        set2.insert(ObservedType::Float);
+
+        let v1: Vec<_> = set1.iter().collect();
+        let v2: Vec<_> = set2.iter().collect();
+        assert_eq!(v1, v2, "BTreeSet iteration order should be deterministic");
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep tests: quickening level lattice monotonicity
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn quickening_level_full_advance_chain() {
+        let mut level = QuickeningLevel::Cold;
+        let mut ranks = vec![level.rank()];
+        while let Some(next) = level.advance() {
+            level = next;
+            ranks.push(level.rank());
+        }
+        assert_eq!(ranks, vec![0, 1, 2, 3]);
+        assert_eq!(level, QuickeningLevel::Quickened);
+    }
+
+    #[test]
+    fn quickening_level_reset_always_returns_cold() {
+        for level in [
+            QuickeningLevel::Cold,
+            QuickeningLevel::Warm,
+            QuickeningLevel::Hot,
+            QuickeningLevel::Quickened,
+        ] {
+            assert_eq!(level.reset(), QuickeningLevel::Cold);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: lattice operations, edge cases, and determinism
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn quickening_level_advance_is_strictly_monotone() {
+        let levels = [
+            QuickeningLevel::Cold,
+            QuickeningLevel::Warm,
+            QuickeningLevel::Hot,
+        ];
+        for level in levels {
+            let next = level.advance().unwrap();
+            assert!(
+                next.rank() > level.rank(),
+                "advance from {level} should produce a strictly higher rank"
+            );
+        }
+    }
+
+    #[test]
+    fn quickening_level_hash_consistency() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h1 = DefaultHasher::new();
+        let mut h2 = DefaultHasher::new();
+        QuickeningLevel::Hot.hash(&mut h1);
+        QuickeningLevel::Hot.hash(&mut h2);
+        assert_eq!(h1.finish(), h2.finish());
+        let mut h3 = DefaultHasher::new();
+        let mut h4 = DefaultHasher::new();
+        QuickeningLevel::Cold.hash(&mut h3);
+        QuickeningLevel::Quickened.hash(&mut h4);
+        assert_ne!(h3.finish(), h4.finish());
+    }
+
+    #[test]
+    fn observed_type_hash_determinism() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let types = [
+            ObservedType::Undefined,
+            ObservedType::Null,
+            ObservedType::Boolean,
+            ObservedType::Integer,
+            ObservedType::Float,
+            ObservedType::String,
+            ObservedType::Object,
+            ObservedType::Symbol,
+            ObservedType::BigInt,
+        ];
+        for ty in &types {
+            let mut h1 = DefaultHasher::new();
+            let mut h2 = DefaultHasher::new();
+            ty.hash(&mut h1);
+            ty.hash(&mut h2);
+            assert_eq!(h1.finish(), h2.finish(), "hash should be stable for {ty}");
+        }
+    }
+
+    #[test]
+    fn type_feedback_slot_all_nine_types_recorded() {
+        let mut slot = TypeFeedbackSlot::new(0, 0);
+        let all_types = [
+            ObservedType::Undefined,
+            ObservedType::Null,
+            ObservedType::Boolean,
+            ObservedType::Integer,
+            ObservedType::Float,
+            ObservedType::String,
+            ObservedType::Object,
+            ObservedType::Symbol,
+            ObservedType::BigInt,
+        ];
+        for ty in &all_types {
+            slot.record(*ty);
+        }
+        assert_eq!(slot.observed_types.len(), 9);
+        assert_eq!(slot.observation_count, 9);
+        assert!(slot.is_polymorphic());
+        assert!(!slot.is_monomorphic());
+        assert_eq!(slot.monomorphic_type(), None);
+        assert_eq!(slot.stability_millionths(), 111_111);
+    }
+
+    #[test]
+    fn type_feedback_slot_serde_roundtrip_polymorphic() {
+        let mut slot = TypeFeedbackSlot::new(100, 2);
+        slot.record(ObservedType::Integer);
+        slot.record(ObservedType::Float);
+        slot.record(ObservedType::String);
+        slot.record(ObservedType::Integer);
+        assert_eq!(slot.observation_count, 4);
+        assert_eq!(slot.observed_types.len(), 3);
+        let json = serde_json::to_string(&slot).unwrap();
+        let back: TypeFeedbackSlot = serde_json::from_str(&json).unwrap();
+        assert_eq!(slot, back);
+        assert_eq!(back.observation_count, 4);
+        assert_eq!(back.observed_types.len(), 3);
+    }
+
+    #[test]
+    fn type_feedback_slot_display_multiple_types_ordered() {
+        let mut slot = TypeFeedbackSlot::new(5, 0);
+        slot.record(ObservedType::Object);
+        slot.record(ObservedType::Null);
+        slot.record(ObservedType::Boolean);
+        let display = format!("{slot}");
+        assert!(display.contains("null"));
+        assert!(display.contains("boolean"));
+        assert!(display.contains("object"));
+        assert!(display.contains("n=3"));
+    }
+
+    #[test]
+    fn instruction_feedback_evaluate_exact_warm_threshold_boundary() {
+        let policy = QuickeningPolicy {
+            warm_threshold: 10,
+            ..QuickeningPolicy::default()
+        };
+        let mut fb = InstructionFeedback::new(0, "add");
+        for _ in 0..9 {
+            fb.record_execution();
+        }
+        let t = fb.evaluate(&policy);
+        assert!(!t.advanced);
+        assert_eq!(fb.level, QuickeningLevel::Cold);
+        fb.record_execution();
+        let t = fb.evaluate(&policy);
+        assert!(t.advanced);
+        assert_eq!(fb.level, QuickeningLevel::Warm);
+    }
+
+    #[test]
+    fn instruction_feedback_evaluate_exact_hot_threshold_boundary() {
+        let policy = QuickeningPolicy {
+            warm_threshold: 1,
+            hot_threshold: 50,
+            ..QuickeningPolicy::default()
+        };
+        let mut fb = InstructionFeedback::new(0, "add");
+        for _ in 0..49 {
+            fb.record_execution();
+        }
+        fb.evaluate(&policy);
+        let t = fb.evaluate(&policy);
+        assert!(!t.advanced);
+        assert_eq!(fb.level, QuickeningLevel::Warm);
+        fb.record_execution();
+        let t = fb.evaluate(&policy);
+        assert!(t.advanced);
+        assert_eq!(fb.level, QuickeningLevel::Hot);
+    }
+
+    #[test]
+    fn instruction_feedback_quickening_blocked_by_stability_boundary() {
+        let policy = QuickeningPolicy {
+            warm_threshold: 1,
+            hot_threshold: 2,
+            min_stability_millionths: 500_001,
+            min_ic_hit_rate_millionths: 0,
+            max_polymorphic_types: 5,
+            deopt_resets_to_cold: true,
+        };
+        let mut fb = InstructionFeedback::new(0, "add");
+        for _ in 0..10 {
+            fb.record_execution();
+        }
+        fb.record_type(0, ObservedType::Integer);
+        fb.record_type(0, ObservedType::Float);
+        fb.evaluate(&policy);
+        fb.evaluate(&policy);
+        let t = fb.evaluate(&policy);
+        assert!(!t.advanced);
+        assert_eq!(fb.level, QuickeningLevel::Hot);
+    }
+
+    #[test]
+    fn instruction_feedback_quickening_passes_exact_stability_boundary() {
+        let policy = QuickeningPolicy {
+            warm_threshold: 1,
+            hot_threshold: 2,
+            min_stability_millionths: 500_000,
+            min_ic_hit_rate_millionths: 0,
+            max_polymorphic_types: 5,
+            deopt_resets_to_cold: true,
+        };
+        let mut fb = InstructionFeedback::new(0, "add");
+        for _ in 0..10 {
+            fb.record_execution();
+        }
+        fb.record_type(0, ObservedType::Integer);
+        fb.record_type(0, ObservedType::Float);
+        fb.evaluate(&policy);
+        fb.evaluate(&policy);
+        let t = fb.evaluate(&policy);
+        assert!(t.advanced);
+        assert_eq!(fb.level, QuickeningLevel::Quickened);
+    }
+
+    #[test]
+    fn instruction_feedback_max_polymorphic_types_exact_boundary() {
+        let policy = QuickeningPolicy {
+            warm_threshold: 1,
+            hot_threshold: 2,
+            min_stability_millionths: 0,
+            min_ic_hit_rate_millionths: 0,
+            max_polymorphic_types: 2,
+            deopt_resets_to_cold: true,
+        };
+        let mut fb = InstructionFeedback::new(0, "add");
+        for _ in 0..10 {
+            fb.record_execution();
+        }
+        fb.record_type(0, ObservedType::Integer);
+        fb.record_type(0, ObservedType::Float);
+        fb.evaluate(&policy);
+        fb.evaluate(&policy);
+        let t = fb.evaluate(&policy);
+        assert!(t.advanced);
+        assert_eq!(fb.level, QuickeningLevel::Quickened);
+
+        let mut fb2 = InstructionFeedback::new(0, "add");
+        for _ in 0..10 {
+            fb2.record_execution();
+        }
+        fb2.record_type(0, ObservedType::Integer);
+        fb2.record_type(0, ObservedType::Float);
+        fb2.record_type(0, ObservedType::String);
+        fb2.evaluate(&policy);
+        fb2.evaluate(&policy);
+        let t2 = fb2.evaluate(&policy);
+        assert!(!t2.advanced);
+        assert_eq!(fb2.level, QuickeningLevel::Hot);
+    }
+
+    #[test]
+    fn instruction_feedback_multiple_deopts_accumulate() {
+        let policy = QuickeningPolicy::default();
+        let mut fb = InstructionFeedback::new(0, "add");
+        fb.record_deopt(&policy);
+        fb.record_deopt(&policy);
+        fb.record_deopt(&policy);
+        assert_eq!(fb.deopt_count, 3);
+    }
+
+    #[test]
+    fn instruction_feedback_deopt_clears_quickened_opcode() {
+        let policy = QuickeningPolicy::default();
+        let mut fb = InstructionFeedback::new(0, "add");
+        fb.quickened_opcode = Some("fast_add".to_string());
+        fb.record_deopt(&policy);
+        assert!(fb.quickened_opcode.is_none());
+    }
+
+    #[test]
+    fn instruction_feedback_evaluate_transition_fields_correct() {
+        let policy = QuickeningPolicy {
+            warm_threshold: 5,
+            ..QuickeningPolicy::default()
+        };
+        let mut fb = InstructionFeedback::new(42, "load");
+        for _ in 0..10 {
+            fb.record_execution();
+        }
+        let t = fb.evaluate(&policy);
+        assert!(t.advanced);
+        assert_eq!(t.instruction_offset, 42);
+        assert_eq!(t.from, QuickeningLevel::Cold);
+        assert_eq!(t.to, QuickeningLevel::Warm);
+        assert_eq!(t.execution_count, 10);
+    }
+
+    #[test]
+    fn instruction_feedback_serde_with_all_fields_populated() {
+        let mut fb = InstructionFeedback::new(99, "complex_op");
+        for _ in 0..50 {
+            fb.record_execution();
+        }
+        fb.record_type(0, ObservedType::Integer);
+        fb.record_type(1, ObservedType::String);
+        fb.record_type(1, ObservedType::Object);
+        fb.update_ic_hit_rate(850_000);
+        fb.quickened_opcode = Some("fast_complex_op".to_string());
+        fb.deopt_count = 7;
+        fb.level = QuickeningLevel::Quickened;
+        let json = serde_json::to_string(&fb).unwrap();
+        let back: InstructionFeedback = serde_json::from_str(&json).unwrap();
+        assert_eq!(fb, back);
+        assert_eq!(back.type_slots.len(), 2);
+        assert_eq!(back.type_slots[0].observed_types.len(), 1);
+        assert_eq!(back.type_slots[1].observed_types.len(), 2);
+    }
+
+    #[test]
+    fn quickening_policy_hash_changes_with_each_field() {
+        let base = QuickeningPolicy::default();
+        let base_hash = base.policy_hash();
+        let p1 = QuickeningPolicy {
+            warm_threshold: base.warm_threshold + 1,
+            ..base.clone()
+        };
+        assert_ne!(p1.policy_hash(), base_hash);
+        let p2 = QuickeningPolicy {
+            hot_threshold: base.hot_threshold + 1,
+            ..base.clone()
+        };
+        assert_ne!(p2.policy_hash(), base_hash);
+        let p3 = QuickeningPolicy {
+            min_stability_millionths: base.min_stability_millionths + 1,
+            ..base.clone()
+        };
+        assert_ne!(p3.policy_hash(), base_hash);
+        let p4 = QuickeningPolicy {
+            min_ic_hit_rate_millionths: base.min_ic_hit_rate_millionths + 1,
+            ..base.clone()
+        };
+        assert_ne!(p4.policy_hash(), base_hash);
+        let p5 = QuickeningPolicy {
+            max_polymorphic_types: base.max_polymorphic_types + 1,
+            ..base.clone()
+        };
+        assert_ne!(p5.policy_hash(), base_hash);
+        let p6 = QuickeningPolicy {
+            deopt_resets_to_cold: !base.deopt_resets_to_cold,
+            ..base.clone()
+        };
+        assert_ne!(p6.policy_hash(), base_hash);
+    }
+
+    #[test]
+    fn quickening_profile_hash_changes_with_state() {
+        let mut p1 = QuickeningProfile::new("fn_a");
+        let hash_empty = p1.profile_hash();
+        p1.record_execution(0, "add");
+        let hash_one = p1.profile_hash();
+        assert_ne!(hash_empty, hash_one);
+        p1.record_type(0, "add", 0, ObservedType::Integer);
+        let hash_with_type = p1.profile_hash();
+        assert_ne!(hash_one, hash_with_type);
+    }
+
+    #[test]
+    fn quickening_profile_different_function_ids_different_hashes() {
+        let p1 = QuickeningProfile::new("fn_alpha");
+        let p2 = QuickeningProfile::new("fn_beta");
+        assert_ne!(p1.profile_hash(), p2.profile_hash());
+    }
+
+    #[test]
+    fn quickening_profile_superinstruction_store_jump_no_ic_needed() {
+        let policy = QuickeningPolicy {
+            warm_threshold: 1,
+            hot_threshold: 2,
+            min_stability_millionths: 0,
+            min_ic_hit_rate_millionths: 0,
+            max_polymorphic_types: 5,
+            deopt_resets_to_cold: true,
+        };
+        let catalog = SuperInstructionCatalog::default();
+        let mut profile = QuickeningProfile::new("store_jump_test");
+        for _ in 0..10 {
+            profile.record_execution(0, "store_prop");
+            profile.record_execution(4, "jump");
+        }
+        profile.evaluate_all(&policy);
+        profile.evaluate_all(&policy);
+        let candidates = profile.find_superinstruction_candidates(&catalog);
+        let store_jump: Vec<_> = candidates
+            .iter()
+            .filter(|c| c.fused_opcode == "store_prop_and_jump")
+            .collect();
+        assert!(
+            !store_jump.is_empty(),
+            "store_prop_and_jump should be found without IC requirement"
+        );
+    }
+
+    #[test]
+    fn quickening_profile_evaluate_all_returns_only_advances() {
+        let policy = QuickeningPolicy {
+            warm_threshold: 1,
+            hot_threshold: 100,
+            ..QuickeningPolicy::default()
+        };
+        let mut profile = QuickeningProfile::new("only_advances");
+        for _ in 0..5 {
+            profile.record_execution(0, "add");
+        }
+        let t1 = profile.evaluate_all(&policy);
+        assert_eq!(t1.len(), 1);
+        assert!(t1[0].advanced);
+        let t2 = profile.evaluate_all(&policy);
+        assert!(t2.is_empty());
+    }
+
+    #[test]
+    fn quickening_profile_summary_after_deopt_and_re_evaluation() {
+        let policy = QuickeningPolicy {
+            warm_threshold: 1,
+            hot_threshold: 2,
+            min_stability_millionths: 0,
+            min_ic_hit_rate_millionths: 0,
+            max_polymorphic_types: 10,
+            deopt_resets_to_cold: true,
+        };
+        let mut profile = QuickeningProfile::new("deopt_and_re_eval");
+        for _ in 0..10 {
+            profile.record_execution(0, "add");
+        }
+        profile.evaluate_all(&policy);
+        profile.evaluate_all(&policy);
+        profile.evaluate_all(&policy);
+        let s1 = profile.summary();
+        assert_eq!(s1.quickened_count, 1);
+        profile.record_deopt(0, &policy);
+        let s2 = profile.summary();
+        assert_eq!(s2.quickened_count, 0);
+        assert_eq!(s2.cold_count, 1);
+        assert_eq!(s2.total_deopts, 1);
+    }
+
+    #[test]
+    fn quickening_profile_serde_roundtrip_full() {
+        let policy = QuickeningPolicy {
+            warm_threshold: 1,
+            hot_threshold: 2,
+            min_stability_millionths: 0,
+            min_ic_hit_rate_millionths: 0,
+            max_polymorphic_types: 10,
+            deopt_resets_to_cold: true,
+        };
+        let mut profile = QuickeningProfile::new("full_serde");
+        for _ in 0..10 {
+            profile.record_execution(0, "add");
+            profile.record_execution(4, "sub");
+        }
+        profile.record_type(0, "add", 0, ObservedType::Integer);
+        profile.record_type(4, "sub", 0, ObservedType::Float);
+        profile.record_type(4, "sub", 0, ObservedType::String);
+        profile.evaluate_all(&policy);
+        profile.evaluate_all(&policy);
+        profile.record_deopt(4, &policy);
+        let json = serde_json::to_string(&profile).unwrap();
+        let back: QuickeningProfile = serde_json::from_str(&json).unwrap();
+        assert_eq!(profile.function_id, back.function_id);
+        assert_eq!(profile.total_executions, back.total_executions);
+        assert_eq!(profile.total_deopts, back.total_deopts);
+        assert_eq!(profile.evaluation_epoch, back.evaluation_epoch);
+        assert_eq!(profile.entry_count(), back.entry_count());
+        assert_eq!(profile.profile_hash(), back.profile_hash());
+    }
+
+    #[test]
+    fn quickening_decision_hash_changes_with_transitions() {
+        let policy = QuickeningPolicy::default();
+        let profile = QuickeningProfile::new("fn_dec_diff");
+        let d1 = QuickeningDecision::build(&profile, &policy, vec![], vec![]);
+        let d2 = QuickeningDecision::build(
+            &profile,
+            &policy,
+            vec![QuickeningTransition {
+                instruction_offset: 0,
+                from: QuickeningLevel::Cold,
+                to: QuickeningLevel::Warm,
+                execution_count: 10,
+                advanced: true,
+            }],
+            vec![],
+        );
+        assert_ne!(d1.decision_hash, d2.decision_hash);
+    }
+
+    #[test]
+    fn quickening_decision_serde_roundtrip_with_content() {
+        let policy = QuickeningPolicy::default();
+        let profile = QuickeningProfile::new("fn_full_dec");
+        let transitions = vec![
+            QuickeningTransition {
+                instruction_offset: 0,
+                from: QuickeningLevel::Cold,
+                to: QuickeningLevel::Warm,
+                execution_count: 8,
+                advanced: true,
+            },
+            QuickeningTransition {
+                instruction_offset: 4,
+                from: QuickeningLevel::Warm,
+                to: QuickeningLevel::Hot,
+                execution_count: 64,
+                advanced: true,
+            },
+        ];
+        let candidates = vec![SuperInstructionCandidate {
+            start_offset: 0,
+            pattern_id: "si-load-add".into(),
+            fused_opcode: "load_prop_and_add".into(),
+            estimated_speedup_millionths: 1_300_000,
+        }];
+        let decision =
+            QuickeningDecision::build(&profile, &policy, transitions, candidates);
+        let json = serde_json::to_string(&decision).unwrap();
+        let back: QuickeningDecision = serde_json::from_str(&json).unwrap();
+        assert_eq!(decision, back);
+        assert_eq!(back.transitions.len(), 2);
+        assert_eq!(back.superinstruction_candidates.len(), 1);
+    }
+
+    #[test]
+    fn superinstruction_pattern_display_arrow_separator() {
+        let p = SuperInstructionPattern {
+            pattern_id: "test".into(),
+            opcode_sequence: vec!["load".into(), "add".into(), "store".into()],
+            fused_opcode: "fused_las".into(),
+            type_constraints: BTreeMap::new(),
+            requires_monomorphic_ic: false,
+            estimated_speedup_millionths: 1_000_000,
+        };
+        let display = format!("{p}");
+        assert!(
+            display.contains("load \u{2192} add \u{2192} store"),
+            "display should show arrow-separated opcodes, got: {display}"
+        );
+    }
+
+    #[test]
+    fn superinstruction_pattern_display_speedup_exactly_1x() {
+        let p = SuperInstructionPattern {
+            pattern_id: "test".into(),
+            opcode_sequence: vec!["a".into(), "b".into()],
+            fused_opcode: "fused_ab".into(),
+            type_constraints: BTreeMap::new(),
+            requires_monomorphic_ic: false,
+            estimated_speedup_millionths: 1_000_000,
+        };
+        let display = format!("{p}");
+        assert!(display.contains("1.0x"), "expected 1.0x, got: {display}");
+    }
+
+    #[test]
+    fn superinstruction_catalog_version_starts_at_one() {
+        let catalog = SuperInstructionCatalog::new(vec![]);
+        assert_eq!(catalog.catalog_version, 1);
+    }
+
+    #[test]
+    fn superinstruction_catalog_version_saturates() {
+        let mut catalog = SuperInstructionCatalog::new(vec![]);
+        catalog.catalog_version = u32::MAX;
+        catalog.add_pattern(SuperInstructionPattern {
+            pattern_id: "overflow".into(),
+            opcode_sequence: vec!["a".into()],
+            fused_opcode: "fused_a".into(),
+            type_constraints: BTreeMap::new(),
+            requires_monomorphic_ic: false,
+            estimated_speedup_millionths: 1_000_000,
+        });
+        assert_eq!(catalog.catalog_version, u32::MAX);
+    }
+
+    #[test]
+    fn quickening_profile_entry_count_tracks_distinct_offsets() {
+        let mut profile = QuickeningProfile::new("entry_count");
+        assert_eq!(profile.entry_count(), 0);
+        profile.record_execution(0, "add");
+        assert_eq!(profile.entry_count(), 1);
+        profile.record_execution(0, "add");
+        assert_eq!(profile.entry_count(), 1);
+        profile.record_execution(4, "sub");
+        assert_eq!(profile.entry_count(), 2);
+        profile.record_execution(8, "mul");
+        assert_eq!(profile.entry_count(), 3);
+    }
+
+    #[test]
+    fn quickening_profile_candidates_not_found_for_partial_sequence() {
+        let policy = QuickeningPolicy {
+            warm_threshold: 1,
+            hot_threshold: 2,
+            min_stability_millionths: 0,
+            min_ic_hit_rate_millionths: 0,
+            max_polymorphic_types: 5,
+            deopt_resets_to_cold: true,
+        };
+        let catalog = SuperInstructionCatalog::default();
+        let mut profile = QuickeningProfile::new("partial");
+        for _ in 0..10 {
+            profile.record_execution(0, "load_prop_cached");
+        }
+        if let Some(fb) = profile.entries.get_mut(&0) {
+            fb.update_ic_hit_rate(950_000);
+        }
+        profile.evaluate_all(&policy);
+        profile.evaluate_all(&policy);
+        let candidates = profile.find_superinstruction_candidates(&catalog);
+        let load_patterns: Vec<_> = candidates
+            .iter()
+            .filter(|c| c.fused_opcode.starts_with("load_prop"))
+            .collect();
+        assert!(load_patterns.is_empty());
+    }
+
+    #[test]
+    fn quickening_transition_not_advanced_has_same_from_and_to() {
+        let policy = QuickeningPolicy::default();
+        let mut fb = InstructionFeedback::new(0, "nop");
+        let t = fb.evaluate(&policy);
+        assert!(!t.advanced);
+        assert_eq!(t.from, QuickeningLevel::Cold);
+        assert_eq!(t.to, QuickeningLevel::Cold);
+    }
+
+    #[test]
+    fn quickening_profile_deopt_resets_to_warm_policy() {
+        let policy = QuickeningPolicy {
+            warm_threshold: 1,
+            hot_threshold: 2,
+            min_stability_millionths: 0,
+            min_ic_hit_rate_millionths: 0,
+            max_polymorphic_types: 10,
+            deopt_resets_to_cold: false,
+        };
+        let mut profile = QuickeningProfile::new("warm_deopt");
+        for _ in 0..10 {
+            profile.record_execution(0, "add");
+        }
+        profile.evaluate_all(&policy);
+        profile.evaluate_all(&policy);
+        profile.evaluate_all(&policy);
+        assert_eq!(
+            profile.get(0).unwrap().level,
+            QuickeningLevel::Quickened
+        );
+        profile.record_deopt(0, &policy);
+        assert_eq!(profile.get(0).unwrap().level, QuickeningLevel::Warm);
+    }
+
+    #[test]
+    fn quickening_summary_serde_all_zero() {
+        let s = QuickeningSummary {
+            total_sites: 0,
+            cold_count: 0,
+            warm_count: 0,
+            hot_count: 0,
+            quickened_count: 0,
+            total_executions: 0,
+            total_deopts: 0,
+            evaluation_epoch: 0,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let back: QuickeningSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(s, back);
+    }
+
+    #[test]
+    fn default_patterns_unique_pattern_ids() {
+        let patterns = default_superinstruction_patterns();
+        let ids: BTreeSet<&str> = patterns.iter().map(|p| p.pattern_id.as_str()).collect();
+        assert_eq!(ids.len(), patterns.len(), "all pattern IDs should be unique");
+    }
+
+    #[test]
+    fn default_patterns_unique_fused_opcodes() {
+        let patterns = default_superinstruction_patterns();
+        let fused: BTreeSet<&str> =
+            patterns.iter().map(|p| p.fused_opcode.as_str()).collect();
+        assert_eq!(
+            fused.len(),
+            patterns.len(),
+            "all fused opcodes should be unique"
+        );
+    }
+
+    #[test]
+    fn instruction_feedback_ic_hit_rate_boundary_for_quickening() {
+        let policy = QuickeningPolicy {
+            warm_threshold: 1,
+            hot_threshold: 2,
+            min_stability_millionths: 0,
+            min_ic_hit_rate_millionths: 600_000,
+            max_polymorphic_types: 5,
+            deopt_resets_to_cold: true,
+        };
+        let mut fb = InstructionFeedback::new(0, "add");
+        for _ in 0..10 {
+            fb.record_execution();
+            fb.record_type(0, ObservedType::Integer);
+        }
+        fb.update_ic_hit_rate(600_000);
+        fb.evaluate(&policy);
+        fb.evaluate(&policy);
+        let t = fb.evaluate(&policy);
+        assert!(t.advanced);
+        assert_eq!(fb.level, QuickeningLevel::Quickened);
+
+        let mut fb2 = InstructionFeedback::new(0, "add");
+        for _ in 0..10 {
+            fb2.record_execution();
+            fb2.record_type(0, ObservedType::Integer);
+        }
+        fb2.update_ic_hit_rate(599_999);
+        fb2.evaluate(&policy);
+        fb2.evaluate(&policy);
+        let t2 = fb2.evaluate(&policy);
+        assert!(!t2.advanced);
+        assert_eq!(fb2.level, QuickeningLevel::Hot);
+    }
 }

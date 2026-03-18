@@ -1223,4 +1223,1499 @@ mod tests {
         assert_eq!(state.total_suppressed, 0);
         assert!(state.cooldowns.is_empty());
     }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: edge cases, error paths, boundary conditions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn trigger_category_display_all_variants() {
+        assert_eq!(
+            TriggerCategory::PerformanceAnomaly.to_string(),
+            "performance_anomaly"
+        );
+        assert_eq!(
+            TriggerCategory::UserVisibleError.to_string(),
+            "user_visible_error"
+        );
+        assert_eq!(TriggerCategory::Regression.to_string(), "regression");
+        assert_eq!(
+            TriggerCategory::OperatorRequest.to_string(),
+            "operator_request"
+        );
+        assert_eq!(
+            TriggerCategory::ResourceExhaustion.to_string(),
+            "resource_exhaustion"
+        );
+    }
+
+    #[test]
+    fn trigger_severity_display_all_variants() {
+        assert_eq!(TriggerSeverity::Info.to_string(), "info");
+        assert_eq!(TriggerSeverity::Warning.to_string(), "warning");
+        assert_eq!(TriggerSeverity::Critical.to_string(), "critical");
+        assert_eq!(TriggerSeverity::Fatal.to_string(), "fatal");
+    }
+
+    #[test]
+    fn trigger_content_hash_changes_with_severity() {
+        let t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Info);
+        let t2 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Fatal);
+        assert_ne!(t1.content_hash(), t2.content_hash());
+    }
+
+    #[test]
+    fn trigger_content_hash_changes_with_correlation_id() {
+        let mut t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        t1.correlation_id = Some("corr-aaa".into());
+        let mut t2 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        t2.correlation_id = Some("corr-bbb".into());
+        assert_ne!(t1.content_hash(), t2.content_hash());
+    }
+
+    #[test]
+    fn trigger_content_hash_none_vs_some_correlation() {
+        let t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        assert!(t1.correlation_id.is_none());
+        let mut t2 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        t2.correlation_id = Some("corr-1".into());
+        assert_ne!(t1.content_hash(), t2.content_hash());
+    }
+
+    #[test]
+    fn trigger_content_hash_changes_with_epoch() {
+        let t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        let mut t2 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        t2.epoch = SecurityEpoch::from_raw(999);
+        assert_ne!(t1.content_hash(), t2.content_hash());
+    }
+
+    #[test]
+    fn trigger_content_hash_changes_with_source_component() {
+        let t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        let mut t2 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        t2.source_component = "different_component".into();
+        assert_ne!(t1.content_hash(), t2.content_hash());
+    }
+
+    #[test]
+    fn trigger_with_metadata_does_not_affect_hash() {
+        let t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        let mut t2 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        t2.metadata.insert("extra_key".into(), "extra_value".into());
+        // Metadata is NOT part of content_hash input, so hashes should match.
+        assert_eq!(t1.content_hash(), t2.content_hash());
+    }
+
+    #[test]
+    fn policy_content_hash_changes_with_policy_id() {
+        let p1 = EscalationPolicy::default();
+        let p2 = EscalationPolicy {
+            policy_id: "custom-policy".into(),
+            ..Default::default()
+        };
+        assert_ne!(p1.content_hash(), p2.content_hash());
+    }
+
+    #[test]
+    fn policy_content_hash_changes_with_allow_forensic() {
+        let p1 = EscalationPolicy {
+            allow_forensic: false,
+            ..Default::default()
+        };
+        let p2 = EscalationPolicy {
+            allow_forensic: true,
+            ..Default::default()
+        };
+        assert_ne!(p1.content_hash(), p2.content_hash());
+    }
+
+    #[test]
+    fn policy_content_hash_changes_with_category_overrides() {
+        let p1 = EscalationPolicy::default();
+        let mut p2 = EscalationPolicy::default();
+        p2.category_overrides
+            .insert("security_event".into(), EscalationLevel::Forensic);
+        assert_ne!(p1.content_hash(), p2.content_hash());
+    }
+
+    #[test]
+    fn policy_resolve_level_severity_wins_over_low_category_override() {
+        let mut policy = EscalationPolicy::default();
+        // Override regression category to Minimal, but severity is Critical -> Full.
+        policy.category_overrides.insert(
+            TriggerCategory::Regression.to_string(),
+            EscalationLevel::Minimal,
+        );
+        let trigger = test_trigger(TriggerCategory::Regression, TriggerSeverity::Critical);
+        // Severity min (Full) > category override (Minimal), so Full wins.
+        assert_eq!(policy.resolve_level(&trigger), EscalationLevel::Full);
+    }
+
+    #[test]
+    fn policy_resolve_level_forensic_allowed_when_flag_true() {
+        let policy = EscalationPolicy {
+            allow_forensic: true,
+            ..Default::default()
+        };
+        let trigger = test_trigger(TriggerCategory::SecurityEvent, TriggerSeverity::Fatal);
+        assert_eq!(policy.resolve_level(&trigger), EscalationLevel::Forensic);
+    }
+
+    #[test]
+    fn policy_artifacts_for_forensic_includes_all() {
+        let policy = EscalationPolicy::default();
+        let forensic_artifacts = policy.artifacts_for_level(EscalationLevel::Forensic);
+        // Forensic includes ALL artifact specs.
+        assert_eq!(forensic_artifacts.len(), standard_artifact_specs().len());
+    }
+
+    #[test]
+    fn policy_artifacts_for_extended_includes_minimal_and_extended() {
+        let policy = EscalationPolicy::default();
+        let extended_artifacts = policy.artifacts_for_level(EscalationLevel::Extended);
+        // Extended artifacts include those with min_level Minimal and Extended.
+        for artifact in &extended_artifacts {
+            assert!(artifact.min_level.depth() <= EscalationLevel::Extended.depth());
+        }
+        // Should have more than Minimal-only but fewer than Full.
+        let minimal_artifacts = policy.artifacts_for_level(EscalationLevel::Minimal);
+        let full_artifacts = policy.artifacts_for_level(EscalationLevel::Full);
+        assert!(extended_artifacts.len() >= minimal_artifacts.len());
+        assert!(extended_artifacts.len() <= full_artifacts.len());
+    }
+
+    #[test]
+    fn policy_estimate_bundle_size_forensic_largest() {
+        let policy = EscalationPolicy::default();
+        let minimal = policy.estimate_bundle_size(EscalationLevel::Minimal);
+        let extended = policy.estimate_bundle_size(EscalationLevel::Extended);
+        let full = policy.estimate_bundle_size(EscalationLevel::Full);
+        let forensic = policy.estimate_bundle_size(EscalationLevel::Forensic);
+        assert!(minimal <= extended);
+        assert!(extended <= full);
+        assert!(full <= forensic);
+    }
+
+    #[test]
+    fn policy_empty_artifact_specs_zero_size() {
+        let policy = EscalationPolicy {
+            artifact_specs: Vec::new(),
+            ..Default::default()
+        };
+        assert_eq!(policy.estimate_bundle_size(EscalationLevel::Forensic), 0);
+        assert!(
+            policy
+                .artifacts_for_level(EscalationLevel::Forensic)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn escalator_evaluate_suppressed_below_threshold() {
+        // A policy with default_level=Minimal and no category overrides means
+        // a trigger with Info severity resolves to Extended (severity min),
+        // but if we override the category to Minimal and use Info severity,
+        // the max(Extended, Minimal) = Extended, so it won't be suppressed.
+        // Instead, test by setting category override to Minimal with Info severity
+        // and patching severity_min: Info -> Extended means min is Extended.
+        // Actually, the only way to get Minimal is if both severity min and
+        // category override produce Minimal. Info maps to Extended, so we need
+        // a category override that produces Minimal AND severity that maps to
+        // Extended. The max will be Extended. The below-threshold check is for
+        // resolved_level == Minimal. We need a scenario where that's true.
+        // That can only happen when severity's minimum_escalation and category
+        // override are BOTH Minimal. Since all severities map to Extended+,
+        // we need a policy with category_overrides that pull the category to
+        // Minimal. But severity min is always >= Extended. So max >= Extended.
+        // Wait: severity_min for Info = Extended, category default = Minimal.
+        // max(Extended, Minimal) = Extended. We can never get Minimal resolved
+        // unless the code had a path for it. Let's check: the default_level is
+        // Minimal, with no overrides the category_override = default = Minimal.
+        // And severity Info => Extended. max(Extended, Minimal) = Extended.
+        // It seems like SuppressedBelowThreshold can never happen with the
+        // current severity mapping. But let's test the path by using a policy
+        // where the severity_minimums map could override things... but wait,
+        // severity_minimums BTreeMap is declared but never used in resolve_level.
+        // So the only way to get Minimal is... actually impossible with the
+        // current severity enum. Let's just verify that:
+        // All triggers get at least Extended, so below-threshold never fires.
+        let policy = EscalationPolicy::default();
+        for severity in [
+            TriggerSeverity::Info,
+            TriggerSeverity::Warning,
+            TriggerSeverity::Critical,
+            TriggerSeverity::Fatal,
+        ] {
+            let trigger = test_trigger(TriggerCategory::Regression, severity);
+            let level = policy.resolve_level(&trigger);
+            assert!(level.depth() >= EscalationLevel::Extended.depth());
+        }
+    }
+
+    #[test]
+    fn escalator_complete_escalation_at_zero_does_not_underflow() {
+        let policy = EscalationPolicy::default();
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        assert_eq!(escalator.state.active_escalations, 0);
+        // Completing with no active escalations should saturate at zero.
+        escalator.complete_escalation();
+        assert_eq!(escalator.state.active_escalations, 0);
+        // Do it again to confirm no underflow.
+        escalator.complete_escalation();
+        assert_eq!(escalator.state.active_escalations, 0);
+    }
+
+    #[test]
+    fn advance_epoch_retains_unexpired_cooldowns() {
+        let policy = EscalationPolicy {
+            cooldown_epochs: 10,
+            ..Default::default()
+        };
+        let mut escalator = HindsightTraceEscalator::new(policy, SecurityEpoch::from_raw(50));
+        // Trigger with correlation_id sets cooldown expiring at epoch 50 + 10 = 60.
+        let mut t = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        t.correlation_id = Some("corr-x".into());
+        escalator.evaluate(t);
+        escalator.complete_escalation();
+        // Advance to epoch 55 — cooldown expires at 60, so should be retained.
+        escalator.advance_epoch(SecurityEpoch::from_raw(55));
+        assert_eq!(escalator.state.cooldowns.len(), 1);
+        assert!(escalator.state.cooldowns.contains_key("corr-x"));
+        // Advance to epoch 61 — cooldown expired, should be removed.
+        escalator.advance_epoch(SecurityEpoch::from_raw(61));
+        assert!(escalator.state.cooldowns.is_empty());
+    }
+
+    #[test]
+    fn advance_epoch_clears_only_expired_cooldowns() {
+        let policy = EscalationPolicy {
+            cooldown_epochs: 5,
+            ..Default::default()
+        };
+        let mut escalator = HindsightTraceEscalator::new(policy, SecurityEpoch::from_raw(10));
+        // First trigger: correlation "a", cooldown expires at 15.
+        let mut t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        t1.correlation_id = Some("a".into());
+        escalator.evaluate(t1);
+        escalator.complete_escalation();
+        // Advance to epoch 13, add another correlated trigger "b" -> expires at 18.
+        escalator.advance_epoch(SecurityEpoch::from_raw(13));
+        let mut t2 = EscalationTrigger::new(
+            "trigger-002",
+            TriggerCategory::SecurityEvent,
+            TriggerSeverity::Warning,
+            "second",
+            "comp",
+            SecurityEpoch::from_raw(13),
+        );
+        t2.correlation_id = Some("b".into());
+        escalator.evaluate(t2);
+        escalator.complete_escalation();
+        assert_eq!(escalator.state.cooldowns.len(), 2);
+        // Advance to epoch 16 — "a" (expires 15) should be gone, "b" (expires 18) stays.
+        escalator.advance_epoch(SecurityEpoch::from_raw(16));
+        assert_eq!(escalator.state.cooldowns.len(), 1);
+        assert!(!escalator.state.cooldowns.contains_key("a"));
+        assert!(escalator.state.cooldowns.contains_key("b"));
+    }
+
+    #[test]
+    fn decision_log_entries_have_correct_schema_version() {
+        let policy = EscalationPolicy::default();
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        let t = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        escalator.evaluate(t);
+        for entry in &escalator.decision_log {
+            assert_eq!(entry.schema_version, ESCALATION_SCHEMA_VERSION);
+        }
+    }
+
+    #[test]
+    fn level_counts_tracked_across_different_levels() {
+        let policy = EscalationPolicy::default();
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        // Warning -> Extended
+        let t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        escalator.evaluate(t1);
+        escalator.complete_escalation();
+        // Critical -> Full
+        let t2 = EscalationTrigger::new(
+            "trigger-002",
+            TriggerCategory::SecurityEvent,
+            TriggerSeverity::Critical,
+            "critical event",
+            "sec_module",
+            test_epoch(),
+        );
+        escalator.evaluate(t2);
+        escalator.complete_escalation();
+        assert_eq!(escalator.state.level_counts.get("extended"), Some(&1));
+        assert_eq!(escalator.state.level_counts.get("full"), Some(&1));
+    }
+
+    #[test]
+    fn multiple_categories_tracked_independently() {
+        let policy = EscalationPolicy::default();
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        let t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        escalator.evaluate(t1);
+        escalator.complete_escalation();
+        let t2 = EscalationTrigger::new(
+            "trigger-002",
+            TriggerCategory::SecurityEvent,
+            TriggerSeverity::Warning,
+            "security thing",
+            "sec",
+            test_epoch(),
+        );
+        escalator.evaluate(t2);
+        escalator.complete_escalation();
+        let t3 = EscalationTrigger::new(
+            "trigger-003",
+            TriggerCategory::Regression,
+            TriggerSeverity::Critical,
+            "another regression",
+            "bench",
+            test_epoch(),
+        );
+        escalator.evaluate(t3);
+        assert_eq!(escalator.state.category_counts.get("regression"), Some(&2));
+        assert_eq!(
+            escalator.state.category_counts.get("security_event"),
+            Some(&1)
+        );
+    }
+
+    #[test]
+    fn verdict_display_suppressed_capacity() {
+        let v = EscalationVerdict::SuppressedCapacity {
+            active_count: 10,
+            max_allowed: 10,
+        };
+        assert_eq!(v.to_string(), "suppressed_capacity(10/10)");
+    }
+
+    #[test]
+    fn verdict_display_suppressed_cooldown() {
+        let v = EscalationVerdict::SuppressedCooldown {
+            correlation_id: "corr-abc".into(),
+            epochs_remaining: 3,
+        };
+        assert_eq!(v.to_string(), "suppressed_cooldown(corr-abc)");
+    }
+
+    #[test]
+    fn verdict_display_approved_at_each_level() {
+        assert_eq!(
+            EscalationVerdict::Approved {
+                level: EscalationLevel::Minimal
+            }
+            .to_string(),
+            "approved(minimal)"
+        );
+        assert_eq!(
+            EscalationVerdict::Approved {
+                level: EscalationLevel::Extended
+            }
+            .to_string(),
+            "approved(extended)"
+        );
+        assert_eq!(
+            EscalationVerdict::Approved {
+                level: EscalationLevel::Forensic
+            }
+            .to_string(),
+            "approved(forensic)"
+        );
+    }
+
+    #[test]
+    fn support_bundle_manifest_multiple_artifacts_sums_bytes() {
+        let policy = EscalationPolicy::default();
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        let t = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        let decision = escalator.evaluate(t);
+        let artifacts = vec![
+            SupportBundleArtifact {
+                label: "decision_log".into(),
+                format: "jsonl".into(),
+                path: "/tmp/bundle/decisions.jsonl".into(),
+                bytes: 1000,
+                content_hash: "hash1".into(),
+            },
+            SupportBundleArtifact {
+                label: "counter_snapshot".into(),
+                format: "json".into(),
+                path: "/tmp/bundle/counters.json".into(),
+                bytes: 2000,
+                content_hash: "hash2".into(),
+            },
+            SupportBundleArtifact {
+                label: "replay_inputs".into(),
+                format: "bin".into(),
+                path: "/tmp/bundle/replay.bin".into(),
+                bytes: 3000,
+                content_hash: "hash3".into(),
+            },
+        ];
+        let manifest = SupportBundleManifest::from_decision(&decision, "bundle-multi", artifacts);
+        assert_eq!(manifest.total_bytes, 6000);
+        assert_eq!(manifest.artifacts.len(), 3);
+    }
+
+    #[test]
+    fn support_bundle_manifest_empty_artifacts() {
+        let policy = EscalationPolicy::default();
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        let t = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        let decision = escalator.evaluate(t);
+        let manifest = SupportBundleManifest::from_decision(&decision, "bundle-empty", Vec::new());
+        assert_eq!(manifest.total_bytes, 0);
+        assert!(manifest.artifacts.is_empty());
+        assert!(!manifest.manifest_hash.is_empty());
+    }
+
+    #[test]
+    fn support_bundle_manifest_hash_deterministic() {
+        let policy = EscalationPolicy::default();
+        let mut e1 = HindsightTraceEscalator::new(policy.clone(), test_epoch());
+        let mut e2 = HindsightTraceEscalator::new(policy, test_epoch());
+        let t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        let t2 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        let d1 = e1.evaluate(t1);
+        let d2 = e2.evaluate(t2);
+        let arts1 = vec![SupportBundleArtifact {
+            label: "log".into(),
+            format: "jsonl".into(),
+            path: "/tmp/a.jsonl".into(),
+            bytes: 512,
+            content_hash: "h1".into(),
+        }];
+        let arts2 = vec![SupportBundleArtifact {
+            label: "log".into(),
+            format: "jsonl".into(),
+            path: "/tmp/a.jsonl".into(),
+            bytes: 512,
+            content_hash: "h1".into(),
+        }];
+        let m1 = SupportBundleManifest::from_decision(&d1, "bundle-det", arts1);
+        let m2 = SupportBundleManifest::from_decision(&d2, "bundle-det", arts2);
+        assert_eq!(m1.manifest_hash, m2.manifest_hash);
+    }
+
+    #[test]
+    fn escalator_serde_roundtrip() {
+        let policy = EscalationPolicy::default();
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        let t = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        escalator.evaluate(t);
+        let json = serde_json::to_string(&escalator).unwrap();
+        let back: HindsightTraceEscalator = serde_json::from_str(&json).unwrap();
+        assert_eq!(escalator, back);
+    }
+
+    #[test]
+    fn escalator_state_serde_roundtrip() {
+        let mut state = EscalatorState::new(test_epoch());
+        state.active_escalations = 3;
+        state.total_approved = 10;
+        state.total_suppressed = 2;
+        state.cooldowns.insert("corr-1".into(), 200);
+        state.category_counts.insert("regression".into(), 5);
+        state.level_counts.insert("extended".into(), 3);
+        let json = serde_json::to_string(&state).unwrap();
+        let back: EscalatorState = serde_json::from_str(&json).unwrap();
+        assert_eq!(state, back);
+    }
+
+    #[test]
+    fn bundle_artifact_spec_serde_roundtrip() {
+        let spec = BundleArtifactSpec {
+            label: "test_artifact".into(),
+            format: "bin".into(),
+            min_level: EscalationLevel::Full,
+            required: true,
+            estimated_bytes: 999_999,
+        };
+        let json = serde_json::to_string(&spec).unwrap();
+        let back: BundleArtifactSpec = serde_json::from_str(&json).unwrap();
+        assert_eq!(spec, back);
+    }
+
+    #[test]
+    fn escalation_level_serde_roundtrip_all_variants() {
+        for level in [
+            EscalationLevel::Minimal,
+            EscalationLevel::Extended,
+            EscalationLevel::Full,
+            EscalationLevel::Forensic,
+        ] {
+            let json = serde_json::to_string(&level).unwrap();
+            let back: EscalationLevel = serde_json::from_str(&json).unwrap();
+            assert_eq!(level, back);
+        }
+    }
+
+    #[test]
+    fn trigger_category_serde_roundtrip_all_variants() {
+        for cat in [
+            TriggerCategory::PerformanceAnomaly,
+            TriggerCategory::SecurityEvent,
+            TriggerCategory::CorrectnessFailure,
+            TriggerCategory::UserVisibleError,
+            TriggerCategory::Regression,
+            TriggerCategory::OperatorRequest,
+            TriggerCategory::ResourceExhaustion,
+            TriggerCategory::DeterminismViolation,
+        ] {
+            let json = serde_json::to_string(&cat).unwrap();
+            let back: TriggerCategory = serde_json::from_str(&json).unwrap();
+            assert_eq!(cat, back);
+        }
+    }
+
+    #[test]
+    fn trigger_severity_serde_roundtrip_all_variants() {
+        for sev in [
+            TriggerSeverity::Info,
+            TriggerSeverity::Warning,
+            TriggerSeverity::Critical,
+            TriggerSeverity::Fatal,
+        ] {
+            let json = serde_json::to_string(&sev).unwrap();
+            let back: TriggerSeverity = serde_json::from_str(&json).unwrap();
+            assert_eq!(sev, back);
+        }
+    }
+
+    #[test]
+    fn policy_max_active_zero_suppresses_all() {
+        let policy = EscalationPolicy {
+            max_active_escalations: 0,
+            ..Default::default()
+        };
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        let t = test_trigger(TriggerCategory::SecurityEvent, TriggerSeverity::Fatal);
+        let d = escalator.evaluate(t);
+        assert!(matches!(
+            d.verdict,
+            EscalationVerdict::SuppressedCapacity { .. }
+        ));
+        assert_eq!(escalator.state.total_suppressed, 1);
+        assert_eq!(escalator.state.total_approved, 0);
+        assert_eq!(escalator.state.active_escalations, 0);
+    }
+
+    #[test]
+    fn trigger_with_empty_strings() {
+        let trigger = EscalationTrigger::new(
+            "",
+            TriggerCategory::Regression,
+            TriggerSeverity::Info,
+            "",
+            "",
+            SecurityEpoch::from_raw(0),
+        );
+        // Should still produce a valid hash even with empty strings.
+        let hash = trigger.content_hash();
+        assert!(!hash.is_empty());
+        assert!(hash.len() == 64); // SHA-256 hex = 64 chars
+    }
+
+    #[test]
+    fn trigger_content_hash_length_is_sha256_hex() {
+        let t = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        let hash = t.content_hash();
+        assert_eq!(hash.len(), 64);
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn policy_content_hash_length_is_sha256_hex() {
+        let policy = EscalationPolicy::default();
+        let hash = policy.content_hash();
+        assert_eq!(hash.len(), 64);
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn decision_hash_length_is_sha256_hex() {
+        let policy = EscalationPolicy::default();
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        let t = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        let d = escalator.evaluate(t);
+        assert_eq!(d.decision_hash.len(), 64);
+        assert!(d.decision_hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn escalator_summary_reflects_counts_after_multiple_evaluations() {
+        let policy = EscalationPolicy {
+            max_active_escalations: 100,
+            ..Default::default()
+        };
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        for i in 0..5 {
+            let t = EscalationTrigger::new(
+                format!("trig-{i}"),
+                TriggerCategory::PerformanceAnomaly,
+                TriggerSeverity::Warning,
+                "perf",
+                "profiler",
+                test_epoch(),
+            );
+            escalator.evaluate(t);
+        }
+        let summary = escalator.summary();
+        assert_eq!(summary.total_approved, 5);
+        assert_eq!(summary.total_suppressed, 0);
+        assert_eq!(summary.active_escalations, 5);
+        assert_eq!(summary.epoch, test_epoch());
+        assert_eq!(summary.schema_version, ESCALATION_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn escalator_summary_cooldown_count() {
+        let policy = EscalationPolicy {
+            cooldown_epochs: 10,
+            ..Default::default()
+        };
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        // Add two triggers with different correlation IDs.
+        let mut t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        t1.correlation_id = Some("c1".into());
+        escalator.evaluate(t1);
+        escalator.complete_escalation();
+        let mut t2 = EscalationTrigger::new(
+            "trigger-002",
+            TriggerCategory::SecurityEvent,
+            TriggerSeverity::Warning,
+            "sec",
+            "sec",
+            test_epoch(),
+        );
+        t2.correlation_id = Some("c2".into());
+        escalator.evaluate(t2);
+        escalator.complete_escalation();
+        let summary = escalator.summary();
+        assert_eq!(summary.cooldown_count, 2);
+    }
+
+    #[test]
+    fn escalation_verdict_serde_roundtrip_all_variants() {
+        let variants = vec![
+            EscalationVerdict::Approved {
+                level: EscalationLevel::Extended,
+            },
+            EscalationVerdict::SuppressedCapacity {
+                active_count: 5,
+                max_allowed: 5,
+            },
+            EscalationVerdict::SuppressedCooldown {
+                correlation_id: "corr-test".into(),
+                epochs_remaining: 3,
+            },
+            EscalationVerdict::SuppressedBelowThreshold,
+        ];
+        for v in variants {
+            let json = serde_json::to_string(&v).unwrap();
+            let back: EscalationVerdict = serde_json::from_str(&json).unwrap();
+            assert_eq!(v, back);
+        }
+    }
+
+    #[test]
+    fn escalator_decision_log_oldest_evicted_first() {
+        let policy = EscalationPolicy::default();
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        escalator.max_log_entries = 3;
+        for i in 0..5 {
+            let t = EscalationTrigger::new(
+                format!("trigger-{i:03}"),
+                TriggerCategory::PerformanceAnomaly,
+                TriggerSeverity::Warning,
+                "perf anomaly",
+                "profiler",
+                test_epoch(),
+            );
+            escalator.evaluate(t);
+            escalator.complete_escalation();
+        }
+        assert_eq!(escalator.decision_log.len(), 3);
+        // The log should contain the three most recent: trigger-002, trigger-003, trigger-004.
+        assert_eq!(escalator.decision_log[0].trigger.trigger_id, "trigger-002");
+        assert_eq!(escalator.decision_log[1].trigger.trigger_id, "trigger-003");
+        assert_eq!(escalator.decision_log[2].trigger.trigger_id, "trigger-004");
+    }
+
+    #[test]
+    fn cooldown_does_not_apply_to_triggers_without_correlation_id() {
+        let policy = EscalationPolicy {
+            cooldown_epochs: 100,
+            max_active_escalations: 100,
+            ..Default::default()
+        };
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        // Trigger without correlation_id — no cooldown should be set.
+        let t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        assert!(t1.correlation_id.is_none());
+        let d1 = escalator.evaluate(t1);
+        assert!(matches!(d1.verdict, EscalationVerdict::Approved { .. }));
+        escalator.complete_escalation();
+        assert!(escalator.state.cooldowns.is_empty());
+        // Second trigger also without correlation_id — should also be approved.
+        let t2 = EscalationTrigger::new(
+            "trigger-002",
+            TriggerCategory::Regression,
+            TriggerSeverity::Warning,
+            "another",
+            "comp",
+            test_epoch(),
+        );
+        let d2 = escalator.evaluate(t2);
+        assert!(matches!(d2.verdict, EscalationVerdict::Approved { .. }));
+    }
+
+    #[test]
+    fn support_bundle_manifest_preserves_trigger_epoch() {
+        let epoch = SecurityEpoch::from_raw(42);
+        let trigger = EscalationTrigger::new(
+            "trig-epoch",
+            TriggerCategory::Regression,
+            TriggerSeverity::Warning,
+            "test",
+            "comp",
+            epoch,
+        );
+        let policy = EscalationPolicy::default();
+        let mut escalator = HindsightTraceEscalator::new(policy, epoch);
+        let decision = escalator.evaluate(trigger);
+        let manifest = SupportBundleManifest::from_decision(&decision, "bundle-epoch", Vec::new());
+        assert_eq!(manifest.epoch, epoch);
+        assert_eq!(manifest.trigger_id, "trig-epoch");
+    }
+
+    #[test]
+    fn standard_artifact_specs_required_flags() {
+        let specs = standard_artifact_specs();
+        // Verify at least some are required and some are optional.
+        let required_count = specs.iter().filter(|s| s.required).count();
+        let optional_count = specs.iter().filter(|s| !s.required).count();
+        assert!(required_count > 0);
+        assert!(optional_count > 0);
+    }
+
+    #[test]
+    fn standard_artifact_specs_all_have_nonzero_estimated_bytes() {
+        let specs = standard_artifact_specs();
+        for spec in &specs {
+            assert!(
+                spec.estimated_bytes > 0,
+                "artifact '{}' has zero estimated_bytes",
+                spec.label
+            );
+        }
+    }
+
+    #[test]
+    fn standard_artifact_specs_unique_labels() {
+        let specs = standard_artifact_specs();
+        let labels: BTreeSet<_> = specs.iter().map(|s| &s.label).collect();
+        assert_eq!(labels.len(), specs.len(), "artifact labels must be unique");
+    }
+
+    #[test]
+    fn escalation_level_eq_same_variant() {
+        assert_eq!(EscalationLevel::Minimal, EscalationLevel::Minimal);
+        assert_eq!(EscalationLevel::Extended, EscalationLevel::Extended);
+        assert_eq!(EscalationLevel::Full, EscalationLevel::Full);
+        assert_eq!(EscalationLevel::Forensic, EscalationLevel::Forensic);
+    }
+
+    #[test]
+    fn trigger_category_ordering() {
+        // Verify that the derive(Ord) gives a consistent total order.
+        let categories = [
+            TriggerCategory::PerformanceAnomaly,
+            TriggerCategory::SecurityEvent,
+            TriggerCategory::CorrectnessFailure,
+            TriggerCategory::UserVisibleError,
+            TriggerCategory::Regression,
+            TriggerCategory::OperatorRequest,
+            TriggerCategory::ResourceExhaustion,
+            TriggerCategory::DeterminismViolation,
+        ];
+        for i in 0..categories.len() {
+            for j in (i + 1)..categories.len() {
+                assert!(
+                    categories[i] < categories[j],
+                    "expected {:?} < {:?}",
+                    categories[i],
+                    categories[j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn trigger_severity_ordering() {
+        assert!(TriggerSeverity::Info < TriggerSeverity::Warning);
+        assert!(TriggerSeverity::Warning < TriggerSeverity::Critical);
+        assert!(TriggerSeverity::Critical < TriggerSeverity::Fatal);
+    }
+
+    #[test]
+    fn schema_constants_non_empty() {
+        assert!(!ESCALATION_SCHEMA_VERSION.is_empty());
+        assert!(!ESCALATION_BEAD_ID.is_empty());
+        assert!(ESCALATION_SCHEMA_VERSION.contains("hindsight-trace-escalator"));
+        assert!(ESCALATION_BEAD_ID.starts_with("bd-"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Deep edge-case and boundary-condition tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn escalation_level_serde_exact_snake_case_strings() {
+        assert_eq!(
+            serde_json::to_string(&EscalationLevel::Minimal).unwrap(),
+            "\"minimal\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EscalationLevel::Extended).unwrap(),
+            "\"extended\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EscalationLevel::Full).unwrap(),
+            "\"full\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EscalationLevel::Forensic).unwrap(),
+            "\"forensic\""
+        );
+    }
+
+    #[test]
+    fn trigger_category_serde_exact_snake_case_strings() {
+        assert_eq!(
+            serde_json::to_string(&TriggerCategory::PerformanceAnomaly).unwrap(),
+            "\"performance_anomaly\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TriggerCategory::SecurityEvent).unwrap(),
+            "\"security_event\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TriggerCategory::CorrectnessFailure).unwrap(),
+            "\"correctness_failure\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TriggerCategory::UserVisibleError).unwrap(),
+            "\"user_visible_error\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TriggerCategory::Regression).unwrap(),
+            "\"regression\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TriggerCategory::OperatorRequest).unwrap(),
+            "\"operator_request\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TriggerCategory::ResourceExhaustion).unwrap(),
+            "\"resource_exhaustion\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TriggerCategory::DeterminismViolation).unwrap(),
+            "\"determinism_violation\""
+        );
+    }
+
+    #[test]
+    fn trigger_severity_serde_exact_snake_case_strings() {
+        assert_eq!(
+            serde_json::to_string(&TriggerSeverity::Info).unwrap(),
+            "\"info\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TriggerSeverity::Warning).unwrap(),
+            "\"warning\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TriggerSeverity::Critical).unwrap(),
+            "\"critical\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TriggerSeverity::Fatal).unwrap(),
+            "\"fatal\""
+        );
+    }
+
+    #[test]
+    fn trigger_content_hash_changes_with_trigger_id() {
+        let mut t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        t1.trigger_id = "id-alpha".into();
+        let mut t2 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        t2.trigger_id = "id-beta".into();
+        assert_ne!(t1.content_hash(), t2.content_hash());
+    }
+
+    #[test]
+    fn policy_content_hash_changes_with_max_active_escalations() {
+        let p1 = EscalationPolicy::default();
+        let p2 = EscalationPolicy {
+            max_active_escalations: 999,
+            ..Default::default()
+        };
+        assert_ne!(p1.content_hash(), p2.content_hash());
+    }
+
+    #[test]
+    fn policy_content_hash_changes_with_cooldown_epochs() {
+        let p1 = EscalationPolicy::default();
+        let p2 = EscalationPolicy {
+            cooldown_epochs: 999,
+            ..Default::default()
+        };
+        assert_ne!(p1.content_hash(), p2.content_hash());
+    }
+
+    #[test]
+    fn policy_content_hash_changes_with_default_level() {
+        let p1 = EscalationPolicy::default();
+        let p2 = EscalationPolicy {
+            default_level: EscalationLevel::Full,
+            ..Default::default()
+        };
+        assert_ne!(p1.content_hash(), p2.content_hash());
+    }
+
+    #[test]
+    fn policy_content_hash_changes_with_schema_version() {
+        let p1 = EscalationPolicy::default();
+        let p2 = EscalationPolicy {
+            schema_version: "different-version".into(),
+            ..Default::default()
+        };
+        assert_ne!(p1.content_hash(), p2.content_hash());
+    }
+
+    #[test]
+    fn cooldown_epochs_zero_no_blocking() {
+        let policy = EscalationPolicy {
+            cooldown_epochs: 0,
+            max_active_escalations: 100,
+            ..Default::default()
+        };
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        let mut t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        t1.correlation_id = Some("corr-zero".into());
+        let d1 = escalator.evaluate(t1);
+        assert!(matches!(d1.verdict, EscalationVerdict::Approved { .. }));
+        escalator.complete_escalation();
+        // With cooldown_epochs=0, expires = 100 + 0 = 100. current(100) < 100 is false.
+        let mut t2 = EscalationTrigger::new(
+            "trigger-002",
+            TriggerCategory::Regression,
+            TriggerSeverity::Warning,
+            "retry",
+            "comp",
+            test_epoch(),
+        );
+        t2.correlation_id = Some("corr-zero".into());
+        let d2 = escalator.evaluate(t2);
+        assert!(matches!(d2.verdict, EscalationVerdict::Approved { .. }));
+    }
+
+    #[test]
+    #[should_panic(expected = "removal index")]
+    fn escalator_max_log_entries_zero_panics_on_first_evaluate() {
+        // Setting max_log_entries=0 triggers a panic on the first evaluate because
+        // len()==0 >= 0 is true, so remove(0) is called on an empty vec.
+        // This documents the edge case.
+        let policy = EscalationPolicy::default();
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        escalator.max_log_entries = 0;
+        let t = EscalationTrigger::new(
+            "trigger-0",
+            TriggerCategory::PerformanceAnomaly,
+            TriggerSeverity::Warning,
+            "perf",
+            "profiler",
+            test_epoch(),
+        );
+        escalator.evaluate(t); // panics
+    }
+
+    #[test]
+    fn escalator_max_log_entries_one_keeps_latest() {
+        let policy = EscalationPolicy::default();
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        escalator.max_log_entries = 1;
+        for i in 0..3 {
+            let t = EscalationTrigger::new(
+                format!("trigger-{i}"),
+                TriggerCategory::PerformanceAnomaly,
+                TriggerSeverity::Warning,
+                "perf",
+                "profiler",
+                test_epoch(),
+            );
+            escalator.evaluate(t);
+            escalator.complete_escalation();
+        }
+        assert_eq!(escalator.decision_log.len(), 1);
+        assert_eq!(escalator.decision_log[0].trigger.trigger_id, "trigger-2");
+    }
+
+    #[test]
+    fn support_bundle_manifest_hash_changes_with_bundle_id() {
+        let policy = EscalationPolicy::default();
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        let t = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        let decision = escalator.evaluate(t);
+        let m1 = SupportBundleManifest::from_decision(&decision, "bundle-aaa", Vec::new());
+        let m2 = SupportBundleManifest::from_decision(&decision, "bundle-bbb", Vec::new());
+        assert_ne!(m1.manifest_hash, m2.manifest_hash);
+    }
+
+    #[test]
+    fn support_bundle_artifact_serde_roundtrip() {
+        let art = SupportBundleArtifact {
+            label: "replay_data".into(),
+            format: "bin".into(),
+            path: "/var/bundles/replay.bin".into(),
+            bytes: 1_048_576,
+            content_hash: "deadbeef01234567".into(),
+        };
+        let json = serde_json::to_string(&art).unwrap();
+        let back: SupportBundleArtifact = serde_json::from_str(&json).unwrap();
+        assert_eq!(art, back);
+    }
+
+    #[test]
+    fn escalator_summary_schema_version_matches() {
+        let policy = EscalationPolicy::default();
+        let escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        let summary = escalator.summary();
+        assert_eq!(summary.schema_version, ESCALATION_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn escalator_summary_after_advance_epoch() {
+        let policy = EscalationPolicy::default();
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        escalator.advance_epoch(SecurityEpoch::from_raw(777));
+        let summary = escalator.summary();
+        assert_eq!(summary.epoch, SecurityEpoch::from_raw(777));
+    }
+
+    #[test]
+    fn all_categories_produce_distinct_hashes() {
+        let categories = [
+            TriggerCategory::PerformanceAnomaly,
+            TriggerCategory::SecurityEvent,
+            TriggerCategory::CorrectnessFailure,
+            TriggerCategory::UserVisibleError,
+            TriggerCategory::Regression,
+            TriggerCategory::OperatorRequest,
+            TriggerCategory::ResourceExhaustion,
+            TriggerCategory::DeterminismViolation,
+        ];
+        let hashes: BTreeSet<String> = categories
+            .iter()
+            .map(|c| test_trigger(*c, TriggerSeverity::Warning).content_hash())
+            .collect();
+        assert_eq!(hashes.len(), categories.len());
+    }
+
+    #[test]
+    fn policy_severity_minimums_field_serializes() {
+        // severity_minimums is declared on EscalationPolicy but not used in resolve_level.
+        // Verify it round-trips correctly through serde.
+        let mut policy = EscalationPolicy::default();
+        policy
+            .severity_minimums
+            .insert("critical".into(), EscalationLevel::Full);
+        policy
+            .severity_minimums
+            .insert("fatal".into(), EscalationLevel::Forensic);
+        let json = serde_json::to_string(&policy).unwrap();
+        let back: EscalationPolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(policy.severity_minimums, back.severity_minimums);
+    }
+
+    #[test]
+    fn trigger_with_very_large_epoch() {
+        let big_epoch = SecurityEpoch::from_raw(u64::MAX);
+        let trigger = EscalationTrigger::new(
+            "trig-big-epoch",
+            TriggerCategory::Regression,
+            TriggerSeverity::Warning,
+            "big epoch",
+            "comp",
+            big_epoch,
+        );
+        let hash = trigger.content_hash();
+        assert_eq!(hash.len(), 64);
+    }
+
+    #[test]
+    fn policy_resolve_level_every_category_with_default_policy() {
+        let policy = EscalationPolicy::default();
+        let all_categories = [
+            TriggerCategory::PerformanceAnomaly,
+            TriggerCategory::SecurityEvent,
+            TriggerCategory::CorrectnessFailure,
+            TriggerCategory::UserVisibleError,
+            TriggerCategory::Regression,
+            TriggerCategory::OperatorRequest,
+            TriggerCategory::ResourceExhaustion,
+            TriggerCategory::DeterminismViolation,
+        ];
+        // With default policy (no overrides, default=Minimal), all Info triggers
+        // should resolve to Extended (severity minimum for Info).
+        for cat in all_categories {
+            let trigger = test_trigger(cat, TriggerSeverity::Info);
+            let level = policy.resolve_level(&trigger);
+            assert_eq!(
+                level,
+                EscalationLevel::Extended,
+                "category {cat:?} with Info severity should resolve to Extended"
+            );
+        }
+    }
+
+    #[test]
+    fn approved_decision_artifacts_match_level() {
+        let policy = EscalationPolicy {
+            allow_forensic: true,
+            ..Default::default()
+        };
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        // Warning => Extended
+        let t = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        let decision = escalator.evaluate(t);
+        assert_eq!(decision.resolved_level, EscalationLevel::Extended);
+        // Artifacts should match those for Extended level.
+        let expected_artifacts: Vec<String> = standard_artifact_specs()
+            .iter()
+            .filter(|s| s.min_level.depth() <= EscalationLevel::Extended.depth())
+            .map(|s| s.label.clone())
+            .collect();
+        assert_eq!(decision.artifacts_included, expected_artifacts);
+    }
+
+    #[test]
+    fn approved_decision_artifacts_for_full_level() {
+        let policy = EscalationPolicy {
+            allow_forensic: true,
+            ..Default::default()
+        };
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        // Critical => Full
+        let t = test_trigger(TriggerCategory::Regression, TriggerSeverity::Critical);
+        let decision = escalator.evaluate(t);
+        assert_eq!(decision.resolved_level, EscalationLevel::Full);
+        let expected_artifacts: Vec<String> = standard_artifact_specs()
+            .iter()
+            .filter(|s| s.min_level.depth() <= EscalationLevel::Full.depth())
+            .map(|s| s.label.clone())
+            .collect();
+        assert_eq!(decision.artifacts_included, expected_artifacts);
+    }
+
+    #[test]
+    fn hex_encode_produces_lowercase_only() {
+        let t = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        let hash = t.content_hash();
+        for ch in hash.chars() {
+            assert!(
+                ch.is_ascii_digit() || ('a'..='f').contains(&ch),
+                "unexpected char in hex: {ch}"
+            );
+        }
+    }
+
+    #[test]
+    fn default_policy_has_expected_field_values() {
+        let policy = EscalationPolicy::default();
+        assert_eq!(policy.schema_version, ESCALATION_SCHEMA_VERSION);
+        assert_eq!(policy.policy_id, "default");
+        assert_eq!(policy.default_level, EscalationLevel::Minimal);
+        assert!(policy.category_overrides.is_empty());
+        assert!(policy.severity_minimums.is_empty());
+        assert_eq!(policy.max_active_escalations, 10);
+        assert_eq!(policy.cooldown_epochs, 5);
+        assert!(!policy.allow_forensic);
+        assert_eq!(policy.artifact_specs.len(), standard_artifact_specs().len());
+    }
+
+    #[test]
+    fn escalator_total_suppressed_accumulates_capacity() {
+        let policy = EscalationPolicy {
+            max_active_escalations: 0,
+            ..Default::default()
+        };
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        for i in 0..7 {
+            let t = EscalationTrigger::new(
+                format!("trigger-{i}"),
+                TriggerCategory::Regression,
+                TriggerSeverity::Warning,
+                "suppressed",
+                "comp",
+                test_epoch(),
+            );
+            escalator.evaluate(t);
+        }
+        assert_eq!(escalator.state.total_suppressed, 7);
+        assert_eq!(escalator.state.total_approved, 0);
+        assert_eq!(escalator.state.active_escalations, 0);
+    }
+
+    #[test]
+    fn escalator_interleaved_approve_complete_cycles() {
+        let policy = EscalationPolicy {
+            max_active_escalations: 2,
+            ..Default::default()
+        };
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        // Fill to capacity.
+        for i in 0..2 {
+            let t = EscalationTrigger::new(
+                format!("trigger-{i}"),
+                TriggerCategory::PerformanceAnomaly,
+                TriggerSeverity::Warning,
+                "perf",
+                "prof",
+                test_epoch(),
+            );
+            let d = escalator.evaluate(t);
+            assert!(matches!(d.verdict, EscalationVerdict::Approved { .. }));
+        }
+        assert_eq!(escalator.state.active_escalations, 2);
+        // Next should be suppressed.
+        let t_suppressed = EscalationTrigger::new(
+            "trigger-sup",
+            TriggerCategory::Regression,
+            TriggerSeverity::Warning,
+            "sup",
+            "comp",
+            test_epoch(),
+        );
+        let d = escalator.evaluate(t_suppressed);
+        assert!(matches!(
+            d.verdict,
+            EscalationVerdict::SuppressedCapacity { .. }
+        ));
+        // Complete one, then next should succeed.
+        escalator.complete_escalation();
+        assert_eq!(escalator.state.active_escalations, 1);
+        let t_ok = EscalationTrigger::new(
+            "trigger-ok",
+            TriggerCategory::Regression,
+            TriggerSeverity::Critical,
+            "now ok",
+            "comp",
+            test_epoch(),
+        );
+        let d = escalator.evaluate(t_ok);
+        assert!(matches!(d.verdict, EscalationVerdict::Approved { .. }));
+        assert_eq!(escalator.state.active_escalations, 2);
+    }
+
+    #[test]
+    fn cooldown_boundary_exact_expiry_epoch() {
+        // Test the exact boundary: cooldown expires at epoch X, current == X.
+        // The check is `current < expires`, so at expiry it should NOT block.
+        let policy = EscalationPolicy {
+            cooldown_epochs: 5,
+            max_active_escalations: 100,
+            ..Default::default()
+        };
+        let mut escalator = HindsightTraceEscalator::new(policy, SecurityEpoch::from_raw(100));
+        let mut t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        t1.correlation_id = Some("boundary-corr".into());
+        escalator.evaluate(t1);
+        escalator.complete_escalation();
+        // Cooldown expires at 105. Advance to exactly 105.
+        escalator.advance_epoch(SecurityEpoch::from_raw(105));
+        // At epoch 105, the cooldown entry (expires=105) should be removed by
+        // retain(|_, expires| *expires > current). 105 > 105 is false, so removed.
+        assert!(escalator.state.cooldowns.is_empty());
+        let mut t2 = EscalationTrigger::new(
+            "trigger-boundary",
+            TriggerCategory::Regression,
+            TriggerSeverity::Warning,
+            "boundary",
+            "comp",
+            SecurityEpoch::from_raw(105),
+        );
+        t2.correlation_id = Some("boundary-corr".into());
+        let d2 = escalator.evaluate(t2);
+        assert!(matches!(d2.verdict, EscalationVerdict::Approved { .. }));
+    }
+
+    #[test]
+    fn cooldown_one_epoch_before_expiry_still_blocks() {
+        let policy = EscalationPolicy {
+            cooldown_epochs: 5,
+            max_active_escalations: 100,
+            ..Default::default()
+        };
+        let mut escalator = HindsightTraceEscalator::new(policy, SecurityEpoch::from_raw(100));
+        let mut t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        t1.correlation_id = Some("pre-boundary".into());
+        escalator.evaluate(t1);
+        escalator.complete_escalation();
+        // Cooldown expires at 105. Advance to 104 (one before expiry).
+        escalator.advance_epoch(SecurityEpoch::from_raw(104));
+        let mut t2 = EscalationTrigger::new(
+            "trigger-prebound",
+            TriggerCategory::Regression,
+            TriggerSeverity::Warning,
+            "pre-boundary",
+            "comp",
+            SecurityEpoch::from_raw(104),
+        );
+        t2.correlation_id = Some("pre-boundary".into());
+        let d2 = escalator.evaluate(t2);
+        assert!(matches!(
+            d2.verdict,
+            EscalationVerdict::SuppressedCooldown { .. }
+        ));
+        if let EscalationVerdict::SuppressedCooldown {
+            epochs_remaining, ..
+        } = d2.verdict
+        {
+            assert_eq!(epochs_remaining, 1); // 105 - 104
+        }
+    }
+
+    #[test]
+    fn escalator_new_default_state() {
+        let policy = EscalationPolicy::default();
+        let escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        assert_eq!(escalator.state.active_escalations, 0);
+        assert_eq!(escalator.state.total_approved, 0);
+        assert_eq!(escalator.state.total_suppressed, 0);
+        assert!(escalator.state.cooldowns.is_empty());
+        assert!(escalator.state.category_counts.is_empty());
+        assert!(escalator.state.level_counts.is_empty());
+        assert_eq!(escalator.state.current_epoch, test_epoch());
+        assert!(escalator.decision_log.is_empty());
+        assert_eq!(escalator.max_log_entries, 500);
+    }
+
+    #[test]
+    fn suppressed_decisions_have_zero_estimated_bytes() {
+        let policy = EscalationPolicy {
+            max_active_escalations: 0,
+            ..Default::default()
+        };
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        let t = test_trigger(TriggerCategory::Regression, TriggerSeverity::Critical);
+        let d = escalator.evaluate(t);
+        assert!(matches!(
+            d.verdict,
+            EscalationVerdict::SuppressedCapacity { .. }
+        ));
+        assert_eq!(d.estimated_bundle_bytes, 0);
+        assert!(d.artifacts_included.is_empty());
+    }
+
+    #[test]
+    fn support_bundle_manifest_bead_id_always_set() {
+        let policy = EscalationPolicy::default();
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        let t = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        let decision = escalator.evaluate(t);
+        let manifest = SupportBundleManifest::from_decision(&decision, "any-bundle-id", Vec::new());
+        assert_eq!(manifest.bead_id, ESCALATION_BEAD_ID);
+        assert_eq!(manifest.schema_version, ESCALATION_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn escalation_level_depth_consistent_with_ord() {
+        let levels = [
+            EscalationLevel::Minimal,
+            EscalationLevel::Extended,
+            EscalationLevel::Full,
+            EscalationLevel::Forensic,
+        ];
+        for i in 0..levels.len() {
+            for j in (i + 1)..levels.len() {
+                assert!(
+                    levels[i].depth() < levels[j].depth(),
+                    "depth ordering mismatch for {:?} vs {:?}",
+                    levels[i],
+                    levels[j]
+                );
+                assert!(
+                    levels[i] < levels[j],
+                    "Ord ordering mismatch for {:?} vs {:?}",
+                    levels[i],
+                    levels[j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn category_counts_not_incremented_for_suppressed() {
+        let policy = EscalationPolicy {
+            max_active_escalations: 1,
+            ..Default::default()
+        };
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        // First: approved.
+        let t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        escalator.evaluate(t1);
+        // Second with same category: suppressed due to capacity.
+        let t2 = EscalationTrigger::new(
+            "trigger-002",
+            TriggerCategory::Regression,
+            TriggerSeverity::Warning,
+            "suppressed",
+            "comp",
+            test_epoch(),
+        );
+        let d2 = escalator.evaluate(t2);
+        assert!(matches!(
+            d2.verdict,
+            EscalationVerdict::SuppressedCapacity { .. }
+        ));
+        // Only the approved trigger should count.
+        assert_eq!(escalator.state.category_counts.get("regression"), Some(&1));
+    }
+
+    #[test]
+    fn level_counts_not_incremented_for_suppressed() {
+        let policy = EscalationPolicy {
+            max_active_escalations: 1,
+            ..Default::default()
+        };
+        let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
+        let t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
+        escalator.evaluate(t1);
+        let t2 = EscalationTrigger::new(
+            "trigger-002",
+            TriggerCategory::SecurityEvent,
+            TriggerSeverity::Warning,
+            "suppressed",
+            "comp",
+            test_epoch(),
+        );
+        let d2 = escalator.evaluate(t2);
+        assert!(matches!(
+            d2.verdict,
+            EscalationVerdict::SuppressedCapacity { .. }
+        ));
+        // Only the first trigger's level should be counted.
+        assert_eq!(escalator.state.level_counts.get("extended"), Some(&1));
+        assert_eq!(escalator.state.level_counts.get("full"), None);
+    }
 }

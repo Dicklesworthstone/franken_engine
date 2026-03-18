@@ -1403,4 +1403,308 @@ mod tests {
         assert_eq!(report.contexts_validated, 3);
         assert_eq!(report.derivations_checked, 2);
     }
+
+    // -----------------------------------------------------------------------
+    // Deep enrichment tests (PearlTower 2026-03-18)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn context_origin_serde_all() {
+        for origin in [
+            ContextOrigin::Root,
+            ContextOrigin::ChildDerivation,
+            ContextOrigin::CleanupCarve,
+            ContextOrigin::CellClose,
+            ContextOrigin::Replay,
+        ] {
+            let json = serde_json::to_string(&origin).unwrap();
+            let back: ContextOrigin = serde_json::from_str(&json).unwrap();
+            assert_eq!(origin, back);
+        }
+    }
+
+    #[test]
+    fn context_origin_display_matches_as_str() {
+        for origin in [
+            ContextOrigin::Root,
+            ContextOrigin::ChildDerivation,
+            ContextOrigin::CleanupCarve,
+            ContextOrigin::CellClose,
+            ContextOrigin::Replay,
+        ] {
+            assert_eq!(format!("{origin}"), origin.as_str());
+        }
+    }
+
+    #[test]
+    fn context_state_serde_all() {
+        for state in [
+            ContextState::Active,
+            ContextState::Exhausted,
+            ContextState::Released,
+            ContextState::Cancelled,
+        ] {
+            let json = serde_json::to_string(&state).unwrap();
+            let back: ContextState = serde_json::from_str(&json).unwrap();
+            assert_eq!(state, back);
+        }
+    }
+
+    #[test]
+    fn context_state_display_matches_as_str() {
+        for state in [
+            ContextState::Active,
+            ContextState::Exhausted,
+            ContextState::Released,
+            ContextState::Cancelled,
+        ] {
+            assert_eq!(format!("{state}"), state.as_str());
+        }
+    }
+
+    #[test]
+    fn mock_seam_serde_all() {
+        for cls in [
+            MockSeamClassification::MustFixProduction,
+            MockSeamClassification::AcceptableTestOnly,
+            MockSeamClassification::FalsePositive,
+            MockSeamClassification::UnderInvestigation,
+        ] {
+            let json = serde_json::to_string(&cls).unwrap();
+            let back: MockSeamClassification = serde_json::from_str(&json).unwrap();
+            assert_eq!(cls, back);
+        }
+    }
+
+    #[test]
+    fn mock_seam_display_matches_as_str() {
+        for cls in [
+            MockSeamClassification::MustFixProduction,
+            MockSeamClassification::AcceptableTestOnly,
+            MockSeamClassification::FalsePositive,
+            MockSeamClassification::UnderInvestigation,
+        ] {
+            assert_eq!(format!("{cls}"), cls.as_str());
+        }
+    }
+
+    #[test]
+    fn consumed_fraction_partial() {
+        let mut ctx = root_ctx("frac", 100);
+        ctx.consumed_ms = 25;
+        assert_eq!(ctx.consumed_fraction_millionths(), 250_000);
+    }
+
+    #[test]
+    fn consumed_fraction_full() {
+        let mut ctx = root_ctx("full", 100);
+        ctx.consumed_ms = 100;
+        assert_eq!(ctx.consumed_fraction_millionths(), MILLION);
+    }
+
+    #[test]
+    fn can_derive_child_min_budget_boundary() {
+        let mut ctx = root_ctx("boundary", MIN_DERIVABLE_BUDGET_MS);
+        assert!(ctx.can_derive_child());
+        ctx.consumed_ms = 1;
+        assert!(!ctx.can_derive_child());
+    }
+
+    #[test]
+    fn can_derive_child_max_depth_boundary() {
+        let mut ctx = root_ctx("deep", 10_000);
+        ctx.depth = MAX_DERIVATION_DEPTH - 1;
+        assert!(ctx.can_derive_child());
+        ctx.depth = MAX_DERIVATION_DEPTH;
+        assert!(!ctx.can_derive_child());
+    }
+
+    #[test]
+    fn derivation_rule_different_ids_different_hash() {
+        let r1 = DerivationRule::new("rule-a".to_string());
+        let r2 = DerivationRule::new("rule-b".to_string());
+        assert_ne!(r1.content_hash, r2.content_hash);
+    }
+
+    #[test]
+    fn derivation_rule_serde() {
+        let rule = default_rule();
+        let json = serde_json::to_string(&rule).unwrap();
+        let back: DerivationRule = serde_json::from_str(&json).unwrap();
+        assert_eq!(rule, back);
+    }
+
+    #[test]
+    fn derivation_rule_display() {
+        let rule = default_rule();
+        let s = format!("{rule}");
+        assert!(s.contains("default"));
+        assert!(s.contains("90%")); // 900_000 / 10_000 = 90
+    }
+
+    #[test]
+    fn derivation_event_serde() {
+        let mut parent = root_ctx("parent", 10_000);
+        let rule = default_rule();
+        let (_, event) = derive_child_context(
+            &mut parent,
+            "child".to_string(),
+            3000,
+            ContextOrigin::ChildDerivation,
+            &rule,
+        )
+        .unwrap();
+        let json = serde_json::to_string(&event).unwrap();
+        let back: DerivationEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, back);
+    }
+
+    #[test]
+    fn derivation_event_display() {
+        let mut parent = root_ctx("p", 10_000);
+        let rule = default_rule();
+        let (_, event) = derive_child_context(
+            &mut parent,
+            "c".to_string(),
+            3000,
+            ContextOrigin::ChildDerivation,
+            &rule,
+        )
+        .unwrap();
+        let s = format!("{event}");
+        assert!(s.contains("p"));
+        assert!(s.contains("c"));
+    }
+
+    #[test]
+    fn mock_seam_entry_display() {
+        let seam = MockSeamEntry {
+            seam_id: "s1".to_string(),
+            file_path: "src/test.rs".to_string(),
+            line_number: 10,
+            classification: MockSeamClassification::FalsePositive,
+            description: "desc".to_string(),
+            remediated: false,
+        };
+        let s = format!("{seam}");
+        assert!(s.contains("s1"));
+        assert!(s.contains("src/test.rs"));
+    }
+
+    #[test]
+    fn validation_report_display() {
+        let rule = default_rule();
+        let report = validate_threading(&[], &[], &[], &rule, epoch(1));
+        let s = format!("{report}");
+        assert!(s.contains("passed=true"));
+    }
+
+    #[test]
+    fn validation_report_serde() {
+        let rule = default_rule();
+        let report = validate_threading(&[], &[], &[], &rule, epoch(1));
+        let json = serde_json::to_string(&report).unwrap();
+        let back: ValidationReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(report, back);
+    }
+
+    #[test]
+    fn error_display_all_variants() {
+        let errors = [
+            ContextError::InsufficientBudget {
+                parent_id: "p".to_string(),
+                remaining_ms: 10,
+                requested_ms: 20,
+            },
+            ContextError::DepthExceeded {
+                parent_id: "p".to_string(),
+                depth: 65,
+                max_depth: 64,
+            },
+            ContextError::NotConsumable {
+                context_id: "c".to_string(),
+                state: ContextState::Released,
+            },
+            ContextError::ChildExceedsAllowedFraction {
+                parent_id: "p".to_string(),
+                child_budget_ms: 9000,
+                max_allowed_ms: 5000,
+            },
+            ContextError::CleanupExceedsMaxFraction {
+                parent_id: "p".to_string(),
+                cleanup_ms: 3000,
+                max_allowed_ms: 2500,
+            },
+            ContextError::MockSeamDetected {
+                seam_id: "s".to_string(),
+                file_path: "f.rs".to_string(),
+            },
+        ];
+        for e in &errors {
+            assert!(!format!("{e}").is_empty());
+        }
+    }
+
+    #[test]
+    fn schema_constants() {
+        assert_eq!(COMPONENT, "orchestration_context_contract");
+        assert!(!SCHEMA_VERSION.is_empty());
+        assert!(SCHEMA_VERSION.starts_with("franken-engine."));
+    }
+
+    #[test]
+    fn consume_budget_cancelled_context_fails() {
+        let mut ctx = root_ctx("ctx", 1000);
+        cancel_context(&mut ctx);
+        let err = consume_budget(&mut ctx, 100).unwrap_err();
+        assert!(matches!(err, ContextError::NotConsumable { .. }));
+    }
+
+    #[test]
+    fn derive_multiple_children_sequential() {
+        let mut parent = root_ctx("parent", 10_000);
+        let rule = default_rule();
+        let (c1, _) = derive_child_context(
+            &mut parent,
+            "c1".to_string(),
+            3000,
+            ContextOrigin::ChildDerivation,
+            &rule,
+        )
+        .unwrap();
+        let (c2, _) = derive_child_context(
+            &mut parent,
+            "c2".to_string(),
+            3000,
+            ContextOrigin::ChildDerivation,
+            &rule,
+        )
+        .unwrap();
+        assert_eq!(parent.consumed_ms, 6000);
+        assert_eq!(c1.depth, 1);
+        assert_eq!(c2.depth, 1);
+    }
+
+    #[test]
+    fn context_hash_deterministic() {
+        let c1 = root_ctx("det", 5000);
+        let c2 = root_ctx("det", 5000);
+        assert_eq!(c1.content_hash, c2.content_hash);
+    }
+
+    #[test]
+    fn accept_test_only_seam_passes_validation() {
+        let rule = default_rule();
+        let seam = MockSeamEntry {
+            seam_id: "s".to_string(),
+            file_path: "tests/helper.rs".to_string(),
+            line_number: 1,
+            classification: MockSeamClassification::AcceptableTestOnly,
+            description: "test helper".to_string(),
+            remediated: false,
+        };
+        let report = validate_threading(&[], &[], &[seam], &rule, epoch(1));
+        assert!(report.passed);
+        assert!(report.mock_free);
+    }
 }

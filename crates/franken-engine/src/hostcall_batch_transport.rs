@@ -2005,4 +2005,820 @@ mod tests {
         ts.grant_credits(10);
         assert_eq!(ts.credit_pool.available(), before + 10);
     }
+
+    // ===================================================================
+    // Deep unit tests: enum serde roundtrips, Display/as_str consistency,
+    // error Display formatting, edge cases, state machine transitions,
+    // canonical hash determinism
+    // ===================================================================
+
+    #[test]
+    fn region_state_serde_roundtrip_all_variants() {
+        for variant in RegionState::ALL {
+            let json = serde_json::to_string(variant).unwrap();
+            let back: RegionState = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                *variant, back,
+                "RegionState serde roundtrip failed for {variant}"
+            );
+        }
+    }
+
+    #[test]
+    fn region_state_display_all_variants_consistency() {
+        let expected = [
+            (RegionState::Allocated, "allocated"),
+            (RegionState::Writing, "writing"),
+            (RegionState::Sealed, "sealed"),
+            (RegionState::Released, "released"),
+            (RegionState::Revoked, "revoked"),
+        ];
+        for (variant, label) in expected {
+            assert_eq!(variant.to_string(), label);
+        }
+        // ALL slice covers exactly 5 variants
+        assert_eq!(RegionState::ALL.len(), 5);
+    }
+
+    #[test]
+    fn batch_transport_specimen_family_serde_roundtrip_all() {
+        for family in BatchTransportSpecimenFamily::ALL {
+            let json = serde_json::to_string(family).unwrap();
+            let back: BatchTransportSpecimenFamily = serde_json::from_str(&json).unwrap();
+            assert_eq!(*family, back, "Family serde roundtrip failed for {family}");
+        }
+    }
+
+    #[test]
+    fn batch_transport_specimen_family_display_all_consistency() {
+        let expected = [
+            (BatchTransportSpecimenFamily::HappyPath, "happy_path"),
+            (
+                BatchTransportSpecimenFamily::CreditExhaustion,
+                "credit_exhaustion",
+            ),
+            (
+                BatchTransportSpecimenFamily::BatchSizeLimits,
+                "batch_size_limits",
+            ),
+            (
+                BatchTransportSpecimenFamily::SharedRegionLifecycle,
+                "shared_region_lifecycle",
+            ),
+            (
+                BatchTransportSpecimenFamily::MembranePhaseRejection,
+                "membrane_phase_rejection",
+            ),
+            (
+                BatchTransportSpecimenFamily::MembraneReplayRejection,
+                "membrane_replay_rejection",
+            ),
+            (
+                BatchTransportSpecimenFamily::DegradedModeHandling,
+                "degraded_mode_handling",
+            ),
+            (
+                BatchTransportSpecimenFamily::BatchMacVerification,
+                "batch_mac_verification",
+            ),
+            (
+                BatchTransportSpecimenFamily::SequenceContiguity,
+                "sequence_contiguity",
+            ),
+            (
+                BatchTransportSpecimenFamily::RegionCapacityEnforcement,
+                "region_capacity_enforcement",
+            ),
+            (
+                BatchTransportSpecimenFamily::CreditGrantAndReturn,
+                "credit_grant_and_return",
+            ),
+            (
+                BatchTransportSpecimenFamily::EmptyBatchRejection,
+                "empty_batch_rejection",
+            ),
+        ];
+        for (variant, label) in expected {
+            assert_eq!(variant.to_string(), label);
+        }
+        assert_eq!(BatchTransportSpecimenFamily::ALL.len(), 12);
+    }
+
+    #[test]
+    fn membrane_rejection_reason_display_all_variants() {
+        let expected = [
+            (MembraneRejectionReason::PhaseBlocked, "phase_blocked"),
+            (MembraneRejectionReason::EpochMismatch, "epoch_mismatch"),
+            (MembraneRejectionReason::ReplayDetected, "replay_detected"),
+            (MembraneRejectionReason::DegradedBlocked, "degraded_blocked"),
+            (
+                MembraneRejectionReason::InsufficientCredits,
+                "insufficient_credits",
+            ),
+            (
+                MembraneRejectionReason::BatchSizeExceeded,
+                "batch_size_exceeded",
+            ),
+            (MembraneRejectionReason::InvalidRegion, "invalid_region"),
+            (
+                MembraneRejectionReason::MacVerificationFailed,
+                "mac_verification_failed",
+            ),
+            (MembraneRejectionReason::SequenceGap, "sequence_gap"),
+        ];
+        for (variant, label) in expected {
+            assert_eq!(variant.to_string(), label);
+        }
+        assert_eq!(MembraneRejectionReason::ALL.len(), 9);
+    }
+
+    #[test]
+    fn batch_transport_verdict_serde_roundtrip() {
+        let pass = BatchTransportVerdict::Pass;
+        let fail = BatchTransportVerdict::Fail;
+        let pass_json = serde_json::to_string(&pass).unwrap();
+        let fail_json = serde_json::to_string(&fail).unwrap();
+        assert_eq!(
+            serde_json::from_str::<BatchTransportVerdict>(&pass_json).unwrap(),
+            pass
+        );
+        assert_eq!(
+            serde_json::from_str::<BatchTransportVerdict>(&fail_json).unwrap(),
+            fail
+        );
+        // Different serialized forms
+        assert_ne!(pass_json, fail_json);
+    }
+
+    #[test]
+    fn error_display_all_variants() {
+        let errors: Vec<(BatchTransportError, &str)> = vec![
+            (
+                BatchTransportError::BatchTooLarge { size: 100, max: 64 },
+                "batch too large: 100 > 64",
+            ),
+            (
+                BatchTransportError::PayloadTooLarge {
+                    bytes: 5000,
+                    max: 4096,
+                },
+                "payload too large: 5000 > 4096",
+            ),
+            (
+                BatchTransportError::InsufficientCredits {
+                    requested: 10,
+                    available: 3,
+                },
+                "insufficient credits: need 10, have 3",
+            ),
+            (
+                BatchTransportError::TooManyRegions {
+                    active: 16,
+                    max: 16,
+                },
+                "too many active regions: 16 >= 16",
+            ),
+            (
+                BatchTransportError::RegionNotFound { region_id: 99 },
+                "region 99 not found",
+            ),
+            (
+                BatchTransportError::InvalidRegionState {
+                    region_id: 5,
+                    expected: RegionState::Sealed,
+                    actual: RegionState::Allocated,
+                },
+                "region 5: expected sealed, got allocated",
+            ),
+            (
+                BatchTransportError::RegionCapacityExceeded {
+                    region_id: 3,
+                    capacity: 1024,
+                    requested: 2048,
+                },
+                "region 3: capacity 1024, requested 2048",
+            ),
+            (
+                BatchTransportError::NonContiguousSequences {
+                    expected: 2,
+                    actual: 5,
+                },
+                "non-contiguous sequences: expected 2, got 5",
+            ),
+            (BatchTransportError::EmptyBatch, "empty batch"),
+            (
+                BatchTransportError::BatchMacMismatch { batch_id: 7 },
+                "batch MAC mismatch for batch 7",
+            ),
+            (
+                BatchTransportError::MembraneRejection {
+                    reason: MembraneRejectionReason::PhaseBlocked,
+                    detail: "not ready".into(),
+                },
+                "membrane rejection (phase_blocked): not ready",
+            ),
+        ];
+        for (err, expected_msg) in &errors {
+            assert_eq!(
+                err.to_string(),
+                *expected_msg,
+                "Display mismatch for {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn error_serde_roundtrip_all_variants() {
+        let errors = vec![
+            BatchTransportError::BatchTooLarge { size: 10, max: 5 },
+            BatchTransportError::PayloadTooLarge {
+                bytes: 999,
+                max: 100,
+            },
+            BatchTransportError::InsufficientCredits {
+                requested: 50,
+                available: 2,
+            },
+            BatchTransportError::TooManyRegions { active: 8, max: 8 },
+            BatchTransportError::RegionNotFound { region_id: 1 },
+            BatchTransportError::InvalidRegionState {
+                region_id: 2,
+                expected: RegionState::Writing,
+                actual: RegionState::Revoked,
+            },
+            BatchTransportError::RegionCapacityExceeded {
+                region_id: 3,
+                capacity: 500,
+                requested: 600,
+            },
+            BatchTransportError::NonContiguousSequences {
+                expected: 1,
+                actual: 3,
+            },
+            BatchTransportError::EmptyBatch,
+            BatchTransportError::BatchMacMismatch { batch_id: 42 },
+            BatchTransportError::MembraneRejection {
+                reason: MembraneRejectionReason::SequenceGap,
+                detail: "gap at 5".into(),
+            },
+        ];
+        for err in &errors {
+            let json = serde_json::to_string(err).unwrap();
+            let back: BatchTransportError = serde_json::from_str(&json).unwrap();
+            assert_eq!(*err, back, "serde roundtrip failed for {err:?}");
+        }
+    }
+
+    #[test]
+    fn batch_payload_display_shared_region() {
+        let payload = BatchPayload::SharedRegion {
+            region_id: 42,
+            offset: 0,
+            length: 256,
+            payload_hash: ContentHash::compute(b"test"),
+        };
+        let display = payload.to_string();
+        assert!(display.contains("shared"));
+        assert!(display.contains("42"));
+        assert!(display.contains("256 bytes"));
+    }
+
+    #[test]
+    fn batch_payload_display_backpressure() {
+        let payload = BatchPayload::Backpressure(BackpressureSignal {
+            pending_messages: 75,
+            limit: 100,
+        });
+        let display = payload.to_string();
+        assert!(display.contains("backpressure"));
+        assert!(display.contains("75"));
+        assert!(display.contains("100"));
+    }
+
+    #[test]
+    fn batch_payload_inline_empty() {
+        let payload = BatchPayload::Inline(Vec::new());
+        let display = payload.to_string();
+        assert!(display.contains("0 bytes"));
+    }
+
+    #[test]
+    fn batch_payload_serde_roundtrip_all_variants() {
+        let payloads = vec![
+            BatchPayload::Inline(b"hello world".to_vec()),
+            BatchPayload::Inline(Vec::new()),
+            BatchPayload::SharedRegion {
+                region_id: 1,
+                offset: 64,
+                length: 128,
+                payload_hash: ContentHash::compute(b"region-data"),
+            },
+            BatchPayload::Backpressure(BackpressureSignal {
+                pending_messages: 10,
+                limit: 50,
+            }),
+        ];
+        for p in &payloads {
+            let json = serde_json::to_string(p).unwrap();
+            let back: BatchPayload = serde_json::from_str(&json).unwrap();
+            assert_eq!(*p, back);
+        }
+    }
+
+    #[test]
+    fn credit_pool_consume_exact_amount_exhausts() {
+        let mut pool = CreditPool::new("s".into(), 10, 100);
+        pool.try_consume(10).unwrap();
+        assert!(pool.is_exhausted());
+        assert_eq!(pool.available(), 0);
+        assert_eq!(pool.total_consumed(), 10);
+    }
+
+    #[test]
+    fn credit_pool_consume_zero_is_noop() {
+        let mut pool = CreditPool::new("s".into(), 50, 100);
+        pool.try_consume(0).unwrap();
+        assert_eq!(pool.available(), 50);
+        assert_eq!(pool.total_consumed(), 0);
+    }
+
+    #[test]
+    fn credit_pool_grant_tracks_high_water_mark() {
+        let mut pool = CreditPool::new("s".into(), 10, 100);
+        assert_eq!(pool.high_water_mark(), 10);
+        pool.grant(20);
+        assert_eq!(pool.high_water_mark(), 30);
+        pool.try_consume(25).unwrap();
+        assert_eq!(pool.high_water_mark(), 30); // stays at previous high
+        pool.grant(50);
+        assert_eq!(pool.high_water_mark(), 55);
+    }
+
+    #[test]
+    fn credit_pool_revoke_below_zero_saturates() {
+        let mut pool = CreditPool::new("s".into(), 5, 100);
+        pool.revoke(100);
+        assert_eq!(pool.available(), 0);
+        assert!(pool.is_exhausted());
+    }
+
+    #[test]
+    fn credit_pool_initial_capped_at_max() {
+        let pool = CreditPool::new("s".into(), 999, 10);
+        assert_eq!(pool.available(), 10);
+    }
+
+    #[test]
+    fn credit_pool_state_hash_differs_after_mutation() {
+        let mut pool = CreditPool::new("s".into(), 100, 200);
+        let hash_before = pool.state_hash();
+        pool.try_consume(1).unwrap();
+        let hash_after = pool.state_hash();
+        assert_ne!(hash_before, hash_after);
+    }
+
+    #[test]
+    fn credit_pool_state_hash_differs_by_session_id() {
+        let p1 = CreditPool::new("session-a".into(), 100, 200);
+        let p2 = CreditPool::new("session-b".into(), 100, 200);
+        assert_ne!(p1.state_hash(), p2.state_hash());
+    }
+
+    #[test]
+    fn region_full_lifecycle_allocated_to_revoked() {
+        let mut ts = default_state();
+        let rid = ts.allocate_region(512, 10).unwrap();
+        assert_eq!(ts.regions[&rid].state, RegionState::Allocated);
+
+        ts.seal_region(rid, 256, 20).unwrap();
+        assert_eq!(ts.regions[&rid].state, RegionState::Sealed);
+        assert!(ts.regions[&rid].sealed_at_tick.is_some());
+        assert_eq!(ts.regions[&rid].occupied_bytes, 256);
+
+        ts.release_region(rid).unwrap();
+        assert_eq!(ts.regions[&rid].state, RegionState::Released);
+
+        // Cannot release again (already released, not sealed)
+        let err = ts.release_region(rid);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn region_seal_with_zero_bytes() {
+        let mut ts = default_state();
+        let rid = ts.allocate_region(1024, 10).unwrap();
+        let hash = ts.seal_region(rid, 0, 20).unwrap();
+        assert_eq!(ts.regions[&rid].occupied_bytes, 0);
+        assert_eq!(ts.regions[&rid].content_hash, Some(hash));
+    }
+
+    #[test]
+    fn region_seal_at_capacity_boundary() {
+        let mut ts = default_state();
+        let rid = ts.allocate_region(100, 10).unwrap();
+        // Exact capacity should succeed
+        ts.seal_region(rid, 100, 20).unwrap();
+        assert_eq!(ts.regions[&rid].occupied_bytes, 100);
+    }
+
+    #[test]
+    fn region_seal_exceeds_capacity() {
+        let mut ts = default_state();
+        let rid = ts.allocate_region(100, 10).unwrap();
+        let err = ts.seal_region(rid, 101, 20);
+        assert!(matches!(
+            err,
+            Err(BatchTransportError::RegionCapacityExceeded { .. })
+        ));
+    }
+
+    #[test]
+    fn region_not_found_errors() {
+        let mut ts = default_state();
+        assert!(matches!(
+            ts.seal_region(999, 10, 20),
+            Err(BatchTransportError::RegionNotFound { region_id: 999 })
+        ));
+        assert!(matches!(
+            ts.release_region(999),
+            Err(BatchTransportError::RegionNotFound { region_id: 999 })
+        ));
+        assert!(matches!(
+            ts.revoke_region(999),
+            Err(BatchTransportError::RegionNotFound { region_id: 999 })
+        ));
+    }
+
+    #[test]
+    fn region_revoke_from_any_state() {
+        // Revoke should work from any state, not just Sealed
+        let mut ts = default_state();
+        let r1 = ts.allocate_region(100, 10).unwrap();
+        ts.revoke_region(r1).unwrap();
+        assert_eq!(ts.regions[&r1].state, RegionState::Revoked);
+
+        let r2 = ts.allocate_region(100, 20).unwrap();
+        ts.seal_region(r2, 50, 30).unwrap();
+        ts.revoke_region(r2).unwrap();
+        assert_eq!(ts.regions[&r2].state, RegionState::Revoked);
+    }
+
+    #[test]
+    fn membrane_audit_trail_truncation() {
+        let epoch = test_epoch();
+        let mut membrane = SafetyMembrane::new("s".into(), epoch, 3);
+        let config = BatchTransportConfig::default();
+        let protocol = established_protocol();
+        let credit_pool = CreditPool::new("s".into(), 1000, 2000);
+        let regions = BTreeMap::new();
+
+        // Submit 5 batches so the audit trail must truncate to 3
+        for i in 1..=5u64 {
+            let entries = vec![make_entry(i, b"data")];
+            let batch_mac = compute_batch_mac(&session_key(), i, &entries, epoch);
+            let batch = BatchEnvelope {
+                batch_id: i,
+                session_id: "s".into(),
+                entries,
+                sequence_start: i,
+                sequence_end: i,
+                credits_consumed: 1,
+                total_payload_bytes: 4,
+                batch_mac,
+                sealed_at_tick: 100 + i,
+                epoch,
+            };
+            membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100 + i);
+        }
+        assert_eq!(membrane.audit_trail().len(), 3);
+        // Oldest entries were removed; latest batch_ids remain
+        assert_eq!(membrane.audit_trail()[0].batch_id, 3);
+        assert_eq!(membrane.audit_trail()[2].batch_id, 5);
+    }
+
+    #[test]
+    fn membrane_update_epoch() {
+        let mut membrane = SafetyMembrane::new("s".into(), SecurityEpoch::from_raw(1), 10);
+        membrane.update_epoch(SecurityEpoch::from_raw(42));
+        // Verify via a batch that would fail epoch mismatch against epoch 1
+        // but we can't directly read current_epoch, so we test indirectly by
+        // checking that the membrane's epoch was updated.
+        let config = BatchTransportConfig::default();
+        let protocol = established_protocol();
+        let credit_pool = CreditPool::new("s".into(), 100, 200);
+        let regions = BTreeMap::new();
+
+        let entries = vec![make_entry(1, b"test")];
+        let epoch42 = SecurityEpoch::from_raw(42);
+        let batch_mac = compute_batch_mac(&session_key(), 1, &entries, epoch42);
+        let batch = BatchEnvelope {
+            batch_id: 1,
+            session_id: "s".into(),
+            entries,
+            sequence_start: 1,
+            sequence_end: 1,
+            credits_consumed: 1,
+            total_payload_bytes: 4,
+            batch_mac,
+            sealed_at_tick: 100,
+            epoch: epoch42,
+        };
+        let verdict =
+            membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100);
+        assert!(verdict.is_accept());
+    }
+
+    #[test]
+    fn membrane_rejection_count_tracking() {
+        let epoch = test_epoch();
+        let mut membrane = SafetyMembrane::new("s".into(), epoch, 50);
+        let config = BatchTransportConfig {
+            max_batch_size: 1,
+            ..Default::default()
+        };
+        let protocol = established_protocol();
+        let credit_pool = CreditPool::new("s".into(), 100, 200);
+        let regions = BTreeMap::new();
+
+        // Submit a batch with 2 entries to a config that only allows 1 -> BatchSizeExceeded
+        let entries = vec![make_entry(1, b"a"), make_entry(2, b"b")];
+        let batch_mac = compute_batch_mac(&session_key(), 1, &entries, epoch);
+        let batch = BatchEnvelope {
+            batch_id: 1,
+            session_id: "s".into(),
+            entries,
+            sequence_start: 1,
+            sequence_end: 2,
+            credits_consumed: 2,
+            total_payload_bytes: 2,
+            batch_mac,
+            sealed_at_tick: 100,
+            epoch,
+        };
+        let verdict =
+            membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100);
+        assert!(!verdict.is_accept());
+        assert_eq!(
+            membrane.rejection_count(MembraneRejectionReason::BatchSizeExceeded),
+            1
+        );
+        assert_eq!(membrane.total_rejected_batches(), 1);
+        assert_eq!(membrane.total_accepted_batches(), 0);
+    }
+
+    #[test]
+    fn entry_content_hash_varies_by_sequence() {
+        let payload = BatchPayload::Inline(b"same-data".to_vec());
+        let h1 = compute_entry_content_hash(1, &payload, "t");
+        let h2 = compute_entry_content_hash(2, &payload, "t");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn entry_content_hash_varies_by_trace_id() {
+        let payload = BatchPayload::Inline(b"data".to_vec());
+        let h1 = compute_entry_content_hash(1, &payload, "trace-a");
+        let h2 = compute_entry_content_hash(1, &payload, "trace-b");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn entry_content_hash_shared_region_variant() {
+        let payload = BatchPayload::SharedRegion {
+            region_id: 1,
+            offset: 0,
+            length: 100,
+            payload_hash: ContentHash::compute(b"region-payload"),
+        };
+        let h1 = compute_entry_content_hash(1, &payload, "t");
+        let h2 = compute_entry_content_hash(1, &payload, "t");
+        assert_eq!(h1, h2);
+
+        // Different region_id produces different hash
+        let payload2 = BatchPayload::SharedRegion {
+            region_id: 2,
+            offset: 0,
+            length: 100,
+            payload_hash: ContentHash::compute(b"region-payload"),
+        };
+        let h3 = compute_entry_content_hash(1, &payload2, "t");
+        assert_ne!(h1, h3);
+    }
+
+    #[test]
+    fn entry_content_hash_backpressure_variant() {
+        let payload = BatchPayload::Backpressure(BackpressureSignal {
+            pending_messages: 10,
+            limit: 50,
+        });
+        let h1 = compute_entry_content_hash(1, &payload, "t");
+        let h2 = compute_entry_content_hash(1, &payload, "t");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn batch_mac_varies_by_epoch() {
+        let entries = vec![make_entry(1, b"data")];
+        let m1 = compute_batch_mac(&session_key(), 1, &entries, SecurityEpoch::from_raw(1));
+        let m2 = compute_batch_mac(&session_key(), 1, &entries, SecurityEpoch::from_raw(2));
+        assert_ne!(m1, m2);
+    }
+
+    #[test]
+    fn batch_mac_varies_by_batch_id() {
+        let entries = vec![make_entry(1, b"data")];
+        let m1 = compute_batch_mac(&session_key(), 1, &entries, test_epoch());
+        let m2 = compute_batch_mac(&session_key(), 2, &entries, test_epoch());
+        assert_ne!(m1, m2);
+    }
+
+    #[test]
+    fn batch_build_payload_too_large() {
+        let config = BatchTransportConfig {
+            max_batch_payload_bytes: 5,
+            ..Default::default()
+        };
+        let mut ts = BatchTransportState::new("s".into(), config, test_epoch());
+        let entries = vec![make_entry(1, b"abcdef")]; // 6 bytes > 5
+        let err = ts.build_batch(entries, &session_key(), test_epoch(), 100);
+        assert!(matches!(
+            err,
+            Err(BatchTransportError::PayloadTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn batch_build_increments_batch_id() {
+        let mut ts = default_state();
+        let b1 = ts
+            .build_batch(vec![make_entry(1, b"a")], &session_key(), test_epoch(), 100)
+            .unwrap();
+        let b2 = ts
+            .build_batch(vec![make_entry(2, b"b")], &session_key(), test_epoch(), 200)
+            .unwrap();
+        assert_eq!(b1.batch_id, 1);
+        assert_eq!(b2.batch_id, 2);
+    }
+
+    #[test]
+    fn state_hash_differs_after_batch_submission() {
+        let mut ts = default_state();
+        let hash_before = ts.state_hash();
+        let protocol = established_protocol();
+        let entries = vec![make_entry(1, b"data")];
+        let batch = ts
+            .build_batch(entries, &session_key(), test_epoch(), 100)
+            .unwrap();
+        ts.submit_batch(batch, &protocol, 100).unwrap();
+        let hash_after = ts.state_hash();
+        assert_ne!(hash_before, hash_after);
+    }
+
+    #[test]
+    fn state_hash_differs_by_session_id() {
+        let s1 = BatchTransportState::new(
+            "alpha".into(),
+            BatchTransportConfig::default(),
+            test_epoch(),
+        );
+        let s2 =
+            BatchTransportState::new("beta".into(), BatchTransportConfig::default(), test_epoch());
+        assert_ne!(s1.state_hash(), s2.state_hash());
+    }
+
+    #[test]
+    fn specimen_hash_determinism() {
+        let h1 = specimen_hash("test-specimen", BatchTransportVerdict::Pass);
+        let h2 = specimen_hash("test-specimen", BatchTransportVerdict::Pass);
+        assert_eq!(h1, h2);
+
+        let h3 = specimen_hash("test-specimen", BatchTransportVerdict::Fail);
+        assert_ne!(h1, h3);
+    }
+
+    #[test]
+    fn membrane_audit_entry_serde_roundtrip() {
+        let entry = MembraneAuditEntry {
+            batch_id: 42,
+            accepted: true,
+            rejection_reason: None,
+            tick: 999,
+            envelope_count: 3,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let back: MembraneAuditEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(entry, back);
+
+        let entry_reject = MembraneAuditEntry {
+            batch_id: 7,
+            accepted: false,
+            rejection_reason: Some(MembraneRejectionReason::ReplayDetected),
+            tick: 500,
+            envelope_count: 1,
+        };
+        let json2 = serde_json::to_string(&entry_reject).unwrap();
+        let back2: MembraneAuditEntry = serde_json::from_str(&json2).unwrap();
+        assert_eq!(entry_reject, back2);
+    }
+
+    #[test]
+    fn membrane_verdict_serde_roundtrip() {
+        let accept = MembraneVerdict::Accept { envelope_count: 5 };
+        let reject = MembraneVerdict::Reject {
+            reason: MembraneRejectionReason::MacVerificationFailed,
+            detail: "bad mac".into(),
+        };
+        for v in [&accept, &reject] {
+            let json = serde_json::to_string(v).unwrap();
+            let back: MembraneVerdict = serde_json::from_str(&json).unwrap();
+            assert_eq!(*v, back);
+        }
+    }
+
+    #[test]
+    fn batch_receipt_serde_roundtrip() {
+        let receipt = BatchReceipt {
+            batch_id: 1,
+            session_id: "s".into(),
+            sequence_start: 10,
+            sequence_end: 15,
+            envelope_count: 6,
+            credits_consumed: 6,
+            batch_content_hash: ContentHash::compute(b"receipt"),
+            accepted_at_tick: 300,
+        };
+        let json = serde_json::to_string(&receipt).unwrap();
+        let back: BatchReceipt = serde_json::from_str(&json).unwrap();
+        assert_eq!(receipt, back);
+    }
+
+    #[test]
+    fn batch_envelope_serde_roundtrip() {
+        let entries = vec![make_entry(1, b"test")];
+        let mac = compute_batch_mac(&session_key(), 1, &entries, test_epoch());
+        let envelope = BatchEnvelope {
+            batch_id: 1,
+            session_id: "sess".into(),
+            entries,
+            sequence_start: 1,
+            sequence_end: 1,
+            credits_consumed: 1,
+            total_payload_bytes: 4,
+            batch_mac: mac,
+            sealed_at_tick: 100,
+            epoch: test_epoch(),
+        };
+        let json = serde_json::to_string(&envelope).unwrap();
+        let back: BatchEnvelope = serde_json::from_str(&json).unwrap();
+        assert_eq!(envelope, back);
+    }
+
+    #[test]
+    fn batch_entry_serde_roundtrip() {
+        let entry = make_entry(42, b"serde-check");
+        let json = serde_json::to_string(&entry).unwrap();
+        let back: BatchEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(entry, back);
+    }
+
+    #[test]
+    fn runner_result_families_covers_all() {
+        let result = run_batch_transport_corpus();
+        // Runner should cover all 12 families
+        assert_eq!(result.families_covered.len(), 12);
+        for family in BatchTransportSpecimenFamily::ALL {
+            assert!(
+                result.families_covered.contains(family),
+                "missing family: {family}"
+            );
+        }
+    }
+
+    #[test]
+    fn released_region_does_not_count_as_active() {
+        let config = BatchTransportConfig {
+            max_active_regions: 1,
+            ..Default::default()
+        };
+        let mut ts = BatchTransportState::new("s".into(), config, test_epoch());
+        let r1 = ts.allocate_region(100, 10).unwrap();
+        ts.seal_region(r1, 50, 20).unwrap();
+        ts.release_region(r1).unwrap();
+        // Released region should not count as active, so we can allocate another
+        let r2 = ts.allocate_region(100, 30);
+        assert!(r2.is_ok());
+    }
+
+    #[test]
+    fn revoked_region_does_not_count_as_active() {
+        let config = BatchTransportConfig {
+            max_active_regions: 1,
+            ..Default::default()
+        };
+        let mut ts = BatchTransportState::new("s".into(), config, test_epoch());
+        let r1 = ts.allocate_region(100, 10).unwrap();
+        ts.revoke_region(r1).unwrap();
+        let r2 = ts.allocate_region(100, 20);
+        assert!(r2.is_ok());
+    }
 }

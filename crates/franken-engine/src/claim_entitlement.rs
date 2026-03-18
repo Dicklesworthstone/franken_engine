@@ -1711,4 +1711,898 @@ mod tests {
         let errors = contract.validate().expect_err("should fail");
         assert!(errors.iter().any(|e| e.contains("precedence_order")));
     }
+
+    // --- Deep unit tests below ---
+
+    #[test]
+    fn claim_domain_serde_exact_snake_case_strings() {
+        assert_eq!(
+            serde_json::to_string(&ClaimDomain::Compatibility).unwrap(),
+            "\"compatibility\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ClaimDomain::ShippedSurface).unwrap(),
+            "\"shipped_surface\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ClaimDomain::React).unwrap(),
+            "\"react\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ClaimDomain::Supremacy).unwrap(),
+            "\"supremacy\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ClaimDomain::Rollout).unwrap(),
+            "\"rollout\""
+        );
+        assert_eq!(serde_json::to_string(&ClaimDomain::Ga).unwrap(), "\"ga\"");
+        assert_eq!(
+            serde_json::to_string(&ClaimDomain::SupportSurface).unwrap(),
+            "\"support_surface\""
+        );
+    }
+
+    #[test]
+    fn claim_tier_serde_exact_snake_case_strings() {
+        assert_eq!(
+            serde_json::to_string(&ClaimTier::ShippedFact).unwrap(),
+            "\"shipped_fact\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ClaimTier::ScopedObserved).unwrap(),
+            "\"scoped_observed\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ClaimTier::FrontierAmbition).unwrap(),
+            "\"frontier_ambition\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ClaimTier::UnsupportedSurface).unwrap(),
+            "\"unsupported_surface\""
+        );
+    }
+
+    #[test]
+    fn morphism_effect_serde_exact_snake_case_strings() {
+        assert_eq!(
+            serde_json::to_string(&MorphismEffect::Supports).unwrap(),
+            "\"supports\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MorphismEffect::Constrains).unwrap(),
+            "\"constrains\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MorphismEffect::Disqualifies).unwrap(),
+            "\"disqualifies\""
+        );
+    }
+
+    #[test]
+    fn disqualifier_verdict_serde_exact_snake_case_strings() {
+        assert_eq!(
+            serde_json::to_string(&DisqualifierVerdict::Forbid).unwrap(),
+            "\"forbid\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DisqualifierVerdict::DowngradeToScoped).unwrap(),
+            "\"downgrade_to_scoped\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DisqualifierVerdict::DowngradeToTarget).unwrap(),
+            "\"downgrade_to_target\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DisqualifierVerdict::RequireOperatorGuidance).unwrap(),
+            "\"require_operator_guidance\""
+        );
+    }
+
+    #[test]
+    fn evidence_state_serde_exact_snake_case_strings() {
+        assert_eq!(
+            serde_json::to_string(&EvidenceState::Fresh).unwrap(),
+            "\"fresh\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EvidenceState::Stale).unwrap(),
+            "\"stale\""
+        );
+    }
+
+    #[test]
+    fn claim_verdict_state_serde_exact_snake_case_strings() {
+        assert_eq!(
+            serde_json::to_string(&ClaimVerdictState::Entitled).unwrap(),
+            "\"entitled\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ClaimVerdictState::NotYetProven).unwrap(),
+            "\"not_yet_proven\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ClaimVerdictState::BlockedByMissingEvidence).unwrap(),
+            "\"blocked_by_missing_evidence\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ClaimVerdictState::CurrentlyFalseUnderActiveCounterexample)
+                .unwrap(),
+            "\"currently_false_under_active_counterexample\""
+        );
+    }
+
+    #[test]
+    fn claim_domain_ord_is_declaration_order() {
+        assert!(ClaimDomain::Compatibility < ClaimDomain::ShippedSurface);
+        assert!(ClaimDomain::ShippedSurface < ClaimDomain::React);
+        assert!(ClaimDomain::React < ClaimDomain::Supremacy);
+        assert!(ClaimDomain::Supremacy < ClaimDomain::Rollout);
+        assert!(ClaimDomain::Rollout < ClaimDomain::Ga);
+        assert!(ClaimDomain::Ga < ClaimDomain::SupportSurface);
+    }
+
+    #[test]
+    fn claim_tier_ord_is_declaration_order() {
+        assert!(ClaimTier::ShippedFact < ClaimTier::ScopedObserved);
+        assert!(ClaimTier::ScopedObserved < ClaimTier::FrontierAmbition);
+        assert!(ClaimTier::FrontierAmbition < ClaimTier::UnsupportedSurface);
+    }
+
+    #[test]
+    fn morphism_effect_ord_is_declaration_order() {
+        assert!(MorphismEffect::Supports < MorphismEffect::Constrains);
+        assert!(MorphismEffect::Constrains < MorphismEffect::Disqualifies);
+    }
+
+    #[test]
+    fn disqualifier_verdict_ord_is_declaration_order() {
+        assert!(DisqualifierVerdict::Forbid < DisqualifierVerdict::DowngradeToScoped);
+        assert!(DisqualifierVerdict::DowngradeToScoped < DisqualifierVerdict::DowngradeToTarget);
+        assert!(
+            DisqualifierVerdict::DowngradeToTarget < DisqualifierVerdict::RequireOperatorGuidance
+        );
+    }
+
+    #[test]
+    fn enum_deserialization_rejects_invalid_variant() {
+        assert!(serde_json::from_str::<ClaimDomain>("\"bogus\"").is_err());
+        assert!(serde_json::from_str::<ClaimTier>("\"bogus\"").is_err());
+        assert!(serde_json::from_str::<MorphismEffect>("\"bogus\"").is_err());
+        assert!(serde_json::from_str::<DisqualifierVerdict>("\"bogus\"").is_err());
+        assert!(serde_json::from_str::<EvidenceState>("\"bogus\"").is_err());
+        assert!(serde_json::from_str::<ClaimVerdictState>("\"bogus\"").is_err());
+    }
+
+    #[test]
+    fn lattice_has_cycle_empty_lattice() {
+        let lattice = SideConstraintLattice {
+            schema_version: "v1".to_string(),
+            top_constraint_id: String::new(),
+            bottom_constraint_id: String::new(),
+            constraints: vec![],
+            cover_relations: vec![],
+        };
+        assert!(!lattice_has_cycle(&lattice));
+    }
+
+    #[test]
+    fn lattice_has_cycle_single_node_no_edges() {
+        let lattice = SideConstraintLattice {
+            schema_version: "v1".to_string(),
+            top_constraint_id: "only".to_string(),
+            bottom_constraint_id: "only".to_string(),
+            constraints: vec![SideConstraint {
+                constraint_id: "only".to_string(),
+                constraint_class: "sole".to_string(),
+                description: String::new(),
+            }],
+            cover_relations: vec![],
+        };
+        assert!(!lattice_has_cycle(&lattice));
+    }
+
+    #[test]
+    fn lattice_has_cycle_diamond_acyclic() {
+        let lattice = SideConstraintLattice {
+            schema_version: "v1".to_string(),
+            top_constraint_id: "top".to_string(),
+            bottom_constraint_id: "bot".to_string(),
+            constraints: vec![
+                SideConstraint {
+                    constraint_id: "top".to_string(),
+                    constraint_class: "t".to_string(),
+                    description: String::new(),
+                },
+                SideConstraint {
+                    constraint_id: "left".to_string(),
+                    constraint_class: "m".to_string(),
+                    description: String::new(),
+                },
+                SideConstraint {
+                    constraint_id: "right".to_string(),
+                    constraint_class: "m".to_string(),
+                    description: String::new(),
+                },
+                SideConstraint {
+                    constraint_id: "bot".to_string(),
+                    constraint_class: "b".to_string(),
+                    description: String::new(),
+                },
+            ],
+            cover_relations: vec![
+                ConstraintRelation {
+                    lower_constraint_id: "bot".to_string(),
+                    higher_constraint_id: "left".to_string(),
+                },
+                ConstraintRelation {
+                    lower_constraint_id: "bot".to_string(),
+                    higher_constraint_id: "right".to_string(),
+                },
+                ConstraintRelation {
+                    lower_constraint_id: "left".to_string(),
+                    higher_constraint_id: "top".to_string(),
+                },
+                ConstraintRelation {
+                    lower_constraint_id: "right".to_string(),
+                    higher_constraint_id: "top".to_string(),
+                },
+            ],
+        };
+        assert!(!lattice_has_cycle(&lattice));
+    }
+
+    #[test]
+    fn validate_rejects_morphism_referencing_unknown_rule() {
+        let mut contract = minimal_contract();
+        contract.evidence_morphism_catalog.morphisms[0]
+            .blocked_by_rules
+            .push("nonexistent-rule".to_string());
+        let errors = contract.validate().expect_err("should fail");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("unknown disqualifier rule"))
+        );
+    }
+
+    #[test]
+    fn validate_rejects_cover_relation_with_unknown_lower() {
+        let mut contract = minimal_contract();
+        contract
+            .side_constraint_lattice
+            .cover_relations
+            .push(ConstraintRelation {
+                lower_constraint_id: "phantom-lower".to_string(),
+                higher_constraint_id: "constraint-top".to_string(),
+            });
+        let errors = contract.validate().expect_err("should fail");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("unknown lower constraint"))
+        );
+    }
+
+    #[test]
+    fn validate_rejects_cover_relation_with_unknown_higher() {
+        let mut contract = minimal_contract();
+        contract
+            .side_constraint_lattice
+            .cover_relations
+            .push(ConstraintRelation {
+                lower_constraint_id: "constraint-bottom".to_string(),
+                higher_constraint_id: "phantom-higher".to_string(),
+            });
+        let errors = contract.validate().expect_err("should fail");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("unknown higher constraint"))
+        );
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_morphism_ids() {
+        let mut contract = minimal_contract();
+        let dup = contract.evidence_morphism_catalog.morphisms[0].clone();
+        contract.evidence_morphism_catalog.morphisms.push(dup);
+        let errors = contract.validate().expect_err("should fail");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("duplicate") && e.contains("evidence morphism"))
+        );
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_constraint_ids() {
+        let mut contract = minimal_contract();
+        let dup = contract.side_constraint_lattice.constraints[0].clone();
+        contract.side_constraint_lattice.constraints.push(dup);
+        let errors = contract.validate().expect_err("should fail");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("duplicate") && e.contains("side constraint"))
+        );
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_rule_ids() {
+        let mut contract = minimal_contract();
+        let mut dup = contract.disqualifier_rules.rules[0].clone();
+        dup.precedence = 999;
+        contract.disqualifier_rules.rules.push(dup);
+        contract
+            .disqualifier_rules
+            .precedence_order
+            .push("rule-forbid".to_string());
+        let errors = contract.validate().expect_err("should fail");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("duplicate") && e.contains("disqualifier rule"))
+        );
+    }
+
+    #[test]
+    fn validate_rejects_rule_targeting_unknown_atom() {
+        let mut contract = minimal_contract();
+        contract.disqualifier_rules.rules[0]
+            .target_atoms
+            .push("atom-ghost".to_string());
+        let errors = contract.validate().expect_err("should fail");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("disqualifier rule") && e.contains("unknown atom"))
+        );
+    }
+
+    #[test]
+    fn evaluate_rejects_duplicate_scenario_ids() {
+        let contract = minimal_contract();
+        let base_scenario = ClaimEvaluationScenario {
+            scenario_id: "dup-scenario".to_string(),
+            description: "first".to_string(),
+            evaluated_at_utc: "2026-01-01T00:00:00Z".to_string(),
+            observed_evidence: vec![],
+            satisfied_constraints: vec![],
+            expected_outcomes: vec![],
+        };
+        let scenarios = ClaimEvaluationScenarioSet {
+            schema_version: CLAIM_ENTITLEMENT_SCENARIO_SCHEMA_VERSION.to_string(),
+            scenario_version: "v1".to_string(),
+            scenarios: vec![base_scenario.clone(), base_scenario],
+        };
+        let errors = contract
+            .evaluate_scenarios(&scenarios)
+            .expect_err("should fail");
+        assert!(errors.iter().any(|e| e.contains("duplicate scenario id")));
+    }
+
+    #[test]
+    fn evaluate_rejects_scenario_triggering_unknown_rule() {
+        let contract = minimal_contract();
+        let scenarios = ClaimEvaluationScenarioSet {
+            schema_version: CLAIM_ENTITLEMENT_SCENARIO_SCHEMA_VERSION.to_string(),
+            scenario_version: "v1".to_string(),
+            scenarios: vec![ClaimEvaluationScenario {
+                scenario_id: "bad-rule".to_string(),
+                description: "triggers unknown rule".to_string(),
+                evaluated_at_utc: "2026-01-01T00:00:00Z".to_string(),
+                observed_evidence: vec![ObservedEvidence {
+                    evidence_kind: "counterexample_suite".to_string(),
+                    state: EvidenceState::Fresh,
+                    triggered_rule_ids: vec!["rule-nonexistent".to_string()],
+                }],
+                satisfied_constraints: vec![],
+                expected_outcomes: vec![],
+            }],
+        };
+        let errors = contract
+            .evaluate_scenarios(&scenarios)
+            .expect_err("should fail");
+        assert!(errors.iter().any(|e| e.contains("unknown rule")));
+    }
+
+    #[test]
+    fn evaluate_rejects_scenario_with_unknown_satisfied_constraint() {
+        let contract = minimal_contract();
+        let scenarios = ClaimEvaluationScenarioSet {
+            schema_version: CLAIM_ENTITLEMENT_SCENARIO_SCHEMA_VERSION.to_string(),
+            scenario_version: "v1".to_string(),
+            scenarios: vec![ClaimEvaluationScenario {
+                scenario_id: "bad-constraint".to_string(),
+                description: "references unknown constraint".to_string(),
+                evaluated_at_utc: "2026-01-01T00:00:00Z".to_string(),
+                observed_evidence: vec![],
+                satisfied_constraints: vec!["constraint-ghost".to_string()],
+                expected_outcomes: vec![],
+            }],
+        };
+        let errors = contract
+            .evaluate_scenarios(&scenarios)
+            .expect_err("should fail");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("unknown satisfied constraint"))
+        );
+    }
+
+    #[test]
+    fn evaluate_rejects_expected_outcome_unknown_atom() {
+        let contract = minimal_contract();
+        let scenarios = ClaimEvaluationScenarioSet {
+            schema_version: CLAIM_ENTITLEMENT_SCENARIO_SCHEMA_VERSION.to_string(),
+            scenario_version: "v1".to_string(),
+            scenarios: vec![ClaimEvaluationScenario {
+                scenario_id: "bad-atom-ref".to_string(),
+                description: "expected outcome references unknown atom".to_string(),
+                evaluated_at_utc: "2026-01-01T00:00:00Z".to_string(),
+                observed_evidence: vec![],
+                satisfied_constraints: vec![],
+                expected_outcomes: vec![ExpectedClaimOutcome {
+                    atom_id: "atom-ghost".to_string(),
+                    state: ClaimVerdictState::Entitled,
+                    minimal_morphism_id: None,
+                    impossible_rule_id: None,
+                }],
+            }],
+        };
+        let errors = contract
+            .evaluate_scenarios(&scenarios)
+            .expect_err("should fail");
+        assert!(errors.iter().any(|e| e.contains("unknown expected atom")));
+    }
+
+    #[test]
+    fn evaluate_rejects_expected_outcome_unknown_morphism() {
+        let contract = minimal_contract();
+        let scenarios = ClaimEvaluationScenarioSet {
+            schema_version: CLAIM_ENTITLEMENT_SCENARIO_SCHEMA_VERSION.to_string(),
+            scenario_version: "v1".to_string(),
+            scenarios: vec![ClaimEvaluationScenario {
+                scenario_id: "bad-morph-ref".to_string(),
+                description: "expected outcome references unknown morphism".to_string(),
+                evaluated_at_utc: "2026-01-01T00:00:00Z".to_string(),
+                observed_evidence: vec![],
+                satisfied_constraints: vec![],
+                expected_outcomes: vec![ExpectedClaimOutcome {
+                    atom_id: "atom-shipped".to_string(),
+                    state: ClaimVerdictState::Entitled,
+                    minimal_morphism_id: Some("morph-nonexistent".to_string()),
+                    impossible_rule_id: None,
+                }],
+            }],
+        };
+        let errors = contract
+            .evaluate_scenarios(&scenarios)
+            .expect_err("should fail");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("unknown expected morphism"))
+        );
+    }
+
+    #[test]
+    fn evaluate_rejects_expected_outcome_unknown_rule() {
+        let contract = minimal_contract();
+        let scenarios = ClaimEvaluationScenarioSet {
+            schema_version: CLAIM_ENTITLEMENT_SCENARIO_SCHEMA_VERSION.to_string(),
+            scenario_version: "v1".to_string(),
+            scenarios: vec![ClaimEvaluationScenario {
+                scenario_id: "bad-rule-ref".to_string(),
+                description: "expected outcome references unknown rule".to_string(),
+                evaluated_at_utc: "2026-01-01T00:00:00Z".to_string(),
+                observed_evidence: vec![],
+                satisfied_constraints: vec![],
+                expected_outcomes: vec![ExpectedClaimOutcome {
+                    atom_id: "atom-shipped".to_string(),
+                    state: ClaimVerdictState::Entitled,
+                    minimal_morphism_id: None,
+                    impossible_rule_id: Some("rule-nonexistent".to_string()),
+                }],
+            }],
+        };
+        let errors = contract
+            .evaluate_scenarios(&scenarios)
+            .expect_err("should fail");
+        assert!(errors.iter().any(|e| e.contains("unknown expected rule")));
+    }
+
+    #[test]
+    fn disqualifies_morphism_excluded_from_satisfying_paths() {
+        let mut contract = minimal_contract();
+        // Add a Disqualifies morphism targeting atom-shipped; it should NOT satisfy the atom
+        contract
+            .evidence_morphism_catalog
+            .morphisms
+            .push(EvidenceMorphism {
+                morphism_id: "morph-disqualify".to_string(),
+                evidence_kind: "compatibility_test_suite".to_string(),
+                effect: MorphismEffect::Disqualifies,
+                target_atoms: vec!["atom-shipped".to_string()],
+                requires_side_constraints: vec![],
+                blocked_by_rules: vec![],
+                rationale: "disqualifying morphism".to_string(),
+            });
+        // Remove the supporting morphism so atom-shipped has no satisfying path
+        contract
+            .evidence_morphism_catalog
+            .morphisms
+            .retain(|m| m.morphism_id != "morph-compat");
+        let scenarios = ClaimEvaluationScenarioSet {
+            schema_version: CLAIM_ENTITLEMENT_SCENARIO_SCHEMA_VERSION.to_string(),
+            scenario_version: "v1".to_string(),
+            scenarios: vec![ClaimEvaluationScenario {
+                scenario_id: "disq-only".to_string(),
+                description: "only disqualifying morphism present".to_string(),
+                evaluated_at_utc: "2026-01-01T00:00:00Z".to_string(),
+                observed_evidence: vec![ObservedEvidence {
+                    evidence_kind: "compatibility_test_suite".to_string(),
+                    state: EvidenceState::Fresh,
+                    triggered_rule_ids: vec![],
+                }],
+                satisfied_constraints: vec!["constraint-top".to_string()],
+                expected_outcomes: vec![],
+            }],
+        };
+        let outputs = contract
+            .evaluate_scenarios(&scenarios)
+            .expect("should succeed");
+        let verdicts = &outputs.claim_entitlement_report.evaluated_scenarios[0].verdicts;
+        let shipped = verdicts
+            .iter()
+            .find(|v| v.atom_id == "atom-shipped")
+            .unwrap();
+        // Should NOT be entitled because Disqualifies morphisms are filtered out
+        assert_ne!(shipped.state, ClaimVerdictState::Entitled);
+    }
+
+    #[test]
+    fn non_forbid_blocking_rule_prevents_entitlement() {
+        let mut contract = minimal_contract();
+        // Add a DowngradeToScoped rule that blocks the morphism
+        contract.disqualifier_rules.rules.push(DisqualifierRule {
+            rule_id: "rule-downgrade".to_string(),
+            precedence: 2,
+            evidence_kind: "compatibility_test_suite".to_string(),
+            condition: "scoped regression".to_string(),
+            target_atoms: vec!["atom-shipped".to_string()],
+            verdict: DisqualifierVerdict::DowngradeToScoped,
+            remediation: "scope it down".to_string(),
+        });
+        contract.disqualifier_rules.precedence_order =
+            vec!["rule-forbid".to_string(), "rule-downgrade".to_string()];
+        // Wire up the morphism to be blocked by the downgrade rule
+        contract.evidence_morphism_catalog.morphisms[0]
+            .blocked_by_rules
+            .push("rule-downgrade".to_string());
+
+        let scenarios = ClaimEvaluationScenarioSet {
+            schema_version: CLAIM_ENTITLEMENT_SCENARIO_SCHEMA_VERSION.to_string(),
+            scenario_version: "v1".to_string(),
+            scenarios: vec![ClaimEvaluationScenario {
+                scenario_id: "downgrade-blocks".to_string(),
+                description: "non-forbid rule blocks morphism".to_string(),
+                evaluated_at_utc: "2026-01-01T00:00:00Z".to_string(),
+                observed_evidence: vec![ObservedEvidence {
+                    evidence_kind: "compatibility_test_suite".to_string(),
+                    state: EvidenceState::Fresh,
+                    triggered_rule_ids: vec!["rule-downgrade".to_string()],
+                }],
+                satisfied_constraints: vec!["constraint-top".to_string()],
+                expected_outcomes: vec![],
+            }],
+        };
+        let outputs = contract
+            .evaluate_scenarios(&scenarios)
+            .expect("should succeed");
+        let verdicts = &outputs.claim_entitlement_report.evaluated_scenarios[0].verdicts;
+        let shipped = verdicts
+            .iter()
+            .find(|v| v.atom_id == "atom-shipped")
+            .unwrap();
+        assert_eq!(shipped.state, ClaimVerdictState::BlockedByMissingEvidence);
+        // The cutset should mention the blocking rule
+        let cutsets = &outputs.missing_evidence_cutsets.evaluated_scenarios[0].cutsets;
+        let shipped_cutset = cutsets.iter().find(|c| c.atom_id == "atom-shipped");
+        assert!(shipped_cutset.is_some());
+        assert!(
+            shipped_cutset
+                .unwrap()
+                .blocking_rule_ids
+                .contains(&"rule-downgrade".to_string())
+        );
+    }
+
+    #[test]
+    fn cutset_cost_reflects_missing_evidence_plus_constraints_plus_rules() {
+        let mut contract = minimal_contract();
+        // Morphism requires constraint-top (already there) and we won't satisfy it,
+        // evidence is missing, and we add a blocking rule -> cost should be 3
+        contract.disqualifier_rules.rules.push(DisqualifierRule {
+            rule_id: "rule-downgrade2".to_string(),
+            precedence: 2,
+            evidence_kind: "compatibility_test_suite".to_string(),
+            condition: "cond".to_string(),
+            target_atoms: vec!["atom-shipped".to_string()],
+            verdict: DisqualifierVerdict::DowngradeToTarget,
+            remediation: "fix".to_string(),
+        });
+        contract.disqualifier_rules.precedence_order =
+            vec!["rule-forbid".to_string(), "rule-downgrade2".to_string()];
+        contract.evidence_morphism_catalog.morphisms[0]
+            .blocked_by_rules
+            .push("rule-downgrade2".to_string());
+
+        let scenarios = ClaimEvaluationScenarioSet {
+            schema_version: CLAIM_ENTITLEMENT_SCENARIO_SCHEMA_VERSION.to_string(),
+            scenario_version: "v1".to_string(),
+            scenarios: vec![ClaimEvaluationScenario {
+                scenario_id: "cost-calc".to_string(),
+                description: "all three kinds of cost".to_string(),
+                evaluated_at_utc: "2026-01-01T00:00:00Z".to_string(),
+                observed_evidence: vec![ObservedEvidence {
+                    evidence_kind: "compatibility_test_suite".to_string(),
+                    state: EvidenceState::Stale,
+                    triggered_rule_ids: vec!["rule-downgrade2".to_string()],
+                }],
+                satisfied_constraints: vec![],
+                expected_outcomes: vec![],
+            }],
+        };
+        let outputs = contract
+            .evaluate_scenarios(&scenarios)
+            .expect("should succeed");
+        let cutsets = &outputs.missing_evidence_cutsets.evaluated_scenarios[0].cutsets;
+        let shipped_cutset = cutsets
+            .iter()
+            .find(|c| c.atom_id == "atom-shipped")
+            .unwrap();
+        // cost = 1 (missing evidence) + 1 (missing constraint-top) + 1 (blocking rule) = 3
+        assert_eq!(shipped_cutset.cost, 3);
+        assert_eq!(shipped_cutset.missing_evidence_kinds.len(), 1);
+        assert_eq!(shipped_cutset.missing_constraint_ids.len(), 1);
+        assert_eq!(shipped_cutset.blocking_rule_ids.len(), 1);
+    }
+
+    #[test]
+    fn multiple_forbidding_rules_produce_multiple_certificates() {
+        let mut contract = minimal_contract();
+        contract.disqualifier_rules.rules.push(DisqualifierRule {
+            rule_id: "rule-forbid-2".to_string(),
+            precedence: 2,
+            evidence_kind: "counterexample_suite".to_string(),
+            condition: "second regression".to_string(),
+            target_atoms: vec!["atom-shipped".to_string()],
+            verdict: DisqualifierVerdict::Forbid,
+            remediation: "fix second regression".to_string(),
+        });
+        contract.disqualifier_rules.precedence_order =
+            vec!["rule-forbid".to_string(), "rule-forbid-2".to_string()];
+
+        let scenarios = ClaimEvaluationScenarioSet {
+            schema_version: CLAIM_ENTITLEMENT_SCENARIO_SCHEMA_VERSION.to_string(),
+            scenario_version: "v1".to_string(),
+            scenarios: vec![ClaimEvaluationScenario {
+                scenario_id: "multi-forbid".to_string(),
+                description: "two forbid rules triggered".to_string(),
+                evaluated_at_utc: "2026-01-01T00:00:00Z".to_string(),
+                observed_evidence: vec![ObservedEvidence {
+                    evidence_kind: "counterexample_suite".to_string(),
+                    state: EvidenceState::Fresh,
+                    triggered_rule_ids: vec![
+                        "rule-forbid".to_string(),
+                        "rule-forbid-2".to_string(),
+                    ],
+                }],
+                satisfied_constraints: vec![],
+                expected_outcomes: vec![],
+            }],
+        };
+        let outputs = contract
+            .evaluate_scenarios(&scenarios)
+            .expect("should succeed");
+        let certs = &outputs.impossibility_certificates.evaluated_scenarios[0].certificates;
+        let shipped_certs: Vec<_> = certs
+            .iter()
+            .filter(|c| c.atom_id == "atom-shipped")
+            .collect();
+        assert_eq!(shipped_certs.len(), 2);
+        let ledger_entries = &outputs.claim_counterexample_ledger.evaluated_scenarios[0].entries;
+        let shipped_entries: Vec<_> = ledger_entries
+            .iter()
+            .filter(|e| e.atom_id == "atom-shipped")
+            .collect();
+        assert_eq!(shipped_entries.len(), 2);
+    }
+
+    #[test]
+    fn evaluate_multiple_scenarios_produces_matching_output_counts() {
+        let contract = minimal_contract();
+        let scenarios = ClaimEvaluationScenarioSet {
+            schema_version: CLAIM_ENTITLEMENT_SCENARIO_SCHEMA_VERSION.to_string(),
+            scenario_version: "v1".to_string(),
+            scenarios: vec![
+                ClaimEvaluationScenario {
+                    scenario_id: "s1".to_string(),
+                    description: "first".to_string(),
+                    evaluated_at_utc: "2026-01-01T00:00:00Z".to_string(),
+                    observed_evidence: vec![],
+                    satisfied_constraints: vec![],
+                    expected_outcomes: vec![],
+                },
+                ClaimEvaluationScenario {
+                    scenario_id: "s2".to_string(),
+                    description: "second".to_string(),
+                    evaluated_at_utc: "2026-01-02T00:00:00Z".to_string(),
+                    observed_evidence: vec![],
+                    satisfied_constraints: vec![],
+                    expected_outcomes: vec![],
+                },
+            ],
+        };
+        let outputs = contract
+            .evaluate_scenarios(&scenarios)
+            .expect("should succeed");
+        assert_eq!(
+            outputs.claim_entitlement_report.evaluated_scenarios.len(),
+            2
+        );
+        assert_eq!(
+            outputs.missing_evidence_cutsets.evaluated_scenarios.len(),
+            2
+        );
+        assert_eq!(
+            outputs.impossibility_certificates.evaluated_scenarios.len(),
+            2
+        );
+        assert_eq!(
+            outputs
+                .claim_counterexample_ledger
+                .evaluated_scenarios
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn evaluate_empty_scenarios_produces_empty_outputs() {
+        let contract = minimal_contract();
+        let scenarios = ClaimEvaluationScenarioSet {
+            schema_version: CLAIM_ENTITLEMENT_SCENARIO_SCHEMA_VERSION.to_string(),
+            scenario_version: "v1".to_string(),
+            scenarios: vec![],
+        };
+        let outputs = contract
+            .evaluate_scenarios(&scenarios)
+            .expect("should succeed");
+        assert!(
+            outputs
+                .claim_entitlement_report
+                .evaluated_scenarios
+                .is_empty()
+        );
+        assert!(
+            outputs
+                .missing_evidence_cutsets
+                .evaluated_scenarios
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn scenario_set_serde_round_trip() {
+        let scenarios = minimal_scenario_set();
+        let json = serde_json::to_string(&scenarios).expect("serialize");
+        let restored: ClaimEvaluationScenarioSet =
+            serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored, scenarios);
+    }
+
+    #[test]
+    fn contract_clone_equality() {
+        let contract = minimal_contract();
+        let cloned = contract.clone();
+        assert_eq!(contract, cloned);
+        let json1 = serde_json::to_string(&contract).unwrap();
+        let json2 = serde_json::to_string(&cloned).unwrap();
+        assert_eq!(json1, json2);
+    }
+
+    #[test]
+    fn certificate_id_format_is_scenario_atom_rule() {
+        let contract = minimal_contract();
+        let scenarios = ClaimEvaluationScenarioSet {
+            schema_version: CLAIM_ENTITLEMENT_SCENARIO_SCHEMA_VERSION.to_string(),
+            scenario_version: "v1".to_string(),
+            scenarios: vec![ClaimEvaluationScenario {
+                scenario_id: "scen-123".to_string(),
+                description: "verify cert id format".to_string(),
+                evaluated_at_utc: "2026-01-01T00:00:00Z".to_string(),
+                observed_evidence: vec![ObservedEvidence {
+                    evidence_kind: "counterexample_suite".to_string(),
+                    state: EvidenceState::Fresh,
+                    triggered_rule_ids: vec!["rule-forbid".to_string()],
+                }],
+                satisfied_constraints: vec![],
+                expected_outcomes: vec![],
+            }],
+        };
+        let outputs = contract
+            .evaluate_scenarios(&scenarios)
+            .expect("should succeed");
+        let certs = &outputs.impossibility_certificates.evaluated_scenarios[0].certificates;
+        let cert = certs.iter().find(|c| c.atom_id == "atom-shipped").unwrap();
+        assert_eq!(cert.certificate_id, "scen-123::atom-shipped::rule-forbid");
+    }
+
+    #[test]
+    fn cutset_id_format_is_scenario_atom_morphism() {
+        let contract = minimal_contract();
+        let scenarios = ClaimEvaluationScenarioSet {
+            schema_version: CLAIM_ENTITLEMENT_SCENARIO_SCHEMA_VERSION.to_string(),
+            scenario_version: "v1".to_string(),
+            scenarios: vec![ClaimEvaluationScenario {
+                scenario_id: "scen-456".to_string(),
+                description: "verify cutset id format".to_string(),
+                evaluated_at_utc: "2026-01-01T00:00:00Z".to_string(),
+                observed_evidence: vec![],
+                satisfied_constraints: vec![],
+                expected_outcomes: vec![],
+            }],
+        };
+        let outputs = contract
+            .evaluate_scenarios(&scenarios)
+            .expect("should succeed");
+        let cutsets = &outputs.missing_evidence_cutsets.evaluated_scenarios[0].cutsets;
+        let shipped_cutset = cutsets
+            .iter()
+            .find(|c| c.atom_id == "atom-shipped")
+            .unwrap();
+        assert_eq!(
+            shipped_cutset.cutset_id,
+            "scen-456::atom-shipped::morph-compat"
+        );
+    }
+
+    #[test]
+    fn evaluation_deterministic_serialization_across_ten_runs() {
+        let contract = minimal_contract();
+        let scenarios = minimal_scenario_set();
+        let baseline =
+            serde_json::to_string(&contract.evaluate_scenarios(&scenarios).expect("baseline"))
+                .unwrap();
+        for i in 0..10 {
+            let run = serde_json::to_string(
+                &contract
+                    .evaluate_scenarios(&scenarios)
+                    .expect(&format!("run {i}")),
+            )
+            .unwrap();
+            assert_eq!(baseline, run, "determinism failed on run {i}");
+        }
+    }
+
+    #[test]
+    fn validate_accumulates_multiple_errors() {
+        let mut contract = minimal_contract();
+        contract.schema_version = "wrong".to_string();
+        contract.track.id = "wrong".to_string();
+        contract.side_constraint_lattice.top_constraint_id = "phantom".to_string();
+        let errors = contract.validate().expect_err("should fail");
+        assert!(
+            errors.len() >= 3,
+            "expected at least 3 errors, got {}",
+            errors.len()
+        );
+        assert!(errors.iter().any(|e| e.contains("schema_version")));
+        assert!(errors.iter().any(|e| e.contains("track id")));
+        assert!(errors.iter().any(|e| e.contains("top constraint")));
+    }
 }

@@ -327,6 +327,10 @@ impl ArithmeticCoder {
             cumulative += adjusted_freq;
         }
 
+        if cumulative == 0 {
+            return Err(EntropyError::EmptyInput);
+        }
+
         Ok(Self {
             frequency_table: cum_freq_table,
             total_frequency: cumulative,

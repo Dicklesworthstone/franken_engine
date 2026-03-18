@@ -1170,4 +1170,303 @@ mod tests {
         };
         assert!(!inv_all_fail.contract_satisfied());
     }
+
+    // ── enrichment: corpus structure ──────────────────────────────
+
+    #[test]
+    fn corpus_specimen_count_is_eighteen() {
+        let corpus = esm_cjs_parity_corpus();
+        assert_eq!(corpus.len(), 18);
+    }
+
+    #[test]
+    fn corpus_specimen_ids_follow_naming_convention() {
+        let corpus = esm_cjs_parity_corpus();
+        for s in &corpus {
+            assert!(
+                s.specimen_id.starts_with("esm_cjs_"),
+                "specimen id '{}' should start with esm_cjs_",
+                s.specimen_id
+            );
+        }
+    }
+
+    #[test]
+    fn corpus_all_specimens_have_non_empty_source() {
+        let corpus = esm_cjs_parity_corpus();
+        for s in &corpus {
+            assert!(
+                !s.source.is_empty(),
+                "specimen {} has empty source",
+                s.specimen_id
+            );
+        }
+    }
+
+    #[test]
+    fn corpus_topology_distribution_is_balanced() {
+        let corpus = esm_cjs_parity_corpus();
+        let pure_esm = corpus
+            .iter()
+            .filter(|s| s.topology == ModuleGraphTopology::PureEsm)
+            .count();
+        let pure_cjs = corpus
+            .iter()
+            .filter(|s| s.topology == ModuleGraphTopology::PureCjs)
+            .count();
+        let mixed = corpus
+            .iter()
+            .filter(|s| s.topology == ModuleGraphTopology::Mixed)
+            .count();
+        assert!(pure_esm > 0, "no PureEsm specimens");
+        assert!(pure_cjs > 0, "no PureCjs specimens");
+        assert!(mixed > 0, "no Mixed specimens");
+        assert_eq!(
+            pure_esm + pure_cjs + mixed,
+            corpus.len(),
+            "topology counts don't sum"
+        );
+    }
+
+    // ── enrichment: inventory evidence properties ─────────────────
+
+    #[test]
+    fn inventory_evidence_count_matches_corpus() {
+        let inv = run_esm_cjs_parity_corpus();
+        let corpus = esm_cjs_parity_corpus();
+        assert_eq!(inv.evidence.len(), corpus.len());
+    }
+
+    #[test]
+    fn inventory_evidence_preserves_corpus_order() {
+        let inv = run_esm_cjs_parity_corpus();
+        let corpus = esm_cjs_parity_corpus();
+        for (ev, sp) in inv.evidence.iter().zip(corpus.iter()) {
+            assert_eq!(ev.specimen_id, sp.specimen_id, "evidence order mismatch");
+        }
+    }
+
+    #[test]
+    fn inventory_evidence_topology_matches_corpus() {
+        let inv = run_esm_cjs_parity_corpus();
+        let corpus = esm_cjs_parity_corpus();
+        for (ev, sp) in inv.evidence.iter().zip(corpus.iter()) {
+            assert_eq!(
+                ev.topology, sp.topology,
+                "topology mismatch for specimen '{}'",
+                ev.specimen_id
+            );
+        }
+    }
+
+    #[test]
+    fn inventory_evidence_interop_direction_matches_corpus() {
+        let inv = run_esm_cjs_parity_corpus();
+        let corpus = esm_cjs_parity_corpus();
+        for (ev, sp) in inv.evidence.iter().zip(corpus.iter()) {
+            assert_eq!(
+                ev.interop_direction, sp.interop_direction,
+                "interop direction mismatch for specimen '{}'",
+                ev.specimen_id
+            );
+        }
+    }
+
+    #[test]
+    fn inventory_topology_counts_match_evidence() {
+        let inv = run_esm_cjs_parity_corpus();
+        let counted_esm = inv
+            .evidence
+            .iter()
+            .filter(|e| e.topology == ModuleGraphTopology::PureEsm)
+            .count() as u64;
+        let counted_cjs = inv
+            .evidence
+            .iter()
+            .filter(|e| e.topology == ModuleGraphTopology::PureCjs)
+            .count() as u64;
+        let counted_mixed = inv
+            .evidence
+            .iter()
+            .filter(|e| e.topology == ModuleGraphTopology::Mixed)
+            .count() as u64;
+        assert_eq!(inv.pure_esm_count, counted_esm);
+        assert_eq!(inv.pure_cjs_count, counted_cjs);
+        assert_eq!(inv.mixed_count, counted_mixed);
+    }
+
+    // ── enrichment: enum display completeness ─────────────────────
+
+    #[test]
+    fn actual_outcome_display_all_variants() {
+        let variants = [
+            (EsmCjsActualOutcome::ExecuteSuccess, "execute_success"),
+            (EsmCjsActualOutcome::ResolutionFailure, "resolution_failure"),
+            (EsmCjsActualOutcome::LinkingFailure, "linking_failure"),
+            (EsmCjsActualOutcome::EvaluationFailure, "evaluation_failure"),
+            (EsmCjsActualOutcome::ParseFailure, "parse_failure"),
+            (EsmCjsActualOutcome::OtherFailure, "other_failure"),
+        ];
+        for (variant, expected) in &variants {
+            assert_eq!(variant.to_string(), *expected);
+        }
+    }
+
+    #[test]
+    fn topology_as_str_matches_display() {
+        for variant in [
+            ModuleGraphTopology::PureEsm,
+            ModuleGraphTopology::PureCjs,
+            ModuleGraphTopology::Mixed,
+        ] {
+            assert_eq!(variant.as_str(), variant.to_string());
+        }
+    }
+
+    #[test]
+    fn interop_direction_as_str_matches_display() {
+        for variant in [
+            InteropDirection::None,
+            InteropDirection::EsmImportsCjs,
+            InteropDirection::CjsRequiresEsm,
+            InteropDirection::Bidirectional,
+        ] {
+            assert_eq!(variant.as_str(), variant.to_string());
+        }
+    }
+
+    #[test]
+    fn expected_outcome_as_str_matches_display() {
+        for variant in [
+            EsmCjsExpectedOutcome::ExecuteSuccess,
+            EsmCjsExpectedOutcome::ResolutionFailure,
+            EsmCjsExpectedOutcome::LinkingFailure,
+            EsmCjsExpectedOutcome::EvaluationFailure,
+            EsmCjsExpectedOutcome::ParseFailure,
+        ] {
+            assert_eq!(variant.as_str(), variant.to_string());
+        }
+    }
+
+    // ── enrichment: schema constants ──────────────────────────────
+
+    #[test]
+    fn policy_id_is_non_empty() {
+        assert!(!ESM_CJS_PARITY_POLICY_ID.is_empty());
+    }
+
+    #[test]
+    fn component_is_non_empty() {
+        assert!(!ESM_CJS_PARITY_COMPONENT.is_empty());
+    }
+
+    #[test]
+    fn all_schema_constants_start_with_franken_engine() {
+        assert!(ESM_CJS_PARITY_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(ESM_CJS_PARITY_MANIFEST_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(ESM_CJS_PARITY_EVENT_SCHEMA_VERSION.starts_with("franken-engine."));
+    }
+
+    // ── enrichment: verdict consistency ───────────────────────────
+
+    #[test]
+    fn all_passing_evidence_has_matching_outcomes() {
+        let inv = run_esm_cjs_parity_corpus();
+        for ev in &inv.evidence {
+            if ev.verdict == EsmCjsParityVerdict::Pass {
+                assert_eq!(
+                    format!("{}", ev.expected_outcome),
+                    format!("{}", ev.actual_outcome),
+                    "passing specimen {} has mismatched outcomes",
+                    ev.specimen_id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn passing_evidence_has_no_error_detail() {
+        let inv = run_esm_cjs_parity_corpus();
+        for ev in &inv.evidence {
+            if ev.verdict == EsmCjsParityVerdict::Pass
+                && ev.actual_outcome == EsmCjsActualOutcome::ExecuteSuccess
+            {
+                assert!(
+                    ev.error_detail.is_none(),
+                    "passing specimen {} should have no error_detail",
+                    ev.specimen_id
+                );
+            }
+        }
+    }
+
+    // ── enrichment: serde for additional types ────────────────────
+
+    #[test]
+    fn artifact_paths_serde_roundtrip() {
+        let paths = EsmCjsParityArtifactPaths {
+            evidence_inventory: "inv.json".into(),
+            run_manifest: "manifest.json".into(),
+            events_jsonl: "events.jsonl".into(),
+            commands_txt: "commands.txt".into(),
+        };
+        let json = serde_json::to_string(&paths).unwrap();
+        let decoded: EsmCjsParityArtifactPaths = serde_json::from_str(&json).unwrap();
+        assert_eq!(paths, decoded);
+    }
+
+    #[test]
+    fn event_with_all_none_fields_serde_roundtrip() {
+        let event = EsmCjsParityEvent {
+            schema_version: ESM_CJS_PARITY_EVENT_SCHEMA_VERSION.into(),
+            component: ESM_CJS_PARITY_COMPONENT.into(),
+            event: "run_started".into(),
+            policy_id: ESM_CJS_PARITY_POLICY_ID.into(),
+            specimen_id: None,
+            verdict: None,
+            detail: None,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let decoded: EsmCjsParityEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, decoded);
+    }
+
+    #[test]
+    fn verdict_ordering() {
+        assert!(EsmCjsParityVerdict::Fail < EsmCjsParityVerdict::Pass);
+    }
+
+    #[test]
+    fn topology_ordering_transitive() {
+        assert!(ModuleGraphTopology::Mixed < ModuleGraphTopology::PureCjs);
+        assert!(ModuleGraphTopology::PureCjs < ModuleGraphTopology::PureEsm);
+        assert!(ModuleGraphTopology::Mixed < ModuleGraphTopology::PureEsm);
+    }
+
+    // ── enrichment: corpus source_file coverage ───────────────────
+
+    #[test]
+    fn corpus_has_specimens_with_and_without_source_file() {
+        let corpus = esm_cjs_parity_corpus();
+        let with_file = corpus.iter().any(|s| s.source_file.is_some());
+        let without_file = corpus.iter().any(|s| s.source_file.is_none());
+        assert!(
+            with_file || without_file,
+            "corpus should have diverse source_file coverage"
+        );
+    }
+
+    #[test]
+    fn corpus_source_files_have_js_extensions() {
+        let corpus = esm_cjs_parity_corpus();
+        for s in &corpus {
+            if let Some(ref f) = s.source_file {
+                assert!(
+                    f.ends_with(".js") || f.ends_with(".mjs") || f.ends_with(".cjs"),
+                    "source_file '{}' should have a JS extension",
+                    f
+                );
+            }
+        }
+    }
 }

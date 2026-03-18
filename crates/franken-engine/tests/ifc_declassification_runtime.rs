@@ -938,6 +938,12 @@ fn receipt_contains_replay_command() {
 
     let cmd = receipt.replay_command();
     assert!(!cmd.is_empty());
+    assert!(cmd.contains("frankenctl verify receipt --input <verifier_input.json>"));
+    assert!(cmd.contains("--receipt-id"));
+    assert!(cmd.contains(&receipt.receipt_id));
+    assert!(cmd.contains("--summary"));
+    assert!(!cmd.contains("frankenctl replay run --trace"));
+    assert!(!cmd.contains(" --receipt "));
 }
 
 #[test]

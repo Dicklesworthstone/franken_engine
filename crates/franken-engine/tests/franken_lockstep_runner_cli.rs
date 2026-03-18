@@ -22,6 +22,7 @@ use std::os::unix::fs::PermissionsExt;
 
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser};
+use sha2::{Digest, Sha256};
 
 fn temp_path(name: &str, ext: &str) -> PathBuf {
     let mut path = std::env::temp_dir();
@@ -42,6 +43,19 @@ fn temp_dir(name: &str) -> PathBuf {
     path.push(format!("{}_{}_{}", name, std::process::id(), nonce));
     fs::create_dir_all(&path).expect("temporary directory should be created");
     path
+}
+
+fn repo_root_path(relative: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("crate manifest dir should have repo root ancestors")
+        .join(relative)
+}
+
+fn read_repo_file(relative: &str) -> String {
+    fs::read_to_string(repo_root_path(relative))
+        .unwrap_or_else(|error| panic!("repo file `{relative}` should be readable: {error}"))
 }
 
 fn write_fixture_catalog(path: &Path) -> String {
@@ -92,6 +106,20 @@ fn write_runtime_specs_with_runtime_ids(path: &Path, expected_hash: &str, runtim
 
 fn write_runtime_specs_content(path: &Path, content: &str) {
     fs::write(path, content).expect("runtime spec file should be written");
+}
+
+fn write_canon_rules(path: &Path, replacement: &str) -> String {
+    let content = canon_rules_content(replacement);
+    fs::write(path, content.as_bytes()).expect("canon rules file should be written");
+    canon_rules_hash(content.as_str())
+}
+
+fn write_invalid_canon_rules(path: &Path) {
+    fs::write(
+        path,
+        "schema_version = \"franken-engine.lockstep-canon-rules.v0\"\n",
+    )
+    .expect("invalid canon rules file should be written");
 }
 
 fn write_runtime_specs_using_script(path: &Path, script_path: &Path) {
@@ -161,6 +189,46 @@ args = ['-c', 'cat >/dev/null; echo \"{{\\\"hash\\\":\\\"{expected_hash}\\\"}}\"
         );
     }
     toml
+}
+
+fn canon_rules_content(replacement: &str) -> String {
+    format!(
+        r#"schema_version = "franken-engine.lockstep-canon-rules.v1"
+
+[[rules]]
+rule_id = "normalize-newlines"
+kind = "newline_normalization"
+description = "Normalize CRLF and CR line endings before observable output comparison."
+
+[[rules]]
+rule_id = "replace-engine-wording"
+kind = "message_normalization"
+description = "Replace engine-specific wording using stable governance text."
+replacement = "{replacement}"
+"#
+    )
+}
+
+fn canon_rules_hash(content: &str) -> String {
+    format!("sha256:{}", hex::encode(Sha256::digest(content.as_bytes())))
+}
+
+fn expected_environment_fingerprint(locale: &str, timezone: &str) -> String {
+    let mut material = std::collections::BTreeMap::new();
+    material.insert("arch", std::env::consts::ARCH.to_string());
+    material.insert("locale", locale.to_string());
+    material.insert("os", std::env::consts::OS.to_string());
+    material.insert(
+        "rust_toolchain",
+        std::env::var("RUSTUP_TOOLCHAIN").unwrap_or_else(|_| "unknown".to_string()),
+    );
+    material.insert("timezone", timezone.to_string());
+    format!(
+        "sha256:{}",
+        hex::encode(Sha256::digest(
+            serde_json::to_vec(&material).expect("environment material should serialize")
+        ))
+    )
 }
 
 fn write_script(path: &Path, content: &str) {
@@ -352,6 +420,7 @@ fn lockstep_runner_help_exits_zero() {
     assert!(stdout.contains("franken_lockstep_runner"));
     assert!(stdout.contains("--fixture-catalog"));
     assert!(stdout.contains("--runtime-specs"));
+    assert!(stdout.contains("--canon-rules"));
     assert!(stdout.contains("--evidence-jsonl"));
     assert!(stdout.contains("--preflight-only"));
 }
@@ -367,6 +436,43 @@ fn lockstep_runner_unknown_argument_exits_nonzero() {
 
     let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
     assert!(stderr.contains("unknown argument"));
+}
+
+#[test]
+fn lockstep_runner_rejects_invalid_canon_rules_schema() {
+    let catalog_path = temp_path("franken_lockstep_runner_invalid_canon_catalog", "json");
+    let engine_specs_path = temp_path("franken_lockstep_runner_invalid_canon_engine_specs", "json");
+    let canon_rules_path = temp_path("franken_lockstep_runner_invalid_canon_rules", "toml");
+    write_fixture_catalog(&catalog_path);
+    write_engine_specs(&engine_specs_path);
+    write_invalid_canon_rules(&canon_rules_path);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_franken_lockstep_runner"))
+        .args([
+            "--fixture-catalog",
+            catalog_path
+                .to_str()
+                .expect("fixture path should be valid utf8"),
+            "--engine-specs",
+            engine_specs_path
+                .to_str()
+                .expect("engine specs path should be valid utf8"),
+            "--canon-rules",
+            canon_rules_path
+                .to_str()
+                .expect("canon rules path should be valid utf8"),
+        ])
+        .output()
+        .expect("command should execute");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    assert!(stderr.contains("canon rules file"));
+    assert!(stderr.contains("lockstep-canon-rules.v0"));
+
+    let _ = fs::remove_file(catalog_path);
+    let _ = fs::remove_file(engine_specs_path);
+    let _ = fs::remove_file(canon_rules_path);
 }
 
 #[test]
@@ -483,9 +589,11 @@ fn lockstep_runner_loads_runtime_specs_as_external_engines() {
 fn lockstep_runner_emits_evidence_jsonl_with_deterministic_runtime_order() {
     let catalog_path = temp_path("franken_lockstep_runner_evidence_catalog", "json");
     let runtime_specs_path = temp_path("franken_lockstep_runner_evidence_specs", "toml");
+    let canon_rules_path = temp_path("franken_lockstep_runner_evidence_canon_rules", "toml");
     let report_path = temp_path("franken_lockstep_runner_evidence_report", "json");
     let evidence_path = temp_path("franken_lockstep_runner_evidence", "jsonl");
     let expected_hash = write_fixture_catalog(&catalog_path);
+    let expected_canon_rules_hash = write_canon_rules(&canon_rules_path, "stable-engine-wording");
     write_runtime_specs(&runtime_specs_path, expected_hash.as_str());
 
     let output = Command::new(env!("CARGO_BIN_EXE_franken_lockstep_runner"))
@@ -500,6 +608,10 @@ fn lockstep_runner_emits_evidence_jsonl_with_deterministic_runtime_order() {
             runtime_specs_path
                 .to_str()
                 .expect("runtime specs path should be valid utf8"),
+            "--canon-rules",
+            canon_rules_path
+                .to_str()
+                .expect("canon rules path should be valid utf8"),
             "--out",
             report_path
                 .to_str()
@@ -538,6 +650,14 @@ fn lockstep_runner_emits_evidence_jsonl_with_deterministic_runtime_order() {
         evidence["fixture_catalog_hash"],
         report["fixture_catalog_hash"]
     );
+    assert_eq!(
+        evidence["canon_rules_hash"].as_str(),
+        Some(expected_canon_rules_hash.as_str())
+    );
+    assert_eq!(
+        evidence["environment_fingerprint"].as_str(),
+        Some(expected_environment_fingerprint("C", "UTC").as_str())
+    );
 
     let runtime_versions = evidence["runtime_versions"]
         .as_array()
@@ -558,6 +678,7 @@ fn lockstep_runner_emits_evidence_jsonl_with_deterministic_runtime_order() {
 
     let _ = fs::remove_file(catalog_path);
     let _ = fs::remove_file(runtime_specs_path);
+    let _ = fs::remove_file(canon_rules_path);
     let _ = fs::remove_file(report_path);
     let _ = fs::remove_file(evidence_path);
 }
@@ -961,14 +1082,16 @@ fn lockstep_runner_preflight_only_rejects_missing_script_path() {
 
 #[test]
 fn lockstep_suite_script_contract_tracks_timeout_logs_and_replay_metadata() {
-    let script = fs::read_to_string("scripts/run_lockstep_runner_suite.sh")
-        .expect("lockstep suite script should be readable");
+    let script = read_repo_file("scripts/run_lockstep_runner_suite.sh");
 
     for expected in [
         "RCH_EXEC_TIMEOUT_SECONDS",
+        "canon_rules=\"${LOCKSTEP_RUNNER_CANON_RULES:-crates/franken-engine/tests/fixtures/lockstep_canon_rules.toml}\"",
         "step_logs_dir=\"${run_dir}/step_logs\"",
-        "\"rch_timeout_seconds\": ${rch_exec_timeout_seconds}",
-        "\"step_logs_dir\": \"${step_logs_dir}\"",
+        "\\\"rch_timeout_seconds\\\": ${rch_exec_timeout_seconds}",
+        "\\\"canon_rules\\\": \\\"${canon_rules}\\\"",
+        "\\\"step_logs_dir\\\": \\\"${step_logs_dir}\\\"",
+        "--canon-rules \"$canon_rules\"",
         "remote-exit=missing/process-exit=",
         "timeout=${rch_exec_timeout_seconds}s/process-exit=",
         "./scripts/e2e/lockstep_runner_replay.sh report",
@@ -982,8 +1105,7 @@ fn lockstep_suite_script_contract_tracks_timeout_logs_and_replay_metadata() {
 
 #[test]
 fn lockstep_replay_wrapper_defaults_to_report_mode() {
-    let script = fs::read_to_string("scripts/e2e/lockstep_runner_replay.sh")
-        .expect("lockstep replay wrapper should be readable");
+    let script = read_repo_file("scripts/e2e/lockstep_runner_replay.sh");
 
     assert!(
         script.contains("mode=\"${1:-report}\""),
@@ -1483,8 +1605,7 @@ fn canonical_parser_different_sources_produce_different_hashes() {
 
 #[test]
 fn lockstep_suite_script_has_no_todo_or_fixme_markers() {
-    let script = fs::read_to_string("scripts/run_lockstep_runner_suite.sh")
-        .expect("lockstep suite script should be readable");
+    let script = read_repo_file("scripts/run_lockstep_runner_suite.sh");
     let upper = script.to_uppercase();
     assert!(
         !upper.contains("TODO"),
@@ -1498,8 +1619,7 @@ fn lockstep_suite_script_has_no_todo_or_fixme_markers() {
 
 #[test]
 fn lockstep_suite_script_mode_variants_are_documented() {
-    let script = fs::read_to_string("scripts/run_lockstep_runner_suite.sh")
-        .expect("lockstep suite script should be readable");
+    let script = read_repo_file("scripts/run_lockstep_runner_suite.sh");
     for mode_variant in ["check)", "test)", "clippy)", "report)", "ci)"] {
         assert!(
             script.contains(mode_variant),
@@ -1510,8 +1630,7 @@ fn lockstep_suite_script_mode_variants_are_documented() {
 
 #[test]
 fn lockstep_suite_script_references_all_artifact_paths() {
-    let script = fs::read_to_string("scripts/run_lockstep_runner_suite.sh")
-        .expect("lockstep suite script should be readable");
+    let script = read_repo_file("scripts/run_lockstep_runner_suite.sh");
     for artifact in [
         "run_manifest.json",
         "events.jsonl",
@@ -1530,8 +1649,7 @@ fn lockstep_suite_script_references_all_artifact_paths() {
 
 #[test]
 fn lockstep_replay_wrapper_has_no_todo_or_fixme_markers() {
-    let script = fs::read_to_string("scripts/e2e/lockstep_runner_replay.sh")
-        .expect("lockstep replay wrapper should be readable");
+    let script = read_repo_file("scripts/e2e/lockstep_runner_replay.sh");
     let upper = script.to_uppercase();
     assert!(
         !upper.contains("TODO"),
@@ -1563,6 +1681,7 @@ fn lockstep_runner_help_lists_all_documented_flags() {
         "--timezone",
         "--engine-specs",
         "--runtime-specs",
+        "--canon-rules",
         "--fail-on-divergence",
         "--allow-critical-drift",
         "--max-retries",
@@ -1645,8 +1764,7 @@ fn lockstep_runner_report_fields_are_deterministic_across_seeds() {
 
 #[test]
 fn lockstep_suite_script_schema_version_matches_manifest_contract() {
-    let script = fs::read_to_string("scripts/run_lockstep_runner_suite.sh")
-        .expect("lockstep suite script should be readable");
+    let script = read_repo_file("scripts/run_lockstep_runner_suite.sh");
     assert!(
         script.contains("franken-engine.lockstep-runner-suite.run-manifest.v1"),
         "suite script should embed the manifest schema version"

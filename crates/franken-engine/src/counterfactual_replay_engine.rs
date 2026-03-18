@@ -1518,7 +1518,12 @@ mod tests {
         let alt_b = make_alternate_policy("alt-1", "description-b");
 
         let result_a = engine_a
-            .compare(&[trace.clone()], &[alt_a], &default_scope(), None)
+            .compare(
+                std::slice::from_ref(&trace),
+                &[alt_a],
+                &default_scope(),
+                None,
+            )
             .unwrap();
         let result_b = engine_b
             .compare(&[trace], &[alt_b], &default_scope(), None)

@@ -1065,4 +1065,296 @@ mod tests {
         assert_eq!(a.report_id, b.report_id);
         assert_eq!(a.content_hash, b.content_hash);
     }
+
+    // ── enrichment: mutation contract properties ──────────────────
+
+    #[test]
+    fn test_mutation_contract_as_str_all_distinct() {
+        let contracts = [
+            MutationContract::ReadOnly,
+            MutationContract::MayMutate,
+            MutationContract::Accumulator,
+            MutationContract::SideEffectOnly,
+        ];
+        let strs: std::collections::BTreeSet<String> =
+            contracts.iter().map(|c| c.to_string()).collect();
+        assert_eq!(strs.len(), contracts.len());
+    }
+
+    #[test]
+    fn test_mutation_contract_readonly_is_most_restrictive() {
+        assert!(!MutationContract::ReadOnly.permits_in_place_mutation());
+        assert!(MutationContract::MayMutate.permits_in_place_mutation());
+        // Accumulator does not permit in-place mutation (it accumulates into a separate value)
+        assert!(!MutationContract::Accumulator.permits_in_place_mutation());
+    }
+
+    // ── enrichment: workload outcome properties ───────────────────
+
+    #[test]
+    fn test_outcome_serde_roundtrip_all_variants() {
+        let outcomes = [
+            WorkloadOutcome::Pass,
+            WorkloadOutcome::Mismatch,
+            WorkloadOutcome::Error,
+            WorkloadOutcome::MutationViolation,
+            WorkloadOutcome::UnexpectedFallback,
+            WorkloadOutcome::Timeout,
+        ];
+        for o in &outcomes {
+            let json = serde_json::to_string(o).unwrap();
+            let decoded: WorkloadOutcome = serde_json::from_str(&json).unwrap();
+            assert_eq!(*o, decoded);
+        }
+    }
+
+    #[test]
+    fn test_outcome_as_str_all_distinct() {
+        let outcomes = [
+            WorkloadOutcome::Pass,
+            WorkloadOutcome::Mismatch,
+            WorkloadOutcome::Error,
+            WorkloadOutcome::MutationViolation,
+            WorkloadOutcome::UnexpectedFallback,
+            WorkloadOutcome::Timeout,
+        ];
+        let strs: std::collections::BTreeSet<String> =
+            outcomes.iter().map(|o| o.to_string()).collect();
+        assert_eq!(strs.len(), outcomes.len());
+    }
+
+    #[test]
+    fn test_outcome_timeout_is_not_pass() {
+        assert!(!WorkloadOutcome::Timeout.is_pass());
+    }
+
+    #[test]
+    fn test_outcome_unexpected_fallback_is_not_pass() {
+        assert!(!WorkloadOutcome::UnexpectedFallback.is_pass());
+    }
+
+    // ── enrichment: infer_mutation_contract coverage ──────────────
+
+    #[test]
+    fn test_infer_contract_filter() {
+        assert_eq!(
+            infer_mutation_contract(StdlibMethod::ArrayFilter),
+            MutationContract::ReadOnly
+        );
+    }
+
+    #[test]
+    fn test_infer_contract_find() {
+        assert_eq!(
+            infer_mutation_contract(StdlibMethod::ArrayFind),
+            MutationContract::ReadOnly
+        );
+    }
+
+    #[test]
+    fn test_infer_contract_every() {
+        assert_eq!(
+            infer_mutation_contract(StdlibMethod::ArrayEvery),
+            MutationContract::ReadOnly
+        );
+    }
+
+    #[test]
+    fn test_infer_contract_some() {
+        assert_eq!(
+            infer_mutation_contract(StdlibMethod::ArraySome),
+            MutationContract::ReadOnly
+        );
+    }
+
+    #[test]
+    fn test_infer_contract_flatmap() {
+        let contract = infer_mutation_contract(StdlibMethod::ArrayFlatMap);
+        // flatmap produces new array, so should be ReadOnly or Accumulator
+        assert!(
+            contract == MutationContract::ReadOnly || contract == MutationContract::Accumulator
+        );
+    }
+
+    // ── enrichment: scenario and result properties ────────────────
+
+    #[test]
+    fn test_scenario_serde_roundtrip() {
+        let scenario = WorkloadScenario::new(
+            "test_scenario",
+            StdlibMethod::ArrayMap,
+            CallbackKind::PureFunction,
+            MutationContract::ReadOnly,
+            100,
+            DispatchStrategy::InlinedCallback,
+            "test description",
+        );
+        let json = serde_json::to_string(&scenario).unwrap();
+        let decoded: WorkloadScenario = serde_json::from_str(&json).unwrap();
+        assert_eq!(scenario, decoded);
+    }
+
+    #[test]
+    fn test_scenario_result_serde_roundtrip() {
+        let mut result = ScenarioResult {
+            scenario_id: "s1".to_string(),
+            outcome: WorkloadOutcome::Pass,
+            actual_strategy: DispatchStrategy::InlinedCallback,
+            mutation_honored: true,
+            observed_cost_millionths: 500_000,
+            observed_deopt_risk_millionths: 100_000,
+            details: "test details".to_string(),
+            content_hash: ContentHash::compute(b""),
+        };
+        result.seal();
+        let json = serde_json::to_string(&result).unwrap();
+        let decoded: ScenarioResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(result, decoded);
+    }
+
+    #[test]
+    fn test_scenario_result_seal_deterministic() {
+        let mut r1 = ScenarioResult {
+            scenario_id: "s1".to_string(),
+            outcome: WorkloadOutcome::Pass,
+            actual_strategy: DispatchStrategy::InlinedCallback,
+            mutation_honored: true,
+            observed_cost_millionths: 100_000,
+            observed_deopt_risk_millionths: 50_000,
+            details: String::new(),
+            content_hash: ContentHash::compute(b""),
+        };
+        let mut r2 = r1.clone();
+        r1.seal();
+        r2.seal();
+        assert_eq!(r1.content_hash, r2.content_hash);
+    }
+
+    // ── enrichment: suite properties ──────────────────────────────
+
+    #[test]
+    fn test_canonical_suite_has_non_empty_id() {
+        let suite = build_canonical_pure_suite();
+        assert!(!suite.suite_id.is_empty());
+        assert!(!suite.description.is_empty());
+    }
+
+    #[test]
+    fn test_canonical_suite_scenario_ids_unique() {
+        let suite = build_canonical_pure_suite();
+        let ids: std::collections::BTreeSet<&str> = suite
+            .scenarios
+            .iter()
+            .map(|s| s.scenario_id.as_str())
+            .collect();
+        assert_eq!(ids.len(), suite.scenarios.len());
+    }
+
+    #[test]
+    fn test_suite_serde_roundtrip() {
+        let suite = build_canonical_pure_suite();
+        let json = serde_json::to_string(&suite).unwrap();
+        let decoded: WorkloadSuite = serde_json::from_str(&json).unwrap();
+        assert_eq!(suite, decoded);
+    }
+
+    // ── enrichment: report properties ─────────────────────────────
+
+    #[test]
+    fn test_report_serde_roundtrip() {
+        let report = franken_engine_stdlib_verification_manifest();
+        let json = serde_json::to_string(&report).unwrap();
+        let decoded: VerificationReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(report, decoded);
+    }
+
+    #[test]
+    fn test_report_pass_rate_boundary() {
+        let results: Vec<ScenarioResult> = vec![];
+        let report = build_verification_report("r0", &test_epoch(), &results);
+        // Empty results should have 0 pass rate
+        assert_eq!(report.pass_rate_millionths, 0);
+    }
+
+    #[test]
+    fn test_report_method_summary_populated() {
+        let manifest = franken_engine_stdlib_verification_manifest();
+        assert!(!manifest.method_summary.is_empty());
+    }
+
+    #[test]
+    fn test_report_healthy_when_all_pass() {
+        let results = vec![{
+            let mut r = ScenarioResult {
+                scenario_id: "map:pure:100".to_string(),
+                outcome: WorkloadOutcome::Pass,
+                actual_strategy: DispatchStrategy::InlinedCallback,
+                mutation_honored: true,
+                observed_cost_millionths: 100_000,
+                observed_deopt_risk_millionths: 0,
+                details: String::new(),
+                content_hash: ContentHash::compute(b""),
+            };
+            r.seal();
+            r
+        }];
+        let report = build_verification_report("r-healthy", &test_epoch(), &results);
+        assert!(report.is_healthy);
+    }
+
+    // ── enrichment: mutation violation properties ──────────────────
+
+    #[test]
+    fn test_mutation_violation_serde_roundtrip() {
+        let v = MutationViolation {
+            scenario_id: "s1".into(),
+            contract: MutationContract::ReadOnly,
+            observed_mutation: "array.push".into(),
+            severity: 2,
+        };
+        let json = serde_json::to_string(&v).unwrap();
+        let decoded: MutationViolation = serde_json::from_str(&json).unwrap();
+        assert_eq!(v, decoded);
+    }
+
+    // ── enrichment: coverage calculation ──────────────────────────
+
+    #[test]
+    fn test_coverage_full_canonical_suite() {
+        let suite = build_canonical_pure_suite();
+        let coverage = suite_coverage_millionths(&suite);
+        assert!(coverage > 0);
+    }
+
+    #[test]
+    fn test_coverage_single_method_suite() {
+        let mut suite = WorkloadSuite::new("single", "single method test");
+        suite.add_scenario(WorkloadScenario::new(
+            "map:pure:10",
+            StdlibMethod::ArrayMap,
+            CallbackKind::PureFunction,
+            MutationContract::ReadOnly,
+            10,
+            DispatchStrategy::InlinedCallback,
+            "single map scenario",
+        ));
+        let coverage = suite_coverage_millionths(&suite);
+        assert!(coverage > 0);
+        assert!(coverage < 1_000_000); // not full coverage
+    }
+
+    // ── enrichment: schema constants ──────────────────────────────
+
+    #[test]
+    fn test_schema_version_starts_with_franken_engine() {
+        assert!(VERIFICATION_SCHEMA_VERSION.starts_with("franken-engine."));
+    }
+
+    #[test]
+    fn test_all_constants_non_empty() {
+        assert!(!VERIFICATION_SCHEMA_VERSION.is_empty());
+        assert!(!VERIFICATION_BEAD_ID.is_empty());
+        assert!(!VERIFICATION_POLICY_ID.is_empty());
+        assert!(!COMPONENT.is_empty());
+    }
 }

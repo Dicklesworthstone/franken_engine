@@ -1042,4 +1042,282 @@ mod tests {
     fn test_triage_severity_ordering() {
         assert!(TriageSeverity::Info < TriageSeverity::Critical);
     }
+
+    // ── enrichment: severity ordering completeness ────────────────
+
+    #[test]
+    fn test_triage_severity_full_ordering() {
+        assert!(TriageSeverity::Info < TriageSeverity::Warning);
+        assert!(TriageSeverity::Warning < TriageSeverity::Error);
+        assert!(TriageSeverity::Error < TriageSeverity::Critical);
+    }
+
+    #[test]
+    fn test_triage_severity_serde_roundtrip() {
+        for sev in [
+            TriageSeverity::Info,
+            TriageSeverity::Warning,
+            TriageSeverity::Error,
+            TriageSeverity::Critical,
+        ] {
+            let json = serde_json::to_string(&sev).unwrap();
+            let back: TriageSeverity = serde_json::from_str(&json).unwrap();
+            assert_eq!(sev, back);
+        }
+    }
+
+    // ── enrichment: failure category properties ───────────────────
+
+    #[test]
+    fn test_failure_category_serde_roundtrip() {
+        for cat in FailureCategory::all() {
+            let json = serde_json::to_string(cat).unwrap();
+            let back: FailureCategory = serde_json::from_str(&json).unwrap();
+            assert_eq!(*cat, back);
+        }
+    }
+
+    #[test]
+    fn test_failure_category_all_display_distinct() {
+        let displays: std::collections::BTreeSet<String> = FailureCategory::all()
+            .iter()
+            .map(|c| c.to_string())
+            .collect();
+        assert_eq!(displays.len(), FailureCategory::all().len());
+    }
+
+    // ── enrichment: minimization strategy coverage ────────────────
+
+    #[test]
+    fn test_minimization_strategy_serde_roundtrip() {
+        for strat in [
+            MinimizationStrategy::DeltaDebugging,
+            MinimizationStrategy::HierarchicalReduction,
+            MinimizationStrategy::DependencyStripping,
+            MinimizationStrategy::StateSlicing,
+            MinimizationStrategy::PropElimination,
+        ] {
+            let json = serde_json::to_string(&strat).unwrap();
+            let back: MinimizationStrategy = serde_json::from_str(&json).unwrap();
+            assert_eq!(strat, back);
+        }
+    }
+
+    #[test]
+    fn test_minimization_strategy_display_all_distinct() {
+        let strats = [
+            MinimizationStrategy::DeltaDebugging,
+            MinimizationStrategy::HierarchicalReduction,
+            MinimizationStrategy::DependencyStripping,
+            MinimizationStrategy::StateSlicing,
+            MinimizationStrategy::PropElimination,
+        ];
+        let displays: std::collections::BTreeSet<String> =
+            strats.iter().map(|s| s.to_string()).collect();
+        assert_eq!(displays.len(), strats.len());
+    }
+
+    // ── enrichment: triage owner routing completeness ─────────────
+
+    #[test]
+    fn test_default_owner_all_categories() {
+        for cat in FailureCategory::all() {
+            let owner = ExtractionEngine::default_owner(*cat);
+            let display = owner.to_string();
+            assert!(
+                !display.is_empty(),
+                "owner for {:?} should be non-empty",
+                cat
+            );
+        }
+    }
+
+    #[test]
+    fn test_triage_owner_serde_roundtrip() {
+        for owner in [
+            TriageOwner::EngineRuntime,
+            TriageOwner::ParserCompiler,
+            TriageOwner::ReactIntegration,
+            TriageOwner::ModuleResolution,
+            TriageOwner::BuildTooling,
+            TriageOwner::ExternalUpstream,
+        ] {
+            let json = serde_json::to_string(&owner).unwrap();
+            let back: TriageOwner = serde_json::from_str(&json).unwrap();
+            assert_eq!(owner, back);
+        }
+    }
+
+    #[test]
+    fn test_triage_owner_display_all_distinct() {
+        let owners = [
+            TriageOwner::EngineRuntime,
+            TriageOwner::ParserCompiler,
+            TriageOwner::ReactIntegration,
+            TriageOwner::ModuleResolution,
+            TriageOwner::BuildTooling,
+            TriageOwner::ExternalUpstream,
+        ];
+        let displays: std::collections::BTreeSet<String> =
+            owners.iter().map(|o| o.to_string()).collect();
+        assert_eq!(displays.len(), owners.len());
+    }
+
+    // ── enrichment: extraction verdict ────────────────────────────
+
+    #[test]
+    fn test_verdict_serde_roundtrip() {
+        for v in [
+            ExtractionVerdict::Complete,
+            ExtractionVerdict::PartialReduction,
+            ExtractionVerdict::IncompleteCoverage,
+            ExtractionVerdict::TriageLatencyExceeded,
+            ExtractionVerdict::NoInputs,
+            ExtractionVerdict::MultipleIssues,
+        ] {
+            let json = serde_json::to_string(&v).unwrap();
+            let back: ExtractionVerdict = serde_json::from_str(&json).unwrap();
+            assert_eq!(v, back);
+        }
+    }
+
+    #[test]
+    fn test_verdict_complete_does_not_need_attention() {
+        assert!(!ExtractionVerdict::Complete.needs_attention());
+    }
+
+    #[test]
+    fn test_verdict_all_non_complete_need_attention() {
+        for v in [
+            ExtractionVerdict::PartialReduction,
+            ExtractionVerdict::IncompleteCoverage,
+            ExtractionVerdict::TriageLatencyExceeded,
+            ExtractionVerdict::NoInputs,
+            ExtractionVerdict::MultipleIssues,
+        ] {
+            assert!(v.needs_attention(), "{:?} should need attention", v);
+        }
+    }
+
+    // ── enrichment: repro input hash ──────────────────────────────
+
+    #[test]
+    fn test_repro_input_different_source_different_hash() {
+        let a = ReproInput::new("a".to_string(), FailureCategory::RenderCrash, 100, 5, 3);
+        let b = ReproInput::new("b".to_string(), FailureCategory::RenderCrash, 100, 5, 3);
+        assert_ne!(a.input_hash, b.input_hash);
+    }
+
+    #[test]
+    fn test_repro_input_serde_roundtrip() {
+        let input = ReproInput::new("test".to_string(), FailureCategory::HookOrdering, 50, 3, 2);
+        let json = serde_json::to_string(&input).unwrap();
+        let back: ReproInput = serde_json::from_str(&json).unwrap();
+        assert_eq!(input, back);
+    }
+
+    // ── enrichment: minimized repro properties ────────────────────
+
+    #[test]
+    fn test_minimized_repro_serde_roundtrip() {
+        let repro = MinimizedRepro::new(
+            "input-1".to_string(),
+            MinimizationStrategy::DeltaDebugging,
+            10,
+            100,
+            true,
+            5000,
+        );
+        let json = serde_json::to_string(&repro).unwrap();
+        let back: MinimizedRepro = serde_json::from_str(&json).unwrap();
+        assert_eq!(repro, back);
+    }
+
+    #[test]
+    fn test_minimized_repro_hash_deterministic_same_params() {
+        let a = MinimizedRepro::new(
+            "input-1".to_string(),
+            MinimizationStrategy::DeltaDebugging,
+            10,
+            100,
+            true,
+            5000,
+        );
+        let b = MinimizedRepro::new(
+            "input-1".to_string(),
+            MinimizationStrategy::DeltaDebugging,
+            10,
+            100,
+            true,
+            5000,
+        );
+        assert_eq!(a.repro_hash, b.repro_hash);
+    }
+
+    // ── enrichment: triage finding ────────────────────────────────
+
+    #[test]
+    fn test_triage_finding_serde_roundtrip() {
+        let finding = TriageFinding {
+            category: FailureCategory::RenderCrash,
+            owner: TriageOwner::EngineRuntime,
+            severity: TriageSeverity::Critical,
+            summary: "crash in render".into(),
+            repro_hash: Some(ContentHash::compute(b"test")),
+            recommended_action: "fix the renderer".into(),
+        };
+        let json = serde_json::to_string(&finding).unwrap();
+        let back: TriageFinding = serde_json::from_str(&json).unwrap();
+        assert_eq!(finding, back);
+    }
+
+    #[test]
+    fn test_triage_finding_without_repro_hash() {
+        let finding = TriageFinding {
+            category: FailureCategory::BuildToolIntegration,
+            owner: TriageOwner::BuildTooling,
+            severity: TriageSeverity::Warning,
+            summary: "warning".into(),
+            repro_hash: None,
+            recommended_action: "investigate".into(),
+        };
+        let json = serde_json::to_string(&finding).unwrap();
+        let back: TriageFinding = serde_json::from_str(&json).unwrap();
+        assert!(back.repro_hash.is_none());
+    }
+
+    // ── enrichment: extraction config ─────────────────────────────
+
+    #[test]
+    fn test_config_serde_roundtrip() {
+        let config = ExtractionConfig::strict();
+        let json = serde_json::to_string(&config).unwrap();
+        let back: ExtractionConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(config, back);
+    }
+
+    #[test]
+    fn test_config_strict_is_more_restrictive() {
+        let strict = ExtractionConfig::strict();
+        let relaxed = ExtractionConfig::relaxed();
+        assert!(strict.min_reduction_ratio >= relaxed.min_reduction_ratio);
+    }
+
+    // ── enrichment: extraction report ─────────────────────────────
+
+    #[test]
+    fn test_report_serde_roundtrip() {
+        let engine = ExtractionEngine::new(ExtractionConfig::default());
+        let report = engine.evaluate(epoch());
+        let json = serde_json::to_string(&report).unwrap();
+        let back: ExtractionReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(report, back);
+    }
+
+    #[test]
+    fn test_report_empty_engine_categories_missing() {
+        let engine = ExtractionEngine::new(ExtractionConfig::strict());
+        let report = engine.evaluate(epoch());
+        assert!(!report.categories_missing.is_empty());
+    }
 }

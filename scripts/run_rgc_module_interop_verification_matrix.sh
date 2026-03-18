@@ -112,14 +112,16 @@ run_step() {
   fi
 
   remote_exit_code="$(rch_remote_exit_code "$log_path" || true)"
-  if [[ -n "$remote_exit_code" && "$remote_exit_code" != "0" ]]; then
+  if [[ -z "$remote_exit_code" ]]; then
+    echo "rch output missing remote exit marker; failing closed" | tee -a "$log_path"
+    rm -f "$log_path"
+    failed_command="${command_text} (missing-remote-exit-marker)"
+    return 1
+  fi
+  if [[ "$remote_exit_code" != "0" ]]; then
     rm -f "$log_path"
     failed_command="${command_text} (remote-exit=${remote_exit_code})"
     return 1
-  fi
-  if [[ -z "$remote_exit_code" ]]; then
-    echo "==> warning: missing remote exit marker; relying on rch process exit status" \
-      | tee -a "$log_path"
   fi
 
   rm -f "$log_path"

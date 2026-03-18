@@ -1616,4 +1616,659 @@ mod tests {
             assert!(err.error_code().starts_with("FE-PCACHE-"));
         }
     }
+
+    // ── enrichment: cache_key_id sensitivity ───────────────────────
+
+    #[test]
+    fn cache_key_id_differs_for_different_trust_revision() {
+        let base = PersistentCacheKeyMaterial {
+            module_id: "mod-1".into(),
+            source_hash: "abc".into(),
+            policy_version: 1,
+            trust_revision: 1,
+            config_fingerprint: "cfg".into(),
+            dependency_graph_hash: "dep".into(),
+            transform_profile: "default".into(),
+            runtime_mode: "safe".into(),
+            engine_version_marker: "0.1.0".into(),
+        };
+        let mut alt = base.clone();
+        alt.trust_revision = 2;
+        assert_ne!(base.cache_key_id(), alt.cache_key_id());
+    }
+
+    #[test]
+    fn cache_key_id_differs_for_different_config_fingerprint() {
+        let base = PersistentCacheKeyMaterial {
+            module_id: "mod-1".into(),
+            source_hash: "abc".into(),
+            policy_version: 1,
+            trust_revision: 1,
+            config_fingerprint: "cfg-a".into(),
+            dependency_graph_hash: "dep".into(),
+            transform_profile: "default".into(),
+            runtime_mode: "safe".into(),
+            engine_version_marker: "0.1.0".into(),
+        };
+        let mut alt = base.clone();
+        alt.config_fingerprint = "cfg-b".into();
+        assert_ne!(base.cache_key_id(), alt.cache_key_id());
+    }
+
+    #[test]
+    fn cache_key_id_differs_for_different_dependency_graph_hash() {
+        let base = PersistentCacheKeyMaterial {
+            module_id: "mod-1".into(),
+            source_hash: "abc".into(),
+            policy_version: 1,
+            trust_revision: 1,
+            config_fingerprint: "cfg".into(),
+            dependency_graph_hash: "dep-a".into(),
+            transform_profile: "default".into(),
+            runtime_mode: "safe".into(),
+            engine_version_marker: "0.1.0".into(),
+        };
+        let mut alt = base.clone();
+        alt.dependency_graph_hash = "dep-b".into();
+        assert_ne!(base.cache_key_id(), alt.cache_key_id());
+    }
+
+    #[test]
+    fn cache_key_id_differs_for_different_transform_profile() {
+        let base = PersistentCacheKeyMaterial {
+            module_id: "mod-1".into(),
+            source_hash: "abc".into(),
+            policy_version: 1,
+            trust_revision: 1,
+            config_fingerprint: "cfg".into(),
+            dependency_graph_hash: "dep".into(),
+            transform_profile: "lower_ir3".into(),
+            runtime_mode: "safe".into(),
+            engine_version_marker: "0.1.0".into(),
+        };
+        let mut alt = base.clone();
+        alt.transform_profile = "codegen_aot".into();
+        assert_ne!(base.cache_key_id(), alt.cache_key_id());
+    }
+
+    #[test]
+    fn cache_key_id_differs_for_different_runtime_mode() {
+        let base = PersistentCacheKeyMaterial {
+            module_id: "mod-1".into(),
+            source_hash: "abc".into(),
+            policy_version: 1,
+            trust_revision: 1,
+            config_fingerprint: "cfg".into(),
+            dependency_graph_hash: "dep".into(),
+            transform_profile: "default".into(),
+            runtime_mode: "baseline_deterministic_profile".into(),
+            engine_version_marker: "0.1.0".into(),
+        };
+        let mut alt = base.clone();
+        alt.runtime_mode = "baseline_throughput_profile".into();
+        assert_ne!(base.cache_key_id(), alt.cache_key_id());
+    }
+
+    #[test]
+    fn cache_key_id_differs_for_different_engine_version() {
+        let base = PersistentCacheKeyMaterial {
+            module_id: "mod-1".into(),
+            source_hash: "abc".into(),
+            policy_version: 1,
+            trust_revision: 1,
+            config_fingerprint: "cfg".into(),
+            dependency_graph_hash: "dep".into(),
+            transform_profile: "default".into(),
+            runtime_mode: "safe".into(),
+            engine_version_marker: "0.1.0".into(),
+        };
+        let mut alt = base.clone();
+        alt.engine_version_marker = "0.2.0".into();
+        assert_ne!(base.cache_key_id(), alt.cache_key_id());
+    }
+
+    #[test]
+    fn cache_key_id_differs_for_different_module_id() {
+        let base = PersistentCacheKeyMaterial {
+            module_id: "mod-a".into(),
+            source_hash: "abc".into(),
+            policy_version: 1,
+            trust_revision: 1,
+            config_fingerprint: "cfg".into(),
+            dependency_graph_hash: "dep".into(),
+            transform_profile: "default".into(),
+            runtime_mode: "safe".into(),
+            engine_version_marker: "0.1.0".into(),
+        };
+        let mut alt = base.clone();
+        alt.module_id = "mod-b".into();
+        assert_ne!(base.cache_key_id(), alt.cache_key_id());
+    }
+
+    // ── enrichment: verify_receipt field coverage ──────────────────
+
+    #[test]
+    fn verify_receipt_detects_artifact_hash_corruption() {
+        let context = ArtifactContext::new("/tmp/contract-enrich-artifact");
+        let evaluated = evaluate_default_artifacts(&context).expect("evaluation");
+        let receipt = evaluated.contract.receipts[1].clone();
+        let fingerprint = ModuleVersionFingerprint::new(ContentHash::compute(b"source:v2"), 1, 1);
+        let material = PersistentCacheKeyMaterial::from_fingerprint(
+            "mod:compile:entry",
+            &fingerprint,
+            ContentHash::compute(b"config:deterministic-profile"),
+            ContentHash::compute(b"depgraph:root->shared->runtime"),
+            "codegen_aot",
+            "baseline_throughput_profile",
+            "engine-0.1.0",
+        );
+        let mut cache = ModuleCache::new();
+        let ctx = CacheContext::new("t", "d", "p");
+        cache.invalidate_source_update(
+            "mod:compile:entry",
+            ContentHash::compute(b"source:v2"),
+            &ctx,
+        );
+        cache
+            .insert(
+                CacheInsertRequest::new(
+                    "mod:compile:entry",
+                    fingerprint.clone(),
+                    ContentHash::compute(b"artifact:v2"),
+                    "/app/entry.js",
+                ),
+                &ctx,
+            )
+            .expect("insert");
+        let snapshot = cache.snapshot();
+        let entry = cache
+            .get("mod:compile:entry", &fingerprint)
+            .expect("entry")
+            .clone();
+
+        let mut corrupted = receipt;
+        corrupted.artifact_hash = "sha256:tampered-artifact".to_string();
+        let error = verify_receipt(&corrupted, &entry, &snapshot, &material).unwrap_err();
+        assert_eq!(error.error_code(), "FE-PCACHE-0002");
+        assert!(error.to_string().contains("artifact_hash"));
+    }
+
+    #[test]
+    fn verify_receipt_detects_policy_version_mismatch() {
+        let context = ArtifactContext::new("/tmp/contract-enrich-policy");
+        let evaluated = evaluate_default_artifacts(&context).expect("evaluation");
+        let receipt = evaluated.contract.receipts[0].clone();
+        let fingerprint = ModuleVersionFingerprint::new(ContentHash::compute(b"source:v1"), 1, 1);
+        let mut material = PersistentCacheKeyMaterial::from_fingerprint(
+            "mod:compile:entry",
+            &fingerprint,
+            ContentHash::compute(b"config:deterministic-profile"),
+            ContentHash::compute(b"depgraph:root->shared->runtime"),
+            "lower_ir3",
+            "baseline_deterministic_profile",
+            "engine-0.1.0",
+        );
+        material.policy_version = 999;
+        let mut cache = ModuleCache::new();
+        let ctx = CacheContext::new("t", "d", "p");
+        cache
+            .insert(
+                CacheInsertRequest::new(
+                    "mod:compile:entry",
+                    fingerprint.clone(),
+                    ContentHash::compute(b"artifact:v1"),
+                    "/app/entry.js",
+                ),
+                &ctx,
+            )
+            .expect("insert");
+        let snapshot = cache.snapshot();
+        let entry = cache
+            .get("mod:compile:entry", &fingerprint)
+            .expect("entry")
+            .clone();
+
+        let error = verify_receipt(&receipt, &entry, &snapshot, &material).unwrap_err();
+        assert_eq!(error.error_code(), "FE-PCACHE-0002");
+    }
+
+    // ── enrichment: rollback plan success path ────────────────────
+
+    #[test]
+    fn rollback_plan_succeeds_when_target_receipt_present() {
+        let target_receipt = PersistentCacheReceipt {
+            schema_version: RECEIPT_SCHEMA_VERSION.to_string(),
+            receipt_id: "target-r1".to_string(),
+            cache_key_id: "sha256:key1".to_string(),
+            module_id: "mod:entry".to_string(),
+            source_hash: "sha256:src".to_string(),
+            policy_version: 1,
+            trust_revision: 1,
+            artifact_hash: "sha256:art".to_string(),
+            snapshot_state_hash: "sha256:snap".to_string(),
+            resolved_specifier: "/app/entry.js".to_string(),
+            trace_id: "t-1".to_string(),
+            decision_id: "d-1".to_string(),
+            policy_id: "p-1".to_string(),
+            consumers: vec!["product".to_string()],
+            rollback_target_receipt_id: None,
+        };
+        let other = PersistentCacheReceipt {
+            receipt_id: "other-r2".to_string(),
+            ..target_receipt.clone()
+        };
+        let plan = CacheRollbackPlan {
+            schema_version: ROLLBACK_PLAN_SCHEMA_VERSION.to_string(),
+            trigger: "corruption_detected".to_string(),
+            rollback_receipt_id: "target-r1".to_string(),
+            rollback_cache_key_id: "sha256:key1".to_string(),
+            criteria: vec!["receipt verification fails".to_string()],
+            fail_closed: true,
+        };
+        let found = apply_rollback_plan(&plan, &[other, target_receipt.clone()]).unwrap();
+        assert_eq!(found.receipt_id, "target-r1");
+        assert_eq!(found, target_receipt);
+    }
+
+    #[test]
+    fn rollback_plan_picks_first_match_among_multiple() {
+        let receipt_a = PersistentCacheReceipt {
+            schema_version: RECEIPT_SCHEMA_VERSION.to_string(),
+            receipt_id: "dup-id".to_string(),
+            cache_key_id: "sha256:k-a".to_string(),
+            module_id: "mod:a".to_string(),
+            source_hash: "sha256:sa".to_string(),
+            policy_version: 1,
+            trust_revision: 1,
+            artifact_hash: "sha256:a1".to_string(),
+            snapshot_state_hash: "sha256:snap-a".to_string(),
+            resolved_specifier: "/a.js".to_string(),
+            trace_id: "t-a".to_string(),
+            decision_id: "d-a".to_string(),
+            policy_id: "p-a".to_string(),
+            consumers: vec!["product".to_string()],
+            rollback_target_receipt_id: None,
+        };
+        let receipt_b = PersistentCacheReceipt {
+            receipt_id: "dup-id".to_string(),
+            cache_key_id: "sha256:k-b".to_string(),
+            ..receipt_a.clone()
+        };
+        let plan = CacheRollbackPlan {
+            schema_version: ROLLBACK_PLAN_SCHEMA_VERSION.to_string(),
+            trigger: "test".to_string(),
+            rollback_receipt_id: "dup-id".to_string(),
+            rollback_cache_key_id: "sha256:k-a".to_string(),
+            criteria: vec!["dup scenario".to_string()],
+            fail_closed: false,
+        };
+        let result = apply_rollback_plan(&plan, &[receipt_a.clone(), receipt_b]).unwrap();
+        assert_eq!(result.cache_key_id, receipt_a.cache_key_id);
+    }
+
+    // ── enrichment: evaluated artifacts ───────────────────────────
+
+    #[test]
+    fn evaluated_artifacts_has_exactly_five_scenarios() {
+        let context = ArtifactContext::new("/tmp/contract-enrich-scenarios");
+        let evaluated = evaluate_default_artifacts(&context).expect("evaluation");
+        assert_eq!(evaluated.contract.scenarios.len(), 5);
+        let ids: Vec<&str> = evaluated
+            .contract
+            .scenarios
+            .iter()
+            .map(|s| s.scenario_id.as_str())
+            .collect();
+        assert!(ids.contains(&"cache_hit"));
+        assert!(ids.contains(&"cache_miss"));
+        assert!(ids.contains(&"source_invalidation"));
+        assert!(ids.contains(&"receipt_corruption"));
+        assert!(ids.contains(&"rollback_plan"));
+    }
+
+    #[test]
+    fn evaluated_artifacts_all_scenarios_pass() {
+        let context = ArtifactContext::new("/tmp/contract-enrich-all-pass");
+        let evaluated = evaluate_default_artifacts(&context).expect("evaluation");
+        for scenario in &evaluated.contract.scenarios {
+            assert_eq!(
+                scenario.outcome, "pass",
+                "scenario {} should pass",
+                scenario.scenario_id
+            );
+        }
+    }
+
+    #[test]
+    fn evaluated_artifacts_has_two_receipts() {
+        let context = ArtifactContext::new("/tmp/contract-enrich-receipts");
+        let evaluated = evaluate_default_artifacts(&context).expect("evaluation");
+        assert_eq!(evaluated.contract.receipts.len(), 2);
+        assert_ne!(
+            evaluated.contract.receipts[0].receipt_id,
+            evaluated.contract.receipts[1].receipt_id
+        );
+    }
+
+    #[test]
+    fn evaluated_artifacts_has_two_key_material_examples() {
+        let context = ArtifactContext::new("/tmp/contract-enrich-keys");
+        let evaluated = evaluate_default_artifacts(&context).expect("evaluation");
+        assert_eq!(evaluated.contract.key_material_examples.len(), 2);
+        assert_ne!(
+            evaluated.contract.key_material_examples[0].cache_key_id(),
+            evaluated.contract.key_material_examples[1].cache_key_id()
+        );
+    }
+
+    #[test]
+    fn evaluated_artifacts_contract_hash_is_deterministic() {
+        let ctx_a = ArtifactContext::new("/tmp/contract-enrich-det-a");
+        let ctx_b = ArtifactContext::new("/tmp/contract-enrich-det-b");
+        let eval_a = evaluate_default_artifacts(&ctx_a).expect("eval a");
+        let eval_b = evaluate_default_artifacts(&ctx_b).expect("eval b");
+        assert_eq!(eval_a.contract.contract_hash, eval_b.contract.contract_hash);
+    }
+
+    #[test]
+    fn evaluated_artifacts_logs_are_sorted() {
+        let context = ArtifactContext::new("/tmp/contract-enrich-logs-sorted");
+        let evaluated = evaluate_default_artifacts(&context).expect("evaluation");
+        let events: Vec<&str> = evaluated.logs.iter().map(|l| l.event.as_str()).collect();
+        let mut sorted = events.clone();
+        sorted.sort();
+        assert_eq!(events, sorted, "logs should be sorted by event field");
+    }
+
+    #[test]
+    fn evaluated_artifacts_trace_ids_populated() {
+        let context = ArtifactContext::new("/tmp/contract-enrich-trace-ids");
+        let evaluated = evaluate_default_artifacts(&context).expect("evaluation");
+        assert!(!evaluated.trace_ids.trace_ids.is_empty());
+        assert_eq!(evaluated.trace_ids.schema_version, TRACE_IDS_SCHEMA_VERSION);
+        assert!(!evaluated.trace_ids.decision_id.is_empty());
+        assert!(!evaluated.trace_ids.policy_id.is_empty());
+    }
+
+    // ── enrichment: render_summary ────────────────────────────────
+
+    #[test]
+    fn render_summary_contains_all_scenario_ids() {
+        let context = ArtifactContext::new("/tmp/render-enrich");
+        let evaluated = evaluate_default_artifacts(&context).expect("evaluation");
+        let summary = render_summary(&evaluated.contract);
+        for scenario in &evaluated.contract.scenarios {
+            assert!(
+                summary.contains(&scenario.scenario_id),
+                "summary missing scenario {}",
+                scenario.scenario_id
+            );
+        }
+    }
+
+    #[test]
+    fn render_summary_contains_all_consumer_routes() {
+        let context = ArtifactContext::new("/tmp/render-enrich-consumers");
+        let evaluated = evaluate_default_artifacts(&context).expect("evaluation");
+        let summary = render_summary(&evaluated.contract);
+        for route in &evaluated.contract.consumer_routes {
+            assert!(
+                summary.contains(&route.consumer),
+                "summary missing consumer {}",
+                route.consumer
+            );
+        }
+    }
+
+    #[test]
+    fn render_summary_reports_receipt_count() {
+        let context = ArtifactContext::new("/tmp/render-enrich-count");
+        let evaluated = evaluate_default_artifacts(&context).expect("evaluation");
+        let summary = render_summary(&evaluated.contract);
+        assert!(summary.contains(&format!(
+            "receipts: `{}`",
+            evaluated.contract.receipts.len()
+        )));
+    }
+
+    // ── enrichment: bundle write ──────────────────────────────────
+
+    #[test]
+    fn emit_default_bundle_creates_files() {
+        let artifact_dir = temp_dir("emit-bundle");
+        let context = ArtifactContext::new(&artifact_dir);
+        let report = emit_default_contract_bundle(&context).expect("bundle write");
+        assert!(report.run_manifest_path.exists());
+        assert!(report.trace_ids_path.exists());
+        assert!(report.artifact_dir.exists());
+        assert!(!report.written_files.is_empty());
+        let _ = fs::remove_dir_all(&artifact_dir);
+    }
+
+    #[test]
+    fn emit_default_bundle_contract_is_consistent() {
+        let artifact_dir = temp_dir("emit-bundle-consist");
+        let context = ArtifactContext::new(&artifact_dir);
+        let report = emit_default_contract_bundle(&context).expect("bundle write");
+        assert_eq!(report.contract.schema_version, CONTRACT_SCHEMA_VERSION);
+        assert_eq!(report.contract.bead_id, BEAD_ID);
+        assert_eq!(report.contract.component, COMPONENT);
+        assert!(!report.contract.invalidation_rules.is_empty());
+        assert!(!report.contract.consumer_routes.is_empty());
+        let _ = fs::remove_dir_all(&artifact_dir);
+    }
+
+    // ── enrichment: serde round-trips for remaining types ─────────
+
+    #[test]
+    fn trace_ids_artifact_serde_round_trip() {
+        let artifact = TraceIdsArtifact {
+            schema_version: TRACE_IDS_SCHEMA_VERSION.to_string(),
+            trace_ids: vec!["trace-1".into(), "trace-2".into()],
+            decision_id: "decision-1".into(),
+            policy_id: "policy-1".into(),
+        };
+        let json = serde_json::to_string(&artifact).unwrap();
+        let back: TraceIdsArtifact = serde_json::from_str(&json).unwrap();
+        assert_eq!(artifact, back);
+    }
+
+    #[test]
+    fn structured_log_event_serde_round_trip() {
+        let event = StructuredLogEvent {
+            trace_id: "t-1".into(),
+            decision_id: "d-1".into(),
+            policy_id: "p-1".into(),
+            component: COMPONENT.into(),
+            event: "cache_receipt_emitted".into(),
+            outcome: "pass".into(),
+            error_code: None,
+            scenario_id: Some("cache_hit".into()),
+            receipt_id: Some("r-1".into()),
+            detail: "test detail".into(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: StructuredLogEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, back);
+    }
+
+    #[test]
+    fn invalidation_rule_serde_round_trip() {
+        let rule = InvalidationRule {
+            rule_id: "source_update".into(),
+            trigger: "source hash changes".into(),
+            fail_closed_behavior: "reject old receipt".into(),
+        };
+        let json = serde_json::to_string(&rule).unwrap();
+        let back: InvalidationRule = serde_json::from_str(&json).unwrap();
+        assert_eq!(rule, back);
+    }
+
+    #[test]
+    fn cache_consumer_route_serde_round_trip() {
+        let route = CacheConsumerRoute {
+            consumer: "product".into(),
+            required_fields: vec!["module_id".into(), "artifact_hash".into()],
+            usage: "compile pipeline".into(),
+        };
+        let json = serde_json::to_string(&route).unwrap();
+        let back: CacheConsumerRoute = serde_json::from_str(&json).unwrap();
+        assert_eq!(route, back);
+    }
+
+    #[test]
+    fn bundle_write_report_written_files_are_non_empty() {
+        let artifact_dir = temp_dir("bundle-report-files");
+        let context = ArtifactContext::new(&artifact_dir);
+        let report = emit_default_contract_bundle(&context).expect("bundle write");
+        for (name, hash) in &report.written_files {
+            assert!(!name.is_empty(), "written file name is empty");
+            assert!(!hash.is_empty(), "written file hash is empty for {name}");
+            assert!(
+                hash.starts_with("sha256:"),
+                "hash should be sha256: prefixed"
+            );
+        }
+        let _ = fs::remove_dir_all(&artifact_dir);
+    }
+
+    // ── enrichment: error display details ─────────────────────────
+
+    #[test]
+    fn error_display_receipt_field_mismatch_includes_field_name() {
+        let err = PersistentCacheContractError::ReceiptFieldMismatch {
+            field: "artifact_hash",
+            expected: "sha256:expected".into(),
+            actual: "sha256:actual".into(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("artifact_hash"));
+        assert!(msg.contains("sha256:expected"));
+        assert!(msg.contains("sha256:actual"));
+    }
+
+    #[test]
+    fn error_display_rollback_target_missing_includes_receipt_id() {
+        let err = PersistentCacheContractError::RollbackTargetMissing {
+            receipt_id: "rollback-target-42".into(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("rollback-target-42"));
+        assert!(msg.contains("FE-PCACHE-0003"));
+    }
+
+    #[test]
+    fn error_display_empty_rollback_criteria() {
+        let err = PersistentCacheContractError::EmptyRollbackCriteria;
+        let msg = err.to_string();
+        assert!(msg.contains("FE-PCACHE-0004"));
+    }
+
+    // ── enrichment: artifact context ──────────────────────────────
+
+    #[test]
+    fn artifact_context_run_id_includes_component() {
+        let ctx = ArtifactContext::new("/tmp/ctx-component");
+        assert!(ctx.run_id.contains("persistent_cache_contract"));
+    }
+
+    #[test]
+    fn artifact_context_trace_id_is_sha256_prefix() {
+        let ctx = ArtifactContext::new("/tmp/ctx-trace");
+        assert!(ctx.trace_id.starts_with("trace-"));
+    }
+
+    #[test]
+    fn artifact_context_generated_at_utc_is_rfc3339() {
+        let ctx = ArtifactContext::new("/tmp/ctx-time");
+        assert!(ctx.generated_at_utc.ends_with('Z') || ctx.generated_at_utc.contains('+'));
+    }
+
+    // ── enrichment: docs fixture coverage ─────────────────────────
+
+    #[test]
+    fn docs_fixture_key_fields_are_non_empty() {
+        let fixture = build_docs_contract_fixture();
+        assert!(!fixture.key_fields.is_empty());
+        for field in &fixture.key_fields {
+            assert!(!field.is_empty());
+        }
+    }
+
+    #[test]
+    fn docs_fixture_schema_version_matches_constant() {
+        let fixture = build_docs_contract_fixture();
+        assert_eq!(fixture.schema_version, DOCS_CONTRACT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn docs_fixture_bead_id_matches_constant() {
+        let fixture = build_docs_contract_fixture();
+        assert_eq!(fixture.bead_id, BEAD_ID);
+    }
+
+    // ── enrichment: invalidation rules ────────────────────────────
+
+    #[test]
+    fn evaluated_artifacts_has_three_invalidation_rules() {
+        let context = ArtifactContext::new("/tmp/contract-enrich-rules");
+        let evaluated = evaluate_default_artifacts(&context).expect("evaluation");
+        assert_eq!(evaluated.contract.invalidation_rules.len(), 3);
+        let rule_ids: Vec<&str> = evaluated
+            .contract
+            .invalidation_rules
+            .iter()
+            .map(|r| r.rule_id.as_str())
+            .collect();
+        assert!(rule_ids.contains(&"source_update"));
+        assert!(rule_ids.contains(&"policy_change"));
+        assert!(rule_ids.contains(&"trust_revocation"));
+    }
+
+    #[test]
+    fn invalidation_rules_all_have_fail_closed_behavior() {
+        let context = ArtifactContext::new("/tmp/contract-enrich-failclosed");
+        let evaluated = evaluate_default_artifacts(&context).expect("evaluation");
+        for rule in &evaluated.contract.invalidation_rules {
+            assert!(
+                !rule.fail_closed_behavior.is_empty(),
+                "rule {} missing fail_closed_behavior",
+                rule.rule_id
+            );
+        }
+    }
+
+    // ── enrichment: receipt with rollback target ──────────────────
+
+    #[test]
+    fn receipt_v2_has_rollback_target_receipt_id() {
+        let context = ArtifactContext::new("/tmp/contract-enrich-rollback-ref");
+        let evaluated = evaluate_default_artifacts(&context).expect("evaluation");
+        let receipt_v1 = &evaluated.contract.receipts[0];
+        let receipt_v2 = &evaluated.contract.receipts[1];
+        assert!(receipt_v1.rollback_target_receipt_id.is_none());
+        assert!(receipt_v2.rollback_target_receipt_id.is_some());
+        assert_eq!(
+            receipt_v2.rollback_target_receipt_id.as_ref().unwrap(),
+            &receipt_v1.receipt_id
+        );
+    }
+
+    #[test]
+    fn receipt_schema_version_matches_constant() {
+        let context = ArtifactContext::new("/tmp/contract-enrich-schema");
+        let evaluated = evaluate_default_artifacts(&context).expect("evaluation");
+        for receipt in &evaluated.contract.receipts {
+            assert_eq!(receipt.schema_version, RECEIPT_SCHEMA_VERSION);
+        }
+    }
+
+    #[test]
+    fn receipt_consumers_are_non_empty() {
+        let context = ArtifactContext::new("/tmp/contract-enrich-consumers-rcpt");
+        let evaluated = evaluate_default_artifacts(&context).expect("evaluation");
+        for receipt in &evaluated.contract.receipts {
+            assert!(!receipt.consumers.is_empty());
+        }
+    }
 }

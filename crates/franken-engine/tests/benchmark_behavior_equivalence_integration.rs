@@ -533,8 +533,7 @@ fn test_route_owner_rationale_is_nonempty() {
         BehaviorEquivalenceClass::ShippedPathDrift,
     ];
     for class in blocking {
-        let route =
-            route_owner(class, OwnerRouteHint::RuntimeSemantics).expect("should route");
+        let route = route_owner(class, OwnerRouteHint::RuntimeSemantics).expect("should route");
         assert!(
             !route.rationale.is_empty(),
             "rationale should be non-empty for {class}"
@@ -558,14 +557,20 @@ fn test_build_record_deterministic_hash_same_input() {
 fn test_build_record_hash_sensitive_to_workload_id() {
     let obs_a = shipped_obs("workload-a").with_detail("same");
     let obs_b = shipped_obs("workload-b").with_detail("same");
-    assert_ne!(build_record(&obs_a).record_hash, build_record(&obs_b).record_hash);
+    assert_ne!(
+        build_record(&obs_a).record_hash,
+        build_record(&obs_b).record_hash
+    );
 }
 
 #[test]
 fn test_build_record_hash_sensitive_to_detail() {
     let obs_a = shipped_obs("wk").with_detail("detail-alpha");
     let obs_b = shipped_obs("wk").with_detail("detail-beta");
-    assert_ne!(build_record(&obs_a).record_hash, build_record(&obs_b).record_hash);
+    assert_ne!(
+        build_record(&obs_a).record_hash,
+        build_record(&obs_b).record_hash
+    );
 }
 
 #[test]
@@ -593,7 +598,10 @@ fn test_build_record_hash_sensitive_to_baseline() {
         EvidenceSurface::ShippedPath,
         OwnerRouteHint::RuntimeSemantics,
     );
-    assert_ne!(build_record(&obs_node).record_hash, build_record(&obs_bun).record_hash);
+    assert_ne!(
+        build_record(&obs_node).record_hash,
+        build_record(&obs_bun).record_hash
+    );
 }
 
 #[test]
@@ -624,8 +632,14 @@ fn test_build_record_fields_match_observation() {
     assert_eq!(record.workload_id, "w-fields");
     assert_eq!(record.baseline, ParityTarget::NodeJs);
     assert_eq!(record.surface, EvidenceSurface::ShippedPath);
-    assert_eq!(record.classification, BehaviorEquivalenceClass::ShippedPathDrift);
-    assert_eq!(record.publication_disposition, PublicationDisposition::Blocked);
+    assert_eq!(
+        record.classification,
+        BehaviorEquivalenceClass::ShippedPathDrift
+    );
+    assert_eq!(
+        record.publication_disposition,
+        PublicationDisposition::Blocked
+    );
     assert_eq!(record.detail, "my-detail");
     assert!(record.owner_route.is_some());
 }
@@ -757,9 +771,7 @@ fn test_benchmark_parity_verdict_jsonl_empty_report() {
 fn test_divergence_owner_route_json_renders_valid_json() {
     let obs = shipped_obs("w-json").with_output_equivalence(false);
     let report = build_report("t", "d", POLICY_ID, &[obs]);
-    let json_str = report
-        .divergence_owner_route_json()
-        .expect("should render");
+    let json_str = report.divergence_owner_route_json().expect("should render");
     let routes: Vec<DivergenceOwnerRoute> =
         serde_json::from_str(&json_str).expect("should parse back");
     assert_eq!(routes.len(), 1);
@@ -769,9 +781,7 @@ fn test_divergence_owner_route_json_renders_valid_json() {
 #[test]
 fn test_divergence_owner_route_json_empty_when_all_equivalent() {
     let report = build_report("t", "d", POLICY_ID, &[shipped_obs("w1")]);
-    let json_str = report
-        .divergence_owner_route_json()
-        .expect("should render");
+    let json_str = report.divergence_owner_route_json().expect("should render");
     let routes: Vec<DivergenceOwnerRoute> =
         serde_json::from_str(&json_str).expect("should parse back");
     assert!(routes.is_empty());
@@ -791,8 +801,7 @@ fn test_observation_serde_roundtrip_with_all_fields() {
         .with_detail("serde-detail")
         .with_minimized_repro_command("cmd --flag");
     let json = serde_json::to_string(&obs).expect("serialize");
-    let back: BehaviorEquivalenceObservation =
-        serde_json::from_str(&json).expect("deserialize");
+    let back: BehaviorEquivalenceObservation = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(obs, back);
 }
 
@@ -800,8 +809,7 @@ fn test_observation_serde_roundtrip_with_all_fields() {
 fn test_observation_serde_roundtrip_minimal() {
     let obs = shipped_obs("minimal");
     let json = serde_json::to_string(&obs).expect("serialize");
-    let back: BehaviorEquivalenceObservation =
-        serde_json::from_str(&json).expect("deserialize");
+    let back: BehaviorEquivalenceObservation = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(obs, back);
 }
 
@@ -810,8 +818,7 @@ fn test_record_serde_roundtrip() {
     let obs = shipped_obs("rec-serde").with_output_equivalence(false);
     let record = build_record(&obs);
     let json = serde_json::to_string(&record).expect("serialize");
-    let back: BenchmarkParityVerdictRecord =
-        serde_json::from_str(&json).expect("deserialize");
+    let back: BenchmarkParityVerdictRecord = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(record, back);
 }
 
@@ -823,8 +830,7 @@ fn test_report_serde_roundtrip() {
     ];
     let report = build_report("trace-rt", "dec-rt", POLICY_ID, &observations);
     let json = serde_json::to_string(&report).expect("serialize");
-    let back: BehaviorEquivalenceReport =
-        serde_json::from_str(&json).expect("deserialize");
+    let back: BehaviorEquivalenceReport = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(report, back);
 }
 
@@ -858,7 +864,9 @@ fn test_divergence_owner_route_serde_roundtrip() {
 fn test_batch_mixed_classifications() {
     let observations = vec![
         shipped_obs("equiv").with_detail("clean"),
-        shipped_obs("infra").with_infra_ok(false).with_detail("timeout"),
+        shipped_obs("infra")
+            .with_infra_ok(false)
+            .with_detail("timeout"),
         shipped_obs("drift")
             .with_output_equivalence(false)
             .with_detail("output diff"),
@@ -895,9 +903,7 @@ fn test_batch_mixed_classifications() {
 
 #[test]
 fn test_batch_all_equivalent() {
-    let observations: Vec<_> = (0..10)
-        .map(|i| shipped_obs(&format!("w-{i}")))
-        .collect();
+    let observations: Vec<_> = (0..10).map(|i| shipped_obs(&format!("w-{i}"))).collect();
     let report = build_report("t-all-eq", "d-all-eq", POLICY_ID, &observations);
     assert_eq!(report.records.len(), 10);
     assert!(!report.has_publication_blockers());
@@ -920,7 +926,10 @@ fn test_batch_all_blocked() {
     let report = build_report("t-block", "d-block", POLICY_ID, &observations);
     assert!(report.has_publication_blockers());
     for record in &report.records {
-        assert_eq!(record.publication_disposition, PublicationDisposition::Blocked);
+        assert_eq!(
+            record.publication_disposition,
+            PublicationDisposition::Blocked
+        );
         assert!(record.owner_route.is_some());
     }
     // All infra failures route to same owner (BenchmarkHarness), so 1 aggregated route
@@ -989,7 +998,10 @@ fn test_all_parity_targets_produce_distinct_hashes() {
     // All 4 hashes should be unique
     for i in 0..hashes.len() {
         for j in (i + 1)..hashes.len() {
-            assert_ne!(hashes[i], hashes[j], "hash collision between target {i} and {j}");
+            assert_ne!(
+                hashes[i], hashes[j],
+                "hash collision between target {i} and {j}"
+            );
         }
     }
 }
@@ -1024,11 +1036,7 @@ fn test_report_records_sorted_by_baseline_within_same_workload() {
     ];
     let report = build_report("t", "d", POLICY_ID, &observations);
     // Sorted by baseline.as_str() since workload_id is the same
-    let baselines: Vec<&str> = report
-        .records
-        .iter()
-        .map(|r| r.baseline.as_str())
-        .collect();
+    let baselines: Vec<&str> = report.records.iter().map(|r| r.baseline.as_str()).collect();
     let mut sorted = baselines.clone();
     sorted.sort();
     assert_eq!(baselines, sorted);

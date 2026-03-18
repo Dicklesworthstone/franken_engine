@@ -280,7 +280,10 @@ impl SufficientStatistic {
             return 0;
         }
         let n = self.total_count as i64;
-        let mean_sq = self.mean_millionths * self.mean_millionths / MILLION;
+        // Use i128 intermediary to avoid overflow in mean_sq computation:
+        // mean_millionths can be large, so (mean * mean) can exceed i64 range.
+        let mean_wide = self.mean_millionths as i128;
+        let mean_sq = (mean_wide * mean_wide / MILLION as i128) as i64;
         let variance = (self.sum_squared_millionths / n - mean_sq).max(1);
         n * MILLION / variance
     }

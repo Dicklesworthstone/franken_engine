@@ -13,6 +13,7 @@ fixture_catalog="${LOCKSTEP_RUNNER_FIXTURE_CATALOG:-crates/franken-engine/tests/
 fixture_limit="${LOCKSTEP_RUNNER_FIXTURE_LIMIT:-8}"
 fixture_id="${LOCKSTEP_RUNNER_FIXTURE_ID:-}"
 runtime_specs="${LOCKSTEP_RUNNER_RUNTIME_SPECS:-}"
+canon_rules="${LOCKSTEP_RUNNER_CANON_RULES:-crates/franken-engine/tests/fixtures/lockstep_canon_rules.toml}"
 seed="${LOCKSTEP_RUNNER_SEED:-7}"
 fail_on_divergence="${LOCKSTEP_RUNNER_FAIL_ON_DIVERGENCE:-0}"
 allow_critical_drift="${LOCKSTEP_RUNNER_ALLOW_CRITICAL_DRIFT:-0}"
@@ -216,6 +217,7 @@ run_report_step() {
       --policy-id "$policy_id" \
       --locale C \
       --timezone UTC \
+      --canon-rules "$canon_rules" \
       --preflight-only
   )
 
@@ -287,6 +289,7 @@ run_report_step() {
       --policy-id "$policy_id" \
       --locale C \
       --timezone UTC \
+      --canon-rules "$canon_rules" \
       --out "$report_path" \
       --evidence-jsonl "$evidence_path" \
       --governance-actions-out "$governance_actions_path" \
@@ -451,6 +454,7 @@ write_manifest() {
     echo "  \"fixture_limit\": \"${fixture_limit}\","
     echo "  \"fixture_id\": \"${fixture_id}\","
     echo "  \"runtime_specs\": \"${runtime_specs}\","
+    echo "  \"canon_rules\": \"${canon_rules}\","
     echo "  \"seed\": ${seed},"
     echo "  \"fail_on_divergence\": ${fail_on_divergence},"
     echo "  \"allow_critical_drift\": ${allow_critical_drift},"

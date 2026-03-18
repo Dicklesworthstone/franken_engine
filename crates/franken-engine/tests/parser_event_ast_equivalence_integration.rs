@@ -20,11 +20,10 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::parser_event_ast_equivalence::{
-    build_manifest, equivalence_corpus, evaluate_specimen, generate_events,
-    run_equivalence_corpus, CorpusTier, EquivalenceEvent, EquivalenceInventory,
-    EquivalenceRunManifest, EquivalenceVerdict, SpecimenEvidence, TamperKind, TierSummary,
-    BEAD_ID, COMPONENT, EVENT_SCHEMA_VERSION, FIXED_ONE, MANIFEST_SCHEMA_VERSION, POLICY_ID,
-    SCHEMA_VERSION,
+    BEAD_ID, COMPONENT, CorpusTier, EVENT_SCHEMA_VERSION, EquivalenceEvent, EquivalenceInventory,
+    EquivalenceRunManifest, EquivalenceVerdict, FIXED_ONE, MANIFEST_SCHEMA_VERSION, POLICY_ID,
+    SCHEMA_VERSION, SpecimenEvidence, TamperKind, TierSummary, build_manifest, equivalence_corpus,
+    evaluate_specimen, generate_events, run_equivalence_corpus,
 };
 
 // ===========================================================================
@@ -225,7 +224,10 @@ fn test_verdict_serde_roundtrip() {
 fn test_corpus_non_empty() {
     let corpus = equivalence_corpus();
     assert!(!corpus.is_empty());
-    assert!(corpus.len() >= 11, "corpus should have at least 11 specimens");
+    assert!(
+        corpus.len() >= 11,
+        "corpus should have at least 11 specimens"
+    );
 }
 
 #[test]
@@ -722,17 +724,16 @@ fn test_events_pass_parity_have_no_error_code() {
     for event in &events {
         if event.outcome == "pass" {
             // Find the matching specimen
-            let spec = corpus
-                .iter()
-                .find(|s| s.specimen_id == event.specimen_id);
-            if let Some(spec) = spec {
-                if spec.tamper_kind == TamperKind::None && spec.expected_parse_error.is_none() {
-                    assert!(
-                        event.error_code.is_none(),
-                        "pass parity event for '{}' should have no error_code",
-                        event.specimen_id
-                    );
-                }
+            let spec = corpus.iter().find(|s| s.specimen_id == event.specimen_id);
+            if let Some(spec) = spec
+                && spec.tamper_kind == TamperKind::None
+                && spec.expected_parse_error.is_none()
+            {
+                assert!(
+                    event.error_code.is_none(),
+                    "pass parity event for '{}' should have no error_code",
+                    event.specimen_id
+                );
             }
         }
     }
@@ -751,7 +752,11 @@ fn test_events_event_type_is_specimen_evaluated() {
 fn test_events_specimen_ids_match_evidence() {
     let inv = run_equivalence_corpus();
     let events = generate_events(&inv);
-    let evidence_ids: BTreeSet<&str> = inv.evidence.iter().map(|e| e.specimen_id.as_str()).collect();
+    let evidence_ids: BTreeSet<&str> = inv
+        .evidence
+        .iter()
+        .map(|e| e.specimen_id.as_str())
+        .collect();
     let event_ids: BTreeSet<&str> = events.iter().map(|e| e.specimen_id.as_str()).collect();
     assert_eq!(evidence_ids, event_ids);
 }
@@ -767,7 +772,10 @@ fn test_manifest_fields_set_correctly() {
         &inv,
         "trace-42",
         "decision-99",
-        vec!["out/inventory.json".to_string(), "out/events.jsonl".to_string()],
+        vec![
+            "out/inventory.json".to_string(),
+            "out/events.jsonl".to_string(),
+        ],
     );
     assert_eq!(manifest.schema_version, MANIFEST_SCHEMA_VERSION);
     assert_eq!(manifest.trace_id, "trace-42");
@@ -911,7 +919,10 @@ fn test_evaluate_each_specimen_verdict_matches_expectation() {
 #[test]
 fn test_evaluate_parity_specimens_have_matching_hashes() {
     let corpus = equivalence_corpus();
-    for spec in corpus.iter().filter(|s| s.expect_parity && s.tamper_kind == TamperKind::None) {
+    for spec in corpus
+        .iter()
+        .filter(|s| s.expect_parity && s.tamper_kind == TamperKind::None)
+    {
         let ev = evaluate_specimen(spec);
         if ev.verdict == EquivalenceVerdict::Pass {
             assert!(

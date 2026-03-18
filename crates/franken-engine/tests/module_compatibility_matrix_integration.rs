@@ -91,7 +91,7 @@ fn matrix_with(entries: Vec<CompatibilityMatrixEntry>) -> ModuleCompatibilityMat
 }
 
 #[test]
-fn interop_gate_script_uses_repo_local_target_dir_and_rejects_tmp_fallback() {
+fn interop_gate_script_uses_repo_local_target_dir_and_fails_closed_on_rch_drift() {
     let script = read_interop_gate_script();
 
     assert!(
@@ -105,6 +105,14 @@ fn interop_gate_script_uses_repo_local_target_dir_and_rejects_tmp_fallback() {
     assert!(
         script.contains("rch reported local fallback; refusing local execution for heavy command"),
         "interop gate must fail closed if rch falls back to local execution"
+    );
+    assert!(
+        script.contains("rch output missing remote exit marker; failing closed"),
+        "interop gate must fail closed if rch omits the remote exit marker"
+    );
+    assert!(
+        !script.contains("warning: missing remote exit marker; relying on rch process exit status"),
+        "interop gate must not downgrade a missing remote exit marker to a warning"
     );
 }
 

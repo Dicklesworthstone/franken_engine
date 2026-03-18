@@ -1,0 +1,16 @@
+schema_version = "franken-engine.lockstep-canon-rules.v1"
+
+[[rules]]
+rule_id = "normalize-newlines"
+kind = "newline_normalization"
+description = "Normalize CRLF and CR line endings before observable output comparison."
+
+[[rules]]
+rule_id = "trim-engine-stack-noise"
+kind = "stack_trace_noise"
+description = "Strip engine-specific stack-frame prefixes and locations from thrown error output."
+
+[[rules]]
+rule_id = "collapse-whitespace-runs"
+kind = "whitespace_normalization"
+description = "Collapse repeated whitespace in diagnostic and console output comparison surfaces."

@@ -1516,7 +1516,7 @@ mod tests {
         let mut context = ArtifactContext::new(&artifact_dir);
         context.generated_at_utc = "2026-03-06T00:00:00Z".to_string();
         let bundle = emit_default_rollout_bundle(&context).expect("bundle");
-        for (_name, hash) in &bundle.written_files {
+        for hash in bundle.written_files.values() {
             assert!(
                 hash.starts_with("sha256:"),
                 "hash should start with sha256: prefix: {hash}"

@@ -1022,4 +1022,465 @@ mod tests {
                 .any(|p| p == "WILL_NOT_APPEAR")
         );
     }
+
+    // ── enrichment: corpus structure and determinism ───────────────
+
+    #[test]
+    fn corpus_has_exactly_fifteen_specimens() {
+        let corpus = diagnostic_corpus();
+        assert_eq!(corpus.len(), TsFeatureFamily::ALL.len());
+    }
+
+    #[test]
+    fn corpus_specimen_ids_follow_naming_convention() {
+        let corpus = diagnostic_corpus();
+        for s in &corpus {
+            assert!(
+                s.specimen_id.starts_with("ts_"),
+                "specimen id '{}' should start with ts_",
+                s.specimen_id
+            );
+        }
+    }
+
+    #[test]
+    fn corpus_every_specimen_has_expected_absent_or_present_patterns() {
+        let corpus = diagnostic_corpus();
+        for s in &corpus {
+            let has_patterns =
+                !s.expected_absent_patterns.is_empty() || !s.expected_present_patterns.is_empty();
+            assert!(
+                has_patterns
+                    || s.expected_outcome == ExpectedOutcome::FailClosed
+                    || s.expected_outcome == ExpectedOutcome::KnownGap,
+                "specimen '{}' should have patterns or be fail-closed/known-gap",
+                s.specimen_id
+            );
+        }
+    }
+
+    #[test]
+    fn corpus_is_deterministic_across_calls() {
+        let c1 = diagnostic_corpus();
+        let c2 = diagnostic_corpus();
+        assert_eq!(c1.len(), c2.len());
+        for (a, b) in c1.iter().zip(c2.iter()) {
+            assert_eq!(a.specimen_id, b.specimen_id);
+            assert_eq!(a.feature_family, b.feature_family);
+            assert_eq!(a.ts_source, b.ts_source);
+        }
+    }
+
+    // ── enrichment: feature family enum properties ────────────────
+
+    #[test]
+    fn ts_feature_family_all_has_fifteen_members() {
+        assert_eq!(TsFeatureFamily::ALL.len(), 15);
+    }
+
+    #[test]
+    fn ts_feature_family_as_str_is_snake_case() {
+        for f in TsFeatureFamily::ALL {
+            let s = f.as_str();
+            assert!(
+                s.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                "as_str for {:?} = '{}' is not snake_case",
+                f,
+                s
+            );
+        }
+    }
+
+    #[test]
+    fn ts_feature_family_description_is_distinct() {
+        let descriptions: std::collections::BTreeSet<&str> = TsFeatureFamily::ALL
+            .iter()
+            .map(|f| f.description())
+            .collect();
+        assert_eq!(descriptions.len(), TsFeatureFamily::ALL.len());
+    }
+
+    #[test]
+    fn expected_outcome_all_variants_have_distinct_strings() {
+        let outcomes = [
+            ExpectedOutcome::NormalizedAway,
+            ExpectedOutcome::LoweredToEs2020,
+            ExpectedOutcome::FailClosed,
+            ExpectedOutcome::KnownGap,
+        ];
+        let strs: std::collections::BTreeSet<&str> = outcomes.iter().map(|o| o.as_str()).collect();
+        assert_eq!(strs.len(), outcomes.len());
+    }
+
+    // ── enrichment: evidence inventory properties ─────────────────
+
+    #[test]
+    fn inventory_evidence_count_matches_corpus_size() {
+        let inv = run_diagnostic_corpus();
+        let corpus = diagnostic_corpus();
+        assert_eq!(inv.evidence.len(), corpus.len());
+    }
+
+    #[test]
+    fn inventory_all_evidence_has_matching_specimen_id() {
+        let inv = run_diagnostic_corpus();
+        let corpus = diagnostic_corpus();
+        let corpus_ids: std::collections::BTreeSet<&str> =
+            corpus.iter().map(|s| s.specimen_id.as_str()).collect();
+        for ev in &inv.evidence {
+            assert!(
+                corpus_ids.contains(ev.specimen_id.as_str()),
+                "evidence specimen_id '{}' not in corpus",
+                ev.specimen_id
+            );
+        }
+    }
+
+    #[test]
+    fn inventory_feature_family_coverage_keys_are_valid() {
+        let inv = run_diagnostic_corpus();
+        let valid: std::collections::BTreeSet<&str> =
+            TsFeatureFamily::ALL.iter().map(|f| f.as_str()).collect();
+        for key in inv.feature_family_coverage.keys() {
+            assert!(
+                valid.contains(key.as_str()),
+                "coverage key '{}' is not a valid feature family",
+                key
+            );
+        }
+    }
+
+    #[test]
+    fn inventory_known_gap_count_tracks_known_gap_specimens() {
+        let inv = run_diagnostic_corpus();
+        let corpus = diagnostic_corpus();
+        let expected_known = corpus
+            .iter()
+            .filter(|s| s.expected_outcome == ExpectedOutcome::KnownGap)
+            .count() as u64;
+        assert_eq!(inv.known_gap_count, expected_known);
+    }
+
+    // ── enrichment: contract satisfaction edge cases ───────────────
+
+    #[test]
+    fn contract_not_satisfied_when_all_fail() {
+        let inv = TsNormalizationEvidenceInventory {
+            schema_version: TS_DIAGNOSTIC_CORPUS_SCHEMA_VERSION.into(),
+            component: TS_EVIDENCE_COMPONENT.into(),
+            specimen_count: 3,
+            pass_count: 0,
+            fail_count: 3,
+            known_gap_count: 0,
+            feature_family_coverage: BTreeMap::new(),
+            evidence: vec![],
+        };
+        assert!(!inv.contract_satisfied());
+    }
+
+    #[test]
+    fn contract_satisfied_single_pass_no_failures() {
+        let inv = TsNormalizationEvidenceInventory {
+            schema_version: TS_DIAGNOSTIC_CORPUS_SCHEMA_VERSION.into(),
+            component: TS_EVIDENCE_COMPONENT.into(),
+            specimen_count: 1,
+            pass_count: 1,
+            fail_count: 0,
+            known_gap_count: 0,
+            feature_family_coverage: BTreeMap::new(),
+            evidence: vec![],
+        };
+        assert!(inv.contract_satisfied());
+    }
+
+    // ── enrichment: evaluate_specimen edge cases ──────────────────
+
+    #[test]
+    fn evaluate_specimen_success_with_empty_patterns() {
+        let specimen = CorpusSpecimen {
+            specimen_id: "test_empty".to_string(),
+            feature_family: TsFeatureFamily::TypeAnnotation,
+            ts_source: "const x: number = 1;".to_string(),
+            expected_outcome: ExpectedOutcome::NormalizedAway,
+            expected_absent_patterns: vec![],
+            expected_present_patterns: vec![],
+            description: "empty patterns should pass".to_string(),
+        };
+        let config = TsNormalizationConfig::default();
+        let ev = evaluate_specimen(&specimen, &config);
+        assert_eq!(ev.verdict, SpecimenVerdict::Pass);
+    }
+
+    #[test]
+    fn evaluate_specimen_records_feature_family() {
+        let specimen = CorpusSpecimen {
+            specimen_id: "test_family".to_string(),
+            feature_family: TsFeatureFamily::EnumDeclaration,
+            ts_source: "enum Color { Red, Green, Blue }".to_string(),
+            expected_outcome: ExpectedOutcome::NormalizedAway,
+            expected_absent_patterns: vec!["enum".to_string()],
+            expected_present_patterns: vec![],
+            description: "enum normalization".to_string(),
+        };
+        let config = TsNormalizationConfig::default();
+        let ev = evaluate_specimen(&specimen, &config);
+        assert_eq!(ev.feature_family, TsFeatureFamily::EnumDeclaration);
+    }
+
+    #[test]
+    fn evaluate_specimen_multiple_absent_patterns_all_checked() {
+        let specimen = CorpusSpecimen {
+            specimen_id: "test_multi_absent".to_string(),
+            feature_family: TsFeatureFamily::TypeAnnotation,
+            ts_source: "const x: number = 1;".to_string(),
+            expected_outcome: ExpectedOutcome::NormalizedAway,
+            expected_absent_patterns: vec![": number".to_string(), "MISSING_PATTERN".to_string()],
+            expected_present_patterns: vec!["const x".to_string()],
+            description: "check multiple absent patterns".to_string(),
+        };
+        let config = TsNormalizationConfig::default();
+        let ev = evaluate_specimen(&specimen, &config);
+        // Both patterns should be checked. ": number" should be absent (pass),
+        // "MISSING_PATTERN" was already absent (pass too).
+        assert_eq!(ev.verdict, SpecimenVerdict::Pass);
+    }
+
+    #[test]
+    fn evaluate_specimen_normalized_source_preview_is_populated() {
+        let specimen = CorpusSpecimen {
+            specimen_id: "test_preview".to_string(),
+            feature_family: TsFeatureFamily::TypeAnnotation,
+            ts_source: "const x: number = 1;".to_string(),
+            expected_outcome: ExpectedOutcome::NormalizedAway,
+            expected_absent_patterns: vec![],
+            expected_present_patterns: vec![],
+            description: "preview check".to_string(),
+        };
+        let config = TsNormalizationConfig::default();
+        let ev = evaluate_specimen(&specimen, &config);
+        assert!(ev.normalized_source_preview.is_some());
+    }
+
+    // ── enrichment: bundle artifact properties ────────────────────
+
+    #[test]
+    fn bundle_inventory_contains_all_evidence() {
+        let out = unique_temp_dir("ts-evidence-inv-complete");
+        let cmds = vec!["test".to_string()];
+        let arts = write_evidence_bundle(&out, &cmds).expect("write");
+        let inv: TsNormalizationEvidenceInventory =
+            serde_json::from_slice(&fs::read(&arts.inventory_path).expect("read")).expect("parse");
+        assert_eq!(inv.evidence.len() as u64, inv.specimen_count);
+    }
+
+    #[test]
+    fn bundle_commands_file_contains_input_commands() {
+        let out = unique_temp_dir("ts-evidence-cmds");
+        let cmds = vec![
+            "frankenctl verify ts-normalization".to_string(),
+            "cargo test".to_string(),
+        ];
+        let arts = write_evidence_bundle(&out, &cmds).expect("write");
+        let content = fs::read_to_string(&arts.commands_path).expect("read");
+        assert!(content.contains("frankenctl verify ts-normalization"));
+        assert!(content.contains("cargo test"));
+    }
+
+    #[test]
+    fn bundle_manifest_trace_id_is_from_hash() {
+        let out = unique_temp_dir("ts-evidence-trace");
+        let cmds = vec!["test".to_string()];
+        let arts = write_evidence_bundle(&out, &cmds).expect("write");
+        let manifest: TsEvidenceRunManifest =
+            serde_json::from_slice(&fs::read(&arts.run_manifest_path).expect("read"))
+                .expect("parse");
+        assert!(!manifest.trace_id.is_empty());
+        assert!(!manifest.decision_id.is_empty());
+        assert_eq!(manifest.policy_id, TS_EVIDENCE_POLICY_ID);
+    }
+
+    #[test]
+    fn bundle_manifest_artifact_paths_are_set() {
+        let out = unique_temp_dir("ts-evidence-paths");
+        let cmds = vec!["test".to_string()];
+        let arts = write_evidence_bundle(&out, &cmds).expect("write");
+        let manifest: TsEvidenceRunManifest =
+            serde_json::from_slice(&fs::read(&arts.run_manifest_path).expect("read"))
+                .expect("parse");
+        assert!(!manifest.artifact_paths.evidence_inventory.is_empty());
+        assert!(!manifest.artifact_paths.run_manifest.is_empty());
+        assert!(!manifest.artifact_paths.events_jsonl.is_empty());
+        assert!(!manifest.artifact_paths.commands_txt.is_empty());
+    }
+
+    #[test]
+    fn bundle_events_start_with_started_event() {
+        let out = unique_temp_dir("ts-evidence-start-event");
+        let cmds = vec!["test".to_string()];
+        let arts = write_evidence_bundle(&out, &cmds).expect("write");
+        let events_raw = fs::read_to_string(&arts.events_path).expect("read");
+        let first_line = events_raw.lines().next().expect("at least one event");
+        let ev: TsEvidenceEvent = serde_json::from_str(first_line).expect("parse first event");
+        assert_eq!(ev.event, "evidence_run_started");
+    }
+
+    #[test]
+    fn bundle_events_end_with_completed_event() {
+        let out = unique_temp_dir("ts-evidence-end-event");
+        let cmds = vec!["test".to_string()];
+        let arts = write_evidence_bundle(&out, &cmds).expect("write");
+        let events_raw = fs::read_to_string(&arts.events_path).expect("read");
+        let last_line = events_raw.lines().last().expect("at least one event");
+        let ev: TsEvidenceEvent = serde_json::from_str(last_line).expect("parse last event");
+        assert_eq!(ev.event, "evidence_run_completed");
+    }
+
+    // ── enrichment: serde round-trips for remaining types ─────────
+
+    #[test]
+    fn corpus_specimen_serde_roundtrip() {
+        let specimen = CorpusSpecimen {
+            specimen_id: "test_serde".into(),
+            feature_family: TsFeatureFamily::TypeAnnotation,
+            ts_source: "const x: number = 1;".into(),
+            expected_outcome: ExpectedOutcome::NormalizedAway,
+            expected_absent_patterns: vec![": number".into()],
+            expected_present_patterns: vec!["const x".into()],
+            description: "serde test".into(),
+        };
+        let json = serde_json::to_string(&specimen).unwrap();
+        let back: CorpusSpecimen = serde_json::from_str(&json).unwrap();
+        assert_eq!(specimen, back);
+    }
+
+    #[test]
+    fn specimen_evidence_serde_roundtrip() {
+        let ev = SpecimenEvidence {
+            specimen_id: "test".into(),
+            feature_family: TsFeatureFamily::InterfaceDeclaration,
+            expected_outcome: ExpectedOutcome::NormalizedAway,
+            actual_outcome: ActualOutcome::Success,
+            verdict: SpecimenVerdict::Pass,
+            absent_pattern_failures: vec![],
+            present_pattern_failures: vec![],
+            error_message: None,
+            normalized_source_preview: Some("const x = 1;".into()),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: SpecimenEvidence = serde_json::from_str(&json).unwrap();
+        assert_eq!(ev, back);
+    }
+
+    #[test]
+    fn specimen_evidence_with_failures_serde_roundtrip() {
+        let ev = SpecimenEvidence {
+            specimen_id: "fail_test".into(),
+            feature_family: TsFeatureFamily::EnumDeclaration,
+            expected_outcome: ExpectedOutcome::NormalizedAway,
+            actual_outcome: ActualOutcome::Rejected,
+            verdict: SpecimenVerdict::Fail,
+            absent_pattern_failures: vec!["pattern_a".into()],
+            present_pattern_failures: vec!["pattern_b".into()],
+            error_message: Some("normalization error".into()),
+            normalized_source_preview: None,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: SpecimenEvidence = serde_json::from_str(&json).unwrap();
+        assert_eq!(ev, back);
+    }
+
+    #[test]
+    fn run_manifest_serde_roundtrip() {
+        let manifest = TsEvidenceRunManifest {
+            schema_version: TS_EVIDENCE_MANIFEST_SCHEMA_VERSION.into(),
+            component: TS_EVIDENCE_COMPONENT.into(),
+            trace_id: "trace-abc".into(),
+            decision_id: "decision-def".into(),
+            policy_id: TS_EVIDENCE_POLICY_ID.into(),
+            inventory_hash: "a".repeat(64),
+            specimen_count: 15,
+            pass_count: 15,
+            fail_count: 0,
+            known_gap_count: 2,
+            contract_satisfied: true,
+            artifact_paths: TsEvidenceArtifactPaths {
+                evidence_inventory: "inv.json".into(),
+                run_manifest: "manifest.json".into(),
+                events_jsonl: "events.jsonl".into(),
+                commands_txt: "commands.txt".into(),
+            },
+        };
+        let json = serde_json::to_string(&manifest).unwrap();
+        let back: TsEvidenceRunManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(manifest, back);
+    }
+
+    #[test]
+    fn artifact_paths_serde_roundtrip() {
+        let paths = TsEvidenceArtifactPaths {
+            evidence_inventory: "inv.json".into(),
+            run_manifest: "manifest.json".into(),
+            events_jsonl: "events.jsonl".into(),
+            commands_txt: "commands.txt".into(),
+        };
+        let json = serde_json::to_string(&paths).unwrap();
+        let back: TsEvidenceArtifactPaths = serde_json::from_str(&json).unwrap();
+        assert_eq!(paths, back);
+    }
+
+    // ── enrichment: schema constants ──────────────────────────────
+
+    #[test]
+    fn all_schema_constants_start_with_franken_engine() {
+        assert!(TS_DIAGNOSTIC_CORPUS_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(TS_EVIDENCE_MANIFEST_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(TS_EVIDENCE_EVENT_SCHEMA_VERSION.starts_with("franken-engine."));
+    }
+
+    #[test]
+    fn evidence_component_is_non_empty() {
+        assert!(!TS_EVIDENCE_COMPONENT.is_empty());
+        assert!(!TS_EVIDENCE_POLICY_ID.is_empty());
+    }
+
+    // ── enrichment: evidence ordering preserved ───────────────────
+
+    #[test]
+    fn evidence_preserves_corpus_order() {
+        let inv = run_diagnostic_corpus();
+        let corpus = diagnostic_corpus();
+        for (i, (ev, sp)) in inv.evidence.iter().zip(corpus.iter()).enumerate() {
+            assert_eq!(
+                ev.specimen_id, sp.specimen_id,
+                "evidence order mismatch at index {}",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn evidence_feature_families_match_corpus() {
+        let inv = run_diagnostic_corpus();
+        let corpus = diagnostic_corpus();
+        for (ev, sp) in inv.evidence.iter().zip(corpus.iter()) {
+            assert_eq!(
+                ev.feature_family, sp.feature_family,
+                "feature family mismatch for specimen '{}'",
+                ev.specimen_id
+            );
+        }
+    }
+
+    #[test]
+    fn evidence_expected_outcomes_match_corpus() {
+        let inv = run_diagnostic_corpus();
+        let corpus = diagnostic_corpus();
+        for (ev, sp) in inv.evidence.iter().zip(corpus.iter()) {
+            assert_eq!(
+                ev.expected_outcome, sp.expected_outcome,
+                "expected outcome mismatch for specimen '{}'",
+                ev.specimen_id
+            );
+        }
+    }
 }

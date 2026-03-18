@@ -779,12 +779,16 @@ impl DeclassificationReceipt {
         verify_signature(key, &self.preimage_bytes(), &self.signature)
     }
 
-    /// Deterministic replay command that replays the decision path linked to
-    /// this declassification receipt.
+    /// Deterministic operator command for receipt-linked triage on the shipped
+    /// CLI surface.
+    ///
+    /// The current public `frankenctl` contract exposes receipt verification,
+    /// not a receipt-scoped replay subcommand, so this command intentionally
+    /// anchors operators on `verify receipt`.
     pub fn replay_command(&self) -> String {
         format!(
-            "frankenctl replay run --trace {} --receipt {}",
-            self.replay_linkage, self.receipt_id
+            "frankenctl verify receipt --input <verifier_input.json> --receipt-id {} --summary",
+            self.receipt_id
         )
     }
 }
@@ -1358,12 +1362,15 @@ mod tests {
     }
 
     #[test]
-    fn receipt_replay_command_contains_trace_and_receipt_id() {
+    fn receipt_replay_command_matches_shipped_verify_receipt_surface() {
         let receipt = make_receipt();
         let command = receipt.replay_command();
-        assert!(command.contains("frankenctl replay run --trace"));
-        assert!(command.contains(&receipt.replay_linkage));
+        assert!(command.contains("frankenctl verify receipt --input <verifier_input.json>"));
+        assert!(command.contains("--receipt-id"));
         assert!(command.contains(&receipt.receipt_id));
+        assert!(command.contains("--summary"));
+        assert!(!command.contains("frankenctl replay run --trace"));
+        assert!(!command.contains(" --receipt "));
     }
 
     #[test]

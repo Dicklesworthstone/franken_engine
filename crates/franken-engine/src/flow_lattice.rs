@@ -1643,7 +1643,9 @@ mod tests {
         assert_eq!(event.receipt_id.as_deref(), Some("rcpt-2"));
         assert_eq!(
             event.receipt_replay_command.as_deref(),
-            Some("frankenctl replay run --trace trace-rt --receipt rcpt-2")
+            Some(
+                "frankenctl verify receipt --input <verifier_input.json> --receipt-id rcpt-2 --summary"
+            )
         );
     }
 

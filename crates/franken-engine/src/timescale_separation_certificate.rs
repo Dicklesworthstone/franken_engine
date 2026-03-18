@@ -1251,4 +1251,178 @@ mod tests {
         assert_eq!(config.marginal_ratio_millionths, 3_000_000);
         assert_eq!(config.gain_exceedance_threshold_millionths, 1_000_000);
     }
+
+    // ── enrichment: serde round-trips for untested types ──────────
+
+    #[test]
+    fn controller_pair_id_serde_roundtrip() {
+        let pair = ControllerPairId {
+            fast_controller: "gc_pressure".into(),
+            slow_controller: "policy_update".into(),
+        };
+        let json = serde_json::to_string(&pair).unwrap();
+        let back: ControllerPairId = serde_json::from_str(&json).unwrap();
+        assert_eq!(pair, back);
+    }
+
+    #[test]
+    fn controller_timescale_profile_serde_roundtrip() {
+        let profile = ControllerTimescaleProfile {
+            controller_id: "gc_pressure".into(),
+            observation_interval_millionths: 100_000,
+            write_interval_millionths: 200_000,
+            sample_count: 50,
+            measured_epoch: 1,
+        };
+        let json = serde_json::to_string(&profile).unwrap();
+        let back: ControllerTimescaleProfile = serde_json::from_str(&json).unwrap();
+        assert_eq!(profile, back);
+    }
+
+    #[test]
+    fn timescale_ratio_serde_roundtrip() {
+        let ratio = TimescaleRatio {
+            pair: ControllerPairId {
+                fast_controller: "a".into(),
+                slow_controller: "b".into(),
+            },
+            ratio_millionths: 10_000_000,
+            ratio_basis: RatioBasis::Observation,
+        };
+        let json = serde_json::to_string(&ratio).unwrap();
+        let back: TimescaleRatio = serde_json::from_str(&json).unwrap();
+        assert_eq!(ratio, back);
+    }
+
+    // ── enrichment: ratio computation edge cases ──────────────────
+
+    #[test]
+    fn ratio_equal_timescales_is_one() {
+        let fast = ControllerTimescaleProfile {
+            controller_id: "fast".into(),
+            observation_interval_millionths: 1_000_000,
+            write_interval_millionths: 1_000_000,
+            sample_count: 10,
+            measured_epoch: 1,
+        };
+        let slow = fast.clone();
+        let ratio = compute_timescale_ratio(&fast, &slow);
+        assert_eq!(ratio.ratio_millionths, 1_000_000);
+    }
+
+    // ── enrichment: bundle pair counting ──────────────────────────
+
+    #[test]
+    fn bundle_two_controllers_one_pair() {
+        let cfg = BifurcationDetectorConfig::default();
+        let profiles = vec![
+            ControllerTimescaleProfile {
+                controller_id: "a".into(),
+                observation_interval_millionths: 100_000,
+                write_interval_millionths: 100_000,
+                sample_count: 10,
+                measured_epoch: 1,
+            },
+            ControllerTimescaleProfile {
+                controller_id: "b".into(),
+                observation_interval_millionths: 10_000_000,
+                write_interval_millionths: 10_000_000,
+                sample_count: 10,
+                measured_epoch: 1,
+            },
+        ];
+        let bundle = build_certificate_bundle(&profiles, &cfg, 1);
+        assert_eq!(bundle.pair_count, 1);
+        assert_eq!(bundle.certificates.len(), 1);
+    }
+
+    #[test]
+    fn bundle_four_controllers_six_pairs() {
+        let cfg = BifurcationDetectorConfig::default();
+        let profiles: Vec<ControllerTimescaleProfile> = (0..4)
+            .map(|i| ControllerTimescaleProfile {
+                controller_id: format!("ctrl-{}", i),
+                observation_interval_millionths: (i + 1) as i64 * 1_000_000,
+                write_interval_millionths: (i + 1) as i64 * 1_000_000,
+                sample_count: 10,
+                measured_epoch: 1,
+            })
+            .collect();
+        let bundle = build_certificate_bundle(&profiles, &cfg, 1);
+        assert_eq!(bundle.pair_count, 6);
+    }
+
+    // ── enrichment: enum display completeness ─────────────────────
+
+    #[test]
+    fn signal_severity_all_distinct() {
+        let variants = [
+            SignalSeverity::Info,
+            SignalSeverity::Warning,
+            SignalSeverity::Critical,
+        ];
+        let displays: std::collections::BTreeSet<String> =
+            variants.iter().map(|s| s.to_string()).collect();
+        assert_eq!(displays.len(), variants.len());
+    }
+
+    #[test]
+    fn recommended_action_all_distinct() {
+        let variants = [
+            RecommendedAction::Monitor,
+            RecommendedAction::IncreaseTimescaleSeparation,
+            RecommendedAction::ReduceGain,
+            RecommendedAction::DisableController,
+            RecommendedAction::SafeModeFallback,
+        ];
+        let displays: std::collections::BTreeSet<String> =
+            variants.iter().map(|s| s.to_string()).collect();
+        assert_eq!(displays.len(), variants.len());
+    }
+
+    #[test]
+    fn stability_assessment_all_distinct() {
+        let variants = [
+            StabilityAssessment::Stable,
+            StabilityAssessment::MonitoringRecommended,
+            StabilityAssessment::InterventionRecommended,
+            StabilityAssessment::ImmediateActionRequired,
+        ];
+        let displays: std::collections::BTreeSet<String> =
+            variants.iter().map(|s| s.to_string()).collect();
+        assert_eq!(displays.len(), variants.len());
+    }
+
+    #[test]
+    fn bifurcation_signal_kind_all_distinct() {
+        let variants = [
+            BifurcationSignalKind::GrowingOscillation,
+            BifurcationSignalKind::TimescaleConvergence,
+            BifurcationSignalKind::SpectralEdgeCrossing,
+            BifurcationSignalKind::VarianceDivergence,
+            BifurcationSignalKind::GainExceedance,
+        ];
+        let displays: std::collections::BTreeSet<String> =
+            variants.iter().map(|s| s.to_string()).collect();
+        assert_eq!(displays.len(), variants.len());
+    }
+
+    // ── enrichment: detector summary rendering ────────────────────
+
+    #[test]
+    fn detector_summary_contains_assessment() {
+        let result = BifurcationDetectorResult {
+            schema_version: BIFURCATION_DETECTOR_SCHEMA_VERSION.into(),
+            bead_id: TIMESCALE_CERTIFICATE_BEAD_ID.into(),
+            signals: vec![],
+            witnesses: vec![],
+            assessment: StabilityAssessment::Stable,
+            detection_epoch: 1,
+        };
+        let summary = render_detector_summary(&result);
+        assert!(
+            summary.contains("stable") || summary.contains("Stable"),
+            "summary should contain assessment"
+        );
+    }
 }

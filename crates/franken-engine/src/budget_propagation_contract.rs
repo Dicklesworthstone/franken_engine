@@ -1269,4 +1269,386 @@ mod tests {
         assert_eq!(alloc.finalize_budget_ms, 50);
         assert_eq!(alloc.parent_remaining_after_ms, 1000); // not carved
     }
+
+    // ── enrichment: boundary kind properties ──────────────────────
+
+    #[test]
+    fn test_boundary_kind_all_as_str_distinct() {
+        let kinds = [
+            BudgetBoundaryKind::ParentToChildExtension,
+            BudgetBoundaryKind::ParentToChildSession,
+            BudgetBoundaryKind::ParentToChildDelegate,
+            BudgetBoundaryKind::ExecutionToCleanup,
+            BudgetBoundaryKind::CleanupToFinalize,
+            BudgetBoundaryKind::OrchestratorToCellClose,
+        ];
+        let strs: std::collections::BTreeSet<&str> = kinds.iter().map(|k| k.as_str()).collect();
+        assert_eq!(strs.len(), kinds.len());
+    }
+
+    #[test]
+    fn test_boundary_kind_serde_roundtrip_all() {
+        let kinds = [
+            BudgetBoundaryKind::ParentToChildExtension,
+            BudgetBoundaryKind::ParentToChildSession,
+            BudgetBoundaryKind::ParentToChildDelegate,
+            BudgetBoundaryKind::ExecutionToCleanup,
+            BudgetBoundaryKind::CleanupToFinalize,
+            BudgetBoundaryKind::OrchestratorToCellClose,
+        ];
+        for kind in &kinds {
+            let json = serde_json::to_string(kind).unwrap();
+            let decoded: BudgetBoundaryKind = serde_json::from_str(&json).unwrap();
+            assert_eq!(*kind, decoded);
+        }
+    }
+
+    #[test]
+    fn test_non_child_boundaries_are_not_child_derivation() {
+        assert!(!BudgetBoundaryKind::ExecutionToCleanup.is_child_derivation());
+        assert!(!BudgetBoundaryKind::CleanupToFinalize.is_child_derivation());
+        assert!(!BudgetBoundaryKind::OrchestratorToCellClose.is_child_derivation());
+    }
+
+    // ── enrichment: derivation strategy edge cases ────────────────
+
+    #[test]
+    fn test_fraction_derivation_zero_parent() {
+        let strat = BudgetDerivationStrategy::FractionOfRemaining {
+            fraction_millionths: 500_000,
+        };
+        assert_eq!(strat.derive(0), 0);
+    }
+
+    #[test]
+    fn test_fraction_derivation_one_ms_parent() {
+        let strat = BudgetDerivationStrategy::FractionOfRemaining {
+            fraction_millionths: 500_000,
+        };
+        // 1 * 500_000 / 1_000_000 = 0
+        assert_eq!(strat.derive(1), 0);
+    }
+
+    #[test]
+    fn test_fixed_amount_exceeds_parent() {
+        let strat = BudgetDerivationStrategy::FixedAmount { amount_ms: 1000 };
+        // Fixed amount returns the amount regardless of parent
+        assert_eq!(strat.derive(500), 1000);
+    }
+
+    #[test]
+    fn test_bounded_fraction_clamps_to_min() {
+        let strat = BudgetDerivationStrategy::BoundedFraction {
+            fraction_millionths: 100_000, // 10%
+            min_ms: 50,
+            max_ms: 500,
+        };
+        // 100ms * 10% = 10ms, but min is 50
+        assert_eq!(strat.derive(100), 50);
+    }
+
+    #[test]
+    fn test_bounded_fraction_clamps_to_max() {
+        let strat = BudgetDerivationStrategy::BoundedFraction {
+            fraction_millionths: 900_000, // 90%
+            min_ms: 10,
+            max_ms: 100,
+        };
+        // 10000ms * 90% = 9000ms, but max is 100
+        assert_eq!(strat.derive(10000), 100);
+    }
+
+    #[test]
+    fn test_all_remaining_derivation_zero() {
+        assert_eq!(BudgetDerivationStrategy::AllRemaining.derive(0), 0);
+    }
+
+    #[test]
+    fn test_derivation_strategy_serde_roundtrip_all_variants() {
+        let strategies = [
+            BudgetDerivationStrategy::FractionOfRemaining {
+                fraction_millionths: 500_000,
+            },
+            BudgetDerivationStrategy::FixedAmount { amount_ms: 100 },
+            BudgetDerivationStrategy::BoundedFraction {
+                fraction_millionths: 300_000,
+                min_ms: 10,
+                max_ms: 500,
+            },
+            BudgetDerivationStrategy::AllRemaining,
+        ];
+        for strat in &strategies {
+            let json = serde_json::to_string(strat).unwrap();
+            let decoded: BudgetDerivationStrategy = serde_json::from_str(&json).unwrap();
+            assert_eq!(*strat, decoded);
+        }
+    }
+
+    // ── enrichment: cleanup allocation edge cases ─────────────────
+
+    #[test]
+    fn test_cleanup_allocation_carved_reduces_parent() {
+        let policy = CleanupBudgetPolicy {
+            drain_strategy: BudgetDerivationStrategy::FixedAmount { amount_ms: 200 },
+            finalize_budget_ms: 100,
+            carved_from_parent: true,
+        };
+        let alloc = policy.compute_allocation(1000);
+        assert_eq!(alloc.total_cleanup_ms, 300);
+        assert!(alloc.parent_remaining_after_ms < 1000);
+        assert!(alloc.carved_from_parent);
+    }
+
+    #[test]
+    fn test_cleanup_allocation_total_is_drain_plus_finalize() {
+        let policy = CleanupBudgetPolicy {
+            drain_strategy: BudgetDerivationStrategy::FixedAmount { amount_ms: 75 },
+            finalize_budget_ms: 25,
+            carved_from_parent: false,
+        };
+        let alloc = policy.compute_allocation(500);
+        assert_eq!(
+            alloc.total_cleanup_ms,
+            alloc.drain_budget_ms + alloc.finalize_budget_ms
+        );
+    }
+
+    // ── enrichment: validator cascade ─────────────────────────────
+
+    #[test]
+    fn test_validator_events_accumulate() {
+        let mut v = BudgetPropagationValidator::with_defaults();
+        let _ = v.derive_child_budget(
+            "parent",
+            "child-1",
+            5000,
+            BudgetBoundaryKind::ParentToChildExtension,
+        );
+        let _ = v.derive_child_budget(
+            "parent",
+            "child-2",
+            5000,
+            BudgetBoundaryKind::ParentToChildSession,
+        );
+        assert_eq!(v.events().len(), 2);
+    }
+
+    #[test]
+    fn test_validator_event_sequence_numbers_increase() {
+        let mut v = BudgetPropagationValidator::with_defaults();
+        let _ = v.derive_child_budget(
+            "parent",
+            "child-1",
+            5000,
+            BudgetBoundaryKind::ParentToChildExtension,
+        );
+        let _ = v.derive_child_budget(
+            "parent",
+            "child-2",
+            5000,
+            BudgetBoundaryKind::ParentToChildSession,
+        );
+        let events = v.events();
+        assert!(events[1].sequence > events[0].sequence);
+    }
+
+    #[test]
+    fn test_validator_clean_initially() {
+        let v = BudgetPropagationValidator::with_defaults();
+        assert!(!v.has_violations());
+        assert!(v.violations().is_empty());
+        assert!(v.events().is_empty());
+    }
+
+    #[test]
+    fn test_validator_has_violations_after_failure() {
+        let mut v = BudgetPropagationValidator::with_defaults();
+        let _ = v.derive_child_budget(
+            "parent",
+            "child",
+            0,
+            BudgetBoundaryKind::ParentToChildExtension,
+        );
+        assert!(v.has_violations());
+    }
+
+    // ── enrichment: report properties ─────────────────────────────
+
+    #[test]
+    fn test_empty_report_is_clean() {
+        let v = BudgetPropagationValidator::with_defaults();
+        let report = v.build_report();
+        assert!(report.is_clean());
+        assert_eq!(report.total_events, 0);
+        assert_eq!(report.successful_derivations, 0);
+        assert_eq!(report.failed_derivations, 0);
+    }
+
+    #[test]
+    fn test_report_counts_success_and_failure() {
+        let mut v = BudgetPropagationValidator::with_defaults();
+        let _ = v.derive_child_budget(
+            "parent",
+            "child-ok",
+            5000,
+            BudgetBoundaryKind::ParentToChildExtension,
+        );
+        let _ = v.derive_child_budget(
+            "parent",
+            "child-fail",
+            0,
+            BudgetBoundaryKind::ParentToChildExtension,
+        );
+        let report = v.build_report();
+        assert_eq!(report.total_events, 2);
+        assert_eq!(report.successful_derivations, 1);
+        assert_eq!(report.failed_derivations, 1);
+        assert!(!report.is_clean());
+    }
+
+    #[test]
+    fn test_report_boundary_event_counts() {
+        let mut v = BudgetPropagationValidator::with_defaults();
+        let _ = v.derive_child_budget(
+            "parent",
+            "c1",
+            5000,
+            BudgetBoundaryKind::ParentToChildExtension,
+        );
+        let _ = v.derive_child_budget(
+            "parent",
+            "c2",
+            5000,
+            BudgetBoundaryKind::ParentToChildExtension,
+        );
+        let _ = v.derive_child_budget(
+            "parent",
+            "c3",
+            5000,
+            BudgetBoundaryKind::ParentToChildSession,
+        );
+        let report = v.build_report();
+        let ext_count = report
+            .boundary_event_counts
+            .get(BudgetBoundaryKind::ParentToChildExtension.as_str())
+            .copied()
+            .unwrap_or(0);
+        let sess_count = report
+            .boundary_event_counts
+            .get(BudgetBoundaryKind::ParentToChildSession.as_str())
+            .copied()
+            .unwrap_or(0);
+        assert_eq!(ext_count, 2);
+        assert_eq!(sess_count, 1);
+    }
+
+    // ── enrichment: error display coverage ────────────────────────
+
+    #[test]
+    fn test_all_error_variants_display_non_empty() {
+        let errors: Vec<BudgetPropagationError> = vec![
+            BudgetPropagationError::InsufficientBudget {
+                boundary: BudgetBoundaryKind::ParentToChildExtension,
+                derived_ms: 10,
+                minimum_ms: 50,
+                parent_remaining_ms: 100,
+            },
+            BudgetPropagationError::NoRuleForBoundary {
+                boundary: BudgetBoundaryKind::OrchestratorToCellClose,
+            },
+            BudgetPropagationError::ParentExhausted {
+                boundary: BudgetBoundaryKind::ParentToChildSession,
+                parent_remaining_ms: 0,
+            },
+            BudgetPropagationError::CleanupExceedsParent {
+                cleanup_total_ms: 500,
+                parent_remaining_ms: 100,
+            },
+            BudgetPropagationError::ChildExceedsParent {
+                child_ms: 1000,
+                parent_ms: 500,
+            },
+        ];
+        for err in &errors {
+            let msg = err.to_string();
+            assert!(!msg.is_empty(), "error display should be non-empty");
+        }
+    }
+
+    #[test]
+    fn test_error_serde_roundtrip() {
+        let err = BudgetPropagationError::InsufficientBudget {
+            boundary: BudgetBoundaryKind::ParentToChildExtension,
+            derived_ms: 10,
+            minimum_ms: 50,
+            parent_remaining_ms: 100,
+        };
+        let json = serde_json::to_string(&err).unwrap();
+        let decoded: BudgetPropagationError = serde_json::from_str(&json).unwrap();
+        assert_eq!(err, decoded);
+    }
+
+    // ── enrichment: child budget rule ─────────────────────────────
+
+    #[test]
+    fn test_child_rule_serde_roundtrip() {
+        let rule = ChildBudgetRule::default_extension();
+        let json = serde_json::to_string(&rule).unwrap();
+        let decoded: ChildBudgetRule = serde_json::from_str(&json).unwrap();
+        assert_eq!(rule, decoded);
+    }
+
+    #[test]
+    fn test_child_rule_defaults_have_positive_minimum() {
+        assert!(ChildBudgetRule::default_extension().minimum_ms > 0);
+        assert!(ChildBudgetRule::default_session().minimum_ms > 0);
+        assert!(ChildBudgetRule::default_delegate().minimum_ms > 0);
+    }
+
+    // ── enrichment: derivation result properties ──────────────────
+
+    #[test]
+    fn test_derivation_result_serde_roundtrip() {
+        let result = BudgetDerivationResult {
+            derived_budget_ms: 500,
+            parent_remaining_after_ms: 4500,
+            boundary_kind: BudgetBoundaryKind::ParentToChildExtension,
+            carved_from_parent: true,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let decoded: BudgetDerivationResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(result, decoded);
+    }
+
+    #[test]
+    fn test_derivation_result_carved_reduces_parent() {
+        let mut v = BudgetPropagationValidator::with_defaults();
+        let result = v
+            .derive_child_budget(
+                "parent",
+                "child",
+                5000,
+                BudgetBoundaryKind::ParentToChildExtension,
+            )
+            .unwrap();
+        assert!(result.derived_budget_ms > 0);
+        if result.carved_from_parent {
+            assert!(result.parent_remaining_after_ms < 5000);
+        }
+    }
+
+    // ── enrichment: cleanup after child derivation ────────────────
+
+    #[test]
+    fn test_cleanup_after_child_derivation_still_works() {
+        let mut v = BudgetPropagationValidator::with_defaults();
+        let _ = v.derive_child_budget(
+            "parent",
+            "child",
+            5000,
+            BudgetBoundaryKind::ParentToChildExtension,
+        );
+        let cleanup = v.validate_cleanup("parent", 3000);
+        assert!(cleanup.is_ok());
+    }
 }

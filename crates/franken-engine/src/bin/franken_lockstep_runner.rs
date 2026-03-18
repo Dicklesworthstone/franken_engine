@@ -20,13 +20,34 @@ use frankenengine_engine::parser_multi_engine_harness::{
     build_drift_governance_action_report, has_critical_drift, run_multi_engine_harness,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 const LOCKSTEP_RUNTIME_SPECS_SCHEMA_VERSION: &str = "franken-engine.lockstep-runtimes.v1";
 const LOCKSTEP_PREFLIGHT_SCHEMA_VERSION: &str = "franken-engine.lockstep-preflight.v1";
 const LOCKSTEP_EVIDENCE_SCHEMA_VERSION: &str = "franken-engine.lockstep-evidence.v1";
 const LOCKSTEP_GOVERNANCE_SCHEMA_VERSION: &str = "franken-engine.lockstep-governance.v1";
+const LOCKSTEP_CANON_RULES_SCHEMA_VERSION: &str = "franken-engine.lockstep-canon-rules.v1";
 const DEFAULT_LOCKSTEP_RUNTIME_SPECS_PATH: &str =
     "crates/franken-engine/tests/fixtures/lockstep_runtimes.toml";
+const DEFAULT_LOCKSTEP_CANON_RULES_PATH: &str =
+    "crates/franken-engine/tests/fixtures/lockstep_canon_rules.toml";
+const DEFAULT_LOCKSTEP_CANON_RULES_CONTENT: &str = r#"schema_version = "franken-engine.lockstep-canon-rules.v1"
+
+[[rules]]
+rule_id = "normalize-newlines"
+kind = "newline_normalization"
+description = "Normalize CRLF and CR line endings before observable output comparison."
+
+[[rules]]
+rule_id = "trim-engine-stack-noise"
+kind = "stack_trace_noise"
+description = "Strip engine-specific stack-frame prefixes and locations from thrown error output."
+
+[[rules]]
+rule_id = "collapse-whitespace-runs"
+kind = "whitespace_normalization"
+description = "Collapse repeated whitespace in diagnostic and console output comparison surfaces."
+"#;
 
 #[derive(Debug)]
 struct CliArgs {
@@ -34,6 +55,7 @@ struct CliArgs {
     out_path: Option<PathBuf>,
     evidence_jsonl_path: Option<PathBuf>,
     governance_actions_out_path: Option<PathBuf>,
+    canon_rules_path: Option<PathBuf>,
     fail_on_divergence: bool,
     allow_critical_drift: bool,
     max_retries: u32,
@@ -80,6 +102,11 @@ struct LockstepCategoryMatchRate {
     match_rate_ppm: u64,
 }
 
+#[derive(Debug)]
+struct LockstepCanonRules {
+    hash: String,
+}
+
 #[derive(Debug, Serialize)]
 struct LockstepEvidenceRecord {
     schema_version: String,
@@ -89,6 +116,8 @@ struct LockstepEvidenceRecord {
     decision_id: String,
     policy_id: String,
     fixture_catalog_hash: String,
+    canon_rules_hash: String,
+    environment_fingerprint: String,
     parser_mode: String,
     seed: u64,
     locale: String,
@@ -181,6 +210,7 @@ fn run() -> Result<i32, Box<dyn Error>> {
     if args.print_help {
         return Ok(0);
     }
+    let canon_rules = resolve_lockstep_canon_rules(args.canon_rules_path.as_deref())?;
     if args.preflight_only {
         let report = run_preflight(&args.config);
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -219,6 +249,7 @@ fn run() -> Result<i32, Box<dyn Error>> {
             harness.observed_flaky_fixture_ids.as_slice(),
             quarantined_fixture_ids.as_slice(),
             governance_action_count,
+            canon_rules.hash.as_str(),
         )?;
     }
     let json = serde_json::to_string_pretty(&report)?;
@@ -330,6 +361,7 @@ where
     let mut timezone = None::<String>;
     let mut engine_specs = None::<Vec<HarnessEngineSpec>>;
     let mut runtime_specs_path = None::<PathBuf>;
+    let mut canon_rules_path = None::<PathBuf>;
     let mut out_path = None::<PathBuf>;
     let mut evidence_jsonl_path = None::<PathBuf>;
     let mut governance_actions_out_path = None::<PathBuf>;
@@ -408,6 +440,12 @@ where
                     .next()
                     .ok_or_else(|| "missing value for --runtime-specs".to_string())?;
                 runtime_specs_path = Some(PathBuf::from(value));
+            }
+            "--canon-rules" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| "missing value for --canon-rules".to_string())?;
+                canon_rules_path = Some(PathBuf::from(value));
             }
             "--fail-on-divergence" => {
                 fail_on_divergence = true;
@@ -490,6 +528,7 @@ where
         out_path,
         evidence_jsonl_path,
         governance_actions_out_path,
+        canon_rules_path,
         fail_on_divergence,
         allow_critical_drift,
         max_retries,
@@ -731,6 +770,7 @@ fn looks_like_script_path(value: &str) -> bool {
         .any(|suffix| lowered.ends_with(suffix))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_lockstep_evidence_jsonl(
     path: &Path,
     report: &MultiEngineHarnessReport,
@@ -739,6 +779,7 @@ fn append_lockstep_evidence_jsonl(
     observed_flaky_fixture_ids: &[String],
     quarantined_fixture_ids: &[String],
     governance_action_count: u64,
+    canon_rules_hash: &str,
 ) -> Result<(), Box<dyn Error>> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -751,6 +792,7 @@ fn append_lockstep_evidence_jsonl(
         observed_flaky_fixture_ids,
         quarantined_fixture_ids,
         governance_action_count,
+        canon_rules_hash,
     );
     let mut file = fs::OpenOptions::new()
         .create(true)
@@ -768,6 +810,7 @@ fn build_lockstep_evidence_record(
     observed_flaky_fixture_ids: &[String],
     quarantined_fixture_ids: &[String],
     governance_action_count: u64,
+    canon_rules_hash: &str,
 ) -> LockstepEvidenceRecord {
     let runtime_versions = collect_runtime_versions(report);
     let category_match_rates = collect_category_match_rates(report);
@@ -779,6 +822,8 @@ fn build_lockstep_evidence_record(
         decision_id: report.decision_id.clone(),
         policy_id: report.policy_id.clone(),
         fixture_catalog_hash: report.fixture_catalog_hash.clone(),
+        canon_rules_hash: canon_rules_hash.to_string(),
+        environment_fingerprint: lockstep_environment_fingerprint(report),
         parser_mode: report.parser_mode.clone(),
         seed: report.seed,
         locale: report.locale.clone(),
@@ -874,6 +919,64 @@ fn collect_category_match_rates(
             )
         })
         .collect()
+}
+
+fn resolve_lockstep_canon_rules(path: Option<&Path>) -> Result<LockstepCanonRules, Box<dyn Error>> {
+    let (source_path, content) = if let Some(path) = path {
+        (path.display().to_string(), fs::read_to_string(path)?)
+    } else if Path::new(DEFAULT_LOCKSTEP_CANON_RULES_PATH).exists() {
+        (
+            DEFAULT_LOCKSTEP_CANON_RULES_PATH.to_string(),
+            fs::read_to_string(DEFAULT_LOCKSTEP_CANON_RULES_PATH)?,
+        )
+    } else {
+        (
+            DEFAULT_LOCKSTEP_CANON_RULES_PATH.to_string(),
+            DEFAULT_LOCKSTEP_CANON_RULES_CONTENT.to_string(),
+        )
+    };
+    validate_lockstep_canon_rules(content.as_str(), source_path.as_str())?;
+    Ok(LockstepCanonRules {
+        hash: sha256_prefixed(content.as_bytes()),
+    })
+}
+
+fn validate_lockstep_canon_rules(content: &str, source_path: &str) -> Result<(), Box<dyn Error>> {
+    let parsed = toml::from_str::<toml::Value>(content)?;
+    let Some(schema_version) = parsed.get("schema_version").and_then(toml::Value::as_str) else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("canon rules file `{source_path}` is missing `schema_version`"),
+        )
+        .into());
+    };
+    if schema_version != LOCKSTEP_CANON_RULES_SCHEMA_VERSION {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "canon rules file `{source_path}` has schema_version `{schema_version}` (expected `{LOCKSTEP_CANON_RULES_SCHEMA_VERSION}`)"
+            ),
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn lockstep_environment_fingerprint(report: &MultiEngineHarnessReport) -> String {
+    let mut kv = BTreeMap::new();
+    kv.insert("arch", std::env::consts::ARCH.to_string());
+    kv.insert("locale", report.locale.clone());
+    kv.insert("os", std::env::consts::OS.to_string());
+    kv.insert(
+        "rust_toolchain",
+        std::env::var("RUSTUP_TOOLCHAIN").unwrap_or_else(|_| "unknown".to_string()),
+    );
+    kv.insert("timezone", report.timezone.clone());
+    sha256_prefixed(&serde_json::to_vec(&kv).unwrap_or_default())
+}
+
+fn sha256_prefixed(bytes: &[u8]) -> String {
+    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
 }
 
 fn load_engine_specs(path: &Path) -> Result<Vec<HarnessEngineSpec>, Box<dyn Error>> {
@@ -1021,6 +1124,7 @@ fn print_help() {
     println!("  --timezone <timezone>");
     println!("  --engine-specs <path>");
     println!("  --runtime-specs <path>");
+    println!("  --canon-rules <path>");
     println!("  --fail-on-divergence");
     println!("  --allow-critical-drift");
     println!("  --max-retries <count>");
@@ -1030,4 +1134,5 @@ fn print_help() {
     println!("  --evidence-jsonl <path>");
     println!("  --governance-actions-out <path>");
     println!("  default runtime-specs path: {DEFAULT_LOCKSTEP_RUNTIME_SPECS_PATH}");
+    println!("  default canon-rules path: {DEFAULT_LOCKSTEP_CANON_RULES_PATH}");
 }

@@ -2446,8 +2446,7 @@ fn quorum_threshold_zero_is_rejected_as_invalid() {
     let genesis = build_genesis(slice::from_ref(&sk), "zone-a");
     let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
     // Quorum threshold of 0 is rejected as invalid by the implementation
-    let result =
-        mgr.accept_checkpoint("zone-a", &genesis, 0, slice::from_ref(&vk), "t-0");
+    let result = mgr.accept_checkpoint("zone-a", &genesis, 0, slice::from_ref(&vk), "t-0");
     assert!(result.is_err());
 }
 

@@ -1596,12 +1596,12 @@ mod tests {
 
     #[test]
     fn max_signature_dim_positive() {
-        assert!(MAX_SIGNATURE_DIM > 0);
+        const { assert!(MAX_SIGNATURE_DIM > 0) };
     }
 
     #[test]
     fn min_trace_length_positive() {
-        assert!(MIN_TRACE_LENGTH > 0);
+        const { assert!(MIN_TRACE_LENGTH > 0) };
     }
 
     #[test]

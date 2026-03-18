@@ -64,9 +64,19 @@ fn test_add_two_constants() {
         constants: vec![Value::Int(10), Value::Int(32)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
-            Instruction::Add { dst: r(2), lhs: r(0), rhs: r(1) },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::Add {
+                dst: r(2),
+                lhs: r(0),
+                rhs: r(1),
+            },
             Instruction::Return { src: r(2) },
         ],
     };
@@ -82,9 +92,19 @@ fn test_sub_two_constants() {
         constants: vec![Value::Int(100), Value::Int(58)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
-            Instruction::Sub { dst: r(2), lhs: r(0), rhs: r(1) },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::Sub {
+                dst: r(2),
+                lhs: r(0),
+                rhs: r(1),
+            },
             Instruction::Return { src: r(2) },
         ],
     };
@@ -99,9 +119,19 @@ fn test_mul_two_constants() {
         constants: vec![Value::Int(6), Value::Int(7)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
-            Instruction::Mul { dst: r(2), lhs: r(0), rhs: r(1) },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::Mul {
+                dst: r(2),
+                lhs: r(0),
+                rhs: r(1),
+            },
             Instruction::Return { src: r(2) },
         ],
     };
@@ -116,9 +146,19 @@ fn test_div_two_constants() {
         constants: vec![Value::Int(84), Value::Int(2)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
-            Instruction::Div { dst: r(2), lhs: r(0), rhs: r(1) },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::Div {
+                dst: r(2),
+                lhs: r(0),
+                rhs: r(1),
+            },
             Instruction::Return { src: r(2) },
         ],
     };
@@ -134,13 +174,37 @@ fn test_chained_arithmetic() {
         constants: vec![Value::Int(3), Value::Int(7), Value::Int(2), Value::Int(4)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
-            Instruction::Add { dst: r(2), lhs: r(0), rhs: r(1) },       // r2 = 10
-            Instruction::LoadConst { dst: r(3), const_index: 2 },
-            Instruction::Mul { dst: r(4), lhs: r(2), rhs: r(3) },       // r4 = 20
-            Instruction::LoadConst { dst: r(5), const_index: 3 },
-            Instruction::Sub { dst: r(6), lhs: r(4), rhs: r(5) },       // r6 = 16
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::Add {
+                dst: r(2),
+                lhs: r(0),
+                rhs: r(1),
+            }, // r2 = 10
+            Instruction::LoadConst {
+                dst: r(3),
+                const_index: 2,
+            },
+            Instruction::Mul {
+                dst: r(4),
+                lhs: r(2),
+                rhs: r(3),
+            }, // r4 = 20
+            Instruction::LoadConst {
+                dst: r(5),
+                const_index: 3,
+            },
+            Instruction::Sub {
+                dst: r(6),
+                lhs: r(4),
+                rhs: r(5),
+            }, // r6 = 16
             Instruction::Return { src: r(6) },
         ],
     };
@@ -164,17 +228,37 @@ fn test_factorial_via_loop() {
         property_pool: Vec::new(),
         instructions: vec![
             // 0: load n=5 into r0
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             // 1: load acc=1 into r1
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
             // 2: load decrement=1 into r2
-            Instruction::LoadConst { dst: r(2), const_index: 1 },
+            Instruction::LoadConst {
+                dst: r(2),
+                const_index: 1,
+            },
             // 3: acc = acc * n
-            Instruction::Mul { dst: r(1), lhs: r(1), rhs: r(0) },
+            Instruction::Mul {
+                dst: r(1),
+                lhs: r(1),
+                rhs: r(0),
+            },
             // 4: n = n - 1
-            Instruction::Sub { dst: r(0), lhs: r(0), rhs: r(2) },
+            Instruction::Sub {
+                dst: r(0),
+                lhs: r(0),
+                rhs: r(2),
+            },
             // 5: if n == 0 (falsy), jump to 7 (return)
-            Instruction::JumpIfFalse { condition: r(0), target: 7 },
+            Instruction::JumpIfFalse {
+                condition: r(0),
+                target: 7,
+            },
             // 6: jump back to loop body
             Instruction::Jump { target: 3 },
             // 7: return accumulator
@@ -195,23 +279,52 @@ fn test_fibonacci_via_loop() {
         property_pool: Vec::new(),
         instructions: vec![
             // 0: r0 = 0 (fib_prev)
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             // 1: r1 = 1 (fib_curr)
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
             // 2: r2 = 10 (counter)
-            Instruction::LoadConst { dst: r(2), const_index: 2 },
+            Instruction::LoadConst {
+                dst: r(2),
+                const_index: 2,
+            },
             // 3: r3 = 1 (decrement constant)
-            Instruction::LoadConst { dst: r(3), const_index: 1 },
+            Instruction::LoadConst {
+                dst: r(3),
+                const_index: 1,
+            },
             // 4: r4 = r0 + r1  (next fib)
-            Instruction::Add { dst: r(4), lhs: r(0), rhs: r(1) },
+            Instruction::Add {
+                dst: r(4),
+                lhs: r(0),
+                rhs: r(1),
+            },
             // 5: r0 = r1 (shift prev)
-            Instruction::Move { dst: r(0), src: r(1) },
+            Instruction::Move {
+                dst: r(0),
+                src: r(1),
+            },
             // 6: r1 = r4 (shift curr)
-            Instruction::Move { dst: r(1), src: r(4) },
+            Instruction::Move {
+                dst: r(1),
+                src: r(4),
+            },
             // 7: r2 = r2 - 1
-            Instruction::Sub { dst: r(2), lhs: r(2), rhs: r(3) },
+            Instruction::Sub {
+                dst: r(2),
+                lhs: r(2),
+                rhs: r(3),
+            },
             // 8: if counter != 0, continue
-            Instruction::JumpIfFalse { condition: r(2), target: 10 },
+            Instruction::JumpIfFalse {
+                condition: r(2),
+                target: 10,
+            },
             // 9: loop back
             Instruction::Jump { target: 4 },
             // 10: return r0 (fib(10))
@@ -231,15 +344,35 @@ fn test_accumulation_sum_1_to_10() {
         constants: vec![Value::Int(10), Value::Int(0), Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
-            Instruction::LoadConst { dst: r(2), const_index: 2 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::LoadConst {
+                dst: r(2),
+                const_index: 2,
+            },
             // 3: sum += counter
-            Instruction::Add { dst: r(1), lhs: r(1), rhs: r(0) },
+            Instruction::Add {
+                dst: r(1),
+                lhs: r(1),
+                rhs: r(0),
+            },
             // 4: counter -= 1
-            Instruction::Sub { dst: r(0), lhs: r(0), rhs: r(2) },
+            Instruction::Sub {
+                dst: r(0),
+                lhs: r(0),
+                rhs: r(2),
+            },
             // 5: if counter == 0, exit
-            Instruction::JumpIfFalse { condition: r(0), target: 7 },
+            Instruction::JumpIfFalse {
+                condition: r(0),
+                target: 7,
+            },
             // 6: loop
             Instruction::Jump { target: 3 },
             // 7: return sum
@@ -277,9 +410,20 @@ fn test_store_and_load_property() {
         property_pool: vec!["x".to_string()],
         instructions: vec![
             Instruction::NewObject { dst: r(0) },
-            Instruction::LoadConst { dst: r(1), const_index: 0 },
-            Instruction::StoreProp { object: r(0), property_index: 0, value: r(1) },
-            Instruction::LoadPropCached { dst: r(2), object: r(0), property_index: 0 },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 0,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
+            Instruction::LoadPropCached {
+                dst: r(2),
+                object: r(0),
+                property_index: 0,
+            },
             Instruction::Return { src: r(2) },
         ],
     };
@@ -295,13 +439,39 @@ fn test_store_multiple_properties() {
         property_pool: vec!["a".to_string(), "b".to_string()],
         instructions: vec![
             Instruction::NewObject { dst: r(0) },
-            Instruction::LoadConst { dst: r(1), const_index: 0 },
-            Instruction::StoreProp { object: r(0), property_index: 0, value: r(1) },
-            Instruction::LoadConst { dst: r(2), const_index: 1 },
-            Instruction::StoreProp { object: r(0), property_index: 1, value: r(2) },
-            Instruction::LoadPropCached { dst: r(3), object: r(0), property_index: 0 },
-            Instruction::LoadPropCached { dst: r(4), object: r(0), property_index: 1 },
-            Instruction::Add { dst: r(5), lhs: r(3), rhs: r(4) },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 0,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
+            Instruction::LoadConst {
+                dst: r(2),
+                const_index: 1,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 1,
+                value: r(2),
+            },
+            Instruction::LoadPropCached {
+                dst: r(3),
+                object: r(0),
+                property_index: 0,
+            },
+            Instruction::LoadPropCached {
+                dst: r(4),
+                object: r(0),
+                property_index: 1,
+            },
+            Instruction::Add {
+                dst: r(5),
+                lhs: r(3),
+                rhs: r(4),
+            },
             Instruction::Return { src: r(5) },
         ],
     };
@@ -318,7 +488,11 @@ fn test_load_missing_property_returns_undefined() {
         property_pool: vec!["missing".to_string()],
         instructions: vec![
             Instruction::NewObject { dst: r(0) },
-            Instruction::LoadPropCached { dst: r(1), object: r(0), property_index: 0 },
+            Instruction::LoadPropCached {
+                dst: r(1),
+                object: r(0),
+                property_index: 0,
+            },
             Instruction::Return { src: r(1) },
         ],
     };
@@ -334,11 +508,29 @@ fn test_overwrite_property_value() {
         property_pool: vec!["x".to_string()],
         instructions: vec![
             Instruction::NewObject { dst: r(0) },
-            Instruction::LoadConst { dst: r(1), const_index: 0 },
-            Instruction::StoreProp { object: r(0), property_index: 0, value: r(1) },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
-            Instruction::StoreProp { object: r(0), property_index: 0, value: r(1) },
-            Instruction::LoadPropCached { dst: r(2), object: r(0), property_index: 0 },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 0,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
+            Instruction::LoadPropCached {
+                dst: r(2),
+                object: r(0),
+                property_index: 0,
+            },
             Instruction::Return { src: r(2) },
         ],
     };
@@ -358,9 +550,20 @@ fn test_inline_cache_first_access_is_miss() {
         property_pool: vec!["x".to_string()],
         instructions: vec![
             Instruction::NewObject { dst: r(0) },
-            Instruction::LoadConst { dst: r(1), const_index: 0 },
-            Instruction::StoreProp { object: r(0), property_index: 0, value: r(1) },
-            Instruction::LoadPropCached { dst: r(2), object: r(0), property_index: 0 },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 0,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
+            Instruction::LoadPropCached {
+                dst: r(2),
+                object: r(0),
+                property_index: 0,
+            },
             Instruction::Return { src: r(2) },
         ],
     };
@@ -382,19 +585,43 @@ fn test_inline_cache_repeated_access_accumulates_hits() {
             // 0: create object
             Instruction::NewObject { dst: r(0) },
             // 1: load value
-            Instruction::LoadConst { dst: r(1), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 0,
+            },
             // 2: store prop
-            Instruction::StoreProp { object: r(0), property_index: 0, value: r(1) },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
             // 3: load counter=5
-            Instruction::LoadConst { dst: r(2), const_index: 1 },
+            Instruction::LoadConst {
+                dst: r(2),
+                const_index: 1,
+            },
             // 4: load 1
-            Instruction::LoadConst { dst: r(3), const_index: 2 },
+            Instruction::LoadConst {
+                dst: r(3),
+                const_index: 2,
+            },
             // 5: load prop cached (this is the cache site, ip=5)
-            Instruction::LoadPropCached { dst: r(4), object: r(0), property_index: 0 },
+            Instruction::LoadPropCached {
+                dst: r(4),
+                object: r(0),
+                property_index: 0,
+            },
             // 6: counter -= 1
-            Instruction::Sub { dst: r(2), lhs: r(2), rhs: r(3) },
+            Instruction::Sub {
+                dst: r(2),
+                lhs: r(2),
+                rhs: r(3),
+            },
             // 7: if counter == 0, exit
-            Instruction::JumpIfFalse { condition: r(2), target: 9 },
+            Instruction::JumpIfFalse {
+                condition: r(2),
+                target: 9,
+            },
             // 8: loop back to load
             Instruction::Jump { target: 5 },
             // 9: return loaded value
@@ -418,15 +645,37 @@ fn test_inline_cache_miss_on_shape_transition() {
         property_pool: vec!["a".to_string(), "b".to_string()],
         instructions: vec![
             Instruction::NewObject { dst: r(0) },
-            Instruction::LoadConst { dst: r(1), const_index: 0 },
-            Instruction::StoreProp { object: r(0), property_index: 0, value: r(1) },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 0,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
             // 3: first load of "a" — miss
-            Instruction::LoadPropCached { dst: r(2), object: r(0), property_index: 0 },
+            Instruction::LoadPropCached {
+                dst: r(2),
+                object: r(0),
+                property_index: 0,
+            },
             // 4: store "b" — shape transition
-            Instruction::LoadConst { dst: r(3), const_index: 1 },
-            Instruction::StoreProp { object: r(0), property_index: 1, value: r(3) },
+            Instruction::LoadConst {
+                dst: r(3),
+                const_index: 1,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 1,
+                value: r(3),
+            },
             // 6: second load of "a" — miss (shape changed)
-            Instruction::LoadPropCached { dst: r(4), object: r(0), property_index: 0 },
+            Instruction::LoadPropCached {
+                dst: r(4),
+                object: r(0),
+                property_index: 0,
+            },
             Instruction::Return { src: r(4) },
         ],
     };
@@ -449,11 +698,17 @@ fn test_unconditional_jump() {
         property_pool: Vec::new(),
         instructions: vec![
             // 0: load 1 into r0
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             // 1: jump to 3 (skip instruction 2)
             Instruction::Jump { target: 3 },
             // 2: load 2 into r0 (should be skipped)
-            Instruction::LoadConst { dst: r(0), const_index: 1 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 1,
+            },
             // 3: return r0
             Instruction::Return { src: r(0) },
         ],
@@ -469,11 +724,23 @@ fn test_jump_if_false_taken_on_false_value() {
         constants: vec![Value::Bool(false), Value::Int(10), Value::Int(20)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 }, // false
-            Instruction::JumpIfFalse { condition: r(0), target: 4 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 }, // 10 (skipped)
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            }, // false
+            Instruction::JumpIfFalse {
+                condition: r(0),
+                target: 4,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            }, // 10 (skipped)
             Instruction::Return { src: r(1) },
-            Instruction::LoadConst { dst: r(1), const_index: 2 }, // 20
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 2,
+            }, // 20
             Instruction::Return { src: r(1) },
         ],
     };
@@ -488,11 +755,23 @@ fn test_jump_if_false_not_taken_on_truthy_value() {
         constants: vec![Value::Bool(true), Value::Int(10), Value::Int(20)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 }, // true
-            Instruction::JumpIfFalse { condition: r(0), target: 4 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 }, // 10
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            }, // true
+            Instruction::JumpIfFalse {
+                condition: r(0),
+                target: 4,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            }, // 10
             Instruction::Return { src: r(1) },
-            Instruction::LoadConst { dst: r(1), const_index: 2 }, // 20 (skipped)
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 2,
+            }, // 20 (skipped)
             Instruction::Return { src: r(1) },
         ],
     };
@@ -508,10 +787,19 @@ fn test_jump_if_false_on_zero_int() {
         constants: vec![Value::Int(0), Value::Int(99)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::JumpIfFalse { condition: r(0), target: 3 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::JumpIfFalse {
+                condition: r(0),
+                target: 3,
+            },
             Instruction::Return { src: r(0) },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
             Instruction::Return { src: r(1) },
         ],
     };
@@ -528,9 +816,15 @@ fn test_jump_if_false_on_undefined() {
         property_pool: Vec::new(),
         instructions: vec![
             // r0 starts as Undefined
-            Instruction::JumpIfFalse { condition: r(0), target: 2 },
+            Instruction::JumpIfFalse {
+                condition: r(0),
+                target: 2,
+            },
             Instruction::Return { src: r(0) },
-            Instruction::LoadConst { dst: r(1), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 0,
+            },
             Instruction::Return { src: r(1) },
         ],
     };
@@ -548,17 +842,37 @@ fn test_loop_with_early_exit() {
         property_pool: Vec::new(),
         instructions: vec![
             // 0: r0 = 100
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             // 1: r1 = 1
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
             // 2: r2 = 95
-            Instruction::LoadConst { dst: r(2), const_index: 2 },
+            Instruction::LoadConst {
+                dst: r(2),
+                const_index: 2,
+            },
             // 3: r0 = r0 - r1
-            Instruction::Sub { dst: r(0), lhs: r(0), rhs: r(1) },
+            Instruction::Sub {
+                dst: r(0),
+                lhs: r(0),
+                rhs: r(1),
+            },
             // 4: r3 = r0 - r2 (zero when r0 == 95)
-            Instruction::Sub { dst: r(3), lhs: r(0), rhs: r(2) },
+            Instruction::Sub {
+                dst: r(3),
+                lhs: r(0),
+                rhs: r(2),
+            },
             // 5: if r3 == 0, exit
-            Instruction::JumpIfFalse { condition: r(3), target: 7 },
+            Instruction::JumpIfFalse {
+                condition: r(3),
+                target: 7,
+            },
             // 6: loop
             Instruction::Jump { target: 3 },
             // 7: return counter
@@ -580,9 +894,19 @@ fn test_error_division_by_zero() {
         constants: vec![Value::Int(10), Value::Int(0)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
-            Instruction::Div { dst: r(2), lhs: r(0), rhs: r(1) },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::Div {
+                dst: r(2),
+                lhs: r(0),
+                rhs: r(1),
+            },
             Instruction::Return { src: r(2) },
         ],
     };
@@ -596,13 +920,17 @@ fn test_error_register_out_of_bounds_read() {
     let program = Program {
         constants: Vec::new(),
         property_pool: Vec::new(),
-        instructions: vec![
-            Instruction::Return { src: r(100) },
-        ],
+        instructions: vec![Instruction::Return { src: r(100) }],
     };
     let mut vm = BytecodeVm::new("reg-oob", 4, 100);
     let err = vm.execute(&program).unwrap_err();
-    assert!(matches!(err, VmError::RegisterOutOfBounds { register: 100, register_count: 4 }));
+    assert!(matches!(
+        err,
+        VmError::RegisterOutOfBounds {
+            register: 100,
+            register_count: 4
+        }
+    ));
 }
 
 #[test]
@@ -611,13 +939,19 @@ fn test_error_register_out_of_bounds_write() {
         constants: vec![Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(50), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(50),
+                const_index: 0,
+            },
             Instruction::Return { src: r(0) },
         ],
     };
     let mut vm = BytecodeVm::new("reg-oob-write", 4, 100);
     let err = vm.execute(&program).unwrap_err();
-    assert!(matches!(err, VmError::RegisterOutOfBounds { register: 50, .. }));
+    assert!(matches!(
+        err,
+        VmError::RegisterOutOfBounds { register: 50, .. }
+    ));
 }
 
 #[test]
@@ -626,13 +960,22 @@ fn test_error_constant_out_of_bounds() {
         constants: vec![Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 99 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 99,
+            },
             Instruction::Return { src: r(0) },
         ],
     };
     let mut vm = BytecodeVm::new("const-oob", 4, 100);
     let err = vm.execute(&program).unwrap_err();
-    assert!(matches!(err, VmError::ConstantOutOfBounds { const_index: 99, constant_count: 1 }));
+    assert!(matches!(
+        err,
+        VmError::ConstantOutOfBounds {
+            const_index: 99,
+            constant_count: 1
+        }
+    ));
 }
 
 #[test]
@@ -641,9 +984,10 @@ fn test_error_missing_return() {
     let program = Program {
         constants: vec![Value::Int(1)],
         property_pool: Vec::new(),
-        instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-        ],
+        instructions: vec![Instruction::LoadConst {
+            dst: r(0),
+            const_index: 0,
+        }],
     };
     let mut vm = BytecodeVm::new("missing-ret", 4, 100);
     let err = vm.execute(&program).unwrap_err();
@@ -663,7 +1007,13 @@ fn test_error_budget_exhausted() {
     };
     let mut vm = BytecodeVm::new("budget-exhausted", 4, 10);
     let err = vm.execute(&program).unwrap_err();
-    assert!(matches!(err, VmError::BudgetExhausted { executed_steps: 10, step_budget: 10 }));
+    assert!(matches!(
+        err,
+        VmError::BudgetExhausted {
+            executed_steps: 10,
+            step_budget: 10
+        }
+    ));
 }
 
 #[test]
@@ -672,15 +1022,31 @@ fn test_error_type_mismatch_add_on_bool() {
         constants: vec![Value::Bool(true), Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
-            Instruction::Add { dst: r(2), lhs: r(0), rhs: r(1) },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::Add {
+                dst: r(2),
+                lhs: r(0),
+                rhs: r(1),
+            },
             Instruction::Return { src: r(2) },
         ],
     };
     let mut vm = BytecodeVm::new("type-mismatch", 4, 100);
     let err = vm.execute(&program).unwrap_err();
-    assert!(matches!(err, VmError::TypeMismatch { expected: "int", got: "bool" }));
+    assert!(matches!(
+        err,
+        VmError::TypeMismatch {
+            expected: "int",
+            got: "bool"
+        }
+    ));
 }
 
 #[test]
@@ -689,15 +1055,28 @@ fn test_error_type_mismatch_div_on_undefined() {
         constants: vec![Value::Int(5)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             // r1 is Undefined
-            Instruction::Div { dst: r(2), lhs: r(0), rhs: r(1) },
+            Instruction::Div {
+                dst: r(2),
+                lhs: r(0),
+                rhs: r(1),
+            },
             Instruction::Return { src: r(2) },
         ],
     };
     let mut vm = BytecodeVm::new("type-mismatch-undef", 4, 100);
     let err = vm.execute(&program).unwrap_err();
-    assert!(matches!(err, VmError::TypeMismatch { expected: "int", got: "undefined" }));
+    assert!(matches!(
+        err,
+        VmError::TypeMismatch {
+            expected: "int",
+            got: "undefined"
+        }
+    ));
 }
 
 #[test]
@@ -712,7 +1091,13 @@ fn test_error_invalid_jump_target() {
     };
     let mut vm = BytecodeVm::new("bad-jump", 4, 100);
     let err = vm.execute(&program).unwrap_err();
-    assert!(matches!(err, VmError::InvalidJumpTarget { target: 999, instruction_count: 2 }));
+    assert!(matches!(
+        err,
+        VmError::InvalidJumpTarget {
+            target: 999,
+            instruction_count: 2
+        }
+    ));
 }
 
 #[test]
@@ -721,14 +1106,23 @@ fn test_error_invalid_jump_if_false_target() {
         constants: vec![Value::Int(0)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::JumpIfFalse { condition: r(0), target: 500 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::JumpIfFalse {
+                condition: r(0),
+                target: 500,
+            },
             Instruction::Return { src: r(0) },
         ],
     };
     let mut vm = BytecodeVm::new("bad-jif-target", 4, 100);
     let err = vm.execute(&program).unwrap_err();
-    assert!(matches!(err, VmError::InvalidJumpTarget { target: 500, .. }));
+    assert!(matches!(
+        err,
+        VmError::InvalidJumpTarget { target: 500, .. }
+    ));
 }
 
 #[test]
@@ -738,9 +1132,19 @@ fn test_error_object_not_found_store() {
         constants: vec![Value::Object(ObjectId(999)), Value::Int(1)],
         property_pool: vec!["x".to_string()],
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
-            Instruction::StoreProp { object: r(0), property_index: 0, value: r(1) },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
             Instruction::Return { src: r(0) },
         ],
     };
@@ -755,8 +1159,15 @@ fn test_error_object_not_found_load() {
         constants: vec![Value::Object(ObjectId(42))],
         property_pool: vec!["x".to_string()],
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadPropCached { dst: r(1), object: r(0), property_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadPropCached {
+                dst: r(1),
+                object: r(0),
+                property_index: 0,
+            },
             Instruction::Return { src: r(1) },
         ],
     };
@@ -772,14 +1183,27 @@ fn test_error_property_index_out_of_bounds_store() {
         property_pool: vec!["x".to_string()],
         instructions: vec![
             Instruction::NewObject { dst: r(0) },
-            Instruction::LoadConst { dst: r(1), const_index: 0 },
-            Instruction::StoreProp { object: r(0), property_index: 99, value: r(1) },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 0,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 99,
+                value: r(1),
+            },
             Instruction::Return { src: r(0) },
         ],
     };
     let mut vm = BytecodeVm::new("prop-oob-store", 4, 100);
     let err = vm.execute(&program).unwrap_err();
-    assert!(matches!(err, VmError::PropertyIndexOutOfBounds { property_index: 99, property_count: 1 }));
+    assert!(matches!(
+        err,
+        VmError::PropertyIndexOutOfBounds {
+            property_index: 99,
+            property_count: 1
+        }
+    ));
 }
 
 #[test]
@@ -789,13 +1213,23 @@ fn test_error_property_index_out_of_bounds_load() {
         property_pool: Vec::new(),
         instructions: vec![
             Instruction::NewObject { dst: r(0) },
-            Instruction::LoadPropCached { dst: r(1), object: r(0), property_index: 5 },
+            Instruction::LoadPropCached {
+                dst: r(1),
+                object: r(0),
+                property_index: 5,
+            },
             Instruction::Return { src: r(1) },
         ],
     };
     let mut vm = BytecodeVm::new("prop-oob-load", 4, 100);
     let err = vm.execute(&program).unwrap_err();
-    assert!(matches!(err, VmError::PropertyIndexOutOfBounds { property_index: 5, property_count: 0 }));
+    assert!(matches!(
+        err,
+        VmError::PropertyIndexOutOfBounds {
+            property_index: 5,
+            property_count: 0
+        }
+    ));
 }
 
 #[test]
@@ -804,15 +1238,31 @@ fn test_error_type_mismatch_store_prop_on_int() {
         constants: vec![Value::Int(5), Value::Int(1)],
         property_pool: vec!["x".to_string()],
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
-            Instruction::StoreProp { object: r(0), property_index: 0, value: r(1) },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
             Instruction::Return { src: r(0) },
         ],
     };
     let mut vm = BytecodeVm::new("type-mismatch-store", 4, 100);
     let err = vm.execute(&program).unwrap_err();
-    assert!(matches!(err, VmError::TypeMismatch { expected: "object", got: "int" }));
+    assert!(matches!(
+        err,
+        VmError::TypeMismatch {
+            expected: "object",
+            got: "int"
+        }
+    ));
 }
 
 // ===========================================================================
@@ -825,9 +1275,19 @@ fn test_deterministic_state_hash_across_runs() {
         constants: vec![Value::Int(3), Value::Int(4)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
-            Instruction::Add { dst: r(2), lhs: r(0), rhs: r(1) },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::Add {
+                dst: r(2),
+                lhs: r(0),
+                rhs: r(1),
+            },
             Instruction::Return { src: r(2) },
         ],
     };
@@ -849,7 +1309,10 @@ fn test_different_trace_ids_produce_different_hashes() {
         constants: vec![Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             Instruction::Return { src: r(0) },
         ],
     };
@@ -872,12 +1335,32 @@ fn test_determinism_complex_program() {
         constants: vec![Value::Int(7), Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
-            Instruction::LoadConst { dst: r(2), const_index: 1 },
-            Instruction::Mul { dst: r(1), lhs: r(1), rhs: r(0) },
-            Instruction::Sub { dst: r(0), lhs: r(0), rhs: r(2) },
-            Instruction::JumpIfFalse { condition: r(0), target: 7 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::LoadConst {
+                dst: r(2),
+                const_index: 1,
+            },
+            Instruction::Mul {
+                dst: r(1),
+                lhs: r(1),
+                rhs: r(0),
+            },
+            Instruction::Sub {
+                dst: r(0),
+                lhs: r(0),
+                rhs: r(2),
+            },
+            Instruction::JumpIfFalse {
+                condition: r(0),
+                target: 7,
+            },
             Instruction::Jump { target: 3 },
             Instruction::Return { src: r(1) },
         ],
@@ -905,7 +1388,10 @@ fn test_serde_roundtrip_program() {
         constants: vec![Value::Int(42), Value::Bool(true), Value::Undefined],
         property_pool: vec!["hello".to_string()],
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             Instruction::NewObject { dst: r(1) },
             Instruction::Return { src: r(0) },
         ],
@@ -936,37 +1422,91 @@ fn test_serde_roundtrip_value_all_variants() {
 #[test]
 fn test_serde_roundtrip_vm_error_all_variants() {
     let errors = vec![
-        VmError::RegisterOutOfBounds { register: 10, register_count: 4 },
-        VmError::ConstantOutOfBounds { const_index: 5, constant_count: 2 },
-        VmError::PropertyIndexOutOfBounds { property_index: 3, property_count: 1 },
+        VmError::RegisterOutOfBounds {
+            register: 10,
+            register_count: 4,
+        },
+        VmError::ConstantOutOfBounds {
+            const_index: 5,
+            constant_count: 2,
+        },
+        VmError::PropertyIndexOutOfBounds {
+            property_index: 3,
+            property_count: 1,
+        },
         VmError::ObjectNotFound { object_id: 99 },
-        VmError::TypeMismatch { expected: "int", got: "bool" },
+        VmError::TypeMismatch {
+            expected: "int",
+            got: "bool",
+        },
         VmError::DivisionByZero,
-        VmError::InvalidJumpTarget { target: 100, instruction_count: 5 },
+        VmError::InvalidJumpTarget {
+            target: 100,
+            instruction_count: 5,
+        },
         VmError::MissingReturn,
-        VmError::BudgetExhausted { executed_steps: 50, step_budget: 50 },
+        VmError::BudgetExhausted {
+            executed_steps: 50,
+            step_budget: 50,
+        },
     ];
     for error in &errors {
-        let serialized = serde_json::to_string(error).unwrap();
-        let deserialized: VmError = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(error, &deserialized);
+        // VmError contains &'static str fields (TypeMismatch), so we can't
+        // deserialize from non-static data. Compare JSON round-trip instead.
+        let value = serde_json::to_value(error).unwrap();
+        let json_str = serde_json::to_string(&value).unwrap();
+        let reparsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(value, reparsed, "JSON round-trip failed for {error:?}");
     }
 }
 
 #[test]
 fn test_serde_roundtrip_instruction_all_variants() {
     let instructions = vec![
-        Instruction::LoadConst { dst: r(0), const_index: 5 },
-        Instruction::Move { dst: r(1), src: r(2) },
-        Instruction::Add { dst: r(3), lhs: r(4), rhs: r(5) },
-        Instruction::Sub { dst: r(0), lhs: r(1), rhs: r(2) },
-        Instruction::Mul { dst: r(0), lhs: r(1), rhs: r(2) },
-        Instruction::Div { dst: r(0), lhs: r(1), rhs: r(2) },
+        Instruction::LoadConst {
+            dst: r(0),
+            const_index: 5,
+        },
+        Instruction::Move {
+            dst: r(1),
+            src: r(2),
+        },
+        Instruction::Add {
+            dst: r(3),
+            lhs: r(4),
+            rhs: r(5),
+        },
+        Instruction::Sub {
+            dst: r(0),
+            lhs: r(1),
+            rhs: r(2),
+        },
+        Instruction::Mul {
+            dst: r(0),
+            lhs: r(1),
+            rhs: r(2),
+        },
+        Instruction::Div {
+            dst: r(0),
+            lhs: r(1),
+            rhs: r(2),
+        },
         Instruction::NewObject { dst: r(0) },
-        Instruction::StoreProp { object: r(0), property_index: 1, value: r(2) },
-        Instruction::LoadPropCached { dst: r(3), object: r(0), property_index: 0 },
+        Instruction::StoreProp {
+            object: r(0),
+            property_index: 1,
+            value: r(2),
+        },
+        Instruction::LoadPropCached {
+            dst: r(3),
+            object: r(0),
+            property_index: 0,
+        },
         Instruction::Jump { target: 42 },
-        Instruction::JumpIfFalse { condition: r(0), target: 10 },
+        Instruction::JumpIfFalse {
+            condition: r(0),
+            target: 10,
+        },
         Instruction::Return { src: r(7) },
     ];
     for instruction in &instructions {
@@ -982,7 +1522,10 @@ fn test_serde_roundtrip_execution_report() {
         constants: vec![Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             Instruction::Return { src: r(0) },
         ],
     };
@@ -1009,7 +1552,10 @@ fn test_events_contain_trace_id_and_component() {
         constants: vec![Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             Instruction::Return { src: r(0) },
         ],
     };
@@ -1029,9 +1575,19 @@ fn test_events_one_per_instruction() {
         constants: vec![Value::Int(1), Value::Int(2)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
-            Instruction::Add { dst: r(2), lhs: r(0), rhs: r(1) },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::Add {
+                dst: r(2),
+                lhs: r(0),
+                rhs: r(1),
+            },
             Instruction::Return { src: r(2) },
         ],
     };
@@ -1047,8 +1603,14 @@ fn test_events_record_opcode_names() {
         constants: vec![Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::Move { dst: r(1), src: r(0) },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::Move {
+                dst: r(1),
+                src: r(0),
+            },
             Instruction::Return { src: r(1) },
         ],
     };
@@ -1064,7 +1626,10 @@ fn test_events_return_instruction_has_return_event() {
         constants: vec![Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             Instruction::Return { src: r(0) },
         ],
     };
@@ -1081,9 +1646,19 @@ fn test_events_error_has_error_code() {
         constants: vec![Value::Int(1), Value::Int(0)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
-            Instruction::Div { dst: r(2), lhs: r(0), rhs: r(1) },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::Div {
+                dst: r(2),
+                lhs: r(0),
+                rhs: r(1),
+            },
             Instruction::Return { src: r(2) },
         ],
     };
@@ -1099,7 +1674,10 @@ fn test_cache_stats_zero_for_no_property_loads() {
         constants: vec![Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             Instruction::Return { src: r(0) },
         ],
     };
@@ -1118,15 +1696,41 @@ fn test_cache_stats_entries_count_distinct_sites() {
         property_pool: vec!["a".to_string(), "b".to_string()],
         instructions: vec![
             Instruction::NewObject { dst: r(0) },
-            Instruction::LoadConst { dst: r(1), const_index: 0 },
-            Instruction::StoreProp { object: r(0), property_index: 0, value: r(1) },
-            Instruction::LoadConst { dst: r(2), const_index: 1 },
-            Instruction::StoreProp { object: r(0), property_index: 1, value: r(2) },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 0,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
+            Instruction::LoadConst {
+                dst: r(2),
+                const_index: 1,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 1,
+                value: r(2),
+            },
             // ip=5: load "a"
-            Instruction::LoadPropCached { dst: r(3), object: r(0), property_index: 0 },
+            Instruction::LoadPropCached {
+                dst: r(3),
+                object: r(0),
+                property_index: 0,
+            },
             // ip=6: load "b"
-            Instruction::LoadPropCached { dst: r(4), object: r(0), property_index: 1 },
-            Instruction::Add { dst: r(5), lhs: r(3), rhs: r(4) },
+            Instruction::LoadPropCached {
+                dst: r(4),
+                object: r(0),
+                property_index: 1,
+            },
+            Instruction::Add {
+                dst: r(5),
+                lhs: r(3),
+                rhs: r(4),
+            },
             Instruction::Return { src: r(5) },
         ],
     };
@@ -1148,7 +1752,10 @@ fn test_vm_resets_registers_between_executions() {
         constants: vec![Value::Int(999)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             Instruction::Return { src: r(0) },
         ],
     };
@@ -1175,8 +1782,15 @@ fn test_vm_resets_heap_between_executions() {
         property_pool: vec!["x".to_string()],
         instructions: vec![
             Instruction::NewObject { dst: r(0) },
-            Instruction::LoadConst { dst: r(1), const_index: 0 },
-            Instruction::StoreProp { object: r(0), property_index: 0, value: r(1) },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 0,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
             Instruction::Return { src: r(0) },
         ],
     };
@@ -1185,8 +1799,15 @@ fn test_vm_resets_heap_between_executions() {
         property_pool: vec!["x".to_string()],
         instructions: vec![
             // Try to load from object 0 which should not exist anymore
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadPropCached { dst: r(1), object: r(0), property_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadPropCached {
+                dst: r(1),
+                object: r(0),
+                property_index: 0,
+            },
             Instruction::Return { src: r(1) },
         ],
     };
@@ -1203,9 +1824,20 @@ fn test_vm_resets_cache_between_executions() {
         property_pool: vec!["x".to_string()],
         instructions: vec![
             Instruction::NewObject { dst: r(0) },
-            Instruction::LoadConst { dst: r(1), const_index: 0 },
-            Instruction::StoreProp { object: r(0), property_index: 0, value: r(1) },
-            Instruction::LoadPropCached { dst: r(2), object: r(0), property_index: 0 },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 0,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
+            Instruction::LoadPropCached {
+                dst: r(2),
+                object: r(0),
+                property_index: 0,
+            },
             Instruction::Return { src: r(2) },
         ],
     };
@@ -1227,7 +1859,10 @@ fn test_vm_resets_events_between_executions() {
         constants: vec![Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             Instruction::Return { src: r(0) },
         ],
     };
@@ -1279,7 +1914,13 @@ fn test_zero_budget_immediate_exhaustion() {
     };
     let mut vm = BytecodeVm::new("zero-budget", 2, 0);
     let err = vm.execute(&program).unwrap_err();
-    assert!(matches!(err, VmError::BudgetExhausted { executed_steps: 0, step_budget: 0 }));
+    assert!(matches!(
+        err,
+        VmError::BudgetExhausted {
+            executed_steps: 0,
+            step_budget: 0
+        }
+    ));
 }
 
 #[test]
@@ -1288,7 +1929,10 @@ fn test_budget_exactly_sufficient() {
         constants: vec![Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             Instruction::Return { src: r(0) },
         ],
     };
@@ -1304,7 +1948,10 @@ fn test_budget_one_short() {
         constants: vec![Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             Instruction::Return { src: r(0) },
         ],
     };
@@ -1332,13 +1979,22 @@ fn test_budget_one_short_errors() {
         constants: vec![Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             Instruction::Return { src: r(0) },
         ],
     };
     let mut vm = BytecodeVm::new("short-budget-err", 2, 1);
     let err = vm.execute(&program).unwrap_err();
-    assert!(matches!(err, VmError::BudgetExhausted { executed_steps: 1, step_budget: 1 }));
+    assert!(matches!(
+        err,
+        VmError::BudgetExhausted {
+            executed_steps: 1,
+            step_budget: 1
+        }
+    ));
 }
 
 #[test]
@@ -1348,7 +2004,10 @@ fn test_maximum_register_index() {
         constants: vec![Value::Int(77)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: Register(255), const_index: 0 },
+            Instruction::LoadConst {
+                dst: Register(255),
+                const_index: 0,
+            },
             Instruction::Return { src: Register(255) },
         ],
     };
@@ -1363,8 +2022,14 @@ fn test_move_instruction() {
         constants: vec![Value::Int(42)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::Move { dst: r(1), src: r(0) },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::Move {
+                dst: r(1),
+                src: r(0),
+            },
             Instruction::Return { src: r(1) },
         ],
     };
@@ -1379,10 +2044,20 @@ fn test_move_preserves_source() {
         constants: vec![Value::Int(42)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::Move { dst: r(1), src: r(0) },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::Move {
+                dst: r(1),
+                src: r(0),
+            },
             // r0 should still have 42
-            Instruction::Add { dst: r(2), lhs: r(0), rhs: r(1) },
+            Instruction::Add {
+                dst: r(2),
+                lhs: r(0),
+                rhs: r(1),
+            },
             Instruction::Return { src: r(2) },
         ],
     };
@@ -1397,9 +2072,19 @@ fn test_wrapping_add_overflow() {
         constants: vec![Value::Int(i64::MAX), Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
-            Instruction::Add { dst: r(2), lhs: r(0), rhs: r(1) },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::Add {
+                dst: r(2),
+                lhs: r(0),
+                rhs: r(1),
+            },
             Instruction::Return { src: r(2) },
         ],
     };
@@ -1414,9 +2099,19 @@ fn test_wrapping_sub_underflow() {
         constants: vec![Value::Int(i64::MIN), Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
-            Instruction::Sub { dst: r(2), lhs: r(0), rhs: r(1) },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::Sub {
+                dst: r(2),
+                lhs: r(0),
+                rhs: r(1),
+            },
             Instruction::Return { src: r(2) },
         ],
     };
@@ -1431,9 +2126,19 @@ fn test_wrapping_mul_overflow() {
         constants: vec![Value::Int(i64::MAX), Value::Int(2)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
-            Instruction::Mul { dst: r(2), lhs: r(0), rhs: r(1) },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::Mul {
+                dst: r(2),
+                lhs: r(0),
+                rhs: r(1),
+            },
             Instruction::Return { src: r(2) },
         ],
     };
@@ -1448,7 +2153,10 @@ fn test_return_bool_value() {
         constants: vec![Value::Bool(true)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             Instruction::Return { src: r(0) },
         ],
     };
@@ -1463,7 +2171,10 @@ fn test_state_hash_is_hex_string() {
         constants: vec![Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             Instruction::Return { src: r(0) },
         ],
     };
@@ -1481,8 +2192,15 @@ fn test_shape_trace_emitted_on_store_prop() {
         property_pool: vec!["x".to_string()],
         instructions: vec![
             Instruction::NewObject { dst: r(0) },
-            Instruction::LoadConst { dst: r(1), const_index: 0 },
-            Instruction::StoreProp { object: r(0), property_index: 0, value: r(1) },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 0,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
             Instruction::Return { src: r(0) },
         ],
     };
@@ -1505,14 +2223,40 @@ fn test_multiple_objects_independent_shapes() {
             Instruction::NewObject { dst: r(0) },
             Instruction::NewObject { dst: r(1) },
             // Store different properties on each
-            Instruction::LoadConst { dst: r(2), const_index: 0 },
-            Instruction::StoreProp { object: r(0), property_index: 0, value: r(2) },
-            Instruction::LoadConst { dst: r(3), const_index: 1 },
-            Instruction::StoreProp { object: r(1), property_index: 1, value: r(3) },
+            Instruction::LoadConst {
+                dst: r(2),
+                const_index: 0,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(2),
+            },
+            Instruction::LoadConst {
+                dst: r(3),
+                const_index: 1,
+            },
+            Instruction::StoreProp {
+                object: r(1),
+                property_index: 1,
+                value: r(3),
+            },
             // Load from each
-            Instruction::LoadPropCached { dst: r(4), object: r(0), property_index: 0 },
-            Instruction::LoadPropCached { dst: r(5), object: r(1), property_index: 1 },
-            Instruction::Add { dst: r(6), lhs: r(4), rhs: r(5) },
+            Instruction::LoadPropCached {
+                dst: r(4),
+                object: r(0),
+                property_index: 0,
+            },
+            Instruction::LoadPropCached {
+                dst: r(5),
+                object: r(1),
+                property_index: 1,
+            },
+            Instruction::Add {
+                dst: r(6),
+                lhs: r(4),
+                rhs: r(5),
+            },
             Instruction::Return { src: r(6) },
         ],
     };
@@ -1524,26 +2268,39 @@ fn test_multiple_objects_independent_shapes() {
 #[test]
 fn test_jump_to_instruction_zero() {
     // Jump back to instruction 0, but with a counter to avoid infinite loop
-    let program = Program {
+    let _program = Program {
         constants: vec![Value::Int(3), Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
             // 0: if r0 is undefined (first pass) or truthy, load counter
-            Instruction::JumpIfFalse { condition: r(0), target: 3 },
+            Instruction::JumpIfFalse {
+                condition: r(0),
+                target: 3,
+            },
             // 1: decrement
-            Instruction::Sub { dst: r(0), lhs: r(0), rhs: r(1) },
+            Instruction::Sub {
+                dst: r(0),
+                lhs: r(0),
+                rhs: r(1),
+            },
             // 2: jump to start
             Instruction::Jump { target: 0 },
             // 3: load initial counter if first time, or return if done
             // Actually this is tricky. Let me restructure.
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             // 4: load decrement
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
             // 5: jump to start
             Instruction::Jump { target: 0 },
         ],
     };
-    let mut vm = BytecodeVm::new("jump-zero", 4, 100);
+    let vm = BytecodeVm::new("jump-zero", 4, 100);
     // r0 starts as Undefined (falsy), so it jumps to 3, loads 3, loads 1, jumps to 0
     // Then r0=3 (truthy), sub to 2, jump to 0. r0=2 (truthy), sub to 1, jump to 0.
     // r0=1 (truthy), sub to 0 (falsy), jump to 0. r0=0 (falsy), jump to 3.
@@ -1555,13 +2312,26 @@ fn test_jump_to_instruction_zero() {
         property_pool: Vec::new(),
         instructions: vec![
             // 0: load counter first time
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             // 1: load 1
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
             // 2: sub
-            Instruction::Sub { dst: r(0), lhs: r(0), rhs: r(1) },
+            Instruction::Sub {
+                dst: r(0),
+                lhs: r(0),
+                rhs: r(1),
+            },
             // 3: if zero, exit
-            Instruction::JumpIfFalse { condition: r(0), target: 5 },
+            Instruction::JumpIfFalse {
+                condition: r(0),
+                target: 5,
+            },
             // 4: jump to 2 (not 0, to avoid re-loading)
             Instruction::Jump { target: 2 },
             // 5: return
@@ -1579,9 +2349,19 @@ fn test_negative_integer_arithmetic() {
         constants: vec![Value::Int(-10), Value::Int(-5)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
-            Instruction::Mul { dst: r(2), lhs: r(0), rhs: r(1) },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::Mul {
+                dst: r(2),
+                lhs: r(0),
+                rhs: r(1),
+            },
             Instruction::Return { src: r(2) },
         ],
     };
@@ -1596,9 +2376,19 @@ fn test_div_truncates_toward_zero() {
         constants: vec![Value::Int(7), Value::Int(2)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
-            Instruction::Div { dst: r(2), lhs: r(0), rhs: r(1) },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
+            Instruction::Div {
+                dst: r(2),
+                lhs: r(0),
+                rhs: r(1),
+            },
             Instruction::Return { src: r(2) },
         ],
     };
@@ -1613,8 +2403,14 @@ fn test_event_ip_tracks_instruction_pointer() {
         constants: vec![Value::Int(1), Value::Int(2)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::LoadConst { dst: r(1), const_index: 1 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 1,
+            },
             Instruction::Return { src: r(0) },
         ],
     };
@@ -1630,9 +2426,18 @@ fn test_event_steps_are_sequential() {
         constants: vec![Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
-            Instruction::Move { dst: r(1), src: r(0) },
-            Instruction::Move { dst: r(2), src: r(1) },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
+            Instruction::Move {
+                dst: r(1),
+                src: r(0),
+            },
+            Instruction::Move {
+                dst: r(2),
+                src: r(1),
+            },
             Instruction::Return { src: r(2) },
         ],
     };
@@ -1666,7 +2471,10 @@ fn test_report_trace_id_matches_vm() {
         constants: vec![Value::Int(1)],
         property_pool: Vec::new(),
         instructions: vec![
-            Instruction::LoadConst { dst: r(0), const_index: 0 },
+            Instruction::LoadConst {
+                dst: r(0),
+                const_index: 0,
+            },
             Instruction::Return { src: r(0) },
         ],
     };
@@ -1682,14 +2490,35 @@ fn test_load_prop_cached_event_records_cache_hit_field() {
         property_pool: vec!["val".to_string()],
         instructions: vec![
             Instruction::NewObject { dst: r(0) },
-            Instruction::LoadConst { dst: r(1), const_index: 0 },
-            Instruction::StoreProp { object: r(0), property_index: 0, value: r(1) },
-            Instruction::LoadConst { dst: r(2), const_index: 1 },
-            Instruction::LoadConst { dst: r(3), const_index: 2 },
+            Instruction::LoadConst {
+                dst: r(1),
+                const_index: 0,
+            },
+            Instruction::StoreProp {
+                object: r(0),
+                property_index: 0,
+                value: r(1),
+            },
+            Instruction::LoadConst {
+                dst: r(2),
+                const_index: 1,
+            },
+            Instruction::LoadConst {
+                dst: r(3),
+                const_index: 2,
+            },
             // 5: first load (miss)
-            Instruction::LoadPropCached { dst: r(4), object: r(0), property_index: 0 },
+            Instruction::LoadPropCached {
+                dst: r(4),
+                object: r(0),
+                property_index: 0,
+            },
             // 6: second load (hit)
-            Instruction::LoadPropCached { dst: r(4), object: r(0), property_index: 0 },
+            Instruction::LoadPropCached {
+                dst: r(4),
+                object: r(0),
+                property_index: 0,
+            },
             Instruction::Return { src: r(4) },
         ],
     };

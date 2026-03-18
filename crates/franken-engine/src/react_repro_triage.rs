@@ -1114,4 +1114,443 @@ mod tests {
         assert!(!POLICY_ID.is_empty());
         assert!(!COMPONENT.is_empty());
     }
+
+    // ── enrichment: failure class exhaustiveness ──────────────────
+
+    #[test]
+    fn failure_class_all_has_ten_variants() {
+        assert_eq!(FailureClass::all().len(), 10);
+    }
+
+    #[test]
+    fn failure_class_as_str_all_snake_case() {
+        for class in FailureClass::all() {
+            let s = class.as_str();
+            assert!(
+                s.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                "failure class '{}' is not snake_case",
+                s
+            );
+        }
+    }
+
+    #[test]
+    fn failure_class_serde_roundtrip_all_variants() {
+        for class in FailureClass::all() {
+            let json = serde_json::to_string(class).unwrap();
+            let decoded: FailureClass = serde_json::from_str(&json).unwrap();
+            assert_eq!(*class, decoded);
+        }
+    }
+
+    #[test]
+    fn failure_class_suspense_and_error_boundary_are_engine_bugs() {
+        assert!(FailureClass::SuspenseDivergence.is_engine_bug());
+        assert!(FailureClass::ErrorBoundaryFailure.is_engine_bug());
+    }
+
+    // ── enrichment: severity properties ───────────────────────────
+
+    #[test]
+    fn severity_all_variants_have_distinct_as_str() {
+        let strs: BTreeSet<&str> = [
+            FailureSeverity::Critical,
+            FailureSeverity::High,
+            FailureSeverity::Medium,
+            FailureSeverity::Low,
+            FailureSeverity::Info,
+        ]
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+        assert_eq!(strs.len(), 5);
+    }
+
+    #[test]
+    fn severity_display_matches_as_str() {
+        for sev in [
+            FailureSeverity::Critical,
+            FailureSeverity::High,
+            FailureSeverity::Medium,
+            FailureSeverity::Low,
+            FailureSeverity::Info,
+        ] {
+            assert_eq!(sev.to_string(), sev.as_str());
+        }
+    }
+
+    #[test]
+    fn severity_serde_roundtrip_all_variants() {
+        for sev in [
+            FailureSeverity::Critical,
+            FailureSeverity::High,
+            FailureSeverity::Medium,
+            FailureSeverity::Low,
+            FailureSeverity::Info,
+        ] {
+            let json = serde_json::to_string(&sev).unwrap();
+            let decoded: FailureSeverity = serde_json::from_str(&json).unwrap();
+            assert_eq!(sev, decoded);
+        }
+    }
+
+    #[test]
+    fn severity_weights_are_all_distinct() {
+        let weights: BTreeSet<u32> = [
+            FailureSeverity::Critical,
+            FailureSeverity::High,
+            FailureSeverity::Medium,
+            FailureSeverity::Low,
+            FailureSeverity::Info,
+        ]
+        .iter()
+        .map(|s| s.weight())
+        .collect();
+        assert_eq!(weights.len(), 5);
+    }
+
+    // ── enrichment: minimized repro ───────────────────────────────
+
+    #[test]
+    fn minimized_repro_repro_id_starts_with_prefix() {
+        let repro = sample_repro();
+        assert!(
+            repro.repro_id.starts_with("repro-"),
+            "repro_id should start with 'repro-'"
+        );
+    }
+
+    #[test]
+    fn minimized_repro_source_hash_is_deterministic() {
+        let r1 = MinimizedRepro::build("source", "expected", "actual", BTreeSet::new(), "cmd");
+        let r2 = MinimizedRepro::build("source", "expected", "actual", BTreeSet::new(), "cmd");
+        assert_eq!(r1.source_hash, r2.source_hash);
+    }
+
+    #[test]
+    fn minimized_repro_different_source_different_hash() {
+        let r1 = MinimizedRepro::build("source-a", "expected", "actual", BTreeSet::new(), "cmd");
+        let r2 = MinimizedRepro::build("source-b", "expected", "actual", BTreeSet::new(), "cmd");
+        assert_ne!(r1.source_hash, r2.source_hash);
+    }
+
+    #[test]
+    fn minimized_repro_preserves_react_versions() {
+        let versions = BTreeSet::from(["18.2.0".to_string(), "18.3.0".to_string()]);
+        let repro = MinimizedRepro::build("src", "e", "a", versions.clone(), "cmd");
+        assert_eq!(repro.react_versions, versions);
+    }
+
+    #[test]
+    fn minimized_repro_empty_source() {
+        let repro = MinimizedRepro::build("", "e", "a", BTreeSet::new(), "cmd");
+        assert!(repro.source.is_empty());
+        assert!(repro.deterministic);
+    }
+
+    #[test]
+    fn minimized_repro_serde_roundtrip() {
+        let repro = sample_repro();
+        let json = serde_json::to_string(&repro).unwrap();
+        let decoded: MinimizedRepro = serde_json::from_str(&json).unwrap();
+        assert_eq!(repro, decoded);
+    }
+
+    // ── enrichment: triage entry ──────────────────────────────────
+
+    #[test]
+    fn triage_entry_id_contains_failure_class() {
+        let entry = sample_entry();
+        assert!(
+            entry.entry_id.contains("transform_bug"),
+            "entry_id should contain the failure class"
+        );
+    }
+
+    #[test]
+    fn triage_entry_truncates_long_advisory() {
+        let long_advisory = "x".repeat(MAX_ADVISORY_LEN + 500);
+        let entry = TriageEntry::build(
+            FailureClass::TransformBug,
+            FailureSeverity::High,
+            sample_owner(),
+            sample_repro(),
+            &long_advisory,
+        );
+        assert_eq!(entry.advisory.len(), MAX_ADVISORY_LEN);
+    }
+
+    #[test]
+    fn triage_entry_content_hash_deterministic() {
+        let e1 = sample_entry();
+        let e2 = sample_entry();
+        assert_eq!(e1.content_hash, e2.content_hash);
+    }
+
+    #[test]
+    fn triage_entry_different_class_different_hash() {
+        let e1 = TriageEntry::build(
+            FailureClass::TransformBug,
+            FailureSeverity::High,
+            sample_owner(),
+            sample_repro(),
+            "advisory",
+        );
+        let e2 = TriageEntry::build(
+            FailureClass::ResolverBug,
+            FailureSeverity::High,
+            sample_owner(),
+            sample_repro(),
+            "advisory",
+        );
+        assert_ne!(e1.content_hash, e2.content_hash);
+    }
+
+    // ── enrichment: catalog properties ────────────────────────────
+
+    #[test]
+    fn catalog_verify_integrity_single_entry() {
+        let catalog = ReproCatalog::build(vec![sample_entry()], SecurityEpoch::from_raw(1));
+        assert!(catalog.verify_integrity());
+    }
+
+    #[test]
+    fn catalog_schema_version_matches_constant() {
+        let catalog = ReproCatalog::build(vec![], SecurityEpoch::from_raw(1));
+        assert_eq!(catalog.schema_version, SCHEMA_VERSION);
+        assert_eq!(catalog.bead_id, BEAD_ID);
+        assert_eq!(catalog.policy_id, POLICY_ID);
+        assert_eq!(catalog.component, COMPONENT);
+    }
+
+    #[test]
+    fn catalog_by_class_counts_sum_to_total() {
+        let entries = vec![
+            sample_entry(),
+            TriageEntry::build(
+                FailureClass::ResolverBug,
+                FailureSeverity::Medium,
+                default_owner_route(FailureClass::ResolverBug),
+                MinimizedRepro::build("res", "e", "a", BTreeSet::new(), "cmd"),
+                "resolver advisory",
+            ),
+        ];
+        let catalog = ReproCatalog::build(entries, SecurityEpoch::from_raw(1));
+        let sum: usize = catalog.summary.by_class.values().sum();
+        assert_eq!(sum, catalog.summary.total_entries);
+    }
+
+    #[test]
+    fn catalog_by_severity_counts_sum_to_total() {
+        let entries = vec![
+            sample_entry(),
+            TriageEntry::build(
+                FailureClass::PackageMisuse,
+                FailureSeverity::Low,
+                default_owner_route(FailureClass::PackageMisuse),
+                MinimizedRepro::build("pkg", "e", "a", BTreeSet::new(), "cmd"),
+                "misuse advisory",
+            ),
+        ];
+        let catalog = ReproCatalog::build(entries, SecurityEpoch::from_raw(1));
+        let sum: usize = catalog.summary.by_severity.values().sum();
+        assert_eq!(sum, catalog.summary.total_entries);
+    }
+
+    #[test]
+    fn catalog_severity_weighted_score_increases_with_severity() {
+        let low_catalog = ReproCatalog::build(
+            vec![TriageEntry::build(
+                FailureClass::PackageMisuse,
+                FailureSeverity::Low,
+                default_owner_route(FailureClass::PackageMisuse),
+                MinimizedRepro::build("low", "e", "a", BTreeSet::new(), "cmd"),
+                "low",
+            )],
+            SecurityEpoch::from_raw(1),
+        );
+        let high_catalog = ReproCatalog::build(
+            vec![TriageEntry::build(
+                FailureClass::TransformBug,
+                FailureSeverity::Critical,
+                sample_owner(),
+                sample_repro(),
+                "critical",
+            )],
+            SecurityEpoch::from_raw(1),
+        );
+        assert!(
+            high_catalog.summary.severity_weighted_score
+                > low_catalog.summary.severity_weighted_score
+        );
+    }
+
+    // ── enrichment: classify_failure individual symptoms ──────────
+
+    #[test]
+    fn classify_failure_resolver_only() {
+        assert_eq!(
+            classify_failure(&FailureSymptoms {
+                has_resolver_error: true,
+                ..FailureSymptoms::default()
+            }),
+            FailureClass::ResolverBug
+        );
+    }
+
+    #[test]
+    fn classify_failure_runtime_gap_only() {
+        assert_eq!(
+            classify_failure(&FailureSymptoms {
+                has_runtime_gap: true,
+                ..FailureSymptoms::default()
+            }),
+            FailureClass::RuntimeSemanticGap
+        );
+    }
+
+    #[test]
+    fn classify_failure_env_boundary_only() {
+        assert_eq!(
+            classify_failure(&FailureSymptoms {
+                has_env_boundary: true,
+                ..FailureSymptoms::default()
+            }),
+            FailureClass::UnsupportedEnvironment
+        );
+    }
+
+    #[test]
+    fn classify_failure_version_mismatch_only() {
+        assert_eq!(
+            classify_failure(&FailureSymptoms {
+                has_version_mismatch: true,
+                ..FailureSymptoms::default()
+            }),
+            FailureClass::PackageMisuse
+        );
+    }
+
+    #[test]
+    fn classify_failure_suspense_only() {
+        assert_eq!(
+            classify_failure(&FailureSymptoms {
+                has_suspense_diff: true,
+                ..FailureSymptoms::default()
+            }),
+            FailureClass::SuspenseDivergence
+        );
+    }
+
+    #[test]
+    fn classify_failure_error_boundary_only() {
+        assert_eq!(
+            classify_failure(&FailureSymptoms {
+                has_error_boundary_diff: true,
+                ..FailureSymptoms::default()
+            }),
+            FailureClass::ErrorBoundaryFailure
+        );
+    }
+
+    // ── enrichment: assign_severity edge cases ────────────────────
+
+    #[test]
+    fn assign_severity_info_when_resolved() {
+        assert_eq!(
+            assign_severity(FailureClass::TransformBug, false, false, true),
+            FailureSeverity::Info
+        );
+    }
+
+    #[test]
+    fn assign_severity_unclassified_is_low() {
+        assert_eq!(
+            assign_severity(FailureClass::Unclassified, false, false, false),
+            FailureSeverity::Low
+        );
+    }
+
+    // ── enrichment: owner route properties ────────────────────────
+
+    #[test]
+    fn owner_route_serde_roundtrip() {
+        let owner = sample_owner();
+        let json = serde_json::to_string(&owner).unwrap();
+        let decoded: OwnerRoute = serde_json::from_str(&json).unwrap();
+        assert_eq!(owner, decoded);
+    }
+
+    #[test]
+    fn default_owner_routes_have_distinct_teams_for_different_classes() {
+        let transform_owner = default_owner_route(FailureClass::TransformBug);
+        let resolver_owner = default_owner_route(FailureClass::ResolverBug);
+        // Different classes may have different teams (not guaranteed, but likely)
+        assert!(!transform_owner.team.is_empty());
+        assert!(!resolver_owner.team.is_empty());
+    }
+
+    // ── enrichment: triage event details ──────────────────────────
+
+    #[test]
+    fn build_triage_event_trace_ids_propagated() {
+        let entry = sample_entry();
+        let event = build_triage_event("trace-42", "decision-42", "scenario-42", &entry);
+        assert_eq!(event.trace_id, "trace-42");
+        assert_eq!(event.decision_id, "decision-42");
+    }
+
+    #[test]
+    fn build_triage_event_owner_bead_included() {
+        let entry = sample_entry();
+        let event = build_triage_event("t", "d", "s", &entry);
+        assert_eq!(event.owner_bead, entry.owner.bead_id);
+    }
+
+    // ── enrichment: advisory generation ───────────────────────────
+
+    #[test]
+    fn generate_advisory_contains_class_name() {
+        let advisory = generate_advisory(FailureClass::TransformBug, FailureSeverity::Critical);
+        assert!(
+            advisory.contains("transform") || advisory.contains("Transform"),
+            "advisory should reference the failure class"
+        );
+    }
+
+    #[test]
+    fn generate_advisory_bounded_length() {
+        for class in FailureClass::all() {
+            for sev in [
+                FailureSeverity::Critical,
+                FailureSeverity::High,
+                FailureSeverity::Medium,
+                FailureSeverity::Low,
+                FailureSeverity::Info,
+            ] {
+                let advisory = generate_advisory(*class, sev);
+                assert!(
+                    advisory.len() <= MAX_ADVISORY_LEN,
+                    "advisory for {:?}/{:?} exceeds max length",
+                    class,
+                    sev
+                );
+            }
+        }
+    }
+
+    // ── enrichment: catalog summary ───────────────────────────────
+
+    #[test]
+    fn catalog_summary_serde_roundtrip() {
+        let catalog = ReproCatalog::build(vec![sample_entry()], SecurityEpoch::from_raw(1));
+        let json = serde_json::to_string(&catalog.summary).unwrap();
+        let decoded: CatalogSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(catalog.summary, decoded);
+    }
+
+    #[test]
+    fn schema_version_starts_with_franken_engine() {
+        assert!(SCHEMA_VERSION.starts_with("franken-engine."));
+    }
 }

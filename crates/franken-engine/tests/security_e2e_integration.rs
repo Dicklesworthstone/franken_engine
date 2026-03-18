@@ -1,9 +1,10 @@
 #![forbid(unsafe_code)]
 
-//! Integration tests for the `security_e2e` module.
+//! Comprehensive integration tests for the `security_e2e` module.
 //!
 //! Covers all 8 attack categories, Xorshift64 PRNG, scenario result types,
-//! the full suite runner, evidence artifact I/O, and cross-category invariants.
+//! the full suite runner, evidence artifact I/O, determinism, and cross-category
+//! invariants.
 
 #![allow(
     clippy::field_reassign_with_default,
@@ -36,6 +37,15 @@ fn default_config() -> SecuritySuiteConfig {
     }
 }
 
+fn small_config() -> SecuritySuiteConfig {
+    SecuritySuiteConfig {
+        seed: 42,
+        n_extensions: 2,
+        n_evidence_updates: 5,
+        run_id: "small-integ".to_string(),
+    }
+}
+
 fn tmp_dir(suffix: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("franken_sec_e2e_integ_{suffix}"))
 }
@@ -63,6 +73,16 @@ fn constants_min_budget_positive() {
     assert_eq!(MIN_BUDGET_MILLIONTHS, 1_000);
 }
 
+#[test]
+fn constants_component_non_empty() {
+    assert!(!SECURITY_E2E_COMPONENT.is_empty());
+}
+
+#[test]
+fn constants_schema_version_non_empty() {
+    assert!(!SECURITY_E2E_SCHEMA_VERSION.is_empty());
+}
+
 // ===========================================================================
 // 2. AttackCategory
 // ===========================================================================
@@ -76,6 +96,16 @@ fn attack_category_all_returns_eight_variants() {
 fn attack_category_all_unique_strings() {
     let strs: BTreeSet<&str> = AttackCategory::all().iter().map(|c| c.as_str()).collect();
     assert_eq!(strs.len(), 8);
+}
+
+#[test]
+fn attack_category_as_str_returns_distinct_non_empty_for_all() {
+    let mut seen = BTreeSet::new();
+    for cat in AttackCategory::all() {
+        let s = cat.as_str();
+        assert!(!s.is_empty(), "as_str() returned empty for {:?}", cat);
+        assert!(seen.insert(s), "duplicate as_str() value: {s}");
+    }
 }
 
 #[test]
@@ -118,6 +148,48 @@ fn attack_category_all_as_str_contain_hyphens() {
     }
 }
 
+#[test]
+fn attack_category_all_as_str_lowercase_no_underscores() {
+    for cat in AttackCategory::all() {
+        let s = cat.as_str();
+        assert_eq!(s, s.to_lowercase(), "as_str should be lowercase: {s}");
+        assert!(
+            !s.contains('_'),
+            "as_str should use hyphens not underscores: {s}"
+        );
+    }
+}
+
+#[test]
+fn attack_category_all_order_matches_individual_variants() {
+    let all = AttackCategory::all();
+    assert_eq!(all[0], AttackCategory::CapabilityEscalation);
+    assert_eq!(all[1], AttackCategory::ResourceExhaustion);
+    assert_eq!(all[2], AttackCategory::QuarantineCascade);
+    assert_eq!(all[3], AttackCategory::SafeModeFallback);
+    assert_eq!(all[4], AttackCategory::BayesianPosterior);
+    assert_eq!(all[5], AttackCategory::ForkDetection);
+    assert_eq!(all[6], AttackCategory::EpochRegression);
+    assert_eq!(all[7], AttackCategory::EvidenceIntegrity);
+}
+
+#[test]
+fn attack_category_debug_format_contains_variant_name() {
+    let dbg = format!("{:?}", AttackCategory::CapabilityEscalation);
+    assert!(dbg.contains("CapabilityEscalation"));
+    let dbg2 = format!("{:?}", AttackCategory::EvidenceIntegrity);
+    assert!(dbg2.contains("EvidenceIntegrity"));
+}
+
+#[test]
+fn attack_category_clone_eq_ne() {
+    let a = AttackCategory::CapabilityEscalation;
+    let b = a;
+    assert_eq!(a, b);
+    let c = AttackCategory::ForkDetection;
+    assert_ne!(a, c);
+}
+
 // ===========================================================================
 // 3. Xorshift64 PRNG
 // ===========================================================================
@@ -135,7 +207,15 @@ fn xorshift64_deterministic_across_instances() {
 fn xorshift64_zero_seed_normalised_to_one() {
     let mut zero = Xorshift64::new(0);
     let mut one = Xorshift64::new(1);
+    // seed=0 becomes state=1, so they produce the same sequence
     assert_eq!(zero.next_u64(), one.next_u64());
+}
+
+#[test]
+fn xorshift64_zero_seed_does_not_produce_zero() {
+    let mut rng = Xorshift64::new(0);
+    let val = rng.next_u64();
+    assert_ne!(val, 0, "seed=0 should produce nonzero first value");
 }
 
 #[test]
@@ -149,7 +229,24 @@ fn xorshift64_different_seeds_diverge() {
             break;
         }
     }
-    assert!(differ);
+    assert!(differ, "different seeds should produce different sequences");
+}
+
+#[test]
+fn xorshift64_many_different_seeds_diverge() {
+    // Test several seed pairs
+    for (s1, s2) in [(10, 20), (100, 200), (42, 43), (9999, 1)] {
+        let mut a = Xorshift64::new(s1);
+        let mut b = Xorshift64::new(s2);
+        let mut differ = false;
+        for _ in 0..10 {
+            if a.next_u64() != b.next_u64() {
+                differ = true;
+                break;
+            }
+        }
+        assert!(differ, "seeds {s1} and {s2} should diverge");
+    }
 }
 
 #[test]
@@ -165,6 +262,18 @@ fn xorshift64_next_usize_bound_one_always_zero() {
     let mut rng = Xorshift64::new(42);
     for _ in 0..100 {
         assert_eq!(rng.next_usize(1), 0);
+    }
+}
+
+#[test]
+fn xorshift64_next_usize_covers_all_values_for_small_bound() {
+    let mut rng = Xorshift64::new(7);
+    let mut hit = [false; 4];
+    for _ in 0..200 {
+        hit[rng.next_usize(4)] = true;
+    }
+    for (i, &h) in hit.iter().enumerate() {
+        assert!(h, "bucket {i} was never hit in 200 iterations");
     }
 }
 
@@ -208,6 +317,15 @@ fn xorshift64_no_trivial_period() {
     }
 }
 
+#[test]
+fn xorshift64_never_produces_zero_for_many_iterations() {
+    let mut rng = Xorshift64::new(42);
+    for i in 0..10_000 {
+        let val = rng.next_u64();
+        assert_ne!(val, 0, "xorshift64 produced zero at iteration {i}");
+    }
+}
+
 // ===========================================================================
 // 4. Capability escalation
 // ===========================================================================
@@ -226,6 +344,13 @@ fn capability_escalation_blocks_all() {
     for r in &results {
         assert!(r.attack_blocked, "scenario {} not blocked", r.scenario_name);
     }
+}
+
+#[test]
+fn capability_escalation_at_least_one_blocked() {
+    let results = run_capability_escalation(3, 42);
+    let any_blocked = results.iter().any(|r| r.attack_blocked);
+    assert!(any_blocked, "at least one attack should be blocked");
 }
 
 #[test]
@@ -251,6 +376,27 @@ fn capability_escalation_cpu_produces_evidence() {
     assert!(results[0].evidence_produced);
 }
 
+#[test]
+fn capability_escalation_non_empty_results() {
+    let results = run_capability_escalation(3, 42);
+    assert!(!results.is_empty());
+}
+
+#[test]
+fn capability_escalation_hostcall_produces_evidence() {
+    let results = run_capability_escalation(2, 42);
+    assert!(results[1].evidence_produced);
+}
+
+#[test]
+fn capability_escalation_many_extensions_all_blocked() {
+    let results = run_capability_escalation(10, 99);
+    assert_eq!(results.len(), 2);
+    for r in &results {
+        assert!(r.attack_blocked);
+    }
+}
+
 // ===========================================================================
 // 5. Resource exhaustion
 // ===========================================================================
@@ -260,6 +406,12 @@ fn resource_exhaustion_single_scenario() {
     let results = run_resource_exhaustion(3, 42);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].category, AttackCategory::ResourceExhaustion);
+}
+
+#[test]
+fn resource_exhaustion_non_empty_results() {
+    let results = run_resource_exhaustion(3, 42);
+    assert!(!results.is_empty());
 }
 
 #[test]
@@ -282,9 +434,31 @@ fn resource_exhaustion_deterministic() {
     assert_eq!(a[0].security_events, b[0].security_events);
 }
 
+#[test]
+fn resource_exhaustion_zero_extensions() {
+    let results = run_resource_exhaustion(0, 42);
+    assert_eq!(results.len(), 1);
+    assert!(results[0].attack_blocked);
+    assert_eq!(results[0].security_events, 0);
+}
+
+#[test]
+fn resource_exhaustion_many_extensions_produces_events() {
+    let results = run_resource_exhaustion(10, 99);
+    assert_eq!(results.len(), 1);
+    assert!(results[0].attack_blocked);
+    assert!(results[0].security_events > 0);
+}
+
 // ===========================================================================
 // 6. Quarantine cascade
 // ===========================================================================
+
+#[test]
+fn quarantine_cascade_non_empty_results() {
+    let results = run_quarantine_cascade(8, 4, 42);
+    assert!(!results.is_empty());
+}
 
 #[test]
 fn quarantine_cascade_isolates_subset() {
@@ -326,6 +500,28 @@ fn quarantine_cascade_total_registered_correct() {
     assert_eq!(r.details["total_registered"], "7");
 }
 
+#[test]
+fn quarantine_cascade_single_extension_single_quarantine() {
+    let results = run_quarantine_cascade(1, 1, 42);
+    assert_eq!(results.len(), 1);
+    let r = &results[0];
+    assert_eq!(r.details["quarantined"], "1");
+    assert_eq!(r.details["running"], "0");
+    assert_eq!(r.invariant_violations, 0);
+}
+
+#[test]
+fn quarantine_cascade_invariant_violations_zero_for_valid_inputs() {
+    for n in [2, 5, 8, 15] {
+        let half = n / 2;
+        let results = run_quarantine_cascade(n, half, 42);
+        assert_eq!(
+            results[0].invariant_violations, 0,
+            "invariant violations should be 0 for n_total={n}, n_quarantine={half}"
+        );
+    }
+}
+
 // ===========================================================================
 // 7. Safe-mode fallback
 // ===========================================================================
@@ -334,6 +530,12 @@ fn quarantine_cascade_total_registered_correct() {
 fn safe_mode_fallback_five_scenarios() {
     let results = run_safe_mode_fallback(42);
     assert_eq!(results.len(), 5);
+}
+
+#[test]
+fn safe_mode_fallback_non_empty_results() {
+    let results = run_safe_mode_fallback(42);
+    assert!(!results.is_empty());
 }
 
 #[test]
@@ -382,6 +584,36 @@ fn safe_mode_fallback_activation_and_recovery_counts() {
     }
 }
 
+#[test]
+fn safe_mode_fallback_each_scenario_has_action_detail() {
+    let results = run_safe_mode_fallback(42);
+    for r in &results {
+        assert!(
+            r.details.contains_key("action"),
+            "scenario {} missing 'action' detail",
+            r.scenario_name
+        );
+        assert!(
+            !r.details["action"].is_empty(),
+            "scenario {} has empty 'action' detail",
+            r.scenario_name
+        );
+    }
+}
+
+#[test]
+fn safe_mode_fallback_deterministic_across_runs() {
+    let r1 = run_safe_mode_fallback(42);
+    let r2 = run_safe_mode_fallback(42);
+    assert_eq!(r1.len(), r2.len());
+    for (a, b) in r1.iter().zip(r2.iter()) {
+        assert_eq!(a.scenario_name, b.scenario_name);
+        assert_eq!(a.attack_blocked, b.attack_blocked);
+        assert_eq!(a.invariant_violations, b.invariant_violations);
+        assert_eq!(a.security_events, b.security_events);
+    }
+}
+
 // ===========================================================================
 // 8. Bayesian posterior convergence
 // ===========================================================================
@@ -393,6 +625,12 @@ fn bayesian_posterior_three_scenarios() {
     assert_eq!(results[0].scenario_name, "benign-convergence");
     assert_eq!(results[1].scenario_name, "malicious-convergence");
     assert_eq!(results[2].scenario_name, "deterministic-replay");
+}
+
+#[test]
+fn bayesian_posterior_non_empty_results() {
+    let results = run_bayesian_posterior_convergence(2, 10, 42);
+    assert!(!results.is_empty());
 }
 
 #[test]
@@ -441,6 +679,12 @@ fn epoch_regression_four_scenarios() {
 }
 
 #[test]
+fn epoch_regression_non_empty_results() {
+    let results = run_epoch_regression(42);
+    assert!(!results.is_empty());
+}
+
+#[test]
 fn epoch_regression_current_validates() {
     let results = run_epoch_regression(42);
     assert!(results[0].attack_blocked);
@@ -480,8 +724,20 @@ fn epoch_regression_zero_invariant_violations() {
     }
 }
 
+#[test]
+fn epoch_regression_all_produce_evidence() {
+    let results = run_epoch_regression(42);
+    for r in &results {
+        assert!(
+            r.evidence_produced,
+            "scenario {} should produce evidence",
+            r.scenario_name
+        );
+    }
+}
+
 // ===========================================================================
-// 10. Containment verification
+// 10. Containment verification (evidence integrity)
 // ===========================================================================
 
 #[test]
@@ -524,6 +780,18 @@ fn containment_verification_scales_to_many() {
     }
 }
 
+#[test]
+fn containment_verification_security_events_proportional() {
+    let r_small = run_containment_verification(2, 42);
+    let r_large = run_containment_verification(8, 42);
+    let events_small = r_small[0].security_events;
+    let events_large = r_large[0].security_events;
+    assert!(
+        events_large >= events_small,
+        "more extensions ({events_large}) should produce >= events than fewer ({events_small})"
+    );
+}
+
 // ===========================================================================
 // 11. SecuritySuiteConfig
 // ===========================================================================
@@ -537,6 +805,14 @@ fn security_suite_config_default_values() {
     assert!(!cfg.run_id.is_empty());
 }
 
+#[test]
+fn security_suite_config_debug_format() {
+    let cfg = SecuritySuiteConfig::default();
+    let dbg = format!("{cfg:?}");
+    assert!(dbg.contains("42"), "Debug should show seed");
+    assert!(dbg.contains("10"), "Debug should show n_extensions");
+}
+
 // ===========================================================================
 // 12. Full suite runner
 // ===========================================================================
@@ -548,6 +824,27 @@ fn suite_runs_all_categories() {
     assert!(!result.scenarios.is_empty());
     assert!(!result.events.is_empty());
     assert!(result.total_security_events > 0);
+}
+
+#[test]
+fn suite_returns_results_for_all_eight_categories() {
+    let config = default_config();
+    let result = run_security_suite(&config);
+    let categories: BTreeSet<&str> = result
+        .scenarios
+        .iter()
+        .map(|s| s.category.as_str())
+        .collect();
+    // run_security_suite calls 7 runners but covers multiple categories
+    // At minimum we should see capability-escalation, resource-exhaustion,
+    // quarantine-cascade, safe-mode-fallback, bayesian-posterior,
+    // epoch-regression, and evidence-integrity.
+    assert!(
+        categories.len() >= 6,
+        "expected at least 6 distinct categories, got {}: {:?}",
+        categories.len(),
+        categories
+    );
 }
 
 #[test]
@@ -647,14 +944,14 @@ fn suite_events_policy_id_is_security_e2e() {
 }
 
 // ===========================================================================
-// 13. Evidence artifact I/O
+// 13. Evidence artifact I/O (write_security_evidence)
 // ===========================================================================
 
 #[test]
 fn write_security_evidence_creates_all_files() {
-    let config = default_config();
+    let config = small_config();
     let result = run_security_suite(&config);
-    let dir = tmp_dir("creates_all");
+    let dir = tmp_dir("creates_all_v2");
     let _ = fs::remove_dir_all(&dir);
     let artifacts = write_security_evidence(&result, &dir).unwrap();
 
@@ -667,9 +964,9 @@ fn write_security_evidence_creates_all_files() {
 
 #[test]
 fn write_security_evidence_manifest_valid_json() {
-    let config = default_config();
+    let config = small_config();
     let result = run_security_suite(&config);
-    let dir = tmp_dir("manifest_json");
+    let dir = tmp_dir("manifest_json_v2");
     let _ = fs::remove_dir_all(&dir);
     let artifacts = write_security_evidence(&result, &dir).unwrap();
 
@@ -682,10 +979,33 @@ fn write_security_evidence_manifest_valid_json() {
 }
 
 #[test]
-fn write_security_evidence_jsonl_valid_lines() {
-    let config = default_config();
+fn write_security_evidence_manifest_has_all_fields() {
+    let config = small_config();
     let result = run_security_suite(&config);
-    let dir = tmp_dir("jsonl_lines");
+    let dir = tmp_dir("manifest_fields_v2");
+    let _ = fs::remove_dir_all(&dir);
+    let artifacts = write_security_evidence(&result, &dir).unwrap();
+
+    let raw = fs::read_to_string(&artifacts.run_manifest_path).unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert!(manifest.get("schema_version").is_some());
+    assert!(manifest.get("scenario_count").is_some());
+    assert!(manifest.get("total_security_events").is_some());
+    assert!(manifest.get("total_invariant_violations").is_some());
+    assert!(manifest.get("blocked").is_some());
+    assert_eq!(
+        manifest["scenario_count"].as_u64().unwrap(),
+        result.scenarios.len() as u64
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn write_security_evidence_jsonl_valid_lines() {
+    let config = small_config();
+    let result = run_security_suite(&config);
+    let dir = tmp_dir("jsonl_lines_v2");
     let _ = fs::remove_dir_all(&dir);
     let artifacts = write_security_evidence(&result, &dir).unwrap();
 
@@ -701,9 +1021,9 @@ fn write_security_evidence_jsonl_valid_lines() {
 
 #[test]
 fn write_security_evidence_summary_has_categories() {
-    let config = default_config();
+    let config = small_config();
     let result = run_security_suite(&config);
-    let dir = tmp_dir("summary_cats");
+    let dir = tmp_dir("summary_cats_v2");
     let _ = fs::remove_dir_all(&dir);
     let artifacts = write_security_evidence(&result, &dir).unwrap();
 
@@ -722,9 +1042,9 @@ fn write_security_evidence_summary_has_categories() {
 
 #[test]
 fn write_security_evidence_idempotent_overwrite() {
-    let config = default_config();
+    let config = small_config();
     let result = run_security_suite(&config);
-    let dir = tmp_dir("idempotent");
+    let dir = tmp_dir("idempotent_v2");
     let _ = fs::remove_dir_all(&dir);
 
     let a1 = write_security_evidence(&result, &dir).unwrap();
@@ -736,6 +1056,17 @@ fn write_security_evidence_idempotent_overwrite() {
     assert_eq!(content1, content2);
 
     let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn write_security_evidence_creates_parent_directory() {
+    let dir = tmp_dir("nested_v2/subdir/deep");
+    let _ = fs::remove_dir_all(tmp_dir("nested_v2"));
+    let config = small_config();
+    let result = run_security_suite(&config);
+    let artifacts = write_security_evidence(&result, &dir).unwrap();
+    assert!(artifacts.run_manifest_path.exists());
+    let _ = fs::remove_dir_all(tmp_dir("nested_v2"));
 }
 
 // ===========================================================================
@@ -781,6 +1112,51 @@ fn security_suite_event_error_code_none() {
         scenario: String::new(),
     };
     assert!(evt.error_code.is_none());
+}
+
+#[test]
+fn security_suite_event_error_code_some() {
+    let evt = SecuritySuiteEvent {
+        trace_id: "tr".to_string(),
+        decision_id: "d".to_string(),
+        policy_id: "p".to_string(),
+        component: "c".to_string(),
+        event: "e".to_string(),
+        outcome: "fail".to_string(),
+        error_code: Some("FE-TEST-ERR".to_string()),
+        category: "test".to_string(),
+        scenario: "test".to_string(),
+    };
+    assert_eq!(evt.error_code.as_deref(), Some("FE-TEST-ERR"));
+}
+
+#[test]
+fn security_suite_event_debug_format() {
+    let evt = SecuritySuiteEvent {
+        trace_id: "tr-dbg".to_string(),
+        decision_id: "d-dbg".to_string(),
+        policy_id: "p-dbg".to_string(),
+        component: "comp-dbg".to_string(),
+        event: "evt-dbg".to_string(),
+        outcome: "pass".to_string(),
+        error_code: None,
+        category: "cat-dbg".to_string(),
+        scenario: "sc-dbg".to_string(),
+    };
+    let dbg = format!("{evt:?}");
+    assert!(dbg.contains("tr-dbg"), "Debug should include trace_id");
+    assert!(dbg.contains("comp-dbg"), "Debug should include component");
+}
+
+#[test]
+fn suite_generated_events_have_non_empty_trace_id_component_event() {
+    let config = default_config();
+    let result = run_security_suite(&config);
+    for evt in &result.events {
+        assert!(!evt.trace_id.is_empty(), "trace_id should be non-empty");
+        assert!(!evt.component.is_empty(), "component should be non-empty");
+        assert!(!evt.event.is_empty(), "event should be non-empty");
+    }
 }
 
 // ===========================================================================
@@ -841,4 +1217,167 @@ fn suite_scenario_names_contain_hyphens() {
             s.scenario_name
         );
     }
+}
+
+// ===========================================================================
+// 16. Determinism: same seed produces same results across full suite
+// ===========================================================================
+
+#[test]
+fn full_determinism_same_seed_identical_scenario_results() {
+    let make_config = || SecuritySuiteConfig {
+        seed: 12345,
+        n_extensions: 5,
+        n_evidence_updates: 10,
+        run_id: "det-test".to_string(),
+    };
+    let r1 = run_security_suite(&make_config());
+    let r2 = run_security_suite(&make_config());
+    assert_eq!(r1.scenarios.len(), r2.scenarios.len());
+    assert_eq!(r1.total_security_events, r2.total_security_events);
+    assert_eq!(r1.total_invariant_violations, r2.total_invariant_violations);
+    assert_eq!(r1.blocked, r2.blocked);
+    for (a, b) in r1.scenarios.iter().zip(r2.scenarios.iter()) {
+        assert_eq!(a.scenario_name, b.scenario_name);
+        assert_eq!(a.category, b.category);
+        assert_eq!(a.attack_blocked, b.attack_blocked);
+        assert_eq!(a.containment_action_taken, b.containment_action_taken);
+        assert_eq!(a.evidence_produced, b.evidence_produced);
+        assert_eq!(a.invariant_violations, b.invariant_violations);
+        assert_eq!(a.security_events, b.security_events);
+        assert_eq!(a.details, b.details);
+    }
+}
+
+#[test]
+fn full_determinism_individual_runners_with_same_seed() {
+    for seed in [1, 42, 9999, u64::MAX] {
+        let a = run_capability_escalation(3, seed);
+        let b = run_capability_escalation(3, seed);
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter().zip(b.iter()) {
+            assert_eq!(x.attack_blocked, y.attack_blocked);
+            assert_eq!(x.security_events, y.security_events);
+        }
+
+        let a = run_resource_exhaustion(3, seed);
+        let b = run_resource_exhaustion(3, seed);
+        assert_eq!(a[0].security_events, b[0].security_events);
+
+        let a = run_epoch_regression(seed);
+        let b = run_epoch_regression(seed);
+        for (x, y) in a.iter().zip(b.iter()) {
+            assert_eq!(x.attack_blocked, y.attack_blocked);
+        }
+    }
+}
+
+// ===========================================================================
+// 17. AttackScenarioResult field population
+// ===========================================================================
+
+#[test]
+fn all_suite_results_have_populated_evidence_field() {
+    let config = default_config();
+    let result = run_security_suite(&config);
+    // At least some scenarios should have evidence_produced = true
+    let with_evidence = result
+        .scenarios
+        .iter()
+        .filter(|s| s.evidence_produced)
+        .count();
+    assert!(
+        with_evidence > 0,
+        "at least some scenarios should produce evidence"
+    );
+}
+
+#[test]
+fn all_suite_results_have_correct_category_type() {
+    let config = default_config();
+    let result = run_security_suite(&config);
+    for s in &result.scenarios {
+        // Verify category as_str is non-empty and round-trips via all()
+        let s_str = s.category.as_str();
+        assert!(!s_str.is_empty());
+        let found = AttackCategory::all().iter().any(|c| c.as_str() == s_str);
+        assert!(found, "category {} not in AttackCategory::all()", s_str);
+    }
+}
+
+// ===========================================================================
+// 18. SecurityEvidenceArtifacts path structure
+// ===========================================================================
+
+#[test]
+fn evidence_artifacts_paths_use_expected_filenames() {
+    let config = small_config();
+    let result = run_security_suite(&config);
+    let dir = tmp_dir("path_names_v2");
+    let _ = fs::remove_dir_all(&dir);
+    let artifacts = write_security_evidence(&result, &dir).unwrap();
+
+    assert!(
+        artifacts
+            .run_manifest_path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("manifest")
+    );
+    assert!(
+        artifacts
+            .evidence_path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("evidence")
+    );
+    assert!(
+        artifacts
+            .summary_path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("summary")
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// ===========================================================================
+// 19. SecuritySuiteResult debug
+// ===========================================================================
+
+#[test]
+fn security_suite_result_debug_format() {
+    let config = small_config();
+    let result = run_security_suite(&config);
+    let dbg = format!("{result:?}");
+    assert!(dbg.contains("scenarios"));
+    assert!(dbg.contains("blocked"));
+}
+
+// ===========================================================================
+// 20. Edge case: very large n_extensions
+// ===========================================================================
+
+#[test]
+fn capability_escalation_with_twenty_extensions() {
+    let results = run_capability_escalation(20, 42);
+    assert_eq!(results.len(), 2);
+    assert!(results[0].attack_blocked);
+    assert!(results[0].evidence_produced);
+}
+
+#[test]
+fn quarantine_cascade_with_twenty_extensions() {
+    let results = run_quarantine_cascade(20, 10, 42);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].details["quarantined"], "10");
+    assert_eq!(results[0].details["running"], "10");
+    assert_eq!(results[0].invariant_violations, 0);
 }

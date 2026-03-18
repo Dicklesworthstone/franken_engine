@@ -1139,6 +1139,19 @@ fn receipt_verify_fails_wrong_key() {
     assert!(receipt.verify(&wrong.verification_key()).is_err());
 }
 
+#[test]
+fn receipt_replay_command_uses_shipped_verify_receipt_surface() {
+    let receipt = make_receipt();
+    let command = receipt.replay_command();
+
+    assert!(command.contains("frankenctl verify receipt --input <verifier_input.json>"));
+    assert!(command.contains("--receipt-id"));
+    assert!(command.contains(&receipt.receipt_id));
+    assert!(command.contains("--summary"));
+    assert!(!command.contains("frankenctl replay run --trace"));
+    assert!(!command.contains(" --receipt "));
+}
+
 // ===========================================================================
 // 13. ClaimStrength
 // ===========================================================================

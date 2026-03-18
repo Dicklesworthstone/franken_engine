@@ -1673,4 +1673,183 @@ mod tests {
             }
         ));
     }
+
+    // ── enrichment: track_ref properties ──────────────────────────
+
+    #[test]
+    fn track_ref_display_format() {
+        let tr = TrackRef {
+            id: "RGC-010".into(),
+            name: "planning-track".into(),
+        };
+        let json = serde_json::to_string(&tr).unwrap();
+        assert!(json.contains("RGC-010"));
+        assert!(json.contains("planning-track"));
+    }
+
+    // ── enrichment: error variant coverage ────────────────────────
+
+    #[test]
+    fn error_io_error_code() {
+        let err = RgcPlanningTrackError::Io {
+            path: PathBuf::from("test"),
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "not found"),
+        };
+        let msg = format!("{}", err);
+        assert!(!msg.is_empty());
+    }
+
+    #[test]
+    fn error_json_parse_contains_context() {
+        let err = RgcPlanningTrackError::JsonParse {
+            path: PathBuf::from("milestone_source"),
+            reason: "unexpected key".into(),
+        };
+        let msg = format!("{}", err);
+        assert!(msg.contains("milestone_source") || msg.contains("JSON"));
+    }
+
+    #[test]
+    fn error_timestamp_parse_contains_value() {
+        let err = RgcPlanningTrackError::TimestampParse {
+            field: "next_review_due_utc",
+            value: "not-a-date".into(),
+        };
+        let msg = format!("{}", err);
+        assert!(msg.contains("not-a-date") || msg.contains("timestamp"));
+    }
+
+    #[test]
+    fn error_missing_linkage_contains_field() {
+        let err = RgcPlanningTrackError::MissingLinkage {
+            field: "review_policy.milestone_reviews",
+            key: "no mapping".into(),
+        };
+        let msg = format!("{}", err);
+        assert!(!msg.is_empty());
+    }
+
+    #[test]
+    fn error_coordination_validation_contains_detail() {
+        let err = RgcPlanningTrackError::CoordinationValidation {
+            reason: "wave_handoff: dry run failed".into(),
+        };
+        let msg = format!("{}", err);
+        assert!(!msg.is_empty());
+    }
+
+    // ── enrichment: sorted_unique edge cases ──────────────────────
+
+    #[test]
+    fn sorted_unique_two_elements_sorted() {
+        assert!(sorted_unique(&["a".to_string(), "b".to_string()]));
+    }
+
+    #[test]
+    fn sorted_unique_two_elements_unsorted() {
+        assert!(!sorted_unique(&["b".to_string(), "a".to_string()]));
+    }
+
+    #[test]
+    fn sorted_unique_duplicate_elements() {
+        assert!(!sorted_unique(&["a".to_string(), "a".to_string()]));
+    }
+
+    #[test]
+    fn sorted_unique_three_elements() {
+        assert!(sorted_unique(&[
+            "alpha".to_string(),
+            "beta".to_string(),
+            "gamma".to_string()
+        ]));
+    }
+
+    // ── enrichment: shell_quote edge cases ────────────────────────
+
+    #[test]
+    fn shell_quote_with_single_quotes() {
+        let result = shell_quote("it's a test");
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn shell_quote_with_dollar_sign() {
+        let result = shell_quote("$HOME/path");
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn shell_quote_with_backtick() {
+        let result = shell_quote("`command`");
+        assert!(!result.is_empty());
+    }
+
+    // ── enrichment: command_uses_rch ──────────────────────────────
+
+    #[test]
+    fn command_uses_rch_for_rch_exec() {
+        assert!(command_uses_rch("rch exec 'cargo test'"));
+    }
+
+    #[test]
+    fn command_uses_rch_for_non_cargo_command() {
+        assert!(command_uses_rch("echo hello"));
+    }
+
+    #[test]
+    fn command_uses_rch_false_for_cargo_test() {
+        assert!(!command_uses_rch("cargo test --lib"));
+    }
+
+    #[test]
+    fn command_uses_rch_false_for_cargo_clippy() {
+        assert!(!command_uses_rch("cargo clippy --all-targets"));
+    }
+
+    // ── enrichment: bundle construction ───────────────────────────
+
+    #[test]
+    fn bundle_construction_succeeds() {
+        let bundle = build_rgc_planning_track_bundle_with_generated_at(1709251200000);
+        assert!(bundle.is_ok());
+    }
+
+    #[test]
+    fn bundle_has_non_empty_hash() {
+        let bundle = build_rgc_planning_track_bundle_with_generated_at(1709251200000).unwrap();
+        assert!(!bundle.report_hash.is_empty());
+    }
+
+    #[test]
+    fn bundle_hash_is_deterministic() {
+        let a = build_rgc_planning_track_bundle_with_generated_at(1709251200000).unwrap();
+        let b = build_rgc_planning_track_bundle_with_generated_at(1709251200000).unwrap();
+        assert_eq!(a.report_hash, b.report_hash);
+    }
+
+    // ── enrichment: scope and milestone JSON parse ────────────────
+
+    #[test]
+    fn scope_source_contains_expected_fields() {
+        let scope: CompatibilityMatrixSource =
+            parse_embedded_json(SCOPE_SOURCE_JSON, "scope").unwrap();
+        assert!(!scope.milestone_targets.is_empty());
+    }
+
+    #[test]
+    fn milestone_source_has_ordered_milestones() {
+        let milestones: MilestoneGatebookSource =
+            parse_embedded_json(MILESTONE_SOURCE_JSON, "milestones").unwrap();
+        assert!(!milestones.milestones.is_empty());
+        // M1 should come before M5
+        if milestones.milestones.len() >= 2 {
+            assert!(milestones.milestones[0].milestone <= milestones.milestones[1].milestone);
+        }
+    }
+
+    #[test]
+    fn risk_source_has_non_empty_risks() {
+        let risk: RiskRegisterSource = parse_embedded_json(RISK_SOURCE_JSON, "risk").unwrap();
+        assert!(!risk.risks.is_empty());
+    }
 }

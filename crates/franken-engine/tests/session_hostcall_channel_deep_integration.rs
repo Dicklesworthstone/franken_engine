@@ -27,11 +27,11 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::hash_tiers::{AuthenticityHash, ContentHash};
 use frankenengine_engine::session_hostcall_channel::{
-    AeadAlgorithm, BackpressureSignal, ChannelPayload, DataPlaneDirection,
-    HandshakeRequest, HandshakeResponse, HostcallEnvelope, ReplayDropReason, SequencePolicy,
-    SessionChannelError, SessionChannelEvent, SessionConfig, SessionHandle, SessionHandshake,
-    SessionHostcallChannel, SessionState, SharedPayloadDescriptor, SharedSendInput,
-    build_aead_associated_data, derive_deterministic_aead_nonce,
+    AeadAlgorithm, BackpressureSignal, ChannelPayload, DataPlaneDirection, HandshakeRequest,
+    HandshakeResponse, HostcallEnvelope, ReplayDropReason, SequencePolicy, SessionChannelError,
+    SessionChannelEvent, SessionConfig, SessionHandle, SessionHandshake, SessionHostcallChannel,
+    SessionState, SharedPayloadDescriptor, SharedSendInput, build_aead_associated_data,
+    derive_deterministic_aead_nonce,
 };
 use frankenengine_engine::signature_preimage::SigningKey;
 
@@ -1546,7 +1546,9 @@ fn all_error_display_strings_are_non_empty() {
         SessionChannelError::InvalidIdentity { field: "f".into() },
         SessionChannelError::InvalidHandshake { detail: "d".into() },
         SessionChannelError::SignatureFailure(SignatureError::VerificationFailed {
-            signer: frankenengine_engine::signature_preimage::VerificationKey::from_bytes([0u8; 32]),
+            signer: frankenengine_engine::signature_preimage::VerificationKey::from_bytes(
+                [0u8; 32],
+            ),
             reason: "test".to_string(),
         }),
         SessionChannelError::SessionAlreadyExists {

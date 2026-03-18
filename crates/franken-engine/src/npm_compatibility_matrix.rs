@@ -2133,4 +2133,717 @@ mod tests {
         // 1 compatible / 1 testable = 100%
         assert_eq!(summary.compatibility_rate_millionths, 1_000_000);
     }
+
+    // -----------------------------------------------------------------------
+    // Deep enrichment tests (PearlTower 2026-03-18)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn verdict_partially_unblocked() {
+        let mut m = NpmCompatibilityMatrix::new();
+        // Tier1: 1 compatible (100%) -> unblocked
+        m.add_package(sample_package("a", CohortTier::Tier1Critical))
+            .unwrap();
+        m.record_test_result(sample_test_result(
+            "a",
+            PackageTestOutcome::Compatible,
+            10,
+            10,
+        ))
+        .unwrap();
+        // Tier2: 1 incompatible (0%) -> blocked
+        m.add_package(sample_package("b", CohortTier::Tier2Popular))
+            .unwrap();
+        m.record_test_result(sample_test_result(
+            "b",
+            PackageTestOutcome::Incompatible,
+            10,
+            0,
+        ))
+        .unwrap();
+        assert_eq!(m.verdict(), MatrixVerdict::PartiallyUnblocked);
+    }
+
+    #[test]
+    fn package_normalization_trims_whitespace() {
+        let mut m = NpmCompatibilityMatrix::new();
+        let mut pkg = sample_package("  lodash  ", CohortTier::Tier1Critical);
+        pkg.version = "  1.0.0  ".to_string();
+        pkg.node_api_deps.insert("  fs  ".to_string());
+        pkg.node_api_deps.insert("".to_string());
+        m.add_package(pkg).unwrap();
+        assert_eq!(m.packages[0].name, "lodash");
+        assert_eq!(m.packages[0].version, "1.0.0");
+        assert!(m.packages[0].node_api_deps.contains("fs"));
+        assert!(!m.packages[0].node_api_deps.contains(""));
+    }
+
+    #[test]
+    fn incompatibility_normalization_trims_whitespace() {
+        let mut m = NpmCompatibilityMatrix::new();
+        let mut inc =
+            sample_incompatibility("  INC-001  ", "  foo  ", IncompatibilitySeverity::Minor);
+        inc.summary = "  summary  ".to_string();
+        inc.owner = "  agent  ".to_string();
+        inc.related_beads.insert("  bd-123  ".to_string());
+        inc.related_beads.insert("".to_string());
+        m.add_incompatibility(inc).unwrap();
+        assert_eq!(m.incompatibilities[0].incompatibility_id, "INC-001");
+        assert_eq!(m.incompatibilities[0].package_name, "foo");
+        assert_eq!(m.incompatibilities[0].summary, "summary");
+        assert_eq!(m.incompatibilities[0].owner, "agent");
+        assert!(m.incompatibilities[0].related_beads.contains("bd-123"));
+        assert!(!m.incompatibilities[0].related_beads.contains(""));
+    }
+
+    #[test]
+    fn types_only_package_field() {
+        let mut pkg = sample_package("types-node", CohortTier::Tier1Critical);
+        pkg.types_only = true;
+        let json = serde_json::to_string(&pkg).unwrap();
+        let back: PackageRecord = serde_json::from_str(&json).unwrap();
+        assert!(back.types_only);
+    }
+
+    #[test]
+    fn all_module_system_variants_serde() {
+        let variants = [
+            ModuleSystemReq::EsmOnly,
+            ModuleSystemReq::CjsOnly,
+            ModuleSystemReq::DualEsmCjs,
+            ModuleSystemReq::Unknown,
+        ];
+        for v in variants {
+            let json = serde_json::to_string(&v).unwrap();
+            let back: ModuleSystemReq = serde_json::from_str(&json).unwrap();
+            assert_eq!(v, back);
+            assert!(!v.as_str().is_empty());
+        }
+    }
+
+    #[test]
+    fn all_remediation_states_serde() {
+        let states = [
+            RemediationState::Discovered,
+            RemediationState::Triaged,
+            RemediationState::InProgress,
+            RemediationState::FixLanded,
+            RemediationState::Verified,
+            RemediationState::WontFix,
+        ];
+        for s in states {
+            let json = serde_json::to_string(&s).unwrap();
+            let back: RemediationState = serde_json::from_str(&json).unwrap();
+            assert_eq!(s, back);
+        }
+    }
+
+    #[test]
+    fn all_test_outcomes_serde_and_compat_flag() {
+        let outcomes = [
+            (PackageTestOutcome::Compatible, true),
+            (PackageTestOutcome::PartiallyCompatible, false),
+            (PackageTestOutcome::Incompatible, false),
+            (PackageTestOutcome::Skipped, false),
+            (PackageTestOutcome::Untested, false),
+        ];
+        for (outcome, expected_compat) in outcomes {
+            let json = serde_json::to_string(&outcome).unwrap();
+            let back: PackageTestOutcome = serde_json::from_str(&json).unwrap();
+            assert_eq!(outcome, back);
+            assert_eq!(outcome.counts_as_compatible(), expected_compat);
+        }
+    }
+
+    #[test]
+    fn all_root_causes_serde() {
+        let causes = [
+            IncompatibilityRootCause::MissingNodeApi,
+            IncompatibilityRootCause::CjsRequireDivergence,
+            IncompatibilityRootCause::EsmResolutionDivergence,
+            IncompatibilityRootCause::ExportsMapDivergence,
+            IncompatibilityRootCause::NativeAddon,
+            IncompatibilityRootCause::V8SpecificApi,
+            IncompatibilityRootCause::ProcessGlobalsDivergence,
+            IncompatibilityRootCause::ChildProcessDivergence,
+            IncompatibilityRootCause::StreamBufferDivergence,
+            IncompatibilityRootCause::TypeScriptCompilation,
+            IncompatibilityRootCause::RuntimeIdentityCheck,
+            IncompatibilityRootCause::Other,
+        ];
+        for cause in causes {
+            let json = serde_json::to_string(&cause).unwrap();
+            let back: IncompatibilityRootCause = serde_json::from_str(&json).unwrap();
+            assert_eq!(cause, back);
+            assert!(!cause.as_str().is_empty());
+        }
+    }
+
+    #[test]
+    fn all_verdicts_serde_and_display() {
+        let verdicts = [
+            MatrixVerdict::AllCohortsUnblocked,
+            MatrixVerdict::PartiallyUnblocked,
+            MatrixVerdict::Blocked,
+            MatrixVerdict::InsufficientData,
+        ];
+        for v in verdicts {
+            let json = serde_json::to_string(&v).unwrap();
+            let back: MatrixVerdict = serde_json::from_str(&json).unwrap();
+            assert_eq!(v, back);
+            assert_eq!(format!("{v}"), v.as_str());
+        }
+    }
+
+    #[test]
+    fn pass_rate_partial_fraction() {
+        let result = sample_test_result("x", PackageTestOutcome::PartiallyCompatible, 3, 1);
+        // 1/3 = 333_333
+        assert_eq!(result.pass_rate_millionths(), 333_333);
+    }
+
+    #[test]
+    fn pass_rate_half() {
+        let result = sample_test_result("x", PackageTestOutcome::PartiallyCompatible, 100, 50);
+        assert_eq!(result.pass_rate_millionths(), 500_000);
+    }
+
+    #[test]
+    fn cohort_summary_empty_tier_zero_rate() {
+        let m = NpmCompatibilityMatrix::new();
+        let summary = m.cohort_summary(CohortTier::Tier3LongTail);
+        assert_eq!(summary.total_packages, 0);
+        assert_eq!(summary.compatibility_rate_millionths, 0);
+        assert!(!summary.unblocked);
+    }
+
+    #[test]
+    fn cohort_summary_all_skipped_zero_rate() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_package(sample_package("a", CohortTier::Tier1Critical))
+            .unwrap();
+        m.add_package(sample_package("b", CohortTier::Tier1Critical))
+            .unwrap();
+        m.record_test_result(sample_test_result("a", PackageTestOutcome::Skipped, 0, 0))
+            .unwrap();
+        m.record_test_result(sample_test_result("b", PackageTestOutcome::Skipped, 0, 0))
+            .unwrap();
+        let summary = m.cohort_summary(CohortTier::Tier1Critical);
+        assert_eq!(summary.skipped_count, 2);
+        // testable = 0, so rate = 0
+        assert_eq!(summary.compatibility_rate_millionths, 0);
+    }
+
+    #[test]
+    fn cohort_summary_blocker_count_filters_resolved() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_package(sample_package("a", CohortTier::Tier1Critical))
+            .unwrap();
+        m.add_incompatibility(sample_incompatibility(
+            "INC-001",
+            "a",
+            IncompatibilitySeverity::Blocker,
+        ))
+        .unwrap();
+        m.add_incompatibility(sample_incompatibility(
+            "INC-002",
+            "a",
+            IncompatibilitySeverity::Blocker,
+        ))
+        .unwrap();
+        // Resolve one
+        m.transition_remediation("INC-001", RemediationState::Triaged, 2)
+            .unwrap();
+        m.transition_remediation("INC-001", RemediationState::WontFix, 3)
+            .unwrap();
+        let summary = m.cohort_summary(CohortTier::Tier1Critical);
+        assert_eq!(summary.blocker_count, 1);
+        assert_eq!(summary.open_incompatibilities, 1);
+    }
+
+    #[test]
+    fn in_progress_to_wont_fix_transition() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_incompatibility(sample_incompatibility(
+            "INC-001",
+            "foo",
+            IncompatibilitySeverity::Minor,
+        ))
+        .unwrap();
+        m.transition_remediation("INC-001", RemediationState::Triaged, 2)
+            .unwrap();
+        m.transition_remediation("INC-001", RemediationState::InProgress, 3)
+            .unwrap();
+        m.transition_remediation("INC-001", RemediationState::WontFix, 4)
+            .unwrap();
+        assert!(m.open_incompatibilities().is_empty());
+    }
+
+    #[test]
+    fn discovered_to_in_progress_invalid() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_incompatibility(sample_incompatibility(
+            "INC-001",
+            "foo",
+            IncompatibilitySeverity::Minor,
+        ))
+        .unwrap();
+        let err = m
+            .transition_remediation("INC-001", RemediationState::InProgress, 2)
+            .unwrap_err();
+        assert!(matches!(
+            *err,
+            NpmCompatibilityError::InvalidStateTransition { .. }
+        ));
+    }
+
+    #[test]
+    fn verified_to_anything_invalid() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_incompatibility(sample_incompatibility(
+            "INC-001",
+            "foo",
+            IncompatibilitySeverity::Minor,
+        ))
+        .unwrap();
+        m.transition_remediation("INC-001", RemediationState::Triaged, 2)
+            .unwrap();
+        m.transition_remediation("INC-001", RemediationState::InProgress, 3)
+            .unwrap();
+        m.transition_remediation("INC-001", RemediationState::FixLanded, 4)
+            .unwrap();
+        m.transition_remediation("INC-001", RemediationState::Verified, 5)
+            .unwrap();
+        // Verified is terminal — can't transition further
+        let err = m
+            .transition_remediation("INC-001", RemediationState::InProgress, 6)
+            .unwrap_err();
+        assert!(matches!(
+            *err,
+            NpmCompatibilityError::InvalidStateTransition { .. }
+        ));
+    }
+
+    #[test]
+    fn error_display_all_variants() {
+        let errors: Vec<NpmCompatibilityError> = vec![
+            NpmCompatibilityError::DuplicatePackage {
+                name: "lodash".to_string(),
+            },
+            NpmCompatibilityError::DuplicateIncompatibility {
+                id: "INC-001".to_string(),
+            },
+            NpmCompatibilityError::PackageNotFound {
+                name: "missing".to_string(),
+            },
+            NpmCompatibilityError::IncompatibilityNotFound {
+                id: "INC-999".to_string(),
+            },
+            NpmCompatibilityError::CohortOverflow {
+                tier: CohortTier::Tier1Critical,
+                count: 501,
+            },
+            NpmCompatibilityError::IncompatibilityOverflow {
+                package: "express".to_string(),
+                count: 101,
+            },
+            NpmCompatibilityError::InvalidStateTransition {
+                id: "INC-001".to_string(),
+                from: RemediationState::Discovered,
+                to: RemediationState::Verified,
+            },
+            NpmCompatibilityError::SnapshotHashMismatch {
+                expected: "abc".to_string(),
+                actual: "def".to_string(),
+            },
+        ];
+        for e in &errors {
+            let msg = format!("{e}");
+            assert!(!msg.is_empty(), "empty display for {e:?}");
+        }
+    }
+
+    #[test]
+    fn top_blockers_ignores_resolved() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_incompatibility(sample_incompatibility(
+            "INC-001",
+            "a",
+            IncompatibilitySeverity::Blocker,
+        ))
+        .unwrap();
+        m.add_incompatibility(sample_incompatibility(
+            "INC-002",
+            "b",
+            IncompatibilitySeverity::Blocker,
+        ))
+        .unwrap();
+        // Resolve the "a" blocker
+        m.transition_remediation("INC-001", RemediationState::Triaged, 2)
+            .unwrap();
+        m.transition_remediation("INC-001", RemediationState::WontFix, 3)
+            .unwrap();
+        let top = m.top_blockers(10);
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].0, "b");
+    }
+
+    #[test]
+    fn top_blockers_respects_limit() {
+        let mut m = NpmCompatibilityMatrix::new();
+        for i in 0..10 {
+            m.add_incompatibility(sample_incompatibility(
+                &format!("INC-{i:03}"),
+                &format!("pkg-{i}"),
+                IncompatibilitySeverity::Minor,
+            ))
+            .unwrap();
+        }
+        let top = m.top_blockers(3);
+        assert_eq!(top.len(), 3);
+    }
+
+    #[test]
+    fn top_blockers_empty_matrix() {
+        let m = NpmCompatibilityMatrix::new();
+        let top = m.top_blockers(10);
+        assert!(top.is_empty());
+    }
+
+    #[test]
+    fn root_cause_distribution_excludes_resolved() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_incompatibility(sample_incompatibility(
+            "INC-001",
+            "a",
+            IncompatibilitySeverity::Minor,
+        ))
+        .unwrap();
+        m.transition_remediation("INC-001", RemediationState::Triaged, 2)
+            .unwrap();
+        m.transition_remediation("INC-001", RemediationState::WontFix, 3)
+            .unwrap();
+        let dist = m.root_cause_distribution();
+        assert!(dist.is_empty());
+    }
+
+    #[test]
+    fn seed_tier1_into_matrix() {
+        let mut m = NpmCompatibilityMatrix::new();
+        for pkg in seed_tier1_critical_packages() {
+            m.add_package(pkg).unwrap();
+        }
+        assert_eq!(m.packages_in_tier(CohortTier::Tier1Critical).len(), 10);
+        // All should be tier 1
+        for pkg in &m.packages {
+            assert_eq!(pkg.tier, CohortTier::Tier1Critical);
+        }
+    }
+
+    #[test]
+    fn seed_tier2_into_matrix() {
+        let mut m = NpmCompatibilityMatrix::new();
+        for pkg in seed_tier2_popular_packages() {
+            m.add_package(pkg).unwrap();
+        }
+        assert_eq!(m.packages_in_tier(CohortTier::Tier2Popular).len(), 10);
+    }
+
+    #[test]
+    fn seed_both_tiers_no_overlap() {
+        let mut m = NpmCompatibilityMatrix::new();
+        for pkg in seed_tier1_critical_packages() {
+            m.add_package(pkg).unwrap();
+        }
+        for pkg in seed_tier2_popular_packages() {
+            m.add_package(pkg).unwrap();
+        }
+        assert_eq!(m.total_packages(), 20);
+    }
+
+    #[test]
+    fn canonical_value_package_includes_all_fields() {
+        let mut pkg = sample_package("test-pkg", CohortTier::Tier2Popular);
+        pkg.node_api_deps.insert("fs".to_string());
+        let cv = pkg.canonical_value();
+        if let CanonicalValue::Map(map) = cv {
+            assert!(map.contains_key("name"));
+            assert!(map.contains_key("version"));
+            assert!(map.contains_key("tier"));
+            assert!(map.contains_key("category"));
+            assert!(map.contains_key("module_system"));
+            assert!(map.contains_key("weekly_downloads"));
+            assert!(map.contains_key("dependency_fanout"));
+            assert!(map.contains_key("node_api_deps"));
+            assert!(map.contains_key("types_only"));
+            assert_eq!(map.len(), 9);
+        } else {
+            panic!("expected Map canonical value");
+        }
+    }
+
+    #[test]
+    fn canonical_value_incompatibility_includes_all_fields() {
+        let inc = sample_incompatibility("INC-001", "foo", IncompatibilitySeverity::Blocker);
+        let cv = inc.canonical_value();
+        if let CanonicalValue::Map(map) = cv {
+            assert!(map.contains_key("incompatibility_id"));
+            assert!(map.contains_key("package_name"));
+            assert!(map.contains_key("root_cause"));
+            assert!(map.contains_key("severity"));
+            assert!(map.contains_key("summary"));
+            assert!(map.contains_key("minimized_repro"));
+            assert!(map.contains_key("expected_behavior"));
+            assert!(map.contains_key("actual_behavior"));
+            assert!(map.contains_key("remediation_state"));
+            assert!(map.contains_key("owner"));
+            assert!(map.contains_key("related_beads"));
+            assert!(map.contains_key("discovered_epoch"));
+            assert!(map.contains_key("last_updated_epoch"));
+            assert_eq!(map.len(), 13);
+        } else {
+            panic!("expected Map canonical value");
+        }
+    }
+
+    #[test]
+    fn canonical_value_test_result_null_hash() {
+        let result = sample_test_result("x", PackageTestOutcome::Compatible, 10, 10);
+        let cv = result.canonical_value();
+        if let CanonicalValue::Map(map) = cv {
+            assert!(matches!(map["output_hash"], CanonicalValue::Null));
+        } else {
+            panic!("expected Map canonical value");
+        }
+    }
+
+    #[test]
+    fn canonical_value_test_result_with_hash() {
+        let mut result = sample_test_result("x", PackageTestOutcome::Compatible, 10, 10);
+        result.output_hash = Some("abc123".to_string());
+        let cv = result.canonical_value();
+        if let CanonicalValue::Map(map) = cv {
+            assert!(matches!(&map["output_hash"], CanonicalValue::String(s) if s == "abc123"));
+        } else {
+            panic!("expected Map canonical value");
+        }
+    }
+
+    #[test]
+    fn normalize_and_hash_idempotent() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_package(sample_package("a", CohortTier::Tier1Critical))
+            .unwrap();
+        m.add_incompatibility(sample_incompatibility(
+            "INC-001",
+            "a",
+            IncompatibilitySeverity::Minor,
+        ))
+        .unwrap();
+        let h1 = m.normalize_and_hash();
+        let h2 = m.normalize_and_hash();
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn packages_sorted_after_add() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_package(sample_package("zlib", CohortTier::Tier1Critical))
+            .unwrap();
+        m.add_package(sample_package("axios", CohortTier::Tier1Critical))
+            .unwrap();
+        m.add_package(sample_package("express", CohortTier::Tier1Critical))
+            .unwrap();
+        assert_eq!(m.packages[0].name, "axios");
+        assert_eq!(m.packages[1].name, "express");
+        assert_eq!(m.packages[2].name, "zlib");
+    }
+
+    #[test]
+    fn incompatibilities_sorted_after_add() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_incompatibility(sample_incompatibility(
+            "INC-003",
+            "c",
+            IncompatibilitySeverity::Minor,
+        ))
+        .unwrap();
+        m.add_incompatibility(sample_incompatibility(
+            "INC-001",
+            "a",
+            IncompatibilitySeverity::Blocker,
+        ))
+        .unwrap();
+        assert_eq!(m.incompatibilities[0].incompatibility_id, "INC-001");
+        assert_eq!(m.incompatibilities[1].incompatibility_id, "INC-003");
+    }
+
+    #[test]
+    fn test_results_sorted_after_record() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_package(sample_package("z", CohortTier::Tier1Critical))
+            .unwrap();
+        m.add_package(sample_package("a", CohortTier::Tier1Critical))
+            .unwrap();
+        m.record_test_result(sample_test_result(
+            "z",
+            PackageTestOutcome::Compatible,
+            5,
+            5,
+        ))
+        .unwrap();
+        m.record_test_result(sample_test_result(
+            "a",
+            PackageTestOutcome::Compatible,
+            5,
+            5,
+        ))
+        .unwrap();
+        assert_eq!(m.test_results[0].package_name, "a");
+        assert_eq!(m.test_results[1].package_name, "z");
+    }
+
+    #[test]
+    fn incompatibilities_for_nonexistent_package_empty() {
+        let m = NpmCompatibilityMatrix::new();
+        assert!(m.incompatibilities_for_package("nothing").is_empty());
+    }
+
+    #[test]
+    fn get_test_result_nonexistent_returns_none() {
+        let m = NpmCompatibilityMatrix::new();
+        assert!(m.get_test_result("nothing").is_none());
+    }
+
+    #[test]
+    fn remediation_epoch_updated_on_transition() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_incompatibility(sample_incompatibility(
+            "INC-001",
+            "foo",
+            IncompatibilitySeverity::Minor,
+        ))
+        .unwrap();
+        assert_eq!(m.incompatibilities[0].last_updated_epoch, 1);
+        m.transition_remediation("INC-001", RemediationState::Triaged, 42)
+            .unwrap();
+        assert_eq!(m.incompatibilities[0].last_updated_epoch, 42);
+    }
+
+    #[test]
+    fn remediation_is_resolved_logic() {
+        assert!(!RemediationState::Discovered.is_resolved());
+        assert!(!RemediationState::Triaged.is_resolved());
+        assert!(!RemediationState::InProgress.is_resolved());
+        assert!(!RemediationState::FixLanded.is_resolved());
+        assert!(RemediationState::Verified.is_resolved());
+        assert!(RemediationState::WontFix.is_resolved());
+    }
+
+    #[test]
+    fn cohort_summary_canonical_value_has_all_fields() {
+        let summary = CohortSummary {
+            tier: CohortTier::Tier1Critical,
+            total_packages: 10,
+            compatible_count: 8,
+            partially_compatible_count: 1,
+            incompatible_count: 1,
+            skipped_count: 0,
+            untested_count: 0,
+            compatibility_rate_millionths: 800_000,
+            unblock_threshold_millionths: 950_000,
+            unblocked: false,
+            open_incompatibilities: 2,
+            blocker_count: 1,
+        };
+        let cv = summary.canonical_value();
+        if let CanonicalValue::Map(map) = cv {
+            assert_eq!(map.len(), 12);
+            assert!(map.contains_key("tier"));
+            assert!(map.contains_key("blocker_count"));
+        } else {
+            panic!("expected Map");
+        }
+    }
+
+    #[test]
+    fn multiple_incompatibilities_same_package_filtered() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_package(sample_package("express", CohortTier::Tier1Critical))
+            .unwrap();
+        for i in 0..5 {
+            let mut inc = sample_incompatibility(
+                &format!("INC-express-{i:03}"),
+                "express",
+                IncompatibilitySeverity::Minor,
+            );
+            inc.root_cause = if i % 2 == 0 {
+                IncompatibilityRootCause::MissingNodeApi
+            } else {
+                IncompatibilityRootCause::CjsRequireDivergence
+            };
+            m.add_incompatibility(inc).unwrap();
+        }
+        assert_eq!(m.incompatibilities_for_package("express").len(), 5);
+        assert_eq!(
+            m.incompatibilities_by_root_cause(IncompatibilityRootCause::MissingNodeApi)
+                .len(),
+            3
+        );
+        assert_eq!(
+            m.incompatibilities_by_root_cause(IncompatibilityRootCause::CjsRequireDivergence)
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn verdict_with_tier3_only() {
+        let mut m = NpmCompatibilityMatrix::new();
+        m.add_package(sample_package("niche-pkg", CohortTier::Tier3LongTail))
+            .unwrap();
+        m.record_test_result(sample_test_result(
+            "niche-pkg",
+            PackageTestOutcome::Compatible,
+            5,
+            5,
+        ))
+        .unwrap();
+        assert_eq!(m.verdict(), MatrixVerdict::AllCohortsUnblocked);
+    }
+
+    #[test]
+    fn cohort_tier_as_str_values() {
+        assert_eq!(CohortTier::Tier1Critical.as_str(), "tier_1_critical");
+        assert_eq!(CohortTier::Tier2Popular.as_str(), "tier_2_popular");
+        assert_eq!(CohortTier::Tier3LongTail.as_str(), "tier_3_long_tail");
+    }
+
+    #[test]
+    fn package_category_as_str_exhaustive() {
+        let categories = [
+            (PackageCategory::BuildTool, "build_tool"),
+            (PackageCategory::TestFramework, "test_framework"),
+            (PackageCategory::HttpNetworking, "http_networking"),
+            (PackageCategory::DatabaseOrm, "database_orm"),
+            (PackageCategory::CliTool, "cli_tool"),
+            (PackageCategory::UtilityLibrary, "utility_library"),
+            (PackageCategory::CryptoSecurity, "crypto_security"),
+            (PackageCategory::FileSystem, "file_system"),
+            (PackageCategory::StreamBuffer, "stream_buffer"),
+            (PackageCategory::Framework, "framework"),
+            (PackageCategory::Other, "other"),
+        ];
+        for (cat, expected) in categories {
+            assert_eq!(cat.as_str(), expected);
+        }
+    }
+
+    #[test]
+    fn constants_sanity() {
+        assert_eq!(COMPONENT, "npm_compatibility_matrix");
+        assert!(SCHEMA_VERSION.contains("npm-compatibility-matrix"));
+        assert!(MAX_PACKAGES_PER_COHORT > 0);
+        assert!(MAX_INCOMPATIBILITIES_PER_PACKAGE > 0);
+    }
 }

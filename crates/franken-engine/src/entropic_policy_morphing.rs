@@ -1782,4 +1782,232 @@ mod tests {
             assert_eq!(f.to_string(), f.as_str());
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Deep enrichment tests (PearlTower 2026-03-18)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn policy_profile_l1_distance_missing_dimension() {
+        let mut dims_a = BTreeMap::new();
+        dims_a.insert("x".into(), 500_000i64);
+        let a = PolicyProfile::new("a", dims_a);
+
+        let mut dims_b = BTreeMap::new();
+        dims_b.insert("y".into(), 300_000i64);
+        let b = PolicyProfile::new("b", dims_b);
+
+        // Both missing the other's dimension → treated as 0
+        // |500_000 - 0| + |0 - 300_000| = 800_000
+        assert_eq!(a.l1_distance(&b), 800_000);
+    }
+
+    #[test]
+    fn policy_profile_entropy_single_dimension() {
+        let mut dims = BTreeMap::new();
+        dims.insert("only".into(), 1_000_000i64);
+        let p = PolicyProfile::new("single", dims);
+        // Single dimension → p=1.0, entropy = -1*ln(1) = 0
+        assert_eq!(p.entropy_millionths(), 0);
+    }
+
+    #[test]
+    fn policy_profile_entropy_uniform_two() {
+        let mut dims = BTreeMap::new();
+        dims.insert("a".into(), 500_000i64);
+        dims.insert("b".into(), 500_000i64);
+        let p = PolicyProfile::new("uniform2", dims);
+        let entropy = p.entropy_millionths();
+        // -2 * (0.5 * ln(0.5)) = ln(2) ≈ 693_147
+        assert!(entropy > 600_000, "entropy too low: {entropy}");
+        assert!(entropy < 800_000, "entropy too high: {entropy}");
+    }
+
+    #[test]
+    fn policy_profile_entropy_with_zero_dimension() {
+        let mut dims = BTreeMap::new();
+        dims.insert("a".into(), 1_000_000i64);
+        dims.insert("b".into(), 0i64);
+        let p = PolicyProfile::new("with_zero", dims);
+        // Only one effective dimension → entropy = 0
+        assert_eq!(p.entropy_millionths(), 0);
+    }
+
+    #[test]
+    fn policy_profile_entropy_negative_dimension_clamped() {
+        let mut dims = BTreeMap::new();
+        dims.insert("a".into(), 1_000_000i64);
+        dims.insert("b".into(), -500_000i64); // negative treated as 0
+        let p = PolicyProfile::new("neg", dims);
+        assert_eq!(p.entropy_millionths(), 0);
+    }
+
+    #[test]
+    fn policy_profile_different_profiles_different_hash() {
+        let p1 = make_anchor_profile();
+        let mut dims = BTreeMap::new();
+        dims.insert("exploration_rate".into(), 999_999i64);
+        let p2 = PolicyProfile::new("different", dims);
+        assert_ne!(p1.content_hash(), p2.content_hash());
+    }
+
+    #[test]
+    fn policy_profile_for_regime_stores_regime() {
+        let p = PolicyProfile::for_regime("test", Regime::Attack, BTreeMap::new());
+        assert_eq!(p.target_regime, Some(Regime::Attack));
+    }
+
+    #[test]
+    fn transition_budget_remaining_steps() {
+        let mut b = TransitionBudget::new(SecurityEpoch::from_raw(1), 5, 5 * MILLION);
+        assert_eq!(b.remaining_steps(), 5);
+        b.record_step(100_000);
+        assert_eq!(b.remaining_steps(), 4);
+    }
+
+    #[test]
+    fn transition_budget_remaining_distance() {
+        let mut b = TransitionBudget::new(SecurityEpoch::from_raw(1), 10, 3 * MILLION);
+        assert_eq!(b.remaining_distance_millionths(), 3 * MILLION);
+        b.record_step(MILLION);
+        assert_eq!(b.remaining_distance_millionths(), 2 * MILLION);
+    }
+
+    #[test]
+    fn transition_budget_exhaustion_by_distance() {
+        let mut b = TransitionBudget::new(SecurityEpoch::from_raw(1), 100, 2 * MILLION);
+        b.record_step(MILLION);
+        b.record_step(MILLION);
+        assert!(b.is_exhausted());
+        assert!(!b.can_step(1));
+    }
+
+    #[test]
+    fn transition_budget_cannot_step_if_distance_exceeds() {
+        let b = TransitionBudget::new(SecurityEpoch::from_raw(1), 10, MILLION);
+        // Can't step if distance would exceed budget
+        assert!(!b.can_step(2 * MILLION));
+    }
+
+    #[test]
+    fn morphing_rejection_serde() {
+        for r in [
+            MorphingRejection::BudgetExhausted,
+            MorphingRejection::StepTooLarge,
+            MorphingRejection::EntropyTooLow,
+            MorphingRejection::EntropyTooHigh,
+            MorphingRejection::CooldownActive,
+            MorphingRejection::SourceAbstention,
+            MorphingRejection::NoTargetProfile,
+        ] {
+            let json = serde_json::to_string(&r).unwrap();
+            let back: MorphingRejection = serde_json::from_str(&json).unwrap();
+            assert_eq!(r, back);
+        }
+    }
+
+    #[test]
+    fn morphing_outcome_serde() {
+        let applied = MorphingOutcome::Applied {
+            distance_millionths: 100_000,
+            new_entropy_millionths: 500_000,
+        };
+        let json = serde_json::to_string(&applied).unwrap();
+        let back: MorphingOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(applied, back);
+
+        let noop = MorphingOutcome::NoOp;
+        let json = serde_json::to_string(&noop).unwrap();
+        let back: MorphingOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(noop, back);
+    }
+
+    #[test]
+    fn morpher_budget_exhaustion_causes_rejection() {
+        let mut m = make_test_morpher(1);
+        m.current_regime = RegimeLabel::Classified(Regime::Normal);
+        // Exhaust the budget manually
+        m.budget.steps_used = m.budget.max_steps;
+        let outcome = m.morph(RegimeLabel::Classified(Regime::Elevated));
+        assert!(outcome.is_rejected());
+    }
+
+    #[test]
+    fn morpher_multiple_transitions() {
+        let mut m = make_test_morpher(1);
+        m.current_regime = RegimeLabel::Classified(Regime::Normal);
+        m.morph(RegimeLabel::Classified(Regime::Elevated));
+        m.morph(RegimeLabel::Classified(Regime::Attack));
+        assert_eq!(m.history.len(), 2);
+        assert_eq!(m.step_count, 2);
+    }
+
+    #[test]
+    fn ln_millionths_negative_input() {
+        let result = ln_millionths(-1);
+        assert!(result < -1_000_000_000);
+    }
+
+    #[test]
+    fn ln_millionths_zero_input() {
+        let result = ln_millionths(0);
+        assert!(result < -1_000_000_000);
+    }
+
+    #[test]
+    fn ln_millionths_small_positive() {
+        let result = ln_millionths(1);
+        // ln(1/1_000_000) ≈ -13.8 → should be very negative
+        assert!(result < -10_000_000);
+    }
+
+    #[test]
+    fn ln_millionths_large_value() {
+        let result = ln_millionths(10_000_000); // ln(10) ≈ 2.302
+        assert!(result > 2_000_000);
+        assert!(result < 2_600_000);
+    }
+
+    #[test]
+    fn morphing_verdict_serde() {
+        for v in [MorphingVerdict::Pass, MorphingVerdict::Fail] {
+            let json = serde_json::to_string(&v).unwrap();
+            let back: MorphingVerdict = serde_json::from_str(&json).unwrap();
+            assert_eq!(v, back);
+        }
+    }
+
+    #[test]
+    fn default_transition_budget_constant() {
+        assert_eq!(DEFAULT_TRANSITION_BUDGET, 10);
+    }
+
+    #[test]
+    fn max_step_distance_constant() {
+        assert_eq!(MAX_STEP_DISTANCE_MILLIONTHS, 500_000);
+    }
+
+    #[test]
+    fn entropy_bounds_ordered() {
+        assert!(MIN_ENTROPY_MILLIONTHS < MAX_ENTROPY_MILLIONTHS);
+    }
+
+    #[test]
+    fn morphing_step_serde() {
+        let step = MorphingStep {
+            seq: 1,
+            from_regime: RegimeLabel::Classified(Regime::Normal),
+            to_regime: RegimeLabel::Classified(Regime::Elevated),
+            from_profile_name: "normal_profile".into(),
+            to_profile_name: "elevated_profile".into(),
+            outcome: MorphingOutcome::Applied {
+                distance_millionths: 150_000,
+                new_entropy_millionths: 600_000,
+            },
+            evidence_hash: "abc123".into(),
+        };
+        let json = serde_json::to_string(&step).unwrap();
+        let back: MorphingStep = serde_json::from_str(&json).unwrap();
+        assert_eq!(step, back);
+    }
 }

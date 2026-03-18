@@ -2193,4 +2193,127 @@ mod tests {
         assert_eq!(inv.schema_version, INTEROP_PARITY_SCHEMA_VERSION);
         assert_eq!(inv.component, INTEROP_PARITY_COMPONENT);
     }
+
+    // -----------------------------------------------------------------------
+    // Deep enrichment tests (PearlTower 2026-03-18)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn interop_family_all_count() {
+        assert_eq!(InteropFamily::ALL.len(), 10);
+    }
+
+    #[test]
+    fn expected_outcome_display() {
+        for o in [
+            InteropExpectedOutcome::Success,
+            InteropExpectedOutcome::LinkFailure,
+            InteropExpectedOutcome::EvalFailure,
+            InteropExpectedOutcome::CycleDetected,
+        ] {
+            let json = serde_json::to_string(&o).unwrap();
+            assert!(!json.is_empty());
+        }
+    }
+
+    #[test]
+    fn actual_outcome_has_graph_construction_failure() {
+        let o = InteropActualOutcome::GraphConstructionFailure;
+        let json = serde_json::to_string(&o).unwrap();
+        let back: InteropActualOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(o, back);
+    }
+
+    #[test]
+    fn hex_encode_deterministic() {
+        let h1 = hex_encode(&[0x00, 0xff, 0xab]);
+        let h2 = hex_encode(&[0x00, 0xff, 0xab]);
+        assert_eq!(h1, h2);
+        assert_eq!(h1, "00ffab");
+    }
+
+    #[test]
+    fn hex_encode_empty() {
+        assert_eq!(hex_encode(&[]), "");
+    }
+
+    #[test]
+    fn corpus_modules_all_have_specifiers() {
+        let corpus = interop_parity_corpus();
+        for s in &corpus {
+            assert!(
+                !s.entry_point.is_empty(),
+                "specimen {} missing entry point",
+                s.specimen_id
+            );
+            for m in &s.modules {
+                assert!(
+                    !m.specifier.is_empty(),
+                    "specimen {} module missing specifier",
+                    s.specimen_id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn corpus_specimen_descriptions_non_empty() {
+        let corpus = interop_parity_corpus();
+        for s in &corpus {
+            assert!(
+                !s.description.is_empty(),
+                "specimen {} missing description",
+                s.specimen_id
+            );
+        }
+    }
+
+    #[test]
+    fn remediation_guidance_has_message() {
+        let g = remediation_guidance("test-code", "test message");
+        assert_eq!(g.guidance_code, "test-code");
+        assert_eq!(g.message, "test message");
+    }
+
+    #[test]
+    fn compatibility_disposition_variants() {
+        let supported = InteropCompatibilityDisposition::Supported;
+        let degraded = InteropCompatibilityDisposition::Degraded;
+        let unsupported = InteropCompatibilityDisposition::Unsupported;
+        assert_ne!(supported, degraded);
+        assert_ne!(degraded, unsupported);
+        assert_ne!(supported, unsupported);
+    }
+
+    #[test]
+    fn verdict_equality() {
+        assert_eq!(InteropVerdict::Pass, InteropVerdict::Pass);
+        assert_ne!(InteropVerdict::Pass, InteropVerdict::Fail);
+    }
+
+    #[test]
+    fn evidence_specimen_ids_match_corpus() {
+        let corpus = interop_parity_corpus();
+        let inv = run_interop_parity_corpus();
+        let corpus_ids: BTreeSet<&str> = corpus.iter().map(|s| s.specimen_id.as_str()).collect();
+        let evidence_ids: BTreeSet<&str> = inv
+            .evidence
+            .iter()
+            .map(|e| e.specimen_id.as_str())
+            .collect();
+        assert_eq!(corpus_ids, evidence_ids);
+    }
+
+    #[test]
+    fn artifact_paths_serde() {
+        let paths = InteropParityArtifactPaths {
+            evidence_inventory: "inv.json".to_string(),
+            run_manifest: "manifest.json".to_string(),
+            events_jsonl: "events.jsonl".to_string(),
+            commands_txt: "commands.txt".to_string(),
+        };
+        let json = serde_json::to_string(&paths).unwrap();
+        let back: InteropParityArtifactPaths = serde_json::from_str(&json).unwrap();
+        assert_eq!(paths, back);
+    }
 }

@@ -748,8 +748,6 @@ impl RevocationChain {
             }
         }
 
-        self.audit_events.len(); // borrow-check avoidance; we can't push to &self
-
         Ok(())
     }
 

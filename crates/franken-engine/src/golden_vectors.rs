@@ -349,7 +349,7 @@ mod tests {
             ids.insert(format!("{domain}"), id.to_hex());
         }
 
-        // All 8 domains must produce distinct IDs.
+        // All 9 domains must produce distinct IDs.
         let unique_ids: std::collections::BTreeSet<&String> = ids.values().collect();
         assert_eq!(
             unique_ids.len(),
@@ -1371,6 +1371,7 @@ mod tests {
             RevocationReason::Expired,
             RevocationReason::Superseded,
             RevocationReason::PolicyViolation,
+            RevocationReason::Administrative,
         ]
         .iter()
         .enumerate()

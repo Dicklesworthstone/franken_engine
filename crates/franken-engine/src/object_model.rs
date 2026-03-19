@@ -526,8 +526,8 @@ impl OrdinaryObject {
         for key in self.properties.keys() {
             match key {
                 PropertyKey::String(s) => {
-                    if let Ok(n) = s.parse::<u64>() {
-                        int_keys.push((n, key.clone()));
+                    if let Ok(n) = s.parse::<u32>() {
+                        int_keys.push((u64::from(n), key.clone()));
                     } else {
                         str_keys.push(key.clone());
                     }
@@ -2023,9 +2023,6 @@ impl ObjectHeap {
         visited.insert(obj);
 
         while let Some(h) = current {
-            if h == proto_target {
-                return Ok(true);
-            }
             if depth > MAX_PROTOTYPE_CHAIN_DEPTH {
                 return Err(ObjectError::PrototypeChainTooDeep {
                     depth,
@@ -2034,6 +2031,9 @@ impl ObjectHeap {
             }
             if !visited.insert(h) {
                 return Err(ObjectError::PrototypeCycleDetected);
+            }
+            if h == proto_target {
+                return Ok(true);
             }
             current = self.get_prototype_of(h)?;
             depth += 1;

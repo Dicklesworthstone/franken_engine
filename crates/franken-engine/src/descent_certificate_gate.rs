@@ -1133,9 +1133,9 @@ mod tests {
     #[test]
     fn gate_with_defaults_thresholds() {
         let gate = DescentGate::with_defaults();
-        assert_eq!(gate.min_coverage_millionths, MIN_DESCENT_COVERAGE);
-        assert_eq!(gate.min_confidence_millionths, MIN_DESCENT_CONFIDENCE);
-        assert_eq!(gate.max_obstructions, MAX_OBSTRUCTIONS_ALLOWED);
+        assert_eq!(gate.config.min_coverage, MIN_DESCENT_COVERAGE);
+        assert_eq!(gate.config.min_confidence, MIN_DESCENT_CONFIDENCE);
+        assert_eq!(gate.config.max_obstructions, MAX_OBSTRUCTIONS_ALLOWED);
     }
 
     #[test]
@@ -1175,7 +1175,7 @@ mod tests {
     fn report_schema_version() {
         let r = GateReport::new(epoch(), vec![]);
         assert_eq!(r.schema_version, SCHEMA_VERSION);
-        assert_eq!(r.bead_id, BEAD_ID);
+        assert_eq!(BEAD_ID, "bd-1lsy.9.8.3");
     }
 
     #[test]
@@ -1219,7 +1219,7 @@ mod tests {
     }
 
     #[test]
-    fn cert_with_covered_regions() {
+    fn cert_with_excluded_regions() {
         let regions = BTreeSet::from(["region-a".to_string(), "region-b".to_string()]);
         let c = DescentCertificate::new(
             "cert-reg",
@@ -1229,7 +1229,7 @@ mod tests {
             Vec::new(),
             regions.clone(),
         );
-        assert_eq!(c.covered_regions, regions);
+        assert_eq!(c.excluded_regions, regions);
     }
 
     #[test]

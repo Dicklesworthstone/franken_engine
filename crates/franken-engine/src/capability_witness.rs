@@ -189,6 +189,8 @@ pub enum WitnessError {
     MissingPromotionTheoremProofs { missing_checks: Vec<String> },
     /// One or more theorem checks failed.
     PromotionTheoremFailed { failed_checks: Vec<String> },
+    /// Required and denied capability sets overlap.
+    RequiredDeniedOverlap { capabilities: Vec<String> },
 }
 
 impl fmt::Display for WitnessError {
@@ -232,6 +234,13 @@ impl fmt::Display for WitnessError {
                     f,
                     "promotion theorem checks failed: {}",
                     failed_checks.join(",")
+                )
+            }
+            Self::RequiredDeniedOverlap { capabilities } => {
+                write!(
+                    f,
+                    "required and denied capability sets overlap: {}",
+                    capabilities.join(",")
                 )
             }
         }
@@ -678,6 +687,20 @@ impl CapabilityWitness {
             buf.push(po.kind as u8);
             buf.extend_from_slice(po.proof_artifact_id.as_bytes());
             buf.extend_from_slice(po.artifact_hash.as_bytes());
+        }
+        buf.push(0xff);
+
+        for dr in &self.denial_records {
+            buf.extend_from_slice(dr.capability.as_str().as_bytes());
+            buf.push(0);
+            buf.extend_from_slice(dr.reason.as_bytes());
+            buf.push(0);
+            if let Some(ref eid) = dr.evidence_id {
+                buf.push(1);
+                buf.extend_from_slice(eid.as_bytes());
+            } else {
+                buf.push(0);
+            }
         }
         buf.push(0xff);
 
@@ -1297,6 +1320,17 @@ impl WitnessBuilder {
     pub fn build(self) -> Result<CapabilityWitness, WitnessError> {
         if self.required.is_empty() {
             return Err(WitnessError::EmptyRequiredSet);
+        }
+
+        // Validate that required and denied capability sets are disjoint.
+        let overlap: Vec<&Capability> = self.required.intersection(&self.denied).collect();
+        if !overlap.is_empty() {
+            return Err(WitnessError::RequiredDeniedOverlap {
+                capabilities: overlap
+                    .into_iter()
+                    .map(|c| c.as_str().to_string())
+                    .collect(),
+            });
         }
 
         let confidence = self.confidence.unwrap_or(ConfidenceInterval {

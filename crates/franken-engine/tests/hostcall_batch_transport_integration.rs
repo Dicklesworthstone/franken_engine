@@ -540,14 +540,22 @@ fn membrane_accepts_valid_batch() {
     let config = default_config();
     let epoch = test_epoch();
     let mut ts = BatchTransportState::new("s".into(), config.clone(), epoch);
-    let protocol = established_protocol();
+    let mut protocol = established_protocol();
     let entries = vec![make_entry(1, b"ok")];
     let batch = ts.build_batch(entries, &session_key(), epoch, 100).unwrap();
 
     let mut membrane = SafetyMembrane::new("s".into(), epoch, 100);
     let credit_pool = CreditPool::new("s".into(), 256, 1024);
     let regions: BTreeMap<u64, SharedMemoryRegion> = BTreeMap::new();
-    let verdict = membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100);
+    let verdict = membrane.validate_batch(
+        &batch,
+        &mut protocol,
+        &session_key(),
+        &credit_pool,
+        &regions,
+        &config,
+        100,
+    );
     assert!(verdict.is_accept());
     assert_eq!(membrane.total_accepted_batches(), 1);
     assert_eq!(membrane.total_rejected_batches(), 0);
@@ -559,14 +567,22 @@ fn membrane_rejects_phase_blocked() {
     let epoch = test_epoch();
     let mut ts = BatchTransportState::new("s".into(), config.clone(), epoch);
     // Protocol in Uninit phase, which does not permit data.
-    let protocol = SessionProtocolState::new("s".into(), "ext".into(), "host".into(), 64, 50);
+    let mut protocol = SessionProtocolState::new("s".into(), "ext".into(), "host".into(), 64, 50);
     let entries = vec![make_entry(1, b"data")];
     let batch = ts.build_batch(entries, &session_key(), epoch, 100).unwrap();
 
     let mut membrane = SafetyMembrane::new("s".into(), epoch, 100);
     let credit_pool = CreditPool::new("s".into(), 256, 1024);
     let regions: BTreeMap<u64, SharedMemoryRegion> = BTreeMap::new();
-    let verdict = membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100);
+    let verdict = membrane.validate_batch(
+        &batch,
+        &mut protocol,
+        &session_key(),
+        &credit_pool,
+        &regions,
+        &config,
+        100,
+    );
     assert!(!verdict.is_accept());
     assert_eq!(
         membrane.rejection_count(MembraneRejectionReason::PhaseBlocked),
@@ -605,7 +621,15 @@ fn membrane_rejects_epoch_mismatch() {
     let mut membrane = SafetyMembrane::new("s".into(), mismatched_epoch, 100);
     let credit_pool = CreditPool::new("s".into(), 256, 1024);
     let regions: BTreeMap<u64, SharedMemoryRegion> = BTreeMap::new();
-    let verdict = membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100);
+    let verdict = membrane.validate_batch(
+        &batch,
+        &mut protocol,
+        &session_key(),
+        &credit_pool,
+        &regions,
+        &config,
+        100,
+    );
     assert!(!verdict.is_accept());
     assert_eq!(
         membrane.rejection_count(MembraneRejectionReason::EpochMismatch),
@@ -623,14 +647,22 @@ fn membrane_rejects_batch_size_exceeded() {
     // Use a state with larger max to allow build_batch to succeed.
     let build_config = default_config();
     let mut ts = BatchTransportState::new("s".into(), build_config, epoch);
-    let protocol = established_protocol();
+    let mut protocol = established_protocol();
     let entries = vec![make_entry(1, b"a"), make_entry(2, b"b")];
     let batch = ts.build_batch(entries, &session_key(), epoch, 100).unwrap();
 
     let mut membrane = SafetyMembrane::new("s".into(), epoch, 100);
     let credit_pool = CreditPool::new("s".into(), 256, 1024);
     let regions: BTreeMap<u64, SharedMemoryRegion> = BTreeMap::new();
-    let verdict = membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100);
+    let verdict = membrane.validate_batch(
+        &batch,
+        &mut protocol,
+        &session_key(),
+        &credit_pool,
+        &regions,
+        &config,
+        100,
+    );
     assert!(!verdict.is_accept());
     assert_eq!(
         membrane.rejection_count(MembraneRejectionReason::BatchSizeExceeded),
@@ -643,7 +675,7 @@ fn membrane_rejects_insufficient_credits() {
     let config = default_config();
     let epoch = test_epoch();
     let mut ts = BatchTransportState::new("s".into(), config.clone(), epoch);
-    let protocol = established_protocol();
+    let mut protocol = established_protocol();
     let entries = vec![make_entry(1, b"data")];
     let batch = ts.build_batch(entries, &session_key(), epoch, 100).unwrap();
 
@@ -651,7 +683,15 @@ fn membrane_rejects_insufficient_credits() {
     // Credit pool with 0 credits.
     let credit_pool = CreditPool::new("s".into(), 0, 0);
     let regions: BTreeMap<u64, SharedMemoryRegion> = BTreeMap::new();
-    let verdict = membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100);
+    let verdict = membrane.validate_batch(
+        &batch,
+        &mut protocol,
+        &session_key(),
+        &credit_pool,
+        &regions,
+        &config,
+        100,
+    );
     assert!(!verdict.is_accept());
     assert_eq!(
         membrane.rejection_count(MembraneRejectionReason::InsufficientCredits),
@@ -675,7 +715,15 @@ fn membrane_rejects_degraded_blocked() {
     let mut membrane = SafetyMembrane::new("s".into(), epoch, 100);
     let credit_pool = CreditPool::new("s".into(), 256, 1024);
     let regions: BTreeMap<u64, SharedMemoryRegion> = BTreeMap::new();
-    let verdict = membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100);
+    let verdict = membrane.validate_batch(
+        &batch,
+        &mut protocol,
+        &session_key(),
+        &credit_pool,
+        &regions,
+        &config,
+        100,
+    );
     assert!(!verdict.is_accept());
     assert_eq!(
         membrane.rejection_count(MembraneRejectionReason::DegradedBlocked),
@@ -706,7 +754,7 @@ fn membrane_rejects_invalid_region_not_found() {
 
     let build_config = default_config();
     let mut ts = BatchTransportState::new("s".into(), build_config, epoch);
-    let protocol = established_protocol();
+    let mut protocol = established_protocol();
     let batch = ts
         .build_batch(vec![entry], &session_key(), epoch, 100)
         .unwrap();
@@ -714,7 +762,15 @@ fn membrane_rejects_invalid_region_not_found() {
     let mut membrane = SafetyMembrane::new("s".into(), epoch, 100);
     let credit_pool = CreditPool::new("s".into(), 256, 1024);
     let regions: BTreeMap<u64, SharedMemoryRegion> = BTreeMap::new();
-    let verdict = membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100);
+    let verdict = membrane.validate_batch(
+        &batch,
+        &mut protocol,
+        &session_key(),
+        &credit_pool,
+        &regions,
+        &config,
+        100,
+    );
     assert!(!verdict.is_accept());
     assert_eq!(
         membrane.rejection_count(MembraneRejectionReason::InvalidRegion),
@@ -758,14 +814,22 @@ fn membrane_rejects_invalid_region_not_sealed() {
 
     let build_config = default_config();
     let mut ts = BatchTransportState::new("s".into(), build_config, epoch);
-    let protocol = established_protocol();
+    let mut protocol = established_protocol();
     let batch = ts
         .build_batch(vec![entry], &session_key(), epoch, 100)
         .unwrap();
 
     let mut membrane = SafetyMembrane::new("s".into(), epoch, 100);
     let credit_pool = CreditPool::new("s".into(), 256, 1024);
-    let verdict = membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100);
+    let verdict = membrane.validate_batch(
+        &batch,
+        &mut protocol,
+        &session_key(),
+        &credit_pool,
+        &regions,
+        &config,
+        100,
+    );
     assert!(!verdict.is_accept());
     assert_eq!(
         membrane.rejection_count(MembraneRejectionReason::InvalidRegion),
@@ -797,8 +861,16 @@ fn membrane_rejects_sequence_gap() {
     let mut membrane = SafetyMembrane::new("s".into(), epoch, 100);
     let credit_pool = CreditPool::new("s".into(), 256, 1024);
     let regions: BTreeMap<u64, SharedMemoryRegion> = BTreeMap::new();
-    let protocol = established_protocol();
-    let verdict = membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100);
+    let mut protocol = established_protocol();
+    let verdict = membrane.validate_batch(
+        &batch,
+        &mut protocol,
+        &session_key(),
+        &credit_pool,
+        &regions,
+        &config,
+        100,
+    );
     assert!(!verdict.is_accept());
     assert_eq!(
         membrane.rejection_count(MembraneRejectionReason::SequenceGap),
@@ -811,7 +883,7 @@ fn membrane_audit_trail_records_decisions() {
     let config = default_config();
     let epoch = test_epoch();
     let mut ts = BatchTransportState::new("s".into(), config.clone(), epoch);
-    let protocol = established_protocol();
+    let mut protocol = established_protocol();
 
     let mut membrane = SafetyMembrane::new("s".into(), epoch, 100);
     let credit_pool = CreditPool::new("s".into(), 256, 1024);
@@ -820,7 +892,15 @@ fn membrane_audit_trail_records_decisions() {
     // Submit a valid batch.
     let entries = vec![make_entry(1, b"ok")];
     let batch = ts.build_batch(entries, &session_key(), epoch, 100).unwrap();
-    membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100);
+    membrane.validate_batch(
+        &batch,
+        &mut protocol,
+        &session_key(),
+        &credit_pool,
+        &regions,
+        &config,
+        100,
+    );
 
     let trail = membrane.audit_trail();
     assert_eq!(trail.len(), 1);
@@ -869,11 +949,13 @@ fn full_pipeline_inline_payload() {
     let config = default_config();
     let epoch = test_epoch();
     let mut ts = BatchTransportState::new("s".into(), config, epoch);
-    let protocol = established_protocol();
+    let mut protocol = established_protocol();
 
     let entries = vec![make_entry(1, b"payload1"), make_entry(2, b"payload2")];
     let batch = ts.build_batch(entries, &session_key(), epoch, 100).unwrap();
-    let receipt = ts.submit_batch(batch, &protocol, 100).unwrap();
+    let receipt = ts
+        .submit_batch(batch, &mut protocol, &session_key(), 100)
+        .unwrap();
 
     assert_eq!(receipt.batch_id, 1);
     assert_eq!(receipt.sequence_start, 1);
@@ -890,7 +972,7 @@ fn full_pipeline_shared_region_payload() {
     let config = default_config();
     let epoch = test_epoch();
     let mut ts = BatchTransportState::new("s".into(), config, epoch);
-    let protocol = established_protocol();
+    let mut protocol = established_protocol();
 
     // Allocate and seal a region.
     let rid = ts.allocate_region(4096, 10).unwrap();
@@ -915,7 +997,9 @@ fn full_pipeline_shared_region_payload() {
     let batch = ts
         .build_batch(vec![entry], &session_key(), epoch, 100)
         .unwrap();
-    let receipt = ts.submit_batch(batch, &protocol, 100).unwrap();
+    let receipt = ts
+        .submit_batch(batch, &mut protocol, &session_key(), 100)
+        .unwrap();
     assert_eq!(receipt.envelope_count, 1);
     assert_eq!(ts.total_shared_bytes, 1024);
 }
@@ -929,11 +1013,12 @@ fn full_pipeline_grant_credits_after_submit() {
     };
     let epoch = test_epoch();
     let mut ts = BatchTransportState::new("s".into(), config, epoch);
-    let protocol = established_protocol();
+    let mut protocol = established_protocol();
 
     let entries = vec![make_entry(1, b"a"), make_entry(2, b"b")];
     let batch = ts.build_batch(entries, &session_key(), epoch, 100).unwrap();
-    ts.submit_batch(batch, &protocol, 100).unwrap();
+    ts.submit_batch(batch, &mut protocol, &session_key(), 100)
+        .unwrap();
 
     let after_submit = ts.credit_pool.available();
     ts.grant_credits(5);
@@ -945,7 +1030,7 @@ fn full_pipeline_multiple_batches() {
     let config = default_config();
     let epoch = test_epoch();
     let mut ts = BatchTransportState::new("s".into(), config, epoch);
-    let protocol = established_protocol();
+    let mut protocol = established_protocol();
 
     for i in 0..5u64 {
         let seq_start = i * 2 + 1;
@@ -953,7 +1038,8 @@ fn full_pipeline_multiple_batches() {
         let batch = ts
             .build_batch(entries, &session_key(), epoch, 100 + i)
             .unwrap();
-        ts.submit_batch(batch, &protocol, 100 + i).unwrap();
+        ts.submit_batch(batch, &mut protocol, &session_key(), 100 + i)
+            .unwrap();
     }
     assert_eq!(ts.accepted_batches.len(), 5);
     assert_eq!(ts.total_envelopes, 10);
@@ -965,11 +1051,11 @@ fn full_pipeline_membrane_rejection_returns_error() {
     let epoch = test_epoch();
     let mut ts = BatchTransportState::new("s".into(), config, epoch);
     // Use uninit protocol to trigger phase blocked.
-    let protocol = SessionProtocolState::new("s".into(), "ext".into(), "host".into(), 64, 50);
+    let mut protocol = SessionProtocolState::new("s".into(), "ext".into(), "host".into(), 64, 50);
 
     let entries = vec![make_entry(1, b"blocked")];
     let batch = ts.build_batch(entries, &session_key(), epoch, 100).unwrap();
-    let result = ts.submit_batch(batch, &protocol, 100);
+    let result = ts.submit_batch(batch, &mut protocol, &session_key(), 100);
     assert!(result.is_err());
 }
 
@@ -1179,10 +1265,11 @@ fn state_hash_changes_after_batch_submission() {
     let mut ts = default_state();
     let hash_before = ts.state_hash();
 
-    let protocol = established_protocol();
+    let mut protocol = established_protocol();
     let entries = vec![make_entry(1, b"change")];
     let batch = ts.build_batch(entries, &session_key(), epoch, 100).unwrap();
-    ts.submit_batch(batch, &protocol, 100).unwrap();
+    ts.submit_batch(batch, &mut protocol, &session_key(), 100)
+        .unwrap();
 
     let hash_after = ts.state_hash();
     assert_ne!(hash_before, hash_after);

@@ -940,11 +940,9 @@ mod tests {
             event.declassification_route_ref.as_deref(),
             Some(declassification_route_ref)
         );
-        assert!(
-            event
-                .receipt_replay_command
-                .as_deref()
-                .is_some_and(|command| command.contains(receipt_id))
+        assert_eq!(
+            event.receipt_replay_command.as_deref(),
+            Some("frankenctl replay run --trace <trace.json> --mode strict")
         );
     }
 

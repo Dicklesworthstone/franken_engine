@@ -638,8 +638,12 @@ fn declassification_receipt_sign_verify() {
 fn declassification_receipt_replay_command() {
     let receipt = make_receipt();
     let cmd = receipt.replay_command();
-    assert!(cmd.contains("frankenctl"));
-    assert!(cmd.contains(&receipt.receipt_id));
+    assert_eq!(
+        cmd,
+        "frankenctl replay run --trace <trace.json> --mode strict"
+    );
+    assert!(!cmd.contains("frankenctl verify receipt"));
+    assert!(!cmd.contains("--receipt-id"));
 }
 
 // ===========================================================================

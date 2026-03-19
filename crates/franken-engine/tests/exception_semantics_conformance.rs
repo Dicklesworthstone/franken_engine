@@ -9,33 +9,38 @@
 //! - Module rejection propagates real exception descriptions
 //! - Deterministic replay stability for exception control flow
 
-use frankenengine_engine::ast::*;
-use frankenengine_engine::baseline_interpreter::{InterpreterError, Value, quickjs_execute};
-use frankenengine_engine::ir_contract::ContentHash;
-use frankenengine_engine::ir_contract::{Ir3Instruction, Ir3Module};
+#![allow(clippy::needless_borrows_for_generic_args, clippy::too_many_arguments)]
+
+use frankenengine_engine::ast::{
+    BlockStatement, CatchClause, Expression, ExpressionStatement, ParseGoal, SourceSpan, Statement,
+    SyntaxTree, ThrowStatement, TryCatchStatement,
+};
+use frankenengine_engine::baseline_interpreter::{InterpreterError, QuickJsLane, Value};
+use frankenengine_engine::hash_tiers::ContentHash;
+use frankenengine_engine::ir_contract::{Ir0Module, Ir3FunctionDesc, Ir3Instruction, Ir3Module};
 use frankenengine_engine::lowering_pipeline::{
-    Ir1Op, lower_ir0_to_ir1, lower_ir1_to_ir2, lower_ir2_to_ir3,
+    lower_ir0_to_ir1, lower_ir1_to_ir2, lower_ir2_to_ir3,
 };
-use frankenengine_engine::module_async_evaluation::{
-    AsyncModuleEvaluator, AsyncModulePhase, RejectionLinkage,
-};
+use frankenengine_engine::module_async_evaluation::{AsyncModuleEvaluator, AsyncModulePhase};
+use frankenengine_engine::module_live_binding::LiveBindingMap;
 use frankenengine_engine::object_model::JsValue;
-use std::collections::BTreeSet;
+use frankenengine_engine::promise_model::PromiseHandle;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn span() -> Span {
-    Span { start: 0, end: 0 }
+fn span() -> SourceSpan {
+    SourceSpan::new(0, 1, 1, 1, 1, 2)
 }
 
-fn stmt_ir0(body: Vec<Statement>) -> Ir0Module {
-    Ir0Module {
-        body,
-        source_type: SourceType::Script,
-        source_label: "test_exception_conformance.js".to_string(),
-    }
+fn stmt_ir0(stmts: Vec<Statement>) -> Ir0Module {
+    let tree = SyntaxTree {
+        goal: ParseGoal::Script,
+        body: stmts,
+        span: span(),
+    };
+    Ir0Module::from_syntax_tree(tree, "test_exception_conformance.js")
 }
 
 fn lower_to_ir3(stmts: Vec<Statement>) -> Ir3Module {
@@ -48,13 +53,12 @@ fn lower_to_ir3(stmts: Vec<Statement>) -> Ir3Module {
 fn test_module(instructions: Vec<Ir3Instruction>) -> Ir3Module {
     let mut m = Ir3Module::new(ContentHash::compute(b"conformance-test"), "conformance.js");
     m.instructions = instructions;
-    m.function_table
-        .push(frankenengine_engine::ir_contract::Ir3FunctionDesc {
-            entry: 0,
-            arity: 0,
-            frame_size: 16,
-            name: Some("main".to_string()),
-        });
+    m.function_table.push(Ir3FunctionDesc {
+        entry: 0,
+        arity: 0,
+        frame_size: 16,
+        name: Some("main".to_string()),
+    });
     m
 }
 
@@ -203,7 +207,7 @@ fn conformance_runtime_throw_without_catch_is_uncaught() {
         Ir3Instruction::Throw { value: 0 },
         Ir3Instruction::Halt,
     ]);
-    let result = quickjs_execute(&m);
+    let result = QuickJsLane::new().execute(&m, "conformance");
     assert!(
         matches!(result, Err(InterpreterError::UncaughtException { .. })),
         "throw without catch must produce UncaughtException, got {result:?}"
@@ -231,7 +235,7 @@ fn conformance_runtime_try_catch_catches_exception() {
         Ir3Instruction::Return { value: 1 },
         Ir3Instruction::Halt,
     ]);
-    let result = quickjs_execute(&m).expect("try/catch should not error");
+    let result = QuickJsLane::new().execute(&m, "conformance").expect("try/catch should not error");
     assert_eq!(result.value, Value::Int(42));
 }
 
@@ -258,7 +262,7 @@ fn conformance_runtime_try_catch_normal_path() {
         // 6: Halt
         Ir3Instruction::Halt,
     ]);
-    let result = quickjs_execute(&m).expect("normal try should not error");
+    let result = QuickJsLane::new().execute(&m, "conformance").expect("normal try should not error");
     assert_eq!(result.value, Value::Int(10));
 }
 
@@ -288,42 +292,51 @@ fn conformance_runtime_finally_executes_on_normal_path() {
         // 8: Halt
         Ir3Instruction::Halt,
     ]);
-    let result = quickjs_execute(&m).expect("finally on normal path should succeed");
+    let result = QuickJsLane::new().execute(&m, "conformance").expect("finally on normal path should succeed");
     // r0 should be 20 because finally body executed
     assert_eq!(result.value, Value::Int(20));
 }
 
 // ---------------------------------------------------------------------------
-// 3. Module Rejection Conformance: real exception descriptions propagate
+// 3. Throw/Catch Value Propagation: exception values survive unwinding
 // ---------------------------------------------------------------------------
 
 #[test]
-fn conformance_module_rejection_preserves_description() {
-    let mut eval = AsyncModuleEvaluator::with_defaults();
-    eval.register_module(
-        "failing.js",
-        true,
-        &[],
-        Some(frankenengine_engine::promise_model::PromiseHandle(100)),
-    );
-    let mut bindings = frankenengine_engine::module_async_evaluation::LiveBindingMap::new();
-    let reason = JsValue::String("TypeError: x is not a function".into());
-    let linkage = eval
-        .reject_module("failing.js", &reason, &mut bindings)
-        .expect("reject_module should succeed");
-    // Rejection reason description must contain the real error message.
-    assert!(
-        linkage
-            .rejection_reason_description
-            .as_deref()
-            .unwrap_or("")
-            .contains("TypeError"),
-        "rejection description should contain the error type"
-    );
-    // Module state should also carry the description.
-    let state = &eval.states()["failing.js"];
-    assert_eq!(state.phase, AsyncModulePhase::Rejected);
-    assert!(state.rejection_reason_description.is_some());
+fn conformance_throw_string_value_survives_unwinding() {
+    let m = test_module(vec![
+        Ir3Instruction::LoadInt { dst: 0, value: 0 },
+        Ir3Instruction::LoadInt { dst: 2, value: 42 },
+        Ir3Instruction::BeginTry {
+            catch_target: 5,
+            finally_target: None,
+        },
+        Ir3Instruction::Throw { value: 2 },
+        Ir3Instruction::EndTry,
+        // catch handler
+        Ir3Instruction::EnterCatch { dst: 3 },
+        Ir3Instruction::Move { dst: 0, src: 3 },
+        Ir3Instruction::Halt,
+    ]);
+    let result = QuickJsLane::new().execute(&m, "conformance").expect("catch should succeed");
+    assert_eq!(result.value, Value::Int(42));
+}
+
+#[test]
+fn conformance_uncaught_throw_reports_value_type() {
+    let m = test_module(vec![
+        Ir3Instruction::LoadBool {
+            dst: 0,
+            value: true,
+        },
+        Ir3Instruction::Throw { value: 0 },
+    ]);
+    let err = QuickJsLane::new().execute(&m, "conformance").unwrap_err();
+    match err {
+        InterpreterError::UncaughtException { value } => {
+            assert_eq!(value, "true");
+        }
+        other => panic!("expected UncaughtException, got {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -432,4 +445,30 @@ fn conformance_exception_support_matrix_coverage() {
             "exception feature '{feature}' must be present in IR3 for try/catch/finally"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// 6. Module Rejection Conformance: real exception descriptions propagate
+// ---------------------------------------------------------------------------
+
+#[test]
+fn conformance_module_rejection_preserves_description() {
+    let mut eval = AsyncModuleEvaluator::with_defaults();
+    eval.register_module("failing.js", true, &[], Some(PromiseHandle(100)));
+    let mut bindings = LiveBindingMap::new();
+    let reason = JsValue::Str("TypeError: x is not a function".into());
+    let linkage = eval
+        .reject_module("failing.js", &reason, &mut bindings)
+        .expect("reject_module should succeed");
+    assert!(
+        linkage
+            .rejection_reason_description
+            .as_deref()
+            .unwrap_or("")
+            .contains("TypeError"),
+        "rejection description should contain the error type"
+    );
+    let state = &eval.states()["failing.js"];
+    assert_eq!(state.phase, AsyncModulePhase::Rejected);
+    assert!(state.rejection_reason_description.is_some());
 }

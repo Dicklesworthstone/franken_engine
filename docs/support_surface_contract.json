@@ -39,6 +39,11 @@
         "crates/franken-engine/src/parser.rs",
         "docs/PARSER_DIAGNOSTICS_TAXONOMY.md"
       ],
+      "ownership": {
+        "owner_repo": "franken_engine",
+        "owner_bead_id": "bd-1lsy.5.10.1",
+        "guidance_owner_bead_id": "bd-1lsy.10.11.2"
+      },
       "mode_matrix_row_id": null,
       "user_visible_diagnostic": {
         "error_code": "FE-PARSER-DIAG-UNSUPPORTED-SYNTAX-0001",
@@ -67,6 +72,11 @@
         "docs/TS_NORMALIZATION_CONTRACT.md",
         "crates/franken-engine/src/ts_normalization.rs"
       ],
+      "ownership": {
+        "owner_repo": "franken_engine",
+        "owner_bead_id": "bd-1lsy.5.10.1",
+        "guidance_owner_bead_id": "bd-1lsy.10.11.2"
+      },
       "mode_matrix_row_id": null,
       "user_visible_diagnostic": null,
       "fallback_policy": {
@@ -89,6 +99,11 @@
         "docs/TS_NORMALIZATION_CONTRACT.md",
         "crates/franken-engine/src/ts_normalization.rs"
       ],
+      "ownership": {
+        "owner_repo": "franken_engine",
+        "owner_bead_id": "bd-1lsy.5.10.1",
+        "guidance_owner_bead_id": "bd-1lsy.10.11.2"
+      },
       "mode_matrix_row_id": null,
       "user_visible_diagnostic": {
         "error_code": null,
@@ -117,6 +132,11 @@
         "docs/TS_NORMALIZATION_CONTRACT.md",
         "crates/franken-engine/src/ts_normalization.rs"
       ],
+      "ownership": {
+        "owner_repo": "franken_engine",
+        "owner_bead_id": "bd-1lsy.5.10.1",
+        "guidance_owner_bead_id": "bd-1lsy.10.11.2"
+      },
       "mode_matrix_row_id": null,
       "user_visible_diagnostic": {
         "error_code": null,
@@ -146,6 +166,11 @@
         "docs/RGC_DOCS_HELP_SURFACE_AUDIT_V1.md",
         "crates/franken-engine/src/bin/frankenctl.rs"
       ],
+      "ownership": {
+        "owner_repo": "franken_engine",
+        "owner_bead_id": "bd-1lsy.5.10.1",
+        "guidance_owner_bead_id": "bd-1lsy.10.11.2"
+      },
       "mode_matrix_row_id": null,
       "user_visible_diagnostic": null,
       "fallback_policy": {
@@ -169,6 +194,11 @@
         "crates/franken-engine/tests/frankenctl_cli.rs",
         "docs/RGC_OBSERVABILITY_CHANNEL_POLICY_V1.md"
       ],
+      "ownership": {
+        "owner_repo": "franken_engine",
+        "owner_bead_id": "bd-1lsy.5.10.1",
+        "guidance_owner_bead_id": "bd-1lsy.10.11.2"
+      },
       "mode_matrix_row_id": "runtime.doctor_support_bundle_export",
       "user_visible_diagnostic": null,
       "fallback_policy": {
@@ -191,6 +221,11 @@
         "crates/franken-engine/src/stdlib.rs",
         "crates/franken-engine/src/callback_stdlib_dispatch.rs"
       ],
+      "ownership": {
+        "owner_repo": "franken_engine",
+        "owner_bead_id": "bd-1lsy.5.10.1",
+        "guidance_owner_bead_id": "bd-1lsy.10.11.2"
+      },
       "linked_fallback_reasons": [
         "requires_callback_or_heap_access_use_interpreter_dispatch"
       ],
@@ -223,6 +258,11 @@
         "docs/rgc_react_capability_contract_v1.json",
         "crates/franken-engine/src/bin/frankenctl.rs"
       ],
+      "ownership": {
+        "owner_repo": "franken_engine",
+        "owner_bead_id": "bd-1lsy.5.10.1",
+        "guidance_owner_bead_id": "bd-1lsy.10.11.2"
+      },
       "linked_capability_ids": [
         "jsx-classic-runtime-compile",
         "tsx-classic-runtime-compile",
@@ -259,6 +299,11 @@
         "docs/RGC_REACT_CAPABILITY_CONTRACT_V1.md",
         "docs/rgc_react_capability_contract_v1.json"
       ],
+      "ownership": {
+        "owner_repo": "franken_engine",
+        "owner_bead_id": "bd-1lsy.5.10.1",
+        "guidance_owner_bead_id": "bd-1lsy.10.11.2"
+      },
       "linked_capability_ids": [
         "react-ssr-entrypoint",
         "react-client-entry-preparation",
@@ -292,6 +337,11 @@
         "docs/RGC_MODULE_RESOLUTION_INDEX_V1.md",
         "docs/rgc_module_resolution_index_v1.json"
       ],
+      "ownership": {
+        "owner_repo": "franken_engine",
+        "owner_bead_id": "bd-1lsy.5.10.1",
+        "guidance_owner_bead_id": "bd-1lsy.10.11.2"
+      },
       "linked_fallback_reasons": [
         "unsupported_wildcard_export"
       ],
@@ -323,6 +373,11 @@
         "docs/RGC_CROSS_PLATFORM_MATRIX_V1.md",
         "docs/rgc_cross_platform_matrix_v1.json"
       ],
+      "ownership": {
+        "owner_repo": "franken_engine",
+        "owner_bead_id": "bd-1lsy.5.10.1",
+        "guidance_owner_bead_id": "bd-1lsy.10.11.2"
+      },
       "linked_platform_targets": [
         "windows-arm64"
       ],
@@ -354,6 +409,11 @@
         "docs/RGC_OBSERVABILITY_CHANNEL_POLICY_V1.md",
         "docs/rgc_observability_channel_policy_v1.json"
       ],
+      "ownership": {
+        "owner_repo": "franken_engine",
+        "owner_bead_id": "bd-1lsy.5.10.1",
+        "guidance_owner_bead_id": "bd-1lsy.10.11.2"
+      },
       "mode_matrix_row_id": "observability.support_bundle_export_lossless",
       "user_visible_diagnostic": null,
       "fallback_policy": {
@@ -376,6 +436,11 @@
         "docs/RGC_OBSERVABILITY_CHANNEL_POLICY_V1.md",
         "docs/rgc_observability_channel_policy_v1.json"
       ],
+      "ownership": {
+        "owner_repo": "franken_engine",
+        "owner_bead_id": "bd-1lsy.5.10.1",
+        "guidance_owner_bead_id": "bd-1lsy.10.11.2"
+      },
       "mode_matrix_row_id": "observability.lossless_evidence_paths",
       "user_visible_diagnostic": {
         "error_code": null,

@@ -1224,6 +1224,119 @@ fn default_matrix_includes_cyclic_import_edge_case() {
 }
 
 #[test]
+fn default_matrix_pins_require_of_esm_contract_and_bun_shim() {
+    let m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let entry = m
+        .entry("cjs-require-esm")
+        .expect("default matrix should include require-of-esm case");
+
+    assert_eq!(entry.feature, ModuleFeature::Cjs);
+    assert_eq!(entry.node_behavior, "throw_err_require_esm");
+    assert_eq!(entry.bun_behavior, "allow_via_sync_bridge");
+    assert_eq!(entry.franken_native_behavior, "throw_err_require_esm");
+    assert_eq!(entry.franken_node_compat_behavior, "throw_err_require_esm");
+    assert_eq!(entry.franken_bun_compat_behavior, "allow_via_sync_bridge");
+    assert_eq!(entry.explicit_shims.len(), 1);
+    assert_eq!(
+        entry.explicit_shims[0].shim_id,
+        "shim-bun-cjs-require-esm-bridge-v1"
+    );
+    assert_eq!(entry.explicit_shims[0].mode, CompatibilityMode::BunCompat);
+    assert!(
+        entry
+            .lockstep_case_refs
+            .contains(&"lockstep/module/cjs-require-esm".to_string())
+    );
+
+    let divergence = entry
+        .divergence
+        .as_ref()
+        .expect("require-of-esm case must record the Bun divergence explicitly");
+    assert_eq!(divergence.diverges_from, vec![ReferenceRuntime::Bun]);
+    assert_eq!(divergence.waiver_id, "waiver-modcomp-cjs-require-esm-bun");
+    assert!(
+        divergence.migration_guidance.contains("dynamic import()")
+            && divergence.migration_guidance.contains("bun_compat"),
+        "require-of-esm divergence should carry actionable migration guidance"
+    );
+}
+
+#[test]
+fn default_matrix_pins_exports_map_contracts() {
+    let m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+
+    let conditional = m
+        .entry("conditional-exports-condition-order")
+        .expect("default matrix should include conditional exports ordering case");
+    assert_eq!(conditional.feature, ModuleFeature::ConditionalExports);
+    assert_eq!(
+        conditional.node_behavior,
+        "resolve_condition_import_require_default"
+    );
+    assert_eq!(
+        conditional.franken_native_behavior,
+        "resolve_condition_import_require_default"
+    );
+    assert!(conditional.explicit_shims.is_empty());
+    assert!(
+        conditional
+            .lockstep_case_refs
+            .contains(&"lockstep/module/conditional-exports-condition-order".to_string())
+    );
+
+    let dual_mode = m
+        .entry("dual-mode-exports-map")
+        .expect("default matrix should include dual-mode exports map case");
+    assert_eq!(dual_mode.feature, ModuleFeature::DualMode);
+    assert_eq!(dual_mode.node_behavior, "resolve_exports_by_import_style");
+    assert_eq!(
+        dual_mode.franken_node_compat_behavior,
+        "resolve_exports_by_import_style"
+    );
+    assert_eq!(
+        dual_mode.franken_bun_compat_behavior,
+        "resolve_exports_by_import_style"
+    );
+    assert!(dual_mode.explicit_shims.is_empty());
+    assert!(
+        dual_mode
+            .lockstep_case_refs
+            .contains(&"lockstep/module/dual-mode-exports-map".to_string())
+    );
+}
+
+#[test]
+fn default_matrix_pins_default_namespace_projection_contract() {
+    let m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let entry = m
+        .entry("esm-import-cjs-default")
+        .expect("default matrix should include ESM-imports-CJS default projection case");
+
+    assert_eq!(entry.feature, ModuleFeature::Esm);
+    assert_eq!(entry.node_behavior, "namespace_default_projection");
+    assert_eq!(entry.bun_behavior, "namespace_default_projection");
+    assert_eq!(
+        entry.franken_native_behavior,
+        "namespace_default_projection"
+    );
+    assert_eq!(
+        entry.franken_node_compat_behavior,
+        "namespace_default_projection"
+    );
+    assert_eq!(
+        entry.franken_bun_compat_behavior,
+        "namespace_default_projection"
+    );
+    assert!(entry.explicit_shims.is_empty());
+    assert!(
+        entry
+            .lockstep_case_refs
+            .contains(&"lockstep/module/esm-import-cjs-default".to_string())
+    );
+    assert!(entry.divergence.is_none());
+}
+
+#[test]
 fn default_matrix_pins_extensionless_relative_esm_contract() {
     let m = ModuleCompatibilityMatrix::from_default_json().unwrap();
     let entry = m

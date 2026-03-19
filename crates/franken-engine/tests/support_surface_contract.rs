@@ -33,6 +33,8 @@ struct SupportSurfaceContract {
     contract_version: String,
     bead_id: String,
     policy_id: String,
+    generated_by: String,
+    generated_at_utc: String,
     source_inputs: Vec<String>,
     allowed_support_statuses: Vec<String>,
     claim_language_states: Vec<String>,
@@ -53,6 +55,7 @@ struct SurfaceRow {
     claim_language_state: String,
     current_behavior: String,
     evidence_sources: Vec<String>,
+    ownership: OwnershipRoute,
     linked_capability_ids: Option<Vec<String>>,
     linked_platform_targets: Option<Vec<String>>,
     linked_fallback_reasons: Option<Vec<String>>,
@@ -69,6 +72,14 @@ struct UserVisibleDiagnostic {
     message_template: String,
     remediation: String,
     remediation_bead: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct OwnershipRoute {
+    owner_repo: String,
+    owner_bead_id: String,
+    guidance_owner_bead_id: String,
 }
 
 #[allow(dead_code)]
@@ -216,6 +227,8 @@ fn rgc_911b_contract_is_versioned_and_covers_required_areas() {
     assert_eq!(contract.contract_version, "1.0.0");
     assert_eq!(contract.bead_id, "bd-1lsy.5.10.1");
     assert_eq!(contract.policy_id, "policy-rgc-support-surface-contract-v1");
+    assert_eq!(contract.generated_by, "bd-1lsy.5.10.1");
+    assert!(contract.generated_at_utc.ends_with('Z'));
 
     let statuses: BTreeSet<_> = contract
         .allowed_support_statuses
@@ -278,6 +291,21 @@ fn rgc_911b_contract_is_versioned_and_covers_required_areas() {
             "evidence sources must not be empty for {}",
             row.surface_id
         );
+        assert_eq!(
+            row.ownership.owner_repo, "franken_engine",
+            "ownership.owner_repo must be franken_engine for {}",
+            row.surface_id
+        );
+        assert_eq!(
+            row.ownership.owner_bead_id, "bd-1lsy.5.10.1",
+            "ownership.owner_bead_id must route support-surface truth through RGC-408A for {}",
+            row.surface_id
+        );
+        assert_eq!(
+            row.ownership.guidance_owner_bead_id, "bd-1lsy.10.11.2",
+            "ownership.guidance_owner_bead_id must route operator guidance through RGC-911B for {}",
+            row.surface_id
+        );
         for source in &row.evidence_sources {
             let path = repo_root().join(source);
             assert!(
@@ -329,13 +357,16 @@ fn rgc_911b_non_shipped_rows_have_guidance_and_target_only_language() {
             "remediation missing for {}",
             row.surface_id
         );
-        assert_eq!(diag.remediation_bead, "bd-1lsy.10.11.2");
+        assert_eq!(diag.remediation_bead, row.ownership.guidance_owner_bead_id);
         assert!(
             row.fallback_policy.user_visible_diagnostics_required,
             "non-shipped row {} must require user-visible diagnostics",
             row.surface_id
         );
-        assert_eq!(row.fallback_policy.remediation_bead, "bd-1lsy.10.11.2");
+        assert_eq!(
+            row.fallback_policy.remediation_bead,
+            row.ownership.guidance_owner_bead_id
+        );
     }
 }
 

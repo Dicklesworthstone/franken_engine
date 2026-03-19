@@ -20,7 +20,7 @@
 
 use std::collections::BTreeMap;
 
-use frankenengine_engine::hash_tiers::{AuthenticityHash, ContentHash};
+use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::hostcall_batch_transport::{
     BatchEntry, BatchEnvelope, BatchPayload, BatchReceipt, BatchTransportConfig,
     BatchTransportError, BatchTransportSpecimenFamily, BatchTransportState, BatchTransportVerdict,

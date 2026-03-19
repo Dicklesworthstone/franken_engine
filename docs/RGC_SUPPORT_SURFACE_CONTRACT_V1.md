@@ -39,6 +39,7 @@ The machine-readable contract covers these areas:
 
 Each row names:
 
+- the ownership route (`owner_repo`, `owner_bead_id`, `guidance_owner_bead_id`)
 - the current `support_status`
 - the allowed public claim language (`shipped_fact` or `target_only`)
 - the operator-facing entry surface

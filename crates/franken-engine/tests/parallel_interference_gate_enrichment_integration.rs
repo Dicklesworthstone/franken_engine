@@ -674,19 +674,25 @@ fn enrichment_rollback_promote_records_success() {
 }
 
 #[test]
-fn enrichment_rollback_reject_triggers_rollback() {
+fn enrichment_rollback_reject_records_failure() {
     let incidents = vec![make_incident(InterferenceClass::MergeOrder, InterferenceSeverity::Critical, 0)];
     let result = make_gate_result(GateDecision::Reject, incidents);
-    let mut rollback = RollbackControl::default();
+    let mut rollback = RollbackControl {
+        auto_rollback_threshold: 1,
+        ..RollbackControl::default()
+    };
     let triggered = apply_gate_to_rollback(&result, &mut rollback);
     assert!(triggered);
 }
 
 #[test]
-fn enrichment_rollback_hold_triggers_rollback() {
+fn enrichment_rollback_hold_records_failure() {
     let incidents = vec![make_incident(InterferenceClass::Scheduler, InterferenceSeverity::Warning, 0)];
     let result = make_gate_result(GateDecision::Hold, incidents);
-    let mut rollback = RollbackControl::default();
+    let mut rollback = RollbackControl {
+        auto_rollback_threshold: 1,
+        ..RollbackControl::default()
+    };
     let triggered = apply_gate_to_rollback(&result, &mut rollback);
     assert!(triggered);
 }

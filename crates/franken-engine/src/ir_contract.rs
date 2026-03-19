@@ -1248,7 +1248,6 @@ pub enum Ir3Instruction {
     Halt,
 
     // ── Exception handling (unwind-capable IR) ────────────────────────
-
     /// Push a catch frame onto the exception handler stack.
     /// `catch_target` is the instruction index of the catch handler.
     /// `finally_target` is the instruction index of the finally block

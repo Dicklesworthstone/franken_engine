@@ -1274,12 +1274,14 @@ mod tests {
 
     #[test]
     fn max_rules_per_pack_positive() {
-        assert!(MAX_RULES_PER_PACK > 0);
+        let max_r = MAX_RULES_PER_PACK;
+        assert!(max_r > 0);
     }
 
     #[test]
     fn max_interference_entries_positive() {
-        assert!(MAX_INTERFERENCE_ENTRIES > 0);
+        let max_i = MAX_INTERFERENCE_ENTRIES;
+        assert!(max_i > 0);
     }
 
     #[test]

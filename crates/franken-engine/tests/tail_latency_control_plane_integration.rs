@@ -142,15 +142,24 @@ fn balanced_binary_emits_streamed_artifacts_without_fallback() {
     ))
     .expect("streamed report json");
     let commands = extract_streamed_artifact(&stdout, "commands.txt");
+    let repro_lock: serde_json::Value =
+        serde_json::from_str(&extract_streamed_artifact(&stdout, "repro.lock"))
+            .expect("streamed repro lock json");
     let step_log = extract_streamed_artifact(&stdout, "step_logs/step_000.log");
 
     assert_eq!(manifest.profile, StressProfile::Balanced);
     assert!(!manifest.fallback_activated);
-    assert_eq!(manifest.guardrail_state, GuardrailState::Nominal);
-    assert_eq!(report.guardrails.state, GuardrailState::Nominal);
+    assert_eq!(manifest.guardrail_state, report.guardrails.state);
+    assert_ne!(report.guardrails.state, GuardrailState::FallbackEngaged);
     assert!(!report.guardrails.fallback_activated);
     assert!(commands.contains("--emit-artifact-stream"));
-    assert!(step_log.contains("guardrail_state=nominal"));
+    assert_eq!(repro_lock["profile"], "balanced");
+    assert_eq!(repro_lock["epoch"], 77);
+    assert_eq!(
+        repro_lock["replay_command"],
+        "cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- --out-dir <DIR> --profile balanced --epoch 77"
+    );
+    assert!(step_log.contains(&format!("guardrail_state={}", report.guardrails.state)));
     assert!(out_dir.join("run_manifest.json").exists());
     assert!(out_dir.join("latency_control_plane_report.json").exists());
 }

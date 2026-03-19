@@ -548,7 +548,9 @@ pub fn write_tail_latency_control_plane_bundle(
             "profile": profile,
             "epoch": epoch,
             "report_hash": report_hash,
-            "replay_command": "cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- --out-dir <DIR> --profile synthetic-contention --epoch 42",
+            "replay_command": format!(
+                "cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- --out-dir <DIR> --profile {profile} --epoch {epoch}"
+            ),
         }),
         &repro_lock_path,
     )?;

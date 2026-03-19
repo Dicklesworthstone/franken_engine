@@ -745,6 +745,7 @@ fn enrichment_insert_and_get_declass_receipt() {
     assert_eq!(got.receipt_id, "r1");
     assert_eq!(got.decision, DeclassificationDecision::Allow);
     assert_eq!(got.declassification_route_ref, "route-r1");
+    assert_eq!(got.decision_contract_id, "decision-r1");
 }
 
 #[test]

@@ -2582,7 +2582,7 @@ mod tests {
             let run = serde_json::to_string(
                 &contract
                     .evaluate_scenarios(&scenarios)
-                    .expect(&format!("run {i}")),
+                    .unwrap_or_else(|_| panic!("run {i}")),
             )
             .unwrap();
             assert_eq!(baseline, run, "determinism failed on run {i}");

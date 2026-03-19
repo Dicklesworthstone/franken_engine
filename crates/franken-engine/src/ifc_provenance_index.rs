@@ -966,6 +966,7 @@ mod tests {
         let results = idx.declass_receipts_by_extension("ext-a", &ctx).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].receipt_id, "r1");
+        assert_eq!(results[0].declassification_route_ref, "route-r1");
         assert_eq!(results[0].decision_contract_id, "decision-r1");
     }
 
@@ -1450,7 +1451,7 @@ mod tests {
     }
 
     #[test]
-    fn declass_receipt_record_legacy_serde_defaults_route_ref() {
+    fn declass_receipt_record_legacy_serde_defaults_route_and_contract() {
         let mut value = serde_json::to_value(declass_receipt(
             "r1",
             "ext-a",

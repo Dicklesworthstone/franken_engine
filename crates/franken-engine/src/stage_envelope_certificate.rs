@@ -1394,13 +1394,16 @@ mod tests {
 
     #[test]
     fn min_observation_count_positive() {
-        assert!(MIN_OBSERVATION_COUNT > 0);
+        let min_obs = MIN_OBSERVATION_COUNT;
+        assert!(min_obs > 0);
     }
 
     #[test]
     fn default_budgets_positive() {
-        assert!(DEFAULT_P99_BUDGET_NS > 0);
-        assert!(DEFAULT_P999_BUDGET_NS > DEFAULT_P99_BUDGET_NS);
+        let p99 = DEFAULT_P99_BUDGET_NS;
+        let p999 = DEFAULT_P999_BUDGET_NS;
+        assert!(p99 > 0);
+        assert!(p999 > p99);
     }
 
     #[test]

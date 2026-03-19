@@ -1629,7 +1629,7 @@ mod tests {
     #[test]
     fn test_verdict_ord() {
         // GovernanceVerdict derives Ord; verify the declared ordering is stable.
-        let mut verdicts = vec![
+        let mut verdicts = [
             GovernanceVerdict::MultipleViolations,
             GovernanceVerdict::Approved,
             GovernanceVerdict::NumaRemoteExceeded,
@@ -1651,11 +1651,15 @@ mod tests {
     #[test]
     fn test_default_thresholds_relative_ordering() {
         // Portability and observability thresholds should be >= 80%.
-        assert!(DEFAULT_MIN_PORTABILITY_SCORE >= 800_000);
-        assert!(DEFAULT_MIN_OBSERVABILITY_COVERAGE >= 800_000);
+        let port = DEFAULT_MIN_PORTABILITY_SCORE;
+        let obs = DEFAULT_MIN_OBSERVABILITY_COVERAGE;
+        assert!(port >= 800_000, "portability score below 80%");
+        assert!(obs >= 800_000, "observability coverage below 80%");
         // Cache miss and NUMA thresholds should be small fractions.
-        assert!(DEFAULT_MAX_CACHE_MISS_RATE <= 100_000);
-        assert!(DEFAULT_MAX_NUMA_REMOTE_RATIO <= 200_000);
+        let cache = DEFAULT_MAX_CACHE_MISS_RATE;
+        let numa = DEFAULT_MAX_NUMA_REMOTE_RATIO;
+        assert!(cache <= 100_000, "cache miss rate too high");
+        assert!(numa <= 200_000, "NUMA remote ratio too high");
     }
 
     // -----------------------------------------------------------------------

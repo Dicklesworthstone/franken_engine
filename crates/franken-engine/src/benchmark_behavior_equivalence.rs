@@ -1540,7 +1540,7 @@ mod tests {
     #[test]
     fn behavior_equivalence_class_ord_is_consistent() {
         // Verify Ord is defined (derive-based, follows declaration order)
-        let mut variants = vec![
+        let mut variants = [
             BehaviorEquivalenceClass::ShippedPathDrift,
             BehaviorEquivalenceClass::Equivalent,
             BehaviorEquivalenceClass::BenchmarkNoise,

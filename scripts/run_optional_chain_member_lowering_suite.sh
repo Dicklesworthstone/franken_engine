@@ -43,10 +43,14 @@ fi
 
 member_source_path="${specimens_dir}/member.js"
 computed_source_path="${specimens_dir}/computed.js"
+grouped_source_path="${specimens_dir}/grouped.js"
 nullish_source_path="${specimens_dir}/nullish.js"
+skip_key_source_path="${specimens_dir}/skip_key.js"
 member_artifact_path="${run_dir}/member.compile.json"
 computed_artifact_path="${run_dir}/computed.compile.json"
+grouped_artifact_path="${run_dir}/grouped.compile.json"
 nullish_report_path="${run_dir}/nullish.run.json"
+skip_key_report_path="${run_dir}/skip_key.run.json"
 
 cat >"${member_source_path}" <<'EOF'
 const obj = { value: 7 };
@@ -59,9 +63,21 @@ const obj = { value: 7 };
 obj?.[key];
 EOF
 
+cat >"${grouped_source_path}" <<'EOF'
+const obj = { nested: { value: 7 } };
+(obj?.nested).value;
+EOF
+
 cat >"${nullish_source_path}" <<'EOF'
 let obj = null;
 obj?.value;
+EOF
+
+cat >"${skip_key_source_path}" <<'EOF'
+let probe = 0;
+let obj = null;
+obj?.[(probe = 1)];
+probe;
 EOF
 
 rch_strip_ansi() {
@@ -167,6 +183,18 @@ run_step \
   --policy-id "${policy_id}"
 
 run_step \
+  "compile-grouped" \
+  "cargo run -p frankenengine-engine --bin frankenctl -- compile --input ${grouped_source_path} --out ${grouped_artifact_path} --goal script --trace-id ${trace_id}-grouped --decision-id ${decision_id}-grouped --policy-id ${policy_id}" \
+  cargo run -p frankenengine-engine --bin frankenctl -- \
+  compile \
+  --input "${grouped_source_path}" \
+  --out "${grouped_artifact_path}" \
+  --goal script \
+  --trace-id "${trace_id}-grouped" \
+  --decision-id "${decision_id}-grouped" \
+  --policy-id "${policy_id}"
+
+run_step \
   "run-nullish" \
   "cargo run -p frankenengine-engine --bin frankenctl -- run --input ${nullish_source_path} --extension-id optional-chain-nullish --out ${nullish_report_path}" \
   cargo run -p frankenengine-engine --bin frankenctl -- \
@@ -175,9 +203,20 @@ run_step \
   --extension-id optional-chain-nullish \
   --out "${nullish_report_path}"
 
+run_step \
+  "run-skip-key" \
+  "cargo run -p frankenengine-engine --bin frankenctl -- run --input ${skip_key_source_path} --extension-id optional-chain-skip-key --out ${skip_key_report_path}" \
+  cargo run -p frankenengine-engine --bin frankenctl -- \
+  run \
+  --input "${skip_key_source_path}" \
+  --extension-id optional-chain-skip-key \
+  --out "${skip_key_report_path}"
+
 jq -e '.. | objects | select(has("JumpIfNullish"))' "${member_artifact_path}" >/dev/null
 jq -e '.. | objects | select(has("JumpIfNullish"))' "${computed_artifact_path}" >/dev/null
+jq -e '.. | objects | select(has("JumpIfNullish"))' "${grouped_artifact_path}" >/dev/null
 jq -e '.execution_value == "undefined"' "${nullish_report_path}" >/dev/null
+jq -e '.execution_value == "0"' "${skip_key_report_path}" >/dev/null
 
 printf '%s\n' "${commands_run[@]}" >"${commands_path}"
 : >"${events_path}"
@@ -261,7 +300,9 @@ jq -n \
       step_logs_dir: "step_logs",
       member_compile_artifact: "member.compile.json",
       computed_compile_artifact: "computed.compile.json",
-      nullish_run_report: "nullish.run.json"
+      grouped_compile_artifact: "grouped.compile.json",
+      nullish_run_report: "nullish.run.json",
+      skip_key_run_report: "skip_key.run.json"
     },
     replay_command: "./scripts/e2e/optional_chain_member_lowering_replay.sh " + $mode
   }' >"${manifest_path}"
@@ -272,12 +313,38 @@ jq -n \
   --arg mode "${mode}" \
   --arg member_artifact "member.compile.json" \
   --arg computed_artifact "computed.compile.json" \
+  --arg grouped_artifact "grouped.compile.json" \
   --arg nullish_report "nullish.run.json" \
+  --arg skip_key_report "skip_key.run.json" \
   '{
     schema_version: $schema_version,
     bead_id: $bead_id,
     mode: $mode,
     component: "optional_chain_member_lowering",
+    support_matrix: {
+      supported_forms: [
+        "obj?.prop",
+        "obj?.[expr]",
+        "nested optional member chains",
+        "grouped follow-on member access such as (obj?.nested).value"
+      ],
+      explicitly_verified_runtime_behaviors: [
+        "nullish optional member returns undefined",
+        "computed key side effects are skipped when the base is nullish",
+        "grouped follow-on member access is not silently short-circuited"
+      ],
+      unsupported_residual_shapes: [],
+      sibling_bead_scope: [
+        {
+          bead_id: "bd-1lsy.2.10.2",
+          shape: "optional-call lowering, receiver preservation, and argument-order guarantees"
+        },
+        {
+          bead_id: "bd-1lsy.2.10.3",
+          shape: "broader optional-chaining regression corpus and placeholder-scan evidence"
+        }
+      ]
+    },
     specimen_results: [
       {
         specimen_id: "member",
@@ -292,9 +359,22 @@ jq -n \
         outcome: "pass"
       },
       {
+        specimen_id: "grouped",
+        compile_artifact: $grouped_artifact,
+        typed_nullish_guard: true,
+        grouped_scope_preserved: true,
+        outcome: "pass"
+      },
+      {
         specimen_id: "nullish",
         run_report: $nullish_report,
         expected_execution_value: "undefined",
+        outcome: "pass"
+      },
+      {
+        specimen_id: "skip_key_side_effect",
+        run_report: $skip_key_report,
+        expected_execution_value: "0",
         outcome: "pass"
       }
     ]
@@ -306,9 +386,11 @@ cat >"${summary_path}" <<EOF
 - Bead: \`${bead_id}\`
 - Mode: \`${mode}\`
 - Outcome: pass
-- Verified library lowering tests for optional member and computed-member paths.
-- Verified \`frankenctl compile\` accepts member and computed optional-chain specimens and emits typed nullish-guard IR.
+- Verified library lowering tests for optional member, computed-member, nested-chain, and grouped-scope paths.
+- Verified \`frankenctl compile\` accepts member, computed, and grouped optional-chain specimens and emits typed nullish-guard IR.
 - Verified \`frankenctl run\` short-circuits a nullish optional member to \`undefined\`.
+- Verified computed key side effects are skipped when the optional-chain base is nullish.
+- Recorded sibling-bead scope explicitly so this bundle does not over-claim optional-call coverage.
 EOF
 
 echo "optional-chain member lowering manifest: ${manifest_path}"

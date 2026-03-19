@@ -2843,8 +2843,10 @@ mod tests {
     fn constants_sanity() {
         assert_eq!(COMPONENT, "npm_compatibility_matrix");
         assert!(SCHEMA_VERSION.contains("npm-compatibility-matrix"));
-        assert!(MAX_PACKAGES_PER_COHORT > 0);
-        assert!(MAX_INCOMPATIBILITIES_PER_PACKAGE > 0);
+        let max_pkg = MAX_PACKAGES_PER_COHORT;
+        assert!(max_pkg > 0);
+        let max_inc = MAX_INCOMPATIBILITIES_PER_PACKAGE;
+        assert!(max_inc > 0);
     }
 
     // -----------------------------------------------------------------------

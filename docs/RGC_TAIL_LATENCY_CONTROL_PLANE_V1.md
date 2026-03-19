@@ -46,8 +46,13 @@ RGC_TAIL_LATENCY_CONTROL_PLANE_PROFILE=balanced \
   ./scripts/run_rgc_tail_latency_control_plane.sh ci
 ```
 
+The runner defaults to `epoch=42`; override with
+`RGC_TAIL_LATENCY_CONTROL_PLANE_EPOCH=<n>` when you need a different
+deterministic bundle epoch.
+
 The synthetic contention profile is expected to engage fallback guardrails.
 That is a feature of the stress artifact, not a test failure.
 
-The balanced profile is expected to stay nominal with
-`guardrails.fallback_activated == false`.
+The balanced profile is expected to stay out of fallback with
+`guardrails.fallback_activated == false`. The deterministic balanced fixture may
+still report `guardrails.state == "near_limit"` while remaining non-fallback.

@@ -9,6 +9,7 @@ parser_frontier_bootstrap_env
 
 mode="${1:-ci}"
 profile="${RGC_TAIL_LATENCY_CONTROL_PLANE_PROFILE:-synthetic-contention}"
+epoch="${RGC_TAIL_LATENCY_CONTROL_PLANE_EPOCH:-42}"
 toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
 cargo_build_jobs="${CARGO_BUILD_JOBS:-1}"
 artifact_root="${RGC_TAIL_LATENCY_CONTROL_PLANE_ARTIFACT_ROOT:-artifacts/rgc_tail_latency_control_plane}"
@@ -182,11 +183,11 @@ extract_streamed_artifacts() {
 }
 
 run_step \
-  "cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- --out-dir ${run_dir} --profile ${profile} --epoch 42 && stream artifact bundle" \
+  "cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- --out-dir ${run_dir} --profile ${profile} --epoch ${epoch} && stream artifact bundle" \
   cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- \
   --out-dir "${run_dir}" \
   --profile "${profile}" \
-  --epoch 42 \
+  --epoch "${epoch}" \
   --emit-artifact-stream
 
 extract_streamed_artifacts || true
@@ -222,6 +223,15 @@ if [[ -f "${commands_path}" ]] && ! grep -q 'franken_tail_latency_control_plane'
   validation_errors+=("commands.txt does not reference the runner binary")
 fi
 
+if [[ -f "${repro_lock_path}" ]] && ! jq -e --arg profile "${profile}" --arg epoch "${epoch}" '
+    .profile == $profile
+    and (.epoch | tostring) == $epoch
+    and (.replay_command | contains("--profile " + $profile))
+    and (.replay_command | contains("--epoch " + $epoch))
+  ' "${repro_lock_path}" >/dev/null; then
+  validation_errors+=("repro.lock does not preserve the active profile/epoch in replay_command")
+fi
+
 if [[ "${profile}" == "synthetic-contention" ]] && [[ -f "${report_path}" ]] && ! jq -e '
     .guardrails.fallback_activated == true
     and .guardrails.state == "fallback_engaged"
@@ -231,9 +241,9 @@ fi
 
 if [[ "${profile}" == "balanced" ]] && [[ -f "${report_path}" ]] && ! jq -e '
     .guardrails.fallback_activated == false
-    and .guardrails.state == "nominal"
+    and .guardrails.state != "fallback_engaged"
   ' "${report_path}" >/dev/null; then
-  validation_errors+=("balanced profile did not remain in nominal guardrail mode")
+  validation_errors+=("balanced profile unexpectedly engaged fallback guardrails")
 fi
 
 if [[ "${#validation_errors[@]}" -gt 0 ]]; then

@@ -2307,7 +2307,7 @@ mod tests {
     #[test]
     fn corpus_tier_clone_and_copy_equivalence() {
         let tier = CorpusTier::Edge;
-        let cloned = tier.clone();
+        let cloned = tier;
         let copied = tier;
         assert_eq!(tier, cloned);
         assert_eq!(tier, copied);
@@ -2317,7 +2317,7 @@ mod tests {
     #[test]
     fn tamper_kind_clone_and_copy_equivalence() {
         let kind = TamperKind::SequenceReorder;
-        let cloned = kind.clone();
+        let cloned = kind;
         let copied = kind;
         assert_eq!(kind, cloned);
         assert_eq!(kind, copied);
@@ -2326,7 +2326,7 @@ mod tests {
     #[test]
     fn verdict_clone_and_copy_equivalence() {
         let v = EquivalenceVerdict::Fail;
-        let cloned = v.clone();
+        let cloned = v;
         let copied = v;
         assert_eq!(v, cloned);
         assert_eq!(v, copied);

@@ -52,10 +52,10 @@ fn add_chain(ctrl: &mut SwarmControlLoop, ids: &[&str]) {
     for (i, id) in ids.iter().enumerate() {
         let deps: Vec<&str> = if i > 0 { vec![ids[i - 1]] } else { vec![] };
         let mut task = make_task(id, &deps);
-        if i > 0 {
-            if let Some(prev) = ctrl.graph.get_mut(ids[i - 1]) {
-                prev.dependents.insert(id.to_string());
-            }
+        if i > 0
+            && let Some(prev) = ctrl.graph.get_mut(ids[i - 1])
+        {
+            prev.dependents.insert(id.to_string());
         }
         task.dependents = if i + 1 < ids.len() {
             let mut s = BTreeSet::new();

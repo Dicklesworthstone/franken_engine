@@ -1997,7 +1997,8 @@ mod tests {
 
     #[test]
     fn max_features_per_surface_positive() {
-        assert!(MAX_FEATURES_PER_SURFACE > 0);
+        let max_f = MAX_FEATURES_PER_SURFACE;
+        assert!(max_f > 0);
     }
 
     // --- Hash determinism deep checks ---

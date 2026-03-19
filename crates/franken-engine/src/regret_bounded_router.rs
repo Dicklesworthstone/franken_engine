@@ -2063,7 +2063,7 @@ mod tests {
 
     #[test]
     fn integer_sqrt_one() {
-        let s1 = sqrt_of_millionths(1 * MILLION);
+        let s1 = sqrt_of_millionths(MILLION);
         // sqrt(1) * 1M = 1M
         assert!((s1 - MILLION).abs() < 100_000);
     }

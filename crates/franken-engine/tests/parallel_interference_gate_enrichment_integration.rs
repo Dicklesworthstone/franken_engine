@@ -23,7 +23,7 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::parallel_interference_gate::{
-    self, COMPONENT, DEFAULT_FLAKE_THRESHOLD_MILLIONTHS, DEFAULT_MAX_WORKER_VARIATIONS,
+    COMPONENT, DEFAULT_FLAKE_THRESHOLD_MILLIONTHS, DEFAULT_MAX_WORKER_VARIATIONS,
     DEFAULT_REPEATS_PER_SEED, DEFAULT_SEED_COUNT, FlakeRate, GateConfig, GateDecision, GateResult,
     InterferenceClass, InterferenceIncident, InterferenceSeverity, OperatorSummary, ReplayBundle,
     RootCauseHint, RunRecord, SCHEMA_VERSION, WitnessDiff, WitnessDiffEntry,

@@ -1989,7 +1989,9 @@ mod tests {
 
     #[test]
     fn entropy_bounds_ordered() {
-        assert!(MIN_ENTROPY_MILLIONTHS < MAX_ENTROPY_MILLIONTHS);
+        let min = MIN_ENTROPY_MILLIONTHS;
+        let max = MAX_ENTROPY_MILLIONTHS;
+        assert!(min < max, "MIN_ENTROPY must be less than MAX_ENTROPY");
     }
 
     #[test]

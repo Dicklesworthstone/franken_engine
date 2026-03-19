@@ -64,6 +64,11 @@ fn library_lowering_emits_typed_nullish_guards_for_optional_member_paths() {
             "const obj = { nested: { value: 7 } }; obj?.nested?.value;",
             2usize,
         ),
+        (
+            "grouped",
+            "const obj = { nested: { value: 7 } }; (obj?.nested).value;",
+            1usize,
+        ),
     ] {
         let tree = parser
             .parse_with_options(source, ParseGoal::Script, &ParserOptions::default())
@@ -103,6 +108,10 @@ fn frankenctl_compile_accepts_optional_member_and_computed_member_sources() {
         (
             "nested",
             "const obj = { nested: { value: 7 } }; obj?.nested?.value;\n",
+        ),
+        (
+            "grouped",
+            "const obj = { nested: { value: 7 } }; (obj?.nested).value;\n",
         ),
     ] {
         let source_path = temp_path(&format!("optional_chain_{specimen_id}_source"), "js");
@@ -162,11 +171,21 @@ fn frankenctl_compile_accepts_optional_member_and_computed_member_sources() {
 
 #[test]
 fn frankenctl_run_executes_optional_member_and_computed_member_sources() {
-    for (specimen_id, source) in [
-        ("nullish_member", "let obj = null; obj?.value;\n"),
+    for (specimen_id, source, expected_execution_value) in [
+        (
+            "nullish_member",
+            "let obj = null; obj?.value;\n",
+            "undefined",
+        ),
         (
             "live_computed",
             "let key = \"value\"; let obj = { value: 7 }; obj?.[key];\n",
+            "7",
+        ),
+        (
+            "skipped_key_side_effect",
+            "let probe = 0; let obj = null; obj?.[(probe = 1)]; probe;\n",
+            "0",
         ),
     ] {
         let source_path = temp_path(&format!("optional_chain_{specimen_id}_run_source"), "js");
@@ -199,19 +218,59 @@ fn frankenctl_run_executes_optional_member_and_computed_member_sources() {
         let stdout_json = parse_stdout_json(&output);
         assert!(stdout_json["lane"].as_str().is_some());
         assert!(stdout_json["containment_action"].as_str().is_some());
-        assert!(stdout_json["execution_value"].as_str().is_some());
+        assert_eq!(
+            stdout_json["execution_value"].as_str(),
+            Some(expected_execution_value),
+            "stdout execution value mismatch for `{specimen_id}`"
+        );
 
         let report_json: Value =
             serde_json::from_slice(&fs::read(&report_path).expect("run report should be readable"))
                 .expect("run report should parse as json");
         assert_eq!(
             report_json["extension_id"].as_str(),
-            Some(&format!("ext-{specimen_id}")),
+            Some(format!("ext-{specimen_id}").as_str()),
             "run report should preserve the extension id"
         );
-        assert!(report_json["execution_value"].as_str().is_some());
+        assert_eq!(
+            report_json["execution_value"].as_str(),
+            Some(expected_execution_value),
+            "report execution value mismatch for `{specimen_id}`"
+        );
 
         let _ = fs::remove_file(source_path);
         let _ = fs::remove_file(report_path);
     }
+}
+
+#[test]
+fn frankenctl_run_preserves_grouped_optional_chain_scope() {
+    let source_path = temp_path("optional_chain_grouped_scope_source", "js");
+    write_source(&source_path, "let obj = null; (obj?.nested).value;\n");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "run",
+            "--input",
+            source_path
+                .to_str()
+                .expect("grouped scope source path should be valid utf8"),
+            "--extension-id",
+            "ext-grouped-scope",
+        ])
+        .output()
+        .expect("run command should execute");
+
+    assert!(
+        !output.status.success(),
+        "grouped optional chain should fail once the follow-on plain member reads from undefined"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("type error: expected object, got undefined"),
+        "grouped scope failure should surface the shipped TypeError; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = fs::remove_file(source_path);
 }

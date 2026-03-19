@@ -24,7 +24,7 @@ use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::moonshot_contract::MoonshotStage;
 use frankenengine_engine::regret_bounded_router::{RegimeKind, RegretCertificate};
 use frankenengine_engine::security_epoch::SecurityEpoch;
-use frankenengine_engine::self_replacement::{GateVerdict, RiskLevel};
+use frankenengine_engine::self_replacement::GateVerdict;
 
 // ---------------------------------------------------------------------------
 // Helpers — match existing test patterns exactly

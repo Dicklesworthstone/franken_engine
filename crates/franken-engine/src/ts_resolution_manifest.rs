@@ -1819,34 +1819,46 @@ mod tests {
 
     #[test]
     fn test_tsconfig_strict_flag_affects_hash() {
-        let mut s1 = TsconfigSnapshot::default();
-        s1.strict = true;
-        let mut s2 = TsconfigSnapshot::default();
-        s2.strict = false;
+        let s1 = TsconfigSnapshot {
+            strict: true,
+            ..TsconfigSnapshot::default()
+        };
+        let s2 = TsconfigSnapshot {
+            strict: false,
+            ..TsconfigSnapshot::default()
+        };
         assert_ne!(s1.content_hash(), s2.content_hash());
     }
 
     #[test]
     fn test_tsconfig_target_affects_hash() {
-        let mut s1 = TsconfigSnapshot::default();
-        s1.target = "es2020".to_string();
-        let mut s2 = TsconfigSnapshot::default();
-        s2.target = "es2022".to_string();
+        let s1 = TsconfigSnapshot {
+            target: "es2020".to_string(),
+            ..TsconfigSnapshot::default()
+        };
+        let s2 = TsconfigSnapshot {
+            target: "es2022".to_string(),
+            ..TsconfigSnapshot::default()
+        };
         assert_ne!(s1.content_hash(), s2.content_hash());
     }
 
     #[test]
     fn test_tsconfig_custom_conditions_affects_hash() {
-        let mut s1 = TsconfigSnapshot::default();
-        s1.custom_conditions = vec!["development".into()];
+        let s1 = TsconfigSnapshot {
+            custom_conditions: vec!["development".into()],
+            ..TsconfigSnapshot::default()
+        };
         let s2 = TsconfigSnapshot::default();
         assert_ne!(s1.content_hash(), s2.content_hash());
     }
 
     #[test]
     fn test_tsconfig_module_resolution_mode_affects_hash() {
-        let mut s1 = TsconfigSnapshot::default();
-        s1.module_resolution = TsModuleResolutionMode::Bundler;
+        let s1 = TsconfigSnapshot {
+            module_resolution: TsModuleResolutionMode::Bundler,
+            ..TsconfigSnapshot::default()
+        };
         let s2 = TsconfigSnapshot::default(); // NodeNext by default
         assert_ne!(s1.content_hash(), s2.content_hash());
     }
@@ -2414,8 +2426,10 @@ mod tests {
 
     #[test]
     fn test_tsconfig_jsx_affects_hash() {
-        let mut s1 = TsconfigSnapshot::default();
-        s1.jsx = "preserve".to_string();
+        let s1 = TsconfigSnapshot {
+            jsx: "preserve".to_string(),
+            ..TsconfigSnapshot::default()
+        };
         let s2 = TsconfigSnapshot::default(); // "react-jsx" by default
         assert_ne!(s1.content_hash(), s2.content_hash());
     }

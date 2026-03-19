@@ -206,6 +206,29 @@ enum RuntimeIteratorState {
 // CallFrame — interpreter call stack frame
 // ---------------------------------------------------------------------------
 
+/// A catch frame pushed by `BeginTry`, popped by `EndTry` or consumed by `Throw`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CatchFrame {
+    /// Instruction index of the catch handler.
+    catch_target: usize,
+    /// Instruction index of the finally block (if present).
+    finally_target: Option<usize>,
+    /// Call stack depth when the try block was entered.  Used to validate
+    /// that the catch frame is still in scope during unwinding.
+    call_depth: usize,
+}
+
+/// Tracks how a finally block was entered so `EndFinally` knows whether to
+/// re-throw a pending exception or continue normally.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+enum FinallyMode {
+    /// Entered via normal control flow (try body completed, or catch body completed).
+    Normal,
+    /// Entered because an exception was in flight.  The pending exception is
+    /// stored in `InterpreterCore::pending_exception`.
+    Exception,
+}
+
 /// A call stack frame.
 #[derive(Debug, Clone)]
 struct CallFrame {
@@ -261,6 +284,8 @@ pub enum InterpreterError {
     IteratorNotFound { handle: u32 },
     /// Halt instruction reached (normal termination).
     Halted,
+    /// An exception was thrown but no catch handler was found.
+    UncaughtException { value: String },
 }
 
 impl fmt::Display for InterpreterError {
@@ -310,6 +335,9 @@ impl fmt::Display for InterpreterError {
             ),
             Self::IteratorNotFound { handle } => write!(f, "iterator#{handle} not found"),
             Self::Halted => write!(f, "execution halted"),
+            Self::UncaughtException { value } => {
+                write!(f, "uncaught exception: {value}")
+            }
         }
     }
 }
@@ -419,6 +447,15 @@ pub struct InterpreterCore {
     trace_id: String,
     /// Base register offset for current frame.
     register_base: usize,
+    /// Stack of active try/catch frames for exception unwinding.
+    catch_frames: Vec<CatchFrame>,
+    /// A pending exception value during unwinding (set by `Throw`,
+    /// consumed by `EnterCatch` or re-thrown by `EndFinally`).
+    pending_exception: Option<Value>,
+    /// Stack of finally-entry modes.  Pushed by `EnterFinally`, popped by
+    /// `EndFinally`.  When `Exception`, `EndFinally` re-throws the pending
+    /// exception.
+    finally_modes: Vec<FinallyMode>,
 }
 
 impl InterpreterCore {
@@ -440,6 +477,9 @@ impl InterpreterCore {
             witness_seq: 0,
             trace_id: trace_id.into(),
             register_base: 0,
+            catch_frames: Vec::new(),
+            pending_exception: None,
+            finally_modes: Vec::new(),
         }
     }
 
@@ -1038,29 +1078,122 @@ impl InterpreterCore {
                 Ir3Instruction::Halt => {
                     return Err(InterpreterError::Halted);
                 }
-                // Exception handling instructions — the runtime unwinder
-                // (RGC-313B) will provide full semantics.  Until then these
-                // are fail-closed stubs: BeginTry/EndTry/EnterFinally/EndFinally
-                // are structural noops, Throw halts, and EnterCatch loads
-                // undefined into the catch binding.
-                Ir3Instruction::BeginTry { .. } => {
+                // ---------------------------------------------------------
+                // Exception handling — real unwinding semantics (RGC-313B).
+                // ---------------------------------------------------------
+                Ir3Instruction::BeginTry {
+                    catch_target,
+                    finally_target,
+                } => {
+                    self.catch_frames.push(CatchFrame {
+                        catch_target: catch_target as usize,
+                        finally_target: finally_target.map(|t| t as usize),
+                        call_depth: self.call_stack.len(),
+                    });
                     self.ip += 1;
                 }
                 Ir3Instruction::EndTry => {
+                    // Normal completion of the try block — pop the catch frame.
+                    if !self.catch_frames.is_empty() {
+                        self.catch_frames.pop();
+                    }
                     self.ip += 1;
                 }
-                Ir3Instruction::Throw { .. } => {
-                    return Err(InterpreterError::Halted);
+                Ir3Instruction::Throw { value } => {
+                    let thrown = self.read_reg(value)?;
+                    self.pending_exception = Some(thrown.clone());
+                    // Walk the catch frame stack to find the nearest valid handler.
+                    let current_depth = self.call_stack.len();
+                    if let Some(frame) = self
+                        .catch_frames
+                        .iter()
+                        .rev()
+                        .find(|f| f.call_depth <= current_depth)
+                        .cloned()
+                    {
+                        // Remove all catch frames at or above the matched one.
+                        let target_depth = frame.call_depth;
+                        while self
+                            .catch_frames
+                            .last()
+                            .is_some_and(|f| f.call_depth >= target_depth)
+                        {
+                            self.catch_frames.pop();
+                        }
+                        // Jump to catch handler (the EnterCatch instruction
+                        // will load the pending exception into the binding).
+                        self.ip = frame.catch_target;
+                    } else {
+                        // No catch handler found — uncaught exception.
+                        let desc = match &thrown {
+                            Value::Str(s) => s.clone(),
+                            Value::Int(n) => n.to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            Value::Undefined => "undefined".to_string(),
+                            Value::Null => "null".to_string(),
+                            _ => "[object]".to_string(),
+                        };
+                        return Err(InterpreterError::UncaughtException { value: desc });
+                    }
                 }
                 Ir3Instruction::EnterCatch { dst } => {
-                    self.write_reg(dst, Value::Undefined)?;
+                    // Load the pending exception into the catch binding register.
+                    let exception = self.pending_exception.take().unwrap_or(Value::Undefined);
+                    self.write_reg(dst, exception)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::EnterFinally => {
+                    // Track whether we entered the finally block via normal
+                    // control flow or exception unwinding.
+                    if self.pending_exception.is_some() {
+                        self.finally_modes.push(FinallyMode::Exception);
+                    } else {
+                        self.finally_modes.push(FinallyMode::Normal);
+                    }
                     self.ip += 1;
                 }
                 Ir3Instruction::EndFinally => {
-                    self.ip += 1;
+                    let mode = self.finally_modes.pop().unwrap_or(FinallyMode::Normal);
+                    if mode == FinallyMode::Exception {
+                        // Re-throw the pending exception after finally completes.
+                        if let Some(thrown) = &self.pending_exception {
+                            let desc = match thrown {
+                                Value::Str(s) => s.clone(),
+                                Value::Int(n) => n.to_string(),
+                                Value::Bool(b) => b.to_string(),
+                                Value::Undefined => "undefined".to_string(),
+                                Value::Null => "null".to_string(),
+                                _ => "[object]".to_string(),
+                            };
+                            // Look for another catch frame to propagate to.
+                            let current_depth = self.call_stack.len();
+                            if let Some(frame) = self
+                                .catch_frames
+                                .iter()
+                                .rev()
+                                .find(|f| f.call_depth <= current_depth)
+                                .cloned()
+                            {
+                                let target_depth = frame.call_depth;
+                                while self
+                                    .catch_frames
+                                    .last()
+                                    .is_some_and(|f| f.call_depth >= target_depth)
+                                {
+                                    self.catch_frames.pop();
+                                }
+                                self.ip = frame.catch_target;
+                            } else {
+                                return Err(InterpreterError::UncaughtException { value: desc });
+                            }
+                        } else {
+                            // Exception was consumed (shouldn't happen, but safe fallthrough).
+                            self.ip += 1;
+                        }
+                    } else {
+                        // Normal completion — just continue.
+                        self.ip += 1;
+                    }
                 }
             }
         }
@@ -2677,6 +2810,9 @@ mod tests {
             InterpreterError::UnsupportedMembershipSemantics {
                 operator: "in".to_string(),
             },
+            InterpreterError::UncaughtException {
+                value: "test error".to_string(),
+            },
         ];
         for e in errors {
             let s = e.to_string();
@@ -2911,6 +3047,9 @@ mod tests {
             },
             InterpreterError::UnsupportedMembershipSemantics {
                 operator: "instanceof".to_string(),
+            },
+            InterpreterError::UncaughtException {
+                value: "test error".to_string(),
             },
         ];
         let mut displays = std::collections::BTreeSet::new();
@@ -3238,6 +3377,9 @@ mod tests {
                 operator: "instanceof".to_string(),
             },
             InterpreterError::Halted,
+            InterpreterError::UncaughtException {
+                value: "error msg".to_string(),
+            },
         ];
         for v in &variants {
             let json = serde_json::to_string(v).unwrap();
@@ -3246,8 +3388,8 @@ mod tests {
         }
         assert_eq!(
             variants.len(),
-            14,
-            "all 14 InterpreterError variants covered"
+            15,
+            "all 15 InterpreterError variants covered"
         );
     }
 
@@ -4704,5 +4846,138 @@ mod tests {
             &Value::Undefined,
             &Value::Str(String::new())
         ));
+    }
+
+    // -----------------------------------------------------------------------
+    // Exception handling tests (RGC-313B)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn throw_without_catch_returns_uncaught_exception() {
+        let m = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 42 },
+            Ir3Instruction::Throw { value: 0 },
+        ]);
+        let err = quickjs_execute(&m).unwrap_err();
+        assert!(
+            matches!(err, InterpreterError::UncaughtException { .. }),
+            "expected UncaughtException, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn try_catch_catches_thrown_exception() {
+        // try { throw 99; } catch(e) { result = e; }
+        // IR3 layout:
+        //   0: LoadInt r0, 99
+        //   1: BeginTry { catch_target: 5 }
+        //   2: Throw { value: r0 }
+        //   3: EndTry           (skipped on throw)
+        //   4: Jump { target: 7 } (skip catch)
+        //   5: EnterCatch { dst: r1 }
+        //   6: Move { dst: r0, src: r1 }   (copy to result reg)
+        //   7: Halt
+        let m = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 0, value: 99 },
+            Ir3Instruction::BeginTry {
+                catch_target: 5,
+                finally_target: None,
+            },
+            Ir3Instruction::Throw { value: 0 },
+            Ir3Instruction::EndTry,
+            Ir3Instruction::Jump { target: 7 },
+            Ir3Instruction::EnterCatch { dst: 1 },
+            Ir3Instruction::Move { dst: 0, src: 1 },
+            Ir3Instruction::Halt,
+        ]);
+        let result = quickjs_execute(&m).unwrap();
+        assert_eq!(result.value, Value::Int(99));
+    }
+
+    #[test]
+    fn try_normal_exit_pops_catch_frame() {
+        // try { result = 42; } catch(e) { result = -1; }
+        // Normal flow: BeginTry → body → EndTry → Jump(past catch) → Halt
+        let m = test_module(vec![
+            Ir3Instruction::BeginTry {
+                catch_target: 5,
+                finally_target: None,
+            },
+            Ir3Instruction::LoadInt { dst: 0, value: 42 },
+            Ir3Instruction::EndTry,
+            Ir3Instruction::Jump { target: 7 },
+            // catch handler (should not execute)
+            Ir3Instruction::EnterCatch { dst: 1 },
+            Ir3Instruction::LoadInt { dst: 0, value: -1 },
+            Ir3Instruction::Halt,
+            // end
+            Ir3Instruction::Halt,
+        ]);
+        let result = quickjs_execute(&m).unwrap();
+        assert_eq!(result.value, Value::Int(42));
+    }
+
+    #[test]
+    fn enter_catch_provides_exception_value() {
+        // throw "error_msg" → catch(e) → e should be the thrown string
+        let m = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
+                Ir3Instruction::BeginTry {
+                    catch_target: 4,
+                    finally_target: None,
+                },
+                Ir3Instruction::Throw { value: 0 },
+                Ir3Instruction::EndTry,
+                Ir3Instruction::EnterCatch { dst: 1 },
+                Ir3Instruction::Move { dst: 0, src: 1 },
+                Ir3Instruction::Halt,
+            ],
+            vec!["error_msg".to_string()],
+        );
+        let result = quickjs_execute(&m).unwrap();
+        assert_eq!(result.value, Value::Str("error_msg".to_string()));
+    }
+
+    #[test]
+    fn begin_try_end_try_noop_on_normal_flow() {
+        // BeginTry + EndTry with no throw should not affect execution
+        let m = test_module(vec![
+            Ir3Instruction::BeginTry {
+                catch_target: 4,
+                finally_target: None,
+            },
+            Ir3Instruction::LoadInt { dst: 0, value: 7 },
+            Ir3Instruction::EndTry,
+            Ir3Instruction::Jump { target: 5 },
+            Ir3Instruction::EnterCatch { dst: 1 },
+            Ir3Instruction::Halt,
+        ]);
+        let result = quickjs_execute(&m).unwrap();
+        assert_eq!(result.value, Value::Int(7));
+    }
+
+    #[test]
+    fn throw_string_uncaught_includes_value() {
+        let m = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
+                Ir3Instruction::Throw { value: 0 },
+            ],
+            vec!["custom error".to_string()],
+        );
+        let err = quickjs_execute(&m).unwrap_err();
+        match err {
+            InterpreterError::UncaughtException { value } => {
+                assert_eq!(value, "custom error");
+            }
+            other => panic!("expected UncaughtException, got {other:?}"),
+        }
     }
 }

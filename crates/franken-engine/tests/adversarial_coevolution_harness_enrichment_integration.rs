@@ -17,8 +17,8 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::adversarial_coevolution_harness::{
     COEVOLUTION_COMPONENT, COEVOLUTION_SCHEMA_VERSION, CoevolutionError, CoevolutionHarness,
-    ExploitClass, PayoffEntry, PayoffMatrix, PlayerRole, PolicyDelta,
-    StrategyId, TournamentConfig, TournamentResult,
+    ExploitClass, PayoffEntry, PayoffMatrix, PlayerRole, PolicyDelta, StrategyId, TournamentConfig,
+    TournamentResult,
 };
 // ===========================================================================
 // Helpers
@@ -33,17 +33,66 @@ fn rps_matrix() -> PayoffMatrix {
     ];
     let def = atk.clone();
     let entries = vec![
-        PayoffEntry { attacker: StrategyId("rock".into()), defender: StrategyId("rock".into()), attacker_payoff_millionths: 0, defender_payoff_millionths: 0 },
-        PayoffEntry { attacker: StrategyId("rock".into()), defender: StrategyId("paper".into()), attacker_payoff_millionths: -million, defender_payoff_millionths: million },
-        PayoffEntry { attacker: StrategyId("rock".into()), defender: StrategyId("scissors".into()), attacker_payoff_millionths: million, defender_payoff_millionths: -million },
-        PayoffEntry { attacker: StrategyId("paper".into()), defender: StrategyId("rock".into()), attacker_payoff_millionths: million, defender_payoff_millionths: -million },
-        PayoffEntry { attacker: StrategyId("paper".into()), defender: StrategyId("paper".into()), attacker_payoff_millionths: 0, defender_payoff_millionths: 0 },
-        PayoffEntry { attacker: StrategyId("paper".into()), defender: StrategyId("scissors".into()), attacker_payoff_millionths: -million, defender_payoff_millionths: million },
-        PayoffEntry { attacker: StrategyId("scissors".into()), defender: StrategyId("rock".into()), attacker_payoff_millionths: -million, defender_payoff_millionths: million },
-        PayoffEntry { attacker: StrategyId("scissors".into()), defender: StrategyId("paper".into()), attacker_payoff_millionths: million, defender_payoff_millionths: -million },
-        PayoffEntry { attacker: StrategyId("scissors".into()), defender: StrategyId("scissors".into()), attacker_payoff_millionths: 0, defender_payoff_millionths: 0 },
+        PayoffEntry {
+            attacker: StrategyId("rock".into()),
+            defender: StrategyId("rock".into()),
+            attacker_payoff_millionths: 0,
+            defender_payoff_millionths: 0,
+        },
+        PayoffEntry {
+            attacker: StrategyId("rock".into()),
+            defender: StrategyId("paper".into()),
+            attacker_payoff_millionths: -million,
+            defender_payoff_millionths: million,
+        },
+        PayoffEntry {
+            attacker: StrategyId("rock".into()),
+            defender: StrategyId("scissors".into()),
+            attacker_payoff_millionths: million,
+            defender_payoff_millionths: -million,
+        },
+        PayoffEntry {
+            attacker: StrategyId("paper".into()),
+            defender: StrategyId("rock".into()),
+            attacker_payoff_millionths: million,
+            defender_payoff_millionths: -million,
+        },
+        PayoffEntry {
+            attacker: StrategyId("paper".into()),
+            defender: StrategyId("paper".into()),
+            attacker_payoff_millionths: 0,
+            defender_payoff_millionths: 0,
+        },
+        PayoffEntry {
+            attacker: StrategyId("paper".into()),
+            defender: StrategyId("scissors".into()),
+            attacker_payoff_millionths: -million,
+            defender_payoff_millionths: million,
+        },
+        PayoffEntry {
+            attacker: StrategyId("scissors".into()),
+            defender: StrategyId("rock".into()),
+            attacker_payoff_millionths: -million,
+            defender_payoff_millionths: million,
+        },
+        PayoffEntry {
+            attacker: StrategyId("scissors".into()),
+            defender: StrategyId("paper".into()),
+            attacker_payoff_millionths: million,
+            defender_payoff_millionths: -million,
+        },
+        PayoffEntry {
+            attacker: StrategyId("scissors".into()),
+            defender: StrategyId("scissors".into()),
+            attacker_payoff_millionths: 0,
+            defender_payoff_millionths: 0,
+        },
     ];
-    PayoffMatrix { attacker_strategies: atk, defender_strategies: def, entries }
+    PayoffMatrix {
+        attacker_strategies: atk,
+        defender_strategies: def,
+        entries,
+    }
 }
 
 fn security_matrix() -> PayoffMatrix {
@@ -56,12 +105,36 @@ fn security_matrix() -> PayoffMatrix {
         StrategyId("adaptive-sandbox".into()),
     ];
     let entries = vec![
-        PayoffEntry { attacker: StrategyId("capability-escalation".into()), defender: StrategyId("strict-containment".into()), attacker_payoff_millionths: 200_000, defender_payoff_millionths: 800_000 },
-        PayoffEntry { attacker: StrategyId("capability-escalation".into()), defender: StrategyId("adaptive-sandbox".into()), attacker_payoff_millionths: 600_000, defender_payoff_millionths: 400_000 },
-        PayoffEntry { attacker: StrategyId("policy-bypass".into()), defender: StrategyId("strict-containment".into()), attacker_payoff_millionths: 700_000, defender_payoff_millionths: 300_000 },
-        PayoffEntry { attacker: StrategyId("policy-bypass".into()), defender: StrategyId("adaptive-sandbox".into()), attacker_payoff_millionths: 300_000, defender_payoff_millionths: 700_000 },
+        PayoffEntry {
+            attacker: StrategyId("capability-escalation".into()),
+            defender: StrategyId("strict-containment".into()),
+            attacker_payoff_millionths: 200_000,
+            defender_payoff_millionths: 800_000,
+        },
+        PayoffEntry {
+            attacker: StrategyId("capability-escalation".into()),
+            defender: StrategyId("adaptive-sandbox".into()),
+            attacker_payoff_millionths: 600_000,
+            defender_payoff_millionths: 400_000,
+        },
+        PayoffEntry {
+            attacker: StrategyId("policy-bypass".into()),
+            defender: StrategyId("strict-containment".into()),
+            attacker_payoff_millionths: 700_000,
+            defender_payoff_millionths: 300_000,
+        },
+        PayoffEntry {
+            attacker: StrategyId("policy-bypass".into()),
+            defender: StrategyId("adaptive-sandbox".into()),
+            attacker_payoff_millionths: 300_000,
+            defender_payoff_millionths: 700_000,
+        },
     ];
-    PayoffMatrix { attacker_strategies: atk, defender_strategies: def, entries }
+    PayoffMatrix {
+        attacker_strategies: atk,
+        defender_strategies: def,
+        entries,
+    }
 }
 
 // ===========================================================================
@@ -220,7 +293,10 @@ fn enrichment_harness_new_valid() {
 
 #[test]
 fn enrichment_harness_config_accessible() {
-    let config = TournamentConfig { rounds: 200, ..TournamentConfig::default() };
+    let config = TournamentConfig {
+        rounds: 200,
+        ..TournamentConfig::default()
+    };
     let matrix = rps_matrix();
     let harness = CoevolutionHarness::new(config, matrix).unwrap();
     assert_eq!(harness.config().rounds, 200);
@@ -236,7 +312,10 @@ fn enrichment_harness_payoff_matrix_accessible() {
 
 #[test]
 fn enrichment_harness_run_rps() {
-    let config = TournamentConfig { rounds: 100, ..TournamentConfig::default() };
+    let config = TournamentConfig {
+        rounds: 100,
+        ..TournamentConfig::default()
+    };
     let mut harness = CoevolutionHarness::new(config, rps_matrix()).unwrap();
     let result = harness.run().unwrap();
     assert_eq!(result.rounds_played, 100);
@@ -245,7 +324,10 @@ fn enrichment_harness_run_rps() {
 
 #[test]
 fn enrichment_harness_run_security_game() {
-    let config = TournamentConfig { rounds: 100, ..TournamentConfig::default() };
+    let config = TournamentConfig {
+        rounds: 100,
+        ..TournamentConfig::default()
+    };
     let mut harness = CoevolutionHarness::new(config, security_matrix()).unwrap();
     let result = harness.run().unwrap();
     assert_eq!(result.rounds_played, 100);
@@ -254,7 +336,10 @@ fn enrichment_harness_run_security_game() {
 
 #[test]
 fn enrichment_harness_multiple_tournaments() {
-    let config = TournamentConfig { rounds: 50, ..TournamentConfig::default() };
+    let config = TournamentConfig {
+        rounds: 50,
+        ..TournamentConfig::default()
+    };
     let mut harness = CoevolutionHarness::new(config, rps_matrix()).unwrap();
     let _ = harness.run().unwrap();
     let _ = harness.run().unwrap();
@@ -263,20 +348,34 @@ fn enrichment_harness_multiple_tournaments() {
 
 #[test]
 fn enrichment_harness_deterministic_results() {
-    let config = TournamentConfig { rounds: 100, ..TournamentConfig::default() };
+    let config = TournamentConfig {
+        rounds: 100,
+        ..TournamentConfig::default()
+    };
     let matrix = rps_matrix();
     let mut h1 = CoevolutionHarness::new(config.clone(), matrix.clone()).unwrap();
     let mut h2 = CoevolutionHarness::new(config, matrix).unwrap();
     let r1 = h1.run().unwrap();
     let r2 = h2.run().unwrap();
     assert_eq!(r1.artifact_hash, r2.artifact_hash);
-    assert_eq!(r1.total_attacker_payoff_millionths, r2.total_attacker_payoff_millionths);
+    assert_eq!(
+        r1.total_attacker_payoff_millionths,
+        r2.total_attacker_payoff_millionths
+    );
 }
 
 #[test]
 fn enrichment_harness_different_seeds() {
-    let c1 = TournamentConfig { rounds: 100, seed: 1, ..TournamentConfig::default() };
-    let c2 = TournamentConfig { rounds: 100, seed: 999, ..TournamentConfig::default() };
+    let c1 = TournamentConfig {
+        rounds: 100,
+        seed: 1,
+        ..TournamentConfig::default()
+    };
+    let c2 = TournamentConfig {
+        rounds: 100,
+        seed: 999,
+        ..TournamentConfig::default()
+    };
     let mut h1 = CoevolutionHarness::new(c1, rps_matrix()).unwrap();
     let mut h2 = CoevolutionHarness::new(c2, rps_matrix()).unwrap();
     let r1 = h1.run().unwrap();
@@ -290,7 +389,10 @@ fn enrichment_harness_different_seeds() {
 
 #[test]
 fn enrichment_tournament_result_schema_version() {
-    let config = TournamentConfig { rounds: 50, ..TournamentConfig::default() };
+    let config = TournamentConfig {
+        rounds: 50,
+        ..TournamentConfig::default()
+    };
     let mut harness = CoevolutionHarness::new(config, rps_matrix()).unwrap();
     let result = harness.run().unwrap();
     assert_eq!(result.schema_version, COEVOLUTION_SCHEMA_VERSION);
@@ -298,7 +400,10 @@ fn enrichment_tournament_result_schema_version() {
 
 #[test]
 fn enrichment_tournament_result_serde_roundtrip() {
-    let config = TournamentConfig { rounds: 50, ..TournamentConfig::default() };
+    let config = TournamentConfig {
+        rounds: 50,
+        ..TournamentConfig::default()
+    };
     let mut harness = CoevolutionHarness::new(config, rps_matrix()).unwrap();
     let result = harness.run().unwrap();
     let json = serde_json::to_string(&result).unwrap();
@@ -312,7 +417,11 @@ fn enrichment_tournament_result_serde_roundtrip() {
 
 #[test]
 fn enrichment_trajectory_tracks_all_rounds() {
-    let config = TournamentConfig { rounds: 50, track_trajectory: true, ..TournamentConfig::default() };
+    let config = TournamentConfig {
+        rounds: 50,
+        track_trajectory: true,
+        ..TournamentConfig::default()
+    };
     let mut harness = CoevolutionHarness::new(config, rps_matrix()).unwrap();
     let result = harness.run().unwrap();
     let traj = result.trajectory.as_ref().unwrap();
@@ -321,7 +430,11 @@ fn enrichment_trajectory_tracks_all_rounds() {
 
 #[test]
 fn enrichment_trajectory_disabled() {
-    let config = TournamentConfig { rounds: 50, track_trajectory: false, ..TournamentConfig::default() };
+    let config = TournamentConfig {
+        rounds: 50,
+        track_trajectory: false,
+        ..TournamentConfig::default()
+    };
     let mut harness = CoevolutionHarness::new(config, rps_matrix()).unwrap();
     let result = harness.run().unwrap();
     assert!(result.trajectory.is_none());
@@ -329,7 +442,10 @@ fn enrichment_trajectory_disabled() {
 
 #[test]
 fn enrichment_trajectory_regret_non_negative() {
-    let config = TournamentConfig { rounds: 100, ..TournamentConfig::default() };
+    let config = TournamentConfig {
+        rounds: 100,
+        ..TournamentConfig::default()
+    };
     let mut harness = CoevolutionHarness::new(config, rps_matrix()).unwrap();
     let result = harness.run().unwrap();
     let traj = result.trajectory.unwrap();
@@ -343,7 +459,10 @@ fn enrichment_trajectory_regret_non_negative() {
 
 #[test]
 fn enrichment_trajectory_final_regret() {
-    let config = TournamentConfig { rounds: 100, ..TournamentConfig::default() };
+    let config = TournamentConfig {
+        rounds: 100,
+        ..TournamentConfig::default()
+    };
     let mut harness = CoevolutionHarness::new(config, rps_matrix()).unwrap();
     let result = harness.run().unwrap();
     let traj = result.trajectory.unwrap();
@@ -357,7 +476,10 @@ fn enrichment_trajectory_final_regret() {
 
 #[test]
 fn enrichment_convergence_frequency_sums_to_rounds() {
-    let config = TournamentConfig { rounds: 100, ..TournamentConfig::default() };
+    let config = TournamentConfig {
+        rounds: 100,
+        ..TournamentConfig::default()
+    };
     let mut harness = CoevolutionHarness::new(config, rps_matrix()).unwrap();
     let result = harness.run().unwrap();
     let atk_total: u64 = result.convergence.attacker_frequency.values().sum();
@@ -368,7 +490,10 @@ fn enrichment_convergence_frequency_sums_to_rounds() {
 
 #[test]
 fn enrichment_convergence_avg_regret_computed() {
-    let config = TournamentConfig { rounds: 100, ..TournamentConfig::default() };
+    let config = TournamentConfig {
+        rounds: 100,
+        ..TournamentConfig::default()
+    };
     let mut harness = CoevolutionHarness::new(config, rps_matrix()).unwrap();
     let result = harness.run().unwrap();
     // Average regret is computed; value may be positive or negative for zero-sum games.
@@ -386,17 +511,33 @@ fn enrichment_convergence_avg_regret_computed() {
 
 #[test]
 fn enrichment_policy_delta_has_all_defender_strategies() {
-    let config = TournamentConfig { rounds: 50, ..TournamentConfig::default() };
+    let config = TournamentConfig {
+        rounds: 50,
+        ..TournamentConfig::default()
+    };
     let mut harness = CoevolutionHarness::new(config, security_matrix()).unwrap();
     let result = harness.run().unwrap();
     assert_eq!(result.policy_delta.recommended_mix.len(), 2);
-    assert!(result.policy_delta.recommended_mix.contains_key("strict-containment"));
-    assert!(result.policy_delta.recommended_mix.contains_key("adaptive-sandbox"));
+    assert!(
+        result
+            .policy_delta
+            .recommended_mix
+            .contains_key("strict-containment")
+    );
+    assert!(
+        result
+            .policy_delta
+            .recommended_mix
+            .contains_key("adaptive-sandbox")
+    );
 }
 
 #[test]
 fn enrichment_policy_delta_serde_roundtrip() {
-    let config = TournamentConfig { rounds: 50, ..TournamentConfig::default() };
+    let config = TournamentConfig {
+        rounds: 50,
+        ..TournamentConfig::default()
+    };
     let mut harness = CoevolutionHarness::new(config, security_matrix()).unwrap();
     let result = harness.run().unwrap();
     let json = serde_json::to_string(&result.policy_delta).unwrap();
@@ -411,12 +552,26 @@ fn enrichment_policy_delta_serde_roundtrip() {
 #[test]
 fn enrichment_coevolution_error_display_all_unique() {
     let errors = [
-        CoevolutionError::EmptyStrategies { player: PlayerRole::Attacker },
-        CoevolutionError::TooManyStrategies { count: 100, max: 64 },
-        CoevolutionError::IncompletePayoffMatrix { expected: 9, actual: 5 },
+        CoevolutionError::EmptyStrategies {
+            player: PlayerRole::Attacker,
+        },
+        CoevolutionError::TooManyStrategies {
+            count: 100,
+            max: 64,
+        },
+        CoevolutionError::IncompletePayoffMatrix {
+            expected: 9,
+            actual: 5,
+        },
         CoevolutionError::InvalidGamma { value: 0 },
-        CoevolutionError::TooManyRounds { rounds: 200_000, max: 100_000 },
-        CoevolutionError::BudgetExhausted { spent: 500, budget: 100 },
+        CoevolutionError::TooManyRounds {
+            rounds: 200_000,
+            max: 100_000,
+        },
+        CoevolutionError::BudgetExhausted {
+            spent: 500,
+            budget: 100,
+        },
         CoevolutionError::ZeroRounds,
     ];
     let displays: BTreeSet<String> = errors.iter().map(|e| e.to_string()).collect();
@@ -426,7 +581,9 @@ fn enrichment_coevolution_error_display_all_unique() {
 #[test]
 fn enrichment_coevolution_error_serde_roundtrip() {
     let errors = [
-        CoevolutionError::EmptyStrategies { player: PlayerRole::Attacker },
+        CoevolutionError::EmptyStrategies {
+            player: PlayerRole::Attacker,
+        },
         CoevolutionError::ZeroRounds,
         CoevolutionError::InvalidGamma { value: -1 },
     ];
@@ -450,7 +607,12 @@ fn enrichment_error_empty_attacker() {
         entries: vec![],
     };
     let err = CoevolutionHarness::new(config, matrix).unwrap_err();
-    assert!(matches!(err, CoevolutionError::EmptyStrategies { player: PlayerRole::Attacker }));
+    assert!(matches!(
+        err,
+        CoevolutionError::EmptyStrategies {
+            player: PlayerRole::Attacker
+        }
+    ));
 }
 
 #[test]
@@ -462,28 +624,45 @@ fn enrichment_error_empty_defender() {
         entries: vec![],
     };
     let err = CoevolutionHarness::new(config, matrix).unwrap_err();
-    assert!(matches!(err, CoevolutionError::EmptyStrategies { player: PlayerRole::Defender }));
+    assert!(matches!(
+        err,
+        CoevolutionError::EmptyStrategies {
+            player: PlayerRole::Defender
+        }
+    ));
 }
 
 #[test]
 fn enrichment_error_zero_rounds() {
-    let config = TournamentConfig { rounds: 0, ..TournamentConfig::default() };
+    let config = TournamentConfig {
+        rounds: 0,
+        ..TournamentConfig::default()
+    };
     let err = CoevolutionHarness::new(config, rps_matrix()).unwrap_err();
     assert!(matches!(err, CoevolutionError::ZeroRounds));
 }
 
 #[test]
 fn enrichment_error_invalid_gamma_zero() {
-    let config = TournamentConfig { gamma_millionths: 0, ..TournamentConfig::default() };
+    let config = TournamentConfig {
+        gamma_millionths: 0,
+        ..TournamentConfig::default()
+    };
     let err = CoevolutionHarness::new(config, rps_matrix()).unwrap_err();
     assert!(matches!(err, CoevolutionError::InvalidGamma { value: 0 }));
 }
 
 #[test]
 fn enrichment_error_invalid_gamma_million() {
-    let config = TournamentConfig { gamma_millionths: 1_000_000, ..TournamentConfig::default() };
+    let config = TournamentConfig {
+        gamma_millionths: 1_000_000,
+        ..TournamentConfig::default()
+    };
     let err = CoevolutionHarness::new(config, rps_matrix()).unwrap_err();
-    assert!(matches!(err, CoevolutionError::InvalidGamma { value: 1_000_000 }));
+    assert!(matches!(
+        err,
+        CoevolutionError::InvalidGamma { value: 1_000_000 }
+    ));
 }
 
 #[test]
@@ -500,7 +679,13 @@ fn enrichment_error_incomplete_payoff_matrix() {
         }],
     };
     let err = CoevolutionHarness::new(config, matrix).unwrap_err();
-    assert!(matches!(err, CoevolutionError::IncompletePayoffMatrix { expected: 2, actual: 1 }));
+    assert!(matches!(
+        err,
+        CoevolutionError::IncompletePayoffMatrix {
+            expected: 2,
+            actual: 1
+        }
+    ));
 }
 
 // ===========================================================================

@@ -1057,4 +1057,769 @@ mod tests {
         );
         assert_eq!(sel.strategy_count(), 2);
     }
+
+    // -----------------------------------------------------------------------
+    // Additional tests (edge cases, constraint interactions, serde, Display,
+    // hash determinism, fallback paths)
+    // -----------------------------------------------------------------------
+
+    fn gc_strategy() -> OptimizationStrategy {
+        OptimizationStrategy {
+            strategy_id: "gc-concurrent".into(),
+            kind: StrategyKind::GcStrategy,
+            name: "Concurrent GC".into(),
+            expected_reward_millionths: 180_000,
+            cost_millionths: 60_000,
+            worst_case_regret_millionths: 50_000,
+            required_features: BTreeSet::from([FeatureKey::GcPauseFrequency]),
+        }
+    }
+
+    fn module_loading_strategy() -> OptimizationStrategy {
+        OptimizationStrategy {
+            strategy_id: "mod-lazy".into(),
+            kind: StrategyKind::ModuleLoading,
+            name: "Lazy module loading".into(),
+            expected_reward_millionths: 100_000,
+            cost_millionths: 10_000,
+            worst_case_regret_millionths: 20_000,
+            required_features: BTreeSet::from([FeatureKey::ModuleCount]),
+        }
+    }
+
+    fn default_strategy() -> OptimizationStrategy {
+        OptimizationStrategy {
+            strategy_id: "default-noop".into(),
+            kind: StrategyKind::Default,
+            name: "No optimization".into(),
+            expected_reward_millionths: 0,
+            cost_millionths: 0,
+            worst_case_regret_millionths: 0,
+            required_features: BTreeSet::new(),
+        }
+    }
+
+    fn full_context() -> WorkloadContext {
+        let mut features = BTreeMap::new();
+        for (i, key) in FeatureKey::ALL.iter().enumerate() {
+            features.insert(*key, (i as u64 + 1) * 100_000);
+        }
+        WorkloadContext::new(features)
+    }
+
+    // --- Net value edge cases ---
+
+    #[test]
+    fn strategy_net_value_zero_cost() {
+        let s = default_strategy();
+        assert_eq!(s.net_value(), 0);
+    }
+
+    #[test]
+    fn strategy_net_value_cost_exceeds_reward_saturates() {
+        let s = OptimizationStrategy {
+            strategy_id: "overflow-test".into(),
+            kind: StrategyKind::Default,
+            name: "Cost exceeds reward".into(),
+            expected_reward_millionths: 10_000,
+            cost_millionths: 50_000,
+            worst_case_regret_millionths: 0,
+            required_features: BTreeSet::new(),
+        };
+        assert_eq!(s.net_value(), 0); // saturating_sub clamps to 0
+    }
+
+    #[test]
+    fn strategy_net_value_equal_cost_and_reward() {
+        let s = OptimizationStrategy {
+            strategy_id: "break-even".into(),
+            kind: StrategyKind::Default,
+            name: "Break even".into(),
+            expected_reward_millionths: 100_000,
+            cost_millionths: 100_000,
+            worst_case_regret_millionths: 0,
+            required_features: BTreeSet::new(),
+        };
+        assert_eq!(s.net_value(), 0);
+    }
+
+    // --- Regret budget boundary ---
+
+    #[test]
+    fn strategy_regret_at_exact_boundary() {
+        let s = tiering_strategy(); // regret = 80_000
+        assert!(s.within_regret_budget(80_000)); // exact boundary is within
+        assert!(!s.within_regret_budget(79_999)); // one below is not
+    }
+
+    // --- Context with no features ---
+
+    #[test]
+    fn context_empty_features() {
+        let ctx = WorkloadContext::new(BTreeMap::new());
+        assert_eq!(ctx.feature_count(), 0);
+        assert!(ctx.get(FeatureKey::RequestRate).is_none());
+    }
+
+    #[test]
+    fn strategy_with_no_required_features_satisfies_empty_context() {
+        let s = default_strategy();
+        let ctx = WorkloadContext::new(BTreeMap::new());
+        assert!(s.context_satisfies(&ctx));
+    }
+
+    #[test]
+    fn strategy_with_required_features_fails_empty_context() {
+        let s = tiering_strategy();
+        let ctx = WorkloadContext::new(BTreeMap::new());
+        assert!(!s.context_satisfies(&ctx));
+    }
+
+    // --- Selector: multiple constraints combined ---
+
+    #[test]
+    fn selector_multiple_constraints_combined() {
+        // Apply cost + regret + kind constraints simultaneously
+        let sel = ContextualSelector::with_defaults(
+            vec![tiering_strategy(), cache_strategy(), expensive_strategy()],
+            vec![
+                PolicyConstraint::MaxCost {
+                    limit_millionths: 100_000,
+                },
+                PolicyConstraint::MaxRegret {
+                    limit_millionths: 90_000,
+                },
+                PolicyConstraint::AllowedKinds {
+                    kinds: BTreeSet::from([
+                        StrategyKind::Tiering,
+                        StrategyKind::CachePolicy,
+                        StrategyKind::Specialization,
+                    ]),
+                },
+            ],
+        );
+        let ctx = full_context();
+        let d = sel.select(&ctx, epoch());
+        // expensive_strategy: cost=250k > 100k limit => rejected
+        // tiering: cost=50k, regret=80k, kind=Tiering (allowed) => feasible, nv=150k
+        // cache: cost=20k, regret=40k, kind=CachePolicy (allowed) => feasible, nv=130k
+        assert_eq!(d.selected_strategy_id.as_deref(), Some("tier-aggressive"));
+        assert_eq!(d.feasible_count, 2);
+        assert_eq!(d.infeasible_count, 1);
+    }
+
+    #[test]
+    fn selector_all_strategies_infeasible_fallback() {
+        // Constraints so tight nothing passes
+        let sel = ContextualSelector::with_defaults(
+            vec![tiering_strategy(), cache_strategy()],
+            vec![PolicyConstraint::MaxCost {
+                limit_millionths: 5_000,
+            }],
+        );
+        let d = sel.select(&basic_context(), epoch());
+        assert!(d.is_fallback());
+        assert!(!d.has_selection());
+        assert_eq!(d.feasible_count, 0);
+        assert_eq!(d.infeasible_count, 2);
+    }
+
+    #[test]
+    fn selector_min_reward_filters_low_reward() {
+        let sel = ContextualSelector::with_defaults(
+            vec![tiering_strategy(), cache_strategy()],
+            vec![PolicyConstraint::MinReward {
+                threshold_millionths: 180_000,
+            }],
+        );
+        let d = sel.select(&basic_context(), epoch());
+        // tiering reward=200k >= 180k => feasible
+        // cache reward=150k < 180k => rejected
+        assert_eq!(d.selected_strategy_id.as_deref(), Some("tier-aggressive"));
+        assert_eq!(d.feasible_count, 1);
+        assert_eq!(d.infeasible_count, 1);
+    }
+
+    #[test]
+    fn selector_min_reward_at_exact_threshold() {
+        let sel = ContextualSelector::with_defaults(
+            vec![tiering_strategy()],
+            vec![PolicyConstraint::MinReward {
+                threshold_millionths: 200_000, // exactly matches tiering reward
+            }],
+        );
+        let d = sel.select(&basic_context(), epoch());
+        assert!(d.has_selection());
+        assert_eq!(d.selected_strategy_id.as_deref(), Some("tier-aggressive"));
+    }
+
+    #[test]
+    fn selector_forbidden_all_strategies_fallback() {
+        let sel = ContextualSelector::with_defaults(
+            vec![tiering_strategy(), cache_strategy()],
+            vec![PolicyConstraint::ForbiddenStrategies {
+                strategy_ids: BTreeSet::from([
+                    "tier-aggressive".to_string(),
+                    "cache-s3fifo".to_string(),
+                ]),
+            }],
+        );
+        let d = sel.select(&basic_context(), epoch());
+        assert!(d.is_fallback());
+        assert_eq!(d.infeasible_count, 2);
+    }
+
+    // --- Operator override edge cases ---
+
+    #[test]
+    fn selector_override_nonexistent_strategy() {
+        let sel = ContextualSelector::with_defaults(
+            vec![tiering_strategy()],
+            vec![PolicyConstraint::ForceStrategy {
+                strategy_id: "nonexistent-strategy".into(),
+            }],
+        );
+        let d = sel.select(&basic_context(), epoch());
+        assert!(d.is_override());
+        assert_eq!(
+            d.selected_strategy_id.as_deref(),
+            Some("nonexistent-strategy")
+        );
+        // kind is None because the strategy wasn't found
+        assert!(d.selected_kind.is_none());
+        assert_eq!(d.feasible_count, 0);
+    }
+
+    #[test]
+    fn selector_override_ignores_other_constraints() {
+        // Force a strategy even though other constraints would reject it
+        let sel = ContextualSelector::with_defaults(
+            vec![tiering_strategy()],
+            vec![
+                PolicyConstraint::ForceStrategy {
+                    strategy_id: "tier-aggressive".into(),
+                },
+                PolicyConstraint::MaxCost {
+                    limit_millionths: 1, // would reject tiering (50k cost)
+                },
+            ],
+        );
+        let d = sel.select(&basic_context(), epoch());
+        assert!(d.is_override());
+        assert_eq!(d.selected_strategy_id.as_deref(), Some("tier-aggressive"));
+    }
+
+    #[test]
+    fn selector_first_force_wins() {
+        // If two ForceStrategy constraints exist, the first one wins
+        let sel = ContextualSelector::with_defaults(
+            vec![tiering_strategy(), cache_strategy()],
+            vec![
+                PolicyConstraint::ForceStrategy {
+                    strategy_id: "tier-aggressive".into(),
+                },
+                PolicyConstraint::ForceStrategy {
+                    strategy_id: "cache-s3fifo".into(),
+                },
+            ],
+        );
+        let d = sel.select(&basic_context(), epoch());
+        assert!(d.is_override());
+        assert_eq!(d.selected_strategy_id.as_deref(), Some("tier-aggressive"));
+    }
+
+    // --- Hash determinism across different parameters ---
+
+    #[test]
+    fn decision_hash_changes_with_epoch() {
+        let sel = ContextualSelector::with_defaults(vec![tiering_strategy()], Vec::new());
+        let ctx = basic_context();
+        let d1 = sel.select(&ctx, SecurityEpoch::from_raw(1));
+        let d2 = sel.select(&ctx, SecurityEpoch::from_raw(2));
+        assert_ne!(d1.content_hash, d2.content_hash);
+    }
+
+    #[test]
+    fn decision_hash_changes_with_selected_strategy() {
+        let ctx = basic_context();
+        let sel1 = ContextualSelector::with_defaults(vec![tiering_strategy()], Vec::new());
+        let sel2 = ContextualSelector::with_defaults(vec![cache_strategy()], Vec::new());
+        let d1 = sel1.select(&ctx, epoch());
+        let d2 = sel2.select(&ctx, epoch());
+        assert_ne!(d1.content_hash, d2.content_hash);
+    }
+
+    #[test]
+    fn decision_hash_changes_with_candidate_count() {
+        let ctx = basic_context();
+        let sel1 = ContextualSelector::with_defaults(vec![tiering_strategy()], Vec::new());
+        let sel2 = ContextualSelector::with_defaults(
+            vec![tiering_strategy(), cache_strategy()],
+            Vec::new(),
+        );
+        let d1 = sel1.select(&ctx, epoch());
+        let d2 = sel2.select(&ctx, epoch());
+        // Both select tiering, but evaluation counts differ => different hash
+        assert_ne!(d1.content_hash, d2.content_hash);
+    }
+
+    // --- Candidate evaluations ---
+
+    #[test]
+    fn selector_records_all_evaluations() {
+        let sel = ContextualSelector::with_defaults(
+            vec![tiering_strategy(), cache_strategy(), expensive_strategy()],
+            Vec::new(),
+        );
+        let d = sel.select(&basic_context(), epoch());
+        // basic_context is missing HotFunctionCount, so expensive is infeasible
+        assert_eq!(d.candidate_evaluations.len(), 3);
+        // Check that the missing feature rejection is recorded
+        let expensive_eval = d
+            .candidate_evaluations
+            .iter()
+            .find(|(id, _)| id == "spec-mega")
+            .unwrap();
+        assert_eq!(expensive_eval.1.tag(), "missing_features");
+    }
+
+    #[test]
+    fn selector_feasible_evaluations_show_net_value() {
+        let sel = ContextualSelector::with_defaults(vec![tiering_strategy()], Vec::new());
+        let d = sel.select(&basic_context(), epoch());
+        let eval = &d.candidate_evaluations[0];
+        assert_eq!(eval.0, "tier-aggressive");
+        assert_eq!(eval.1.tag(), "highest_net_value");
+        if let SelectionReason::HighestNetValue {
+            net_value_millionths,
+        } = &eval.1
+        {
+            assert_eq!(*net_value_millionths, 150_000);
+        } else {
+            panic!("Expected HighestNetValue reason");
+        }
+    }
+
+    // --- SelectionDecision methods ---
+
+    #[test]
+    fn decision_is_fallback_false_for_selection() {
+        let sel = ContextualSelector::with_defaults(vec![tiering_strategy()], Vec::new());
+        let d = sel.select(&basic_context(), epoch());
+        assert!(!d.is_fallback());
+        assert!(d.has_selection());
+        assert!(!d.is_override());
+    }
+
+    #[test]
+    fn decision_is_override_false_for_normal_selection() {
+        let sel = ContextualSelector::with_defaults(vec![tiering_strategy()], Vec::new());
+        let d = sel.select(&basic_context(), epoch());
+        assert!(!d.is_override());
+    }
+
+    // --- Tie-breaking ---
+
+    #[test]
+    fn selector_tie_breaking_same_net_value() {
+        // Two strategies with the same net value
+        let s1 = OptimizationStrategy {
+            strategy_id: "alpha".into(),
+            kind: StrategyKind::Tiering,
+            name: "Alpha".into(),
+            expected_reward_millionths: 100_000,
+            cost_millionths: 0,
+            worst_case_regret_millionths: 10_000,
+            required_features: BTreeSet::new(),
+        };
+        let s2 = OptimizationStrategy {
+            strategy_id: "beta".into(),
+            kind: StrategyKind::CachePolicy,
+            name: "Beta".into(),
+            expected_reward_millionths: 100_000,
+            cost_millionths: 0,
+            worst_case_regret_millionths: 10_000,
+            required_features: BTreeSet::new(),
+        };
+        let sel = ContextualSelector::with_defaults(vec![s1, s2], Vec::new());
+        let d = sel.select(&basic_context(), epoch());
+        assert!(d.has_selection());
+        // Deterministic: same result on repeated runs
+        let d2 = sel.select(&basic_context(), epoch());
+        assert_eq!(d.selected_strategy_id, d2.selected_strategy_id);
+    }
+
+    // --- WorkloadContext serde and ordering ---
+
+    #[test]
+    fn context_with_label_serde_round_trip() {
+        let ctx = WorkloadContext::with_label(
+            BTreeMap::from([(FeatureKey::PayloadSize, 42_000)]),
+            "benchmark-workload",
+        );
+        let json = serde_json::to_string(&ctx).unwrap();
+        let back: WorkloadContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(ctx, back);
+        assert_eq!(back.label.as_deref(), Some("benchmark-workload"));
+    }
+
+    #[test]
+    fn context_all_features() {
+        let ctx = full_context();
+        assert_eq!(ctx.feature_count(), 8);
+        for key in FeatureKey::ALL {
+            assert!(ctx.get(*key).is_some());
+        }
+    }
+
+    // --- Display formatting ---
+
+    #[test]
+    fn policy_constraint_display_allowed_kinds() {
+        let c = PolicyConstraint::AllowedKinds {
+            kinds: BTreeSet::from([StrategyKind::Tiering]),
+        };
+        let display = c.to_string();
+        assert!(display.contains("allowed kinds"));
+        assert!(display.contains("Tiering"));
+    }
+
+    #[test]
+    fn policy_constraint_display_forbidden() {
+        let c = PolicyConstraint::ForbiddenStrategies {
+            strategy_ids: BTreeSet::from(["my-strat".to_string()]),
+        };
+        let display = c.to_string();
+        assert!(display.contains("forbidden"));
+        assert!(display.contains("my-strat"));
+    }
+
+    #[test]
+    fn policy_constraint_display_max_regret() {
+        let c = PolicyConstraint::MaxRegret {
+            limit_millionths: 75_000,
+        };
+        assert!(c.to_string().contains("75000"));
+    }
+
+    #[test]
+    fn policy_constraint_display_min_reward() {
+        let c = PolicyConstraint::MinReward {
+            threshold_millionths: 250_000,
+        };
+        assert!(c.to_string().contains("250000"));
+    }
+
+    #[test]
+    fn policy_constraint_display_force() {
+        let c = PolicyConstraint::ForceStrategy {
+            strategy_id: "forced-id".into(),
+        };
+        let display = c.to_string();
+        assert!(display.contains("force"));
+        assert!(display.contains("forced-id"));
+    }
+
+    // --- Serde round-trips for rejection reasons ---
+
+    #[test]
+    fn selection_reason_serde_cost_exceeded() {
+        let r = SelectionReason::CostExceeded {
+            cost: 50_000,
+            limit: 30_000,
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        let back: SelectionReason = serde_json::from_str(&json).unwrap();
+        assert_eq!(r, back);
+    }
+
+    #[test]
+    fn selection_reason_serde_regret_exceeded() {
+        let r = SelectionReason::RegretExceeded {
+            regret: 200_000,
+            budget: 100_000,
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        let back: SelectionReason = serde_json::from_str(&json).unwrap();
+        assert_eq!(r, back);
+    }
+
+    #[test]
+    fn selection_reason_serde_missing_features() {
+        let r = SelectionReason::MissingFeatures {
+            missing: BTreeSet::from([FeatureKey::HotFunctionCount, FeatureKey::GcPauseFrequency]),
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        let back: SelectionReason = serde_json::from_str(&json).unwrap();
+        assert_eq!(r, back);
+    }
+
+    #[test]
+    fn selection_reason_serde_fallback() {
+        let r = SelectionReason::FallbackToDefault;
+        let json = serde_json::to_string(&r).unwrap();
+        let back: SelectionReason = serde_json::from_str(&json).unwrap();
+        assert_eq!(r, back);
+    }
+
+    // --- Selector with custom exploration budget ---
+
+    #[test]
+    fn selector_custom_exploration_budget() {
+        let sel = ContextualSelector::new(
+            vec![tiering_strategy()],
+            Vec::new(),
+            75_000, // custom budget
+        );
+        assert_eq!(sel.exploration_budget, 75_000);
+        // Selection still works
+        let d = sel.select(&basic_context(), epoch());
+        assert!(d.has_selection());
+    }
+
+    // --- Decision schema version ---
+
+    #[test]
+    fn decision_schema_version_matches_constant() {
+        let sel = ContextualSelector::with_defaults(vec![tiering_strategy()], Vec::new());
+        let d = sel.select(&basic_context(), epoch());
+        assert_eq!(d.schema_version, SCHEMA_VERSION);
+    }
+
+    // --- Decision epoch ---
+
+    #[test]
+    fn decision_epoch_is_preserved() {
+        let sel = ContextualSelector::with_defaults(vec![tiering_strategy()], Vec::new());
+        let ep = SecurityEpoch::from_raw(12345);
+        let d = sel.select(&basic_context(), ep);
+        assert_eq!(d.epoch, ep);
+    }
+
+    // --- AllowedKinds with empty set rejects everything ---
+
+    #[test]
+    fn allowed_kinds_empty_rejects_all() {
+        let sel = ContextualSelector::with_defaults(
+            vec![tiering_strategy(), cache_strategy()],
+            vec![PolicyConstraint::AllowedKinds {
+                kinds: BTreeSet::new(),
+            }],
+        );
+        let d = sel.select(&basic_context(), epoch());
+        assert!(d.is_fallback());
+        assert_eq!(d.infeasible_count, 2);
+    }
+
+    // --- Strategy with multiple required features ---
+
+    #[test]
+    fn strategy_requiring_multiple_features_partial_match_fails() {
+        let s = OptimizationStrategy {
+            strategy_id: "multi-req".into(),
+            kind: StrategyKind::Tiering,
+            name: "Multi-req".into(),
+            expected_reward_millionths: 200_000,
+            cost_millionths: 10_000,
+            worst_case_regret_millionths: 10_000,
+            required_features: BTreeSet::from([
+                FeatureKey::RequestRate,
+                FeatureKey::HotFunctionCount,
+            ]),
+        };
+        // basic_context has RequestRate but not HotFunctionCount
+        assert!(!s.context_satisfies(&basic_context()));
+
+        // full_context has both
+        assert!(s.context_satisfies(&full_context()));
+    }
+
+    // --- Selector picks lower-cost strategy when rewards equal ---
+
+    #[test]
+    fn selector_prefers_higher_net_value_from_lower_cost() {
+        let s1 = OptimizationStrategy {
+            strategy_id: "high-cost".into(),
+            kind: StrategyKind::Tiering,
+            name: "High cost".into(),
+            expected_reward_millionths: 200_000,
+            cost_millionths: 100_000, // net=100k
+            worst_case_regret_millionths: 10_000,
+            required_features: BTreeSet::new(),
+        };
+        let s2 = OptimizationStrategy {
+            strategy_id: "low-cost".into(),
+            kind: StrategyKind::CachePolicy,
+            name: "Low cost".into(),
+            expected_reward_millionths: 200_000,
+            cost_millionths: 50_000, // net=150k
+            worst_case_regret_millionths: 10_000,
+            required_features: BTreeSet::new(),
+        };
+        let sel = ContextualSelector::with_defaults(vec![s1, s2], Vec::new());
+        let d = sel.select(&basic_context(), epoch());
+        assert_eq!(d.selected_strategy_id.as_deref(), Some("low-cost"));
+    }
+
+    // --- Large number of strategies ---
+
+    #[test]
+    fn selector_handles_max_strategies() {
+        let strategies: Vec<OptimizationStrategy> = (0..MAX_STRATEGIES)
+            .map(|i| OptimizationStrategy {
+                strategy_id: format!("strat-{}", i),
+                kind: StrategyKind::Default,
+                name: format!("Strategy {}", i),
+                expected_reward_millionths: (i as u64 + 1) * 10_000,
+                cost_millionths: 1_000,
+                worst_case_regret_millionths: 5_000,
+                required_features: BTreeSet::new(),
+            })
+            .collect();
+        let sel = ContextualSelector::with_defaults(strategies, Vec::new());
+        assert_eq!(sel.strategy_count(), MAX_STRATEGIES);
+        let d = sel.select(&basic_context(), epoch());
+        assert!(d.has_selection());
+        // Highest index = highest reward => picked
+        assert_eq!(
+            d.selected_strategy_id.as_deref(),
+            Some("strat-31")
+        );
+        assert_eq!(d.feasible_count, MAX_STRATEGIES);
+        assert_eq!(d.infeasible_count, 0);
+    }
+
+    // --- Serde round-trip for the full decision from fallback ---
+
+    #[test]
+    fn fallback_decision_serde_round_trip() {
+        let sel = ContextualSelector::with_defaults(Vec::new(), Vec::new());
+        let d = sel.select(&basic_context(), epoch());
+        assert!(d.is_fallback());
+        let json = serde_json::to_string(&d).unwrap();
+        let back: SelectionDecision = serde_json::from_str(&json).unwrap();
+        assert_eq!(d, back);
+        assert!(back.selected_strategy_id.is_none());
+        assert!(back.selected_kind.is_none());
+    }
+
+    // --- Serde round-trip for override decision ---
+
+    #[test]
+    fn override_decision_serde_round_trip() {
+        let sel = ContextualSelector::with_defaults(
+            vec![cache_strategy()],
+            vec![PolicyConstraint::ForceStrategy {
+                strategy_id: "cache-s3fifo".into(),
+            }],
+        );
+        let d = sel.select(&basic_context(), epoch());
+        assert!(d.is_override());
+        let json = serde_json::to_string(&d).unwrap();
+        let back: SelectionDecision = serde_json::from_str(&json).unwrap();
+        assert_eq!(d, back);
+    }
+
+    // --- FeatureKey ordering is deterministic (BTreeMap) ---
+
+    #[test]
+    fn feature_key_ordering_deterministic() {
+        let mut keys_a: Vec<FeatureKey> = FeatureKey::ALL.to_vec();
+        let mut keys_b: Vec<FeatureKey> = FeatureKey::ALL.to_vec();
+        keys_b.reverse();
+        keys_a.sort();
+        keys_b.sort();
+        assert_eq!(keys_a, keys_b);
+    }
+
+    // --- StrategyKind ordering is deterministic ---
+
+    #[test]
+    fn strategy_kind_ordering_deterministic() {
+        let mut kinds_a: Vec<StrategyKind> = StrategyKind::ALL.to_vec();
+        let mut kinds_b: Vec<StrategyKind> = StrategyKind::ALL.to_vec();
+        kinds_b.reverse();
+        kinds_a.sort();
+        kinds_b.sort();
+        assert_eq!(kinds_a, kinds_b);
+    }
+
+    // --- Constraint serde round-trips for all variants ---
+
+    #[test]
+    fn constraint_serde_forbidden() {
+        let c = PolicyConstraint::ForbiddenStrategies {
+            strategy_ids: BTreeSet::from(["a".to_string(), "b".to_string()]),
+        };
+        let json = serde_json::to_string(&c).unwrap();
+        let back: PolicyConstraint = serde_json::from_str(&json).unwrap();
+        assert_eq!(c, back);
+    }
+
+    #[test]
+    fn constraint_serde_max_regret() {
+        let c = PolicyConstraint::MaxRegret {
+            limit_millionths: 42_000,
+        };
+        let json = serde_json::to_string(&c).unwrap();
+        let back: PolicyConstraint = serde_json::from_str(&json).unwrap();
+        assert_eq!(c, back);
+    }
+
+    #[test]
+    fn constraint_serde_min_reward() {
+        let c = PolicyConstraint::MinReward {
+            threshold_millionths: 99_999,
+        };
+        let json = serde_json::to_string(&c).unwrap();
+        let back: PolicyConstraint = serde_json::from_str(&json).unwrap();
+        assert_eq!(c, back);
+    }
+
+    #[test]
+    fn constraint_serde_force_strategy() {
+        let c = PolicyConstraint::ForceStrategy {
+            strategy_id: "my-forced".into(),
+        };
+        let json = serde_json::to_string(&c).unwrap();
+        let back: PolicyConstraint = serde_json::from_str(&json).unwrap();
+        assert_eq!(c, back);
+    }
+
+    #[test]
+    fn constraint_serde_max_cost() {
+        let c = PolicyConstraint::MaxCost {
+            limit_millionths: 55_555,
+        };
+        let json = serde_json::to_string(&c).unwrap();
+        let back: PolicyConstraint = serde_json::from_str(&json).unwrap();
+        assert_eq!(c, back);
+    }
+
+    // --- Max cost at exact boundary ---
+
+    #[test]
+    fn selector_max_cost_exact_boundary_passes() {
+        let sel = ContextualSelector::with_defaults(
+            vec![tiering_strategy()], // cost=50_000
+            vec![PolicyConstraint::MaxCost {
+                limit_millionths: 50_000, // exactly equal
+            }],
+        );
+        let d = sel.select(&basic_context(), epoch());
+        assert!(d.has_selection());
+        assert_eq!(d.selected_strategy_id.as_deref(), Some("tier-aggressive"));
+    }
+
+    #[test]
+    fn selector_max_cost_one_below_boundary_rejects() {
+        let sel = ContextualSelector::with_defaults(
+            vec![tiering_strategy()], // cost=50_000
+            vec![PolicyConstraint::MaxCost {
+                limit_millionths: 49_999, // one below
+            }],
+        );
+        let d = sel.select(&basic_context(), epoch());
+        assert!(d.is_fallback());
+    }
 }

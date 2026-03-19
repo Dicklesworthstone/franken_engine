@@ -16,10 +16,9 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::attested_execution_cell::{
-    AttestationQuote, CellError, CellFunction, CellLifecycle,
-    CellRegistry, CreateCellInput, FallbackPolicy,
-    MeasurementDigest, PlatformKind, SoftwareTrustRoot, TrustLevel, TrustRootBackend,
-    VerificationResult,
+    AttestationQuote, CellError, CellFunction, CellLifecycle, CellRegistry, CreateCellInput,
+    FallbackPolicy, MeasurementDigest, PlatformKind, SoftwareTrustRoot, TrustLevel,
+    TrustRootBackend, VerificationResult,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -52,7 +51,13 @@ fn input(label: &str, func: CellFunction, zone: &str) -> CreateCellInput {
 }
 
 fn meas(tr: &SoftwareTrustRoot) -> MeasurementDigest {
-    tr.measure(b"code-v1", b"config-v1", b"policy-v1", b"schema-v1", "1.0.0")
+    tr.measure(
+        b"code-v1",
+        b"config-v1",
+        b"policy-v1",
+        b"schema-v1",
+        "1.0.0",
+    )
 }
 
 fn fresh_quote(tr: &SoftwareTrustRoot, m: &MeasurementDigest, nonce: [u8; 32]) -> AttestationQuote {
@@ -137,14 +142,22 @@ fn enrichment_cell_lifecycle_allows_reattestation() {
 
 #[test]
 fn enrichment_trust_level_display_all_unique() {
-    let all = [TrustLevel::SoftwareOnly, TrustLevel::Hybrid, TrustLevel::Hardware];
+    let all = [
+        TrustLevel::SoftwareOnly,
+        TrustLevel::Hybrid,
+        TrustLevel::Hardware,
+    ];
     let displays: BTreeSet<String> = all.iter().map(|t| t.to_string()).collect();
     assert_eq!(displays.len(), all.len());
 }
 
 #[test]
 fn enrichment_trust_level_serde_roundtrip() {
-    let all = [TrustLevel::SoftwareOnly, TrustLevel::Hybrid, TrustLevel::Hardware];
+    let all = [
+        TrustLevel::SoftwareOnly,
+        TrustLevel::Hybrid,
+        TrustLevel::Hardware,
+    ];
     for level in &all {
         let json = serde_json::to_string(level).unwrap();
         let back: TrustLevel = serde_json::from_str(&json).unwrap();
@@ -164,14 +177,24 @@ fn enrichment_trust_level_ordering() {
 
 #[test]
 fn enrichment_platform_kind_display_all_unique() {
-    let all = [PlatformKind::IntelSgx, PlatformKind::ArmCca, PlatformKind::AmdSevSnp, PlatformKind::Software];
+    let all = [
+        PlatformKind::IntelSgx,
+        PlatformKind::ArmCca,
+        PlatformKind::AmdSevSnp,
+        PlatformKind::Software,
+    ];
     let displays: BTreeSet<String> = all.iter().map(|p| p.to_string()).collect();
     assert_eq!(displays.len(), all.len());
 }
 
 #[test]
 fn enrichment_platform_kind_serde_roundtrip() {
-    let all = [PlatformKind::IntelSgx, PlatformKind::ArmCca, PlatformKind::AmdSevSnp, PlatformKind::Software];
+    let all = [
+        PlatformKind::IntelSgx,
+        PlatformKind::ArmCca,
+        PlatformKind::AmdSevSnp,
+        PlatformKind::Software,
+    ];
     for platform in &all {
         let json = serde_json::to_string(platform).unwrap();
         let back: PlatformKind = serde_json::from_str(&json).unwrap();
@@ -286,7 +309,10 @@ fn enrichment_software_trust_root_verify_measurement_mismatch() {
     let different_m = tr.measure(b"different-code", b"cfg", b"pol", b"sch", "2.0");
     let result = tr.verify(&q, &different_m, &nonce, 500_000);
     assert!(!result.is_valid());
-    assert!(matches!(result, VerificationResult::MeasurementMismatch { .. }));
+    assert!(matches!(
+        result,
+        VerificationResult::MeasurementMismatch { .. }
+    ));
 }
 
 #[test]
@@ -367,9 +393,15 @@ fn enrichment_verification_result_display_all_unique() {
             actual: ContentHash::compute(b"b"),
         },
         VerificationResult::SignatureInvalid,
-        VerificationResult::Expired { issued_at_ns: 100, validity_window_ns: 50, checked_at_ns: 200 },
+        VerificationResult::Expired {
+            issued_at_ns: 100,
+            validity_window_ns: 50,
+            checked_at_ns: 200,
+        },
         VerificationResult::NonceMismatch,
-        VerificationResult::SignerRevoked { key_id: "test-key".to_string() },
+        VerificationResult::SignerRevoked {
+            key_id: "test-key".to_string(),
+        },
     ];
     let displays: BTreeSet<String> = all.iter().map(|r| r.to_string()).collect();
     assert_eq!(displays.len(), all.len());
@@ -382,7 +414,10 @@ fn enrichment_verification_result_display_all_unique() {
 #[test]
 fn enrichment_registry_create_cell() {
     let mut reg = CellRegistry::new();
-    let cid = reg.create_cell(input("cell-1", CellFunction::DecisionReceiptSigner, "zone-a"), 100);
+    let cid = reg.create_cell(
+        input("cell-1", CellFunction::DecisionReceiptSigner, "zone-a"),
+        100,
+    );
     assert!(cid.is_ok());
     assert_eq!(reg.cell_count(), 1);
 }
@@ -390,22 +425,36 @@ fn enrichment_registry_create_cell() {
 #[test]
 fn enrichment_registry_create_duplicate_error() {
     let mut reg = CellRegistry::new();
-    let _ = reg.create_cell(input("cell-1", CellFunction::DecisionReceiptSigner, "zone-a"), 100).unwrap();
-    let result = reg.create_cell(input("cell-1", CellFunction::DecisionReceiptSigner, "zone-a"), 200);
+    let _ = reg
+        .create_cell(
+            input("cell-1", CellFunction::DecisionReceiptSigner, "zone-a"),
+            100,
+        )
+        .unwrap();
+    let result = reg.create_cell(
+        input("cell-1", CellFunction::DecisionReceiptSigner, "zone-a"),
+        200,
+    );
     assert!(matches!(result, Err(CellError::Duplicate { .. })));
 }
 
 #[test]
 fn enrichment_registry_empty_label_error() {
     let mut reg = CellRegistry::new();
-    let result = reg.create_cell(input("", CellFunction::DecisionReceiptSigner, "zone-a"), 100);
+    let result = reg.create_cell(
+        input("", CellFunction::DecisionReceiptSigner, "zone-a"),
+        100,
+    );
     assert!(matches!(result, Err(CellError::EmptyLabel)));
 }
 
 #[test]
 fn enrichment_registry_empty_zone_error() {
     let mut reg = CellRegistry::new();
-    let result = reg.create_cell(input("cell-1", CellFunction::DecisionReceiptSigner, ""), 100);
+    let result = reg.create_cell(
+        input("cell-1", CellFunction::DecisionReceiptSigner, ""),
+        100,
+    );
     assert!(matches!(result, Err(CellError::EmptyZone)));
 }
 
@@ -428,7 +477,13 @@ fn enrichment_registry_empty_authority_error() {
 fn enrichment_registry_full_lifecycle() {
     let mut reg = CellRegistry::new();
     let tr = root("key-1", 42);
-    let cid = drive_to_active(&mut reg, &tr, "lifecycle-cell", CellFunction::EvidenceAccumulator, "zone-b");
+    let cid = drive_to_active(
+        &mut reg,
+        &tr,
+        "lifecycle-cell",
+        CellFunction::EvidenceAccumulator,
+        "zone-b",
+    );
 
     let cell = reg.get(&cid).unwrap();
     assert_eq!(cell.lifecycle, CellLifecycle::Active);
@@ -440,7 +495,8 @@ fn enrichment_registry_full_lifecycle() {
     assert_eq!(cell.lifecycle, CellLifecycle::Suspended);
 
     // Decommission from suspended
-    reg.decommission_cell(&cid, "end of life", 600, ep(3)).unwrap();
+    reg.decommission_cell(&cid, "end of life", 600, ep(3))
+        .unwrap();
     let cell = reg.get(&cid).unwrap();
     assert_eq!(cell.lifecycle, CellLifecycle::Decommissioned);
 }
@@ -448,7 +504,12 @@ fn enrichment_registry_full_lifecycle() {
 #[test]
 fn enrichment_registry_invalid_transition_error() {
     let mut reg = CellRegistry::new();
-    let cid = reg.create_cell(input("trans-cell", CellFunction::PolicyEvaluator, "zone-c"), 100).unwrap();
+    let cid = reg
+        .create_cell(
+            input("trans-cell", CellFunction::PolicyEvaluator, "zone-c"),
+            100,
+        )
+        .unwrap();
     let cid_s = format!("{cid}");
     // Cannot activate a provisioning cell
     let result = reg.activate_cell(&cid_s, 200, ep(1));
@@ -463,8 +524,20 @@ fn enrichment_registry_invalid_transition_error() {
 fn enrichment_registry_cells_by_function() {
     let mut reg = CellRegistry::new();
     let tr = root("key-1", 42);
-    drive_to_active(&mut reg, &tr, "signer-1", CellFunction::DecisionReceiptSigner, "zone-a");
-    drive_to_active(&mut reg, &tr, "eval-1", CellFunction::PolicyEvaluator, "zone-a");
+    drive_to_active(
+        &mut reg,
+        &tr,
+        "signer-1",
+        CellFunction::DecisionReceiptSigner,
+        "zone-a",
+    );
+    drive_to_active(
+        &mut reg,
+        &tr,
+        "eval-1",
+        CellFunction::PolicyEvaluator,
+        "zone-a",
+    );
     let signers = reg.cells_by_function(CellFunction::DecisionReceiptSigner);
     assert_eq!(signers.len(), 1);
 }
@@ -473,8 +546,17 @@ fn enrichment_registry_cells_by_function() {
 fn enrichment_registry_active_cells() {
     let mut reg = CellRegistry::new();
     let tr = root("key-1", 42);
-    drive_to_active(&mut reg, &tr, "active-1", CellFunction::EvidenceAccumulator, "zone-a");
-    let _ = reg.create_cell(input("inactive-1", CellFunction::ProofValidator, "zone-a"), 100);
+    drive_to_active(
+        &mut reg,
+        &tr,
+        "active-1",
+        CellFunction::EvidenceAccumulator,
+        "zone-a",
+    );
+    let _ = reg.create_cell(
+        input("inactive-1", CellFunction::ProofValidator, "zone-a"),
+        100,
+    );
     let active = reg.active_cells();
     assert_eq!(active.len(), 1);
 }
@@ -483,8 +565,20 @@ fn enrichment_registry_active_cells() {
 fn enrichment_registry_cells_in_zone() {
     let mut reg = CellRegistry::new();
     let tr = root("key-1", 42);
-    drive_to_active(&mut reg, &tr, "zone-test-1", CellFunction::ExtensionRuntime, "prod");
-    drive_to_active(&mut reg, &tr, "zone-test-2", CellFunction::PolicyEvaluator, "staging");
+    drive_to_active(
+        &mut reg,
+        &tr,
+        "zone-test-1",
+        CellFunction::ExtensionRuntime,
+        "prod",
+    );
+    drive_to_active(
+        &mut reg,
+        &tr,
+        "zone-test-2",
+        CellFunction::PolicyEvaluator,
+        "staging",
+    );
     let prod_cells = reg.cells_in_zone("prod");
     assert_eq!(prod_cells.len(), 1);
 }
@@ -503,7 +597,13 @@ fn enrichment_registry_not_found_error() {
 fn enrichment_registry_revoke_trust_root_suspends_active() {
     let mut reg = CellRegistry::new();
     let tr = root("key-1", 42);
-    let cid = drive_to_active(&mut reg, &tr, "revoke-cell", CellFunction::DecisionReceiptSigner, "zone-a");
+    let cid = drive_to_active(
+        &mut reg,
+        &tr,
+        "revoke-cell",
+        CellFunction::DecisionReceiptSigner,
+        "zone-a",
+    );
     let suspended = reg.revoke_trust_root("key-1", 500, ep(2));
     assert_eq!(suspended.len(), 1);
     assert_eq!(suspended[0], cid);
@@ -515,7 +615,13 @@ fn enrichment_registry_revoke_trust_root_suspends_active() {
 fn enrichment_registry_revoke_trust_root_ignores_non_matching() {
     let mut reg = CellRegistry::new();
     let tr = root("key-1", 42);
-    drive_to_active(&mut reg, &tr, "safe-cell", CellFunction::EvidenceAccumulator, "zone-a");
+    drive_to_active(
+        &mut reg,
+        &tr,
+        "safe-cell",
+        CellFunction::EvidenceAccumulator,
+        "zone-a",
+    );
     let suspended = reg.revoke_trust_root("different-key", 500, ep(2));
     assert!(suspended.is_empty());
 }
@@ -528,7 +634,13 @@ fn enrichment_registry_revoke_trust_root_ignores_non_matching() {
 fn enrichment_registry_events_accumulate() {
     let mut reg = CellRegistry::new();
     let tr = root("key-1", 42);
-    drive_to_active(&mut reg, &tr, "event-cell", CellFunction::ProofValidator, "zone-a");
+    drive_to_active(
+        &mut reg,
+        &tr,
+        "event-cell",
+        CellFunction::ProofValidator,
+        "zone-a",
+    );
     // create, measure, attest, activate = 4 events
     assert_eq!(reg.events().len(), 4);
 }
@@ -537,7 +649,13 @@ fn enrichment_registry_events_accumulate() {
 fn enrichment_registry_event_seq_monotonic() {
     let mut reg = CellRegistry::new();
     let tr = root("key-1", 42);
-    drive_to_active(&mut reg, &tr, "seq-cell", CellFunction::ExtensionRuntime, "zone-a");
+    drive_to_active(
+        &mut reg,
+        &tr,
+        "seq-cell",
+        CellFunction::ExtensionRuntime,
+        "zone-a",
+    );
     for window in reg.events().windows(2) {
         assert!(window[0].seq < window[1].seq);
     }
@@ -573,13 +691,26 @@ fn enrichment_fallback_policy_serde_roundtrip() {
 fn enrichment_cell_error_display_all_unique() {
     let errors: Vec<CellError> = vec![
         CellError::IdDerivation("test".to_string()),
-        CellError::NotFound { cell_id: "abc".to_string() },
-        CellError::Duplicate { cell_id: "def".to_string() },
-        CellError::InvalidTransition { from: CellLifecycle::Provisioning, to: CellLifecycle::Active },
-        CellError::NotOperational { lifecycle: CellLifecycle::Suspended },
-        CellError::AttestationFailed { reason: "expired".to_string() },
+        CellError::NotFound {
+            cell_id: "abc".to_string(),
+        },
+        CellError::Duplicate {
+            cell_id: "def".to_string(),
+        },
+        CellError::InvalidTransition {
+            from: CellLifecycle::Provisioning,
+            to: CellLifecycle::Active,
+        },
+        CellError::NotOperational {
+            lifecycle: CellLifecycle::Suspended,
+        },
+        CellError::AttestationFailed {
+            reason: "expired".to_string(),
+        },
         CellError::NotMeasured,
-        CellError::TrustRootRevoked { key_id: "key-1".to_string() },
+        CellError::TrustRootRevoked {
+            key_id: "key-1".to_string(),
+        },
         CellError::EmptyLabel,
         CellError::EmptyZone,
         CellError::EmptyAuthority,

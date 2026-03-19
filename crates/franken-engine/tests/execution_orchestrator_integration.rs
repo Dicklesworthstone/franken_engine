@@ -440,6 +440,154 @@ fn failed_staged_receipt_with_decision_contract_mismatch_allows_clean_retry() {
 }
 
 #[test]
+fn failed_staged_receipt_with_source_label_mismatch_allows_clean_retry() {
+    let mut orch = default_orch();
+    let pkg = package_with_caps(
+        "ext-declassify-source-mismatch",
+        r#""hostcall<\"declassify.audit\"> secret_token";"#,
+        &["declassify.audit"],
+    );
+
+    let first_prepared = orch
+        .prepare_next_runtime_flow_guards(&pkg)
+        .expect("initial preflight should succeed");
+    let first_obligation = first_prepared
+        .ir2_flow_proof_artifact
+        .required_declassifications
+        .first()
+        .expect("initial preflight should expose a declassification obligation");
+
+    let bad_signing_key = SigningKey::from_bytes([28u8; 32]);
+    let (_, bad_receipt) = approved_receipt_for_prepared_declassification(
+        &mut orch,
+        &pkg,
+        &first_prepared,
+        &bad_signing_key,
+    );
+    let mut wrong_source_receipt = bad_receipt.clone();
+    wrong_source_receipt.source_label = Label::Public;
+    wrong_source_receipt
+        .sign(&bad_signing_key)
+        .expect("mutated receipt should be re-signed for a valid source-label mismatch test");
+    orch.stage_declassification_receipt_for_obligation(
+        first_prepared.trace_id.clone(),
+        first_obligation.obligation_id.clone(),
+        wrong_source_receipt,
+    );
+
+    let first_err = orch
+        .execute(&pkg)
+        .expect_err("source-label-mismatched staged receipt should fail closed");
+    match first_err {
+        OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
+            assert!(detail.contains("receipt-linked declassification failed"));
+            assert!(detail.contains("source label does not match"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let second_prepared = orch
+        .prepare_next_runtime_flow_guards(&pkg)
+        .expect("fresh preflight should still succeed after the failed attempt");
+    assert_ne!(second_prepared.trace_id, first_prepared.trace_id);
+    assert_ne!(second_prepared.decision_id, first_prepared.decision_id);
+
+    let good_signing_key = SigningKey::from_bytes([29u8; 32]);
+    let (second_obligation_id, good_receipt) = approved_receipt_for_prepared_declassification(
+        &mut orch,
+        &pkg,
+        &second_prepared,
+        &good_signing_key,
+    );
+    orch.stage_declassification_receipt_for_obligation(
+        second_prepared.trace_id.clone(),
+        second_obligation_id,
+        good_receipt,
+    );
+
+    let result = orch
+        .execute(&pkg)
+        .expect("fresh preflight and valid receipt should recover after source-label mismatch");
+    assert_eq!(result.trace_id, second_prepared.trace_id);
+    assert_eq!(result.decision_id, second_prepared.decision_id);
+    assert_eq!(result.execution_value, "undefined");
+}
+
+#[test]
+fn failed_staged_receipt_with_sink_clearance_mismatch_allows_clean_retry() {
+    let mut orch = default_orch();
+    let pkg = package_with_caps(
+        "ext-declassify-sink-mismatch",
+        r#""hostcall<\"declassify.audit\"> secret_token";"#,
+        &["declassify.audit"],
+    );
+
+    let first_prepared = orch
+        .prepare_next_runtime_flow_guards(&pkg)
+        .expect("initial preflight should succeed");
+    let first_obligation = first_prepared
+        .ir2_flow_proof_artifact
+        .required_declassifications
+        .first()
+        .expect("initial preflight should expose a declassification obligation");
+
+    let bad_signing_key = SigningKey::from_bytes([30u8; 32]);
+    let (_, bad_receipt) = approved_receipt_for_prepared_declassification(
+        &mut orch,
+        &pkg,
+        &first_prepared,
+        &bad_signing_key,
+    );
+    let mut wrong_sink_receipt = bad_receipt.clone();
+    wrong_sink_receipt.sink_clearance = Label::Internal;
+    wrong_sink_receipt
+        .sign(&bad_signing_key)
+        .expect("mutated receipt should be re-signed for a valid sink-clearance mismatch test");
+    orch.stage_declassification_receipt_for_obligation(
+        first_prepared.trace_id.clone(),
+        first_obligation.obligation_id.clone(),
+        wrong_sink_receipt,
+    );
+
+    let first_err = orch
+        .execute(&pkg)
+        .expect_err("sink-clearance-mismatched staged receipt should fail closed");
+    match first_err {
+        OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
+            assert!(detail.contains("receipt-linked declassification failed"));
+            assert!(detail.contains("sink clearance internal cannot flow"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let second_prepared = orch
+        .prepare_next_runtime_flow_guards(&pkg)
+        .expect("fresh preflight should still succeed after the failed attempt");
+    assert_ne!(second_prepared.trace_id, first_prepared.trace_id);
+    assert_ne!(second_prepared.decision_id, first_prepared.decision_id);
+
+    let good_signing_key = SigningKey::from_bytes([31u8; 32]);
+    let (second_obligation_id, good_receipt) = approved_receipt_for_prepared_declassification(
+        &mut orch,
+        &pkg,
+        &second_prepared,
+        &good_signing_key,
+    );
+    orch.stage_declassification_receipt_for_obligation(
+        second_prepared.trace_id.clone(),
+        second_obligation_id,
+        good_receipt,
+    );
+
+    let result = orch
+        .execute(&pkg)
+        .expect("fresh preflight and valid receipt should recover after sink-clearance mismatch");
+    assert_eq!(result.trace_id, second_prepared.trace_id);
+    assert_eq!(result.decision_id, second_prepared.decision_id);
+    assert_eq!(result.execution_value, "undefined");
+}
+
+#[test]
 fn failed_staged_receipt_allows_clean_retry_via_fresh_preflight_and_receipt() {
     let mut orch = default_orch();
     let pkg = package_with_caps(

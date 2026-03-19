@@ -1430,4 +1430,816 @@ mod tests {
             .unwrap();
         assert_eq!(r1.receipt_hash, r2.receipt_hash);
     }
+
+    // ---------------------------------------------------------------
+    // Additional tests — morsel partition edge cases
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_partition_single_element_input() {
+        let engine = MorselKernelEngine::new(epoch(1));
+        // ArrayMap uses Medium morsel (256), input=1 => one tail partition
+        let parts = engine.partition(BuiltinFamily::ArrayMap, 1);
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].start, 0);
+        assert_eq!(parts[0].end, 1);
+        assert_eq!(parts[0].element_count(), 1);
+        assert!(parts[0].is_tail);
+        assert_eq!(parts[0].index, 0);
+    }
+
+    #[test]
+    fn test_partition_large_input_many_morsels() {
+        let engine = MorselKernelEngine::new(epoch(1));
+        // JsonParse uses Large morsel (1024). 10000 / 1024 = 9 full + 1 tail (784)
+        let parts = engine.partition(BuiltinFamily::JsonParse, 10000);
+        assert_eq!(parts.len(), 10);
+        for (i, p) in parts.iter().enumerate() {
+            assert_eq!(p.index, i as u32);
+            assert_eq!(p.lane_width, LaneWidth::Lane8);
+        }
+        // First 9 partitions are full-sized
+        for p in &parts[..9] {
+            assert_eq!(p.element_count(), 1024);
+            assert!(!p.is_tail);
+        }
+        // Last partition is the tail
+        assert_eq!(parts[9].element_count(), 10000 - 9 * 1024);
+        assert!(parts[9].is_tail);
+    }
+
+    #[test]
+    fn test_partition_unknown_family_in_empty_catalog() {
+        let engine =
+            MorselKernelEngine::with_catalog(MorselKernelCatalog::new(), epoch(1));
+        let parts = engine.partition(BuiltinFamily::ArrayMap, 500);
+        assert!(parts.is_empty());
+    }
+
+    #[test]
+    fn test_partition_typed_array_uses_lane16() {
+        let engine = MorselKernelEngine::new(epoch(1));
+        let parts = engine.partition(BuiltinFamily::TypedArraySort, 2048);
+        assert!(!parts.is_empty());
+        for p in &parts {
+            assert_eq!(p.lane_width, LaneWidth::Lane16);
+        }
+    }
+
+    #[test]
+    fn test_partition_string_uses_lane4() {
+        let engine = MorselKernelEngine::new(epoch(1));
+        let parts = engine.partition(BuiltinFamily::StringReplace, 100);
+        // StringReplace uses Small morsel (64), Lane4
+        assert_eq!(parts.len(), 2); // 64 + 36
+        for p in &parts {
+            assert_eq!(p.lane_width, LaneWidth::Lane4);
+        }
+    }
+
+    #[test]
+    fn test_partition_contiguous_no_gaps() {
+        let engine = MorselKernelEngine::new(epoch(1));
+        let parts = engine.partition(BuiltinFamily::ArrayFilter, 999);
+        // Verify no gaps or overlaps: each partition.start == prev.end
+        for i in 1..parts.len() {
+            assert_eq!(parts[i].start, parts[i - 1].end);
+        }
+        // First starts at 0, last ends at input_length
+        assert_eq!(parts[0].start, 0);
+        assert_eq!(parts.last().unwrap().end, 999);
+    }
+
+    // ---------------------------------------------------------------
+    // Additional tests — selection vector masking in execute
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_execute_with_selection_vector_all_active() {
+        let mut engine = MorselKernelEngine::new(epoch(1));
+        let sel = SelectionVector::new(100);
+        let receipt = engine
+            .execute(
+                BuiltinFamily::ArrayMap,
+                100,
+                CallbackFenceKind::PureCallback,
+                Some(&sel),
+            )
+            .unwrap();
+        assert_eq!(receipt.total_elements, 100);
+    }
+
+    #[test]
+    fn test_execute_with_selection_vector_partial_mask() {
+        let mut engine = MorselKernelEngine::new(epoch(1));
+        let mut sel = SelectionVector::new(100);
+        // Mask out 30 elements
+        for i in 0..30 {
+            sel.mask(i);
+        }
+        let receipt = engine
+            .execute(
+                BuiltinFamily::ArrayMap,
+                100,
+                CallbackFenceKind::PureCallback,
+                Some(&sel),
+            )
+            .unwrap();
+        // 70 active out of 100
+        assert_eq!(receipt.total_elements, 70);
+    }
+
+    #[test]
+    fn test_execute_with_selection_vector_all_masked() {
+        let mut engine = MorselKernelEngine::new(epoch(1));
+        let mut sel = SelectionVector::new(50);
+        for i in 0..50 {
+            sel.mask(i);
+        }
+        let receipt = engine
+            .execute(
+                BuiltinFamily::ArrayMap,
+                50,
+                CallbackFenceKind::PureCallback,
+                Some(&sel),
+            )
+            .unwrap();
+        assert_eq!(receipt.total_elements, 0);
+    }
+
+    #[test]
+    fn test_execute_selection_vector_shorter_than_input() {
+        // Selection vector length < input length means elements beyond
+        // the selection vector are treated as fully masked.
+        let mut engine = MorselKernelEngine::new(epoch(1));
+        let sel = SelectionVector::new(50); // all active, but only 50 elements
+        let receipt = engine
+            .execute(
+                BuiltinFamily::ArrayMap,
+                300, // input has 300 elements, 2 partitions (256 + 44)
+                CallbackFenceKind::PureCallback,
+                Some(&sel),
+            )
+            .unwrap();
+        // First partition [0..256]: sel covers [0..50] all active, [50..256] are masked => 50 processed
+        // But wait — mask counting: for i in 0..256, sel only has 50 entries,
+        // is_active returns false for i >= 50 => 206 masked, 50 processed
+        // Second partition [256..300]: start=256 >= sel_len=50 => all masked, 0 processed
+        assert_eq!(receipt.total_elements, 50);
+    }
+
+    // ---------------------------------------------------------------
+    // Additional tests — callback fence interactions
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_no_callback_kernel_rejects_side_effect() {
+        let mut engine = MorselKernelEngine::new(epoch(1));
+        // StringSplit kernel uses NoCallback fence
+        let receipt = engine.execute(
+            BuiltinFamily::StringSplit,
+            100,
+            CallbackFenceKind::SideEffectCallback,
+            None,
+        );
+        assert!(receipt.is_none());
+    }
+
+    #[test]
+    fn test_side_effect_kernel_accepts_all_fences() {
+        let mut engine = MorselKernelEngine::new(epoch(1));
+        // ArrayReduce uses SideEffectCallback — should accept everything
+        for fence in [
+            CallbackFenceKind::NoCallback,
+            CallbackFenceKind::PureCallback,
+            CallbackFenceKind::SideEffectCallback,
+            CallbackFenceKind::ThrowingCallback,
+            CallbackFenceKind::MutatingCallback,
+        ] {
+            let receipt = engine.execute(BuiltinFamily::ArrayReduce, 100, fence, None);
+            assert!(
+                receipt.is_some(),
+                "ArrayReduce should accept {:?}",
+                fence
+            );
+        }
+    }
+
+    #[test]
+    fn test_throwing_callback_produces_scalar_fallback() {
+        let mut engine = MorselKernelEngine::new(epoch(1));
+        // ArrayReduce accepts ThrowingCallback, but ThrowingCallback doesn't
+        // allow vectorization, so all morsels should be scalar fallback.
+        let receipt = engine
+            .execute(
+                BuiltinFamily::ArrayReduce,
+                300,
+                CallbackFenceKind::ThrowingCallback,
+                None,
+            )
+            .unwrap();
+        assert_eq!(receipt.vectorized_count, 0);
+        assert!(receipt.scalar_count > 0);
+    }
+
+    #[test]
+    fn test_side_effect_callback_produces_fences() {
+        let mut engine = MorselKernelEngine::new(epoch(1));
+        let receipt = engine
+            .execute(
+                BuiltinFamily::ArrayReduce,
+                600,
+                CallbackFenceKind::SideEffectCallback,
+                None,
+            )
+            .unwrap();
+        // SideEffectCallback requires_ordering => one fence per morsel
+        assert!(receipt.total_fences > 0);
+        assert_eq!(receipt.total_fences, receipt.morsel_count);
+    }
+
+    #[test]
+    fn test_mutating_callback_aborts_all_morsels() {
+        let mut engine = MorselKernelEngine::new(epoch(1));
+        // ArrayReduce accepts MutatingCallback but morsels get AbortedMutation
+        let receipt = engine
+            .execute(
+                BuiltinFamily::ArrayReduce,
+                500,
+                CallbackFenceKind::MutatingCallback,
+                None,
+            )
+            .unwrap();
+        assert_eq!(receipt.vectorized_count, 0);
+        assert_eq!(receipt.scalar_count, 0);
+        assert!(receipt.aborted_count > 0);
+        assert_eq!(receipt.aborted_count, receipt.morsel_count);
+    }
+
+    // ---------------------------------------------------------------
+    // Additional tests — morsel size selection boundaries
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_morsel_size_boundary_values() {
+        // Exact boundary values
+        assert_eq!(MorselSize::for_input_length(1), MorselSize::Small);
+        assert_eq!(MorselSize::for_input_length(127), MorselSize::Small);
+        assert_eq!(MorselSize::for_input_length(128), MorselSize::Small);
+        assert_eq!(MorselSize::for_input_length(129), MorselSize::Medium);
+        assert_eq!(MorselSize::for_input_length(511), MorselSize::Medium);
+        assert_eq!(MorselSize::for_input_length(512), MorselSize::Medium);
+        assert_eq!(MorselSize::for_input_length(513), MorselSize::Large);
+        assert_eq!(MorselSize::for_input_length(2047), MorselSize::Large);
+        assert_eq!(MorselSize::for_input_length(2048), MorselSize::Large);
+        assert_eq!(MorselSize::for_input_length(2049), MorselSize::Huge);
+        assert_eq!(MorselSize::for_input_length(u64::MAX), MorselSize::Huge);
+    }
+
+    #[test]
+    fn test_morsel_size_ordering() {
+        assert!(MorselSize::Small < MorselSize::Medium);
+        assert!(MorselSize::Medium < MorselSize::Large);
+        assert!(MorselSize::Large < MorselSize::Huge);
+    }
+
+    #[test]
+    fn test_morsel_size_as_str_all_variants() {
+        assert_eq!(MorselSize::Small.as_str(), "small");
+        assert_eq!(MorselSize::Medium.as_str(), "medium");
+        assert_eq!(MorselSize::Large.as_str(), "large");
+        assert_eq!(MorselSize::Huge.as_str(), "huge");
+    }
+
+    // ---------------------------------------------------------------
+    // Additional tests — kernel content hash uniqueness
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_kernel_hash_differs_by_lane_width() {
+        let k1 = MorselKernelDescriptor::new(
+            BuiltinFamily::ArrayMap,
+            LaneWidth::Lane4,
+            MorselSize::Medium,
+            CallbackFenceKind::PureCallback,
+        );
+        let k2 = MorselKernelDescriptor::new(
+            BuiltinFamily::ArrayMap,
+            LaneWidth::Lane8,
+            MorselSize::Medium,
+            CallbackFenceKind::PureCallback,
+        );
+        assert_ne!(k1.content_hash, k2.content_hash);
+        assert_ne!(k1.kernel_id, k2.kernel_id);
+    }
+
+    #[test]
+    fn test_kernel_hash_differs_by_morsel_size() {
+        let k1 = MorselKernelDescriptor::new(
+            BuiltinFamily::ArrayMap,
+            LaneWidth::Lane8,
+            MorselSize::Small,
+            CallbackFenceKind::PureCallback,
+        );
+        let k2 = MorselKernelDescriptor::new(
+            BuiltinFamily::ArrayMap,
+            LaneWidth::Lane8,
+            MorselSize::Huge,
+            CallbackFenceKind::PureCallback,
+        );
+        // Same kernel_id (based on family + lane width) but different hash
+        // because morsel size element_count is hashed
+        assert_eq!(k1.kernel_id, k2.kernel_id);
+        assert_ne!(k1.content_hash, k2.content_hash);
+    }
+
+    // ---------------------------------------------------------------
+    // Additional tests — serde round-trips for compound types
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_kill_switch_serde_roundtrip() {
+        let mut ks = KillSwitch::new(epoch(5));
+        ks.add_family(BuiltinFamily::ArrayMap);
+        ks.add_family(BuiltinFamily::JsonParse);
+        ks.engage("serde test", epoch(6));
+
+        let json = serde_json::to_string(&ks).unwrap();
+        let decoded: KillSwitch = serde_json::from_str(&json).unwrap();
+        assert_eq!(ks.engaged, decoded.engaged);
+        assert_eq!(ks.reason, decoded.reason);
+        assert_eq!(ks.affected_families, decoded.affected_families);
+        assert_eq!(ks.last_toggled_epoch, decoded.last_toggled_epoch);
+    }
+
+    #[test]
+    fn test_cliff_policy_serde_roundtrip() {
+        let policy = CliffPolicy {
+            min_vectorize_length: 16,
+            behavior: CliffBehavior::PaddedLane,
+            min_parallel_length: 512,
+        };
+        let json = serde_json::to_string(&policy).unwrap();
+        let decoded: CliffPolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(policy, decoded);
+    }
+
+    #[test]
+    fn test_morsel_partition_serde_roundtrip() {
+        let part = MorselPartition {
+            index: 3,
+            start: 768,
+            end: 1024,
+            lane_width: LaneWidth::Lane16,
+            is_tail: true,
+        };
+        let json = serde_json::to_string(&part).unwrap();
+        let decoded: MorselPartition = serde_json::from_str(&json).unwrap();
+        assert_eq!(part, decoded);
+    }
+
+    #[test]
+    fn test_callback_fence_serde_roundtrip() {
+        let fence = CallbackFence {
+            kind: CallbackFenceKind::ThrowingCallback,
+            after_morsel: 7,
+            flushed_effects: true,
+            callback_invocations: 42,
+        };
+        let json = serde_json::to_string(&fence).unwrap();
+        let decoded: CallbackFence = serde_json::from_str(&json).unwrap();
+        assert_eq!(fence, decoded);
+    }
+
+    #[test]
+    fn test_execution_receipt_serde_roundtrip() {
+        let mut engine = MorselKernelEngine::new(epoch(10));
+        let receipt = engine
+            .execute(
+                BuiltinFamily::ArrayFilter,
+                500,
+                CallbackFenceKind::PureCallback,
+                None,
+            )
+            .unwrap();
+        let json = serde_json::to_string(&receipt).unwrap();
+        let decoded: KernelExecutionReceipt = serde_json::from_str(&json).unwrap();
+        assert_eq!(receipt.receipt_id, decoded.receipt_id);
+        assert_eq!(receipt.receipt_hash, decoded.receipt_hash);
+        assert_eq!(receipt.family, decoded.family);
+        assert_eq!(receipt.morsel_count, decoded.morsel_count);
+    }
+
+    #[test]
+    fn test_catalog_serde_roundtrip() {
+        let catalog = MorselKernelCatalog::with_defaults();
+        let json = serde_json::to_string(&catalog).unwrap();
+        let decoded: MorselKernelCatalog = serde_json::from_str(&json).unwrap();
+        assert_eq!(catalog.kernel_count(), decoded.kernel_count());
+        // Verify lookup still works after deserialization
+        let k = decoded.lookup(BuiltinFamily::ArrayMap).unwrap();
+        assert_eq!(k.family, BuiltinFamily::ArrayMap);
+    }
+
+    // ---------------------------------------------------------------
+    // Additional tests — engine cumulative statistics
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_engine_cumulative_morsels_across_executions() {
+        let mut engine = MorselKernelEngine::new(epoch(1));
+        engine.execute(
+            BuiltinFamily::ArrayMap,
+            256,
+            CallbackFenceKind::PureCallback,
+            None,
+        );
+        let m1 = engine.total_morsels_executed;
+        engine.execute(
+            BuiltinFamily::ArrayFilter,
+            256,
+            CallbackFenceKind::PureCallback,
+            None,
+        );
+        assert!(engine.total_morsels_executed > m1);
+        assert_eq!(engine.receipt_count(), 2);
+    }
+
+    #[test]
+    fn test_engine_scalar_fallback_count_below_cliff() {
+        let mut engine = MorselKernelEngine::new(epoch(1));
+        // Default cliff min_vectorize_length = 8. Single morsel with 5 elements
+        // should trigger scalar fallback (5 < 8).
+        let receipt = engine
+            .execute(
+                BuiltinFamily::ArrayMap,
+                5,
+                CallbackFenceKind::PureCallback,
+                None,
+            )
+            .unwrap();
+        assert_eq!(receipt.vectorized_count, 0);
+        assert_eq!(receipt.scalar_count, 1);
+        assert_eq!(engine.total_scalar_fallbacks, 1);
+    }
+
+    #[test]
+    fn test_engine_vectorization_rate_zero_morsels() {
+        let receipt = KernelExecutionReceipt {
+            receipt_id: "test".to_string(),
+            kernel_id: "mk-test".to_string(),
+            family: BuiltinFamily::ArrayMap,
+            input_length: 0,
+            morsel_count: 0,
+            vectorized_count: 0,
+            scalar_count: 0,
+            aborted_count: 0,
+            total_elements: 0,
+            total_fences: 0,
+            kill_switch_active: false,
+            receipt_hash: ContentHash::compute(b"test"),
+            epoch: epoch(1),
+        };
+        assert_eq!(receipt.vectorization_rate_millionths(), 0);
+    }
+
+    #[test]
+    fn test_engine_vectorization_rate_partial() {
+        let receipt = KernelExecutionReceipt {
+            receipt_id: "test".to_string(),
+            kernel_id: "mk-test".to_string(),
+            family: BuiltinFamily::ArrayMap,
+            input_length: 100,
+            morsel_count: 4,
+            vectorized_count: 1,
+            scalar_count: 3,
+            aborted_count: 0,
+            total_elements: 100,
+            total_fences: 0,
+            kill_switch_active: false,
+            receipt_hash: ContentHash::compute(b"test"),
+            epoch: epoch(1),
+        };
+        // 1/4 = 250_000 millionths
+        assert_eq!(receipt.vectorization_rate_millionths(), 250_000);
+    }
+
+    // ---------------------------------------------------------------
+    // Additional tests — kill switch edge cases
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_kill_switch_engage_disengage_epoch_tracking() {
+        let mut ks = KillSwitch::new(epoch(1));
+        assert_eq!(ks.last_toggled_epoch, epoch(1));
+
+        ks.engage("reason1", epoch(5));
+        assert_eq!(ks.last_toggled_epoch, epoch(5));
+        assert_eq!(ks.reason, Some("reason1".to_string()));
+
+        ks.disengage(epoch(10));
+        assert_eq!(ks.last_toggled_epoch, epoch(10));
+        assert!(ks.reason.is_none());
+    }
+
+    #[test]
+    fn test_kill_switch_not_engaged_returns_false_for_targeted() {
+        let mut ks = KillSwitch::new(epoch(1));
+        ks.add_family(BuiltinFamily::ArrayMap);
+        // Families added but not engaged — nothing should be killed
+        assert!(!ks.is_killed(BuiltinFamily::ArrayMap));
+        assert!(!ks.is_killed(BuiltinFamily::JsonParse));
+    }
+
+    #[test]
+    fn test_kill_switch_engage_after_disengage_reengages() {
+        let mut ks = KillSwitch::new(epoch(1));
+        ks.engage("first", epoch(2));
+        ks.disengage(epoch(3));
+        assert!(!ks.is_killed(BuiltinFamily::ArrayMap));
+
+        ks.engage("second", epoch(4));
+        assert!(ks.is_killed(BuiltinFamily::ArrayMap));
+        assert_eq!(ks.reason, Some("second".to_string()));
+    }
+
+    // ---------------------------------------------------------------
+    // Additional tests — catalog register overwrites
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_catalog_register_overwrites_existing() {
+        let mut catalog = MorselKernelCatalog::new();
+        let k1 = MorselKernelDescriptor::new(
+            BuiltinFamily::ArrayMap,
+            LaneWidth::Lane4,
+            MorselSize::Small,
+            CallbackFenceKind::NoCallback,
+        );
+        catalog.register(k1);
+
+        let k2 = MorselKernelDescriptor::new(
+            BuiltinFamily::ArrayMap,
+            LaneWidth::Lane8,
+            MorselSize::Large,
+            CallbackFenceKind::PureCallback,
+        );
+        catalog.register(k2);
+
+        // The family_map should point to the latest registered kernel
+        let looked_up = catalog.lookup(BuiltinFamily::ArrayMap).unwrap();
+        assert_eq!(looked_up.lane_width, LaneWidth::Lane8);
+        assert_eq!(looked_up.morsel_size, MorselSize::Large);
+        // Both kernel_ids remain in the kernels map since they differ
+        assert_eq!(catalog.kernel_count(), 2);
+    }
+
+    #[test]
+    fn test_catalog_default_impl() {
+        // Default trait delegates to with_defaults
+        let cat: MorselKernelCatalog = Default::default();
+        assert_eq!(cat.kernel_count(), 15);
+    }
+
+    // ---------------------------------------------------------------
+    // Additional tests — engine with custom catalog
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_engine_with_empty_catalog_returns_none() {
+        let mut engine =
+            MorselKernelEngine::with_catalog(MorselKernelCatalog::new(), epoch(1));
+        let receipt = engine.execute(
+            BuiltinFamily::ArrayMap,
+            100,
+            CallbackFenceKind::PureCallback,
+            None,
+        );
+        assert!(receipt.is_none());
+        assert_eq!(engine.total_morsels_executed, 0);
+    }
+
+    #[test]
+    fn test_engine_execute_zero_length_returns_none() {
+        let mut engine = MorselKernelEngine::new(epoch(1));
+        let receipt = engine.execute(
+            BuiltinFamily::ArrayMap,
+            0,
+            CallbackFenceKind::PureCallback,
+            None,
+        );
+        assert!(receipt.is_none());
+    }
+
+    // ---------------------------------------------------------------
+    // Additional tests — MorselPartition element_count edge case
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_morsel_partition_element_count_saturating() {
+        // If start > end (shouldn't normally happen), saturating_sub returns 0
+        let part = MorselPartition {
+            index: 0,
+            start: 100,
+            end: 50,
+            lane_width: LaneWidth::Lane8,
+            is_tail: false,
+        };
+        assert_eq!(part.element_count(), 0);
+    }
+
+    // ---------------------------------------------------------------
+    // Additional tests — receipt id format
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_receipt_id_format_prefix_and_length() {
+        let mut engine = MorselKernelEngine::new(epoch(1));
+        let receipt = engine
+            .execute(
+                BuiltinFamily::ArrayMap,
+                100,
+                CallbackFenceKind::PureCallback,
+                None,
+            )
+            .unwrap();
+        assert!(receipt.receipt_id.starts_with("mkr-"));
+        // "mkr-" + 16 hex chars = 20 total
+        assert_eq!(receipt.receipt_id.len(), 20);
+    }
+
+    #[test]
+    fn test_receipt_hash_differs_by_epoch() {
+        let mut e1 = MorselKernelEngine::new(epoch(1));
+        let mut e2 = MorselKernelEngine::new(epoch(99));
+        let r1 = e1
+            .execute(
+                BuiltinFamily::ArrayMap,
+                100,
+                CallbackFenceKind::PureCallback,
+                None,
+            )
+            .unwrap();
+        let r2 = e2
+            .execute(
+                BuiltinFamily::ArrayMap,
+                100,
+                CallbackFenceKind::PureCallback,
+                None,
+            )
+            .unwrap();
+        assert_ne!(r1.receipt_hash, r2.receipt_hash);
+    }
+
+    #[test]
+    fn test_receipt_hash_differs_by_input_length() {
+        let mut e1 = MorselKernelEngine::new(epoch(1));
+        let mut e2 = MorselKernelEngine::new(epoch(1));
+        let r1 = e1
+            .execute(
+                BuiltinFamily::ArrayMap,
+                100,
+                CallbackFenceKind::PureCallback,
+                None,
+            )
+            .unwrap();
+        let r2 = e2
+            .execute(
+                BuiltinFamily::ArrayMap,
+                200,
+                CallbackFenceKind::PureCallback,
+                None,
+            )
+            .unwrap();
+        assert_ne!(r1.receipt_hash, r2.receipt_hash);
+    }
+
+    // ---------------------------------------------------------------
+    // Additional tests — callback fence kind as_str completeness
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_callback_fence_kind_as_str_all_variants() {
+        assert_eq!(CallbackFenceKind::NoCallback.as_str(), "no_callback");
+        assert_eq!(CallbackFenceKind::PureCallback.as_str(), "pure_callback");
+        assert_eq!(
+            CallbackFenceKind::SideEffectCallback.as_str(),
+            "side_effect_callback"
+        );
+        assert_eq!(
+            CallbackFenceKind::ThrowingCallback.as_str(),
+            "throwing_callback"
+        );
+        assert_eq!(
+            CallbackFenceKind::MutatingCallback.as_str(),
+            "mutating_callback"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Additional tests — morsel outcome ordering
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_morsel_outcome_ordering() {
+        // Derive(Ord) gives declaration order
+        assert!(MorselOutcome::Vectorized < MorselOutcome::ScalarFallback);
+        assert!(MorselOutcome::ScalarFallback < MorselOutcome::AbortedMutation);
+        assert!(MorselOutcome::AbortedMutation < MorselOutcome::AbortedKillSwitch);
+        assert!(MorselOutcome::AbortedKillSwitch < MorselOutcome::Skipped);
+    }
+
+    #[test]
+    fn test_morsel_outcome_as_str_all_variants() {
+        assert_eq!(MorselOutcome::Vectorized.as_str(), "vectorized");
+        assert_eq!(MorselOutcome::ScalarFallback.as_str(), "scalar_fallback");
+        assert_eq!(MorselOutcome::AbortedMutation.as_str(), "aborted_mutation");
+        assert_eq!(
+            MorselOutcome::AbortedKillSwitch.as_str(),
+            "aborted_kill_switch"
+        );
+        assert_eq!(MorselOutcome::Skipped.as_str(), "skipped");
+    }
+
+    // ---------------------------------------------------------------
+    // Additional tests — MorselExecutionRecord serde
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_morsel_execution_record_serde_roundtrip() {
+        let record = MorselExecutionRecord {
+            partition: MorselPartition {
+                index: 0,
+                start: 0,
+                end: 256,
+                lane_width: LaneWidth::Lane8,
+                is_tail: false,
+            },
+            outcome: MorselOutcome::Vectorized,
+            elements_processed: 256,
+            elements_masked: 0,
+            fences: vec![CallbackFence {
+                kind: CallbackFenceKind::PureCallback,
+                after_morsel: 0,
+                flushed_effects: false,
+                callback_invocations: 10,
+            }],
+            epoch: epoch(1),
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        let decoded: MorselExecutionRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(record, decoded);
+    }
+
+    // ---------------------------------------------------------------
+    // Additional tests — diagnostics after kill switch
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_diagnostics_reflects_kill_switch_state() {
+        let mut engine = MorselKernelEngine::new(epoch(1));
+        let diag = engine.diagnostics();
+        assert!(!diag.kill_switch_engaged);
+
+        engine.engage_kill_switch("test reason");
+        let diag = engine.diagnostics();
+        assert!(diag.kill_switch_engaged);
+
+        engine.disengage_kill_switch();
+        let diag = engine.diagnostics();
+        assert!(!diag.kill_switch_engaged);
+    }
+
+    // ---------------------------------------------------------------
+    // Additional tests — pure callback fences count zero
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_pure_callback_produces_zero_fences() {
+        let mut engine = MorselKernelEngine::new(epoch(1));
+        let receipt = engine
+            .execute(
+                BuiltinFamily::ArrayMap,
+                500,
+                CallbackFenceKind::PureCallback,
+                None,
+            )
+            .unwrap();
+        // PureCallback does not require ordering => no fences
+        assert_eq!(receipt.total_fences, 0);
+    }
+
+    #[test]
+    fn test_no_callback_produces_zero_fences() {
+        let mut engine = MorselKernelEngine::new(epoch(1));
+        let receipt = engine
+            .execute(
+                BuiltinFamily::TypedArrayFill,
+                2000,
+                CallbackFenceKind::NoCallback,
+                None,
+            )
+            .unwrap();
+        assert_eq!(receipt.total_fences, 0);
+    }
 }

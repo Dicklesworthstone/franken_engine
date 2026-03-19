@@ -1674,4 +1674,683 @@ mod tests {
     fn regime_sig_component_constant() {
         assert_eq!(REGIME_SIG_COMPONENT, "regime_signature_feature");
     }
+
+    // --- Additional enrichment tests (PearlTower 2026-03-18) ---
+
+    #[test]
+    fn isqrt_negative_returns_zero() {
+        assert_eq!(isqrt(-1), 0);
+        assert_eq!(isqrt(-1_000_000), 0);
+        assert_eq!(isqrt(i64::MIN), 0);
+    }
+
+    #[test]
+    fn isqrt_large_values() {
+        // 1_000_000_000_000 = 1e12, sqrt = 1e6
+        assert_eq!(isqrt(1_000_000_000_000), 1_000_000);
+        // Non-perfect square: isqrt(10) should be 3 (floor)
+        assert_eq!(isqrt(10), 3);
+        assert_eq!(isqrt(15), 3);
+        assert_eq!(isqrt(17), 4);
+    }
+
+    #[test]
+    fn l1_distance_different_dimensions_returns_max() {
+        let sig_a = TraceSignature {
+            schema_version: REGIME_SIG_SCHEMA_VERSION.to_string(),
+            trace_id: "a".to_string(),
+            dimension: 4,
+            components: vec![1, 2, 3, 4],
+            bucket_counts: vec![1, 1, 1, 1],
+            observation_count: 4,
+            feature_count: 4,
+            valid: true,
+            signature_hash: "h".to_string(),
+        };
+        let sig_b = TraceSignature {
+            schema_version: REGIME_SIG_SCHEMA_VERSION.to_string(),
+            trace_id: "b".to_string(),
+            dimension: 3,
+            components: vec![1, 2, 3],
+            bucket_counts: vec![1, 1, 1],
+            observation_count: 3,
+            feature_count: 3,
+            valid: true,
+            signature_hash: "h".to_string(),
+        };
+        assert_eq!(sig_a.l1_distance(&sig_b), i64::MAX);
+    }
+
+    #[test]
+    fn cosine_similarity_different_dimensions_returns_zero() {
+        let sig_a = TraceSignature {
+            schema_version: REGIME_SIG_SCHEMA_VERSION.to_string(),
+            trace_id: "a".to_string(),
+            dimension: 4,
+            components: vec![1_000_000; 4],
+            bucket_counts: vec![1; 4],
+            observation_count: 4,
+            feature_count: 1,
+            valid: true,
+            signature_hash: "h".to_string(),
+        };
+        let sig_b = TraceSignature {
+            schema_version: REGIME_SIG_SCHEMA_VERSION.to_string(),
+            trace_id: "b".to_string(),
+            dimension: 2,
+            components: vec![1_000_000; 2],
+            bucket_counts: vec![1; 2],
+            observation_count: 2,
+            feature_count: 1,
+            valid: true,
+            signature_hash: "h".to_string(),
+        };
+        assert_eq!(sig_a.cosine_similarity(&sig_b), 0);
+    }
+
+    #[test]
+    fn cosine_similarity_zero_vector_returns_zero() {
+        let sig = TraceSignature {
+            schema_version: REGIME_SIG_SCHEMA_VERSION.to_string(),
+            trace_id: "z".to_string(),
+            dimension: 4,
+            components: vec![0; 4],
+            bucket_counts: vec![1; 4],
+            observation_count: 4,
+            feature_count: 1,
+            valid: true,
+            signature_hash: "h".to_string(),
+        };
+        let other = TraceSignature {
+            schema_version: REGIME_SIG_SCHEMA_VERSION.to_string(),
+            trace_id: "o".to_string(),
+            dimension: 4,
+            components: vec![500_000; 4],
+            bucket_counts: vec![1; 4],
+            observation_count: 4,
+            feature_count: 1,
+            valid: true,
+            signature_hash: "h".to_string(),
+        };
+        assert_eq!(sig.cosine_similarity(&other), 0);
+        assert_eq!(other.cosine_similarity(&sig), 0);
+    }
+
+    #[test]
+    fn l1_distance_symmetric() {
+        let config = SignatureConfig::default();
+        let trace_a = make_trace("a", "cpu", &[100_000, 200_000, 300_000, 400_000], 1);
+        let trace_b = make_trace("b", "cpu", &[500_000, 600_000, 700_000, 800_000], 1);
+        let sig_a = extract_signature(&trace_a, &config);
+        let sig_b = extract_signature(&trace_b, &config);
+        assert_eq!(sig_a.l1_distance(&sig_b), sig_b.l1_distance(&sig_a));
+    }
+
+    #[test]
+    fn cosine_similarity_symmetric() {
+        let config = SignatureConfig::default();
+        let trace_a = make_trace("a", "cpu", &[100_000, 200_000, 300_000, 400_000], 1);
+        let trace_b = make_trace("b", "cpu", &[500_000, 600_000, 700_000, 800_000], 1);
+        let sig_a = extract_signature(&trace_a, &config);
+        let sig_b = extract_signature(&trace_b, &config);
+        assert_eq!(
+            sig_a.cosine_similarity(&sig_b),
+            sig_b.cosine_similarity(&sig_a)
+        );
+    }
+
+    #[test]
+    fn extract_signature_preserves_trace_id() {
+        let config = SignatureConfig::default();
+        let trace = make_trace("my-unique-trace-42", "cpu", &[1, 2, 3, 4], 7);
+        let sig = extract_signature(&trace, &config);
+        assert_eq!(sig.trace_id, "my-unique-trace-42");
+    }
+
+    #[test]
+    fn extract_signature_schema_version_matches_constant() {
+        let config = SignatureConfig::default();
+        let trace = make_trace("t", "cpu", &[1, 2, 3, 4], 1);
+        let sig = extract_signature(&trace, &config);
+        assert_eq!(sig.schema_version, REGIME_SIG_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn extract_signature_hash_determinism() {
+        let config = SignatureConfig::default();
+        let trace = make_trace("t", "cpu", &[500_000, 600_000, 400_000, 550_000], 1);
+        let sig1 = extract_signature(&trace, &config);
+        let sig2 = extract_signature(&trace, &config);
+        assert_eq!(sig1.signature_hash, sig2.signature_hash);
+        assert!(!sig1.signature_hash.is_empty());
+    }
+
+    #[test]
+    fn extract_signature_invalid_hash_determinism() {
+        let config = SignatureConfig::default();
+        let trace = make_trace("short", "cpu", &[1], 1);
+        let sig1 = extract_signature(&trace, &config);
+        let sig2 = extract_signature(&trace, &config);
+        assert_eq!(sig1.signature_hash, sig2.signature_hash);
+        assert!(!sig1.signature_hash.is_empty());
+    }
+
+    #[test]
+    fn extract_signature_different_traces_different_hashes() {
+        let config = SignatureConfig::default();
+        let trace_a = make_trace("a", "cpu", &[100_000, 200_000, 300_000, 400_000], 1);
+        let trace_b = make_trace("b", "cpu", &[500_000, 600_000, 700_000, 800_000], 1);
+        let sig_a = extract_signature(&trace_a, &config);
+        let sig_b = extract_signature(&trace_b, &config);
+        assert_ne!(sig_a.signature_hash, sig_b.signature_hash);
+    }
+
+    #[test]
+    fn extract_signature_multi_feature_counts_features() {
+        let config = SignatureConfig::default();
+        let trace = make_multi_feature_trace(
+            "mf",
+            &[
+                ("cpu", &[500_000, 600_000]),
+                ("mem", &[300_000, 400_000]),
+                ("disk", &[100_000, 200_000]),
+            ],
+            1,
+        );
+        let sig = extract_signature(&trace, &config);
+        assert!(sig.valid);
+        assert_eq!(sig.observation_count, 6);
+        // At least some distinct features should be counted (may be less than 3
+        // if two features hash to the same bucket, but at least 1).
+        assert!(sig.feature_count >= 1);
+    }
+
+    #[test]
+    fn extract_signature_bucket_counts_sum_to_observations() {
+        let config = SignatureConfig::default();
+        let trace = make_trace("t", "cpu", &[1, 2, 3, 4, 5, 6, 7, 8], 1);
+        let sig = extract_signature(&trace, &config);
+        let total_buckets: u64 = sig.bucket_counts.iter().sum();
+        assert_eq!(total_buckets, sig.observation_count);
+    }
+
+    #[test]
+    fn extract_signature_exactly_min_trace_length_valid() {
+        let config = SignatureConfig::default();
+        // MIN_TRACE_LENGTH is 4, so exactly 4 observations should produce valid.
+        let trace = make_trace("t", "cpu", &[1, 2, 3, 4], 1);
+        let sig = extract_signature(&trace, &config);
+        assert!(sig.valid);
+        assert_eq!(sig.observation_count, 4);
+    }
+
+    #[test]
+    fn extract_signature_one_below_min_trace_length_invalid() {
+        let config = SignatureConfig::default();
+        // MIN_TRACE_LENGTH - 1 = 3 observations should be invalid.
+        let trace = make_trace("t", "cpu", &[1, 2, 3], 1);
+        let sig = extract_signature(&trace, &config);
+        assert!(!sig.valid);
+    }
+
+    #[test]
+    fn classify_regime_no_matching_centroids_abstains() {
+        // Config with centroids whose dimension doesn't match the signature.
+        let config = SignatureConfig {
+            max_dim: 4,
+            min_trace_length: 2,
+            abstention_threshold: ABSTENTION_THRESHOLD_MILLIONTHS,
+            centroids: vec![RegimeCentroid {
+                regime: Regime::Normal,
+                components: vec![500_000; 8], // dimension 8, but sig will be 4
+                radius_millionths: 2_000_000,
+            }],
+        };
+        let trace = make_trace("t", "cpu", &[500_000, 500_000, 500_000, 500_000], 1);
+        let sig = extract_signature(&trace, &config);
+        let (label, _) = classify_regime(&sig, &config);
+        assert!(label.is_abstention());
+    }
+
+    #[test]
+    fn classify_regime_empty_centroids_abstains() {
+        let config = SignatureConfig {
+            max_dim: MAX_SIGNATURE_DIM,
+            min_trace_length: MIN_TRACE_LENGTH,
+            abstention_threshold: ABSTENTION_THRESHOLD_MILLIONTHS,
+            centroids: vec![],
+        };
+        let trace = make_trace("t", "cpu", &[500_000, 500_000, 500_000, 500_000], 1);
+        let sig = extract_signature(&trace, &config);
+        let (label, _) = classify_regime(&sig, &config);
+        assert!(label.is_abstention());
+    }
+
+    #[test]
+    fn regime_label_display_all_variants() {
+        assert_eq!(RegimeLabel::Classified(Regime::Normal).to_string(), "normal");
+        assert_eq!(
+            RegimeLabel::Classified(Regime::Elevated).to_string(),
+            "elevated"
+        );
+        assert_eq!(
+            RegimeLabel::Classified(Regime::Attack).to_string(),
+            "attack"
+        );
+        assert_eq!(
+            RegimeLabel::Classified(Regime::Degraded).to_string(),
+            "degraded"
+        );
+        assert_eq!(
+            RegimeLabel::Classified(Regime::Recovery).to_string(),
+            "recovery"
+        );
+        assert_eq!(RegimeLabel::Abstention.to_string(), "abstention");
+    }
+
+    #[test]
+    fn regime_label_as_str_matches_display() {
+        for label in RegimeLabel::ALL_CLASSIFIED {
+            assert_eq!(label.as_str(), label.to_string());
+        }
+        let abst = RegimeLabel::Abstention;
+        assert_eq!(abst.as_str(), abst.to_string());
+    }
+
+    #[test]
+    fn regime_label_is_abstention_false_for_classified() {
+        for label in RegimeLabel::ALL_CLASSIFIED {
+            assert!(!label.is_abstention(), "{label:?} should not be abstention");
+        }
+    }
+
+    #[test]
+    fn regime_label_all_classified_contains_five_regimes() {
+        assert_eq!(RegimeLabel::ALL_CLASSIFIED.len(), 5);
+    }
+
+    #[test]
+    fn specimen_family_display_matches_as_str() {
+        for family in SignatureSpecimenFamily::ALL {
+            assert_eq!(family.as_str(), family.to_string());
+        }
+    }
+
+    #[test]
+    fn specimen_family_all_has_six_variants() {
+        assert_eq!(SignatureSpecimenFamily::ALL.len(), 6);
+    }
+
+    #[test]
+    fn signature_config_default_centroids_cover_all_regimes() {
+        let config = SignatureConfig::default();
+        let regimes: std::collections::BTreeSet<_> =
+            config.centroids.iter().map(|c| c.regime).collect();
+        assert!(regimes.contains(&Regime::Normal));
+        assert!(regimes.contains(&Regime::Elevated));
+        assert!(regimes.contains(&Regime::Attack));
+        assert!(regimes.contains(&Regime::Degraded));
+        assert!(regimes.contains(&Regime::Recovery));
+    }
+
+    #[test]
+    fn signature_config_default_centroids_all_have_correct_dimension() {
+        let config = SignatureConfig::default();
+        for centroid in &config.centroids {
+            assert_eq!(
+                centroid.components.len(),
+                config.max_dim,
+                "centroid for {:?} has wrong dimension",
+                centroid.regime
+            );
+        }
+    }
+
+    #[test]
+    fn signature_config_serde_roundtrip() {
+        let config = SignatureConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        let back: SignatureConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(config, back);
+    }
+
+    #[test]
+    fn regime_centroid_serde_roundtrip() {
+        let centroid = RegimeCentroid {
+            regime: Regime::Attack,
+            components: vec![900_000; 8],
+            radius_millionths: 3_000_000,
+        };
+        let json = serde_json::to_string(&centroid).unwrap();
+        let back: RegimeCentroid = serde_json::from_str(&json).unwrap();
+        assert_eq!(centroid, back);
+    }
+
+    #[test]
+    fn trace_observation_serde_roundtrip() {
+        let obs = TraceObservation {
+            seq: 99,
+            feature_name: "gc_pause_ns".to_string(),
+            value_millionths: 750_000,
+        };
+        let json = serde_json::to_string(&obs).unwrap();
+        let back: TraceObservation = serde_json::from_str(&json).unwrap();
+        assert_eq!(obs, back);
+    }
+
+    #[test]
+    fn runtime_trace_serde_roundtrip() {
+        let trace = make_multi_feature_trace(
+            "serde-test",
+            &[("cpu", &[100_000, 200_000]), ("mem", &[300_000, 400_000])],
+            42,
+        );
+        let json = serde_json::to_string(&trace).unwrap();
+        let back: RuntimeTrace = serde_json::from_str(&json).unwrap();
+        assert_eq!(trace, back);
+    }
+
+    #[test]
+    fn signature_specimen_serde_roundtrip() {
+        let specimen = SignatureSpecimen {
+            specimen_id: "test-specimen".into(),
+            description: "A test".into(),
+            family: SignatureSpecimenFamily::Extraction,
+            traces: vec![make_trace("t", "cpu", &[1, 2, 3, 4], 1)],
+            expected_outcome: SignatureExpectedOutcome::ValidSignature,
+            expected_regime: Some(RegimeLabel::Classified(Regime::Normal)),
+            expected_valid: Some(true),
+            expected_transition_count: None,
+        };
+        let json = serde_json::to_string(&specimen).unwrap();
+        let back: SignatureSpecimen = serde_json::from_str(&json).unwrap();
+        assert_eq!(specimen, back);
+    }
+
+    #[test]
+    fn build_state_chart_empty_traces() {
+        let config = SignatureConfig::default();
+        let chart = build_regime_state_chart(&[], &config);
+        assert!(chart.entries.is_empty());
+        assert_eq!(chart.transition_count, 0);
+        assert_eq!(chart.abstention_count, 0);
+        assert!(chart.label_distribution.is_empty());
+        assert!(!chart.chart_hash.is_empty());
+    }
+
+    #[test]
+    fn build_state_chart_entries_have_sequential_seqs() {
+        let config = SignatureConfig::default();
+        let traces = vec![
+            make_trace("t1", "cpu", &[500_000, 510_000, 490_000, 505_000], 1),
+            make_trace("t2", "cpu", &[500_000, 510_000, 490_000, 505_000], 2),
+            make_trace("t3", "cpu", &[500_000, 510_000, 490_000, 505_000], 3),
+        ];
+        let chart = build_regime_state_chart(&traces, &config);
+        assert_eq!(chart.entries.len(), 3);
+        for (i, entry) in chart.entries.iter().enumerate() {
+            assert_eq!(entry.seq, i as u64);
+        }
+    }
+
+    #[test]
+    fn build_state_chart_label_distribution_sums_to_entry_count() {
+        let config = SignatureConfig::default();
+        let traces = vec![
+            make_trace("t1", "cpu", &[500_000, 510_000, 490_000, 505_000], 1),
+            make_trace("t2", "cpu", &[500_000, 510_000, 490_000, 505_000], 2),
+        ];
+        let chart = build_regime_state_chart(&traces, &config);
+        let dist_total: u64 = chart.label_distribution.values().sum();
+        assert_eq!(dist_total, chart.entries.len() as u64);
+    }
+
+    #[test]
+    fn build_state_chart_hash_determinism() {
+        let config = SignatureConfig::default();
+        let traces = vec![
+            make_trace("t1", "cpu", &[500_000, 510_000, 490_000, 505_000], 1),
+            make_trace("t2", "cpu", &[500_000, 510_000, 490_000, 505_000], 2),
+        ];
+        let chart1 = build_regime_state_chart(&traces, &config);
+        let chart2 = build_regime_state_chart(&traces, &config);
+        assert_eq!(chart1.chart_hash, chart2.chart_hash);
+    }
+
+    #[test]
+    fn build_state_chart_schema_version_matches() {
+        let config = SignatureConfig::default();
+        let traces = vec![make_trace(
+            "t1",
+            "cpu",
+            &[500_000, 510_000, 490_000, 505_000],
+            1,
+        )];
+        let chart = build_regime_state_chart(&traces, &config);
+        assert_eq!(chart.schema_version, REGIME_SIG_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn extract_signature_all_negative_values() {
+        let config = SignatureConfig::default();
+        let trace = make_trace("neg", "metric", &[-500_000, -600_000, -400_000, -550_000], 1);
+        let sig = extract_signature(&trace, &config);
+        assert!(sig.valid);
+        // The single bucket that contains all observations should have a negative mean.
+        let active: Vec<_> = sig
+            .components
+            .iter()
+            .zip(&sig.bucket_counts)
+            .filter(|(_, &count)| count > 0)
+            .collect();
+        assert!(!active.is_empty());
+        for (&comp, _) in &active {
+            assert!(comp < 0, "expected negative component, got {comp}");
+        }
+    }
+
+    #[test]
+    fn extract_signature_zero_values() {
+        let config = SignatureConfig::default();
+        let trace = make_trace("zero", "metric", &[0, 0, 0, 0], 1);
+        let sig = extract_signature(&trace, &config);
+        assert!(sig.valid);
+        // All bucket values that were populated should be 0.
+        for (i, &count) in sig.bucket_counts.iter().enumerate() {
+            if count > 0 {
+                assert_eq!(sig.components[i], 0);
+            }
+        }
+    }
+
+    #[test]
+    fn extract_signature_custom_dim() {
+        let config = SignatureConfig {
+            max_dim: 8,
+            min_trace_length: 2,
+            abstention_threshold: ABSTENTION_THRESHOLD_MILLIONTHS,
+            centroids: vec![],
+        };
+        let trace = make_trace("t", "cpu", &[500_000, 600_000, 400_000, 550_000], 1);
+        let sig = extract_signature(&trace, &config);
+        assert!(sig.valid);
+        assert_eq!(sig.dimension, 8);
+        assert_eq!(sig.components.len(), 8);
+        assert_eq!(sig.bucket_counts.len(), 8);
+    }
+
+    #[test]
+    fn regime_state_chart_empty_entries_not_stable() {
+        let chart = RegimeStateChart {
+            schema_version: REGIME_SIG_SCHEMA_VERSION.to_string(),
+            entries: vec![],
+            transition_count: 0,
+            abstention_count: 0,
+            label_distribution: BTreeMap::new(),
+            chart_hash: "h".to_string(),
+        };
+        assert!(!chart.is_stable(), "empty chart should not be stable");
+    }
+
+    #[test]
+    fn evidence_event_serde_roundtrip() {
+        let event = SignatureEvidenceEvent {
+            schema_version: REGIME_SIG_EVENT_SCHEMA_VERSION.to_string(),
+            component: REGIME_SIG_COMPONENT.to_string(),
+            event: "test_event".to_string(),
+            policy_id: REGIME_SIG_POLICY_ID.to_string(),
+            specimen_id: Some("spec-1".to_string()),
+            verdict: Some("pass".to_string()),
+            detail: Some("all good".to_string()),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: SignatureEvidenceEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, back);
+    }
+
+    #[test]
+    fn run_manifest_serde_roundtrip() {
+        let manifest = SignatureRunManifest {
+            schema_version: REGIME_SIG_MANIFEST_SCHEMA_VERSION.to_string(),
+            component: REGIME_SIG_COMPONENT.to_string(),
+            trace_id: "sig-abc123".to_string(),
+            decision_id: "dec-xyz456".to_string(),
+            policy_id: REGIME_SIG_POLICY_ID.to_string(),
+            inventory_hash: "deadbeef".to_string(),
+            specimen_count: 10,
+            pass_count: 10,
+            fail_count: 0,
+            contract_satisfied: true,
+            artifact_paths: SignatureArtifactPaths {
+                evidence_inventory: "inv.json".to_string(),
+                run_manifest: "manifest.json".to_string(),
+                events_jsonl: "events.jsonl".to_string(),
+                commands_txt: "commands.txt".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&manifest).unwrap();
+        let back: SignatureRunManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(manifest, back);
+    }
+
+    #[test]
+    fn hex_encode_all_byte_values() {
+        // Verify 0x00 and 0xff encode correctly.
+        assert_eq!(hex_encode(&[0x00]), "00");
+        assert_eq!(hex_encode(&[0xff]), "ff");
+        assert_eq!(hex_encode(&[0x0a]), "0a");
+        assert_eq!(hex_encode(&[0xa0]), "a0");
+    }
+
+    #[test]
+    fn make_trace_helper_produces_correct_seqs() {
+        let trace = make_trace("t", "cpu", &[1, 2, 3, 4, 5], 1);
+        for (i, obs) in trace.observations.iter().enumerate() {
+            assert_eq!(obs.seq, i as u64);
+            assert_eq!(obs.feature_name, "cpu");
+        }
+        assert_eq!(trace.observations.len(), 5);
+    }
+
+    #[test]
+    fn make_multi_feature_trace_helper_sequential_seqs() {
+        let trace = make_multi_feature_trace(
+            "t",
+            &[("a", &[10, 20]), ("b", &[30, 40, 50])],
+            1,
+        );
+        assert_eq!(trace.observations.len(), 5);
+        for (i, obs) in trace.observations.iter().enumerate() {
+            assert_eq!(obs.seq, i as u64);
+        }
+        assert_eq!(trace.observations[0].feature_name, "a");
+        assert_eq!(trace.observations[2].feature_name, "b");
+    }
+
+    #[test]
+    fn trace_observation_ord_by_seq_then_name_then_value() {
+        let a = TraceObservation {
+            seq: 0,
+            feature_name: "alpha".to_string(),
+            value_millionths: 100,
+        };
+        let b = TraceObservation {
+            seq: 1,
+            feature_name: "alpha".to_string(),
+            value_millionths: 100,
+        };
+        assert!(a < b, "lower seq should sort first");
+
+        let c = TraceObservation {
+            seq: 0,
+            feature_name: "beta".to_string(),
+            value_millionths: 100,
+        };
+        assert!(a < c, "alpha should sort before beta at same seq");
+    }
+
+    #[test]
+    fn regime_label_ord_classified_before_abstention() {
+        let classified = RegimeLabel::Classified(Regime::Normal);
+        let abstention = RegimeLabel::Abstention;
+        // Classified comes before Abstention in the enum definition.
+        assert!(classified < abstention);
+    }
+
+    #[test]
+    fn signature_verdict_serde_roundtrip() {
+        for verdict in [SignatureVerdict::Pass, SignatureVerdict::Fail] {
+            let json = serde_json::to_string(&verdict).unwrap();
+            let back: SignatureVerdict = serde_json::from_str(&json).unwrap();
+            assert_eq!(verdict, back);
+        }
+    }
+
+    #[test]
+    fn expected_outcome_serde_roundtrip() {
+        let outcomes = [
+            SignatureExpectedOutcome::ValidSignature,
+            SignatureExpectedOutcome::InvalidSignature,
+            SignatureExpectedOutcome::CorrectClassification,
+            SignatureExpectedOutcome::Abstention,
+            SignatureExpectedOutcome::StableChart,
+            SignatureExpectedOutcome::TransitionDetected,
+            SignatureExpectedOutcome::SimilarityComputed,
+        ];
+        for outcome in outcomes {
+            let json = serde_json::to_string(&outcome).unwrap();
+            let back: SignatureExpectedOutcome = serde_json::from_str(&json).unwrap();
+            assert_eq!(outcome, back);
+        }
+    }
+
+    #[test]
+    fn state_chart_serde_roundtrip() {
+        let config = SignatureConfig::default();
+        let traces = vec![
+            make_trace("t1", "cpu", &[500_000, 510_000, 490_000, 505_000], 1),
+            make_trace("t2", "cpu", &[500_000, 510_000, 490_000, 505_000], 2),
+        ];
+        let chart = build_regime_state_chart(&traces, &config);
+        let json = serde_json::to_string(&chart).unwrap();
+        let back: RegimeStateChart = serde_json::from_str(&json).unwrap();
+        assert_eq!(chart, back);
+    }
+
+    #[test]
+    fn classify_confidence_bounded_by_million() {
+        let config = SignatureConfig::default();
+        let trace = make_trace("t", "cpu", &[500_000, 500_000, 500_000, 500_000], 1);
+        let sig = extract_signature(&trace, &config);
+        let (_, conf) = classify_regime(&sig, &config);
+        assert!(conf <= MILLION, "confidence {conf} should not exceed MILLION");
+    }
+
+    #[test]
+    fn feature_to_bucket_dim_one_always_zero() {
+        // With dimension 1, every feature should map to bucket 0.
+        for name in ["cpu", "mem", "disk", "net", "gc", "io"] {
+            assert_eq!(feature_to_bucket(name, 1), 0);
+        }
+    }
 }

@@ -95,8 +95,10 @@ fn make_cert(id: &str, region: &str) -> ResourceCertificate {
 
 #[test]
 fn enrichment_resource_dimension_display_all_unique() {
-    let displays: BTreeSet<String> =
-        ResourceDimension::ALL.iter().map(|d| d.to_string()).collect();
+    let displays: BTreeSet<String> = ResourceDimension::ALL
+        .iter()
+        .map(|d| d.to_string())
+        .collect();
     assert_eq!(displays.len(), ResourceDimension::ALL.len());
 }
 
@@ -369,7 +371,12 @@ fn enrichment_symbolic_potential_invalid_negative() {
     let mut points = BTreeMap::new();
     points.insert("entry".into(), 1_000_000i64);
     points.insert("violation".into(), -500_000i64);
-    let pot = SymbolicPotential::new("bad-region", ResourceDimension::HeapMemory, 1_000_000, points);
+    let pot = SymbolicPotential::new(
+        "bad-region",
+        ResourceDimension::HeapMemory,
+        1_000_000,
+        points,
+    );
     assert!(!pot.is_valid);
     assert_eq!(pot.min_potential_millionths, -500_000);
 }
@@ -411,7 +418,12 @@ fn enrichment_symbolic_potential_serde_roundtrip() {
 
 #[test]
 fn enrichment_symbolic_potential_empty_points() {
-    let pot = SymbolicPotential::new("empty", ResourceDimension::GcPressure, 500_000, BTreeMap::new());
+    let pot = SymbolicPotential::new(
+        "empty",
+        ResourceDimension::GcPressure,
+        500_000,
+        BTreeMap::new(),
+    );
     assert!(pot.is_valid);
     assert_eq!(pot.terminal_potential(), 500_000);
     assert_eq!(pot.point_count(), 0);

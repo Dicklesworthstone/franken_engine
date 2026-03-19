@@ -85,7 +85,10 @@ fn enrichment_experiment_kind_all_count() {
 
 #[test]
 fn enrichment_acquisition_signal_display_all_unique() {
-    let displays: BTreeSet<String> = AcquisitionSignal::ALL.iter().map(|s| s.to_string()).collect();
+    let displays: BTreeSet<String> = AcquisitionSignal::ALL
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     assert_eq!(displays.len(), AcquisitionSignal::ALL.len());
 }
 
@@ -116,7 +119,14 @@ fn enrichment_acquisition_signal_all_count() {
 
 #[test]
 fn enrichment_proposal_new_seals_content_hash() {
-    let p = make_proposal("p1", ExperimentKind::BoardCellProbe, AcquisitionSignal::LiveShiftPressure, 800_000, 500_000, 100_000);
+    let p = make_proposal(
+        "p1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::LiveShiftPressure,
+        800_000,
+        500_000,
+        100_000,
+    );
     // Content hash should not be the empty hash
     let empty_hash = frankenengine_engine::hash_tiers::ContentHash::compute(b"");
     assert_ne!(p.content_hash, empty_hash);
@@ -124,21 +134,49 @@ fn enrichment_proposal_new_seals_content_hash() {
 
 #[test]
 fn enrichment_proposal_deterministic_hash() {
-    let p1 = make_proposal("p-det", ExperimentKind::CorpusAddition, AcquisitionSignal::CoverageDebt, 500_000, 400_000, 50_000);
-    let p2 = make_proposal("p-det", ExperimentKind::CorpusAddition, AcquisitionSignal::CoverageDebt, 500_000, 400_000, 50_000);
+    let p1 = make_proposal(
+        "p-det",
+        ExperimentKind::CorpusAddition,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        400_000,
+        50_000,
+    );
+    let p2 = make_proposal(
+        "p-det",
+        ExperimentKind::CorpusAddition,
+        AcquisitionSignal::CoverageDebt,
+        500_000,
+        400_000,
+        50_000,
+    );
     assert_eq!(p1.content_hash, p2.content_hash);
 }
 
 #[test]
 fn enrichment_proposal_display_contains_id() {
-    let p = make_proposal("abc", ExperimentKind::AdversarialProbe, AcquisitionSignal::AdversarialOpportunity, 700_000, 600_000, 100_000);
+    let p = make_proposal(
+        "abc",
+        ExperimentKind::AdversarialProbe,
+        AcquisitionSignal::AdversarialOpportunity,
+        700_000,
+        600_000,
+        100_000,
+    );
     let display = p.to_string();
     assert!(display.contains("abc"));
 }
 
 #[test]
 fn enrichment_proposal_serde_roundtrip() {
-    let p = make_proposal("serde", ExperimentKind::HoleFilling, AcquisitionSignal::PersistentHole, 600_000, 400_000, 80_000);
+    let p = make_proposal(
+        "serde",
+        ExperimentKind::HoleFilling,
+        AcquisitionSignal::PersistentHole,
+        600_000,
+        400_000,
+        80_000,
+    );
     let json = serde_json::to_string(&p).unwrap();
     let back: ExperimentProposal = serde_json::from_str(&json).unwrap();
     assert_eq!(p, back);
@@ -150,7 +188,14 @@ fn enrichment_proposal_serde_roundtrip() {
 
 #[test]
 fn enrichment_score_proposal_basic() {
-    let p = make_proposal("score-test", ExperimentKind::BoardCellProbe, AcquisitionSignal::LiveShiftPressure, 800_000, 500_000, 100_000);
+    let p = make_proposal(
+        "score-test",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::LiveShiftPressure,
+        800_000,
+        500_000,
+        100_000,
+    );
     let score = score_proposal(&p, &default_weights());
     assert!(score.raw_gain_millionths > 0);
     assert!(score.cost_adjusted_millionths > 0);
@@ -159,7 +204,14 @@ fn enrichment_score_proposal_basic() {
 
 #[test]
 fn enrichment_score_proposal_with_custom_weights() {
-    let p = make_proposal("w-test", ExperimentKind::CorpusAddition, AcquisitionSignal::CoverageDebt, 800_000, 500_000, 100_000);
+    let p = make_proposal(
+        "w-test",
+        ExperimentKind::CorpusAddition,
+        AcquisitionSignal::CoverageDebt,
+        800_000,
+        500_000,
+        100_000,
+    );
     let mut weights = BTreeMap::new();
     weights.insert("coverage_debt".to_string(), 2_000_000u64); // 2x weight
     let score = score_proposal(&p, &weights);
@@ -170,7 +222,14 @@ fn enrichment_score_proposal_with_custom_weights() {
 
 #[test]
 fn enrichment_score_proposal_zero_cost_no_panic() {
-    let p = make_proposal("zero-cost", ExperimentKind::BoardCellProbe, AcquisitionSignal::LiveShiftPressure, 500_000, 400_000, 0);
+    let p = make_proposal(
+        "zero-cost",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::LiveShiftPressure,
+        500_000,
+        400_000,
+        0,
+    );
     let score = score_proposal(&p, &default_weights());
     assert!(score.cost_adjusted_millionths > 0);
 }
@@ -182,8 +241,22 @@ fn enrichment_score_proposal_zero_cost_no_panic() {
 #[test]
 fn enrichment_rank_proposals_sorted_descending() {
     let proposals = vec![
-        make_proposal("low", ExperimentKind::BoardCellProbe, AcquisitionSignal::LiveShiftPressure, 100_000, 50_000, 100_000),
-        make_proposal("high", ExperimentKind::CorpusAddition, AcquisitionSignal::CoverageDebt, 900_000, 800_000, 100_000),
+        make_proposal(
+            "low",
+            ExperimentKind::BoardCellProbe,
+            AcquisitionSignal::LiveShiftPressure,
+            100_000,
+            50_000,
+            100_000,
+        ),
+        make_proposal(
+            "high",
+            ExperimentKind::CorpusAddition,
+            AcquisitionSignal::CoverageDebt,
+            900_000,
+            800_000,
+            100_000,
+        ),
     ];
     let ranked = rank_proposals(proposals, &default_weights());
     assert_eq!(ranked.len(), 2);
@@ -203,8 +276,22 @@ fn enrichment_rank_proposals_empty() {
 #[test]
 fn enrichment_select_experiments_basic() {
     let proposals = vec![
-        make_proposal("s1", ExperimentKind::BoardCellProbe, AcquisitionSignal::LiveShiftPressure, 800_000, 500_000, 100_000),
-        make_proposal("s2", ExperimentKind::CorpusAddition, AcquisitionSignal::CoverageDebt, 600_000, 400_000, 100_000),
+        make_proposal(
+            "s1",
+            ExperimentKind::BoardCellProbe,
+            AcquisitionSignal::LiveShiftPressure,
+            800_000,
+            500_000,
+            100_000,
+        ),
+        make_proposal(
+            "s2",
+            ExperimentKind::CorpusAddition,
+            AcquisitionSignal::CoverageDebt,
+            600_000,
+            400_000,
+            100_000,
+        ),
     ];
     let plan = select_experiments(proposals, 200_000, &default_weights()).unwrap();
     assert_eq!(plan.proposals.len(), 2);
@@ -215,8 +302,22 @@ fn enrichment_select_experiments_basic() {
 #[test]
 fn enrichment_select_experiments_budget_limit() {
     let proposals = vec![
-        make_proposal("b1", ExperimentKind::BoardCellProbe, AcquisitionSignal::LiveShiftPressure, 800_000, 500_000, 100_000),
-        make_proposal("b2", ExperimentKind::CorpusAddition, AcquisitionSignal::CoverageDebt, 600_000, 400_000, 200_000),
+        make_proposal(
+            "b1",
+            ExperimentKind::BoardCellProbe,
+            AcquisitionSignal::LiveShiftPressure,
+            800_000,
+            500_000,
+            100_000,
+        ),
+        make_proposal(
+            "b2",
+            ExperimentKind::CorpusAddition,
+            AcquisitionSignal::CoverageDebt,
+            600_000,
+            400_000,
+            200_000,
+        ),
     ];
     let plan = select_experiments(proposals, 150_000, &default_weights()).unwrap();
     assert_eq!(plan.proposals.len(), 1);
@@ -230,18 +331,28 @@ fn enrichment_select_experiments_no_candidates_error() {
 
 #[test]
 fn enrichment_select_experiments_budget_exhausted_error() {
-    let proposals = vec![
-        make_proposal("exp", ExperimentKind::BoardCellProbe, AcquisitionSignal::LiveShiftPressure, 800_000, 500_000, 500_000),
-    ];
+    let proposals = vec![make_proposal(
+        "exp",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::LiveShiftPressure,
+        800_000,
+        500_000,
+        500_000,
+    )];
     let result = select_experiments(proposals, 100, &default_weights());
     assert!(matches!(result, Err(AcquisitionError::BudgetExhausted)));
 }
 
 #[test]
 fn enrichment_select_experiments_plan_has_content_hash() {
-    let proposals = vec![
-        make_proposal("h1", ExperimentKind::BoardCellProbe, AcquisitionSignal::LiveShiftPressure, 800_000, 500_000, 100_000),
-    ];
+    let proposals = vec![make_proposal(
+        "h1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::LiveShiftPressure,
+        800_000,
+        500_000,
+        100_000,
+    )];
     let plan = select_experiments(proposals, 200_000, &default_weights()).unwrap();
     let empty_hash = frankenengine_engine::hash_tiers::ContentHash::compute(b"");
     assert_ne!(plan.content_hash, empty_hash);
@@ -253,7 +364,14 @@ fn enrichment_select_experiments_plan_has_content_hash() {
 
 #[test]
 fn enrichment_record_outcome_exact_prediction() {
-    let p = make_proposal("exact", ExperimentKind::BoardCellProbe, AcquisitionSignal::LiveShiftPressure, 800_000, 500_000, 100_000);
+    let p = make_proposal(
+        "exact",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::LiveShiftPressure,
+        800_000,
+        500_000,
+        100_000,
+    );
     let outcome = record_outcome(&p, 500_000);
     assert_eq!(outcome.actual_information_gain_millionths, 500_000);
     assert_eq!(outcome.surprise_millionths, 0);
@@ -262,7 +380,14 @@ fn enrichment_record_outcome_exact_prediction() {
 
 #[test]
 fn enrichment_record_outcome_over_prediction() {
-    let p = make_proposal("over", ExperimentKind::BoardCellProbe, AcquisitionSignal::LiveShiftPressure, 800_000, 500_000, 100_000);
+    let p = make_proposal(
+        "over",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::LiveShiftPressure,
+        800_000,
+        500_000,
+        100_000,
+    );
     let outcome = record_outcome(&p, 200_000);
     assert_eq!(outcome.surprise_millionths, 300_000);
     assert_eq!(outcome.regret_millionths, 300_000);
@@ -270,7 +395,14 @@ fn enrichment_record_outcome_over_prediction() {
 
 #[test]
 fn enrichment_record_outcome_under_prediction() {
-    let p = make_proposal("under", ExperimentKind::BoardCellProbe, AcquisitionSignal::LiveShiftPressure, 800_000, 500_000, 100_000);
+    let p = make_proposal(
+        "under",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::LiveShiftPressure,
+        800_000,
+        500_000,
+        100_000,
+    );
     let outcome = record_outcome(&p, 800_000);
     assert_eq!(outcome.surprise_millionths, 300_000);
     assert_eq!(outcome.regret_millionths, 0);
@@ -282,9 +414,14 @@ fn enrichment_record_outcome_under_prediction() {
 
 #[test]
 fn enrichment_calibrate_oracle_perfect_predictions() {
-    let proposals = vec![
-        make_proposal("c1", ExperimentKind::BoardCellProbe, AcquisitionSignal::LiveShiftPressure, 800_000, 500_000, 100_000),
-    ];
+    let proposals = vec![make_proposal(
+        "c1",
+        ExperimentKind::BoardCellProbe,
+        AcquisitionSignal::LiveShiftPressure,
+        800_000,
+        500_000,
+        100_000,
+    )];
     let outcomes = vec![record_outcome(&proposals[0], 500_000)];
     let cal = calibrate_oracle(&outcomes, &proposals);
     assert_eq!(cal.predictions_count, 1);
@@ -294,9 +431,14 @@ fn enrichment_calibrate_oracle_perfect_predictions() {
 
 #[test]
 fn enrichment_calibrate_oracle_over_predicting() {
-    let proposals = vec![
-        make_proposal("c2", ExperimentKind::CorpusAddition, AcquisitionSignal::CoverageDebt, 600_000, 500_000, 100_000),
-    ];
+    let proposals = vec![make_proposal(
+        "c2",
+        ExperimentKind::CorpusAddition,
+        AcquisitionSignal::CoverageDebt,
+        600_000,
+        500_000,
+        100_000,
+    )];
     let outcomes = vec![record_outcome(&proposals[0], 300_000)];
     let cal = calibrate_oracle(&outcomes, &proposals);
     assert_eq!(cal.predictions_count, 1);

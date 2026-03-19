@@ -223,7 +223,10 @@ fn enrichment_requirement_gc_has_heap_memory() {
 fn enrichment_requirement_module_loader_has_io() {
     let req = SubsystemRequirement::module_loader();
     assert_eq!(req.subsystem, Subsystem::ModuleLoader);
-    assert!(req.min_bounds.contains_key(&ResourceDimension::IoOperationCount));
+    assert!(
+        req.min_bounds
+            .contains_key(&ResourceDimension::IoOperationCount)
+    );
 }
 
 #[test]
@@ -238,7 +241,10 @@ fn enrichment_requirement_specializer_forbids_dynamic_code_gen() {
 fn enrichment_requirement_hostcall_gate_has_hostcall_count() {
     let req = SubsystemRequirement::hostcall_gate();
     assert_eq!(req.subsystem, Subsystem::HostcallGate);
-    assert!(req.min_bounds.contains_key(&ResourceDimension::HostcallCount));
+    assert!(
+        req.min_bounds
+            .contains_key(&ResourceDimension::HostcallCount)
+    );
 }
 
 // ===========================================================================
@@ -387,10 +393,7 @@ fn enrichment_custom_consumer_empty_requirements() {
 
 #[test]
 fn enrichment_custom_consumer_single_requirement() {
-    let mut consumer = ResourceConsumer::new(
-        vec![SubsystemRequirement::scheduler()],
-        ep(1),
-    );
+    let mut consumer = ResourceConsumer::new(vec![SubsystemRequirement::scheduler()], ep(1));
     let cert = good_certificate();
     let decisions = consumer.consume(&cert);
     assert_eq!(decisions.len(), 1);

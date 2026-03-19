@@ -844,7 +844,9 @@ impl ExecutionOrchestrator {
                     return Err(OrchestratorError::IfcRuntimeGuardBlocked {
                         detail: format!(
                             "artifact {} receipt-linked declassification failed for {}: {}",
-                            artifact.artifact_id, entry.obligation_id, err
+                            artifact.artifact_id,
+                            Self::describe_runtime_declassification_obligation(entry),
+                            err
                         ),
                     });
                 }
@@ -862,14 +864,17 @@ impl ExecutionOrchestrator {
                     return Err(OrchestratorError::IfcRuntimeGuardBlocked {
                         detail: format!(
                             "artifact {} declassification failed for {}: {}",
-                            artifact.artifact_id, entry.obligation_id, err
+                            artifact.artifact_id,
+                            Self::describe_runtime_declassification_obligation(entry),
+                            err
                         ),
                     });
                 }
                 continue;
             }
 
-            pending_declassifications.push(format!("{}@op{}", entry.obligation_id, entry.op_index));
+            pending_declassifications
+                .push(Self::describe_runtime_declassification_obligation(entry));
         }
 
         let mut summary = Vec::new();
@@ -925,6 +930,27 @@ impl ExecutionOrchestrator {
                 summary.join("; ")
             ),
         })
+    }
+
+    fn describe_runtime_declassification_obligation(
+        entry: &crate::lowering_pipeline::RequiredDeclassificationArtifactEntry,
+    ) -> String {
+        let mut parts = vec![format!("{}@op{}", entry.obligation_id, entry.op_index)];
+
+        if let Some(capability) = entry.capability.as_deref() {
+            parts.push(format!("capability={capability}"));
+        }
+        if !entry.decision_contract_id.is_empty() {
+            parts.push(format!("decision_contract={}", entry.decision_contract_id));
+        }
+        if let Some(route) = entry.declassification_route_ref.as_deref() {
+            parts.push(format!("route={route}"));
+        }
+        if !entry.replay_command_hint.is_empty() {
+            parts.push(format!("replay_hint='{}'", entry.replay_command_hint));
+        }
+
+        parts.join(" ")
     }
 
     fn register_artifact_declassification_obligations(
@@ -1634,9 +1660,8 @@ mod tests {
                 declassification_route_ref: Some("declassify.audit".to_string()),
                 requires_operator_approval: true,
                 receipt_linkage_required: true,
-                replay_command_hint: format!(
-                    "frankenctl replay run --trace {trace_id} --obligation {obligation_id}"
-                ),
+                replay_command_hint: "frankenctl replay run --trace <trace.json> --mode strict"
+                    .to_string(),
             },
         );
         artifact
@@ -1700,6 +1725,13 @@ mod tests {
             OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
                 assert!(detail.contains("pending declassifications=1"));
                 assert!(detail.contains("obl-7@op7"));
+                assert!(detail.contains("capability=declassify.audit"));
+                assert!(detail.contains("decision_contract=decision-7"));
+                assert!(detail.contains("route=declassify.audit"));
+                assert!(detail.contains(
+                    "replay_hint='frankenctl replay run --trace <trace.json> --mode strict'"
+                ));
+                assert!(!detail.contains("--obligation"));
             }
             other => panic!("unexpected error: {other}"),
         }
@@ -1781,6 +1813,13 @@ mod tests {
         match err {
             OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
                 assert!(detail.contains("receipt-linked declassification failed for obl-block"));
+                assert!(detail.contains("capability=declassify.audit"));
+                assert!(detail.contains("decision_contract=decision-block"));
+                assert!(detail.contains("route=declassify.audit"));
+                assert!(detail.contains(
+                    "replay_hint='frankenctl replay run --trace <trace.json> --mode strict'"
+                ));
+                assert!(!detail.contains("--obligation"));
                 assert!(detail.contains("replay linkage does not match trace trace-block"));
             }
             other => panic!("unexpected error: {other}"),

@@ -23,6 +23,7 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::capability::RuntimeCapability;
+use frankenengine_engine::module_compatibility_matrix::CompatibilityMode;
 use frankenengine_engine::module_resolver::{
     AllowAllPolicy, CapabilityPolicyHook, CapabilitySafeHostApiSurface,
     DeterministicModuleResolver, HostApiErrorCode, HostApiRequest, ImportStyle,
@@ -256,6 +257,53 @@ fn register_and_resolve_workspace_module() {
     assert_eq!(
         outcome.module.record.provenance.kind,
         ModuleSourceKind::Workspace
+    );
+}
+
+#[test]
+fn package_type_module_extensionless_relative_native_requires_explicit_extension() {
+    let mut resolver = DeterministicModuleResolver::new("/app");
+    resolver
+        .register_workspace_module("main.mjs", esm_def("import './lib';"))
+        .unwrap();
+    resolver
+        .register_workspace_module("lib.mjs", esm_def("export const value = 1;"))
+        .unwrap();
+
+    let error = resolver
+        .resolve(
+            &ModuleRequest::new("./lib", ImportStyle::Import).with_referrer("/app/main.mjs"),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect_err("native mode should reject extensionless relative ESM imports");
+    assert_eq!(error.code, ResolutionErrorCode::ModuleNotFound);
+    assert_eq!(error.probe_sequence, vec!["/app/lib"]);
+}
+
+#[test]
+fn package_type_module_extensionless_relative_bun_compat_resolves() {
+    let mut resolver = DeterministicModuleResolver::new("/app");
+    resolver
+        .register_workspace_module("main.mjs", esm_def("import './lib';"))
+        .unwrap();
+    resolver
+        .register_workspace_module("lib.mjs", esm_def("export const value = 1;"))
+        .unwrap();
+
+    let outcome = resolver
+        .resolve(
+            &ModuleRequest::new("./lib", ImportStyle::Import)
+                .with_referrer("/app/main.mjs")
+                .with_compatibility_mode(CompatibilityMode::BunCompat),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect("bun_compat should resolve extensionless relative ESM imports");
+    assert_eq!(outcome.module.canonical_specifier, "/app/lib.mjs");
+    assert_eq!(
+        outcome.module.probe_sequence,
+        vec!["/app/lib", "/app/lib.mjs"]
     );
 }
 

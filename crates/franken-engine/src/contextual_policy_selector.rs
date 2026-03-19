@@ -1063,30 +1063,6 @@ mod tests {
     // hash determinism, fallback paths)
     // -----------------------------------------------------------------------
 
-    fn gc_strategy() -> OptimizationStrategy {
-        OptimizationStrategy {
-            strategy_id: "gc-concurrent".into(),
-            kind: StrategyKind::GcStrategy,
-            name: "Concurrent GC".into(),
-            expected_reward_millionths: 180_000,
-            cost_millionths: 60_000,
-            worst_case_regret_millionths: 50_000,
-            required_features: BTreeSet::from([FeatureKey::GcPauseFrequency]),
-        }
-    }
-
-    fn module_loading_strategy() -> OptimizationStrategy {
-        OptimizationStrategy {
-            strategy_id: "mod-lazy".into(),
-            kind: StrategyKind::ModuleLoading,
-            name: "Lazy module loading".into(),
-            expected_reward_millionths: 100_000,
-            cost_millionths: 10_000,
-            worst_case_regret_millionths: 20_000,
-            required_features: BTreeSet::from([FeatureKey::ModuleCount]),
-        }
-    }
-
     fn default_strategy() -> OptimizationStrategy {
         OptimizationStrategy {
             strategy_id: "default-noop".into(),

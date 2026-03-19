@@ -1569,23 +1569,26 @@ mod tests {
 
     #[test]
     fn test_execute_selection_vector_shorter_than_input() {
-        // Selection vector length < input length means elements beyond
-        // the selection vector are treated as fully masked.
+        // Selection vector shorter than input: masking only scans
+        // [partition.start .. min(partition.end, sel_len)]. Elements
+        // beyond the selection vector but within a partition whose
+        // start < sel_len are NOT masked — only the covered range
+        // is checked. Partitions whose start >= sel_len are fully masked.
         let mut engine = MorselKernelEngine::new(epoch(1));
-        let sel = SelectionVector::new(50); // all active, but only 50 elements
+        let sel = SelectionVector::new(50); // all 50 active
         let receipt = engine
             .execute(
                 BuiltinFamily::ArrayMap,
-                300, // input has 300 elements, 2 partitions (256 + 44)
+                300, // 2 partitions: [0..256] and [256..300]
                 CallbackFenceKind::PureCallback,
                 Some(&sel),
             )
             .unwrap();
-        // First partition [0..256]: sel covers [0..50] all active, [50..256] are masked => 50 processed
-        // But wait — mask counting: for i in 0..256, sel only has 50 entries,
-        // is_active returns false for i >= 50 => 206 masked, 50 processed
-        // Second partition [256..300]: start=256 >= sel_len=50 => all masked, 0 processed
-        assert_eq!(receipt.total_elements, 50);
+        // Partition [0..256]: end=min(256,50)=50, scan [0..50], 0 inactive
+        //   => masked=0, processed=256-0=256
+        // Partition [256..300]: start=256 >= sel_len=50
+        //   => masked=44, processed=44-44=0
+        assert_eq!(receipt.total_elements, 256);
     }
 
     // ---------------------------------------------------------------

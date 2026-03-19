@@ -2141,10 +2141,10 @@ mod tests {
             .components
             .iter()
             .zip(&sig.bucket_counts)
-            .filter(|(_, &count)| count > 0)
+            .filter(|&(_, &count)| count > 0)
             .collect();
         assert!(!active.is_empty());
-        for (&comp, _) in &active {
+        for &(&comp, _) in &active {
             assert!(comp < 0, "expected negative component, got {comp}");
         }
     }

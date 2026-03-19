@@ -25,12 +25,11 @@ use std::collections::BTreeSet;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::hostcall_batch_transport::{
     BatchEntry, BatchPayload, BatchTransportConfig,
-    BatchTransportError, BatchTransportSpecimenFamily, BatchTransportState, BatchTransportVerdict,
+    BatchTransportError, BatchTransportSpecimenFamily, BatchTransportState,
     CreditPool, MembraneRejectionReason, MembraneVerdict, RegionState,
     SharedMemoryRegion, batch_transport_corpus, compute_batch_mac, compute_entry_content_hash,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
-use frankenengine_engine::session_hostcall_channel::BackpressureSignal;
 
 // ===========================================================================
 // Helpers

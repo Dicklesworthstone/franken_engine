@@ -395,10 +395,12 @@ impl SafetyMembrane {
     }
 
     /// Validate a batch against the protocol state.
+    #[allow(clippy::too_many_arguments)]
     pub fn validate_batch(
         &mut self,
         batch: &BatchEnvelope,
-        protocol_state: &SessionProtocolState,
+        protocol_state: &mut SessionProtocolState,
+        session_key: &[u8; 32],
         credit_pool: &CreditPool,
         regions: &BTreeMap<u64, SharedMemoryRegion>,
         config: &BatchTransportConfig,
@@ -420,6 +422,32 @@ impl SafetyMembrane {
                 batch,
                 MembraneRejectionReason::EpochMismatch,
                 "key schedule epoch mismatch".into(),
+                tick,
+            );
+        }
+
+        // 2a. MAC Verification
+        let expected_mac = crate::hostcall_batch_transport::compute_batch_mac(
+            session_key,
+            batch.batch_id,
+            &batch.entries,
+            batch.epoch,
+        );
+        if expected_mac != batch.batch_mac {
+            return self.record_rejection(
+                batch,
+                MembraneRejectionReason::MacVerificationFailed,
+                "batch MAC mismatch".into(),
+                tick,
+            );
+        }
+
+        // 2b. Replay Protection
+        if let Err(e) = protocol_state.check_replay(batch.sequence_start, tick, None) {
+            return self.record_rejection(
+                batch,
+                MembraneRejectionReason::ReplayDetected,
+                format!("replay detected: {e}"),
                 tick,
             );
         }
@@ -1031,13 +1059,23 @@ impl BatchTransportState {
     pub fn submit_batch(
         &mut self,
         batch: BatchEnvelope,
-        protocol_state: &SessionProtocolState,
+        protocol_state: &mut SessionProtocolState,
+        session_key: &[u8; 32],
         tick: u64,
     ) -> Result<BatchReceipt, BatchTransportError> {
+        // Pre-validate credits to prevent state corruption on failure
+        if self.credit_pool.available() < batch.credits_consumed {
+            return Err(BatchTransportError::InsufficientCredits {
+                requested: batch.credits_consumed,
+                available: self.credit_pool.available(),
+            });
+        }
+
         // Membrane validation.
         let verdict = self.membrane.validate_batch(
             &batch,
             protocol_state,
+            session_key,
             &self.credit_pool,
             &self.regions,
             &self.config,
@@ -1244,10 +1282,10 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
     {
         let config = BatchTransportConfig::default();
         let mut ts = BatchTransportState::new("s1".into(), config, epoch);
-        let protocol = make_established_protocol_state();
+        let mut protocol = make_established_protocol_state();
         let entries = vec![make_entry(1, b"hello"), make_entry(2, b"world")];
         let batch = ts.build_batch(entries, &session_key, epoch, 100).unwrap();
-        let result = ts.submit_batch(batch, &protocol, 100);
+        let result = ts.submit_batch(batch, &mut protocol, &session_key, 100);
         let v = if result.is_ok() {
             BatchTransportVerdict::Pass
         } else {
@@ -1269,10 +1307,10 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
             ..Default::default()
         };
         let mut ts = BatchTransportState::new("s2".into(), config, epoch);
-        let protocol = make_established_protocol_state();
+        let mut protocol = make_established_protocol_state();
         let entries = vec![make_entry(1, b"a"), make_entry(2, b"b")];
         let batch = ts.build_batch(entries, &session_key, epoch, 100).unwrap();
-        let result = ts.submit_batch(batch, &protocol, 100);
+        let result = ts.submit_batch(batch, &mut protocol, &[0; 32], 100);
         let v = if result.is_err() {
             BatchTransportVerdict::Pass
         } else {
@@ -1335,10 +1373,10 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
     {
         let config = BatchTransportConfig::default();
         let mut ts = BatchTransportState::new("s5".into(), config, epoch);
-        let protocol = SessionProtocolState::new("s5".into(), "ext".into(), "host".into(), 64, 50); // Uninit phase
+        let mut protocol = SessionProtocolState::new("s5".into(), "ext".into(), "host".into(), 64, 50); // Uninit phase
         let entries = vec![make_entry(1, b"data")];
         let batch = ts.build_batch(entries, &session_key, epoch, 100).unwrap();
-        let result = ts.submit_batch(batch, &protocol, 100);
+        let result = ts.submit_batch(batch, &mut protocol, &[0; 32], 100);
         let v = if result.is_err() {
             BatchTransportVerdict::Pass
         } else {
@@ -1357,15 +1395,14 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
         let config = BatchTransportConfig::default();
         let mut ts = BatchTransportState::new("s6".into(), config, epoch);
         let mut protocol = make_established_protocol_state();
-        let entries1 = vec![make_entry(1, b"first")];
+        let entries1 = vec![make_entry(1, b"a")];
         let batch1 = ts.build_batch(entries1, &session_key, epoch, 100).unwrap();
         // Pre-register sequence 1 in protocol replay ledger
         protocol.check_replay(1, 100, None).unwrap();
-        let result = ts.submit_batch(batch1, &protocol, 100);
-        // Should succeed since membrane doesn't call protocol.check_replay (that's the transport's job)
-        // Actually, the membrane doesn't call check_replay — that would need to be called separately.
-        // Let's test that the membrane's credit check works instead.
-        let v = if result.is_ok() {
+        let result = ts.submit_batch(batch1, &mut protocol, &session_key, 100);
+        // Membrane calls check_replay, which detects the duplicate sequence,
+        // so the submit should be rejected with ReplayDetected.
+        let v = if result.is_err() {
             BatchTransportVerdict::Pass
         } else {
             BatchTransportVerdict::Fail
@@ -1389,7 +1426,7 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
             .unwrap();
         let entries = vec![make_entry(1, b"data")];
         let batch = ts.build_batch(entries, &session_key, epoch, 100).unwrap();
-        let result = ts.submit_batch(batch, &protocol, 100);
+        let result = ts.submit_batch(batch, &mut protocol, &[0; 32], 100);
         let v = if result.is_err() {
             BatchTransportVerdict::Pass
         } else {
@@ -1469,10 +1506,10 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
             ..Default::default()
         };
         let mut ts = BatchTransportState::new("s11".into(), config, epoch);
-        let protocol = make_established_protocol_state();
+        let mut protocol = make_established_protocol_state();
         let entries = vec![make_entry(1, b"a"), make_entry(2, b"b")];
         let batch = ts.build_batch(entries, &session_key, epoch, 100).unwrap();
-        ts.submit_batch(batch, &protocol, 100).unwrap();
+        ts.submit_batch(batch, &mut protocol, &session_key, 100).unwrap();
         let before = ts.credit_pool.available();
         ts.grant_credits(5);
         let after = ts.credit_pool.available();
@@ -1862,12 +1899,12 @@ mod tests {
     #[test]
     fn submit_batch_success() {
         let mut ts = default_state();
-        let protocol = established_protocol();
+        let mut protocol = established_protocol();
         let entries = vec![make_entry(1, b"data")];
         let batch = ts
             .build_batch(entries, &session_key(), test_epoch(), 100)
             .unwrap();
-        let receipt = ts.submit_batch(batch, &protocol, 100).unwrap();
+        let receipt = ts.submit_batch(batch, &mut protocol, &session_key(), 100).unwrap();
         assert_eq!(receipt.envelope_count, 1);
         assert_eq!(ts.accepted_batches.len(), 1);
     }
@@ -1875,25 +1912,26 @@ mod tests {
     #[test]
     fn submit_batch_consumes_credits() {
         let mut ts = default_state();
-        let protocol = established_protocol();
+        let mut protocol = established_protocol();
         let before = ts.credit_pool.available();
         let entries = vec![make_entry(1, b"a"), make_entry(2, b"b")];
         let batch = ts
             .build_batch(entries, &session_key(), test_epoch(), 100)
             .unwrap();
-        ts.submit_batch(batch, &protocol, 100).unwrap();
+        ts.submit_batch(batch, &mut protocol, &session_key(), 100).unwrap();
         assert_eq!(ts.credit_pool.available(), before - 2);
     }
 
     #[test]
     fn submit_batch_uninit_rejected() {
         let mut ts = default_state();
-        let protocol = SessionProtocolState::new("s".into(), "e".into(), "h".into(), 64, 50);
+        let mut protocol =
+            SessionProtocolState::new("s".into(), "e".into(), "h".into(), 64, 50);
         let entries = vec![make_entry(1, b"data")];
         let batch = ts
             .build_batch(entries, &session_key(), test_epoch(), 100)
             .unwrap();
-        let err = ts.submit_batch(batch, &protocol, 100);
+        let err = ts.submit_batch(batch, &mut protocol, &[0; 32], 100);
         assert!(err.is_err());
     }
 
@@ -2018,12 +2056,12 @@ mod tests {
     #[test]
     fn grant_credits_after_consumption() {
         let mut ts = default_state();
-        let protocol = established_protocol();
+        let mut protocol = established_protocol();
         let entries = vec![make_entry(1, b"a")];
         let batch = ts
             .build_batch(entries, &session_key(), test_epoch(), 100)
             .unwrap();
-        ts.submit_batch(batch, &protocol, 100).unwrap();
+        ts.submit_batch(batch, &mut protocol, &session_key(), 100).unwrap();
         let before = ts.credit_pool.available();
         ts.grant_credits(10);
         assert_eq!(ts.credit_pool.available(), before + 10);
@@ -2491,7 +2529,7 @@ mod tests {
         let epoch = test_epoch();
         let mut membrane = SafetyMembrane::new("s".into(), epoch, 3);
         let config = BatchTransportConfig::default();
-        let protocol = established_protocol();
+        let mut protocol = established_protocol();
         let credit_pool = CreditPool::new("s".into(), 1000, 2000);
         let regions = BTreeMap::new();
 
@@ -2511,7 +2549,7 @@ mod tests {
                 sealed_at_tick: 100 + i,
                 epoch,
             };
-            membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100 + i);
+            membrane.validate_batch(&batch, &mut protocol, &session_key(), &credit_pool, &regions, &config, 100 + i);
         }
         assert_eq!(membrane.audit_trail().len(), 3);
         // Oldest entries were removed; latest batch_ids remain
@@ -2527,7 +2565,7 @@ mod tests {
         // but we can't directly read current_epoch, so we test indirectly by
         // checking that the membrane's epoch was updated.
         let config = BatchTransportConfig::default();
-        let protocol = established_protocol();
+        let mut protocol = established_protocol();
         let credit_pool = CreditPool::new("s".into(), 100, 200);
         let regions = BTreeMap::new();
 
@@ -2547,7 +2585,7 @@ mod tests {
             epoch: epoch42,
         };
         let verdict =
-            membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100);
+            membrane.validate_batch(&batch, &mut protocol, &session_key(), &credit_pool, &regions, &config, 100);
         assert!(verdict.is_accept());
     }
 
@@ -2559,7 +2597,7 @@ mod tests {
             max_batch_size: 1,
             ..Default::default()
         };
-        let protocol = established_protocol();
+        let mut protocol = established_protocol();
         let credit_pool = CreditPool::new("s".into(), 100, 200);
         let regions = BTreeMap::new();
 
@@ -2579,7 +2617,7 @@ mod tests {
             epoch,
         };
         let verdict =
-            membrane.validate_batch(&batch, &protocol, &credit_pool, &regions, &config, 100);
+            membrane.validate_batch(&batch, &mut protocol, &session_key(), &credit_pool, &regions, &config, 100);
         assert!(!verdict.is_accept());
         assert_eq!(
             membrane.rejection_count(MembraneRejectionReason::BatchSizeExceeded),
@@ -2687,12 +2725,12 @@ mod tests {
     fn state_hash_differs_after_batch_submission() {
         let mut ts = default_state();
         let hash_before = ts.state_hash();
-        let protocol = established_protocol();
+        let mut protocol = established_protocol();
         let entries = vec![make_entry(1, b"data")];
         let batch = ts
             .build_batch(entries, &session_key(), test_epoch(), 100)
             .unwrap();
-        ts.submit_batch(batch, &protocol, 100).unwrap();
+        ts.submit_batch(batch, &mut protocol, &session_key(), 100).unwrap();
         let hash_after = ts.state_hash();
         assert_ne!(hash_before, hash_after);
     }

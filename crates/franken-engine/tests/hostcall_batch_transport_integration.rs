@@ -845,15 +845,17 @@ fn membrane_rejects_sequence_gap() {
     // Build a batch with non-contiguous sequences directly.
     let entry1 = make_entry(1, b"a");
     let entry2 = make_entry(3, b"c"); // gap at 2
+    let entries = vec![entry1, entry2];
+    let batch_mac = compute_batch_mac(&session_key(), 1, &entries, epoch);
     let batch = BatchEnvelope {
         batch_id: 1,
         session_id: "s".into(),
-        entries: vec![entry1, entry2],
+        entries,
         sequence_start: 1,
         sequence_end: 3,
         credits_consumed: 2,
         total_payload_bytes: 2,
-        batch_mac: AuthenticityHash::compute_keyed(&session_key(), b"dummy"),
+        batch_mac,
         sealed_at_tick: 100,
         epoch,
     };

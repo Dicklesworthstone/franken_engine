@@ -598,6 +598,12 @@ impl ContextualSelector {
         }
         h.update(reason.tag().as_bytes());
         h.update((evaluations.len() as u64).to_le_bytes());
+        for (eval_id, eval_reason) in &evaluations {
+            h.update(eval_id.as_bytes());
+            h.update(eval_reason.tag().as_bytes());
+        }
+        h.update((feasible_count as u64).to_le_bytes());
+        h.update((infeasible_count as u64).to_le_bytes());
         let content_hash = ContentHash::compute(&h.finalize());
 
         SelectionDecision {

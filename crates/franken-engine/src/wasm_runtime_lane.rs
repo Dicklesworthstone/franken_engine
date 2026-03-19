@@ -455,6 +455,9 @@ impl WasmBudget {
         if self.max_dom_ops_per_cycle == 0 {
             errors.push("max_dom_ops_per_cycle must be > 0".into());
         }
+        if self.max_evaluations_per_flush == 0 {
+            errors.push("max_evaluations_per_flush must be > 0".into());
+        }
         errors
     }
 }

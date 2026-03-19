@@ -400,6 +400,7 @@ pub mod synthesis_budget;
 pub mod synthesis_eligibility_envelope;
 pub mod synthesis_kernel_promotion;
 pub mod tail_latency_feedback_control;
+pub mod tail_latency_control_plane;
 pub mod tee_attestation_policy;
 pub mod test262_release_gate;
 pub mod test_depth_gate;

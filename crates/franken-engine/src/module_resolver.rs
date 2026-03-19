@@ -1208,12 +1208,13 @@ impl DeterministicModuleResolver {
                     ));
                 }
             };
+            let allow_probes = self.allow_relative_import_probes(request, referrer);
             if let Some(external_referrer) = referrer.strip_prefix("external:") {
                 let base_dir = external_referrer_directory(external_referrer);
                 let resolved_base =
                     normalize_external_specifier_path(&join_paths(&base_dir, specifier));
                 let (relative_probes, candidate) =
-                    self.lookup_external_candidate_with_probes(&resolved_base, request.style);
+                    self.lookup_external_candidate(&resolved_base, request.style, allow_probes);
                 probe_sequence.extend(relative_probes);
                 return match candidate {
                     Some((resolved, record)) => Ok((resolved, record, probe_sequence)),
@@ -1266,7 +1267,7 @@ impl DeterministicModuleResolver {
                 ));
             }
             let (relative_probes, candidate) =
-                self.lookup_workspace_candidate_with_probes(&resolved_base, request.style);
+                self.lookup_workspace_candidate(&resolved_base, request.style, allow_probes);
             probe_sequence.extend(relative_probes);
             return match candidate {
                 Some((resolved, record)) => Ok((resolved, record, probe_sequence)),
@@ -1310,7 +1311,7 @@ impl DeterministicModuleResolver {
                 ));
             }
             let (absolute_probes, candidate) =
-                self.lookup_workspace_candidate_with_probes(&resolved_base, request.style);
+                self.lookup_workspace_candidate(&resolved_base, request.style, true);
             probe_sequence.extend(absolute_probes);
             return match candidate {
                 Some((resolved, record)) => Ok((resolved, record, probe_sequence)),
@@ -1331,7 +1332,7 @@ impl DeterministicModuleResolver {
         }
 
         let (external_probes, external_candidate) =
-            self.lookup_external_candidate_with_probes(specifier, request.style);
+            self.lookup_external_candidate(specifier, request.style, true);
         probe_sequence.extend(external_probes);
         if let Some((resolved, record)) = external_candidate {
             return Ok((resolved, record, probe_sequence));
@@ -1357,7 +1358,7 @@ impl DeterministicModuleResolver {
             ));
         }
         let (workspace_probes, workspace_candidate) =
-            self.lookup_workspace_candidate_with_probes(&workspace_base, request.style);
+            self.lookup_workspace_candidate(&workspace_base, request.style, true);
         probe_sequence.extend(workspace_probes);
         if let Some((resolved, record)) = workspace_candidate {
             return Ok((resolved, record, probe_sequence));
@@ -1412,13 +1413,18 @@ impl DeterministicModuleResolver {
         Ok(parent_directory(&normalized))
     }
 
-    fn lookup_workspace_candidate_with_probes<'a>(
+    fn lookup_workspace_candidate<'a>(
         &'a self,
         resolved_base: &str,
         style: ImportStyle,
+        allow_probes: bool,
     ) -> (Vec<String>, Option<(String, &'a ModuleRecord)>) {
         let mut probes = Vec::new();
-        let candidates = candidate_paths(resolved_base, style);
+        let candidates = if allow_probes {
+            candidate_paths(resolved_base, style)
+        } else {
+            vec![resolved_base.to_string()]
+        };
         for candidate in candidates {
             probes.push(candidate.clone());
             if let Some(record) = self.workspace_modules.get(&candidate) {
@@ -1428,13 +1434,18 @@ impl DeterministicModuleResolver {
         (probes, None)
     }
 
-    fn lookup_external_candidate_with_probes<'a>(
+    fn lookup_external_candidate<'a>(
         &'a self,
         specifier: &str,
         style: ImportStyle,
+        allow_probes: bool,
     ) -> (Vec<String>, Option<(String, &'a ModuleRecord)>) {
         let mut probes = Vec::new();
-        let candidates = candidate_paths(specifier, style);
+        let candidates = if allow_probes {
+            candidate_paths(specifier, style)
+        } else {
+            vec![specifier.to_string()]
+        };
         for candidate in candidates {
             probes.push(candidate.clone());
             if let Some(record) = self.external_modules.get(&candidate) {
@@ -1442,6 +1453,43 @@ impl DeterministicModuleResolver {
             }
         }
         (probes, None)
+    }
+
+    fn referrer_module_syntax(&self, referrer: &str) -> Option<ModuleSyntax> {
+        if let Some(external_referrer) = referrer.strip_prefix("external:") {
+            return self
+                .external_modules
+                .get(external_referrer)
+                .map(|record| record.syntax);
+        }
+        if let Some(builtin_referrer) = referrer.strip_prefix("builtin:") {
+            return self
+                .builtins
+                .get(builtin_referrer)
+                .map(|record| record.syntax);
+        }
+
+        let normalized = if referrer.starts_with('/') {
+            normalize_absolute_path(referrer)
+        } else {
+            normalize_absolute_path(&join_paths(&self.root_dir, referrer))
+        };
+        self.workspace_modules
+            .get(&normalized)
+            .map(|record| record.syntax)
+    }
+
+    fn allow_relative_import_probes(&self, request: &ModuleRequest, referrer: &str) -> bool {
+        if request.style != ImportStyle::Import
+            || request.compatibility_mode == CompatibilityMode::BunCompat
+        {
+            return true;
+        }
+
+        !matches!(
+            self.referrer_module_syntax(referrer),
+            Some(ModuleSyntax::EsModule)
+        )
     }
 }
 
@@ -1739,7 +1787,7 @@ mod tests {
     }
 
     #[test]
-    fn import_and_require_use_style_specific_resolution() {
+    fn import_requires_explicit_relative_extension_outside_bun_compat() {
         let mut resolver = DeterministicModuleResolver::new("/app");
         resolver
             .register_workspace_module(
@@ -1760,14 +1808,31 @@ mod tests {
             )
             .unwrap();
 
-        let import_request =
-            ModuleRequest::new("./lib", ImportStyle::Import).with_referrer("/app/main.mjs");
-        let import_outcome = resolver
-            .resolve(&import_request, &context(), &AllowAllPolicy)
-            .unwrap();
-        assert_eq!(import_outcome.module.canonical_specifier, "/app/lib.mjs");
+        let import_error = resolver
+            .resolve(
+                &ModuleRequest::new("./lib", ImportStyle::Import).with_referrer("/app/main.mjs"),
+                &context(),
+                &AllowAllPolicy,
+            )
+            .expect_err("native mode should reject extensionless relative ESM imports");
+        assert_eq!(import_error.code, ResolutionErrorCode::ModuleNotFound);
+        assert_eq!(import_error.probe_sequence, vec!["/app/lib"]);
+
+        let bun_import_outcome = resolver
+            .resolve(
+                &ModuleRequest::new("./lib", ImportStyle::Import)
+                    .with_referrer("/app/main.mjs")
+                    .with_compatibility_mode(CompatibilityMode::BunCompat),
+                &context(),
+                &AllowAllPolicy,
+            )
+            .expect("bun_compat should continue probing extensionless relative ESM imports");
         assert_eq!(
-            import_outcome.module.probe_sequence,
+            bun_import_outcome.module.canonical_specifier,
+            "/app/lib.mjs"
+        );
+        assert_eq!(
+            bun_import_outcome.module.probe_sequence,
             vec!["/app/lib", "/app/lib.mjs"]
         );
 
@@ -2106,8 +2171,14 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn import_probes_index_mjs_for_directory_specifier() {
+    fn bun_compat_import_probes_index_mjs_for_directory_specifier() {
         let mut resolver = DeterministicModuleResolver::new("/app");
+        resolver
+            .register_workspace_module(
+                "/app/main.mjs",
+                ModuleDefinition::new(ModuleSyntax::EsModule, "import './lib';"),
+            )
+            .unwrap();
         resolver
             .register_workspace_module(
                 "/app/lib/index.mjs",
@@ -2115,8 +2186,9 @@ mod tests {
             )
             .unwrap();
 
-        let request =
-            ModuleRequest::new("./lib", ImportStyle::Import).with_referrer("/app/main.js");
+        let request = ModuleRequest::new("./lib", ImportStyle::Import)
+            .with_referrer("/app/main.mjs")
+            .with_compatibility_mode(CompatibilityMode::BunCompat);
         let outcome = resolver
             .resolve(&request, &context(), &AllowAllPolicy)
             .unwrap();
@@ -2904,7 +2976,9 @@ mod tests {
 
         let outcome = resolver
             .resolve(
-                &ModuleRequest::new("./lib", ImportStyle::Import).with_referrer("/app/main.mjs"),
+                &ModuleRequest::new("./lib", ImportStyle::Import)
+                    .with_referrer("/app/main.mjs")
+                    .with_compatibility_mode(CompatibilityMode::BunCompat),
                 &context(),
                 &AllowAllPolicy,
             )
@@ -2948,16 +3022,7 @@ mod tests {
         assert_eq!(trace.request_specifier, "./missing");
         assert_eq!(trace.canonical_specifier, "./missing");
         assert_eq!(trace.source_kind, "unresolved");
-        assert_eq!(
-            trace.probe_sequence,
-            vec![
-                "/app/missing",
-                "/app/missing.mjs",
-                "/app/missing.js",
-                "/app/missing/index.mjs",
-                "/app/missing/index.js"
-            ]
-        );
+        assert_eq!(trace.probe_sequence, vec!["/app/missing"]);
         assert_eq!(trace.outcome, "deny");
         assert_eq!(
             trace.error_code,
@@ -3282,7 +3347,7 @@ mod tests {
     // ── Enrichment: relative from external referrer ──────────────
 
     #[test]
-    fn relative_from_external_referrer_resolves_against_package_root() {
+    fn native_relative_import_from_external_esm_referrer_requires_extension() {
         let mut resolver = DeterministicModuleResolver::new("/app");
         resolver
             .register_external_module(
@@ -3291,11 +3356,37 @@ mod tests {
             )
             .unwrap();
 
-        let request =
-            ModuleRequest::new("./sub", ImportStyle::Import).with_referrer("external:some-pkg");
+        let error = resolver
+            .resolve(
+                &ModuleRequest::new("./sub", ImportStyle::Import)
+                    .with_referrer("external:some-pkg"),
+                &context(),
+                &AllowAllPolicy,
+            )
+            .expect_err("native mode should require explicit extension for external ESM relatives");
+        assert_eq!(error.code, ResolutionErrorCode::ModuleNotFound);
+        assert_eq!(error.probe_sequence, vec!["some-pkg/sub"]);
+    }
+
+    #[test]
+    fn bun_compat_relative_import_from_external_esm_referrer_resolves_against_package_root() {
+        let mut resolver = DeterministicModuleResolver::new("/app");
+        resolver
+            .register_external_module(
+                "some-pkg/sub.mjs",
+                ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
+            )
+            .unwrap();
+
         let outcome = resolver
-            .resolve(&request, &context(), &AllowAllPolicy)
-            .expect("relative dependency should resolve within external package");
+            .resolve(
+                &ModuleRequest::new("./sub", ImportStyle::Import)
+                    .with_referrer("external:some-pkg")
+                    .with_compatibility_mode(CompatibilityMode::BunCompat),
+                &context(),
+                &AllowAllPolicy,
+            )
+            .expect("bun_compat should resolve external relative dependency");
         assert_eq!(outcome.module.canonical_specifier, "some-pkg/sub.mjs");
         assert_eq!(outcome.module.record.id, "external:some-pkg/sub.mjs");
     }

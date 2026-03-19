@@ -1755,6 +1755,7 @@ fn build_event(
         let msg_bytes = result.message.as_bytes();
         buf.extend_from_slice(&(msg_bytes.len() as u64).to_be_bytes());
         buf.extend_from_slice(msg_bytes);
+        buf.extend_from_slice(&[result.passed as u8]);
         buf.extend_from_slice(&now.0.to_be_bytes());
         buf
     };

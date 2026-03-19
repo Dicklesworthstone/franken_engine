@@ -829,19 +829,52 @@ impl ObjectHeap {
         key: PropertyKey,
         value: JsValue,
     ) -> Result<bool, ObjectError> {
+        // First, traverse prototype chain to determine what should happen.
+        let mut current = Some(handle);
+        let mut depth: u32 = 0;
+        let mut visited = BTreeSet::new();
+
+        while let Some(h) = current {
+            if depth > MAX_PROTOTYPE_CHAIN_DEPTH {
+                return Err(ObjectError::PrototypeChainTooDeep {
+                    depth,
+                    max: MAX_PROTOTYPE_CHAIN_DEPTH,
+                });
+            }
+            if !visited.insert(h) {
+                return Err(ObjectError::PrototypeCycleDetected);
+            }
+
+            let obj = self.get(h)?;
+            match obj {
+                ManagedObject::Ordinary(o) => {
+                    if let Some(desc) = o.get_own_property(&key) {
+                        if desc.is_accessor() {
+                            // Accessor set trap handled by interpreter.
+                            return Ok(false);
+                        }
+                        if !desc.is_writable() {
+                            return Ok(false); // Non-writable property found on object or its prototype chain
+                        }
+                        // We found a writable property on the prototype chain, or on the object itself.
+                        break;
+                    }
+                    current = o.prototype;
+                }
+                ManagedObject::Proxy(_) => {
+                    return Err(ObjectError::TypeError(
+                        "proxy set trap must be handled by interpreter".to_string(),
+                    ));
+                }
+            }
+            depth += 1;
+        }
+
+        // We verified there are no blocking properties on the prototype chain.
+        // Now set the property on the *original* object handle.
         let obj = self.get_mut(handle)?;
         match obj {
             ManagedObject::Ordinary(o) => {
-                if let Some(desc) = o.properties.get(&key) {
-                    if !desc.is_configurable() && desc.is_data() && !desc.is_writable() {
-                        return Ok(false); // non-writable non-configurable
-                    }
-                    if desc.is_accessor() {
-                        // Accessor set trap handled by interpreter.
-                        return Ok(false);
-                    }
-                }
-                // If property exists and is writable, or is new and object is extensible.
                 if o.properties.contains_key(&key) {
                     if let Some(PropertyDescriptor::Data { value: v, .. }) =
                         o.properties.get_mut(&key)
@@ -855,9 +888,7 @@ impl ObjectHeap {
                 }
                 Ok(false)
             }
-            ManagedObject::Proxy(_) => Err(ObjectError::TypeError(
-                "proxy set trap must be handled by interpreter".to_string(),
-            )),
+            ManagedObject::Proxy(_) => unreachable!(),
         }
     }
 

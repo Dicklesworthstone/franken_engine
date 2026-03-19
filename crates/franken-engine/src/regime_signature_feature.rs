@@ -504,7 +504,7 @@ pub fn classify_regime(signature: &TraceSignature, config: &SignatureConfig) -> 
         MILLION
     } else {
         (MILLION * MILLION)
-            .checked_div(mean_distance + MILLION)
+            .checked_div(mean_distance.saturating_add(MILLION))
             .unwrap_or(0)
     };
 

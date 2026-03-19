@@ -280,8 +280,8 @@ impl Exp3State {
         // 2 * sqrt(T * K * ln(K))
         // ln(K) ≈ K for small K; use integer sqrt approximation.
         let ln_k = integer_ln_millionths(k as u64) as i128;
-        let product = (t as i128).saturating_mul(k as i128).saturating_mul(ln_k) / MILLION as i128;
-        integer_sqrt_millionths(product.min(i64::MAX as i128) as i64).saturating_mul(2)
+        let product_millionths = (t as i128).saturating_mul(k as i128).saturating_mul(ln_k);
+        sqrt_of_millionths(product_millionths.min(i64::MAX as i128) as i64).saturating_mul(2)
     }
 }
 
@@ -400,8 +400,8 @@ impl FtrlState {
         let t = i64::try_from(self.rounds.max(1)).unwrap_or(i64::MAX);
         let k = self.num_arms as i64;
         let ln_k = integer_ln_millionths(k as u64) as i128;
-        let product = (t as i128).saturating_mul(ln_k) / MILLION as i128;
-        integer_sqrt_millionths(product.min(i64::MAX as i128) as i64).saturating_mul(2)
+        let product_millionths = (t as i128).saturating_mul(ln_k);
+        sqrt_of_millionths(product_millionths.min(i64::MAX as i128) as i64).saturating_mul(2)
     }
 }
 
@@ -1011,15 +1011,15 @@ fn integer_ln_millionths(n: u64) -> i64 {
     (integer_log2_millionths(n) as i128 * LN_2_MILLIONTHS as i128 / MILLION as i128) as i64
 }
 
-/// Integer approximation of √n in millionths.
-/// For raw input n, returns sqrt(n) × 1_000_000.
+/// Integer approximation of √n for a value in millionths.
+/// Returns sqrt(n_millionths / 1_000_000) * 1_000_000.
 /// Newton's method with convergence guard from a bit-shift seed.
-fn integer_sqrt_millionths(n: i64) -> i64 {
-    if n <= 0 {
+fn sqrt_of_millionths(n_millionths: i64) -> i64 {
+    if n_millionths <= 0 {
         return 0;
     }
-    // sqrt(n) * MILLION = sqrt(n * MILLION²).
-    let n_wide = n as i128 * (MILLION as i128 * MILLION as i128);
+    // sqrt(n_millionths / MILLION) * MILLION = sqrt(n_millionths * MILLION).
+    let n_wide = n_millionths as i128 * MILLION as i128;
     // Bit-shift seed.
     let bits = 128 - n_wide.leading_zeros();
     let mut x = 1i128 << bits.div_ceil(2);
@@ -1526,8 +1526,8 @@ mod tests {
 
     #[test]
     fn integer_sqrt_basic() {
-        assert_eq!(integer_sqrt_millionths(0), 0);
-        let s4 = integer_sqrt_millionths(4);
+        assert_eq!(sqrt_of_millionths(0), 0);
+        let s4 = sqrt_of_millionths(4 * MILLION);
         // sqrt(4) * 1M = 2M
         assert!((s4 - 2_000_000).abs() < 100_000);
     }
@@ -2056,21 +2056,21 @@ mod tests {
 
     #[test]
     fn integer_sqrt_large_values() {
-        let s100 = integer_sqrt_millionths(100);
+        let s100 = sqrt_of_millionths(100 * MILLION);
         // sqrt(100) * 1M = 10M
         assert!((s100 - 10_000_000).abs() < 500_000);
     }
 
     #[test]
     fn integer_sqrt_one() {
-        let s1 = integer_sqrt_millionths(1);
+        let s1 = sqrt_of_millionths(1 * MILLION);
         // sqrt(1) * 1M = 1M
         assert!((s1 - MILLION).abs() < 100_000);
     }
 
     #[test]
     fn integer_sqrt_negative_returns_zero() {
-        assert_eq!(integer_sqrt_millionths(-5), 0);
+        assert_eq!(sqrt_of_millionths(-5), 0);
     }
 
     #[test]

@@ -1207,6 +1207,7 @@ fn build_report_with_meets_floor_flag_mismatch() {
         .get_mut("security_delta")
         .expect("security_delta")
         .meets_floor = false;
+    scorecard.result_hash = scorecard.compute_hash();
     let err = build_category_shift_report(report_input(scorecard)).unwrap_err();
     assert!(matches!(
         err,

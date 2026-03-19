@@ -168,7 +168,28 @@ fn node_compat_still_rejects_require_of_esm_package_entry() {
 }
 
 #[test]
-fn external_relative_dependency_resolves_from_package_root() {
+fn native_external_relative_dependency_requires_explicit_extension() {
+    let mut resolver = DeterministicModuleResolver::new("/repo");
+    resolver
+        .register_external_module(
+            "some-pkg/sub.mjs",
+            ModuleDefinition::new(ModuleSyntax::EsModule, "export default 'sub';"),
+        )
+        .unwrap();
+
+    let error = resolver
+        .resolve(
+            &ModuleRequest::new("./sub", ImportStyle::Import).with_referrer("external:some-pkg"),
+            &context(),
+            &AllowAllPolicy,
+        )
+        .expect_err("native mode should require explicit extension for external ESM relatives");
+    assert_eq!(error.code, ResolutionErrorCode::ModuleNotFound);
+    assert_eq!(error.probe_sequence, vec!["some-pkg/sub"]);
+}
+
+#[test]
+fn bun_compat_external_relative_dependency_resolves_from_package_root() {
     let mut resolver = DeterministicModuleResolver::new("/repo");
     resolver
         .register_external_module(
@@ -179,12 +200,13 @@ fn external_relative_dependency_resolves_from_package_root() {
 
     let outcome = resolver
         .resolve(
-            &ModuleRequest::new("./sub", ImportStyle::Import).with_referrer("external:some-pkg"),
+            &ModuleRequest::new("./sub", ImportStyle::Import)
+                .with_referrer("external:some-pkg")
+                .with_compatibility_mode(CompatibilityMode::BunCompat),
             &context(),
             &AllowAllPolicy,
         )
-        .expect("external package relative dependency should resolve");
-
+        .expect("bun_compat external package relative dependency should resolve");
     assert_eq!(outcome.module.canonical_specifier, "some-pkg/sub.mjs");
     assert_eq!(outcome.module.record.id, "external:some-pkg/sub.mjs");
 }

@@ -9,6 +9,7 @@ toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 uid="$(id -u)"
 target_dir="${CARGO_TARGET_DIR:-${root_dir}/target_rch_category_shift_report_uid${uid}}"
+cargo_build_jobs="${CARGO_BUILD_JOBS:-}"
 artifact_root="${CATEGORY_SHIFT_REPORT_ARTIFACT_ROOT:-artifacts/category_shift_report}"
 run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/run_manifest.json"
@@ -27,9 +28,15 @@ policy_id="section-10.9-category-shift"
 mkdir -p "$run_dir" "$step_logs_dir"
 
 run_rch() {
+  local -a env_args=(
+    "RUSTUP_TOOLCHAIN=${toolchain}"
+    "CARGO_TARGET_DIR=${target_dir}"
+  )
+  if [[ -n "${cargo_build_jobs}" ]]; then
+    env_args+=("CARGO_BUILD_JOBS=${cargo_build_jobs}")
+  fi
   timeout "${rch_timeout_seconds}" rch exec -- env \
-    "RUSTUP_TOOLCHAIN=${toolchain}" \
-    "CARGO_TARGET_DIR=${target_dir}" \
+    "${env_args[@]}" \
     "$@"
 }
 
@@ -54,6 +61,7 @@ write_static_artifacts() {
 {
   "toolchain": "${toolchain}",
   "cargo_target_dir": "${target_dir}",
+  "cargo_build_jobs": $(json_or_null "${cargo_build_jobs}"),
   "bead_id": "${bead_id}",
   "mode": "${mode}",
   "component": "category_shift_report_suite"
@@ -64,6 +72,7 @@ EOF
 mode=${mode}
 toolchain=${toolchain}
 cargo_target_dir=${target_dir}
+cargo_build_jobs=${cargo_build_jobs}
 rch_exec_timeout_seconds=${rch_timeout_seconds}
 bead_id=${bead_id}
 EOF
@@ -99,29 +108,41 @@ run_mode() {
   case "$mode" in
     check)
       run_step \
-        "cargo check -p frankenengine-engine --test category_shift_report_integration" \
-        cargo check -p frankenengine-engine --test category_shift_report_integration
+        "cargo check -p frankenengine-engine --lib --test category_shift_report_integration --test category_shift_report_enrichment_integration" \
+        cargo check -p frankenengine-engine --lib --test category_shift_report_integration --test category_shift_report_enrichment_integration
       ;;
     test)
       run_step \
+        "cargo test -p frankenengine-engine --lib category_shift_report::tests" \
+        cargo test -p frankenengine-engine --lib category_shift_report::tests
+      run_step \
         "cargo test -p frankenengine-engine --test category_shift_report_integration" \
         cargo test -p frankenengine-engine --test category_shift_report_integration
+      run_step \
+        "cargo test -p frankenengine-engine --test category_shift_report_enrichment_integration" \
+        cargo test -p frankenengine-engine --test category_shift_report_enrichment_integration
       ;;
     clippy)
       run_step \
-        "cargo clippy -p frankenengine-engine --test category_shift_report_integration -- -D warnings" \
-        cargo clippy -p frankenengine-engine --test category_shift_report_integration -- -D warnings
+        "cargo clippy -p frankenengine-engine --lib --test category_shift_report_integration --test category_shift_report_enrichment_integration -- -D warnings" \
+        cargo clippy -p frankenengine-engine --lib --test category_shift_report_integration --test category_shift_report_enrichment_integration -- -D warnings
       ;;
     ci)
       run_step \
-        "cargo check -p frankenengine-engine --test category_shift_report_integration" \
-        cargo check -p frankenengine-engine --test category_shift_report_integration
+        "cargo check -p frankenengine-engine --lib --test category_shift_report_integration --test category_shift_report_enrichment_integration" \
+        cargo check -p frankenengine-engine --lib --test category_shift_report_integration --test category_shift_report_enrichment_integration
+      run_step \
+        "cargo test -p frankenengine-engine --lib category_shift_report::tests" \
+        cargo test -p frankenengine-engine --lib category_shift_report::tests
       run_step \
         "cargo test -p frankenengine-engine --test category_shift_report_integration" \
         cargo test -p frankenengine-engine --test category_shift_report_integration
       run_step \
-        "cargo clippy -p frankenengine-engine --test category_shift_report_integration -- -D warnings" \
-        cargo clippy -p frankenengine-engine --test category_shift_report_integration -- -D warnings
+        "cargo test -p frankenengine-engine --test category_shift_report_enrichment_integration" \
+        cargo test -p frankenengine-engine --test category_shift_report_enrichment_integration
+      run_step \
+        "cargo clippy -p frankenengine-engine --lib --test category_shift_report_integration --test category_shift_report_enrichment_integration -- -D warnings" \
+        cargo clippy -p frankenengine-engine --lib --test category_shift_report_integration --test category_shift_report_enrichment_integration -- -D warnings
       ;;
     *)
       echo "usage: $0 [check|test|clippy|ci]" >&2
@@ -187,6 +208,7 @@ write_manifest() {
     echo "  \"generated_at_utc\": \"${timestamp}\","
     echo "  \"toolchain\": \"${toolchain}\","
     echo "  \"cargo_target_dir\": \"${target_dir}\","
+    echo "  \"cargo_build_jobs\": $(json_or_null "${cargo_build_jobs}"),"
     echo "  \"git_commit\": \"${git_commit}\","
     echo "  \"dirty_worktree\": ${dirty_worktree},"
     echo "  \"trace_id\": \"${trace_id}\","
@@ -226,7 +248,10 @@ write_manifest() {
     echo "    \"repro_lock\": \"${repro_lock_path}\","
     echo "    \"step_logs_dir\": \"${step_logs_dir}\","
     echo '    "source_module": "crates/franken-engine/src/category_shift_report.rs",'
-    echo '    "integration_test": "crates/franken-engine/tests/category_shift_report_integration.rs"'
+    echo '    "integration_tests": ['
+    echo '      "crates/franken-engine/tests/category_shift_report_integration.rs",'
+    echo '      "crates/franken-engine/tests/category_shift_report_enrichment_integration.rs"'
+    echo '    ]'
     echo '  }'
     echo "}"
   } >"$manifest_path"

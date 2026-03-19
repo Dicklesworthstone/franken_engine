@@ -24,6 +24,27 @@ pub const COMPONENT: &str = "category_shift_report";
 pub const BEAD_ID: &str = "bd-f7n";
 pub const POLICY_ID: &str = "section-10.9-category-shift";
 pub const MINIMUM_PEER_REVIEWERS: usize = 2;
+pub const REQUIRED_PREREQUISITE_BEADS: [&str; 9] = [
+    "bd-1ze", "bd-181", "bd-2n3", "bd-2rx", "bd-3rd", "bd-6pk", "bd-dkh", "bd-eke", "bd-uwc",
+];
+
+fn is_canonical_repo_relative_path(path: &str) -> bool {
+    let trimmed = path.trim();
+    if trimmed != path || trimmed.is_empty() || trimmed.starts_with('/') || trimmed.ends_with('/') {
+        return false;
+    }
+    trimmed.split('/').all(|segment| {
+        !segment.is_empty() && segment != "." && segment != ".." && !segment.contains('\\')
+    })
+}
+
+fn archive_path(archive_root: &str, relative_path: &str) -> String {
+    format!(
+        "{}/{}",
+        archive_root.trim_end_matches('/'),
+        relative_path.trim_start_matches('/')
+    )
+}
 
 // ---------------------------------------------------------------------------
 // CategoryShiftCapability
@@ -113,7 +134,7 @@ impl CategoryShiftClaim {
                 field: "evidence_summary".to_string(),
             });
         }
-        if self.evidence_bundle_ref.trim().is_empty() {
+        if !is_canonical_repo_relative_path(&self.evidence_bundle_ref) {
             return Err(CategoryShiftReportError::InvalidClaimField {
                 claim_id: self.claim_id.clone(),
                 field: "evidence_bundle_ref".to_string(),
@@ -216,6 +237,91 @@ pub struct PeerReviewSignoff {
     pub notes: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrerequisiteGateRecord {
+    pub bead_id: String,
+    pub artifact_manifest: String,
+    pub artifact_hash: ContentHash,
+    pub summary: String,
+    pub passed: bool,
+}
+
+impl PrerequisiteGateRecord {
+    pub fn validate(&self) -> Result<(), CategoryShiftReportError> {
+        if self.bead_id.trim().is_empty() || !self.bead_id.starts_with("bd-") {
+            return Err(CategoryShiftReportError::InvalidPrerequisiteGateField {
+                bead_id: self.bead_id.clone(),
+                field: "bead_id".to_string(),
+            });
+        }
+        if !is_canonical_repo_relative_path(&self.artifact_manifest) {
+            return Err(CategoryShiftReportError::InvalidPrerequisiteGateField {
+                bead_id: self.bead_id.clone(),
+                field: "artifact_manifest".to_string(),
+            });
+        }
+        if self.summary.trim().is_empty() {
+            return Err(CategoryShiftReportError::InvalidPrerequisiteGateField {
+                bead_id: self.bead_id.clone(),
+                field: "summary".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    pub fn compute_hash(&self) -> ContentHash {
+        ContentHash::compute(
+            format!(
+                "{}|{}|{}|{}|{}",
+                self.bead_id, self.artifact_manifest, self.artifact_hash, self.summary, self.passed
+            )
+            .as_bytes(),
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublishedArtifact {
+    pub artifact_id: String,
+    pub relative_path: String,
+    pub kind: String,
+    pub content_hash: ContentHash,
+}
+
+impl PublishedArtifact {
+    pub fn validate(&self) -> Result<(), CategoryShiftReportError> {
+        if self.artifact_id.trim().is_empty() {
+            return Err(CategoryShiftReportError::InvalidPublishedArtifactField {
+                artifact_id: self.artifact_id.clone(),
+                field: "artifact_id".to_string(),
+            });
+        }
+        if !is_canonical_repo_relative_path(&self.relative_path) {
+            return Err(CategoryShiftReportError::InvalidPublishedArtifactField {
+                artifact_id: self.artifact_id.clone(),
+                field: "relative_path".to_string(),
+            });
+        }
+        if self.kind.trim().is_empty() {
+            return Err(CategoryShiftReportError::InvalidPublishedArtifactField {
+                artifact_id: self.artifact_id.clone(),
+                field: "kind".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    pub fn compute_hash(&self) -> ContentHash {
+        ContentHash::compute(
+            format!(
+                "{}|{}|{}|{}",
+                self.artifact_id, self.relative_path, self.kind, self.content_hash
+            )
+            .as_bytes(),
+        )
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Report summaries / output
 // ---------------------------------------------------------------------------
@@ -239,6 +345,8 @@ pub struct CategoryShiftReportInput {
     pub scorecard_result: ScorecardResult,
     pub claims: Vec<CategoryShiftClaim>,
     pub methodology: MethodologySection,
+    pub prerequisite_gates: Vec<PrerequisiteGateRecord>,
+    pub published_artifacts: Vec<PublishedArtifact>,
     pub peer_reviews: Vec<PeerReviewSignoff>,
 }
 
@@ -257,6 +365,8 @@ pub struct CategoryShiftReport {
     pub dimension_summaries: BTreeMap<String, DimensionPublicationSummary>,
     pub claims: Vec<CategoryShiftClaim>,
     pub methodology: MethodologySection,
+    pub prerequisite_gates: Vec<PrerequisiteGateRecord>,
+    pub published_artifacts: Vec<PublishedArtifact>,
     pub peer_reviews: Vec<PeerReviewSignoff>,
     pub publication_hash: ContentHash,
 }
@@ -295,6 +405,14 @@ impl CategoryShiftReport {
         parts.push(self.methodology.statistical_frameworks.join("|"));
         parts.push(self.methodology.validation_methodology.join("|"));
         parts.push(self.methodology.limitations.join("|"));
+
+        for gate in &self.prerequisite_gates {
+            parts.push(gate.compute_hash().to_string());
+        }
+
+        for artifact in &self.published_artifacts {
+            parts.push(artifact.compute_hash().to_string());
+        }
 
         for review in &self.peer_reviews {
             parts.push(format!(
@@ -345,7 +463,7 @@ impl CategoryShiftReport {
                 claim.claim_id,
                 claim.claim_statement,
                 claim.evidence_summary,
-                claim.evidence_bundle_ref,
+                archive_path(&self.archive_root, &claim.evidence_bundle_ref),
                 claim.evidence_hash,
                 claim.source_beads.join(", ")
             ));
@@ -375,6 +493,32 @@ impl CategoryShiftReport {
         out.push_str("\nKnown limitations:\n");
         for item in &self.methodology.limitations {
             out.push_str(&format!("- {}\n", item));
+        }
+
+        out.push_str("\n## Prerequisite Gates\n\n");
+        for gate in &self.prerequisite_gates {
+            out.push_str(&format!(
+                "- `{}`: {} - `{}` (`{}`)\n",
+                gate.bead_id,
+                if gate.passed {
+                    gate.summary.as_str()
+                } else {
+                    "failed"
+                },
+                archive_path(&self.archive_root, &gate.artifact_manifest),
+                gate.artifact_hash
+            ));
+        }
+
+        out.push_str("\n## Published Artifacts\n\n");
+        for artifact in &self.published_artifacts {
+            out.push_str(&format!(
+                "- `{}` [{}]: `{}` (`{}`)\n",
+                artifact.artifact_id,
+                artifact.kind,
+                archive_path(&self.archive_root, &artifact.relative_path),
+                artifact.content_hash
+            ));
         }
 
         out.push_str("\n## Peer Review\n\n");
@@ -467,6 +611,9 @@ pub fn generate_log_entries(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CategoryShiftReportError {
+    InvalidArchiveRoot {
+        archive_root: String,
+    },
     InvalidClaimField {
         claim_id: String,
         field: String,
@@ -474,14 +621,34 @@ pub enum CategoryShiftReportError {
     InvalidMethodologyField {
         field: String,
     },
+    InvalidPrerequisiteGateField {
+        bead_id: String,
+        field: String,
+    },
+    InvalidPublishedArtifactField {
+        artifact_id: String,
+        field: String,
+    },
     MissingRequiredCapability {
         capability: CategoryShiftCapability,
+    },
+    MissingRequiredPrerequisiteGate {
+        bead_id: String,
     },
     DuplicateCapability {
         capability: CategoryShiftCapability,
     },
     DuplicateClaimId {
         claim_id: String,
+    },
+    DuplicatePrerequisiteGate {
+        bead_id: String,
+    },
+    DuplicatePublishedArtifactPath {
+        relative_path: String,
+    },
+    PrerequisiteGateFailed {
+        bead_id: String,
     },
     ScorecardSchemaInvalid {
         detail: String,
@@ -511,6 +678,14 @@ pub enum CategoryShiftReportError {
         raw_score_millionths: u64,
         target_millionths: u64,
     },
+    MissingPublishedArtifact {
+        relative_path: String,
+    },
+    PublishedArtifactHashMismatch {
+        relative_path: String,
+        expected: ContentHash,
+        found: ContentHash,
+    },
     InsufficientPeerReview {
         approved_reviewers: usize,
     },
@@ -522,19 +697,46 @@ pub enum CategoryShiftReportError {
 impl fmt::Display for CategoryShiftReportError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidArchiveRoot { archive_root } => {
+                write!(f, "invalid archive root `{archive_root}`")
+            }
             Self::InvalidClaimField { claim_id, field } => {
                 write!(f, "invalid claim field `{field}` for claim `{claim_id}`")
             }
             Self::InvalidMethodologyField { field } => {
                 write!(f, "invalid methodology field `{field}`")
             }
+            Self::InvalidPrerequisiteGateField { bead_id, field } => {
+                write!(
+                    f,
+                    "invalid prerequisite gate field `{field}` for `{bead_id}`"
+                )
+            }
+            Self::InvalidPublishedArtifactField { artifact_id, field } => {
+                write!(
+                    f,
+                    "invalid published artifact field `{field}` for `{artifact_id}`"
+                )
+            }
             Self::MissingRequiredCapability { capability } => {
                 write!(f, "missing required capability `{capability}`")
+            }
+            Self::MissingRequiredPrerequisiteGate { bead_id } => {
+                write!(f, "missing required prerequisite gate `{bead_id}`")
             }
             Self::DuplicateCapability { capability } => {
                 write!(f, "duplicate capability `{capability}`")
             }
             Self::DuplicateClaimId { claim_id } => write!(f, "duplicate claim id `{claim_id}`"),
+            Self::DuplicatePrerequisiteGate { bead_id } => {
+                write!(f, "duplicate prerequisite gate `{bead_id}`")
+            }
+            Self::DuplicatePublishedArtifactPath { relative_path } => {
+                write!(f, "duplicate published artifact path `{relative_path}`")
+            }
+            Self::PrerequisiteGateFailed { bead_id } => {
+                write!(f, "prerequisite gate `{bead_id}` did not pass")
+            }
             Self::ScorecardSchemaInvalid { detail } => {
                 write!(f, "invalid scorecard schema: {detail}")
             }
@@ -569,6 +771,17 @@ impl fmt::Display for CategoryShiftReportError {
                 f,
                 "scorecard dimension `{dimension}` below target: {raw_score_millionths} < {target_millionths}"
             ),
+            Self::MissingPublishedArtifact { relative_path } => {
+                write!(f, "missing published artifact `{relative_path}`")
+            }
+            Self::PublishedArtifactHashMismatch {
+                relative_path,
+                expected,
+                found,
+            } => write!(
+                f,
+                "published artifact `{relative_path}` hash mismatch: expected `{expected}`, found `{found}`"
+            ),
             Self::InsufficientPeerReview { approved_reviewers } => write!(
                 f,
                 "insufficient approved peer reviews: {approved_reviewers} < {MINIMUM_PEER_REVIEWERS}"
@@ -585,6 +798,11 @@ impl std::error::Error for CategoryShiftReportError {}
 pub fn build_category_shift_report(
     input: CategoryShiftReportInput,
 ) -> Result<CategoryShiftReport, CategoryShiftReportError> {
+    if !is_canonical_repo_relative_path(&input.archive_root) {
+        return Err(CategoryShiftReportError::InvalidArchiveRoot {
+            archive_root: input.archive_root,
+        });
+    }
     input.methodology.validate()?;
     input.scorecard_schema.validate().map_err(|err| {
         CategoryShiftReportError::ScorecardSchemaInvalid {
@@ -615,6 +833,58 @@ pub fn build_category_shift_report(
         });
     }
 
+    let mut published_artifacts = input.published_artifacts;
+    published_artifacts.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    let mut published_artifact_paths = BTreeSet::new();
+    let mut published_artifact_hashes = BTreeMap::new();
+    for artifact in &published_artifacts {
+        artifact.validate()?;
+        if !published_artifact_paths.insert(artifact.relative_path.clone()) {
+            return Err(CategoryShiftReportError::DuplicatePublishedArtifactPath {
+                relative_path: artifact.relative_path.clone(),
+            });
+        }
+        published_artifact_hashes.insert(artifact.relative_path.clone(), artifact.content_hash);
+    }
+
+    let mut prerequisite_gates = input.prerequisite_gates;
+    prerequisite_gates.sort_by(|left, right| left.bead_id.cmp(&right.bead_id));
+    let mut seen_prerequisite_beads = BTreeSet::new();
+    for gate in &prerequisite_gates {
+        gate.validate()?;
+        if !seen_prerequisite_beads.insert(gate.bead_id.clone()) {
+            return Err(CategoryShiftReportError::DuplicatePrerequisiteGate {
+                bead_id: gate.bead_id.clone(),
+            });
+        }
+        if !gate.passed {
+            return Err(CategoryShiftReportError::PrerequisiteGateFailed {
+                bead_id: gate.bead_id.clone(),
+            });
+        }
+        let published_hash = published_artifact_hashes
+            .get(&gate.artifact_manifest)
+            .copied()
+            .ok_or_else(|| CategoryShiftReportError::MissingPublishedArtifact {
+                relative_path: gate.artifact_manifest.clone(),
+            })?;
+        if published_hash != gate.artifact_hash {
+            return Err(CategoryShiftReportError::PublishedArtifactHashMismatch {
+                relative_path: gate.artifact_manifest.clone(),
+                expected: published_hash,
+                found: gate.artifact_hash,
+            });
+        }
+    }
+
+    for bead_id in REQUIRED_PREREQUISITE_BEADS {
+        if !seen_prerequisite_beads.contains(bead_id) {
+            return Err(CategoryShiftReportError::MissingRequiredPrerequisiteGate {
+                bead_id: bead_id.to_string(),
+            });
+        }
+    }
+
     let mut seen_claim_ids = BTreeSet::new();
     let mut seen_capabilities = BTreeSet::new();
     let mut claims = input.claims;
@@ -629,6 +899,19 @@ pub fn build_category_shift_report(
         if !seen_capabilities.insert(claim.capability) {
             return Err(CategoryShiftReportError::DuplicateCapability {
                 capability: claim.capability,
+            });
+        }
+        let published_hash = published_artifact_hashes
+            .get(&claim.evidence_bundle_ref)
+            .copied()
+            .ok_or_else(|| CategoryShiftReportError::MissingPublishedArtifact {
+                relative_path: claim.evidence_bundle_ref.clone(),
+            })?;
+        if published_hash != claim.evidence_hash {
+            return Err(CategoryShiftReportError::PublishedArtifactHashMismatch {
+                relative_path: claim.evidence_bundle_ref.clone(),
+                expected: published_hash,
+                found: claim.evidence_hash,
             });
         }
     }
@@ -725,6 +1008,8 @@ pub fn build_category_shift_report(
         dimension_summaries,
         claims,
         methodology: input.methodology,
+        prerequisite_gates,
+        published_artifacts,
         peer_reviews,
         publication_hash: ContentHash::compute(b"placeholder"),
     };
@@ -771,12 +1056,56 @@ mod tests {
             capability,
             claim_statement: format!("{} is demonstrated", capability.display_name()),
             evidence_summary: format!("{} summary", capability.display_name()),
-            evidence_bundle_ref: format!("archive/{}.json", capability.as_str()),
+            evidence_bundle_ref: format!("claims/{}/bundle.json", capability.as_str()),
             evidence_hash: ContentHash::compute(capability.as_str().as_bytes()),
             reproduction_instructions: vec![format!("rerun {}", capability.as_str())],
             source_beads: vec!["bd-source".to_string()],
             caveats: vec!["bounded to shipped corpus".to_string()],
         }
+    }
+
+    fn prerequisite_artifact_path(bead_id: &str) -> String {
+        format!("prerequisites/{bead_id}/run_manifest.json")
+    }
+
+    fn prerequisite_gate(bead_id: &str) -> PrerequisiteGateRecord {
+        PrerequisiteGateRecord {
+            bead_id: bead_id.to_string(),
+            artifact_manifest: prerequisite_artifact_path(bead_id),
+            artifact_hash: ContentHash::compute(format!("gate:{bead_id}").as_bytes()),
+            summary: format!("{bead_id} publication gate passed"),
+            passed: true,
+        }
+    }
+
+    fn prerequisite_gates() -> Vec<PrerequisiteGateRecord> {
+        REQUIRED_PREREQUISITE_BEADS
+            .iter()
+            .map(|bead_id| prerequisite_gate(bead_id))
+            .collect()
+    }
+
+    fn published_artifacts() -> Vec<PublishedArtifact> {
+        let mut artifacts = CategoryShiftCapability::ALL
+            .iter()
+            .map(|capability| PublishedArtifact {
+                artifact_id: format!("claim-{}", capability.as_str()),
+                relative_path: format!("claims/{}/bundle.json", capability.as_str()),
+                kind: "evidence_bundle".to_string(),
+                content_hash: ContentHash::compute(capability.as_str().as_bytes()),
+            })
+            .collect::<Vec<_>>();
+        artifacts.extend(
+            REQUIRED_PREREQUISITE_BEADS
+                .iter()
+                .map(|bead_id| PublishedArtifact {
+                    artifact_id: format!("gate-{bead_id}"),
+                    relative_path: prerequisite_artifact_path(bead_id),
+                    kind: "gate_manifest".to_string(),
+                    content_hash: ContentHash::compute(format!("gate:{bead_id}").as_bytes()),
+                }),
+        );
+        artifacts
     }
 
     fn methodology() -> MethodologySection {
@@ -1061,6 +1390,8 @@ mod tests {
                 .map(claim)
                 .collect(),
             methodology: methodology(),
+            prerequisite_gates: prerequisite_gates(),
+            published_artifacts: published_artifacts(),
             peer_reviews: peer_reviews(),
         }
     }
@@ -1148,6 +1479,8 @@ mod tests {
         assert!(md.contains("## Disruption Scorecard"));
         assert!(md.contains("## Beyond-Parity Claims"));
         assert!(md.contains("## Methodology"));
+        assert!(md.contains("## Prerequisite Gates"));
+        assert!(md.contains("## Published Artifacts"));
         assert!(md.contains("## Peer Review"));
     }
 
@@ -1350,6 +1683,8 @@ mod tests {
             scorecard_result: scorecard_result(),
             claims,
             methodology: methodology(),
+            prerequisite_gates: prerequisite_gates(),
+            published_artifacts: published_artifacts(),
             peer_reviews: peer_reviews(),
         })
         .unwrap_err();
@@ -1375,6 +1710,8 @@ mod tests {
             scorecard_result: scorecard_result(),
             claims,
             methodology: methodology(),
+            prerequisite_gates: prerequisite_gates(),
+            published_artifacts: published_artifacts(),
             peer_reviews: vec![PeerReviewSignoff {
                 reviewer_id: "solo".to_string(),
                 reviewed_at_utc: "2026-03-13T00:00:00Z".to_string(),
@@ -1405,6 +1742,8 @@ mod tests {
             scorecard_result: scorecard_result(),
             claims,
             methodology: methodology(),
+            prerequisite_gates: prerequisite_gates(),
+            published_artifacts: published_artifacts(),
             peer_reviews: peer_reviews(),
         })
         .expect("report");

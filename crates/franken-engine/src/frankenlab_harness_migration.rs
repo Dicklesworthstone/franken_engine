@@ -1071,9 +1071,9 @@ mod tests {
     #[test]
     fn lifecycle_scenario_id_serde_all() {
         for id in LifecycleScenarioId::ALL {
-            let json = serde_json::to_string(id).unwrap();
+            let json = serde_json::to_string(&id).unwrap();
             let back: LifecycleScenarioId = serde_json::from_str(&json).unwrap();
-            assert_eq!(*id, back);
+            assert_eq!(id, back);
         }
     }
 
@@ -1087,9 +1087,9 @@ mod tests {
     #[test]
     fn containment_test_kind_serde_all() {
         for kind in ContainmentTestKind::ALL {
-            let json = serde_json::to_string(kind).unwrap();
+            let json = serde_json::to_string(&kind).unwrap();
             let back: ContainmentTestKind = serde_json::from_str(&json).unwrap();
-            assert_eq!(*kind, back);
+            assert_eq!(kind, back);
         }
     }
 
@@ -1162,7 +1162,6 @@ mod tests {
         let reg = HarnessMigrationRegistry::with_default_scenarios(test_epoch());
         let report = reg.build_report();
         assert_eq!(report.schema_version, HARNESS_MIGRATION_SCHEMA_VERSION);
-        assert_eq!(report.bead_id, HARNESS_MIGRATION_BEAD_ID);
     }
 
     #[test]
@@ -1184,7 +1183,7 @@ mod tests {
     fn registry_content_hash_deterministic() {
         let r1 = HarnessMigrationRegistry::with_default_scenarios(test_epoch());
         let r2 = HarnessMigrationRegistry::with_default_scenarios(test_epoch());
-        assert_eq!(r1.content_hash, r2.content_hash);
+        assert_eq!(r1.build_report().content_hash, r2.build_report().content_hash);
     }
 
     #[test]

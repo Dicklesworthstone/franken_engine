@@ -19,8 +19,8 @@
 use frankenengine_engine::category_shift_report::{
     BEAD_ID, COMPONENT, CategoryShiftCapability, CategoryShiftClaim, CategoryShiftReportError,
     CategoryShiftReportInput, CategoryShiftReportLogEntry, MINIMUM_PEER_REVIEWERS,
-    MethodologySection, POLICY_ID, PeerReviewSignoff, SCHEMA_VERSION, build_category_shift_report,
-    generate_log_entries,
+    MethodologySection, POLICY_ID, PeerReviewSignoff, PrerequisiteGateRecord, PublishedArtifact,
+    REQUIRED_PREREQUISITE_BEADS, SCHEMA_VERSION, build_category_shift_report, generate_log_entries,
 };
 use frankenengine_engine::disruption_scorecard::{
     DisruptionDimension, EvidenceInput, SCORECARD_SCHEMA_VERSION, ScorecardResult, ScorecardSchema,
@@ -94,7 +94,7 @@ fn claim(capability: CategoryShiftCapability) -> CategoryShiftClaim {
             "{} evidence bundle cleared deterministic reproduction checks.",
             capability.display_name()
         ),
-        evidence_bundle_ref: format!("archive/{}/bundle.json", capability.as_str()),
+        evidence_bundle_ref: format!("claims/{}/bundle.json", capability.as_str()),
         evidence_hash: ContentHash::compute(capability.as_str().as_bytes()),
         reproduction_instructions: vec![
             format!("fetch {}", capability.as_str()),
@@ -131,6 +131,51 @@ fn methodology() -> MethodologySection {
     }
 }
 
+fn prerequisite_artifact_path(bead_id: &str) -> String {
+    format!("prerequisites/{bead_id}/run_manifest.json")
+}
+
+fn prerequisite_gate(bead_id: &str) -> PrerequisiteGateRecord {
+    PrerequisiteGateRecord {
+        bead_id: bead_id.to_string(),
+        artifact_manifest: prerequisite_artifact_path(bead_id),
+        artifact_hash: ContentHash::compute(format!("gate:{bead_id}").as_bytes()),
+        summary: format!("{bead_id} prerequisite gate passed"),
+        passed: true,
+    }
+}
+
+fn prerequisite_gates() -> Vec<PrerequisiteGateRecord> {
+    REQUIRED_PREREQUISITE_BEADS
+        .iter()
+        .map(|bead_id| prerequisite_gate(bead_id))
+        .collect()
+}
+
+fn published_artifacts() -> Vec<PublishedArtifact> {
+    let mut artifacts = CategoryShiftCapability::ALL
+        .iter()
+        .copied()
+        .map(|capability| PublishedArtifact {
+            artifact_id: format!("claim-{}", capability.as_str()),
+            relative_path: format!("claims/{}/bundle.json", capability.as_str()),
+            kind: "evidence_bundle".to_string(),
+            content_hash: ContentHash::compute(capability.as_str().as_bytes()),
+        })
+        .collect::<Vec<_>>();
+    artifacts.extend(
+        REQUIRED_PREREQUISITE_BEADS
+            .iter()
+            .map(|bead_id| PublishedArtifact {
+                artifact_id: format!("gate-{bead_id}"),
+                relative_path: prerequisite_artifact_path(bead_id),
+                kind: "gate_manifest".to_string(),
+                content_hash: ContentHash::compute(format!("gate:{bead_id}").as_bytes()),
+            }),
+    );
+    artifacts
+}
+
 fn peer_reviews() -> Vec<PeerReviewSignoff> {
     vec![
         PeerReviewSignoff {
@@ -158,6 +203,8 @@ fn report_input(scorecard_result: ScorecardResult) -> CategoryShiftReportInput {
         scorecard_result,
         claims: all_claims(),
         methodology: methodology(),
+        prerequisite_gates: prerequisite_gates(),
+        published_artifacts: published_artifacts(),
         peer_reviews: peer_reviews(),
     }
 }
@@ -200,9 +247,13 @@ fn build_report_success_and_renderings_are_stable() {
     assert!(markdown.contains("## Disruption Scorecard"));
     assert!(markdown.contains("## Beyond-Parity Claims"));
     assert!(markdown.contains("## Methodology"));
+    assert!(markdown.contains("## Prerequisite Gates"));
+    assert!(markdown.contains("## Published Artifacts"));
     assert!(markdown.contains("## Peer Review"));
     assert!(markdown.contains("Proof-Carrying Optimization"));
-    assert!(markdown.contains("archive/proof_carrying_optimization/bundle.json"));
+    assert!(markdown.contains(
+        "archive/category-shift/20260313T020000Z/claims/proof_carrying_optimization/bundle.json"
+    ));
 
     let rebuilt = build_category_shift_report(report_input(passing_scorecard())).expect("report");
     assert_eq!(report.publication_hash, rebuilt.publication_hash);
@@ -277,6 +328,33 @@ fn build_report_fails_when_scorecard_flags_are_inconsistent() {
             expected: true,
             found: false,
         } if dimension == "performance_delta" && field == "meets_target"
+    ));
+}
+
+#[test]
+fn build_report_fails_when_required_prerequisite_gate_is_missing() {
+    let mut input = report_input(passing_scorecard());
+    input.prerequisite_gates.pop();
+
+    let err = build_category_shift_report(input).unwrap_err();
+    assert!(matches!(
+        err,
+        CategoryShiftReportError::MissingRequiredPrerequisiteGate { .. }
+    ));
+}
+
+#[test]
+fn build_report_fails_when_claim_bundle_is_not_published() {
+    let mut input = report_input(passing_scorecard());
+    input
+        .published_artifacts
+        .retain(|artifact| artifact.relative_path != "claims/deterministic_ifc/bundle.json");
+
+    let err = build_category_shift_report(input).unwrap_err();
+    assert!(matches!(
+        err,
+        CategoryShiftReportError::MissingPublishedArtifact { ref relative_path }
+        if relative_path == "claims/deterministic_ifc/bundle.json"
     ));
 }
 

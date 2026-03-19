@@ -827,15 +827,25 @@ pub fn exec_math(builtin: BuiltinId, args: &[JsValue]) -> Result<JsValue, Stdlib
             let base = require_int("Math.pow", args, 0)?;
             let exp = require_int("Math.pow", args, 1)?;
             // Fixed-point power: base^exp where both are in FP_SCALE.
-            let base_units = base / FP_SCALE;
             let exp_units = exp / FP_SCALE;
             if exp_units < 0 {
                 return Err(StdlibError::RangeError(
                     "negative exponent not supported in fixed-point".into(),
                 ));
             }
-            let result = base_units.saturating_pow(exp_units as u32);
-            Ok(JsValue::Int(result.saturating_mul(FP_SCALE)))
+            let mut result: i64 = FP_SCALE;
+            let mut current_base: i64 = base;
+            let mut current_exp = exp_units as u32;
+
+            while current_exp > 0 {
+                if current_exp % 2 == 1 {
+                    // Convert to i128 to prevent overflow during multiplication
+                    result = ((result as i128 * current_base as i128) / FP_SCALE as i128) as i64;
+                }
+                current_base = ((current_base as i128 * current_base as i128) / FP_SCALE as i128) as i64;
+                current_exp /= 2;
+            }
+            Ok(JsValue::Int(result))
         }
         BuiltinId::MathClz32 => {
             let n = require_int("Math.clz32", args, 0)?;
@@ -942,18 +952,28 @@ pub fn exec_global_function(builtin: BuiltinId, args: &[JsValue]) -> Result<JsVa
                 Some(v) => coerce_to_string(v),
                 None => return Ok(JsValue::Int(0)),
             };
-            let radix = opt_int_arg(args, 1).map(|n| n / FP_SCALE).unwrap_or(10);
-            if !(2..=36).contains(&radix) {
-                return Ok(JsValue::Int(0)); // NaN equivalent
-            }
+            let mut radix = opt_int_arg(args, 1).map(|n| n / FP_SCALE).unwrap_or(0);
             let trimmed = input.trim();
-            let (is_neg, digits) = if let Some(rest) = trimmed.strip_prefix('-') {
+            let (is_neg, mut digits) = if let Some(rest) = trimmed.strip_prefix('-') {
                 (true, rest)
             } else if let Some(rest) = trimmed.strip_prefix('+') {
                 (false, rest)
             } else {
                 (false, trimmed)
             };
+            
+            if radix == 0 || radix == 16 {
+                if let Some(rest) = digits.strip_prefix("0x").or_else(|| digits.strip_prefix("0X")) {
+                    radix = 16;
+                    digits = rest;
+                } else if radix == 0 {
+                    radix = 10;
+                }
+            }
+
+            if !(2..=36).contains(&radix) {
+                return Ok(JsValue::Int(0)); // NaN equivalent
+            }
             // Parse digits up to first invalid character.
             let mut result: i64 = 0;
             let mut found = false;
@@ -1100,6 +1120,9 @@ pub fn exec_array_method(
             Ok(ArrayMethodResult::Value(JsValue::Int(-FP_SCALE)))
         }
         BuiltinId::ArrayPrototypeLastIndexOf => {
+            if elements.is_empty() {
+                return Ok(ArrayMethodResult::Value(JsValue::Int(-FP_SCALE)));
+            }
             let search = args.first().unwrap_or(&JsValue::Undefined);
             let from = opt_int_arg(args, 1)
                 .map(|n| {
@@ -2400,12 +2423,15 @@ pub fn exec_number_method(
             }
             let units = this_val / FP_SCALE;
             let frac = (this_val % FP_SCALE).abs();
-            let sign = if this_val < 0 && units == 0 { "-" } else { "" };
+            let sign = if this_val < 0 { "-" } else { "" };
             if digits == 0 {
                 Ok(JsValue::Str(format!("{sign}{}", units.abs())))
             } else {
                 let frac_str = format!("{frac:06}");
-                let trimmed = &frac_str[..digits.min(6) as usize];
+                let mut trimmed = frac_str[..digits.min(6) as usize].to_string();
+                if digits > 6 {
+                    trimmed.push_str(&"0".repeat((digits - 6) as usize));
+                }
                 Ok(JsValue::Str(format!("{sign}{}.{trimmed}", units.abs())))
             }
         }
@@ -2461,21 +2487,22 @@ pub fn exec_date_method(
         BuiltinId::DatePrototypeToString => {
             let ts = this_timestamp.unwrap_or(0) / FP_SCALE;
             // Simplified ISO-like string for deterministic output.
-            let secs = ts / 1000;
-            let ms = (ts % 1000).abs();
-            Ok(JsValue::Str(format!("Date({secs}.{ms:03})")))
+            let sign = if ts < 0 { "-" } else { "" };
+            let secs = ts.abs() / 1000;
+            let ms = ts.abs() % 1000;
+            Ok(JsValue::Str(format!("Date({sign}{secs}.{ms:03})")))
         }
         BuiltinId::DatePrototypeToISOString => {
             let ts = this_timestamp.unwrap_or(0) / FP_SCALE;
             // Deterministic ISO 8601 from millisecond timestamp.
-            let total_secs = ts / 1000;
-            let ms = (ts % 1000).abs();
+            let total_secs = ts.div_euclid(1000);
+            let ms = ts.rem_euclid(1000);
             let secs_in_day = total_secs.rem_euclid(86400);
             let hours = secs_in_day / 3600;
             let minutes = (secs_in_day % 3600) / 60;
             let seconds = secs_in_day % 60;
             // Simplified: epoch day calculation for deterministic output.
-            let days = total_secs / 86400;
+            let days = total_secs.div_euclid(86400);
             Ok(JsValue::Str(format!(
                 "{days}T{hours:02}:{minutes:02}:{seconds:02}.{ms:03}Z"
             )))

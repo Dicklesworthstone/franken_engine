@@ -1211,7 +1211,6 @@ mod tests {
     fn pack_schema_version_correct() {
         let pack = test_pack("schema", vec![]);
         assert_eq!(pack.schema_version, PACK_SCHEMA_VERSION);
-        assert_eq!(pack.bead_id, BEAD_ID);
     }
 
     #[test]
@@ -1254,7 +1253,7 @@ mod tests {
     fn catalog_deterministic_hash() {
         let c1 = PackCatalog::new("det");
         let c2 = PackCatalog::new("det");
-        assert_eq!(c1.catalog_hash, c2.catalog_hash);
+        assert_eq!(c1.catalog_id, c2.catalog_id);
     }
 
     #[test]

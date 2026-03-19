@@ -199,13 +199,22 @@ fn rgc_063_doc_contains_required_sections() {
     for section in required_sections {
         assert!(doc.contains(section), "missing required section: {section}");
     }
+
+    assert!(
+        doc.contains("$PWD/target_rch_rgc_cross_platform_matrix_verify"),
+        "operator verification doc should use the repo-local target dir example"
+    );
+    assert!(
+        !doc.contains("/tmp/rch_target_rgc_cross_platform_matrix"),
+        "operator verification doc must not point back to /tmp-backed target dirs"
+    );
 }
 
 #[test]
 fn rgc_063_contract_is_versioned_and_target_complete() {
     let contract = parse_contract();
     assert_eq!(contract.schema_version, MATRIX_SCHEMA_VERSION);
-    assert_eq!(contract.contract_version, "1.1.0");
+    assert_eq!(contract.contract_version, "1.1.1");
     assert_eq!(contract.bead_id, "bd-1lsy.11.13");
     assert_eq!(contract.policy_id, "policy-rgc-cross-platform-matrix-v1");
 
@@ -500,6 +509,18 @@ fn rgc_063_gate_runner_and_operator_commands_are_wired() {
             .operator_verification
             .iter()
             .any(|cmd| cmd.contains("run_rgc_cross_platform_matrix_gate.sh ci"))
+    );
+    assert!(
+        contract
+            .operator_verification
+            .iter()
+            .any(|cmd| { cmd.contains("$PWD/target_rch_rgc_cross_platform_matrix_verify") })
+    );
+    assert!(
+        !contract
+            .operator_verification
+            .iter()
+            .any(|cmd| { cmd.contains("/tmp/rch_target_rgc_cross_platform_matrix") })
     );
     assert!(contract.operator_verification.iter().any(|cmd| {
         cmd.contains("RGC_CROSS_PLATFORM_MANIFEST_SET_ROOT")

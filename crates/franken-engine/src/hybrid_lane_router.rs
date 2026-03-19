@@ -556,6 +556,12 @@ impl AdaptiveWeights {
 fn exp_millionths(x_millionths: i64) -> i64 {
     // Clamp to avoid overflow
     let x = x_millionths.clamp(-3 * MILLION, 3 * MILLION);
+    
+    if x < 0 {
+        let e_pos = exp_millionths(-x);
+        return (MILLION * MILLION) / e_pos.max(1);
+    }
+
     let x_norm = x; // already in millionths
 
     let term0 = MILLION;

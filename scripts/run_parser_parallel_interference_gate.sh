@@ -111,6 +111,12 @@ rch_reject_artifact_retrieval_failure() {
   fi
 }
 
+rch_exact_filter_ran_zero_tests() {
+  local log_path="$1"
+  rch_strip_ansi "$log_path" \
+    | grep -Eiq '^running 0 tests$|test result: ok\. 0 passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out;'
+}
+
 declare -a commands_run=()
 declare -a command_log_paths=()
 failed_command=""
@@ -188,12 +194,18 @@ run_step() {
     failed_command="${command_text} (remote-exit-${remote_exit_code})"
     return 1
   fi
+
+  if [[ "$command_text" == *"--exact"* ]] && rch_exact_filter_ran_zero_tests "$log_path"; then
+    echo "rch exact-filter step matched zero tests; failing closed" | tee -a "$log_path"
+    failed_command="${command_text} (zero-tests-matched-exact-filter)"
+    return 1
+  fi
 }
 
 run_test_lane() {
   run_step \
-    "cargo test -p frankenengine-engine --lib -- --exact chunk_plan_worker_count_capped_to_input_bytes" \
-    cargo test -p frankenengine-engine --lib -- --exact chunk_plan_worker_count_capped_to_input_bytes
+    "cargo test -p frankenengine-engine --lib -- --exact parallel_parser::tests::chunk_plan_worker_count_capped_to_input_bytes" \
+    cargo test -p frankenengine-engine --lib -- --exact parallel_parser::tests::chunk_plan_worker_count_capped_to_input_bytes
   run_step \
     "cargo test -p frankenengine-engine --test parallel_interference_gate_integration -- --exact evaluate_gate_correct_run_count" \
     cargo test -p frankenengine-engine --test parallel_interference_gate_integration -- --exact evaluate_gate_correct_run_count

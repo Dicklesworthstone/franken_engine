@@ -104,3 +104,6 @@ steps.
 Timeout paths preserve failure provenance: when remote compiler diagnostics are
 present before timeout, the manifest marks the failed command as
 `rch-timeout-after-remote-compile-failure` instead of a generic timeout.
+Exact-filter steps also fail closed if the remote test harness reports
+`running 0 tests`, preventing mistyped anchor names from producing false-green
+gate passes.

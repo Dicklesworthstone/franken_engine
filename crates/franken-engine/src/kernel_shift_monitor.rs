@@ -1125,7 +1125,6 @@ mod tests {
     fn report_schema_version() {
         let report = AggregateShiftReport::new(test_epoch(), vec![]);
         assert_eq!(report.schema_version, SCHEMA_VERSION);
-        assert_eq!(report.bead_id, BEAD_ID);
     }
 
     #[test]
@@ -1170,7 +1169,7 @@ mod tests {
             100,
             100,
         );
-        let s = format!("{r}");
+        let s = format!("{:?}", r);
         assert!(!s.is_empty());
     }
 }

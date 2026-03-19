@@ -17,7 +17,7 @@ The matrix is evidence-first:
 ## Contract Version
 
 - `schema_version`: `franken-engine.rgc-cross-platform-matrix.v1`
-- `contract_version`: `1.1.0`
+- `contract_version`: `1.1.1`
 - `policy_id`: `policy-rgc-cross-platform-matrix-v1`
 
 ## Matrix Dimensions
@@ -116,7 +116,7 @@ under `artifacts/rgc_cross_platform_matrix/<UTC_TIMESTAMP>/`.
 ```bash
 jq empty docs/rgc_cross_platform_matrix_v1.json
 
-rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_rgc_cross_platform_matrix \
+rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_rgc_cross_platform_matrix_verify \
   cargo test -p frankenengine-engine --test rgc_cross_platform_matrix
 
 ./scripts/run_rgc_cross_platform_matrix_gate.sh check

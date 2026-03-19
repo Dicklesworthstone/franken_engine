@@ -1987,7 +1987,7 @@ mod tests {
 
     #[test]
     fn superinstruction_candidates_not_eligible_when_cold() {
-        let policy = QuickeningPolicy::default();
+        let _policy = QuickeningPolicy::default();
         let catalog = SuperInstructionCatalog::default();
         let mut profile = QuickeningProfile::new("cold_check");
 

@@ -15,7 +15,8 @@ use frankenengine_engine::category_shift_report::{
     BEAD_ID, COMPONENT, CategoryShiftCapability, CategoryShiftClaim, CategoryShiftReport,
     CategoryShiftReportError, CategoryShiftReportInput, CategoryShiftReportLogEntry,
     DimensionPublicationSummary, MINIMUM_PEER_REVIEWERS, MethodologySection, POLICY_ID,
-    PeerReviewSignoff, SCHEMA_VERSION, build_category_shift_report, generate_log_entries,
+    PeerReviewSignoff, PrerequisiteGateRecord, PublishedArtifact, REQUIRED_PREREQUISITE_BEADS,
+    SCHEMA_VERSION, build_category_shift_report, generate_log_entries,
 };
 use frankenengine_engine::disruption_scorecard::{
     DisruptionDimension, EvidenceInput, ScorecardResult, ScorecardSchema, compute_scorecard,
@@ -56,12 +57,57 @@ fn claim(capability: CategoryShiftCapability) -> CategoryShiftClaim {
         capability,
         claim_statement: format!("{} demonstrated", capability.display_name()),
         evidence_summary: format!("{} evidence summary", capability.display_name()),
-        evidence_bundle_ref: format!("archive/{}.json", capability.as_str()),
+        evidence_bundle_ref: format!("claims/{}/bundle.json", capability.as_str()),
         evidence_hash: ContentHash::compute(capability.as_str().as_bytes()),
         reproduction_instructions: vec![format!("run {}", capability.as_str())],
         source_beads: vec!["bd-src".to_string()],
         caveats: vec!["corpus-limited".to_string()],
     }
+}
+
+fn prerequisite_artifact_path(bead_id: &str) -> String {
+    format!("prerequisites/{bead_id}/run_manifest.json")
+}
+
+fn prerequisite_gate(bead_id: &str) -> PrerequisiteGateRecord {
+    PrerequisiteGateRecord {
+        bead_id: bead_id.to_string(),
+        artifact_manifest: prerequisite_artifact_path(bead_id),
+        artifact_hash: ContentHash::compute(format!("gate:{bead_id}").as_bytes()),
+        summary: format!("{bead_id} prerequisite gate passed"),
+        passed: true,
+    }
+}
+
+fn prerequisite_gates() -> Vec<PrerequisiteGateRecord> {
+    REQUIRED_PREREQUISITE_BEADS
+        .iter()
+        .map(|bead_id| prerequisite_gate(bead_id))
+        .collect()
+}
+
+fn published_artifacts() -> Vec<PublishedArtifact> {
+    let mut artifacts = CategoryShiftCapability::ALL
+        .iter()
+        .copied()
+        .map(|capability| PublishedArtifact {
+            artifact_id: format!("claim-{}", capability.as_str()),
+            relative_path: format!("claims/{}/bundle.json", capability.as_str()),
+            kind: "evidence_bundle".to_string(),
+            content_hash: ContentHash::compute(capability.as_str().as_bytes()),
+        })
+        .collect::<Vec<_>>();
+    artifacts.extend(
+        REQUIRED_PREREQUISITE_BEADS
+            .iter()
+            .map(|bead_id| PublishedArtifact {
+                artifact_id: format!("gate-{bead_id}"),
+                relative_path: prerequisite_artifact_path(bead_id),
+                kind: "gate_manifest".to_string(),
+                content_hash: ContentHash::compute(format!("gate:{bead_id}").as_bytes()),
+            }),
+    );
+    artifacts
 }
 
 fn methodology() -> MethodologySection {
@@ -104,6 +150,8 @@ fn valid_input() -> CategoryShiftReportInput {
             .map(claim)
             .collect(),
         methodology: methodology(),
+        prerequisite_gates: prerequisite_gates(),
+        published_artifacts: published_artifacts(),
         peer_reviews: peer_reviews(),
     }
 }
@@ -423,6 +471,8 @@ fn enrich_report_to_markdown_contains_all_sections() {
     assert!(md.contains("## Disruption Scorecard"));
     assert!(md.contains("## Beyond-Parity Claims"));
     assert!(md.contains("## Methodology"));
+    assert!(md.contains("## Prerequisite Gates"));
+    assert!(md.contains("## Published Artifacts"));
     assert!(md.contains("## Peer Review"));
 }
 
@@ -529,6 +579,40 @@ fn enrich_error_display_duplicate_peer_reviewer() {
     };
     let msg = format!("{err}");
     assert!(msg.contains("rev-dup"));
+}
+
+#[test]
+fn enrich_build_report_rejects_failed_prerequisite_gate() {
+    let mut input = valid_input();
+    input.prerequisite_gates[0].passed = false;
+    let err = build_category_shift_report(input).unwrap_err();
+    assert!(matches!(
+        err,
+        CategoryShiftReportError::PrerequisiteGateFailed { .. }
+    ));
+}
+
+#[test]
+fn enrich_build_report_rejects_prerequisite_manifest_hash_mismatch() {
+    let mut input = valid_input();
+    input.prerequisite_gates[0].artifact_hash = ContentHash::compute(b"tampered-gate-hash");
+    let err = build_category_shift_report(input).unwrap_err();
+    assert!(matches!(
+        err,
+        CategoryShiftReportError::PublishedArtifactHashMismatch { ref relative_path, .. }
+        if relative_path == "prerequisites/bd-1ze/run_manifest.json"
+    ));
+}
+
+#[test]
+fn enrich_build_report_rejects_noncanonical_archive_root() {
+    let mut input = valid_input();
+    input.archive_root = "/absolute/archive/root".to_string();
+    let err = build_category_shift_report(input).unwrap_err();
+    assert!(matches!(
+        err,
+        CategoryShiftReportError::InvalidArchiveRoot { .. }
+    ));
 }
 
 // ---------------------------------------------------------------------------

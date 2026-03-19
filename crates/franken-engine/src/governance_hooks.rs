@@ -1163,10 +1163,12 @@ pub fn generate_compliance_bundle(
     let controls = evaluate_controls(&framework, &evidence_bundle);
     let satisfied = controls.iter().filter(|c| c.satisfied).count() as u64;
     let total = controls.len() as u64;
+    // Vacuous truth: zero controls → 100% satisfaction (consistent with
+    // execute_hook compliance check which uses 1_000_000 for total==0).
     let satisfaction_rate_millionths = satisfied
         .saturating_mul(1_000_000)
         .checked_div(total)
-        .unwrap_or(0);
+        .unwrap_or(1_000_000);
 
     // Derive contract ID.
     let contract_schema = SchemaId::from_definition(COMPLIANCE_EVIDENCE_SCHEMA_DEF);
@@ -1747,8 +1749,12 @@ fn build_event(
     let summary = format!("{}: {}", hook_type, result.message);
     let canonical: Vec<u8> = {
         let mut buf = Vec::new();
-        buf.extend_from_slice(hook_type.as_str().as_bytes());
-        buf.extend_from_slice(result.message.as_bytes());
+        let hook_bytes = hook_type.as_str().as_bytes();
+        buf.extend_from_slice(&(hook_bytes.len() as u64).to_be_bytes());
+        buf.extend_from_slice(hook_bytes);
+        let msg_bytes = result.message.as_bytes();
+        buf.extend_from_slice(&(msg_bytes.len() as u64).to_be_bytes());
+        buf.extend_from_slice(msg_bytes);
         buf.extend_from_slice(&now.0.to_be_bytes());
         buf
     };

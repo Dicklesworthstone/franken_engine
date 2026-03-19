@@ -493,7 +493,13 @@ impl SafetyMembrane {
 
         // 8. Region validation for shared-region payloads
         for entry in &batch.entries {
-            if let BatchPayload::SharedRegion { region_id, .. } = &entry.payload {
+            if let BatchPayload::SharedRegion {
+                region_id,
+                offset,
+                length,
+                ..
+            } = &entry.payload
+            {
                 match regions.get(region_id) {
                     None => {
                         return self.record_rejection(
@@ -511,7 +517,24 @@ impl SafetyMembrane {
                             tick,
                         );
                     }
-                    _ => {}
+                    Some(region) => {
+                        // Validate that offset + length does not exceed
+                        // the region's occupied bytes (bounds check).
+                        let end = offset.saturating_add(*length);
+                        if end > region.occupied_bytes {
+                            return self.record_rejection(
+                                batch,
+                                MembraneRejectionReason::InvalidRegion,
+                                format!(
+                                    "region {region_id} access out of bounds: \
+                                     offset({offset})+length({length})={end} > \
+                                     occupied({})",
+                                    region.occupied_bytes
+                                ),
+                                tick,
+                            );
+                        }
+                    }
                 }
             }
         }

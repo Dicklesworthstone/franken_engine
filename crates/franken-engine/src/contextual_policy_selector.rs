@@ -438,11 +438,12 @@ impl ContextualSelector {
         // Check for operator override first
         for c in &self.constraints {
             if let PolicyConstraint::ForceStrategy { strategy_id } = c {
-                let kind = self
+                let matched = self
                     .strategies
                     .iter()
-                    .find(|s| s.strategy_id == *strategy_id)
-                    .map(|s| s.kind);
+                    .find(|s| s.strategy_id == *strategy_id);
+                let kind = matched.map(|s| s.kind);
+                let feasible_count = usize::from(matched.is_some());
                 return self.build_decision(
                     epoch,
                     Some(strategy_id.clone()),
@@ -451,7 +452,7 @@ impl ContextualSelector {
                         strategy_id: strategy_id.clone(),
                     },
                     Vec::new(),
-                    0,
+                    feasible_count,
                     0,
                 );
             }

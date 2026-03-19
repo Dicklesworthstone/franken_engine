@@ -1,15 +1,16 @@
 # RGC Support Surface Contract V1
 
 Status: active
-Primary bead: `bd-1lsy.10.11.2`
+Primary bead: `bd-1lsy.5.10.1`
 Machine-readable contracts:
 - `docs/support_surface_contract.json`
 - `docs/support_surface_mode_matrix.json`
 
 ## Purpose
 
-`RGC-911B` publishes the explicit support boundary that operator-facing docs,
-CLI guidance, rollout language, and downstream release gates are allowed to use.
+`RGC-408A` publishes the engine-owned support boundary that downstream product
+work, operator-facing docs, CLI guidance, rollout language, and release gates
+are allowed to use.
 
 The contract exists so the public story is derived from the same evidence that
 already governs:
@@ -103,7 +104,7 @@ Gate runs emit:
 - `events.jsonl`
 - `commands.txt`
 - `trace_ids.json`
-- `support_surface_contract_report.json`
+- `support_surface_schema_report.json`
 - `support_surface_contract.json`
 - `support_surface_mode_matrix.json`
 - `step_logs/`

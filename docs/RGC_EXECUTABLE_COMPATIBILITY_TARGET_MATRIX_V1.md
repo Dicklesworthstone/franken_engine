@@ -56,6 +56,16 @@ That extension carries explicit rows for:
 - hydration handoff artifacts
 - React diagnostics and source-map fidelity
 
+The React extension is not considered fully wired unless both of these remain
+present and reviewable:
+
+- the contract gate row via `./scripts/run_rgc_react_capability_contract.sh ci`
+- the deterministic replay row via
+  `./scripts/e2e/rgc_react_capability_contract_replay.sh ci`
+- the shared artifact bundle includes `trace_ids.json` alongside
+  `run_manifest.json`, `events.jsonl`, `commands.txt`, and
+  `react_capability_contract.json`
+
 Until the React operator surface (`bd-1lsy.10.12*`) and parity gates
 (`bd-1lsy.9.7*`) are actually green, these rows remain fail-closed. The
 contract forbids treating narrow TSX demos as evidence that "React works" in a
@@ -114,6 +124,8 @@ rch exec -- env \
   cargo test -p frankenengine-engine --test rgc_executable_compatibility_target_matrix
 
 ./scripts/run_rgc_react_capability_contract.sh ci
+
+./scripts/e2e/rgc_react_capability_contract_replay.sh ci
 
 ./scripts/run_phase_a_exit_gate.sh check
 ```

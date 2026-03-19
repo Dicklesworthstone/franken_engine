@@ -61,6 +61,7 @@
       "required_artifacts": [
         "artifacts/rgc_react_capability_contract/<timestamp>/react_capability_contract.json",
         "artifacts/rgc_react_capability_contract/<timestamp>/run_manifest.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/trace_ids.json",
         "artifacts/rgc_react_capability_contract/<timestamp>/events.jsonl",
         "artifacts/rgc_react_capability_contract/<timestamp>/commands.txt"
       ],
@@ -93,6 +94,7 @@
       "required_artifacts": [
         "artifacts/rgc_react_capability_contract/<timestamp>/react_capability_contract.json",
         "artifacts/rgc_react_capability_contract/<timestamp>/run_manifest.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/trace_ids.json",
         "artifacts/rgc_react_capability_contract/<timestamp>/events.jsonl",
         "artifacts/rgc_react_capability_contract/<timestamp>/commands.txt"
       ],
@@ -125,6 +127,7 @@
       "required_artifacts": [
         "artifacts/rgc_react_capability_contract/<timestamp>/react_capability_contract.json",
         "artifacts/rgc_react_capability_contract/<timestamp>/run_manifest.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/trace_ids.json",
         "artifacts/rgc_react_capability_contract/<timestamp>/events.jsonl",
         "artifacts/rgc_react_capability_contract/<timestamp>/commands.txt"
       ],
@@ -157,6 +160,7 @@
       "required_artifacts": [
         "artifacts/rgc_react_capability_contract/<timestamp>/react_capability_contract.json",
         "artifacts/rgc_react_capability_contract/<timestamp>/run_manifest.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/trace_ids.json",
         "artifacts/rgc_react_capability_contract/<timestamp>/events.jsonl",
         "artifacts/rgc_react_capability_contract/<timestamp>/commands.txt"
       ],
@@ -189,6 +193,7 @@
       "required_artifacts": [
         "artifacts/rgc_react_capability_contract/<timestamp>/react_capability_contract.json",
         "artifacts/rgc_react_capability_contract/<timestamp>/run_manifest.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/trace_ids.json",
         "artifacts/rgc_react_capability_contract/<timestamp>/events.jsonl",
         "artifacts/rgc_react_capability_contract/<timestamp>/commands.txt"
       ],
@@ -221,6 +226,7 @@
       "required_artifacts": [
         "artifacts/rgc_react_capability_contract/<timestamp>/react_capability_contract.json",
         "artifacts/rgc_react_capability_contract/<timestamp>/run_manifest.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/trace_ids.json",
         "artifacts/rgc_react_capability_contract/<timestamp>/events.jsonl",
         "artifacts/rgc_react_capability_contract/<timestamp>/commands.txt"
       ],
@@ -253,6 +259,7 @@
       "required_artifacts": [
         "artifacts/rgc_react_capability_contract/<timestamp>/react_capability_contract.json",
         "artifacts/rgc_react_capability_contract/<timestamp>/run_manifest.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/trace_ids.json",
         "artifacts/rgc_react_capability_contract/<timestamp>/events.jsonl",
         "artifacts/rgc_react_capability_contract/<timestamp>/commands.txt"
       ],
@@ -285,6 +292,7 @@
       "required_artifacts": [
         "artifacts/rgc_react_capability_contract/<timestamp>/react_capability_contract.json",
         "artifacts/rgc_react_capability_contract/<timestamp>/run_manifest.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/trace_ids.json",
         "artifacts/rgc_react_capability_contract/<timestamp>/events.jsonl",
         "artifacts/rgc_react_capability_contract/<timestamp>/commands.txt"
       ],
@@ -317,6 +325,7 @@
       "required_artifacts": [
         "artifacts/rgc_react_capability_contract/<timestamp>/react_capability_contract.json",
         "artifacts/rgc_react_capability_contract/<timestamp>/run_manifest.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/trace_ids.json",
         "artifacts/rgc_react_capability_contract/<timestamp>/events.jsonl",
         "artifacts/rgc_react_capability_contract/<timestamp>/commands.txt"
       ],
@@ -349,6 +358,7 @@
       "required_artifacts": [
         "artifacts/rgc_react_capability_contract/<timestamp>/react_capability_contract.json",
         "artifacts/rgc_react_capability_contract/<timestamp>/run_manifest.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/trace_ids.json",
         "artifacts/rgc_react_capability_contract/<timestamp>/events.jsonl",
         "artifacts/rgc_react_capability_contract/<timestamp>/commands.txt"
       ],
@@ -381,6 +391,7 @@
       "required_artifacts": [
         "artifacts/rgc_react_capability_contract/<timestamp>/react_capability_contract.json",
         "artifacts/rgc_react_capability_contract/<timestamp>/run_manifest.json",
+        "artifacts/rgc_react_capability_contract/<timestamp>/trace_ids.json",
         "artifacts/rgc_react_capability_contract/<timestamp>/events.jsonl",
         "artifacts/rgc_react_capability_contract/<timestamp>/commands.txt"
       ],

@@ -1,7 +1,7 @@
 {
   "schema_version": "franken-engine.rgc-support-surface-mode-matrix.v1",
   "contract_version": "1.0.0",
-  "generated_by": "bd-1lsy.10.11.2",
+  "generated_by": "bd-1lsy.5.10.1",
   "generated_at_utc": "2026-03-10T00:00:00Z",
   "modes": [
     {

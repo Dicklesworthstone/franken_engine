@@ -20,7 +20,7 @@ manifest_path="${run_dir}/run_manifest.json"
 events_path="${run_dir}/events.jsonl"
 commands_path="${run_dir}/commands.txt"
 trace_ids_path="${run_dir}/trace_ids.json"
-report_path="${run_dir}/support_surface_contract_report.json"
+schema_report_path="${run_dir}/support_surface_schema_report.json"
 copied_contract_path="${run_dir}/support_surface_contract.json"
 copied_mode_matrix_path="${run_dir}/support_surface_mode_matrix.json"
 step_logs_dir="${run_dir}/step_logs"
@@ -33,33 +33,33 @@ trace_id="trace-rgc-support-surface-contract-${timestamp}"
 decision_id="decision-rgc-support-surface-contract-${timestamp}"
 policy_id="policy-rgc-support-surface-contract-v1"
 component="rgc_support_surface_contract_gate"
-scenario_id="rgc-911b"
+scenario_id="rgc-408a"
 replay_command="./scripts/e2e/rgc_support_surface_contract_replay.sh ${mode}"
 
 mkdir -p "$run_dir" "$step_logs_dir"
 
 if [[ ! -f "$contract_doc" ]]; then
-  echo "FE-RGC-911B-CONTRACT-0001: missing contract doc (${contract_doc})" >&2
+  echo "FE-RGC-408A-CONTRACT-0001: missing contract doc (${contract_doc})" >&2
   exit 1
 fi
 
 if [[ ! -f "$contract_json" ]]; then
-  echo "FE-RGC-911B-CONTRACT-0002: missing contract JSON (${contract_json})" >&2
+  echo "FE-RGC-408A-CONTRACT-0002: missing contract JSON (${contract_json})" >&2
   exit 1
 fi
 
 if [[ ! -f "$mode_matrix_json" ]]; then
-  echo "FE-RGC-911B-CONTRACT-0003: missing mode matrix JSON (${mode_matrix_json})" >&2
+  echo "FE-RGC-408A-CONTRACT-0003: missing mode matrix JSON (${mode_matrix_json})" >&2
   exit 1
 fi
 
 if ! jq -e '.' "$contract_json" >/dev/null 2>&1; then
-  echo "FE-RGC-911B-CONTRACT-0004: failed to parse contract JSON (${contract_json})" >&2
+  echo "FE-RGC-408A-CONTRACT-0004: failed to parse contract JSON (${contract_json})" >&2
   exit 1
 fi
 
 if ! jq -e '.' "$mode_matrix_json" >/dev/null 2>&1; then
-  echo "FE-RGC-911B-CONTRACT-0005: failed to parse mode matrix JSON (${mode_matrix_json})" >&2
+  echo "FE-RGC-408A-CONTRACT-0005: failed to parse mode matrix JSON (${mode_matrix_json})" >&2
   exit 1
 fi
 
@@ -296,8 +296,8 @@ write_report() {
   mode_rows_json="$(jq '.surface_mode_rows' "$mode_matrix_json")"
 
   jq -n \
-    --arg schema_version "franken-engine.rgc-support-surface-contract.report.v1" \
-    --arg bead_id "bd-1lsy.10.11.2" \
+    --arg schema_version "franken-engine.rgc-support-surface-contract.schema-report.v1" \
+    --arg bead_id "bd-1lsy.5.10.1" \
     --arg trace_id "$trace_id" \
     --arg decision_id "$decision_id" \
     --arg policy_id "$policy_id" \
@@ -333,7 +333,7 @@ write_report() {
         mode_rows: $mode_rows
       },
       validation_errors: $validation_errors
-    }' >"$report_path"
+    }' >"$schema_report_path"
 }
 
 write_manifest() {
@@ -350,7 +350,7 @@ write_manifest() {
     error_code_json="null"
   else
     outcome="fail"
-    error_code_json='"FE-RGC-911B-GATE-0001"'
+    error_code_json='"FE-RGC-408A-GATE-0001"'
   fi
 
   write_report "$outcome"
@@ -381,7 +381,7 @@ write_manifest() {
 
   jq -n \
     --arg schema_version "franken-engine.rgc-support-surface-contract.run-manifest.v1" \
-    --arg bead_id "bd-1lsy.10.11.2" \
+    --arg bead_id "bd-1lsy.5.10.1" \
     --arg component "$component" \
     --arg scenario_id "$scenario_id" \
     --arg mode "$mode" \
@@ -398,7 +398,7 @@ write_manifest() {
     --arg events "$events_path" \
     --arg commands "$commands_path" \
     --arg trace_ids "$trace_ids_path" \
-    --arg report "$report_path" \
+    --arg schema_report "$schema_report_path" \
     --arg contract_json_path "$copied_contract_path" \
     --arg mode_matrix_json_path "$copied_mode_matrix_path" \
     --arg contract_doc_path "$contract_doc" \
@@ -432,7 +432,7 @@ write_manifest() {
         events: $events,
         commands: $commands,
         trace_ids: $trace_ids,
-        report: $report,
+        support_surface_schema_report: $schema_report,
         support_surface_contract: $contract_json_path,
         support_surface_mode_matrix: $mode_matrix_json_path,
         contract_doc: $contract_doc_path,
@@ -444,7 +444,7 @@ write_manifest() {
         ("cat " + $events),
         ("cat " + $commands),
         ("cat " + $trace_ids),
-        ("cat " + $report),
+        ("cat " + $schema_report),
         "jq empty docs/support_surface_contract.json",
         "jq empty docs/support_surface_mode_matrix.json"
       ] + $contract_operator_verification

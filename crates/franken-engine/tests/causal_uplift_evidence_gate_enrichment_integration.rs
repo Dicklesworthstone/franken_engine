@@ -37,6 +37,7 @@ fn good_backing(category: ClaimCategory) -> CausalBacking {
     }
 }
 
+#[allow(dead_code)]
 fn strong_backing(category: ClaimCategory) -> CausalBacking {
     CausalBacking {
         method: IdentificationMethod::Randomized,
@@ -204,7 +205,7 @@ fn enrich_rejection_display_effect_below_threshold() {
 
 #[test]
 fn enrich_rejection_tag_no_duplicates() {
-    let reasons = vec![
+    let reasons = [
         RejectionReason::IdentificationAbstained,
         RejectionReason::EffectBelowThreshold {
             effect_millionths: 0,

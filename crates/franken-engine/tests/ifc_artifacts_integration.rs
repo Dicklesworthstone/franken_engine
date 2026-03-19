@@ -1140,16 +1140,16 @@ fn receipt_verify_fails_wrong_key() {
 }
 
 #[test]
-fn receipt_replay_command_uses_shipped_verify_receipt_surface() {
+fn receipt_replay_command_uses_shipped_trace_replay_surface() {
     let receipt = make_receipt();
     let command = receipt.replay_command();
 
-    assert!(command.contains("frankenctl verify receipt --input <verifier_input.json>"));
-    assert!(command.contains("--receipt-id"));
-    assert!(command.contains(&receipt.receipt_id));
-    assert!(command.contains("--summary"));
-    assert!(!command.contains("frankenctl replay run --trace"));
-    assert!(!command.contains(" --receipt "));
+    assert_eq!(
+        command,
+        "frankenctl replay run --trace <trace.json> --mode strict"
+    );
+    assert!(!command.contains("frankenctl verify receipt"));
+    assert!(!command.contains("--receipt-id"));
 }
 
 // ===========================================================================

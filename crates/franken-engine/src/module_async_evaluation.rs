@@ -196,8 +196,10 @@ pub struct LinkedModule {
 pub struct RejectionLinkage {
     /// The module that was originally rejected.
     pub rejected_module: String,
-    /// The rejection reason (error value).
+    /// The rejection reason (error value hash).
     pub rejection_reason_hash: String,
+    /// Human-readable description of the exception that caused rejection.
+    pub rejection_reason_description: Option<String>,
     /// Modules directly linked to the rejected module.
     pub linked_modules: Vec<LinkedModule>,
     /// Transitive closure of all modules affected by this rejection.
@@ -223,6 +225,9 @@ pub struct AsyncModuleState {
     pub suspensions: Vec<SuspensionRecord>,
     /// If rejected, the hash of the rejection reason.
     pub rejection_reason_hash: Option<String>,
+    /// If rejected, a human-readable description of the exception that caused
+    /// rejection.  Preserved for downstream failure hooks and diagnostics.
+    pub rejection_reason_description: Option<String>,
     /// Modules that this module is waiting on.
     pub pending_dependencies: BTreeSet<String>,
     /// Whether this module has top-level await.
@@ -239,6 +244,7 @@ impl AsyncModuleState {
             evaluation_promise: None,
             suspensions: Vec::new(),
             rejection_reason_hash: None,
+            rejection_reason_description: None,
             pending_dependencies: BTreeSet::new(),
             has_top_level_await: false,
             event_seq: 0,
@@ -252,6 +258,7 @@ impl AsyncModuleState {
             evaluation_promise: Some(promise),
             suspensions: Vec::new(),
             rejection_reason_hash: None,
+            rejection_reason_description: None,
             pending_dependencies: BTreeSet::new(),
             has_top_level_await: true,
             event_seq: 0,
@@ -293,9 +300,10 @@ impl AsyncModuleState {
         self.pending_dependencies.clear();
     }
 
-    pub fn reject(&mut self, reason_hash: String) {
+    pub fn reject(&mut self, reason_hash: String, reason_description: Option<String>) {
         self.phase = AsyncModulePhase::Rejected;
         self.rejection_reason_hash = Some(reason_hash);
+        self.rejection_reason_description = reason_description;
     }
 
     pub fn add_pending_dependency(&mut self, dep: String) {
@@ -730,6 +738,9 @@ impl AsyncModuleEvaluator {
                 acc
             });
 
+        // Derive a human-readable description from the rejection reason.
+        let reason_description = Some(format!("{reason:?}"));
+
         // Mark the module as rejected.
         {
             let state =
@@ -738,7 +749,7 @@ impl AsyncModuleEvaluator {
                     .ok_or_else(|| AsyncEvalError::ModuleNotFound {
                         specifier: specifier.to_string(),
                     })?;
-            state.reject(reason_hash.clone());
+            state.reject(reason_hash.clone(), reason_description.clone());
         }
 
         self.emit_event(
@@ -780,7 +791,7 @@ impl AsyncModuleEvaluator {
             let additional_dead = if let Some(dep_state) = self.states.get_mut(module_spec)
                 && !dep_state.phase.is_terminal()
             {
-                dep_state.reject(reason_hash.clone());
+                dep_state.reject(reason_hash.clone(), reason_description.clone());
                 Some(Self::mark_bindings_dead(module_spec, live_bindings))
             } else {
                 None
@@ -804,6 +815,7 @@ impl AsyncModuleEvaluator {
         let linkage = RejectionLinkage {
             rejected_module: specifier.to_string(),
             rejection_reason_hash: reason_hash,
+            rejection_reason_description: reason_description,
             linked_modules,
             transitive_closure,
             dead_bindings,
@@ -1112,7 +1124,7 @@ mod tests {
     #[test]
     fn state_reject() {
         let mut s = AsyncModuleState::async_pending("d.js".into(), PromiseHandle(3));
-        s.reject("hash123".into());
+        s.reject("hash123".into(), Some("test rejection".into()));
         assert_eq!(s.phase, AsyncModulePhase::Rejected);
         assert_eq!(s.rejection_reason_hash, Some("hash123".to_string()));
     }
@@ -1385,6 +1397,7 @@ mod tests {
         let rl = RejectionLinkage {
             rejected_module: "bad.js".into(),
             rejection_reason_hash: "abc".into(),
+            rejection_reason_description: Some("Error: oops".into()),
             linked_modules: vec![LinkedModule {
                 module_specifier: "consumer.js".into(),
                 import_bindings: vec![],

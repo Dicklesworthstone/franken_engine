@@ -28,7 +28,7 @@ latest_complete_run_dir() {
     [[ -f "${candidate}/trace_ids.json" ]] || continue
     [[ -f "${candidate}/events.jsonl" ]] || continue
     [[ -f "${candidate}/commands.txt" ]] || continue
-    [[ -f "${candidate}/support_surface_contract_report.json" ]] || continue
+    [[ -f "${candidate}/support_surface_schema_report.json" ]] || continue
     [[ -f "${candidate}/support_surface_contract.json" ]] || continue
     [[ -f "${candidate}/support_surface_mode_matrix.json" ]] || continue
     [[ -f "${candidate}/step_logs/step_000.log" ]] || continue
@@ -69,8 +69,8 @@ echo "[rgc-support-surface-contract] latest events: ${latest_run_dir}/events.jso
 cat "${latest_run_dir}/events.jsonl"
 echo "[rgc-support-surface-contract] latest commands: ${latest_run_dir}/commands.txt"
 cat "${latest_run_dir}/commands.txt"
-echo "[rgc-support-surface-contract] latest report: ${latest_run_dir}/support_surface_contract_report.json"
-cat "${latest_run_dir}/support_surface_contract_report.json"
+echo "[rgc-support-surface-contract] latest schema report: ${latest_run_dir}/support_surface_schema_report.json"
+cat "${latest_run_dir}/support_surface_schema_report.json"
 echo "[rgc-support-surface-contract] latest contract: ${latest_run_dir}/support_surface_contract.json"
 cat "${latest_run_dir}/support_surface_contract.json"
 echo "[rgc-support-surface-contract] latest mode matrix: ${latest_run_dir}/support_surface_mode_matrix.json"

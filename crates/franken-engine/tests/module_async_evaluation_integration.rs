@@ -469,7 +469,7 @@ fn state_settle_clears_pending() {
 #[test]
 fn state_reject_stores_hash() {
     let mut state = AsyncModuleState::async_pending("m.js".into(), PromiseHandle(1));
-    state.reject("abc123".into());
+    state.reject("abc123".into(), None);
     assert_eq!(state.phase, AsyncModulePhase::Rejected);
     assert_eq!(state.rejection_reason_hash, Some("abc123".to_string()));
 }
@@ -1240,6 +1240,7 @@ fn rejection_linkage_serde_roundtrip() {
     let linkage = RejectionLinkage {
         rejected_module: "error.js".into(),
         rejection_reason_hash: "deadbeef".into(),
+        rejection_reason_description: Some("Error: test".into()),
         linked_modules: vec![
             LinkedModule {
                 module_specifier: "a.js".into(),

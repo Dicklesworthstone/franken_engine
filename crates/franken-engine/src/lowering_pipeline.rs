@@ -8414,13 +8414,10 @@ mod tests {
         // Call ops are classified as HostcallEffect and lowered to HostCall
         // at IR3 level, so check for either Call or HostCall.
         assert!(
-            ir3.module
-                .instructions
-                .iter()
-                .any(|i| matches!(
-                    i,
-                    Ir3Instruction::Call { .. } | Ir3Instruction::HostCall { .. }
-                )),
+            ir3.module.instructions.iter().any(|i| matches!(
+                i,
+                Ir3Instruction::Call { .. } | Ir3Instruction::HostCall { .. }
+            )),
             "IR3 must contain Call or HostCall for optional call"
         );
     }

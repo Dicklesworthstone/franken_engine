@@ -434,6 +434,13 @@ fn rgc_011_operator_verification_commands_are_present() {
             .any(|cmd| cmd.contains("./scripts/run_rgc_react_capability_contract.sh ci")),
         "operator verification must include react capability contract gate"
     );
+    assert!(
+        matrix
+            .operator_verification
+            .iter()
+            .any(|cmd| cmd.contains("./scripts/e2e/rgc_react_capability_contract_replay.sh ci")),
+        "operator verification must include the React capability replay wrapper"
+    );
 }
 
 #[test]
@@ -493,6 +500,85 @@ fn rgc_011_react_capability_extension_is_bound_and_covered() {
         !react.product_surface_beads.is_empty(),
         "react capability extension must name product surfaces"
     );
+}
+
+#[test]
+fn rgc_011_react_capability_extension_has_integration_and_replay_rows() {
+    let matrix = parse_matrix();
+
+    let row_kind_by_id: BTreeMap<&str, &str> = matrix
+        .coverage_rows
+        .iter()
+        .map(|row| (row.row_id.as_str(), row.test_kind.as_str()))
+        .collect();
+
+    let matched = matched_row_ids(&matrix, "bd-1lsy.1.6.1");
+    let matched_set: BTreeSet<&str> = matched.iter().copied().collect();
+    let kinds: BTreeSet<&str> = matched
+        .iter()
+        .map(|row_id| {
+            row_kind_by_id
+                .get(row_id)
+                .copied()
+                .unwrap_or_else(|| panic!("row_id {row_id} missing from row_kind index"))
+        })
+        .collect();
+
+    assert!(
+        matched_set.contains("rgc-react-capability-contract"),
+        "react capability extension must keep the integration contract row"
+    );
+    assert!(
+        matched_set.contains("rgc-react-capability-contract-replay"),
+        "react capability extension must keep the replay/e2e contract row"
+    );
+    assert!(
+        kinds.contains("integration"),
+        "react capability extension must keep integration coverage"
+    );
+    assert!(
+        kinds.contains("e2e"),
+        "react capability extension must keep replay/e2e coverage"
+    );
+
+    let replay_row = matrix
+        .coverage_rows
+        .iter()
+        .find(|row| row.row_id == "rgc-react-capability-contract-replay")
+        .expect("missing react capability replay row");
+    assert_eq!(replay_row.test_kind, "e2e");
+    assert_eq!(
+        replay_row.harness_entrypoint,
+        "./scripts/e2e/rgc_react_capability_contract_replay.sh ci"
+    );
+    assert_eq!(
+        replay_row.deterministic_seed_policy,
+        "fixed-seed-react-capability-contract-v1"
+    );
+}
+
+#[test]
+fn rgc_011_react_capability_rows_require_trace_ids_artifact() {
+    let matrix = parse_matrix();
+
+    for row_id in [
+        "rgc-react-capability-contract",
+        "rgc-react-capability-contract-replay",
+    ] {
+        let row = matrix
+            .coverage_rows
+            .iter()
+            .find(|row| row.row_id == row_id)
+            .unwrap_or_else(|| panic!("missing React matrix row {row_id}"));
+
+        assert!(
+            row.artifact_paths
+                .iter()
+                .any(|path| path.ends_with("trace_ids.json")),
+            "React matrix row {} must require trace_ids.json in artifact_paths",
+            row_id
+        );
+    }
 }
 
 #[test]

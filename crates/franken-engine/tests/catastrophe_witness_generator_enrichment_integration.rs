@@ -609,7 +609,7 @@ fn manifest_has_boundaries_and_witnesses() {
 
 #[test]
 fn witness_error_display_all_distinct() {
-    let errors = vec![
+    let errors = [
         WitnessError::NoBoundaryDetected,
         WitnessError::MinimizationFailed,
         WitnessError::RegionClassificationAmbiguous,

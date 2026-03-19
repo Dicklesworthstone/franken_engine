@@ -135,6 +135,18 @@ fn rgc_016a_doc_contains_required_sections() {
 }
 
 #[test]
+fn rgc_016a_doc_mentions_trace_ids_artifact() {
+    let path = repo_root().join("docs/RGC_REACT_CAPABILITY_CONTRACT_V1.md");
+    let doc = fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+
+    assert!(
+        doc.contains("trace_ids.json"),
+        "React capability contract doc must mention trace_ids.json"
+    );
+}
+
+#[test]
 fn rgc_016a_contract_is_versioned_and_matrix_bound() {
     let contract = parse_contract();
 
@@ -260,6 +272,13 @@ fn rgc_016a_rows_bind_to_implementation_parity_and_product_surfaces() {
                 row.capability_id
             );
         }
+        assert!(
+            row.required_artifacts
+                .iter()
+                .any(|artifact| artifact.ends_with("trace_ids.json")),
+            "trace_ids artifact missing for {}",
+            row.capability_id
+        );
     }
 }
 
@@ -375,6 +394,46 @@ fn rgc_016a_operator_verification_commands_are_present() {
             .iter()
             .any(|cmd| cmd.contains("./scripts/e2e/rgc_react_capability_contract_replay.sh ci")),
         "operator verification must include the replay wrapper"
+    );
+}
+
+#[test]
+fn rgc_016a_gate_script_emits_trace_ids_and_manifest_references_it() {
+    let path = repo_root().join("scripts/run_rgc_react_capability_contract.sh");
+    let script = fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+
+    assert!(
+        script.contains("trace_ids_path=\"${run_dir}/trace_ids.json\""),
+        "gate script must define a trace_ids artifact path"
+    );
+    assert!(
+        script.contains("write_trace_ids()"),
+        "gate script must emit a trace_ids artifact"
+    );
+    assert!(
+        script.contains("\"trace_ids\": \"${trace_ids_path}\""),
+        "run manifest must publish the trace_ids artifact path"
+    );
+    assert!(
+        script.contains("cat ${trace_ids_path}"),
+        "operator verification must surface the trace_ids artifact"
+    );
+}
+
+#[test]
+fn rgc_016a_replay_wrapper_surfaces_trace_ids_artifact() {
+    let path = repo_root().join("scripts/e2e/rgc_react_capability_contract_replay.sh");
+    let script = fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+
+    assert!(
+        script.contains("trace_ids.json"),
+        "replay wrapper must require the trace_ids artifact"
+    );
+    assert!(
+        script.contains("latest trace ids"),
+        "replay wrapper must print the latest trace ids artifact"
     );
 }
 
@@ -650,7 +709,12 @@ fn rgc_016a_diagnostic_message_templates_are_non_empty() {
 fn rgc_016a_required_artifacts_include_triad() {
     let contract = parse_contract();
     for row in &contract.capability_rows {
-        for expected_suffix in ["run_manifest.json", "events.jsonl", "commands.txt"] {
+        for expected_suffix in [
+            "run_manifest.json",
+            "trace_ids.json",
+            "events.jsonl",
+            "commands.txt",
+        ] {
             assert!(
                 row.required_artifacts
                     .iter()
@@ -806,8 +870,8 @@ fn rgc_016a_required_artifacts_count_per_row() {
     let contract = parse_contract();
     for row in &contract.capability_rows {
         assert!(
-            row.required_artifacts.len() >= 4,
-            "capability {} must have at least 4 required artifacts, found {}",
+            row.required_artifacts.len() >= 5,
+            "capability {} must have at least 5 required artifacts, found {}",
             row.capability_id,
             row.required_artifacts.len()
         );

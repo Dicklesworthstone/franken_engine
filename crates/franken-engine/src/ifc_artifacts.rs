@@ -782,14 +782,11 @@ impl DeclassificationReceipt {
     /// Deterministic operator command for receipt-linked triage on the shipped
     /// CLI surface.
     ///
-    /// The current public `frankenctl` contract exposes receipt verification,
-    /// not a receipt-scoped replay subcommand, so this command intentionally
-    /// anchors operators on `verify receipt`.
+    /// `frankenctl verify receipt` currently verifies optimizer `OptReceipt`
+    /// payloads, not IFC `DeclassificationReceipt` records, so IFC receipts
+    /// must anchor operators on the shipped trace replay surface instead.
     pub fn replay_command(&self) -> String {
-        format!(
-            "frankenctl verify receipt --input <verifier_input.json> --receipt-id {} --summary",
-            self.receipt_id
-        )
+        "frankenctl replay run --trace <trace.json> --mode strict".to_string()
     }
 }
 
@@ -1362,15 +1359,15 @@ mod tests {
     }
 
     #[test]
-    fn receipt_replay_command_matches_shipped_verify_receipt_surface() {
+    fn receipt_replay_command_matches_shipped_trace_replay_surface() {
         let receipt = make_receipt();
         let command = receipt.replay_command();
-        assert!(command.contains("frankenctl verify receipt --input <verifier_input.json>"));
-        assert!(command.contains("--receipt-id"));
-        assert!(command.contains(&receipt.receipt_id));
-        assert!(command.contains("--summary"));
-        assert!(!command.contains("frankenctl replay run --trace"));
-        assert!(!command.contains(" --receipt "));
+        assert_eq!(
+            command,
+            "frankenctl replay run --trace <trace.json> --mode strict"
+        );
+        assert!(!command.contains("frankenctl verify receipt"));
+        assert!(!command.contains("--receipt-id"));
     }
 
     #[test]

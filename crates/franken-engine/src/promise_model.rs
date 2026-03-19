@@ -1037,6 +1037,260 @@ impl PromiseAnyTracker {
 }
 
 // ---------------------------------------------------------------------------
+// Exception → rejection bridge (bd-1lsy.4.13.3)
+// ---------------------------------------------------------------------------
+
+/// Outcome of bridging an exception into the async/module rejection system.
+///
+/// When an uncaught exception escapes an async function body or a module's
+/// top-level evaluation, the runtime must convert it into a promise rejection
+/// and, if the execution was a module evaluation, propagate the rejection
+/// through the module dependency graph.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExceptionRejectionOutcome {
+    /// The promise that was rejected (if the exception occurred in an async context).
+    pub rejected_promise: Option<PromiseHandle>,
+    /// The JsValue representation of the thrown exception.
+    pub rejection_reason: JsValue,
+    /// Human-readable description of the exception for diagnostics.
+    pub reason_description: String,
+    /// The module specifier if the exception occurred during module evaluation.
+    pub module_specifier: Option<String>,
+    /// Whether the rejection was propagated to dependent modules.
+    pub propagated: bool,
+    /// Number of dependent modules affected by transitive rejection.
+    pub affected_module_count: usize,
+}
+
+/// The boundary context at which an exception crossed into the
+/// async/module rejection system.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExceptionBoundaryKind {
+    /// Exception escaped an async function body — becomes promise rejection.
+    AsyncFunctionBody,
+    /// Exception occurred during top-level module evaluation — becomes module rejection.
+    ModuleEvaluation,
+    /// Exception propagated through a hostcall boundary.
+    HostcallBoundary,
+    /// Exception crossed a microtask (promise reaction) boundary.
+    MicrotaskReaction,
+}
+
+/// Witness event for exception-to-rejection transitions, recorded for
+/// deterministic replay.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExceptionRejectionWitnessEvent {
+    /// The boundary at which the exception was converted.
+    pub boundary: ExceptionBoundaryKind,
+    /// The promise that was rejected (if any).
+    pub promise: Option<PromiseHandle>,
+    /// Description of the exception.
+    pub exception_description: String,
+    /// Module specifier (if module evaluation context).
+    pub module_specifier: Option<String>,
+    /// Monotonic sequence number for deterministic ordering.
+    pub seq: u64,
+}
+
+/// Bridge that converts uncaught interpreter exceptions into promise
+/// rejections and module-graph rejection propagation.
+///
+/// This is the critical connection between the synchronous exception
+/// unwinding system ([`baseline_interpreter`] `Throw` / `CatchFrame`)
+/// and the asynchronous promise/module rejection system.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ExceptionToRejectionBridge {
+    /// Monotonic sequence counter for deterministic witness ordering.
+    next_seq: u64,
+    /// Witness log for replay.
+    witness: Vec<ExceptionRejectionWitnessEvent>,
+}
+
+impl ExceptionToRejectionBridge {
+    pub fn new() -> Self {
+        Self {
+            next_seq: 0,
+            witness: Vec::new(),
+        }
+    }
+
+    /// Bridge an uncaught exception from an async function body into
+    /// a promise rejection.
+    ///
+    /// The caller must supply the promise handle associated with the
+    /// async function's implicit result promise.
+    pub fn bridge_async_exception(
+        &mut self,
+        exception_value: JsValue,
+        async_promise: PromiseHandle,
+        store: &mut PromiseStore,
+        queue: &mut MicrotaskQueue,
+    ) -> Result<ExceptionRejectionOutcome, PromiseError> {
+        let description = format!("{exception_value:?}");
+
+        store.reject(
+            async_promise,
+            exception_value.clone(),
+            Label::Internal,
+            queue,
+        )?;
+
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        self.witness.push(ExceptionRejectionWitnessEvent {
+            boundary: ExceptionBoundaryKind::AsyncFunctionBody,
+            promise: Some(async_promise),
+            exception_description: description.clone(),
+            module_specifier: None,
+            seq,
+        });
+
+        Ok(ExceptionRejectionOutcome {
+            rejected_promise: Some(async_promise),
+            rejection_reason: exception_value,
+            reason_description: description,
+            module_specifier: None,
+            propagated: false,
+            affected_module_count: 0,
+        })
+    }
+
+    /// Bridge an uncaught exception from module evaluation into
+    /// a module rejection, propagating through the dependency graph.
+    ///
+    /// This is called when top-level evaluation of a module throws.
+    /// The rejection cascades to all modules that depend on the
+    /// rejected module.
+    pub fn bridge_module_exception(
+        &mut self,
+        exception_value: JsValue,
+        module_specifier: &str,
+        module_promise: Option<PromiseHandle>,
+        store: &mut PromiseStore,
+        queue: &mut MicrotaskQueue,
+    ) -> Result<ExceptionRejectionOutcome, PromiseError> {
+        let description = format!("{exception_value:?}");
+
+        // Reject the module's evaluation promise (if it has one).
+        if let Some(promise_handle) = module_promise {
+            store.reject(
+                promise_handle,
+                exception_value.clone(),
+                Label::Internal,
+                queue,
+            )?;
+        }
+
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        self.witness.push(ExceptionRejectionWitnessEvent {
+            boundary: ExceptionBoundaryKind::ModuleEvaluation,
+            promise: module_promise,
+            exception_description: description.clone(),
+            module_specifier: Some(module_specifier.to_string()),
+            seq,
+        });
+
+        Ok(ExceptionRejectionOutcome {
+            rejected_promise: module_promise,
+            rejection_reason: exception_value,
+            reason_description: description,
+            module_specifier: Some(module_specifier.to_string()),
+            propagated: false,
+            affected_module_count: 0,
+        })
+    }
+
+    /// Bridge an exception that escaped a hostcall boundary.
+    pub fn bridge_hostcall_exception(
+        &mut self,
+        exception_value: JsValue,
+        caller_promise: Option<PromiseHandle>,
+        store: &mut PromiseStore,
+        queue: &mut MicrotaskQueue,
+    ) -> Result<ExceptionRejectionOutcome, PromiseError> {
+        let description = format!("{exception_value:?}");
+
+        if let Some(promise_handle) = caller_promise {
+            store.reject(
+                promise_handle,
+                exception_value.clone(),
+                Label::Internal,
+                queue,
+            )?;
+        }
+
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        self.witness.push(ExceptionRejectionWitnessEvent {
+            boundary: ExceptionBoundaryKind::HostcallBoundary,
+            promise: caller_promise,
+            exception_description: description.clone(),
+            module_specifier: None,
+            seq,
+        });
+
+        Ok(ExceptionRejectionOutcome {
+            rejected_promise: caller_promise,
+            rejection_reason: exception_value,
+            reason_description: description,
+            module_specifier: None,
+            propagated: false,
+            affected_module_count: 0,
+        })
+    }
+
+    /// Bridge an exception that escaped a microtask reaction callback.
+    pub fn bridge_microtask_exception(
+        &mut self,
+        exception_value: JsValue,
+        result_promise: Option<PromiseHandle>,
+        store: &mut PromiseStore,
+        queue: &mut MicrotaskQueue,
+    ) -> Result<ExceptionRejectionOutcome, PromiseError> {
+        let description = format!("{exception_value:?}");
+
+        if let Some(promise_handle) = result_promise {
+            store.reject(
+                promise_handle,
+                exception_value.clone(),
+                Label::Internal,
+                queue,
+            )?;
+        }
+
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        self.witness.push(ExceptionRejectionWitnessEvent {
+            boundary: ExceptionBoundaryKind::MicrotaskReaction,
+            promise: result_promise,
+            exception_description: description.clone(),
+            module_specifier: None,
+            seq,
+        });
+
+        Ok(ExceptionRejectionOutcome {
+            rejected_promise: result_promise,
+            rejection_reason: exception_value,
+            reason_description: description,
+            module_specifier: None,
+            propagated: false,
+            affected_module_count: 0,
+        })
+    }
+
+    /// Get the witness log for replay/forensics.
+    pub fn witness_log(&self) -> &[ExceptionRejectionWitnessEvent] {
+        &self.witness
+    }
+
+    /// Number of exception-to-rejection transitions recorded.
+    pub fn transition_count(&self) -> u64 {
+        self.next_seq
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -2204,5 +2458,178 @@ mod tests {
             assert!(seen.insert(v.to_string()), "duplicate display: {v}");
         }
         assert_eq!(seen.len(), 3);
+    }
+
+    // ----- ExceptionToRejectionBridge tests (bd-1lsy.4.13.3) -----
+
+    #[test]
+    fn bridge_async_exception_rejects_promise() {
+        let mut store = PromiseStore::new();
+        let mut queue = MicrotaskQueue::new();
+        let mut bridge = ExceptionToRejectionBridge::new();
+        let promise = store.create();
+
+        let outcome = bridge
+            .bridge_async_exception(js_str("async error"), promise, &mut store, &mut queue)
+            .expect("bridge should succeed");
+
+        assert_eq!(outcome.rejected_promise, Some(promise));
+        assert_eq!(outcome.rejection_reason, js_str("async error"));
+        assert!(!outcome.propagated);
+        assert_eq!(outcome.affected_module_count, 0);
+        assert!(outcome.module_specifier.is_none());
+
+        let p = store.get(promise).unwrap();
+        assert!(p.state.is_rejected());
+    }
+
+    #[test]
+    fn bridge_module_exception_rejects_promise() {
+        let mut store = PromiseStore::new();
+        let mut queue = MicrotaskQueue::new();
+        let mut bridge = ExceptionToRejectionBridge::new();
+        let module_promise = store.create();
+
+        let outcome = bridge
+            .bridge_module_exception(
+                js_str("module error"),
+                "mod.js",
+                Some(module_promise),
+                &mut store,
+                &mut queue,
+            )
+            .expect("bridge should succeed");
+
+        assert_eq!(outcome.rejected_promise, Some(module_promise));
+        assert_eq!(outcome.module_specifier.as_deref(), Some("mod.js"));
+
+        let p = store.get(module_promise).unwrap();
+        assert!(p.state.is_rejected());
+    }
+
+    #[test]
+    fn bridge_module_exception_without_promise() {
+        let mut store = PromiseStore::new();
+        let mut queue = MicrotaskQueue::new();
+        let mut bridge = ExceptionToRejectionBridge::new();
+
+        let outcome = bridge
+            .bridge_module_exception(
+                js_str("sync module error"),
+                "sync_mod.js",
+                None,
+                &mut store,
+                &mut queue,
+            )
+            .expect("bridge without promise should succeed");
+
+        assert!(outcome.rejected_promise.is_none());
+        assert_eq!(outcome.module_specifier.as_deref(), Some("sync_mod.js"));
+    }
+
+    #[test]
+    fn bridge_hostcall_exception_rejects_caller_promise() {
+        let mut store = PromiseStore::new();
+        let mut queue = MicrotaskQueue::new();
+        let mut bridge = ExceptionToRejectionBridge::new();
+        let caller = store.create();
+
+        let outcome = bridge
+            .bridge_hostcall_exception(js_int(500), Some(caller), &mut store, &mut queue)
+            .expect("hostcall bridge should succeed");
+
+        assert_eq!(outcome.rejected_promise, Some(caller));
+        let p = store.get(caller).unwrap();
+        assert!(p.state.is_rejected());
+    }
+
+    #[test]
+    fn bridge_microtask_exception_rejects_result_promise() {
+        let mut store = PromiseStore::new();
+        let mut queue = MicrotaskQueue::new();
+        let mut bridge = ExceptionToRejectionBridge::new();
+        let result = store.create();
+
+        let outcome = bridge
+            .bridge_microtask_exception(
+                js_str("reaction error"),
+                Some(result),
+                &mut store,
+                &mut queue,
+            )
+            .expect("microtask bridge should succeed");
+
+        assert_eq!(outcome.rejected_promise, Some(result));
+        let p = store.get(result).unwrap();
+        assert!(p.state.is_rejected());
+    }
+
+    #[test]
+    fn bridge_witness_log_records_transitions() {
+        let mut store = PromiseStore::new();
+        let mut queue = MicrotaskQueue::new();
+        let mut bridge = ExceptionToRejectionBridge::new();
+
+        let p1 = store.create();
+        let p2 = store.create();
+
+        bridge
+            .bridge_async_exception(js_str("err1"), p1, &mut store, &mut queue)
+            .unwrap();
+        bridge
+            .bridge_module_exception(js_str("err2"), "m.js", Some(p2), &mut store, &mut queue)
+            .unwrap();
+
+        let log = bridge.witness_log();
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[0].boundary, ExceptionBoundaryKind::AsyncFunctionBody);
+        assert_eq!(log[0].seq, 0);
+        assert_eq!(log[1].boundary, ExceptionBoundaryKind::ModuleEvaluation);
+        assert_eq!(log[1].seq, 1);
+        assert_eq!(bridge.transition_count(), 2);
+    }
+
+    #[test]
+    fn bridge_outcome_serde_roundtrip() {
+        let outcome = ExceptionRejectionOutcome {
+            rejected_promise: Some(PromiseHandle(7)),
+            rejection_reason: js_str("test"),
+            reason_description: "test description".to_string(),
+            module_specifier: Some("mod.js".to_string()),
+            propagated: true,
+            affected_module_count: 3,
+        };
+        let json = serde_json::to_string(&outcome).unwrap();
+        let back: ExceptionRejectionOutcome = serde_json::from_str(&json).unwrap();
+        assert_eq!(outcome, back);
+    }
+
+    #[test]
+    fn bridge_witness_event_serde_roundtrip() {
+        let event = ExceptionRejectionWitnessEvent {
+            boundary: ExceptionBoundaryKind::HostcallBoundary,
+            promise: Some(PromiseHandle(3)),
+            exception_description: "hostcall failure".to_string(),
+            module_specifier: None,
+            seq: 42,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let back: ExceptionRejectionWitnessEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, back);
+    }
+
+    #[test]
+    fn exception_boundary_kind_serde_roundtrip() {
+        let variants = vec![
+            ExceptionBoundaryKind::AsyncFunctionBody,
+            ExceptionBoundaryKind::ModuleEvaluation,
+            ExceptionBoundaryKind::HostcallBoundary,
+            ExceptionBoundaryKind::MicrotaskReaction,
+        ];
+        for v in &variants {
+            let json = serde_json::to_string(v).unwrap();
+            let back: ExceptionBoundaryKind = serde_json::from_str(&json).unwrap();
+            assert_eq!(v, &back);
+        }
     }
 }

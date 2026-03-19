@@ -108,6 +108,7 @@ Artifacts are emitted under:
 with:
 
 - `run_manifest.json`
+- `trace_ids.json`
 - `events.jsonl`
 - `commands.txt`
 - `react_capability_contract.json`

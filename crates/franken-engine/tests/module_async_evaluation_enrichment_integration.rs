@@ -227,7 +227,7 @@ fn state_settle_clears_deps() {
 #[test]
 fn state_reject_sets_hash() {
     let mut s = AsyncModuleState::async_pending("m.js".into(), PromiseHandle(1));
-    s.reject("hash123".into());
+    s.reject("hash123".into(), None);
     assert_eq!(s.phase, AsyncModulePhase::Rejected);
     assert_eq!(s.rejection_reason_hash, Some("hash123".to_string()));
 }
@@ -693,6 +693,7 @@ fn rejection_linkage_serde_roundtrip() {
     let rl = RejectionLinkage {
         rejected_module: "bad.js".into(),
         rejection_reason_hash: "abc123".into(),
+        rejection_reason_description: Some("Error: bad module".into()),
         linked_modules: vec![LinkedModule {
             module_specifier: "consumer.js".into(),
             import_bindings: vec![BindingId::new("bad.js", "x")],

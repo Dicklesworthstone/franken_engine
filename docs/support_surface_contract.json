@@ -1,9 +1,9 @@
 {
   "schema_version": "franken-engine.rgc-support-surface-contract.v1",
   "contract_version": "1.0.0",
-  "bead_id": "bd-1lsy.10.11.2",
+  "bead_id": "bd-1lsy.5.10.1",
   "policy_id": "policy-rgc-support-surface-contract-v1",
-  "generated_by": "bd-1lsy.10.11.2",
+  "generated_by": "bd-1lsy.5.10.1",
   "generated_at_utc": "2026-03-10T00:00:00Z",
   "source_inputs": [
     "docs/RGC_SUPPORT_SURFACE_CONTRACT_V1.md",
@@ -409,7 +409,7 @@
     "events.jsonl",
     "commands.txt",
     "trace_ids.json",
-    "support_surface_contract_report.json",
+    "support_surface_schema_report.json",
     "support_surface_contract.json",
     "support_surface_mode_matrix.json",
     "step_logs/step_*.log"

@@ -214,7 +214,7 @@ fn rgc_911b_contract_is_versioned_and_covers_required_areas() {
 
     assert_eq!(contract.schema_version, CONTRACT_SCHEMA_VERSION);
     assert_eq!(contract.contract_version, "1.0.0");
-    assert_eq!(contract.bead_id, "bd-1lsy.10.11.2");
+    assert_eq!(contract.bead_id, "bd-1lsy.5.10.1");
     assert_eq!(contract.policy_id, "policy-rgc-support-surface-contract-v1");
 
     let statuses: BTreeSet<_> = contract
@@ -513,7 +513,7 @@ fn rgc_911b_mode_matrix_is_versioned_and_complete() {
 
     assert_eq!(matrix.schema_version, MODE_MATRIX_SCHEMA_VERSION);
     assert_eq!(matrix.contract_version, "1.0.0");
-    assert_eq!(matrix.generated_by, "bd-1lsy.10.11.2");
+    assert_eq!(matrix.generated_by, "bd-1lsy.5.10.1");
     assert!(matrix.generated_at_utc.ends_with('Z'));
 
     let mode_ids: BTreeSet<_> = matrix
@@ -620,7 +620,7 @@ fn rgc_911b_contract_references_gate_and_expected_artifacts() {
         "events.jsonl",
         "commands.txt",
         "trace_ids.json",
-        "support_surface_contract_report.json",
+        "support_surface_schema_report.json",
         "support_surface_contract.json",
         "support_surface_mode_matrix.json",
         "step_logs/step_*.log",
@@ -698,6 +698,10 @@ fn rgc_911b_gate_script_manifest_reuses_contract_operator_verification_commands(
         script.contains("] + $contract_operator_verification"),
         "gate manifest should append the published operator verification commands"
     );
+    assert!(
+        script.contains("support_surface_schema_report: $schema_report"),
+        "gate manifest should expose the schema report artifact under an explicit key"
+    );
 }
 
 #[test]
@@ -721,8 +725,9 @@ fn rgc_911b_replay_wrapper_uses_latest_complete_bundle() {
         "replay wrapper should print the trace identifiers"
     );
     assert!(
-        script.contains("latest report: ${latest_run_dir}/support_surface_contract_report.json"),
-        "replay wrapper should print the support-surface report"
+        script
+            .contains("latest schema report: ${latest_run_dir}/support_surface_schema_report.json"),
+        "replay wrapper should print the support-surface schema report"
     );
     assert!(
         script.contains("latest contract: ${latest_run_dir}/support_surface_contract.json"),
@@ -1017,7 +1022,7 @@ fn enrichment_contract_serde_roundtrip_via_json_value() {
     let contract: SupportSurfaceContract =
         serde_json::from_str(&re_serialized).expect("roundtrip contract must parse");
     assert_eq!(contract.schema_version, CONTRACT_SCHEMA_VERSION);
-    assert_eq!(contract.bead_id, "bd-1lsy.10.11.2");
+    assert_eq!(contract.bead_id, "bd-1lsy.5.10.1");
     assert!(!contract.surface_rows.is_empty());
 }
 

@@ -15,6 +15,7 @@ rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/run_manifest.json"
+trace_ids_path="${run_dir}/trace_ids.json"
 events_path="${run_dir}/events.jsonl"
 commands_path="${run_dir}/commands.txt"
 contract_artifact_path="${run_dir}/react_capability_contract.json"
@@ -137,6 +138,19 @@ run_mode() {
   esac
 }
 
+write_trace_ids() {
+  cat >"${trace_ids_path}" <<EOF_TRACE
+{
+  "schema_version": "franken-engine.rgc-react-capability-contract.trace-ids.v1",
+  "bead_id": "bd-1lsy.1.6.1",
+  "component": "${component}",
+  "policy_id": "${policy_id}",
+  "trace_ids": ["${trace_id}"],
+  "decision_ids": ["${decision_id}"]
+}
+EOF_TRACE
+}
+
 write_manifest() {
   local exit_code="${1:-0}"
   local outcome error_code_json git_commit dirty_worktree idx comma
@@ -203,6 +217,7 @@ write_manifest() {
     echo '  ],'
     echo '  "artifacts": {'
     echo "    \"manifest\": \"${manifest_path}\","
+    echo "    \"trace_ids\": \"${trace_ids_path}\","
     echo "    \"events\": \"${events_path}\","
     echo "    \"commands\": \"${commands_path}\","
     echo "    \"react_capability_contract\": \"${contract_artifact_path}\","
@@ -217,6 +232,7 @@ write_manifest() {
     echo '  },'
     echo '  "operator_verification": ['
     echo "    \"cat ${manifest_path}\","
+    echo "    \"cat ${trace_ids_path}\","
     echo "    \"cat ${events_path}\","
     echo "    \"cat ${commands_path}\","
     echo "    \"cat ${contract_artifact_path}\","
@@ -231,5 +247,7 @@ write_manifest() {
 
 main_exit=0
 run_mode || main_exit=$?
+write_trace_ids
 write_manifest "$main_exit"
+echo "rgc react capability contract trace ids: ${trace_ids_path}"
 exit "$main_exit"

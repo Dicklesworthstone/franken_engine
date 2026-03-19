@@ -23,9 +23,12 @@ fn constants_are_consistent() {
     assert!(BEAD_ID.starts_with("bd-"));
     assert!(POLICY_ID.starts_with("RGC-"));
     assert_eq!(FIXED_ONE, 1_000_000);
-    assert!(DEFAULT_MAX_REPRO_LINES > 0);
-    assert!(DEFAULT_MIN_REDUCTION_RATIO > 0);
-    assert!(DEFAULT_MAX_TRIAGE_LATENCY_NS > 0);
+    let max_lines = DEFAULT_MAX_REPRO_LINES;
+    assert!(max_lines > 0);
+    let min_ratio = DEFAULT_MIN_REDUCTION_RATIO;
+    assert!(min_ratio > 0);
+    let max_latency = DEFAULT_MAX_TRIAGE_LATENCY_NS;
+    assert!(max_latency > 0);
 }
 
 // ---------------------------------------------------------------------------

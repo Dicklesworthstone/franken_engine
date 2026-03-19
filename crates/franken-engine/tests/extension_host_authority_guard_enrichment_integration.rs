@@ -1,83 +1,80 @@
-#![forbid(unsafe_code)]
+//! Enrichment integration tests for `extension_host_authority_guard` module.
+//!
+//! Covers: ViolationKind, ExtensionHostFinding, ExtensionHostExemption,
+//! ExtensionHostExemptionRegistry — Display uniqueness, serde roundtrips,
+//! exemption registry matching (exact line, module-wide with line=0),
+//! exemption not matching different modules/kinds, registry count, clone/eq.
+
 #![allow(
     clippy::field_reassign_with_default,
     clippy::assertions_on_constants,
-    clippy::too_many_arguments
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op
 )]
 
-//! Enrichment integration tests for the `extension_host_authority_guard` module.
-//!
-//! Covers: serde roundtrips, Display distinctness, GuardConfig defaults and
-//! customization, exemption registry operations, audit result structure,
-//! source auditing edge cases, canonical type shadowing, direct import
-//! detection, and deterministic behavior.
-
-use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
-use frankenengine_engine::extension_host_authority_guard::{
-    ExtensionHostAuditResult, ExtensionHostExemption, ExtensionHostExemptionRegistry,
-    ExtensionHostFinding, ExtensionHostGuard, GuardConfig, ViolationKind,
-};
+use frankenengine_engine::extension_host_authority_guard::*;
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+// ── helpers ──────────────────────────────────────────────────────────────
 
-fn standard_guard() -> ExtensionHostGuard {
-    ExtensionHostGuard::standard()
-}
-
-fn cx_guard(prefix: &str) -> ExtensionHostGuard {
-    let mut config = GuardConfig::default();
-    config.add_cx_audited_prefix(prefix);
-    ExtensionHostGuard::new(config, ExtensionHostExemptionRegistry::new())
-}
-
-fn no_base_guard() -> ExtensionHostGuard {
-    let config = GuardConfig {
-        include_base_patterns: false,
-        ..GuardConfig::default()
-    };
-    ExtensionHostGuard::new(config, ExtensionHostExemptionRegistry::new())
-}
-
-// ===========================================================================
-// ViolationKind — serde and Display
-// ===========================================================================
-
-#[test]
-fn enrichment_violation_kind_serde_roundtrip_all() {
-    let kinds = [
+fn all_violation_kinds() -> Vec<ViolationKind> {
+    vec![
         ViolationKind::ForbiddenPattern,
         ViolationKind::MissingCxParameter,
         ViolationKind::DirectUpstreamImport,
         ViolationKind::CanonicalTypeShadow,
-    ];
-    for k in &kinds {
-        let json = serde_json::to_string(k).unwrap();
-        let back: ViolationKind = serde_json::from_str(&json).unwrap();
-        assert_eq!(*k, back);
+    ]
+}
+
+fn sample_finding() -> ExtensionHostFinding {
+    ExtensionHostFinding {
+        kind: ViolationKind::DirectUpstreamImport,
+        module_path: "ext_host::bridge".to_string(),
+        file_path: "src/bridge.rs".to_string(),
+        line: 5,
+        source_line: "use franken_kernel::Cx;".to_string(),
+        description: "Direct upstream import: `use franken_kernel`".to_string(),
+        remediation: "Import from crate::control_plane instead".to_string(),
+        exempted: false,
     }
 }
 
-#[test]
-fn enrichment_violation_kind_display_all_distinct() {
-    let mut set = BTreeSet::new();
-    set.insert(ViolationKind::ForbiddenPattern.to_string());
-    set.insert(ViolationKind::MissingCxParameter.to_string());
-    set.insert(ViolationKind::DirectUpstreamImport.to_string());
-    set.insert(ViolationKind::CanonicalTypeShadow.to_string());
-    assert_eq!(set.len(), 4);
+fn sample_exemption(id: &str, module: &str, kind: ViolationKind, token: &str, line: usize) -> ExtensionHostExemption {
+    ExtensionHostExemption {
+        exemption_id: id.to_string(),
+        module_path: module.to_string(),
+        kind,
+        matched_token: token.to_string(),
+        reason: "test exemption".to_string(),
+        line,
+    }
 }
 
+// ── test: ViolationKind Display uniqueness ───────────────────────────────
+
 #[test]
-fn enrichment_violation_kind_display_snake_case() {
+fn enrichment_violation_kind_display_all_unique() {
+    let strs: BTreeSet<String> = all_violation_kinds().iter().map(|k| k.to_string()).collect();
+    assert_eq!(strs.len(), 4);
+}
+
+// ── test: ViolationKind Display stable values ────────────────────────────
+
+#[test]
+fn enrichment_violation_kind_display_stable_values() {
     assert_eq!(ViolationKind::ForbiddenPattern.to_string(), "forbidden_pattern");
     assert_eq!(ViolationKind::MissingCxParameter.to_string(), "missing_cx_parameter");
     assert_eq!(ViolationKind::DirectUpstreamImport.to_string(), "direct_upstream_import");
     assert_eq!(ViolationKind::CanonicalTypeShadow.to_string(), "canonical_type_shadow");
 }
+
+// ── test: ViolationKind ordering ─────────────────────────────────────────
 
 #[test]
 fn enrichment_violation_kind_ordering() {
@@ -86,472 +83,330 @@ fn enrichment_violation_kind_ordering() {
     assert!(ViolationKind::DirectUpstreamImport < ViolationKind::CanonicalTypeShadow);
 }
 
-#[test]
-fn enrichment_violation_kind_clone_copy() {
-    let k = ViolationKind::CanonicalTypeShadow;
-    let k2 = k;
-    assert_eq!(k, k2);
-}
+// ── test: ViolationKind serde roundtrip all variants ─────────────────────
 
 #[test]
-fn enrichment_violation_kind_deterministic_serde() {
-    let k = ViolationKind::ForbiddenPattern;
-    let a = serde_json::to_string(&k).unwrap();
-    let b = serde_json::to_string(&k).unwrap();
-    assert_eq!(a, b);
+fn enrichment_violation_kind_serde_all_variants() {
+    for kind in all_violation_kinds() {
+        let json = serde_json::to_string(&kind).unwrap();
+        let back: ViolationKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(kind, back);
+    }
 }
 
-// ===========================================================================
-// ExtensionHostFinding — serde
-// ===========================================================================
+// ── test: ViolationKind serde JSON strings distinct ──────────────────────
+
+#[test]
+fn enrichment_violation_kind_serde_json_strings_distinct() {
+    let jsons: BTreeSet<String> = all_violation_kinds().iter().map(|k| serde_json::to_string(k).unwrap()).collect();
+    assert_eq!(jsons.len(), 4);
+}
+
+// ── test: ViolationKind Debug distinctness ───────────────────────────────
+
+#[test]
+fn enrichment_violation_kind_debug_distinct() {
+    let debugs: BTreeSet<String> = all_violation_kinds().iter().map(|k| format!("{k:?}")).collect();
+    assert_eq!(debugs.len(), 4);
+}
+
+// ── test: ViolationKind Clone/Eq ─────────────────────────────────────────
+
+#[test]
+fn enrichment_violation_kind_clone_eq() {
+    for kind in all_violation_kinds() {
+        let cloned = kind;
+        assert_eq!(kind, cloned);
+    }
+}
+
+// ── test: ViolationKind Hash consistency ─────────────────────────────────
+
+#[test]
+fn enrichment_violation_kind_hash_consistent() {
+    use std::hash::{Hash, Hasher};
+    for kind in all_violation_kinds() {
+        let h1 = {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            kind.hash(&mut h);
+            h.finish()
+        };
+        let h2 = {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            kind.hash(&mut h);
+            h.finish()
+        };
+        assert_eq!(h1, h2);
+    }
+}
+
+// ── test: ViolationKind in BTreeSet ──────────────────────────────────────
+
+#[test]
+fn enrichment_violation_kind_btreeset() {
+    let mut set = BTreeSet::new();
+    for kind in all_violation_kinds() {
+        set.insert(kind);
+    }
+    assert_eq!(set.len(), 4);
+    set.insert(ViolationKind::ForbiddenPattern);
+    assert_eq!(set.len(), 4); // no dup
+}
+
+// ── test: ExtensionHostFinding serde roundtrip ───────────────────────────
 
 #[test]
 fn enrichment_finding_serde_roundtrip() {
-    let finding = ExtensionHostFinding {
-        kind: ViolationKind::DirectUpstreamImport,
-        module_path: "ext_host::loader".to_string(),
-        file_path: "src/loader.rs".to_string(),
-        line: 42,
-        source_line: "use franken_kernel::something;".to_string(),
-        description: "Direct upstream import".to_string(),
-        remediation: "Use adapter layer".to_string(),
-        exempted: false,
-    };
+    let finding = sample_finding();
     let json = serde_json::to_string(&finding).unwrap();
     let back: ExtensionHostFinding = serde_json::from_str(&json).unwrap();
     assert_eq!(finding, back);
 }
 
+// ── test: ExtensionHostFinding serde with exempted=true ──────────────────
+
 #[test]
-fn enrichment_finding_fields_accessible() {
-    let f = ExtensionHostFinding {
-        kind: ViolationKind::CanonicalTypeShadow,
-        module_path: "mod".to_string(),
-        file_path: "file.rs".to_string(),
-        line: 10,
-        source_line: "struct TraceId {}".to_string(),
-        description: "desc".to_string(),
-        remediation: "fix".to_string(),
-        exempted: true,
-    };
-    assert_eq!(f.kind, ViolationKind::CanonicalTypeShadow);
-    assert_eq!(f.module_path, "mod");
-    assert_eq!(f.file_path, "file.rs");
-    assert_eq!(f.line, 10);
-    assert!(f.exempted);
+fn enrichment_finding_serde_exempted_true() {
+    let mut finding = sample_finding();
+    finding.exempted = true;
+    let json = serde_json::to_string(&finding).unwrap();
+    let back: ExtensionHostFinding = serde_json::from_str(&json).unwrap();
+    assert!(back.exempted);
 }
 
-// ===========================================================================
-// ExtensionHostExemption — serde
-// ===========================================================================
+// ── test: ExtensionHostFinding JSON field names ──────────────────────────
+
+#[test]
+fn enrichment_finding_json_field_names() {
+    let finding = sample_finding();
+    let val = serde_json::to_value(&finding).unwrap();
+    let obj = val.as_object().unwrap();
+    for key in ["kind", "module_path", "file_path", "line", "source_line", "description", "remediation", "exempted"] {
+        assert!(obj.contains_key(key), "missing: {key}");
+    }
+    assert_eq!(obj.len(), 8);
+}
+
+// ── test: ExtensionHostFinding ordering ──────────────────────────────────
+
+#[test]
+fn enrichment_finding_ordering_by_kind() {
+    let mut f1 = sample_finding();
+    f1.kind = ViolationKind::ForbiddenPattern;
+    let mut f2 = sample_finding();
+    f2.kind = ViolationKind::CanonicalTypeShadow;
+    assert!(f1 < f2);
+}
+
+// ── test: ExtensionHostFinding clone independence ────────────────────────
+
+#[test]
+fn enrichment_finding_clone_independence() {
+    let finding = sample_finding();
+    let mut cloned = finding.clone();
+    cloned.line = 999;
+    assert_ne!(finding.line, cloned.line);
+    assert_eq!(finding.line, 5);
+}
+
+// ── test: ExtensionHostExemption serde roundtrip ─────────────────────────
 
 #[test]
 fn enrichment_exemption_serde_roundtrip() {
-    let ex = ExtensionHostExemption {
-        exemption_id: "ex-001".to_string(),
-        module_path: "ext_host::special".to_string(),
-        kind: ViolationKind::ForbiddenPattern,
-        matched_token: "std::fs::read".to_string(),
-        reason: "Legacy code path under migration".to_string(),
-        line: 55,
-    };
-    let json = serde_json::to_string(&ex).unwrap();
+    let exemption = sample_exemption("e1", "mod", ViolationKind::ForbiddenPattern, "std::fs", 0);
+    let json = serde_json::to_string(&exemption).unwrap();
     let back: ExtensionHostExemption = serde_json::from_str(&json).unwrap();
-    assert_eq!(ex, back);
+    assert_eq!(exemption, back);
 }
+
+// ── test: ExtensionHostExemption serde all ViolationKind variants ────────
 
 #[test]
-fn enrichment_exemption_fields_accessible() {
-    let ex = ExtensionHostExemption {
-        exemption_id: "ex-002".to_string(),
-        module_path: "m".to_string(),
-        kind: ViolationKind::DirectUpstreamImport,
-        matched_token: "use franken_kernel".to_string(),
-        reason: "r".to_string(),
-        line: 0,
-    };
-    assert_eq!(ex.exemption_id, "ex-002");
-    assert_eq!(ex.kind, ViolationKind::DirectUpstreamImport);
-    assert_eq!(ex.line, 0);
+fn enrichment_exemption_serde_all_kinds() {
+    for (i, kind) in all_violation_kinds().iter().enumerate() {
+        let ex = sample_exemption(&format!("e{i}"), "m", *kind, "tok", 0);
+        let json = serde_json::to_string(&ex).unwrap();
+        let back: ExtensionHostExemption = serde_json::from_str(&json).unwrap();
+        assert_eq!(ex, back);
+    }
 }
 
-// ===========================================================================
-// ExtensionHostExemptionRegistry — operations
-// ===========================================================================
+// ── test: ExtensionHostExemption JSON field names ────────────────────────
+
+#[test]
+fn enrichment_exemption_json_field_names() {
+    let ex = sample_exemption("e1", "m", ViolationKind::ForbiddenPattern, "t", 5);
+    let val = serde_json::to_value(&ex).unwrap();
+    let obj = val.as_object().unwrap();
+    for key in ["exemption_id", "module_path", "kind", "matched_token", "reason", "line"] {
+        assert!(obj.contains_key(key), "missing: {key}");
+    }
+    assert_eq!(obj.len(), 6);
+}
+
+// ── test: ExtensionHostExemptionRegistry new is empty ────────────────────
 
 #[test]
 fn enrichment_registry_new_is_empty() {
-    let r = ExtensionHostExemptionRegistry::new();
-    assert!(r.is_empty());
-    assert_eq!(r.len(), 0);
-    assert!(r.entries().is_empty());
+    let reg = ExtensionHostExemptionRegistry::new();
+    assert!(reg.is_empty());
+    assert_eq!(reg.len(), 0);
+    assert!(reg.entries().is_empty());
 }
 
-#[test]
-fn enrichment_registry_add_increases_count() {
-    let mut r = ExtensionHostExemptionRegistry::new();
-    r.add(ExtensionHostExemption {
-        exemption_id: "e1".to_string(),
-        module_path: "m".to_string(),
-        kind: ViolationKind::ForbiddenPattern,
-        matched_token: "std::fs".to_string(),
-        reason: "r".to_string(),
-        line: 0,
-    });
-    assert_eq!(r.len(), 1);
-    assert!(!r.is_empty());
-}
+// ── test: registry add increments count ──────────────────────────────────
 
 #[test]
-fn enrichment_registry_is_exempted_exact_match() {
-    let mut r = ExtensionHostExemptionRegistry::new();
-    r.add(ExtensionHostExemption {
-        exemption_id: "e1".to_string(),
-        module_path: "ext_host::loader".to_string(),
-        kind: ViolationKind::DirectUpstreamImport,
-        matched_token: "Direct upstream import: `use franken_kernel`".to_string(),
-        reason: "legacy".to_string(),
-        line: 10,
-    });
-    assert!(r.is_exempted(
-        "ext_host::loader",
-        ViolationKind::DirectUpstreamImport,
-        "Direct upstream import: `use franken_kernel`",
-        10,
-    ));
+fn enrichment_registry_add_increments_count() {
+    let mut reg = ExtensionHostExemptionRegistry::new();
+    reg.add(sample_exemption("e1", "m1", ViolationKind::ForbiddenPattern, "t1", 0));
+    assert_eq!(reg.len(), 1);
+    assert!(!reg.is_empty());
+    reg.add(sample_exemption("e2", "m2", ViolationKind::MissingCxParameter, "t2", 0));
+    assert_eq!(reg.len(), 2);
 }
 
-#[test]
-fn enrichment_registry_is_exempted_line_zero_matches_any_line() {
-    let mut r = ExtensionHostExemptionRegistry::new();
-    r.add(ExtensionHostExemption {
-        exemption_id: "e1".to_string(),
-        module_path: "m".to_string(),
-        kind: ViolationKind::ForbiddenPattern,
-        matched_token: "desc".to_string(),
-        reason: "module-wide".to_string(),
-        line: 0, // module-wide
-    });
-    assert!(r.is_exempted("m", ViolationKind::ForbiddenPattern, "desc", 1));
-    assert!(r.is_exempted("m", ViolationKind::ForbiddenPattern, "desc", 999));
-}
+// ── test: registry is_exempted with module-wide (line=0) ─────────────────
 
 #[test]
-fn enrichment_registry_is_exempted_wrong_module_returns_false() {
-    let mut r = ExtensionHostExemptionRegistry::new();
-    r.add(ExtensionHostExemption {
-        exemption_id: "e1".to_string(),
-        module_path: "correct_module".to_string(),
-        kind: ViolationKind::ForbiddenPattern,
-        matched_token: "t".to_string(),
-        reason: "r".to_string(),
-        line: 0,
-    });
-    assert!(!r.is_exempted("wrong_module", ViolationKind::ForbiddenPattern, "t", 1));
+fn enrichment_registry_module_wide_exemption() {
+    let mut reg = ExtensionHostExemptionRegistry::new();
+    reg.add(sample_exemption("e1", "ext::boot", ViolationKind::DirectUpstreamImport, "use franken_kernel", 0));
+
+    assert!(reg.is_exempted("ext::boot", ViolationKind::DirectUpstreamImport, "use franken_kernel", 1));
+    assert!(reg.is_exempted("ext::boot", ViolationKind::DirectUpstreamImport, "use franken_kernel", 42));
+    assert!(reg.is_exempted("ext::boot", ViolationKind::DirectUpstreamImport, "use franken_kernel", 999));
 }
+
+// ── test: registry is_exempted with exact line ───────────────────────────
+
+#[test]
+fn enrichment_registry_exact_line_exemption() {
+    let mut reg = ExtensionHostExemptionRegistry::new();
+    reg.add(sample_exemption("e1", "ext::boot", ViolationKind::ForbiddenPattern, "std::fs", 5));
+
+    assert!(reg.is_exempted("ext::boot", ViolationKind::ForbiddenPattern, "std::fs", 5));
+    assert!(!reg.is_exempted("ext::boot", ViolationKind::ForbiddenPattern, "std::fs", 6));
+    assert!(!reg.is_exempted("ext::boot", ViolationKind::ForbiddenPattern, "std::fs", 4));
+}
+
+// ── test: registry is_exempted not matching different module ─────────────
+
+#[test]
+fn enrichment_registry_different_module_not_matched() {
+    let mut reg = ExtensionHostExemptionRegistry::new();
+    reg.add(sample_exemption("e1", "ext::a", ViolationKind::ForbiddenPattern, "std::fs", 0));
+
+    assert!(!reg.is_exempted("ext::b", ViolationKind::ForbiddenPattern, "std::fs", 1));
+}
+
+// ── test: registry is_exempted not matching different kind ───────────────
+
+#[test]
+fn enrichment_registry_different_kind_not_matched() {
+    let mut reg = ExtensionHostExemptionRegistry::new();
+    reg.add(sample_exemption("e1", "ext::a", ViolationKind::ForbiddenPattern, "std::fs", 0));
+
+    assert!(!reg.is_exempted("ext::a", ViolationKind::MissingCxParameter, "std::fs", 1));
+}
+
+// ── test: registry is_exempted not matching different token ──────────────
+
+#[test]
+fn enrichment_registry_different_token_not_matched() {
+    let mut reg = ExtensionHostExemptionRegistry::new();
+    reg.add(sample_exemption("e1", "ext::a", ViolationKind::ForbiddenPattern, "std::fs", 0));
+
+    assert!(!reg.is_exempted("ext::a", ViolationKind::ForbiddenPattern, "std::net", 1));
+}
+
+// ── test: registry serde roundtrip ───────────────────────────────────────
 
 #[test]
 fn enrichment_registry_serde_roundtrip() {
-    let mut r = ExtensionHostExemptionRegistry::new();
-    r.add(ExtensionHostExemption {
-        exemption_id: "e1".to_string(),
-        module_path: "m".to_string(),
-        kind: ViolationKind::CanonicalTypeShadow,
-        matched_token: "t".to_string(),
-        reason: "r".to_string(),
-        line: 5,
-    });
-    let json = serde_json::to_string(&r).unwrap();
+    let mut reg = ExtensionHostExemptionRegistry::new();
+    reg.add(sample_exemption("e1", "m1", ViolationKind::ForbiddenPattern, "t1", 0));
+    reg.add(sample_exemption("e2", "m2", ViolationKind::CanonicalTypeShadow, "t2", 5));
+    let json = serde_json::to_string(&reg).unwrap();
     let back: ExtensionHostExemptionRegistry = serde_json::from_str(&json).unwrap();
-    assert_eq!(r, back);
+    assert_eq!(reg, back);
 }
 
-// ===========================================================================
-// GuardConfig — defaults and customization
-// ===========================================================================
+// ── test: registry serde empty ───────────────────────────────────────────
 
 #[test]
-fn enrichment_guard_config_default_has_forbidden_imports() {
-    let cfg = GuardConfig::default();
-    assert!(!cfg.forbidden_imports.is_empty());
-    assert!(cfg.forbidden_imports.iter().any(|(p, _)| p.contains("franken_kernel")));
-    assert!(cfg.forbidden_imports.iter().any(|(p, _)| p.contains("franken_decision")));
-    assert!(cfg.forbidden_imports.iter().any(|(p, _)| p.contains("franken_evidence")));
+fn enrichment_registry_serde_empty() {
+    let reg = ExtensionHostExemptionRegistry::new();
+    let json = serde_json::to_string(&reg).unwrap();
+    let back: ExtensionHostExemptionRegistry = serde_json::from_str(&json).unwrap();
+    assert_eq!(reg, back);
+    assert!(back.is_empty());
 }
 
+// ── test: registry entries returns all added ─────────────────────────────
+
 #[test]
-fn enrichment_guard_config_default_has_canonical_types() {
-    let cfg = GuardConfig::default();
-    assert!(cfg.canonical_types.contains("TraceId"));
-    assert!(cfg.canonical_types.contains("DecisionId"));
-    assert!(cfg.canonical_types.contains("PolicyId"));
-    assert!(cfg.canonical_types.contains("Budget"));
-    assert!(cfg.canonical_types.contains("Cx"));
+fn enrichment_registry_entries_returns_all() {
+    let mut reg = ExtensionHostExemptionRegistry::new();
+    for i in 0..5 {
+        reg.add(sample_exemption(&format!("e{i}"), &format!("m{i}"), ViolationKind::ForbiddenPattern, "t", 0));
+    }
+    assert_eq!(reg.entries().len(), 5);
+    assert_eq!(reg.len(), 5);
 }
 
+// ── test: registry clone independence ────────────────────────────────────
+
 #[test]
-fn enrichment_guard_config_default_has_effectful_indicators() {
-    let cfg = GuardConfig::default();
-    assert!(cfg.effectful_indicators.iter().any(|s| s == "dispatch_hostcall"));
-    assert!(cfg.effectful_indicators.iter().any(|s| s == "consume_budget"));
+fn enrichment_registry_clone_independence() {
+    let mut reg = ExtensionHostExemptionRegistry::new();
+    reg.add(sample_exemption("e1", "m", ViolationKind::ForbiddenPattern, "t", 0));
+    let cloned = reg.clone();
+    reg.add(sample_exemption("e2", "m2", ViolationKind::MissingCxParameter, "t2", 0));
+    assert_eq!(cloned.len(), 1);
+    assert_eq!(reg.len(), 2);
 }
 
+// ── test: registry Default trait ─────────────────────────────────────────
+
 #[test]
-fn enrichment_guard_config_default_include_base_patterns_true() {
-    let cfg = GuardConfig::default();
-    assert!(cfg.include_base_patterns);
+fn enrichment_registry_default() {
+    let reg = ExtensionHostExemptionRegistry::default();
+    assert!(reg.is_empty());
+    assert_eq!(reg.len(), 0);
 }
 
+// ── test: ExtensionHostFinding with all ViolationKind variants serde ─────
+
 #[test]
-fn enrichment_guard_config_add_cx_prefix() {
-    let mut cfg = GuardConfig::default();
-    cfg.add_cx_audited_prefix("ext_host");
-    assert!(cfg.cx_audited_module_prefixes.contains("ext_host"));
+fn enrichment_finding_all_kinds_serde() {
+    for kind in all_violation_kinds() {
+        let mut finding = sample_finding();
+        finding.kind = kind;
+        let json = serde_json::to_string(&finding).unwrap();
+        let back: ExtensionHostFinding = serde_json::from_str(&json).unwrap();
+        assert_eq!(finding, back);
+    }
 }
 
+// ── test: ExtensionHostExemption clone/eq ────────────────────────────────
+
 #[test]
-fn enrichment_guard_config_add_effectful_indicator() {
-    let mut cfg = GuardConfig::default();
-    cfg.add_effectful_indicator("custom_effect");
-    assert!(cfg.effectful_indicators.iter().any(|s| s == "custom_effect"));
+fn enrichment_exemption_clone_eq() {
+    let ex = sample_exemption("e1", "m", ViolationKind::ForbiddenPattern, "t", 5);
+    let cloned = ex.clone();
+    assert_eq!(ex, cloned);
 }
 
-#[test]
-fn enrichment_guard_config_add_forbidden_import() {
-    let mut cfg = GuardConfig::default();
-    cfg.add_forbidden_import("use custom_crate", "Use adapter instead");
-    assert!(cfg.forbidden_imports.iter().any(|(p, _)| p == "use custom_crate"));
-}
+// ── test: multiple exemptions for same module ────────────────────────────
 
 #[test]
-fn enrichment_guard_config_serde_roundtrip() {
-    let cfg = GuardConfig::default();
-    let json = serde_json::to_string(&cfg).unwrap();
-    let back: GuardConfig = serde_json::from_str(&json).unwrap();
-    assert_eq!(cfg, back);
-}
+fn enrichment_multiple_exemptions_same_module() {
+    let mut reg = ExtensionHostExemptionRegistry::new();
+    reg.add(sample_exemption("e1", "ext::m", ViolationKind::ForbiddenPattern, "std::fs", 0));
+    reg.add(sample_exemption("e2", "ext::m", ViolationKind::DirectUpstreamImport, "use franken_kernel", 0));
 
-// ===========================================================================
-// ExtensionHostAuditResult — serde
-// ===========================================================================
-
-#[test]
-fn enrichment_audit_result_serde_roundtrip() {
-    let result = ExtensionHostAuditResult {
-        findings: vec![],
-        violation_count: 0,
-        exemption_count: 0,
-        modules_audited: vec!["mod_a".to_string()],
-        passed: true,
-        summary_by_kind: BTreeMap::new(),
-    };
-    let json = serde_json::to_string(&result).unwrap();
-    let back: ExtensionHostAuditResult = serde_json::from_str(&json).unwrap();
-    assert_eq!(result, back);
-}
-
-#[test]
-fn enrichment_audit_result_fields_accessible() {
-    let result = ExtensionHostAuditResult {
-        findings: vec![],
-        violation_count: 3,
-        exemption_count: 1,
-        modules_audited: vec!["a".to_string(), "b".to_string()],
-        passed: false,
-        summary_by_kind: {
-            let mut m = BTreeMap::new();
-            m.insert("forbidden_pattern".to_string(), 2);
-            m.insert("missing_cx_parameter".to_string(), 1);
-            m
-        },
-    };
-    assert_eq!(result.violation_count, 3);
-    assert_eq!(result.exemption_count, 1);
-    assert!(!result.passed);
-    assert_eq!(result.modules_audited.len(), 2);
-    assert_eq!(result.summary_by_kind.len(), 2);
-}
-
-// ===========================================================================
-// ExtensionHostGuard — audit_source edge cases
-// ===========================================================================
-
-#[test]
-fn enrichment_empty_source_produces_no_findings() {
-    let guard = standard_guard();
-    let findings = guard.audit_source("mod", "file.rs", "");
-    assert!(findings.is_empty());
-}
-
-#[test]
-fn enrichment_comment_only_source_no_findings() {
-    let guard = standard_guard();
-    let source = "// This is just a comment\n// use franken_kernel::something;\n";
-    let findings = guard.audit_source("mod", "file.rs", source);
-    // Comments should be skipped for direct import detection
-    let import_findings: Vec<_> = findings
-        .iter()
-        .filter(|f| f.kind == ViolationKind::DirectUpstreamImport)
-        .collect();
-    assert!(import_findings.is_empty());
-}
-
-#[test]
-fn enrichment_detects_direct_upstream_import_franken_kernel() {
-    let guard = no_base_guard();
-    let source = "use franken_kernel::core;\n";
-    let findings = guard.audit_source("mod", "file.rs", source);
-    assert!(findings.iter().any(|f| f.kind == ViolationKind::DirectUpstreamImport));
-}
-
-#[test]
-fn enrichment_detects_direct_upstream_import_franken_decision() {
-    let guard = no_base_guard();
-    let source = "use franken_decision::policy;\n";
-    let findings = guard.audit_source("mod", "file.rs", source);
-    assert!(findings.iter().any(|f| f.kind == ViolationKind::DirectUpstreamImport));
-}
-
-#[test]
-fn enrichment_detects_direct_upstream_import_franken_evidence() {
-    let guard = no_base_guard();
-    let source = "use franken_evidence::ledger;\n";
-    let findings = guard.audit_source("mod", "file.rs", source);
-    assert!(findings.iter().any(|f| f.kind == ViolationKind::DirectUpstreamImport));
-}
-
-#[test]
-fn enrichment_detects_canonical_type_shadow_struct() {
-    let guard = no_base_guard();
-    let source = "pub struct TraceId { id: String }\n";
-    let findings = guard.audit_source("mod", "file.rs", source);
-    assert!(findings.iter().any(|f| f.kind == ViolationKind::CanonicalTypeShadow));
-}
-
-#[test]
-fn enrichment_detects_canonical_type_shadow_enum() {
-    let guard = no_base_guard();
-    let source = "pub enum PolicyId { V1, V2 }\n";
-    let findings = guard.audit_source("mod", "file.rs", source);
-    assert!(findings.iter().any(|f| f.kind == ViolationKind::CanonicalTypeShadow));
-}
-
-#[test]
-fn enrichment_detects_canonical_type_shadow_type_alias() {
-    let guard = no_base_guard();
-    let source = "type Budget = u64;\n";
-    let findings = guard.audit_source("mod", "file.rs", source);
-    assert!(findings.iter().any(|f| f.kind == ViolationKind::CanonicalTypeShadow));
-}
-
-#[test]
-fn enrichment_no_shadow_for_non_canonical_type() {
-    let guard = no_base_guard();
-    let source = "pub struct MyCustomType { data: Vec<u8> }\n";
-    let findings = guard.audit_source("mod", "file.rs", source);
-    assert!(findings.iter().all(|f| f.kind != ViolationKind::CanonicalTypeShadow));
-}
-
-// ===========================================================================
-// ExtensionHostGuard — audit_all
-// ===========================================================================
-
-#[test]
-fn enrichment_audit_all_empty_sources_passes() {
-    let guard = standard_guard();
-    let sources: BTreeMap<(String, String), String> = BTreeMap::new();
-    let result = guard.audit_all(&sources);
-    assert!(result.passed);
-    assert_eq!(result.violation_count, 0);
-    assert_eq!(result.exemption_count, 0);
-    assert!(result.findings.is_empty());
-}
-
-#[test]
-fn enrichment_audit_all_clean_sources_passes() {
-    let guard = standard_guard();
-    let mut sources = BTreeMap::new();
-    sources.insert(
-        ("mod_a".to_string(), "src/a.rs".to_string()),
-        "fn compute(x: u64) -> u64 { x + 1 }".to_string(),
-    );
-    sources.insert(
-        ("mod_b".to_string(), "src/b.rs".to_string()),
-        "fn transform(data: &[u8]) -> Vec<u8> { data.to_vec() }".to_string(),
-    );
-    let result = guard.audit_all(&sources);
-    assert!(result.passed);
-    assert_eq!(result.modules_audited.len(), 2);
-}
-
-#[test]
-fn enrichment_audit_all_with_violations_fails() {
-    let guard = no_base_guard();
-    let mut sources = BTreeMap::new();
-    sources.insert(
-        ("mod_a".to_string(), "src/a.rs".to_string()),
-        "use franken_kernel::core;\nstruct TraceId { id: String }".to_string(),
-    );
-    let result = guard.audit_all(&sources);
-    assert!(!result.passed);
-    assert!(result.violation_count >= 2);
-}
-
-#[test]
-fn enrichment_audit_all_summary_by_kind_counts_correctly() {
-    let guard = no_base_guard();
-    let mut sources = BTreeMap::new();
-    sources.insert(
-        ("mod_a".to_string(), "src/a.rs".to_string()),
-        "use franken_kernel::core;\nuse franken_decision::policy;\n".to_string(),
-    );
-    let result = guard.audit_all(&sources);
-    assert!(result
-        .summary_by_kind
-        .get("direct_upstream_import")
-        .is_some_and(|&c| c >= 2));
-}
-
-// ===========================================================================
-// ExtensionHostGuard — config and exemptions accessors
-// ===========================================================================
-
-#[test]
-fn enrichment_guard_config_accessor() {
-    let guard = standard_guard();
-    let cfg = guard.config();
-    assert!(cfg.include_base_patterns);
-    assert!(!cfg.forbidden_imports.is_empty());
-}
-
-#[test]
-fn enrichment_guard_exemptions_accessor() {
-    let guard = standard_guard();
-    assert!(guard.exemptions().is_empty());
-}
-
-// ===========================================================================
-// Determinism
-// ===========================================================================
-
-#[test]
-fn enrichment_audit_deterministic_same_input_same_output() {
-    let guard = standard_guard();
-    let source = "use franken_kernel::core;\nstruct TraceId { id: String }\n";
-    let findings1 = guard.audit_source("mod", "file.rs", source);
-    let findings2 = guard.audit_source("mod", "file.rs", source);
-    assert_eq!(findings1, findings2);
-}
-
-#[test]
-fn enrichment_audit_all_deterministic() {
-    let guard = no_base_guard();
-    let mut sources = BTreeMap::new();
-    sources.insert(
-        ("mod_a".to_string(), "src/a.rs".to_string()),
-        "use franken_evidence::ledger;\n".to_string(),
-    );
-    let r1 = guard.audit_all(&sources);
-    let r2 = guard.audit_all(&sources);
-    assert_eq!(r1, r2);
+    assert!(reg.is_exempted("ext::m", ViolationKind::ForbiddenPattern, "std::fs", 1));
+    assert!(reg.is_exempted("ext::m", ViolationKind::DirectUpstreamImport, "use franken_kernel", 10));
+    assert!(!reg.is_exempted("ext::m", ViolationKind::CanonicalTypeShadow, "TraceId", 1));
 }

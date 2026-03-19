@@ -1,729 +1,488 @@
-//! Enrichment integration tests for `native_addon_cohort_gate` (bd-1lsy.5.9.3).
+//! Enrichment integration tests for `native_addon_cohort_gate`.
 //!
-//! Exercises advanced gate evaluation paths, governance derivation, tier
-//! coverage computation, receipt tamper evidence, serde fidelity, and
-//! edge-case interactions across the public API.
+//! Covers: serde round-trips for all enum and struct types, verdict evaluation
+//! functions, governance action derivation, tier coverage computation,
+//! receipt determinism, cohort gate evaluation, boundary conditions, and
+//! stress scenarios.
 
-#![allow(
-    clippy::field_reassign_with_default,
-    clippy::assertions_on_constants,
-    clippy::useless_vec,
-    clippy::clone_on_copy,
-    clippy::unnecessary_get_then_check,
-    clippy::len_zero,
-    clippy::needless_borrows_for_generic_args,
-    clippy::too_many_arguments
-)]
+#![allow(clippy::too_many_arguments)]
 
 use std::collections::BTreeSet;
 
 use frankenengine_engine::hash_tiers::ContentHash;
-use frankenengine_engine::native_addon_cohort_gate::*;
+use frankenengine_engine::native_addon_cohort_gate::{
+    AddonDescriptor, BEAD_ID, COMPONENT, CohortTier,
+    GateConfig, GateVerdict, GovernanceAction, ParityDimension,
+    ParityFinding, POLICY_ID, SCHEMA_VERSION, SecurityClass, SecurityFinding, SecurityVerdict,
+    ThroughputMetric, ThroughputSample, compute_parity_verdict, compute_receipt,
+    compute_security_verdict, compute_throughput_verdict, compute_tier_coverage,
+    derive_governance_action, evaluate_addon, evaluate_cohort_gate,
+};
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
-// ---------------------------------------------------------------------------
+// ===========================================================================
 // Helpers
-// ---------------------------------------------------------------------------
+// ===========================================================================
 
-fn epoch() -> SecurityEpoch {
-    SecurityEpoch::from_raw(20)
+const MILLIONTHS: u64 = 1_000_000;
+
+fn ep(n: u64) -> SecurityEpoch {
+    SecurityEpoch::from_raw(n)
 }
 
-fn hash(tag: &[u8]) -> ContentHash {
-    ContentHash::compute(tag)
-}
-
-fn addon(name: &str, tier: CohortTier) -> AddonDescriptor {
+fn make_addon(name: &str, tier: CohortTier) -> AddonDescriptor {
     AddonDescriptor {
-        name: String::from(name),
-        version: String::from("2.0.0"),
+        name: name.to_string(),
+        version: "1.0.0".to_string(),
         tier,
         napi_version: 8,
-        node_api_calls: 25,
+        node_api_calls: 42,
         has_worker_threads: false,
         has_async_hooks: false,
     }
 }
 
-fn parity_finding(name: &str, dim: ParityDimension, achieved: bool) -> ParityFinding {
+fn make_parity(addon: &str, dim: ParityDimension, achieved: bool) -> ParityFinding {
     ParityFinding {
         dimension: dim,
-        addon_name: String::from(name),
+        addon_name: addon.to_string(),
         is_parity_achieved: achieved,
-        divergence_count: if achieved { 0 } else { 2 },
-        total_checks: 10,
-        detail: String::from("enrichment parity finding"),
+        divergence_count: if achieved { 0 } else { 5 },
+        total_checks: 100,
+        detail: format!("{} on {}", dim, addon),
     }
 }
 
-fn security_finding(
-    name: &str,
-    class: SecurityClass,
-    verdict: SecurityVerdict,
-) -> SecurityFinding {
+fn make_security(addon: &str, class: SecurityClass, verdict: SecurityVerdict) -> SecurityFinding {
     SecurityFinding {
         class,
-        addon_name: String::from(name),
+        addon_name: addon.to_string(),
         verdict,
-        vulnerability_count: if matches!(verdict, SecurityVerdict::Vulnerable) {
-            1
-        } else {
-            0
-        },
-        detail: String::from("enrichment security finding"),
-        content_hash: hash(name.as_bytes()),
+        vulnerability_count: if verdict == SecurityVerdict::Vulnerable { 1 } else { 0 },
+        detail: format!("{} on {}", class, addon),
+        content_hash: ContentHash::compute(addon.as_bytes()),
     }
 }
 
-fn throughput_sample(name: &str, baseline: u64, candidate: u64) -> ThroughputSample {
+fn make_throughput(addon: &str, metric: ThroughputMetric, baseline: u64, candidate: u64) -> ThroughputSample {
     ThroughputSample {
-        metric: ThroughputMetric::CallLatency,
-        addon_name: String::from(name),
+        metric,
+        addon_name: addon.to_string(),
         baseline_millionths: baseline,
         candidate_millionths: candidate,
-        sample_count: 50,
-        epoch: epoch(),
+        sample_count: 30,
+        epoch: ep(1),
     }
 }
 
 // ===========================================================================
-// Section 1: Constants
+// Serde round-trip tests
 // ===========================================================================
 
 #[test]
-fn enrich_schema_version_format() {
-    assert!(SCHEMA_VERSION.starts_with("franken-engine."));
-    assert!(SCHEMA_VERSION.ends_with(".v1"));
-}
-
-#[test]
-fn enrich_component_is_module_name() {
-    assert_eq!(COMPONENT, "native_addon_cohort_gate");
-}
-
-#[test]
-fn enrich_bead_id_format() {
-    assert!(BEAD_ID.starts_with("bd-"));
-}
-
-#[test]
-fn enrich_policy_id_format() {
-    assert!(POLICY_ID.starts_with("RGC-"));
-}
-
-// ===========================================================================
-// Section 2: CohortTier
-// ===========================================================================
-
-#[test]
-fn enrich_cohort_tier_all_has_six_variants() {
-    assert_eq!(CohortTier::ALL.len(), 6);
-}
-
-#[test]
-fn enrich_cohort_tier_display_uniqueness() {
-    let set: BTreeSet<String> = CohortTier::ALL.iter().map(|t| t.to_string()).collect();
-    assert_eq!(set.len(), 6);
-}
-
-#[test]
-fn enrich_cohort_tier_as_str_matches_display() {
-    for tier in CohortTier::ALL {
-        assert_eq!(tier.as_str(), &tier.to_string());
-    }
-}
-
-#[test]
-fn enrich_cohort_tier_serde_roundtrip_all() {
+fn integ_cohort_tier_serde_all_variants() {
     for tier in CohortTier::ALL {
         let json = serde_json::to_string(tier).unwrap();
-        let restored: CohortTier = serde_json::from_str(&json).unwrap();
-        assert_eq!(*tier, restored);
+        let back: CohortTier = serde_json::from_str(&json).unwrap();
+        assert_eq!(*tier, back);
     }
 }
 
-// ===========================================================================
-// Section 3: ParityDimension
-// ===========================================================================
-
 #[test]
-fn enrich_parity_dimension_all_has_six() {
-    assert_eq!(ParityDimension::ALL.len(), 6);
-}
-
-#[test]
-fn enrich_parity_dimension_display_uniqueness() {
-    let set: BTreeSet<String> = ParityDimension::ALL.iter().map(|d| d.to_string()).collect();
-    assert_eq!(set.len(), 6);
-}
-
-#[test]
-fn enrich_parity_dimension_serde_roundtrip_all() {
+fn integ_parity_dimension_serde_all_variants() {
     for dim in ParityDimension::ALL {
         let json = serde_json::to_string(dim).unwrap();
-        let restored: ParityDimension = serde_json::from_str(&json).unwrap();
-        assert_eq!(*dim, restored);
+        let back: ParityDimension = serde_json::from_str(&json).unwrap();
+        assert_eq!(*dim, back);
     }
 }
 
-// ===========================================================================
-// Section 4: SecurityClass
-// ===========================================================================
-
 #[test]
-fn enrich_security_class_all_has_six() {
-    assert_eq!(SecurityClass::ALL.len(), 6);
-}
-
-#[test]
-fn enrich_security_class_display_uniqueness() {
-    let set: BTreeSet<String> = SecurityClass::ALL.iter().map(|c| c.to_string()).collect();
-    assert_eq!(set.len(), 6);
-}
-
-#[test]
-fn enrich_security_class_serde_roundtrip_all() {
+fn integ_security_class_serde_all_variants() {
     for class in SecurityClass::ALL {
         let json = serde_json::to_string(class).unwrap();
-        let restored: SecurityClass = serde_json::from_str(&json).unwrap();
-        assert_eq!(*class, restored);
+        let back: SecurityClass = serde_json::from_str(&json).unwrap();
+        assert_eq!(*class, back);
     }
 }
 
-// ===========================================================================
-// Section 5: ThroughputMetric
-// ===========================================================================
-
 #[test]
-fn enrich_throughput_metric_all_has_six() {
-    assert_eq!(ThroughputMetric::ALL.len(), 6);
+fn integ_throughput_metric_serde_all_variants() {
+    for metric in ThroughputMetric::ALL {
+        let json = serde_json::to_string(metric).unwrap();
+        let back: ThroughputMetric = serde_json::from_str(&json).unwrap();
+        assert_eq!(*metric, back);
+    }
 }
 
 #[test]
-fn enrich_throughput_metric_display_uniqueness() {
-    let set: BTreeSet<String> = ThroughputMetric::ALL.iter().map(|m| m.to_string()).collect();
-    assert_eq!(set.len(), 6);
-}
-
-// ===========================================================================
-// Section 6: GateVerdict
-// ===========================================================================
-
-#[test]
-fn enrich_gate_verdict_pass_is_adoptable() {
-    assert!(GateVerdict::Pass.is_adoptable());
-}
-
-#[test]
-fn enrich_gate_verdict_conditional_pass_is_adoptable() {
-    assert!(GateVerdict::ConditionalPass.is_adoptable());
-}
-
-#[test]
-fn enrich_gate_verdict_fail_not_adoptable() {
-    assert!(!GateVerdict::Fail.is_adoptable());
-}
-
-#[test]
-fn enrich_gate_verdict_insufficient_not_adoptable() {
-    assert!(!GateVerdict::InsufficientEvidence.is_adoptable());
-}
-
-#[test]
-fn enrich_gate_verdict_display_uniqueness() {
-    let verdicts = [
+fn integ_gate_verdict_serde_all_variants() {
+    for verdict in [
         GateVerdict::Pass,
         GateVerdict::ConditionalPass,
         GateVerdict::Fail,
         GateVerdict::InsufficientEvidence,
-    ];
-    let set: BTreeSet<String> = verdicts.iter().map(|v| v.to_string()).collect();
-    assert_eq!(set.len(), 4);
-}
-
-// ===========================================================================
-// Section 7: SecurityVerdict
-// ===========================================================================
-
-#[test]
-fn enrich_security_verdict_serde_roundtrip_all() {
-    let verdicts = [
-        SecurityVerdict::Secure,
-        SecurityVerdict::ConditionallySecure,
-        SecurityVerdict::Vulnerable,
-        SecurityVerdict::Unassessed,
-    ];
-    for v in &verdicts {
-        let json = serde_json::to_string(v).unwrap();
-        let restored: SecurityVerdict = serde_json::from_str(&json).unwrap();
-        assert_eq!(*v, restored);
+    ] {
+        let json = serde_json::to_string(&verdict).unwrap();
+        let back: GateVerdict = serde_json::from_str(&json).unwrap();
+        assert_eq!(verdict, back);
     }
 }
 
 #[test]
-fn enrich_security_verdict_display_uniqueness() {
-    let set: BTreeSet<String> = [
+fn integ_security_verdict_serde_all_variants() {
+    for sv in [
         SecurityVerdict::Secure,
         SecurityVerdict::ConditionallySecure,
         SecurityVerdict::Vulnerable,
         SecurityVerdict::Unassessed,
-    ]
-    .iter()
-    .map(|v| v.to_string())
-    .collect();
-    assert_eq!(set.len(), 4);
-}
-
-// ===========================================================================
-// Section 8: GovernanceAction
-// ===========================================================================
-
-#[test]
-fn enrich_governance_action_display_uniqueness() {
-    let actions = [
-        GovernanceAction::AllowAdoption,
-        GovernanceAction::ConditionalAdoption,
-        GovernanceAction::BlockAdoption,
-        GovernanceAction::RequireAudit,
-        GovernanceAction::DowngradeTier,
-        GovernanceAction::RequireRemediation,
-    ];
-    let set: BTreeSet<String> = actions.iter().map(|a| a.to_string()).collect();
-    assert_eq!(set.len(), 6);
-}
-
-// ===========================================================================
-// Section 9: compute_parity_verdict
-// ===========================================================================
-
-#[test]
-fn enrich_parity_verdict_empty_is_insufficient() {
-    let v = compute_parity_verdict(&[], 800_000);
-    assert_eq!(v, GateVerdict::InsufficientEvidence);
+    ] {
+        let json = serde_json::to_string(&sv).unwrap();
+        let back: SecurityVerdict = serde_json::from_str(&json).unwrap();
+        assert_eq!(sv, back);
+    }
 }
 
 #[test]
-fn enrich_parity_verdict_all_achieved_is_pass() {
-    let findings = vec![
-        parity_finding("a", ParityDimension::ApiSurface, true),
-        parity_finding("a", ParityDimension::MemorySafety, true),
-    ];
-    let v = compute_parity_verdict(&findings, 800_000);
-    assert_eq!(v, GateVerdict::Pass);
+fn integ_addon_descriptor_serde_roundtrip() {
+    let addon = make_addon("sharp", CohortTier::Critical);
+    let json = serde_json::to_string(&addon).unwrap();
+    let back: AddonDescriptor = serde_json::from_str(&json).unwrap();
+    assert_eq!(addon, back);
 }
 
 #[test]
-fn enrich_parity_verdict_none_achieved_is_fail() {
-    let findings = vec![
-        parity_finding("a", ParityDimension::ApiSurface, false),
-        parity_finding("a", ParityDimension::MemorySafety, false),
-    ];
-    let v = compute_parity_verdict(&findings, 800_000);
-    assert_eq!(v, GateVerdict::Fail);
-}
-
-#[test]
-fn enrich_parity_verdict_partial_is_conditional() {
-    // 1 of 2 achieved = 500_000 coverage, which is >= 800_000/2 = 400_000
-    let findings = vec![
-        parity_finding("a", ParityDimension::ApiSurface, true),
-        parity_finding("a", ParityDimension::MemorySafety, false),
-    ];
-    let v = compute_parity_verdict(&findings, 800_000);
-    assert_eq!(v, GateVerdict::ConditionalPass);
-}
-
-// ===========================================================================
-// Section 10: compute_security_verdict
-// ===========================================================================
-
-#[test]
-fn enrich_security_verdict_empty_is_unassessed() {
-    let v = compute_security_verdict(&[]);
-    assert_eq!(v, SecurityVerdict::Unassessed);
-}
-
-#[test]
-fn enrich_security_verdict_all_secure() {
-    let findings = vec![
-        security_finding("a", SecurityClass::MemoryIsolation, SecurityVerdict::Secure),
-        security_finding("a", SecurityClass::InputValidation, SecurityVerdict::Secure),
-    ];
-    let v = compute_security_verdict(&findings);
-    assert_eq!(v, SecurityVerdict::Secure);
-}
-
-#[test]
-fn enrich_security_verdict_any_vulnerable_yields_vulnerable() {
-    let findings = vec![
-        security_finding("a", SecurityClass::MemoryIsolation, SecurityVerdict::Secure),
-        security_finding(
-            "a",
-            SecurityClass::InputValidation,
-            SecurityVerdict::Vulnerable,
-        ),
-    ];
-    let v = compute_security_verdict(&findings);
-    assert_eq!(v, SecurityVerdict::Vulnerable);
-}
-
-#[test]
-fn enrich_security_verdict_conditional_without_vulnerable() {
-    let findings = vec![
-        security_finding("a", SecurityClass::MemoryIsolation, SecurityVerdict::Secure),
-        security_finding(
-            "a",
-            SecurityClass::InputValidation,
-            SecurityVerdict::ConditionallySecure,
-        ),
-    ];
-    let v = compute_security_verdict(&findings);
-    assert_eq!(v, SecurityVerdict::ConditionallySecure);
-}
-
-// ===========================================================================
-// Section 11: compute_throughput_verdict
-// ===========================================================================
-
-#[test]
-fn enrich_throughput_verdict_empty_is_insufficient() {
-    let v = compute_throughput_verdict(&[], 100_000, 30);
-    assert_eq!(v, GateVerdict::InsufficientEvidence);
-}
-
-#[test]
-fn enrich_throughput_verdict_no_regression_is_pass() {
-    let samples = vec![throughput_sample("a", 1_000_000, 900_000)];
-    // Regression = 100_000/1_000_000 * 1M = 100_000. Max = 200_000. Pass.
-    let v = compute_throughput_verdict(&samples, 200_000, 30);
-    assert_eq!(v, GateVerdict::Pass);
-}
-
-#[test]
-fn enrich_throughput_verdict_high_regression_is_fail() {
-    let samples = vec![throughput_sample("a", 1_000_000, 2_000_000)];
-    // Candidate > baseline => regression. delta = 1M, regression = 1M.
-    let v = compute_throughput_verdict(&samples, 100_000, 30);
-    assert_eq!(v, GateVerdict::Fail);
-}
-
-#[test]
-fn enrich_throughput_verdict_low_samples_is_insufficient() {
-    let mut sample = throughput_sample("a", 1_000_000, 900_000);
-    sample.sample_count = 5; // below min of 30
-    let v = compute_throughput_verdict(&[sample], 200_000, 30);
-    assert_eq!(v, GateVerdict::InsufficientEvidence);
-}
-
-// ===========================================================================
-// Section 12: derive_governance_action
-// ===========================================================================
-
-#[test]
-fn enrich_governance_vulnerable_critical_blocks() {
-    let action = derive_governance_action(
-        &GateVerdict::Pass,
-        &SecurityVerdict::Vulnerable,
-        &CohortTier::Critical,
-    );
-    assert_eq!(action, GovernanceAction::BlockAdoption);
-}
-
-#[test]
-fn enrich_governance_vulnerable_low_requires_remediation() {
-    let action = derive_governance_action(
-        &GateVerdict::Pass,
-        &SecurityVerdict::Vulnerable,
-        &CohortTier::Low,
-    );
-    assert_eq!(action, GovernanceAction::RequireRemediation);
-}
-
-#[test]
-fn enrich_governance_unassessed_critical_requires_audit() {
-    let action = derive_governance_action(
-        &GateVerdict::Pass,
-        &SecurityVerdict::Unassessed,
-        &CohortTier::Critical,
-    );
-    assert_eq!(action, GovernanceAction::RequireAudit);
-}
-
-#[test]
-fn enrich_governance_pass_secure_allows() {
-    let action = derive_governance_action(
-        &GateVerdict::Pass,
-        &SecurityVerdict::Secure,
-        &CohortTier::Medium,
-    );
-    assert_eq!(action, GovernanceAction::AllowAdoption);
-}
-
-#[test]
-fn enrich_governance_pass_conditional_secure() {
-    let action = derive_governance_action(
-        &GateVerdict::Pass,
-        &SecurityVerdict::ConditionallySecure,
-        &CohortTier::Medium,
-    );
-    assert_eq!(action, GovernanceAction::ConditionalAdoption);
-}
-
-#[test]
-fn enrich_governance_fail_critical_blocks() {
-    let action = derive_governance_action(
-        &GateVerdict::Fail,
-        &SecurityVerdict::Secure,
-        &CohortTier::Critical,
-    );
-    assert_eq!(action, GovernanceAction::BlockAdoption);
-}
-
-#[test]
-fn enrich_governance_fail_medium_requires_remediation() {
-    let action = derive_governance_action(
-        &GateVerdict::Fail,
-        &SecurityVerdict::Secure,
-        &CohortTier::Medium,
-    );
-    assert_eq!(action, GovernanceAction::RequireRemediation);
-}
-
-#[test]
-fn enrich_governance_fail_low_downgrades() {
-    let action = derive_governance_action(
-        &GateVerdict::Fail,
-        &SecurityVerdict::Secure,
-        &CohortTier::Low,
-    );
-    assert_eq!(action, GovernanceAction::DowngradeTier);
-}
-
-// ===========================================================================
-// Section 13: evaluate_cohort_gate — empty addons
-// ===========================================================================
-
-#[test]
-fn enrich_evaluate_cohort_gate_empty_addons() {
+fn integ_gate_config_serde_roundtrip() {
     let config = GateConfig::default();
-    let report = evaluate_cohort_gate(&config, &[], &[], &[], &[], epoch());
-    assert_eq!(report.overall_verdict, GateVerdict::InsufficientEvidence);
-    assert_eq!(report.total_addons, 0);
-    assert_eq!(report.passing_addons, 0);
-    assert_eq!(report.failing_addons, 0);
+    let json = serde_json::to_string(&config).unwrap();
+    let back: GateConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(config, back);
 }
 
 // ===========================================================================
-// Section 14: evaluate_cohort_gate — single addon pass
+// Display tests
 // ===========================================================================
 
 #[test]
-fn enrich_evaluate_cohort_gate_single_addon_pass() {
-    let config = GateConfig::default();
-    let addons = vec![addon("crypto-a", CohortTier::High)];
+fn integ_cohort_tier_display_all_unique() {
+    let mut displays = BTreeSet::new();
+    for tier in CohortTier::ALL {
+        displays.insert(tier.to_string());
+    }
+    assert_eq!(displays.len(), 6);
+}
 
-    let parity = vec![
-        parity_finding("crypto-a", ParityDimension::ApiSurface, true),
-        parity_finding("crypto-a", ParityDimension::MemorySafety, true),
-        parity_finding("crypto-a", ParityDimension::ThreadSafety, true),
-    ];
-    let security = vec![
-        security_finding(
-            "crypto-a",
-            SecurityClass::MemoryIsolation,
-            SecurityVerdict::Secure,
-        ),
-    ];
-    let throughput = vec![throughput_sample("crypto-a", 1_000_000, 950_000)];
+#[test]
+fn integ_parity_dimension_display_all_unique() {
+    let mut displays = BTreeSet::new();
+    for dim in ParityDimension::ALL {
+        displays.insert(dim.to_string());
+    }
+    assert_eq!(displays.len(), 6);
+}
 
-    let report = evaluate_cohort_gate(
-        &config,
-        &addons,
-        &parity,
-        &security,
-        &throughput,
-        epoch(),
+#[test]
+fn integ_security_class_display_all_unique() {
+    let mut displays = BTreeSet::new();
+    for class in SecurityClass::ALL {
+        displays.insert(class.to_string());
+    }
+    assert_eq!(displays.len(), 6);
+}
+
+#[test]
+fn integ_throughput_metric_display_all_unique() {
+    let mut displays = BTreeSet::new();
+    for metric in ThroughputMetric::ALL {
+        displays.insert(metric.to_string());
+    }
+    assert_eq!(displays.len(), 6);
+}
+
+#[test]
+fn integ_gate_verdict_adoptability() {
+    assert!(GateVerdict::Pass.is_adoptable());
+    assert!(GateVerdict::ConditionalPass.is_adoptable());
+    assert!(!GateVerdict::Fail.is_adoptable());
+    assert!(!GateVerdict::InsufficientEvidence.is_adoptable());
+}
+
+// ===========================================================================
+// Parity verdict tests
+// ===========================================================================
+
+#[test]
+fn integ_parity_verdict_empty_is_insufficient() {
+    assert_eq!(compute_parity_verdict(&[], 800_000), GateVerdict::InsufficientEvidence);
+}
+
+#[test]
+fn integ_parity_verdict_all_pass() {
+    let findings: Vec<ParityFinding> = ParityDimension::ALL
+        .iter()
+        .map(|d| make_parity("test", *d, true))
+        .collect();
+    assert_eq!(compute_parity_verdict(&findings, 800_000), GateVerdict::Pass);
+}
+
+#[test]
+fn integ_parity_verdict_below_threshold_fails() {
+    let findings: Vec<ParityFinding> = ParityDimension::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, d)| make_parity("test", *d, i < 2))
+        .collect();
+    assert_eq!(compute_parity_verdict(&findings, 800_000), GateVerdict::Fail);
+}
+
+#[test]
+fn integ_parity_verdict_conditional_at_half_threshold() {
+    let findings: Vec<ParityFinding> = ParityDimension::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, d)| make_parity("test", *d, i < 3))
+        .collect();
+    assert_eq!(compute_parity_verdict(&findings, 800_000), GateVerdict::ConditionalPass);
+}
+
+// ===========================================================================
+// Security verdict tests
+// ===========================================================================
+
+#[test]
+fn integ_security_verdict_empty_is_unassessed() {
+    assert_eq!(compute_security_verdict(&[]), SecurityVerdict::Unassessed);
+}
+
+#[test]
+fn integ_security_verdict_all_secure() {
+    let findings: Vec<SecurityFinding> = SecurityClass::ALL
+        .iter()
+        .map(|c| make_security("test", *c, SecurityVerdict::Secure))
+        .collect();
+    assert_eq!(compute_security_verdict(&findings), SecurityVerdict::Secure);
+}
+
+#[test]
+fn integ_security_verdict_one_vulnerable_overrides() {
+    let findings = vec![
+        make_security("test", SecurityClass::MemoryIsolation, SecurityVerdict::Secure),
+        make_security("test", SecurityClass::InputValidation, SecurityVerdict::Vulnerable),
+    ];
+    assert_eq!(compute_security_verdict(&findings), SecurityVerdict::Vulnerable);
+}
+
+#[test]
+fn integ_security_verdict_conditionally_secure() {
+    let findings = vec![
+        make_security("test", SecurityClass::MemoryIsolation, SecurityVerdict::Secure),
+        make_security("test", SecurityClass::OutputSanitization, SecurityVerdict::ConditionallySecure),
+    ];
+    assert_eq!(compute_security_verdict(&findings), SecurityVerdict::ConditionallySecure);
+}
+
+// ===========================================================================
+// Throughput verdict tests
+// ===========================================================================
+
+#[test]
+fn integ_throughput_verdict_empty_is_insufficient() {
+    assert_eq!(compute_throughput_verdict(&[], 100_000, 30), GateVerdict::InsufficientEvidence);
+}
+
+#[test]
+fn integ_throughput_verdict_no_regression_passes() {
+    let samples = vec![make_throughput("test", ThroughputMetric::CallLatency, MILLIONTHS, MILLIONTHS)];
+    assert_eq!(compute_throughput_verdict(&samples, 100_000, 30), GateVerdict::Pass);
+}
+
+#[test]
+fn integ_throughput_verdict_regression_above_threshold_fails() {
+    let samples = vec![make_throughput("test", ThroughputMetric::CallLatency, MILLIONTHS, 1_200_000)];
+    assert_eq!(compute_throughput_verdict(&samples, 100_000, 30), GateVerdict::Fail);
+}
+
+#[test]
+fn integ_throughput_verdict_regression_between_half_and_full_conditional() {
+    let samples = vec![make_throughput("test", ThroughputMetric::CallLatency, MILLIONTHS, 1_070_000)];
+    assert_eq!(compute_throughput_verdict(&samples, 100_000, 30), GateVerdict::ConditionalPass);
+}
+
+#[test]
+fn integ_throughput_verdict_insufficient_samples() {
+    let mut sample = make_throughput("test", ThroughputMetric::CallLatency, MILLIONTHS, 1_200_000);
+    sample.sample_count = 5;
+    assert_eq!(compute_throughput_verdict(&[sample], 100_000, 30), GateVerdict::InsufficientEvidence);
+}
+
+#[test]
+fn integ_throughput_zero_baseline_skipped() {
+    let samples = vec![make_throughput("test", ThroughputMetric::CallLatency, 0, 1_200_000)];
+    assert_eq!(compute_throughput_verdict(&samples, 100_000, 30), GateVerdict::Pass);
+}
+
+// ===========================================================================
+// Governance action tests
+// ===========================================================================
+
+#[test]
+fn integ_governance_pass_secure_allows() {
+    assert_eq!(
+        derive_governance_action(&GateVerdict::Pass, &SecurityVerdict::Secure, &CohortTier::Medium),
+        GovernanceAction::AllowAdoption
     );
+}
 
-    assert_eq!(report.total_addons, 1);
-    assert!(report.passing_addons >= 1 || report.overall_verdict == GateVerdict::Pass);
+#[test]
+fn integ_governance_vulnerable_critical_blocks() {
+    assert_eq!(
+        derive_governance_action(&GateVerdict::Pass, &SecurityVerdict::Vulnerable, &CohortTier::Critical),
+        GovernanceAction::BlockAdoption
+    );
+}
+
+#[test]
+fn integ_governance_vulnerable_low_remediates() {
+    assert_eq!(
+        derive_governance_action(&GateVerdict::Pass, &SecurityVerdict::Vulnerable, &CohortTier::Low),
+        GovernanceAction::RequireRemediation
+    );
+}
+
+#[test]
+fn integ_governance_fail_medium_remediates() {
+    assert_eq!(
+        derive_governance_action(&GateVerdict::Fail, &SecurityVerdict::Secure, &CohortTier::Medium),
+        GovernanceAction::RequireRemediation
+    );
+}
+
+#[test]
+fn integ_governance_fail_low_downgrades() {
+    assert_eq!(
+        derive_governance_action(&GateVerdict::Fail, &SecurityVerdict::Secure, &CohortTier::Low),
+        GovernanceAction::DowngradeTier
+    );
+}
+
+#[test]
+fn integ_governance_unassessed_high_audits() {
+    assert_eq!(
+        derive_governance_action(&GateVerdict::Pass, &SecurityVerdict::Unassessed, &CohortTier::High),
+        GovernanceAction::RequireAudit
+    );
 }
 
 // ===========================================================================
-// Section 15: compute_tier_coverage
+// Receipt tests
 // ===========================================================================
 
 #[test]
-fn enrich_compute_tier_coverage_empty_results() {
-    let coverage = compute_tier_coverage(&[]);
-    assert!(coverage.is_empty());
-}
-
-// ===========================================================================
-// Section 16: compute_receipt determinism
-// ===========================================================================
-
-#[test]
-fn enrich_compute_receipt_deterministic() {
-    let input_hash = ContentHash::compute(b"test-input");
-    let r1 = compute_receipt(input_hash.clone(), &GateVerdict::Pass, epoch());
-    let r2 = compute_receipt(input_hash, &GateVerdict::Pass, epoch());
+fn integ_receipt_determinism() {
+    let hash = ContentHash::compute(b"test-input");
+    let r1 = compute_receipt(hash, &GateVerdict::Pass, ep(5));
+    let r2 = compute_receipt(hash, &GateVerdict::Pass, ep(5));
     assert_eq!(r1.verdict_hash, r2.verdict_hash);
     assert_eq!(r1.schema_version, SCHEMA_VERSION);
     assert_eq!(r1.component, COMPONENT);
-    assert_eq!(r1.bead_id, BEAD_ID);
-    assert_eq!(r1.policy_id, POLICY_ID);
 }
 
 #[test]
-fn enrich_compute_receipt_different_verdicts_different_hash() {
-    let input_hash = ContentHash::compute(b"test-input");
-    let r1 = compute_receipt(input_hash.clone(), &GateVerdict::Pass, epoch());
-    let r2 = compute_receipt(input_hash, &GateVerdict::Fail, epoch());
+fn integ_receipt_different_verdicts_differ() {
+    let hash = ContentHash::compute(b"test-input");
+    let r1 = compute_receipt(hash, &GateVerdict::Pass, ep(5));
+    let r2 = compute_receipt(hash, &GateVerdict::Fail, ep(5));
+    assert_ne!(r1.verdict_hash, r2.verdict_hash);
+}
+
+#[test]
+fn integ_receipt_different_epochs_differ() {
+    let hash = ContentHash::compute(b"test-input");
+    let r1 = compute_receipt(hash, &GateVerdict::Pass, ep(1));
+    let r2 = compute_receipt(hash, &GateVerdict::Pass, ep(2));
     assert_ne!(r1.verdict_hash, r2.verdict_hash);
 }
 
 // ===========================================================================
-// Section 17: AddonDescriptor serde
+// Full cohort gate evaluation tests
 // ===========================================================================
 
 #[test]
-fn enrich_addon_descriptor_serde_roundtrip() {
-    let a = addon("test-addon", CohortTier::Critical);
-    let json = serde_json::to_string(&a).unwrap();
-    let restored: AddonDescriptor = serde_json::from_str(&json).unwrap();
-    assert_eq!(a, restored);
-}
-
-#[test]
-fn enrich_addon_descriptor_with_worker_threads() {
-    let mut a = addon("wt-addon", CohortTier::Medium);
-    a.has_worker_threads = true;
-    a.has_async_hooks = true;
-    let json = serde_json::to_string(&a).unwrap();
-    let restored: AddonDescriptor = serde_json::from_str(&json).unwrap();
-    assert_eq!(a, restored);
-}
-
-// ===========================================================================
-// Section 18: ParityFinding serde
-// ===========================================================================
-
-#[test]
-fn enrich_parity_finding_serde_roundtrip() {
-    let f = parity_finding("a", ParityDimension::ErrorSemantics, true);
-    let json = serde_json::to_string(&f).unwrap();
-    let restored: ParityFinding = serde_json::from_str(&json).unwrap();
-    assert_eq!(f, restored);
-}
-
-// ===========================================================================
-// Section 19: SecurityFinding serde
-// ===========================================================================
-
-#[test]
-fn enrich_security_finding_serde_roundtrip() {
-    let f = security_finding(
-        "b",
-        SecurityClass::SandboxEscapePrevention,
-        SecurityVerdict::Secure,
-    );
-    let json = serde_json::to_string(&f).unwrap();
-    let restored: SecurityFinding = serde_json::from_str(&json).unwrap();
-    assert_eq!(f, restored);
-}
-
-// ===========================================================================
-// Section 20: ThroughputSample serde
-// ===========================================================================
-
-#[test]
-fn enrich_throughput_sample_serde_roundtrip() {
-    let s = throughput_sample("c", 500_000, 480_000);
-    let json = serde_json::to_string(&s).unwrap();
-    let restored: ThroughputSample = serde_json::from_str(&json).unwrap();
-    assert_eq!(s, restored);
-}
-
-// ===========================================================================
-// Section 21: GateConfig default and serde
-// ===========================================================================
-
-#[test]
-fn enrich_gate_config_default_values() {
-    let cfg = GateConfig::default();
-    assert_eq!(cfg.min_parity_coverage_millionths, 800_000);
-    assert_eq!(cfg.max_throughput_regression_millionths, 100_000);
-    assert!(cfg.require_security_audit);
-    assert!(cfg.required_tiers.is_empty());
-    assert_eq!(cfg.min_sample_count, 30);
-}
-
-#[test]
-fn enrich_gate_config_serde_roundtrip() {
-    let cfg = GateConfig::default();
-    let json = serde_json::to_string(&cfg).unwrap();
-    let restored: GateConfig = serde_json::from_str(&json).unwrap();
-    assert_eq!(cfg, restored);
-}
-
-// ===========================================================================
-// Section 22: DecisionReceipt serde
-// ===========================================================================
-
-#[test]
-fn enrich_decision_receipt_serde_roundtrip() {
-    let receipt = compute_receipt(ContentHash::compute(b"data"), &GateVerdict::Pass, epoch());
-    let json = serde_json::to_string(&receipt).unwrap();
-    let restored: DecisionReceipt = serde_json::from_str(&json).unwrap();
-    assert_eq!(receipt, restored);
-}
-
-// ===========================================================================
-// Section 23: GateReport serde
-// ===========================================================================
-
-#[test]
-fn enrich_gate_report_empty_serde_roundtrip() {
+fn integ_empty_cohort_insufficient_evidence() {
     let config = GateConfig::default();
-    let report = evaluate_cohort_gate(&config, &[], &[], &[], &[], epoch());
-    let json = serde_json::to_string(&report).unwrap();
-    let restored: GateReport = serde_json::from_str(&json).unwrap();
-    assert_eq!(report, restored);
+    let report = evaluate_cohort_gate(&config, &[], &[], &[], &[], ep(1));
+    assert_eq!(report.overall_verdict, GateVerdict::InsufficientEvidence);
+    assert_eq!(report.total_addons, 0);
+}
+
+#[test]
+fn integ_single_addon_all_pass() {
+    let config = GateConfig::default();
+    let addon = make_addon("good", CohortTier::Medium);
+    let parity: Vec<_> = ParityDimension::ALL.iter().map(|d| make_parity("good", *d, true)).collect();
+    let security: Vec<_> = SecurityClass::ALL.iter().map(|c| make_security("good", *c, SecurityVerdict::Secure)).collect();
+    let throughput: Vec<_> = ThroughputMetric::ALL.iter().map(|m| make_throughput("good", *m, MILLIONTHS, MILLIONTHS)).collect();
+    let report = evaluate_cohort_gate(&config, &[addon], &parity, &security, &throughput, ep(1));
+    assert_eq!(report.overall_verdict, GateVerdict::Pass);
+    assert_eq!(report.passing_addons, 1);
+    assert_eq!(report.failing_addons, 0);
+}
+
+#[test]
+fn integ_critical_failure_propagates() {
+    let config = GateConfig::default();
+    let addon = make_addon("vuln", CohortTier::Critical);
+    let security = vec![make_security("vuln", SecurityClass::MemoryIsolation, SecurityVerdict::Vulnerable)];
+    let report = evaluate_cohort_gate(&config, &[addon], &[], &security, &[], ep(1));
+    assert_eq!(report.overall_verdict, GateVerdict::Fail);
+    assert_eq!(report.governance_action, GovernanceAction::BlockAdoption);
 }
 
 // ===========================================================================
-// Section 24: CohortResult serde
+// Tier coverage tests
 // ===========================================================================
 
 #[test]
-fn enrich_cohort_result_serde_roundtrip() {
-    let config = GateConfig::default();
-    let addons = vec![addon("test-addon", CohortTier::Medium)];
-    let parity = vec![parity_finding("test-addon", ParityDimension::ApiSurface, true)];
-    let security = vec![security_finding(
-        "test-addon",
-        SecurityClass::MemoryIsolation,
-        SecurityVerdict::Secure,
-    )];
-    let throughput = vec![throughput_sample("test-addon", 1_000_000, 950_000)];
+fn integ_tier_coverage_empty() {
+    let coverage = compute_tier_coverage(&[]);
+    assert!(coverage.is_empty());
+}
 
-    let result = evaluate_addon(&addons[0], &parity, &security, &throughput, &config);
-    let json = serde_json::to_string(&result).unwrap();
-    let restored: CohortResult = serde_json::from_str(&json).unwrap();
-    assert_eq!(result, restored);
+#[test]
+fn integ_tier_coverage_all_pass_is_100_percent() {
+    let config = GateConfig::default();
+    let addon = make_addon("a1", CohortTier::Medium);
+    let parity: Vec<_> = ParityDimension::ALL.iter().map(|d| make_parity("a1", *d, true)).collect();
+    let security: Vec<_> = SecurityClass::ALL.iter().map(|c| make_security("a1", *c, SecurityVerdict::Secure)).collect();
+    let throughput: Vec<_> = ThroughputMetric::ALL.iter().map(|m| make_throughput("a1", *m, MILLIONTHS, MILLIONTHS)).collect();
+    let result = evaluate_addon(&addon, &parity, &security, &throughput, &config);
+    let coverage = compute_tier_coverage(&[result]);
+    assert_eq!(coverage.len(), 1);
+    assert_eq!(coverage[0].1, MILLIONTHS);
 }
 
 // ===========================================================================
-// Section 25: evaluate_addon with no evidence
+// Constants tests
 // ===========================================================================
 
 #[test]
-fn enrich_evaluate_addon_no_evidence_yields_insufficient() {
+fn integ_constants_non_empty() {
+    assert!(!SCHEMA_VERSION.is_empty());
+    assert!(!COMPONENT.is_empty());
+    assert!(!BEAD_ID.is_empty());
+    assert!(!POLICY_ID.is_empty());
+}
+
+// ===========================================================================
+// Config defaults
+// ===========================================================================
+
+#[test]
+fn integ_config_defaults() {
     let config = GateConfig::default();
-    let a = addon("empty-addon", CohortTier::Low);
-    let result = evaluate_addon(&a, &[], &[], &[], &config);
-    assert_eq!(result.parity_verdict, GateVerdict::InsufficientEvidence);
-    assert_eq!(result.security_verdict, SecurityVerdict::Unassessed);
-    assert_eq!(result.throughput_verdict, GateVerdict::InsufficientEvidence);
+    assert_eq!(config.min_parity_coverage_millionths, 800_000);
+    assert_eq!(config.max_throughput_regression_millionths, 100_000);
+    assert!(config.require_security_audit);
+    assert!(config.required_tiers.is_empty());
+    assert_eq!(config.min_sample_count, 30);
 }

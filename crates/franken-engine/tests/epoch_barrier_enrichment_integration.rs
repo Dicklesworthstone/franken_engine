@@ -1,661 +1,664 @@
-#![forbid(unsafe_code)]
+//! Enrichment integration tests for `epoch_barrier` module.
+//!
+//! Covers: BarrierState, BarrierError, CriticalOpKind, EpochGuard,
+//! TransitionEvidence, BarrierConfig, EpochBarrier — full transition lifecycle,
+//! guard acquire/release, drain with force-cancel, non-monotonic rejection,
+//! concurrent guard tracking, error paths, serde roundtrips, Display uniqueness.
+
 #![allow(
     clippy::field_reassign_with_default,
     clippy::assertions_on_constants,
-    clippy::too_many_arguments
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op
 )]
-
-//! Enrichment integration tests for the `epoch_barrier` module.
-//!
-//! Covers: serde roundtrips for all types, Display distinctness, Default
-//! values, deterministic behavior, advanced transition scenarios, edge
-//! cases, evidence recording, and guard lifecycle interactions.
 
 use std::collections::BTreeSet;
 
-use frankenengine_engine::epoch_barrier::{
-    BarrierConfig, BarrierError, BarrierState, CriticalOpKind, EpochBarrier, EpochGuard,
-    TransitionEvidence,
-};
+use frankenengine_engine::epoch_barrier::*;
 use frankenengine_engine::security_epoch::{SecurityEpoch, TransitionReason};
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+// ── helpers ──────────────────────────────────────────────────────────────
 
-fn det_barrier(epoch: u64) -> EpochBarrier {
-    EpochBarrier::new(
-        SecurityEpoch::from_raw(epoch),
-        BarrierConfig::deterministic(),
-    )
+fn epoch(n: u64) -> SecurityEpoch {
+    SecurityEpoch::from_raw(n)
 }
 
-// ===========================================================================
-// BarrierState — serde and Display
-// ===========================================================================
-
-#[test]
-fn barrier_state_serde_roundtrip_all_variants() {
-    let variants = [
-        BarrierState::Open,
-        BarrierState::Draining,
-        BarrierState::Finalizing,
-    ];
-    for v in &variants {
-        let json = serde_json::to_string(v).unwrap();
-        let back: BarrierState = serde_json::from_str(&json).unwrap();
-        assert_eq!(*v, back);
-    }
+fn det_barrier(e: u64) -> EpochBarrier {
+    EpochBarrier::new(epoch(e), BarrierConfig::deterministic())
 }
 
-#[test]
-fn barrier_state_display_all_distinct() {
-    let mut set = BTreeSet::new();
-    set.insert(BarrierState::Open.to_string());
-    set.insert(BarrierState::Draining.to_string());
-    set.insert(BarrierState::Finalizing.to_string());
-    assert_eq!(set.len(), 3);
-}
-
-#[test]
-fn barrier_state_display_lowercase() {
-    assert_eq!(BarrierState::Open.to_string(), "open");
-    assert_eq!(BarrierState::Draining.to_string(), "draining");
-    assert_eq!(BarrierState::Finalizing.to_string(), "finalizing");
-}
-
-#[test]
-fn barrier_state_clone_copy_eq() {
-    let s = BarrierState::Draining;
-    let s2 = s;
-    assert_eq!(s, s2);
-}
-
-// ===========================================================================
-// CriticalOpKind — serde and Display
-// ===========================================================================
-
-#[test]
-fn critical_op_kind_serde_roundtrip_all_variants() {
-    let variants = [
+fn all_op_kinds() -> Vec<CriticalOpKind> {
+    vec![
         CriticalOpKind::DecisionEval,
         CriticalOpKind::EvidenceEmission,
         CriticalOpKind::KeyDerivation,
         CriticalOpKind::CapabilityCheck,
         CriticalOpKind::RevocationCheck,
         CriticalOpKind::RemoteOperation,
-    ];
-    for v in &variants {
-        let json = serde_json::to_string(v).unwrap();
-        let back: CriticalOpKind = serde_json::from_str(&json).unwrap();
-        assert_eq!(*v, back);
+    ]
+}
+
+fn all_reasons() -> Vec<TransitionReason> {
+    vec![
+        TransitionReason::PolicyKeyRotation,
+        TransitionReason::RevocationFrontierAdvance,
+        TransitionReason::GuardrailConfigChange,
+        TransitionReason::LossMatrixUpdate,
+        TransitionReason::RemoteTrustConfigChange,
+        TransitionReason::OperatorManualBump,
+    ]
+}
+
+// ── test: full lifecycle with guards drained before complete ─────────────
+
+#[test]
+fn enrichment_full_lifecycle_guard_drain_then_complete() {
+    let mut barrier = det_barrier(1);
+
+    let g1 = barrier.enter_critical(CriticalOpKind::DecisionEval, "t1").unwrap();
+    let g2 = barrier.enter_critical(CriticalOpKind::EvidenceEmission, "t2").unwrap();
+    let g3 = barrier.enter_critical(CriticalOpKind::KeyDerivation, "t3").unwrap();
+
+    assert_eq!(barrier.in_flight(), 3);
+
+    let in_flight = barrier.begin_transition(epoch(2), TransitionReason::PolicyKeyRotation, "tr").unwrap();
+    assert_eq!(in_flight, 3);
+    assert_eq!(barrier.state(), BarrierState::Draining);
+    assert!(!barrier.can_complete());
+
+    assert!(barrier.release_guard(&g1));
+    assert!(barrier.release_guard(&g2));
+    assert!(!barrier.can_complete());
+    assert!(barrier.release_guard(&g3));
+    assert!(barrier.can_complete());
+
+    let ev = barrier.complete_transition().unwrap();
+    assert_eq!(ev.old_epoch, epoch(1));
+    assert_eq!(ev.new_epoch, epoch(2));
+    assert_eq!(ev.in_flight_at_start, 3);
+    assert_eq!(ev.forced_cancellations, 0);
+    assert_eq!(barrier.state(), BarrierState::Open);
+    assert_eq!(barrier.current_epoch(), epoch(2));
+}
+
+// ── test: transition_now force-cancels in-flight guards ──────────────────
+
+#[test]
+fn enrichment_transition_now_force_cancels_multiple_guards() {
+    let mut barrier = det_barrier(10);
+    for i in 0..5 {
+        let _g = barrier.enter_critical(CriticalOpKind::CapabilityCheck, &format!("t{i}")).unwrap();
+    }
+    assert_eq!(barrier.in_flight(), 5);
+
+    let ev = barrier.transition_now(epoch(11), TransitionReason::OperatorManualBump, "force").unwrap();
+    assert_eq!(ev.forced_cancellations, 5);
+    assert_eq!(ev.in_flight_at_start, 5);
+    assert_eq!(barrier.current_epoch(), epoch(11));
+    assert_eq!(barrier.in_flight(), 0);
+}
+
+// ── test: non-monotonic transition rejection ─────────────────────────────
+
+#[test]
+fn enrichment_non_monotonic_transition_rejected_lower_epoch() {
+    let mut barrier = det_barrier(10);
+    let err = barrier.begin_transition(epoch(5), TransitionReason::PolicyKeyRotation, "t").unwrap_err();
+    assert!(matches!(err, BarrierError::NonMonotonicTransition { current, attempted }
+        if current == epoch(10) && attempted == epoch(5)));
+}
+
+#[test]
+fn enrichment_non_monotonic_transition_rejected_same_epoch() {
+    let mut barrier = det_barrier(7);
+    let err = barrier.begin_transition(epoch(7), TransitionReason::PolicyKeyRotation, "t").unwrap_err();
+    assert!(matches!(err, BarrierError::NonMonotonicTransition { .. }));
+}
+
+// ── test: guard acquisition rejected during drain ────────────────────────
+
+#[test]
+fn enrichment_guard_rejected_while_draining() {
+    let mut barrier = det_barrier(1);
+    barrier.begin_transition(epoch(2), TransitionReason::LossMatrixUpdate, "t").unwrap();
+    let err = barrier.enter_critical(CriticalOpKind::RemoteOperation, "t2").unwrap_err();
+    assert!(matches!(err, BarrierError::EpochTransitioning { state: BarrierState::Draining, .. }));
+}
+
+// ── test: double transition rejected ─────────────────────────────────────
+
+#[test]
+fn enrichment_double_transition_begin_rejected() {
+    let mut barrier = det_barrier(1);
+    barrier.begin_transition(epoch(2), TransitionReason::PolicyKeyRotation, "t1").unwrap();
+    let err = barrier.begin_transition(epoch(3), TransitionReason::PolicyKeyRotation, "t2").unwrap_err();
+    assert!(matches!(err, BarrierError::TransitionAlreadyInProgress { .. }));
+}
+
+// ── test: complete without transition returns error ───────────────────────
+
+#[test]
+fn enrichment_complete_without_transition_is_error() {
+    let mut barrier = det_barrier(1);
+    let err = barrier.complete_transition().unwrap_err();
+    assert!(matches!(err, BarrierError::NoTransitionInProgress));
+}
+
+// ── test: complete with guards held returns drain timeout ────────────────
+
+#[test]
+fn enrichment_complete_with_held_guards_returns_drain_timeout() {
+    let mut barrier = det_barrier(1);
+    let _g = barrier.enter_critical(CriticalOpKind::DecisionEval, "t").unwrap();
+    barrier.begin_transition(epoch(2), TransitionReason::PolicyKeyRotation, "t").unwrap();
+    let err = barrier.complete_transition().unwrap_err();
+    assert!(matches!(err, BarrierError::DrainTimeout { remaining_guards: 1, .. }));
+}
+
+// ── test: force cancel when not draining is error ────────────────────────
+
+#[test]
+fn enrichment_force_cancel_when_not_draining() {
+    let mut barrier = det_barrier(1);
+    let err = barrier.force_cancel_remaining().unwrap_err();
+    assert!(matches!(err, BarrierError::NoTransitionInProgress));
+}
+
+// ── test: force cancel with zero in-flight returns zero ──────────────────
+
+#[test]
+fn enrichment_force_cancel_zero_in_flight() {
+    let mut barrier = det_barrier(1);
+    barrier.begin_transition(epoch(2), TransitionReason::PolicyKeyRotation, "t").unwrap();
+    let cancelled = barrier.force_cancel_remaining().unwrap();
+    assert_eq!(cancelled, 0);
+}
+
+// ── test: stale guard from old epoch cannot be released ──────────────────
+
+#[test]
+fn enrichment_stale_guard_release_after_transition() {
+    let mut barrier = det_barrier(1);
+    let old_guard = barrier.enter_critical(CriticalOpKind::DecisionEval, "t").unwrap();
+    barrier.transition_now(epoch(2), TransitionReason::PolicyKeyRotation, "t").unwrap();
+    assert!(!barrier.release_guard(&old_guard));
+}
+
+// ── test: guard from wrong epoch on empty barrier ────────────────────────
+
+#[test]
+fn enrichment_release_guard_wrong_epoch_returns_false() {
+    let mut barrier = det_barrier(5);
+    let fake = EpochGuard {
+        guard_id: 999,
+        epoch: epoch(99),
+        op_kind: CriticalOpKind::RevocationCheck,
+        trace_id: "fake".to_string(),
+    };
+    assert!(!barrier.release_guard(&fake));
+}
+
+// ── test: guard IDs are monotonically increasing ─────────────────────────
+
+#[test]
+fn enrichment_guard_ids_monotonically_increase() {
+    let mut barrier = det_barrier(1);
+    let mut prev = 0u64;
+    for i in 0..20 {
+        let g = barrier.enter_critical(CriticalOpKind::DecisionEval, &format!("t{i}")).unwrap();
+        assert!(g.guard_id > prev);
+        prev = g.guard_id;
     }
 }
 
+// ── test: guard IDs persist across transitions ───────────────────────────
+
 #[test]
-fn critical_op_kind_display_all_distinct() {
-    let mut set = BTreeSet::new();
-    set.insert(CriticalOpKind::DecisionEval.to_string());
-    set.insert(CriticalOpKind::EvidenceEmission.to_string());
-    set.insert(CriticalOpKind::KeyDerivation.to_string());
-    set.insert(CriticalOpKind::CapabilityCheck.to_string());
-    set.insert(CriticalOpKind::RevocationCheck.to_string());
-    set.insert(CriticalOpKind::RemoteOperation.to_string());
-    assert_eq!(set.len(), 6);
+fn enrichment_guard_ids_persist_across_transitions() {
+    let mut barrier = det_barrier(1);
+    let g1 = barrier.enter_critical(CriticalOpKind::DecisionEval, "t").unwrap();
+    barrier.release_guard(&g1);
+    barrier.transition_now(epoch(2), TransitionReason::PolicyKeyRotation, "t").unwrap();
+    let g2 = barrier.enter_critical(CriticalOpKind::DecisionEval, "t").unwrap();
+    assert!(g2.guard_id > g1.guard_id);
 }
 
+// ── test: sequential transitions accumulate evidence ─────────────────────
+
 #[test]
-fn critical_op_kind_display_snake_case() {
-    assert_eq!(CriticalOpKind::DecisionEval.to_string(), "decision_eval");
-    assert_eq!(CriticalOpKind::EvidenceEmission.to_string(), "evidence_emission");
-    assert_eq!(CriticalOpKind::KeyDerivation.to_string(), "key_derivation");
-    assert_eq!(CriticalOpKind::CapabilityCheck.to_string(), "capability_check");
-    assert_eq!(CriticalOpKind::RevocationCheck.to_string(), "revocation_check");
-    assert_eq!(CriticalOpKind::RemoteOperation.to_string(), "remote_operation");
+fn enrichment_sequential_transitions_accumulate_evidence() {
+    let mut barrier = det_barrier(1);
+    for i in 2..=6 {
+        barrier.transition_now(epoch(i), TransitionReason::PolicyKeyRotation, &format!("t{i}")).unwrap();
+    }
+    assert_eq!(barrier.evidence().len(), 5);
+    assert_eq!(barrier.current_epoch(), epoch(6));
+    for (idx, ev) in barrier.evidence().iter().enumerate() {
+        assert_eq!(ev.old_epoch, epoch((idx as u64) + 1));
+        assert_eq!(ev.new_epoch, epoch((idx as u64) + 2));
+    }
 }
 
+// ── test: all op kinds can acquire guards ────────────────────────────────
+
 #[test]
-fn critical_op_kind_ord() {
-    assert!(CriticalOpKind::DecisionEval < CriticalOpKind::EvidenceEmission);
-    assert!(CriticalOpKind::EvidenceEmission < CriticalOpKind::KeyDerivation);
+fn enrichment_all_op_kinds_acquire_guards() {
+    let mut barrier = det_barrier(1);
+    for kind in all_op_kinds() {
+        let guard = barrier.enter_critical(kind, "t").unwrap();
+        assert_eq!(guard.op_kind, kind);
+    }
+    assert_eq!(barrier.in_flight(), 6);
 }
 
-// ===========================================================================
-// BarrierConfig — Default, serde
-// ===========================================================================
+// ── test: all transition reasons preserved in evidence ───────────────────
 
 #[test]
-fn barrier_config_default_values() {
-    let cfg = BarrierConfig::default();
-    assert_eq!(cfg.drain_timeout_ms, 5000);
-    assert!(!cfg.deterministic);
+fn enrichment_all_transition_reasons_preserved() {
+    let mut barrier = det_barrier(1);
+    for (i, reason) in all_reasons().iter().enumerate() {
+        let ev = barrier
+            .transition_now(epoch((i as u64) + 2), reason.clone(), &format!("r{i}"))
+            .unwrap();
+        assert_eq!(ev.reason, *reason);
+    }
+    assert_eq!(barrier.evidence().len(), 6);
 }
 
+// ── test: partial drain then force cancel ────────────────────────────────
+
 #[test]
-fn barrier_config_deterministic_values() {
-    let cfg = BarrierConfig::deterministic();
-    assert_eq!(cfg.drain_timeout_ms, 0);
-    assert!(cfg.deterministic);
+fn enrichment_partial_drain_then_force_cancel() {
+    let mut barrier = det_barrier(1);
+    let g1 = barrier.enter_critical(CriticalOpKind::DecisionEval, "t1").unwrap();
+    let _g2 = barrier.enter_critical(CriticalOpKind::KeyDerivation, "t2").unwrap();
+    let _g3 = barrier.enter_critical(CriticalOpKind::RemoteOperation, "t3").unwrap();
+
+    barrier.begin_transition(epoch(2), TransitionReason::PolicyKeyRotation, "t").unwrap();
+    barrier.release_guard(&g1);
+    assert_eq!(barrier.in_flight(), 2);
+
+    let cancelled = barrier.force_cancel_remaining().unwrap();
+    assert_eq!(cancelled, 2);
+    assert!(barrier.can_complete());
+
+    let ev = barrier.complete_transition().unwrap();
+    assert_eq!(ev.in_flight_at_start, 3);
+    assert_eq!(ev.forced_cancellations, 2);
 }
 
+// ── test: epoch skipping allowed ─────────────────────────────────────────
+
 #[test]
-fn barrier_config_serde_roundtrip() {
-    let cfg = BarrierConfig {
-        drain_timeout_ms: 12345,
-        deterministic: true,
-    };
-    let json = serde_json::to_string(&cfg).unwrap();
-    let back: BarrierConfig = serde_json::from_str(&json).unwrap();
-    assert_eq!(cfg, back);
+fn enrichment_epoch_skipping_allowed() {
+    let mut barrier = det_barrier(1);
+    let ev = barrier.transition_now(epoch(1000), TransitionReason::OperatorManualBump, "skip").unwrap();
+    assert_eq!(ev.old_epoch, epoch(1));
+    assert_eq!(ev.new_epoch, epoch(1000));
 }
 
+// ── test: barrier at high epoch value ────────────────────────────────────
+
 #[test]
-fn barrier_config_default_serde_roundtrip() {
-    let cfg = BarrierConfig::default();
-    let json = serde_json::to_string(&cfg).unwrap();
-    let back: BarrierConfig = serde_json::from_str(&json).unwrap();
-    assert_eq!(cfg, back);
+fn enrichment_barrier_high_epoch() {
+    let high = u64::MAX - 1;
+    let mut barrier = det_barrier(high);
+    let ev = barrier.transition_now(epoch(u64::MAX), TransitionReason::PolicyKeyRotation, "t").unwrap();
+    assert_eq!(ev.new_epoch, epoch(u64::MAX));
 }
 
-// ===========================================================================
-// EpochGuard — serde and Display
-// ===========================================================================
+// ── test: barrier at epoch zero ──────────────────────────────────────────
 
 #[test]
-fn epoch_guard_serde_roundtrip() {
+fn enrichment_barrier_at_epoch_zero() {
+    let mut barrier = det_barrier(0);
+    let guard = barrier.enter_critical(CriticalOpKind::DecisionEval, "t").unwrap();
+    assert_eq!(guard.epoch, epoch(0));
+    barrier.release_guard(&guard);
+    let ev = barrier.transition_now(epoch(1), TransitionReason::OperatorManualBump, "t").unwrap();
+    assert_eq!(ev.old_epoch, epoch(0));
+}
+
+// ── test: BarrierState Display uniqueness ────────────────────────────────
+
+#[test]
+fn enrichment_barrier_state_display_uniqueness() {
+    let states = [BarrierState::Open, BarrierState::Draining, BarrierState::Finalizing];
+    let strs: BTreeSet<String> = states.iter().map(|s| s.to_string()).collect();
+    assert_eq!(strs.len(), 3);
+}
+
+// ── test: CriticalOpKind Display uniqueness ──────────────────────────────
+
+#[test]
+fn enrichment_critical_op_kind_display_uniqueness() {
+    let strs: BTreeSet<String> = all_op_kinds().iter().map(|k| k.to_string()).collect();
+    assert_eq!(strs.len(), 6);
+}
+
+// ── test: BarrierError Display uniqueness ────────────────────────────────
+
+#[test]
+fn enrichment_barrier_error_display_all_unique() {
+    let variants = vec![
+        BarrierError::EpochTransitioning { current_epoch: epoch(1), state: BarrierState::Draining },
+        BarrierError::TransitionAlreadyInProgress { current_epoch: epoch(2) },
+        BarrierError::DrainTimeout { epoch: epoch(3), remaining_guards: 5, timeout_ms: 1000 },
+        BarrierError::NoTransitionInProgress,
+        BarrierError::NonMonotonicTransition { current: epoch(5), attempted: epoch(3) },
+    ];
+    let strs: BTreeSet<String> = variants.iter().map(|v| v.to_string()).collect();
+    assert_eq!(strs.len(), 5);
+}
+
+// ── test: BarrierError implements std::error::Error ──────────────────────
+
+#[test]
+fn enrichment_barrier_error_is_std_error() {
+    let err: Box<dyn std::error::Error> = Box::new(BarrierError::NoTransitionInProgress);
+    assert!(!err.to_string().is_empty());
+    assert!(err.source().is_none());
+}
+
+// ── test: EpochGuard Display format ──────────────────────────────────────
+
+#[test]
+fn enrichment_epoch_guard_display_format() {
     let guard = EpochGuard {
         guard_id: 42,
-        epoch: SecurityEpoch::from_raw(7),
+        epoch: epoch(7),
         op_kind: CriticalOpKind::KeyDerivation,
-        trace_id: "trace-001".to_string(),
+        trace_id: "trace-42".to_string(),
+    };
+    let s = guard.to_string();
+    assert!(s.contains("#42"));
+    assert!(s.contains("key_derivation"));
+}
+
+// ── test: serde roundtrip BarrierState all variants ──────────────────────
+
+#[test]
+fn enrichment_serde_barrier_state_all_variants() {
+    for state in [BarrierState::Open, BarrierState::Draining, BarrierState::Finalizing] {
+        let json = serde_json::to_string(&state).unwrap();
+        let back: BarrierState = serde_json::from_str(&json).unwrap();
+        assert_eq!(state, back);
+    }
+}
+
+// ── test: serde roundtrip CriticalOpKind all variants ────────────────────
+
+#[test]
+fn enrichment_serde_critical_op_kind_all_variants() {
+    for kind in all_op_kinds() {
+        let json = serde_json::to_string(&kind).unwrap();
+        let back: CriticalOpKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(kind, back);
+    }
+}
+
+// ── test: serde roundtrip EpochGuard ─────────────────────────────────────
+
+#[test]
+fn enrichment_serde_epoch_guard_roundtrip() {
+    let guard = EpochGuard {
+        guard_id: 7,
+        epoch: epoch(3),
+        op_kind: CriticalOpKind::RemoteOperation,
+        trace_id: "t-123".to_string(),
     };
     let json = serde_json::to_string(&guard).unwrap();
     let back: EpochGuard = serde_json::from_str(&json).unwrap();
     assert_eq!(guard, back);
 }
 
-#[test]
-fn epoch_guard_display_contains_id_epoch_and_kind() {
-    let guard = EpochGuard {
-        guard_id: 5,
-        epoch: SecurityEpoch::from_raw(10),
-        op_kind: CriticalOpKind::CapabilityCheck,
-        trace_id: "t".to_string(),
-    };
-    let display = guard.to_string();
-    assert!(display.contains("#5"), "display={display}");
-    assert!(display.contains("capability_check"), "display={display}");
-}
+// ── test: serde roundtrip TransitionEvidence ─────────────────────────────
 
 #[test]
-fn epoch_guard_fields_accessible() {
-    let guard = EpochGuard {
-        guard_id: 99,
-        epoch: SecurityEpoch::from_raw(3),
-        op_kind: CriticalOpKind::RevocationCheck,
-        trace_id: "my-trace".to_string(),
-    };
-    assert_eq!(guard.guard_id, 99);
-    assert_eq!(guard.epoch, SecurityEpoch::from_raw(3));
-    assert_eq!(guard.op_kind, CriticalOpKind::RevocationCheck);
-    assert_eq!(guard.trace_id, "my-trace");
-}
-
-// ===========================================================================
-// TransitionEvidence — serde
-// ===========================================================================
-
-#[test]
-fn transition_evidence_serde_roundtrip() {
+fn enrichment_serde_transition_evidence_roundtrip() {
     let ev = TransitionEvidence {
-        old_epoch: SecurityEpoch::from_raw(1),
-        new_epoch: SecurityEpoch::from_raw(2),
+        old_epoch: epoch(1),
+        new_epoch: epoch(2),
         reason: TransitionReason::PolicyKeyRotation,
-        in_flight_at_start: 5,
+        in_flight_at_start: 3,
         in_flight_at_complete: 0,
-        forced_cancellations: 3,
-        duration_ms: 42,
-        trace_id: "tr-1".to_string(),
+        forced_cancellations: 1,
+        duration_ms: 0,
+        trace_id: "test-trace".to_string(),
     };
     let json = serde_json::to_string(&ev).unwrap();
     let back: TransitionEvidence = serde_json::from_str(&json).unwrap();
     assert_eq!(ev, back);
 }
 
-#[test]
-fn transition_evidence_fields_accessible() {
-    let ev = TransitionEvidence {
-        old_epoch: SecurityEpoch::from_raw(10),
-        new_epoch: SecurityEpoch::from_raw(11),
-        reason: TransitionReason::RevocationFrontierAdvance,
-        in_flight_at_start: 2,
-        in_flight_at_complete: 0,
-        forced_cancellations: 1,
-        duration_ms: 100,
-        trace_id: "trace-xyz".to_string(),
-    };
-    assert_eq!(ev.old_epoch, SecurityEpoch::from_raw(10));
-    assert_eq!(ev.new_epoch, SecurityEpoch::from_raw(11));
-    assert_eq!(ev.in_flight_at_start, 2);
-    assert_eq!(ev.in_flight_at_complete, 0);
-    assert_eq!(ev.forced_cancellations, 1);
-    assert_eq!(ev.duration_ms, 100);
-    assert_eq!(ev.trace_id, "trace-xyz");
-}
-
-// ===========================================================================
-// BarrierError — serde and Display
-// ===========================================================================
+// ── test: serde roundtrip BarrierError all variants ──────────────────────
 
 #[test]
-fn barrier_error_serde_roundtrip_all_variants() {
+fn enrichment_serde_barrier_error_all_variants() {
     let variants = vec![
-        BarrierError::EpochTransitioning {
-            current_epoch: SecurityEpoch::from_raw(1),
-            state: BarrierState::Draining,
-        },
-        BarrierError::TransitionAlreadyInProgress {
-            current_epoch: SecurityEpoch::from_raw(2),
-        },
-        BarrierError::DrainTimeout {
-            epoch: SecurityEpoch::from_raw(3),
-            remaining_guards: 5,
-            timeout_ms: 5000,
-        },
+        BarrierError::EpochTransitioning { current_epoch: epoch(1), state: BarrierState::Draining },
+        BarrierError::TransitionAlreadyInProgress { current_epoch: epoch(2) },
+        BarrierError::DrainTimeout { epoch: epoch(3), remaining_guards: 5, timeout_ms: 5000 },
         BarrierError::NoTransitionInProgress,
-        BarrierError::NonMonotonicTransition {
-            current: SecurityEpoch::from_raw(10),
-            attempted: SecurityEpoch::from_raw(5),
-        },
+        BarrierError::NonMonotonicTransition { current: epoch(5), attempted: epoch(3) },
     ];
-    for v in &variants {
-        let json = serde_json::to_string(v).unwrap();
+    for err in &variants {
+        let json = serde_json::to_string(err).unwrap();
         let back: BarrierError = serde_json::from_str(&json).unwrap();
-        assert_eq!(*v, back);
+        assert_eq!(*err, back);
     }
 }
 
-#[test]
-fn barrier_error_display_all_distinct() {
-    let displays: Vec<String> = vec![
-        BarrierError::EpochTransitioning {
-            current_epoch: SecurityEpoch::from_raw(1),
-            state: BarrierState::Draining,
-        }
-        .to_string(),
-        BarrierError::TransitionAlreadyInProgress {
-            current_epoch: SecurityEpoch::from_raw(2),
-        }
-        .to_string(),
-        BarrierError::DrainTimeout {
-            epoch: SecurityEpoch::from_raw(3),
-            remaining_guards: 5,
-            timeout_ms: 5000,
-        }
-        .to_string(),
-        BarrierError::NoTransitionInProgress.to_string(),
-        BarrierError::NonMonotonicTransition {
-            current: SecurityEpoch::from_raw(10),
-            attempted: SecurityEpoch::from_raw(5),
-        }
-        .to_string(),
-    ];
-    let set: BTreeSet<&str> = displays.iter().map(String::as_str).collect();
-    assert_eq!(set.len(), 5);
-}
+// ── test: serde roundtrip BarrierConfig ──────────────────────────────────
 
 #[test]
-fn barrier_error_display_epoch_transitioning_contains_state() {
-    let err = BarrierError::EpochTransitioning {
-        current_epoch: SecurityEpoch::from_raw(1),
-        state: BarrierState::Draining,
-    };
-    let msg = err.to_string();
-    assert!(msg.contains("draining"), "msg={msg}");
-}
-
-#[test]
-fn barrier_error_display_drain_timeout_contains_guard_count() {
-    let err = BarrierError::DrainTimeout {
-        epoch: SecurityEpoch::from_raw(3),
-        remaining_guards: 7,
-        timeout_ms: 5000,
-    };
-    let msg = err.to_string();
-    assert!(msg.contains("7"), "msg={msg}");
-    assert!(msg.contains("5000"), "msg={msg}");
-}
-
-#[test]
-fn barrier_error_display_non_monotonic() {
-    let err = BarrierError::NonMonotonicTransition {
-        current: SecurityEpoch::from_raw(10),
-        attempted: SecurityEpoch::from_raw(5),
-    };
-    let msg = err.to_string();
-    assert!(msg.contains("non-monotonic"), "msg={msg}");
-}
-
-// ===========================================================================
-// EpochBarrier — advanced transition scenarios
-// ===========================================================================
-
-#[test]
-fn transition_now_with_no_guards_succeeds() {
-    let mut barrier = det_barrier(1);
-    let ev = barrier
-        .transition_now(
-            SecurityEpoch::from_raw(2),
-            TransitionReason::PolicyKeyRotation,
-            "t1",
-        )
-        .unwrap();
-    assert_eq!(ev.old_epoch, SecurityEpoch::from_raw(1));
-    assert_eq!(ev.new_epoch, SecurityEpoch::from_raw(2));
-    assert_eq!(ev.in_flight_at_start, 0);
-    assert_eq!(ev.forced_cancellations, 0);
-    assert_eq!(barrier.current_epoch(), SecurityEpoch::from_raw(2));
-    assert_eq!(barrier.state(), BarrierState::Open);
-}
-
-#[test]
-fn transition_now_with_active_guards_force_cancels() {
-    let mut barrier = det_barrier(1);
-    let _g = barrier
-        .enter_critical(CriticalOpKind::DecisionEval, "t1")
-        .unwrap();
-    let ev = barrier
-        .transition_now(
-            SecurityEpoch::from_raw(2),
-            TransitionReason::RevocationFrontierAdvance,
-            "t2",
-        )
-        .unwrap();
-    assert_eq!(ev.forced_cancellations, 1);
-    assert_eq!(barrier.in_flight(), 0);
-}
-
-#[test]
-fn multiple_sequential_transitions_accumulate_evidence() {
-    let mut barrier = det_barrier(1);
-    for i in 2..=5 {
-        barrier
-            .transition_now(
-                SecurityEpoch::from_raw(i),
-                TransitionReason::PolicyKeyRotation,
-                &format!("t-{i}"),
-            )
-            .unwrap();
+fn enrichment_serde_barrier_config_roundtrip() {
+    for cfg in [BarrierConfig::default(), BarrierConfig::deterministic()] {
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: BarrierConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(cfg, back);
     }
-    assert_eq!(barrier.evidence().len(), 4);
-    assert_eq!(barrier.current_epoch(), SecurityEpoch::from_raw(5));
 }
 
-#[test]
-fn non_monotonic_transition_rejected() {
-    let mut barrier = det_barrier(10);
-    let err = barrier
-        .begin_transition(
-            SecurityEpoch::from_raw(5),
-            TransitionReason::PolicyKeyRotation,
-            "t1",
-        )
-        .unwrap_err();
-    assert!(matches!(
-        err,
-        BarrierError::NonMonotonicTransition { .. }
-    ));
-}
+// ── test: BarrierConfig default values ───────────────────────────────────
 
 #[test]
-fn same_epoch_transition_rejected() {
-    let mut barrier = det_barrier(5);
-    let err = barrier
-        .begin_transition(
-            SecurityEpoch::from_raw(5),
-            TransitionReason::PolicyKeyRotation,
-            "t1",
-        )
-        .unwrap_err();
-    assert!(matches!(
-        err,
-        BarrierError::NonMonotonicTransition { .. }
-    ));
+fn enrichment_barrier_config_default_values() {
+    let cfg = BarrierConfig::default();
+    assert_eq!(cfg.drain_timeout_ms, 5000);
+    assert!(!cfg.deterministic);
 }
 
-#[test]
-fn enter_critical_during_draining_rejected() {
-    let mut barrier = det_barrier(1);
-    barrier
-        .begin_transition(
-            SecurityEpoch::from_raw(2),
-            TransitionReason::RevocationFrontierAdvance,
-            "t1",
-        )
-        .unwrap();
-    let err = barrier
-        .enter_critical(CriticalOpKind::KeyDerivation, "t2")
-        .unwrap_err();
-    assert!(matches!(
-        err,
-        BarrierError::EpochTransitioning { state: BarrierState::Draining, .. }
-    ));
-}
+// ── test: BarrierConfig deterministic values ─────────────────────────────
 
 #[test]
-fn complete_transition_with_guards_fails() {
-    let mut barrier = det_barrier(1);
-    let _g = barrier
-        .enter_critical(CriticalOpKind::DecisionEval, "t1")
-        .unwrap();
-    barrier
-        .begin_transition(
-            SecurityEpoch::from_raw(2),
-            TransitionReason::PolicyKeyRotation,
-            "t2",
-        )
-        .unwrap();
-    let err = barrier.complete_transition().unwrap_err();
-    assert!(matches!(err, BarrierError::DrainTimeout { .. }));
+fn enrichment_barrier_config_deterministic_values() {
+    let cfg = BarrierConfig::deterministic();
+    assert_eq!(cfg.drain_timeout_ms, 0);
+    assert!(cfg.deterministic);
 }
 
-#[test]
-fn release_stale_guard_returns_false() {
-    let mut barrier = det_barrier(1);
-    let guard = barrier
-        .enter_critical(CriticalOpKind::EvidenceEmission, "t1")
-        .unwrap();
-    barrier
-        .transition_now(
-            SecurityEpoch::from_raw(2),
-            TransitionReason::RevocationFrontierAdvance,
-            "t2",
-        )
-        .unwrap();
-    // guard is from epoch 1, barrier is now at epoch 2
-    assert!(!barrier.release_guard(&guard));
-}
+// ── test: config() accessor ──────────────────────────────────────────────
 
 #[test]
-fn can_complete_is_false_when_open() {
+fn enrichment_barrier_config_accessor() {
     let barrier = det_barrier(1);
-    assert!(!barrier.can_complete());
+    assert!(barrier.config().deterministic);
+    assert_eq!(barrier.config().drain_timeout_ms, 0);
 }
 
-#[test]
-fn can_complete_is_true_after_drain_with_zero_guards() {
-    let mut barrier = det_barrier(1);
-    barrier
-        .begin_transition(
-            SecurityEpoch::from_raw(2),
-            TransitionReason::PolicyKeyRotation,
-            "t1",
-        )
-        .unwrap();
-    assert!(barrier.can_complete());
-}
+// ── test: deterministic replay produces identical evidence ───────────────
 
 #[test]
-fn force_cancel_remaining_when_not_draining_fails() {
-    let mut barrier = det_barrier(1);
-    let err = barrier.force_cancel_remaining().unwrap_err();
-    assert!(matches!(err, BarrierError::NoTransitionInProgress));
-}
-
-#[test]
-fn complete_transition_when_open_fails() {
-    let mut barrier = det_barrier(1);
-    let err = barrier.complete_transition().unwrap_err();
-    assert!(matches!(err, BarrierError::NoTransitionInProgress));
-}
-
-#[test]
-fn config_accessor_returns_correct_config() {
-    let cfg = BarrierConfig {
-        drain_timeout_ms: 999,
-        deterministic: true,
-    };
-    let barrier = EpochBarrier::new(SecurityEpoch::from_raw(1), cfg.clone());
-    assert_eq!(*barrier.config(), cfg);
-}
-
-// ===========================================================================
-// Determinism
-// ===========================================================================
-
-#[test]
-fn deterministic_transition_cycle_produces_same_evidence() {
-    let run = || {
-        let mut barrier = det_barrier(1);
-        for i in 2..=4 {
-            barrier
-                .enter_critical(CriticalOpKind::DecisionEval, &format!("t-{i}"))
-                .unwrap();
-            barrier
-                .transition_now(
-                    SecurityEpoch::from_raw(i),
-                    TransitionReason::PolicyKeyRotation,
-                    &format!("trans-{i}"),
-                )
-                .unwrap();
-        }
-        serde_json::to_string(barrier.evidence()).unwrap()
+fn enrichment_deterministic_replay() {
+    let run = || -> Vec<TransitionEvidence> {
+        let mut b = det_barrier(1);
+        let _g = b.enter_critical(CriticalOpKind::EvidenceEmission, "t1").unwrap();
+        b.transition_now(epoch(2), TransitionReason::PolicyKeyRotation, "trace-det").unwrap();
+        b.transition_now(epoch(3), TransitionReason::LossMatrixUpdate, "trace-det-2").unwrap();
+        b.evidence().to_vec()
     };
     assert_eq!(run(), run());
 }
 
-#[test]
-fn guard_ids_are_monotonically_increasing() {
-    let mut barrier = det_barrier(1);
-    let g1 = barrier
-        .enter_critical(CriticalOpKind::DecisionEval, "t")
-        .unwrap();
-    let g2 = barrier
-        .enter_critical(CriticalOpKind::EvidenceEmission, "t")
-        .unwrap();
-    let g3 = barrier
-        .enter_critical(CriticalOpKind::KeyDerivation, "t")
-        .unwrap();
-    assert!(g1.guard_id < g2.guard_id);
-    assert!(g2.guard_id < g3.guard_id);
-}
+// ── test: evidence duration_ms is zero in deterministic mode ─────────────
 
 #[test]
-fn enter_critical_all_six_op_kinds() {
+fn enrichment_evidence_duration_zero_in_deterministic() {
     let mut barrier = det_barrier(1);
-    let kinds = [
-        CriticalOpKind::DecisionEval,
-        CriticalOpKind::EvidenceEmission,
-        CriticalOpKind::KeyDerivation,
-        CriticalOpKind::CapabilityCheck,
-        CriticalOpKind::RevocationCheck,
-        CriticalOpKind::RemoteOperation,
-    ];
-    for kind in &kinds {
-        barrier.enter_critical(*kind, "t").unwrap();
+    let ev = barrier.transition_now(epoch(2), TransitionReason::PolicyKeyRotation, "t").unwrap();
+    assert_eq!(ev.duration_ms, 0);
+}
+
+// ── test: empty trace IDs allowed ────────────────────────────────────────
+
+#[test]
+fn enrichment_empty_trace_ids_allowed() {
+    let mut barrier = det_barrier(1);
+    let guard = barrier.enter_critical(CriticalOpKind::DecisionEval, "").unwrap();
+    assert_eq!(guard.trace_id, "");
+    barrier.release_guard(&guard);
+    let ev = barrier.transition_now(epoch(2), TransitionReason::PolicyKeyRotation, "").unwrap();
+    assert_eq!(ev.trace_id, "");
+}
+
+// ── test: large number of guards ─────────────────────────────────────────
+
+#[test]
+fn enrichment_large_number_of_guards() {
+    let mut barrier = det_barrier(1);
+    let mut guards = Vec::new();
+    for i in 0..200 {
+        guards.push(barrier.enter_critical(CriticalOpKind::EvidenceEmission, &format!("t{i}")).unwrap());
     }
-    assert_eq!(barrier.in_flight(), 6);
+    assert_eq!(barrier.in_flight(), 200);
+    for g in &guards {
+        barrier.release_guard(g);
+    }
+    assert_eq!(barrier.in_flight(), 0);
 }
 
-#[test]
-fn begin_transition_returns_inflight_count() {
-    let mut barrier = det_barrier(1);
-    barrier.enter_critical(CriticalOpKind::DecisionEval, "t").unwrap();
-    barrier.enter_critical(CriticalOpKind::EvidenceEmission, "t").unwrap();
-    let count = barrier
-        .begin_transition(
-            SecurityEpoch::from_raw(2),
-            TransitionReason::PolicyKeyRotation,
-            "t",
-        )
-        .unwrap();
-    assert_eq!(count, 2);
-}
+// ── test: transition evidence trace_id preserved ─────────────────────────
 
 #[test]
-fn double_begin_transition_fails() {
+fn enrichment_evidence_trace_id_preserved() {
     let mut barrier = det_barrier(1);
-    barrier
-        .begin_transition(
-            SecurityEpoch::from_raw(2),
-            TransitionReason::PolicyKeyRotation,
-            "t",
-        )
-        .unwrap();
-    let err = barrier
-        .begin_transition(
-            SecurityEpoch::from_raw(3),
-            TransitionReason::PolicyKeyRotation,
-            "t",
-        )
-        .unwrap_err();
-    assert!(matches!(
-        err,
-        BarrierError::TransitionAlreadyInProgress { .. }
-    ));
+    barrier.transition_now(epoch(2), TransitionReason::PolicyKeyRotation, "unique-trace-xyz").unwrap();
+    assert_eq!(barrier.evidence()[0].trace_id, "unique-trace-xyz");
 }
 
+// ── test: clone independence of TransitionEvidence ───────────────────────
+
 #[test]
-fn drain_then_release_then_complete() {
-    let mut barrier = det_barrier(1);
-    let g1 = barrier
-        .enter_critical(CriticalOpKind::DecisionEval, "t")
-        .unwrap();
-    let g2 = barrier
-        .enter_critical(CriticalOpKind::KeyDerivation, "t")
-        .unwrap();
-    barrier
-        .begin_transition(
-            SecurityEpoch::from_raw(2),
-            TransitionReason::PolicyKeyRotation,
-            "t",
-        )
-        .unwrap();
+fn enrichment_transition_evidence_clone_independence() {
+    let ev = TransitionEvidence {
+        old_epoch: epoch(1),
+        new_epoch: epoch(2),
+        reason: TransitionReason::LossMatrixUpdate,
+        in_flight_at_start: 5,
+        in_flight_at_complete: 0,
+        forced_cancellations: 3,
+        duration_ms: 100,
+        trace_id: "clone-ev".to_string(),
+    };
+    let mut cloned = ev.clone();
+    cloned.forced_cancellations = 999;
+    assert_ne!(ev.forced_cancellations, cloned.forced_cancellations);
+    assert_eq!(ev.forced_cancellations, 3);
+}
+
+// ── test: JSON field names for TransitionEvidence ────────────────────────
+
+#[test]
+fn enrichment_transition_evidence_json_field_names() {
+    let ev = TransitionEvidence {
+        old_epoch: epoch(1),
+        new_epoch: epoch(2),
+        reason: TransitionReason::PolicyKeyRotation,
+        in_flight_at_start: 0,
+        in_flight_at_complete: 0,
+        forced_cancellations: 0,
+        duration_ms: 0,
+        trace_id: "t".to_string(),
+    };
+    let val = serde_json::to_value(&ev).unwrap();
+    let obj = val.as_object().unwrap();
+    for key in ["old_epoch", "new_epoch", "reason", "in_flight_at_start",
+                "in_flight_at_complete", "forced_cancellations", "duration_ms", "trace_id"] {
+        assert!(obj.contains_key(key), "missing field: {key}");
+    }
+    assert_eq!(obj.len(), 8);
+}
+
+// ── test: JSON field names for EpochGuard ────────────────────────────────
+
+#[test]
+fn enrichment_epoch_guard_json_field_names() {
+    let guard = EpochGuard {
+        guard_id: 1,
+        epoch: epoch(5),
+        op_kind: CriticalOpKind::DecisionEval,
+        trace_id: "x".to_string(),
+    };
+    let val = serde_json::to_value(&guard).unwrap();
+    let obj = val.as_object().unwrap();
+    assert!(obj.contains_key("guard_id"));
+    assert!(obj.contains_key("epoch"));
+    assert!(obj.contains_key("op_kind"));
+    assert!(obj.contains_key("trace_id"));
+    assert_eq!(obj.len(), 4);
+}
+
+// ── test: BarrierError Display content checks ────────────────────────────
+
+#[test]
+fn enrichment_barrier_error_display_content() {
+    let err = BarrierError::DrainTimeout { epoch: epoch(7), remaining_guards: 3, timeout_ms: 5000 };
+    let msg = err.to_string();
+    assert!(msg.contains("3 guards remaining"));
+    assert!(msg.contains("5000ms"));
+
+    let err2 = BarrierError::NonMonotonicTransition { current: epoch(10), attempted: epoch(5) };
+    let msg2 = err2.to_string();
+    assert!(msg2.contains("non-monotonic"));
+}
+
+// ── test: can_complete false when open ────────────────────────────────────
+
+#[test]
+fn enrichment_can_complete_false_when_open() {
+    let barrier = det_barrier(1);
     assert!(!barrier.can_complete());
-    barrier.release_guard(&g1);
-    assert!(!barrier.can_complete());
-    barrier.release_guard(&g2);
-    assert!(barrier.can_complete());
-    let ev = barrier.complete_transition().unwrap();
-    assert_eq!(ev.forced_cancellations, 0);
-    assert_eq!(ev.in_flight_at_start, 2);
 }
 
+// ── test: evidence starts empty ──────────────────────────────────────────
+
 #[test]
-fn evidence_empty_before_any_transition() {
+fn enrichment_evidence_starts_empty() {
     let barrier = det_barrier(1);
     assert!(barrier.evidence().is_empty());
 }
 
+// ── test: release guard twice - second fails ─────────────────────────────
+
 #[test]
-fn release_guard_with_zero_inflight_returns_false() {
+fn enrichment_release_guard_twice_second_fails() {
     let mut barrier = det_barrier(1);
-    let guard = EpochGuard {
-        guard_id: 1,
-        epoch: SecurityEpoch::from_raw(1),
-        op_kind: CriticalOpKind::DecisionEval,
-        trace_id: "t".to_string(),
-    };
-    // barrier has 0 in-flight
+    let guard = barrier.enter_critical(CriticalOpKind::DecisionEval, "t").unwrap();
+    assert!(barrier.release_guard(&guard));
     assert!(!barrier.release_guard(&guard));
+}
+
+// ── test: transition_now with non-monotonic returns error ────────────────
+
+#[test]
+fn enrichment_transition_now_non_monotonic_error() {
+    let mut barrier = det_barrier(10);
+    let err = barrier.transition_now(epoch(5), TransitionReason::PolicyKeyRotation, "t").unwrap_err();
+    assert!(matches!(err, BarrierError::NonMonotonicTransition { .. }));
 }

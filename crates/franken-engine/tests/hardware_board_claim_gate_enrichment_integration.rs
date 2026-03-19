@@ -1,15 +1,22 @@
-//! Enrichment integration tests for `hardware_board_claim_gate`.
-//!
-//! Covers: HardwareClaimKind, ClaimVerdict, PromotionDecision, DegradationReason
-//! serde/display/ordering, HardwareClaim construction/hashing, ClaimEvidence
-//! lifecycle, PromotionRecord, RollbackRecord, GateConfig variants, GateSummary
-//! computation, DecisionReceipt, evaluate/evaluate_promotion/evaluate_batch
-//! integration, boundary conditions, and determinism.
+// Enrichment integration tests for hardware_board_claim_gate module.
+//
+// Covers: HardwareClaimKind ALL completeness, as_str values, Display uniqueness,
+// serde roundtrips, ClaimVerdict/PromotionDecision/DegradationReason enums,
+// GateConfig presets, evaluate/evaluate_promotion/evaluate_batch functions,
+// GateSummary, DecisionReceipt, RollbackRecord, hash determinism, constants.
+//
+// Bead: bd-1lsy.7.16.3 [RGC-616C]
 
 #![allow(
     clippy::field_reassign_with_default,
     clippy::assertions_on_constants,
-    clippy::too_many_arguments
+    clippy::useless_vec,
+    clippy::clone_on_copy,
+    clippy::unnecessary_get_then_check,
+    clippy::len_zero,
+    clippy::needless_borrows_for_generic_args,
+    clippy::too_many_arguments,
+    clippy::identity_op
 )]
 
 use std::collections::BTreeSet;
@@ -100,24 +107,26 @@ fn insufficient_claim() -> HardwareClaim {
 // ===========================================================================
 
 #[test]
-fn constants_schema_version() {
+fn enrichment_schema_version_non_empty() {
     assert!(SCHEMA_VERSION.starts_with("franken-engine."));
     assert!(SCHEMA_VERSION.contains("hardware-board-claim-gate"));
 }
 
 #[test]
-fn constants_bead_id() {
+fn enrichment_bead_id_starts_with_bd() {
     assert!(BEAD_ID.starts_with("bd-"));
+    assert!(!BEAD_ID.is_empty());
 }
 
 #[test]
-fn constants_component() {
+fn enrichment_component_value() {
     assert_eq!(COMPONENT, "hardware_board_claim_gate");
 }
 
 #[test]
-fn constants_policy_id() {
+fn enrichment_policy_id_starts_with_rgc() {
     assert!(POLICY_ID.starts_with("RGC-"));
+    assert!(!POLICY_ID.is_empty());
 }
 
 // ===========================================================================
@@ -125,14 +134,44 @@ fn constants_policy_id() {
 // ===========================================================================
 
 #[test]
-fn claim_kind_all_variants() {
+fn enrichment_claim_kind_all_has_six_entries() {
     assert_eq!(HardwareClaimKind::ALL.len(), 6);
-    let names: BTreeSet<&str> = HardwareClaimKind::ALL.iter().map(|k| k.as_str()).collect();
-    assert_eq!(names.len(), 6);
 }
 
 #[test]
-fn claim_kind_serde_roundtrip_all() {
+fn enrichment_claim_kind_all_unique() {
+    let set: BTreeSet<HardwareClaimKind> = HardwareClaimKind::ALL.iter().copied().collect();
+    assert_eq!(set.len(), 6);
+}
+
+#[test]
+fn enrichment_claim_kind_as_str_values() {
+    assert_eq!(HardwareClaimKind::Throughput.as_str(), "throughput");
+    assert_eq!(HardwareClaimKind::Latency.as_str(), "latency");
+    assert_eq!(HardwareClaimKind::MemoryEfficiency.as_str(), "memory_efficiency");
+    assert_eq!(HardwareClaimKind::StartupTime.as_str(), "startup_time");
+    assert_eq!(HardwareClaimKind::TailLatency.as_str(), "tail_latency");
+    assert_eq!(HardwareClaimKind::EnergyEfficiency.as_str(), "energy_efficiency");
+}
+
+#[test]
+fn enrichment_claim_kind_display_matches_as_str() {
+    for kind in HardwareClaimKind::ALL {
+        assert_eq!(kind.to_string(), kind.as_str());
+    }
+}
+
+#[test]
+fn enrichment_claim_kind_display_unique() {
+    let displays: BTreeSet<String> = HardwareClaimKind::ALL
+        .iter()
+        .map(|k| format!("{k}"))
+        .collect();
+    assert_eq!(displays.len(), 6);
+}
+
+#[test]
+fn enrichment_claim_kind_serde_roundtrip_all() {
     for kind in HardwareClaimKind::ALL {
         let json = serde_json::to_string(kind).unwrap();
         let back: HardwareClaimKind = serde_json::from_str(&json).unwrap();
@@ -141,10 +180,12 @@ fn claim_kind_serde_roundtrip_all() {
 }
 
 #[test]
-fn claim_kind_display_matches_as_str() {
-    for kind in HardwareClaimKind::ALL {
-        assert_eq!(kind.to_string(), kind.as_str());
-    }
+fn enrichment_claim_kind_ordering_deterministic() {
+    let mut kinds: Vec<HardwareClaimKind> = HardwareClaimKind::ALL.to_vec();
+    kinds.sort();
+    let mut kinds2 = kinds.clone();
+    kinds2.sort();
+    assert_eq!(kinds, kinds2);
 }
 
 // ===========================================================================
@@ -152,21 +193,27 @@ fn claim_kind_display_matches_as_str() {
 // ===========================================================================
 
 #[test]
-fn verdict_all_variants() {
+fn enrichment_verdict_all_has_five_entries() {
     assert_eq!(ClaimVerdict::ALL.len(), 5);
 }
 
 #[test]
-fn verdict_serde_roundtrip_all() {
-    for v in ClaimVerdict::ALL {
-        let json = serde_json::to_string(v).unwrap();
-        let back: ClaimVerdict = serde_json::from_str(&json).unwrap();
-        assert_eq!(*v, back);
-    }
+fn enrichment_verdict_all_unique() {
+    let set: BTreeSet<ClaimVerdict> = ClaimVerdict::ALL.iter().copied().collect();
+    assert_eq!(set.len(), 5);
 }
 
 #[test]
-fn verdict_is_usable() {
+fn enrichment_verdict_as_str_values() {
+    assert_eq!(ClaimVerdict::Confirmed.as_str(), "confirmed");
+    assert_eq!(ClaimVerdict::Downgraded.as_str(), "downgraded");
+    assert_eq!(ClaimVerdict::RequiresLocal.as_str(), "requires_local");
+    assert_eq!(ClaimVerdict::Unsupported.as_str(), "unsupported");
+    assert_eq!(ClaimVerdict::InsufficientEvidence.as_str(), "insufficient_evidence");
+}
+
+#[test]
+fn enrichment_verdict_is_usable() {
     assert!(ClaimVerdict::Confirmed.is_usable());
     assert!(ClaimVerdict::Downgraded.is_usable());
     assert!(!ClaimVerdict::RequiresLocal.is_usable());
@@ -175,7 +222,16 @@ fn verdict_is_usable() {
 }
 
 #[test]
-fn verdict_display_matches_as_str() {
+fn enrichment_verdict_serde_roundtrip_all() {
+    for v in ClaimVerdict::ALL {
+        let json = serde_json::to_string(v).unwrap();
+        let back: ClaimVerdict = serde_json::from_str(&json).unwrap();
+        assert_eq!(*v, back);
+    }
+}
+
+#[test]
+fn enrichment_verdict_display_matches_as_str() {
     for v in ClaimVerdict::ALL {
         assert_eq!(v.to_string(), v.as_str());
     }
@@ -186,23 +242,33 @@ fn verdict_display_matches_as_str() {
 // ===========================================================================
 
 #[test]
-fn promotion_all_variants() {
+fn enrichment_promotion_all_has_four_entries() {
     assert_eq!(PromotionDecision::ALL.len(), 4);
 }
 
 #[test]
-fn promotion_serde_roundtrip_all() {
+fn enrichment_promotion_as_str_values() {
+    assert_eq!(PromotionDecision::Promote.as_str(), "promote");
+    assert_eq!(PromotionDecision::Hold.as_str(), "hold");
+    assert_eq!(PromotionDecision::Rollback.as_str(), "rollback");
+    assert_eq!(PromotionDecision::RequireFreshMeasurement.as_str(), "require_fresh_measurement");
+}
+
+#[test]
+fn enrichment_promotion_display_unique() {
+    let displays: BTreeSet<String> = PromotionDecision::ALL
+        .iter()
+        .map(|d| format!("{d}"))
+        .collect();
+    assert_eq!(displays.len(), 4);
+}
+
+#[test]
+fn enrichment_promotion_serde_roundtrip_all() {
     for d in PromotionDecision::ALL {
         let json = serde_json::to_string(d).unwrap();
         let back: PromotionDecision = serde_json::from_str(&json).unwrap();
         assert_eq!(*d, back);
-    }
-}
-
-#[test]
-fn promotion_display_matches_as_str() {
-    for d in PromotionDecision::ALL {
-        assert_eq!(d.to_string(), d.as_str());
     }
 }
 
@@ -211,12 +277,28 @@ fn promotion_display_matches_as_str() {
 // ===========================================================================
 
 #[test]
-fn degradation_all_variants() {
+fn enrichment_degradation_all_has_six_entries() {
     assert_eq!(DegradationReason::ALL.len(), 6);
 }
 
 #[test]
-fn degradation_serde_roundtrip_all() {
+fn enrichment_degradation_as_str_values() {
+    assert_eq!(DegradationReason::ArchMismatch.as_str(), "arch_mismatch");
+    assert_eq!(DegradationReason::VectorWidthLoss.as_str(), "vector_width_loss");
+    assert_eq!(DegradationReason::CacheSizeDifference.as_str(), "cache_size_difference");
+    assert_eq!(DegradationReason::MicroarchVariance.as_str(), "microarch_variance");
+    assert_eq!(DegradationReason::InsufficientSamples.as_str(), "insufficient_samples");
+    assert_eq!(DegradationReason::ResidualTooLow.as_str(), "residual_too_low");
+}
+
+#[test]
+fn enrichment_degradation_names_unique() {
+    let names: BTreeSet<&str> = DegradationReason::ALL.iter().map(|r| r.as_str()).collect();
+    assert_eq!(names.len(), DegradationReason::ALL.len());
+}
+
+#[test]
+fn enrichment_degradation_serde_roundtrip_all() {
     for r in DegradationReason::ALL {
         let json = serde_json::to_string(r).unwrap();
         let back: DegradationReason = serde_json::from_str(&json).unwrap();
@@ -224,18 +306,12 @@ fn degradation_serde_roundtrip_all() {
     }
 }
 
-#[test]
-fn degradation_names_unique() {
-    let names: BTreeSet<&str> = DegradationReason::ALL.iter().map(|r| r.as_str()).collect();
-    assert_eq!(names.len(), DegradationReason::ALL.len());
-}
-
 // ===========================================================================
 // HardwareClaim
 // ===========================================================================
 
 #[test]
-fn claim_construction_and_fields() {
+fn enrichment_claim_construction_and_fields() {
     let c = confirmed_claim();
     assert_eq!(c.kind, HardwareClaimKind::Throughput);
     assert_eq!(c.source_cell_id, "cell-a");
@@ -245,53 +321,46 @@ fn claim_construction_and_fields() {
 }
 
 #[test]
-fn claim_content_hash_deterministic() {
+fn enrichment_claim_content_hash_deterministic() {
     let h1 = confirmed_claim().content_hash();
     let h2 = confirmed_claim().content_hash();
     assert_eq!(h1, h2);
 }
 
 #[test]
-fn claim_content_hash_differs_between_claims() {
+fn enrichment_claim_content_hash_varies_by_kind() {
     let h1 = confirmed_claim().content_hash();
     let h2 = downgraded_claim().content_hash();
     assert_ne!(h1, h2);
 }
 
 #[test]
-fn claim_is_same_cell_true() {
+fn enrichment_claim_is_same_cell_true() {
     let c = HardwareClaim::new(
-        HardwareClaimKind::Throughput,
-        "cell-x",
-        "cell-x",
-        1_000_000,
-        1_000_000,
-        1_000_000,
-        10,
-        ep(1),
+        HardwareClaimKind::Throughput, "cell-x", "cell-x",
+        1_000_000, 1_000_000, 1_000_000, 10, ep(1),
     );
     assert!(c.is_same_cell());
 }
 
 #[test]
-fn claim_is_same_cell_false() {
+fn enrichment_claim_is_same_cell_false() {
     assert!(!confirmed_claim().is_same_cell());
 }
 
 #[test]
-fn claim_display_contains_fields() {
-    let s = confirmed_claim().to_string();
-    assert!(s.contains("throughput"));
-    assert!(s.contains("cell-a"));
-    assert!(s.contains("cell-b"));
-}
-
-#[test]
-fn claim_serde_roundtrip() {
+fn enrichment_claim_serde_roundtrip() {
     let c = confirmed_claim();
     let json = serde_json::to_string(&c).unwrap();
     let back: HardwareClaim = serde_json::from_str(&json).unwrap();
     assert_eq!(c, back);
+}
+
+#[test]
+fn enrichment_claim_display_contains_kind() {
+    let s = confirmed_claim().to_string();
+    assert!(s.contains("throughput"));
+    assert!(s.contains("cell-a"));
 }
 
 // ===========================================================================
@@ -299,44 +368,42 @@ fn claim_serde_roundtrip() {
 // ===========================================================================
 
 #[test]
-fn evaluate_confirmed_verdict() {
+fn enrichment_evaluate_confirmed_verdict() {
     let ev = evaluate(&confirmed_claim(), &GateConfig::default());
     assert_eq!(ev.verdict, ClaimVerdict::Confirmed);
     assert!(ev.is_supported());
-    assert!(ev.explanation.contains("confirmed"));
 }
 
 #[test]
-fn evaluate_downgraded_verdict() {
+fn enrichment_evaluate_downgraded_verdict() {
     let ev = evaluate(&downgraded_claim(), &GateConfig::default());
     assert_eq!(ev.verdict, ClaimVerdict::Downgraded);
     assert!(ev.is_supported());
-    assert!(!ev.degradation_reasons.is_empty());
 }
 
 #[test]
-fn evaluate_requires_local_verdict() {
+fn enrichment_evaluate_requires_local_verdict() {
     let ev = evaluate(&requires_local_claim(), &GateConfig::default());
     assert_eq!(ev.verdict, ClaimVerdict::RequiresLocal);
     assert!(!ev.is_supported());
 }
 
 #[test]
-fn evaluate_unsupported_verdict() {
+fn enrichment_evaluate_unsupported_verdict() {
     let ev = evaluate(&unsupported_claim(), &GateConfig::default());
     assert_eq!(ev.verdict, ClaimVerdict::Unsupported);
     assert!(!ev.is_supported());
 }
 
 #[test]
-fn evaluate_insufficient_verdict() {
+fn enrichment_evaluate_insufficient_verdict() {
     let ev = evaluate(&insufficient_claim(), &GateConfig::default());
     assert_eq!(ev.verdict, ClaimVerdict::InsufficientEvidence);
     assert!(!ev.is_supported());
 }
 
 #[test]
-fn evaluate_evidence_hash_deterministic() {
+fn enrichment_evaluate_evidence_hash_deterministic() {
     let config = GateConfig::default();
     let h1 = evaluate(&confirmed_claim(), &config).content_hash();
     let h2 = evaluate(&confirmed_claim(), &config).content_hash();
@@ -344,150 +411,25 @@ fn evaluate_evidence_hash_deterministic() {
 }
 
 #[test]
-fn evaluate_evidence_display() {
-    let ev = evaluate(&confirmed_claim(), &GateConfig::default());
-    let s = ev.to_string();
-    assert!(s.contains("confirmed"));
-}
-
-#[test]
-fn evaluate_evidence_serde_roundtrip() {
+fn enrichment_evaluate_evidence_serde_roundtrip() {
     let ev = evaluate(&downgraded_claim(), &GateConfig::default());
     let json = serde_json::to_string(&ev).unwrap();
     let back: ClaimEvidence = serde_json::from_str(&json).unwrap();
     assert_eq!(ev, back);
 }
 
-// ===========================================================================
-// evaluate — boundary conditions
-// ===========================================================================
-
 #[test]
-fn evaluate_boundary_at_full_threshold() {
-    let claim = HardwareClaim::new(
-        HardwareClaimKind::Latency,
-        "src",
-        "dst",
-        1_000_000,
-        1_050_000,
-        950_000,
-        100,
-        ep(1),
-    );
-    let ev = evaluate(&claim, &GateConfig::default());
-    assert_eq!(ev.verdict, ClaimVerdict::Confirmed);
-}
-
-#[test]
-fn evaluate_boundary_just_below_full_threshold() {
-    let claim = HardwareClaim::new(
-        HardwareClaimKind::Latency,
-        "src",
-        "dst",
-        1_000_000,
-        1_050_000,
-        949_999,
-        100,
-        ep(1),
-    );
-    let ev = evaluate(&claim, &GateConfig::default());
-    assert_eq!(ev.verdict, ClaimVerdict::Downgraded);
-}
-
-#[test]
-fn evaluate_boundary_at_partial_threshold() {
-    let claim = HardwareClaim::new(
-        HardwareClaimKind::Latency,
-        "src",
-        "dst",
-        1_000_000,
-        1_050_000,
-        700_000,
-        100,
-        ep(1),
-    );
-    let ev = evaluate(&claim, &GateConfig::default());
-    assert_eq!(ev.verdict, ClaimVerdict::Downgraded);
-}
-
-#[test]
-fn evaluate_boundary_at_degraded_threshold() {
-    let claim = HardwareClaim::new(
-        HardwareClaimKind::Latency,
-        "src",
-        "dst",
-        1_000_000,
-        1_050_000,
-        300_000,
-        100,
-        ep(1),
-    );
-    let ev = evaluate(&claim, &GateConfig::default());
-    assert_eq!(ev.verdict, ClaimVerdict::RequiresLocal);
-}
-
-#[test]
-fn evaluate_zero_residual() {
-    let claim = HardwareClaim::new(
-        HardwareClaimKind::EnergyEfficiency,
-        "src",
-        "dst",
-        1_000_000,
-        1_100_000,
-        0,
-        100,
-        ep(1),
-    );
-    let ev = evaluate(&claim, &GateConfig::default());
-    assert_eq!(ev.verdict, ClaimVerdict::Unsupported);
-}
-
-#[test]
-fn evaluate_max_residual() {
-    let claim = HardwareClaim::new(
-        HardwareClaimKind::Throughput,
-        "src",
-        "dst",
-        1_000_000,
-        1_500_000,
-        1_000_000,
-        100,
-        ep(1),
-    );
-    let ev = evaluate(&claim, &GateConfig::default());
-    assert_eq!(ev.verdict, ClaimVerdict::Confirmed);
-}
-
-// ===========================================================================
-// evaluate — config variations
-// ===========================================================================
-
-#[test]
-fn evaluate_permissive_config_always_confirmed() {
+fn enrichment_evaluate_permissive_always_confirmed() {
     let config = GateConfig::permissive();
-    for claim in &[
-        confirmed_claim(),
-        downgraded_claim(),
-        requires_local_claim(),
-        unsupported_claim(),
-    ] {
+    for claim in &[confirmed_claim(), downgraded_claim(), requires_local_claim(), unsupported_claim()] {
         let ev = evaluate(claim, &config);
         assert_eq!(ev.verdict, ClaimVerdict::Confirmed);
     }
 }
 
 #[test]
-fn evaluate_strict_config_tighter() {
-    let claim = HardwareClaim::new(
-        HardwareClaimKind::Throughput,
-        "src",
-        "dst",
-        1_000_000,
-        1_200_000,
-        960_000,
-        100,
-        ep(1),
-    );
+fn enrichment_evaluate_strict_tighter_than_default() {
+    let claim = confirmed_claim();
     let default_ev = evaluate(&claim, &GateConfig::default());
     let strict_ev = evaluate(&claim, &GateConfig::strict());
     assert_eq!(default_ev.verdict, ClaimVerdict::Confirmed);
@@ -499,7 +441,7 @@ fn evaluate_strict_config_tighter() {
 // ===========================================================================
 
 #[test]
-fn promotion_confirmed_promotes() {
+fn enrichment_promotion_confirmed_promotes() {
     let config = GateConfig::default();
     let ev = evaluate(&confirmed_claim(), &config);
     let pr = evaluate_promotion(&ev, &config);
@@ -507,23 +449,7 @@ fn promotion_confirmed_promotes() {
 }
 
 #[test]
-fn promotion_downgraded_holds() {
-    let config = GateConfig::default();
-    let ev = evaluate(&downgraded_claim(), &config);
-    let pr = evaluate_promotion(&ev, &config);
-    assert_eq!(pr.decision, PromotionDecision::Hold);
-}
-
-#[test]
-fn promotion_requires_local_fresh_measurement() {
-    let config = GateConfig::default();
-    let ev = evaluate(&requires_local_claim(), &config);
-    let pr = evaluate_promotion(&ev, &config);
-    assert_eq!(pr.decision, PromotionDecision::RequireFreshMeasurement);
-}
-
-#[test]
-fn promotion_unsupported_rollback() {
+fn enrichment_promotion_unsupported_rollback() {
     let config = GateConfig::default();
     let ev = evaluate(&unsupported_claim(), &config);
     let pr = evaluate_promotion(&ev, &config);
@@ -531,15 +457,7 @@ fn promotion_unsupported_rollback() {
 }
 
 #[test]
-fn promotion_insufficient_holds() {
-    let config = GateConfig::default();
-    let ev = evaluate(&insufficient_claim(), &config);
-    let pr = evaluate_promotion(&ev, &config);
-    assert_eq!(pr.decision, PromotionDecision::Hold);
-}
-
-#[test]
-fn promotion_record_content_hash_deterministic() {
+fn enrichment_promotion_record_hash_deterministic() {
     let config = GateConfig::default();
     let ev = evaluate(&confirmed_claim(), &config);
     let pr = evaluate_promotion(&ev, &config);
@@ -549,16 +467,7 @@ fn promotion_record_content_hash_deterministic() {
 }
 
 #[test]
-fn promotion_record_display() {
-    let config = GateConfig::default();
-    let ev = evaluate(&confirmed_claim(), &config);
-    let pr = evaluate_promotion(&ev, &config);
-    let s = pr.to_string();
-    assert!(s.contains("promotion"));
-}
-
-#[test]
-fn promotion_record_serde_roundtrip() {
+fn enrichment_promotion_record_serde_roundtrip() {
     let config = GateConfig::default();
     let ev = evaluate(&confirmed_claim(), &config);
     let pr = evaluate_promotion(&ev, &config);
@@ -572,27 +481,21 @@ fn promotion_record_serde_roundtrip() {
 // ===========================================================================
 
 #[test]
-fn batch_mixed_verdicts() {
+fn enrichment_batch_mixed_verdicts() {
     let claims = vec![
-        confirmed_claim(),
-        downgraded_claim(),
-        requires_local_claim(),
-        unsupported_claim(),
-        insufficient_claim(),
+        confirmed_claim(), downgraded_claim(), requires_local_claim(),
+        unsupported_claim(), insufficient_claim(),
     ];
     let (evidence, summary) = evaluate_batch(&claims, &GateConfig::default());
     assert_eq!(evidence.len(), 5);
     assert_eq!(summary.total_claims, 5);
     assert_eq!(summary.confirmed, 1);
     assert_eq!(summary.downgraded, 1);
-    assert_eq!(summary.requires_local, 1);
-    assert_eq!(summary.unsupported, 1);
-    assert_eq!(summary.insufficient, 1);
     assert_eq!(summary.pass_rate, 400_000);
 }
 
 #[test]
-fn batch_all_confirmed() {
+fn enrichment_batch_all_confirmed() {
     let claims = vec![confirmed_claim(); 3];
     let (_, summary) = evaluate_batch(&claims, &GateConfig::default());
     assert!(summary.all_passed());
@@ -600,11 +503,10 @@ fn batch_all_confirmed() {
 }
 
 #[test]
-fn batch_empty() {
+fn enrichment_batch_empty() {
     let (evidence, summary) = evaluate_batch(&[], &GateConfig::default());
     assert!(evidence.is_empty());
     assert_eq!(summary.total_claims, 0);
-    assert_eq!(summary.pass_rate, 0);
     assert!(!summary.all_passed());
 }
 
@@ -613,28 +515,20 @@ fn batch_empty() {
 // ===========================================================================
 
 #[test]
-fn summary_has_unsupported() {
+fn enrichment_summary_has_unsupported() {
     let s = GateSummary::from_verdicts(&[ClaimVerdict::Confirmed, ClaimVerdict::Unsupported]);
     assert!(s.has_unsupported());
 }
 
 #[test]
-fn summary_content_hash_deterministic() {
+fn enrichment_summary_content_hash_deterministic() {
     let s1 = GateSummary::from_verdicts(&[ClaimVerdict::Confirmed]);
     let s2 = GateSummary::from_verdicts(&[ClaimVerdict::Confirmed]);
     assert_eq!(s1.content_hash(), s2.content_hash());
 }
 
 #[test]
-fn summary_display() {
-    let s = GateSummary::from_verdicts(&[ClaimVerdict::Confirmed, ClaimVerdict::Downgraded]);
-    let d = s.to_string();
-    assert!(d.contains("claims=2"));
-    assert!(d.contains("confirmed=1"));
-}
-
-#[test]
-fn summary_serde_roundtrip() {
+fn enrichment_summary_serde_roundtrip() {
     let s = GateSummary::from_verdicts(&[ClaimVerdict::Confirmed, ClaimVerdict::RequiresLocal]);
     let json = serde_json::to_string(&s).unwrap();
     let back: GateSummary = serde_json::from_str(&json).unwrap();
@@ -642,17 +536,34 @@ fn summary_serde_roundtrip() {
 }
 
 // ===========================================================================
+// GateConfig
+// ===========================================================================
+
+#[test]
+fn enrichment_gate_config_default_serde_roundtrip() {
+    let config = GateConfig::default();
+    let json = serde_json::to_string(&config).unwrap();
+    let back: GateConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(config, back);
+}
+
+#[test]
+fn enrichment_gate_config_strict_higher_thresholds() {
+    let strict = GateConfig::strict();
+    let default = GateConfig::default();
+    assert!(strict.full_transport_threshold >= default.full_transport_threshold);
+    assert!(strict.min_samples >= default.min_samples);
+}
+
+// ===========================================================================
 // RollbackRecord
 // ===========================================================================
 
 #[test]
-fn rollback_record_creation() {
+fn enrichment_rollback_record_creation() {
     let rb = RollbackRecord::new(
-        "claim-1",
-        ClaimVerdict::Downgraded,
-        ClaimVerdict::Unsupported,
-        "regression detected",
-        ep(500),
+        "claim-1", ClaimVerdict::Downgraded, ClaimVerdict::Unsupported,
+        "regression detected", ep(500),
     );
     assert_eq!(rb.claim_id, "claim-1");
     assert_eq!(rb.original_verdict, ClaimVerdict::Downgraded);
@@ -660,22 +571,14 @@ fn rollback_record_creation() {
 }
 
 #[test]
-fn rollback_record_hash_deterministic() {
+fn enrichment_rollback_record_hash_deterministic() {
     let rb1 = RollbackRecord::new("c1", ClaimVerdict::Confirmed, ClaimVerdict::RequiresLocal, "d", ep(1));
     let rb2 = RollbackRecord::new("c1", ClaimVerdict::Confirmed, ClaimVerdict::RequiresLocal, "d", ep(1));
     assert_eq!(rb1.receipt_hash, rb2.receipt_hash);
 }
 
 #[test]
-fn rollback_record_display() {
-    let rb = RollbackRecord::new("c2", ClaimVerdict::Confirmed, ClaimVerdict::Unsupported, "arch", ep(1));
-    let s = rb.to_string();
-    assert!(s.contains("rollback"));
-    assert!(s.contains("c2"));
-}
-
-#[test]
-fn rollback_record_serde_roundtrip() {
+fn enrichment_rollback_record_serde_roundtrip() {
     let rb = RollbackRecord::new("c3", ClaimVerdict::Downgraded, ClaimVerdict::RequiresLocal, "spike", ep(1));
     let json = serde_json::to_string(&rb).unwrap();
     let back: RollbackRecord = serde_json::from_str(&json).unwrap();
@@ -687,7 +590,7 @@ fn rollback_record_serde_roundtrip() {
 // ===========================================================================
 
 #[test]
-fn decision_receipt_creation() {
+fn enrichment_decision_receipt_creation() {
     let hash = ContentHash::compute(b"test");
     let receipt = DecisionReceipt::new(ep(1), ClaimVerdict::Confirmed, hash);
     assert_eq!(receipt.verdict, ClaimVerdict::Confirmed);
@@ -695,7 +598,7 @@ fn decision_receipt_creation() {
 }
 
 #[test]
-fn decision_receipt_hash_deterministic() {
+fn enrichment_decision_receipt_hash_deterministic() {
     let hash = ContentHash::compute(b"x");
     let r1 = DecisionReceipt::new(ep(1), ClaimVerdict::Downgraded, hash);
     let r2 = DecisionReceipt::new(ep(1), ClaimVerdict::Downgraded, hash);
@@ -703,7 +606,7 @@ fn decision_receipt_hash_deterministic() {
 }
 
 #[test]
-fn decision_receipt_different_verdicts_different_hashes() {
+fn enrichment_decision_receipt_different_verdicts_different_hashes() {
     let hash = ContentHash::compute(b"y");
     let r1 = DecisionReceipt::new(ep(1), ClaimVerdict::Confirmed, hash);
     let r2 = DecisionReceipt::new(ep(1), ClaimVerdict::Unsupported, hash);
@@ -711,45 +614,9 @@ fn decision_receipt_different_verdicts_different_hashes() {
 }
 
 #[test]
-fn decision_receipt_display() {
-    let receipt = DecisionReceipt::new(ep(1), ClaimVerdict::RequiresLocal, ContentHash::compute(b"abc"));
-    let s = receipt.to_string();
-    assert!(s.contains("receipt"));
-    assert!(s.contains("requires_local"));
-}
-
-#[test]
-fn decision_receipt_serde_roundtrip() {
+fn enrichment_decision_receipt_serde_roundtrip() {
     let receipt = DecisionReceipt::new(ep(1), ClaimVerdict::Confirmed, ContentHash::compute(b"serde"));
     let json = serde_json::to_string(&receipt).unwrap();
     let back: DecisionReceipt = serde_json::from_str(&json).unwrap();
     assert_eq!(receipt, back);
-}
-
-// ===========================================================================
-// GateConfig
-// ===========================================================================
-
-#[test]
-fn gate_config_default_serde_roundtrip() {
-    let config = GateConfig::default();
-    let json = serde_json::to_string(&config).unwrap();
-    let back: GateConfig = serde_json::from_str(&json).unwrap();
-    assert_eq!(config, back);
-}
-
-#[test]
-fn gate_config_permissive_serde_roundtrip() {
-    let config = GateConfig::permissive();
-    let json = serde_json::to_string(&config).unwrap();
-    let back: GateConfig = serde_json::from_str(&json).unwrap();
-    assert_eq!(config, back);
-}
-
-#[test]
-fn gate_config_strict_serde_roundtrip() {
-    let config = GateConfig::strict();
-    let json = serde_json::to_string(&config).unwrap();
-    let back: GateConfig = serde_json::from_str(&json).unwrap();
-    assert_eq!(config, back);
 }

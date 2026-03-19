@@ -399,7 +399,7 @@ fn enrich_build_report_dimension_summaries_complete() {
     let report = build_category_shift_report(valid_input()).unwrap();
     // Should have summaries for all dimensions
     assert!(!report.dimension_summaries.is_empty());
-    for (_dim, summary) in &report.dimension_summaries {
+    for summary in report.dimension_summaries.values() {
         assert!(summary.meets_floor || summary.raw_score_millionths < summary.floor_millionths);
     }
 }

@@ -210,9 +210,9 @@ impl ScenarioMigrationEntry {
         (self.bridge_oracles.len() as u64) * SCALE / (total as u64)
     }
 
-    /// Whether all oracles are bridge-dispatched.
+    /// Whether all oracles are bridge-dispatched (vacuously true when empty).
     pub fn all_oracles_bridged(&self) -> bool {
-        !self.bridge_oracles.is_empty() && self.local_oracles.is_empty()
+        self.local_oracles.is_empty()
     }
 
     /// Mark as migrated.

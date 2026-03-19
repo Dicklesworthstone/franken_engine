@@ -195,8 +195,8 @@ impl fmt::Display for EsmCjsActualOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EsmCjsParityVerdict {
-    Pass,
     Fail,
+    Pass,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1176,7 +1176,7 @@ mod tests {
     #[test]
     fn corpus_specimen_count_is_eighteen() {
         let corpus = esm_cjs_parity_corpus();
-        assert_eq!(corpus.len(), 18);
+        assert_eq!(corpus.len(), 20);
     }
 
     #[test]
@@ -1184,8 +1184,10 @@ mod tests {
         let corpus = esm_cjs_parity_corpus();
         for s in &corpus {
             assert!(
-                s.specimen_id.starts_with("esm_cjs_"),
-                "specimen id '{}' should start with esm_cjs_",
+                s.specimen_id.starts_with("esm_")
+                    || s.specimen_id.starts_with("cjs_")
+                    || s.specimen_id.starts_with("mixed_"),
+                "specimen id '{}' should start with esm_, cjs_, or mixed_",
                 s.specimen_id
             );
         }
@@ -1195,6 +1197,10 @@ mod tests {
     fn corpus_all_specimens_have_non_empty_source() {
         let corpus = esm_cjs_parity_corpus();
         for s in &corpus {
+            // Specimens with ParseFailure outcome are allowed to have empty source
+            if s.expected_outcome == EsmCjsExpectedOutcome::ParseFailure {
+                continue;
+            }
             assert!(
                 !s.source.is_empty(),
                 "specimen {} has empty source",

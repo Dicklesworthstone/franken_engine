@@ -715,6 +715,11 @@ impl CausalDag {
             }
         }
 
+        // If treatment or outcome is not observable, identification is impossible
+        if !reasons.is_empty() {
+            return self.build_unidentifiable_cert(treatment, outcome, reasons);
+        }
+
         // Check connectivity
         if !self.has_path(treatment, outcome) {
             reasons.push(UnidentifiableReason::NotConnected);

@@ -197,7 +197,7 @@ impl ArtifactContext {
         Self {
             artifact_dir: artifact_dir.into(),
             run_id: format!("run-{}-{}", COMPONENT, Utc::now().format("%Y%m%dT%H%M%SZ")),
-            trace_id: "trace.rgc.610a".to_string(),
+            trace_id: "trace-rgc-610a".to_string(),
             decision_id: "decision.rgc.610a".to_string(),
             policy_id: "policy.rgc.610a".to_string(),
             generated_at_utc: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),

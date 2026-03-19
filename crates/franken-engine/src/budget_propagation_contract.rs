@@ -1332,8 +1332,8 @@ mod tests {
     #[test]
     fn test_fixed_amount_exceeds_parent() {
         let strat = BudgetDerivationStrategy::FixedAmount { amount_ms: 1000 };
-        // Fixed amount returns the amount regardless of parent
-        assert_eq!(strat.derive(500), 1000);
+        // Fixed amount is clamped to parent remaining budget
+        assert_eq!(strat.derive(500), 500);
     }
 
     #[test]

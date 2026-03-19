@@ -194,7 +194,7 @@ fn ln_millionths(x_millionths: i64) -> i64 {
 
     // Range reduction: divide by e ≈ 2_718_282 millionths until val < 2*MILLION
     let e_m: i64 = 2_718_282; // e in millionths
-    while val > 2 * MILLION {
+    while val >= 2 * MILLION {
         val = val.saturating_mul(MILLION).checked_div(e_m).unwrap_or(1);
         log_acc += MILLION; // +1.0 in millionths
     }

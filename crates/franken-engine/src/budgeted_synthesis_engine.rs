@@ -538,14 +538,20 @@ impl CounterexampleArchive {
 
     /// Add counterexamples from a synthesis report.
     pub fn ingest(&mut self, report: &SynthesisReport) {
-        let entry = self
-            .entries
-            .entry(report.target_schema_id.clone())
-            .or_default();
+        let mut collected = Vec::new();
         for c in &report.candidates {
             for cx in &c.counterexamples {
+                collected.push(cx.clone());
+            }
+        }
+        if !collected.is_empty() {
+            let entry = self
+                .entries
+                .entry(report.target_schema_id.clone())
+                .or_default();
+            for cx in collected {
                 if entry.len() < MAX_COUNTEREXAMPLES {
-                    entry.push(cx.clone());
+                    entry.push(cx);
                     self.total_count += 1;
                 }
             }

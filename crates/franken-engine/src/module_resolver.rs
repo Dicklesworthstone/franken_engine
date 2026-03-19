@@ -2246,8 +2246,8 @@ mod tests {
         resolver
             .register_workspace_module(
                 "/app/entry.js",
-                ModuleDefinition::new(ModuleSyntax::EsModule, "import './dep';")
-                    .with_dependency(ModuleDependency::new("./dep", ImportStyle::Import)),
+                ModuleDefinition::new(ModuleSyntax::EsModule, "import './dep.js';")
+                    .with_dependency(ModuleDependency::new("./dep.js", ImportStyle::Import)),
             )
             .unwrap();
         resolver
@@ -2273,15 +2273,15 @@ mod tests {
         resolver
             .register_workspace_module(
                 "/app/a.js",
-                ModuleDefinition::new(ModuleSyntax::EsModule, "import './b';")
-                    .with_dependency(ModuleDependency::new("./b", ImportStyle::Import)),
+                ModuleDefinition::new(ModuleSyntax::EsModule, "import './b.js';")
+                    .with_dependency(ModuleDependency::new("./b.js", ImportStyle::Import)),
             )
             .unwrap();
         resolver
             .register_workspace_module(
                 "/app/b.js",
-                ModuleDefinition::new(ModuleSyntax::EsModule, "import './a';")
-                    .with_dependency(ModuleDependency::new("./a", ImportStyle::Import)),
+                ModuleDefinition::new(ModuleSyntax::EsModule, "import './a.js';")
+                    .with_dependency(ModuleDependency::new("./a.js", ImportStyle::Import)),
             )
             .unwrap();
 
@@ -3112,10 +3112,10 @@ mod tests {
         resolver
             .register_workspace_module(
                 "/app/src/main.js",
-                ModuleDefinition::new(ModuleSyntax::EsModule, "import '../shared/util';"),
+                ModuleDefinition::new(ModuleSyntax::EsModule, "import '../shared/util.js';"),
             )
             .unwrap();
-        let request = ModuleRequest::new("../shared/util", ImportStyle::Import)
+        let request = ModuleRequest::new("../shared/util.js", ImportStyle::Import)
             .with_referrer("/app/src/main.js");
         let outcome = resolver
             .resolve(&request, &context(), &AllowAllPolicy)
@@ -3131,15 +3131,15 @@ mod tests {
         resolver
             .register_workspace_module(
                 "/app/a.js",
-                ModuleDefinition::new(ModuleSyntax::EsModule, "import './b';")
-                    .with_dependency(ModuleDependency::new("./b", ImportStyle::Import)),
+                ModuleDefinition::new(ModuleSyntax::EsModule, "import './b.js';")
+                    .with_dependency(ModuleDependency::new("./b.js", ImportStyle::Import)),
             )
             .unwrap();
         resolver
             .register_workspace_module(
                 "/app/b.js",
-                ModuleDefinition::new(ModuleSyntax::EsModule, "import './c';")
-                    .with_dependency(ModuleDependency::new("./c", ImportStyle::Import)),
+                ModuleDefinition::new(ModuleSyntax::EsModule, "import './c.js';")
+                    .with_dependency(ModuleDependency::new("./c.js", ImportStyle::Import)),
             )
             .unwrap();
         resolver
@@ -3166,8 +3166,11 @@ mod tests {
         resolver
             .register_workspace_module(
                 "/app/entry.js",
-                ModuleDefinition::new(ModuleSyntax::EsModule, "import './restricted';")
-                    .with_dependency(ModuleDependency::new("./restricted", ImportStyle::Import)),
+                ModuleDefinition::new(ModuleSyntax::EsModule, "import './restricted.js';")
+                    .with_dependency(ModuleDependency::new(
+                        "./restricted.js",
+                        ImportStyle::Import,
+                    )),
             )
             .unwrap();
         resolver
@@ -3349,6 +3352,12 @@ mod tests {
     #[test]
     fn native_relative_import_from_external_esm_referrer_requires_extension() {
         let mut resolver = DeterministicModuleResolver::new("/app");
+        resolver
+            .register_external_module(
+                "some-pkg",
+                ModuleDefinition::new(ModuleSyntax::EsModule, "export { default } from './sub';"),
+            )
+            .unwrap();
         resolver
             .register_external_module(
                 "some-pkg/sub.mjs",

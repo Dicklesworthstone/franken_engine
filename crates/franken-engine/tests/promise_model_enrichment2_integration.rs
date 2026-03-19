@@ -603,3 +603,225 @@ fn enrichment_macrotask_queue_dequeue_empty_returns_none() {
     assert!(q.dequeue_ready(0).is_none());
     assert!(q.dequeue_ready(u64::MAX).is_none());
 }
+
+// ===========================================================================
+// ExceptionToRejectionBridge integration tests (bd-1lsy.4.13.3)
+// ===========================================================================
+
+#[test]
+fn enrichment_bridge_new_has_zero_transitions() {
+    let bridge = ExceptionToRejectionBridge::new();
+    assert_eq!(bridge.transition_count(), 0);
+    assert!(bridge.witness_log().is_empty());
+}
+
+#[test]
+fn enrichment_bridge_default_matches_new() {
+    let a = ExceptionToRejectionBridge::new();
+    let b = ExceptionToRejectionBridge::default();
+    assert_eq!(a.transition_count(), b.transition_count());
+    assert_eq!(a.witness_log().len(), b.witness_log().len());
+}
+
+#[test]
+fn enrichment_bridge_async_exception_witness_has_correct_boundary() {
+    let mut store = PromiseStore::new();
+    let mut queue = MicrotaskQueue::new();
+    let mut bridge = ExceptionToRejectionBridge::new();
+    let p = store.create();
+
+    bridge
+        .bridge_async_exception(JsValue::Str("oops".into()), p, &mut store, &mut queue)
+        .unwrap();
+
+    let log = bridge.witness_log();
+    assert_eq!(log.len(), 1);
+    assert_eq!(log[0].boundary, ExceptionBoundaryKind::AsyncFunctionBody);
+    assert_eq!(log[0].promise, Some(p));
+    assert!(log[0].module_specifier.is_none());
+}
+
+#[test]
+fn enrichment_bridge_module_exception_witness_has_specifier() {
+    let mut store = PromiseStore::new();
+    let mut queue = MicrotaskQueue::new();
+    let mut bridge = ExceptionToRejectionBridge::new();
+    let p = store.create();
+
+    bridge
+        .bridge_module_exception(
+            JsValue::Int(42),
+            "entry.mjs",
+            Some(p),
+            &mut store,
+            &mut queue,
+        )
+        .unwrap();
+
+    let log = bridge.witness_log();
+    assert_eq!(log[0].boundary, ExceptionBoundaryKind::ModuleEvaluation);
+    assert_eq!(log[0].module_specifier.as_deref(), Some("entry.mjs"));
+}
+
+#[test]
+fn enrichment_bridge_hostcall_exception_without_promise_succeeds() {
+    let mut store = PromiseStore::new();
+    let mut queue = MicrotaskQueue::new();
+    let mut bridge = ExceptionToRejectionBridge::new();
+
+    let outcome = bridge
+        .bridge_hostcall_exception(JsValue::Null, None, &mut store, &mut queue)
+        .unwrap();
+
+    assert!(outcome.rejected_promise.is_none());
+    assert_eq!(outcome.rejection_reason, JsValue::Null);
+}
+
+#[test]
+fn enrichment_bridge_microtask_exception_increments_counter() {
+    let mut store = PromiseStore::new();
+    let mut queue = MicrotaskQueue::new();
+    let mut bridge = ExceptionToRejectionBridge::new();
+
+    for i in 0..5 {
+        let p = store.create();
+        bridge
+            .bridge_microtask_exception(JsValue::Int(i), Some(p), &mut store, &mut queue)
+            .unwrap();
+    }
+
+    assert_eq!(bridge.transition_count(), 5);
+    assert_eq!(bridge.witness_log().len(), 5);
+    for (idx, event) in bridge.witness_log().iter().enumerate() {
+        assert_eq!(event.seq, idx as u64);
+        assert_eq!(event.boundary, ExceptionBoundaryKind::MicrotaskReaction);
+    }
+}
+
+#[test]
+fn enrichment_bridge_mixed_boundaries_maintain_ordering() {
+    let mut store = PromiseStore::new();
+    let mut queue = MicrotaskQueue::new();
+    let mut bridge = ExceptionToRejectionBridge::new();
+
+    let p1 = store.create();
+    let p2 = store.create();
+    let p3 = store.create();
+
+    bridge
+        .bridge_async_exception(JsValue::Str("a".into()), p1, &mut store, &mut queue)
+        .unwrap();
+    bridge
+        .bridge_module_exception(
+            JsValue::Str("m".into()),
+            "mod.js",
+            Some(p2),
+            &mut store,
+            &mut queue,
+        )
+        .unwrap();
+    bridge
+        .bridge_hostcall_exception(JsValue::Str("h".into()), Some(p3), &mut store, &mut queue)
+        .unwrap();
+
+    let log = bridge.witness_log();
+    assert_eq!(log[0].boundary, ExceptionBoundaryKind::AsyncFunctionBody);
+    assert_eq!(log[1].boundary, ExceptionBoundaryKind::ModuleEvaluation);
+    assert_eq!(log[2].boundary, ExceptionBoundaryKind::HostcallBoundary);
+    assert_eq!(log[0].seq, 0);
+    assert_eq!(log[1].seq, 1);
+    assert_eq!(log[2].seq, 2);
+}
+
+#[test]
+fn enrichment_bridge_outcome_description_contains_value() {
+    let mut store = PromiseStore::new();
+    let mut queue = MicrotaskQueue::new();
+    let mut bridge = ExceptionToRejectionBridge::new();
+    let p = store.create();
+
+    let outcome = bridge
+        .bridge_async_exception(
+            JsValue::Str("TypeError: cannot read property".into()),
+            p,
+            &mut store,
+            &mut queue,
+        )
+        .unwrap();
+
+    assert!(
+        outcome
+            .reason_description
+            .contains("TypeError: cannot read property")
+    );
+}
+
+#[test]
+fn enrichment_bridge_rejected_promise_matches_unhandled_list() {
+    let mut store = PromiseStore::new();
+    let mut queue = MicrotaskQueue::new();
+    let mut bridge = ExceptionToRejectionBridge::new();
+    let p = store.create();
+
+    bridge
+        .bridge_async_exception(JsValue::Str("err".into()), p, &mut store, &mut queue)
+        .unwrap();
+
+    let unhandled = store.unhandled_rejections();
+    assert!(
+        unhandled.contains(&p),
+        "rejected promise should be unhandled"
+    );
+}
+
+#[test]
+fn enrichment_bridge_outcome_serde_roundtrip_with_all_fields() {
+    let outcome = ExceptionRejectionOutcome {
+        rejected_promise: Some(PromiseHandle(42)),
+        rejection_reason: JsValue::Str("test error".into()),
+        reason_description: "Str(\"test error\")".into(),
+        module_specifier: Some("index.mjs".into()),
+        propagated: true,
+        affected_module_count: 7,
+    };
+    let json = serde_json::to_string(&outcome).unwrap();
+    let back: ExceptionRejectionOutcome = serde_json::from_str(&json).unwrap();
+    assert_eq!(outcome, back);
+    assert!(json.contains("index.mjs"));
+    assert!(json.contains("42"));
+}
+
+#[test]
+fn enrichment_exception_boundary_kind_all_variants_distinct() {
+    let variants = [
+        ExceptionBoundaryKind::AsyncFunctionBody,
+        ExceptionBoundaryKind::ModuleEvaluation,
+        ExceptionBoundaryKind::HostcallBoundary,
+        ExceptionBoundaryKind::MicrotaskReaction,
+    ];
+    let mut serialized = BTreeSet::new();
+    for v in &variants {
+        let json = serde_json::to_string(v).unwrap();
+        assert!(serialized.insert(json), "duplicate variant serialization");
+    }
+    assert_eq!(serialized.len(), 4);
+}
+
+#[test]
+fn enrichment_bridge_witness_event_deterministic_across_runs() {
+    let mut store = PromiseStore::new();
+    let mut queue = MicrotaskQueue::new();
+
+    let run = |store: &mut PromiseStore, queue: &mut MicrotaskQueue| {
+        let mut bridge = ExceptionToRejectionBridge::new();
+        let p = store.create();
+        bridge
+            .bridge_async_exception(JsValue::Int(1), p, store, queue)
+            .unwrap();
+        serde_json::to_string(bridge.witness_log()).unwrap()
+    };
+
+    let r1 = run(&mut store.clone(), &mut queue.clone());
+    let r2 = run(&mut store.clone(), &mut queue.clone());
+    assert_eq!(r1, r2, "witness log must be deterministic across runs");
+}

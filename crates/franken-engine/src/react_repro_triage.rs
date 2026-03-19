@@ -603,14 +603,14 @@ pub fn assign_severity(
     if blocks_core_workflow && class.is_engine_bug() {
         return FailureSeverity::Critical;
     }
+    if is_edge_case {
+        return FailureSeverity::Info;
+    }
     if class.is_engine_bug() && !has_workaround {
         return FailureSeverity::High;
     }
     if class.is_engine_bug() && has_workaround {
         return FailureSeverity::Medium;
-    }
-    if is_edge_case {
-        return FailureSeverity::Low;
     }
     if !class.is_engine_bug() {
         return FailureSeverity::Low;

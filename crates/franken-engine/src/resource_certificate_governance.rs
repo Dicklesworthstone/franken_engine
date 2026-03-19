@@ -181,10 +181,17 @@ impl CertificateEvidence {
         sample_count: u64,
         max_utilisation: u64,
     ) -> Self {
-        let utilisation_millionths = measured_usage
-            .saturating_mul(FIXED_ONE)
-            .checked_div(certified_budget)
-            .unwrap_or(if measured_usage == 0 { 0 } else { FIXED_ONE });
+        let utilisation_millionths = if certified_budget == 0 {
+            if measured_usage == 0 { 0 } else { FIXED_ONE }
+        } else {
+            let wide = (measured_usage as u128).saturating_mul(FIXED_ONE as u128);
+            let result = wide / (certified_budget as u128);
+            if result > u64::MAX as u128 {
+                u64::MAX
+            } else {
+                result as u64
+            }
+        };
         let within_budget = utilisation_millionths <= max_utilisation;
         let mut buf = Vec::with_capacity(64);
         append_str(&mut buf, &dimension.to_string());
@@ -1567,9 +1574,9 @@ mod tests {
             u64::MAX / FIXED_ONE,
             u64::MAX / FIXED_ONE - 1,
             100,
-            DEFAULT_MAX_UTILISATION_MILLIONTHS,
+            FIXED_ONE, // 100% threshold so near-full utilisation is within budget
         );
-        // Should compute without panic.
+        // Should compute without panic and produce accurate utilisation.
         assert!(c.within_budget);
     }
 

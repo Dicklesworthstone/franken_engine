@@ -235,7 +235,9 @@ fn conformance_runtime_try_catch_catches_exception() {
         Ir3Instruction::Return { value: 1 },
         Ir3Instruction::Halt,
     ]);
-    let result = QuickJsLane::new().execute(&m, "conformance").expect("try/catch should not error");
+    let result = QuickJsLane::new()
+        .execute(&m, "conformance")
+        .expect("try/catch should not error");
     assert_eq!(result.value, Value::Int(42));
 }
 
@@ -262,7 +264,9 @@ fn conformance_runtime_try_catch_normal_path() {
         // 6: Halt
         Ir3Instruction::Halt,
     ]);
-    let result = QuickJsLane::new().execute(&m, "conformance").expect("normal try should not error");
+    let result = QuickJsLane::new()
+        .execute(&m, "conformance")
+        .expect("normal try should not error");
     assert_eq!(result.value, Value::Int(10));
 }
 
@@ -292,7 +296,9 @@ fn conformance_runtime_finally_executes_on_normal_path() {
         // 8: Halt
         Ir3Instruction::Halt,
     ]);
-    let result = QuickJsLane::new().execute(&m, "conformance").expect("finally on normal path should succeed");
+    let result = QuickJsLane::new()
+        .execute(&m, "conformance")
+        .expect("finally on normal path should succeed");
     // r0 should be 20 because finally body executed
     assert_eq!(result.value, Value::Int(20));
 }
@@ -317,7 +323,9 @@ fn conformance_throw_string_value_survives_unwinding() {
         Ir3Instruction::Move { dst: 0, src: 3 },
         Ir3Instruction::Halt,
     ]);
-    let result = QuickJsLane::new().execute(&m, "conformance").expect("catch should succeed");
+    let result = QuickJsLane::new()
+        .execute(&m, "conformance")
+        .expect("catch should succeed");
     assert_eq!(result.value, Value::Int(42));
 }
 

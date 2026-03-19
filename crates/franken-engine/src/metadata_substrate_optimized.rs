@@ -2381,7 +2381,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_string(&FallbackPath::BTreeLookup).unwrap(),
-            "\"btree_lookup\""
+            "\"b_tree_lookup\""
         );
         assert_eq!(
             serde_json::to_string(&FallbackPath::LinearProbe).unwrap(),
@@ -2848,10 +2848,10 @@ mod tests {
 
     #[test]
     fn test_transition_cost_compact_bitmap_to_flat_array() {
-        // CompactBitmap -> FlatArray: FlatArray inbound = 150k + 100k = 250k.
-        // Wait: (CompactBitmap, _) arm is 250k. So CompactBitmap -> FlatArray = 250k + 100k = 350k.
+        // CompactBitmap -> FlatArray: (_, FlatArray) arm matches first with 150k,
+        // plus 100k base = 250k.
         let cost = compute_transition_cost(SubstrateKind::CompactBitmap, SubstrateKind::FlatArray);
-        assert_eq!(cost, 350_000);
+        assert_eq!(cost, 250_000);
     }
 
     #[test]

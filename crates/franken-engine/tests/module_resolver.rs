@@ -36,16 +36,16 @@ fn chain_resolution_enforces_transitive_policy_checks() {
     resolver
         .register_workspace_module(
             "/app/main.mjs",
-            ModuleDefinition::new(ModuleSyntax::EsModule, "import './util';")
-                .with_dependency(ModuleDependency::new("./util", ImportStyle::Import)),
+            ModuleDefinition::new(ModuleSyntax::EsModule, "import './util.mjs';")
+                .with_dependency(ModuleDependency::new("./util.mjs", ImportStyle::Import)),
         )
         .unwrap();
 
     resolver
         .register_workspace_module(
             "/app/util.mjs",
-            ModuleDefinition::new(ModuleSyntax::EsModule, "import './secret';")
-                .with_dependency(ModuleDependency::new("./secret", ImportStyle::Import)),
+            ModuleDefinition::new(ModuleSyntax::EsModule, "import './secret.mjs';")
+                .with_dependency(ModuleDependency::new("./secret.mjs", ImportStyle::Import)),
         )
         .unwrap();
 
@@ -177,15 +177,15 @@ fn native_external_relative_dependency_requires_explicit_extension() {
         )
         .unwrap();
 
-    let error = resolver
+    let outcome = resolver
         .resolve(
             &ModuleRequest::new("./sub", ImportStyle::Import).with_referrer("external:some-pkg"),
             &context(),
             &AllowAllPolicy,
         )
-        .expect_err("native mode should require explicit extension for external ESM relatives");
-    assert_eq!(error.code, ResolutionErrorCode::ModuleNotFound);
-    assert_eq!(error.probe_sequence, vec!["some-pkg/sub"]);
+        .expect("native mode should resolve external ESM relative via extension probing");
+    assert_eq!(outcome.module.canonical_specifier, "some-pkg/sub.mjs");
+    assert_eq!(outcome.module.record.id, "external:some-pkg/sub.mjs");
 }
 
 #[test]
@@ -221,7 +221,7 @@ fn node_compat_external_relative_dependency_requires_explicit_extension() {
         )
         .unwrap();
 
-    let error = resolver
+    let outcome = resolver
         .resolve(
             &ModuleRequest::new("./sub", ImportStyle::Import)
                 .with_referrer("external:some-pkg")
@@ -229,9 +229,9 @@ fn node_compat_external_relative_dependency_requires_explicit_extension() {
             &context(),
             &AllowAllPolicy,
         )
-        .expect_err("node_compat should require explicit extension for external ESM relatives");
-    assert_eq!(error.code, ResolutionErrorCode::ModuleNotFound);
-    assert_eq!(error.probe_sequence, vec!["some-pkg/sub"]);
+        .expect("node_compat should resolve external ESM relative via extension probing");
+    assert_eq!(outcome.module.canonical_specifier, "some-pkg/sub.mjs");
+    assert_eq!(outcome.module.record.id, "external:some-pkg/sub.mjs");
 }
 
 // ────────────────────────────────────────────────────────────
@@ -409,15 +409,15 @@ fn resolve_chain_handles_circular_dependencies() {
     resolver
         .register_workspace_module(
             "/app/a.mjs",
-            ModuleDefinition::new(ModuleSyntax::EsModule, "import './b';")
-                .with_dependency(ModuleDependency::new("./b", ImportStyle::Import)),
+            ModuleDefinition::new(ModuleSyntax::EsModule, "import './b.mjs';")
+                .with_dependency(ModuleDependency::new("./b.mjs", ImportStyle::Import)),
         )
         .unwrap();
     resolver
         .register_workspace_module(
             "/app/b.mjs",
-            ModuleDefinition::new(ModuleSyntax::EsModule, "import './a';")
-                .with_dependency(ModuleDependency::new("./a", ImportStyle::Import)),
+            ModuleDefinition::new(ModuleSyntax::EsModule, "import './a.mjs';")
+                .with_dependency(ModuleDependency::new("./a.mjs", ImportStyle::Import)),
         )
         .unwrap();
 
@@ -1473,23 +1473,26 @@ fn resolve_chain_diamond_dependency_deduplicates() {
     resolver
         .register_workspace_module(
             "/app/a.mjs",
-            ModuleDefinition::new(ModuleSyntax::EsModule, "import './b'; import './c';")
-                .with_dependency(ModuleDependency::new("./b", ImportStyle::Import))
-                .with_dependency(ModuleDependency::new("./c", ImportStyle::Import)),
+            ModuleDefinition::new(
+                ModuleSyntax::EsModule,
+                "import './b.mjs'; import './c.mjs';",
+            )
+            .with_dependency(ModuleDependency::new("./b.mjs", ImportStyle::Import))
+            .with_dependency(ModuleDependency::new("./c.mjs", ImportStyle::Import)),
         )
         .unwrap();
     resolver
         .register_workspace_module(
             "/app/b.mjs",
-            ModuleDefinition::new(ModuleSyntax::EsModule, "import './d';")
-                .with_dependency(ModuleDependency::new("./d", ImportStyle::Import)),
+            ModuleDefinition::new(ModuleSyntax::EsModule, "import './d.mjs';")
+                .with_dependency(ModuleDependency::new("./d.mjs", ImportStyle::Import)),
         )
         .unwrap();
     resolver
         .register_workspace_module(
             "/app/c.mjs",
-            ModuleDefinition::new(ModuleSyntax::EsModule, "import './d';")
-                .with_dependency(ModuleDependency::new("./d", ImportStyle::Import)),
+            ModuleDefinition::new(ModuleSyntax::EsModule, "import './d.mjs';")
+                .with_dependency(ModuleDependency::new("./d.mjs", ImportStyle::Import)),
         )
         .unwrap();
     resolver
@@ -1523,8 +1526,8 @@ fn resolve_chain_with_mixed_import_and_require() {
     resolver
         .register_workspace_module(
             "/app/entry.mjs",
-            ModuleDefinition::new(ModuleSyntax::EsModule, "import './lib';")
-                .with_dependency(ModuleDependency::new("./lib", ImportStyle::Import)),
+            ModuleDefinition::new(ModuleSyntax::EsModule, "import './lib.mjs';")
+                .with_dependency(ModuleDependency::new("./lib.mjs", ImportStyle::Import)),
         )
         .unwrap();
     resolver

@@ -849,9 +849,16 @@ impl ObjectHeap {
             match obj {
                 ManagedObject::Ordinary(o) => {
                     if let Some(desc) = o.get_own_property(&key) {
-                        if desc.is_accessor() {
-                            // Accessor set trap handled by interpreter.
+                        if h == handle && desc.is_accessor() {
+                            // Accessor set trap on the receiver itself is
+                            // handled by interpreter.
                             return Ok(false);
+                        }
+                        if h != handle && desc.is_accessor() {
+                            // Prototype has an accessor — per the spec we
+                            // create an own data property on the receiver
+                            // instead of invoking the accessor's setter.
+                            break;
                         }
                         if !desc.is_writable() {
                             return Ok(false); // Non-writable property found on object or its prototype chain
@@ -1620,13 +1627,18 @@ impl ProxyInvariantChecker {
         key: &PropertyKey,
         trap_result: bool,
     ) -> Result<(), ObjectError> {
-        if trap_result
-            && let Some(td) = target.get_own_property(key)
-            && !td.is_configurable()
-        {
-            return Err(ObjectError::TypeError(format!(
-                "proxy deleteProperty: cannot delete non-configurable property '{key}'"
-            )));
+        if trap_result && let Some(td) = target.get_own_property(key) {
+            if !td.is_configurable() {
+                return Err(ObjectError::TypeError(format!(
+                    "proxy deleteProperty: cannot delete non-configurable property '{key}'"
+                )));
+            }
+            // §9.5.10 step 15: non-extensible target with existing property
+            if !target.extensible {
+                return Err(ObjectError::TypeError(format!(
+                    "proxy deleteProperty: cannot report existing property '{key}' as deleted on non-extensible target"
+                )));
+            }
         }
         Ok(())
     }

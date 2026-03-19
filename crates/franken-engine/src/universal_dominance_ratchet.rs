@@ -1817,4 +1817,1108 @@ mod tests {
         assert_eq!(counts.get(&CellState::Claimed), Some(&1));
         assert_eq!(counts.get(&CellState::Unproven), Some(&2));
     }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: ratchet monotonicity, edge cases, serde, Display,
+    // hash determinism, regression detection
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn cell_state_rank_values_are_strictly_ordered() {
+        assert!(CellState::Unproven.rank() < CellState::Claimed.rank());
+        assert!(CellState::Claimed.rank() < CellState::Proven.rank());
+    }
+
+    #[test]
+    fn cell_state_self_advance_is_noop_for_all_states() {
+        for state in [CellState::Unproven, CellState::Claimed, CellState::Proven] {
+            assert!(
+                state.can_advance_to(state),
+                "state {state} should be able to advance to itself"
+            );
+        }
+    }
+
+    #[test]
+    fn advance_unproven_directly_to_proven_skipping_claimed() {
+        let mut board = RatchetBoard::new();
+        let mut log = RatchetEventLog::new();
+        let cell = make_cell(CellDomain::ModuleLoading, ComparisonTarget::Deno, "skip-claimed");
+        let cell_id = cell.cell_id.clone();
+        add_cell(&mut board, &mut log, cell).unwrap();
+
+        // Direct jump from Unproven to Proven is allowed.
+        advance_cell(
+            &mut board,
+            &mut log,
+            &cell_id,
+            CellState::Proven,
+            750_000,
+            vec!["direct-proof".to_string()],
+        )
+        .unwrap();
+
+        let found = board.find_cell(&cell_id).unwrap();
+        assert_eq!(found.state, CellState::Proven);
+        assert_eq!(found.margin_millionths, 750_000);
+    }
+
+    #[test]
+    fn margin_regression_only_checked_for_proven_cells() {
+        // For a Claimed cell, reducing margin when advancing to Proven is fine.
+        let mut board = RatchetBoard::new();
+        let mut log = RatchetEventLog::new();
+        let cell = make_cell(
+            CellDomain::SecurityOverhead,
+            ComparisonTarget::Bun,
+            "margin-claim",
+        );
+        let cell_id = cell.cell_id.clone();
+        add_cell(&mut board, &mut log, cell).unwrap();
+
+        advance_cell(
+            &mut board,
+            &mut log,
+            &cell_id,
+            CellState::Claimed,
+            500_000,
+            vec!["ev-claim".to_string()],
+        )
+        .unwrap();
+
+        // Advance to Proven with lower margin than the Claimed margin — should succeed
+        // because margin regression is only enforced on Proven cells.
+        advance_cell(
+            &mut board,
+            &mut log,
+            &cell_id,
+            CellState::Proven,
+            200_000,
+            vec!["ev-proven".to_string()],
+        )
+        .unwrap();
+
+        let found = board.find_cell(&cell_id).unwrap();
+        assert_eq!(found.state, CellState::Proven);
+        assert_eq!(found.margin_millionths, 200_000);
+    }
+
+    #[test]
+    fn proven_cell_margin_can_increase() {
+        let mut board = RatchetBoard::new();
+        let mut log = RatchetEventLog::new();
+        let cell = make_cell(CellDomain::Throughput, ComparisonTarget::V8Node, "margin-up");
+        let cell_id = cell.cell_id.clone();
+        add_cell(&mut board, &mut log, cell).unwrap();
+
+        advance_cell(
+            &mut board,
+            &mut log,
+            &cell_id,
+            CellState::Proven,
+            100_000,
+            vec![],
+        )
+        .unwrap();
+
+        // Increasing margin on a Proven cell should succeed.
+        advance_cell(
+            &mut board,
+            &mut log,
+            &cell_id,
+            CellState::Proven,
+            300_000,
+            vec!["better-evidence".to_string()],
+        )
+        .unwrap();
+
+        let found = board.find_cell(&cell_id).unwrap();
+        assert_eq!(found.margin_millionths, 300_000);
+    }
+
+    #[test]
+    fn proven_cell_margin_stays_same_is_ok() {
+        let mut board = RatchetBoard::new();
+        let mut log = RatchetEventLog::new();
+        let cell = make_cell(CellDomain::TailLatency, ComparisonTarget::Jsc, "margin-same");
+        let cell_id = cell.cell_id.clone();
+        add_cell(&mut board, &mut log, cell).unwrap();
+
+        advance_cell(
+            &mut board,
+            &mut log,
+            &cell_id,
+            CellState::Proven,
+            250_000,
+            vec![],
+        )
+        .unwrap();
+
+        // Same margin on Proven should not be rejected.
+        advance_cell(
+            &mut board,
+            &mut log,
+            &cell_id,
+            CellState::Proven,
+            250_000,
+            vec!["re-confirm".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(
+            board.find_cell(&cell_id).unwrap().margin_millionths,
+            250_000
+        );
+    }
+
+    #[test]
+    fn evidence_ids_accumulate_across_advances() {
+        let mut board = RatchetBoard::new();
+        let mut log = RatchetEventLog::new();
+        let cell = make_cell(CellDomain::ReplayFidelity, ComparisonTarget::Deno, "accum");
+        let cell_id = cell.cell_id.clone();
+        add_cell(&mut board, &mut log, cell).unwrap();
+
+        advance_cell(
+            &mut board,
+            &mut log,
+            &cell_id,
+            CellState::Claimed,
+            10_000,
+            vec!["ev-a".to_string(), "ev-b".to_string()],
+        )
+        .unwrap();
+        advance_cell(
+            &mut board,
+            &mut log,
+            &cell_id,
+            CellState::Proven,
+            50_000,
+            vec!["ev-c".to_string()],
+        )
+        .unwrap();
+
+        let found = board.find_cell(&cell_id).unwrap();
+        assert_eq!(found.evidence_ids, vec!["ev-a", "ev-b", "ev-c"]);
+    }
+
+    #[test]
+    fn advance_cell_updates_last_advanced_epoch() {
+        let mut board = RatchetBoard::new();
+        let mut log = RatchetEventLog::new();
+        let cell = make_cell(
+            CellDomain::ExtensionIsolation,
+            ComparisonTarget::Bun,
+            "epoch-track",
+        );
+        let cell_id = cell.cell_id.clone();
+        add_cell(&mut board, &mut log, cell).unwrap();
+
+        advance_epoch(&mut board, &mut log, 5).unwrap();
+        advance_cell(
+            &mut board,
+            &mut log,
+            &cell_id,
+            CellState::Claimed,
+            10_000,
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            board.find_cell(&cell_id).unwrap().last_advanced_epoch,
+            5
+        );
+
+        advance_epoch(&mut board, &mut log, 10).unwrap();
+        advance_cell(
+            &mut board,
+            &mut log,
+            &cell_id,
+            CellState::Proven,
+            20_000,
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            board.find_cell(&cell_id).unwrap().last_advanced_epoch,
+            10
+        );
+    }
+
+    #[test]
+    fn regression_event_is_logged_on_rejected_advance() {
+        let mut board = RatchetBoard::new();
+        let mut log = RatchetEventLog::new();
+        let cell = make_cell(CellDomain::ColdStart, ComparisonTarget::V8Node, "reg-log");
+        let cell_id = cell.cell_id.clone();
+        add_cell(&mut board, &mut log, cell).unwrap();
+
+        advance_cell(
+            &mut board,
+            &mut log,
+            &cell_id,
+            CellState::Proven,
+            100_000,
+            vec![],
+        )
+        .unwrap();
+
+        // This should fail and log a RegressionRejected event.
+        let _ = advance_cell(
+            &mut board,
+            &mut log,
+            &cell_id,
+            CellState::Unproven,
+            0,
+            vec![],
+        );
+
+        let last_event = log.events.last().unwrap();
+        assert!(matches!(
+            last_event.kind,
+            RatchetEventKind::RegressionRejected { .. }
+        ));
+    }
+
+    #[test]
+    fn board_default_equals_new() {
+        let default_board = RatchetBoard::default();
+        let new_board = RatchetBoard::new();
+        assert_eq!(default_board, new_board);
+    }
+
+    #[test]
+    fn ledger_default_equals_new() {
+        let default_ledger = FrontierGapLedger::default();
+        let new_ledger = FrontierGapLedger::new();
+        assert_eq!(default_ledger, new_ledger);
+    }
+
+    #[test]
+    fn event_log_default_equals_new() {
+        let default_log = RatchetEventLog::default();
+        let new_log = RatchetEventLog::new();
+        assert_eq!(default_log, new_log);
+    }
+
+    #[test]
+    fn dominance_fraction_full_board_proven() {
+        let mut board = RatchetBoard::new();
+        let mut log = RatchetEventLog::new();
+
+        for (i, target) in [
+            ComparisonTarget::V8Node,
+            ComparisonTarget::Bun,
+            ComparisonTarget::Deno,
+            ComparisonTarget::Jsc,
+        ]
+        .iter()
+        .enumerate()
+        {
+            let cell = make_cell(CellDomain::ColdStart, *target, &format!("full-{i}"));
+            let cell_id = cell.cell_id.clone();
+            add_cell(&mut board, &mut log, cell).unwrap();
+            advance_cell(
+                &mut board,
+                &mut log,
+                &cell_id,
+                CellState::Proven,
+                1_000_000,
+                vec![],
+            )
+            .unwrap();
+        }
+
+        assert_eq!(board.dominance_fraction_millionths(), 1_000_000);
+    }
+
+    #[test]
+    fn dominance_fraction_two_of_five() {
+        let mut board = RatchetBoard::new();
+        let mut log = RatchetEventLog::new();
+
+        for i in 0..5 {
+            let cell = make_cell(
+                CellDomain::Throughput,
+                ComparisonTarget::V8Node,
+                &format!("frac5-{i}"),
+            );
+            add_cell(&mut board, &mut log, cell).unwrap();
+        }
+
+        for i in 0..2 {
+            let cell_id = make_cell_id(
+                CellDomain::Throughput,
+                ComparisonTarget::V8Node,
+                &format!("frac5-{i}"),
+            );
+            advance_cell(
+                &mut board,
+                &mut log,
+                &cell_id,
+                CellState::Proven,
+                100_000,
+                vec![],
+            )
+            .unwrap();
+        }
+
+        // 2/5 = 400_000 millionths
+        assert_eq!(board.dominance_fraction_millionths(), 400_000);
+    }
+
+    #[test]
+    fn snapshot_domain_proven_counts_are_correct() {
+        let mut board = RatchetBoard::new();
+        let mut log = RatchetEventLog::new();
+        let ledger = FrontierGapLedger::new();
+
+        // Add 2 ColdStart cells, prove 1
+        let c1 = make_cell(CellDomain::ColdStart, ComparisonTarget::V8Node, "d1");
+        let c1_id = c1.cell_id.clone();
+        add_cell(&mut board, &mut log, c1).unwrap();
+        let c2 = make_cell(CellDomain::ColdStart, ComparisonTarget::Bun, "d2");
+        add_cell(&mut board, &mut log, c2).unwrap();
+        advance_cell(
+            &mut board,
+            &mut log,
+            &c1_id,
+            CellState::Proven,
+            100_000,
+            vec![],
+        )
+        .unwrap();
+
+        // Add 1 Memory cell, prove it
+        let m1 = make_cell(CellDomain::Memory, ComparisonTarget::Deno, "m1");
+        let m1_id = m1.cell_id.clone();
+        add_cell(&mut board, &mut log, m1).unwrap();
+        advance_cell(
+            &mut board,
+            &mut log,
+            &m1_id,
+            CellState::Proven,
+            200_000,
+            vec![],
+        )
+        .unwrap();
+
+        let snapshot = compute_dominance_snapshot(&board, &ledger, &mut log);
+
+        let cs_domain = snapshot
+            .domain_proven_counts
+            .iter()
+            .find(|d| d.domain == CellDomain::ColdStart)
+            .unwrap();
+        assert_eq!(cs_domain.proven, 1);
+        assert_eq!(cs_domain.total, 2);
+
+        let mem_domain = snapshot
+            .domain_proven_counts
+            .iter()
+            .find(|d| d.domain == CellDomain::Memory)
+            .unwrap();
+        assert_eq!(mem_domain.proven, 1);
+        assert_eq!(mem_domain.total, 1);
+    }
+
+    #[test]
+    fn snapshot_target_proven_counts_are_correct() {
+        let mut board = RatchetBoard::new();
+        let mut log = RatchetEventLog::new();
+        let ledger = FrontierGapLedger::new();
+
+        let c1 = make_cell(CellDomain::ColdStart, ComparisonTarget::V8Node, "t1");
+        let c1_id = c1.cell_id.clone();
+        add_cell(&mut board, &mut log, c1).unwrap();
+        let c2 = make_cell(CellDomain::Memory, ComparisonTarget::V8Node, "t2");
+        add_cell(&mut board, &mut log, c2).unwrap();
+        advance_cell(
+            &mut board,
+            &mut log,
+            &c1_id,
+            CellState::Proven,
+            100_000,
+            vec![],
+        )
+        .unwrap();
+
+        let snapshot = compute_dominance_snapshot(&board, &ledger, &mut log);
+
+        let v8_target = snapshot
+            .target_proven_counts
+            .iter()
+            .find(|t| t.target == ComparisonTarget::V8Node)
+            .unwrap();
+        assert_eq!(v8_target.proven, 1);
+        assert_eq!(v8_target.total, 2);
+    }
+
+    #[test]
+    fn snapshot_empty_board_not_universal() {
+        let board = RatchetBoard::new();
+        let mut log = RatchetEventLog::new();
+        let ledger = FrontierGapLedger::new();
+
+        let snapshot = compute_dominance_snapshot(&board, &ledger, &mut log);
+        // Empty board should NOT claim universal dominance (total == 0).
+        assert!(!snapshot.universal_dominance_achieved);
+        assert_eq!(snapshot.total_cells, 0);
+        assert_eq!(snapshot.dominance_fraction_millionths, 0);
+    }
+
+    #[test]
+    fn snapshot_all_proven_but_open_gaps_blocks_universal() {
+        let mut board = RatchetBoard::new();
+        let mut log = RatchetEventLog::new();
+        let mut ledger = FrontierGapLedger::new();
+
+        let cell = make_cell(CellDomain::ColdStart, ComparisonTarget::V8Node, "univ-block");
+        let cell_id = cell.cell_id.clone();
+        add_cell(&mut board, &mut log, cell).unwrap();
+        advance_cell(
+            &mut board,
+            &mut log,
+            &cell_id,
+            CellState::Proven,
+            1_000_000,
+            vec![],
+        )
+        .unwrap();
+
+        // Register an open gap — this should block universal dominance.
+        register_gap(
+            &mut ledger,
+            &mut log,
+            make_gap("blocker", CellDomain::Memory, GapKind::Unknown),
+        )
+        .unwrap();
+
+        let snapshot = compute_dominance_snapshot(&board, &ledger, &mut log);
+        assert!(!snapshot.universal_dominance_achieved);
+        assert_eq!(snapshot.proven_cells, 1);
+        assert_eq!(snapshot.total_cells, 1);
+        assert_eq!(snapshot.open_gap_count, 1);
+    }
+
+    #[test]
+    fn open_gaps_by_priority_excludes_closed_gaps() {
+        let mut ledger = FrontierGapLedger::new();
+        let mut log = RatchetEventLog::new();
+
+        let mut gap_open = make_gap("open-g", CellDomain::ColdStart, GapKind::Unknown);
+        gap_open.priority_millionths = 100_000;
+        let mut gap_closed = make_gap("closed-g", CellDomain::Memory, GapKind::KnownDeficient);
+        gap_closed.priority_millionths = 999_000;
+
+        register_gap(&mut ledger, &mut log, gap_open).unwrap();
+        register_gap(&mut ledger, &mut log, gap_closed).unwrap();
+        close_gap(
+            &mut ledger,
+            &mut log,
+            "closed-g",
+            GapResolution::ProvenOnBoard,
+            1,
+        )
+        .unwrap();
+
+        let sorted = ledger.open_gaps_by_priority();
+        assert_eq!(sorted.len(), 1);
+        assert_eq!(sorted[0].gap_id, "open-g");
+    }
+
+    #[test]
+    fn gap_closed_epoch_and_resolution_are_set() {
+        let mut ledger = FrontierGapLedger::new();
+        let mut log = RatchetEventLog::new();
+
+        register_gap(
+            &mut ledger,
+            &mut log,
+            make_gap("res-gap", CellDomain::Throughput, GapKind::PartiallyExplored),
+        )
+        .unwrap();
+
+        close_gap(
+            &mut ledger,
+            &mut log,
+            "res-gap",
+            GapResolution::DimensionInvalidated,
+            42,
+        )
+        .unwrap();
+
+        let entry = ledger.find_gap("res-gap").unwrap();
+        assert_eq!(entry.closed_epoch, Some(42));
+        assert_eq!(entry.resolution, Some(GapResolution::DimensionInvalidated));
+        assert_eq!(entry.state, GapState::Closed);
+    }
+
+    #[test]
+    fn open_gap_kinds_ignores_closed_gaps() {
+        let mut ledger = FrontierGapLedger::new();
+        let mut log = RatchetEventLog::new();
+
+        register_gap(
+            &mut ledger,
+            &mut log,
+            make_gap("ik-1", CellDomain::ColdStart, GapKind::Unknown),
+        )
+        .unwrap();
+        register_gap(
+            &mut ledger,
+            &mut log,
+            make_gap("ik-2", CellDomain::Memory, GapKind::Unknown),
+        )
+        .unwrap();
+        close_gap(
+            &mut ledger,
+            &mut log,
+            "ik-2",
+            GapResolution::ProvenOnBoard,
+            1,
+        )
+        .unwrap();
+
+        let kinds = ledger.open_gap_kinds();
+        assert_eq!(kinds.get(&GapKind::Unknown), Some(&1));
+    }
+
+    #[test]
+    fn ratchet_error_display_margin_regression() {
+        let cell_id = make_cell_id(CellDomain::Memory, ComparisonTarget::Bun, "margin-disp");
+        let err = RatchetError::MarginRegressionRejected {
+            cell_id,
+            current_margin: 500_000,
+            attempted_margin: 100_000,
+        };
+        let display = err.to_string();
+        assert!(display.contains("margin regression rejected"));
+        assert!(display.contains("500000"));
+        assert!(display.contains("100000"));
+    }
+
+    #[test]
+    fn ratchet_error_display_epoch_regression() {
+        let err = RatchetError::EpochRegression {
+            current_epoch: 10,
+            attempted_epoch: 5,
+        };
+        let display = err.to_string();
+        assert!(display.contains("epoch regression"));
+        assert!(display.contains("10"));
+        assert!(display.contains("5"));
+    }
+
+    #[test]
+    fn ratchet_error_display_cell_not_found() {
+        let cell_id = make_cell_id(CellDomain::Throughput, ComparisonTarget::Deno, "missing");
+        let err = RatchetError::CellNotFound { cell_id };
+        let display = err.to_string();
+        assert!(display.contains("cell not found"));
+        assert!(display.contains("throughput"));
+    }
+
+    #[test]
+    fn ratchet_error_display_gap_not_found() {
+        let err = RatchetError::GapNotFound {
+            gap_id: "gap-xyz".to_string(),
+        };
+        assert!(err.to_string().contains("gap not found: gap-xyz"));
+    }
+
+    #[test]
+    fn ratchet_error_display_gap_already_closed() {
+        let err = RatchetError::GapAlreadyClosed {
+            gap_id: "gap-abc".to_string(),
+        };
+        assert!(err.to_string().contains("gap already closed: gap-abc"));
+    }
+
+    #[test]
+    fn ratchet_error_display_duplicate_cell() {
+        let cell_id = make_cell_id(
+            CellDomain::ReactPerformance,
+            ComparisonTarget::Jsc,
+            "dup-disp",
+        );
+        let err = RatchetError::DuplicateCell { cell_id };
+        assert!(err.to_string().contains("duplicate cell"));
+    }
+
+    #[test]
+    fn ratchet_error_display_duplicate_gap() {
+        let err = RatchetError::DuplicateGap {
+            gap_id: "gap-dup-disp".to_string(),
+        };
+        assert!(err.to_string().contains("duplicate gap: gap-dup-disp"));
+    }
+
+    #[test]
+    fn ratchet_error_serde_round_trip() {
+        let cell_id = make_cell_id(CellDomain::ColdStart, ComparisonTarget::V8Node, "err-serde");
+        let err = RatchetError::RegressionRejected {
+            cell_id,
+            current_state: CellState::Proven,
+            attempted_state: CellState::Unproven,
+        };
+        let json = serde_json::to_string(&err).expect("serialize");
+        let deser: RatchetError = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(err, deser);
+    }
+
+    #[test]
+    fn ratchet_cell_serde_round_trip() {
+        let mut cell = make_cell(
+            CellDomain::TypeScriptCompilation,
+            ComparisonTarget::Bun,
+            "cell-rt",
+        );
+        cell.state = CellState::Claimed;
+        cell.margin_millionths = 333_333;
+        cell.evidence_ids = vec!["e1".to_string(), "e2".to_string()];
+        cell.last_advanced_epoch = 7;
+        cell.owning_bead = "bd-test".to_string();
+
+        let json = serde_json::to_string(&cell).expect("serialize");
+        let deser: RatchetCell = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(cell, deser);
+    }
+
+    #[test]
+    fn frontier_gap_entry_serde_round_trip() {
+        let mut entry = make_gap("entry-rt", CellDomain::Memory, GapKind::KnownDeficient);
+        entry.target = Some(ComparisonTarget::Deno);
+        entry.state = GapState::Closed;
+        entry.closed_epoch = Some(5);
+        entry.resolution = Some(GapResolution::SubsumedByOther);
+        entry.priority_millionths = 750_000;
+
+        let json = serde_json::to_string(&entry).expect("serialize");
+        let deser: FrontierGapEntry = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(entry, deser);
+    }
+
+    #[test]
+    fn serde_deterministic_serialization_for_cell_domain() {
+        // Serialize the same domain twice and ensure identical JSON.
+        let d = CellDomain::ReactPerformance;
+        let json1 = serde_json::to_string(&d).unwrap();
+        let json2 = serde_json::to_string(&d).unwrap();
+        assert_eq!(json1, json2);
+        assert_eq!(json1, "\"react_performance\"");
+    }
+
+    #[test]
+    fn serde_deterministic_serialization_for_comparison_target() {
+        let t = ComparisonTarget::Jsc;
+        let json1 = serde_json::to_string(&t).unwrap();
+        let json2 = serde_json::to_string(&t).unwrap();
+        assert_eq!(json1, json2);
+        assert_eq!(json1, "\"jsc\"");
+    }
+
+    #[test]
+    fn serde_deterministic_serialization_for_cell_state() {
+        for (state, expected) in [
+            (CellState::Unproven, "\"unproven\""),
+            (CellState::Claimed, "\"claimed\""),
+            (CellState::Proven, "\"proven\""),
+        ] {
+            let json = serde_json::to_string(&state).unwrap();
+            assert_eq!(json, expected);
+        }
+    }
+
+    #[test]
+    fn cell_id_display_format_all_domains() {
+        let domains = [
+            (CellDomain::ColdStart, "cold_start"),
+            (CellDomain::Throughput, "throughput"),
+            (CellDomain::TailLatency, "tail_latency"),
+            (CellDomain::Memory, "memory"),
+            (CellDomain::ReactPerformance, "react_performance"),
+            (CellDomain::ModuleLoading, "module_loading"),
+            (CellDomain::TypeScriptCompilation, "typescript_compilation"),
+            (CellDomain::SecurityOverhead, "security_overhead"),
+            (CellDomain::ReplayFidelity, "replay_fidelity"),
+            (CellDomain::ExtensionIsolation, "extension_isolation"),
+        ];
+        for (domain, label) in domains {
+            let id = make_cell_id(domain, ComparisonTarget::V8Node, "dim");
+            let display = id.to_string();
+            assert_eq!(display, format!("{label}::v8_node::dim"));
+        }
+    }
+
+    #[test]
+    fn render_summary_with_populated_board_and_gaps() {
+        let mut board = RatchetBoard::new();
+        let mut log = RatchetEventLog::new();
+        let mut ledger = FrontierGapLedger::new();
+
+        let cell = make_cell(CellDomain::ColdStart, ComparisonTarget::V8Node, "sum-1");
+        let cell_id = cell.cell_id.clone();
+        add_cell(&mut board, &mut log, cell).unwrap();
+        advance_cell(
+            &mut board,
+            &mut log,
+            &cell_id,
+            CellState::Proven,
+            800_000,
+            vec![],
+        )
+        .unwrap();
+
+        register_gap(
+            &mut ledger,
+            &mut log,
+            make_gap("sum-gap", CellDomain::Memory, GapKind::KnownDeficient),
+        )
+        .unwrap();
+
+        advance_epoch(&mut board, &mut log, 3).unwrap();
+
+        let summary = render_ratchet_summary(&board, &ledger);
+        assert!(summary.contains("epoch: 3"));
+        assert!(summary.contains("total_cells: 1"));
+        assert!(summary.contains("proven: 1"));
+        assert!(summary.contains("open_gaps: 1"));
+        assert!(summary.contains("closed_gaps: 0"));
+        assert!(summary.contains("known_deficient: 1"));
+    }
+
+    #[test]
+    fn render_summary_no_gap_kinds_section_when_no_open_gaps() {
+        let board = RatchetBoard::new();
+        let ledger = FrontierGapLedger::new();
+        let summary = render_ratchet_summary(&board, &ledger);
+        assert!(!summary.contains("open_gap_kinds:"));
+    }
+
+    #[test]
+    fn schema_constants_are_non_empty() {
+        assert!(!UNIVERSAL_DOMINANCE_RATCHET_SCHEMA_VERSION.is_empty());
+        assert!(!UNIVERSAL_DOMINANCE_RATCHET_BEAD_ID.is_empty());
+        assert!(!RATCHET_BOARD_SCHEMA_VERSION.is_empty());
+        assert!(!FRONTIER_GAP_LEDGER_SCHEMA_VERSION.is_empty());
+        assert!(!RATCHET_EVENT_LOG_SCHEMA_VERSION.is_empty());
+        assert!(!DOMINANCE_SNAPSHOT_SCHEMA_VERSION.is_empty());
+    }
+
+    #[test]
+    fn board_new_uses_correct_schema_and_bead() {
+        let board = RatchetBoard::new();
+        assert_eq!(board.schema_version, RATCHET_BOARD_SCHEMA_VERSION);
+        assert_eq!(board.bead_id, UNIVERSAL_DOMINANCE_RATCHET_BEAD_ID);
+        assert_eq!(board.current_epoch, 0);
+    }
+
+    #[test]
+    fn ledger_new_uses_correct_schema_and_bead() {
+        let ledger = FrontierGapLedger::new();
+        assert_eq!(ledger.schema_version, FRONTIER_GAP_LEDGER_SCHEMA_VERSION);
+        assert_eq!(ledger.bead_id, UNIVERSAL_DOMINANCE_RATCHET_BEAD_ID);
+    }
+
+    #[test]
+    fn event_log_new_uses_correct_schema_and_bead() {
+        let log = RatchetEventLog::new();
+        assert_eq!(log.schema_version, RATCHET_EVENT_LOG_SCHEMA_VERSION);
+        assert_eq!(log.bead_id, UNIVERSAL_DOMINANCE_RATCHET_BEAD_ID);
+        assert_eq!(log.next_sequence, 0);
+    }
+
+    #[test]
+    fn snapshot_schema_version_and_bead_id_are_correct() {
+        let board = RatchetBoard::new();
+        let mut log = RatchetEventLog::new();
+        let ledger = FrontierGapLedger::new();
+
+        let snapshot = compute_dominance_snapshot(&board, &ledger, &mut log);
+        assert_eq!(snapshot.schema_version, DOMINANCE_SNAPSHOT_SCHEMA_VERSION);
+        assert_eq!(snapshot.bead_id, UNIVERSAL_DOMINANCE_RATCHET_BEAD_ID);
+    }
+
+    #[test]
+    fn negative_margin_allowed_for_unproven_and_claimed() {
+        // A negative margin means FrankenEngine is behind. This is a valid state
+        // for Unproven->Claimed transition.
+        let mut board = RatchetBoard::new();
+        let mut log = RatchetEventLog::new();
+        let cell = make_cell(CellDomain::Memory, ComparisonTarget::Jsc, "neg-margin");
+        let cell_id = cell.cell_id.clone();
+        add_cell(&mut board, &mut log, cell).unwrap();
+
+        advance_cell(
+            &mut board,
+            &mut log,
+            &cell_id,
+            CellState::Claimed,
+            -200_000,
+            vec!["neg-ev".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(
+            board.find_cell(&cell_id).unwrap().margin_millionths,
+            -200_000
+        );
+    }
+
+    #[test]
+    fn large_board_state_counts_consistency() {
+        let mut board = RatchetBoard::new();
+        let mut log = RatchetEventLog::new();
+
+        let domains = [CellDomain::ColdStart, CellDomain::Throughput, CellDomain::Memory];
+        let targets = [
+            ComparisonTarget::V8Node,
+            ComparisonTarget::Bun,
+            ComparisonTarget::Deno,
+        ];
+
+        // Add 9 cells (3 domains x 3 targets)
+        for domain in &domains {
+            for target in &targets {
+                let dim = format!("{domain}-{target}");
+                let cell = make_cell(*domain, *target, &dim);
+                add_cell(&mut board, &mut log, cell).unwrap();
+            }
+        }
+        assert_eq!(board.cell_count(), 9);
+
+        // Prove 3, claim 2, leave 4 unproven
+        let proven_ids: Vec<CellId> = vec![
+            make_cell_id(CellDomain::ColdStart, ComparisonTarget::V8Node, "cold_start-v8_node"),
+            make_cell_id(CellDomain::Throughput, ComparisonTarget::Bun, "throughput-bun"),
+            make_cell_id(CellDomain::Memory, ComparisonTarget::Deno, "memory-deno"),
+        ];
+        for cid in &proven_ids {
+            advance_cell(&mut board, &mut log, cid, CellState::Proven, 100_000, vec![]).unwrap();
+        }
+
+        let claimed_ids: Vec<CellId> = vec![
+            make_cell_id(CellDomain::ColdStart, ComparisonTarget::Bun, "cold_start-bun"),
+            make_cell_id(CellDomain::Memory, ComparisonTarget::V8Node, "memory-v8_node"),
+        ];
+        for cid in &claimed_ids {
+            advance_cell(&mut board, &mut log, cid, CellState::Claimed, 50_000, vec![]).unwrap();
+        }
+
+        let counts = board.state_counts();
+        let total_from_counts: usize = counts.values().sum();
+        assert_eq!(total_from_counts, board.cell_count());
+        assert_eq!(counts.get(&CellState::Proven), Some(&3));
+        assert_eq!(counts.get(&CellState::Claimed), Some(&2));
+        assert_eq!(counts.get(&CellState::Unproven), Some(&4));
+    }
+
+    #[test]
+    fn gap_with_specific_target_serde_round_trip() {
+        let mut gap = make_gap("target-gap", CellDomain::ColdStart, GapKind::PartiallyExplored);
+        gap.target = Some(ComparisonTarget::Bun);
+
+        let json = serde_json::to_string(&gap).expect("serialize");
+        let deser: FrontierGapEntry = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(gap, deser);
+        assert_eq!(deser.target, Some(ComparisonTarget::Bun));
+    }
+
+    #[test]
+    fn gap_without_target_serde_round_trip() {
+        let gap = make_gap("no-target-gap", CellDomain::Memory, GapKind::OutOfScope);
+        let json = serde_json::to_string(&gap).expect("serialize");
+        let deser: FrontierGapEntry = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(deser.target, None);
+    }
+
+    #[test]
+    fn close_gap_with_all_resolution_variants() {
+        let resolutions = [
+            GapResolution::ProvenOnBoard,
+            GapResolution::DeclaredOutOfScope,
+            GapResolution::SubsumedByOther,
+            GapResolution::DimensionInvalidated,
+        ];
+
+        for (i, resolution) in resolutions.iter().enumerate() {
+            let mut ledger = FrontierGapLedger::new();
+            let mut log = RatchetEventLog::new();
+            let gap_id = format!("res-{i}");
+            register_gap(
+                &mut ledger,
+                &mut log,
+                make_gap(&gap_id, CellDomain::ColdStart, GapKind::Unknown),
+            )
+            .unwrap();
+            close_gap(&mut ledger, &mut log, &gap_id, *resolution, 1).unwrap();
+            let entry = ledger.find_gap(&gap_id).unwrap();
+            assert_eq!(entry.resolution, Some(*resolution));
+        }
+    }
+
+    #[test]
+    fn event_log_epoch_matches_board_epoch() {
+        let mut board = RatchetBoard::new();
+        let mut log = RatchetEventLog::new();
+
+        advance_epoch(&mut board, &mut log, 5).unwrap();
+        let cell = make_cell(CellDomain::ColdStart, ComparisonTarget::V8Node, "ep-match");
+        add_cell(&mut board, &mut log, cell).unwrap();
+
+        // The CellAdded event should be logged at the board's current epoch (5).
+        let last = log.events.last().unwrap();
+        assert_eq!(last.epoch, 5);
+    }
+
+    #[test]
+    fn multiple_epoch_advances_in_sequence() {
+        let mut board = RatchetBoard::new();
+        let mut log = RatchetEventLog::new();
+
+        for epoch in [1, 5, 10, 100, 1000, u64::MAX] {
+            advance_epoch(&mut board, &mut log, epoch).unwrap();
+            assert_eq!(board.current_epoch, epoch);
+        }
+    }
+
+    #[test]
+    fn epoch_zero_regression_from_zero() {
+        let mut board = RatchetBoard::new();
+        let mut log = RatchetEventLog::new();
+        // Epoch 0 is the initial; trying to advance to 0 is "same" so should fail.
+        let err = advance_epoch(&mut board, &mut log, 0).unwrap_err();
+        assert!(matches!(err, RatchetError::EpochRegression { .. }));
+    }
+
+    #[test]
+    fn cell_domain_ord_is_deterministic() {
+        // BTreeMap ordering requires consistent Ord. Verify a known ordering
+        // by comparing variants.
+        assert!(CellDomain::ColdStart < CellDomain::Throughput);
+        assert!(CellDomain::Throughput < CellDomain::TailLatency);
+    }
+
+    #[test]
+    fn comparison_target_ord_is_deterministic() {
+        assert!(ComparisonTarget::V8Node < ComparisonTarget::Bun);
+        assert!(ComparisonTarget::Bun < ComparisonTarget::Deno);
+        assert!(ComparisonTarget::Deno < ComparisonTarget::Jsc);
+    }
+
+    #[test]
+    fn gap_kind_ord_is_deterministic() {
+        assert!(GapKind::Unknown < GapKind::PartiallyExplored);
+        assert!(GapKind::PartiallyExplored < GapKind::KnownDeficient);
+        assert!(GapKind::KnownDeficient < GapKind::OutOfScope);
+    }
+
+    #[test]
+    fn gap_resolution_ord_is_deterministic() {
+        assert!(GapResolution::ProvenOnBoard < GapResolution::DeclaredOutOfScope);
+        assert!(GapResolution::DeclaredOutOfScope < GapResolution::SubsumedByOther);
+        assert!(GapResolution::SubsumedByOther < GapResolution::DimensionInvalidated);
+    }
+
+    #[test]
+    fn ratchet_event_kind_serde_all_variants() {
+        let variants: Vec<RatchetEventKind> = vec![
+            RatchetEventKind::CellAdded {
+                cell_id: make_cell_id(CellDomain::ColdStart, ComparisonTarget::V8Node, "v"),
+            },
+            RatchetEventKind::CellAdvanced {
+                cell_id: make_cell_id(CellDomain::Memory, ComparisonTarget::Bun, "v"),
+                from_state: CellState::Unproven,
+                to_state: CellState::Claimed,
+                margin_millionths: 100_000,
+                evidence_ids: vec!["ev".to_string()],
+            },
+            RatchetEventKind::RegressionRejected {
+                cell_id: make_cell_id(CellDomain::Throughput, ComparisonTarget::Deno, "v"),
+                current_state: CellState::Proven,
+                attempted_state: CellState::Unproven,
+            },
+            RatchetEventKind::GapRegistered {
+                gap_id: "g1".to_string(),
+            },
+            RatchetEventKind::GapClosed {
+                gap_id: "g1".to_string(),
+                resolution: GapResolution::ProvenOnBoard,
+            },
+            RatchetEventKind::EpochAdvanced {
+                from_epoch: 0,
+                to_epoch: 1,
+            },
+            RatchetEventKind::DominanceAssessed {
+                proven_count: 5,
+                total_count: 10,
+                fraction_millionths: 500_000,
+            },
+        ];
+
+        for variant in &variants {
+            let json = serde_json::to_string(variant).expect("serialize");
+            let deser: RatchetEventKind = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(*variant, deser);
+        }
+    }
+
+    #[test]
+    fn find_cell_returns_none_for_missing() {
+        let board = RatchetBoard::new();
+        let cell_id = make_cell_id(CellDomain::ColdStart, ComparisonTarget::V8Node, "nope");
+        assert!(board.find_cell(&cell_id).is_none());
+    }
+
+    #[test]
+    fn find_gap_returns_none_for_missing() {
+        let ledger = FrontierGapLedger::new();
+        assert!(ledger.find_gap("nonexistent").is_none());
+    }
+
+    #[test]
+    fn state_counts_empty_board() {
+        let board = RatchetBoard::new();
+        let counts = board.state_counts();
+        assert!(counts.is_empty());
+    }
+
+    #[test]
+    fn ratchet_event_sequence_numbers_never_repeat() {
+        let mut board = RatchetBoard::new();
+        let mut log = RatchetEventLog::new();
+        let mut ledger = FrontierGapLedger::new();
+
+        // Perform various operations to generate many events.
+        for i in 0..5 {
+            let cell = make_cell(
+                CellDomain::ColdStart,
+                ComparisonTarget::V8Node,
+                &format!("seq-nr-{i}"),
+            );
+            add_cell(&mut board, &mut log, cell).unwrap();
+        }
+        advance_epoch(&mut board, &mut log, 1).unwrap();
+        register_gap(
+            &mut ledger,
+            &mut log,
+            make_gap("seq-gap", CellDomain::Memory, GapKind::Unknown),
+        )
+        .unwrap();
+        compute_dominance_snapshot(&board, &ledger, &mut log);
+
+        // Verify no duplicate sequence numbers.
+        let mut seen = std::collections::BTreeSet::new();
+        for event in &log.events {
+            assert!(
+                seen.insert(event.sequence),
+                "duplicate sequence number: {}",
+                event.sequence
+            );
+        }
+        assert_eq!(seen.len(), log.events.len());
+    }
 }

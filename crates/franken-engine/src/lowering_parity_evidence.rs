@@ -977,4 +977,568 @@ mod tests {
         let back: ParityEvidenceArtifactPaths = serde_json::from_str(&json).unwrap();
         assert_eq!(paths, back);
     }
+
+    // ── additional enrichment tests (PearlTower 2026-03-18) ──────────
+
+    #[test]
+    fn compute_verdict_exhaustive_3x3_matrix() {
+        // Verify all 9 combinations of 3 parser statuses x 3 lowering statuses.
+        let cases = [
+            (ParserGapRemediationStatus::Resolved, LoweringGapStatus::Resolved, ParityVerdict::Covered),
+            (ParserGapRemediationStatus::Resolved, LoweringGapStatus::FailClosed, ParityVerdict::ParserLeadsLowering),
+            (ParserGapRemediationStatus::Resolved, LoweringGapStatus::OpenPlaceholder, ParityVerdict::ParserLeadsLowering),
+            (ParserGapRemediationStatus::FailClosed, LoweringGapStatus::Resolved, ParityVerdict::LoweringLeadsParser),
+            (ParserGapRemediationStatus::FailClosed, LoweringGapStatus::FailClosed, ParityVerdict::FailClosedAgreed),
+            (ParserGapRemediationStatus::FailClosed, LoweringGapStatus::OpenPlaceholder, ParityVerdict::OpenGap),
+            (ParserGapRemediationStatus::OpenPlaceholder, LoweringGapStatus::Resolved, ParityVerdict::LoweringLeadsParser),
+            (ParserGapRemediationStatus::OpenPlaceholder, LoweringGapStatus::FailClosed, ParityVerdict::OpenGap),
+            (ParserGapRemediationStatus::OpenPlaceholder, LoweringGapStatus::OpenPlaceholder, ParityVerdict::OpenGap),
+        ];
+        for (i, (parser, lowering, expected)) in cases.iter().enumerate() {
+            let actual = compute_verdict(*parser, *lowering);
+            assert_eq!(
+                actual, *expected,
+                "case {}: compute_verdict({:?}, {:?}) expected {:?}, got {:?}",
+                i, parser, lowering, expected, actual
+            );
+        }
+    }
+
+    #[test]
+    fn inventory_with_all_verdict_types_counts_correctly() {
+        let findings = vec![
+            ParityFinding {
+                site_id: "a".to_string(),
+                feature_family: "fa".to_string(),
+                parser_status: "resolved".to_string(),
+                lowering_status: "resolved".to_string(),
+                verdict: ParityVerdict::Covered,
+                diagnostic_code: "FE-A".to_string(),
+            },
+            ParityFinding {
+                site_id: "b".to_string(),
+                feature_family: "fb".to_string(),
+                parser_status: "fail_closed".to_string(),
+                lowering_status: "fail_closed".to_string(),
+                verdict: ParityVerdict::FailClosedAgreed,
+                diagnostic_code: "FE-B".to_string(),
+            },
+            ParityFinding {
+                site_id: "c".to_string(),
+                feature_family: "fc".to_string(),
+                parser_status: "resolved".to_string(),
+                lowering_status: "open_placeholder".to_string(),
+                verdict: ParityVerdict::ParserLeadsLowering,
+                diagnostic_code: "FE-C".to_string(),
+            },
+            ParityFinding {
+                site_id: "d".to_string(),
+                feature_family: "fd".to_string(),
+                parser_status: "open_placeholder".to_string(),
+                lowering_status: "resolved".to_string(),
+                verdict: ParityVerdict::LoweringLeadsParser,
+                diagnostic_code: "FE-D".to_string(),
+            },
+            ParityFinding {
+                site_id: "e".to_string(),
+                feature_family: "fe".to_string(),
+                parser_status: "open_placeholder".to_string(),
+                lowering_status: "open_placeholder".to_string(),
+                verdict: ParityVerdict::OpenGap,
+                diagnostic_code: "FE-E".to_string(),
+            },
+        ];
+        let inv = ParityEvidenceInventory {
+            schema_version: PARITY_EVIDENCE_SCHEMA_VERSION.to_string(),
+            component: PARITY_EVIDENCE_COMPONENT.to_string(),
+            findings,
+        };
+        assert_eq!(inv.covered_count(), 1);
+        assert_eq!(inv.fail_closed_agreed_count(), 1);
+        assert_eq!(inv.parity_violation_count(), 1);
+        assert_eq!(inv.open_gap_count(), 1);
+        // LoweringLeadsParser is not counted by any of the 4 named counters
+        // except as part of total findings
+        let sum = inv.covered_count()
+            + inv.fail_closed_agreed_count()
+            + inv.parity_violation_count()
+            + inv.open_gap_count();
+        assert_eq!(sum, 4);
+        assert_eq!(inv.findings.len(), 5);
+        assert!(!inv.contract_satisfied());
+    }
+
+    #[test]
+    fn inventory_lowering_leads_parser_only_satisfies_contract() {
+        // LoweringLeadsParser is unusual but safe -- contract should be satisfied.
+        let inv = ParityEvidenceInventory {
+            schema_version: PARITY_EVIDENCE_SCHEMA_VERSION.to_string(),
+            component: PARITY_EVIDENCE_COMPONENT.to_string(),
+            findings: vec![ParityFinding {
+                site_id: "x".to_string(),
+                feature_family: "fx".to_string(),
+                parser_status: "fail_closed".to_string(),
+                lowering_status: "resolved".to_string(),
+                verdict: ParityVerdict::LoweringLeadsParser,
+                diagnostic_code: "FE-X".to_string(),
+            }],
+        };
+        assert!(inv.contract_satisfied());
+        assert_eq!(inv.parity_violation_count(), 0);
+    }
+
+    #[test]
+    fn inventory_open_gaps_only_satisfies_contract() {
+        // Open gaps are in-progress work, not violations.
+        let inv = ParityEvidenceInventory {
+            schema_version: PARITY_EVIDENCE_SCHEMA_VERSION.to_string(),
+            component: PARITY_EVIDENCE_COMPONENT.to_string(),
+            findings: vec![
+                ParityFinding {
+                    site_id: "g1".to_string(),
+                    feature_family: "fg1".to_string(),
+                    parser_status: "open_placeholder".to_string(),
+                    lowering_status: "open_placeholder".to_string(),
+                    verdict: ParityVerdict::OpenGap,
+                    diagnostic_code: "FE-G1".to_string(),
+                },
+                ParityFinding {
+                    site_id: "g2".to_string(),
+                    feature_family: "fg2".to_string(),
+                    parser_status: "fail_closed".to_string(),
+                    lowering_status: "open_placeholder".to_string(),
+                    verdict: ParityVerdict::OpenGap,
+                    diagnostic_code: "FE-G2".to_string(),
+                },
+            ],
+        };
+        assert!(inv.contract_satisfied());
+        assert_eq!(inv.open_gap_count(), 2);
+    }
+
+    #[test]
+    fn generate_events_start_and_end_bookend() {
+        let inv = ParityEvidenceInventory {
+            schema_version: PARITY_EVIDENCE_SCHEMA_VERSION.to_string(),
+            component: PARITY_EVIDENCE_COMPONENT.to_string(),
+            findings: vec![ParityFinding {
+                site_id: "s1".to_string(),
+                feature_family: "f1".to_string(),
+                parser_status: "resolved".to_string(),
+                lowering_status: "resolved".to_string(),
+                verdict: ParityVerdict::Covered,
+                diagnostic_code: "FE-1".to_string(),
+            }],
+        };
+        let events = generate_events(&inv);
+        assert_eq!(events.len(), 3); // start + 1 finding + end
+        assert_eq!(events[0].event, "parity_evidence_run_started");
+        assert_eq!(events[1].event, "parity_finding_recorded");
+        assert_eq!(events[2].event, "parity_evidence_run_completed");
+    }
+
+    #[test]
+    fn generate_events_empty_inventory() {
+        let inv = ParityEvidenceInventory {
+            schema_version: PARITY_EVIDENCE_SCHEMA_VERSION.to_string(),
+            component: PARITY_EVIDENCE_COMPONENT.to_string(),
+            findings: Vec::new(),
+        };
+        let events = generate_events(&inv);
+        assert_eq!(events.len(), 2); // start + end, no per-finding events
+        assert_eq!(events[0].event, "parity_evidence_run_started");
+        assert_eq!(events[1].event, "parity_evidence_run_completed");
+    }
+
+    #[test]
+    fn generate_events_finding_events_carry_site_id_and_verdict() {
+        let finding = ParityFinding {
+            site_id: "my.site.id".to_string(),
+            feature_family: "expr".to_string(),
+            parser_status: "resolved".to_string(),
+            lowering_status: "resolved".to_string(),
+            verdict: ParityVerdict::Covered,
+            diagnostic_code: "FE-MY".to_string(),
+        };
+        let inv = ParityEvidenceInventory {
+            schema_version: PARITY_EVIDENCE_SCHEMA_VERSION.to_string(),
+            component: PARITY_EVIDENCE_COMPONENT.to_string(),
+            findings: vec![finding],
+        };
+        let events = generate_events(&inv);
+        let finding_event = &events[1];
+        assert_eq!(finding_event.site_id.as_deref(), Some("my.site.id"));
+        assert_eq!(finding_event.verdict.as_deref(), Some("covered"));
+        assert!(finding_event.detail.as_ref().unwrap().contains("parser=resolved"));
+        assert!(finding_event.detail.as_ref().unwrap().contains("lowering=resolved"));
+        assert!(finding_event.detail.as_ref().unwrap().contains("verdict=covered"));
+    }
+
+    #[test]
+    fn generate_events_start_event_has_no_site_or_verdict() {
+        let inv = parity_evidence_inventory();
+        let events = generate_events(&inv);
+        let start = &events[0];
+        assert!(start.site_id.is_none());
+        assert!(start.verdict.is_none());
+    }
+
+    #[test]
+    fn generate_events_end_event_detail_contains_contract_status() {
+        let inv = parity_evidence_inventory();
+        let events = generate_events(&inv);
+        let end = events.last().unwrap();
+        assert!(end.detail.as_ref().unwrap().contains("Contract:"));
+        // Current inventory should be SATISFIED
+        assert!(end.detail.as_ref().unwrap().contains("SATISFIED"));
+    }
+
+    #[test]
+    fn generate_events_violated_contract_detail() {
+        let inv = ParityEvidenceInventory {
+            schema_version: PARITY_EVIDENCE_SCHEMA_VERSION.to_string(),
+            component: PARITY_EVIDENCE_COMPONENT.to_string(),
+            findings: vec![ParityFinding {
+                site_id: "v1".to_string(),
+                feature_family: "fv".to_string(),
+                parser_status: "resolved".to_string(),
+                lowering_status: "open_placeholder".to_string(),
+                verdict: ParityVerdict::ParserLeadsLowering,
+                diagnostic_code: "FE-V".to_string(),
+            }],
+        };
+        let events = generate_events(&inv);
+        let end = events.last().unwrap();
+        assert!(end.detail.as_ref().unwrap().contains("VIOLATED"));
+        assert!(end.detail.as_ref().unwrap().contains("1 violations"));
+    }
+
+    #[test]
+    fn generate_events_all_events_have_correct_schema_and_component() {
+        let inv = parity_evidence_inventory();
+        let events = generate_events(&inv);
+        for event in &events {
+            assert_eq!(event.schema_version, PARITY_EVIDENCE_EVENT_SCHEMA_VERSION);
+            assert_eq!(event.component, PARITY_EVIDENCE_COMPONENT);
+            assert_eq!(event.policy_id, PARITY_EVIDENCE_POLICY_ID);
+        }
+    }
+
+    #[test]
+    fn generate_events_each_event_is_valid_json() {
+        let inv = parity_evidence_inventory();
+        let events = generate_events(&inv);
+        for event in &events {
+            let json = serde_json::to_string(event).unwrap();
+            let _parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        }
+    }
+
+    #[test]
+    fn parity_verdict_clone_is_independent() {
+        let original = ParityVerdict::ParserLeadsLowering;
+        let cloned = original;
+        assert_eq!(original, cloned);
+        // Both are Copy, so both remain valid
+        assert!(original.is_parity_violation());
+        assert!(cloned.is_parity_violation());
+    }
+
+    #[test]
+    fn parity_finding_clone_is_independent() {
+        let original = ParityFinding {
+            site_id: "clone.test".to_string(),
+            feature_family: "clone_fam".to_string(),
+            parser_status: "resolved".to_string(),
+            lowering_status: "resolved".to_string(),
+            verdict: ParityVerdict::Covered,
+            diagnostic_code: "FE-CLN".to_string(),
+        };
+        let cloned = original.clone();
+        assert_eq!(original, cloned);
+    }
+
+    #[test]
+    fn parity_evidence_inventory_clone_is_independent() {
+        let inv = parity_evidence_inventory();
+        let cloned = inv.clone();
+        assert_eq!(inv, cloned);
+        assert_eq!(inv.findings.len(), cloned.findings.len());
+    }
+
+    #[test]
+    fn parity_verdict_debug_format_contains_variant_name() {
+        let dbg = format!("{:?}", ParityVerdict::Covered);
+        assert!(dbg.contains("Covered"));
+        let dbg2 = format!("{:?}", ParityVerdict::ParserLeadsLowering);
+        assert!(dbg2.contains("ParserLeadsLowering"));
+    }
+
+    #[test]
+    fn parity_finding_debug_format_contains_fields() {
+        let finding = ParityFinding {
+            site_id: "debug.site".to_string(),
+            feature_family: "debug_fam".to_string(),
+            parser_status: "resolved".to_string(),
+            lowering_status: "resolved".to_string(),
+            verdict: ParityVerdict::Covered,
+            diagnostic_code: "FE-DBG".to_string(),
+        };
+        let dbg = format!("{:?}", finding);
+        assert!(dbg.contains("debug.site"));
+        assert!(dbg.contains("FE-DBG"));
+        assert!(dbg.contains("Covered"));
+    }
+
+    #[test]
+    fn parity_verdict_serde_snake_case_encoding() {
+        assert_eq!(
+            serde_json::to_string(&ParityVerdict::Covered).unwrap(),
+            "\"covered\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ParityVerdict::FailClosedAgreed).unwrap(),
+            "\"fail_closed_agreed\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ParityVerdict::ParserLeadsLowering).unwrap(),
+            "\"parser_leads_lowering\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ParityVerdict::LoweringLeadsParser).unwrap(),
+            "\"lowering_leads_parser\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ParityVerdict::OpenGap).unwrap(),
+            "\"open_gap\""
+        );
+    }
+
+    #[test]
+    fn parity_verdict_rejects_invalid_serde_input() {
+        let result: Result<ParityVerdict, _> = serde_json::from_str("\"nonexistent_verdict\"");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parity_verdict_rejects_numeric_serde_input() {
+        let result: Result<ParityVerdict, _> = serde_json::from_str("42");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parity_verdict_rejects_null_serde_input() {
+        let result: Result<ParityVerdict, _> = serde_json::from_str("null");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parity_finding_rejects_missing_fields() {
+        let json = r#"{"site_id":"s","feature_family":"f"}"#;
+        let result: Result<ParityFinding, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parity_event_optional_fields_serialize_as_null() {
+        let event = ParityEvidenceEvent {
+            schema_version: PARITY_EVIDENCE_EVENT_SCHEMA_VERSION.to_string(),
+            component: PARITY_EVIDENCE_COMPONENT.to_string(),
+            event: "test".to_string(),
+            policy_id: PARITY_EVIDENCE_POLICY_ID.to_string(),
+            site_id: None,
+            verdict: None,
+            detail: None,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(val["site_id"].is_null());
+        assert!(val["verdict"].is_null());
+        assert!(val["detail"].is_null());
+    }
+
+    #[test]
+    fn write_bundle_commands_file_content() {
+        let out_dir = unique_temp_dir("parity-cmds");
+        let commands = vec![
+            "cmd_alpha".to_string(),
+            "cmd_beta".to_string(),
+            "cmd_gamma".to_string(),
+        ];
+        let artifacts = write_parity_evidence_bundle(&out_dir, &commands).unwrap();
+        let content = fs::read_to_string(&artifacts.commands_path).unwrap();
+        assert_eq!(content, "cmd_alpha\ncmd_beta\ncmd_gamma");
+    }
+
+    #[test]
+    fn write_bundle_empty_commands() {
+        let out_dir = unique_temp_dir("parity-empty-cmds");
+        let commands: Vec<String> = Vec::new();
+        let artifacts = write_parity_evidence_bundle(&out_dir, &commands).unwrap();
+        let content = fs::read_to_string(&artifacts.commands_path).unwrap();
+        assert!(content.is_empty());
+    }
+
+    #[test]
+    fn write_bundle_events_jsonl_each_line_is_valid_json() {
+        let out_dir = unique_temp_dir("parity-jsonl");
+        let artifacts =
+            write_parity_evidence_bundle(&out_dir, &["test".to_string()]).unwrap();
+        let content = fs::read_to_string(&artifacts.events_path).unwrap();
+        for line in content.lines() {
+            let parsed: Result<serde_json::Value, _> = serde_json::from_str(line);
+            assert!(parsed.is_ok(), "invalid JSON line: {}", line);
+        }
+    }
+
+    #[test]
+    fn write_bundle_manifest_trace_id_derived_from_hash() {
+        let out_dir = unique_temp_dir("parity-trace");
+        let artifacts =
+            write_parity_evidence_bundle(&out_dir, &["test".to_string()]).unwrap();
+        let manifest_json = fs::read_to_string(&artifacts.run_manifest_path).unwrap();
+        let manifest: ParityEvidenceRunManifest =
+            serde_json::from_str(&manifest_json).unwrap();
+        assert!(manifest.trace_id.starts_with("parity-evidence-"));
+        assert!(manifest.decision_id.starts_with("decision-parity-evidence-"));
+        // Trace ID should embed 12 chars of the inventory hash
+        let hash_prefix: String = artifacts.inventory_hash.chars().take(12).collect();
+        assert!(manifest.trace_id.contains(&hash_prefix));
+    }
+
+    #[test]
+    fn write_bundle_manifest_artifact_paths_are_filenames_only() {
+        let out_dir = unique_temp_dir("parity-paths");
+        let artifacts =
+            write_parity_evidence_bundle(&out_dir, &["test".to_string()]).unwrap();
+        let manifest_json = fs::read_to_string(&artifacts.run_manifest_path).unwrap();
+        let manifest: ParityEvidenceRunManifest =
+            serde_json::from_str(&manifest_json).unwrap();
+        // Paths should be relative filenames, not absolute paths
+        assert!(!manifest.artifact_paths.parity_evidence_inventory.contains('/'));
+        assert!(!manifest.artifact_paths.run_manifest.contains('/'));
+        assert!(!manifest.artifact_paths.events_jsonl.contains('/'));
+        assert!(!manifest.artifact_paths.commands_txt.contains('/'));
+    }
+
+    #[test]
+    fn write_bundle_creates_output_directory() {
+        let out_dir = unique_temp_dir("parity-mkdir")
+            .join("nested")
+            .join("deep");
+        assert!(!out_dir.exists());
+        let _artifacts =
+            write_parity_evidence_bundle(&out_dir, &["test".to_string()]).unwrap();
+        assert!(out_dir.exists());
+    }
+
+    #[test]
+    fn inventory_hash_is_hex_string() {
+        let out_dir = unique_temp_dir("parity-hex");
+        let artifacts =
+            write_parity_evidence_bundle(&out_dir, &["test".to_string()]).unwrap();
+        assert!(!artifacts.inventory_hash.is_empty());
+        assert!(
+            artifacts
+                .inventory_hash
+                .chars()
+                .all(|c| c.is_ascii_hexdigit()),
+            "hash should be hex: {}",
+            artifacts.inventory_hash
+        );
+    }
+
+    #[test]
+    fn inventory_unique_site_ids() {
+        let inv = parity_evidence_inventory();
+        let mut seen = std::collections::BTreeSet::new();
+        for finding in &inv.findings {
+            assert!(
+                seen.insert(&finding.site_id),
+                "duplicate site_id: {}",
+                finding.site_id
+            );
+        }
+    }
+
+    #[test]
+    fn parity_verdict_copy_semantics() {
+        let v = ParityVerdict::Covered;
+        let v2 = v; // Copy
+        let v3 = v; // Still valid since Copy
+        assert_eq!(v2, v3);
+        assert_eq!(v, v2);
+    }
+
+    #[test]
+    fn run_manifest_serde_full_equality_roundtrip() {
+        let manifest = ParityEvidenceRunManifest {
+            schema_version: PARITY_EVIDENCE_MANIFEST_SCHEMA_VERSION.to_string(),
+            component: PARITY_EVIDENCE_COMPONENT.to_string(),
+            trace_id: "trace-full-rt".to_string(),
+            decision_id: "decision-trace-full-rt".to_string(),
+            policy_id: PARITY_EVIDENCE_POLICY_ID.to_string(),
+            inventory_hash: "abcdef0123456789".to_string(),
+            finding_count: 10,
+            covered_count: 7,
+            fail_closed_agreed_count: 2,
+            parity_violation_count: 0,
+            open_gap_count: 1,
+            contract_satisfied: true,
+            artifact_paths: ParityEvidenceArtifactPaths {
+                parity_evidence_inventory: "inv.json".to_string(),
+                run_manifest: "manifest.json".to_string(),
+                events_jsonl: "events.jsonl".to_string(),
+                commands_txt: "commands.txt".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&manifest).unwrap();
+        let back: ParityEvidenceRunManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(manifest, back);
+    }
+
+    #[test]
+    fn multiple_violations_tracked_correctly() {
+        let findings = vec![
+            ParityFinding {
+                site_id: "v1".to_string(),
+                feature_family: "f1".to_string(),
+                parser_status: "resolved".to_string(),
+                lowering_status: "fail_closed".to_string(),
+                verdict: ParityVerdict::ParserLeadsLowering,
+                diagnostic_code: "FE-V1".to_string(),
+            },
+            ParityFinding {
+                site_id: "v2".to_string(),
+                feature_family: "f2".to_string(),
+                parser_status: "resolved".to_string(),
+                lowering_status: "open_placeholder".to_string(),
+                verdict: ParityVerdict::ParserLeadsLowering,
+                diagnostic_code: "FE-V2".to_string(),
+            },
+            ParityFinding {
+                site_id: "v3".to_string(),
+                feature_family: "f3".to_string(),
+                parser_status: "resolved".to_string(),
+                lowering_status: "resolved".to_string(),
+                verdict: ParityVerdict::Covered,
+                diagnostic_code: "FE-V3".to_string(),
+            },
+        ];
+        let inv = ParityEvidenceInventory {
+            schema_version: PARITY_EVIDENCE_SCHEMA_VERSION.to_string(),
+            component: PARITY_EVIDENCE_COMPONENT.to_string(),
+            findings,
+        };
+        assert_eq!(inv.parity_violation_count(), 2);
+        assert_eq!(inv.covered_count(), 1);
+        assert!(!inv.contract_satisfied());
+    }
+
+    #[test]
+    fn parity_verdict_partial_ord_consistent_with_ord() {
+        let a = ParityVerdict::Covered;
+        let b = ParityVerdict::OpenGap;
+        assert_eq!(a.partial_cmp(&b), Some(a.cmp(&b)));
+    }
 }

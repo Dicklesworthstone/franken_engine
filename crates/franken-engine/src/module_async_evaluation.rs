@@ -1475,4 +1475,778 @@ mod tests {
         assert_eq!(result.settled_count(), 1); // ok.js is Synchronous
         assert_eq!(result.rejected_count(), 1); // bad.js
     }
+
+    // -----------------------------------------------------------------------
+    // Additional tests (edge cases, Display, Hash, serde, error paths, etc.)
+    // -----------------------------------------------------------------------
+
+    // -- AsyncModulePhase Display --
+
+    #[test]
+    fn phase_display_matches_as_str() {
+        for p in AsyncModulePhase::ALL {
+            assert_eq!(p.to_string(), p.as_str());
+        }
+    }
+
+    #[test]
+    fn phase_ordering_is_defined() {
+        // Enum derives Ord; verify the ordering is consistent with variant declaration order.
+        assert!(AsyncModulePhase::Synchronous < AsyncModulePhase::Suspended);
+        assert!(AsyncModulePhase::Suspended < AsyncModulePhase::AwaitingDependencies);
+        assert!(AsyncModulePhase::AwaitingDependencies < AsyncModulePhase::Settled);
+        assert!(AsyncModulePhase::Settled < AsyncModulePhase::Rejected);
+    }
+
+    #[test]
+    fn phase_clone_eq() {
+        let p = AsyncModulePhase::Settled;
+        let p2 = p;
+        assert_eq!(p, p2);
+    }
+
+    // -- LinkageKind Display --
+
+    #[test]
+    fn linkage_kind_display_matches_as_str() {
+        for k in LinkageKind::ALL {
+            assert_eq!(k.to_string(), k.as_str());
+        }
+    }
+
+    #[test]
+    fn linkage_kind_ordering_is_defined() {
+        assert!(LinkageKind::DirectImport < LinkageKind::ReExport);
+        assert!(LinkageKind::ReExport < LinkageKind::NamespaceImport);
+        assert!(LinkageKind::NamespaceImport < LinkageKind::DefaultImport);
+    }
+
+    // -- AsyncEvalEventType --
+
+    #[test]
+    fn event_type_as_str_all_distinct() {
+        let strs: BTreeSet<&str> = AsyncEvalEventType::ALL.iter().map(|e| e.as_str()).collect();
+        assert_eq!(strs.len(), AsyncEvalEventType::ALL.len());
+    }
+
+    #[test]
+    fn event_type_ordering() {
+        assert!(AsyncEvalEventType::EvaluationStarted < AsyncEvalEventType::EvaluationRejected);
+        assert!(AsyncEvalEventType::BindingMarkedDead < AsyncEvalEventType::RejectionPropagated);
+    }
+
+    // -- AsyncEvalError Display coverage --
+
+    #[test]
+    fn error_display_invalid_phase_transition() {
+        let err = AsyncEvalError::InvalidPhaseTransition {
+            specifier: "mod.js".into(),
+            from: AsyncModulePhase::Synchronous,
+            to: AsyncModulePhase::Rejected,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("mod.js"));
+        assert!(msg.contains("synchronous"));
+        assert!(msg.contains("rejected"));
+    }
+
+    #[test]
+    fn error_display_cycle_detected() {
+        let err = AsyncEvalError::CycleDetected {
+            modules: vec!["a.js".into(), "b.js".into(), "c.js".into()],
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("a.js -> b.js -> c.js"));
+    }
+
+    #[test]
+    fn error_display_suspension_limit_exceeded() {
+        let err = AsyncEvalError::SuspensionLimitExceeded {
+            specifier: "heavy.js".into(),
+            limit: 42,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("heavy.js"));
+        assert!(msg.contains("42"));
+    }
+
+    #[test]
+    fn error_display_rejection_propagation_failed() {
+        let err = AsyncEvalError::RejectionPropagationFailed {
+            specifier: "src.js".into(),
+            detail: "network timeout".into(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("src.js"));
+        assert!(msg.contains("network timeout"));
+    }
+
+    #[test]
+    fn error_implements_std_error() {
+        let err = AsyncEvalError::ModuleNotFound {
+            specifier: "x.js".into(),
+        };
+        // std::error::Error is implemented; verify source() returns None (no chained cause).
+        let as_error: &dyn std::error::Error = &err;
+        assert!(as_error.source().is_none());
+    }
+
+    #[test]
+    fn error_serde_roundtrip_all_variants() {
+        let variants: Vec<AsyncEvalError> = vec![
+            AsyncEvalError::ModuleNotFound {
+                specifier: "a.js".into(),
+            },
+            AsyncEvalError::InvalidPhaseTransition {
+                specifier: "b.js".into(),
+                from: AsyncModulePhase::Suspended,
+                to: AsyncModulePhase::Synchronous,
+            },
+            AsyncEvalError::CycleDetected {
+                modules: vec!["c.js".into(), "d.js".into()],
+            },
+            AsyncEvalError::SuspensionLimitExceeded {
+                specifier: "e.js".into(),
+                limit: 100,
+            },
+            AsyncEvalError::RejectionPropagationFailed {
+                specifier: "f.js".into(),
+                detail: "internal".into(),
+            },
+        ];
+        for v in &variants {
+            let json = serde_json::to_string(v).unwrap();
+            let back: AsyncEvalError = serde_json::from_str(&json).unwrap();
+            assert_eq!(*v, back);
+        }
+    }
+
+    // -- SuspensionRecord edge cases --
+
+    #[test]
+    fn suspension_record_resolve_twice_overwrites() {
+        let mut sr = SuspensionRecord::new(
+            "mod.js".into(),
+            0,
+            PromiseHandle(5),
+            SuspensionContext::TopLevelAwait,
+        );
+        sr.resolve(10);
+        assert_eq!(sr.resume_seq, 10);
+        sr.resolve(20);
+        assert_eq!(sr.resume_seq, 20);
+        assert!(sr.resolved);
+    }
+
+    #[test]
+    fn suspension_record_awaiting_dependency_context() {
+        let sr = SuspensionRecord::new(
+            "consumer.js".into(),
+            3,
+            PromiseHandle(7),
+            SuspensionContext::AwaitingDependency {
+                module_specifier: "dep.js".into(),
+            },
+        );
+        assert_eq!(sr.suspension_seq, 3);
+        assert!(matches!(
+            sr.context,
+            SuspensionContext::AwaitingDependency { ref module_specifier } if module_specifier == "dep.js"
+        ));
+    }
+
+    #[test]
+    fn suspension_record_awaiting_binding_context() {
+        let bid = BindingId::new("m.js", "count");
+        let sr = SuspensionRecord::new(
+            "m.js".into(),
+            0,
+            PromiseHandle(1),
+            SuspensionContext::AwaitingBinding {
+                binding_id: bid.clone(),
+            },
+        );
+        assert!(matches!(
+            sr.context,
+            SuspensionContext::AwaitingBinding { ref binding_id } if binding_id == &bid
+        ));
+    }
+
+    // -- AsyncModuleState edge cases --
+
+    #[test]
+    fn state_next_seq_increments() {
+        let mut s = AsyncModuleState::synchronous("s.js".into());
+        assert_eq!(s.event_seq, 0);
+        s.record_suspension(PromiseHandle(1), SuspensionContext::TopLevelAwait);
+        assert_eq!(s.event_seq, 1);
+        s.record_suspension(PromiseHandle(2), SuspensionContext::TopLevelAwait);
+        assert_eq!(s.event_seq, 2);
+    }
+
+    #[test]
+    fn state_record_resumption_no_suspensions_is_noop() {
+        let mut s = AsyncModuleState::async_pending("r.js".into(), PromiseHandle(1));
+        // record_resumption with no suspensions should not panic.
+        s.record_resumption();
+        assert!(s.suspensions.is_empty());
+    }
+
+    #[test]
+    fn state_record_resumption_already_resolved_is_noop() {
+        let mut s = AsyncModuleState::async_pending("r.js".into(), PromiseHandle(1));
+        s.record_suspension(PromiseHandle(2), SuspensionContext::TopLevelAwait);
+        s.record_resumption();
+        assert!(s.suspensions[0].resolved);
+        let old_seq = s.suspensions[0].resume_seq;
+        // A second resumption should not modify the already-resolved record.
+        s.record_resumption();
+        assert_eq!(s.suspensions[0].resume_seq, old_seq);
+    }
+
+    #[test]
+    fn state_add_pending_dependency_transitions_to_awaiting() {
+        let mut s = AsyncModuleState::async_pending("m.js".into(), PromiseHandle(1));
+        assert_eq!(s.phase, AsyncModulePhase::Suspended);
+        s.add_pending_dependency("dep.js".into());
+        assert_eq!(s.phase, AsyncModulePhase::AwaitingDependencies);
+    }
+
+    #[test]
+    fn state_add_pending_dependency_when_not_suspended_preserves_phase() {
+        let mut s = AsyncModuleState::synchronous("m.js".into());
+        assert_eq!(s.phase, AsyncModulePhase::Synchronous);
+        s.add_pending_dependency("dep.js".into());
+        // Phase transition only happens from Suspended -> AwaitingDependencies.
+        assert_eq!(s.phase, AsyncModulePhase::Synchronous);
+        assert!(!s.all_dependencies_settled());
+    }
+
+    #[test]
+    fn state_resolve_nonexistent_dependency_is_noop() {
+        let mut s = AsyncModuleState::async_pending("m.js".into(), PromiseHandle(1));
+        s.add_pending_dependency("real.js".into());
+        s.resolve_dependency("nonexistent.js");
+        assert!(!s.all_dependencies_settled());
+    }
+
+    #[test]
+    fn state_settle_clears_pending_dependencies() {
+        let mut s = AsyncModuleState::async_pending("m.js".into(), PromiseHandle(1));
+        s.add_pending_dependency("a.js".into());
+        s.add_pending_dependency("b.js".into());
+        assert!(!s.all_dependencies_settled());
+        s.settle();
+        assert!(s.all_dependencies_settled());
+        assert_eq!(s.phase, AsyncModulePhase::Settled);
+    }
+
+    #[test]
+    fn state_serde_roundtrip_async_with_suspensions() {
+        let mut s = AsyncModuleState::async_pending("m.js".into(), PromiseHandle(42));
+        s.record_suspension(PromiseHandle(100), SuspensionContext::TopLevelAwait);
+        s.record_resumption();
+        s.add_pending_dependency("dep.js".into());
+        let json = serde_json::to_string(&s).unwrap();
+        let back: AsyncModuleState = serde_json::from_str(&json).unwrap();
+        assert_eq!(s, back);
+    }
+
+    // -- Evaluator: module_not_found on various operations --
+
+    #[test]
+    fn evaluator_suspend_on_dependency_module_not_found() {
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        let err = eval
+            .suspend_on_dependency("ghost.js", "dep.js", PromiseHandle(1))
+            .unwrap_err();
+        assert!(matches!(err, AsyncEvalError::ModuleNotFound { ref specifier } if specifier == "ghost.js"));
+    }
+
+    #[test]
+    fn evaluator_resume_evaluation_module_not_found() {
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        let err = eval.resume_evaluation("ghost.js").unwrap_err();
+        assert!(matches!(err, AsyncEvalError::ModuleNotFound { ref specifier } if specifier == "ghost.js"));
+    }
+
+    #[test]
+    fn evaluator_settle_module_not_found() {
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        let err = eval.settle_module("ghost.js").unwrap_err();
+        assert!(matches!(err, AsyncEvalError::ModuleNotFound { ref specifier } if specifier == "ghost.js"));
+    }
+
+    #[test]
+    fn evaluator_reject_module_not_found() {
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        let mut bindings = empty_live_bindings();
+        let err = eval
+            .reject_module("ghost.js", &js_error("err"), &mut bindings)
+            .unwrap_err();
+        assert!(matches!(err, AsyncEvalError::ModuleNotFound { ref specifier } if specifier == "ghost.js"));
+    }
+
+    // -- Evaluator: complex graph scenarios --
+
+    #[test]
+    fn evaluator_diamond_dependency_graph() {
+        // A -> B, A -> C, B -> D, C -> D (D is the leaf)
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        eval.register_module("d.js", true, &[], Some(PromiseHandle(1)));
+        eval.register_module("b.js", true, &["d.js".into()], Some(PromiseHandle(2)));
+        eval.register_module("c.js", true, &["d.js".into()], Some(PromiseHandle(3)));
+        eval.register_module(
+            "a.js",
+            true,
+            &["b.js".into(), "c.js".into()],
+            Some(PromiseHandle(4)),
+        );
+
+        // d.js settles -> b.js and c.js should become resumable
+        let resumable = eval.settle_module("d.js").unwrap();
+        assert!(resumable.contains(&"b.js".to_string()));
+        assert!(resumable.contains(&"c.js".to_string()));
+        // a.js is still waiting on b.js and c.js
+        assert!(!resumable.contains(&"a.js".to_string()));
+
+        // Settle b.js
+        let resumable2 = eval.settle_module("b.js").unwrap();
+        // a.js still waiting on c.js
+        assert!(!resumable2.contains(&"a.js".to_string()));
+
+        // Settle c.js -> a.js should become resumable
+        let resumable3 = eval.settle_module("c.js").unwrap();
+        assert!(resumable3.contains(&"a.js".to_string()));
+    }
+
+    #[test]
+    fn evaluator_rejection_transitive_cascade() {
+        // chain: root -> mid -> leaf
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        eval.register_module("root.js", true, &[], Some(PromiseHandle(1)));
+        eval.register_module(
+            "mid.js",
+            true,
+            &["root.js".into()],
+            Some(PromiseHandle(2)),
+        );
+        eval.suspend_on_dependency("mid.js", "root.js", PromiseHandle(1))
+            .unwrap();
+        eval.register_module("leaf.js", true, &["mid.js".into()], Some(PromiseHandle(3)));
+        eval.suspend_on_dependency("leaf.js", "mid.js", PromiseHandle(2))
+            .unwrap();
+
+        let mut bindings = empty_live_bindings();
+        let linkage = eval
+            .reject_module("root.js", &js_error("cascade"), &mut bindings)
+            .unwrap();
+
+        // mid.js depends on root.js, leaf.js depends on mid.js
+        assert!(linkage.transitive_closure.contains("mid.js"));
+        assert!(linkage.transitive_closure.contains("leaf.js"));
+        assert_eq!(eval.states()["mid.js"].phase, AsyncModulePhase::Rejected);
+        assert_eq!(eval.states()["leaf.js"].phase, AsyncModulePhase::Rejected);
+    }
+
+    #[test]
+    fn evaluator_rejection_no_transitive_when_disabled() {
+        let config = AsyncEvalConfig {
+            transitive_rejection_propagation: false,
+            ..Default::default()
+        };
+        let mut eval = AsyncModuleEvaluator::new(config);
+        eval.register_module("root.js", true, &[], Some(PromiseHandle(1)));
+        eval.register_module(
+            "mid.js",
+            true,
+            &["root.js".into()],
+            Some(PromiseHandle(2)),
+        );
+        eval.suspend_on_dependency("mid.js", "root.js", PromiseHandle(1))
+            .unwrap();
+        eval.register_module("leaf.js", true, &["mid.js".into()], Some(PromiseHandle(3)));
+        eval.suspend_on_dependency("leaf.js", "mid.js", PromiseHandle(2))
+            .unwrap();
+
+        let mut bindings = empty_live_bindings();
+        let linkage = eval
+            .reject_module("root.js", &js_error("no-cascade"), &mut bindings)
+            .unwrap();
+
+        // Without transitive propagation, only direct dependents are in the closure.
+        assert!(linkage.transitive_closure.contains("mid.js"));
+        // leaf.js is NOT a direct dependent of root.js.
+        assert!(!linkage.transitive_closure.contains("leaf.js"));
+    }
+
+    #[test]
+    fn evaluator_multiple_suspensions_tracked() {
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        eval.register_module("m.js", true, &[], Some(PromiseHandle(1)));
+        eval.suspend_at_top_level_await("m.js", PromiseHandle(10))
+            .unwrap();
+        eval.resume_evaluation("m.js").unwrap();
+        eval.suspend_at_top_level_await("m.js", PromiseHandle(11))
+            .unwrap();
+        eval.resume_evaluation("m.js").unwrap();
+        eval.suspend_at_top_level_await("m.js", PromiseHandle(12))
+            .unwrap();
+
+        let state = &eval.states()["m.js"];
+        assert_eq!(state.suspensions.len(), 3);
+        assert!(state.suspensions[0].resolved);
+        assert!(state.suspensions[1].resolved);
+        assert!(!state.suspensions[2].resolved);
+    }
+
+    #[test]
+    fn evaluator_register_module_with_rejected_dependency_tracks_pending() {
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        eval.register_module("dep.js", true, &[], Some(PromiseHandle(1)));
+        let mut bindings = empty_live_bindings();
+        eval.reject_module("dep.js", &js_error("fail"), &mut bindings)
+            .unwrap();
+
+        // Now register a consumer that depends on the rejected module.
+        eval.register_module(
+            "consumer.js",
+            false,
+            &["dep.js".into()],
+            None,
+        );
+        // rejected module has is_terminal() == true AND phase == Rejected,
+        // so dep.js should be added as pending.
+        assert!(eval.states()["consumer.js"]
+            .pending_dependencies
+            .contains("dep.js"));
+    }
+
+    #[test]
+    fn evaluator_notify_dependency_settled_unknown_module_returns_empty() {
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        eval.register_module("m.js", true, &[], Some(PromiseHandle(1)));
+        let resumable = eval.notify_dependency_settled("unknown.js").unwrap();
+        assert!(resumable.is_empty());
+    }
+
+    #[test]
+    fn evaluator_reject_marks_multiple_bindings_dead() {
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        eval.register_module("lib.js", true, &[], Some(PromiseHandle(1)));
+
+        let mut bindings = empty_live_bindings();
+        let id1 = bindings.register_cell(BindingCell::new(
+            "lib.js",
+            "alpha",
+            "alpha",
+            BindingType::Direct,
+        ));
+        let id2 = bindings.register_cell(BindingCell::new(
+            "lib.js",
+            "beta",
+            "beta",
+            BindingType::Direct,
+        ));
+        // Register a binding from a different module — should NOT be marked dead.
+        let id_other = bindings.register_cell(BindingCell::new(
+            "other.js",
+            "gamma",
+            "gamma",
+            BindingType::Direct,
+        ));
+
+        let linkage = eval
+            .reject_module("lib.js", &js_error("err"), &mut bindings)
+            .unwrap();
+
+        assert!(linkage.dead_bindings.contains(&id1));
+        assert!(linkage.dead_bindings.contains(&id2));
+        assert!(!linkage.dead_bindings.contains(&id_other));
+        assert_eq!(
+            bindings.get_cell(&id1).unwrap().state,
+            BindingCellState::Dead
+        );
+        assert_eq!(
+            bindings.get_cell(&id2).unwrap().state,
+            BindingCellState::Dead
+        );
+        assert_ne!(
+            bindings.get_cell(&id_other).unwrap().state,
+            BindingCellState::Dead
+        );
+    }
+
+    #[test]
+    fn evaluator_reject_already_dead_binding_not_double_counted() {
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        eval.register_module("lib.js", true, &[], Some(PromiseHandle(1)));
+
+        let mut bindings = empty_live_bindings();
+        let id = bindings.register_cell(BindingCell::new(
+            "lib.js",
+            "val",
+            "val",
+            BindingType::Direct,
+        ));
+        // Pre-mark the binding as dead.
+        bindings.mark_dead(&id).unwrap();
+
+        let linkage = eval
+            .reject_module("lib.js", &js_error("err"), &mut bindings)
+            .unwrap();
+        // Already-dead binding should not appear in dead_bindings.
+        assert!(linkage.dead_bindings.is_empty());
+    }
+
+    // -- Finalize hash determinism --
+
+    #[test]
+    fn finalize_hash_deterministic_same_input() {
+        let build = || {
+            let mut eval = AsyncModuleEvaluator::with_defaults();
+            eval.register_module("a.js", false, &[], None);
+            eval.register_module("b.js", true, &[], Some(PromiseHandle(1)));
+            eval.settle_module("b.js").unwrap();
+            eval.finalize()
+        };
+        let r1 = build();
+        let r2 = build();
+        assert_eq!(r1.result_hash, r2.result_hash);
+    }
+
+    #[test]
+    fn finalize_hash_different_for_different_inputs() {
+        let mut eval1 = AsyncModuleEvaluator::with_defaults();
+        eval1.register_module("a.js", false, &[], None);
+        let r1 = eval1.finalize();
+
+        let mut eval2 = AsyncModuleEvaluator::with_defaults();
+        eval2.register_module("a.js", false, &[], None);
+        eval2.register_module("b.js", false, &[], None);
+        let r2 = eval2.finalize();
+
+        assert_ne!(r1.result_hash, r2.result_hash);
+    }
+
+    // -- Topological ordering edge cases --
+
+    #[test]
+    fn topological_order_single_module() {
+        let modules = vec!["only.js".into()];
+        let deps = BTreeMap::new();
+        let order = compute_async_evaluation_order(&modules, &deps).unwrap();
+        assert_eq!(order, vec!["only.js".to_string()]);
+    }
+
+    #[test]
+    fn topological_order_diamond() {
+        // d depends on b and c, b depends on a, c depends on a
+        let modules: Vec<String> = vec!["a.js".into(), "b.js".into(), "c.js".into(), "d.js".into()];
+        let mut deps: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        deps.insert("b.js".into(), vec!["a.js".into()]);
+        deps.insert("c.js".into(), vec!["a.js".into()]);
+        deps.insert("d.js".into(), vec!["b.js".into(), "c.js".into()]);
+        let order = compute_async_evaluation_order(&modules, &deps).unwrap();
+        let pos = |name: &str| order.iter().position(|s| s == name).unwrap();
+        assert!(pos("a.js") < pos("b.js"));
+        assert!(pos("a.js") < pos("c.js"));
+        assert!(pos("b.js") < pos("d.js"));
+        assert!(pos("c.js") < pos("d.js"));
+    }
+
+    #[test]
+    fn topological_order_deterministic_across_runs() {
+        let modules: Vec<String> = vec![
+            "z.js".into(),
+            "y.js".into(),
+            "x.js".into(),
+            "w.js".into(),
+        ];
+        let deps = BTreeMap::new();
+        let order1 = compute_async_evaluation_order(&modules, &deps).unwrap();
+        let order2 = compute_async_evaluation_order(&modules, &deps).unwrap();
+        assert_eq!(order1, order2);
+    }
+
+    #[test]
+    fn topological_order_external_dep_ignored() {
+        // If a dependency is not in the module_specifiers list, it should be ignored.
+        let modules = vec!["a.js".into(), "b.js".into()];
+        let mut deps: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        deps.insert("b.js".into(), vec!["external.js".into()]);
+        let order = compute_async_evaluation_order(&modules, &deps).unwrap();
+        assert_eq!(order.len(), 2);
+    }
+
+    #[test]
+    fn topological_order_three_way_cycle() {
+        let modules = vec!["a.js".into(), "b.js".into(), "c.js".into()];
+        let mut deps: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        deps.insert("a.js".into(), vec!["b.js".into()]);
+        deps.insert("b.js".into(), vec!["c.js".into()]);
+        deps.insert("c.js".into(), vec!["a.js".into()]);
+        let err = compute_async_evaluation_order(&modules, &deps).unwrap_err();
+        if let AsyncEvalError::CycleDetected { modules } = &err {
+            assert_eq!(modules.len(), 3);
+        } else {
+            panic!("expected CycleDetected");
+        }
+    }
+
+    #[test]
+    fn topological_order_empty_input() {
+        let modules: Vec<String> = vec![];
+        let deps = BTreeMap::new();
+        let order = compute_async_evaluation_order(&modules, &deps).unwrap();
+        assert!(order.is_empty());
+    }
+
+    // -- Evaluator: witness events content --
+
+    #[test]
+    fn witness_events_contain_correct_event_types() {
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        eval.register_module("m.js", true, &[], Some(PromiseHandle(1)));
+        eval.suspend_at_top_level_await("m.js", PromiseHandle(2))
+            .unwrap();
+        eval.resume_evaluation("m.js").unwrap();
+        eval.settle_module("m.js").unwrap();
+
+        let events = eval.witness_events();
+        let types: Vec<AsyncEvalEventType> = events.iter().map(|e| e.event_type).collect();
+        assert!(types.contains(&AsyncEvalEventType::EvaluationStarted));
+        assert!(types.contains(&AsyncEvalEventType::TopLevelAwaitSuspended));
+        assert!(types.contains(&AsyncEvalEventType::EvaluationResumed));
+        assert!(types.contains(&AsyncEvalEventType::EvaluationSettled));
+    }
+
+    #[test]
+    fn witness_events_seq_monotonically_increasing() {
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        eval.register_module("a.js", true, &[], Some(PromiseHandle(1)));
+        eval.register_module("b.js", true, &[], Some(PromiseHandle(2)));
+        eval.suspend_at_top_level_await("a.js", PromiseHandle(10))
+            .unwrap();
+        eval.resume_evaluation("a.js").unwrap();
+        eval.settle_module("a.js").unwrap();
+        eval.settle_module("b.js").unwrap();
+
+        let events = eval.witness_events();
+        for window in events.windows(2) {
+            assert!(
+                window[0].seq < window[1].seq,
+                "seq {} should be < {}",
+                window[0].seq,
+                window[1].seq
+            );
+        }
+    }
+
+    // -- AsyncEvalConfig serde --
+
+    #[test]
+    fn config_serde_roundtrip() {
+        let cfg = AsyncEvalConfig {
+            max_suspensions_per_module: 10,
+            max_total_suspensions: 50,
+            transitive_rejection_propagation: false,
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: AsyncEvalConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(cfg, back);
+    }
+
+    // -- LinkedModule serde --
+
+    #[test]
+    fn linked_module_serde_roundtrip_with_bindings() {
+        let lm = LinkedModule {
+            module_specifier: "consumer.js".into(),
+            import_bindings: vec![
+                BindingId::new("lib.js", "foo"),
+                BindingId::new("lib.js", "bar"),
+            ],
+            linkage_kind: LinkageKind::NamespaceImport,
+        };
+        let json = serde_json::to_string(&lm).unwrap();
+        let back: LinkedModule = serde_json::from_str(&json).unwrap();
+        assert_eq!(lm, back);
+    }
+
+    // -- AsyncEvalWitnessEvent serde --
+
+    #[test]
+    fn witness_event_serde_roundtrip() {
+        let ev = AsyncEvalWitnessEvent {
+            module_specifier: "test.js".into(),
+            event_type: AsyncEvalEventType::BindingMarkedDead,
+            seq: 42,
+            detail: "binding=m.js:x".into(),
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        let back: AsyncEvalWitnessEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(ev, back);
+    }
+
+    // -- Evaluator: full lifecycle --
+
+    #[test]
+    fn evaluator_full_lifecycle_suspend_depend_settle() {
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+
+        // Register a dep and a consumer with TLA.
+        eval.register_module("dep.js", true, &[], Some(PromiseHandle(1)));
+        eval.register_module(
+            "app.js",
+            true,
+            &["dep.js".into()],
+            Some(PromiseHandle(2)),
+        );
+
+        // app.js suspends on TLA, then suspends on dep.js
+        eval.suspend_at_top_level_await("app.js", PromiseHandle(10))
+            .unwrap();
+        eval.suspend_on_dependency("app.js", "dep.js", PromiseHandle(1))
+            .unwrap();
+
+        // dep.js settles
+        eval.settle_module("dep.js").unwrap();
+
+        // app.js should now be resumable
+        assert!(eval.states()["app.js"].all_dependencies_settled());
+
+        eval.resume_evaluation("app.js").unwrap();
+        eval.settle_module("app.js").unwrap();
+
+        let result = eval.finalize();
+        assert!(result.all_settled);
+        assert_eq!(result.settled_count(), 2);
+        assert_eq!(result.rejected_count(), 0);
+        assert!(result.total_suspensions >= 2);
+    }
+
+    // -- Evaluator: register_module with sync dep does not add pending --
+
+    #[test]
+    fn evaluator_register_with_settled_dep_no_pending() {
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        eval.register_module("dep.js", true, &[], Some(PromiseHandle(1)));
+        eval.settle_module("dep.js").unwrap();
+
+        // Now register consumer — dep.js is Settled (terminal, not Rejected)
+        // so it should NOT be added as pending.
+        eval.register_module("app.js", false, &["dep.js".into()], None);
+        assert!(eval.states()["app.js"].all_dependencies_settled());
+    }
+
+    #[test]
+    fn evaluator_register_with_sync_dep_no_pending() {
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        eval.register_module("dep.js", false, &[], None);
+
+        // Synchronous dep is terminal and not Rejected — not added as pending.
+        eval.register_module("app.js", false, &["dep.js".into()], None);
+        assert!(eval.states()["app.js"].all_dependencies_settled());
+    }
 }

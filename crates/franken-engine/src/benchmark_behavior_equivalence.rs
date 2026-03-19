@@ -807,13 +807,11 @@ mod tests {
 
     #[test]
     fn route_owner_returns_none_for_equivalent() {
-        assert!(
-            route_owner(
-                BehaviorEquivalenceClass::Equivalent,
-                OwnerRouteHint::RuntimeSemantics,
-            )
-            .is_none()
-        );
+        assert!(route_owner(
+            BehaviorEquivalenceClass::Equivalent,
+            OwnerRouteHint::RuntimeSemantics,
+        )
+        .is_none());
     }
 
     #[test]
@@ -1030,5 +1028,608 @@ mod tests {
     #[test]
     fn policy_id_is_rgc_704b() {
         assert_eq!(POLICY_ID, "RGC-704B");
+    }
+
+    // --- Additional hash determinism tests ---
+
+    #[test]
+    fn build_record_hash_differs_by_workload_id() {
+        let obs_a = shipped_observation("workload_alpha");
+        let obs_b = shipped_observation("workload_beta");
+        assert_ne!(
+            build_record(&obs_a).record_hash,
+            build_record(&obs_b).record_hash
+        );
+    }
+
+    #[test]
+    fn build_record_hash_differs_by_surface() {
+        let obs_shipped = BehaviorEquivalenceObservation::new(
+            "w1",
+            ParityTarget::NodeJs,
+            EvidenceSurface::ShippedPath,
+            OwnerRouteHint::RuntimeSemantics,
+        );
+        let obs_library = BehaviorEquivalenceObservation::new(
+            "w1",
+            ParityTarget::NodeJs,
+            EvidenceSurface::LibraryOnly,
+            OwnerRouteHint::RuntimeSemantics,
+        );
+        assert_ne!(
+            build_record(&obs_shipped).record_hash,
+            build_record(&obs_library).record_hash
+        );
+    }
+
+    #[test]
+    fn build_record_hash_differs_by_baseline() {
+        let obs_node = BehaviorEquivalenceObservation::new(
+            "w1",
+            ParityTarget::NodeJs,
+            EvidenceSurface::ShippedPath,
+            OwnerRouteHint::RuntimeSemantics,
+        );
+        let obs_bun = BehaviorEquivalenceObservation::new(
+            "w1",
+            ParityTarget::Bun,
+            EvidenceSurface::ShippedPath,
+            OwnerRouteHint::RuntimeSemantics,
+        );
+        assert_ne!(
+            build_record(&obs_node).record_hash,
+            build_record(&obs_bun).record_hash
+        );
+    }
+
+    #[test]
+    fn build_record_hash_differs_with_and_without_repro_command() {
+        let obs_no_cmd = shipped_observation("w1");
+        let obs_with_cmd =
+            shipped_observation("w1").with_minimized_repro_command("frankenctl repro");
+        assert_ne!(
+            build_record(&obs_no_cmd).record_hash,
+            build_record(&obs_with_cmd).record_hash
+        );
+    }
+
+    #[test]
+    fn build_record_hash_differs_by_repro_command_content() {
+        let obs_a = shipped_observation("w1").with_minimized_repro_command("cmd_a");
+        let obs_b = shipped_observation("w1").with_minimized_repro_command("cmd_b");
+        assert_ne!(
+            build_record(&obs_a).record_hash,
+            build_record(&obs_b).record_hash
+        );
+    }
+
+    #[test]
+    fn build_record_hash_stable_across_multiple_invocations() {
+        let obs = shipped_observation("stability_test")
+            .with_detail("some detail")
+            .with_minimized_repro_command("frankenctl run");
+        let hashes: Vec<ContentHash> = (0..5).map(|_| build_record(&obs).record_hash).collect();
+        for hash in &hashes[1..] {
+            assert_eq!(&hashes[0], hash);
+        }
+    }
+
+    // --- classify_observation priority / edge cases ---
+
+    #[test]
+    fn classify_infra_failure_wins_over_noise() {
+        let obs = shipped_observation("w1")
+            .with_infra_ok(false)
+            .with_noise_only(true);
+        assert_eq!(
+            classify_observation(&obs),
+            BehaviorEquivalenceClass::InfraFailure
+        );
+    }
+
+    #[test]
+    fn classify_unsupported_feature_wins_over_noise() {
+        let obs = shipped_observation("w1")
+            .with_feature_supported(false)
+            .with_noise_only(true);
+        assert_eq!(
+            classify_observation(&obs),
+            BehaviorEquivalenceClass::UnsupportedFeature
+        );
+    }
+
+    #[test]
+    fn classify_noise_wins_over_output_mismatch() {
+        let obs = shipped_observation("w1")
+            .with_noise_only(true)
+            .with_output_equivalence(false);
+        assert_eq!(
+            classify_observation(&obs),
+            BehaviorEquivalenceClass::BenchmarkNoise
+        );
+    }
+
+    #[test]
+    fn classify_library_equivalent_when_all_pass() {
+        let obs = library_observation("w1");
+        assert_eq!(
+            classify_observation(&obs),
+            BehaviorEquivalenceClass::Equivalent
+        );
+    }
+
+    // --- route_owner edge cases ---
+
+    #[test]
+    fn route_owner_unsupported_feature_preserves_hint() {
+        let route = route_owner(
+            BehaviorEquivalenceClass::UnsupportedFeature,
+            OwnerRouteHint::DocsContract,
+        )
+        .expect("should route");
+        assert_eq!(route.owner_hint, OwnerRouteHint::DocsContract);
+        assert_eq!(route.owner_bead_id, "bd-1lsy.10.11");
+        assert_eq!(route.component, "docs_help_surface");
+    }
+
+    #[test]
+    fn route_owner_benchmark_noise_always_routes_to_harness() {
+        let route = route_owner(
+            BehaviorEquivalenceClass::BenchmarkNoise,
+            OwnerRouteHint::BenchmarkCorpus,
+        )
+        .expect("should route");
+        assert_eq!(route.owner_hint, OwnerRouteHint::BenchmarkHarness);
+        assert_eq!(route.owner_bead_id, BEAD_ID);
+        assert_eq!(route.component, COMPONENT);
+    }
+
+    #[test]
+    fn route_owner_shipped_path_drift_ignores_provided_hint() {
+        // ShippedPathDrift always routes to ShippedPathParity, regardless of the hint provided
+        let route = route_owner(
+            BehaviorEquivalenceClass::ShippedPathDrift,
+            OwnerRouteHint::DocsContract,
+        )
+        .expect("should route");
+        assert_eq!(route.owner_hint, OwnerRouteHint::ShippedPathParity);
+        assert_eq!(route.owner_bead_id, "bd-1lsy.9.6");
+    }
+
+    #[test]
+    fn route_owner_semantic_mismatch_with_all_hint_variants() {
+        let hints = [
+            OwnerRouteHint::RuntimeSemantics,
+            OwnerRouteHint::ModuleInterop,
+            OwnerRouteHint::TypeScriptNormalization,
+            OwnerRouteHint::ShippedPathParity,
+            OwnerRouteHint::BenchmarkHarness,
+            OwnerRouteHint::BenchmarkCorpus,
+            OwnerRouteHint::DocsContract,
+        ];
+        for hint in hints {
+            let route = route_owner(BehaviorEquivalenceClass::SemanticMismatch, hint)
+                .expect("should route");
+            assert_eq!(route.owner_hint, hint);
+            assert_eq!(route.owner_bead_id, hint.owner_bead_id());
+            assert_eq!(route.component, hint.component());
+        }
+    }
+
+    // --- publication_disposition_for edge cases ---
+
+    #[test]
+    fn disposition_blocked_for_all_non_equivalent_library_surface() {
+        for class in [
+            BehaviorEquivalenceClass::SemanticMismatch,
+            BehaviorEquivalenceClass::UnsupportedFeature,
+            BehaviorEquivalenceClass::InfraFailure,
+            BehaviorEquivalenceClass::BenchmarkNoise,
+            BehaviorEquivalenceClass::ShippedPathDrift,
+        ] {
+            assert_eq!(
+                publication_disposition_for(class, EvidenceSurface::LibraryOnly),
+                PublicationDisposition::Blocked,
+                "{class} library-only should still block publication"
+            );
+        }
+    }
+
+    // --- serde roundtrip edge cases ---
+
+    #[test]
+    fn evidence_surface_serde_roundtrip() {
+        for surface in [EvidenceSurface::ShippedPath, EvidenceSurface::LibraryOnly] {
+            let json = serde_json::to_string(&surface).expect("serialize");
+            let back: EvidenceSurface = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(surface, back);
+        }
+    }
+
+    #[test]
+    fn behavior_equivalence_class_serde_roundtrip() {
+        let variants = [
+            BehaviorEquivalenceClass::Equivalent,
+            BehaviorEquivalenceClass::SemanticMismatch,
+            BehaviorEquivalenceClass::UnsupportedFeature,
+            BehaviorEquivalenceClass::InfraFailure,
+            BehaviorEquivalenceClass::BenchmarkNoise,
+            BehaviorEquivalenceClass::ShippedPathDrift,
+        ];
+        for variant in variants {
+            let json = serde_json::to_string(&variant).expect("serialize");
+            let back: BehaviorEquivalenceClass = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(variant, back);
+        }
+    }
+
+    #[test]
+    fn publication_disposition_serde_roundtrip() {
+        for disp in [
+            PublicationDisposition::PublicationEligible,
+            PublicationDisposition::NonPublicationEvidence,
+            PublicationDisposition::Blocked,
+        ] {
+            let json = serde_json::to_string(&disp).expect("serialize");
+            let back: PublicationDisposition = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(disp, back);
+        }
+    }
+
+    #[test]
+    fn owner_route_hint_serde_roundtrip() {
+        let hints = [
+            OwnerRouteHint::RuntimeSemantics,
+            OwnerRouteHint::ModuleInterop,
+            OwnerRouteHint::TypeScriptNormalization,
+            OwnerRouteHint::ShippedPathParity,
+            OwnerRouteHint::BenchmarkHarness,
+            OwnerRouteHint::BenchmarkCorpus,
+            OwnerRouteHint::DocsContract,
+        ];
+        for hint in hints {
+            let json = serde_json::to_string(&hint).expect("serialize");
+            let back: OwnerRouteHint = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(hint, back);
+        }
+    }
+
+    #[test]
+    fn verdict_record_serde_roundtrip_with_owner_route() {
+        let obs = shipped_observation("w1").with_output_equivalence(false);
+        let record = build_record(&obs);
+        assert!(record.owner_route.is_some());
+        let json = serde_json::to_string(&record).expect("serialize");
+        let back: BenchmarkParityVerdictRecord = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(record, back);
+    }
+
+    #[test]
+    fn verdict_record_serde_roundtrip_without_owner_route() {
+        let obs = shipped_observation("w1");
+        let record = build_record(&obs);
+        assert!(record.owner_route.is_none());
+        let json = serde_json::to_string(&record).expect("serialize");
+        let back: BenchmarkParityVerdictRecord = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(record, back);
+    }
+
+    #[test]
+    fn observation_serde_roundtrip_without_minimized_repro() {
+        let obs = shipped_observation("w1").with_detail("no repro");
+        let json = serde_json::to_string(&obs).expect("serialize");
+        let back: BehaviorEquivalenceObservation =
+            serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(obs, back);
+        assert!(back.minimized_repro_command.is_none());
+    }
+
+    #[test]
+    fn observation_deserialize_missing_repro_field_defaults_to_none() {
+        // Simulate JSON without minimized_repro_command field
+        let json = r#"{
+            "workload_id": "w1",
+            "baseline": "node_js",
+            "surface": "shipped_path",
+            "output_equivalent": true,
+            "feature_supported": true,
+            "infra_ok": true,
+            "noise_only": false,
+            "detail": "",
+            "owner_hint": "runtime_semantics"
+        }"#;
+        let obs: BehaviorEquivalenceObservation = serde_json::from_str(json).expect("deserialize");
+        assert!(obs.minimized_repro_command.is_none());
+    }
+
+    // --- Display formatting ---
+
+    #[test]
+    fn behavior_equivalence_class_display_matches_as_str() {
+        let variants = [
+            BehaviorEquivalenceClass::Equivalent,
+            BehaviorEquivalenceClass::SemanticMismatch,
+            BehaviorEquivalenceClass::UnsupportedFeature,
+            BehaviorEquivalenceClass::InfraFailure,
+            BehaviorEquivalenceClass::BenchmarkNoise,
+            BehaviorEquivalenceClass::ShippedPathDrift,
+        ];
+        for variant in variants {
+            assert_eq!(format!("{variant}"), variant.as_str());
+        }
+    }
+
+    #[test]
+    fn publication_disposition_display_matches_as_str() {
+        for disp in [
+            PublicationDisposition::PublicationEligible,
+            PublicationDisposition::NonPublicationEvidence,
+            PublicationDisposition::Blocked,
+        ] {
+            assert_eq!(format!("{disp}"), disp.as_str());
+        }
+    }
+
+    #[test]
+    fn owner_route_hint_display_matches_as_str() {
+        let hints = [
+            OwnerRouteHint::RuntimeSemantics,
+            OwnerRouteHint::ModuleInterop,
+            OwnerRouteHint::TypeScriptNormalization,
+            OwnerRouteHint::ShippedPathParity,
+            OwnerRouteHint::BenchmarkHarness,
+            OwnerRouteHint::BenchmarkCorpus,
+            OwnerRouteHint::DocsContract,
+        ];
+        for hint in hints {
+            assert_eq!(format!("{hint}"), hint.as_str());
+        }
+    }
+
+    // --- build_report aggregation and structure ---
+
+    #[test]
+    fn build_report_populates_schema_and_policy_fields() {
+        let report = build_report("trace-42", "dec-99", "RGC-704B", &[]);
+        assert_eq!(report.schema_version, SCHEMA_VERSION);
+        assert_eq!(report.trace_id, "trace-42");
+        assert_eq!(report.decision_id, "dec-99");
+        assert_eq!(report.policy_id, "RGC-704B");
+        assert_eq!(report.component, COMPONENT);
+    }
+
+    #[test]
+    fn build_report_multiple_different_owner_routes_grouped_separately() {
+        // Two observations routed to different owners
+        let obs_shipped_drift = shipped_observation("w1").with_output_equivalence(false);
+        let obs_infra_fail = library_observation("w2").with_infra_ok(false);
+        let report = build_report("t", "d", POLICY_ID, &[obs_shipped_drift, obs_infra_fail]);
+        // ShippedPathDrift -> ShippedPathParity owner
+        // InfraFailure -> BenchmarkHarness owner
+        assert_eq!(report.owner_routes.len(), 2);
+        let owner_hints: BTreeSet<OwnerRouteHint> =
+            report.owner_routes.iter().map(|r| r.owner_hint).collect();
+        assert!(owner_hints.contains(&OwnerRouteHint::ShippedPathParity));
+        assert!(owner_hints.contains(&OwnerRouteHint::BenchmarkHarness));
+    }
+
+    #[test]
+    fn build_report_no_owner_routes_when_all_equivalent() {
+        let observations = vec![
+            shipped_observation("w1"),
+            library_observation("w2"),
+            shipped_observation("w3"),
+        ];
+        let report = build_report("t", "d", POLICY_ID, &observations);
+        assert!(report.owner_routes.is_empty());
+    }
+
+    #[test]
+    fn build_report_owner_route_workload_ids_are_sorted_and_deduped() {
+        // Two observations with different workload_ids hitting same owner route
+        let obs1 = shipped_observation("zeta_workload").with_output_equivalence(false);
+        let obs2 = shipped_observation("alpha_workload").with_output_equivalence(false);
+        let report = build_report("t", "d", POLICY_ID, &[obs1, obs2]);
+        assert_eq!(report.owner_routes.len(), 1);
+        let wids = &report.owner_routes[0].workload_ids;
+        assert_eq!(wids, &["alpha_workload", "zeta_workload"]);
+    }
+
+    #[test]
+    fn build_report_owner_route_classifications_are_deduped() {
+        // Both are ShippedPathDrift, so only one classification in the aggregated route
+        let obs1 = shipped_observation("w1").with_output_equivalence(false);
+        let obs2 = shipped_observation("w2").with_output_equivalence(false);
+        let report = build_report("t", "d", POLICY_ID, &[obs1, obs2]);
+        assert_eq!(report.owner_routes.len(), 1);
+        assert_eq!(
+            report.owner_routes[0].classifications,
+            vec![BehaviorEquivalenceClass::ShippedPathDrift]
+        );
+    }
+
+    // --- build_record field propagation ---
+
+    #[test]
+    fn build_record_propagates_all_observation_fields() {
+        let obs = BehaviorEquivalenceObservation::new(
+            "my_workload",
+            ParityTarget::Deno,
+            EvidenceSurface::LibraryOnly,
+            OwnerRouteHint::TypeScriptNormalization,
+        )
+        .with_detail("some detail text")
+        .with_minimized_repro_command("frankenctl --debug");
+        let record = build_record(&obs);
+        assert_eq!(record.workload_id, "my_workload");
+        assert_eq!(record.baseline, ParityTarget::Deno);
+        assert_eq!(record.surface, EvidenceSurface::LibraryOnly);
+        assert_eq!(record.detail, "some detail text");
+        assert_eq!(
+            record.minimized_repro_command.as_deref(),
+            Some("frankenctl --debug")
+        );
+    }
+
+    #[test]
+    fn build_record_equivalent_has_no_owner_route() {
+        let obs = shipped_observation("w1");
+        let record = build_record(&obs);
+        assert_eq!(record.classification, BehaviorEquivalenceClass::Equivalent);
+        assert_eq!(
+            record.publication_disposition,
+            PublicationDisposition::PublicationEligible
+        );
+        assert!(record.owner_route.is_none());
+    }
+
+    #[test]
+    fn build_record_library_equivalent_non_publication() {
+        let obs = library_observation("w1");
+        let record = build_record(&obs);
+        assert_eq!(record.classification, BehaviorEquivalenceClass::Equivalent);
+        assert_eq!(
+            record.publication_disposition,
+            PublicationDisposition::NonPublicationEvidence
+        );
+    }
+
+    // --- JSONL / JSON output edge cases ---
+
+    #[test]
+    fn benchmark_parity_verdict_jsonl_empty_report() {
+        let report = build_report("t", "d", POLICY_ID, &[]);
+        let jsonl = report
+            .benchmark_parity_verdict_jsonl()
+            .expect("should render");
+        assert_eq!(jsonl, "");
+    }
+
+    #[test]
+    fn divergence_owner_route_json_empty_report() {
+        let report = build_report("t", "d", POLICY_ID, &[]);
+        let json_str = report.divergence_owner_route_json().expect("should render");
+        let routes: Vec<DivergenceOwnerRoute> =
+            serde_json::from_str(&json_str).expect("should parse");
+        assert!(routes.is_empty());
+    }
+
+    // --- Observation builder chaining ---
+
+    #[test]
+    fn observation_builder_chaining_all_flags() {
+        let obs = shipped_observation("chain_test")
+            .with_output_equivalence(false)
+            .with_feature_supported(false)
+            .with_infra_ok(false)
+            .with_noise_only(true)
+            .with_detail("full chain")
+            .with_minimized_repro_command("cmd");
+        assert!(!obs.output_equivalent);
+        assert!(!obs.feature_supported);
+        assert!(!obs.infra_ok);
+        assert!(obs.noise_only);
+        assert_eq!(obs.detail, "full chain");
+        assert_eq!(obs.minimized_repro_command.as_deref(), Some("cmd"));
+    }
+
+    // --- Ord / Hash on enums ---
+
+    #[test]
+    fn behavior_equivalence_class_ord_is_consistent() {
+        // Verify Ord is defined (derive-based, follows declaration order)
+        let mut variants = vec![
+            BehaviorEquivalenceClass::ShippedPathDrift,
+            BehaviorEquivalenceClass::Equivalent,
+            BehaviorEquivalenceClass::BenchmarkNoise,
+            BehaviorEquivalenceClass::InfraFailure,
+            BehaviorEquivalenceClass::UnsupportedFeature,
+            BehaviorEquivalenceClass::SemanticMismatch,
+        ];
+        variants.sort();
+        // Declaration order: Equivalent, SemanticMismatch, UnsupportedFeature,
+        // InfraFailure, BenchmarkNoise, ShippedPathDrift
+        assert_eq!(variants[0], BehaviorEquivalenceClass::Equivalent);
+        assert_eq!(variants[1], BehaviorEquivalenceClass::SemanticMismatch);
+        assert_eq!(variants[2], BehaviorEquivalenceClass::UnsupportedFeature);
+        assert_eq!(variants[3], BehaviorEquivalenceClass::InfraFailure);
+        assert_eq!(variants[4], BehaviorEquivalenceClass::BenchmarkNoise);
+        assert_eq!(variants[5], BehaviorEquivalenceClass::ShippedPathDrift);
+    }
+
+    #[test]
+    fn evidence_surface_ord_shipped_before_library() {
+        assert!(EvidenceSurface::ShippedPath < EvidenceSurface::LibraryOnly);
+    }
+
+    #[test]
+    fn owner_route_hint_can_be_used_as_btreeset_key() {
+        let mut set = BTreeSet::new();
+        set.insert(OwnerRouteHint::RuntimeSemantics);
+        set.insert(OwnerRouteHint::DocsContract);
+        set.insert(OwnerRouteHint::RuntimeSemantics); // duplicate
+        assert_eq!(set.len(), 2);
+    }
+
+    // --- ParityTarget variants in observations ---
+
+    #[test]
+    fn classify_works_with_all_parity_targets() {
+        for target in ParityTarget::ALL {
+            let obs = BehaviorEquivalenceObservation::new(
+                "target_test",
+                *target,
+                EvidenceSurface::ShippedPath,
+                OwnerRouteHint::RuntimeSemantics,
+            );
+            assert_eq!(
+                classify_observation(&obs),
+                BehaviorEquivalenceClass::Equivalent
+            );
+        }
+    }
+
+    #[test]
+    fn build_record_with_v8_isolate_baseline() {
+        let obs = BehaviorEquivalenceObservation::new(
+            "v8_test",
+            ParityTarget::V8Isolate,
+            EvidenceSurface::ShippedPath,
+            OwnerRouteHint::RuntimeSemantics,
+        )
+        .with_output_equivalence(false);
+        let record = build_record(&obs);
+        assert_eq!(record.baseline, ParityTarget::V8Isolate);
+        assert_eq!(
+            record.classification,
+            BehaviorEquivalenceClass::ShippedPathDrift
+        );
+    }
+
+    // --- empty/edge string handling ---
+
+    #[test]
+    fn observation_with_empty_workload_id() {
+        let obs = shipped_observation("");
+        let record = build_record(&obs);
+        assert_eq!(record.workload_id, "");
+        assert_eq!(record.classification, BehaviorEquivalenceClass::Equivalent);
+    }
+
+    #[test]
+    fn observation_with_unicode_detail() {
+        let obs = shipped_observation("unicode_test").with_detail("divergence \u{1F4A5} detected");
+        let record = build_record(&obs);
+        let json = serde_json::to_string(&record).expect("serialize");
+        let back: BenchmarkParityVerdictRecord = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.detail, "divergence \u{1F4A5} detected");
+    }
+
+    #[test]
+    fn build_report_single_observation_produces_single_record() {
+        let obs = shipped_observation("singleton");
+        let report = build_report("t", "d", POLICY_ID, &[obs]);
+        assert_eq!(report.records.len(), 1);
+        assert_eq!(report.records[0].workload_id, "singleton");
     }
 }

@@ -990,4 +990,683 @@ mod tests {
         let hash = inv.content_hash();
         assert_ne!(hash, ContentHash::default());
     }
+
+    // -- Additional tests: enum ordering --
+
+    #[test]
+    fn test_semantic_domain_ord_is_variant_order() {
+        // Ord should follow declaration order: Budget < Outcome < ... < SchemaVersion
+        assert!(SemanticDomain::Budget < SemanticDomain::Outcome);
+        assert!(SemanticDomain::Outcome < SemanticDomain::Capability);
+        assert!(SemanticDomain::Capability < SemanticDomain::Severity);
+        assert!(SemanticDomain::Severity < SemanticDomain::Diagnostics);
+        assert!(SemanticDomain::Diagnostics < SemanticDomain::PolicyId);
+        assert!(SemanticDomain::PolicyId < SemanticDomain::TraceId);
+        assert!(SemanticDomain::TraceId < SemanticDomain::DecisionId);
+        assert!(SemanticDomain::DecisionId < SemanticDomain::EvidenceLink);
+        assert!(SemanticDomain::EvidenceLink < SemanticDomain::SchemaVersion);
+    }
+
+    #[test]
+    fn test_translation_kind_ord_is_variant_order() {
+        assert!(TranslationKind::Preserved < TranslationKind::Narrowed);
+        assert!(TranslationKind::Narrowed < TranslationKind::Widened);
+        assert!(TranslationKind::Widened < TranslationKind::Collapsed);
+        assert!(TranslationKind::Collapsed < TranslationKind::Translated);
+        assert!(TranslationKind::Translated < TranslationKind::Dropped);
+    }
+
+    #[test]
+    fn test_flattening_classification_ord_is_variant_order() {
+        assert!(FlatteningClassification::Intentional < FlatteningClassification::MustFix);
+        assert!(FlatteningClassification::MustFix < FlatteningClassification::AcceptableEdge);
+        assert!(FlatteningClassification::AcceptableEdge < FlatteningClassification::FalsePositive);
+    }
+
+    #[test]
+    fn test_flattening_severity_ord_is_variant_order() {
+        assert!(FlatteningSeverity::Critical < FlatteningSeverity::High);
+        assert!(FlatteningSeverity::High < FlatteningSeverity::Medium);
+        assert!(FlatteningSeverity::Medium < FlatteningSeverity::Low);
+        assert!(FlatteningSeverity::Low < FlatteningSeverity::Info);
+    }
+
+    // -- Additional tests: BoundaryPoint edge cases --
+
+    #[test]
+    fn test_boundary_point_with_empty_strings() {
+        let bp = BoundaryPoint {
+            source_module: String::new(),
+            target_module: String::new(),
+            api_surface: String::new(),
+            line_hint: None,
+        };
+        let s = format!("{bp}");
+        assert_eq!(s, " ->  via ");
+    }
+
+    #[test]
+    fn test_boundary_point_with_line_hint_zero() {
+        let bp = BoundaryPoint {
+            source_module: "a".to_string(),
+            target_module: "b".to_string(),
+            api_surface: "f".to_string(),
+            line_hint: Some(0),
+        };
+        let s = format!("{bp}");
+        assert!(s.contains("line 0"));
+    }
+
+    #[test]
+    fn test_boundary_point_with_max_line_hint() {
+        let bp = BoundaryPoint {
+            source_module: "mod_a".to_string(),
+            target_module: "mod_b".to_string(),
+            api_surface: "call".to_string(),
+            line_hint: Some(u32::MAX),
+        };
+        let s = format!("{bp}");
+        assert!(s.contains(&u32::MAX.to_string()));
+    }
+
+    #[test]
+    fn test_boundary_point_clone_equality() {
+        let bp = sample_boundary();
+        let bp2 = bp.clone();
+        assert_eq!(bp, bp2);
+    }
+
+    #[test]
+    fn test_boundary_point_ord_by_source_module() {
+        let bp_a = BoundaryPoint {
+            source_module: "aaa".to_string(),
+            target_module: "zzz".to_string(),
+            api_surface: "x".to_string(),
+            line_hint: None,
+        };
+        let bp_b = BoundaryPoint {
+            source_module: "bbb".to_string(),
+            target_module: "aaa".to_string(),
+            api_surface: "x".to_string(),
+            line_hint: None,
+        };
+        assert!(bp_a < bp_b, "BoundaryPoint should order by source_module first");
+    }
+
+    #[test]
+    fn test_boundary_point_serde_roundtrip_no_line_hint() {
+        let bp = BoundaryPoint {
+            source_module: "src".to_string(),
+            target_module: "dst".to_string(),
+            api_surface: "api".to_string(),
+            line_hint: None,
+        };
+        let json = serde_json::to_string(&bp).unwrap();
+        assert!(json.contains("null"), "None line_hint should serialize as null");
+        let back: BoundaryPoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(bp, back);
+    }
+
+    // -- Additional tests: content hash sensitivity --
+
+    #[test]
+    fn test_content_hash_sensitive_to_domain_change() {
+        let bp = sample_boundary();
+        let h1 = FlatteningOccurrence::compute_content_hash(
+            "id",
+            SemanticDomain::Budget,
+            &bp,
+            TranslationKind::Preserved,
+            FlatteningClassification::Intentional,
+        );
+        let h2 = FlatteningOccurrence::compute_content_hash(
+            "id",
+            SemanticDomain::Outcome,
+            &bp,
+            TranslationKind::Preserved,
+            FlatteningClassification::Intentional,
+        );
+        assert_ne!(h1, h2, "Different domains should produce different hashes");
+    }
+
+    #[test]
+    fn test_content_hash_sensitive_to_translation_kind() {
+        let bp = sample_boundary();
+        let h1 = FlatteningOccurrence::compute_content_hash(
+            "id",
+            SemanticDomain::Budget,
+            &bp,
+            TranslationKind::Preserved,
+            FlatteningClassification::Intentional,
+        );
+        let h2 = FlatteningOccurrence::compute_content_hash(
+            "id",
+            SemanticDomain::Budget,
+            &bp,
+            TranslationKind::Dropped,
+            FlatteningClassification::Intentional,
+        );
+        assert_ne!(h1, h2, "Different translation kinds should produce different hashes");
+    }
+
+    #[test]
+    fn test_content_hash_sensitive_to_classification() {
+        let bp = sample_boundary();
+        let h1 = FlatteningOccurrence::compute_content_hash(
+            "id",
+            SemanticDomain::Budget,
+            &bp,
+            TranslationKind::Preserved,
+            FlatteningClassification::Intentional,
+        );
+        let h2 = FlatteningOccurrence::compute_content_hash(
+            "id",
+            SemanticDomain::Budget,
+            &bp,
+            TranslationKind::Preserved,
+            FlatteningClassification::MustFix,
+        );
+        assert_ne!(h1, h2, "Different classifications should produce different hashes");
+    }
+
+    #[test]
+    fn test_content_hash_sensitive_to_line_hint_presence() {
+        let bp_with = BoundaryPoint {
+            source_module: "s".to_string(),
+            target_module: "t".to_string(),
+            api_surface: "a".to_string(),
+            line_hint: Some(10),
+        };
+        let bp_without = BoundaryPoint {
+            source_module: "s".to_string(),
+            target_module: "t".to_string(),
+            api_surface: "a".to_string(),
+            line_hint: None,
+        };
+        let h1 = FlatteningOccurrence::compute_content_hash(
+            "id",
+            SemanticDomain::Budget,
+            &bp_with,
+            TranslationKind::Preserved,
+            FlatteningClassification::Intentional,
+        );
+        let h2 = FlatteningOccurrence::compute_content_hash(
+            "id",
+            SemanticDomain::Budget,
+            &bp_without,
+            TranslationKind::Preserved,
+            FlatteningClassification::Intentional,
+        );
+        assert_ne!(h1, h2, "Line hint presence should affect the hash");
+    }
+
+    #[test]
+    fn test_content_hash_sensitive_to_boundary_modules() {
+        let bp1 = BoundaryPoint {
+            source_module: "alpha".to_string(),
+            target_module: "beta".to_string(),
+            api_surface: "fn_call".to_string(),
+            line_hint: None,
+        };
+        let bp2 = BoundaryPoint {
+            source_module: "beta".to_string(),
+            target_module: "alpha".to_string(),
+            api_surface: "fn_call".to_string(),
+            line_hint: None,
+        };
+        let h1 = FlatteningOccurrence::compute_content_hash(
+            "id",
+            SemanticDomain::Budget,
+            &bp1,
+            TranslationKind::Preserved,
+            FlatteningClassification::Intentional,
+        );
+        let h2 = FlatteningOccurrence::compute_content_hash(
+            "id",
+            SemanticDomain::Budget,
+            &bp2,
+            TranslationKind::Preserved,
+            FlatteningClassification::Intentional,
+        );
+        assert_ne!(h1, h2, "Swapped source/target should produce different hashes");
+    }
+
+    // -- Additional tests: occurrence Display edge cases --
+
+    #[test]
+    fn test_occurrence_display_contains_boundary_info() {
+        let occ = FlatteningOccurrence::new(
+            "OCC-DISP-2".to_string(),
+            SemanticDomain::EvidenceLink,
+            BoundaryPoint {
+                source_module: "evidence_store".to_string(),
+                target_module: "audit_log".to_string(),
+                api_surface: "record_evidence".to_string(),
+                line_hint: Some(999),
+            },
+            TranslationKind::Dropped,
+            FlatteningClassification::MustFix,
+            FlatteningSeverity::Critical,
+            "Evidence link dropped at audit boundary".to_string(),
+            "Preserve evidence link".to_string(),
+            "bd-fix-003".to_string(),
+        );
+        let s = format!("{occ}");
+        assert!(s.contains("OCC-DISP-2"));
+        assert!(s.contains("Critical"));
+        assert!(s.contains("MustFix"));
+        assert!(s.contains("Dropped"));
+        assert!(s.contains("evidence_store"));
+        assert!(s.contains("audit_log"));
+        assert!(s.contains("line 999"));
+        assert!(s.contains("Evidence link dropped"));
+    }
+
+    // -- Additional tests: inventory filter combinations --
+
+    #[test]
+    fn test_by_domain_all_ten_domains() {
+        let mut inv = FlatteningInventory::new(SecurityEpoch::GENESIS);
+        let domains = [
+            SemanticDomain::Budget,
+            SemanticDomain::Outcome,
+            SemanticDomain::Capability,
+            SemanticDomain::Severity,
+            SemanticDomain::Diagnostics,
+            SemanticDomain::PolicyId,
+            SemanticDomain::TraceId,
+            SemanticDomain::DecisionId,
+            SemanticDomain::EvidenceLink,
+            SemanticDomain::SchemaVersion,
+        ];
+        for (i, domain) in domains.iter().enumerate() {
+            inv.add(FlatteningOccurrence::new(
+                format!("DOM-{i}"),
+                *domain,
+                sample_boundary(),
+                TranslationKind::Preserved,
+                FlatteningClassification::Intentional,
+                FlatteningSeverity::Info,
+                "test".to_string(),
+                "none".to_string(),
+                String::new(),
+            ));
+        }
+        for domain in &domains {
+            let items = inv.by_domain(*domain);
+            assert_eq!(items.len(), 1, "Each domain should have exactly one item");
+        }
+    }
+
+    #[test]
+    fn test_by_severity_all_five_levels() {
+        let mut inv = FlatteningInventory::new(SecurityEpoch::GENESIS);
+        let severities = [
+            FlatteningSeverity::Critical,
+            FlatteningSeverity::High,
+            FlatteningSeverity::Medium,
+            FlatteningSeverity::Low,
+            FlatteningSeverity::Info,
+        ];
+        for (i, sev) in severities.iter().enumerate() {
+            inv.add(FlatteningOccurrence::new(
+                format!("SEV-{i}"),
+                SemanticDomain::Budget,
+                sample_boundary(),
+                TranslationKind::Collapsed,
+                FlatteningClassification::MustFix,
+                *sev,
+                "test".to_string(),
+                "fix".to_string(),
+                String::new(),
+            ));
+        }
+        for sev in &severities {
+            let items = inv.by_severity(*sev);
+            assert_eq!(items.len(), 1, "Each severity should have exactly one item");
+        }
+    }
+
+    #[test]
+    fn test_must_fix_items_ignores_other_classifications() {
+        let mut inv = FlatteningInventory::new(SecurityEpoch::GENESIS);
+        let classifications = [
+            FlatteningClassification::Intentional,
+            FlatteningClassification::AcceptableEdge,
+            FlatteningClassification::FalsePositive,
+        ];
+        for (i, cls) in classifications.iter().enumerate() {
+            inv.add(FlatteningOccurrence::new(
+                format!("NON-MF-{i}"),
+                SemanticDomain::Budget,
+                sample_boundary(),
+                TranslationKind::Narrowed,
+                *cls,
+                FlatteningSeverity::High,
+                "test".to_string(),
+                "none".to_string(),
+                String::new(),
+            ));
+        }
+        assert!(inv.must_fix_items().is_empty());
+    }
+
+    // -- Additional tests: inventory content hash sensitivity --
+
+    #[test]
+    fn test_inventory_hash_changes_with_occurrence_order() {
+        let mut inv1 = FlatteningInventory::new(SecurityEpoch::GENESIS);
+        inv1.add(sample_occurrence("ORD-A"));
+        inv1.add(sample_occurrence("ORD-B"));
+
+        let mut inv2 = FlatteningInventory::new(SecurityEpoch::GENESIS);
+        inv2.add(sample_occurrence("ORD-B"));
+        inv2.add(sample_occurrence("ORD-A"));
+
+        assert_ne!(
+            inv1.content_hash(),
+            inv2.content_hash(),
+            "Inventory hash should be order-dependent"
+        );
+    }
+
+    #[test]
+    fn test_inventory_hash_changes_with_added_occurrence() {
+        let mut inv1 = FlatteningInventory::new(SecurityEpoch::GENESIS);
+        inv1.add(sample_occurrence("GROW-1"));
+        let h1 = inv1.content_hash();
+
+        inv1.add(sample_occurrence("GROW-2"));
+        let h2 = inv1.content_hash();
+
+        assert_ne!(h1, h2, "Adding an occurrence should change the inventory hash");
+    }
+
+    // -- Additional tests: summary with all-one-classification --
+
+    #[test]
+    fn test_summary_all_must_fix() {
+        let mut inv = FlatteningInventory::new(SecurityEpoch::GENESIS);
+        for i in 0..5 {
+            inv.add(sample_occurrence(&format!("AMF-{i}")));
+        }
+        let s = inv.summary();
+        assert_eq!(s.total, 5);
+        assert_eq!(s.must_fix, 5);
+        assert_eq!(s.intentional, 0);
+        assert_eq!(s.acceptable, 0);
+        assert_eq!(s.false_positive, 0);
+    }
+
+    #[test]
+    fn test_summary_all_false_positive() {
+        let mut inv = FlatteningInventory::new(SecurityEpoch::GENESIS);
+        for i in 0..3 {
+            inv.add(FlatteningOccurrence::new(
+                format!("AFP-{i}"),
+                SemanticDomain::Diagnostics,
+                sample_boundary(),
+                TranslationKind::Preserved,
+                FlatteningClassification::FalsePositive,
+                FlatteningSeverity::Info,
+                "not a real flattening".to_string(),
+                "none".to_string(),
+                String::new(),
+            ));
+        }
+        let s = inv.summary();
+        assert_eq!(s.total, 3);
+        assert_eq!(s.must_fix, 0);
+        assert_eq!(s.false_positive, 3);
+        assert_eq!(s.by_domain.get("Diagnostics"), Some(&3));
+        assert_eq!(s.by_severity.get("Info"), Some(&3));
+    }
+
+    #[test]
+    fn test_summary_by_domain_keys_are_sorted() {
+        let mut inv = FlatteningInventory::new(SecurityEpoch::GENESIS);
+        // Add in reverse alphabetical domain order
+        inv.add(FlatteningOccurrence::new(
+            "K-1".to_string(),
+            SemanticDomain::TraceId,
+            sample_boundary(),
+            TranslationKind::Preserved,
+            FlatteningClassification::Intentional,
+            FlatteningSeverity::Info,
+            "t".to_string(),
+            "n".to_string(),
+            String::new(),
+        ));
+        inv.add(FlatteningOccurrence::new(
+            "K-2".to_string(),
+            SemanticDomain::Budget,
+            sample_boundary(),
+            TranslationKind::Preserved,
+            FlatteningClassification::Intentional,
+            FlatteningSeverity::Info,
+            "t".to_string(),
+            "n".to_string(),
+            String::new(),
+        ));
+        let s = inv.summary();
+        let keys: Vec<&String> = s.by_domain.keys().collect();
+        assert_eq!(keys, vec!["Budget", "TraceId"], "BTreeMap keys should be sorted");
+    }
+
+    // -- Additional tests: serde round-trip for full inventory with multiple items --
+
+    #[test]
+    fn test_inventory_serde_roundtrip_multiple_items() {
+        let mut inv = FlatteningInventory::new(SecurityEpoch::from_raw(42));
+        inv.add(FlatteningOccurrence::new(
+            "SER-1".to_string(),
+            SemanticDomain::PolicyId,
+            BoundaryPoint {
+                source_module: "policy".to_string(),
+                target_module: "enforcer".to_string(),
+                api_surface: "apply".to_string(),
+                line_hint: Some(100),
+            },
+            TranslationKind::Translated,
+            FlatteningClassification::AcceptableEdge,
+            FlatteningSeverity::Medium,
+            "Policy ID format changed".to_string(),
+            "Use canonical form".to_string(),
+            "bd-fix-100".to_string(),
+        ));
+        inv.add(FlatteningOccurrence::new(
+            "SER-2".to_string(),
+            SemanticDomain::DecisionId,
+            BoundaryPoint {
+                source_module: "decision".to_string(),
+                target_module: "logger".to_string(),
+                api_surface: "log_decision".to_string(),
+                line_hint: None,
+            },
+            TranslationKind::Narrowed,
+            FlatteningClassification::Intentional,
+            FlatteningSeverity::Low,
+            "Decision ID truncated for log".to_string(),
+            "Log full ID".to_string(),
+            "bd-fix-101".to_string(),
+        ));
+        let json = serde_json::to_string_pretty(&inv).unwrap();
+        let back: FlatteningInventory = serde_json::from_str(&json).unwrap();
+        assert_eq!(inv, back);
+        assert_eq!(inv.content_hash(), back.content_hash());
+    }
+
+    // -- Additional tests: occurrence clone preserves hash --
+
+    #[test]
+    fn test_occurrence_clone_preserves_content_hash() {
+        let occ = sample_occurrence("CLONE-TEST");
+        let cloned = occ.clone();
+        assert_eq!(occ.content_hash, cloned.content_hash);
+        assert_eq!(occ, cloned);
+    }
+
+    // -- Additional tests: inventory Display with items --
+
+    #[test]
+    fn test_inventory_display_with_items() {
+        let mut inv = FlatteningInventory::new(SecurityEpoch::from_raw(77));
+        inv.add(sample_occurrence("DISP-1"));
+        inv.add(sample_occurrence("DISP-2"));
+        inv.add(sample_occurrence("DISP-3"));
+        let s = format!("{inv}");
+        assert!(s.contains("count=3"));
+        assert!(s.contains("epoch="));
+    }
+
+    // -- Additional tests: summary Display all fields --
+
+    #[test]
+    fn test_summary_display_all_fields() {
+        let s = FlatteningSummary {
+            total: 100,
+            must_fix: 10,
+            intentional: 50,
+            acceptable: 30,
+            false_positive: 10,
+            by_domain: BTreeMap::new(),
+            by_severity: BTreeMap::new(),
+        };
+        let txt = format!("{s}");
+        assert!(txt.contains("total=100"));
+        assert!(txt.contains("must_fix=10"));
+        assert!(txt.contains("intentional=50"));
+        assert!(txt.contains("acceptable=30"));
+        assert!(txt.contains("false_positive=10"));
+    }
+
+    // -- Additional tests: occurrence with empty strings --
+
+    #[test]
+    fn test_occurrence_with_empty_description_and_remediation() {
+        let occ = FlatteningOccurrence::new(
+            "EMPTY-DESC".to_string(),
+            SemanticDomain::SchemaVersion,
+            sample_boundary(),
+            TranslationKind::Widened,
+            FlatteningClassification::MustFix,
+            FlatteningSeverity::Critical,
+            String::new(),
+            String::new(),
+            String::new(),
+        );
+        assert_eq!(occ.description, "");
+        assert_eq!(occ.remediation, "");
+        assert_eq!(occ.remediation_bead, "");
+        // Hash should still be non-default even with empty strings
+        assert_ne!(occ.content_hash, ContentHash::default());
+    }
+
+    // -- Additional tests: inventory at genesis vs non-genesis --
+
+    #[test]
+    fn test_inventory_genesis_vs_from_raw_zero() {
+        let inv_genesis = FlatteningInventory::new(SecurityEpoch::GENESIS);
+        let inv_zero = FlatteningInventory::new(SecurityEpoch::from_raw(0));
+        assert_eq!(inv_genesis.assessed_epoch, inv_zero.assessed_epoch);
+        assert_eq!(inv_genesis.content_hash(), inv_zero.content_hash());
+    }
+
+    // -- Additional tests: BoundaryPoint hash in BTreeSet --
+
+    #[test]
+    fn test_boundary_point_usable_as_btreeset_key() {
+        use std::collections::BTreeSet;
+        let mut set = BTreeSet::new();
+        set.insert(sample_boundary());
+        set.insert(sample_boundary());
+        assert_eq!(set.len(), 1, "Identical BoundaryPoints should deduplicate in BTreeSet");
+
+        let other = BoundaryPoint {
+            source_module: "other".to_string(),
+            target_module: "other".to_string(),
+            api_surface: "other".to_string(),
+            line_hint: None,
+        };
+        set.insert(other);
+        assert_eq!(set.len(), 2);
+    }
+
+    // -- Additional tests: large inventory summary counts --
+
+    #[test]
+    fn test_summary_with_many_occurrences() {
+        let mut inv = FlatteningInventory::new(SecurityEpoch::from_raw(1));
+        let classifications = [
+            FlatteningClassification::Intentional,
+            FlatteningClassification::MustFix,
+            FlatteningClassification::AcceptableEdge,
+            FlatteningClassification::FalsePositive,
+        ];
+        for i in 0..40 {
+            inv.add(FlatteningOccurrence::new(
+                format!("MANY-{i}"),
+                SemanticDomain::Budget,
+                sample_boundary(),
+                TranslationKind::Collapsed,
+                classifications[i % 4],
+                FlatteningSeverity::Medium,
+                "desc".to_string(),
+                "fix".to_string(),
+                String::new(),
+            ));
+        }
+        let s = inv.summary();
+        assert_eq!(s.total, 40);
+        assert_eq!(s.must_fix, 10);
+        assert_eq!(s.intentional, 10);
+        assert_eq!(s.acceptable, 10);
+        assert_eq!(s.false_positive, 10);
+        assert_eq!(s.by_domain.get("Budget"), Some(&40));
+        assert_eq!(s.by_severity.get("Medium"), Some(&40));
+    }
+
+    // -- Additional tests: enum Hash trait --
+
+    #[test]
+    fn test_semantic_domain_hash_consistency() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let compute_hash = |d: SemanticDomain| {
+            let mut h = DefaultHasher::new();
+            d.hash(&mut h);
+            h.finish()
+        };
+        // Same variant should always hash the same
+        assert_eq!(
+            compute_hash(SemanticDomain::Budget),
+            compute_hash(SemanticDomain::Budget),
+        );
+        // Different variants should (almost certainly) hash differently
+        assert_ne!(
+            compute_hash(SemanticDomain::Budget),
+            compute_hash(SemanticDomain::Outcome),
+        );
+    }
+
+    // -- Additional tests: occurrence Ord --
+
+    #[test]
+    fn test_occurrence_ord_by_id() {
+        let occ_a = sample_occurrence("AAA");
+        let occ_b = sample_occurrence("BBB");
+        // FlatteningOccurrence derives Ord; first field is `id`
+        assert!(occ_a < occ_b, "Occurrences should be ordered by id (first field)");
+    }
+
+    // -- Additional tests: inventory schema version preserved --
+
+    #[test]
+    fn test_inventory_schema_version_preserved_through_serde() {
+        let inv = FlatteningInventory::new(SecurityEpoch::from_raw(50));
+        let json = serde_json::to_string(&inv).unwrap();
+        assert!(json.contains(FLATTENING_SCHEMA_VERSION));
+        let back: FlatteningInventory = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.schema_version, FLATTENING_SCHEMA_VERSION);
+    }
 }

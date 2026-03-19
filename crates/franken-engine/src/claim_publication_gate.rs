@@ -1361,4 +1361,743 @@ mod tests {
             assert_eq!(*e, deser);
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: edge cases, determinism, routing, tier boundaries
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn not_yet_proven_generates_info_risk_flag() {
+        let verdict = ClaimVerdict {
+            atom_id: "nyp-1".to_string(),
+            state: ClaimVerdictState::NotYetProven,
+            supporting_morphism_ids: Vec::new(),
+            active_rule_ids: Vec::new(),
+            minimal_cutset_ids: Vec::new(),
+            impossibility_certificate_ids: Vec::new(),
+        };
+        let verdicts = vec![make_annotated(verdict, "compatibility", "shipped_fact")];
+        let eval =
+            evaluate_publication_gate(&verdicts, &[], &default_config(), 1).expect("evaluate");
+        let info_flags: Vec<_> = eval
+            .risk_flags
+            .iter()
+            .filter(|f| f.severity == RiskSeverity::Info)
+            .collect();
+        assert!(!info_flags.is_empty(), "NotYetProven should produce info-severity flags");
+    }
+
+    #[test]
+    fn counterexample_generates_critical_risk_flag() {
+        let verdicts = vec![make_annotated(
+            counterexample_verdict("cx-1"),
+            "compatibility",
+            "shipped_fact",
+        )];
+        let eval =
+            evaluate_publication_gate(&verdicts, &[], &default_config(), 1).expect("evaluate");
+        let critical_flags: Vec<_> = eval
+            .risk_flags
+            .iter()
+            .filter(|f| f.severity == RiskSeverity::Critical)
+            .collect();
+        assert!(!critical_flags.is_empty(), "counterexample should produce critical flags");
+    }
+
+    #[test]
+    fn schema_version_and_bead_id_in_evaluation() {
+        let verdicts = vec![make_annotated(
+            entitled_verdict("sv-1"),
+            "compatibility",
+            "shipped_fact",
+        )];
+        let eval =
+            evaluate_publication_gate(&verdicts, &[], &default_config(), 99).expect("evaluate");
+        assert_eq!(eval.schema_version, CLAIM_PUBLICATION_GATE_SCHEMA_VERSION);
+        assert_eq!(eval.bead_id, CLAIM_PUBLICATION_GATE_BEAD_ID);
+        assert_eq!(eval.evaluated_epoch, 99);
+    }
+
+    #[test]
+    fn staleness_at_exact_boundary_is_not_flagged() {
+        // Supremacy has 72h max staleness; exactly 72 should pass
+        let verdicts = vec![make_stale_annotated(
+            entitled_verdict("boundary-1"),
+            "supremacy",
+            "shipped_fact",
+            72,
+        )];
+        let eval =
+            evaluate_publication_gate(&verdicts, &[], &default_config(), 1).expect("evaluate");
+        let stale_flags: Vec<_> = eval
+            .risk_flags
+            .iter()
+            .filter(|f| f.description.contains("staleness"))
+            .collect();
+        assert!(stale_flags.is_empty(), "staleness at exact boundary should not be flagged");
+        let sup_claims = eval.surface_claims.get("supremacy");
+        assert!(sup_claims.is_some_and(|c| !c.is_empty()));
+    }
+
+    #[test]
+    fn staleness_one_over_boundary_is_flagged() {
+        // Supremacy has 72h max staleness; 73 should be flagged
+        let verdicts = vec![make_stale_annotated(
+            entitled_verdict("over-1"),
+            "supremacy",
+            "shipped_fact",
+            73,
+        )];
+        let eval =
+            evaluate_publication_gate(&verdicts, &[], &default_config(), 1).expect("evaluate");
+        let stale_flags: Vec<_> = eval
+            .risk_flags
+            .iter()
+            .filter(|f| f.description.contains("staleness"))
+            .collect();
+        assert!(!stale_flags.is_empty(), "staleness 1 over boundary should be flagged");
+        // The claim should NOT appear in surface_claims because it was skipped
+        let sup_claims = eval.surface_claims.get("supremacy");
+        assert!(sup_claims.is_none() || sup_claims.is_some_and(|c| c.is_empty()));
+    }
+
+    #[test]
+    fn docs_has_double_max_staleness() {
+        // Docs allows MAX_PUBLISHABLE_STALENESS_HOURS * 2 = 336h
+        let verdicts = vec![make_stale_annotated(
+            entitled_verdict("docs-stale-1"),
+            "docs",
+            "frontier_ambition",
+            335,
+        )];
+        let eval =
+            evaluate_publication_gate(&verdicts, &[], &default_config(), 1).expect("evaluate");
+        let docs_claims = eval.surface_claims.get("docs");
+        assert!(docs_claims.is_some_and(|c| !c.is_empty()), "335h should be within docs limit");
+    }
+
+    #[test]
+    fn docs_staleness_exceeded() {
+        // Docs allows 336h; 337 should be stale
+        let verdicts = vec![make_stale_annotated(
+            entitled_verdict("docs-stale-2"),
+            "docs",
+            "frontier_ambition",
+            337,
+        )];
+        let eval =
+            evaluate_publication_gate(&verdicts, &[], &default_config(), 1).expect("evaluate");
+        let docs_claims = eval.surface_claims.get("docs");
+        assert!(
+            docs_claims.is_none() || docs_claims.is_some_and(|c| c.is_empty()),
+            "337h should exceed docs staleness limit"
+        );
+    }
+
+    #[test]
+    fn invalid_tier_string_skips_verdict() {
+        let verdicts = vec![make_annotated(
+            entitled_verdict("bad-tier-1"),
+            "compatibility",
+            "bogus_tier",
+        )];
+        let eval =
+            evaluate_publication_gate(&verdicts, &[], &default_config(), 1).expect("evaluate");
+        // No claims should be routed because tier_from_str returns None
+        assert_eq!(eval.summary.total_publishable_claims, 0);
+    }
+
+    #[test]
+    fn unknown_domain_verdict_produces_no_claims() {
+        let verdicts = vec![make_annotated(
+            entitled_verdict("unk-1"),
+            "nonexistent_domain",
+            "shipped_fact",
+        )];
+        let eval =
+            evaluate_publication_gate(&verdicts, &[], &default_config(), 1).expect("evaluate");
+        assert_eq!(eval.summary.total_publishable_claims, 0);
+        // All surfaces should be rejected (no claims anywhere)
+        for decision in eval.gate_decisions.values() {
+            assert!(matches!(decision, GateDecision::Rejected { .. }));
+        }
+    }
+
+    #[test]
+    fn rollout_domain_routes_only_to_rollout() {
+        let config = default_config();
+        let av = make_annotated(entitled_verdict("ro-1"), "rollout", "shipped_fact");
+        let surfaces = route_verdict_to_surfaces(&av, &config);
+        assert_eq!(surfaces, vec![PublicationSurface::Rollout]);
+    }
+
+    #[test]
+    fn ga_domain_routes_only_to_ga() {
+        let config = default_config();
+        let av = make_annotated(entitled_verdict("ga-1"), "ga", "shipped_fact");
+        let surfaces = route_verdict_to_surfaces(&av, &config);
+        assert_eq!(surfaces, vec![PublicationSurface::Ga]);
+    }
+
+    #[test]
+    fn docs_domain_routes_only_to_docs() {
+        let config = default_config();
+        let av = make_annotated(entitled_verdict("d-1"), "docs", "shipped_fact");
+        let surfaces = route_verdict_to_surfaces(&av, &config);
+        assert_eq!(surfaces, vec![PublicationSurface::Docs]);
+    }
+
+    #[test]
+    fn support_surface_domain_routes_to_docs_and_rollout() {
+        let config = default_config();
+        let av = make_annotated(entitled_verdict("ss-1"), "support_surface", "shipped_fact");
+        let surfaces = route_verdict_to_surfaces(&av, &config);
+        assert!(surfaces.contains(&PublicationSurface::Docs));
+        assert!(surfaces.contains(&PublicationSurface::Rollout));
+        assert_eq!(surfaces.len(), 2);
+    }
+
+    #[test]
+    fn shipped_surface_domain_routing() {
+        let config = default_config();
+        let av = make_annotated(entitled_verdict("sh-1"), "shipped_surface", "shipped_fact");
+        let surfaces = route_verdict_to_surfaces(&av, &config);
+        assert!(surfaces.contains(&PublicationSurface::Docs));
+        assert!(surfaces.contains(&PublicationSurface::Rollout));
+        assert!(surfaces.contains(&PublicationSurface::Ga));
+        assert_eq!(surfaces.len(), 3);
+    }
+
+    #[test]
+    fn frontier_gap_disclosure_display_format() {
+        let gap = FrontierGapDisclosure {
+            gap_id: "g-42".to_string(),
+            description: "Missing async iterators".to_string(),
+            domain: "compatibility".to_string(),
+            blocks_surfaces: vec![PublicationSurface::Ga],
+            remediation: "bd-xyz".to_string(),
+        };
+        let display = gap.to_string();
+        assert!(display.contains("g-42"));
+        assert!(display.contains("compatibility"));
+        assert!(display.starts_with("gap:"));
+    }
+
+    #[test]
+    fn risk_flag_display_format() {
+        let flag = RiskFlag {
+            flag_id: "rf-99".to_string(),
+            severity: RiskSeverity::Critical,
+            surface: PublicationSurface::React,
+            description: "test flag".to_string(),
+        };
+        let display = flag.to_string();
+        assert!(display.contains("rf-99"));
+        assert!(display.contains("critical"));
+        assert!(display.contains("react"));
+    }
+
+    #[test]
+    fn publishable_claim_display_includes_tier() {
+        let claim = PublishableClaim {
+            atom_id: "atom-tier".to_string(),
+            surface: PublicationSurface::Supremacy,
+            publication_tier: PublicationTier::ScopedObserved,
+            supporting_morphisms: Vec::new(),
+            impossibility_certificates: Vec::new(),
+            domain: "supremacy".to_string(),
+            statement: "perf claim".to_string(),
+        };
+        let display = claim.to_string();
+        assert!(display.contains("atom-tier"));
+        assert!(display.contains("supremacy"));
+        assert!(display.contains("scoped_observed"));
+    }
+
+    #[test]
+    fn evaluation_display_shows_flag_count() {
+        let verdicts = vec![
+            make_annotated(entitled_verdict("c1"), "compatibility", "shipped_fact"),
+            make_annotated(blocked_verdict("c2"), "compatibility", "shipped_fact"),
+        ];
+        let eval =
+            evaluate_publication_gate(&verdicts, &[], &default_config(), 10).expect("evaluate");
+        let display = format!("{eval}");
+        assert!(display.contains("epoch=10"));
+        assert!(display.contains("flags="));
+    }
+
+    #[test]
+    fn gate_decision_display_approved_with_caveats_count() {
+        let decision = GateDecision::ApprovedWithCaveats {
+            caveat_ids: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        };
+        assert_eq!(decision.to_string(), "approved_with_caveats(3)");
+    }
+
+    #[test]
+    fn gate_decision_display_rejected_reason() {
+        let decision = GateDecision::Rejected {
+            reason: "no entitled claims".to_string(),
+        };
+        assert_eq!(decision.to_string(), "rejected: no entitled claims");
+    }
+
+    #[test]
+    fn gate_decision_display_guidance_reason() {
+        let decision = GateDecision::RequireOperatorGuidance {
+            reason: "frontier gaps block".to_string(),
+        };
+        assert_eq!(
+            decision.to_string(),
+            "require_operator_guidance: frontier gaps block"
+        );
+    }
+
+    #[test]
+    fn critical_flag_takes_precedence_over_gaps() {
+        // When a surface has both critical flags and blocking gaps,
+        // the critical flag should result in Rejected (not RequireOperatorGuidance)
+        let verdicts = vec![make_annotated(
+            counterexample_verdict("cx-prec"),
+            "compatibility",
+            "shipped_fact",
+        )];
+        let gaps = vec![FrontierGapDisclosure {
+            gap_id: "gap-prec".to_string(),
+            description: "test gap".to_string(),
+            domain: "compatibility".to_string(),
+            blocks_surfaces: vec![PublicationSurface::Docs, PublicationSurface::Rollout],
+            remediation: "bd-prec".to_string(),
+        }];
+        let eval =
+            evaluate_publication_gate(&verdicts, &gaps, &default_config(), 1).expect("evaluate");
+        let docs = eval.gate_decisions.get("docs").expect("docs");
+        // Critical flags should override gap-based guidance
+        assert!(matches!(docs, GateDecision::Rejected { .. }));
+    }
+
+    #[test]
+    fn gap_blocking_no_surfaces_has_no_effect() {
+        let verdicts = vec![make_annotated(
+            entitled_verdict("g-none"),
+            "compatibility",
+            "shipped_fact",
+        )];
+        let gaps = vec![FrontierGapDisclosure {
+            gap_id: "gap-empty".to_string(),
+            description: "gap that blocks nothing".to_string(),
+            domain: "compatibility".to_string(),
+            blocks_surfaces: Vec::new(),
+            remediation: "bd-none".to_string(),
+        }];
+        let eval =
+            evaluate_publication_gate(&verdicts, &gaps, &default_config(), 1).expect("evaluate");
+        // Docs should be approved since gap blocks no surfaces
+        let docs = eval.gate_decisions.get("docs").expect("docs");
+        assert!(matches!(docs, GateDecision::Approved));
+    }
+
+    #[test]
+    fn many_verdicts_all_entitled_single_domain() {
+        let verdicts: Vec<_> = (0..20)
+            .map(|i| {
+                make_annotated(
+                    entitled_verdict(&format!("bulk-{i}")),
+                    "compatibility",
+                    "shipped_fact",
+                )
+            })
+            .collect();
+        let eval =
+            evaluate_publication_gate(&verdicts, &[], &default_config(), 1).expect("evaluate");
+        assert_eq!(eval.summary.total_verdicts, 20);
+        // Each verdict routes to docs, rollout, ga => 20 * 3 = 60 claims
+        assert_eq!(eval.summary.total_publishable_claims, 60);
+        let docs = eval.gate_decisions.get("docs").expect("docs");
+        assert!(matches!(docs, GateDecision::Approved));
+    }
+
+    #[test]
+    fn scoped_observed_allowed_on_rollout_and_ga() {
+        let verdicts = vec![make_annotated(
+            entitled_verdict("so-1"),
+            "compatibility",
+            "scoped_observed",
+        )];
+        let eval =
+            evaluate_publication_gate(&verdicts, &[], &default_config(), 1).expect("evaluate");
+        let rollout_claims = eval.surface_claims.get("rollout");
+        assert!(rollout_claims.is_some_and(|c| !c.is_empty()));
+        let ga_claims = eval.surface_claims.get("ga");
+        assert!(ga_claims.is_some_and(|c| !c.is_empty()));
+    }
+
+    #[test]
+    fn scoped_observed_excluded_from_react_surface() {
+        // React requires shipped_fact
+        let verdicts = vec![make_annotated(
+            entitled_verdict("so-react"),
+            "react",
+            "scoped_observed",
+        )];
+        let eval =
+            evaluate_publication_gate(&verdicts, &[], &default_config(), 1).expect("evaluate");
+        let react_claims = eval.surface_claims.get("react");
+        assert!(
+            react_claims.is_none() || react_claims.is_some_and(|c| c.is_empty()),
+            "scoped_observed should not appear on react surface"
+        );
+    }
+
+    #[test]
+    fn render_summary_includes_per_surface_decisions() {
+        let verdicts = vec![make_annotated(
+            entitled_verdict("render-1"),
+            "compatibility",
+            "shipped_fact",
+        )];
+        let eval =
+            evaluate_publication_gate(&verdicts, &[], &default_config(), 7).expect("evaluate");
+        let summary = render_publication_gate_summary(&eval);
+        assert!(summary.contains("Per-surface decisions"));
+        assert!(summary.contains("docs:"));
+        assert!(summary.contains("rollout:"));
+        assert!(summary.contains("ga:"));
+        assert!(summary.contains("react:"));
+        assert!(summary.contains("supremacy:"));
+    }
+
+    #[test]
+    fn render_summary_shows_schema_version() {
+        let verdicts = vec![make_annotated(
+            entitled_verdict("schema-1"),
+            "docs",
+            "shipped_fact",
+        )];
+        let eval =
+            evaluate_publication_gate(&verdicts, &[], &default_config(), 1).expect("evaluate");
+        let summary = render_publication_gate_summary(&eval);
+        assert!(summary.contains(CLAIM_PUBLICATION_GATE_SCHEMA_VERSION));
+    }
+
+    #[test]
+    fn surface_ordering_is_deterministic() {
+        // PublicationSurface derives Ord; verify canonical ordering
+        let mut surfaces = vec![
+            PublicationSurface::Supremacy,
+            PublicationSurface::React,
+            PublicationSurface::Ga,
+            PublicationSurface::Rollout,
+            PublicationSurface::Docs,
+        ];
+        surfaces.sort();
+        assert_eq!(surfaces, ALL_SURFACES.to_vec());
+    }
+
+    #[test]
+    fn risk_severity_ordering() {
+        assert!(RiskSeverity::Info < RiskSeverity::Warning);
+        assert!(RiskSeverity::Warning < RiskSeverity::Critical);
+        assert!(RiskSeverity::Info < RiskSeverity::Critical);
+    }
+
+    #[test]
+    fn publication_tier_ordering() {
+        assert!(PublicationTier::ShippedFact < PublicationTier::ScopedObserved);
+        assert!(PublicationTier::ScopedObserved < PublicationTier::FrontierAmbition);
+    }
+
+    #[test]
+    fn annotated_verdict_serde_round_trip() {
+        let av = make_stale_annotated(
+            entitled_verdict("serde-av"),
+            "supremacy",
+            "shipped_fact",
+            42,
+        );
+        let json = serde_json::to_string(&av).expect("serialize");
+        let deser: AnnotatedVerdict = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(av, deser);
+    }
+
+    #[test]
+    fn publication_gate_summary_serde_round_trip() {
+        let summary = PublicationGateSummary {
+            total_verdicts: 10,
+            approved_surfaces: 3,
+            rejected_surfaces: 1,
+            guidance_required_surfaces: 1,
+            total_publishable_claims: 25,
+            frontier_gap_count: 2,
+            risk_flag_count: 4,
+        };
+        let json = serde_json::to_string(&summary).expect("serialize");
+        let deser: PublicationGateSummary = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(summary, deser);
+    }
+
+    #[test]
+    fn risk_severity_serde_round_trip() {
+        for severity in [RiskSeverity::Info, RiskSeverity::Warning, RiskSeverity::Critical] {
+            let json = serde_json::to_string(&severity).expect("serialize");
+            let deser: RiskSeverity = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(severity, deser);
+        }
+    }
+
+    #[test]
+    fn publication_tier_serde_round_trip() {
+        for tier in [
+            PublicationTier::ShippedFact,
+            PublicationTier::ScopedObserved,
+            PublicationTier::FrontierAmbition,
+        ] {
+            let json = serde_json::to_string(&tier).expect("serialize");
+            let deser: PublicationTier = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(tier, deser);
+        }
+    }
+
+    #[test]
+    fn evaluation_determinism_same_inputs() {
+        let verdicts = vec![
+            make_annotated(entitled_verdict("det-1"), "compatibility", "shipped_fact"),
+            make_annotated(blocked_verdict("det-2"), "supremacy", "shipped_fact"),
+            make_annotated(entitled_verdict("det-3"), "react", "shipped_fact"),
+        ];
+        let gaps = vec![FrontierGapDisclosure {
+            gap_id: "det-gap".to_string(),
+            description: "det test".to_string(),
+            domain: "compatibility".to_string(),
+            blocks_surfaces: vec![PublicationSurface::Ga],
+            remediation: "bd-det".to_string(),
+        }];
+        let eval1 =
+            evaluate_publication_gate(&verdicts, &gaps, &default_config(), 50).expect("eval1");
+        let eval2 =
+            evaluate_publication_gate(&verdicts, &gaps, &default_config(), 50).expect("eval2");
+        // Same inputs must produce identical outputs
+        assert_eq!(eval1.gate_decisions, eval2.gate_decisions);
+        assert_eq!(eval1.surface_claims, eval2.surface_claims);
+        assert_eq!(eval1.risk_flags, eval2.risk_flags);
+        assert_eq!(eval1.summary, eval2.summary);
+    }
+
+    #[test]
+    fn empty_frontier_gaps_produces_zero_gap_count() {
+        let verdicts = vec![make_annotated(
+            entitled_verdict("no-gap"),
+            "docs",
+            "shipped_fact",
+        )];
+        let eval =
+            evaluate_publication_gate(&verdicts, &[], &default_config(), 1).expect("evaluate");
+        assert_eq!(eval.summary.frontier_gap_count, 0);
+        assert!(eval.frontier_gaps.is_empty());
+    }
+
+    #[test]
+    fn frontier_gaps_preserved_in_evaluation() {
+        let verdicts = vec![make_annotated(
+            entitled_verdict("gap-pres"),
+            "docs",
+            "shipped_fact",
+        )];
+        let gaps = vec![
+            FrontierGapDisclosure {
+                gap_id: "g1".to_string(),
+                description: "first gap".to_string(),
+                domain: "compat".to_string(),
+                blocks_surfaces: Vec::new(),
+                remediation: "bd-g1".to_string(),
+            },
+            FrontierGapDisclosure {
+                gap_id: "g2".to_string(),
+                description: "second gap".to_string(),
+                domain: "react".to_string(),
+                blocks_surfaces: vec![PublicationSurface::React],
+                remediation: "bd-g2".to_string(),
+            },
+        ];
+        let eval =
+            evaluate_publication_gate(&verdicts, &gaps, &default_config(), 1).expect("evaluate");
+        assert_eq!(eval.frontier_gaps.len(), 2);
+        assert_eq!(eval.frontier_gaps[0].gap_id, "g1");
+        assert_eq!(eval.frontier_gaps[1].gap_id, "g2");
+    }
+
+    #[test]
+    fn summary_guidance_required_counted_correctly() {
+        let verdicts = vec![make_annotated(
+            entitled_verdict("guide-1"),
+            "compatibility",
+            "shipped_fact",
+        )];
+        let gaps = vec![FrontierGapDisclosure {
+            gap_id: "guide-gap".to_string(),
+            description: "test".to_string(),
+            domain: "compatibility".to_string(),
+            blocks_surfaces: vec![PublicationSurface::Rollout, PublicationSurface::Ga],
+            remediation: "bd-guide".to_string(),
+        }];
+        let eval =
+            evaluate_publication_gate(&verdicts, &gaps, &default_config(), 1).expect("evaluate");
+        assert_eq!(eval.summary.guidance_required_surfaces, 2);
+    }
+
+    #[test]
+    fn all_surfaces_constant_has_five_elements() {
+        assert_eq!(ALL_SURFACES.len(), 5);
+    }
+
+    #[test]
+    fn max_publishable_staleness_hours_value() {
+        assert_eq!(MAX_PUBLISHABLE_STALENESS_HOURS, 168);
+    }
+
+    #[test]
+    fn custom_config_empty_domain_map() {
+        let config = SurfaceRoutingConfig {
+            domain_to_surfaces: BTreeMap::new(),
+            min_tier_for_surface: BTreeMap::new(),
+            max_staleness_hours: BTreeMap::new(),
+        };
+        let verdicts = vec![make_annotated(
+            entitled_verdict("custom-1"),
+            "compatibility",
+            "shipped_fact",
+        )];
+        let eval =
+            evaluate_publication_gate(&verdicts, &[], &config, 1).expect("evaluate");
+        // No domain routing => no claims anywhere
+        assert_eq!(eval.summary.total_publishable_claims, 0);
+        for decision in eval.gate_decisions.values() {
+            assert!(matches!(decision, GateDecision::Rejected { .. }));
+        }
+    }
+
+    #[test]
+    fn custom_config_no_min_tier_allows_all() {
+        let mut domain_to_surfaces = BTreeMap::new();
+        domain_to_surfaces.insert(
+            "custom".to_string(),
+            vec![PublicationSurface::Supremacy],
+        );
+        let config = SurfaceRoutingConfig {
+            domain_to_surfaces,
+            min_tier_for_surface: BTreeMap::new(),
+            max_staleness_hours: BTreeMap::new(),
+        };
+        // With no min_tier for supremacy, even frontier_ambition should pass
+        let verdicts = vec![make_annotated(
+            entitled_verdict("lax-1"),
+            "custom",
+            "frontier_ambition",
+        )];
+        let eval =
+            evaluate_publication_gate(&verdicts, &[], &config, 1).expect("evaluate");
+        let sup_claims = eval.surface_claims.get("supremacy");
+        assert!(sup_claims.is_some_and(|c| !c.is_empty()));
+    }
+
+    #[test]
+    fn stale_claim_does_not_appear_in_surface_claims() {
+        // GA has 168h limit
+        let verdicts = vec![make_stale_annotated(
+            entitled_verdict("stale-ga"),
+            "compatibility",
+            "shipped_fact",
+            200,
+        )];
+        let eval =
+            evaluate_publication_gate(&verdicts, &[], &default_config(), 1).expect("evaluate");
+        let ga_claims = eval.surface_claims.get("ga");
+        assert!(
+            ga_claims.is_none() || ga_claims.is_some_and(|c| c.is_empty()),
+            "stale claim should not appear in ga surface_claims"
+        );
+    }
+
+    #[test]
+    fn risk_flag_counter_increments_across_surfaces() {
+        // A single stale verdict routed to multiple surfaces should produce
+        // multiple flags with distinct IDs
+        let verdicts = vec![make_stale_annotated(
+            entitled_verdict("multi-flag"),
+            "compatibility",
+            "shipped_fact",
+            500, // exceeds all surface staleness limits
+        )];
+        let eval =
+            evaluate_publication_gate(&verdicts, &[], &default_config(), 1).expect("evaluate");
+        let stale_flags: Vec<_> = eval
+            .risk_flags
+            .iter()
+            .filter(|f| f.flag_id.starts_with("stale-"))
+            .collect();
+        assert!(stale_flags.len() >= 2, "should produce flags for multiple surfaces");
+        // All flag IDs should be unique
+        let mut flag_ids: Vec<_> = stale_flags.iter().map(|f| &f.flag_id).collect();
+        let pre_dedup = flag_ids.len();
+        flag_ids.sort();
+        flag_ids.dedup();
+        assert_eq!(flag_ids.len(), pre_dedup, "all flag IDs should be unique");
+    }
+
+    #[test]
+    fn publishable_claim_fields_populated_from_verdict() {
+        let verdict = ClaimVerdict {
+            atom_id: "atom-verify".to_string(),
+            state: ClaimVerdictState::Entitled,
+            supporting_morphism_ids: vec!["m1".to_string(), "m2".to_string()],
+            active_rule_ids: Vec::new(),
+            minimal_cutset_ids: Vec::new(),
+            impossibility_certificate_ids: vec!["cert-1".to_string()],
+        };
+        let verdicts = vec![AnnotatedVerdict {
+            verdict,
+            domain: "docs".to_string(),
+            tier: "shipped_fact".to_string(),
+            statement: "The engine supports ES2024".to_string(),
+            staleness_hours: 0,
+        }];
+        let eval =
+            evaluate_publication_gate(&verdicts, &[], &default_config(), 1).expect("evaluate");
+        let docs_claims = eval.surface_claims.get("docs").expect("docs claims");
+        assert_eq!(docs_claims.len(), 1);
+        let claim = &docs_claims[0];
+        assert_eq!(claim.atom_id, "atom-verify");
+        assert_eq!(claim.surface, PublicationSurface::Docs);
+        assert_eq!(claim.publication_tier, PublicationTier::ShippedFact);
+        assert_eq!(claim.supporting_morphisms, vec!["m1", "m2"]);
+        assert_eq!(claim.impossibility_certificates, vec!["cert-1"]);
+        assert_eq!(claim.domain, "docs");
+        assert_eq!(claim.statement, "The engine supports ES2024");
+    }
+
+    #[test]
+    fn epoch_zero_is_valid() {
+        let verdicts = vec![make_annotated(
+            entitled_verdict("ep0"),
+            "docs",
+            "shipped_fact",
+        )];
+        let eval =
+            evaluate_publication_gate(&verdicts, &[], &default_config(), 0).expect("evaluate");
+        assert_eq!(eval.evaluated_epoch, 0);
+    }
+
+    #[test]
+    fn large_epoch_value() {
+        let verdicts = vec![make_annotated(
+            entitled_verdict("big-ep"),
+            "docs",
+            "shipped_fact",
+        )];
+        let epoch = u64::MAX;
+        let eval =
+            evaluate_publication_gate(&verdicts, &[], &default_config(), epoch).expect("evaluate");
+        assert_eq!(eval.evaluated_epoch, epoch);
+    }
 }

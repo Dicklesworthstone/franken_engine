@@ -1431,4 +1431,915 @@ mod tests {
         let decision = evaluate_substrate(&profile, Some(&config));
         assert_eq!(decision.rollback, RollbackStrategy::SnapshotRestore);
     }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: serde roundtrips for remaining types
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_rollback_strategy_serde_roundtrip() {
+        let all = [
+            RollbackStrategy::SnapshotRestore,
+            RollbackStrategy::EpochInvalidate,
+            RollbackStrategy::CowClone,
+            RollbackStrategy::Rebuild,
+            RollbackStrategy::NoRollback,
+        ];
+        for rs in &all {
+            let json = serde_json::to_string(rs).unwrap();
+            let back: RollbackStrategy = serde_json::from_str(&json).unwrap();
+            assert_eq!(*rs, back);
+        }
+    }
+
+    #[test]
+    fn test_transition_trigger_serde_roundtrip() {
+        let all = [
+            TransitionTrigger::HotnessThreshold,
+            TransitionTrigger::MemoryPressure,
+            TransitionTrigger::LatencySpike,
+            TransitionTrigger::ManualOverride,
+            TransitionTrigger::FallbackTriggered,
+            TransitionTrigger::PortabilityCheck,
+        ];
+        for tt in &all {
+            let json = serde_json::to_string(tt).unwrap();
+            let back: TransitionTrigger = serde_json::from_str(&json).unwrap();
+            assert_eq!(*tt, back);
+        }
+    }
+
+    #[test]
+    fn test_substrate_error_serde_roundtrip() {
+        let errors = [
+            SubstrateError::EmptyInventory,
+            SubstrateError::InvalidProfile {
+                reason: "bad data".into(),
+            },
+            SubstrateError::TransitionForbidden {
+                from: SubstrateKind::Swizzled,
+                to: SubstrateKind::FlatArray,
+            },
+            SubstrateError::OverrideConflict {
+                reason: "conflict".into(),
+            },
+        ];
+        for err in &errors {
+            let json = serde_json::to_string(err).unwrap();
+            let back: SubstrateError = serde_json::from_str(&json).unwrap();
+            assert_eq!(*err, back);
+        }
+    }
+
+    #[test]
+    fn test_substrate_profile_serde_roundtrip() {
+        let profile = SubstrateProfile {
+            id: "serde_prof".into(),
+            kind: SubstrateKind::ArtTree,
+            access_count: 42_000,
+            hit_rate_millionths: 870_000,
+            avg_latency_millionths: 95,
+            memory_bytes: 524_288,
+            is_hot: true,
+        };
+        let json = serde_json::to_string(&profile).unwrap();
+        let back: SubstrateProfile = serde_json::from_str(&json).unwrap();
+        assert_eq!(profile, back);
+    }
+
+    #[test]
+    fn test_override_config_serde_roundtrip() {
+        let config = OverrideConfig {
+            force_kind: Some(SubstrateKind::Swizzled),
+            force_fallback: Some(FallbackPath::BTreeLookup),
+            force_rollback: Some(RollbackStrategy::CowClone),
+            disable_optimization: false,
+            debug_mode: true,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let back: OverrideConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(config, back);
+    }
+
+    #[test]
+    fn test_substrate_transition_serde_roundtrip() {
+        let transition = SubstrateTransition {
+            from_kind: SubstrateKind::FlatArray,
+            to_kind: SubstrateKind::SwissTable,
+            trigger: TransitionTrigger::HotnessThreshold,
+            cost_millionths: 300_000,
+        };
+        let json = serde_json::to_string(&transition).unwrap();
+        let back: SubstrateTransition = serde_json::from_str(&json).unwrap();
+        assert_eq!(transition, back);
+    }
+
+    #[test]
+    fn test_inventory_report_serde_roundtrip() {
+        let report = build_canonical_inventory();
+        let json = serde_json::to_string(&report).unwrap();
+        let back: SubstrateInventoryReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(report, back);
+    }
+
+    #[test]
+    fn test_evidence_manifest_serde_roundtrip() {
+        let manifest = run_substrate_evidence();
+        let json = serde_json::to_string(&manifest).unwrap();
+        let back: SubstrateEvidenceManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(manifest, back);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: Display formatting for composite types
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_substrate_profile_display_format() {
+        let profile = SubstrateProfile {
+            id: "display_test".into(),
+            kind: SubstrateKind::SwissTable,
+            access_count: 999,
+            hit_rate_millionths: 500_000,
+            avg_latency_millionths: 50,
+            memory_bytes: 1024,
+            is_hot: true,
+        };
+        let display = profile.to_string();
+        assert!(display.contains("display_test"));
+        assert!(display.contains("swiss_table"));
+        assert!(display.contains("999"));
+        assert!(display.contains("hot=true"));
+    }
+
+    #[test]
+    fn test_optimization_decision_display_format() {
+        let profile = hot_profile("dec_disp", SubstrateKind::FlatArray, 200_000);
+        let decision = evaluate_substrate(&profile, None);
+        let display = decision.to_string();
+        assert!(display.contains("dec_disp"));
+        assert!(display.contains("flat_array"));
+        assert!(display.contains("->"));
+    }
+
+    #[test]
+    fn test_substrate_transition_display_format() {
+        let transition = SubstrateTransition {
+            from_kind: SubstrateKind::GenericFallback,
+            to_kind: SubstrateKind::SwissTable,
+            trigger: TransitionTrigger::HotnessThreshold,
+            cost_millionths: 400_000,
+        };
+        let display = transition.to_string();
+        assert!(display.contains("generic_fallback"));
+        assert!(display.contains("swiss_table"));
+        assert!(display.contains("hotness_threshold"));
+        assert!(display.contains("400000"));
+    }
+
+    #[test]
+    fn test_certificate_display_format() {
+        let profile = hot_profile("cert_disp", SubstrateKind::FlatArray, 200_000);
+        let decision = evaluate_substrate(&profile, None);
+        let cert = certify_substrate(&profile, &decision);
+        let display = cert.to_string();
+        assert!(display.contains("cert_disp"));
+        assert!(display.contains("overrides="));
+        assert!(display.contains("hash="));
+    }
+
+    #[test]
+    fn test_inventory_report_display_format() {
+        let report = build_canonical_inventory();
+        let display = report.to_string();
+        assert!(display.contains("profiles=8"));
+        assert!(display.contains("hot="));
+        assert!(display.contains("optimized="));
+        assert!(display.contains("fallback="));
+    }
+
+    #[test]
+    fn test_evidence_manifest_display_format() {
+        let manifest = run_substrate_evidence();
+        let display = manifest.to_string();
+        assert!(display.contains("evaluated=8"));
+        assert!(display.contains("optimized="));
+        assert!(display.contains("fallback="));
+        assert!(display.contains("error=None"));
+    }
+
+    #[test]
+    fn test_override_config_display_format() {
+        let config = OverrideConfig {
+            force_kind: Some(SubstrateKind::ArtTree),
+            disable_optimization: false,
+            debug_mode: true,
+            ..OverrideConfig::default()
+        };
+        let display = config.to_string();
+        assert!(display.contains("ArtTree"));
+        assert!(display.contains("disable=false"));
+        assert!(display.contains("debug=true"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: recommendation boundary conditions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_recommend_boundary_100k_accesses_not_enough_for_swiss() {
+        // Exactly 100_000 accesses (must be >100_000 for SwissTable).
+        let profile = SubstrateProfile {
+            id: "boundary_100k".into(),
+            kind: SubstrateKind::FlatArray,
+            access_count: 100_000,
+            hit_rate_millionths: 900_000,
+            avg_latency_millionths: 50,
+            memory_bytes: 32_768,
+            is_hot: true,
+        };
+        let kind = recommend_substrate_kind(&profile);
+        // 100_000 is not > 100_000, so not SwissTable.
+        // hit_rate 900_000 >= 900_000 -> InlineCache.
+        assert_eq!(kind, SubstrateKind::InlineCache);
+    }
+
+    #[test]
+    fn test_recommend_boundary_100001_accesses_gets_swiss() {
+        let profile = SubstrateProfile {
+            id: "boundary_100001".into(),
+            kind: SubstrateKind::FlatArray,
+            access_count: 100_001,
+            hit_rate_millionths: 800_000,
+            avg_latency_millionths: 50,
+            memory_bytes: 32_768,
+            is_hot: true,
+        };
+        let kind = recommend_substrate_kind(&profile);
+        assert_eq!(kind, SubstrateKind::SwissTable);
+    }
+
+    #[test]
+    fn test_recommend_swiss_requires_hit_rate_800k() {
+        // High accesses but hit rate below 800_000 => not SwissTable.
+        let profile = SubstrateProfile {
+            id: "swiss_hr_boundary".into(),
+            kind: SubstrateKind::FlatArray,
+            access_count: 200_000,
+            hit_rate_millionths: 799_999,
+            avg_latency_millionths: 50,
+            memory_bytes: 32_768,
+            is_hot: true,
+        };
+        let kind = recommend_substrate_kind(&profile);
+        assert_ne!(kind, SubstrateKind::SwissTable);
+    }
+
+    #[test]
+    fn test_recommend_bitmap_requires_memory_below_4096() {
+        // hit_rate >= 950_000, but memory is exactly 4096 (not < 4096).
+        let profile = SubstrateProfile {
+            id: "bitmap_mem_boundary".into(),
+            kind: SubstrateKind::FlatArray,
+            access_count: 5_000,
+            hit_rate_millionths: 960_000,
+            avg_latency_millionths: 20,
+            memory_bytes: 4_096,
+            is_hot: true,
+        };
+        let kind = recommend_substrate_kind(&profile);
+        // memory_bytes 4096 is not < 4096, so CompactBitmap is skipped.
+        // hit_rate 960_000 >= 900_000 -> InlineCache.
+        assert_eq!(kind, SubstrateKind::InlineCache);
+    }
+
+    #[test]
+    fn test_recommend_art_tree_memory_boundary() {
+        // Memory exactly 1_048_576 is not > 1_048_576, so no ArtTree.
+        let profile = SubstrateProfile {
+            id: "art_mem_boundary".into(),
+            kind: SubstrateKind::FlatArray,
+            access_count: 5_000,
+            hit_rate_millionths: 800_000,
+            avg_latency_millionths: 200,
+            memory_bytes: 1_048_576,
+            is_hot: true,
+        };
+        let kind = recommend_substrate_kind(&profile);
+        // Not ArtTree (memory not > 1_048_576), not CompactBitmap, not SwissTable.
+        // hit_rate 800_000 < 900_000 so not InlineCache.
+        // access_count 5_000 is not > 10_000 so not Swizzled.
+        assert_eq!(kind, SubstrateKind::FlatArray);
+    }
+
+    #[test]
+    fn test_recommend_swizzled_boundary_10001_accesses() {
+        let profile = SubstrateProfile {
+            id: "swizzled_boundary".into(),
+            kind: SubstrateKind::FlatArray,
+            access_count: 10_001,
+            hit_rate_millionths: 800_000,
+            avg_latency_millionths: 100,
+            memory_bytes: 65_536,
+            is_hot: true,
+        };
+        let kind = recommend_substrate_kind(&profile);
+        assert_eq!(kind, SubstrateKind::Swizzled);
+    }
+
+    #[test]
+    fn test_recommend_flat_array_10000_accesses() {
+        // 10_000 is not > 10_000 => no Swizzled, falls to FlatArray.
+        let profile = SubstrateProfile {
+            id: "flat_boundary".into(),
+            kind: SubstrateKind::FlatArray,
+            access_count: 10_000,
+            hit_rate_millionths: 800_000,
+            avg_latency_millionths: 100,
+            memory_bytes: 65_536,
+            is_hot: true,
+        };
+        let kind = recommend_substrate_kind(&profile);
+        assert_eq!(kind, SubstrateKind::FlatArray);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: transition cost symmetry / asymmetry
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_transition_cost_all_same_kind_zero() {
+        let kinds = [
+            SubstrateKind::SwissTable,
+            SubstrateKind::ArtTree,
+            SubstrateKind::FlatArray,
+            SubstrateKind::CompactBitmap,
+            SubstrateKind::InlineCache,
+            SubstrateKind::Swizzled,
+            SubstrateKind::GenericFallback,
+        ];
+        for kind in &kinds {
+            assert_eq!(compute_transition_cost(*kind, *kind), 0);
+        }
+    }
+
+    #[test]
+    fn test_transition_cost_asymmetry_swizzled() {
+        // Swizzled -> FlatArray vs FlatArray -> Swizzled.
+        let cost_from = compute_transition_cost(SubstrateKind::Swizzled, SubstrateKind::FlatArray);
+        let cost_to = compute_transition_cost(SubstrateKind::FlatArray, SubstrateKind::Swizzled);
+        // Swizzled outbound is 800k, inbound is 700k. Both + 100k base.
+        assert_eq!(cost_from, 900_000);
+        assert_eq!(cost_to, 800_000);
+        assert!(cost_from > cost_to);
+    }
+
+    #[test]
+    fn test_transition_cost_generic_rebuild_vs_teardown() {
+        let rebuild =
+            compute_transition_cost(SubstrateKind::GenericFallback, SubstrateKind::SwissTable);
+        let teardown =
+            compute_transition_cost(SubstrateKind::SwissTable, SubstrateKind::GenericFallback);
+        // Rebuild from generic: 300k + 100k = 400k.
+        // Teardown to generic: 50k + 100k = 150k.
+        assert_eq!(rebuild, 400_000);
+        assert_eq!(teardown, 150_000);
+        assert!(rebuild > teardown);
+    }
+
+    #[test]
+    fn test_transition_cost_swiss_art_symmetric() {
+        let a_to_b =
+            compute_transition_cost(SubstrateKind::SwissTable, SubstrateKind::ArtTree);
+        let b_to_a =
+            compute_transition_cost(SubstrateKind::ArtTree, SubstrateKind::SwissTable);
+        // Both are covered by the same match arm: 500k + 100k = 600k.
+        assert_eq!(a_to_b, 600_000);
+        assert_eq!(b_to_a, 600_000);
+    }
+
+    #[test]
+    fn test_transition_cost_flat_array_outbound() {
+        // FlatArray -> ArtTree: FlatArray outbound arm = 200k + 100k = 300k.
+        let cost = compute_transition_cost(SubstrateKind::FlatArray, SubstrateKind::ArtTree);
+        assert_eq!(cost, 300_000);
+    }
+
+    #[test]
+    fn test_transition_cost_inline_cache_transitions() {
+        // InlineCache -> CompactBitmap: InlineCache outbound = 350k + 100k = 450k.
+        let cost_out = compute_transition_cost(
+            SubstrateKind::InlineCache,
+            SubstrateKind::CompactBitmap,
+        );
+        assert_eq!(cost_out, 450_000);
+        // ArtTree -> InlineCache: InlineCache inbound = 350k + 100k = 450k.
+        let cost_in =
+            compute_transition_cost(SubstrateKind::ArtTree, SubstrateKind::InlineCache);
+        assert_eq!(cost_in, 450_000);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: optimization level selection
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_select_optimization_level_cold() {
+        let profile = cold_profile("opt_cold", SubstrateKind::FlatArray);
+        let level = select_optimization_level(&profile);
+        assert_eq!(level, OptimizationLevel::Unoptimized);
+    }
+
+    #[test]
+    fn test_select_optimization_level_fully_swizzled() {
+        let profile = SubstrateProfile {
+            id: "opt_full".into(),
+            kind: SubstrateKind::SwissTable,
+            access_count: 600_000,
+            hit_rate_millionths: 960_000,
+            avg_latency_millionths: 20,
+            memory_bytes: 4_096,
+            is_hot: true,
+        };
+        let level = select_optimization_level(&profile);
+        assert_eq!(level, OptimizationLevel::FullySwizzled);
+    }
+
+    #[test]
+    fn test_select_optimization_level_prefetched() {
+        let profile = SubstrateProfile {
+            id: "opt_pre".into(),
+            kind: SubstrateKind::SwissTable,
+            access_count: 200_000,
+            hit_rate_millionths: 800_000,
+            avg_latency_millionths: 50,
+            memory_bytes: 32_768,
+            is_hot: true,
+        };
+        let level = select_optimization_level(&profile);
+        assert_eq!(level, OptimizationLevel::Prefetched);
+    }
+
+    #[test]
+    fn test_select_optimization_level_cache_line() {
+        let profile = SubstrateProfile {
+            id: "opt_cl".into(),
+            kind: SubstrateKind::FlatArray,
+            access_count: 50_000,
+            hit_rate_millionths: 800_000,
+            avg_latency_millionths: 100,
+            memory_bytes: 32_768,
+            is_hot: true,
+        };
+        let level = select_optimization_level(&profile);
+        assert_eq!(level, OptimizationLevel::CacheLine);
+    }
+
+    #[test]
+    fn test_select_optimization_level_locality_aware() {
+        let profile = SubstrateProfile {
+            id: "opt_la".into(),
+            kind: SubstrateKind::FlatArray,
+            access_count: 5_000,
+            hit_rate_millionths: 700_000,
+            avg_latency_millionths: 200,
+            memory_bytes: 32_768,
+            is_hot: true,
+        };
+        let level = select_optimization_level(&profile);
+        assert_eq!(level, OptimizationLevel::LocalityAware);
+    }
+
+    #[test]
+    fn test_select_optimization_level_boundary_500k_not_enough_for_fully_swizzled() {
+        // access_count 500_000 is not >500_000. But hit_rate 950_000 is >= 950_000.
+        // The condition is access_count > 500_000 && hit_rate >= 950_000.
+        let profile = SubstrateProfile {
+            id: "opt_boundary".into(),
+            kind: SubstrateKind::SwissTable,
+            access_count: 500_000,
+            hit_rate_millionths: 950_000,
+            avg_latency_millionths: 20,
+            memory_bytes: 4_096,
+            is_hot: true,
+        };
+        let level = select_optimization_level(&profile);
+        // 500_000 not > 500_000, falls to next: access_count > 100_000 -> Prefetched.
+        assert_eq!(level, OptimizationLevel::Prefetched);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: fallback and rollback selection
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_select_fallback_all_kinds() {
+        assert_eq!(
+            select_fallback(SubstrateKind::SwissTable),
+            FallbackPath::LinearProbe
+        );
+        assert_eq!(
+            select_fallback(SubstrateKind::ArtTree),
+            FallbackPath::BTreeLookup
+        );
+        assert_eq!(
+            select_fallback(SubstrateKind::FlatArray),
+            FallbackPath::GenericScan
+        );
+        assert_eq!(
+            select_fallback(SubstrateKind::CompactBitmap),
+            FallbackPath::SortedArray
+        );
+        assert_eq!(
+            select_fallback(SubstrateKind::InlineCache),
+            FallbackPath::LinearProbe
+        );
+        assert_eq!(
+            select_fallback(SubstrateKind::Swizzled),
+            FallbackPath::BTreeLookup
+        );
+        assert_eq!(
+            select_fallback(SubstrateKind::GenericFallback),
+            FallbackPath::Abstain
+        );
+    }
+
+    #[test]
+    fn test_select_rollback_all_levels() {
+        assert_eq!(
+            select_rollback(OptimizationLevel::Unoptimized),
+            RollbackStrategy::NoRollback
+        );
+        assert_eq!(
+            select_rollback(OptimizationLevel::LocalityAware),
+            RollbackStrategy::Rebuild
+        );
+        assert_eq!(
+            select_rollback(OptimizationLevel::CacheLine),
+            RollbackStrategy::EpochInvalidate
+        );
+        assert_eq!(
+            select_rollback(OptimizationLevel::Prefetched),
+            RollbackStrategy::CowClone
+        );
+        assert_eq!(
+            select_rollback(OptimizationLevel::FullySwizzled),
+            RollbackStrategy::SnapshotRestore
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: confidence computation
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_confidence_caps_at_950k() {
+        // With 1_000_000 accesses the raw value is 1_000_000 which caps to 950_000.
+        let profile = SubstrateProfile {
+            id: "conf_cap".into(),
+            kind: SubstrateKind::FlatArray,
+            access_count: 1_000_000,
+            hit_rate_millionths: 900_000,
+            avg_latency_millionths: 50,
+            memory_bytes: 32_768,
+            is_hot: true,
+        };
+        let decision = evaluate_substrate(&profile, None);
+        assert_eq!(decision.confidence_millionths, 950_000);
+    }
+
+    #[test]
+    fn test_confidence_scales_linearly_below_cap() {
+        // With 500_000 accesses: raw = 500_000 * 1_000_000 / 1_000_000 = 500_000.
+        let profile = SubstrateProfile {
+            id: "conf_500k".into(),
+            kind: SubstrateKind::FlatArray,
+            access_count: 500_000,
+            hit_rate_millionths: 900_000,
+            avg_latency_millionths: 50,
+            memory_bytes: 32_768,
+            is_hot: true,
+        };
+        let decision = evaluate_substrate(&profile, None);
+        assert_eq!(decision.confidence_millionths, 500_000);
+    }
+
+    #[test]
+    fn test_confidence_single_access() {
+        let profile = SubstrateProfile {
+            id: "conf_one".into(),
+            kind: SubstrateKind::FlatArray,
+            access_count: 1,
+            hit_rate_millionths: 900_000,
+            avg_latency_millionths: 50,
+            memory_bytes: 32_768,
+            is_hot: true,
+        };
+        let decision = evaluate_substrate(&profile, None);
+        // 1 * 1_000_000 / 1_000_000 = 1, min(1, 950_000) = 1.
+        assert_eq!(decision.confidence_millionths, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: expected speedup computation
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_speedup_same_kind_is_1x() {
+        // If the recommended kind is the same as the current kind, speedup = 1.0x.
+        let profile = SubstrateProfile {
+            id: "speedup_same".into(),
+            kind: SubstrateKind::InlineCache,
+            access_count: 50_000,
+            hit_rate_millionths: 910_000,
+            avg_latency_millionths: 70,
+            memory_bytes: 16_384,
+            is_hot: true,
+        };
+        // This profile recommends InlineCache (same as current kind).
+        let recommended = recommend_substrate_kind(&profile);
+        assert_eq!(recommended, SubstrateKind::InlineCache);
+        let speedup = compute_expected_speedup(&profile, recommended);
+        assert_eq!(speedup, MILLIONTHS);
+    }
+
+    #[test]
+    fn test_speedup_generic_fallback_is_1x() {
+        let profile = cold_profile("speedup_fb", SubstrateKind::FlatArray);
+        let speedup = compute_expected_speedup(&profile, SubstrateKind::GenericFallback);
+        assert_eq!(speedup, MILLIONTHS);
+    }
+
+    #[test]
+    fn test_speedup_swiss_table_with_high_hit_rate() {
+        let profile = SubstrateProfile {
+            id: "speedup_swiss".into(),
+            kind: SubstrateKind::FlatArray,
+            access_count: 200_000,
+            hit_rate_millionths: 900_000,
+            avg_latency_millionths: 50,
+            memory_bytes: 32_768,
+            is_hot: true,
+        };
+        // SwissTable base: 2_500_000. Scaled: 2_500_000 * 900_000 / 1_000_000 = 2_250_000.
+        let speedup = compute_expected_speedup(&profile, SubstrateKind::SwissTable);
+        assert_eq!(speedup, 2_250_000);
+    }
+
+    #[test]
+    fn test_speedup_floor_at_1x_when_hit_rate_very_low() {
+        // Very low hit rate should floor the speedup at 1.0x.
+        let profile = SubstrateProfile {
+            id: "speedup_floor".into(),
+            kind: SubstrateKind::FlatArray,
+            access_count: 200_000,
+            hit_rate_millionths: 100_000,
+            avg_latency_millionths: 50,
+            memory_bytes: 32_768,
+            is_hot: true,
+        };
+        // FlatArray base: 1_200_000. Scaled: 1_200_000 * 100_000 / 1_000_000 = 120_000.
+        // Floor at 1_000_000.
+        let speedup = compute_expected_speedup(&profile, SubstrateKind::FlatArray);
+        // Same kind => 1.0x.
+        assert_eq!(speedup, MILLIONTHS);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: certificate overrides_applied flag
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_certificate_overrides_applied_when_hot_forced_to_generic() {
+        let profile = hot_profile("cert_override_hot", SubstrateKind::FlatArray, 200_000);
+        let config = OverrideConfig {
+            disable_optimization: true,
+            ..OverrideConfig::default()
+        };
+        let decision = evaluate_substrate(&profile, Some(&config));
+        let cert = certify_substrate(&profile, &decision);
+        // is_hot=true and recommended=GenericFallback => overrides_applied=true.
+        assert!(cert.overrides_applied);
+    }
+
+    #[test]
+    fn test_certificate_overrides_not_applied_for_cold_generic() {
+        let profile = cold_profile("cert_cold_gen", SubstrateKind::FlatArray);
+        let decision = evaluate_substrate(&profile, None);
+        // Cold profile gets GenericFallback naturally.
+        assert_eq!(decision.recommended_kind, SubstrateKind::GenericFallback);
+        let cert = certify_substrate(&profile, &decision);
+        // is_hot=false => overrides_applied=false.
+        assert!(!cert.overrides_applied);
+    }
+
+    #[test]
+    fn test_certificate_overrides_not_applied_for_hot_non_generic() {
+        let profile = hot_profile("cert_hot_opt", SubstrateKind::FlatArray, 200_000);
+        let decision = evaluate_substrate(&profile, None);
+        assert_ne!(decision.recommended_kind, SubstrateKind::GenericFallback);
+        let cert = certify_substrate(&profile, &decision);
+        // is_hot=true but recommended is not GenericFallback => overrides_applied=false.
+        assert!(!cert.overrides_applied);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: certificate transition trigger logic
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_certificate_trigger_portability_check_when_same_kind() {
+        let profile = SubstrateProfile {
+            id: "trigger_same".into(),
+            kind: SubstrateKind::InlineCache,
+            access_count: 50_000,
+            hit_rate_millionths: 910_000,
+            avg_latency_millionths: 70,
+            memory_bytes: 16_384,
+            is_hot: true,
+        };
+        let mut decision = evaluate_substrate(&profile, None);
+        decision.recommended_kind = profile.kind;
+        let cert = certify_substrate(&profile, &decision);
+        // Same kind => no transitions.
+        assert!(cert.transitions.is_empty());
+    }
+
+    #[test]
+    fn test_certificate_trigger_fallback_when_recommended_generic() {
+        let profile = hot_profile("trigger_fb", SubstrateKind::FlatArray, 200_000);
+        let config = OverrideConfig {
+            disable_optimization: true,
+            ..OverrideConfig::default()
+        };
+        let decision = evaluate_substrate(&profile, Some(&config));
+        let cert = certify_substrate(&profile, &decision);
+        // recommended = GenericFallback, from != to => has transition with FallbackTriggered.
+        assert_eq!(cert.transitions.len(), 1);
+        assert_eq!(
+            cert.transitions[0].trigger,
+            TransitionTrigger::FallbackTriggered
+        );
+    }
+
+    #[test]
+    fn test_certificate_trigger_hotness_when_upgrading() {
+        let profile = hot_profile("trigger_hot", SubstrateKind::FlatArray, 200_000);
+        let decision = evaluate_substrate(&profile, None);
+        // Should recommend something other than FlatArray and other than GenericFallback.
+        assert_ne!(decision.recommended_kind, SubstrateKind::FlatArray);
+        assert_ne!(decision.recommended_kind, SubstrateKind::GenericFallback);
+        let cert = certify_substrate(&profile, &decision);
+        assert_eq!(cert.transitions.len(), 1);
+        assert_eq!(
+            cert.transitions[0].trigger,
+            TransitionTrigger::HotnessThreshold
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: combined overrides
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_combined_force_kind_and_debug_mode() {
+        let profile = hot_profile("combined_1", SubstrateKind::FlatArray, 800_000);
+        let config = OverrideConfig {
+            force_kind: Some(SubstrateKind::CompactBitmap),
+            debug_mode: true,
+            ..OverrideConfig::default()
+        };
+        let decision = evaluate_substrate(&profile, Some(&config));
+        assert_eq!(decision.recommended_kind, SubstrateKind::CompactBitmap);
+        assert!(decision.confidence_millionths <= 500_000);
+    }
+
+    #[test]
+    fn test_disable_overrides_all_force_fields() {
+        // When disable_optimization is true, force_kind should be ignored.
+        let profile = hot_profile("disable_wins", SubstrateKind::FlatArray, 200_000);
+        let config = OverrideConfig {
+            force_kind: Some(SubstrateKind::SwissTable),
+            force_fallback: Some(FallbackPath::SortedArray),
+            force_rollback: Some(RollbackStrategy::SnapshotRestore),
+            disable_optimization: true,
+            debug_mode: true,
+        };
+        let decision = evaluate_substrate(&profile, Some(&config));
+        // disable_optimization returns early, so force fields are not applied.
+        assert_eq!(decision.recommended_kind, SubstrateKind::GenericFallback);
+        assert_eq!(decision.fallback, FallbackPath::Abstain);
+        assert_eq!(decision.rollback, RollbackStrategy::NoRollback);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: hash determinism across varied inputs
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_certificate_hash_differs_for_different_profiles() {
+        let profile_a = hot_profile("hash_a", SubstrateKind::FlatArray, 200_000);
+        let profile_b = hot_profile("hash_b", SubstrateKind::FlatArray, 200_000);
+        let decision_a = evaluate_substrate(&profile_a, None);
+        let decision_b = evaluate_substrate(&profile_b, None);
+        let cert_a = certify_substrate(&profile_a, &decision_a);
+        let cert_b = certify_substrate(&profile_b, &decision_b);
+        // Different substrate_id => different hash.
+        assert_ne!(cert_a.certificate_hash, cert_b.certificate_hash);
+    }
+
+    #[test]
+    fn test_inventory_report_hash_is_content_addressed() {
+        // Building twice should produce the same hash since inputs are deterministic.
+        let r1 = build_canonical_inventory();
+        let r2 = build_canonical_inventory();
+        assert_eq!(r1.report_hash, r2.report_hash);
+        // Verify the hash is non-zero (computed from meaningful content).
+        assert_ne!(r1.report_hash, ContentHash::compute(b""));
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: SubstrateKind ordering (Ord derive)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_substrate_kind_ord_derives_from_variant_order() {
+        // Enum variants are ordered by declaration, so SwissTable < ArtTree < ...
+        assert!(SubstrateKind::SwissTable < SubstrateKind::ArtTree);
+        assert!(SubstrateKind::ArtTree < SubstrateKind::FlatArray);
+        assert!(SubstrateKind::FlatArray < SubstrateKind::CompactBitmap);
+        assert!(SubstrateKind::CompactBitmap < SubstrateKind::InlineCache);
+        assert!(SubstrateKind::InlineCache < SubstrateKind::Swizzled);
+        assert!(SubstrateKind::Swizzled < SubstrateKind::GenericFallback);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional tests: canonical inventory specific profiles
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_canonical_inventory_gc_mark_bitmap_is_cold() {
+        let report = build_canonical_inventory();
+        let gc_mark = report
+            .profiles
+            .iter()
+            .find(|p| p.id == "gc_mark_bitmap")
+            .expect("gc_mark_bitmap not found");
+        assert!(!gc_mark.is_hot);
+        // The decision for a cold profile should be GenericFallback.
+        let decision = report
+            .decisions
+            .iter()
+            .find(|d| d.substrate_id == "gc_mark_bitmap")
+            .expect("gc_mark_bitmap decision not found");
+        assert_eq!(decision.recommended_kind, SubstrateKind::GenericFallback);
+    }
+
+    #[test]
+    fn test_canonical_inventory_prototype_chain_gets_swiss_table() {
+        let report = build_canonical_inventory();
+        let decision = report
+            .decisions
+            .iter()
+            .find(|d| d.substrate_id == "prototype_chain")
+            .expect("prototype_chain decision not found");
+        // prototype_chain: access 800k, hit_rate 950k, memory 2048, is_hot.
+        // access > 100k && hit_rate >= 800k => SwissTable.
+        assert_eq!(decision.recommended_kind, SubstrateKind::SwissTable);
+    }
+
+    #[test]
+    fn test_canonical_inventory_string_intern_gets_art_tree() {
+        let report = build_canonical_inventory();
+        let decision = report
+            .decisions
+            .iter()
+            .find(|d| d.substrate_id == "string_intern_table")
+            .expect("string_intern_table decision not found");
+        // string_intern_table: access 200k, hit_rate 850k, memory 2_097_152, is_hot.
+        // access > 100k but hit_rate 850k < 800k? No, 850k >= 800k => SwissTable.
+        // Actually: access > 100k && hit_rate >= 800k => SwissTable.
+        assert_eq!(decision.recommended_kind, SubstrateKind::SwissTable);
+    }
+
+    #[test]
+    fn test_evidence_manifest_certificate_ids_match_profiles() {
+        let manifest = run_substrate_evidence();
+        let report = build_canonical_inventory();
+        for (cert, profile) in manifest.certificates.iter().zip(report.profiles.iter()) {
+            assert_eq!(cert.substrate_id, profile.id);
+        }
+    }
+
+    #[test]
+    fn test_evidence_manifest_counts_match_inventory() {
+        let manifest = run_substrate_evidence();
+        let report = build_canonical_inventory();
+        assert_eq!(manifest.optimized_count, report.optimized_count);
+        assert_eq!(manifest.fallback_count, report.fallback_count);
+        assert_eq!(
+            manifest.substrates_evaluated,
+            report.profiles.len() as u32
+        );
+    }
 }

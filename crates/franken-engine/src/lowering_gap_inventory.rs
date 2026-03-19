@@ -1189,4 +1189,501 @@ mod tests {
             "bundle lock should be released after failure",
         );
     }
+
+    // --- Additional tests below ---
+
+    #[test]
+    fn stage_deserializes_from_explicit_snake_case_json() {
+        let ir0: LoweringGapStage = serde_json::from_str("\"ir0_to_ir1\"").unwrap();
+        assert_eq!(ir0, LoweringGapStage::Ir0ToIr1);
+        let ir1: LoweringGapStage = serde_json::from_str("\"ir1_to_ir3\"").unwrap();
+        assert_eq!(ir1, LoweringGapStage::Ir1ToIr3);
+    }
+
+    #[test]
+    fn status_deserializes_from_explicit_snake_case_json() {
+        let fc: LoweringGapStatus = serde_json::from_str("\"fail_closed\"").unwrap();
+        assert_eq!(fc, LoweringGapStatus::FailClosed);
+        let op: LoweringGapStatus = serde_json::from_str("\"open_placeholder\"").unwrap();
+        assert_eq!(op, LoweringGapStatus::OpenPlaceholder);
+        let res: LoweringGapStatus = serde_json::from_str("\"resolved\"").unwrap();
+        assert_eq!(res, LoweringGapStatus::Resolved);
+    }
+
+    #[test]
+    fn stage_rejects_unknown_variant() {
+        let err = serde_json::from_str::<LoweringGapStage>("\"ir2_to_ir5\"");
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn status_rejects_unknown_variant() {
+        let err = serde_json::from_str::<LoweringGapStatus>("\"partially_open\"");
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn site_id_rejects_unknown_variant() {
+        let err = serde_json::from_str::<LoweringGapSiteId>("\"unknown_placeholder\"");
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn stage_ord_ir0_before_ir1() {
+        assert!(LoweringGapStage::Ir0ToIr1 < LoweringGapStage::Ir1ToIr3);
+    }
+
+    #[test]
+    fn status_ord_fail_closed_before_open_before_resolved() {
+        assert!(LoweringGapStatus::FailClosed < LoweringGapStatus::OpenPlaceholder);
+        assert!(LoweringGapStatus::OpenPlaceholder < LoweringGapStatus::Resolved);
+        assert!(LoweringGapStatus::FailClosed < LoweringGapStatus::Resolved);
+    }
+
+    #[test]
+    fn site_id_clone_produces_equal_value() {
+        for site in LoweringGapSiteId::ALL {
+            let cloned = site;
+            assert_eq!(site, cloned);
+            assert_eq!(site.as_str(), cloned.as_str());
+            assert_eq!(site.diagnostic_code(), cloned.diagnostic_code());
+        }
+    }
+
+    #[test]
+    fn descriptor_clone_is_deep_and_equal() {
+        let desc = LoweringGapSiteDescriptor::from_site(
+            LoweringGapSiteId::NewExpressionCallPlaceholder,
+        );
+        let cloned = desc.clone();
+        assert_eq!(desc, cloned);
+        assert_eq!(desc.site_id, cloned.site_id);
+        assert_eq!(desc.execution_consequence, cloned.execution_consequence);
+    }
+
+    #[test]
+    fn inventory_clone_preserves_all_sites() {
+        let inventory = lowering_gap_inventory();
+        let cloned = inventory.clone();
+        assert_eq!(inventory, cloned);
+        assert_eq!(inventory.sites.len(), cloned.sites.len());
+        for (orig, cl) in inventory.sites.iter().zip(cloned.sites.iter()) {
+            assert_eq!(orig, cl);
+        }
+    }
+
+    #[test]
+    fn inventory_with_mixed_statuses_counts_correctly() {
+        let mut inv = LoweringGapInventory {
+            schema_version: "test".to_string(),
+            component: "test".to_string(),
+            sites: Vec::new(),
+        };
+        // Add sites with different statuses by mutating descriptors
+        let mut desc_fc = LoweringGapSiteDescriptor::from_site(
+            LoweringGapSiteId::ForInStatementPlaceholder,
+        );
+        desc_fc.status = LoweringGapStatus::FailClosed;
+        desc_fc.execution_ready_semantics = false;
+        desc_fc.parser_ready_syntax = false;
+
+        let mut desc_op = LoweringGapSiteDescriptor::from_site(
+            LoweringGapSiteId::ForOfStatementPlaceholder,
+        );
+        desc_op.status = LoweringGapStatus::OpenPlaceholder;
+        desc_op.execution_ready_semantics = false;
+        desc_op.parser_ready_syntax = true;
+
+        let mut desc_resolved = LoweringGapSiteDescriptor::from_site(
+            LoweringGapSiteId::NewExpressionCallPlaceholder,
+        );
+        desc_resolved.execution_ready_semantics = true;
+
+        inv.sites.push(desc_fc);
+        inv.sites.push(desc_op);
+        inv.sites.push(desc_resolved);
+
+        assert_eq!(inv.fail_closed_site_count(), 1);
+        assert_eq!(inv.open_placeholder_site_count(), 1);
+        assert_eq!(inv.parser_ready_site_count(), 2);
+        assert_eq!(inv.execution_ready_site_count(), 1);
+    }
+
+    #[test]
+    fn empty_inventory_all_counts_zero() {
+        let inv = LoweringGapInventory {
+            schema_version: "test".to_string(),
+            component: "test".to_string(),
+            sites: Vec::new(),
+        };
+        assert_eq!(inv.fail_closed_site_count(), 0);
+        assert_eq!(inv.open_placeholder_site_count(), 0);
+        assert_eq!(inv.parser_ready_site_count(), 0);
+        assert_eq!(inv.execution_ready_site_count(), 0);
+    }
+
+    #[test]
+    fn sha256_hex_empty_input_is_well_known_hash() {
+        // SHA-256 of empty string is a well-known constant
+        let hash = sha256_hex(b"");
+        assert_eq!(
+            hash,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn sha256_hex_single_byte_differs_from_empty() {
+        let empty_hash = sha256_hex(b"");
+        let one_byte = sha256_hex(b"\x00");
+        assert_ne!(empty_hash, one_byte);
+        assert_eq!(one_byte.len(), 64);
+    }
+
+    #[test]
+    fn sha256_hex_large_input_still_produces_64_chars() {
+        let large = vec![0xABu8; 1_000_000];
+        let hash = sha256_hex(&large);
+        assert_eq!(hash.len(), 64);
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn unique_temp_path_with_no_filename_uses_artifact_fallback() {
+        // A path with no file_name component (e.g., root or empty)
+        let target = Path::new("/");
+        let temp = unique_temp_path(target);
+        let name = temp.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with(".artifact"));
+        assert!(name.ends_with(".tmp"));
+    }
+
+    #[test]
+    fn unique_temp_path_preserves_parent_directory() {
+        let target = Path::new("/some/deep/path/inventory.json");
+        let temp = unique_temp_path(target);
+        assert_eq!(temp.parent().unwrap(), Path::new("/some/deep/path"));
+    }
+
+    #[test]
+    fn unique_temp_path_name_starts_with_dot_and_ends_with_tmp() {
+        let target = Path::new("output/result.json");
+        let temp = unique_temp_path(target);
+        let name = temp.file_name().unwrap().to_str().unwrap();
+        assert!(
+            name.starts_with(".result.json."),
+            "temp name should start with dot + original filename: {name}"
+        );
+        assert!(
+            name.ends_with(".tmp"),
+            "temp name should end with .tmp: {name}"
+        );
+    }
+
+    #[test]
+    fn event_optional_fields_omitted_in_json_when_none() {
+        let event = LoweringGapInventoryEvent {
+            schema_version: LOWERING_GAP_EVENT_SCHEMA_VERSION.to_string(),
+            trace_id: "t".to_string(),
+            decision_id: "d".to_string(),
+            policy_id: "p".to_string(),
+            component: "c".to_string(),
+            event: "inventory_started".to_string(),
+            outcome: "started".to_string(),
+            site_id: None,
+            diagnostic_code: None,
+            detail: None,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(!json.contains("site_id"), "None site_id should be omitted from JSON");
+        assert!(!json.contains("diagnostic_code"), "None diagnostic_code should be omitted");
+        assert!(!json.contains("detail"), "None detail should be omitted");
+    }
+
+    #[test]
+    fn event_optional_fields_present_in_json_when_some() {
+        let event = LoweringGapInventoryEvent {
+            schema_version: "v".to_string(),
+            trace_id: "t".to_string(),
+            decision_id: "d".to_string(),
+            policy_id: "p".to_string(),
+            component: "c".to_string(),
+            event: "gap_site_recorded".to_string(),
+            outcome: "resolved".to_string(),
+            site_id: Some("site_x".to_string()),
+            diagnostic_code: Some("DC-0001".to_string()),
+            detail: Some("some detail".to_string()),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"site_id\""));
+        assert!(json.contains("\"diagnostic_code\""));
+        assert!(json.contains("\"detail\""));
+    }
+
+    #[test]
+    fn event_deserialize_with_missing_optional_fields() {
+        let json = r#"{"schema_version":"v","trace_id":"t","decision_id":"d","policy_id":"p","component":"c","event":"e","outcome":"o"}"#;
+        let event: LoweringGapInventoryEvent = serde_json::from_str(json).unwrap();
+        assert!(event.site_id.is_none());
+        assert!(event.diagnostic_code.is_none());
+        assert!(event.detail.is_none());
+    }
+
+    #[test]
+    fn inventory_serde_roundtrip_preserves_all_sites() {
+        let inventory = lowering_gap_inventory();
+        let json = serde_json::to_string(&inventory).unwrap();
+        let back: LoweringGapInventory = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, inventory);
+        assert_eq!(back.sites.len(), LoweringGapSiteId::ALL.len());
+        for (orig, rt) in inventory.sites.iter().zip(back.sites.iter()) {
+            assert_eq!(orig.site_id, rt.site_id);
+            assert_eq!(orig.status, rt.status);
+            assert_eq!(orig.stage, rt.stage);
+        }
+    }
+
+    #[test]
+    fn schema_version_constants_have_expected_prefix() {
+        assert!(LOWERING_GAP_INVENTORY_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(LOWERING_GAP_RUN_MANIFEST_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(LOWERING_GAP_EVENT_SCHEMA_VERSION.starts_with("franken-engine."));
+        assert!(LOWERING_GAP_POLICY_ID.starts_with("franken-engine."));
+    }
+
+    #[test]
+    fn schema_version_constants_end_with_version_tag() {
+        assert!(LOWERING_GAP_INVENTORY_SCHEMA_VERSION.ends_with(".v1"));
+        assert!(LOWERING_GAP_RUN_MANIFEST_SCHEMA_VERSION.ends_with(".v1"));
+        assert!(LOWERING_GAP_EVENT_SCHEMA_VERSION.ends_with(".v1"));
+        assert!(LOWERING_GAP_POLICY_ID.ends_with(".v1"));
+    }
+
+    #[test]
+    fn for_in_and_for_of_placeholders_share_stage_but_differ_in_identity() {
+        let for_in = LoweringGapSiteId::ForInStatementPlaceholder;
+        let for_of = LoweringGapSiteId::ForOfStatementPlaceholder;
+        assert_eq!(for_in.stage(), for_of.stage());
+        assert_ne!(for_in.as_str(), for_of.as_str());
+        assert_ne!(for_in.diagnostic_code(), for_of.diagnostic_code());
+        assert_ne!(for_in.ast_node_family(), for_of.ast_node_family());
+        assert_ne!(for_in.emitted_ir_shape(), for_of.emitted_ir_shape());
+        assert_ne!(for_in.regression_test_hint(), for_of.regression_test_hint());
+    }
+
+    #[test]
+    fn binary_placeholder_is_only_ir1_to_ir3_site() {
+        let ir3_sites: Vec<LoweringGapSiteId> = LoweringGapSiteId::ALL
+            .iter()
+            .copied()
+            .filter(|s| s.stage() == LoweringGapStage::Ir1ToIr3)
+            .collect();
+        assert_eq!(ir3_sites.len(), 1);
+        assert_eq!(
+            ir3_sites[0],
+            LoweringGapSiteId::BinaryNonArithmeticAddPlaceholder
+        );
+    }
+
+    #[test]
+    fn ir0_to_ir1_sites_are_exactly_five() {
+        let ir0_sites: Vec<LoweringGapSiteId> = LoweringGapSiteId::ALL
+            .iter()
+            .copied()
+            .filter(|s| s.stage() == LoweringGapStage::Ir0ToIr1)
+            .collect();
+        assert_eq!(ir0_sites.len(), 5);
+    }
+
+    #[test]
+    fn descriptor_from_site_sets_parser_ready_true_and_execution_ready_false() {
+        for site in LoweringGapSiteId::ALL {
+            let desc = LoweringGapSiteDescriptor::from_site(site);
+            assert!(
+                desc.parser_ready_syntax,
+                "parser_ready_syntax should be true for {}",
+                site.as_str()
+            );
+            assert!(
+                !desc.execution_ready_semantics,
+                "execution_ready_semantics should be false for {}",
+                site.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn user_visible_divergence_all_contain_resolved_prefix() {
+        for site in LoweringGapSiteId::ALL {
+            let divergence = site.user_visible_divergence();
+            assert!(
+                divergence.starts_with("resolved:"),
+                "user_visible_divergence should start with 'resolved:' for {}: {}",
+                site.as_str(),
+                divergence,
+            );
+        }
+    }
+
+    #[test]
+    fn template_literal_descriptor_has_expected_ir_shape() {
+        let desc = LoweringGapSiteDescriptor::from_site(
+            LoweringGapSiteId::TemplateLiteralRawPlaceholder,
+        );
+        assert_eq!(desc.emitted_ir_shape, "ir3.instruction.template_literal");
+        assert_eq!(desc.diagnostic_code, "FE-PARSER-GAP-TEMPLATE-0001");
+        assert_eq!(desc.ast_node_family, "expression.template_literal");
+    }
+
+    #[test]
+    fn non_identifier_assignment_descriptor_fields() {
+        let desc = LoweringGapSiteDescriptor::from_site(
+            LoweringGapSiteId::NonIdentifierAssignmentNopPlaceholder,
+        );
+        assert_eq!(desc.emitted_ir_shape, "ir1.op.set_property");
+        assert_eq!(desc.ast_node_family, "expression.assignment_member_target");
+        assert!(desc.source_reference.contains("Expression::Assignment"));
+    }
+
+    #[test]
+    fn new_expression_descriptor_fields() {
+        let desc = LoweringGapSiteDescriptor::from_site(
+            LoweringGapSiteId::NewExpressionCallPlaceholder,
+        );
+        assert_eq!(desc.emitted_ir_shape, "ir3.instruction.construct");
+        assert_eq!(desc.ast_node_family, "expression.new");
+        assert!(desc.source_reference.contains("Expression::New"));
+        assert_eq!(
+            desc.regression_test_hint,
+            "lower_new_expression_emits_construct"
+        );
+    }
+
+    #[test]
+    fn build_inventory_events_start_event_has_no_site_id() {
+        let inventory = lowering_gap_inventory();
+        let events = build_inventory_events(&inventory, "t", "d");
+        let start = &events[0];
+        assert_eq!(start.event, "inventory_started");
+        assert_eq!(start.outcome, "started");
+        assert!(start.site_id.is_none());
+        assert!(start.diagnostic_code.is_none());
+        assert!(start.detail.is_some());
+    }
+
+    #[test]
+    fn build_inventory_events_completed_event_detail_contains_counts() {
+        let inventory = lowering_gap_inventory();
+        let events = build_inventory_events(&inventory, "t", "d");
+        let completed = events.last().unwrap();
+        assert_eq!(completed.event, "inventory_completed");
+        assert_eq!(completed.outcome, "completed");
+        let detail = completed.detail.as_ref().unwrap();
+        assert!(detail.contains("6 sites recorded"));
+        assert!(detail.contains("0 fail-closed"));
+        assert!(detail.contains("0 open placeholders"));
+        assert!(detail.contains("6 parser-ready"));
+        assert!(detail.contains("0 execution-ready"));
+    }
+
+    #[test]
+    fn build_inventory_events_site_events_match_inventory_order() {
+        let inventory = lowering_gap_inventory();
+        let events = build_inventory_events(&inventory, "trace", "dec");
+        let site_events = &events[1..events.len() - 1];
+        assert_eq!(site_events.len(), inventory.sites.len());
+        for (i, event) in site_events.iter().enumerate() {
+            assert_eq!(
+                event.site_id.as_deref().unwrap(),
+                inventory.sites[i].site_id,
+            );
+            assert_eq!(
+                event.diagnostic_code.as_deref().unwrap(),
+                inventory.sites[i].diagnostic_code,
+            );
+            assert_eq!(event.outcome, inventory.sites[i].status.as_str());
+        }
+    }
+
+    #[test]
+    fn artifact_paths_serde_roundtrip() {
+        let paths = LoweringGapInventoryArtifactPaths {
+            lowering_gap_inventory: "inv.json".to_string(),
+            run_manifest: "man.json".to_string(),
+            events_jsonl: "ev.jsonl".to_string(),
+            commands_txt: "cmd.txt".to_string(),
+        };
+        let json = serde_json::to_string(&paths).unwrap();
+        let back: LoweringGapInventoryArtifactPaths = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, paths);
+    }
+
+    #[test]
+    fn write_bundle_idempotent_on_second_call_same_dir() {
+        let out_dir = unique_temp_dir("lowering-gap-idempotent");
+        let commands = vec!["cmd1".to_string()];
+        let first = write_lowering_gap_inventory_bundle(&out_dir, &commands).unwrap();
+        let second = write_lowering_gap_inventory_bundle(&out_dir, &commands).unwrap();
+        assert_eq!(first.inventory_hash, second.inventory_hash);
+        assert_eq!(first.site_count, second.site_count);
+    }
+
+    #[test]
+    fn write_bundle_commands_with_special_characters() {
+        let out_dir = unique_temp_dir("lowering-gap-special-cmds");
+        let commands = vec![
+            "cmd --flag=\"value with spaces\"".to_string(),
+            "path/to/binary --arg=a&b".to_string(),
+            "line-with-newline-in-arg\ttab".to_string(),
+        ];
+        let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &commands).unwrap();
+        let content = fs::read_to_string(&artifacts.commands_path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], commands[0]);
+        assert_eq!(lines[1], commands[1]);
+        assert_eq!(lines[2], commands[2]);
+    }
+
+    #[test]
+    fn write_error_display_contains_path_info() {
+        let err = LoweringGapInventoryWriteError::Busy {
+            path: "/tmp/test.lock".to_string(),
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("/tmp/test.lock"));
+        assert!(msg.contains("locked"));
+    }
+
+    #[test]
+    fn write_error_io_display_contains_path() {
+        let io_err = io::Error::new(ErrorKind::PermissionDenied, "no access");
+        let err = LoweringGapInventoryWriteError::Io {
+            path: "/tmp/denied.json".to_string(),
+            source: io_err,
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("/tmp/denied.json"));
+    }
+
+    #[test]
+    fn site_id_as_str_contains_stage_prefix() {
+        for site in LoweringGapSiteId::ALL {
+            let id_str = site.as_str();
+            match site.stage() {
+                LoweringGapStage::Ir0ToIr1 => {
+                    assert!(
+                        id_str.starts_with("lower_ir0_to_ir1."),
+                        "ir0->ir1 site should have matching prefix: {id_str}"
+                    );
+                }
+                LoweringGapStage::Ir1ToIr3 => {
+                    assert!(
+                        id_str.starts_with("lower_ir1_to_ir3."),
+                        "ir1->ir3 site should have matching prefix: {id_str}"
+                    );
+                }
+            }
+        }
+    }
 }

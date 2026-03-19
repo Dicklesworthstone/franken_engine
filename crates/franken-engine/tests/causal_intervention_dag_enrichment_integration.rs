@@ -48,9 +48,12 @@ fn edge(from: u32, to: u32, kind: EdgeKind) -> CausalEdge {
 
 fn simple_dag() -> CausalDag {
     let mut b = CausalDagBuilder::new();
-    b.add_variable(var(1, "treatment", VariableDomain::Treatment)).unwrap();
-    b.add_variable(var(2, "outcome", VariableDomain::Outcome)).unwrap();
-    b.add_variable(var(3, "confounder", VariableDomain::Confounder)).unwrap();
+    b.add_variable(var(1, "treatment", VariableDomain::Treatment))
+        .unwrap();
+    b.add_variable(var(2, "outcome", VariableDomain::Outcome))
+        .unwrap();
+    b.add_variable(var(3, "confounder", VariableDomain::Confounder))
+        .unwrap();
     b.add_edge(edge(1, 2, EdgeKind::Direct));
     b.add_edge(edge(3, 1, EdgeKind::Confounding));
     b.add_edge(edge(3, 2, EdgeKind::Confounding));
@@ -94,7 +97,11 @@ fn enrich_variable_domain_all_count() {
 
 #[test]
 fn enrich_observability_serde_roundtrip() {
-    let variants = [Observability::Observable, Observability::Latent, Observability::Proxy];
+    let variants = [
+        Observability::Observable,
+        Observability::Latent,
+        Observability::Proxy,
+    ];
     for v in &variants {
         let json = serde_json::to_string(v).unwrap();
         let back: Observability = serde_json::from_str(&json).unwrap();
@@ -218,15 +225,19 @@ fn enrich_builder_default_same_as_new() {
 #[test]
 fn enrich_builder_duplicate_variable_error() {
     let mut b = CausalDagBuilder::new();
-    b.add_variable(var(1, "first", VariableDomain::Treatment)).unwrap();
-    let err = b.add_variable(var(1, "second", VariableDomain::Outcome)).unwrap_err();
+    b.add_variable(var(1, "first", VariableDomain::Treatment))
+        .unwrap();
+    let err = b
+        .add_variable(var(1, "second", VariableDomain::Outcome))
+        .unwrap_err();
     assert!(matches!(err, CausalDagError::DuplicateVariable { id: 1 }));
 }
 
 #[test]
 fn enrich_builder_unknown_variable_edge() {
     let mut b = CausalDagBuilder::new();
-    b.add_variable(var(1, "t", VariableDomain::Treatment)).unwrap();
+    b.add_variable(var(1, "t", VariableDomain::Treatment))
+        .unwrap();
     b.add_edge(edge(1, 99, EdgeKind::Direct));
     let err = b.build().unwrap_err();
     assert!(matches!(err, CausalDagError::UnknownVariable { id: 99 }));
@@ -235,8 +246,10 @@ fn enrich_builder_unknown_variable_edge() {
 #[test]
 fn enrich_builder_cycle_detection() {
     let mut b = CausalDagBuilder::new();
-    b.add_variable(var(1, "a", VariableDomain::Treatment)).unwrap();
-    b.add_variable(var(2, "b", VariableDomain::Outcome)).unwrap();
+    b.add_variable(var(1, "a", VariableDomain::Treatment))
+        .unwrap();
+    b.add_variable(var(2, "b", VariableDomain::Outcome))
+        .unwrap();
     b.add_edge(edge(1, 2, EdgeKind::Direct));
     b.add_edge(edge(2, 1, EdgeKind::Direct));
     let err = b.build().unwrap_err();
@@ -467,8 +480,10 @@ fn enrich_backdoor_simple_dag_valid() {
 #[test]
 fn enrich_backdoor_no_confounders_empty_set() {
     let mut b = CausalDagBuilder::new();
-    b.add_variable(var(1, "t", VariableDomain::Treatment)).unwrap();
-    b.add_variable(var(2, "o", VariableDomain::Outcome)).unwrap();
+    b.add_variable(var(1, "t", VariableDomain::Treatment))
+        .unwrap();
+    b.add_variable(var(2, "o", VariableDomain::Outcome))
+        .unwrap();
     b.add_edge(edge(1, 2, EdgeKind::Direct));
     let dag = b.build().unwrap();
     let adj = dag.backdoor_adjustment(1, 2);
@@ -492,14 +507,19 @@ fn enrich_identify_effect_backdoor_identified() {
 #[test]
 fn enrich_identify_effect_not_connected() {
     let mut b = CausalDagBuilder::new();
-    b.add_variable(var(1, "t", VariableDomain::Treatment)).unwrap();
-    b.add_variable(var(2, "o", VariableDomain::Outcome)).unwrap();
+    b.add_variable(var(1, "t", VariableDomain::Treatment))
+        .unwrap();
+    b.add_variable(var(2, "o", VariableDomain::Outcome))
+        .unwrap();
     // No edges between them
     let dag = b.build().unwrap();
     let cert = dag.identify_effect(1, 2);
     assert!(!cert.is_identifiable);
     assert_eq!(cert.strategy, IdentificationStrategy::Unidentifiable);
-    assert!(cert.unidentifiable_reasons.contains(&UnidentifiableReason::NotConnected));
+    assert!(
+        cert.unidentifiable_reasons
+            .contains(&UnidentifiableReason::NotConnected)
+    );
 }
 
 #[test]

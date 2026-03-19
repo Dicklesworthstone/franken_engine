@@ -253,7 +253,10 @@ fn enrich_candidate_serde_preserves_all_fields() {
         99,
         EquivalenceProof::verified(50, 2_000_000),
         Vec::new(),
-        vec![CostEstimate::new("hw-a", 1, 2, 3), CostEstimate::new("hw-b", 4, 5, 6)],
+        vec![
+            CostEstimate::new("hw-a", 1, 2, 3),
+            CostEstimate::new("hw-b", 4, 5, 6),
+        ],
         1_500_000,
     );
     let json = serde_json::to_string_pretty(&c).unwrap();

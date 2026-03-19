@@ -12,11 +12,10 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::category_shift_report::{
-    CategoryShiftCapability, CategoryShiftClaim, CategoryShiftReportError,
-    CategoryShiftReportInput, CategoryShiftReportLogEntry, BEAD_ID, COMPONENT,
-    MINIMUM_PEER_REVIEWERS, MethodologySection, POLICY_ID, PeerReviewSignoff, SCHEMA_VERSION,
-    build_category_shift_report, generate_log_entries, DimensionPublicationSummary,
-    CategoryShiftReport,
+    BEAD_ID, COMPONENT, CategoryShiftCapability, CategoryShiftClaim, CategoryShiftReport,
+    CategoryShiftReportError, CategoryShiftReportInput, CategoryShiftReportLogEntry,
+    DimensionPublicationSummary, MINIMUM_PEER_REVIEWERS, MethodologySection, POLICY_ID,
+    PeerReviewSignoff, SCHEMA_VERSION, build_category_shift_report, generate_log_entries,
 };
 use frankenengine_engine::disruption_scorecard::{
     DisruptionDimension, EvidenceInput, ScorecardResult, ScorecardSchema, compute_scorecard,
@@ -99,7 +98,11 @@ fn valid_input() -> CategoryShiftReportInput {
         archive_root: "archive/root".to_string(),
         scorecard_schema: ScorecardSchema::default_schema(),
         scorecard_result: passing_scorecard(),
-        claims: CategoryShiftCapability::ALL.iter().copied().map(claim).collect(),
+        claims: CategoryShiftCapability::ALL
+            .iter()
+            .copied()
+            .map(claim)
+            .collect(),
         methodology: methodology(),
         peer_reviews: peer_reviews(),
     }
@@ -111,15 +114,19 @@ fn valid_input() -> CategoryShiftReportInput {
 
 #[test]
 fn enrich_capability_display_distinct() {
-    let displays: BTreeSet<String> =
-        CategoryShiftCapability::ALL.iter().map(|c| c.to_string()).collect();
+    let displays: BTreeSet<String> = CategoryShiftCapability::ALL
+        .iter()
+        .map(|c| c.to_string())
+        .collect();
     assert_eq!(displays.len(), 5);
 }
 
 #[test]
 fn enrich_capability_display_names_distinct() {
-    let names: BTreeSet<&str> =
-        CategoryShiftCapability::ALL.iter().map(|c| c.display_name()).collect();
+    let names: BTreeSet<&str> = CategoryShiftCapability::ALL
+        .iter()
+        .map(|c| c.display_name())
+        .collect();
     assert_eq!(names.len(), 5);
 }
 

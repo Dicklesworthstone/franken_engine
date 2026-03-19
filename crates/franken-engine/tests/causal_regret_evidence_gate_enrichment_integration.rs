@@ -27,13 +27,15 @@ use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::self_replacement::{GateVerdict, RiskLevel};
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Helpers — match existing test patterns exactly
 // ---------------------------------------------------------------------------
 
 fn make_envelope(lower: i64, upper: i64, samples: u64) -> ConfidenceEnvelope {
     ConfidenceEnvelope {
+        estimate_millionths: (lower + upper) / 2,
         lower_millionths: lower,
         upper_millionths: upper,
+        confidence_millionths: 950_000,
         effective_samples: samples,
     }
 }
@@ -43,48 +45,69 @@ fn make_eval(
     estimator: EstimatorKind,
     status: EnvelopeStatus,
     lower: i64,
-    upper: i64,
     samples: u64,
 ) -> EvaluationResult {
+    let envelope = make_envelope(lower, lower + 100_000, samples);
     EvaluationResult {
-        candidate_policy_id: PolicyId(policy.to_string()),
-        baseline_policy_id: PolicyId("baseline".to_string()),
+        schema_version: "test".into(),
         estimator,
-        improvement_envelope: make_envelope(lower, upper, samples),
+        candidate_policy_id: PolicyId(policy.into()),
+        baseline_policy_id: PolicyId("baseline".into()),
+        candidate_envelope: envelope.clone(),
+        baseline_envelope: make_envelope(0, 50_000, samples),
+        improvement_envelope: envelope,
         safety_status: status,
-        artifact_hash: ContentHash::compute(format!("{policy}-{lower}").as_bytes()),
+        regime_breakdown: BTreeMap::new(),
+        artifact_hash: ContentHash::compute(policy.as_bytes()),
     }
 }
 
-fn make_regret_cert(realized: i64, bound: i64, rounds: u64) -> RegretCertificate {
+fn make_regret_cert(realized: i64, bound: i64, within: bool, per_round: i64) -> RegretCertificate {
     RegretCertificate {
-        rounds,
+        schema: "test".into(),
+        rounds: 1000,
         realized_regret_millionths: realized,
         theoretical_bound_millionths: bound,
-        within_bound: realized <= bound,
-        regime: RegimeKind::Stationary,
-        certificate_hash: ContentHash::compute(format!("regret-{realized}-{bound}").as_bytes()),
+        within_bound: within,
+        exact_regret_available: within,
+        per_round_regret_millionths: per_round,
+        growth_rate_class: "sublinear".into(),
+    }
+}
+
+fn make_demotion(epoch_val: u64, severity: DemotionSeverity) -> DemotionHistoryItem {
+    DemotionHistoryItem {
+        epoch: SecurityEpoch::from_raw(epoch_val),
+        reason: DemotionReason::PerformanceBreach {
+            metric_name: "latency".into(),
+            observed_millionths: 500_000,
+            threshold_millionths: 200_000,
+            sustained_duration_ns: 1_000_000,
+        },
+        severity,
+        timestamp_ns: epoch_val * 1_000_000_000,
     }
 }
 
 fn safe_research_input() -> GateInput {
+    let current = MoonshotStage::Research;
+    let target = MoonshotStage::Shadow;
     GateInput {
-        current_stage: MoonshotStage::Research,
-        target_stage: MoonshotStage::Shadow,
+        current_stage: current,
+        target_stage: target,
         evaluations: vec![make_eval(
-            "pol-1",
+            "policy-1",
             EstimatorKind::DoublyRobust,
             EnvelopeStatus::Safe,
-            100_000,
-            300_000,
-            1000,
+            250_000,
+            2_000,
         )],
-        regret_certificate: Some(make_regret_cert(10_000, 50_000, 100)),
+        regret_certificate: Some(make_regret_cert(50_000, 100_000, true, 50)),
         demotion_history: Vec::new(),
-        epoch: SecurityEpoch::from_raw(50),
+        epoch: SecurityEpoch::from_raw(10),
         timestamp_ns: 1_000_000_000,
-        regime: RegimeKind::Stationary,
-        moonshot_id: Some("ms-1".to_string()),
+        regime: RegimeKind::Stochastic,
+        moonshot_id: Some("moonshot-1".into()),
     }
 }
 
@@ -212,15 +235,16 @@ fn enrich_config_thresholds_for_default_stage() {
 
 #[test]
 fn enrich_demotion_history_item_serde_roundtrip() {
-    let item = DemotionHistoryItem {
-        epoch: SecurityEpoch::from_raw(10),
-        reason: DemotionReason::PerformanceRegression,
-        severity: DemotionSeverity::Critical,
-        timestamp_ns: 999_999,
-    };
+    let item = make_demotion(10, DemotionSeverity::Critical);
     let json = serde_json::to_string(&item).unwrap();
     let back: DemotionHistoryItem = serde_json::from_str(&json).unwrap();
     assert_eq!(item, back);
+}
+
+#[test]
+fn enrich_demotion_history_item_warning_severity() {
+    let item = make_demotion(20, DemotionSeverity::Warning);
+    assert_eq!(item.severity, DemotionSeverity::Warning);
 }
 
 // ---------------------------------------------------------------------------
@@ -236,7 +260,7 @@ fn enrich_blocking_reason_display_distinct() {
         },
         BlockingReason::InconclusiveEnvelope {
             policy_id: "p".to_string(),
-            estimator: EstimatorKind::Ipw,
+            estimator: EstimatorKind::Ips,
         },
         BlockingReason::InsufficientConfidence {
             observed_millionths: 1,
@@ -247,7 +271,7 @@ fn enrich_blocking_reason_display_distinct() {
             required: 2,
         },
         BlockingReason::DisallowedEstimator {
-            estimator: EstimatorKind::Ipw,
+            estimator: EstimatorKind::Ips,
         },
         BlockingReason::MissingRegretCertificate,
         BlockingReason::ExcessiveRegret {
@@ -333,7 +357,10 @@ fn enrich_regret_summary_serde_roundtrip() {
 
 #[test]
 fn enrich_gate_error_display_too_many_evaluations() {
-    let e = CausalRegretGateError::TooManyEvaluations { count: 200, max: 100 };
+    let e = CausalRegretGateError::TooManyEvaluations {
+        count: 200,
+        max: 100,
+    };
     let s = e.to_string();
     assert!(s.contains("200"));
     assert!(s.contains("100"));
@@ -341,7 +368,10 @@ fn enrich_gate_error_display_too_many_evaluations() {
 
 #[test]
 fn enrich_gate_error_display_too_many_demotions() {
-    let e = CausalRegretGateError::TooManyDemotionItems { count: 2000, max: 1000 };
+    let e = CausalRegretGateError::TooManyDemotionItems {
+        count: 2000,
+        max: 1000,
+    };
     let s = e.to_string();
     assert!(s.contains("2000"));
 }
@@ -359,7 +389,9 @@ fn enrich_gate_error_serde_roundtrip() {
     let errors = vec![
         CausalRegretGateError::TooManyEvaluations { count: 1, max: 0 },
         CausalRegretGateError::TooManyDemotionItems { count: 2, max: 1 },
-        CausalRegretGateError::InvalidConfig { reason: "test".to_string() },
+        CausalRegretGateError::InvalidConfig {
+            reason: "test".to_string(),
+        },
     ];
     for e in &errors {
         let json = serde_json::to_string(e).unwrap();
@@ -412,7 +444,7 @@ fn enrich_gate_evaluate_research_to_shadow_approved() {
     let mut gate = CausalRegretEvidenceGate::new();
     let input = safe_research_input();
     let output = gate.evaluate(&input).unwrap();
-    assert_eq!(output.verdict, GateVerdict::Approve);
+    assert_eq!(output.verdict, GateVerdict::Approved);
     assert!(output.blocking_reasons.is_empty());
     assert_eq!(output.target_stage, MoonshotStage::Shadow);
     assert_eq!(output.current_stage, MoonshotStage::Research);
@@ -426,11 +458,13 @@ fn enrich_gate_evaluate_missing_evaluation_blocked() {
     let mut input = safe_research_input();
     input.evaluations.clear();
     let output = gate.evaluate(&input).unwrap();
-    assert_eq!(output.verdict, GateVerdict::Deny);
-    assert!(output
-        .blocking_reasons
-        .iter()
-        .any(|r| matches!(r, BlockingReason::MissingEvaluation)));
+    assert_eq!(output.verdict, GateVerdict::Denied);
+    assert!(
+        output
+            .blocking_reasons
+            .iter()
+            .any(|r| matches!(r, BlockingReason::MissingEvaluation))
+    );
 }
 
 #[test]
@@ -441,16 +475,17 @@ fn enrich_gate_evaluate_unsafe_envelope_blocked() {
         "pol-unsafe",
         EstimatorKind::DoublyRobust,
         EnvelopeStatus::Unsafe,
-        100_000,
-        300_000,
-        1000,
+        250_000,
+        2_000,
     )];
     let output = gate.evaluate(&input).unwrap();
-    assert_eq!(output.verdict, GateVerdict::Deny);
-    assert!(output
-        .blocking_reasons
-        .iter()
-        .any(|r| matches!(r, BlockingReason::UnsafeEnvelope { .. })));
+    assert_eq!(output.verdict, GateVerdict::Denied);
+    assert!(
+        output
+            .blocking_reasons
+            .iter()
+            .any(|r| matches!(r, BlockingReason::UnsafeEnvelope { .. }))
+    );
 }
 
 #[test]
@@ -459,7 +494,7 @@ fn enrich_gate_evaluate_counters_increment() {
 
     // Approved
     let output1 = gate.evaluate(&safe_research_input()).unwrap();
-    assert_eq!(output1.verdict, GateVerdict::Approve);
+    assert_eq!(output1.verdict, GateVerdict::Approved);
     assert_eq!(gate.evaluations_run(), 1);
     assert_eq!(gate.promotions_approved(), 1);
 
@@ -467,7 +502,7 @@ fn enrich_gate_evaluate_counters_increment() {
     let mut denied_input = safe_research_input();
     denied_input.evaluations.clear();
     let output2 = gate.evaluate(&denied_input).unwrap();
-    assert_eq!(output2.verdict, GateVerdict::Deny);
+    assert_eq!(output2.verdict, GateVerdict::Denied);
     assert_eq!(gate.evaluations_run(), 2);
     assert_eq!(gate.promotions_denied(), 1);
 }
@@ -494,7 +529,10 @@ fn enrich_gate_evaluate_output_has_evaluation_summaries() {
     let mut gate = CausalRegretEvidenceGate::new();
     let output = gate.evaluate(&safe_research_input()).unwrap();
     assert_eq!(output.evaluation_summaries.len(), 1);
-    assert_eq!(output.evaluation_summaries[0].estimator, EstimatorKind::DoublyRobust);
+    assert_eq!(
+        output.evaluation_summaries[0].estimator,
+        EstimatorKind::DoublyRobust
+    );
 }
 
 #[test]
@@ -513,11 +551,13 @@ fn enrich_gate_evaluate_invalid_progression() {
     input.current_stage = MoonshotStage::Production;
     input.target_stage = MoonshotStage::Research;
     let output = gate.evaluate(&input).unwrap();
-    assert_eq!(output.verdict, GateVerdict::Deny);
-    assert!(output
-        .blocking_reasons
-        .iter()
-        .any(|r| matches!(r, BlockingReason::InvalidStageProgression { .. })));
+    assert_eq!(output.verdict, GateVerdict::Denied);
+    assert!(
+        output
+            .blocking_reasons
+            .iter()
+            .any(|r| matches!(r, BlockingReason::InvalidStageProgression { .. }))
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -535,13 +575,22 @@ fn enrich_gate_input_serde_roundtrip() {
 #[test]
 fn enrich_gate_input_with_demotion_history() {
     let mut input = safe_research_input();
-    input.demotion_history = vec![DemotionHistoryItem {
-        epoch: SecurityEpoch::from_raw(45),
-        reason: DemotionReason::PerformanceRegression,
-        severity: DemotionSeverity::Warning,
-        timestamp_ns: 500_000_000,
-    }];
+    input.demotion_history = vec![make_demotion(5, DemotionSeverity::Warning)];
     let json = serde_json::to_string(&input).unwrap();
     let back: GateInput = serde_json::from_str(&json).unwrap();
     assert_eq!(back.demotion_history.len(), 1);
+}
+
+#[test]
+fn enrich_gate_evaluate_with_demotion_history() {
+    let mut gate = CausalRegretEvidenceGate::new();
+    let mut input = safe_research_input();
+    input.demotion_history = vec![
+        make_demotion(8, DemotionSeverity::Warning),
+        make_demotion(9, DemotionSeverity::Warning),
+    ];
+    let output = gate.evaluate(&input).unwrap();
+    // Research -> Shadow is permissive, so should still approve
+    assert_eq!(output.verdict, GateVerdict::Approved);
+    assert_eq!(output.demotions_considered, 2);
 }

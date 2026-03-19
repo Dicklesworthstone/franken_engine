@@ -114,8 +114,10 @@ fn enrich_category_clone_eq() {
 
 #[test]
 fn enrich_method_display_distinct() {
-    let displays: BTreeSet<String> =
-        IdentificationMethod::ALL.iter().map(|m| m.to_string()).collect();
+    let displays: BTreeSet<String> = IdentificationMethod::ALL
+        .iter()
+        .map(|m| m.to_string())
+        .collect();
     assert_eq!(displays.len(), IdentificationMethod::ALL.len());
 }
 
@@ -204,13 +206,31 @@ fn enrich_rejection_display_effect_below_threshold() {
 fn enrich_rejection_tag_no_duplicates() {
     let reasons = vec![
         RejectionReason::IdentificationAbstained,
-        RejectionReason::EffectBelowThreshold { effect_millionths: 0, threshold_millionths: 0 },
-        RejectionReason::IntervalSpansZero { lower_millionths: 0, upper_millionths: 0 },
-        RejectionReason::IntervalTooWide { width_millionths: 0, effect_millionths: 0 },
-        RejectionReason::LowConfidence { confidence_millionths: 0, threshold_millionths: 0 },
-        RejectionReason::CategoryMismatch { claim: ClaimCategory::Regression, evidence: ClaimCategory::Transfer },
+        RejectionReason::EffectBelowThreshold {
+            effect_millionths: 0,
+            threshold_millionths: 0,
+        },
+        RejectionReason::IntervalSpansZero {
+            lower_millionths: 0,
+            upper_millionths: 0,
+        },
+        RejectionReason::IntervalTooWide {
+            width_millionths: 0,
+            effect_millionths: 0,
+        },
+        RejectionReason::LowConfidence {
+            confidence_millionths: 0,
+            threshold_millionths: 0,
+        },
+        RejectionReason::CategoryMismatch {
+            claim: ClaimCategory::Regression,
+            evidence: ClaimCategory::Transfer,
+        },
         RejectionReason::NoAdjustmentPath,
-        RejectionReason::WeakEvidence { method: IdentificationMethod::ExpertAssertion, min_strength: 1 },
+        RejectionReason::WeakEvidence {
+            method: IdentificationMethod::ExpertAssertion,
+            min_strength: 1,
+        },
     ];
     let tags: BTreeSet<&str> = reasons.iter().map(|r| r.tag()).collect();
     assert_eq!(tags.len(), 8);
@@ -317,7 +337,9 @@ fn enrich_verdict_rejected_display_reason_count() {
 
 #[test]
 fn enrich_verdict_serde_no_backing() {
-    let v = GateVerdict::NoBacking { claim_id: "z".into() };
+    let v = GateVerdict::NoBacking {
+        claim_id: "z".into(),
+    };
     let json = serde_json::to_string(&v).unwrap();
     let back: GateVerdict = serde_json::from_str(&json).unwrap();
     assert_eq!(v, back);
@@ -399,7 +421,11 @@ fn enrich_gate_rejects_multiple_reasons() {
     let v = gate.evaluate(&regression_claim(), Some(&b));
     match v {
         GateVerdict::Rejected { reasons, .. } => {
-            assert!(reasons.len() >= 3, "expected multiple rejection reasons, got {}", reasons.len());
+            assert!(
+                reasons.len() >= 3,
+                "expected multiple rejection reasons, got {}",
+                reasons.len()
+            );
         }
         _ => panic!("expected Rejected verdict"),
     }
@@ -433,7 +459,11 @@ fn enrich_batch_all_no_backing() {
     let gate = EvidenceGate::with_defaults();
     let claims = vec![regression_claim(), supremacy_claim()];
     let results = gate.evaluate_batch(&claims, &BTreeMap::new());
-    assert!(results.iter().all(|v| matches!(v, GateVerdict::NoBacking { .. })));
+    assert!(
+        results
+            .iter()
+            .all(|v| matches!(v, GateVerdict::NoBacking { .. }))
+    );
 }
 
 #[test]
@@ -441,7 +471,10 @@ fn enrich_batch_mixed_results() {
     let gate = EvidenceGate::with_defaults();
     let claims = vec![regression_claim(), supremacy_claim()];
     let mut backings = BTreeMap::new();
-    backings.insert("reg-e1".to_string(), good_backing(ClaimCategory::Regression));
+    backings.insert(
+        "reg-e1".to_string(),
+        good_backing(ClaimCategory::Regression),
+    );
     // sup-e1 has no backing
     let results = gate.evaluate_batch(&claims, &backings);
     assert!(results[0].is_admitted());
@@ -455,8 +488,12 @@ fn enrich_batch_mixed_results() {
 #[test]
 fn enrich_report_all_no_backing_not_admitted() {
     let verdicts = vec![
-        GateVerdict::NoBacking { claim_id: "a".into() },
-        GateVerdict::NoBacking { claim_id: "b".into() },
+        GateVerdict::NoBacking {
+            claim_id: "a".into(),
+        },
+        GateVerdict::NoBacking {
+            claim_id: "b".into(),
+        },
     ];
     let r = GateReport::new(epoch(), verdicts);
     assert_eq!(r.total_count(), 2);
@@ -509,7 +546,9 @@ fn enrich_report_serde_preserves_counts() {
             claim_id: "b".into(),
             reasons: vec![RejectionReason::IdentificationAbstained],
         },
-        GateVerdict::NoBacking { claim_id: "c".into() },
+        GateVerdict::NoBacking {
+            claim_id: "c".into(),
+        },
     ];
     let r = GateReport::new(epoch(), verdicts);
     let json = serde_json::to_string(&r).unwrap();

@@ -22,9 +22,9 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::hardware_board_claim_gate::{
-    ClaimEvidence, ClaimVerdict, DecisionReceipt, DegradationReason, GateConfig, GateSummary,
-    HardwareClaim, HardwareClaimKind, PromotionDecision, PromotionRecord, RollbackRecord,
-    BEAD_ID, COMPONENT, POLICY_ID, SCHEMA_VERSION, evaluate, evaluate_batch, evaluate_promotion,
+    BEAD_ID, COMPONENT, ClaimEvidence, ClaimVerdict, DecisionReceipt, DegradationReason,
+    GateConfig, GateSummary, HardwareClaim, HardwareClaimKind, POLICY_ID, PromotionDecision,
+    PromotionRecord, RollbackRecord, SCHEMA_VERSION, evaluate, evaluate_batch, evaluate_promotion,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -148,10 +148,16 @@ fn enrichment_claim_kind_all_unique() {
 fn enrichment_claim_kind_as_str_values() {
     assert_eq!(HardwareClaimKind::Throughput.as_str(), "throughput");
     assert_eq!(HardwareClaimKind::Latency.as_str(), "latency");
-    assert_eq!(HardwareClaimKind::MemoryEfficiency.as_str(), "memory_efficiency");
+    assert_eq!(
+        HardwareClaimKind::MemoryEfficiency.as_str(),
+        "memory_efficiency"
+    );
     assert_eq!(HardwareClaimKind::StartupTime.as_str(), "startup_time");
     assert_eq!(HardwareClaimKind::TailLatency.as_str(), "tail_latency");
-    assert_eq!(HardwareClaimKind::EnergyEfficiency.as_str(), "energy_efficiency");
+    assert_eq!(
+        HardwareClaimKind::EnergyEfficiency.as_str(),
+        "energy_efficiency"
+    );
 }
 
 #[test]
@@ -209,7 +215,10 @@ fn enrichment_verdict_as_str_values() {
     assert_eq!(ClaimVerdict::Downgraded.as_str(), "downgraded");
     assert_eq!(ClaimVerdict::RequiresLocal.as_str(), "requires_local");
     assert_eq!(ClaimVerdict::Unsupported.as_str(), "unsupported");
-    assert_eq!(ClaimVerdict::InsufficientEvidence.as_str(), "insufficient_evidence");
+    assert_eq!(
+        ClaimVerdict::InsufficientEvidence.as_str(),
+        "insufficient_evidence"
+    );
 }
 
 #[test]
@@ -251,7 +260,10 @@ fn enrichment_promotion_as_str_values() {
     assert_eq!(PromotionDecision::Promote.as_str(), "promote");
     assert_eq!(PromotionDecision::Hold.as_str(), "hold");
     assert_eq!(PromotionDecision::Rollback.as_str(), "rollback");
-    assert_eq!(PromotionDecision::RequireFreshMeasurement.as_str(), "require_fresh_measurement");
+    assert_eq!(
+        PromotionDecision::RequireFreshMeasurement.as_str(),
+        "require_fresh_measurement"
+    );
 }
 
 #[test]
@@ -284,11 +296,26 @@ fn enrichment_degradation_all_has_six_entries() {
 #[test]
 fn enrichment_degradation_as_str_values() {
     assert_eq!(DegradationReason::ArchMismatch.as_str(), "arch_mismatch");
-    assert_eq!(DegradationReason::VectorWidthLoss.as_str(), "vector_width_loss");
-    assert_eq!(DegradationReason::CacheSizeDifference.as_str(), "cache_size_difference");
-    assert_eq!(DegradationReason::MicroarchVariance.as_str(), "microarch_variance");
-    assert_eq!(DegradationReason::InsufficientSamples.as_str(), "insufficient_samples");
-    assert_eq!(DegradationReason::ResidualTooLow.as_str(), "residual_too_low");
+    assert_eq!(
+        DegradationReason::VectorWidthLoss.as_str(),
+        "vector_width_loss"
+    );
+    assert_eq!(
+        DegradationReason::CacheSizeDifference.as_str(),
+        "cache_size_difference"
+    );
+    assert_eq!(
+        DegradationReason::MicroarchVariance.as_str(),
+        "microarch_variance"
+    );
+    assert_eq!(
+        DegradationReason::InsufficientSamples.as_str(),
+        "insufficient_samples"
+    );
+    assert_eq!(
+        DegradationReason::ResidualTooLow.as_str(),
+        "residual_too_low"
+    );
 }
 
 #[test]
@@ -337,8 +364,14 @@ fn enrichment_claim_content_hash_varies_by_kind() {
 #[test]
 fn enrichment_claim_is_same_cell_true() {
     let c = HardwareClaim::new(
-        HardwareClaimKind::Throughput, "cell-x", "cell-x",
-        1_000_000, 1_000_000, 1_000_000, 10, ep(1),
+        HardwareClaimKind::Throughput,
+        "cell-x",
+        "cell-x",
+        1_000_000,
+        1_000_000,
+        1_000_000,
+        10,
+        ep(1),
     );
     assert!(c.is_same_cell());
 }
@@ -421,7 +454,12 @@ fn enrichment_evaluate_evidence_serde_roundtrip() {
 #[test]
 fn enrichment_evaluate_permissive_always_confirmed() {
     let config = GateConfig::permissive();
-    for claim in &[confirmed_claim(), downgraded_claim(), requires_local_claim(), unsupported_claim()] {
+    for claim in &[
+        confirmed_claim(),
+        downgraded_claim(),
+        requires_local_claim(),
+        unsupported_claim(),
+    ] {
         let ev = evaluate(claim, &config);
         assert_eq!(ev.verdict, ClaimVerdict::Confirmed);
     }
@@ -483,8 +521,11 @@ fn enrichment_promotion_record_serde_roundtrip() {
 #[test]
 fn enrichment_batch_mixed_verdicts() {
     let claims = vec![
-        confirmed_claim(), downgraded_claim(), requires_local_claim(),
-        unsupported_claim(), insufficient_claim(),
+        confirmed_claim(),
+        downgraded_claim(),
+        requires_local_claim(),
+        unsupported_claim(),
+        insufficient_claim(),
     ];
     let (evidence, summary) = evaluate_batch(&claims, &GateConfig::default());
     assert_eq!(evidence.len(), 5);
@@ -562,8 +603,11 @@ fn enrichment_gate_config_strict_higher_thresholds() {
 #[test]
 fn enrichment_rollback_record_creation() {
     let rb = RollbackRecord::new(
-        "claim-1", ClaimVerdict::Downgraded, ClaimVerdict::Unsupported,
-        "regression detected", ep(500),
+        "claim-1",
+        ClaimVerdict::Downgraded,
+        ClaimVerdict::Unsupported,
+        "regression detected",
+        ep(500),
     );
     assert_eq!(rb.claim_id, "claim-1");
     assert_eq!(rb.original_verdict, ClaimVerdict::Downgraded);
@@ -572,14 +616,32 @@ fn enrichment_rollback_record_creation() {
 
 #[test]
 fn enrichment_rollback_record_hash_deterministic() {
-    let rb1 = RollbackRecord::new("c1", ClaimVerdict::Confirmed, ClaimVerdict::RequiresLocal, "d", ep(1));
-    let rb2 = RollbackRecord::new("c1", ClaimVerdict::Confirmed, ClaimVerdict::RequiresLocal, "d", ep(1));
+    let rb1 = RollbackRecord::new(
+        "c1",
+        ClaimVerdict::Confirmed,
+        ClaimVerdict::RequiresLocal,
+        "d",
+        ep(1),
+    );
+    let rb2 = RollbackRecord::new(
+        "c1",
+        ClaimVerdict::Confirmed,
+        ClaimVerdict::RequiresLocal,
+        "d",
+        ep(1),
+    );
     assert_eq!(rb1.receipt_hash, rb2.receipt_hash);
 }
 
 #[test]
 fn enrichment_rollback_record_serde_roundtrip() {
-    let rb = RollbackRecord::new("c3", ClaimVerdict::Downgraded, ClaimVerdict::RequiresLocal, "spike", ep(1));
+    let rb = RollbackRecord::new(
+        "c3",
+        ClaimVerdict::Downgraded,
+        ClaimVerdict::RequiresLocal,
+        "spike",
+        ep(1),
+    );
     let json = serde_json::to_string(&rb).unwrap();
     let back: RollbackRecord = serde_json::from_str(&json).unwrap();
     assert_eq!(rb, back);
@@ -615,7 +677,11 @@ fn enrichment_decision_receipt_different_verdicts_different_hashes() {
 
 #[test]
 fn enrichment_decision_receipt_serde_roundtrip() {
-    let receipt = DecisionReceipt::new(ep(1), ClaimVerdict::Confirmed, ContentHash::compute(b"serde"));
+    let receipt = DecisionReceipt::new(
+        ep(1),
+        ClaimVerdict::Confirmed,
+        ContentHash::compute(b"serde"),
+    );
     let json = serde_json::to_string(&receipt).unwrap();
     let back: DecisionReceipt = serde_json::from_str(&json).unwrap();
     assert_eq!(receipt, back);

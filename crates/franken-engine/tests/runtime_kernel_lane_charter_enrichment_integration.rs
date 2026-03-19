@@ -39,10 +39,10 @@ fn within_js_budget() -> ResourceUsage {
 
 fn exceeding_js_budget() -> ResourceUsage {
     ResourceUsage {
-        heap_bytes: 100_000_000,   // exceeds 16MiB
-        stack_frames: 1000,        // exceeds 256
+        heap_bytes: 100_000_000,     // exceeds 16MiB
+        stack_frames: 1000,          // exceeds 256
         update_cycle_micros: 50_000, // exceeds 16_000
-        dom_patches: 5000,         // exceeds 1000
+        dom_patches: 5000,           // exceeds 1000
     }
 }
 
@@ -59,7 +59,11 @@ fn enrichment_runtime_lane_display_values() {
 
 #[test]
 fn enrichment_runtime_lane_serde_roundtrip_all() {
-    for lane in &[RuntimeLane::Js, RuntimeLane::Wasm, RuntimeLane::HybridRouter] {
+    for lane in &[
+        RuntimeLane::Js,
+        RuntimeLane::Wasm,
+        RuntimeLane::HybridRouter,
+    ] {
         let json = serde_json::to_string(lane).unwrap();
         let back: RuntimeLane = serde_json::from_str(&json).unwrap();
         assert_eq!(*lane, back);
@@ -68,7 +72,11 @@ fn enrichment_runtime_lane_serde_roundtrip_all() {
 
 #[test]
 fn enrichment_runtime_lane_ord_deterministic() {
-    let mut lanes = vec![RuntimeLane::HybridRouter, RuntimeLane::Js, RuntimeLane::Wasm];
+    let mut lanes = vec![
+        RuntimeLane::HybridRouter,
+        RuntimeLane::Js,
+        RuntimeLane::Wasm,
+    ];
     lanes.sort();
     // Verify sort completes without panic and is stable
     let mut lanes2 = lanes.clone();
@@ -83,9 +91,15 @@ fn enrichment_runtime_lane_ord_deterministic() {
 #[test]
 fn enrichment_ownership_domain_display_all_eight() {
     let domains = [
-        (OwnershipDomain::ExecutionCorrectness, "execution_correctness"),
+        (
+            OwnershipDomain::ExecutionCorrectness,
+            "execution_correctness",
+        ),
         (OwnershipDomain::FootprintBudget, "footprint_budget"),
-        (OwnershipDomain::SchedulerDeterminism, "scheduler_determinism"),
+        (
+            OwnershipDomain::SchedulerDeterminism,
+            "scheduler_determinism",
+        ),
         (OwnershipDomain::AbiStability, "abi_stability"),
         (OwnershipDomain::FailoverBehavior, "failover_behavior"),
         (OwnershipDomain::RoutingPolicy, "routing_policy"),
@@ -255,18 +269,27 @@ fn enrichment_hybrid_router_output_needs_lane_selection() {
 
 #[test]
 fn enrichment_failure_action_display() {
-    assert_eq!(FailureAction::LogAndContinue.to_string(), "log_and_continue");
+    assert_eq!(
+        FailureAction::LogAndContinue.to_string(),
+        "log_and_continue"
+    );
     assert_eq!(
         FailureAction::FallbackToLane(RuntimeLane::Js).to_string(),
         "fallback_to_js"
     );
-    assert_eq!(FailureAction::ActivateSafeMode.to_string(), "activate_safe_mode");
+    assert_eq!(
+        FailureAction::ActivateSafeMode.to_string(),
+        "activate_safe_mode"
+    );
     assert_eq!(FailureAction::ForceTerminate.to_string(), "force_terminate");
 }
 
 #[test]
 fn enrichment_invariant_kind_display() {
-    assert_eq!(InvariantKind::SemanticDivergence.to_string(), "semantic_divergence");
+    assert_eq!(
+        InvariantKind::SemanticDivergence.to_string(),
+        "semantic_divergence"
+    );
     assert_eq!(InvariantKind::BudgetExceeded.to_string(), "budget_exceeded");
     assert_eq!(InvariantKind::AbiMismatch.to_string(), "abi_mismatch");
 }

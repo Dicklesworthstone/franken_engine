@@ -24,10 +24,10 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::hostcall_batch_transport::{
-    BatchEntry, BatchPayload, BatchTransportConfig,
-    BatchTransportError, BatchTransportSpecimenFamily, BatchTransportState,
-    CreditPool, MembraneRejectionReason, MembraneVerdict, RegionState,
-    SharedMemoryRegion, batch_transport_corpus, compute_batch_mac, compute_entry_content_hash,
+    BatchEntry, BatchPayload, BatchTransportConfig, BatchTransportError,
+    BatchTransportSpecimenFamily, BatchTransportState, CreditPool, MembraneRejectionReason,
+    MembraneVerdict, RegionState, SharedMemoryRegion, batch_transport_corpus, compute_batch_mac,
+    compute_entry_content_hash,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -291,7 +291,10 @@ fn enrichment_membrane_rejection_reason_all_count() {
 
 #[test]
 fn enrichment_membrane_rejection_reason_display_unique() {
-    let labels: BTreeSet<String> = MembraneRejectionReason::ALL.iter().map(|r| format!("{r}")).collect();
+    let labels: BTreeSet<String> = MembraneRejectionReason::ALL
+        .iter()
+        .map(|r| format!("{r}"))
+        .collect();
     assert_eq!(labels.len(), 9);
 }
 
@@ -408,12 +411,18 @@ fn enrichment_state_revoke_region() {
 
 #[test]
 fn enrichment_state_too_many_regions() {
-    let config = BatchTransportConfig { max_active_regions: 2, ..Default::default() };
+    let config = BatchTransportConfig {
+        max_active_regions: 2,
+        ..Default::default()
+    };
     let mut state = BatchTransportState::new("sess".into(), config, ep(1));
     state.allocate_region(100, 1).unwrap();
     state.allocate_region(100, 2).unwrap();
     let result = state.allocate_region(100, 3);
-    assert!(matches!(result, Err(BatchTransportError::TooManyRegions { .. })));
+    assert!(matches!(
+        result,
+        Err(BatchTransportError::TooManyRegions { .. })
+    ));
 }
 
 // ===========================================================================
@@ -426,7 +435,9 @@ fn enrichment_state_build_batch_ok() {
     let session_key: [u8; 32] = [0xAB; 32];
     let mut state = BatchTransportState::new("sess".into(), config, ep(1));
     let entries = vec![make_entry(1, b"hello"), make_entry(2, b"world")];
-    let batch = state.build_batch(entries, &session_key, ep(1), 100).unwrap();
+    let batch = state
+        .build_batch(entries, &session_key, ep(1), 100)
+        .unwrap();
     assert_eq!(batch.batch_id, 1);
     assert_eq!(batch.entries.len(), 2);
 }
@@ -478,7 +489,10 @@ fn enrichment_specimen_family_all_count() {
 
 #[test]
 fn enrichment_specimen_family_display_unique() {
-    let labels: BTreeSet<String> = BatchTransportSpecimenFamily::ALL.iter().map(|f| format!("{f}")).collect();
+    let labels: BTreeSet<String> = BatchTransportSpecimenFamily::ALL
+        .iter()
+        .map(|f| format!("{f}"))
+        .collect();
     assert_eq!(labels.len(), 12);
 }
 

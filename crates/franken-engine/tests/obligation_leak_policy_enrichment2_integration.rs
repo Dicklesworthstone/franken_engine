@@ -252,9 +252,8 @@ fn enrichment_serde_reject_number_for_policy() {
 
 #[test]
 fn enrichment_serde_reject_incomplete_diagnostic() {
-    let result = serde_json::from_str::<LeakDiagnostic>(
-        r#"{"obligation_id": 1, "channel_id": "c"}"#,
-    );
+    let result =
+        serde_json::from_str::<LeakDiagnostic>(r#"{"obligation_id": 1, "channel_id": "c"}"#);
     assert!(result.is_err());
 }
 
@@ -303,7 +302,14 @@ fn enrichment_severity_ordering_btree_dedup() {
     set.insert(LeakSeverity::Fatal); // duplicate
     assert_eq!(set.len(), 3);
     let ordered: Vec<LeakSeverity> = set.into_iter().collect();
-    assert_eq!(ordered, vec![LeakSeverity::Warning, LeakSeverity::Critical, LeakSeverity::Fatal]);
+    assert_eq!(
+        ordered,
+        vec![
+            LeakSeverity::Warning,
+            LeakSeverity::Critical,
+            LeakSeverity::Fatal
+        ]
+    );
 }
 
 #[test]

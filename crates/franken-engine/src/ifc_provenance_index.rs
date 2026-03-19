@@ -91,6 +91,9 @@ pub struct DeclassReceiptRecord {
     /// Governing policy route; defaults empty for pre-route legacy receipts.
     #[serde(default)]
     pub declassification_route_ref: String,
+    /// Governing decision contract; defaults empty for legacy receipts.
+    #[serde(default)]
+    pub decision_contract_id: String,
     pub timestamp_ms: u64,
 }
 
@@ -896,6 +899,7 @@ mod tests {
             source_label: src,
             sink_clearance: sink,
             declassification_route_ref: format!("route-{id}"),
+            decision_contract_id: format!("decision-{id}"),
             timestamp_ms: 2000,
         }
     }
@@ -962,6 +966,7 @@ mod tests {
         let results = idx.declass_receipts_by_extension("ext-a", &ctx).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].receipt_id, "r1");
+        assert_eq!(results[0].decision_contract_id, "decision-r1");
     }
 
     #[test]
@@ -1381,6 +1386,10 @@ mod tests {
             joined[0].1.as_ref().unwrap().declassification_route_ref,
             "route-r1"
         );
+        assert_eq!(
+            joined[0].1.as_ref().unwrap().decision_contract_id,
+            "decision-r1"
+        );
     }
 
     #[test]
@@ -1454,9 +1463,14 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("declassification_route_ref");
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("decision_contract_id");
         let deser: DeclassReceiptRecord = serde_json::from_value(value).unwrap();
         assert_eq!(deser.receipt_id, "r1");
         assert!(deser.declassification_route_ref.is_empty());
+        assert!(deser.decision_contract_id.is_empty());
     }
 
     #[test]

@@ -179,13 +179,7 @@ fn enrichment_multiple_then_on_fulfilled_each_enqueue_microtask() {
     let h = store.resolve(js_int(10), Label::Public, &mut queue);
     for i in 0..5 {
         store
-            .then(
-                h,
-                Some(ClosureHandle(i)),
-                None,
-                Label::Public,
-                &mut queue,
-            )
+            .then(h, Some(ClosureHandle(i)), None, Label::Public, &mut queue)
             .unwrap();
     }
     // 5 .then calls on a fulfilled promise => 5 microtasks
@@ -564,9 +558,10 @@ fn enrichment_event_loop_witness_records_macrotask_execution() {
     let mut el = EventLoop::new();
     el.set_timeout(ClosureHandle(0), 100, Label::Public);
     el.turn();
-    let has_macro_event = el.witness.iter().any(|e| {
-        matches!(e, WitnessEvent::MacrotaskExecuted { .. })
-    });
+    let has_macro_event = el
+        .witness
+        .iter()
+        .any(|e| matches!(e, WitnessEvent::MacrotaskExecuted { .. }));
     assert!(has_macro_event);
 }
 

@@ -106,6 +106,7 @@ fn receipt(
         source_label: src,
         sink_clearance: sink,
         declassification_route_ref: format!("route-{id}"),
+        decision_contract_id: format!("decision-{id}"),
         timestamp_ms: 2000,
     }
 }
@@ -964,6 +965,7 @@ fn declass_receipt_fields_preserved() {
         source_label: Label::TopSecret,
         sink_clearance: Label::Public,
         declassification_route_ref: "route-fields".to_string(),
+        decision_contract_id: "decision-fields".to_string(),
         timestamp_ms: 111_222_333,
     };
     idx.insert_declass_receipt(&r, &c).unwrap();
@@ -976,6 +978,7 @@ fn declass_receipt_fields_preserved() {
     assert_eq!(got.extension_id, "ext-fields");
     assert_eq!(got.decision, DeclassificationDecision::Deny);
     assert_eq!(got.declassification_route_ref, "route-fields");
+    assert_eq!(got.decision_contract_id, "decision-fields");
     assert_eq!(got.source_label, Label::TopSecret);
     assert_eq!(got.sink_clearance, Label::Public);
     assert_eq!(got.timestamp_ms, 111_222_333);

@@ -470,7 +470,10 @@ fn enrichment_each_scenario_loads_extensions() {
     let mut cx = mock_cx(100_000);
     for kind in ALL_KINDS {
         let r = run_scenario(kind, 1, &mut cx);
-        assert!(!r.extensions_loaded.is_empty(), "{kind} should load extensions");
+        assert!(
+            !r.extensions_loaded.is_empty(),
+            "{kind} should load extensions"
+        );
     }
 }
 

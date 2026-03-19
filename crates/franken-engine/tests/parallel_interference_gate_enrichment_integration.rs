@@ -33,8 +33,7 @@ use frankenengine_engine::parallel_interference_gate::{
     evaluate_gate, generate_operator_summary,
 };
 use frankenengine_engine::parallel_parser::{
-    MergeWitness, ParallelConfig, ParserMode, RollbackControl, ScheduleDispatch,
-    ScheduleTranscript,
+    MergeWitness, ParallelConfig, ParserMode, RollbackControl, ScheduleDispatch, ScheduleTranscript,
 };
 
 // ---------------------------------------------------------------------------
@@ -49,7 +48,11 @@ fn test_source_large() -> String {
     s
 }
 
-fn make_incident(class: InterferenceClass, severity: InterferenceSeverity, seed: u64) -> InterferenceIncident {
+fn make_incident(
+    class: InterferenceClass,
+    severity: InterferenceSeverity,
+    seed: u64,
+) -> InterferenceIncident {
     InterferenceIncident {
         class,
         severity,
@@ -131,7 +134,10 @@ fn enrichment_interference_class_all_variants_display() {
     let variants = [
         (InterferenceClass::MergeOrder, "merge-order"),
         (InterferenceClass::Scheduler, "scheduler"),
-        (InterferenceClass::DataStructureIteration, "data-structure-iteration"),
+        (
+            InterferenceClass::DataStructureIteration,
+            "data-structure-iteration",
+        ),
         (InterferenceClass::ArtifactPipeline, "artifact-pipeline"),
         (InterferenceClass::TimeoutRace, "timeout-race"),
         (InterferenceClass::BackpressureDrift, "backpressure-drift"),
@@ -202,7 +208,11 @@ fn enrichment_severity_serde_roundtrip() {
 
 #[test]
 fn enrichment_incident_all_fields_populated() {
-    let inc = make_incident(InterferenceClass::Scheduler, InterferenceSeverity::Warning, 42);
+    let inc = make_incident(
+        InterferenceClass::Scheduler,
+        InterferenceSeverity::Warning,
+        42,
+    );
     assert_eq!(inc.class, InterferenceClass::Scheduler);
     assert_eq!(inc.severity, InterferenceSeverity::Warning);
     assert_eq!(inc.seed, 42);
@@ -214,7 +224,11 @@ fn enrichment_incident_all_fields_populated() {
 
 #[test]
 fn enrichment_incident_with_mismatch_token_index() {
-    let mut inc = make_incident(InterferenceClass::MergeOrder, InterferenceSeverity::Critical, 7);
+    let mut inc = make_incident(
+        InterferenceClass::MergeOrder,
+        InterferenceSeverity::Critical,
+        7,
+    );
     inc.mismatch_token_index = Some(99);
     let json = serde_json::to_string(&inc).unwrap();
     let back: InterferenceIncident = serde_json::from_str(&json).unwrap();
@@ -223,7 +237,11 @@ fn enrichment_incident_with_mismatch_token_index() {
 
 #[test]
 fn enrichment_incident_clone_deep_equality() {
-    let inc = make_incident(InterferenceClass::TimeoutRace, InterferenceSeverity::Info, 1);
+    let inc = make_incident(
+        InterferenceClass::TimeoutRace,
+        InterferenceSeverity::Info,
+        1,
+    );
     let cloned = inc.clone();
     assert_eq!(inc, cloned);
 }
@@ -420,7 +438,11 @@ fn enrichment_gate_decision_ordering() {
 
 #[test]
 fn enrichment_gate_decision_serde_roundtrip() {
-    for d in [GateDecision::Promote, GateDecision::Hold, GateDecision::Reject] {
+    for d in [
+        GateDecision::Promote,
+        GateDecision::Hold,
+        GateDecision::Reject,
+    ] {
         let json = serde_json::to_string(&d).unwrap();
         let back: GateDecision = serde_json::from_str(&json).unwrap();
         assert_eq!(d, back);
@@ -481,8 +503,16 @@ fn enrichment_gate_result_serde_roundtrip() {
 #[test]
 fn enrichment_gate_result_with_incidents() {
     let incidents = vec![
-        make_incident(InterferenceClass::MergeOrder, InterferenceSeverity::Critical, 1),
-        make_incident(InterferenceClass::Scheduler, InterferenceSeverity::Warning, 2),
+        make_incident(
+            InterferenceClass::MergeOrder,
+            InterferenceSeverity::Critical,
+            1,
+        ),
+        make_incident(
+            InterferenceClass::Scheduler,
+            InterferenceSeverity::Warning,
+            2,
+        ),
     ];
     let result = make_gate_result(GateDecision::Reject, incidents);
     assert_eq!(result.incidents.len(), 2);
@@ -559,22 +589,41 @@ fn enrichment_operator_summary_no_incidents() {
 #[test]
 fn enrichment_operator_summary_with_incidents() {
     let incidents = vec![
-        make_incident(InterferenceClass::Scheduler, InterferenceSeverity::Warning, 1),
-        make_incident(InterferenceClass::Scheduler, InterferenceSeverity::Warning, 2),
-        make_incident(InterferenceClass::MergeOrder, InterferenceSeverity::Critical, 3),
+        make_incident(
+            InterferenceClass::Scheduler,
+            InterferenceSeverity::Warning,
+            1,
+        ),
+        make_incident(
+            InterferenceClass::Scheduler,
+            InterferenceSeverity::Warning,
+            2,
+        ),
+        make_incident(
+            InterferenceClass::MergeOrder,
+            InterferenceSeverity::Critical,
+            3,
+        ),
     ];
     let result = make_gate_result(GateDecision::Reject, incidents);
     let summary = generate_operator_summary(&result);
     assert_eq!(summary.incident_count, 3);
     assert!(!summary.root_cause_hints.is_empty());
     // Scheduler has 2 incidents, should be first
-    assert_eq!(summary.root_cause_hints[0].class, InterferenceClass::Scheduler);
+    assert_eq!(
+        summary.root_cause_hints[0].class,
+        InterferenceClass::Scheduler
+    );
     assert_eq!(summary.root_cause_hints[0].count, 2);
 }
 
 #[test]
 fn enrichment_operator_summary_hold_recommended_action() {
-    let incidents = vec![make_incident(InterferenceClass::BackpressureDrift, InterferenceSeverity::Warning, 0)];
+    let incidents = vec![make_incident(
+        InterferenceClass::BackpressureDrift,
+        InterferenceSeverity::Warning,
+        0,
+    )];
     let result = make_gate_result(GateDecision::Hold, incidents);
     let summary = generate_operator_summary(&result);
     assert!(summary.recommended_action.contains("Investigate"));
@@ -582,7 +631,11 @@ fn enrichment_operator_summary_hold_recommended_action() {
 
 #[test]
 fn enrichment_operator_summary_reject_recommended_action() {
-    let incidents = vec![make_incident(InterferenceClass::MergeOrder, InterferenceSeverity::Critical, 0)];
+    let incidents = vec![make_incident(
+        InterferenceClass::MergeOrder,
+        InterferenceSeverity::Critical,
+        0,
+    )];
     let result = make_gate_result(GateDecision::Reject, incidents);
     let summary = generate_operator_summary(&result);
     assert!(summary.recommended_action.contains("serial fallback"));
@@ -627,8 +680,16 @@ fn enrichment_replay_bundle_none_when_no_incidents() {
 #[test]
 fn enrichment_replay_bundle_present_with_incidents() {
     let incidents = vec![
-        make_incident(InterferenceClass::Scheduler, InterferenceSeverity::Warning, 10),
-        make_incident(InterferenceClass::MergeOrder, InterferenceSeverity::Critical, 20),
+        make_incident(
+            InterferenceClass::Scheduler,
+            InterferenceSeverity::Warning,
+            10,
+        ),
+        make_incident(
+            InterferenceClass::MergeOrder,
+            InterferenceSeverity::Critical,
+            20,
+        ),
     ];
     let result = make_gate_result(GateDecision::Reject, incidents);
     let bundle = build_replay_bundle(&result).unwrap();
@@ -641,7 +702,11 @@ fn enrichment_replay_bundle_present_with_incidents() {
 
 #[test]
 fn enrichment_replay_bundle_serde_roundtrip() {
-    let incidents = vec![make_incident(InterferenceClass::TimeoutRace, InterferenceSeverity::Info, 5)];
+    let incidents = vec![make_incident(
+        InterferenceClass::TimeoutRace,
+        InterferenceSeverity::Info,
+        5,
+    )];
     let result = make_gate_result(GateDecision::Hold, incidents);
     let bundle = build_replay_bundle(&result).unwrap();
     let json = serde_json::to_string(&bundle).unwrap();
@@ -652,8 +717,16 @@ fn enrichment_replay_bundle_serde_roundtrip() {
 #[test]
 fn enrichment_replay_bundle_deduplicates_workers() {
     let incidents = vec![
-        make_incident(InterferenceClass::Scheduler, InterferenceSeverity::Warning, 1),
-        make_incident(InterferenceClass::Scheduler, InterferenceSeverity::Warning, 2),
+        make_incident(
+            InterferenceClass::Scheduler,
+            InterferenceSeverity::Warning,
+            1,
+        ),
+        make_incident(
+            InterferenceClass::Scheduler,
+            InterferenceSeverity::Warning,
+            2,
+        ),
     ];
     // Both incidents have worker_count=4
     let result = make_gate_result(GateDecision::Hold, incidents);
@@ -675,7 +748,11 @@ fn enrichment_rollback_promote_records_success() {
 
 #[test]
 fn enrichment_rollback_reject_records_failure() {
-    let incidents = vec![make_incident(InterferenceClass::MergeOrder, InterferenceSeverity::Critical, 0)];
+    let incidents = vec![make_incident(
+        InterferenceClass::MergeOrder,
+        InterferenceSeverity::Critical,
+        0,
+    )];
     let result = make_gate_result(GateDecision::Reject, incidents);
     let mut rollback = RollbackControl {
         auto_rollback_threshold: 1,
@@ -687,7 +764,11 @@ fn enrichment_rollback_reject_records_failure() {
 
 #[test]
 fn enrichment_rollback_hold_records_failure() {
-    let incidents = vec![make_incident(InterferenceClass::Scheduler, InterferenceSeverity::Warning, 0)];
+    let incidents = vec![make_incident(
+        InterferenceClass::Scheduler,
+        InterferenceSeverity::Warning,
+        0,
+    )];
     let result = make_gate_result(GateDecision::Hold, incidents);
     let mut rollback = RollbackControl {
         auto_rollback_threshold: 1,

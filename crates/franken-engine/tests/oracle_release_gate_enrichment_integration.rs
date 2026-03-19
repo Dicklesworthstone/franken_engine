@@ -218,7 +218,13 @@ fn enrichment_blocker_threshold_serde_all_directions() {
 
 #[test]
 fn enrichment_evaluate_condition_pass_margin_at_least() {
-    let cond = make_condition("margin", OracleKind::Contract, ThresholdDirection::AtLeast, 100, true);
+    let cond = make_condition(
+        "margin",
+        OracleKind::Contract,
+        ThresholdDirection::AtLeast,
+        100,
+        true,
+    );
     let eval = evaluate_condition(&cond, 200, None, None);
     assert_eq!(eval.verdict, GateVerdict::Pass);
     assert_eq!(eval.margin_millionths, 100);
@@ -226,7 +232,13 @@ fn enrichment_evaluate_condition_pass_margin_at_least() {
 
 #[test]
 fn enrichment_evaluate_condition_fail_margin_at_least() {
-    let cond = make_condition("fail_margin", OracleKind::Scenario, ThresholdDirection::AtLeast, 100, true);
+    let cond = make_condition(
+        "fail_margin",
+        OracleKind::Scenario,
+        ThresholdDirection::AtLeast,
+        100,
+        true,
+    );
     let eval = evaluate_condition(&cond, 50, None, None);
     assert_eq!(eval.verdict, GateVerdict::Fail);
     assert_eq!(eval.margin_millionths, -50);
@@ -234,7 +246,13 @@ fn enrichment_evaluate_condition_fail_margin_at_least() {
 
 #[test]
 fn enrichment_evaluate_condition_pass_margin_at_most() {
-    let cond = make_condition("at_most_pass", OracleKind::Metric, ThresholdDirection::AtMost, 100, false);
+    let cond = make_condition(
+        "at_most_pass",
+        OracleKind::Metric,
+        ThresholdDirection::AtMost,
+        100,
+        false,
+    );
     let eval = evaluate_condition(&cond, 50, None, None);
     assert_eq!(eval.verdict, GateVerdict::Pass);
     assert_eq!(eval.margin_millionths, 50);
@@ -242,7 +260,13 @@ fn enrichment_evaluate_condition_pass_margin_at_most() {
 
 #[test]
 fn enrichment_evaluate_condition_advisory_when_soft() {
-    let cond = make_condition("soft_fail", OracleKind::Metric, ThresholdDirection::AtMost, 50, false);
+    let cond = make_condition(
+        "soft_fail",
+        OracleKind::Metric,
+        ThresholdDirection::AtMost,
+        50,
+        false,
+    );
     let eval = evaluate_condition(&cond, 100, None, None);
     assert_eq!(eval.verdict, GateVerdict::Advisory);
     assert!(eval.margin_millionths < 0);
@@ -250,7 +274,13 @@ fn enrichment_evaluate_condition_advisory_when_soft() {
 
 #[test]
 fn enrichment_evaluate_condition_exactly_pass_zero_margin() {
-    let cond = make_condition("exact_pass", OracleKind::Replay, ThresholdDirection::Exactly, 0, true);
+    let cond = make_condition(
+        "exact_pass",
+        OracleKind::Replay,
+        ThresholdDirection::Exactly,
+        0,
+        true,
+    );
     let eval = evaluate_condition(&cond, 0, None, None);
     assert_eq!(eval.verdict, GateVerdict::Pass);
     assert_eq!(eval.margin_millionths, 0);
@@ -258,7 +288,13 @@ fn enrichment_evaluate_condition_exactly_pass_zero_margin() {
 
 #[test]
 fn enrichment_evaluate_condition_evidence_refs_propagated() {
-    let cond = make_condition("refs", OracleKind::Evidence, ThresholdDirection::AtLeast, 0, true);
+    let cond = make_condition(
+        "refs",
+        OracleKind::Evidence,
+        ThresholdDirection::AtLeast,
+        0,
+        true,
+    );
     let eval = evaluate_condition(&cond, 100, Some("ev-abc"), Some("replay-xyz"));
     assert_eq!(eval.evidence_ref.as_deref(), Some("ev-abc"));
     assert_eq!(eval.replay_ref.as_deref(), Some("replay-xyz"));
@@ -278,7 +314,12 @@ fn enrichment_gate_verdict_as_str_all_variants() {
 
 #[test]
 fn enrichment_gate_verdict_display_matches_as_str() {
-    for v in [GateVerdict::Pass, GateVerdict::Fail, GateVerdict::Advisory, GateVerdict::Inconclusive] {
+    for v in [
+        GateVerdict::Pass,
+        GateVerdict::Fail,
+        GateVerdict::Advisory,
+        GateVerdict::Inconclusive,
+    ] {
         assert_eq!(v.to_string(), v.as_str());
     }
 }
@@ -408,7 +449,11 @@ fn enrichment_triage_severity_as_str() {
 
 #[test]
 fn enrichment_triage_severity_display_matches_as_str() {
-    for sev in [TriageSeverity::Blocker, TriageSeverity::Warning, TriageSeverity::Info] {
+    for sev in [
+        TriageSeverity::Blocker,
+        TriageSeverity::Warning,
+        TriageSeverity::Info,
+    ] {
         assert_eq!(sev.to_string(), sev.as_str());
     }
 }
@@ -449,7 +494,10 @@ fn enrichment_triage_fail_maps_to_blocker() {
 #[test]
 fn enrichment_triage_advisory_maps_to_warning() {
     let conditions = default_gate_conditions();
-    let metric_cond = conditions.iter().find(|c| c.oracle_kind == OracleKind::Metric).unwrap();
+    let metric_cond = conditions
+        .iter()
+        .find(|c| c.oracle_kind == OracleKind::Metric)
+        .unwrap();
     let evals = vec![evaluate_condition(metric_cond, 200_000, None, None)];
     let report = build_report(epoch(), "rc-warn", evals);
     let bundle = build_triage_bundle(&report, &conditions);
@@ -479,7 +527,12 @@ fn enrichment_triage_bundle_integrity_detects_tampering() {
 #[test]
 fn enrichment_triage_bundle_serde_roundtrip() {
     let conditions = default_gate_conditions();
-    let evals = vec![evaluate_condition(&conditions[0], 0, Some("ev"), Some("rp"))];
+    let evals = vec![evaluate_condition(
+        &conditions[0],
+        0,
+        Some("ev"),
+        Some("rp"),
+    )];
     let report = build_report(epoch(), "rc-serde", evals);
     let bundle = build_triage_bundle(&report, &conditions);
     let json = serde_json::to_string(&bundle).unwrap();
@@ -490,12 +543,48 @@ fn enrichment_triage_bundle_serde_roundtrip() {
 #[test]
 fn enrichment_triage_remediation_per_oracle_kind_distinct() {
     let conditions = vec![
-        make_condition("s", OracleKind::Scenario, ThresholdDirection::AtLeast, 100, true),
-        make_condition("r", OracleKind::Replay, ThresholdDirection::Exactly, 0, true),
-        make_condition("c", OracleKind::Contract, ThresholdDirection::AtLeast, 100, true),
-        make_condition("m", OracleKind::Metric, ThresholdDirection::AtMost, 10, true),
-        make_condition("e", OracleKind::Evidence, ThresholdDirection::Exactly, 0, true),
-        make_condition("o", OracleKind::Obligation, ThresholdDirection::AtMost, 0, true),
+        make_condition(
+            "s",
+            OracleKind::Scenario,
+            ThresholdDirection::AtLeast,
+            100,
+            true,
+        ),
+        make_condition(
+            "r",
+            OracleKind::Replay,
+            ThresholdDirection::Exactly,
+            0,
+            true,
+        ),
+        make_condition(
+            "c",
+            OracleKind::Contract,
+            ThresholdDirection::AtLeast,
+            100,
+            true,
+        ),
+        make_condition(
+            "m",
+            OracleKind::Metric,
+            ThresholdDirection::AtMost,
+            10,
+            true,
+        ),
+        make_condition(
+            "e",
+            OracleKind::Evidence,
+            ThresholdDirection::Exactly,
+            0,
+            true,
+        ),
+        make_condition(
+            "o",
+            OracleKind::Obligation,
+            ThresholdDirection::AtMost,
+            0,
+            true,
+        ),
     ];
     let evals: Vec<GateEvaluation> = conditions
         .iter()
@@ -503,7 +592,11 @@ fn enrichment_triage_remediation_per_oracle_kind_distinct() {
         .collect();
     let report = build_report(epoch(), "rc-rem", evals);
     let bundle = build_triage_bundle(&report, &conditions);
-    let remediations: BTreeSet<&str> = bundle.entries.iter().map(|e| e.remediation.as_str()).collect();
+    let remediations: BTreeSet<&str> = bundle
+        .entries
+        .iter()
+        .map(|e| e.remediation.as_str())
+        .collect();
     assert!(remediations.len() >= 4);
 }
 
@@ -586,7 +679,10 @@ fn enrichment_default_conditions_all_have_policy_ref() {
 #[test]
 fn enrichment_default_conditions_scenario_hard_blocker() {
     let conditions = default_gate_conditions();
-    let scenario = conditions.iter().find(|c| c.oracle_kind == OracleKind::Scenario).unwrap();
+    let scenario = conditions
+        .iter()
+        .find(|c| c.oracle_kind == OracleKind::Scenario)
+        .unwrap();
     assert!(scenario.threshold.is_hard_blocker);
     assert_eq!(scenario.threshold.threshold_value, DEFAULT_MIN_PASS_RATE);
 }
@@ -594,7 +690,10 @@ fn enrichment_default_conditions_scenario_hard_blocker() {
 #[test]
 fn enrichment_default_conditions_metric_is_advisory() {
     let conditions = default_gate_conditions();
-    let metric = conditions.iter().find(|c| c.oracle_kind == OracleKind::Metric).unwrap();
+    let metric = conditions
+        .iter()
+        .find(|c| c.oracle_kind == OracleKind::Metric)
+        .unwrap();
     assert!(!metric.threshold.is_hard_blocker);
     assert_eq!(metric.threshold.threshold_value, DEFAULT_MAX_REGRESSION);
 }

@@ -54,7 +54,11 @@ fn enrichment_telemetry_tier_all_count() {
 fn enrichment_telemetry_tier_as_key_unique() {
     let mut keys = std::collections::BTreeSet::new();
     for tier in TelemetryTier::ALL {
-        assert!(keys.insert(tier.as_key()), "duplicate key: {}", tier.as_key());
+        assert!(
+            keys.insert(tier.as_key()),
+            "duplicate key: {}",
+            tier.as_key()
+        );
     }
 }
 
@@ -225,9 +229,27 @@ fn enrichment_is_regression_positive_delta_not_regression() {
 #[test]
 fn enrichment_build_evidence_bundle_counts() {
     let samples = vec![
-        build_benchmark_sample(BenchmarkEvidenceKind::Throughput, TelemetryTier::Interpreted, 300_000, 500_000, 900_000),
-        build_benchmark_sample(BenchmarkEvidenceKind::Latency, TelemetryTier::Baseline, 600_000, 500_000, 900_000),
-        build_benchmark_sample(BenchmarkEvidenceKind::MemoryUsage, TelemetryTier::Optimized, 500_000, 500_000, 900_000),
+        build_benchmark_sample(
+            BenchmarkEvidenceKind::Throughput,
+            TelemetryTier::Interpreted,
+            300_000,
+            500_000,
+            900_000,
+        ),
+        build_benchmark_sample(
+            BenchmarkEvidenceKind::Latency,
+            TelemetryTier::Baseline,
+            600_000,
+            500_000,
+            900_000,
+        ),
+        build_benchmark_sample(
+            BenchmarkEvidenceKind::MemoryUsage,
+            TelemetryTier::Optimized,
+            500_000,
+            500_000,
+            900_000,
+        ),
     ];
     let epoch = SecurityEpoch::from_raw(1);
     let bundle = build_evidence_bundle(samples, &epoch);
@@ -237,9 +259,13 @@ fn enrichment_build_evidence_bundle_counts() {
 
 #[test]
 fn enrichment_build_evidence_bundle_serde_roundtrip() {
-    let samples = vec![
-        build_benchmark_sample(BenchmarkEvidenceKind::Throughput, TelemetryTier::Interpreted, 500_000, 500_000, 900_000),
-    ];
+    let samples = vec![build_benchmark_sample(
+        BenchmarkEvidenceKind::Throughput,
+        TelemetryTier::Interpreted,
+        500_000,
+        500_000,
+        900_000,
+    )];
     let bundle = build_evidence_bundle(samples, &SecurityEpoch::from_raw(1));
     let json = serde_json::to_string(&bundle).unwrap();
     let back: BenchmarkEvidenceBundle = serde_json::from_str(&json).unwrap();
@@ -281,9 +307,13 @@ fn enrichment_default_contract_serde_roundtrip() {
 
 #[test]
 fn enrichment_evaluate_publication_insufficient_samples() {
-    let samples = vec![
-        build_benchmark_sample(BenchmarkEvidenceKind::Throughput, TelemetryTier::Interpreted, 500_000, 500_000, 900_000),
-    ];
+    let samples = vec![build_benchmark_sample(
+        BenchmarkEvidenceKind::Throughput,
+        TelemetryTier::Interpreted,
+        500_000,
+        500_000,
+        900_000,
+    )];
     let bundle = build_evidence_bundle(samples, &SecurityEpoch::from_raw(1));
     let contract = PublicationContract::default_contract();
     let verdict = evaluate_publication(&bundle, &contract, &SecurityEpoch::from_raw(1));

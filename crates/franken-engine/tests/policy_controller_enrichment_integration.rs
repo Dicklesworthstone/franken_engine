@@ -206,7 +206,9 @@ fn all_error_variants_distinct_display() {
     let errors = vec![
         PolicyControllerError::EmptyActionSet,
         PolicyControllerError::NoLossEntries,
-        PolicyControllerError::SafeDefaultNotInActionSet { safe_default: "x".into() },
+        PolicyControllerError::SafeDefaultNotInActionSet {
+            safe_default: "x".into(),
+        },
         PolicyControllerError::EvidenceEmissionFailed { reason: "r".into() },
     ];
     let displays: std::collections::BTreeSet<String> =
@@ -219,8 +221,12 @@ fn error_serde_roundtrip_all() {
     let errors = vec![
         PolicyControllerError::EmptyActionSet,
         PolicyControllerError::NoLossEntries,
-        PolicyControllerError::SafeDefaultNotInActionSet { safe_default: "abc".into() },
-        PolicyControllerError::EvidenceEmissionFailed { reason: "xyz".into() },
+        PolicyControllerError::SafeDefaultNotInActionSet {
+            safe_default: "abc".into(),
+        },
+        PolicyControllerError::EvidenceEmissionFailed {
+            reason: "xyz".into(),
+        },
     ];
     for err in &errors {
         let json = serde_json::to_string(err).expect("serialize");
@@ -270,7 +276,9 @@ fn action_selection_with_rejections_serde() {
 #[test]
 fn selects_low_in_calm_state() {
     let mut ctrl = make_controller();
-    let sel = ctrl.select_action(&calm_posterior(), epoch(1), "t1").expect("select");
+    let sel = ctrl
+        .select_action(&calm_posterior(), epoch(1), "t1")
+        .expect("select");
     // E[L(low)] = 0.8*50k + 0.2*3M = 40k + 600k = 640k
     // E[L(med)] = 0.8*200k + 0.2*800k = 160k + 160k = 320k
     // E[L(high)] = 0.8*600k + 0.2*100k = 480k + 20k = 500k
@@ -282,7 +290,9 @@ fn selects_low_in_calm_state() {
 #[test]
 fn selects_high_in_crisis_state() {
     let mut ctrl = make_controller();
-    let sel = ctrl.select_action(&crisis_posterior(), epoch(1), "t2").expect("select");
+    let sel = ctrl
+        .select_action(&crisis_posterior(), epoch(1), "t2")
+        .expect("select");
     // E[L(low)] = 0.1*50k + 0.9*3M = 5k + 2700k = 2705k
     // E[L(med)] = 0.1*200k + 0.9*800k = 20k + 720k = 740k
     // E[L(high)] = 0.1*600k + 0.9*100k = 60k + 90k = 150k
@@ -330,7 +340,9 @@ fn guardrail_blocks_best_falls_to_next() {
         description: "block medium".into(),
         blocked_actions: vec!["medium".into()],
     });
-    let sel = ctrl.select_action(&calm_posterior(), epoch(1), "t").expect("select");
+    let sel = ctrl
+        .select_action(&calm_posterior(), epoch(1), "t")
+        .expect("select");
     assert_ne!(sel.action, "medium");
     assert!(!sel.guardrail_rejections.is_empty());
 }
@@ -348,7 +360,9 @@ fn multiple_guardrails_cumulative() {
         description: "block medium".into(),
         blocked_actions: vec!["medium".into()],
     });
-    let sel = ctrl.select_action(&calm_posterior(), epoch(1), "t").expect("select");
+    let sel = ctrl
+        .select_action(&calm_posterior(), epoch(1), "t")
+        .expect("select");
     assert_eq!(sel.action, "high");
     assert!(!sel.is_safe_default);
     assert_eq!(sel.guardrail_rejections.len(), 2);
@@ -362,7 +376,9 @@ fn all_blocked_safe_default() {
         description: "block".into(),
         blocked_actions: vec!["low".into(), "medium".into(), "high".into()],
     });
-    let sel = ctrl.select_action(&calm_posterior(), epoch(1), "t").expect("select");
+    let sel = ctrl
+        .select_action(&calm_posterior(), epoch(1), "t")
+        .expect("select");
     assert_eq!(sel.action, "high");
     assert!(sel.is_safe_default);
     assert_eq!(sel.guardrail_rejections.len(), 3);
@@ -398,8 +414,12 @@ fn decisions_vec_matches_count() {
 #[test]
 fn decisions_preserve_order() {
     let mut ctrl = make_controller();
-    let s1 = ctrl.select_action(&calm_posterior(), epoch(1), "t1").expect("s1");
-    let s2 = ctrl.select_action(&crisis_posterior(), epoch(1), "t2").expect("s2");
+    let s1 = ctrl
+        .select_action(&calm_posterior(), epoch(1), "t1")
+        .expect("s1");
+    let s2 = ctrl
+        .select_action(&crisis_posterior(), epoch(1), "t2")
+        .expect("s2");
     assert_eq!(ctrl.decisions()[0], s1);
     assert_eq!(ctrl.decisions()[1], s2);
 }
@@ -412,14 +432,18 @@ fn decisions_preserve_order() {
 fn update_matrix_to_empty_still_works() {
     let mut ctrl = make_controller();
     ctrl.update_loss_matrix(LossMatrix::new());
-    let sel = ctrl.select_action(&calm_posterior(), epoch(1), "t").expect("select");
+    let sel = ctrl
+        .select_action(&calm_posterior(), epoch(1), "t")
+        .expect("select");
     assert_eq!(sel.expected_loss, 0);
 }
 
 #[test]
 fn update_matrix_reverses_preference() {
     let mut ctrl = make_controller();
-    let s1 = ctrl.select_action(&calm_posterior(), epoch(1), "t1").expect("s1");
+    let s1 = ctrl
+        .select_action(&calm_posterior(), epoch(1), "t1")
+        .expect("s1");
 
     let mut new_m = LossMatrix::new();
     new_m.set("calm", "low", 1_000);
@@ -430,7 +454,9 @@ fn update_matrix_reverses_preference() {
     new_m.set("crisis", "high", 999_000);
     ctrl.update_loss_matrix(new_m);
 
-    let s2 = ctrl.select_action(&calm_posterior(), epoch(1), "t2").expect("s2");
+    let s2 = ctrl
+        .select_action(&calm_posterior(), epoch(1), "t2")
+        .expect("s2");
     assert_ne!(s1.action, s2.action);
     assert_eq!(s2.action, "low");
 }
@@ -442,33 +468,52 @@ fn update_matrix_reverses_preference() {
 #[test]
 fn evidence_decision_type_is_capability() {
     let mut ctrl = make_controller();
-    let sel = ctrl.select_action(&calm_posterior(), epoch(1), "t").expect("select");
-    let entry = ctrl.build_evidence(&sel, &calm_posterior(), epoch(1), "t").expect("evidence");
+    let sel = ctrl
+        .select_action(&calm_posterior(), epoch(1), "t")
+        .expect("select");
+    let entry = ctrl
+        .build_evidence(&sel, &calm_posterior(), epoch(1), "t")
+        .expect("evidence");
     assert_eq!(entry.decision_type, DecisionType::CapabilityDecision);
 }
 
 #[test]
 fn evidence_candidates_count_matches_actions() {
     let mut ctrl = make_controller();
-    let sel = ctrl.select_action(&calm_posterior(), epoch(1), "t").expect("select");
-    let entry = ctrl.build_evidence(&sel, &calm_posterior(), epoch(1), "t").expect("evidence");
+    let sel = ctrl
+        .select_action(&calm_posterior(), epoch(1), "t")
+        .expect("select");
+    let entry = ctrl
+        .build_evidence(&sel, &calm_posterior(), epoch(1), "t")
+        .expect("evidence");
     assert_eq!(entry.candidates.len(), 3);
 }
 
 #[test]
 fn evidence_chosen_matches_selection() {
     let mut ctrl = make_controller();
-    let sel = ctrl.select_action(&calm_posterior(), epoch(1), "t").expect("select");
-    let entry = ctrl.build_evidence(&sel, &calm_posterior(), epoch(1), "t").expect("evidence");
+    let sel = ctrl
+        .select_action(&calm_posterior(), epoch(1), "t")
+        .expect("select");
+    let entry = ctrl
+        .build_evidence(&sel, &calm_posterior(), epoch(1), "t")
+        .expect("evidence");
     assert_eq!(entry.chosen_action.action_name, sel.action);
-    assert_eq!(entry.chosen_action.expected_loss_millionths, sel.expected_loss);
+    assert_eq!(
+        entry.chosen_action.expected_loss_millionths,
+        sel.expected_loss
+    );
 }
 
 #[test]
 fn evidence_metadata_contains_controller_info() {
     let mut ctrl = make_controller();
-    let sel = ctrl.select_action(&calm_posterior(), epoch(1), "t").expect("select");
-    let entry = ctrl.build_evidence(&sel, &calm_posterior(), epoch(1), "t").expect("evidence");
+    let sel = ctrl
+        .select_action(&calm_posterior(), epoch(1), "t")
+        .expect("select");
+    let entry = ctrl
+        .build_evidence(&sel, &calm_posterior(), epoch(1), "t")
+        .expect("evidence");
     assert_eq!(entry.metadata["controller_id"], "ctrl-2s");
     assert_eq!(entry.metadata["domain"], "risk_level");
 }
@@ -481,10 +526,18 @@ fn evidence_guardrail_filtering_visible() {
         description: "block low".into(),
         blocked_actions: vec!["low".into()],
     });
-    let sel = ctrl.select_action(&calm_posterior(), epoch(1), "t").expect("select");
-    let entry = ctrl.build_evidence(&sel, &calm_posterior(), epoch(1), "t").expect("evidence");
+    let sel = ctrl
+        .select_action(&calm_posterior(), epoch(1), "t")
+        .expect("select");
+    let entry = ctrl
+        .build_evidence(&sel, &calm_posterior(), epoch(1), "t")
+        .expect("evidence");
 
-    let low_cand = entry.candidates.iter().find(|c| c.action_name == "low").unwrap();
+    let low_cand = entry
+        .candidates
+        .iter()
+        .find(|c| c.action_name == "low")
+        .unwrap();
     assert!(low_cand.filtered);
 }
 
@@ -496,9 +549,16 @@ fn evidence_safe_default_rationale() {
         description: "block all".into(),
         blocked_actions: vec!["low".into(), "medium".into(), "high".into()],
     });
-    let sel = ctrl.select_action(&calm_posterior(), epoch(1), "t").expect("select");
-    let entry = ctrl.build_evidence(&sel, &calm_posterior(), epoch(1), "t").expect("evidence");
-    assert_eq!(entry.chosen_action.rationale, "safe default (all actions guardrail-blocked)");
+    let sel = ctrl
+        .select_action(&calm_posterior(), epoch(1), "t")
+        .expect("select");
+    let entry = ctrl
+        .build_evidence(&sel, &calm_posterior(), epoch(1), "t")
+        .expect("evidence");
+    assert_eq!(
+        entry.chosen_action.rationale,
+        "safe default (all actions guardrail-blocked)"
+    );
 }
 
 // ===========================================================================

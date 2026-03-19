@@ -335,13 +335,22 @@ fn cx_threading_error_codes_all_distinct() {
 
 #[test]
 fn effect_category_budget_costs_match_constants() {
-    assert_eq!(EffectCategory::Hostcall.budget_cost_ms(), HOSTCALL_BUDGET_COST_MS);
-    assert_eq!(EffectCategory::PolicyCheck.budget_cost_ms(), POLICY_CHECK_BUDGET_COST_MS);
+    assert_eq!(
+        EffectCategory::Hostcall.budget_cost_ms(),
+        HOSTCALL_BUDGET_COST_MS
+    );
+    assert_eq!(
+        EffectCategory::PolicyCheck.budget_cost_ms(),
+        POLICY_CHECK_BUDGET_COST_MS
+    );
     assert_eq!(
         EffectCategory::LifecycleTransition.budget_cost_ms(),
         LIFECYCLE_TRANSITION_BUDGET_COST_MS
     );
-    assert_eq!(EffectCategory::TelemetryEmit.budget_cost_ms(), TELEMETRY_EMIT_BUDGET_COST_MS);
+    assert_eq!(
+        EffectCategory::TelemetryEmit.budget_cost_ms(),
+        TELEMETRY_EMIT_BUDGET_COST_MS
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -484,9 +493,7 @@ fn gateway_lifecycle_terminal_rejects_further_transitions() {
     let mut gw = make_gateway(11, 1000);
     gw.transition_lifecycle(LifecyclePhase::Loaded).unwrap();
     gw.transition_lifecycle(LifecyclePhase::Terminated).unwrap();
-    let err = gw
-        .transition_lifecycle(LifecyclePhase::Loaded)
-        .unwrap_err();
+    let err = gw.transition_lifecycle(LifecyclePhase::Loaded).unwrap_err();
     assert!(matches!(err, CxThreadingError::LifecycleViolation { .. }));
     assert!(err.to_string().contains("terminal"));
 }
@@ -574,12 +581,7 @@ fn run_full_lifecycle_budget_exhaustion_fails() {
     let mut gw = make_gateway(17, 2); // only 2ms budget
     gw.register_hostcall("fs_read", None);
     // First lifecycle transitions consume 3ms each => should fail
-    let result = run_full_lifecycle(
-        &mut gw,
-        &[hostcall("fs_read")],
-        &[],
-        &[],
-    );
+    let result = run_full_lifecycle(&mut gw, &[hostcall("fs_read")], &[], &[]);
     assert!(result.is_err());
 }
 
@@ -664,5 +666,9 @@ fn audit_log_deterministic_50_times() {
         );
         audit_jsons.insert(key);
     }
-    assert_eq!(audit_jsons.len(), 1, "audit log counts should be deterministic");
+    assert_eq!(
+        audit_jsons.len(),
+        1,
+        "audit log counts should be deterministic"
+    );
 }

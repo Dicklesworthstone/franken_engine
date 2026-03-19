@@ -152,7 +152,10 @@ fn enrichment_snapshot_hash_deterministic_regardless_of_sample_order() {
     let s1 = baseline_snapshot();
     let mut s2 = baseline_snapshot();
     // Reverse samples in one operation
-    if let Some(samples) = s2.operation_samples.get_mut(&ControlPlaneOperation::PolicyQuery) {
+    if let Some(samples) = s2
+        .operation_samples
+        .get_mut(&ControlPlaneOperation::PolicyQuery)
+    {
         samples.with_integrations_ns.reverse();
         samples.without_integrations_ns.reverse();
     }
@@ -188,8 +191,12 @@ fn enrichment_all_four_operations_have_unique_as_str() {
 fn enrichment_gate_failure_when_both_snapshots_miss_different_integrations() {
     let mut baseline = baseline_snapshot();
     let mut candidate = candidate_snapshot();
-    baseline.integrations.remove(&SiblingIntegration::Frankentui);
-    candidate.integrations.remove(&SiblingIntegration::FastapiRust);
+    baseline
+        .integrations
+        .remove(&SiblingIntegration::Frankentui);
+    candidate
+        .integrations
+        .remove(&SiblingIntegration::FastapiRust);
     let input = make_input(baseline, candidate);
     let d = evaluate_sibling_integration_benchmark(&input, &BenchmarkGateThresholds::default());
     assert!(!d.pass);
@@ -346,10 +353,7 @@ fn enrichment_ledger_same_epoch_error() {
     let mut ledger = BaselineLedger::default();
     ledger.record(10, baseline_snapshot()).unwrap();
     let err = ledger.record(10, candidate_snapshot()).unwrap_err();
-    assert!(matches!(
-        err,
-        BaselineLedgerError::NonMonotonicEpoch { .. }
-    ));
+    assert!(matches!(err, BaselineLedgerError::NonMonotonicEpoch { .. }));
 }
 
 #[test]

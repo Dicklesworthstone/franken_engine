@@ -21,9 +21,9 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::reproducibility_provenance_pack::{
     ArtifactEntry, ArtifactKind, ArtifactManifest, BuildEnvironment, DependencyEntry,
-    DependencySnapshot, GitFingerprint, LegalAssessment, LicenseFinding, LicenseRisk,
-    PackBuilder, PackIntegrityResult, ReproducibilityReport, ToolchainFingerprint,
-    generate_report, SCHEMA_VERSION,
+    DependencySnapshot, GitFingerprint, LegalAssessment, LicenseFinding, LicenseRisk, PackBuilder,
+    PackIntegrityResult, ReproducibilityReport, SCHEMA_VERSION, ToolchainFingerprint,
+    generate_report,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -99,7 +99,10 @@ fn test_dep(name: &str, version: &str) -> DependencyEntry {
 
 #[test]
 fn enrichment_schema_version_value() {
-    assert_eq!(SCHEMA_VERSION, "franken-engine.reproducibility-provenance.v1");
+    assert_eq!(
+        SCHEMA_VERSION,
+        "franken-engine.reproducibility-provenance.v1"
+    );
 }
 
 #[test]
@@ -189,19 +192,32 @@ fn enrichment_build_env_serde_round_trip() {
 #[test]
 fn enrichment_artifact_kind_display_unique() {
     let displays: BTreeSet<String> = [
-        ArtifactKind::Source, ArtifactKind::Binary, ArtifactKind::Config,
-        ArtifactKind::TestFixture, ArtifactKind::Evidence, ArtifactKind::LockFile,
-        ArtifactKind::Documentation, ArtifactKind::Legal,
-    ].iter().map(|k| k.to_string()).collect();
+        ArtifactKind::Source,
+        ArtifactKind::Binary,
+        ArtifactKind::Config,
+        ArtifactKind::TestFixture,
+        ArtifactKind::Evidence,
+        ArtifactKind::LockFile,
+        ArtifactKind::Documentation,
+        ArtifactKind::Legal,
+    ]
+    .iter()
+    .map(|k| k.to_string())
+    .collect();
     assert_eq!(displays.len(), 8);
 }
 
 #[test]
 fn enrichment_artifact_kind_serde_all() {
     for k in [
-        ArtifactKind::Source, ArtifactKind::Binary, ArtifactKind::Config,
-        ArtifactKind::TestFixture, ArtifactKind::Evidence, ArtifactKind::LockFile,
-        ArtifactKind::Documentation, ArtifactKind::Legal,
+        ArtifactKind::Source,
+        ArtifactKind::Binary,
+        ArtifactKind::Config,
+        ArtifactKind::TestFixture,
+        ArtifactKind::Evidence,
+        ArtifactKind::LockFile,
+        ArtifactKind::Documentation,
+        ArtifactKind::Legal,
     ] {
         let json = serde_json::to_string(&k).unwrap();
         let back: ArtifactKind = serde_json::from_str(&json).unwrap();
@@ -243,10 +259,7 @@ fn enrichment_manifest_hash_differs_on_pack_id() {
 
 #[test]
 fn enrichment_dep_snapshot_sorts_entries() {
-    let entries = vec![
-        test_dep("z_crate", "1.0"),
-        test_dep("a_crate", "2.0"),
-    ];
+    let entries = vec![test_dep("z_crate", "1.0"), test_dep("a_crate", "2.0")];
     let snap = DependencySnapshot::from_entries(entries);
     assert_eq!(snap.dependencies[0].name, "a_crate");
     assert_eq!(snap.dependencies[1].name, "z_crate");
@@ -282,7 +295,12 @@ fn enrichment_license_risk_ordering() {
 
 #[test]
 fn enrichment_license_risk_serde_all() {
-    for r in [LicenseRisk::None, LicenseRisk::Low, LicenseRisk::Medium, LicenseRisk::High] {
+    for r in [
+        LicenseRisk::None,
+        LicenseRisk::Low,
+        LicenseRisk::Medium,
+        LicenseRisk::High,
+    ] {
         let json = serde_json::to_string(&r).unwrap();
         let back: LicenseRisk = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
@@ -329,8 +347,18 @@ fn enrichment_legal_medium_risk_recommended() {
 #[test]
 fn enrichment_legal_sorts_findings_by_dependency() {
     let findings = vec![
-        LicenseFinding { dependency: "z".into(), license_spdx: "MIT".into(), risk: LicenseRisk::None, notes: String::new() },
-        LicenseFinding { dependency: "a".into(), license_spdx: "MIT".into(), risk: LicenseRisk::None, notes: String::new() },
+        LicenseFinding {
+            dependency: "z".into(),
+            license_spdx: "MIT".into(),
+            risk: LicenseRisk::None,
+            notes: String::new(),
+        },
+        LicenseFinding {
+            dependency: "a".into(),
+            license_spdx: "MIT".into(),
+            risk: LicenseRisk::None,
+            notes: String::new(),
+        },
     ];
     let assessment = LegalAssessment::from_findings(findings);
     assert_eq!(assessment.findings[0].dependency, "a");
@@ -413,18 +441,26 @@ fn enrichment_pack_hash_deterministic() {
 #[test]
 fn enrichment_pack_hash_differs_by_claim() {
     let p1 = PackBuilder::new("FRX-a".to_string(), test_epoch())
-        .environment(test_env()).build().unwrap();
+        .environment(test_env())
+        .build()
+        .unwrap();
     let p2 = PackBuilder::new("FRX-b".to_string(), test_epoch())
-        .environment(test_env()).build().unwrap();
+        .environment(test_env())
+        .build()
+        .unwrap();
     assert_ne!(p1.pack_hash, p2.pack_hash);
 }
 
 #[test]
 fn enrichment_pack_hash_differs_by_epoch() {
     let p1 = PackBuilder::new("FRX-ep".to_string(), SecurityEpoch::from_raw(1))
-        .environment(test_env()).build().unwrap();
+        .environment(test_env())
+        .build()
+        .unwrap();
     let p2 = PackBuilder::new("FRX-ep".to_string(), SecurityEpoch::from_raw(2))
-        .environment(test_env()).build().unwrap();
+        .environment(test_env())
+        .build()
+        .unwrap();
     assert_ne!(p1.pack_hash, p2.pack_hash);
 }
 
@@ -554,7 +590,8 @@ fn enrichment_integrity_result_serde_round_trip() {
 #[test]
 fn enrichment_env_with_extra_metadata() {
     let mut env = test_env();
-    env.extra.insert("custom_key".to_string(), "custom_val".to_string());
+    env.extra
+        .insert("custom_key".to_string(), "custom_val".to_string());
     let pack = PackBuilder::new("FRX-extra".to_string(), test_epoch())
         .environment(env)
         .build()

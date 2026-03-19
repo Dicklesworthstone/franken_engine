@@ -93,16 +93,25 @@ fn category_all_contains_five() {
 
 #[test]
 fn category_all_distinct_display() {
-    let displays: BTreeSet<String> = ObligationCategory::ALL.iter().map(|c| c.to_string()).collect();
+    let displays: BTreeSet<String> = ObligationCategory::ALL
+        .iter()
+        .map(|c| c.to_string())
+        .collect();
     assert_eq!(displays.len(), 5);
 }
 
 #[test]
 fn category_display_values() {
-    assert_eq!(ObligationCategory::BehavioralPreservation.to_string(), "behavioral_preservation");
+    assert_eq!(
+        ObligationCategory::BehavioralPreservation.to_string(),
+        "behavioral_preservation"
+    );
     assert_eq!(ObligationCategory::Safety.to_string(), "safety");
     assert_eq!(ObligationCategory::Liveness.to_string(), "liveness");
-    assert_eq!(ObligationCategory::CalibrationValidity.to_string(), "calibration_validity");
+    assert_eq!(
+        ObligationCategory::CalibrationValidity.to_string(),
+        "calibration_validity"
+    );
     assert_eq!(ObligationCategory::TailRisk.to_string(), "tail_risk");
 }
 
@@ -136,7 +145,12 @@ fn severity_ordering() {
 
 #[test]
 fn severity_serde_all_roundtrip() {
-    for sev in [ObligationSeverity::Info, ObligationSeverity::Warning, ObligationSeverity::Error, ObligationSeverity::Fatal] {
+    for sev in [
+        ObligationSeverity::Info,
+        ObligationSeverity::Warning,
+        ObligationSeverity::Error,
+        ObligationSeverity::Fatal,
+    ] {
         let json = serde_json::to_string(&sev).expect("serialize");
         let restored: ObligationSeverity = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(sev, restored);
@@ -154,7 +168,10 @@ fn status_display_all() {
     assert_eq!(ObligationStatus::Satisfied.to_string(), "satisfied");
     assert_eq!(ObligationStatus::Violated.to_string(), "violated");
     assert_eq!(ObligationStatus::Waived.to_string(), "waived");
-    assert_eq!(ObligationStatus::InsufficientEvidence.to_string(), "insufficient_evidence");
+    assert_eq!(
+        ObligationStatus::InsufficientEvidence.to_string(),
+        "insufficient_evidence"
+    );
 }
 
 #[test]
@@ -194,14 +211,29 @@ fn status_serde_all_roundtrip() {
 #[test]
 fn evidence_requirement_all_variants_serde() {
     let variants = vec![
-        EvidenceRequirement::DifferentialTest { min_pass_rate_millionths: 990_000, min_test_count: 100 },
-        EvidenceRequirement::StatisticalTest { confidence_level_millionths: 950_000, min_samples: 500 },
-        EvidenceRequirement::FormalProof { proof_system: "coq".into() },
+        EvidenceRequirement::DifferentialTest {
+            min_pass_rate_millionths: 990_000,
+            min_test_count: 100,
+        },
+        EvidenceRequirement::StatisticalTest {
+            confidence_level_millionths: 950_000,
+            min_samples: 500,
+        },
+        EvidenceRequirement::FormalProof {
+            proof_system: "coq".into(),
+        },
         EvidenceRequirement::HashLinkage,
         EvidenceRequirement::PlasWitness,
-        EvidenceRequirement::EProcessGuardrail { guardrail_id: "g1".into() },
-        EvidenceRequirement::CvarBound { max_cvar_millionths: 50_000_000, alpha_millionths: 950_000 },
-        EvidenceRequirement::CalibrationCoverage { min_coverage_millionths: 900_000 },
+        EvidenceRequirement::EProcessGuardrail {
+            guardrail_id: "g1".into(),
+        },
+        EvidenceRequirement::CvarBound {
+            max_cvar_millionths: 50_000_000,
+            alpha_millionths: 950_000,
+        },
+        EvidenceRequirement::CalibrationCoverage {
+            min_coverage_millionths: 900_000,
+        },
         EvidenceRequirement::OperatorReview,
     ];
     for ev in &variants {
@@ -259,7 +291,11 @@ fn builtin_templates_unique_ids() {
 #[test]
 fn builtin_templates_all_have_descriptions() {
     for t in builtin_templates() {
-        assert!(!t.description.is_empty(), "template {} has empty description", t.template_id);
+        assert!(
+            !t.description.is_empty(),
+            "template {} has empty description",
+            t.template_id
+        );
     }
 }
 
@@ -275,7 +311,9 @@ fn obligation_binding_serde_roundtrip() {
         template_id: "safety/ifc_label_propagation".into(),
         category: ObligationCategory::Safety,
         severity: ObligationSeverity::Fatal,
-        evidence: EvidenceRequirement::FormalProof { proof_system: "flow_lattice".into() },
+        evidence: EvidenceRequirement::FormalProof {
+            proof_system: "flow_lattice".into(),
+        },
     };
     let json = serde_json::to_string(&b).expect("serialize");
     let restored: ObligationBinding = serde_json::from_str(&json).expect("deserialize");
@@ -319,19 +357,17 @@ fn report_from_empty_evaluations() {
 
 #[test]
 fn report_gate_pass_with_all_satisfied() {
-    let evals = vec![
-        ObligationEvaluation {
-            obligation_id: ObligationId("o1".into()),
-            template_id: "t1".into(),
-            category: ObligationCategory::Safety,
-            severity: ObligationSeverity::Fatal,
-            status: ObligationStatus::Satisfied,
-            epoch: epoch(1),
-            observed_value: None,
-            required_value: None,
-            reason: "ok".into(),
-        },
-    ];
+    let evals = vec![ObligationEvaluation {
+        obligation_id: ObligationId("o1".into()),
+        template_id: "t1".into(),
+        category: ObligationCategory::Safety,
+        severity: ObligationSeverity::Fatal,
+        status: ObligationStatus::Satisfied,
+        epoch: epoch(1),
+        observed_value: None,
+        required_value: None,
+        reason: "ok".into(),
+    }];
     let report = ObligationReport::from_evaluations(epoch(1), evals);
     assert!(report.gate_pass);
     assert_eq!(report.satisfied_count, 1);
@@ -339,19 +375,17 @@ fn report_gate_pass_with_all_satisfied() {
 
 #[test]
 fn report_gate_fails_on_fatal_violation() {
-    let evals = vec![
-        ObligationEvaluation {
-            obligation_id: ObligationId("o1".into()),
-            template_id: "t1".into(),
-            category: ObligationCategory::Safety,
-            severity: ObligationSeverity::Fatal,
-            status: ObligationStatus::Violated,
-            epoch: epoch(1),
-            observed_value: None,
-            required_value: None,
-            reason: "failed".into(),
-        },
-    ];
+    let evals = vec![ObligationEvaluation {
+        obligation_id: ObligationId("o1".into()),
+        template_id: "t1".into(),
+        category: ObligationCategory::Safety,
+        severity: ObligationSeverity::Fatal,
+        status: ObligationStatus::Violated,
+        epoch: epoch(1),
+        observed_value: None,
+        required_value: None,
+        reason: "failed".into(),
+    }];
     let report = ObligationReport::from_evaluations(epoch(1), evals);
     assert!(!report.gate_pass);
     assert_eq!(report.violated_count, 1);
@@ -359,38 +393,34 @@ fn report_gate_fails_on_fatal_violation() {
 
 #[test]
 fn report_gate_fails_on_any_violation() {
-    let evals = vec![
-        ObligationEvaluation {
-            obligation_id: ObligationId("o1".into()),
-            template_id: "t1".into(),
-            category: ObligationCategory::Safety,
-            severity: ObligationSeverity::Warning, // non-fatal
-            status: ObligationStatus::Violated,
-            epoch: epoch(1),
-            observed_value: None,
-            required_value: None,
-            reason: "failed".into(),
-        },
-    ];
+    let evals = vec![ObligationEvaluation {
+        obligation_id: ObligationId("o1".into()),
+        template_id: "t1".into(),
+        category: ObligationCategory::Safety,
+        severity: ObligationSeverity::Warning, // non-fatal
+        status: ObligationStatus::Violated,
+        epoch: epoch(1),
+        observed_value: None,
+        required_value: None,
+        reason: "failed".into(),
+    }];
     let report = ObligationReport::from_evaluations(epoch(1), evals);
     assert!(!report.gate_pass);
 }
 
 #[test]
 fn report_gate_fails_with_pending() {
-    let evals = vec![
-        ObligationEvaluation {
-            obligation_id: ObligationId("o1".into()),
-            template_id: "t1".into(),
-            category: ObligationCategory::Safety,
-            severity: ObligationSeverity::Info,
-            status: ObligationStatus::Pending,
-            epoch: epoch(1),
-            observed_value: None,
-            required_value: None,
-            reason: "pending".into(),
-        },
-    ];
+    let evals = vec![ObligationEvaluation {
+        obligation_id: ObligationId("o1".into()),
+        template_id: "t1".into(),
+        category: ObligationCategory::Safety,
+        severity: ObligationSeverity::Info,
+        status: ObligationStatus::Pending,
+        epoch: epoch(1),
+        observed_value: None,
+        required_value: None,
+        reason: "pending".into(),
+    }];
     let report = ObligationReport::from_evaluations(epoch(1), evals);
     assert!(!report.gate_pass);
     assert_eq!(report.pending_count, 1);
@@ -398,19 +428,17 @@ fn report_gate_fails_with_pending() {
 
 #[test]
 fn report_waived_counts() {
-    let evals = vec![
-        ObligationEvaluation {
-            obligation_id: ObligationId("o1".into()),
-            template_id: "t1".into(),
-            category: ObligationCategory::TailRisk,
-            severity: ObligationSeverity::Warning,
-            status: ObligationStatus::Waived,
-            epoch: epoch(1),
-            observed_value: None,
-            required_value: None,
-            reason: "waived".into(),
-        },
-    ];
+    let evals = vec![ObligationEvaluation {
+        obligation_id: ObligationId("o1".into()),
+        template_id: "t1".into(),
+        category: ObligationCategory::TailRisk,
+        severity: ObligationSeverity::Warning,
+        status: ObligationStatus::Waived,
+        epoch: epoch(1),
+        observed_value: None,
+        required_value: None,
+        reason: "waived".into(),
+    }];
     let report = ObligationReport::from_evaluations(epoch(1), evals);
     assert!(report.gate_pass);
     assert_eq!(report.waived_count, 1);
@@ -467,14 +495,21 @@ fn registry_bind_unknown_template_returns_none() {
 #[test]
 fn registry_evaluate_unknown_binding_returns_false() {
     let mut reg = ObligationRegistry::new(epoch(1));
-    let result = reg.evaluate(&ObligationId("nonexistent".into()), ObligationStatus::Satisfied, None, "ok");
+    let result = reg.evaluate(
+        &ObligationId("nonexistent".into()),
+        ObligationStatus::Satisfied,
+        None,
+        "ok",
+    );
     assert!(!result);
 }
 
 #[test]
 fn registry_evaluate_records_result() {
     let mut reg = ObligationRegistry::new(epoch(1));
-    let obl_id = reg.bind(PassId("p".into()), "safety/ifc_label_propagation").unwrap();
+    let obl_id = reg
+        .bind(PassId("p".into()), "safety/ifc_label_propagation")
+        .unwrap();
     assert!(reg.evaluate(&obl_id, ObligationStatus::Satisfied, None, "ok"));
     assert_eq!(reg.evaluation_count(), 1);
 }
@@ -482,7 +517,9 @@ fn registry_evaluate_records_result() {
 #[test]
 fn registry_auto_evaluate_differential_test_pass() {
     let mut reg = ObligationRegistry::new(epoch(1));
-    let obl_id = reg.bind(PassId("p".into()), "behavioral/ir_transform_equivalence").unwrap();
+    let obl_id = reg
+        .bind(PassId("p".into()), "behavioral/ir_transform_equivalence")
+        .unwrap();
     let status = reg.auto_evaluate(&obl_id, 999_500, 2000).unwrap();
     assert_eq!(status, ObligationStatus::Satisfied);
 }
@@ -490,7 +527,9 @@ fn registry_auto_evaluate_differential_test_pass() {
 #[test]
 fn registry_auto_evaluate_differential_test_fail() {
     let mut reg = ObligationRegistry::new(epoch(1));
-    let obl_id = reg.bind(PassId("p".into()), "behavioral/ir_transform_equivalence").unwrap();
+    let obl_id = reg
+        .bind(PassId("p".into()), "behavioral/ir_transform_equivalence")
+        .unwrap();
     let status = reg.auto_evaluate(&obl_id, 900_000, 2000).unwrap();
     assert_eq!(status, ObligationStatus::Violated);
 }
@@ -498,7 +537,9 @@ fn registry_auto_evaluate_differential_test_fail() {
 #[test]
 fn registry_auto_evaluate_insufficient_samples() {
     let mut reg = ObligationRegistry::new(epoch(1));
-    let obl_id = reg.bind(PassId("p".into()), "behavioral/ir_transform_equivalence").unwrap();
+    let obl_id = reg
+        .bind(PassId("p".into()), "behavioral/ir_transform_equivalence")
+        .unwrap();
     let status = reg.auto_evaluate(&obl_id, 999_500, 50).unwrap(); // needs 1000
     assert_eq!(status, ObligationStatus::InsufficientEvidence);
 }
@@ -506,7 +547,9 @@ fn registry_auto_evaluate_insufficient_samples() {
 #[test]
 fn registry_auto_evaluate_cvar_bound_pass() {
     let mut reg = ObligationRegistry::new(epoch(1));
-    let obl_id = reg.bind(PassId("p".into()), "tail_risk/cvar_latency_bound").unwrap();
+    let obl_id = reg
+        .bind(PassId("p".into()), "tail_risk/cvar_latency_bound")
+        .unwrap();
     let status = reg.auto_evaluate(&obl_id, 40_000_000, 1000).unwrap(); // within bound
     assert_eq!(status, ObligationStatus::Satisfied);
 }
@@ -514,7 +557,9 @@ fn registry_auto_evaluate_cvar_bound_pass() {
 #[test]
 fn registry_auto_evaluate_cvar_bound_fail() {
     let mut reg = ObligationRegistry::new(epoch(1));
-    let obl_id = reg.bind(PassId("p".into()), "tail_risk/cvar_latency_bound").unwrap();
+    let obl_id = reg
+        .bind(PassId("p".into()), "tail_risk/cvar_latency_bound")
+        .unwrap();
     let status = reg.auto_evaluate(&obl_id, 60_000_000, 1000).unwrap(); // exceeds bound
     assert_eq!(status, ObligationStatus::Violated);
 }
@@ -522,21 +567,26 @@ fn registry_auto_evaluate_cvar_bound_fail() {
 #[test]
 fn registry_waive_waivable_succeeds() {
     let mut reg = ObligationRegistry::new(epoch(1));
-    let obl_id = reg.bind(PassId("p".into()), "behavioral/effect_timing_contract").unwrap(); // waivable=true
+    let obl_id = reg
+        .bind(PassId("p".into()), "behavioral/effect_timing_contract")
+        .unwrap(); // waivable=true
     assert!(reg.waive(&obl_id, "operator approved"));
 }
 
 #[test]
 fn registry_waive_non_waivable_fails() {
     let mut reg = ObligationRegistry::new(epoch(1));
-    let obl_id = reg.bind(PassId("p".into()), "safety/ifc_label_propagation").unwrap(); // waivable=false
+    let obl_id = reg
+        .bind(PassId("p".into()), "safety/ifc_label_propagation")
+        .unwrap(); // waivable=false
     assert!(!reg.waive(&obl_id, "try waive"));
 }
 
 #[test]
 fn registry_report_includes_unevaluated_as_pending() {
     let mut reg = ObligationRegistry::new(epoch(1));
-    reg.bind(PassId("p".into()), "safety/ifc_label_propagation").unwrap();
+    reg.bind(PassId("p".into()), "safety/ifc_label_propagation")
+        .unwrap();
     let report = reg.report();
     assert_eq!(report.evaluations.len(), 1);
     assert_eq!(report.evaluations[0].status, ObligationStatus::Pending);
@@ -546,7 +596,9 @@ fn registry_report_includes_unevaluated_as_pending() {
 #[test]
 fn registry_report_all_satisfied_gate_passes() {
     let mut reg = ObligationRegistry::new(epoch(1));
-    let obl_id = reg.bind(PassId("p".into()), "safety/hash_chain_integrity").unwrap();
+    let obl_id = reg
+        .bind(PassId("p".into()), "safety/hash_chain_integrity")
+        .unwrap();
     reg.evaluate(&obl_id, ObligationStatus::Satisfied, None, "ok");
     let report = reg.report();
     assert!(report.gate_pass);
@@ -598,7 +650,9 @@ fn registry_template_lookup_missing() {
 #[test]
 fn obligation_report_serde_roundtrip() {
     let mut reg = ObligationRegistry::new(epoch(1));
-    let obl_id = reg.bind(PassId("p".into()), "safety/hash_chain_integrity").unwrap();
+    let obl_id = reg
+        .bind(PassId("p".into()), "safety/hash_chain_integrity")
+        .unwrap();
     reg.evaluate(&obl_id, ObligationStatus::Satisfied, None, "ok");
     let report = reg.report();
     let json = serde_json::to_string(&report).expect("serialize");
@@ -614,8 +668,12 @@ fn obligation_report_serde_roundtrip() {
 fn registry_deterministic_obligation_ids() {
     let run = || {
         let mut reg = ObligationRegistry::new(epoch(1));
-        let id1 = reg.bind(PassId("p1".into()), "safety/ifc_label_propagation").unwrap();
-        let id2 = reg.bind(PassId("p2".into()), "safety/hash_chain_integrity").unwrap();
+        let id1 = reg
+            .bind(PassId("p1".into()), "safety/ifc_label_propagation")
+            .unwrap();
+        let id2 = reg
+            .bind(PassId("p2".into()), "safety/hash_chain_integrity")
+            .unwrap();
         (id1, id2)
     };
     let (a1, a2) = run();
@@ -627,7 +685,9 @@ fn registry_deterministic_obligation_ids() {
 #[test]
 fn auto_evaluate_calibration_coverage_pass() {
     let mut reg = ObligationRegistry::new(epoch(1));
-    let obl_id = reg.bind(PassId("p".into()), "calibration/conformal_coverage").unwrap();
+    let obl_id = reg
+        .bind(PassId("p".into()), "calibration/conformal_coverage")
+        .unwrap();
     let status = reg.auto_evaluate(&obl_id, 950_000, 1000).unwrap();
     assert_eq!(status, ObligationStatus::Satisfied);
 }
@@ -635,7 +695,9 @@ fn auto_evaluate_calibration_coverage_pass() {
 #[test]
 fn auto_evaluate_calibration_coverage_fail() {
     let mut reg = ObligationRegistry::new(epoch(1));
-    let obl_id = reg.bind(PassId("p".into()), "calibration/conformal_coverage").unwrap();
+    let obl_id = reg
+        .bind(PassId("p".into()), "calibration/conformal_coverage")
+        .unwrap();
     let status = reg.auto_evaluate(&obl_id, 800_000, 1000).unwrap();
     assert_eq!(status, ObligationStatus::Violated);
 }

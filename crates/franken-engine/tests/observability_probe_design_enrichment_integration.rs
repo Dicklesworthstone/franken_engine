@@ -21,11 +21,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::engine_object_id::{ObjectDomain, SchemaId, derive_id};
 use frankenengine_engine::observability_probe_design::{
-    CandidateProbe, MultiModeManifest, ObservabilityBudget,
-    OperatingMode, PROBE_DESIGN_SCHEMA_VERSION, ProbeDomain,
-    ProbeDesignError, ProbeGranularity, ProbeUniverse, ProbeUtilityLedger,
-    build_approximation_certificate, build_schedule,
-    greedy_submodular_select,
+    CandidateProbe, MultiModeManifest, ObservabilityBudget, OperatingMode,
+    PROBE_DESIGN_SCHEMA_VERSION, ProbeDesignError, ProbeDomain, ProbeGranularity, ProbeUniverse,
+    ProbeUtilityLedger, build_approximation_certificate, build_schedule, greedy_submodular_select,
 };
 
 // ===========================================================================
@@ -45,7 +43,13 @@ fn make_id(label: &str) -> frankenengine_engine::engine_object_id::EngineObjectI
     .expect("derive id")
 }
 
-fn simple_probe(name: &str, utility: i64, latency: u64, memory: u64, events: &[&str]) -> CandidateProbe {
+fn simple_probe(
+    name: &str,
+    utility: i64,
+    latency: u64,
+    memory: u64,
+    events: &[&str],
+) -> CandidateProbe {
     CandidateProbe {
         id: make_id(name),
         name: name.to_string(),
@@ -59,7 +63,14 @@ fn simple_probe(name: &str, utility: i64, latency: u64, memory: u64, events: &[&
     }
 }
 
-fn domain_probe(name: &str, domain: ProbeDomain, utility: i64, latency: u64, memory: u64, events: &[&str]) -> CandidateProbe {
+fn domain_probe(
+    name: &str,
+    domain: ProbeDomain,
+    utility: i64,
+    latency: u64,
+    memory: u64,
+    events: &[&str],
+) -> CandidateProbe {
     CandidateProbe {
         id: make_id(name),
         name: name.to_string(),
@@ -75,9 +86,12 @@ fn domain_probe(name: &str, domain: ProbeDomain, utility: i64, latency: u64, mem
 
 fn small_universe() -> ProbeUniverse {
     let mut u = ProbeUniverse::new();
-    u.add_probe(simple_probe("p1", 800_000, 50, 5_000, &["e1", "e2"])).unwrap();
-    u.add_probe(simple_probe("p2", 600_000, 30, 3_000, &["e3"])).unwrap();
-    u.add_probe(simple_probe("p3", 400_000, 20, 2_000, &["e4", "e5"])).unwrap();
+    u.add_probe(simple_probe("p1", 800_000, 50, 5_000, &["e1", "e2"]))
+        .unwrap();
+    u.add_probe(simple_probe("p2", 600_000, 30, 3_000, &["e3"]))
+        .unwrap();
+    u.add_probe(simple_probe("p3", 400_000, 20, 2_000, &["e4", "e5"]))
+        .unwrap();
     u
 }
 
@@ -114,7 +128,8 @@ fn enrichment_greedy_empty_universe_returns_zero_everything() {
 #[test]
 fn enrichment_greedy_single_probe_exactly_at_latency_budget() {
     let mut u = ProbeUniverse::new();
-    u.add_probe(simple_probe("exact", 500_000, 200, 100, &["ev"])).unwrap();
+    u.add_probe(simple_probe("exact", 500_000, 200, 100, &["ev"]))
+        .unwrap();
     let budget = ObservabilityBudget {
         max_latency_micros: 200,
         max_memory_bytes: 100_000,
@@ -129,7 +144,8 @@ fn enrichment_greedy_single_probe_exactly_at_latency_budget() {
 #[test]
 fn enrichment_greedy_probe_exceeding_memory_skipped() {
     let mut u = ProbeUniverse::new();
-    u.add_probe(simple_probe("big", MILLION, 10, 50_000, &["ev"])).unwrap();
+    u.add_probe(simple_probe("big", MILLION, 10, 50_000, &["ev"]))
+        .unwrap();
     let budget = ObservabilityBudget {
         max_latency_micros: 1_000,
         max_memory_bytes: 49_999,
@@ -177,7 +193,8 @@ fn enrichment_schedule_deterministic_across_runs() {
 #[test]
 fn enrichment_certificate_headroom_computed_correctly() {
     let mut u = ProbeUniverse::new();
-    u.add_probe(simple_probe("h1", MILLION, 100, 500, &["x"])).unwrap();
+    u.add_probe(simple_probe("h1", MILLION, 100, 500, &["x"]))
+        .unwrap();
     let budget = ObservabilityBudget {
         max_latency_micros: 300,
         max_memory_bytes: 2_000,
@@ -195,7 +212,8 @@ fn enrichment_certificate_headroom_computed_correctly() {
 #[test]
 fn enrichment_certificate_headroom_zero_when_exact_fit() {
     let mut u = ProbeUniverse::new();
-    u.add_probe(simple_probe("exact_fit", MILLION, 100, 200, &["e"])).unwrap();
+    u.add_probe(simple_probe("exact_fit", MILLION, 100, 200, &["e"]))
+        .unwrap();
     let budget = ObservabilityBudget {
         max_latency_micros: 100,
         max_memory_bytes: 200,
@@ -215,7 +233,9 @@ fn enrichment_ledger_monotone_coverage() {
     let result = greedy_submodular_select(&u, &budget);
     let ledger = ProbeUtilityLedger::from_optimization(&u, &result);
     for window in ledger.entries.windows(2) {
-        assert!(window[1].cumulative_coverage_millionths >= window[0].cumulative_coverage_millionths);
+        assert!(
+            window[1].cumulative_coverage_millionths >= window[0].cumulative_coverage_millionths
+        );
     }
 }
 
@@ -262,7 +282,11 @@ fn enrichment_multi_mode_manifest_incident_coverage_gte_normal() {
 fn enrichment_multi_mode_manifest_schedule_for_mode_accessor() {
     let u = small_universe();
     let manifest = MultiModeManifest::build(&u);
-    for mode in [OperatingMode::Normal, OperatingMode::Degraded, OperatingMode::Incident] {
+    for mode in [
+        OperatingMode::Normal,
+        OperatingMode::Degraded,
+        OperatingMode::Incident,
+    ] {
         let schedule = manifest.schedule_for_mode(&mode);
         assert_eq!(schedule.mode, mode);
     }
@@ -288,9 +312,33 @@ fn enrichment_universe_duplicate_probe_rejected() {
 #[test]
 fn enrichment_universe_probes_by_domain_filters_correctly() {
     let mut u = ProbeUniverse::new();
-    u.add_probe(domain_probe("a", ProbeDomain::Compiler, 100_000, 10, 100, &["e1"])).unwrap();
-    u.add_probe(domain_probe("b", ProbeDomain::Runtime, 200_000, 20, 200, &["e2"])).unwrap();
-    u.add_probe(domain_probe("c", ProbeDomain::Compiler, 300_000, 30, 300, &["e3"])).unwrap();
+    u.add_probe(domain_probe(
+        "a",
+        ProbeDomain::Compiler,
+        100_000,
+        10,
+        100,
+        &["e1"],
+    ))
+    .unwrap();
+    u.add_probe(domain_probe(
+        "b",
+        ProbeDomain::Runtime,
+        200_000,
+        20,
+        200,
+        &["e2"],
+    ))
+    .unwrap();
+    u.add_probe(domain_probe(
+        "c",
+        ProbeDomain::Compiler,
+        300_000,
+        30,
+        300,
+        &["e3"],
+    ))
+    .unwrap();
     assert_eq!(u.probes_by_domain(&ProbeDomain::Compiler).len(), 2);
     assert_eq!(u.probes_by_domain(&ProbeDomain::Runtime).len(), 1);
     assert_eq!(u.probes_by_domain(&ProbeDomain::Governance).len(), 0);
@@ -333,7 +381,11 @@ fn enrichment_error_is_std_error() {
 
 #[test]
 fn enrichment_operating_mode_display_unique() {
-    let modes = [OperatingMode::Normal, OperatingMode::Degraded, OperatingMode::Incident];
+    let modes = [
+        OperatingMode::Normal,
+        OperatingMode::Degraded,
+        OperatingMode::Incident,
+    ];
     let set: BTreeSet<String> = modes.iter().map(|m| m.to_string()).collect();
     assert_eq!(set.len(), 3);
 }
@@ -411,7 +463,8 @@ fn enrichment_budget_escalation_invariants() {
 fn enrichment_probe_with_metadata_serde_roundtrip() {
     let mut p = simple_probe("meta", 500_000, 10, 100, &["e"]);
     p.metadata.insert("owner".to_string(), "team-a".to_string());
-    p.metadata.insert("priority".to_string(), "high".to_string());
+    p.metadata
+        .insert("priority".to_string(), "high".to_string());
     let json = serde_json::to_string(&p).unwrap();
     let back: CandidateProbe = serde_json::from_str(&json).unwrap();
     assert_eq!(p, back);
@@ -431,8 +484,22 @@ fn enrichment_schedule_meets_coverage_boundary() {
 #[test]
 fn enrichment_overlapping_events_diminishing_returns() {
     let mut u = ProbeUniverse::new();
-    u.add_probe(simple_probe("ov_a", MILLION, 10, 100, &["shared", "unique_a"])).unwrap();
-    u.add_probe(simple_probe("ov_b", MILLION, 10, 100, &["shared", "unique_b"])).unwrap();
+    u.add_probe(simple_probe(
+        "ov_a",
+        MILLION,
+        10,
+        100,
+        &["shared", "unique_a"],
+    ))
+    .unwrap();
+    u.add_probe(simple_probe(
+        "ov_b",
+        MILLION,
+        10,
+        100,
+        &["shared", "unique_b"],
+    ))
+    .unwrap();
     let budget = ObservabilityBudget {
         max_latency_micros: 100,
         max_memory_bytes: 100_000,

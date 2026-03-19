@@ -34,12 +34,24 @@ fn action_category_as_str_matches_display() {
 
 #[test]
 fn action_category_as_str_values() {
-    assert_eq!(ActionCategory::DecisionContract.as_str(), "decision_contract");
+    assert_eq!(
+        ActionCategory::DecisionContract.as_str(),
+        "decision_contract"
+    );
     assert_eq!(ActionCategory::RegionLifecycle.as_str(), "region_lifecycle");
     assert_eq!(ActionCategory::Cancellation.as_str(), "cancellation");
-    assert_eq!(ActionCategory::ObligationLifecycle.as_str(), "obligation_lifecycle");
-    assert_eq!(ActionCategory::ExtensionLifecycle.as_str(), "extension_lifecycle");
-    assert_eq!(ActionCategory::ContainmentAction.as_str(), "containment_action");
+    assert_eq!(
+        ActionCategory::ObligationLifecycle.as_str(),
+        "obligation_lifecycle"
+    );
+    assert_eq!(
+        ActionCategory::ExtensionLifecycle.as_str(),
+        "extension_lifecycle"
+    );
+    assert_eq!(
+        ActionCategory::ContainmentAction.as_str(),
+        "containment_action"
+    );
 }
 
 #[test]
@@ -132,7 +144,9 @@ fn evidence_entry_id_clone_equality() {
 
 #[test]
 fn evidence_entry_id_ord_in_btreeset() {
-    let ids: Vec<EvidenceEntryId> = (0..5).map(|i| EvidenceEntryId::new(format!("ev-{i}"))).collect();
+    let ids: Vec<EvidenceEntryId> = (0..5)
+        .map(|i| EvidenceEntryId::new(format!("ev-{i}")))
+        .collect();
     let set: BTreeSet<_> = ids.iter().cloned().collect();
     assert_eq!(set.len(), 5);
 }
@@ -236,8 +250,12 @@ fn error_all_variants_display_unique() {
     let errors = [
         EvidenceEmissionError::BufferFull { capacity: 1 },
         EvidenceEmissionError::BudgetExhausted { requested_ms: 1 },
-        EvidenceEmissionError::BuildError { detail: "x".to_string() },
-        EvidenceEmissionError::ValidationFailed { errors: vec!["y".to_string()] },
+        EvidenceEmissionError::BuildError {
+            detail: "x".to_string(),
+        },
+        EvidenceEmissionError::ValidationFailed {
+            errors: vec!["y".to_string()],
+        },
     ];
     let set: BTreeSet<String> = errors.iter().map(|e| e.to_string()).collect();
     assert_eq!(set.len(), 4);
@@ -248,8 +266,12 @@ fn error_serde_roundtrip_all_variants() {
     let errors = vec![
         EvidenceEmissionError::BufferFull { capacity: 42 },
         EvidenceEmissionError::BudgetExhausted { requested_ms: 99 },
-        EvidenceEmissionError::BuildError { detail: "detail".to_string() },
-        EvidenceEmissionError::ValidationFailed { errors: vec!["e1".to_string(), "e2".to_string()] },
+        EvidenceEmissionError::BuildError {
+            detail: "detail".to_string(),
+        },
+        EvidenceEmissionError::ValidationFailed {
+            errors: vec!["e1".to_string(), "e2".to_string()],
+        },
     ];
     for e in &errors {
         let json = serde_json::to_string(e).unwrap();
@@ -316,7 +338,14 @@ fn emission_event_json_fields_present() {
         error_code: None,
     };
     let json = serde_json::to_string(&event).unwrap();
-    for field in &["trace_id", "decision_id", "policy_id", "component", "event", "outcome"] {
+    for field in &[
+        "trace_id",
+        "decision_id",
+        "policy_id",
+        "component",
+        "event",
+        "outcome",
+    ] {
         assert!(json.contains(field), "JSON missing field: {field}");
     }
 }
@@ -455,9 +484,19 @@ fn request_json_fields_present() {
     };
     let json = serde_json::to_string(&req).unwrap();
     for field in &[
-        "category", "action_name", "trace_id", "decision_id", "policy_id",
-        "ts_unix_ms", "posterior", "expected_losses", "chosen_expected_loss",
-        "calibration_score", "fallback_active", "top_features", "metadata",
+        "category",
+        "action_name",
+        "trace_id",
+        "decision_id",
+        "policy_id",
+        "ts_unix_ms",
+        "posterior",
+        "expected_losses",
+        "chosen_expected_loss",
+        "calibration_score",
+        "fallback_active",
+        "top_features",
+        "metadata",
     ] {
         assert!(json.contains(field), "JSON missing field: {field}");
     }

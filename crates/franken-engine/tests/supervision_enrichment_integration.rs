@@ -13,15 +13,18 @@
 )]
 
 use frankenengine_engine::supervision::{
-    HealthStatus, RestartBudget, RestartPolicy, ServiceConfig, ServiceState, Severity,
-    Supervisor, SupervisorAction, SupervisorEvent,
+    HealthStatus, RestartBudget, RestartPolicy, ServiceConfig, ServiceState, Severity, Supervisor,
+    SupervisorAction, SupervisorEvent,
 };
 
 fn test_config(id: &str) -> ServiceConfig {
     ServiceConfig {
         service_id: id.to_string(),
         restart_policy: RestartPolicy::Permanent,
-        restart_budget: RestartBudget { max_restarts: 3, window_ticks: 100 },
+        restart_budget: RestartBudget {
+            max_restarts: 3,
+            window_ticks: 100,
+        },
         shutdown_order: 0,
     }
 }
@@ -44,16 +47,27 @@ fn enrichment_severity_ordering() {
 #[test]
 fn enrichment_severity_display_unique() {
     let displays: std::collections::BTreeSet<String> = [
-        Severity::Restart, Severity::Isolate, Severity::SubtreeRestart,
-        Severity::SubtreeTerminate, Severity::RootEscalation,
-    ].iter().map(|s| s.to_string()).collect();
+        Severity::Restart,
+        Severity::Isolate,
+        Severity::SubtreeRestart,
+        Severity::SubtreeTerminate,
+        Severity::RootEscalation,
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
     assert_eq!(displays.len(), 5);
 }
 
 #[test]
 fn enrichment_severity_serde_all() {
-    for s in [Severity::Restart, Severity::Isolate, Severity::SubtreeRestart,
-              Severity::SubtreeTerminate, Severity::RootEscalation] {
+    for s in [
+        Severity::Restart,
+        Severity::Isolate,
+        Severity::SubtreeRestart,
+        Severity::SubtreeTerminate,
+        Severity::RootEscalation,
+    ] {
         let json = serde_json::to_string(&s).unwrap();
         let back: Severity = serde_json::from_str(&json).unwrap();
         assert_eq!(s, back);
@@ -63,15 +77,26 @@ fn enrichment_severity_serde_all() {
 #[test]
 fn enrichment_restart_policy_display_unique() {
     let displays: std::collections::BTreeSet<String> = [
-        RestartPolicy::Permanent, RestartPolicy::Transient, RestartPolicy::Temporary,
-    ].iter().map(|p| p.to_string()).collect();
+        RestartPolicy::Permanent,
+        RestartPolicy::Transient,
+        RestartPolicy::Temporary,
+    ]
+    .iter()
+    .map(|p| p.to_string())
+    .collect();
     assert_eq!(displays.len(), 3);
 }
 
 #[test]
 fn enrichment_service_state_serde_all() {
-    for s in [ServiceState::Starting, ServiceState::Running, ServiceState::Failed,
-              ServiceState::Restarting, ServiceState::Isolated, ServiceState::Terminated] {
+    for s in [
+        ServiceState::Starting,
+        ServiceState::Running,
+        ServiceState::Failed,
+        ServiceState::Restarting,
+        ServiceState::Isolated,
+        ServiceState::Terminated,
+    ] {
         let json = serde_json::to_string(&s).unwrap();
         let back: ServiceState = serde_json::from_str(&json).unwrap();
         assert_eq!(s, back);
@@ -87,9 +112,15 @@ fn enrichment_health_status_ordering() {
 #[test]
 fn enrichment_supervisor_action_display_unique() {
     let displays: std::collections::BTreeSet<String> = [
-        SupervisorAction::Start, SupervisorAction::Restart, SupervisorAction::Isolate,
-        SupervisorAction::Terminate, SupervisorAction::Escalate,
-    ].iter().map(|a| a.to_string()).collect();
+        SupervisorAction::Start,
+        SupervisorAction::Restart,
+        SupervisorAction::Isolate,
+        SupervisorAction::Terminate,
+        SupervisorAction::Escalate,
+    ]
+    .iter()
+    .map(|a| a.to_string())
+    .collect();
     assert_eq!(displays.len(), 5);
 }
 
@@ -147,7 +178,10 @@ fn enrichment_budget_resets_after_window() {
     sup.add_service(ServiceConfig {
         service_id: "svc".to_string(),
         restart_policy: RestartPolicy::Permanent,
-        restart_budget: RestartBudget { max_restarts: 2, window_ticks: 100 },
+        restart_budget: RestartBudget {
+            max_restarts: 2,
+            window_ticks: 100,
+        },
         shutdown_order: 0,
     });
     sup.start_service("svc");
@@ -242,9 +276,13 @@ fn enrichment_service_config_serde() {
 #[test]
 fn enrichment_supervisor_event_serde() {
     let event = SupervisorEvent {
-        trace_id: "t".into(), service_id: "svc".into(),
-        action: SupervisorAction::Restart, reason: "crash".into(),
-        restart_count: 1, budget_remaining: 2, severity: Severity::Restart,
+        trace_id: "t".into(),
+        service_id: "svc".into(),
+        action: SupervisorAction::Restart,
+        reason: "crash".into(),
+        restart_count: 1,
+        budget_remaining: 2,
+        severity: Severity::Restart,
     };
     let json = serde_json::to_string(&event).unwrap();
     let back: SupervisorEvent = serde_json::from_str(&json).unwrap();
@@ -258,7 +296,10 @@ fn enrichment_deterministic_event_sequence() {
         sup.add_service(ServiceConfig {
             service_id: "svc".to_string(),
             restart_policy: RestartPolicy::Permanent,
-            restart_budget: RestartBudget { max_restarts: 2, window_ticks: 100 },
+            restart_budget: RestartBudget {
+                max_restarts: 2,
+                window_ticks: 100,
+            },
             shutdown_order: 0,
         });
         sup.start_service("svc");
@@ -276,7 +317,9 @@ fn enrichment_multiple_services_independent() {
     sup.add_service(test_config("svc-b"));
     sup.start_service("svc-a");
     sup.start_service("svc-b");
-    for i in 0..4 { sup.report_failure("svc-a", "c", i * 10 + 10); }
+    for i in 0..4 {
+        sup.report_failure("svc-a", "c", i * 10 + 10);
+    }
     let action = sup.report_failure("svc-b", "c", 50).unwrap();
     assert_eq!(action, SupervisorAction::Restart);
     assert_eq!(sup.service_state("svc-a"), Some(ServiceState::Isolated));
@@ -295,7 +338,10 @@ fn enrichment_zero_budget_escalates_immediately() {
     sup.add_service(ServiceConfig {
         service_id: "svc".to_string(),
         restart_policy: RestartPolicy::Permanent,
-        restart_budget: RestartBudget { max_restarts: 0, window_ticks: 1000 },
+        restart_budget: RestartBudget {
+            max_restarts: 0,
+            window_ticks: 1000,
+        },
         shutdown_order: 0,
     });
     sup.start_service("svc");
@@ -313,7 +359,10 @@ fn enrichment_health_status_display_all() {
 
 #[test]
 fn enrichment_restart_budget_serde() {
-    let b = RestartBudget { max_restarts: 5, window_ticks: 200 };
+    let b = RestartBudget {
+        max_restarts: 5,
+        window_ticks: 200,
+    };
     let json = serde_json::to_string(&b).unwrap();
     let back: RestartBudget = serde_json::from_str(&json).unwrap();
     assert_eq!(b, back);

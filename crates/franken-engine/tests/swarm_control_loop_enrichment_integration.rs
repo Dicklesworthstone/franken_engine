@@ -226,10 +226,20 @@ fn enrich_task_relevance_floors_at_zero() {
 fn enrich_error_display_all_variants() {
     let errors: Vec<ControlLoopError> = vec![
         ControlLoopError::EmptyGraph,
-        ControlLoopError::TooManyTasks { count: 5000, max: 4096 },
-        ControlLoopError::CycleDetected { involved: vec!["a".into(), "b".into()] },
-        ControlLoopError::UnknownDependency { task_id: "x".into(), dependency_id: "y".into() },
-        ControlLoopError::InvalidConfig { detail: "bad value".into() },
+        ControlLoopError::TooManyTasks {
+            count: 5000,
+            max: 4096,
+        },
+        ControlLoopError::CycleDetected {
+            involved: vec!["a".into(), "b".into()],
+        },
+        ControlLoopError::UnknownDependency {
+            task_id: "x".into(),
+            dependency_id: "y".into(),
+        },
+        ControlLoopError::InvalidConfig {
+            detail: "bad value".into(),
+        },
     ];
     for e in &errors {
         assert!(!e.to_string().is_empty());
@@ -240,10 +250,20 @@ fn enrich_error_display_all_variants() {
 fn enrich_error_serde_all_variants() {
     let errors: Vec<ControlLoopError> = vec![
         ControlLoopError::EmptyGraph,
-        ControlLoopError::TooManyTasks { count: 100, max: 50 },
-        ControlLoopError::CycleDetected { involved: vec!["a".into()] },
-        ControlLoopError::UnknownDependency { task_id: "x".into(), dependency_id: "y".into() },
-        ControlLoopError::InvalidConfig { detail: "test".into() },
+        ControlLoopError::TooManyTasks {
+            count: 100,
+            max: 50,
+        },
+        ControlLoopError::CycleDetected {
+            involved: vec!["a".into()],
+        },
+        ControlLoopError::UnknownDependency {
+            task_id: "x".into(),
+            dependency_id: "y".into(),
+        },
+        ControlLoopError::InvalidConfig {
+            detail: "test".into(),
+        },
     ];
     for e in &errors {
         let json = serde_json::to_string(e).unwrap();
@@ -338,7 +358,8 @@ fn enrich_bottleneck_detected_for_task_with_dependents() {
     root.dependents = BTreeSet::from(["c1".into(), "c2".into(), "c3".into()]);
     ctrl.add_task(root).unwrap();
     for i in 1..=3 {
-        ctrl.add_task(make_task(&format!("c{i}"), &["root"])).unwrap();
+        ctrl.add_task(make_task(&format!("c{i}"), &["root"]))
+            .unwrap();
     }
     let art = ctrl.recompute(ep(1), 0, default_signals(), vec![]).unwrap();
     assert!(!art.bottlenecks.is_empty());
@@ -394,7 +415,9 @@ fn enrich_evidence_ids_preserved_in_artifact() {
     let mut ctrl = default_loop();
     ctrl.add_task(make_task("t1", &[])).unwrap();
     let evidence = vec!["ev-1".into(), "ev-2".into()];
-    let art = ctrl.recompute(ep(1), 0, default_signals(), evidence.clone()).unwrap();
+    let art = ctrl
+        .recompute(ep(1), 0, default_signals(), evidence.clone())
+        .unwrap();
     assert_eq!(art.evidence_ids, evidence);
 }
 
@@ -418,11 +441,15 @@ fn enrich_artifact_schema_version() {
 fn enrich_artifact_hash_deterministic() {
     let mut ctrl1 = default_loop();
     ctrl1.add_task(make_task("t1", &[])).unwrap();
-    let a1 = ctrl1.recompute(ep(1), 100, default_signals(), vec![]).unwrap();
+    let a1 = ctrl1
+        .recompute(ep(1), 100, default_signals(), vec![])
+        .unwrap();
 
     let mut ctrl2 = default_loop();
     ctrl2.add_task(make_task("t1", &[])).unwrap();
-    let a2 = ctrl2.recompute(ep(1), 100, default_signals(), vec![]).unwrap();
+    let a2 = ctrl2
+        .recompute(ep(1), 100, default_signals(), vec![])
+        .unwrap();
     assert_eq!(a1.artifact_hash, a2.artifact_hash);
 }
 
@@ -619,7 +646,9 @@ fn enrich_queue_artifact_serde_roundtrip() {
     let mut ctrl = default_loop();
     ctrl.add_task(make_task("t1", &[])).unwrap();
     ctrl.add_task(make_task("t2", &[])).unwrap();
-    let art = ctrl.recompute(ep(1), 1000, default_signals(), vec!["ev1".into()]).unwrap();
+    let art = ctrl
+        .recompute(ep(1), 1000, default_signals(), vec!["ev1".into()])
+        .unwrap();
     let json = serde_json::to_string(&art).unwrap();
     let back: QueueArtifact = serde_json::from_str(&json).unwrap();
     assert_eq!(art, back);

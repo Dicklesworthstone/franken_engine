@@ -398,7 +398,12 @@ fn gate_evaluate_deny_parity_mismatch() {
     let d = g.evaluate("r-002", &parity, &cold, 100_000_000);
     assert_eq!(d, GateDecision::Denied);
     let receipt = g.last_receipt().unwrap();
-    assert!(receipt.blocking_reasons.iter().any(|r| matches!(r, BlockingReason::ParityMismatch { .. })));
+    assert!(
+        receipt
+            .blocking_reasons
+            .iter()
+            .any(|r| matches!(r, BlockingReason::ParityMismatch { .. }))
+    );
 }
 
 #[test]
@@ -620,7 +625,13 @@ fn receipt_affected_packages() {
 fn batch_all_approved() {
     let mut g = ModuleIndexParityGate::with_defaults(epoch());
     let cohorts: Vec<_> = (0..3)
-        .map(|i| (format!("cohort-{i}"), full_parity_evidence(200), good_cold_start()))
+        .map(|i| {
+            (
+                format!("cohort-{i}"),
+                full_parity_evidence(200),
+                good_cold_start(),
+            )
+        })
         .collect();
     let result = evaluate_batch(&mut g, &cohorts, 100_000_000);
     assert!(result.all_approved);
@@ -631,8 +642,16 @@ fn batch_all_approved() {
 fn batch_partial_denial() {
     let mut g = ModuleIndexParityGate::with_defaults(epoch());
     let cohorts = vec![
-        ("cohort-ok".to_string(), full_parity_evidence(200), good_cold_start()),
-        ("cohort-bad".to_string(), partial_parity_evidence(200, 10), good_cold_start()),
+        (
+            "cohort-ok".to_string(),
+            full_parity_evidence(200),
+            good_cold_start(),
+        ),
+        (
+            "cohort-bad".to_string(),
+            partial_parity_evidence(200, 10),
+            good_cold_start(),
+        ),
     ];
     let result = evaluate_batch(&mut g, &cohorts, 100_000_000);
     assert!(!result.all_approved);

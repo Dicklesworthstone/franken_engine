@@ -308,6 +308,29 @@ fn package_type_module_extensionless_relative_bun_compat_resolves() {
 }
 
 #[test]
+fn package_type_module_extensionless_relative_node_compat_requires_explicit_extension() {
+    let mut resolver = DeterministicModuleResolver::new("/app");
+    resolver
+        .register_workspace_module("main.mjs", esm_def("import './lib';"))
+        .unwrap();
+    resolver
+        .register_workspace_module("lib.mjs", esm_def("export const value = 1;"))
+        .unwrap();
+
+    let error = resolver
+        .resolve(
+            &ModuleRequest::new("./lib", ImportStyle::Import)
+                .with_referrer("/app/main.mjs")
+                .with_compatibility_mode(CompatibilityMode::NodeCompat),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect_err("node_compat should reject extensionless relative ESM imports");
+    assert_eq!(error.code, ResolutionErrorCode::ModuleNotFound);
+    assert_eq!(error.probe_sequence, vec!["/app/lib"]);
+}
+
+#[test]
 fn register_workspace_empty_path_fails() {
     let mut resolver = DeterministicModuleResolver::new("/app");
     let result = resolver.register_workspace_module("", esm_def("x"));

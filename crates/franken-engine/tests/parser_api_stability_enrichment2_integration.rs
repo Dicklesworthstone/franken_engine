@@ -19,11 +19,11 @@ use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::parser_api_stability::{
     API_STABILITY_CONTRACT_VERSION, API_STABILITY_SCHEMA_VERSION, ApiStabilityManifest,
     ApiSurfaceEntry, CheckVerdict, CompatibilityCheckResult, CompatibilityReport, EvolutionRule,
-    GoldenVersionVector, IntegrationLogEntry, IntegrationOutcome,
-    MINIMUM_COMPATIBLE_AST_CONTRACT, MINIMUM_COMPATIBLE_DIAGNOSTIC_SCHEMA,
-    MINIMUM_COMPATIBLE_EVENT_IR_CONTRACT, MINIMUM_COMPATIBLE_MATERIALIZER_CONTRACT,
-    MigrationAssessment, assess_migration, is_version_compatible, parse_module, parse_script,
-    parse_with_audit, parse_with_full_provenance, run_compatibility_checks,
+    GoldenVersionVector, IntegrationLogEntry, IntegrationOutcome, MINIMUM_COMPATIBLE_AST_CONTRACT,
+    MINIMUM_COMPATIBLE_DIAGNOSTIC_SCHEMA, MINIMUM_COMPATIBLE_EVENT_IR_CONTRACT,
+    MINIMUM_COMPATIBLE_MATERIALIZER_CONTRACT, MigrationAssessment, assess_migration,
+    is_version_compatible, parse_module, parse_script, parse_with_audit,
+    parse_with_full_provenance, run_compatibility_checks,
 };
 
 // ---------------------------------------------------------------------------
@@ -57,7 +57,11 @@ fn enrichment_evolution_rule_clone_independence() {
 
 #[test]
 fn enrichment_check_verdict_all_variants_serde_roundtrip() {
-    for v in [CheckVerdict::Pass, CheckVerdict::Fail, CheckVerdict::Skipped] {
+    for v in [
+        CheckVerdict::Pass,
+        CheckVerdict::Fail,
+        CheckVerdict::Skipped,
+    ] {
         let json = serde_json::to_string(&v).unwrap();
         let back: CheckVerdict = serde_json::from_str(&json).unwrap();
         assert_eq!(v, back);
@@ -66,7 +70,11 @@ fn enrichment_check_verdict_all_variants_serde_roundtrip() {
 
 #[test]
 fn enrichment_check_verdict_display_distinct() {
-    let variants = [CheckVerdict::Pass, CheckVerdict::Fail, CheckVerdict::Skipped];
+    let variants = [
+        CheckVerdict::Pass,
+        CheckVerdict::Fail,
+        CheckVerdict::Skipped,
+    ];
     let dbg: BTreeSet<String> = variants.iter().map(|v| format!("{v:?}")).collect();
     assert_eq!(dbg.len(), variants.len());
 }
@@ -141,10 +149,7 @@ fn enrichment_manifest_entry_all_known_ids() {
         "diagnostics.schema",
     ];
     for id in expected_ids {
-        assert!(
-            m.entry(id).is_some(),
-            "missing surface entry for {id}"
-        );
+        assert!(m.entry(id).is_some(), "missing surface entry for {id}");
     }
 }
 
@@ -161,7 +166,8 @@ fn enrichment_manifest_descriptions_non_empty() {
     for entry in &m.entries {
         assert!(
             !entry.description.is_empty(),
-            "empty description for {}", entry.surface_id
+            "empty description for {}",
+            entry.surface_id
         );
     }
 }
@@ -335,7 +341,10 @@ fn enrichment_assess_migration_serde_roundtrip() {
 #[test]
 fn enrichment_is_version_compatible_false_for_old_artifact() {
     // A very old version string (before v1) should be incompatible
-    assert!(!is_version_compatible("ast.contract", "franken-engine.parser-ast.contract.v0"));
+    assert!(!is_version_compatible(
+        "ast.contract",
+        "franken-engine.parser-ast.contract.v0"
+    ));
 }
 
 #[test]

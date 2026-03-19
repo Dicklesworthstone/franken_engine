@@ -131,35 +131,23 @@ fn enrichment_verdict_allow_is_allow() {
 
 #[test]
 fn enrichment_verdict_deny_is_not_allow() {
-    assert!(!SafetyVerdict::Deny {
-        reason: "r".into()
-    }
-    .is_allow());
+    assert!(!SafetyVerdict::Deny { reason: "r".into() }.is_allow());
 }
 
 #[test]
 fn enrichment_verdict_fallback_is_not_allow() {
-    assert!(!SafetyVerdict::Fallback {
-        reason: "r".into()
-    }
-    .is_allow());
+    assert!(!SafetyVerdict::Fallback { reason: "r".into() }.is_allow());
 }
 
 #[test]
 fn enrichment_verdict_outcome_str_values() {
     assert_eq!(SafetyVerdict::Allow.outcome_str(), "allow");
     assert_eq!(
-        SafetyVerdict::Deny {
-            reason: "x".into()
-        }
-        .outcome_str(),
+        SafetyVerdict::Deny { reason: "x".into() }.outcome_str(),
         "deny"
     );
     assert_eq!(
-        SafetyVerdict::Fallback {
-            reason: "y".into()
-        }
-        .outcome_str(),
+        SafetyVerdict::Fallback { reason: "y".into() }.outcome_str(),
         "fallback"
     );
 }
@@ -285,7 +273,9 @@ fn enrichment_router_register_replaces_contract() {
 fn enrichment_evaluate_uniform_prior_denies() {
     let mut r = router_defaults();
     let mut c = cx(100);
-    let result = r.evaluate(&mut c, &req(SafetyAction::ForcedTermination, 1)).unwrap();
+    let result = r
+        .evaluate(&mut c, &req(SafetyAction::ForcedTermination, 1))
+        .unwrap();
     assert!(matches!(result.verdict, SafetyVerdict::Deny { .. }));
 }
 
@@ -294,7 +284,9 @@ fn enrichment_evaluate_after_safe_observations_allows() {
     let mut r = router_defaults();
     shift_safe(&mut r, SafetyAction::CapabilityRevocation, 30);
     let mut c = cx(100);
-    let result = r.evaluate(&mut c, &req(SafetyAction::CapabilityRevocation, 1)).unwrap();
+    let result = r
+        .evaluate(&mut c, &req(SafetyAction::CapabilityRevocation, 1))
+        .unwrap();
     assert!(result.verdict.is_allow());
 }
 
@@ -317,14 +309,19 @@ fn enrichment_evaluate_all_actions_succeed() {
 fn enrichment_budget_exact_two_ms_succeeds() {
     let mut r = router_defaults();
     let mut c = cx(2);
-    assert!(r.evaluate(&mut c, &req(SafetyAction::ExtensionQuarantine, 1)).is_ok());
+    assert!(
+        r.evaluate(&mut c, &req(SafetyAction::ExtensionQuarantine, 1))
+            .is_ok()
+    );
 }
 
 #[test]
 fn enrichment_budget_one_ms_fails() {
     let mut r = router_defaults();
     let mut c = cx(1);
-    let err = r.evaluate(&mut c, &req(SafetyAction::ExtensionQuarantine, 1)).unwrap_err();
+    let err = r
+        .evaluate(&mut c, &req(SafetyAction::ExtensionQuarantine, 1))
+        .unwrap_err();
     assert!(matches!(err, SafetyRouterError::BudgetExhausted { .. }));
 }
 
@@ -332,7 +329,9 @@ fn enrichment_budget_one_ms_fails() {
 fn enrichment_budget_zero_ms_fails() {
     let mut r = router_defaults();
     let mut c = cx(0);
-    let err = r.evaluate(&mut c, &req(SafetyAction::BudgetOverride, 1)).unwrap_err();
+    let err = r
+        .evaluate(&mut c, &req(SafetyAction::BudgetOverride, 1))
+        .unwrap_err();
     assert!(matches!(err, SafetyRouterError::BudgetExhausted { .. }));
 }
 
@@ -363,7 +362,9 @@ fn enrichment_budget_exhaustion_stores_fallback_active_result() {
 fn enrichment_no_contract_returns_error() {
     let mut r = SafetyDecisionRouter::new();
     let mut c = cx(100);
-    let err = r.evaluate(&mut c, &req(SafetyAction::BudgetOverride, 1)).unwrap_err();
+    let err = r
+        .evaluate(&mut c, &req(SafetyAction::BudgetOverride, 1))
+        .unwrap_err();
     assert!(matches!(err, SafetyRouterError::NoContract { .. }));
 }
 
@@ -387,7 +388,10 @@ fn enrichment_low_calibration_triggers_fallback() {
     shift_safe(&mut r, SafetyAction::ExtensionQuarantine, 30);
     let mut c = cx(100);
     let result = r
-        .evaluate(&mut c, &req_cal(SafetyAction::ExtensionQuarantine, 1, 4_000))
+        .evaluate(
+            &mut c,
+            &req_cal(SafetyAction::ExtensionQuarantine, 1, 4_000),
+        )
         .unwrap();
     assert!(matches!(result.verdict, SafetyVerdict::Fallback { .. }));
     assert!(result.fallback_active);

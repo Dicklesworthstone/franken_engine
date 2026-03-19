@@ -55,7 +55,11 @@ fn integ_policy_serde_both_variants() {
 
 #[test]
 fn integ_severity_serde_all_variants() {
-    for sev in [LeakSeverity::Warning, LeakSeverity::Critical, LeakSeverity::Fatal] {
+    for sev in [
+        LeakSeverity::Warning,
+        LeakSeverity::Critical,
+        LeakSeverity::Fatal,
+    ] {
         let json = serde_json::to_string(&sev).unwrap();
         let back: LeakSeverity = serde_json::from_str(&json).unwrap();
         assert_eq!(sev, back);
@@ -65,7 +69,9 @@ fn integ_severity_serde_all_variants() {
 #[test]
 fn integ_failover_action_serde_both_variants() {
     let actions = [
-        FailoverAction::ScopedRegionClose { region_id: "r-42".to_string() },
+        FailoverAction::ScopedRegionClose {
+            region_id: "r-42".to_string(),
+        },
         FailoverAction::AlertOnly,
     ];
     for action in &actions {
@@ -92,7 +98,9 @@ fn integ_leak_event_serde_roundtrip() {
         region_id: "r".to_string(),
         component: "comp".to_string(),
         leak_policy: ObligationLeakPolicy::Production,
-        failover_action: Some(FailoverAction::ScopedRegionClose { region_id: "r".to_string() }),
+        failover_action: Some(FailoverAction::ScopedRegionClose {
+            region_id: "r".to_string(),
+        }),
         severity: LeakSeverity::Critical,
     };
     let json = serde_json::to_string(&event).unwrap();
@@ -146,7 +154,9 @@ fn integ_leak_metrics_serde_roundtrip() {
 
 #[test]
 fn integ_leak_response_serde_abort() {
-    let resp = LeakResponse::Abort { diagnostic: test_diagnostic() };
+    let resp = LeakResponse::Abort {
+        diagnostic: test_diagnostic(),
+    };
     let json = serde_json::to_string(&resp).unwrap();
     let back: LeakResponse = serde_json::from_str(&json).unwrap();
     assert_eq!(resp, back);
@@ -176,17 +186,23 @@ fn integ_policy_display_unique() {
 
 #[test]
 fn integ_severity_display_unique() {
-    let displays: BTreeSet<String> = [LeakSeverity::Warning, LeakSeverity::Critical, LeakSeverity::Fatal]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+    let displays: BTreeSet<String> = [
+        LeakSeverity::Warning,
+        LeakSeverity::Critical,
+        LeakSeverity::Fatal,
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
     assert_eq!(displays.len(), 3);
 }
 
 #[test]
 fn integ_failover_action_display_unique() {
     let displays: BTreeSet<String> = [
-        FailoverAction::ScopedRegionClose { region_id: "r".to_string() },
+        FailoverAction::ScopedRegionClose {
+            region_id: "r".to_string(),
+        },
         FailoverAction::AlertOnly,
     ]
     .iter()
@@ -258,7 +274,10 @@ fn integ_production_mode_returns_handled() {
 fn integ_production_mode_triggers_scoped_failover() {
     let mut handler = LeakHandler::new(ObligationLeakPolicy::Production);
     if let LeakResponse::Handled { failover, .. } = handler.handle_leak(test_diagnostic()) {
-        assert!(matches!(failover, Some(FailoverAction::ScopedRegionClose { .. })));
+        assert!(matches!(
+            failover,
+            Some(FailoverAction::ScopedRegionClose { .. })
+        ));
     } else {
         panic!("expected Handled");
     }
@@ -341,7 +360,12 @@ fn integ_metrics_deterministic_ordering() {
 fn integ_metrics_sum_equals_total() {
     let mut handler = LeakHandler::new(ObligationLeakPolicy::Production);
     for i in 0..30u64 {
-        handler.handle_leak(make_diagnostic(i, &format!("r-{}", i % 5), &format!("c-{}", i % 3), "comp"));
+        handler.handle_leak(make_diagnostic(
+            i,
+            &format!("r-{}", i % 5),
+            &format!("c-{}", i % 3),
+            "comp",
+        ));
     }
     let metrics = handler.metrics();
     let region_sum: u64 = metrics.by_region.values().sum();
@@ -366,7 +390,14 @@ fn integ_severity_btreeset_ordering() {
     set.insert(LeakSeverity::Warning);
     set.insert(LeakSeverity::Critical);
     let ordered: Vec<_> = set.into_iter().collect();
-    assert_eq!(ordered, vec![LeakSeverity::Warning, LeakSeverity::Critical, LeakSeverity::Fatal]);
+    assert_eq!(
+        ordered,
+        vec![
+            LeakSeverity::Warning,
+            LeakSeverity::Critical,
+            LeakSeverity::Fatal
+        ]
+    );
 }
 
 // ===========================================================================
@@ -468,7 +499,12 @@ fn integ_deterministic_replay_metrics() {
     let run = || -> LeakMetrics {
         let mut handler = LeakHandler::new(ObligationLeakPolicy::Production);
         for i in 0..10u64 {
-            handler.handle_leak(make_diagnostic(i, &format!("r-{}", i % 4), &format!("c-{}", i % 3), "comp"));
+            handler.handle_leak(make_diagnostic(
+                i,
+                &format!("r-{}", i % 4),
+                &format!("c-{}", i % 3),
+                "comp",
+            ));
         }
         handler.metrics().clone()
     };
@@ -481,7 +517,12 @@ fn integ_deterministic_replay_lab_responses() {
         let mut handler = LeakHandler::new(ObligationLeakPolicy::Lab);
         let mut results = Vec::new();
         for i in 0..3u64 {
-            results.push(handler.handle_leak(make_diagnostic(i, &format!("r-{i}"), &format!("c-{i}"), "comp")));
+            results.push(handler.handle_leak(make_diagnostic(
+                i,
+                &format!("r-{i}"),
+                &format!("c-{i}"),
+                "comp",
+            )));
         }
         results
     };
@@ -527,7 +568,12 @@ fn integ_diagnostic_with_max_id() {
 fn integ_stress_100_production_leaks() {
     let mut handler = LeakHandler::new(ObligationLeakPolicy::Production);
     for i in 0..100u64 {
-        handler.handle_leak(make_diagnostic(i, &format!("r-{}", i % 5), &format!("c-{}", i % 10), &format!("comp-{}", i % 3)));
+        handler.handle_leak(make_diagnostic(
+            i,
+            &format!("r-{}", i % 5),
+            &format!("c-{}", i % 10),
+            &format!("comp-{}", i % 3),
+        ));
     }
     let metrics = handler.metrics();
     assert_eq!(metrics.total, 100);

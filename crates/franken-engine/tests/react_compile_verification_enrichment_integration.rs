@@ -99,7 +99,10 @@ fn enrichment_artifact_kind_display_all_unique() {
 
 #[test]
 fn enrichment_diagnostic_severity_display_all_unique() {
-    let displays: BTreeSet<String> = DiagnosticSeverity::ALL.iter().map(|s| s.to_string()).collect();
+    let displays: BTreeSet<String> = DiagnosticSeverity::ALL
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     assert_eq!(displays.len(), 4);
 }
 
@@ -129,7 +132,10 @@ fn enrichment_mismatch_kind_display_all_unique() {
 
 #[test]
 fn enrichment_verdict_display_all_unique() {
-    let displays: BTreeSet<String> = VerificationVerdict::ALL.iter().map(|v| v.to_string()).collect();
+    let displays: BTreeSet<String> = VerificationVerdict::ALL
+        .iter()
+        .map(|v| v.to_string())
+        .collect();
     assert_eq!(displays.len(), 3);
 }
 
@@ -380,7 +386,12 @@ fn enrichment_parity_missing_artifact_fails() {
     };
     let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0).unwrap();
     assert_eq!(report.verdict, VerificationVerdict::Fail);
-    assert!(report.mismatches.iter().any(|m| m.kind == MismatchKind::ArtifactMissing));
+    assert!(
+        report
+            .mismatches
+            .iter()
+            .any(|m| m.kind == MismatchKind::ArtifactMissing)
+    );
 }
 
 // ===========================================================================

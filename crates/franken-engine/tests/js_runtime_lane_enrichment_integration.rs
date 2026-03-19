@@ -897,7 +897,10 @@ fn dom_tree_move_element_enrichment() {
     })
     .unwrap();
 
-    assert_eq!(tree.get(DomElementId(1)).unwrap().parent, Some(DomElementId(2)));
+    assert_eq!(
+        tree.get(DomElementId(1)).unwrap().parent,
+        Some(DomElementId(2))
+    );
     assert!(tree.get(DomElementId(0)).unwrap().children.is_empty());
 }
 

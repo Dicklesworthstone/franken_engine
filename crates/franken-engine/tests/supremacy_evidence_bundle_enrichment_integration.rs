@@ -370,10 +370,18 @@ fn enrich_bundle_serde_complex_blocked() {
 #[test]
 fn enrich_block_reason_all_variants_serde_roundtrip() {
     let reasons = vec![
-        BlockReason::MissingCell { cell_id: "a".into() },
-        BlockReason::RedCell { cell_id: "b".into() },
-        BlockReason::UnsupportedCell { cell_id: "c".into() },
-        BlockReason::ModeAmbiguousCell { cell_id: "d".into() },
+        BlockReason::MissingCell {
+            cell_id: "a".into(),
+        },
+        BlockReason::RedCell {
+            cell_id: "b".into(),
+        },
+        BlockReason::UnsupportedCell {
+            cell_id: "c".into(),
+        },
+        BlockReason::ModeAmbiguousCell {
+            cell_id: "d".into(),
+        },
         BlockReason::InsufficientCoverage {
             coverage_fraction_millionths: 500_000,
             required_millionths: 1_000_000,
@@ -384,7 +392,9 @@ fn enrich_block_reason_all_variants_serde_roundtrip() {
             current_epoch: 100,
             max_staleness: 5,
         },
-        BlockReason::IntegrityFailure { details: "bad hash".into() },
+        BlockReason::IntegrityFailure {
+            details: "bad hash".into(),
+        },
     ];
     for r in &reasons {
         let json = serde_json::to_string(r).unwrap();
@@ -438,9 +448,16 @@ fn enrich_cell_evidence_large_observation_count() {
 fn enrich_bundle_error_all_tags_unique() {
     let errors: Vec<BundleError> = vec![
         BundleError::EmptyCells,
-        BundleError::TooManyCells { count: 600, max: 512 },
-        BundleError::DuplicateCellIds { duplicates: vec!["x".into()] },
-        BundleError::MissingRequiredCells { missing: vec!["y".into()] },
+        BundleError::TooManyCells {
+            count: 600,
+            max: 512,
+        },
+        BundleError::DuplicateCellIds {
+            duplicates: vec!["x".into()],
+        },
+        BundleError::MissingRequiredCells {
+            missing: vec!["y".into()],
+        },
         BundleError::IntegrityMismatch {
             expected: ContentHash::compute(b"a"),
             actual: ContentHash::compute(b"b"),
@@ -471,7 +488,13 @@ fn enrich_staleness_zero_gap_approved() {
 fn enrich_bundle_hash_differs_by_cell_count() {
     let config = BundleConfig::permissive();
     let b1 = assemble_bundle("same-id", &[green_cell("a")], &config, epoch()).unwrap();
-    let b2 = assemble_bundle("same-id", &[green_cell("a"), green_cell("b")], &config, epoch()).unwrap();
+    let b2 = assemble_bundle(
+        "same-id",
+        &[green_cell("a"), green_cell("b")],
+        &config,
+        epoch(),
+    )
+    .unwrap();
     assert_ne!(b1.bundle_hash, b2.bundle_hash);
 }
 
@@ -483,7 +506,10 @@ fn enrich_bundle_hash_differs_by_cell_count() {
 fn enrich_cell_status_safe_vs_strict_disjoint() {
     for s in CellStatus::ALL {
         if s.is_publication_safe() {
-            assert!(!s.blocks_strict(), "status {s} should not be both safe and blocking");
+            assert!(
+                !s.blocks_strict(),
+                "status {s} should not be both safe and blocking"
+            );
         }
     }
 }
@@ -494,8 +520,14 @@ fn enrich_cell_status_safe_vs_strict_disjoint() {
 
 #[test]
 fn enrich_obs_mode_rigorous_count() {
-    let rigorous = ObservabilityMode::ALL.iter().filter(|m| m.is_rigorous()).count();
-    let non_rigorous = ObservabilityMode::ALL.iter().filter(|m| !m.is_rigorous()).count();
+    let rigorous = ObservabilityMode::ALL
+        .iter()
+        .filter(|m| m.is_rigorous())
+        .count();
+    let non_rigorous = ObservabilityMode::ALL
+        .iter()
+        .filter(|m| !m.is_rigorous())
+        .count();
     assert_eq!(rigorous, 2);
     assert_eq!(non_rigorous, 2);
 }
@@ -572,9 +604,16 @@ fn enrich_config_serde_with_multiple_required() {
 fn enrich_bundle_error_display_all_non_empty() {
     let errors: Vec<BundleError> = vec![
         BundleError::EmptyCells,
-        BundleError::TooManyCells { count: 1000, max: 512 },
-        BundleError::DuplicateCellIds { duplicates: vec!["x".into()] },
-        BundleError::MissingRequiredCells { missing: vec!["y".into()] },
+        BundleError::TooManyCells {
+            count: 1000,
+            max: 512,
+        },
+        BundleError::DuplicateCellIds {
+            duplicates: vec!["x".into()],
+        },
+        BundleError::MissingRequiredCells {
+            missing: vec!["y".into()],
+        },
         BundleError::IntegrityMismatch {
             expected: ContentHash::compute(b"a"),
             actual: ContentHash::compute(b"b"),
@@ -593,9 +632,15 @@ fn enrich_bundle_error_display_all_non_empty() {
 fn enrich_assemble_bundle_deterministic_across_three_calls() {
     let cells = vec![green_cell("a"), green_cell("b"), green_cell("c")];
     let config = BundleConfig::permissive();
-    let h1 = assemble_bundle("det3", &cells, &config, epoch()).unwrap().bundle_hash;
-    let h2 = assemble_bundle("det3", &cells, &config, epoch()).unwrap().bundle_hash;
-    let h3 = assemble_bundle("det3", &cells, &config, epoch()).unwrap().bundle_hash;
+    let h1 = assemble_bundle("det3", &cells, &config, epoch())
+        .unwrap()
+        .bundle_hash;
+    let h2 = assemble_bundle("det3", &cells, &config, epoch())
+        .unwrap()
+        .bundle_hash;
+    let h3 = assemble_bundle("det3", &cells, &config, epoch())
+        .unwrap()
+        .bundle_hash;
     assert_eq!(h1, h2);
     assert_eq!(h2, h3);
 }
@@ -662,9 +707,15 @@ fn enrich_assemble_triple_duplicate_error() {
 fn enrich_verdict_display_blocked_reasons_count() {
     let v = PublicationGateVerdict::Blocked {
         reasons: vec![
-            BlockReason::RedCell { cell_id: "a".into() },
-            BlockReason::RedCell { cell_id: "b".into() },
-            BlockReason::RedCell { cell_id: "c".into() },
+            BlockReason::RedCell {
+                cell_id: "a".into(),
+            },
+            BlockReason::RedCell {
+                cell_id: "b".into(),
+            },
+            BlockReason::RedCell {
+                cell_id: "c".into(),
+            },
         ],
     };
     let s = v.to_string();

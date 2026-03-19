@@ -18,14 +18,16 @@ fn epoch() -> SecurityEpoch {
     SecurityEpoch::from_raw(300)
 }
 
-fn req(lane: LaneKind, shape: ComponentShape, strat: SpecializationStrategy) -> SpecializationRequest {
+fn req(
+    lane: LaneKind,
+    shape: ComponentShape,
+    strat: SpecializationStrategy,
+) -> SpecializationRequest {
     SpecializationRequest {
         lane_kind: lane,
         component_shape: shape,
         strategy: strat,
-        input_hash: ContentHash::compute(
-            format!("{}-{}-{}", lane, shape, strat).as_bytes(),
-        ),
+        input_hash: ContentHash::compute(format!("{}-{}-{}", lane, shape, strat).as_bytes()),
     }
 }
 
@@ -289,7 +291,10 @@ fn enrich_validate_config_threshold_over_boundary() {
 
 #[test]
 fn enrich_benefit_pure_partial_eval_highest() {
-    let b = compute_specialization_benefit(ComponentShape::PureFunction, SpecializationStrategy::PartialEvaluation);
+    let b = compute_specialization_benefit(
+        ComponentShape::PureFunction,
+        SpecializationStrategy::PartialEvaluation,
+    );
     // PureFunction (500k) * PartialEvaluation (5) / 5 + 1M = 1.5M
     assert_eq!(b, 1_500_000);
 }
@@ -297,7 +302,10 @@ fn enrich_benefit_pure_partial_eval_highest() {
 #[test]
 fn enrich_benefit_error_boundary_min() {
     // ErrorBoundary (50k) * DeadBranchElimination (2) / 5 + 1M = 1_020_000
-    let b = compute_specialization_benefit(ComponentShape::ErrorBoundary, SpecializationStrategy::DeadBranchElimination);
+    let b = compute_specialization_benefit(
+        ComponentShape::ErrorBoundary,
+        SpecializationStrategy::DeadBranchElimination,
+    );
     assert_eq!(b, 1_020_000);
 }
 
@@ -306,7 +314,10 @@ fn enrich_benefit_always_above_one_million() {
     for shape in ComponentShape::ALL {
         for strat in SpecializationStrategy::ALL {
             let b = compute_specialization_benefit(*shape, *strat);
-            assert!(b > 1_000_000, "{shape}+{strat} benefit should be > 1M, got {b}");
+            assert!(
+                b > 1_000_000,
+                "{shape}+{strat} benefit should be > 1M, got {b}"
+            );
         }
     }
 }
@@ -328,34 +339,66 @@ fn enrich_safety_always_six_checks() {
 
 #[test]
 fn enrich_safety_memo_all_pass() {
-    let r = req(LaneKind::ServerSideRender, ComponentShape::Memo, SpecializationStrategy::ConstantFolding);
+    let r = req(
+        LaneKind::ServerSideRender,
+        ComponentShape::Memo,
+        SpecializationStrategy::ConstantFolding,
+    );
     let checks = evaluate_safety(&r);
     for c in &checks {
-        assert!(c.passed, "Memo should pass all checks, failed: {}", c.check_kind);
+        assert!(
+            c.passed,
+            "Memo should pass all checks, failed: {}",
+            c.check_kind
+        );
     }
 }
 
 #[test]
 fn enrich_safety_lazy_constant_folding_pattern_fails() {
-    let r = req(LaneKind::ServerSideRender, ComponentShape::Lazy, SpecializationStrategy::ConstantFolding);
+    let r = req(
+        LaneKind::ServerSideRender,
+        ComponentShape::Lazy,
+        SpecializationStrategy::ConstantFolding,
+    );
     let checks = evaluate_safety(&r);
-    let unsup = checks.iter().find(|c| c.check_kind == SafetyCheckKind::UnsupportedPatternAbsence).unwrap();
-    assert!(!unsup.passed, "Lazy+ConstantFolding should fail unsupported pattern check");
+    let unsup = checks
+        .iter()
+        .find(|c| c.check_kind == SafetyCheckKind::UnsupportedPatternAbsence)
+        .unwrap();
+    assert!(
+        !unsup.passed,
+        "Lazy+ConstantFolding should fail unsupported pattern check"
+    );
 }
 
 #[test]
 fn enrich_safety_suspense_inline_pattern_fails() {
-    let r = req(LaneKind::StreamingSSR, ComponentShape::Suspense, SpecializationStrategy::InlineExpansion);
+    let r = req(
+        LaneKind::StreamingSSR,
+        ComponentShape::Suspense,
+        SpecializationStrategy::InlineExpansion,
+    );
     let checks = evaluate_safety(&r);
-    let unsup = checks.iter().find(|c| c.check_kind == SafetyCheckKind::UnsupportedPatternAbsence).unwrap();
+    let unsup = checks
+        .iter()
+        .find(|c| c.check_kind == SafetyCheckKind::UnsupportedPatternAbsence)
+        .unwrap();
     assert!(!unsup.passed);
 }
 
 #[test]
 fn enrich_safety_forward_ref_idempotent() {
-    let r = req(LaneKind::Hydration, ComponentShape::ForwardRef, SpecializationStrategy::ShapeSpecialization);
+    let r = req(
+        LaneKind::Hydration,
+        ComponentShape::ForwardRef,
+        SpecializationStrategy::ShapeSpecialization,
+    );
     let checks = evaluate_safety(&r);
-    let idem = checks.iter().find(|c| c.check_kind == SafetyCheckKind::Idempotency).unwrap();
+    let idem = checks
+        .iter()
+        .find(|c| c.check_kind == SafetyCheckKind::Idempotency)
+        .unwrap();
     assert!(idem.passed, "ForwardRef should be idempotent");
 }
 
@@ -365,28 +408,44 @@ fn enrich_safety_forward_ref_idempotent() {
 
 #[test]
 fn enrich_specialize_memo_dead_branch_applied() {
-    let r = req(LaneKind::StaticGeneration, ComponentShape::Memo, SpecializationStrategy::DeadBranchElimination);
+    let r = req(
+        LaneKind::StaticGeneration,
+        ComponentShape::Memo,
+        SpecializationStrategy::DeadBranchElimination,
+    );
     let result = specialize_lane(&r, &SpecializationConfig::default_config()).unwrap();
     assert!(result.is_applied());
 }
 
 #[test]
 fn enrich_specialize_error_boundary_rejected_purity() {
-    let r = req(LaneKind::ServerSideRender, ComponentShape::ErrorBoundary, SpecializationStrategy::ConstantFolding);
+    let r = req(
+        LaneKind::ServerSideRender,
+        ComponentShape::ErrorBoundary,
+        SpecializationStrategy::ConstantFolding,
+    );
     let result = specialize_lane(&r, &SpecializationConfig::default_config()).unwrap();
     assert!(result.is_rejected());
 }
 
 #[test]
 fn enrich_specialize_result_failed_check_count() {
-    let r = req(LaneKind::ClientEntry, ComponentShape::HookBased, SpecializationStrategy::PartialEvaluation);
+    let r = req(
+        LaneKind::ClientEntry,
+        ComponentShape::HookBased,
+        SpecializationStrategy::PartialEvaluation,
+    );
     let result = specialize_lane(&r, &SpecializationConfig::default_config()).unwrap();
     assert!(result.failed_check_count() > 0);
 }
 
 #[test]
 fn enrich_specialize_applied_no_rejection_reasons() {
-    let r = req(LaneKind::ServerSideRender, ComponentShape::PureFunction, SpecializationStrategy::ConstantFolding);
+    let r = req(
+        LaneKind::ServerSideRender,
+        ComponentShape::PureFunction,
+        SpecializationStrategy::ConstantFolding,
+    );
     let result = specialize_lane(&r, &SpecializationConfig::default_config()).unwrap();
     assert!(result.is_applied());
     assert!(result.rejection_reasons.is_empty());
@@ -395,7 +454,11 @@ fn enrich_specialize_applied_no_rejection_reasons() {
 
 #[test]
 fn enrich_specialize_rejected_has_rejection_reasons() {
-    let r = req(LaneKind::Hydration, ComponentShape::ClassWithState, SpecializationStrategy::ShapeSpecialization);
+    let r = req(
+        LaneKind::Hydration,
+        ComponentShape::ClassWithState,
+        SpecializationStrategy::ShapeSpecialization,
+    );
     let result = specialize_lane(&r, &SpecializationConfig::default_config()).unwrap();
     assert!(result.is_rejected());
     assert!(!result.rejection_reasons.is_empty());
@@ -407,7 +470,11 @@ fn enrich_specialize_rejected_has_rejection_reasons() {
 
 #[test]
 fn enrich_receipt_different_epochs_different_hashes() {
-    let r = req(LaneKind::ServerSideRender, ComponentShape::PureFunction, SpecializationStrategy::ConstantFolding);
+    let r = req(
+        LaneKind::ServerSideRender,
+        ComponentShape::PureFunction,
+        SpecializationStrategy::ConstantFolding,
+    );
     let cfg = SpecializationConfig::default_config();
     let result = specialize_lane(&r, &cfg).unwrap();
     let g = DecisionReceipt::genesis_hash();
@@ -418,7 +485,11 @@ fn enrich_receipt_different_epochs_different_hashes() {
 
 #[test]
 fn enrich_receipt_rejected_verdict_in_receipt() {
-    let r = req(LaneKind::ClientEntry, ComponentShape::HookBased, SpecializationStrategy::PartialEvaluation);
+    let r = req(
+        LaneKind::ClientEntry,
+        ComponentShape::HookBased,
+        SpecializationStrategy::PartialEvaluation,
+    );
     let cfg = SpecializationConfig::default_config();
     let result = specialize_lane(&r, &cfg).unwrap();
     let receipt = DecisionReceipt::new(epoch(), &r, &result, DecisionReceipt::genesis_hash());
@@ -432,8 +503,16 @@ fn enrich_receipt_rejected_verdict_in_receipt() {
 #[test]
 fn enrich_batch_all_rejected() {
     let reqs = vec![
-        req(LaneKind::Hydration, ComponentShape::HookBased, SpecializationStrategy::PartialEvaluation),
-        req(LaneKind::ClientEntry, ComponentShape::ClassWithState, SpecializationStrategy::ShapeSpecialization),
+        req(
+            LaneKind::Hydration,
+            ComponentShape::HookBased,
+            SpecializationStrategy::PartialEvaluation,
+        ),
+        req(
+            LaneKind::ClientEntry,
+            ComponentShape::ClassWithState,
+            SpecializationStrategy::ShapeSpecialization,
+        ),
     ];
     let cfg = SpecializationConfig::default_config();
     let (results, receipts) = specialize_batch(&reqs, &cfg, epoch()).unwrap();
@@ -445,9 +524,21 @@ fn enrich_batch_all_rejected() {
 #[test]
 fn enrich_batch_receipt_chain_all_different() {
     let reqs = vec![
-        req(LaneKind::ServerSideRender, ComponentShape::PureFunction, SpecializationStrategy::ConstantFolding),
-        req(LaneKind::StaticGeneration, ComponentShape::Memo, SpecializationStrategy::DeadBranchElimination),
-        req(LaneKind::IslandsArchitecture, ComponentShape::PureFunction, SpecializationStrategy::ShapeSpecialization),
+        req(
+            LaneKind::ServerSideRender,
+            ComponentShape::PureFunction,
+            SpecializationStrategy::ConstantFolding,
+        ),
+        req(
+            LaneKind::StaticGeneration,
+            ComponentShape::Memo,
+            SpecializationStrategy::DeadBranchElimination,
+        ),
+        req(
+            LaneKind::IslandsArchitecture,
+            ComponentShape::PureFunction,
+            SpecializationStrategy::ShapeSpecialization,
+        ),
     ];
     let cfg = SpecializationConfig::default_config();
     let (_, receipts) = specialize_batch(&reqs, &cfg, epoch()).unwrap();
@@ -465,9 +556,11 @@ fn enrich_batch_receipt_chain_all_different() {
 
 #[test]
 fn enrich_summary_all_rejected() {
-    let reqs = vec![
-        req(LaneKind::Hydration, ComponentShape::HookBased, SpecializationStrategy::PartialEvaluation),
-    ];
+    let reqs = vec![req(
+        LaneKind::Hydration,
+        ComponentShape::HookBased,
+        SpecializationStrategy::PartialEvaluation,
+    )];
     let cfg = SpecializationConfig::default_config();
     let (results, _) = specialize_batch(&reqs, &cfg, epoch()).unwrap();
     let s = BatchSummary::from_results(&results);
@@ -480,8 +573,16 @@ fn enrich_summary_all_rejected() {
 
 #[test]
 fn enrich_summary_content_hash_differs_by_content() {
-    let r1 = vec![req(LaneKind::ServerSideRender, ComponentShape::PureFunction, SpecializationStrategy::ConstantFolding)];
-    let r2 = vec![req(LaneKind::Hydration, ComponentShape::HookBased, SpecializationStrategy::PartialEvaluation)];
+    let r1 = vec![req(
+        LaneKind::ServerSideRender,
+        ComponentShape::PureFunction,
+        SpecializationStrategy::ConstantFolding,
+    )];
+    let r2 = vec![req(
+        LaneKind::Hydration,
+        ComponentShape::HookBased,
+        SpecializationStrategy::PartialEvaluation,
+    )];
     let cfg = SpecializationConfig::default_config();
     let (res1, _) = specialize_batch(&r1, &cfg, epoch()).unwrap();
     let (res2, _) = specialize_batch(&r2, &cfg, epoch()).unwrap();
@@ -500,8 +601,12 @@ fn enrich_error_serde_all_variants() {
         SpecializationError::InvalidConfig { reason: "r".into() },
         SpecializationError::InlineDepthExceeded { depth: 10, max: 5 },
         SpecializationError::SpecializationLimitExceeded { count: 20, max: 16 },
-        SpecializationError::MissingSafetyCheck { kind: SafetyCheckKind::PurityProof },
-        SpecializationError::Internal { detail: "oops".into() },
+        SpecializationError::MissingSafetyCheck {
+            kind: SafetyCheckKind::PurityProof,
+        },
+        SpecializationError::Internal {
+            detail: "oops".into(),
+        },
     ];
     for e in errors {
         let json = serde_json::to_string(&e).unwrap();
@@ -516,14 +621,22 @@ fn enrich_error_serde_all_variants() {
 
 #[test]
 fn enrich_forward_ref_partial_eval_deferred_permissive() {
-    let r = req(LaneKind::Hydration, ComponentShape::ForwardRef, SpecializationStrategy::PartialEvaluation);
+    let r = req(
+        LaneKind::Hydration,
+        ComponentShape::ForwardRef,
+        SpecializationStrategy::PartialEvaluation,
+    );
     let result = specialize_lane(&r, &SpecializationConfig::permissive()).unwrap();
     assert!(result.is_deferred());
 }
 
 #[test]
 fn enrich_class_with_state_deferred_permissive() {
-    let r = req(LaneKind::ClientEntry, ComponentShape::ClassWithState, SpecializationStrategy::ShapeSpecialization);
+    let r = req(
+        LaneKind::ClientEntry,
+        ComponentShape::ClassWithState,
+        SpecializationStrategy::ShapeSpecialization,
+    );
     let result = specialize_lane(&r, &SpecializationConfig::permissive()).unwrap();
     // ClassWithState: purity fails, type stability fails, no ambient mutation fails
     assert!(result.is_deferred());
@@ -531,7 +644,11 @@ fn enrich_class_with_state_deferred_permissive() {
 
 #[test]
 fn enrich_error_boundary_deferred_permissive() {
-    let r = req(LaneKind::ServerSideRender, ComponentShape::ErrorBoundary, SpecializationStrategy::DeadBranchElimination);
+    let r = req(
+        LaneKind::ServerSideRender,
+        ComponentShape::ErrorBoundary,
+        SpecializationStrategy::DeadBranchElimination,
+    );
     let result = specialize_lane(&r, &SpecializationConfig::permissive()).unwrap();
     assert!(result.is_deferred());
 }

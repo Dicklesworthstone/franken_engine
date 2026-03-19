@@ -18,11 +18,10 @@ use std::path::Path;
 
 use frankenengine_engine::parser::ParserMode;
 use frankenengine_engine::parser_oracle::{
-    derive_seed, load_fixture_catalog, partition_fixtures, DriftClass, GateAction,
-    OracleDecision, OracleFixtureCatalog, OracleFixtureResult, OracleFixtureSpec, OracleGateMode,
-    OraclePartition, OracleSummary, ParserOracleConfig, ParserOracleError,
-    DEFAULT_FIXTURE_CATALOG_PATH, PARSER_ORACLE_REPORT_SCHEMA_VERSION,
-    PARSER_ORACLE_TAXONOMY_VERSION,
+    DEFAULT_FIXTURE_CATALOG_PATH, DriftClass, GateAction, OracleDecision, OracleFixtureCatalog,
+    OracleFixtureResult, OracleFixtureSpec, OracleGateMode, OraclePartition, OracleSummary,
+    PARSER_ORACLE_REPORT_SCHEMA_VERSION, PARSER_ORACLE_TAXONOMY_VERSION, ParserOracleConfig,
+    ParserOracleError, derive_seed, load_fixture_catalog, partition_fixtures,
 };
 
 // ---------------------------------------------------------------------------
@@ -42,7 +41,11 @@ fn enrichment_constants_non_empty() {
 
 #[test]
 fn enrichment_partition_as_str_all_distinct() {
-    let all = [OraclePartition::Smoke, OraclePartition::Full, OraclePartition::Nightly];
+    let all = [
+        OraclePartition::Smoke,
+        OraclePartition::Full,
+        OraclePartition::Nightly,
+    ];
     let set: BTreeSet<&str> = all.iter().map(|p| p.as_str()).collect();
     assert_eq!(set.len(), all.len());
 }
@@ -70,9 +73,18 @@ fn enrichment_partition_metamorphic_pairs() {
 
 #[test]
 fn enrichment_partition_from_str_valid() {
-    assert_eq!("smoke".parse::<OraclePartition>().unwrap(), OraclePartition::Smoke);
-    assert_eq!("full".parse::<OraclePartition>().unwrap(), OraclePartition::Full);
-    assert_eq!("nightly".parse::<OraclePartition>().unwrap(), OraclePartition::Nightly);
+    assert_eq!(
+        "smoke".parse::<OraclePartition>().unwrap(),
+        OraclePartition::Smoke
+    );
+    assert_eq!(
+        "full".parse::<OraclePartition>().unwrap(),
+        OraclePartition::Full
+    );
+    assert_eq!(
+        "nightly".parse::<OraclePartition>().unwrap(),
+        OraclePartition::Nightly
+    );
 }
 
 #[test]
@@ -83,7 +95,11 @@ fn enrichment_partition_from_str_invalid() {
 
 #[test]
 fn enrichment_partition_serde_roundtrip() {
-    for p in [OraclePartition::Smoke, OraclePartition::Full, OraclePartition::Nightly] {
+    for p in [
+        OraclePartition::Smoke,
+        OraclePartition::Full,
+        OraclePartition::Nightly,
+    ] {
         let json = serde_json::to_string(&p).unwrap();
         let back: OraclePartition = serde_json::from_str(&json).unwrap();
         assert_eq!(p, back);
@@ -92,9 +108,18 @@ fn enrichment_partition_serde_roundtrip() {
 
 #[test]
 fn enrichment_partition_serde_snake_case() {
-    assert_eq!(serde_json::to_string(&OraclePartition::Smoke).unwrap(), "\"smoke\"");
-    assert_eq!(serde_json::to_string(&OraclePartition::Full).unwrap(), "\"full\"");
-    assert_eq!(serde_json::to_string(&OraclePartition::Nightly).unwrap(), "\"nightly\"");
+    assert_eq!(
+        serde_json::to_string(&OraclePartition::Smoke).unwrap(),
+        "\"smoke\""
+    );
+    assert_eq!(
+        serde_json::to_string(&OraclePartition::Full).unwrap(),
+        "\"full\""
+    );
+    assert_eq!(
+        serde_json::to_string(&OraclePartition::Nightly).unwrap(),
+        "\"nightly\""
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -116,8 +141,14 @@ fn enrichment_gate_mode_as_str_values() {
 
 #[test]
 fn enrichment_gate_mode_from_str_valid() {
-    assert_eq!("report_only".parse::<OracleGateMode>().unwrap(), OracleGateMode::ReportOnly);
-    assert_eq!("fail_closed".parse::<OracleGateMode>().unwrap(), OracleGateMode::FailClosed);
+    assert_eq!(
+        "report_only".parse::<OracleGateMode>().unwrap(),
+        OracleGateMode::ReportOnly
+    );
+    assert_eq!(
+        "fail_closed".parse::<OracleGateMode>().unwrap(),
+        OracleGateMode::FailClosed
+    );
 }
 
 #[test]
@@ -142,10 +173,22 @@ fn enrichment_gate_mode_serde_roundtrip() {
 #[test]
 fn enrichment_drift_class_comparator_decision_all() {
     assert_eq!(DriftClass::Equivalent.comparator_decision(), "equivalent");
-    assert_eq!(DriftClass::DiagnosticsDrift.comparator_decision(), "drift_minor");
-    assert_eq!(DriftClass::SemanticDrift.comparator_decision(), "drift_critical");
-    assert_eq!(DriftClass::HarnessNondeterminism.comparator_decision(), "drift_critical");
-    assert_eq!(DriftClass::ArtifactIntegrityFailure.comparator_decision(), "drift_critical");
+    assert_eq!(
+        DriftClass::DiagnosticsDrift.comparator_decision(),
+        "drift_minor"
+    );
+    assert_eq!(
+        DriftClass::SemanticDrift.comparator_decision(),
+        "drift_critical"
+    );
+    assert_eq!(
+        DriftClass::HarnessNondeterminism.comparator_decision(),
+        "drift_critical"
+    );
+    assert_eq!(
+        DriftClass::ArtifactIntegrityFailure.comparator_decision(),
+        "drift_critical"
+    );
 }
 
 #[test]
@@ -304,11 +347,8 @@ fn enrichment_partition_sorted_by_id() {
 
 #[test]
 fn enrichment_config_with_defaults() {
-    let config = ParserOracleConfig::with_defaults(
-        OraclePartition::Smoke,
-        OracleGateMode::ReportOnly,
-        42,
-    );
+    let config =
+        ParserOracleConfig::with_defaults(OraclePartition::Smoke, OracleGateMode::ReportOnly, 42);
     assert_eq!(config.partition, OraclePartition::Smoke);
     assert_eq!(config.gate_mode, OracleGateMode::ReportOnly);
     assert_eq!(config.seed, 42);

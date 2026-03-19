@@ -63,7 +63,13 @@ fn evidence(node: &str, ext: &str, seq: u64, delta: i64) -> EvidencePacket {
     }
 }
 
-fn intent(node: &str, ext: &str, action: ContainmentAction, seq: u64, epoch: u64) -> ContainmentIntent {
+fn intent(
+    node: &str,
+    ext: &str,
+    action: ContainmentAction,
+    seq: u64,
+    epoch: u64,
+) -> ContainmentIntent {
     ContainmentIntent {
         intent_id: format!("enr-intent-{node}-{ext}-{seq}"),
         extension_id: ext.to_string(),
@@ -85,7 +91,9 @@ fn heartbeat(node: &str, seq: u64, ts_ns: u64) -> HeartbeatLiveness {
     HeartbeatLiveness {
         node_id: NodeId::new(node),
         policy_version: 1,
-        evidence_frontier_hash: ContentHash::compute(format!("enr-frontier-{node}-{seq}").as_bytes()),
+        evidence_frontier_hash: ContentHash::compute(
+            format!("enr-frontier-{node}-{seq}").as_bytes(),
+        ),
         local_health: BTreeMap::new(),
         epoch: SecurityEpoch::from_raw(1),
         sequence: seq,
@@ -105,7 +113,8 @@ fn enrichment_five_node_fleet_evidence_accumulation() {
     let mut acc = EvidenceAccumulator::new();
     for i in 0..5 {
         let node = format!("node-{i}");
-        acc.ingest(&evidence(&node, "ext-target", (i + 1) as u64, 200_000)).unwrap();
+        acc.ingest(&evidence(&node, "ext-target", (i + 1) as u64, 200_000))
+            .unwrap();
     }
     assert_eq!(acc.posterior_delta("ext-target"), 1_000_000);
     assert_eq!(acc.evidence_count("ext-target"), 5);
@@ -144,23 +153,54 @@ fn enrichment_five_node_fleet_state_full_lifecycle() {
     // All 5 send evidence for ext-alpha
     for i in 0..5 {
         let node = format!("fleet-{i}");
-        state.process_evidence(&evidence(&node, "ext-alpha", 2, 100_000)).unwrap();
+        state
+            .process_evidence(&evidence(&node, "ext-alpha", 2, 100_000))
+            .unwrap();
     }
     assert_eq!(state.evidence.posterior_delta("ext-alpha"), 500_000);
 
     // 3 nodes send intents for ext-alpha
-    state.process_intent(&intent("fleet-0", "ext-alpha", ContainmentAction::Sandbox, 3, 1)).unwrap();
-    state.process_intent(&intent("fleet-1", "ext-alpha", ContainmentAction::Terminate, 3, 1)).unwrap();
-    state.process_intent(&intent("fleet-2", "ext-alpha", ContainmentAction::Suspend, 3, 1)).unwrap();
+    state
+        .process_intent(&intent(
+            "fleet-0",
+            "ext-alpha",
+            ContainmentAction::Sandbox,
+            3,
+            1,
+        ))
+        .unwrap();
+    state
+        .process_intent(&intent(
+            "fleet-1",
+            "ext-alpha",
+            ContainmentAction::Terminate,
+            3,
+            1,
+        ))
+        .unwrap();
+    state
+        .process_intent(&intent(
+            "fleet-2",
+            "ext-alpha",
+            ContainmentAction::Suspend,
+            3,
+            1,
+        ))
+        .unwrap();
 
     let winner = state.resolve_intents("ext-alpha").unwrap();
     assert_eq!(winner.proposed_action, ContainmentAction::Terminate);
 
     // Build checkpoint with all nodes healthy
-    let checkpoint = state.build_checkpoint(now + 1_000_000_000, sig("coordinator")).unwrap();
+    let checkpoint = state
+        .build_checkpoint(now + 1_000_000_000, sig("coordinator"))
+        .unwrap();
     assert_eq!(checkpoint.participating_nodes.len(), 5);
     assert_eq!(checkpoint.containment_decisions.len(), 1);
-    assert_eq!(checkpoint.containment_decisions[0].resolved_action, ContainmentAction::Terminate);
+    assert_eq!(
+        checkpoint.containment_decisions[0].resolved_action,
+        ContainmentAction::Terminate
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -172,7 +212,11 @@ fn enrichment_evidence_accumulation_saturates_at_i64_max() {
     let mut acc = EvidenceAccumulator::new();
     acc.ingest(&evidence("n1", "ext", 1, i64::MAX)).unwrap();
     acc.ingest(&evidence("n2", "ext", 1, i64::MAX)).unwrap();
-    assert_eq!(acc.posterior_delta("ext"), i64::MAX, "should saturate, not overflow");
+    assert_eq!(
+        acc.posterior_delta("ext"),
+        i64::MAX,
+        "should saturate, not overflow"
+    );
 }
 
 #[test]
@@ -225,13 +269,20 @@ fn enrichment_heartbeat_update_heals_partition() {
     let timeout = 5_000_000_000;
 
     // At 8s, node-1 is partitioned
-    assert_eq!(tracker.suspected_partitioned(8_000_000_000, timeout).len(), 1);
+    assert_eq!(
+        tracker.suspected_partitioned(8_000_000_000, timeout).len(),
+        1
+    );
 
     // Node-1 sends new heartbeat at 7s
     tracker.record_heartbeat(&heartbeat("node-1", 2, 7_000_000_000));
 
     // At 8s, node-1 is no longer partitioned (1s since last heartbeat < 5s timeout)
-    assert!(tracker.suspected_partitioned(8_000_000_000, timeout).is_empty());
+    assert!(
+        tracker
+            .suspected_partitioned(8_000_000_000, timeout)
+            .is_empty()
+    );
 }
 
 #[test]
@@ -259,7 +310,9 @@ fn enrichment_checkpoint_with_100_percent_quorum_needs_all_nodes() {
 
     state.process_heartbeat(&heartbeat("n1", 1, now)).unwrap();
     state.process_heartbeat(&heartbeat("n2", 1, now)).unwrap();
-    state.process_heartbeat(&heartbeat("n3", 1, 1_000_000_000)).unwrap(); // old, will be partitioned
+    state
+        .process_heartbeat(&heartbeat("n3", 1, 1_000_000_000))
+        .unwrap(); // old, will be partitioned
 
     // At now+1s with 15s timeout, n3 is still healthy (9s old < 15s)
     let result = state.build_checkpoint(now + 1_000_000_000, sig("local"));
@@ -276,7 +329,13 @@ fn enrichment_checkpoint_with_zero_known_nodes_requires_one() {
     let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
     let result = state.build_checkpoint(10_000_000_000, sig("local"));
     // With 0 known nodes, required = 1, actual = 0
-    assert!(matches!(result, Err(ProtocolError::QuorumNotReached { required: 1, actual: 0 })));
+    assert!(matches!(
+        result,
+        Err(ProtocolError::QuorumNotReached {
+            required: 1,
+            actual: 0
+        })
+    ));
 }
 
 #[test]
@@ -286,15 +345,25 @@ fn enrichment_checkpoint_multiple_extensions_resolved() {
     state.process_heartbeat(&heartbeat("n1", 1, now)).unwrap();
 
     // Add intents for 3 different extensions
-    state.process_intent(&intent("n1", "ext-a", ContainmentAction::Sandbox, 2, 1)).unwrap();
-    state.process_intent(&intent("n1", "ext-b", ContainmentAction::Terminate, 3, 1)).unwrap();
-    state.process_intent(&intent("n1", "ext-c", ContainmentAction::Quarantine, 4, 1)).unwrap();
+    state
+        .process_intent(&intent("n1", "ext-a", ContainmentAction::Sandbox, 2, 1))
+        .unwrap();
+    state
+        .process_intent(&intent("n1", "ext-b", ContainmentAction::Terminate, 3, 1))
+        .unwrap();
+    state
+        .process_intent(&intent("n1", "ext-c", ContainmentAction::Quarantine, 4, 1))
+        .unwrap();
 
-    let checkpoint = state.build_checkpoint(now + 1_000_000_000, sig("local")).unwrap();
+    let checkpoint = state
+        .build_checkpoint(now + 1_000_000_000, sig("local"))
+        .unwrap();
     assert_eq!(checkpoint.containment_decisions.len(), 3);
 
     // Verify decisions are for distinct extensions
-    let ext_ids: BTreeSet<&str> = checkpoint.containment_decisions.iter()
+    let ext_ids: BTreeSet<&str> = checkpoint
+        .containment_decisions
+        .iter()
         .map(|d| d.extension_id.as_str())
         .collect();
     assert_eq!(ext_ids.len(), 3);
@@ -370,12 +439,32 @@ fn enrichment_intents_for_different_extensions_resolve_independently() {
     let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
 
     // ext-a: Sandbox from node-1, Terminate from node-2
-    state.process_intent(&intent("node-1", "ext-a", ContainmentAction::Sandbox, 1, 1)).unwrap();
-    state.process_intent(&intent("node-2", "ext-a", ContainmentAction::Terminate, 1, 1)).unwrap();
+    state
+        .process_intent(&intent("node-1", "ext-a", ContainmentAction::Sandbox, 1, 1))
+        .unwrap();
+    state
+        .process_intent(&intent(
+            "node-2",
+            "ext-a",
+            ContainmentAction::Terminate,
+            1,
+            1,
+        ))
+        .unwrap();
 
     // ext-b: Allow from node-3, Quarantine from node-4
-    state.process_intent(&intent("node-3", "ext-b", ContainmentAction::Allow, 1, 1)).unwrap();
-    state.process_intent(&intent("node-4", "ext-b", ContainmentAction::Quarantine, 1, 1)).unwrap();
+    state
+        .process_intent(&intent("node-3", "ext-b", ContainmentAction::Allow, 1, 1))
+        .unwrap();
+    state
+        .process_intent(&intent(
+            "node-4",
+            "ext-b",
+            ContainmentAction::Quarantine,
+            1,
+            1,
+        ))
+        .unwrap();
 
     let winner_a = state.resolve_intents("ext-a").unwrap();
     assert_eq!(winner_a.proposed_action, ContainmentAction::Terminate);
@@ -456,29 +545,48 @@ fn enrichment_full_lifecycle_evidence_intent_heartbeat_checkpoint() {
 
     // Step 1: Register nodes via heartbeats
     for i in 0..3 {
-        state.process_heartbeat(&heartbeat(&format!("peer-{i}"), 1, now)).unwrap();
+        state
+            .process_heartbeat(&heartbeat(&format!("peer-{i}"), 1, now))
+            .unwrap();
     }
     assert_eq!(state.health.known_node_count(), 3);
 
     // Step 2: Ingest evidence from peers
     for i in 0..3 {
-        state.process_evidence(&evidence(&format!("peer-{i}"), "ext-x", 2, 300_000)).unwrap();
+        state
+            .process_evidence(&evidence(&format!("peer-{i}"), "ext-x", 2, 300_000))
+            .unwrap();
     }
     assert_eq!(state.evidence.posterior_delta("ext-x"), 900_000);
 
     // Step 3: Receive containment intents
-    state.process_intent(&intent("peer-0", "ext-x", ContainmentAction::Suspend, 3, 1)).unwrap();
-    state.process_intent(&intent("peer-1", "ext-x", ContainmentAction::Terminate, 3, 1)).unwrap();
+    state
+        .process_intent(&intent("peer-0", "ext-x", ContainmentAction::Suspend, 3, 1))
+        .unwrap();
+    state
+        .process_intent(&intent(
+            "peer-1",
+            "ext-x",
+            ContainmentAction::Terminate,
+            3,
+            1,
+        ))
+        .unwrap();
 
     // Step 4: Resolve
     let winner = state.resolve_intents("ext-x").unwrap();
     assert_eq!(winner.proposed_action, ContainmentAction::Terminate);
 
     // Step 5: Build checkpoint
-    let cp = state.build_checkpoint(now + 1_000_000_000, sig("me")).unwrap();
+    let cp = state
+        .build_checkpoint(now + 1_000_000_000, sig("me"))
+        .unwrap();
     assert_eq!(cp.checkpoint_seq, 1);
     assert!(cp.participating_nodes.len() >= 3);
-    assert_eq!(cp.containment_decisions[0].resolved_action, ContainmentAction::Terminate);
+    assert_eq!(
+        cp.containment_decisions[0].resolved_action,
+        ContainmentAction::Terminate
+    );
 }
 
 #[test]
@@ -512,7 +620,11 @@ fn enrichment_sequence_tracker_rejects_same_sequence_twice() {
     tracker.accept(&node, 42).unwrap();
     let err = tracker.accept(&node, 42).unwrap_err();
     match err {
-        ProtocolError::ReplayDetected { received_seq, last_accepted_seq, .. } => {
+        ProtocolError::ReplayDetected {
+            received_seq,
+            last_accepted_seq,
+            ..
+        } => {
             assert_eq!(received_seq, 42);
             assert_eq!(last_accepted_seq, 42);
         }
@@ -619,12 +731,30 @@ fn enrichment_fleet_message_all_variants_serde_roundtrip() {
 #[test]
 fn enrichment_protocol_error_all_variants_serde_and_display() {
     let errors = vec![
-        ProtocolError::ReplayDetected { node_id: NodeId::new("n"), received_seq: 1, last_accepted_seq: 5 },
-        ProtocolError::DuplicateEvidence { trace_id: "t".into(), extension_id: "e".into() },
-        ProtocolError::IncompatibleVersion { local: ProtocolVersion::CURRENT, remote: ProtocolVersion { major: 2, minor: 0 } },
-        ProtocolError::InvalidSignature { node_id: NodeId::new("n"), message_type: "intent".into() },
-        ProtocolError::QuorumNotReached { required: 3, actual: 1 },
-        ProtocolError::PartitionedNode { node_id: NodeId::new("n") },
+        ProtocolError::ReplayDetected {
+            node_id: NodeId::new("n"),
+            received_seq: 1,
+            last_accepted_seq: 5,
+        },
+        ProtocolError::DuplicateEvidence {
+            trace_id: "t".into(),
+            extension_id: "e".into(),
+        },
+        ProtocolError::IncompatibleVersion {
+            local: ProtocolVersion::CURRENT,
+            remote: ProtocolVersion { major: 2, minor: 0 },
+        },
+        ProtocolError::InvalidSignature {
+            node_id: NodeId::new("n"),
+            message_type: "intent".into(),
+        },
+        ProtocolError::QuorumNotReached {
+            required: 3,
+            actual: 1,
+        },
+        ProtocolError::PartitionedNode {
+            node_id: NodeId::new("n"),
+        },
         ProtocolError::EmptyIntents,
     ];
 
@@ -638,7 +768,11 @@ fn enrichment_protocol_error_all_variants_serde_and_display() {
         assert!(!d.is_empty());
         displays.insert(d);
     }
-    assert_eq!(displays.len(), 7, "all 7 error variants have unique display strings");
+    assert_eq!(
+        displays.len(),
+        7,
+        "all 7 error variants have unique display strings"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -677,14 +811,12 @@ fn enrichment_checkpoint_with_many_nodes_deterministic_serde() {
         epoch: SecurityEpoch::from_raw(3),
         participating_nodes: nodes,
         evidence_summary_hash: ContentHash::compute(b"big-summary"),
-        containment_decisions: vec![
-            ResolvedContainmentDecision {
-                extension_id: "ext-a".into(),
-                resolved_action: ContainmentAction::Sandbox,
-                contributing_intent_ids: vec!["i1".into(), "i2".into()],
-                epoch: SecurityEpoch::from_raw(3),
-            },
-        ],
+        containment_decisions: vec![ResolvedContainmentDecision {
+            extension_id: "ext-a".into(),
+            resolved_action: ContainmentAction::Sandbox,
+            contributing_intent_ids: vec!["i1".into(), "i2".into()],
+            epoch: SecurityEpoch::from_raw(3),
+        }],
         quorum_signatures: sigs_map,
         timestamp_ns: 100_000_000_000,
         protocol_version: ProtocolVersion::CURRENT,
@@ -693,7 +825,10 @@ fn enrichment_checkpoint_with_many_nodes_deterministic_serde() {
 
     let json1 = serde_json::to_string(&checkpoint).unwrap();
     let json2 = serde_json::to_string(&checkpoint).unwrap();
-    assert_eq!(json1, json2, "BTreeMap/BTreeSet guarantee deterministic serialization");
+    assert_eq!(
+        json1, json2,
+        "BTreeMap/BTreeSet guarantee deterministic serialization"
+    );
 
     let back: QuorumCheckpoint = serde_json::from_str(&json1).unwrap();
     assert_eq!(checkpoint, back);

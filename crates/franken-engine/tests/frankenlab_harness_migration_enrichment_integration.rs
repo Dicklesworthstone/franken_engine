@@ -20,9 +20,9 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::frankenlab_harness_migration::{
-    ContainmentTestEntry, ContainmentTestKind, HarnessMigrationRegistry, LifecycleScenarioId,
-    MigrationStatus, ScenarioMigrationEntry, HARNESS_MIGRATION_BEAD_ID,
-    HARNESS_MIGRATION_SCHEMA_VERSION,
+    ContainmentTestEntry, ContainmentTestKind, HARNESS_MIGRATION_BEAD_ID,
+    HARNESS_MIGRATION_SCHEMA_VERSION, HarnessMigrationRegistry, LifecycleScenarioId,
+    MigrationStatus, ScenarioMigrationEntry,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -143,7 +143,10 @@ fn enrichment_migration_status_serde_tags_distinct() {
         MigrationStatus::Verified,
         MigrationStatus::Deferred,
     ];
-    let tags: BTreeSet<String> = all.iter().map(|s| serde_json::to_string(s).unwrap()).collect();
+    let tags: BTreeSet<String> = all
+        .iter()
+        .map(|s| serde_json::to_string(s).unwrap())
+        .collect();
     assert_eq!(tags.len(), 5);
 }
 
@@ -158,8 +161,7 @@ fn enrichment_lifecycle_scenario_id_all_has_10_entries() {
 
 #[test]
 fn enrichment_lifecycle_scenario_id_all_unique() {
-    let set: BTreeSet<LifecycleScenarioId> =
-        LifecycleScenarioId::ALL.iter().copied().collect();
+    let set: BTreeSet<LifecycleScenarioId> = LifecycleScenarioId::ALL.iter().copied().collect();
     assert_eq!(set.len(), 10);
 }
 
@@ -280,8 +282,7 @@ fn enrichment_scenario_migration_entry_mark_migrated() {
 
 #[test]
 fn enrichment_scenario_migration_entry_mark_verified() {
-    let mut entry =
-        ScenarioMigrationEntry::local_only(LifecycleScenarioId::Revocation, "local_h");
+    let mut entry = ScenarioMigrationEntry::local_only(LifecycleScenarioId::Revocation, "local_h");
     entry.mark_migrated("upstream_h");
     entry.mark_verified();
     assert_eq!(entry.status, MigrationStatus::Verified);

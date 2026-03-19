@@ -185,8 +185,16 @@ fn integ_derive_produces_correct_length() {
 
 #[test]
 fn integ_derive_is_deterministic() {
-    let k1 = derive_key(KeyDomain::Session, ep(5), &DerivationContext::with("ext", "x"));
-    let k2 = derive_key(KeyDomain::Session, ep(5), &DerivationContext::with("ext", "x"));
+    let k1 = derive_key(
+        KeyDomain::Session,
+        ep(5),
+        &DerivationContext::with("ext", "x"),
+    );
+    let k2 = derive_key(
+        KeyDomain::Session,
+        ep(5),
+        &DerivationContext::with("ext", "x"),
+    );
     assert_eq!(k1.key_bytes, k2.key_bytes);
     assert_eq!(k1.context_hash, k2.context_hash);
 }
@@ -214,8 +222,16 @@ fn integ_different_epochs_different_keys() {
 
 #[test]
 fn integ_different_contexts_different_keys() {
-    let k1 = derive_key(KeyDomain::Session, ep(1), &DerivationContext::with("ext", "alpha"));
-    let k2 = derive_key(KeyDomain::Session, ep(1), &DerivationContext::with("ext", "beta"));
+    let k1 = derive_key(
+        KeyDomain::Session,
+        ep(1),
+        &DerivationContext::with("ext", "alpha"),
+    );
+    let k2 = derive_key(
+        KeyDomain::Session,
+        ep(1),
+        &DerivationContext::with("ext", "beta"),
+    );
     assert_ne!(k1.key_bytes, k2.key_bytes);
     assert_ne!(k1.context_hash, k2.context_hash);
 }
@@ -359,14 +375,10 @@ fn integ_derived_key_json_fields() {
 fn integ_cache_derive_and_cache() {
     let mut cache = EpochKeyCache::new(DeterministicTestDeriver, mk(), ep(1), 32);
     let ctx = DerivationContext::with("ext", "test");
-    cache
-        .get_or_derive(KeyDomain::Session, &ctx, "t1")
-        .unwrap();
+    cache.get_or_derive(KeyDomain::Session, &ctx, "t1").unwrap();
     assert_eq!(cache.cached_count(), 1);
     // Second call is cache hit
-    cache
-        .get_or_derive(KeyDomain::Session, &ctx, "t2")
-        .unwrap();
+    cache.get_or_derive(KeyDomain::Session, &ctx, "t2").unwrap();
     assert_eq!(cache.cached_count(), 1);
     assert_eq!(cache.events().len(), 1); // only one derivation
 }
@@ -390,12 +402,8 @@ fn integ_cache_returns_same_key() {
 fn integ_cache_different_domains_independent() {
     let mut cache = EpochKeyCache::new(DeterministicTestDeriver, mk(), ep(1), 32);
     let ctx = DerivationContext::empty();
-    cache
-        .get_or_derive(KeyDomain::Symbol, &ctx, "t1")
-        .unwrap();
-    cache
-        .get_or_derive(KeyDomain::Session, &ctx, "t2")
-        .unwrap();
+    cache.get_or_derive(KeyDomain::Symbol, &ctx, "t1").unwrap();
+    cache.get_or_derive(KeyDomain::Session, &ctx, "t2").unwrap();
     cache
         .get_or_derive(KeyDomain::Authentication, &ctx, "t3")
         .unwrap();
@@ -644,8 +652,16 @@ fn integ_same_context_same_hash() {
 
 #[test]
 fn integ_different_context_different_hash() {
-    let k1 = derive_key(KeyDomain::Symbol, ep(1), &DerivationContext::with("ext", "a"));
-    let k2 = derive_key(KeyDomain::Symbol, ep(1), &DerivationContext::with("ext", "b"));
+    let k1 = derive_key(
+        KeyDomain::Symbol,
+        ep(1),
+        &DerivationContext::with("ext", "a"),
+    );
+    let k2 = derive_key(
+        KeyDomain::Symbol,
+        ep(1),
+        &DerivationContext::with("ext", "b"),
+    );
     assert_ne!(k1.context_hash, k2.context_hash);
 }
 

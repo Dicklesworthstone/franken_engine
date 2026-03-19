@@ -105,9 +105,15 @@ fn enrich_read_source_copy_semantics() {
 #[test]
 fn enrich_fallback_reason_serde_all() {
     let variants = [
-        (FastPathFallbackReason::RetryBudgetExceeded, "\"retry_budget_exceeded\""),
+        (
+            FastPathFallbackReason::RetryBudgetExceeded,
+            "\"retry_budget_exceeded\"",
+        ),
         (FastPathFallbackReason::Uninitialized, "\"uninitialized\""),
-        (FastPathFallbackReason::WriterPressure, "\"writer_pressure\""),
+        (
+            FastPathFallbackReason::WriterPressure,
+            "\"writer_pressure\"",
+        ),
     ];
     for (reason, expected_json) in &variants {
         let json = serde_json::to_string(reason).unwrap();
@@ -311,7 +317,10 @@ fn enrich_fp_uninit_fallback() {
     let r = fp.read_clone_or_else(|| 999);
     assert_eq!(r.value, 999);
     assert_eq!(r.source, FastPathReadSource::Fallback);
-    assert_eq!(r.fallback_reason, Some(FastPathFallbackReason::Uninitialized));
+    assert_eq!(
+        r.fallback_reason,
+        Some(FastPathFallbackReason::Uninitialized)
+    );
 }
 
 #[test]

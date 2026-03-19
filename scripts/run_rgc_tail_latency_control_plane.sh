@@ -229,6 +229,13 @@ if [[ "${profile}" == "synthetic-contention" ]] && [[ -f "${report_path}" ]] && 
   validation_errors+=("synthetic-contention profile did not engage fallback guardrails")
 fi
 
+if [[ "${profile}" == "balanced" ]] && [[ -f "${report_path}" ]] && ! jq -e '
+    .guardrails.fallback_activated == false
+    and .guardrails.state == "nominal"
+  ' "${report_path}" >/dev/null; then
+  validation_errors+=("balanced profile did not remain in nominal guardrail mode")
+fi
+
 if [[ "${#validation_errors[@]}" -gt 0 ]]; then
   printf '%s\n' "${validation_errors[@]}" >&2
   exit 1

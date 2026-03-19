@@ -1373,7 +1373,8 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
     {
         let config = BatchTransportConfig::default();
         let mut ts = BatchTransportState::new("s5".into(), config, epoch);
-        let mut protocol = SessionProtocolState::new("s5".into(), "ext".into(), "host".into(), 64, 50); // Uninit phase
+        let mut protocol =
+            SessionProtocolState::new("s5".into(), "ext".into(), "host".into(), 64, 50); // Uninit phase
         let entries = vec![make_entry(1, b"data")];
         let batch = ts.build_batch(entries, &session_key, epoch, 100).unwrap();
         let result = ts.submit_batch(batch, &mut protocol, &[0; 32], 100);
@@ -1509,7 +1510,8 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
         let mut protocol = make_established_protocol_state();
         let entries = vec![make_entry(1, b"a"), make_entry(2, b"b")];
         let batch = ts.build_batch(entries, &session_key, epoch, 100).unwrap();
-        ts.submit_batch(batch, &mut protocol, &session_key, 100).unwrap();
+        ts.submit_batch(batch, &mut protocol, &session_key, 100)
+            .unwrap();
         let before = ts.credit_pool.available();
         ts.grant_credits(5);
         let after = ts.credit_pool.available();
@@ -1904,7 +1906,9 @@ mod tests {
         let batch = ts
             .build_batch(entries, &session_key(), test_epoch(), 100)
             .unwrap();
-        let receipt = ts.submit_batch(batch, &mut protocol, &session_key(), 100).unwrap();
+        let receipt = ts
+            .submit_batch(batch, &mut protocol, &session_key(), 100)
+            .unwrap();
         assert_eq!(receipt.envelope_count, 1);
         assert_eq!(ts.accepted_batches.len(), 1);
     }
@@ -1918,15 +1922,15 @@ mod tests {
         let batch = ts
             .build_batch(entries, &session_key(), test_epoch(), 100)
             .unwrap();
-        ts.submit_batch(batch, &mut protocol, &session_key(), 100).unwrap();
+        ts.submit_batch(batch, &mut protocol, &session_key(), 100)
+            .unwrap();
         assert_eq!(ts.credit_pool.available(), before - 2);
     }
 
     #[test]
     fn submit_batch_uninit_rejected() {
         let mut ts = default_state();
-        let mut protocol =
-            SessionProtocolState::new("s".into(), "e".into(), "h".into(), 64, 50);
+        let mut protocol = SessionProtocolState::new("s".into(), "e".into(), "h".into(), 64, 50);
         let entries = vec![make_entry(1, b"data")];
         let batch = ts
             .build_batch(entries, &session_key(), test_epoch(), 100)
@@ -2061,7 +2065,8 @@ mod tests {
         let batch = ts
             .build_batch(entries, &session_key(), test_epoch(), 100)
             .unwrap();
-        ts.submit_batch(batch, &mut protocol, &session_key(), 100).unwrap();
+        ts.submit_batch(batch, &mut protocol, &session_key(), 100)
+            .unwrap();
         let before = ts.credit_pool.available();
         ts.grant_credits(10);
         assert_eq!(ts.credit_pool.available(), before + 10);
@@ -2549,7 +2554,15 @@ mod tests {
                 sealed_at_tick: 100 + i,
                 epoch,
             };
-            membrane.validate_batch(&batch, &mut protocol, &session_key(), &credit_pool, &regions, &config, 100 + i);
+            membrane.validate_batch(
+                &batch,
+                &mut protocol,
+                &session_key(),
+                &credit_pool,
+                &regions,
+                &config,
+                100 + i,
+            );
         }
         assert_eq!(membrane.audit_trail().len(), 3);
         // Oldest entries were removed; latest batch_ids remain
@@ -2584,8 +2597,15 @@ mod tests {
             sealed_at_tick: 100,
             epoch: epoch42,
         };
-        let verdict =
-            membrane.validate_batch(&batch, &mut protocol, &session_key(), &credit_pool, &regions, &config, 100);
+        let verdict = membrane.validate_batch(
+            &batch,
+            &mut protocol,
+            &session_key(),
+            &credit_pool,
+            &regions,
+            &config,
+            100,
+        );
         assert!(verdict.is_accept());
     }
 
@@ -2616,8 +2636,15 @@ mod tests {
             sealed_at_tick: 100,
             epoch,
         };
-        let verdict =
-            membrane.validate_batch(&batch, &mut protocol, &session_key(), &credit_pool, &regions, &config, 100);
+        let verdict = membrane.validate_batch(
+            &batch,
+            &mut protocol,
+            &session_key(),
+            &credit_pool,
+            &regions,
+            &config,
+            100,
+        );
         assert!(!verdict.is_accept());
         assert_eq!(
             membrane.rejection_count(MembraneRejectionReason::BatchSizeExceeded),
@@ -2730,7 +2757,8 @@ mod tests {
         let batch = ts
             .build_batch(entries, &session_key(), test_epoch(), 100)
             .unwrap();
-        ts.submit_batch(batch, &mut protocol, &session_key(), 100).unwrap();
+        ts.submit_batch(batch, &mut protocol, &session_key(), 100)
+            .unwrap();
         let hash_after = ts.state_hash();
         assert_ne!(hash_before, hash_after);
     }

@@ -16,7 +16,11 @@ use frankenengine_engine::version_matrix_lane::*;
 
 fn make_version_source() -> VersionSource {
     VersionSource {
-        tags: vec!["v1.0.0".to_string(), "v1.1.0".to_string(), "v2.0.0".to_string()],
+        tags: vec![
+            "v1.0.0".to_string(),
+            "v1.1.0".to_string(),
+            "v2.0.0".to_string(),
+        ],
         branch_names: vec!["main".to_string()],
         current_override: None,
         previous_override: None,
@@ -69,7 +73,11 @@ fn enrichment_matrix_lane_kind_as_str_next() {
 #[test]
 fn enrichment_matrix_lane_kind_as_str_unique() {
     let mut strs = std::collections::BTreeSet::new();
-    for kind in [MatrixLaneKind::Current, MatrixLaneKind::Previous, MatrixLaneKind::Next] {
+    for kind in [
+        MatrixLaneKind::Current,
+        MatrixLaneKind::Previous,
+        MatrixLaneKind::Next,
+    ] {
         assert!(strs.insert(kind.as_str()));
     }
 }
@@ -222,18 +230,22 @@ fn enrichment_matrix_cell_result_serde_roundtrip() {
 fn enrichment_classify_failure_scopes_no_failures() {
     let spec = make_spec();
     let plan = derive_version_matrix(&[spec.clone()]).unwrap();
-    let results: Vec<MatrixCellResult> = plan.cells.iter().map(|c| MatrixCellResult {
-        trace_id: "t".to_string(),
-        decision_id: "d".to_string(),
-        policy_id: "p".to_string(),
-        cell_id: c.cell_id.clone(),
-        boundary_surface: c.boundary_surface.clone(),
-        lane_kind: c.lane_kind,
-        outcome: MatrixOutcome::Pass,
-        error_code: None,
-        failure_fingerprint: None,
-        failure_class: None,
-    }).collect();
+    let results: Vec<MatrixCellResult> = plan
+        .cells
+        .iter()
+        .map(|c| MatrixCellResult {
+            trace_id: "t".to_string(),
+            decision_id: "d".to_string(),
+            policy_id: "p".to_string(),
+            cell_id: c.cell_id.clone(),
+            boundary_surface: c.boundary_surface.clone(),
+            lane_kind: c.lane_kind,
+            outcome: MatrixOutcome::Pass,
+            error_code: None,
+            failure_fingerprint: None,
+            failure_class: None,
+        })
+        .collect();
     let scopes = classify_failure_scopes(&plan, &results);
     assert!(scopes.is_empty());
 }
@@ -242,18 +254,22 @@ fn enrichment_classify_failure_scopes_no_failures() {
 fn enrichment_classify_failure_scopes_with_failure() {
     let spec = make_spec();
     let plan = derive_version_matrix(&[spec.clone()]).unwrap();
-    let results: Vec<MatrixCellResult> = plan.cells.iter().map(|c| MatrixCellResult {
-        trace_id: "t".to_string(),
-        decision_id: "d".to_string(),
-        policy_id: "p".to_string(),
-        cell_id: c.cell_id.clone(),
-        boundary_surface: c.boundary_surface.clone(),
-        lane_kind: c.lane_kind,
-        outcome: MatrixOutcome::Fail,
-        error_code: Some("E001".to_string()),
-        failure_fingerprint: Some("fp1".to_string()),
-        failure_class: Some("timeout".to_string()),
-    }).collect();
+    let results: Vec<MatrixCellResult> = plan
+        .cells
+        .iter()
+        .map(|c| MatrixCellResult {
+            trace_id: "t".to_string(),
+            decision_id: "d".to_string(),
+            policy_id: "p".to_string(),
+            cell_id: c.cell_id.clone(),
+            boundary_surface: c.boundary_surface.clone(),
+            lane_kind: c.lane_kind,
+            outcome: MatrixOutcome::Fail,
+            error_code: Some("E001".to_string()),
+            failure_fingerprint: Some("fp1".to_string()),
+            failure_class: Some("timeout".to_string()),
+        })
+        .collect();
     let scopes = classify_failure_scopes(&plan, &results);
     assert!(!scopes.is_empty());
 }
@@ -266,18 +282,22 @@ fn enrichment_classify_failure_scopes_with_failure() {
 fn enrichment_summarize_health_all_pass() {
     let spec = make_spec();
     let plan = derive_version_matrix(&[spec.clone()]).unwrap();
-    let results: Vec<MatrixCellResult> = plan.cells.iter().map(|c| MatrixCellResult {
-        trace_id: "t".to_string(),
-        decision_id: "d".to_string(),
-        policy_id: "p".to_string(),
-        cell_id: c.cell_id.clone(),
-        boundary_surface: c.boundary_surface.clone(),
-        lane_kind: c.lane_kind,
-        outcome: MatrixOutcome::Pass,
-        error_code: None,
-        failure_fingerprint: None,
-        failure_class: None,
-    }).collect();
+    let results: Vec<MatrixCellResult> = plan
+        .cells
+        .iter()
+        .map(|c| MatrixCellResult {
+            trace_id: "t".to_string(),
+            decision_id: "d".to_string(),
+            policy_id: "p".to_string(),
+            cell_id: c.cell_id.clone(),
+            boundary_surface: c.boundary_surface.clone(),
+            lane_kind: c.lane_kind,
+            outcome: MatrixOutcome::Pass,
+            error_code: None,
+            failure_fingerprint: None,
+            failure_class: None,
+        })
+        .collect();
     let summary = summarize_matrix_health(&plan, &results);
     assert_eq!(summary.total_cells, plan.cells.len());
     assert_eq!(summary.passed_cells, plan.cells.len());
@@ -301,7 +321,10 @@ fn enrichment_summarize_health_empty_plan() {
 
 #[test]
 fn enrichment_failure_scope_kind_serde() {
-    for k in [FailureScopeKind::Universal, FailureScopeKind::VersionSpecific] {
+    for k in [
+        FailureScopeKind::Universal,
+        FailureScopeKind::VersionSpecific,
+    ] {
         let json = serde_json::to_string(&k).unwrap();
         let back: FailureScopeKind = serde_json::from_str(&json).unwrap();
         assert_eq!(k, back);

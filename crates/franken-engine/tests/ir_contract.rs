@@ -1320,7 +1320,10 @@ fn enrichment_ir1_all_ops_serde_roundtrip() {
             name: "f".to_string(),
             binding_id: 10,
         },
-        Ir1Op::BeginTry { catch_label: 100 },
+        Ir1Op::BeginTry {
+            catch_label: 100,
+            finally_label: None,
+        },
         Ir1Op::EndTry,
         Ir1Op::Pop,
         Ir1Op::ForInInit,

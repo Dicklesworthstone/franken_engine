@@ -130,8 +130,14 @@ fn enrichment_manifold_schema_axes_for_dimension() {
         make_axis("h1", ManifoldDimension::Hardware, 0, 1_000_000),
     ];
     let schema = ManifoldSchema::new("test", axes, epoch());
-    assert_eq!(schema.axes_for_dimension(ManifoldDimension::Workload).len(), 2);
-    assert_eq!(schema.axes_for_dimension(ManifoldDimension::Hardware).len(), 1);
+    assert_eq!(
+        schema.axes_for_dimension(ManifoldDimension::Workload).len(),
+        2
+    );
+    assert_eq!(
+        schema.axes_for_dimension(ManifoldDimension::Hardware).len(),
+        1
+    );
 }
 
 #[test]

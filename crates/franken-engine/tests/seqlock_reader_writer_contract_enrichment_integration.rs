@@ -487,7 +487,10 @@ fn enrich_manifest_ref_ne_different_path() {
 fn enrich_artifact_context_construction() {
     let ctx = ArtifactContext::new("/tmp/enrich-test");
     assert_eq!(ctx.artifact_dir.to_str().unwrap(), "/tmp/enrich-test");
-    assert!(ctx.run_id.starts_with("run-seqlock_reader_writer_contract-"));
+    assert!(
+        ctx.run_id
+            .starts_with("run-seqlock_reader_writer_contract-")
+    );
     assert!(ctx.trace_id.starts_with("trace."));
     assert!(ctx.decision_id.starts_with("decision."));
     assert!(ctx.policy_id.starts_with("policy."));

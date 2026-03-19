@@ -23,10 +23,11 @@ use std::collections::BTreeSet;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::shipped_path_matrix::{
-    build_cell, classify_mismatch, compare_artifacts, compute_cell_verdict, evaluate_matrix,
-    ArtifactKind, CapturedArtifact, CellVerdict, ClassifiedMismatch, DecisionReceipt,
-    MatrixCell, MatrixConfig, MatrixError, MatrixReport, MismatchClass, MismatchSeverity, Surface,
-    WorkloadClass, BEAD_ID, COMPONENT, DEFAULT_MAX_SIZE_DIVERGENCE, POLICY_ID, SCHEMA_VERSION,
+    ArtifactKind, BEAD_ID, COMPONENT, CapturedArtifact, CellVerdict, ClassifiedMismatch,
+    DEFAULT_MAX_SIZE_DIVERGENCE, DecisionReceipt, MatrixCell, MatrixConfig, MatrixError,
+    MatrixReport, MismatchClass, MismatchSeverity, POLICY_ID, SCHEMA_VERSION, Surface,
+    WorkloadClass, build_cell, classify_mismatch, compare_artifacts, compute_cell_verdict,
+    evaluate_matrix,
 };
 
 fn epoch() -> SecurityEpoch {
@@ -156,8 +157,7 @@ fn enrichment_artifact_kind_display_matches_as_str() {
 fn enrichment_artifact_kind_semantic_weight_compiled_highest() {
     assert_eq!(ArtifactKind::CompiledOutput.semantic_weight(), 10);
     assert!(
-        ArtifactKind::CompiledOutput.semantic_weight()
-            > ArtifactKind::Diagnostic.semantic_weight()
+        ArtifactKind::CompiledOutput.semantic_weight() > ArtifactKind::Diagnostic.semantic_weight()
     );
 }
 
@@ -255,15 +255,35 @@ fn enrichment_captured_artifact_new_fields() {
 
 #[test]
 fn enrichment_captured_artifact_hash_deterministic() {
-    let a = CapturedArtifact::new(ArtifactKind::SourceMap, Surface::Cli, b"data", WorkloadClass::Esm);
-    let b = CapturedArtifact::new(ArtifactKind::SourceMap, Surface::Cli, b"data", WorkloadClass::Esm);
+    let a = CapturedArtifact::new(
+        ArtifactKind::SourceMap,
+        Surface::Cli,
+        b"data",
+        WorkloadClass::Esm,
+    );
+    let b = CapturedArtifact::new(
+        ArtifactKind::SourceMap,
+        Surface::Cli,
+        b"data",
+        WorkloadClass::Esm,
+    );
     assert_eq!(a.content_hash, b.content_hash);
 }
 
 #[test]
 fn enrichment_captured_artifact_different_payload_different_hash() {
-    let a = CapturedArtifact::new(ArtifactKind::SourceMap, Surface::Cli, b"alpha", WorkloadClass::Esm);
-    let b = CapturedArtifact::new(ArtifactKind::SourceMap, Surface::Cli, b"beta", WorkloadClass::Esm);
+    let a = CapturedArtifact::new(
+        ArtifactKind::SourceMap,
+        Surface::Cli,
+        b"alpha",
+        WorkloadClass::Esm,
+    );
+    let b = CapturedArtifact::new(
+        ArtifactKind::SourceMap,
+        Surface::Cli,
+        b"beta",
+        WorkloadClass::Esm,
+    );
     assert_ne!(a.content_hash, b.content_hash);
 }
 
@@ -286,7 +306,11 @@ fn enrichment_captured_artifact_serde_roundtrip() {
 
 #[test]
 fn enrichment_classify_compiled_output_critical() {
-    let sev = classify_mismatch(&ArtifactKind::CompiledOutput, Surface::Library, "divergence");
+    let sev = classify_mismatch(
+        &ArtifactKind::CompiledOutput,
+        Surface::Library,
+        "divergence",
+    );
     assert_eq!(sev, MismatchSeverity::Critical);
 }
 
@@ -310,7 +334,11 @@ fn enrichment_classify_diagnostic_informational() {
 
 #[test]
 fn enrichment_classify_missing_high_weight_critical() {
-    let sev = classify_mismatch(&ArtifactKind::CompiledOutput, Surface::Cli, "missing from CLI");
+    let sev = classify_mismatch(
+        &ArtifactKind::CompiledOutput,
+        Surface::Cli,
+        "missing from CLI",
+    );
     assert_eq!(sev, MismatchSeverity::Critical);
 }
 
@@ -328,10 +356,16 @@ fn enrichment_classify_missing_low_weight_major() {
 fn enrichment_compare_identical_no_mismatches() {
     let cfg = relaxed_config();
     let a = vec![CapturedArtifact::new(
-        ArtifactKind::CompiledOutput, Surface::Library, b"code", WorkloadClass::PureJs,
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        b"code",
+        WorkloadClass::PureJs,
     )];
     let b = vec![CapturedArtifact::new(
-        ArtifactKind::CompiledOutput, Surface::Cli, b"code", WorkloadClass::PureJs,
+        ArtifactKind::CompiledOutput,
+        Surface::Cli,
+        b"code",
+        WorkloadClass::PureJs,
     )];
     let mm = compare_artifacts(&a, &b, &cfg);
     assert!(mm.is_empty());
@@ -341,20 +375,32 @@ fn enrichment_compare_identical_no_mismatches() {
 fn enrichment_compare_content_divergence() {
     let cfg = relaxed_config();
     let a = vec![CapturedArtifact::new(
-        ArtifactKind::CompiledOutput, Surface::Library, b"alpha", WorkloadClass::PureJs,
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        b"alpha",
+        WorkloadClass::PureJs,
     )];
     let b = vec![CapturedArtifact::new(
-        ArtifactKind::CompiledOutput, Surface::Cli, b"beta", WorkloadClass::PureJs,
+        ArtifactKind::CompiledOutput,
+        Surface::Cli,
+        b"beta",
+        WorkloadClass::PureJs,
     )];
     let mm = compare_artifacts(&a, &b, &cfg);
-    assert!(mm.iter().any(|m| m.class == MismatchClass::ContentDivergence));
+    assert!(
+        mm.iter()
+            .any(|m| m.class == MismatchClass::ContentDivergence)
+    );
 }
 
 #[test]
 fn enrichment_compare_missing_artifact() {
     let cfg = relaxed_config();
     let a = vec![CapturedArtifact::new(
-        ArtifactKind::ModuleGraph, Surface::Library, b"graph", WorkloadClass::Esm,
+        ArtifactKind::ModuleGraph,
+        Surface::Library,
+        b"graph",
+        WorkloadClass::Esm,
     )];
     let mm = compare_artifacts(&a, &[], &cfg);
     assert!(mm.iter().any(|m| m.class == MismatchClass::Missing));
@@ -364,7 +410,10 @@ fn enrichment_compare_missing_artifact() {
 fn enrichment_compare_extra_artifact() {
     let cfg = relaxed_config();
     let b = vec![CapturedArtifact::new(
-        ArtifactKind::Diagnostic, Surface::Cli, b"diag", WorkloadClass::Cjs,
+        ArtifactKind::Diagnostic,
+        Surface::Cli,
+        b"diag",
+        WorkloadClass::Cjs,
     )];
     let mm = compare_artifacts(&[], &b, &cfg);
     assert!(mm.iter().any(|m| m.class == MismatchClass::Extra));
@@ -433,10 +482,16 @@ fn enrichment_verdict_pass_below_threshold() {
 fn enrichment_build_cell_pass_identical() {
     let cfg = relaxed_config();
     let a = vec![CapturedArtifact::new(
-        ArtifactKind::CompiledOutput, Surface::Library, b"x", WorkloadClass::PureJs,
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        b"x",
+        WorkloadClass::PureJs,
     )];
     let b = vec![CapturedArtifact::new(
-        ArtifactKind::CompiledOutput, Surface::Cli, b"x", WorkloadClass::PureJs,
+        ArtifactKind::CompiledOutput,
+        Surface::Cli,
+        b"x",
+        WorkloadClass::PureJs,
     )];
     let cell = build_cell(WorkloadClass::PureJs, a, b, &cfg);
     assert_eq!(cell.verdict, CellVerdict::Pass);
@@ -447,10 +502,16 @@ fn enrichment_build_cell_pass_identical() {
 fn enrichment_build_cell_divergence_detected() {
     let cfg = relaxed_config();
     let a = vec![CapturedArtifact::new(
-        ArtifactKind::CompiledOutput, Surface::Library, b"alpha", WorkloadClass::PureTs,
+        ArtifactKind::CompiledOutput,
+        Surface::Library,
+        b"alpha",
+        WorkloadClass::PureTs,
     )];
     let b = vec![CapturedArtifact::new(
-        ArtifactKind::CompiledOutput, Surface::Cli, b"beta", WorkloadClass::PureTs,
+        ArtifactKind::CompiledOutput,
+        Surface::Cli,
+        b"beta",
+        WorkloadClass::PureTs,
     )];
     let cell = build_cell(WorkloadClass::PureTs, a, b, &cfg);
     assert!(!cell.mismatches.is_empty());
@@ -481,7 +542,10 @@ fn enrichment_evaluate_duplicate_class_error() {
 #[test]
 fn enrichment_evaluate_all_pass() {
     let cfg = relaxed_config();
-    let cells: Vec<MatrixCell> = WorkloadClass::ALL.iter().map(|wc| passing_cell(*wc)).collect();
+    let cells: Vec<MatrixCell> = WorkloadClass::ALL
+        .iter()
+        .map(|wc| passing_cell(*wc))
+        .collect();
     let report = evaluate_matrix(&cells, &cfg, &epoch(), 1000).unwrap();
     assert_eq!(report.overall_verdict, CellVerdict::Pass);
     assert_eq!(report.total_mismatches, 0);
@@ -504,7 +568,13 @@ fn enrichment_evaluate_inconclusive_propagates() {
     let cfg = relaxed_config();
     let cells = vec![
         passing_cell(WorkloadClass::PureJs),
-        MatrixCell::new(WorkloadClass::Esm, vec![], vec![], vec![], CellVerdict::Inconclusive),
+        MatrixCell::new(
+            WorkloadClass::Esm,
+            vec![],
+            vec![],
+            vec![],
+            CellVerdict::Inconclusive,
+        ),
     ];
     let report = evaluate_matrix(&cells, &cfg, &epoch(), 0).unwrap();
     assert_eq!(report.overall_verdict, CellVerdict::Inconclusive);
@@ -515,7 +585,13 @@ fn enrichment_evaluate_fail_beats_inconclusive() {
     let cfg = relaxed_config();
     let cells = vec![
         failing_cell(WorkloadClass::PureJs),
-        MatrixCell::new(WorkloadClass::Esm, vec![], vec![], vec![], CellVerdict::Inconclusive),
+        MatrixCell::new(
+            WorkloadClass::Esm,
+            vec![],
+            vec![],
+            vec![],
+            CellVerdict::Inconclusive,
+        ),
     ];
     let report = evaluate_matrix(&cells, &cfg, &epoch(), 0).unwrap();
     assert_eq!(report.overall_verdict, CellVerdict::Fail);

@@ -320,7 +320,10 @@ fn clearance_class_serde_roundtrip() {
 
 #[test]
 fn clearance_class_display_distinct() {
-    let labels: BTreeSet<String> = ClearanceClass::all().iter().map(|c| c.to_string()).collect();
+    let labels: BTreeSet<String> = ClearanceClass::all()
+        .iter()
+        .map(|c| c.to_string())
+        .collect();
     assert_eq!(labels.len(), 5);
 }
 
@@ -365,7 +368,7 @@ fn obligation_is_expired() {
         expiry_epoch: Some(100),
     };
     assert!(!ob.is_expired(100)); // not past
-    assert!(ob.is_expired(101));  // past
+    assert!(ob.is_expired(101)); // past
 
     let ob2 = DeclassificationObligation {
         expiry_epoch: None,
@@ -381,13 +384,22 @@ fn obligation_is_expired() {
 #[test]
 fn ir2_label_source_assign_label() {
     assert_eq!(Ir2LabelSource::Literal.assign_label(), Label::Public);
-    assert_eq!(Ir2LabelSource::EnvironmentVariable.assign_label(), Label::Secret);
     assert_eq!(
-        Ir2LabelSource::CredentialPath { is_key_material: true }.assign_label(),
+        Ir2LabelSource::EnvironmentVariable.assign_label(),
+        Label::Secret
+    );
+    assert_eq!(
+        Ir2LabelSource::CredentialPath {
+            is_key_material: true
+        }
+        .assign_label(),
         Label::TopSecret
     );
     assert_eq!(
-        Ir2LabelSource::CredentialPath { is_key_material: false }.assign_label(),
+        Ir2LabelSource::CredentialPath {
+            is_key_material: false
+        }
+        .assign_label(),
         Label::Secret
     );
     assert_eq!(
@@ -560,7 +572,10 @@ fn flow_proof_sign_verify() {
 
 #[test]
 fn declassification_decision_serde_roundtrip() {
-    for d in [DeclassificationDecision::Allow, DeclassificationDecision::Deny] {
+    for d in [
+        DeclassificationDecision::Allow,
+        DeclassificationDecision::Deny,
+    ] {
         let json = serde_json::to_string(&d).unwrap();
         let back: DeclassificationDecision = serde_json::from_str(&json).unwrap();
         assert_eq!(back, d);
@@ -646,7 +661,10 @@ fn claim_strength_serde_roundtrip() {
 
 #[test]
 fn claim_strength_display_distinct() {
-    assert_ne!(ClaimStrength::Full.to_string(), ClaimStrength::Partial.to_string());
+    assert_ne!(
+        ClaimStrength::Full.to_string(),
+        ClaimStrength::Partial.to_string()
+    );
 }
 
 // ===========================================================================

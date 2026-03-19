@@ -355,14 +355,20 @@ fn enrich_tracker_at_u64_max_cannot_advance() {
 #[test]
 fn enrich_tracker_verify_persisted_accept_higher() {
     let mut tracker = EpochTracker::from_persisted(SecurityEpoch::from_raw(10));
-    assert!(tracker.verify_persisted(SecurityEpoch::from_raw(20)).is_ok());
+    assert!(
+        tracker
+            .verify_persisted(SecurityEpoch::from_raw(20))
+            .is_ok()
+    );
     assert_eq!(tracker.current().as_u64(), 20);
 }
 
 #[test]
 fn enrich_tracker_verify_persisted_reject_lower() {
     let mut tracker = EpochTracker::from_persisted(SecurityEpoch::from_raw(20));
-    let err = tracker.verify_persisted(SecurityEpoch::from_raw(10)).unwrap_err();
+    let err = tracker
+        .verify_persisted(SecurityEpoch::from_raw(10))
+        .unwrap_err();
     assert_eq!(err.current.as_u64(), 20);
     assert_eq!(tracker.current().as_u64(), 20); // unchanged
 }
@@ -384,7 +390,9 @@ fn enrich_validate_open_ended_stays_valid_after_many_advances() {
     let mut tracker = EpochTracker::new();
     let meta = tracker.stamp_open_ended();
     for _ in 0..50 {
-        tracker.advance(TransitionReason::PolicyKeyRotation, "t").unwrap();
+        tracker
+            .advance(TransitionReason::PolicyKeyRotation, "t")
+            .unwrap();
     }
     assert!(tracker.validate_artifact(&meta).is_ok());
 }
@@ -409,7 +417,11 @@ fn enrich_validate_just_past_expiry() {
         SecurityEpoch::from_raw(10),
     );
     let errors = tracker.validate_artifact(&meta).unwrap_err();
-    assert!(errors.iter().any(|e| matches!(e, EpochValidationError::Expired { .. })));
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, EpochValidationError::Expired { .. }))
+    );
 }
 
 #[test]
@@ -431,7 +443,9 @@ fn enrich_validate_multi_error_collection() {
 #[test]
 fn enrich_stamp_open_ended_matches_current() {
     let mut tracker = EpochTracker::new();
-    tracker.advance(TransitionReason::PolicyKeyRotation, "t").unwrap();
+    tracker
+        .advance(TransitionReason::PolicyKeyRotation, "t")
+        .unwrap();
     let meta = tracker.stamp_open_ended();
     assert_eq!(meta.epoch_id, tracker.current());
     assert_eq!(meta.valid_from_epoch, tracker.current());
@@ -454,9 +468,15 @@ fn enrich_stamp_windowed_with_custom_range() {
 #[test]
 fn enrich_tracker_serde_with_transitions() {
     let mut tracker = EpochTracker::new();
-    tracker.advance(TransitionReason::PolicyKeyRotation, "t1").unwrap();
-    tracker.advance(TransitionReason::GuardrailConfigChange, "t2").unwrap();
-    tracker.advance(TransitionReason::LossMatrixUpdate, "t3").unwrap();
+    tracker
+        .advance(TransitionReason::PolicyKeyRotation, "t1")
+        .unwrap();
+    tracker
+        .advance(TransitionReason::GuardrailConfigChange, "t2")
+        .unwrap();
+    tracker
+        .advance(TransitionReason::LossMatrixUpdate, "t3")
+        .unwrap();
     let json = serde_json::to_string(&tracker).unwrap();
     let restored: EpochTracker = serde_json::from_str(&json).unwrap();
     assert_eq!(restored.current().as_u64(), 3);
@@ -471,8 +491,12 @@ fn enrich_tracker_serde_with_transitions() {
 #[test]
 fn enrich_scenario_persisted_advance_validate() {
     let mut tracker = EpochTracker::from_persisted(SecurityEpoch::from_raw(5));
-    tracker.verify_persisted(SecurityEpoch::from_raw(10)).unwrap();
-    tracker.advance(TransitionReason::PolicyKeyRotation, "t").unwrap();
+    tracker
+        .verify_persisted(SecurityEpoch::from_raw(10))
+        .unwrap();
+    tracker
+        .advance(TransitionReason::PolicyKeyRotation, "t")
+        .unwrap();
     assert_eq!(tracker.current().as_u64(), 11);
     let meta = tracker.stamp_open_ended();
     assert!(tracker.validate_artifact(&meta).is_ok());
@@ -481,9 +505,11 @@ fn enrich_scenario_persisted_advance_validate() {
 #[test]
 fn enrich_deterministic_serialization() {
     let mut t1 = EpochTracker::new();
-    t1.advance(TransitionReason::PolicyKeyRotation, "a").unwrap();
+    t1.advance(TransitionReason::PolicyKeyRotation, "a")
+        .unwrap();
     let mut t2 = EpochTracker::new();
-    t2.advance(TransitionReason::PolicyKeyRotation, "a").unwrap();
+    t2.advance(TransitionReason::PolicyKeyRotation, "a")
+        .unwrap();
     assert_eq!(
         serde_json::to_string(&t1).unwrap(),
         serde_json::to_string(&t2).unwrap()

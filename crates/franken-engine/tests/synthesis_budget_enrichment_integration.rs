@@ -37,11 +37,19 @@ fn contract_with_phase_budgets() -> SynthesisBudgetContract {
     let mut pb = BTreeMap::new();
     pb.insert(
         SynthesisPhase::StaticAnalysis,
-        PhaseBudget { time_cap_ns: 500, compute_cap: 50, depth_cap: 5 },
+        PhaseBudget {
+            time_cap_ns: 500,
+            compute_cap: 50,
+            depth_cap: 5,
+        },
     );
     pb.insert(
         SynthesisPhase::Ablation,
-        PhaseBudget { time_cap_ns: 300, compute_cap: 40, depth_cap: 8 },
+        PhaseBudget {
+            time_cap_ns: 300,
+            compute_cap: 40,
+            depth_cap: 8,
+        },
     );
     SynthesisBudgetContract {
         version: 1,
@@ -58,7 +66,11 @@ fn make_history_entry(ext: &str, exhausted: bool, time_ns: u64) -> BudgetHistory
         extension_id: ext.to_string(),
         contract_version: 1,
         phase_consumption: BTreeMap::new(),
-        total_consumption: PhaseConsumption { time_ns, compute: 50, depth: 5 },
+        total_consumption: PhaseConsumption {
+            time_ns,
+            compute: 50,
+            depth: 5,
+        },
         exhausted,
         timestamp_ns: 1_000_000,
         epoch: SecurityEpoch::from_raw(0),
@@ -92,23 +104,47 @@ fn enrich_dimension_ordering() {
 
 #[test]
 fn enrich_phase_budget_exact_limit_not_exceeded() {
-    let budget = PhaseBudget { time_cap_ns: 100, compute_cap: 50, depth_cap: 10 };
-    let consumed = PhaseConsumption { time_ns: 100, compute: 50, depth: 10 };
+    let budget = PhaseBudget {
+        time_cap_ns: 100,
+        compute_cap: 50,
+        depth_cap: 10,
+    };
+    let consumed = PhaseConsumption {
+        time_ns: 100,
+        compute: 50,
+        depth: 10,
+    };
     assert!(!budget.is_exceeded(&consumed));
 }
 
 #[test]
 fn enrich_phase_budget_all_three_exceeded() {
-    let budget = PhaseBudget { time_cap_ns: 100, compute_cap: 50, depth_cap: 10 };
-    let consumed = PhaseConsumption { time_ns: 200, compute: 100, depth: 20 };
+    let budget = PhaseBudget {
+        time_cap_ns: 100,
+        compute_cap: 50,
+        depth_cap: 10,
+    };
+    let consumed = PhaseConsumption {
+        time_ns: 200,
+        compute: 100,
+        depth: 20,
+    };
     assert!(budget.is_exceeded(&consumed));
     assert_eq!(budget.exceeded_dimensions(&consumed).len(), 3);
 }
 
 #[test]
 fn enrich_phase_budget_zero_caps() {
-    let budget = PhaseBudget { time_cap_ns: 0, compute_cap: 0, depth_cap: 0 };
-    let consumed = PhaseConsumption { time_ns: 1, compute: 1, depth: 1 };
+    let budget = PhaseBudget {
+        time_cap_ns: 0,
+        compute_cap: 0,
+        depth_cap: 0,
+    };
+    let consumed = PhaseConsumption {
+        time_ns: 1,
+        compute: 1,
+        depth: 1,
+    };
     assert!(budget.is_exceeded(&consumed));
 }
 
@@ -131,21 +167,33 @@ fn enrich_phase_consumption_zero_is_all_zero() {
 #[test]
 fn enrich_contract_global_not_exceeded_within() {
     let c = tight_contract();
-    let total = PhaseConsumption { time_ns: 500, compute: 50, depth: 5 };
+    let total = PhaseConsumption {
+        time_ns: 500,
+        compute: 50,
+        depth: 5,
+    };
     assert!(!c.is_globally_exceeded(&total));
 }
 
 #[test]
 fn enrich_contract_global_exceeded_time_only() {
     let c = tight_contract();
-    let total = PhaseConsumption { time_ns: 1001, compute: 0, depth: 0 };
+    let total = PhaseConsumption {
+        time_ns: 1001,
+        compute: 0,
+        depth: 0,
+    };
     assert!(c.is_globally_exceeded(&total));
 }
 
 #[test]
 fn enrich_contract_global_exceeded_depth_only() {
     let c = tight_contract();
-    let total = PhaseConsumption { time_ns: 0, compute: 0, depth: 11 };
+    let total = PhaseConsumption {
+        time_ns: 0,
+        compute: 0,
+        depth: 11,
+    };
     assert!(c.is_globally_exceeded(&total));
 }
 
@@ -175,7 +223,9 @@ fn enrich_monitor_phase_consumption_isolated() {
     monitor.begin_phase(SynthesisPhase::Ablation).unwrap();
     monitor.record_consumption(200, 20, 2).unwrap();
 
-    let sa = monitor.phase_consumption(SynthesisPhase::StaticAnalysis).unwrap();
+    let sa = monitor
+        .phase_consumption(SynthesisPhase::StaticAnalysis)
+        .unwrap();
     assert_eq!(sa.time_ns, 100);
     let ab = monitor.phase_consumption(SynthesisPhase::Ablation).unwrap();
     assert_eq!(ab.time_ns, 200);
@@ -259,7 +309,11 @@ fn enrich_budget_error_display_all_variants() {
             exceeded_dimensions: vec![BudgetDimension::Compute],
             phase: SynthesisPhase::TheoremChecking,
             global_limit_hit: true,
-            consumption: PhaseConsumption { time_ns: 0, compute: 200, depth: 0 },
+            consumption: PhaseConsumption {
+                time_ns: 0,
+                compute: 200,
+                depth: 0,
+            },
             limit_value: 100,
         }),
     ];
@@ -288,7 +342,11 @@ fn enrich_exhaustion_reason_display_format() {
         exceeded_dimensions: vec![BudgetDimension::Time, BudgetDimension::Depth],
         phase: SynthesisPhase::Ablation,
         global_limit_hit: false,
-        consumption: PhaseConsumption { time_ns: 2000, compute: 10, depth: 20 },
+        consumption: PhaseConsumption {
+            time_ns: 2000,
+            compute: 10,
+            depth: 20,
+        },
         limit_value: 1000,
     };
     let s = reason.to_string();
@@ -303,13 +361,23 @@ fn enrich_exhaustion_reason_display_format() {
 #[test]
 fn enrich_fallback_quality_display_all() {
     assert_eq!(FallbackQuality::StaticBound.to_string(), "static-bound");
-    assert_eq!(FallbackQuality::PartialAblation.to_string(), "partial-ablation");
-    assert_eq!(FallbackQuality::UnverifiedFull.to_string(), "unverified-full");
+    assert_eq!(
+        FallbackQuality::PartialAblation.to_string(),
+        "partial-ablation"
+    );
+    assert_eq!(
+        FallbackQuality::UnverifiedFull.to_string(),
+        "unverified-full"
+    );
 }
 
 #[test]
 fn enrich_fallback_quality_serde_roundtrip() {
-    for q in [FallbackQuality::StaticBound, FallbackQuality::PartialAblation, FallbackQuality::UnverifiedFull] {
+    for q in [
+        FallbackQuality::StaticBound,
+        FallbackQuality::PartialAblation,
+        FallbackQuality::UnverifiedFull,
+    ] {
         let json = serde_json::to_string(&q).unwrap();
         let back: FallbackQuality = serde_json::from_str(&json).unwrap();
         assert_eq!(q, back);
@@ -329,7 +397,11 @@ fn enrich_fallback_result_serde_roundtrip() {
             exceeded_dimensions: vec![BudgetDimension::Time],
             phase: SynthesisPhase::Ablation,
             global_limit_hit: false,
-            consumption: PhaseConsumption { time_ns: 500, compute: 10, depth: 1 },
+            consumption: PhaseConsumption {
+                time_ns: 500,
+                compute: 10,
+                depth: 1,
+            },
             limit_value: 300,
         },
         increase_likely_helpful: true,
@@ -465,7 +537,9 @@ fn enrich_monitor_global_exhaustion_across_phases() {
     monitor.record_consumption(400, 0, 0).unwrap();
     monitor.begin_phase(SynthesisPhase::Ablation).unwrap();
     monitor.record_consumption(400, 0, 0).unwrap();
-    monitor.begin_phase(SynthesisPhase::TheoremChecking).unwrap();
+    monitor
+        .begin_phase(SynthesisPhase::TheoremChecking)
+        .unwrap();
     let result = monitor.record_consumption(300, 0, 0);
     assert!(matches!(result, Err(BudgetError::Exhausted(_))));
     let reason = monitor.exhaustion_reason().unwrap();
@@ -607,7 +681,11 @@ fn enrich_exhaustion_reason_serde_roundtrip() {
         exceeded_dimensions: vec![BudgetDimension::Time, BudgetDimension::Compute],
         phase: SynthesisPhase::TheoremChecking,
         global_limit_hit: true,
-        consumption: PhaseConsumption { time_ns: 5000, compute: 200, depth: 15 },
+        consumption: PhaseConsumption {
+            time_ns: 5000,
+            compute: 200,
+            depth: 15,
+        },
         limit_value: 1000,
     };
     let json = serde_json::to_string(&reason).unwrap();

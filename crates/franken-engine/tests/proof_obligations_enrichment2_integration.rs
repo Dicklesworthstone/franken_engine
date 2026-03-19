@@ -32,7 +32,10 @@ fn epoch(n: u64) -> SecurityEpoch {
 
 #[test]
 fn enrichment_category_display_all_unique() {
-    let displays: BTreeSet<String> = ObligationCategory::ALL.iter().map(|c| c.to_string()).collect();
+    let displays: BTreeSet<String> = ObligationCategory::ALL
+        .iter()
+        .map(|c| c.to_string())
+        .collect();
     assert_eq!(displays.len(), 5);
 }
 
@@ -206,10 +209,7 @@ fn enrichment_auto_evaluate_calibration_coverage_violated() {
 fn enrichment_waive_waivable_succeeds_and_shows_in_report() {
     let mut reg = ObligationRegistry::new(epoch(1));
     let obl_id = reg
-        .bind(
-            PassId("timing".into()),
-            "behavioral/effect_timing_contract",
-        )
+        .bind(PassId("timing".into()), "behavioral/effect_timing_contract")
         .unwrap();
     assert!(reg.waive(&obl_id, "operator approved"));
     let report = reg.report();
@@ -336,7 +336,9 @@ fn enrichment_custom_template_auto_evaluate_operator_review() {
         evidence: EvidenceRequirement::OperatorReview,
         waivable: true,
     });
-    let obl_id = reg.bind(PassId("custom_pass".into()), "custom/operator_check").unwrap();
+    let obl_id = reg
+        .bind(PassId("custom_pass".into()), "custom/operator_check")
+        .unwrap();
     // OperatorReview falls into the catch-all branch -> Pending
     let status = reg.auto_evaluate(&obl_id, 1_000_000, 1000).unwrap();
     assert_eq!(status, ObligationStatus::Pending);

@@ -13,9 +13,8 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 use frankenengine_engine::deterministic_serde::{
-    CanonicalValue, SchemaDefinition, SchemaHash, SchemaRegistry, SerdeError,
-    canonical_hash, decode_value, deserialize_with_schema, encode_value,
-    serialize_with_schema,
+    CanonicalValue, SchemaDefinition, SchemaHash, SchemaRegistry, SerdeError, canonical_hash,
+    decode_value, deserialize_with_schema, encode_value, serialize_with_schema,
 };
 
 // ---------------------------------------------------------------------------
@@ -349,7 +348,10 @@ fn error_invalid_tag() {
 fn error_invalid_bool_encoding() {
     // tag=BOOL(0x03), value=0x02 (invalid)
     let err = decode_value(&[0x03, 0x02]).unwrap_err();
-    assert!(matches!(err, SerdeError::InvalidBoolEncoding { value: 0x02, .. }));
+    assert!(matches!(
+        err,
+        SerdeError::InvalidBoolEncoding { value: 0x02, .. }
+    ));
 }
 
 #[test]
@@ -382,9 +384,18 @@ fn serde_error_display_distinctness() {
         SerdeError::UnknownSchema {
             schema_hash: SchemaHash([2; 32]),
         },
-        SerdeError::BufferTooShort { expected: 10, actual: 5 },
-        SerdeError::InvalidTag { tag: 0xAB, offset: 0 },
-        SerdeError::InvalidBoolEncoding { value: 0x05, offset: 1 },
+        SerdeError::BufferTooShort {
+            expected: 10,
+            actual: 5,
+        },
+        SerdeError::InvalidTag {
+            tag: 0xAB,
+            offset: 0,
+        },
+        SerdeError::InvalidBoolEncoding {
+            value: 0x05,
+            offset: 1,
+        },
         SerdeError::InvalidUtf8 { offset: 3 },
         SerdeError::DuplicateKey { key: "k".into() },
         SerdeError::NonLexicographicKeys {
@@ -401,8 +412,14 @@ fn serde_error_display_distinctness() {
 #[test]
 fn serde_error_serde_roundtrip_all() {
     let errors = vec![
-        SerdeError::BufferTooShort { expected: 10, actual: 5 },
-        SerdeError::InvalidTag { tag: 0xFF, offset: 0 },
+        SerdeError::BufferTooShort {
+            expected: 10,
+            actual: 5,
+        },
+        SerdeError::InvalidTag {
+            tag: 0xFF,
+            offset: 0,
+        },
         SerdeError::DuplicateKey { key: "test".into() },
         SerdeError::TrailingBytes { count: 7 },
         SerdeError::InvalidUtf8 { offset: 42 },

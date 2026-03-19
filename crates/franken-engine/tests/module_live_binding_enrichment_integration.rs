@@ -337,9 +337,15 @@ fn live_binding_map_string_operations() {
     let cell = make_cell("mod_a", "name");
     let id = map.register_cell(cell);
     map.initialize_string(&id, "alice".into()).unwrap();
-    assert_eq!(map.get_cell(&id).unwrap().value_string.as_deref(), Some("alice"));
+    assert_eq!(
+        map.get_cell(&id).unwrap().value_string.as_deref(),
+        Some("alice")
+    );
     map.mutate_string(&id, "bob".into()).unwrap();
-    assert_eq!(map.get_cell(&id).unwrap().value_string.as_deref(), Some("bob"));
+    assert_eq!(
+        map.get_cell(&id).unwrap().value_string.as_deref(),
+        Some("bob")
+    );
 }
 
 #[test]
@@ -399,14 +405,18 @@ fn live_binding_sees_mutation_through_import() {
     });
 
     assert_eq!(
-        map.read_through_import("mod_b", "cnt").unwrap().value_millionths,
+        map.read_through_import("mod_b", "cnt")
+            .unwrap()
+            .value_millionths,
         Some(0)
     );
 
     map.mutate_millionths(&id, 1_000_000).unwrap();
 
     assert_eq!(
-        map.read_through_import("mod_b", "cnt").unwrap().value_millionths,
+        map.read_through_import("mod_b", "cnt")
+            .unwrap()
+            .value_millionths,
         Some(1_000_000)
     );
 }
@@ -434,11 +444,15 @@ fn multiple_importers_share_same_cell() {
     map.mutate_millionths(&id, 999).unwrap();
 
     assert_eq!(
-        map.read_through_import("mod_b", "s1").unwrap().value_millionths,
+        map.read_through_import("mod_b", "s1")
+            .unwrap()
+            .value_millionths,
         Some(999)
     );
     assert_eq!(
-        map.read_through_import("mod_c", "s2").unwrap().value_millionths,
+        map.read_through_import("mod_c", "s2")
+            .unwrap()
+            .value_millionths,
         Some(999)
     );
 }
@@ -446,7 +460,9 @@ fn multiple_importers_share_same_cell() {
 #[test]
 fn read_through_import_not_wired() {
     let map = LiveBindingMap::new();
-    let err = map.read_through_import("nonexistent", "local_x").unwrap_err();
+    let err = map
+        .read_through_import("nonexistent", "local_x")
+        .unwrap_err();
     assert!(matches!(err, LiveBindingError::ImportNotWired { .. }));
 }
 
@@ -473,7 +489,11 @@ fn event_trace_has_died_event() {
     let cell = BindingCell::new("mod_a", "x", "x", BindingType::Direct);
     map.register_cell(cell);
     map.mark_dead(&id).unwrap();
-    assert!(map.events.iter().any(|e| matches!(e, BindingEvent::CellDied { .. })));
+    assert!(
+        map.events
+            .iter()
+            .any(|e| matches!(e, BindingEvent::CellDied { .. }))
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -692,5 +712,9 @@ fn validate_bindings_namespace_missing() {
     });
     let errors = validate_bindings(&map);
     assert!(!errors.is_empty());
-    assert!(errors.iter().any(|e| matches!(e, LiveBindingError::NamespaceNotFound { .. })));
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, LiveBindingError::NamespaceNotFound { .. }))
+    );
 }

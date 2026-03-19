@@ -116,7 +116,12 @@ fn budget_budgeted_default() {
 
 #[test]
 fn budget_sampling_rate_clamped() {
-    let b = TelemetryBudget::new(100, 1_000_000_000, 2_000_000, CaptureMode::ProbabilisticSampling);
+    let b = TelemetryBudget::new(
+        100,
+        1_000_000_000,
+        2_000_000,
+        CaptureMode::ProbabilisticSampling,
+    );
     assert_eq!(b.sampling_rate_millionths, MILLIONTHS);
 }
 
@@ -201,16 +206,44 @@ fn thinning_config_serde_roundtrip() {
 
 #[test]
 fn event_new_hash_deterministic() {
-    let e1 = TelemetryEvent::new("ev-1", "dom", 1000, CaptureMode::ExactCounting, MILLIONTHS, b"data");
-    let e2 = TelemetryEvent::new("ev-1", "dom", 1000, CaptureMode::ExactCounting, MILLIONTHS, b"data");
+    let e1 = TelemetryEvent::new(
+        "ev-1",
+        "dom",
+        1000,
+        CaptureMode::ExactCounting,
+        MILLIONTHS,
+        b"data",
+    );
+    let e2 = TelemetryEvent::new(
+        "ev-1",
+        "dom",
+        1000,
+        CaptureMode::ExactCounting,
+        MILLIONTHS,
+        b"data",
+    );
     assert_eq!(e1.event_hash, e2.event_hash);
     assert_eq!(e1.payload_hash, e2.payload_hash);
 }
 
 #[test]
 fn event_new_hash_differs_on_payload() {
-    let e1 = TelemetryEvent::new("ev-1", "dom", 1000, CaptureMode::ExactCounting, MILLIONTHS, b"data-a");
-    let e2 = TelemetryEvent::new("ev-1", "dom", 1000, CaptureMode::ExactCounting, MILLIONTHS, b"data-b");
+    let e1 = TelemetryEvent::new(
+        "ev-1",
+        "dom",
+        1000,
+        CaptureMode::ExactCounting,
+        MILLIONTHS,
+        b"data-a",
+    );
+    let e2 = TelemetryEvent::new(
+        "ev-1",
+        "dom",
+        1000,
+        CaptureMode::ExactCounting,
+        MILLIONTHS,
+        b"data-b",
+    );
     assert_ne!(e1.payload_hash, e2.payload_hash);
 }
 
@@ -343,7 +376,10 @@ fn window_new_initial_state() {
 
 #[test]
 fn window_record_accepts_within_budget() {
-    let mut w = EventWindow::new(0, TelemetryBudget::new(3, 1_000_000_000, MILLIONTHS, CaptureMode::ExactCounting));
+    let mut w = EventWindow::new(
+        0,
+        TelemetryBudget::new(3, 1_000_000_000, MILLIONTHS, CaptureMode::ExactCounting),
+    );
     let e1 = TelemetryEvent::exact("e1", "dom", 10, b"a");
     let e2 = TelemetryEvent::exact("e2", "dom", 20, b"b");
     let e3 = TelemetryEvent::exact("e3", "dom", 30, b"c");
@@ -356,7 +392,10 @@ fn window_record_accepts_within_budget() {
 
 #[test]
 fn window_record_rejects_at_capacity() {
-    let mut w = EventWindow::new(0, TelemetryBudget::new(1, 1_000_000_000, MILLIONTHS, CaptureMode::ExactCounting));
+    let mut w = EventWindow::new(
+        0,
+        TelemetryBudget::new(1, 1_000_000_000, MILLIONTHS, CaptureMode::ExactCounting),
+    );
     let e1 = TelemetryEvent::exact("e1", "dom", 10, b"a");
     let e2 = TelemetryEvent::exact("e2", "dom", 20, b"b");
     assert!(w.record(e1));
@@ -366,7 +405,10 @@ fn window_record_rejects_at_capacity() {
 
 #[test]
 fn window_contains_timestamp() {
-    let w = EventWindow::new(100, TelemetryBudget::new(10, 500, MILLIONTHS, CaptureMode::ExactCounting));
+    let w = EventWindow::new(
+        100,
+        TelemetryBudget::new(10, 500, MILLIONTHS, CaptureMode::ExactCounting),
+    );
     assert!(w.contains_timestamp(100));
     assert!(w.contains_timestamp(599));
     assert!(!w.contains_timestamp(600));
@@ -381,7 +423,10 @@ fn window_effective_sampling_rate_full() {
 
 #[test]
 fn window_effective_sampling_rate_with_rejections() {
-    let mut w = EventWindow::new(0, TelemetryBudget::new(2, 1_000_000_000, MILLIONTHS, CaptureMode::ExactCounting));
+    let mut w = EventWindow::new(
+        0,
+        TelemetryBudget::new(2, 1_000_000_000, MILLIONTHS, CaptureMode::ExactCounting),
+    );
     w.record(TelemetryEvent::exact("e1", "d", 10, b"a"));
     w.record(TelemetryEvent::exact("e2", "d", 20, b"b"));
     w.record(TelemetryEvent::exact("e3", "d", 30, b"c")); // rejected
@@ -424,7 +469,10 @@ fn window_serde_roundtrip() {
 
 #[test]
 fn window_thinning_noop_below_target() {
-    let mut w = EventWindow::new(0, TelemetryBudget::new(100, 1_000_000_000, MILLIONTHS, CaptureMode::ExactCounting));
+    let mut w = EventWindow::new(
+        0,
+        TelemetryBudget::new(100, 1_000_000_000, MILLIONTHS, CaptureMode::ExactCounting),
+    );
     w.record(TelemetryEvent::exact("e1", "d", 10, b"a"));
     let removed = w.apply_thinning(&ThinningConfig::uniform_default());
     assert_eq!(removed, 0);
@@ -437,12 +485,7 @@ fn window_thinning_noop_below_target() {
 
 #[test]
 fn mode_breakdown_fraction_calculation() {
-    let bd = ModeBreakdown::new(
-        CaptureMode::ExactCounting,
-        50,
-        100,
-        ProvenanceTag::exact(),
-    );
+    let bd = ModeBreakdown::new(CaptureMode::ExactCounting, 50, 100, ProvenanceTag::exact());
     assert_eq!(bd.fraction_millionths, 500_000);
 }
 

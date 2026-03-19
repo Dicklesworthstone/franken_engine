@@ -17,9 +17,8 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::parser_evidence_indexer::{
     AppliedSchemaMigration, CorrelatedRegression, CorrelationKey, EvidenceIndexerError,
-    ParserEvidenceIndex, ParserEvidenceIndexBuilder, ParserRunArtifactRef,
-    SchemaMigrationBoundary, SchemaMigrationStep, SchemaVersionTag,
-    PARSER_EVIDENCE_INDEX_SCHEMA_V1,
+    PARSER_EVIDENCE_INDEX_SCHEMA_V1, ParserEvidenceIndex, ParserEvidenceIndexBuilder,
+    ParserRunArtifactRef, SchemaMigrationBoundary, SchemaMigrationStep, SchemaVersionTag,
 };
 
 fn manifest(run_id: &str, schema: &str, replay: &str) -> serde_json::Value {
@@ -82,12 +81,21 @@ fn enrichment_schema_version_tag_ordering() {
 fn enrichment_error_display_all_variants_unique() {
     let variants: Vec<EvidenceIndexerError> = vec![
         EvidenceIndexerError::MissingField("f"),
-        EvidenceIndexerError::InvalidFieldType { field: "f", expected: "string" },
+        EvidenceIndexerError::InvalidFieldType {
+            field: "f",
+            expected: "string",
+        },
         EvidenceIndexerError::DuplicateRunId("r".into()),
         EvidenceIndexerError::UnknownRunId("r".into()),
         EvidenceIndexerError::InvalidSchemaVersion("bad".into()),
-        EvidenceIndexerError::IncompatibleSchemaFamily { from_schema: "a.v1".into(), to_schema: "b.v1".into() },
-        EvidenceIndexerError::NoMigrationPath { from_schema: "a.v1".into(), to_schema: "a.v9".into() },
+        EvidenceIndexerError::IncompatibleSchemaFamily {
+            from_schema: "a.v1".into(),
+            to_schema: "b.v1".into(),
+        },
+        EvidenceIndexerError::NoMigrationPath {
+            from_schema: "a.v1".into(),
+            to_schema: "a.v9".into(),
+        },
         EvidenceIndexerError::Json("error".into()),
     ];
     let set: BTreeSet<String> = variants.iter().map(|e| e.to_string()).collect();
@@ -103,8 +111,17 @@ fn enrichment_error_is_std_error() {
 #[test]
 fn enrichment_builder_duplicate_run_rejected() {
     let mut builder = ParserEvidenceIndexBuilder::new();
-    builder.add_run(&manifest("run-a", "fam.run.v1", "replay"), "m", "e", "c").unwrap();
-    let err = builder.add_run(&manifest("run-a", "fam.run.v1", "replay2"), "m2", "e2", "c2").unwrap_err();
+    builder
+        .add_run(&manifest("run-a", "fam.run.v1", "replay"), "m", "e", "c")
+        .unwrap();
+    let err = builder
+        .add_run(
+            &manifest("run-a", "fam.run.v1", "replay2"),
+            "m2",
+            "e2",
+            "c2",
+        )
+        .unwrap_err();
     assert!(matches!(err, EvidenceIndexerError::DuplicateRunId(id) if id == "run-a"));
 }
 
@@ -118,7 +135,9 @@ fn enrichment_builder_unknown_run_events_rejected() {
 #[test]
 fn enrichment_builder_skips_blank_lines() {
     let mut builder = ParserEvidenceIndexBuilder::new();
-    builder.add_run(&manifest("run-a", "fam.run.v1", "replay"), "m", "e", "c").unwrap();
+    builder
+        .add_run(&manifest("run-a", "fam.run.v1", "replay"), "m", "e", "c")
+        .unwrap();
     builder.add_events_jsonl("run-a", "\n  \n{\"schema_version\":\"fam.event.v1\",\"trace_id\":\"t\",\"decision_id\":\"d\",\"policy_id\":\"p\",\"component\":\"c\",\"event\":\"e\",\"outcome\":\"pass\"}\n\n").unwrap();
     let index = builder.build();
     assert_eq!(index.events.len(), 1);
@@ -127,7 +146,9 @@ fn enrichment_builder_skips_blank_lines() {
 #[test]
 fn enrichment_builder_appends_sequence() {
     let mut builder = ParserEvidenceIndexBuilder::new();
-    builder.add_run(&manifest("run-a", "fam.run.v1", "replay"), "m", "e", "c").unwrap();
+    builder
+        .add_run(&manifest("run-a", "fam.run.v1", "replay"), "m", "e", "c")
+        .unwrap();
     builder.add_events_jsonl("run-a", r#"{"schema_version":"fam.event.v1","trace_id":"t1","decision_id":"d1","policy_id":"p","component":"c","event":"e1","outcome":"pass"}"#).unwrap();
     builder.add_events_jsonl("run-a", r#"{"schema_version":"fam.event.v1","trace_id":"t2","decision_id":"d2","policy_id":"p","component":"c","event":"e2","outcome":"pass"}"#).unwrap();
     let index = builder.build();
@@ -139,8 +160,22 @@ fn enrichment_builder_appends_sequence() {
 #[test]
 fn enrichment_build_sorts_runs_by_id() {
     let mut builder = ParserEvidenceIndexBuilder::new();
-    builder.add_run(&manifest("run-b", "fam.run.v1", "replay-b"), "mb", "eb", "cb").unwrap();
-    builder.add_run(&manifest("run-a", "fam.run.v1", "replay-a"), "ma", "ea", "ca").unwrap();
+    builder
+        .add_run(
+            &manifest("run-b", "fam.run.v1", "replay-b"),
+            "mb",
+            "eb",
+            "cb",
+        )
+        .unwrap();
+    builder
+        .add_run(
+            &manifest("run-a", "fam.run.v1", "replay-a"),
+            "ma",
+            "ea",
+            "ca",
+        )
+        .unwrap();
     let index = builder.build();
     assert_eq!(index.runs[0].run_id, "run-a");
     assert_eq!(index.runs[1].run_id, "run-b");
@@ -159,7 +194,9 @@ fn enrichment_build_empty_index() {
 #[test]
 fn enrichment_correlate_ignores_single_run() {
     let mut builder = ParserEvidenceIndexBuilder::new();
-    builder.add_run(&manifest("run-a", "fam.run.v1", "replay"), "m", "e", "c").unwrap();
+    builder
+        .add_run(&manifest("run-a", "fam.run.v1", "replay"), "m", "e", "c")
+        .unwrap();
     builder.add_events_jsonl("run-a", r#"{"schema_version":"fam.event.v1","trace_id":"t","decision_id":"d","policy_id":"p","component":"gate","event":"fail_check","outcome":"fail","error_code":"E01"}"#).unwrap();
     let index = builder.build();
     assert!(index.correlate_regressions().is_empty());
@@ -169,8 +206,17 @@ fn enrichment_correlate_ignores_single_run() {
 fn enrichment_correlate_cross_run_regression() {
     let mut builder = ParserEvidenceIndexBuilder::new();
     for run_id in ["run-a", "run-b"] {
-        builder.add_run(&manifest(run_id, "fam.run.v1", &format!("replay-{run_id}")), format!("{run_id}-m"), format!("{run_id}-e"), format!("{run_id}-c")).unwrap();
-        let ev = format!("{{\"schema_version\":\"fam.event.v1\",\"trace_id\":\"t-{run_id}\",\"decision_id\":\"d-{run_id}\",\"policy_id\":\"p\",\"component\":\"gate\",\"event\":\"drift\",\"outcome\":\"fail\",\"error_code\":\"E-DRIFT\"}}");
+        builder
+            .add_run(
+                &manifest(run_id, "fam.run.v1", &format!("replay-{run_id}")),
+                format!("{run_id}-m"),
+                format!("{run_id}-e"),
+                format!("{run_id}-c"),
+            )
+            .unwrap();
+        let ev = format!(
+            "{{\"schema_version\":\"fam.event.v1\",\"trace_id\":\"t-{run_id}\",\"decision_id\":\"d-{run_id}\",\"policy_id\":\"p\",\"component\":\"gate\",\"event\":\"drift\",\"outcome\":\"fail\",\"error_code\":\"E-DRIFT\"}}"
+        );
         builder.add_events_jsonl(run_id, &ev).unwrap();
     }
     let index = builder.build();
@@ -184,8 +230,17 @@ fn enrichment_correlate_cross_run_regression() {
 fn enrichment_correlate_ignores_pass_events() {
     let mut builder = ParserEvidenceIndexBuilder::new();
     for run_id in ["run-a", "run-b"] {
-        builder.add_run(&manifest(run_id, "fam.run.v1", &format!("replay-{run_id}")), format!("{run_id}-m"), format!("{run_id}-e"), format!("{run_id}-c")).unwrap();
-        let ev = format!("{{\"schema_version\":\"fam.event.v1\",\"trace_id\":\"t-{run_id}\",\"decision_id\":\"d\",\"policy_id\":\"p\",\"component\":\"gate\",\"event\":\"check\",\"outcome\":\"pass\"}}");
+        builder
+            .add_run(
+                &manifest(run_id, "fam.run.v1", &format!("replay-{run_id}")),
+                format!("{run_id}-m"),
+                format!("{run_id}-e"),
+                format!("{run_id}-c"),
+            )
+            .unwrap();
+        let ev = format!(
+            "{{\"schema_version\":\"fam.event.v1\",\"trace_id\":\"t-{run_id}\",\"decision_id\":\"d\",\"policy_id\":\"p\",\"component\":\"gate\",\"event\":\"check\",\"outcome\":\"pass\"}}"
+        );
         builder.add_events_jsonl(run_id, &ev).unwrap();
     }
     let index = builder.build();
@@ -195,26 +250,36 @@ fn enrichment_correlate_ignores_pass_events() {
 #[test]
 fn enrichment_validate_compat_same_version() {
     let mut builder = ParserEvidenceIndexBuilder::new();
-    builder.add_run(&manifest("run-a", "fam.run.v1", "replay"), "m", "e", "c").unwrap();
+    builder
+        .add_run(&manifest("run-a", "fam.run.v1", "replay"), "m", "e", "c")
+        .unwrap();
     builder.add_events_jsonl("run-a", r#"{"schema_version":"fam.event.v2","trace_id":"t","decision_id":"d","policy_id":"p","component":"c","event":"e","outcome":"pass"}"#).unwrap();
     let index = builder.build();
-    index.validate_event_schema_compatibility("fam.event.v2").unwrap();
+    index
+        .validate_event_schema_compatibility("fam.event.v2")
+        .unwrap();
 }
 
 #[test]
 fn enrichment_validate_compat_rejects_newer() {
     let mut builder = ParserEvidenceIndexBuilder::new();
-    builder.add_run(&manifest("run-a", "fam.run.v1", "replay"), "m", "e", "c").unwrap();
+    builder
+        .add_run(&manifest("run-a", "fam.run.v1", "replay"), "m", "e", "c")
+        .unwrap();
     builder.add_events_jsonl("run-a", r#"{"schema_version":"fam.event.v3","trace_id":"t","decision_id":"d","policy_id":"p","component":"c","event":"e","outcome":"pass"}"#).unwrap();
     let index = builder.build();
-    let err = index.validate_event_schema_compatibility("fam.event.v2").unwrap_err();
+    let err = index
+        .validate_event_schema_compatibility("fam.event.v2")
+        .unwrap_err();
     assert!(matches!(err, EvidenceIndexerError::NoMigrationPath { .. }));
 }
 
 #[test]
 fn enrichment_migrate_noop() {
     let mut builder = ParserEvidenceIndexBuilder::new();
-    builder.add_run(&manifest("run-a", "fam.run.v1", "replay"), "m", "e", "c").unwrap();
+    builder
+        .add_run(&manifest("run-a", "fam.run.v1", "replay"), "m", "e", "c")
+        .unwrap();
     builder.add_events_jsonl("run-a", r#"{"schema_version":"fam.event.v2","trace_id":"t","decision_id":"d","policy_id":"p","component":"c","event":"e","outcome":"pass"}"#).unwrap();
     let mut index = builder.build();
     let receipts = index.migrate_event_schemas("fam.event.v2", &[]).unwrap();
@@ -224,30 +289,47 @@ fn enrichment_migrate_noop() {
 #[test]
 fn enrichment_migrate_single_hop() {
     let mut builder = ParserEvidenceIndexBuilder::new();
-    builder.add_run(&manifest("run-a", "fam.run.v1", "replay"), "m", "e", "c").unwrap();
+    builder
+        .add_run(&manifest("run-a", "fam.run.v1", "replay"), "m", "e", "c")
+        .unwrap();
     builder.add_events_jsonl("run-a", r#"{"schema_version":"fam.event.v1","trace_id":"t","decision_id":"d","policy_id":"p","component":"c","event":"e","outcome":"pass"}"#).unwrap();
-    let steps = vec![SchemaMigrationStep { migration_id: "mig-1-2".into(), from_schema: "fam.event.v1".into(), to_schema: "fam.event.v2".into() }];
+    let steps = vec![SchemaMigrationStep {
+        migration_id: "mig-1-2".into(),
+        from_schema: "fam.event.v1".into(),
+        to_schema: "fam.event.v2".into(),
+    }];
     let mut index = builder.build();
     let receipts = index.migrate_event_schemas("fam.event.v2", &steps).unwrap();
     assert_eq!(receipts.len(), 1);
     assert_eq!(receipts[0].affected_records, 1);
-    assert!(index.events.iter().all(|e| e.schema_version == "fam.event.v2"));
+    assert!(
+        index
+            .events
+            .iter()
+            .all(|e| e.schema_version == "fam.event.v2")
+    );
 }
 
 #[test]
 fn enrichment_migrate_no_path() {
     let mut builder = ParserEvidenceIndexBuilder::new();
-    builder.add_run(&manifest("run-a", "fam.run.v1", "replay"), "m", "e", "c").unwrap();
+    builder
+        .add_run(&manifest("run-a", "fam.run.v1", "replay"), "m", "e", "c")
+        .unwrap();
     builder.add_events_jsonl("run-a", r#"{"schema_version":"fam.event.v1","trace_id":"t","decision_id":"d","policy_id":"p","component":"c","event":"e","outcome":"pass"}"#).unwrap();
     let mut index = builder.build();
-    let err = index.migrate_event_schemas("fam.event.v5", &[]).unwrap_err();
+    let err = index
+        .migrate_event_schemas("fam.event.v5", &[])
+        .unwrap_err();
     assert!(matches!(err, EvidenceIndexerError::NoMigrationPath { .. }));
 }
 
 #[test]
 fn enrichment_boundary_on_version_change() {
     let mut builder = ParserEvidenceIndexBuilder::new();
-    builder.add_run(&manifest("run-a", "fam.run.v1", "replay"), "m", "e", "c").unwrap();
+    builder
+        .add_run(&manifest("run-a", "fam.run.v1", "replay"), "m", "e", "c")
+        .unwrap();
     builder.add_events_jsonl("run-a", concat!(
         r#"{"schema_version":"fam.event.v1","trace_id":"t1","decision_id":"d1","policy_id":"p","component":"c","event":"e","outcome":"pass"}"#,
         "\n",
@@ -262,8 +344,22 @@ fn enrichment_boundary_on_version_change() {
 #[test]
 fn enrichment_boundary_not_across_runs() {
     let mut builder = ParserEvidenceIndexBuilder::new();
-    builder.add_run(&manifest("run-a", "fam.run.v1", "replay-a"), "ma", "ea", "ca").unwrap();
-    builder.add_run(&manifest("run-b", "fam.run.v1", "replay-b"), "mb", "eb", "cb").unwrap();
+    builder
+        .add_run(
+            &manifest("run-a", "fam.run.v1", "replay-a"),
+            "ma",
+            "ea",
+            "ca",
+        )
+        .unwrap();
+    builder
+        .add_run(
+            &manifest("run-b", "fam.run.v1", "replay-b"),
+            "mb",
+            "eb",
+            "cb",
+        )
+        .unwrap();
     builder.add_events_jsonl("run-a", r#"{"schema_version":"fam.event.v1","trace_id":"ta","decision_id":"da","policy_id":"p","component":"c","event":"e","outcome":"pass"}"#).unwrap();
     builder.add_events_jsonl("run-b", r#"{"schema_version":"fam.event.v2","trace_id":"tb","decision_id":"db","policy_id":"p","component":"c","event":"e","outcome":"pass"}"#).unwrap();
     let index = builder.build();
@@ -272,7 +368,12 @@ fn enrichment_boundary_not_across_runs() {
 
 #[test]
 fn enrichment_parser_evidence_index_serde_roundtrip() {
-    let index = ParserEvidenceIndex { schema_version: PARSER_EVIDENCE_INDEX_SCHEMA_V1.into(), runs: vec![], events: vec![], schema_migrations: vec![] };
+    let index = ParserEvidenceIndex {
+        schema_version: PARSER_EVIDENCE_INDEX_SCHEMA_V1.into(),
+        runs: vec![],
+        events: vec![],
+        schema_migrations: vec![],
+    };
     let json = serde_json::to_string(&index).unwrap();
     let back: ParserEvidenceIndex = serde_json::from_str(&json).unwrap();
     assert_eq!(index, back);
@@ -280,7 +381,13 @@ fn enrichment_parser_evidence_index_serde_roundtrip() {
 
 #[test]
 fn enrichment_correlation_key_serde_roundtrip() {
-    let key = CorrelationKey { component: "parser".into(), event: "drift".into(), scenario_id: Some("s1".into()), error_code: Some("E01".into()), outcome: "fail".into() };
+    let key = CorrelationKey {
+        component: "parser".into(),
+        event: "drift".into(),
+        scenario_id: Some("s1".into()),
+        error_code: Some("E01".into()),
+        outcome: "fail".into(),
+    };
     let json = serde_json::to_string(&key).unwrap();
     let back: CorrelationKey = serde_json::from_str(&json).unwrap();
     assert_eq!(key, back);
@@ -289,8 +396,19 @@ fn enrichment_correlation_key_serde_roundtrip() {
 #[test]
 fn enrichment_correlated_regression_serde_roundtrip() {
     let cr = CorrelatedRegression {
-        key: CorrelationKey { component: "p".into(), event: "e".into(), scenario_id: None, error_code: None, outcome: "fail".into() },
-        run_count: 2, occurrence_count: 3, run_ids: vec!["r1".into()], trace_ids: vec!["t1".into()], replay_commands: vec![], severity: "medium".into(),
+        key: CorrelationKey {
+            component: "p".into(),
+            event: "e".into(),
+            scenario_id: None,
+            error_code: None,
+            outcome: "fail".into(),
+        },
+        run_count: 2,
+        occurrence_count: 3,
+        run_ids: vec!["r1".into()],
+        trace_ids: vec!["t1".into()],
+        replay_commands: vec![],
+        severity: "medium".into(),
     };
     let json = serde_json::to_string(&cr).unwrap();
     let back: CorrelatedRegression = serde_json::from_str(&json).unwrap();
@@ -299,7 +417,12 @@ fn enrichment_correlated_regression_serde_roundtrip() {
 
 #[test]
 fn enrichment_applied_migration_serde_roundtrip() {
-    let m = AppliedSchemaMigration { migration_id: "mig-1".into(), from_schema: "fam.v1".into(), to_schema: "fam.v2".into(), affected_records: 42 };
+    let m = AppliedSchemaMigration {
+        migration_id: "mig-1".into(),
+        from_schema: "fam.v1".into(),
+        to_schema: "fam.v2".into(),
+        affected_records: 42,
+    };
     let json = serde_json::to_string(&m).unwrap();
     let back: AppliedSchemaMigration = serde_json::from_str(&json).unwrap();
     assert_eq!(m, back);
@@ -307,7 +430,12 @@ fn enrichment_applied_migration_serde_roundtrip() {
 
 #[test]
 fn enrichment_migration_boundary_serde_roundtrip() {
-    let b = SchemaMigrationBoundary { run_id: "run-1".into(), sequence: 5, from_schema: "fam.v1".into(), to_schema: "fam.v2".into() };
+    let b = SchemaMigrationBoundary {
+        run_id: "run-1".into(),
+        sequence: 5,
+        from_schema: "fam.v1".into(),
+        to_schema: "fam.v2".into(),
+    };
     let json = serde_json::to_string(&b).unwrap();
     let back: SchemaMigrationBoundary = serde_json::from_str(&json).unwrap();
     assert_eq!(b, back);
@@ -315,7 +443,11 @@ fn enrichment_migration_boundary_serde_roundtrip() {
 
 #[test]
 fn enrichment_migration_step_serde_roundtrip() {
-    let s = SchemaMigrationStep { migration_id: "mig-x".into(), from_schema: "fam.v1".into(), to_schema: "fam.v2".into() };
+    let s = SchemaMigrationStep {
+        migration_id: "mig-x".into(),
+        from_schema: "fam.v1".into(),
+        to_schema: "fam.v2".into(),
+    };
     let json = serde_json::to_string(&s).unwrap();
     let back: SchemaMigrationStep = serde_json::from_str(&json).unwrap();
     assert_eq!(s, back);
@@ -339,7 +471,13 @@ fn enrichment_manifest_empty_run_id() {
 fn enrichment_manifest_non_string_run_id() {
     let val = serde_json::json!({ "schema_version": "fam.run.v1", "run_id": 42, "replay_command": "replay" });
     let err = ParserRunArtifactRef::from_manifest_value(&val, "m", "e", "c").unwrap_err();
-    assert!(matches!(err, EvidenceIndexerError::InvalidFieldType { field: "run_id", .. }));
+    assert!(matches!(
+        err,
+        EvidenceIndexerError::InvalidFieldType {
+            field: "run_id",
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -352,8 +490,20 @@ fn enrichment_manifest_optional_null_fields() {
 
 #[test]
 fn enrichment_correlation_key_ordering() {
-    let a = CorrelationKey { component: "a".into(), event: "e".into(), scenario_id: None, error_code: None, outcome: "fail".into() };
-    let b = CorrelationKey { component: "b".into(), event: "e".into(), scenario_id: None, error_code: None, outcome: "fail".into() };
+    let a = CorrelationKey {
+        component: "a".into(),
+        event: "e".into(),
+        scenario_id: None,
+        error_code: None,
+        outcome: "fail".into(),
+    };
+    let b = CorrelationKey {
+        component: "b".into(),
+        event: "e".into(),
+        scenario_id: None,
+        error_code: None,
+        outcome: "fail".into(),
+    };
     assert!(a < b);
 }
 

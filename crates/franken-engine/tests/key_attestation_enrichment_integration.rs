@@ -8,13 +8,13 @@
 
 #![allow(clippy::too_many_arguments)]
 
+use frankenengine_engine::capability_token::PrincipalId;
+use frankenengine_engine::engine_object_id::EngineObjectId;
 use frankenengine_engine::key_attestation::{
     AttestationError, AttestationEvent, AttestationEventType, AttestationNonce, AttestationStore,
     CreateAttestationInput, DevicePosture, KeyAttestation, NonceRegistry, attestation_schema,
     attestation_schema_id,
 };
-use frankenengine_engine::capability_token::PrincipalId;
-use frankenengine_engine::engine_object_id::EngineObjectId;
 use frankenengine_engine::policy_checkpoint::DeterministicTimestamp;
 use frankenengine_engine::principal_key_roles::KeyRole;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -514,7 +514,8 @@ fn integ_store_active_for_role() {
         .register(att2, &owner_vk(), DeterministicTimestamp(150), "t2")
         .unwrap();
 
-    let signing = store.active_for_role(&principal(), KeyRole::Signing, DeterministicTimestamp(200));
+    let signing =
+        store.active_for_role(&principal(), KeyRole::Signing, DeterministicTimestamp(200));
     assert_eq!(signing.len(), 1);
     assert_eq!(signing[0].key_role, KeyRole::Signing);
 

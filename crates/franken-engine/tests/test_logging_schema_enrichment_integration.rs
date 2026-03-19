@@ -186,7 +186,11 @@ fn enrichment_validate_event_wrong_schema_version() {
     let mut event = valid_event();
     event.schema_version = "wrong".to_string();
     let failures = validate_event(&event);
-    assert!(failures.iter().any(|f| f.error_code == ValidationErrorCode::SchemaVersionMismatch));
+    assert!(
+        failures
+            .iter()
+            .any(|f| f.error_code == ValidationErrorCode::SchemaVersionMismatch)
+    );
 }
 
 #[test]
@@ -271,12 +275,20 @@ fn enrichment_detect_redacted_value_not_secret() {
 fn enrichment_apply_redaction_replaces_sensitive() {
     let spec = TestLoggingSchemaSpec::default();
     let mut record = BTreeMap::new();
-    record.insert("payload.user_email".to_string(), "test@example.com".to_string());
+    record.insert(
+        "payload.user_email".to_string(),
+        "test@example.com".to_string(),
+    );
     record.insert("payload.auth_token".to_string(), "secret123".to_string());
     record.insert("payload.ip_address".to_string(), "192.168.1.1".to_string());
 
     let redacted = apply_redaction(&record, &spec);
-    assert!(redacted.get("payload.user_email").unwrap().starts_with("sha256:"));
+    assert!(
+        redacted
+            .get("payload.user_email")
+            .unwrap()
+            .starts_with("sha256:")
+    );
     assert_eq!(redacted.get("payload.ip_address").unwrap(), "[REDACTED]");
 }
 
@@ -284,7 +296,10 @@ fn enrichment_apply_redaction_replaces_sensitive() {
 fn enrichment_apply_redaction_audit_has_entries() {
     let spec = TestLoggingSchemaSpec::default();
     let mut record = BTreeMap::new();
-    record.insert("payload.user_email".to_string(), "user@test.com".to_string());
+    record.insert(
+        "payload.user_email".to_string(),
+        "user@test.com".to_string(),
+    );
     let report = apply_redaction_with_audit(&record, &spec);
     assert!(!report.audit_entries.is_empty());
     assert!(!report.report_hash.is_empty());

@@ -22,7 +22,10 @@ use frankenengine_engine::third_party_verifier::*;
 
 #[test]
 fn enrichment_verdict_verified_exit_code() {
-    assert_eq!(VerificationVerdict::Verified.exit_code(), EXIT_CODE_VERIFIED);
+    assert_eq!(
+        VerificationVerdict::Verified.exit_code(),
+        EXIT_CODE_VERIFIED
+    );
 }
 
 #[test]

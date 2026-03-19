@@ -16,9 +16,8 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::delegate_cell_harness::{
-    CellLifecycle, DelegateCellError, DelegateCellHarness, HarnessEventType,
-    InvocationOutcome, InvocationRecord, PerformanceMetrics, ReplayVerification, ResourceUsage,
-    ResourceViolation,
+    CellLifecycle, DelegateCellError, DelegateCellHarness, HarnessEventType, InvocationOutcome,
+    InvocationRecord, PerformanceMetrics, ReplayVerification, ResourceUsage, ResourceViolation,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -150,10 +149,7 @@ fn invocation_outcome_serde_all_variants() {
             code: 42,
             message: "oops".to_string(),
         },
-        InvocationOutcome::ResourceViolation(ResourceViolation::HeapExceeded {
-            used: 2,
-            limit: 1,
-        }),
+        InvocationOutcome::ResourceViolation(ResourceViolation::HeapExceeded { used: 2, limit: 1 }),
         InvocationOutcome::Timeout,
         InvocationOutcome::CapabilityDenied {
             capability: SlotCapability::ReadSource,
@@ -290,10 +286,7 @@ fn invocation_outcome_display_all_distinct() {
             code: 1,
             message: "e".to_string(),
         },
-        InvocationOutcome::ResourceViolation(ResourceViolation::HeapExceeded {
-            used: 2,
-            limit: 1,
-        }),
+        InvocationOutcome::ResourceViolation(ResourceViolation::HeapExceeded { used: 2, limit: 1 }),
         InvocationOutcome::Timeout,
         InvocationOutcome::CapabilityDenied {
             capability: SlotCapability::ReadSource,
@@ -533,10 +526,7 @@ fn harness_invalid_transition_returns_error() {
     let err = harness
         .transition_to(CellLifecycle::Running, 1000)
         .unwrap_err();
-    assert!(matches!(
-        err,
-        DelegateCellError::InvalidTransition { .. }
-    ));
+    assert!(matches!(err, DelegateCellError::InvalidTransition { .. }));
 }
 
 #[test]
@@ -705,7 +695,10 @@ fn harness_from_manifest_has_correct_initial_state() {
         monitoring_hooks: Vec::new(),
         expected_behavior_hash: [0xCDu8; 32],
         zone: "test".to_string(),
-        signature: frankenengine_engine::signature_preimage::Signature { lower: [0; 32], upper: [0; 32] },
+        signature: frankenengine_engine::signature_preimage::Signature {
+            lower: [0; 32],
+            upper: [0; 32],
+        },
     };
     let harness = DelegateCellHarness::from_manifest(&manifest);
     assert_eq!(harness.lifecycle, CellLifecycle::Created);

@@ -17,14 +17,13 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::tail_latency_control_plane::{
-    EndToEndLatencyBounds, GuardrailState, RuntimeGuardrailStatus,
-    StressProfile,
-    TailLatencyControlPlaneReport, TailLatencyControlPlaneRunManifest,
-    TailLatencyControlPlaneTraceIds, TailLatencyDecomposition,
+    EndToEndLatencyBounds, GuardrailState, RuntimeGuardrailStatus, StressProfile,
     TAIL_LATENCY_CONTROL_PLANE_BEAD_ID, TAIL_LATENCY_CONTROL_PLANE_COMPONENT,
     TAIL_LATENCY_CONTROL_PLANE_POLICY_ID, TAIL_LATENCY_CONTROL_PLANE_REPORT_FILE,
-    TAIL_LATENCY_CONTROL_PLANE_SCHEMA_VERSION, build_tail_latency_control_plane_report,
-    default_stage_envelopes, write_tail_latency_control_plane_bundle,
+    TAIL_LATENCY_CONTROL_PLANE_SCHEMA_VERSION, TailLatencyControlPlaneReport,
+    TailLatencyControlPlaneRunManifest, TailLatencyControlPlaneTraceIds, TailLatencyDecomposition,
+    build_tail_latency_control_plane_report, default_stage_envelopes,
+    write_tail_latency_control_plane_bundle,
 };
 
 fn unique_dir(label: &str) -> PathBuf {
@@ -183,7 +182,10 @@ fn enrichment_default_stage_envelopes_all_positive_budgets() {
 #[test]
 fn enrichment_balanced_report_schema_version() {
     let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1).unwrap();
-    assert_eq!(report.schema_version, TAIL_LATENCY_CONTROL_PLANE_SCHEMA_VERSION);
+    assert_eq!(
+        report.schema_version,
+        TAIL_LATENCY_CONTROL_PLANE_SCHEMA_VERSION
+    );
 }
 
 #[test]

@@ -1470,8 +1470,7 @@ mod tests {
 
     #[test]
     fn test_partition_unknown_family_in_empty_catalog() {
-        let engine =
-            MorselKernelEngine::with_catalog(MorselKernelCatalog::new(), epoch(1));
+        let engine = MorselKernelEngine::with_catalog(MorselKernelCatalog::new(), epoch(1));
         let parts = engine.partition(BuiltinFamily::ArrayMap, 500);
         assert!(parts.is_empty());
     }
@@ -1620,11 +1619,7 @@ mod tests {
             CallbackFenceKind::MutatingCallback,
         ] {
             let receipt = engine.execute(BuiltinFamily::ArrayReduce, 100, fence, None);
-            assert!(
-                receipt.is_some(),
-                "ArrayReduce should accept {:?}",
-                fence
-            );
+            assert!(receipt.is_some(), "ArrayReduce should accept {:?}", fence);
         }
     }
 
@@ -2010,8 +2005,7 @@ mod tests {
 
     #[test]
     fn test_engine_with_empty_catalog_returns_none() {
-        let mut engine =
-            MorselKernelEngine::with_catalog(MorselKernelCatalog::new(), epoch(1));
+        let mut engine = MorselKernelEngine::with_catalog(MorselKernelCatalog::new(), epoch(1));
         let receipt = engine.execute(
             BuiltinFamily::ArrayMap,
             100,

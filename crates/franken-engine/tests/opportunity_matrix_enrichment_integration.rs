@@ -19,15 +19,14 @@
 
 use std::collections::BTreeSet;
 
+use frankenengine_engine::benchmark_denominator::BenchmarkCase;
 use frankenengine_engine::opportunity_matrix::{
     HotspotProfileEntry, OPPORTUNITY_MATRIX_COMPONENT, OPPORTUNITY_MATRIX_SCHEMA_VERSION,
-    OPPORTUNITY_SCORE_THRESHOLD_MILLIONTHS, OpportunityMatrixDecision,
-    OpportunityMatrixError, OpportunityMatrixRequest,
-    OpportunityOutcomeObservation, OpportunityStatus, OptimizationCandidateInput,
-    benchmark_pressure_from_cases, derive_candidates_from_hotspots,
+    OPPORTUNITY_SCORE_THRESHOLD_MILLIONTHS, OpportunityMatrixDecision, OpportunityMatrixError,
+    OpportunityMatrixRequest, OpportunityOutcomeObservation, OpportunityStatus,
+    OptimizationCandidateInput, benchmark_pressure_from_cases, derive_candidates_from_hotspots,
     run_opportunity_matrix_scoring,
 };
-use frankenengine_engine::benchmark_denominator::BenchmarkCase;
 
 // ===========================================================================
 // Helpers
@@ -116,7 +115,9 @@ fn enrichment_ranked_opportunities_sorted_by_score_desc() {
 #[test]
 fn enrichment_selected_ids_match_status_selected() {
     let d = run_opportunity_matrix_scoring(&base_request());
-    let selected_from_ranked: BTreeSet<String> = d.ranked_opportunities.iter()
+    let selected_from_ranked: BTreeSet<String> = d
+        .ranked_opportunities
+        .iter()
         .filter(|o| matches!(o.status, OpportunityStatus::Selected))
         .map(|o| o.opportunity_id.clone())
         .collect();
@@ -129,7 +130,9 @@ fn enrichment_security_clearance_zero_rejected() {
     let mut req = base_request();
     req.candidates[0].security_clearance_millionths = 0;
     let d = run_opportunity_matrix_scoring(&req);
-    let opp = d.ranked_opportunities.iter()
+    let opp = d
+        .ranked_opportunities
+        .iter()
         .find(|o| o.opportunity_id == "opp-vm-dispatch")
         .unwrap();
     assert_eq!(opp.status, OpportunityStatus::RejectedSecurityClearance);
@@ -141,7 +144,9 @@ fn enrichment_negative_security_clearance_rejected() {
     let mut req = base_request();
     req.candidates[0].security_clearance_millionths = -100;
     let d = run_opportunity_matrix_scoring(&req);
-    let opp = d.ranked_opportunities.iter()
+    let opp = d
+        .ranked_opportunities
+        .iter()
         .find(|o| o.opportunity_id == "opp-vm-dispatch")
         .unwrap();
     assert_eq!(opp.status, OpportunityStatus::RejectedSecurityClearance);
@@ -164,7 +169,9 @@ fn enrichment_negative_speedup_clamped_to_zero() {
     let mut req = base_request();
     req.candidates[0].estimated_speedup_millionths = -1_000_000;
     let d = run_opportunity_matrix_scoring(&req);
-    let opp = d.ranked_opportunities.iter()
+    let opp = d
+        .ranked_opportunities
+        .iter()
         .find(|o| o.opportunity_id == "opp-vm-dispatch")
         .unwrap();
     assert_eq!(opp.estimated_speedup_millionths, 0);
@@ -242,7 +249,10 @@ fn enrichment_historical_tracking_error_math() {
     let d = run_opportunity_matrix_scoring(&base_request());
     assert_eq!(d.historical_tracking.len(), 1);
     let h = &d.historical_tracking[0];
-    assert_eq!(h.signed_error_millionths, h.actual_gain_millionths - h.predicted_gain_millionths);
+    assert_eq!(
+        h.signed_error_millionths,
+        h.actual_gain_millionths - h.predicted_gain_millionths
+    );
     assert_eq!(h.absolute_error_millionths, h.signed_error_millionths.abs());
 }
 
@@ -266,7 +276,10 @@ fn enrichment_events_contain_start_scored_and_completed() {
     let event_names: Vec<&str> = d.events.iter().map(|e| e.event.as_str()).collect();
     assert!(event_names.contains(&"opportunity_matrix_started"));
     assert!(event_names.contains(&"opportunity_matrix_completed"));
-    let scored_count = event_names.iter().filter(|&&n| n == "opportunity_scored").count();
+    let scored_count = event_names
+        .iter()
+        .filter(|&&n| n == "opportunity_scored")
+        .count();
     assert_eq!(scored_count, 2);
 }
 
@@ -320,12 +333,15 @@ fn enrichment_benchmark_pressure_zero_baseline_skipped() {
 
 #[test]
 fn enrichment_derive_candidates_max_limit() {
-    let hotspots: Vec<HotspotProfileEntry> = (0..10).map(|i| HotspotProfileEntry {
-        module: format!("mod{i}"),
-        function: "f".to_string(),
-        sample_count: 100 - i as u64,
-    }).collect();
-    let derived = derive_candidates_from_hotspots(&hotspots, 1_000_000, 1, 100_000, 1_000_000, 1_000_000, 3);
+    let hotspots: Vec<HotspotProfileEntry> = (0..10)
+        .map(|i| HotspotProfileEntry {
+            module: format!("mod{i}"),
+            function: "f".to_string(),
+            sample_count: 100 - i as u64,
+        })
+        .collect();
+    let derived =
+        derive_candidates_from_hotspots(&hotspots, 1_000_000, 1, 100_000, 1_000_000, 1_000_000, 3);
     assert_eq!(derived.len(), 3);
 }
 
@@ -336,9 +352,13 @@ fn enrichment_derive_candidates_sole_hotspot_gets_full_weight() {
         function: "f".to_string(),
         sample_count: 100,
     }];
-    let derived = derive_candidates_from_hotspots(&hotspots, 1_000_000, 1, 100_000, 1_000_000, 1_000_000, 10);
+    let derived =
+        derive_candidates_from_hotspots(&hotspots, 1_000_000, 1, 100_000, 1_000_000, 1_000_000, 10);
     assert_eq!(derived.len(), 1);
-    assert_eq!(derived[0].hotpath_weight_override_millionths, Some(1_000_000));
+    assert_eq!(
+        derived[0].hotpath_weight_override_millionths,
+        Some(1_000_000)
+    );
 }
 
 #[test]
@@ -373,16 +393,29 @@ fn enrichment_opportunity_status_serde_all_variants() {
 
 #[test]
 fn enrichment_opportunity_status_snake_case() {
-    assert_eq!(serde_json::to_string(&OpportunityStatus::Selected).unwrap(), "\"selected\"");
-    assert_eq!(serde_json::to_string(&OpportunityStatus::RejectedLowScore).unwrap(), "\"rejected_low_score\"");
+    assert_eq!(
+        serde_json::to_string(&OpportunityStatus::Selected).unwrap(),
+        "\"selected\""
+    );
+    assert_eq!(
+        serde_json::to_string(&OpportunityStatus::RejectedLowScore).unwrap(),
+        "\"rejected_low_score\""
+    );
 }
 
 #[test]
 fn enrichment_error_display_all_unique() {
     let errors: [OpportunityMatrixError; 3] = [
-        OpportunityMatrixError::InvalidRequest { field: "f".into(), detail: "d".into() },
-        OpportunityMatrixError::DuplicateOpportunityId { opportunity_id: "x".into() },
-        OpportunityMatrixError::InvalidTimestamp { value: "bad".into() },
+        OpportunityMatrixError::InvalidRequest {
+            field: "f".into(),
+            detail: "d".into(),
+        },
+        OpportunityMatrixError::DuplicateOpportunityId {
+            opportunity_id: "x".into(),
+        },
+        OpportunityMatrixError::InvalidTimestamp {
+            value: "bad".into(),
+        },
     ];
     let set: BTreeSet<String> = errors.iter().map(|e| e.to_string()).collect();
     assert_eq!(set.len(), 3);
@@ -391,8 +424,15 @@ fn enrichment_error_display_all_unique() {
 #[test]
 fn enrichment_error_stable_codes_unique() {
     let codes = [
-        OpportunityMatrixError::InvalidRequest { field: "f".into(), detail: "d".into() }.stable_code(),
-        OpportunityMatrixError::DuplicateOpportunityId { opportunity_id: "x".into() }.stable_code(),
+        OpportunityMatrixError::InvalidRequest {
+            field: "f".into(),
+            detail: "d".into(),
+        }
+        .stable_code(),
+        OpportunityMatrixError::DuplicateOpportunityId {
+            opportunity_id: "x".into(),
+        }
+        .stable_code(),
         OpportunityMatrixError::InvalidTimestamp { value: "v".into() }.stable_code(),
     ];
     let set: BTreeSet<&str> = codes.iter().copied().collect();
@@ -411,7 +451,10 @@ fn enrichment_serde_roundtrip_full_decision() {
 fn enrichment_decision_schema_version_and_threshold_stable() {
     let d = run_opportunity_matrix_scoring(&base_request());
     assert_eq!(d.schema_version, OPPORTUNITY_MATRIX_SCHEMA_VERSION);
-    assert_eq!(d.score_threshold_millionths, OPPORTUNITY_SCORE_THRESHOLD_MILLIONTHS);
+    assert_eq!(
+        d.score_threshold_millionths,
+        OPPORTUNITY_SCORE_THRESHOLD_MILLIONTHS
+    );
 }
 
 #[test]

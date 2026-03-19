@@ -100,6 +100,7 @@ fn declass_receipt(
         source_label: src,
         sink_clearance: sink,
         declassification_route_ref: format!("route-{id}"),
+        decision_contract_id: format!("decision-{id}"),
         timestamp_ms: 2000,
     }
 }
@@ -262,6 +263,8 @@ fn declass_receipt_record_construction() {
     assert_eq!(receipt.decision, DeclassificationDecision::Allow);
     assert_eq!(receipt.source_label, Label::Secret);
     assert_eq!(receipt.sink_clearance, Label::Public);
+    assert_eq!(receipt.declassification_route_ref, "route-r1");
+    assert_eq!(receipt.decision_contract_id, "decision-r1");
 }
 
 #[test]
@@ -1392,6 +1395,10 @@ fn join_events_with_matching_receipt() {
         joined[0].1.as_ref().unwrap().declassification_route_ref,
         "route-r1"
     );
+    assert_eq!(
+        joined[0].1.as_ref().unwrap().decision_contract_id,
+        "decision-r1"
+    );
 }
 
 #[test]
@@ -1583,7 +1590,7 @@ fn declass_receipt_record_serde_roundtrip() {
 }
 
 #[test]
-fn declass_receipt_record_legacy_serde_defaults_route_ref() {
+fn declass_receipt_record_legacy_serde_defaults_route_and_contract() {
     let mut value = serde_json::to_value(declass_receipt(
         "r1",
         "ext-a",
@@ -1596,9 +1603,14 @@ fn declass_receipt_record_legacy_serde_defaults_route_ref() {
         .as_object_mut()
         .unwrap()
         .remove("declassification_route_ref");
+    value
+        .as_object_mut()
+        .unwrap()
+        .remove("decision_contract_id");
     let deser: DeclassReceiptRecord = serde_json::from_value(value).unwrap();
     assert_eq!(deser.receipt_id, "r1");
     assert!(deser.declassification_route_ref.is_empty());
+    assert!(deser.decision_contract_id.is_empty());
 }
 
 #[test]

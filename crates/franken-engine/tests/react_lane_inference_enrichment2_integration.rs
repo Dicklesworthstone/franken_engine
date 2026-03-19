@@ -17,8 +17,8 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::ast::SourceSpan;
 use frankenengine_engine::component_shape_catalog::{
-    ImpurityReason, PropFlowKind, PropValueKind, PurityClassification,
-    PurityConfig, RenderPurityClass, analyze_render_tree,
+    ImpurityReason, PropFlowKind, PropValueKind, PurityClassification, PurityConfig,
+    RenderPurityClass, analyze_render_tree,
 };
 use frankenengine_engine::hook_effect_contract::{HookKind, HookManifest, HookSlot, HookSlotIndex};
 use frankenengine_engine::react_jsx_lowering::{
@@ -611,12 +611,7 @@ fn enrichment_prop_flow_key_and_ref_identified() {
     let el = make_element_with_props(
         "div",
         vec![
-            (
-                "key",
-                LoweredPropValue::StringLiteral {
-                    value: "k".into(),
-                },
-            ),
+            ("key", LoweredPropValue::StringLiteral { value: "k".into() }),
             (
                 "ref",
                 LoweredPropValue::Expression {

@@ -133,13 +133,22 @@ fn module_feature_as_str_values() {
     assert_eq!(ModuleFeature::Esm.as_str(), "esm");
     assert_eq!(ModuleFeature::Cjs.as_str(), "cjs");
     assert_eq!(ModuleFeature::DualMode.as_str(), "dual_mode");
-    assert_eq!(ModuleFeature::ConditionalExports.as_str(), "conditional_exports");
-    assert_eq!(ModuleFeature::PackageJsonFields.as_str(), "package_json_fields");
+    assert_eq!(
+        ModuleFeature::ConditionalExports.as_str(),
+        "conditional_exports"
+    );
+    assert_eq!(
+        ModuleFeature::PackageJsonFields.as_str(),
+        "package_json_fields"
+    );
 }
 
 #[test]
 fn compatibility_runtime_as_str_values() {
-    assert_eq!(CompatibilityRuntime::FrankenEngine.as_str(), "franken_engine");
+    assert_eq!(
+        CompatibilityRuntime::FrankenEngine.as_str(),
+        "franken_engine"
+    );
     assert_eq!(CompatibilityRuntime::Node.as_str(), "node");
     assert_eq!(CompatibilityRuntime::Bun.as_str(), "bun");
 }
@@ -246,7 +255,8 @@ fn from_entries_empty_case_id_fails() {
 #[test]
 fn from_entries_duplicate_case_id_fails() {
     let entry = valid_entry("dup");
-    let err = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry.clone(), entry]).unwrap_err();
+    let err =
+        ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry.clone(), entry]).unwrap_err();
     assert_eq!(err.code, CompatibilityMatrixErrorCode::DuplicateCaseId);
 }
 
@@ -321,7 +331,9 @@ fn validate_empty_scenario_fails() {
     let mut entry = valid_entry("case-1");
     entry.scenario.clear();
     let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
-    let err = matrix.validate_with_waivers(&BTreeSet::new(), &context()).unwrap_err();
+    let err = matrix
+        .validate_with_waivers(&BTreeSet::new(), &context())
+        .unwrap_err();
     assert_eq!(err.code, CompatibilityMatrixErrorCode::InvalidMatrix);
 }
 
@@ -330,7 +342,9 @@ fn validate_empty_lockstep_refs_fails() {
     let mut entry = valid_entry("case-1");
     entry.lockstep_case_refs.clear();
     let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
-    let err = matrix.validate_with_waivers(&BTreeSet::new(), &context()).unwrap_err();
+    let err = matrix
+        .validate_with_waivers(&BTreeSet::new(), &context())
+        .unwrap_err();
     assert_eq!(err.code, CompatibilityMatrixErrorCode::InvalidMatrix);
 }
 
@@ -339,7 +353,9 @@ fn validate_empty_test262_refs_fails() {
     let mut entry = valid_entry("case-1");
     entry.test262_refs.clear();
     let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
-    let err = matrix.validate_with_waivers(&BTreeSet::new(), &context()).unwrap_err();
+    let err = matrix
+        .validate_with_waivers(&BTreeSet::new(), &context())
+        .unwrap_err();
     assert_eq!(err.code, CompatibilityMatrixErrorCode::InvalidMatrix);
 }
 
@@ -348,7 +364,9 @@ fn validate_hidden_shim_node_compat_fails() {
     let mut entry = valid_entry("case-shim");
     entry.franken_node_compat_behavior = "different".to_string();
     let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
-    let err = matrix.validate_with_waivers(&BTreeSet::new(), &context()).unwrap_err();
+    let err = matrix
+        .validate_with_waivers(&BTreeSet::new(), &context())
+        .unwrap_err();
     assert_eq!(err.code, CompatibilityMatrixErrorCode::HiddenShim);
 }
 
@@ -357,7 +375,9 @@ fn validate_hidden_shim_bun_compat_fails() {
     let mut entry = valid_entry("case-shim");
     entry.franken_bun_compat_behavior = "different".to_string();
     let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
-    let err = matrix.validate_with_waivers(&BTreeSet::new(), &context()).unwrap_err();
+    let err = matrix
+        .validate_with_waivers(&BTreeSet::new(), &context())
+        .unwrap_err();
     assert_eq!(err.code, CompatibilityMatrixErrorCode::HiddenShim);
 }
 
@@ -388,7 +408,9 @@ fn validate_mismatched_behavior_without_waiver_fails() {
     // Validation catches either HiddenShim or MissingWaiver depending on
     // which check fires first — both are valid failure modes for mismatched
     // behaviors without explicit divergence/waiver.
-    let err = matrix.validate_with_waivers(&BTreeSet::new(), &context()).unwrap_err();
+    let err = matrix
+        .validate_with_waivers(&BTreeSet::new(), &context())
+        .unwrap_err();
     assert!(
         err.code == CompatibilityMatrixErrorCode::MissingWaiver
             || err.code == CompatibilityMatrixErrorCode::HiddenShim,
@@ -497,7 +519,10 @@ fn evaluate_scenario_produces_report() {
     assert_eq!(report.scenario_id, "scenario-1");
     assert_eq!(report.total_observations, 1);
     assert_eq!(report.matched_observations, 1);
-    assert_eq!(report.schema_version, COMPATIBILITY_SCENARIO_REPORT_SCHEMA_VERSION);
+    assert_eq!(
+        report.schema_version,
+        COMPATIBILITY_SCENARIO_REPORT_SCHEMA_VERSION
+    );
 }
 
 #[test]
@@ -547,11 +572,9 @@ fn to_json_pretty_roundtrips() {
 
 #[test]
 fn events_have_incrementing_seq() {
-    let mut matrix = ModuleCompatibilityMatrix::from_entries(
-        "1.0.0",
-        vec![valid_entry("a"), valid_entry("b")],
-    )
-    .unwrap();
+    let mut matrix =
+        ModuleCompatibilityMatrix::from_entries("1.0.0", vec![valid_entry("a"), valid_entry("b")])
+            .unwrap();
     matrix
         .validate_with_waivers(&BTreeSet::new(), &context())
         .unwrap();

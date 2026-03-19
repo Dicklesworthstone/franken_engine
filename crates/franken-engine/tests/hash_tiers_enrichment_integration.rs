@@ -57,7 +57,11 @@ fn enrichment_keyed_tier3_differs_from_tier2() {
     let data = b"tier-separation-data";
     let t2 = ContentHash::compute(data);
     let t3_keyed = AuthenticityHash::compute_keyed(b"any-key", data);
-    assert_ne!(t2.as_bytes(), t3_keyed.as_bytes(), "keyed T3 differs from T2");
+    assert_ne!(
+        t2.as_bytes(),
+        t3_keyed.as_bytes(),
+        "keyed T3 differs from T2"
+    );
 }
 
 #[test]
@@ -87,7 +91,9 @@ fn enrichment_content_hash_avalanche_single_bit_flip() {
         for bit_idx in 0..8 {
             data[byte_idx] ^= 1 << bit_idx;
             let flipped = ContentHash::compute(&data);
-            let bits_diff: u32 = base.as_bytes().iter()
+            let bits_diff: u32 = base
+                .as_bytes()
+                .iter()
                 .zip(flipped.as_bytes().iter())
                 .map(|(a, b)| (a ^ b).count_ones())
                 .sum();
@@ -98,7 +104,10 @@ fn enrichment_content_hash_avalanche_single_bit_flip() {
 
     // Good avalanche: average ~50% of 256 bits differ per flip
     let avg_diff = total_differing_bits as f64 / trials as f64;
-    assert!(avg_diff > 80.0, "poor avalanche: avg {avg_diff} bits differ (expected ~128)");
+    assert!(
+        avg_diff > 80.0,
+        "poor avalanche: avg {avg_diff} bits differ (expected ~128)"
+    );
 }
 
 #[test]
@@ -115,7 +124,10 @@ fn enrichment_integrity_hash_avalanche_single_byte_change() {
             all_different = false;
         }
     }
-    assert!(all_different, "every single-byte change should produce a different hash");
+    assert!(
+        all_different,
+        "every single-byte change should produce a different hash"
+    );
 }
 
 #[test]
@@ -126,11 +138,16 @@ fn enrichment_authenticity_hash_avalanche_key_change() {
     for i in 1u8..20 {
         let key = format!("key-base-{i:02}");
         let h = AuthenticityHash::compute_keyed(key.as_bytes(), data);
-        let bits_diff: u32 = base.as_bytes().iter()
+        let bits_diff: u32 = base
+            .as_bytes()
+            .iter()
             .zip(h.as_bytes().iter())
             .map(|(a, b)| (a ^ b).count_ones())
             .sum();
-        assert!(bits_diff > 50, "key change should produce significant avalanche, got {bits_diff}");
+        assert!(
+            bits_diff > 50,
+            "key change should produce significant avalanche, got {bits_diff}"
+        );
     }
 }
 
@@ -188,7 +205,10 @@ fn enrichment_large_inputs_differ_by_single_byte() {
 fn enrichment_key_data_swap_produces_different_hash() {
     let a = AuthenticityHash::compute_keyed(b"alpha", b"beta");
     let b = AuthenticityHash::compute_keyed(b"beta", b"alpha");
-    assert_ne!(a, b, "hash(key=alpha, data=beta) must differ from hash(key=beta, data=alpha)");
+    assert_ne!(
+        a, b,
+        "hash(key=alpha, data=beta) must differ from hash(key=beta, data=alpha)"
+    );
 }
 
 #[test]
@@ -249,7 +269,13 @@ fn enrichment_hash_event_json_all_fields_present() {
         trace_id: "trace-enrichment-001".to_string(),
     };
     let json = serde_json::to_string(&event).unwrap();
-    for field in &["\"tier\"", "\"algorithm\"", "\"input_len\"", "\"component\"", "\"trace_id\""] {
+    for field in &[
+        "\"tier\"",
+        "\"algorithm\"",
+        "\"input_len\"",
+        "\"component\"",
+        "\"trace_id\"",
+    ] {
         assert!(json.contains(field), "JSON must contain field {field}");
     }
 }
@@ -469,8 +495,16 @@ fn enrichment_hex_representations_are_lowercase() {
     let ch = ContentHash::compute(b"hex-case-check");
     let ah = AuthenticityHash::compute_keyed(b"k", b"hex-case-check");
 
-    assert!(ch.to_hex().chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
-    assert!(ah.to_hex().chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
+    assert!(
+        ch.to_hex()
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    );
+    assert!(
+        ah.to_hex()
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    );
 }
 
 #[test]
@@ -478,7 +512,12 @@ fn enrichment_content_hash_hex_length_always_64() {
     let inputs: Vec<&[u8]> = vec![b"", b"a", b"short", &[0u8; 1000]];
     for input in inputs {
         let h = ContentHash::compute(input);
-        assert_eq!(h.to_hex().len(), 64, "hex must always be 64 chars for {}-byte input", input.len());
+        assert_eq!(
+            h.to_hex().len(),
+            64,
+            "hex must always be 64 chars for {}-byte input",
+            input.len()
+        );
     }
 }
 
@@ -494,12 +533,20 @@ fn enrichment_every_algorithm_maps_to_unique_tier() {
         HashAlgorithm::SipInspiredKeyed,
     ];
     let tiers: BTreeSet<HashTier> = algs.iter().map(|a| a.tier()).collect();
-    assert_eq!(tiers.len(), 3, "bijection: each algorithm maps to a unique tier");
+    assert_eq!(
+        tiers.len(),
+        3,
+        "bijection: each algorithm maps to a unique tier"
+    );
 }
 
 #[test]
 fn enrichment_hash_tier_display_all_unique_enrichment() {
-    let tiers = [HashTier::Integrity, HashTier::Content, HashTier::Authenticity];
+    let tiers = [
+        HashTier::Integrity,
+        HashTier::Content,
+        HashTier::Authenticity,
+    ];
     let displays: BTreeSet<String> = tiers.iter().map(|t| t.to_string()).collect();
     assert_eq!(displays.len(), 3);
 }
@@ -537,5 +584,8 @@ fn enrichment_all_tiers_handle_empty_input() {
 fn enrichment_empty_and_nonempty_always_differ() {
     assert_ne!(IntegrityHash::compute(b""), IntegrityHash::compute(b"\0"));
     assert_ne!(ContentHash::compute(b""), ContentHash::compute(b"\0"));
-    assert_ne!(AuthenticityHash::compute(b""), AuthenticityHash::compute(b"\0"));
+    assert_ne!(
+        AuthenticityHash::compute(b""),
+        AuthenticityHash::compute(b"\0")
+    );
 }

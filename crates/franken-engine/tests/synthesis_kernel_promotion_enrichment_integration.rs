@@ -19,11 +19,21 @@ use frankenengine_engine::synthesis_kernel_promotion::*;
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn epoch() -> SecurityEpoch { SecurityEpoch::from_raw(1000) }
-fn epoch2() -> SecurityEpoch { SecurityEpoch::from_raw(2000) }
-fn baseline_target() -> BTreeSet<PromotionTarget> { BTreeSet::from([PromotionTarget::BaselineHotPath]) }
-fn aot_target() -> BTreeSet<PromotionTarget> { BTreeSet::from([PromotionTarget::AotArtifact]) }
-fn all_targets() -> BTreeSet<PromotionTarget> { PromotionTarget::ALL.iter().copied().collect() }
+fn epoch() -> SecurityEpoch {
+    SecurityEpoch::from_raw(1000)
+}
+fn epoch2() -> SecurityEpoch {
+    SecurityEpoch::from_raw(2000)
+}
+fn baseline_target() -> BTreeSet<PromotionTarget> {
+    BTreeSet::from([PromotionTarget::BaselineHotPath])
+}
+fn aot_target() -> BTreeSet<PromotionTarget> {
+    BTreeSet::from([PromotionTarget::AotArtifact])
+}
+fn all_targets() -> BTreeSet<PromotionTarget> {
+    PromotionTarget::ALL.iter().copied().collect()
+}
 
 fn good_evidence() -> PromotionEvidence {
     PromotionEvidence::verified(960_000, 150_000, 950_000, baseline_target())
@@ -194,9 +204,14 @@ fn enrich_gate_batch_mixed_results() {
 fn enrich_permissive_gate_promotes_weak() {
     let gate = PromotionGate::with_config(PromotionGateConfig::permissive());
     let ev = PromotionEvidence::partial(PartialEvidenceInput {
-        proof_verified: true, coverage: 10_000, speedup: 0,
-        counterexamples: 100, max_severity: 999_999,
-        regression_confidence: 0, aot_compiled: false, targets: baseline_target(),
+        proof_verified: true,
+        coverage: 10_000,
+        speedup: 0,
+        counterexamples: 100,
+        max_severity: 999_999,
+        regression_confidence: 0,
+        aot_compiled: false,
+        targets: baseline_target(),
     });
     assert!(gate.evaluate("permissive", &ev).is_promoted());
 }
@@ -208,18 +223,21 @@ fn enrich_permissive_gate_promotes_weak() {
 #[test]
 fn enrich_promotion_decision_display_all_variants() {
     let promoted = PromotionDecision::Promoted {
-        kernel_id: "k1".into(), targets: baseline_target(),
+        kernel_id: "k1".into(),
+        targets: baseline_target(),
         content_hash: ContentHash::compute(b"test"),
     };
     assert!(promoted.to_string().contains("PROMOTED"));
 
     let rejected = PromotionDecision::Rejected {
-        kernel_id: "k2".into(), reasons: vec![RejectionReason::ProofNotVerified],
+        kernel_id: "k2".into(),
+        reasons: vec![RejectionReason::ProofNotVerified],
     };
     assert!(rejected.to_string().contains("REJECTED"));
 
     let deferred = PromotionDecision::Deferred {
-        kernel_id: "k3".into(), pending_reasons: vec![RejectionReason::NoAotReceipt],
+        kernel_id: "k3".into(),
+        pending_reasons: vec![RejectionReason::NoAotReceipt],
     };
     assert!(deferred.to_string().contains("DEFERRED"));
 }
@@ -238,7 +256,13 @@ fn enrich_promoted_kernel_new_is_active() {
 #[test]
 fn enrich_promoted_kernel_demote() {
     let mut pk = PromotedKernel::new("k1", "orig1", baseline_target(), epoch(), 150_000, 960_000);
-    let receipt = DemotionReceipt::new("k1", DemotionCause::PerformanceRegression, epoch2(), baseline_target(), "reg");
+    let receipt = DemotionReceipt::new(
+        "k1",
+        DemotionCause::PerformanceRegression,
+        epoch2(),
+        baseline_target(),
+        "reg",
+    );
     pk.demote(receipt);
     assert!(!pk.is_active());
     assert_eq!(pk.status, PromotionStatus::Demoted);
@@ -278,16 +302,43 @@ fn enrich_promoted_kernel_hash_varies_with_kernel_id() {
 #[test]
 fn enrich_ledger_record_and_count() {
     let mut ledger = PromotionLedger::new();
-    ledger.record_promotion(PromotedKernel::new("k1", "orig1", baseline_target(), epoch(), 150_000, 960_000));
-    ledger.record_promotion(PromotedKernel::new("k2", "orig2", aot_target(), epoch(), 200_000, 970_000));
+    ledger.record_promotion(PromotedKernel::new(
+        "k1",
+        "orig1",
+        baseline_target(),
+        epoch(),
+        150_000,
+        960_000,
+    ));
+    ledger.record_promotion(PromotedKernel::new(
+        "k2",
+        "orig2",
+        aot_target(),
+        epoch(),
+        200_000,
+        970_000,
+    ));
     assert_eq!(ledger.active_count(), 2);
 }
 
 #[test]
 fn enrich_ledger_demote_kernel() {
     let mut ledger = PromotionLedger::new();
-    ledger.record_promotion(PromotedKernel::new("k1", "orig1", baseline_target(), epoch(), 150_000, 960_000));
-    let receipt = DemotionReceipt::new("k1", DemotionCause::HardwareFailure, epoch2(), baseline_target(), "GPU fail");
+    ledger.record_promotion(PromotedKernel::new(
+        "k1",
+        "orig1",
+        baseline_target(),
+        epoch(),
+        150_000,
+        960_000,
+    ));
+    let receipt = DemotionReceipt::new(
+        "k1",
+        DemotionCause::HardwareFailure,
+        epoch2(),
+        baseline_target(),
+        "GPU fail",
+    );
     assert!(ledger.demote_kernel("k1", receipt));
     assert_eq!(ledger.active_count(), 0);
     assert_eq!(ledger.demoted_count(), 1);
@@ -296,14 +347,27 @@ fn enrich_ledger_demote_kernel() {
 #[test]
 fn enrich_ledger_demote_nonexistent_returns_false() {
     let mut ledger = PromotionLedger::new();
-    let receipt = DemotionReceipt::new("nope", DemotionCause::PolicyChange, epoch(), BTreeSet::new(), "test");
+    let receipt = DemotionReceipt::new(
+        "nope",
+        DemotionCause::PolicyChange,
+        epoch(),
+        BTreeSet::new(),
+        "test",
+    );
     assert!(!ledger.demote_kernel("nope", receipt));
 }
 
 #[test]
 fn enrich_ledger_supersede_kernel() {
     let mut ledger = PromotionLedger::new();
-    ledger.record_promotion(PromotedKernel::new("k1", "orig1", baseline_target(), epoch(), 150_000, 960_000));
+    ledger.record_promotion(PromotedKernel::new(
+        "k1",
+        "orig1",
+        baseline_target(),
+        epoch(),
+        150_000,
+        960_000,
+    ));
     assert!(ledger.supersede_kernel("k1", "k2", epoch2()));
     assert_eq!(ledger.superseded_count(), 1);
 }
@@ -315,7 +379,14 @@ fn enrich_ledger_supersede_kernel() {
 #[test]
 fn enrich_ledger_get_kernel_found() {
     let mut ledger = PromotionLedger::new();
-    ledger.record_promotion(PromotedKernel::new("k1", "orig1", baseline_target(), epoch(), 150_000, 960_000));
+    ledger.record_promotion(PromotedKernel::new(
+        "k1",
+        "orig1",
+        baseline_target(),
+        epoch(),
+        150_000,
+        960_000,
+    ));
     assert!(ledger.get_kernel("k1").is_some());
 }
 
@@ -332,8 +403,22 @@ fn enrich_ledger_get_kernel_not_found() {
 #[test]
 fn enrich_ledger_active_for_target() {
     let mut ledger = PromotionLedger::new();
-    ledger.record_promotion(PromotedKernel::new("k1", "orig1", baseline_target(), epoch(), 150_000, 960_000));
-    ledger.record_promotion(PromotedKernel::new("k2", "orig2", aot_target(), epoch(), 200_000, 970_000));
+    ledger.record_promotion(PromotedKernel::new(
+        "k1",
+        "orig1",
+        baseline_target(),
+        epoch(),
+        150_000,
+        960_000,
+    ));
+    ledger.record_promotion(PromotedKernel::new(
+        "k2",
+        "orig2",
+        aot_target(),
+        epoch(),
+        200_000,
+        970_000,
+    ));
     let baseline_kernels = ledger.active_for_target(PromotionTarget::BaselineHotPath);
     assert_eq!(baseline_kernels.len(), 1);
 }
@@ -345,8 +430,21 @@ fn enrich_ledger_active_for_target() {
 #[test]
 fn enrich_ledger_demotion_receipts() {
     let mut ledger = PromotionLedger::new();
-    ledger.record_promotion(PromotedKernel::new("k1", "orig1", baseline_target(), epoch(), 150_000, 960_000));
-    let receipt = DemotionReceipt::new("k1", DemotionCause::CounterexampleFound, epoch2(), baseline_target(), "CE");
+    ledger.record_promotion(PromotedKernel::new(
+        "k1",
+        "orig1",
+        baseline_target(),
+        epoch(),
+        150_000,
+        960_000,
+    ));
+    let receipt = DemotionReceipt::new(
+        "k1",
+        DemotionCause::CounterexampleFound,
+        epoch2(),
+        baseline_target(),
+        "CE",
+    );
     ledger.demote_kernel("k1", receipt);
     assert_eq!(ledger.demotion_receipts().len(), 1);
 }
@@ -373,7 +471,10 @@ fn enrich_report_from_decisions() {
 #[test]
 fn enrich_report_all_promoted() {
     let gate = PromotionGate::with_defaults();
-    let decisions = vec![gate.evaluate("k1", &good_evidence()), gate.evaluate("k2", &good_evidence())];
+    let decisions = vec![
+        gate.evaluate("k1", &good_evidence()),
+        gate.evaluate("k2", &good_evidence()),
+    ];
     let report = PromotionReport::new(epoch(), decisions);
     assert!(report.all_promoted());
     assert_eq!(report.promotion_rate(), 1_000_000);
@@ -421,15 +522,39 @@ fn enrich_report_serde_roundtrip() {
 
 #[test]
 fn enrich_demotion_receipt_hash_deterministic() {
-    let r1 = DemotionReceipt::new("k1", DemotionCause::PolicyChange, epoch(), baseline_target(), "policy");
-    let r2 = DemotionReceipt::new("k1", DemotionCause::PolicyChange, epoch(), baseline_target(), "policy");
+    let r1 = DemotionReceipt::new(
+        "k1",
+        DemotionCause::PolicyChange,
+        epoch(),
+        baseline_target(),
+        "policy",
+    );
+    let r2 = DemotionReceipt::new(
+        "k1",
+        DemotionCause::PolicyChange,
+        epoch(),
+        baseline_target(),
+        "policy",
+    );
     assert_eq!(r1.content_hash, r2.content_hash);
 }
 
 #[test]
 fn enrich_demotion_receipt_hash_varies_with_cause() {
-    let r1 = DemotionReceipt::new("k1", DemotionCause::PolicyChange, epoch(), baseline_target(), "test");
-    let r2 = DemotionReceipt::new("k1", DemotionCause::CompileFailure, epoch(), baseline_target(), "test");
+    let r1 = DemotionReceipt::new(
+        "k1",
+        DemotionCause::PolicyChange,
+        epoch(),
+        baseline_target(),
+        "test",
+    );
+    let r2 = DemotionReceipt::new(
+        "k1",
+        DemotionCause::CompileFailure,
+        epoch(),
+        baseline_target(),
+        "test",
+    );
     assert_ne!(r1.content_hash, r2.content_hash);
 }
 
@@ -465,13 +590,27 @@ fn enrich_promotion_status_all_names_unique() {
 fn enrich_rejection_reason_display_all_non_empty() {
     let reasons = vec![
         RejectionReason::ProofNotVerified,
-        RejectionReason::InsufficientProofCoverage { coverage_millionths: 100, threshold_millionths: 900 },
-        RejectionReason::InsufficientSpeedup { speedup_millionths: 10, threshold_millionths: 100 },
+        RejectionReason::InsufficientProofCoverage {
+            coverage_millionths: 100,
+            threshold_millionths: 900,
+        },
+        RejectionReason::InsufficientSpeedup {
+            speedup_millionths: 10,
+            threshold_millionths: 100,
+        },
         RejectionReason::ActiveCounterexamples { count: 3 },
-        RejectionReason::CounterexampleSeverity { max_severity_millionths: 500, threshold_millionths: 0 },
-        RejectionReason::RegressionGateFailure { confidence_millionths: 100, threshold_millionths: 900 },
+        RejectionReason::CounterexampleSeverity {
+            max_severity_millionths: 500,
+            threshold_millionths: 0,
+        },
+        RejectionReason::RegressionGateFailure {
+            confidence_millionths: 100,
+            threshold_millionths: 900,
+        },
         RejectionReason::NoAotReceipt,
-        RejectionReason::TargetIneligible { target: PromotionTarget::AotArtifact },
+        RejectionReason::TargetIneligible {
+            target: PromotionTarget::AotArtifact,
+        },
     ];
     for r in &reasons {
         assert!(!r.to_string().is_empty());
@@ -489,7 +628,9 @@ fn enrich_rejection_reason_all_serde_roundtrip() {
         RejectionReason::ProofNotVerified,
         RejectionReason::NoAotReceipt,
         RejectionReason::ActiveCounterexamples { count: 3 },
-        RejectionReason::TargetIneligible { target: PromotionTarget::SupportSurface },
+        RejectionReason::TargetIneligible {
+            target: PromotionTarget::SupportSurface,
+        },
     ];
     for r in &reasons {
         let json = serde_json::to_string(r).unwrap();
@@ -563,9 +704,14 @@ fn enrich_evidence_verified_fields() {
 #[test]
 fn enrich_evidence_partial_fields() {
     let input = PartialEvidenceInput {
-        proof_verified: false, coverage: 500_000, speedup: 50_000,
-        counterexamples: 2, max_severity: 100_000,
-        regression_confidence: 300_000, aot_compiled: false, targets: aot_target(),
+        proof_verified: false,
+        coverage: 500_000,
+        speedup: 50_000,
+        counterexamples: 2,
+        max_severity: 100_000,
+        regression_confidence: 300_000,
+        aot_compiled: false,
+        targets: aot_target(),
     };
     let ev = PromotionEvidence::partial(input);
     assert!(!ev.proof_verified);

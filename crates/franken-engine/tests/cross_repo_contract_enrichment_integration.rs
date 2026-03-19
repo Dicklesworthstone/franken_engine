@@ -16,13 +16,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::cross_repo_contract::{
-    ContractSuiteResult, ContractViolation, FieldType, RegressionClass, SchemaContract,
-    VersionCompatibilityEntry, fastapi_endpoint_response_contract,
+    ContractSuiteResult, ContractViolation, FieldType, OPTIONAL_LOG_FIELDS, REQUIRED_LOG_FIELDS,
+    RegressionClass, SchemaContract, VersionCompatibilityEntry, fastapi_endpoint_response_contract,
     frankensqlite_migration_receipt_contract, frankensqlite_storage_event_contract,
-    frankensqlite_store_record_contract, frankentui_envelope_contract,
-    integration_point_inventory, verify_deterministic_serde, verify_error_code_format,
-    verify_schema_compliance, verify_structured_log, version_compatibility_registry,
-    OPTIONAL_LOG_FIELDS, REQUIRED_LOG_FIELDS,
+    frankensqlite_store_record_contract, frankentui_envelope_contract, integration_point_inventory,
+    verify_deterministic_serde, verify_error_code_format, verify_schema_compliance,
+    verify_structured_log, version_compatibility_registry,
 };
 
 // ---------------------------------------------------------------------------
@@ -175,7 +174,9 @@ fn schema_contract_verify_wrong_type_returns_violation() {
     });
     let violations = contract.verify(&json);
     assert!(
-        violations.iter().any(|v| v.detail.contains("expected type")),
+        violations
+            .iter()
+            .any(|v| v.detail.contains("expected type")),
         "should detect type mismatch for schema_version"
     );
 }
@@ -268,7 +269,10 @@ fn verify_structured_log_non_object() {
     let json = serde_json::json!("not_an_object");
     let violations = verify_structured_log(&json, "test");
     assert!(!violations.is_empty());
-    assert_eq!(violations[0].regression_class, RegressionClass::Observability);
+    assert_eq!(
+        violations[0].regression_class,
+        RegressionClass::Observability
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -43,7 +43,10 @@ fn failure_category_serde_all_variants() {
 
 #[test]
 fn failure_category_display_distinct() {
-    let displays: BTreeSet<String> = FailureCategory::all().iter().map(|c| c.to_string()).collect();
+    let displays: BTreeSet<String> = FailureCategory::all()
+        .iter()
+        .map(|c| c.to_string())
+        .collect();
     assert_eq!(displays.len(), 10);
 }
 
@@ -187,7 +190,13 @@ fn repro_input_different_category_different_hash() {
 
 #[test]
 fn repro_input_serde_roundtrip() {
-    let input = ReproInput::new("serde-test".into(), FailureCategory::SuspenseFailure, 150, 6, 3);
+    let input = ReproInput::new(
+        "serde-test".into(),
+        FailureCategory::SuspenseFailure,
+        150,
+        6,
+        3,
+    );
     let json = serde_json::to_string(&input).unwrap();
     let back: ReproInput = serde_json::from_str(&json).unwrap();
     assert_eq!(input, back);
@@ -251,8 +260,22 @@ fn minimized_repro_50_percent_reduction() {
 
 #[test]
 fn minimized_repro_hash_deterministic() {
-    let a = MinimizedRepro::new("x".into(), MinimizationStrategy::StateSlicing, 10, 100, true, 99);
-    let b = MinimizedRepro::new("x".into(), MinimizationStrategy::StateSlicing, 10, 100, true, 99);
+    let a = MinimizedRepro::new(
+        "x".into(),
+        MinimizationStrategy::StateSlicing,
+        10,
+        100,
+        true,
+        99,
+    );
+    let b = MinimizedRepro::new(
+        "x".into(),
+        MinimizationStrategy::StateSlicing,
+        10,
+        100,
+        true,
+        99,
+    );
     assert_eq!(a.repro_hash, b.repro_hash);
 }
 
@@ -552,8 +575,16 @@ fn engine_incomplete_coverage() {
     ));
     let report = engine.evaluate(epoch());
     assert_eq!(report.verdict, ExtractionVerdict::IncompleteCoverage);
-    assert!(report.categories_missing.contains(&FailureCategory::HydrationMismatch));
-    assert!(report.categories_missing.contains(&FailureCategory::JsxTransform));
+    assert!(
+        report
+            .categories_missing
+            .contains(&FailureCategory::HydrationMismatch)
+    );
+    assert!(
+        report
+            .categories_missing
+            .contains(&FailureCategory::JsxTransform)
+    );
 }
 
 #[test]
@@ -821,9 +852,21 @@ fn categories_covered_tracks_multiple() {
     ));
     let report = engine.evaluate(epoch());
     assert_eq!(report.categories_covered.len(), 3);
-    assert!(report.categories_covered.contains(&FailureCategory::RenderCrash));
-    assert!(report.categories_covered.contains(&FailureCategory::HookOrdering));
-    assert!(report.categories_covered.contains(&FailureCategory::JsxTransform));
+    assert!(
+        report
+            .categories_covered
+            .contains(&FailureCategory::RenderCrash)
+    );
+    assert!(
+        report
+            .categories_covered
+            .contains(&FailureCategory::HookOrdering)
+    );
+    assert!(
+        report
+            .categories_covered
+            .contains(&FailureCategory::JsxTransform)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -856,13 +899,7 @@ fn strict_config_all_categories_missing_when_empty() {
 fn strict_config_partial_coverage() {
     let mut engine = ExtractionEngine::new(ExtractionConfig::strict());
     for cat in FailureCategory::all().iter().take(5) {
-        engine.add_input(ReproInput::new(
-            format!("i-{}", cat),
-            *cat,
-            100,
-            3,
-            2,
-        ));
+        engine.add_input(ReproInput::new(format!("i-{}", cat), *cat, 100, 3, 2));
     }
     let report = engine.evaluate(epoch());
     assert_eq!(report.categories_missing.len(), 5);

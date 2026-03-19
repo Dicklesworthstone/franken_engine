@@ -157,7 +157,11 @@ fn key_hex_is_64_chars() {
 #[test]
 fn key_hex_is_lowercase() {
     let key = derive_idempotency_key(&test_session_key(), test_epoch(), &test_derivation_input());
-    assert!(key.to_hex().chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+    assert!(
+        key.to_hex()
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    );
 }
 
 #[test]
@@ -166,7 +170,12 @@ fn key_display_format() {
     let display = key.to_string();
     assert!(display.starts_with("idem:"));
     assert!(display.contains('@'));
-    let hex_part = display.strip_prefix("idem:").unwrap().split('@').next().unwrap();
+    let hex_part = display
+        .strip_prefix("idem:")
+        .unwrap()
+        .split('@')
+        .next()
+        .unwrap();
     assert_eq!(hex_part.len(), 64);
 }
 
@@ -216,11 +225,17 @@ fn key_ord_in_btreeset() {
 fn dedup_status_display() {
     assert_eq!(DedupStatus::InProgress.to_string(), "in_progress");
     assert_eq!(
-        DedupStatus::Completed { result_hash: test_result_hash() }.to_string(),
+        DedupStatus::Completed {
+            result_hash: test_result_hash()
+        }
+        .to_string(),
         "completed"
     );
     assert_eq!(
-        DedupStatus::Failed { error_code: "err".into() }.to_string(),
+        DedupStatus::Failed {
+            error_code: "err".into()
+        }
+        .to_string(),
         "failed"
     );
 }
@@ -229,8 +244,12 @@ fn dedup_status_display() {
 fn dedup_status_display_all_unique() {
     let statuses = [
         DedupStatus::InProgress,
-        DedupStatus::Completed { result_hash: test_result_hash() },
-        DedupStatus::Failed { error_code: "x".into() },
+        DedupStatus::Completed {
+            result_hash: test_result_hash(),
+        },
+        DedupStatus::Failed {
+            error_code: "x".into(),
+        },
     ];
     let set: BTreeSet<String> = statuses.iter().map(|s| s.to_string()).collect();
     assert_eq!(set.len(), 3);
@@ -240,8 +259,12 @@ fn dedup_status_display_all_unique() {
 fn dedup_status_serde_roundtrip() {
     let statuses = vec![
         DedupStatus::InProgress,
-        DedupStatus::Completed { result_hash: test_result_hash() },
-        DedupStatus::Failed { error_code: "timeout".into() },
+        DedupStatus::Completed {
+            result_hash: test_result_hash(),
+        },
+        DedupStatus::Failed {
+            error_code: "timeout".into(),
+        },
     ];
     for s in &statuses {
         let json = serde_json::to_string(s).unwrap();
@@ -258,12 +281,21 @@ fn dedup_status_serde_roundtrip() {
 fn dedup_result_display() {
     assert_eq!(DedupResult::New.to_string(), "new");
     assert_eq!(
-        DedupResult::CachedResult { result_hash: test_result_hash() }.to_string(),
+        DedupResult::CachedResult {
+            result_hash: test_result_hash()
+        }
+        .to_string(),
         "cached"
     );
-    assert_eq!(DedupResult::DuplicateInProgress.to_string(), "duplicate_in_progress");
     assert_eq!(
-        DedupResult::PreviouslyFailed { error_code: "err".into() }.to_string(),
+        DedupResult::DuplicateInProgress.to_string(),
+        "duplicate_in_progress"
+    );
+    assert_eq!(
+        DedupResult::PreviouslyFailed {
+            error_code: "err".into()
+        }
+        .to_string(),
         "previously_failed"
     );
 }
@@ -272,9 +304,13 @@ fn dedup_result_display() {
 fn dedup_result_display_all_unique() {
     let results = [
         DedupResult::New,
-        DedupResult::CachedResult { result_hash: test_result_hash() },
+        DedupResult::CachedResult {
+            result_hash: test_result_hash(),
+        },
         DedupResult::DuplicateInProgress,
-        DedupResult::PreviouslyFailed { error_code: "x".into() },
+        DedupResult::PreviouslyFailed {
+            error_code: "x".into(),
+        },
     ];
     let set: BTreeSet<String> = results.iter().map(|r| r.to_string()).collect();
     assert_eq!(set.len(), 4);
@@ -284,9 +320,13 @@ fn dedup_result_display_all_unique() {
 fn dedup_result_serde_roundtrip() {
     let results = vec![
         DedupResult::New,
-        DedupResult::CachedResult { result_hash: test_result_hash() },
+        DedupResult::CachedResult {
+            result_hash: test_result_hash(),
+        },
         DedupResult::DuplicateInProgress,
-        DedupResult::PreviouslyFailed { error_code: "err".into() },
+        DedupResult::PreviouslyFailed {
+            error_code: "err".into(),
+        },
     ];
     for r in &results {
         let json = serde_json::to_string(r).unwrap();
@@ -334,7 +374,9 @@ fn error_display_epoch_mismatch() {
 
 #[test]
 fn error_display_entry_not_found() {
-    let err = IdempotencyError::EntryNotFound { key_hex: "deadbeef".into() };
+    let err = IdempotencyError::EntryNotFound {
+        key_hex: "deadbeef".into(),
+    };
     let msg = err.to_string();
     assert!(msg.contains("deadbeef"));
     assert!(msg.contains("not found"));
@@ -368,7 +410,9 @@ fn error_serde_roundtrip() {
 
 #[test]
 fn error_implements_std_error() {
-    let err = IdempotencyError::EntryNotFound { key_hex: "abc".into() };
+    let err = IdempotencyError::EntryNotFound {
+        key_hex: "abc".into(),
+    };
     let dyn_err: &dyn std::error::Error = &err;
     assert!(!dyn_err.to_string().is_empty());
     assert!(dyn_err.source().is_none());
@@ -389,7 +433,9 @@ fn key_derivation_input_serde_roundtrip() {
 #[test]
 fn dedup_entry_serde_roundtrip() {
     let entry = DedupEntry {
-        status: DedupStatus::Completed { result_hash: test_result_hash() },
+        status: DedupStatus::Completed {
+            result_hash: test_result_hash(),
+        },
         computation_name: "comp".into(),
         created_at_ticks: 42,
         epoch: test_epoch(),
@@ -401,7 +447,10 @@ fn dedup_entry_serde_roundtrip() {
 
 #[test]
 fn retry_config_serde_roundtrip() {
-    let cfg = RetryConfig { max_retries: 5, entry_ttl_ticks: 1000 };
+    let cfg = RetryConfig {
+        max_retries: 5,
+        entry_ttl_ticks: 1000,
+    };
     let json = serde_json::to_string(&cfg).unwrap();
     let back: RetryConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(cfg, back);
@@ -492,11 +541,7 @@ fn store_failed_returns_previously_failed() {
 fn store_old_epoch_key_rejected() {
     let mut store = IdempotencyStore::new(SecurityEpoch::from_raw(2), test_session_key());
     let input = test_derivation_input();
-    let old_key = derive_idempotency_key(
-        &test_session_key(),
-        SecurityEpoch::from_raw(1),
-        &input,
-    );
+    let old_key = derive_idempotency_key(&test_session_key(), SecurityEpoch::from_raw(1), &input);
     let err = store.check_and_claim(&old_key, &input, 100).unwrap_err();
     assert!(matches!(err, IdempotencyError::EpochMismatch { .. }));
 }
@@ -505,11 +550,8 @@ fn store_old_epoch_key_rejected() {
 fn store_future_epoch_key_rejected() {
     let mut store = IdempotencyStore::new(SecurityEpoch::from_raw(1), test_session_key());
     let input = test_derivation_input();
-    let future_key = derive_idempotency_key(
-        &test_session_key(),
-        SecurityEpoch::from_raw(99),
-        &input,
-    );
+    let future_key =
+        derive_idempotency_key(&test_session_key(), SecurityEpoch::from_raw(99), &input);
     let err = store.check_and_claim(&future_key, &input, 100).unwrap_err();
     assert!(matches!(err, IdempotencyError::EpochMismatch { .. }));
 }
@@ -551,7 +593,10 @@ fn store_per_computation_ttl_eviction() {
     let mut store = IdempotencyStore::new(test_epoch(), test_session_key());
     store.set_retry_config(
         "short_ttl",
-        RetryConfig { max_retries: 3, entry_ttl_ticks: 50 },
+        RetryConfig {
+            max_retries: 3,
+            entry_ttl_ticks: 50,
+        },
     );
 
     let mut short = test_derivation_input();
@@ -713,7 +758,10 @@ fn retry_config_zero_max_retries() {
     let mut store = IdempotencyStore::new(test_epoch(), test_session_key());
     store.set_retry_config(
         "zero",
-        RetryConfig { max_retries: 0, entry_ttl_ticks: 600 },
+        RetryConfig {
+            max_retries: 0,
+            entry_ttl_ticks: 600,
+        },
     );
     let mut input = test_derivation_input();
     input.computation_name = "zero".into();

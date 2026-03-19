@@ -183,7 +183,10 @@ fn enrichment_finding_serde_roundtrip() {
 fn enrichment_inventory_from_scan() {
     let inventory = zero_placeholder_scan_inventory();
     assert_eq!(inventory.component, ZERO_PLACEHOLDER_SCAN_COMPONENT);
-    assert_eq!(inventory.findings.len(), ZERO_PLACEHOLDER_SCAN_FINDING_COUNT);
+    assert_eq!(
+        inventory.findings.len(),
+        ZERO_PLACEHOLDER_SCAN_FINDING_COUNT
+    );
 }
 
 #[test]
@@ -237,11 +240,8 @@ fn enrichment_subsystem_summary_serde_roundtrip() {
 #[test]
 fn enrichment_write_bundle_creates_files() {
     let out_dir = unique_dir("write_bundle");
-    let artifacts = write_zero_placeholder_scan_bundle(
-        &out_dir,
-        &[String::from("test-command")],
-    )
-    .unwrap();
+    let artifacts =
+        write_zero_placeholder_scan_bundle(&out_dir, &[String::from("test-command")]).unwrap();
     assert!(artifacts.inventory_path.exists());
     assert!(artifacts.trace_ids_path.exists());
     assert!(artifacts.run_manifest_path.exists());
@@ -252,11 +252,7 @@ fn enrichment_write_bundle_creates_files() {
 #[test]
 fn enrichment_write_bundle_trace_ids_deserializable() {
     let out_dir = unique_dir("trace_deser");
-    let artifacts = write_zero_placeholder_scan_bundle(
-        &out_dir,
-        &[String::from("cmd")],
-    )
-    .unwrap();
+    let artifacts = write_zero_placeholder_scan_bundle(&out_dir, &[String::from("cmd")]).unwrap();
     let bytes = std::fs::read(&artifacts.trace_ids_path).unwrap();
     let trace_ids: ZeroPlaceholderScanTraceIds = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(trace_ids.component, ZERO_PLACEHOLDER_SCAN_COMPONENT);
@@ -265,25 +261,20 @@ fn enrichment_write_bundle_trace_ids_deserializable() {
 #[test]
 fn enrichment_write_bundle_manifest_deserializable() {
     let out_dir = unique_dir("manifest_deser");
-    let artifacts = write_zero_placeholder_scan_bundle(
-        &out_dir,
-        &[String::from("cmd")],
-    )
-    .unwrap();
+    let artifacts = write_zero_placeholder_scan_bundle(&out_dir, &[String::from("cmd")]).unwrap();
     let bytes = std::fs::read(&artifacts.run_manifest_path).unwrap();
     let manifest: ZeroPlaceholderScanRunManifest = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(manifest.component, ZERO_PLACEHOLDER_SCAN_COMPONENT);
-    assert_eq!(manifest.finding_count, ZERO_PLACEHOLDER_SCAN_FINDING_COUNT as u64);
+    assert_eq!(
+        manifest.finding_count,
+        ZERO_PLACEHOLDER_SCAN_FINDING_COUNT as u64
+    );
 }
 
 #[test]
 fn enrichment_write_bundle_events_readable() {
     let out_dir = unique_dir("events");
-    let artifacts = write_zero_placeholder_scan_bundle(
-        &out_dir,
-        &[String::from("cmd")],
-    )
-    .unwrap();
+    let artifacts = write_zero_placeholder_scan_bundle(&out_dir, &[String::from("cmd")]).unwrap();
     let content = std::fs::read_to_string(&artifacts.events_path).unwrap();
     assert!(!content.is_empty());
     // Each line should be valid JSON
@@ -295,11 +286,9 @@ fn enrichment_write_bundle_events_readable() {
 #[test]
 fn enrichment_write_bundle_commands_contain_input() {
     let out_dir = unique_dir("commands");
-    let artifacts = write_zero_placeholder_scan_bundle(
-        &out_dir,
-        &[String::from("my-special-command")],
-    )
-    .unwrap();
+    let artifacts =
+        write_zero_placeholder_scan_bundle(&out_dir, &[String::from("my-special-command")])
+            .unwrap();
     let content = std::fs::read_to_string(&artifacts.commands_path).unwrap();
     assert!(content.contains("my-special-command"));
 }
@@ -352,15 +341,17 @@ fn enrichment_scan_event_serde_roundtrip() {
 #[test]
 fn enrichment_inventory_schema_version_correct() {
     let inventory = zero_placeholder_scan_inventory();
-    assert_eq!(inventory.schema_version, ZERO_PLACEHOLDER_SCAN_SCHEMA_VERSION);
+    assert_eq!(
+        inventory.schema_version,
+        ZERO_PLACEHOLDER_SCAN_SCHEMA_VERSION
+    );
 }
 
 #[test]
 fn enrichment_inventory_has_all_subsystems() {
     let inventory = zero_placeholder_scan_inventory();
     let summaries = inventory.subsystem_summaries();
-    let subsystems: std::collections::BTreeSet<_> =
-        summaries.iter().map(|s| s.subsystem).collect();
+    let subsystems: std::collections::BTreeSet<_> = summaries.iter().map(|s| s.subsystem).collect();
     assert!(subsystems.len() >= 2);
 }
 

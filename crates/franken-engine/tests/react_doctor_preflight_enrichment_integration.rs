@@ -160,7 +160,10 @@ fn enrichment_check_category_priority_weight_positive() {
 fn enrichment_config_default_includes_all() {
     let cfg = DoctorConfig::default();
     for cat in ALL_CATEGORIES {
-        assert!(cfg.is_category_enabled(*cat), "default should include {cat:?}");
+        assert!(
+            cfg.is_category_enabled(*cat),
+            "default should include {cat:?}"
+        );
     }
 }
 
@@ -248,7 +251,11 @@ fn enrichment_run_doctor_empty() {
 
 #[test]
 fn enrichment_run_doctor_info_nonblocking_critical_blocking() {
-    let info_entries = vec![make_entry("i1", MismatchDomain::HookSemantics, MismatchSeverity::Info)];
+    let info_entries = vec![make_entry(
+        "i1",
+        MismatchDomain::HookSemantics,
+        MismatchSeverity::Info,
+    )];
     let report_info = run_doctor(&default_config(), &info_entries).unwrap();
     assert!(!report_info.is_empty());
     assert_eq!(report_info.blocking_count(), 0);
@@ -271,7 +278,13 @@ fn enrichment_run_doctor_max_checks_limit() {
     let mut cfg = default_config();
     cfg.max_checks = 2;
     let entries: Vec<_> = (0..10)
-        .map(|i| make_entry(&format!("e-{i}"), MismatchDomain::Diagnostics, MismatchSeverity::Warning))
+        .map(|i| {
+            make_entry(
+                &format!("e-{i}"),
+                MismatchDomain::Diagnostics,
+                MismatchSeverity::Warning,
+            )
+        })
         .collect();
     let report = run_doctor(&cfg, &entries).unwrap();
     assert!(report.len() <= 2);
@@ -314,7 +327,11 @@ fn enrichment_run_doctor_filters_resolved() {
 fn enrichment_run_doctor_staleness_detection() {
     let mut cfg = default_config();
     cfg.current_epoch = epoch(50);
-    let mut e = make_entry("stale-1", MismatchDomain::Diagnostics, MismatchSeverity::Warning);
+    let mut e = make_entry(
+        "stale-1",
+        MismatchDomain::Diagnostics,
+        MismatchSeverity::Warning,
+    );
     e.verified_epoch = epoch(5); // 45 epochs behind
     let report = run_doctor(&cfg, &[e]).unwrap();
     let stale: Vec<_> = report
@@ -381,7 +398,11 @@ fn enrichment_support_bundle_from_empty() {
 #[test]
 fn enrichment_support_bundle_has_entries() {
     let entries = vec![
-        make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Warning),
+        make_entry(
+            "e1",
+            MismatchDomain::CompileOutput,
+            MismatchSeverity::Warning,
+        ),
         make_entry("e2", MismatchDomain::HookSemantics, MismatchSeverity::Error),
     ];
     let report = run_doctor(&default_config(), &entries).unwrap();
@@ -409,8 +430,16 @@ fn enrichment_guidance_empty_report() {
 #[test]
 fn enrichment_guidance_sorted_by_priority() {
     let entries = vec![
-        make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Warning),
-        make_entry("e2", MismatchDomain::HookSemantics, MismatchSeverity::Critical),
+        make_entry(
+            "e1",
+            MismatchDomain::CompileOutput,
+            MismatchSeverity::Warning,
+        ),
+        make_entry(
+            "e2",
+            MismatchDomain::HookSemantics,
+            MismatchSeverity::Critical,
+        ),
     ];
     let report = run_doctor(&default_config(), &entries).unwrap();
     let guidance = generate_guidance(&report).unwrap();
@@ -469,7 +498,11 @@ fn enrichment_summarize_empty_report() {
 #[test]
 fn enrichment_summarize_counts_match() {
     let entries = vec![
-        make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Warning),
+        make_entry(
+            "e1",
+            MismatchDomain::CompileOutput,
+            MismatchSeverity::Warning,
+        ),
         make_entry("e2", MismatchDomain::HookSemantics, MismatchSeverity::Error),
         make_entry("e3", MismatchDomain::Diagnostics, MismatchSeverity::Info),
     ];
@@ -494,10 +527,22 @@ fn enrichment_readiness_score() {
     let report = DoctorReport::new(epoch(1));
     assert_eq!(readiness_score(&report), 1_000_000);
 
-    let light = vec![make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Info)];
+    let light = vec![make_entry(
+        "e1",
+        MismatchDomain::CompileOutput,
+        MismatchSeverity::Info,
+    )];
     let heavy = vec![
-        make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Critical),
-        make_entry("e2", MismatchDomain::HookSemantics, MismatchSeverity::Critical),
+        make_entry(
+            "e1",
+            MismatchDomain::CompileOutput,
+            MismatchSeverity::Critical,
+        ),
+        make_entry(
+            "e2",
+            MismatchDomain::HookSemantics,
+            MismatchSeverity::Critical,
+        ),
     ];
     let r_light = run_doctor(&default_config(), &light).unwrap();
     let r_heavy = run_doctor(&default_config(), &heavy).unwrap();
@@ -511,7 +556,11 @@ fn enrichment_readiness_score() {
 #[test]
 fn enrichment_referenced_mismatch_ids_collects_all() {
     let entries = vec![
-        make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Warning),
+        make_entry(
+            "e1",
+            MismatchDomain::CompileOutput,
+            MismatchSeverity::Warning,
+        ),
         make_entry("e2", MismatchDomain::Diagnostics, MismatchSeverity::Error),
     ];
     let report = run_doctor(&default_config(), &entries).unwrap();
@@ -527,7 +576,11 @@ fn enrichment_referenced_mismatch_ids_collects_all() {
 #[test]
 fn enrichment_filter_by_categories_restricts() {
     let entries = vec![
-        make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Warning),
+        make_entry(
+            "e1",
+            MismatchDomain::CompileOutput,
+            MismatchSeverity::Warning,
+        ),
         make_entry("e2", MismatchDomain::HookSemantics, MismatchSeverity::Error),
     ];
     let report = run_doctor(&default_config(), &entries).unwrap();
@@ -545,7 +598,11 @@ fn enrichment_filter_by_categories_restricts() {
 #[test]
 fn enrichment_domain_triage_counts_open_only() {
     let entries = vec![
-        make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Warning),
+        make_entry(
+            "e1",
+            MismatchDomain::CompileOutput,
+            MismatchSeverity::Warning,
+        ),
         make_entry_full(
             "e2",
             MismatchDomain::CompileOutput,
@@ -571,12 +628,18 @@ fn enrichment_domain_triage_empty() {
 #[test]
 fn enrichment_doctor_error_display_all_unique() {
     let errors = vec![
-        DoctorError::CheckCapacityExceeded { current: 100, max: 50 },
+        DoctorError::CheckCapacityExceeded {
+            current: 100,
+            max: 50,
+        },
         DoctorError::GuidanceTooLong {
             guidance_id: "gd-0001".to_string(),
             len: 9999,
         },
-        DoctorError::BundleTooLarge { current: 6000, max: 5000 },
+        DoctorError::BundleTooLarge {
+            current: 6000,
+            max: 5000,
+        },
         DoctorError::EmptyInput,
         DoctorError::InvalidConfig {
             reason: "bad".to_string(),
@@ -597,12 +660,18 @@ fn enrichment_doctor_error_display_all_unique() {
 #[test]
 fn enrichment_doctor_error_serde_roundtrip() {
     let errors = vec![
-        DoctorError::CheckCapacityExceeded { current: 100, max: 50 },
+        DoctorError::CheckCapacityExceeded {
+            current: 100,
+            max: 50,
+        },
         DoctorError::GuidanceTooLong {
             guidance_id: "gd-0001".to_string(),
             len: 9999,
         },
-        DoctorError::BundleTooLarge { current: 6000, max: 5000 },
+        DoctorError::BundleTooLarge {
+            current: 6000,
+            max: 5000,
+        },
         DoctorError::EmptyInput,
         DoctorError::InvalidConfig {
             reason: "bad config".to_string(),
@@ -625,7 +694,11 @@ fn enrichment_doctor_error_serde_roundtrip() {
 
 #[test]
 fn enrichment_serde_roundtrip_doctor_report() {
-    let entries = vec![make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Warning)];
+    let entries = vec![make_entry(
+        "e1",
+        MismatchDomain::CompileOutput,
+        MismatchSeverity::Warning,
+    )];
     let report = run_doctor(&default_config(), &entries).unwrap();
     let json = serde_json::to_string(&report).unwrap();
     let back: DoctorReport = serde_json::from_str(&json).unwrap();
@@ -635,7 +708,11 @@ fn enrichment_serde_roundtrip_doctor_report() {
 
 #[test]
 fn enrichment_serde_roundtrip_preflight_result() {
-    let entries = vec![make_entry("e1", MismatchDomain::HookSemantics, MismatchSeverity::Error)];
+    let entries = vec![make_entry(
+        "e1",
+        MismatchDomain::HookSemantics,
+        MismatchSeverity::Error,
+    )];
     let result = run_preflight(&default_config(), &entries).unwrap();
     let json = serde_json::to_string(&result).unwrap();
     let back: PreflightResult = serde_json::from_str(&json).unwrap();
@@ -658,7 +735,11 @@ fn enrichment_serde_roundtrip_doctor_config() {
 #[test]
 fn enrichment_deterministic_report_hash() {
     let entries = vec![
-        make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Warning),
+        make_entry(
+            "e1",
+            MismatchDomain::CompileOutput,
+            MismatchSeverity::Warning,
+        ),
         make_entry("e2", MismatchDomain::HookSemantics, MismatchSeverity::Error),
     ];
     let r1 = run_doctor(&default_config(), &entries).unwrap();

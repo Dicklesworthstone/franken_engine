@@ -1928,7 +1928,10 @@ mod tests {
 
     #[test]
     fn regime_label_display_all_variants() {
-        assert_eq!(RegimeLabel::Classified(Regime::Normal).to_string(), "normal");
+        assert_eq!(
+            RegimeLabel::Classified(Regime::Normal).to_string(),
+            "normal"
+        );
         assert_eq!(
             RegimeLabel::Classified(Regime::Elevated).to_string(),
             "elevated"
@@ -2133,7 +2136,12 @@ mod tests {
     #[test]
     fn extract_signature_all_negative_values() {
         let config = SignatureConfig::default();
-        let trace = make_trace("neg", "metric", &[-500_000, -600_000, -400_000, -550_000], 1);
+        let trace = make_trace(
+            "neg",
+            "metric",
+            &[-500_000, -600_000, -400_000, -550_000],
+            1,
+        );
         let sig = extract_signature(&trace, &config);
         assert!(sig.valid);
         // The single bucket that contains all observations should have a negative mean.
@@ -2254,11 +2262,7 @@ mod tests {
 
     #[test]
     fn make_multi_feature_trace_helper_sequential_seqs() {
-        let trace = make_multi_feature_trace(
-            "t",
-            &[("a", &[10, 20]), ("b", &[30, 40, 50])],
-            1,
-        );
+        let trace = make_multi_feature_trace("t", &[("a", &[10, 20]), ("b", &[30, 40, 50])], 1);
         assert_eq!(trace.observations.len(), 5);
         for (i, obs) in trace.observations.iter().enumerate() {
             assert_eq!(obs.seq, i as u64);
@@ -2343,7 +2347,10 @@ mod tests {
         let trace = make_trace("t", "cpu", &[500_000, 500_000, 500_000, 500_000], 1);
         let sig = extract_signature(&trace, &config);
         let (_, conf) = classify_regime(&sig, &config);
-        assert!(conf <= MILLION, "confidence {conf} should not exceed MILLION");
+        assert!(
+            conf <= MILLION,
+            "confidence {conf} should not exceed MILLION"
+        );
     }
 
     #[test]

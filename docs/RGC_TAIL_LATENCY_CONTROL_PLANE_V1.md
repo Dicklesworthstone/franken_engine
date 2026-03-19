@@ -42,7 +42,12 @@ Heavy execution must stay on `rch`:
 ```bash
 ./scripts/run_rgc_tail_latency_control_plane.sh ci
 ./scripts/e2e/rgc_tail_latency_control_plane_replay.sh ci
+RGC_TAIL_LATENCY_CONTROL_PLANE_PROFILE=balanced \
+  ./scripts/run_rgc_tail_latency_control_plane.sh ci
 ```
 
 The synthetic contention profile is expected to engage fallback guardrails.
 That is a feature of the stress artifact, not a test failure.
+
+The balanced profile is expected to stay nominal with
+`guardrails.fallback_activated == false`.

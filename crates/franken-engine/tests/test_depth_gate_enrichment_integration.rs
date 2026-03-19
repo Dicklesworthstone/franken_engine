@@ -213,7 +213,11 @@ fn enrichment_obligation_missing_partial_count() {
     let mut observed = BTreeMap::new();
     observed.insert(FailureMode::Timeout, 1);
     let missing = o.missing_modes(&observed);
-    assert!(missing.iter().any(|m| m.mode == FailureMode::Timeout && m.observed == 1));
+    assert!(
+        missing
+            .iter()
+            .any(|m| m.mode == FailureMode::Timeout && m.observed == 1)
+    );
 }
 
 // ---------------------------------------------------------------------------

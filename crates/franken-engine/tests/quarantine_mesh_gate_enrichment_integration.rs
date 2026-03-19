@@ -275,7 +275,11 @@ fn enrichment_different_seeds_different_digests() {
         let result = runner.run_all();
         digests.insert(result.result_digest);
     }
-    assert_eq!(digests.len(), 10, "10 different seeds should produce 10 different digests");
+    assert_eq!(
+        digests.len(),
+        10,
+        "10 different seeds should produce 10 different digests"
+    );
 }
 
 // ===========================================================================
@@ -393,8 +397,16 @@ fn enrichment_criteria_have_nonempty_name_and_detail() {
     let result = runner.run_all();
     for s in &result.scenarios {
         for c in &s.criteria {
-            assert!(!c.name.is_empty(), "criterion name empty in {}", s.scenario_id);
-            assert!(!c.detail.is_empty(), "criterion detail empty in {}", s.scenario_id);
+            assert!(
+                !c.name.is_empty(),
+                "criterion name empty in {}",
+                s.scenario_id
+            );
+            assert!(
+                !c.detail.is_empty(),
+                "criterion detail empty in {}",
+                s.scenario_id
+            );
         }
     }
 }
@@ -571,7 +583,10 @@ fn enrichment_trace_id_contains_hex_seed() {
     let mut runner = QuarantineMeshGateRunner::new(0xCAFE);
     let result = runner.run_all();
     let trace = &result.events[0].trace_id;
-    assert!(trace.contains("cafe"), "trace_id should contain hex seed: {trace}");
+    assert!(
+        trace.contains("cafe"),
+        "trace_id should contain hex seed: {trace}"
+    );
 }
 
 // ===========================================================================

@@ -82,7 +82,10 @@ fn enrichment_capability_denial_specific_labels() {
         CapabilityDenialReason::InsufficientAuthority.as_label(),
         "insufficient_authority"
     );
-    assert_eq!(CapabilityDenialReason::NotYetValid.as_label(), "not_yet_valid");
+    assert_eq!(
+        CapabilityDenialReason::NotYetValid.as_label(),
+        "not_yet_valid"
+    );
 }
 
 // =========================================================================
@@ -116,7 +119,10 @@ fn enrichment_checkpoint_violation_labels() {
         CheckpointViolationType::RollbackAttempt.as_label(),
         "rollback_attempt"
     );
-    assert_eq!(CheckpointViolationType::ForkDetected.as_label(), "fork_detected");
+    assert_eq!(
+        CheckpointViolationType::ForkDetected.as_label(),
+        "fork_detected"
+    );
 }
 
 // =========================================================================
@@ -336,14 +342,20 @@ fn enrichment_auth_failure_token_content_redacted() {
 fn enrichment_capability_denial_empty_name_becomes_unspecified() {
     let mut obs = RuntimeSecurityObservability::new();
     let event = obs.record_capability_denial(ctx(1), CapabilityDenialReason::Expired, "");
-    assert_eq!(event.metadata.get("requested_capability").unwrap(), "unspecified");
+    assert_eq!(
+        event.metadata.get("requested_capability").unwrap(),
+        "unspecified"
+    );
 }
 
 #[test]
 fn enrichment_capability_denial_normal_name_preserved() {
     let mut obs = RuntimeSecurityObservability::new();
-    let event =
-        obs.record_capability_denial(ctx(1), CapabilityDenialReason::CeilingExceeded, "net.connect");
+    let event = obs.record_capability_denial(
+        ctx(1),
+        CapabilityDenialReason::CeilingExceeded,
+        "net.connect",
+    );
     assert_eq!(
         event.metadata.get("requested_capability").unwrap(),
         "net.connect"
@@ -357,8 +369,13 @@ fn enrichment_capability_denial_normal_name_preserved() {
 #[test]
 fn enrichment_replay_drop_session_id_redacted() {
     let mut obs = RuntimeSecurityObservability::new();
-    let event =
-        obs.record_replay_drop(ctx(1), ReplayDropReason::StaleSeq, 5, 10, "secret-session-id");
+    let event = obs.record_replay_drop(
+        ctx(1),
+        ReplayDropReason::StaleSeq,
+        5,
+        10,
+        "secret-session-id",
+    );
     let sid = event.metadata.get("session_id_hash").unwrap();
     assert!(sid.starts_with("sha256:"));
     assert!(!sid.contains("secret-session-id"));
@@ -409,7 +426,14 @@ fn enrichment_revocation_check_staleness_gap_no_underflow() {
 #[test]
 fn enrichment_revocation_stale_updates_degraded_gauge() {
     let mut obs = RuntimeSecurityObservability::new();
-    obs.record_revocation_check(ctx(1), RevocationCheckOutcome::Stale, 50, 100, 60, Some(500));
+    obs.record_revocation_check(
+        ctx(1),
+        RevocationCheckOutcome::Stale,
+        50,
+        100,
+        60,
+        Some(500),
+    );
     assert_eq!(obs.metrics().revocation_freshness_degraded_seconds, 500);
 }
 
@@ -423,7 +447,14 @@ fn enrichment_revocation_stale_without_seconds_uses_zero() {
 #[test]
 fn enrichment_revocation_pass_does_not_reset_gauge() {
     let mut obs = RuntimeSecurityObservability::new();
-    obs.record_revocation_check(ctx(1), RevocationCheckOutcome::Stale, 50, 100, 60, Some(300));
+    obs.record_revocation_check(
+        ctx(1),
+        RevocationCheckOutcome::Stale,
+        50,
+        100,
+        60,
+        Some(300),
+    );
     obs.record_revocation_check(ctx(2), RevocationCheckOutcome::Pass, 100, 100, 60, None);
     assert_eq!(obs.metrics().revocation_freshness_degraded_seconds, 300);
 }
@@ -532,8 +563,18 @@ fn enrichment_counters_isolated_across_event_types() {
     obs.record_capability_denial(ctx(2), CapabilityDenialReason::Expired, "c");
 
     let m = obs.metrics();
-    assert_eq!(*m.auth_failure_total.get(&AuthFailureType::KeyExpired).unwrap(), 1);
-    assert_eq!(*m.capability_denial_total.get(&CapabilityDenialReason::Expired).unwrap(), 1);
+    assert_eq!(
+        *m.auth_failure_total
+            .get(&AuthFailureType::KeyExpired)
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        *m.capability_denial_total
+            .get(&CapabilityDenialReason::Expired)
+            .unwrap(),
+        1
+    );
     // Other auth failure types should still be zero
     assert_eq!(
         *m.auth_failure_total

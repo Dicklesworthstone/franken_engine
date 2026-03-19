@@ -261,7 +261,11 @@ fn enrich_report_many_cells_all_have_verdicts() {
     let report = evaluate_supremacy(&ms, &config, &epoch(), 1000).unwrap();
     assert_eq!(report.cell_verdicts.len(), 20);
     // With 50 observations of strong signal (300 vs 1000), all should be confirmed
-    let confirmed = report.cell_verdicts.iter().filter(|v| v.verdict == SupremacyVerdict::Confirmed).count();
+    let confirmed = report
+        .cell_verdicts
+        .iter()
+        .filter(|v| v.verdict == SupremacyVerdict::Confirmed)
+        .count();
     assert_eq!(confirmed, 20);
 }
 
@@ -275,8 +279,13 @@ fn enrich_verdict_error_all_variants_serde() {
         VerdictError::NoMeasurements,
         VerdictError::TooManyCells { count: 300 },
         VerdictError::TooManySideConstraints { count: 50 },
-        VerdictError::InvalidConfig { field: "alpha".into(), detail: "out of range".into() },
-        VerdictError::UnknownCell { cell_id: "x".into() },
+        VerdictError::InvalidConfig {
+            field: "alpha".into(),
+            detail: "out of range".into(),
+        },
+        VerdictError::UnknownCell {
+            cell_id: "x".into(),
+        },
     ];
     for e in &errors {
         let json = serde_json::to_string(e).unwrap();
@@ -298,7 +307,11 @@ fn enrich_observability_mode_matching_passes() {
         .collect();
     let report = evaluate_supremacy(&ms, &config, &epoch(), 1000).unwrap();
     let cv = &report.cell_verdicts[0];
-    assert!(!cv.violations.iter().any(|v| v.kind == SideConstraintKind::ObservabilityMismatch));
+    assert!(
+        !cv.violations
+            .iter()
+            .any(|v| v.kind == SideConstraintKind::ObservabilityMismatch)
+    );
 }
 
 #[test]
@@ -319,7 +332,11 @@ fn enrich_observability_mode_multiple_required_all_present() {
     }
     let report = evaluate_supremacy(&ms, &config, &epoch(), 1000).unwrap();
     let cv = &report.cell_verdicts[0];
-    assert!(!cv.violations.iter().any(|v| v.kind == SideConstraintKind::ObservabilityMismatch));
+    assert!(
+        !cv.violations
+            .iter()
+            .any(|v| v.kind == SideConstraintKind::ObservabilityMismatch)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -534,7 +551,9 @@ fn enrich_confirmed_fraction_zero_when_all_rejected() {
 fn enrich_verdict_report_serde_with_violations() {
     let mut config = relaxed_config();
     config.max_crash_rate = 1;
-    let ms: Vec<_> = (0..20).map(|_| measurement_with_crash("c1", 500, 1000)).collect();
+    let ms: Vec<_> = (0..20)
+        .map(|_| measurement_with_crash("c1", 500, 1000))
+        .collect();
     let report = evaluate_supremacy(&ms, &config, &epoch(), 1000).unwrap();
     assert!(report.total_violations > 0);
     let json = serde_json::to_string(&report).unwrap();
@@ -554,7 +573,11 @@ fn enrich_memory_negative_delta_no_violation() {
         .collect();
     let report = evaluate_supremacy(&ms, &config, &epoch(), 1000).unwrap();
     let cv = &report.cell_verdicts[0];
-    assert!(!cv.violations.iter().any(|v| v.kind == SideConstraintKind::MemoryRegression));
+    assert!(
+        !cv.violations
+            .iter()
+            .any(|v| v.kind == SideConstraintKind::MemoryRegression)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -569,7 +592,11 @@ fn enrich_tail_equal_no_violation() {
         .collect();
     let report = evaluate_supremacy(&ms, &config, &epoch(), 1000).unwrap();
     let cv = &report.cell_verdicts[0];
-    assert!(!cv.violations.iter().any(|v| v.kind == SideConstraintKind::TailLatencyRegression));
+    assert!(
+        !cv.violations
+            .iter()
+            .any(|v| v.kind == SideConstraintKind::TailLatencyRegression)
+    );
 }
 
 // ---------------------------------------------------------------------------

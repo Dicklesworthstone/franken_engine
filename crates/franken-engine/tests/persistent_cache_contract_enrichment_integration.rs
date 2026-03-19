@@ -7,12 +7,12 @@ use frankenengine_engine::module_cache::{
     CacheContext, CacheInsertRequest, ModuleCache, ModuleVersionFingerprint,
 };
 use frankenengine_engine::persistent_cache_contract::{
-    apply_rollback_plan, emit_default_contract_bundle, render_summary, verify_receipt,
-    ArtifactContext, CacheConsumerRoute, CacheRollbackPlan, ContractScenarioResult,
-    InvalidationRule, PersistentCacheContractError, PersistentCacheKeyMaterial,
-    PersistentCacheReceipt, StructuredLogEvent, TraceIdsArtifact, BEAD_ID, COMPONENT,
-    CONTRACT_SCHEMA_VERSION, RECEIPT_SCHEMA_VERSION, ROLLBACK_PLAN_SCHEMA_VERSION,
-    RUN_MANIFEST_SCHEMA_VERSION, TRACE_IDS_SCHEMA_VERSION,
+    ArtifactContext, BEAD_ID, COMPONENT, CONTRACT_SCHEMA_VERSION, CacheConsumerRoute,
+    CacheRollbackPlan, ContractScenarioResult, InvalidationRule, PersistentCacheContractError,
+    PersistentCacheKeyMaterial, PersistentCacheReceipt, RECEIPT_SCHEMA_VERSION,
+    ROLLBACK_PLAN_SCHEMA_VERSION, RUN_MANIFEST_SCHEMA_VERSION, StructuredLogEvent,
+    TRACE_IDS_SCHEMA_VERSION, TraceIdsArtifact, apply_rollback_plan, emit_default_contract_bundle,
+    render_summary, verify_receipt,
 };
 
 // ---------------------------------------------------------------------------
@@ -196,7 +196,11 @@ fn serde_persistent_cache_contract_error_all_serialize() {
         assert!(!json.is_empty());
         jsons.insert(json);
     }
-    assert_eq!(jsons.len(), variants.len(), "all variants produce distinct JSON");
+    assert_eq!(
+        jsons.len(),
+        variants.len(),
+        "all variants produce distinct JSON"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -557,7 +561,11 @@ fn emit_default_bundle_all_scenarios_pass() {
     let context = ArtifactContext::new(&artifact_dir);
     let report = emit_default_contract_bundle(&context).expect("bundle write");
     for scenario in &report.contract.scenarios {
-        assert_eq!(scenario.outcome, "pass", "scenario {} should pass", scenario.scenario_id);
+        assert_eq!(
+            scenario.outcome, "pass",
+            "scenario {} should pass",
+            scenario.scenario_id
+        );
     }
     let _ = std::fs::remove_dir_all(&artifact_dir);
 }

@@ -96,7 +96,10 @@ fn enrichment_single_lever_one_below_threshold_denied() {
     let decision = evaluate_one_lever_policy(&req);
     assert!(!decision.allows_change());
     assert!(decision.blocked);
-    assert_eq!(decision.error_code.as_deref(), Some(ERROR_SCORE_BELOW_THRESHOLD));
+    assert_eq!(
+        decision.error_code.as_deref(),
+        Some(ERROR_SCORE_BELOW_THRESHOLD)
+    );
 }
 
 #[test]
@@ -104,7 +107,10 @@ fn enrichment_zero_score_denied() {
     let req = exec_opt_request(0);
     let decision = evaluate_one_lever_policy(&req);
     assert!(!decision.allows_change());
-    assert_eq!(decision.error_code.as_deref(), Some(ERROR_SCORE_BELOW_THRESHOLD));
+    assert_eq!(
+        decision.error_code.as_deref(),
+        Some(ERROR_SCORE_BELOW_THRESHOLD)
+    );
 }
 
 #[test]
@@ -139,7 +145,10 @@ fn enrichment_multi_lever_without_override_denied() {
     let decision = evaluate_one_lever_policy(&req);
     assert!(!decision.allows_change());
     assert!(decision.is_multi_lever);
-    assert_eq!(decision.error_code.as_deref(), Some(ERROR_MULTI_LEVER_VIOLATION));
+    assert_eq!(
+        decision.error_code.as_deref(),
+        Some(ERROR_MULTI_LEVER_VIOLATION)
+    );
 }
 
 #[test]
@@ -159,7 +168,10 @@ fn enrichment_multi_lever_with_override_and_high_score_allowed() {
     let decision = evaluate_one_lever_policy(&req);
     assert!(decision.allows_change());
     assert!(decision.is_multi_lever);
-    assert_eq!(decision.override_reason.as_deref(), Some("gc and interpreter coupled"));
+    assert_eq!(
+        decision.override_reason.as_deref(),
+        Some("gc and interpreter coupled")
+    );
 }
 
 #[test]
@@ -178,7 +190,10 @@ fn enrichment_multi_lever_override_below_threshold_still_denied() {
     };
     let decision = evaluate_one_lever_policy(&req);
     assert!(!decision.allows_change());
-    assert_eq!(decision.error_code.as_deref(), Some(ERROR_SCORE_BELOW_THRESHOLD));
+    assert_eq!(
+        decision.error_code.as_deref(),
+        Some(ERROR_SCORE_BELOW_THRESHOLD)
+    );
 }
 
 #[test]
@@ -188,7 +203,11 @@ fn enrichment_missing_single_evidence_field_denied() {
     let decision = evaluate_one_lever_policy(&req);
     assert!(!decision.allows_change());
     assert_eq!(decision.error_code.as_deref(), Some(ERROR_MISSING_EVIDENCE));
-    assert!(decision.missing_requirements.contains(&"baseline_benchmark_run_id".to_string()));
+    assert!(
+        decision
+            .missing_requirements
+            .contains(&"baseline_benchmark_run_id".to_string())
+    );
 }
 
 #[test]
@@ -257,7 +276,11 @@ fn enrichment_normalization_empty_evidence_becomes_none() {
     let decision = evaluate_one_lever_policy(&req);
     // baseline_benchmark_run_id is now missing after trim -> None
     assert!(!decision.allows_change());
-    assert!(decision.missing_requirements.contains(&"baseline_benchmark_run_id".to_string()));
+    assert!(
+        decision
+            .missing_requirements
+            .contains(&"baseline_benchmark_run_id".to_string())
+    );
 }
 
 #[test]
@@ -299,11 +322,16 @@ fn enrichment_events_all_have_correct_component() {
 fn enrichment_events_include_path_classification_for_opt_change() {
     let req = exec_opt_request(3_000_000);
     let decision = evaluate_one_lever_policy(&req);
-    let classify_events: Vec<_> = decision.events.iter()
+    let classify_events: Vec<_> = decision
+        .events
+        .iter()
         .filter(|e| e.event == "changed_path_classified")
         .collect();
     assert_eq!(classify_events.len(), 1);
-    assert_eq!(classify_events[0].lever_category.as_deref(), Some("execution"));
+    assert_eq!(
+        classify_events[0].lever_category.as_deref(),
+        Some("execution")
+    );
 }
 
 #[test]
@@ -315,7 +343,7 @@ fn enrichment_lever_categories_sorted_deterministically() {
         commit_sha: "abc".to_string(),
         commit_message: "fix: [multi-lever: coupled]".to_string(),
         changed_paths: vec![
-            "crates/franken-engine/src/gc_pause.rs".to_string(),          // Memory
+            "crates/franken-engine/src/gc_pause.rs".to_string(), // Memory
             "crates/franken-engine/src/baseline_interpreter.rs".to_string(), // Execution
         ],
         evidence: full_evidence(5_000_000),
@@ -358,18 +386,36 @@ fn enrichment_serde_roundtrip_validation_failed_decision() {
 
 #[test]
 fn enrichment_lever_category_serde_snake_case() {
-    assert_eq!(serde_json::to_string(&LeverCategory::Execution).unwrap(), "\"execution\"");
-    assert_eq!(serde_json::to_string(&LeverCategory::Memory).unwrap(), "\"memory\"");
-    assert_eq!(serde_json::to_string(&LeverCategory::Security).unwrap(), "\"security\"");
-    assert_eq!(serde_json::to_string(&LeverCategory::Benchmark).unwrap(), "\"benchmark\"");
-    assert_eq!(serde_json::to_string(&LeverCategory::Config).unwrap(), "\"config\"");
+    assert_eq!(
+        serde_json::to_string(&LeverCategory::Execution).unwrap(),
+        "\"execution\""
+    );
+    assert_eq!(
+        serde_json::to_string(&LeverCategory::Memory).unwrap(),
+        "\"memory\""
+    );
+    assert_eq!(
+        serde_json::to_string(&LeverCategory::Security).unwrap(),
+        "\"security\""
+    );
+    assert_eq!(
+        serde_json::to_string(&LeverCategory::Benchmark).unwrap(),
+        "\"benchmark\""
+    );
+    assert_eq!(
+        serde_json::to_string(&LeverCategory::Config).unwrap(),
+        "\"config\""
+    );
 }
 
 #[test]
 fn enrichment_lever_category_display_all_unique() {
     let cats = [
-        LeverCategory::Execution, LeverCategory::Memory,
-        LeverCategory::Security, LeverCategory::Benchmark, LeverCategory::Config,
+        LeverCategory::Execution,
+        LeverCategory::Memory,
+        LeverCategory::Security,
+        LeverCategory::Benchmark,
+        LeverCategory::Config,
     ];
     let set: BTreeSet<String> = cats.iter().map(|c| c.to_string()).collect();
     assert_eq!(set.len(), 5);
@@ -378,8 +424,11 @@ fn enrichment_lever_category_display_all_unique() {
 #[test]
 fn enrichment_lever_category_as_str_matches_display() {
     for cat in [
-        LeverCategory::Execution, LeverCategory::Memory,
-        LeverCategory::Security, LeverCategory::Benchmark, LeverCategory::Config,
+        LeverCategory::Execution,
+        LeverCategory::Memory,
+        LeverCategory::Security,
+        LeverCategory::Benchmark,
+        LeverCategory::Config,
     ] {
         assert_eq!(cat.as_str(), cat.to_string());
     }
@@ -388,19 +437,31 @@ fn enrichment_lever_category_as_str_matches_display() {
 #[test]
 fn enrichment_lever_category_ord_stable() {
     let mut cats = vec![
-        LeverCategory::Config, LeverCategory::Execution,
-        LeverCategory::Benchmark, LeverCategory::Memory, LeverCategory::Security,
+        LeverCategory::Config,
+        LeverCategory::Execution,
+        LeverCategory::Benchmark,
+        LeverCategory::Memory,
+        LeverCategory::Security,
     ];
     cats.sort();
-    assert_eq!(cats, vec![
-        LeverCategory::Execution, LeverCategory::Memory,
-        LeverCategory::Security, LeverCategory::Benchmark, LeverCategory::Config,
-    ]);
+    assert_eq!(
+        cats,
+        vec![
+            LeverCategory::Execution,
+            LeverCategory::Memory,
+            LeverCategory::Security,
+            LeverCategory::Benchmark,
+            LeverCategory::Config,
+        ]
+    );
 }
 
 #[test]
 fn enrichment_schema_version_and_constants_stable() {
-    assert_eq!(ONE_LEVER_POLICY_SCHEMA_VERSION, "franken-engine.one-lever-policy.v1");
+    assert_eq!(
+        ONE_LEVER_POLICY_SCHEMA_VERSION,
+        "franken-engine.one-lever-policy.v1"
+    );
     assert_eq!(ONE_LEVER_SCORE_THRESHOLD_MILLIONTHS, 2_000_000);
     assert_eq!(ERROR_INVALID_REQUEST, "FE-1LEV-1001");
     assert_eq!(ERROR_MULTI_LEVER_VIOLATION, "FE-1LEV-1002");
@@ -412,7 +473,10 @@ fn enrichment_schema_version_and_constants_stable() {
 fn enrichment_decision_always_has_schema_version_and_threshold() {
     let decision = evaluate_one_lever_policy(&doc_request());
     assert_eq!(decision.schema_version, ONE_LEVER_POLICY_SCHEMA_VERSION);
-    assert_eq!(decision.score_threshold_millionths, ONE_LEVER_SCORE_THRESHOLD_MILLIONTHS);
+    assert_eq!(
+        decision.score_threshold_millionths,
+        ONE_LEVER_SCORE_THRESHOLD_MILLIONTHS
+    );
 }
 
 #[test]

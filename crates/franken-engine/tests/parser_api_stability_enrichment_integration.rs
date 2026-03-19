@@ -54,7 +54,11 @@ fn enrichment_minimum_compatible_ast_contract_nonempty() {
 
 #[test]
 fn enrichment_evolution_rule_all_variants_serde() {
-    for rule in [EvolutionRule::AdditiveOnly, EvolutionRule::Frozen, EvolutionRule::Internal] {
+    for rule in [
+        EvolutionRule::AdditiveOnly,
+        EvolutionRule::Frozen,
+        EvolutionRule::Internal,
+    ] {
         let json = serde_json::to_string(&rule).unwrap();
         let back: EvolutionRule = serde_json::from_str(&json).unwrap();
         assert_eq!(rule, back);
@@ -180,7 +184,11 @@ fn enrichment_manifest_canonical_value_has_entries() {
 
 #[test]
 fn enrichment_check_verdict_serde_all() {
-    for v in [CheckVerdict::Pass, CheckVerdict::Fail, CheckVerdict::Skipped] {
+    for v in [
+        CheckVerdict::Pass,
+        CheckVerdict::Fail,
+        CheckVerdict::Skipped,
+    ] {
         let json = serde_json::to_string(&v).unwrap();
         let back: CheckVerdict = serde_json::from_str(&json).unwrap();
         assert_eq!(v, back);
@@ -223,7 +231,14 @@ fn enrichment_compatibility_report_serde_roundtrip() {
 #[test]
 fn enrichment_compatibility_report_pass_fail_counts() {
     let report = run_compatibility_checks();
-    assert_eq!(report.pass_count() + report.fail_count(), report.results.iter().filter(|r| r.verdict != CheckVerdict::Skipped).count());
+    assert_eq!(
+        report.pass_count() + report.fail_count(),
+        report
+            .results
+            .iter()
+            .filter(|r| r.verdict != CheckVerdict::Skipped)
+            .count()
+    );
 }
 
 #[test]
@@ -439,7 +454,8 @@ fn enrichment_integration_outcome_serde_all() {
 fn enrichment_integration_log_entry_from_parse_success() {
     let (result, event_ir) = parse_with_audit("var z = 3;", ParseGoal::Script);
     let tree = result.unwrap();
-    let entry = IntegrationLogEntry::from_parse_success("test.js", ParseGoal::Script, &tree, &event_ir);
+    let entry =
+        IntegrationLogEntry::from_parse_success("test.js", ParseGoal::Script, &tree, &event_ir);
     assert_eq!(entry.operation, "parse");
     assert_eq!(entry.source_label, "test.js");
     assert_eq!(entry.goal, ParseGoal::Script);
@@ -452,7 +468,8 @@ fn enrichment_integration_log_entry_from_parse_success() {
 fn enrichment_integration_log_entry_serde_roundtrip() {
     let (result, event_ir) = parse_with_audit("1;", ParseGoal::Script);
     let tree = result.unwrap();
-    let entry = IntegrationLogEntry::from_parse_success("a.js", ParseGoal::Script, &tree, &event_ir);
+    let entry =
+        IntegrationLogEntry::from_parse_success("a.js", ParseGoal::Script, &tree, &event_ir);
     let json = serde_json::to_string(&entry).unwrap();
     let back: IntegrationLogEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(entry, back);
@@ -462,7 +479,8 @@ fn enrichment_integration_log_entry_serde_roundtrip() {
 fn enrichment_integration_log_entry_canonical_value_has_goal() {
     let (result, event_ir) = parse_with_audit("2;", ParseGoal::Script);
     let tree = result.unwrap();
-    let entry = IntegrationLogEntry::from_parse_success("b.js", ParseGoal::Script, &tree, &event_ir);
+    let entry =
+        IntegrationLogEntry::from_parse_success("b.js", ParseGoal::Script, &tree, &event_ir);
     let cv = entry.canonical_value();
     let debug = format!("{:?}", cv);
     assert!(debug.contains("goal"));

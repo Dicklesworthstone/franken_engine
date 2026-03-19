@@ -20,12 +20,11 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::render_lane_specializer::{
-    BatchSummary, ComponentShape, DecisionReceipt, LaneKind, SafetyCheck, SafetyCheckKind,
-    SpecializationConfig, SpecializationError, SpecializationRequest, SpecializationStrategy,
-    compute_specialization_benefit, evaluate_safety, specialize_batch,
-    specialize_lane, BEAD_ID, COMPONENT, DEFAULT_MAX_INLINE_DEPTH,
-    DEFAULT_MAX_SPECIALIZATIONS_PER_LANE, DEFAULT_MIN_SPEEDUP_THRESHOLD, POLICY_ID,
-    SCHEMA_VERSION,
+    BEAD_ID, BatchSummary, COMPONENT, ComponentShape, DEFAULT_MAX_INLINE_DEPTH,
+    DEFAULT_MAX_SPECIALIZATIONS_PER_LANE, DEFAULT_MIN_SPEEDUP_THRESHOLD, DecisionReceipt, LaneKind,
+    POLICY_ID, SCHEMA_VERSION, SafetyCheck, SafetyCheckKind, SpecializationConfig,
+    SpecializationError, SpecializationRequest, SpecializationStrategy,
+    compute_specialization_benefit, evaluate_safety, specialize_batch, specialize_lane,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -110,7 +109,12 @@ fn enrichment_benefit_always_above_or_equal_base() {
     for shape in ComponentShape::ALL {
         for strat in SpecializationStrategy::ALL {
             let b = compute_specialization_benefit(*shape, *strat);
-            assert!(b >= MILLION, "benefit for {}/{} should be >= 1x", shape, strat);
+            assert!(
+                b >= MILLION,
+                "benefit for {}/{} should be >= 1x",
+                shape,
+                strat
+            );
         }
     }
 }
@@ -316,7 +320,10 @@ fn enrichment_specialize_result_accessors_consistent() {
 
 #[test]
 fn enrichment_receipt_genesis_deterministic() {
-    assert_eq!(DecisionReceipt::genesis_hash(), DecisionReceipt::genesis_hash());
+    assert_eq!(
+        DecisionReceipt::genesis_hash(),
+        DecisionReceipt::genesis_hash()
+    );
 }
 
 #[test]
@@ -366,9 +373,21 @@ fn enrichment_batch_single_applied() {
 #[test]
 fn enrichment_batch_receipt_chain_links() {
     let reqs = vec![
-        make_request(LaneKind::ServerSideRender, ComponentShape::PureFunction, SpecializationStrategy::ConstantFolding),
-        make_request(LaneKind::StaticGeneration, ComponentShape::Memo, SpecializationStrategy::DeadBranchElimination),
-        make_request(LaneKind::IslandsArchitecture, ComponentShape::PureFunction, SpecializationStrategy::InlineExpansion),
+        make_request(
+            LaneKind::ServerSideRender,
+            ComponentShape::PureFunction,
+            SpecializationStrategy::ConstantFolding,
+        ),
+        make_request(
+            LaneKind::StaticGeneration,
+            ComponentShape::Memo,
+            SpecializationStrategy::DeadBranchElimination,
+        ),
+        make_request(
+            LaneKind::IslandsArchitecture,
+            ComponentShape::PureFunction,
+            SpecializationStrategy::InlineExpansion,
+        ),
     ];
     let cfg = SpecializationConfig::default_config();
     let (_, receipts) = specialize_batch(&reqs, &cfg, epoch()).unwrap();
@@ -382,8 +401,16 @@ fn enrichment_batch_lane_limit_exceeded() {
     let mut cfg = SpecializationConfig::default_config();
     cfg.max_specializations_per_lane = 1;
     let reqs = vec![
-        make_request(LaneKind::ServerSideRender, ComponentShape::PureFunction, SpecializationStrategy::ConstantFolding),
-        make_request(LaneKind::ServerSideRender, ComponentShape::Memo, SpecializationStrategy::DeadBranchElimination),
+        make_request(
+            LaneKind::ServerSideRender,
+            ComponentShape::PureFunction,
+            SpecializationStrategy::ConstantFolding,
+        ),
+        make_request(
+            LaneKind::ServerSideRender,
+            ComponentShape::Memo,
+            SpecializationStrategy::DeadBranchElimination,
+        ),
     ];
     assert!(matches!(
         specialize_batch(&reqs, &cfg, epoch()),
@@ -394,8 +421,16 @@ fn enrichment_batch_lane_limit_exceeded() {
 #[test]
 fn enrichment_batch_summary_mixed_verdicts() {
     let reqs = vec![
-        make_request(LaneKind::ServerSideRender, ComponentShape::PureFunction, SpecializationStrategy::ConstantFolding),
-        make_request(LaneKind::ClientEntry, ComponentShape::HookBased, SpecializationStrategy::PartialEvaluation),
+        make_request(
+            LaneKind::ServerSideRender,
+            ComponentShape::PureFunction,
+            SpecializationStrategy::ConstantFolding,
+        ),
+        make_request(
+            LaneKind::ClientEntry,
+            ComponentShape::HookBased,
+            SpecializationStrategy::PartialEvaluation,
+        ),
     ];
     let cfg = SpecializationConfig::default_config();
     let (results, _) = specialize_batch(&reqs, &cfg, epoch()).unwrap();
@@ -426,7 +461,9 @@ fn enrichment_error_display_all_variants() {
         SpecializationError::InvalidConfig { reason: "r".into() },
         SpecializationError::InlineDepthExceeded { depth: 10, max: 8 },
         SpecializationError::SpecializationLimitExceeded { count: 17, max: 16 },
-        SpecializationError::MissingSafetyCheck { kind: SafetyCheckKind::PurityProof },
+        SpecializationError::MissingSafetyCheck {
+            kind: SafetyCheckKind::PurityProof,
+        },
         SpecializationError::Internal { detail: "d".into() },
     ];
     let displays: BTreeSet<String> = errors.iter().map(|e| e.to_string()).collect();
@@ -436,11 +473,17 @@ fn enrichment_error_display_all_variants() {
 #[test]
 fn enrichment_error_serde_all_variants() {
     let errors: Vec<SpecializationError> = vec![
-        SpecializationError::InvalidConfig { reason: "bad".into() },
+        SpecializationError::InvalidConfig {
+            reason: "bad".into(),
+        },
         SpecializationError::InlineDepthExceeded { depth: 10, max: 8 },
         SpecializationError::SpecializationLimitExceeded { count: 17, max: 16 },
-        SpecializationError::MissingSafetyCheck { kind: SafetyCheckKind::NoAmbientMutation },
-        SpecializationError::Internal { detail: "oops".into() },
+        SpecializationError::MissingSafetyCheck {
+            kind: SafetyCheckKind::NoAmbientMutation,
+        },
+        SpecializationError::Internal {
+            detail: "oops".into(),
+        },
     ];
     for e in &errors {
         let json = serde_json::to_string(e).unwrap();

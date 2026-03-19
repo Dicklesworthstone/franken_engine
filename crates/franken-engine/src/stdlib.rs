@@ -842,7 +842,8 @@ pub fn exec_math(builtin: BuiltinId, args: &[JsValue]) -> Result<JsValue, Stdlib
                     // Convert to i128 to prevent overflow during multiplication
                     result = ((result as i128 * current_base as i128) / FP_SCALE as i128) as i64;
                 }
-                current_base = ((current_base as i128 * current_base as i128) / FP_SCALE as i128) as i64;
+                current_base =
+                    ((current_base as i128 * current_base as i128) / FP_SCALE as i128) as i64;
                 current_exp /= 2;
             }
             Ok(JsValue::Int(result))
@@ -961,9 +962,12 @@ pub fn exec_global_function(builtin: BuiltinId, args: &[JsValue]) -> Result<JsVa
             } else {
                 (false, trimmed)
             };
-            
+
             if radix == 0 || radix == 16 {
-                if let Some(rest) = digits.strip_prefix("0x").or_else(|| digits.strip_prefix("0X")) {
+                if let Some(rest) = digits
+                    .strip_prefix("0x")
+                    .or_else(|| digits.strip_prefix("0X"))
+                {
                     radix = 16;
                     digits = rest;
                 } else if radix == 0 {

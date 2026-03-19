@@ -211,6 +211,29 @@ fn bun_compat_external_relative_dependency_resolves_from_package_root() {
     assert_eq!(outcome.module.record.id, "external:some-pkg/sub.mjs");
 }
 
+#[test]
+fn node_compat_external_relative_dependency_requires_explicit_extension() {
+    let mut resolver = DeterministicModuleResolver::new("/repo");
+    resolver
+        .register_external_module(
+            "some-pkg/sub.mjs",
+            ModuleDefinition::new(ModuleSyntax::EsModule, "export default 'sub';"),
+        )
+        .unwrap();
+
+    let error = resolver
+        .resolve(
+            &ModuleRequest::new("./sub", ImportStyle::Import)
+                .with_referrer("external:some-pkg")
+                .with_compatibility_mode(CompatibilityMode::NodeCompat),
+            &context(),
+            &AllowAllPolicy,
+        )
+        .expect_err("node_compat should require explicit extension for external ESM relatives");
+    assert_eq!(error.code, ResolutionErrorCode::ModuleNotFound);
+    assert_eq!(error.probe_sequence, vec!["some-pkg/sub"]);
+}
+
 // ────────────────────────────────────────────────────────────
 // Enrichment: error paths, builtins, registration, serde
 // ────────────────────────────────────────────────────────────

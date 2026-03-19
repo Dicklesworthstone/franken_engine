@@ -550,7 +550,10 @@ fn enrichment_ir1_op_all_variants_serde_sample() {
             name: "foo".to_string(),
             binding_id: 10,
         },
-        Ir1Op::BeginTry { catch_label: 5 },
+        Ir1Op::BeginTry {
+            catch_label: 5,
+            finally_label: None,
+        },
         Ir1Op::EndTry,
         Ir1Op::Pop,
         Ir1Op::ForInInit,

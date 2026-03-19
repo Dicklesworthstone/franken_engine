@@ -40,19 +40,17 @@ const TEST_ZONE: &str = "enforcement2-zone";
 
 fn head_signing_key() -> SigningKey {
     SigningKey::from_bytes([
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-        0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
-        0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
-        0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E,
+        0x1F, 0x20,
     ])
 }
 
 fn revocation_key() -> SigningKey {
     SigningKey::from_bytes([
-        0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8,
-        0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF, 0xB0,
-        0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8,
-        0xB9, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF, 0xC0,
+        0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF,
+        0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE,
+        0xBF, 0xC0,
     ])
 }
 
@@ -167,11 +165,8 @@ fn enrichment_token_transitive_issuer_key_denial() {
     revoke_target(&mut enforcer, RevocationTargetType::Key, *key_id.as_bytes());
     enforcer.drain_audit_log();
 
-    let result = enforcer.check_token_acceptance(
-        &EngineObjectId([30; 32]),
-        &issuer_key,
-        "t-transitive",
-    );
+    let result =
+        enforcer.check_token_acceptance(&EngineObjectId([30; 32]), &issuer_key, "t-transitive");
     match result {
         EnforcementResult::Denied(denial) => {
             assert!(denial.transitive);
@@ -270,11 +265,8 @@ fn enrichment_extension_transitive_key_denial() {
     let key_id = key_id_from_verification_key(&signing_key);
     revoke_target(&mut enforcer, RevocationTargetType::Key, *key_id.as_bytes());
 
-    let result = enforcer.check_extension_activation(
-        &EngineObjectId([91; 32]),
-        &signing_key,
-        "t-ext-trans",
-    );
+    let result =
+        enforcer.check_extension_activation(&EngineObjectId([91; 32]), &signing_key, "t-ext-trans");
     match result {
         EnforcementResult::Denied(denial) => {
             assert!(denial.transitive);
@@ -310,12 +302,21 @@ fn enrichment_into_result_denied() {
 fn enrichment_batch_all_valid() {
     let mut enforcer = make_enforcer();
     let tokens = vec![
-        (EngineObjectId([1; 32]), VerificationKey::from_bytes([2; 32])),
-        (EngineObjectId([3; 32]), VerificationKey::from_bytes([4; 32])),
+        (
+            EngineObjectId([1; 32]),
+            VerificationKey::from_bytes([2; 32]),
+        ),
+        (
+            EngineObjectId([3; 32]),
+            VerificationKey::from_bytes([4; 32]),
+        ),
     ];
     let result = enforcer.check_token_batch(&tokens, "t-batch");
     assert!(result.is_cleared());
-    if let EnforcementResult::Cleared { checks_performed, .. } = result {
+    if let EnforcementResult::Cleared {
+        checks_performed, ..
+    } = result
+    {
         assert_eq!(checks_performed, 4);
     }
 }
@@ -325,12 +326,23 @@ fn enrichment_batch_stops_at_first_denial() {
     let mut enforcer = make_enforcer();
     revoke_target(&mut enforcer, RevocationTargetType::Token, [3; 32]);
     let tokens = vec![
-        (EngineObjectId([1; 32]), VerificationKey::from_bytes([2; 32])),
-        (EngineObjectId([3; 32]), VerificationKey::from_bytes([4; 32])),
-        (EngineObjectId([5; 32]), VerificationKey::from_bytes([6; 32])),
+        (
+            EngineObjectId([1; 32]),
+            VerificationKey::from_bytes([2; 32]),
+        ),
+        (
+            EngineObjectId([3; 32]),
+            VerificationKey::from_bytes([4; 32]),
+        ),
+        (
+            EngineObjectId([5; 32]),
+            VerificationKey::from_bytes([6; 32]),
+        ),
     ];
     let result = enforcer.check_token_batch(&tokens, "t-batch-deny");
-    assert!(matches!(result, EnforcementResult::Denied(ref d) if d.target_id == EngineObjectId([3; 32])));
+    assert!(
+        matches!(result, EnforcementResult::Denied(ref d) if d.target_id == EngineObjectId([3; 32]))
+    );
 }
 
 #[test]
@@ -338,7 +350,10 @@ fn enrichment_batch_empty_clears() {
     let mut enforcer = make_enforcer();
     let result = enforcer.check_token_batch(&[], "t-empty");
     assert!(result.is_cleared());
-    if let EnforcementResult::Cleared { checks_performed, .. } = result {
+    if let EnforcementResult::Cleared {
+        checks_performed, ..
+    } = result
+    {
         assert_eq!(checks_performed, 0);
     }
 }
@@ -364,9 +379,18 @@ fn enrichment_different_keys_different_ids() {
 
 #[test]
 fn enrichment_enforcement_point_display() {
-    assert_eq!(EnforcementPoint::TokenAcceptance.to_string(), "token_acceptance");
-    assert_eq!(EnforcementPoint::HighRiskOperation.to_string(), "high_risk_operation");
-    assert_eq!(EnforcementPoint::ExtensionActivation.to_string(), "extension_activation");
+    assert_eq!(
+        EnforcementPoint::TokenAcceptance.to_string(),
+        "token_acceptance"
+    );
+    assert_eq!(
+        EnforcementPoint::HighRiskOperation.to_string(),
+        "high_risk_operation"
+    );
+    assert_eq!(
+        EnforcementPoint::ExtensionActivation.to_string(),
+        "extension_activation"
+    );
 }
 
 #[test]
@@ -375,7 +399,10 @@ fn enrichment_enforcement_point_display_unique() {
         EnforcementPoint::TokenAcceptance,
         EnforcementPoint::HighRiskOperation,
         EnforcementPoint::ExtensionActivation,
-    ].iter().map(|p| p.to_string()).collect();
+    ]
+    .iter()
+    .map(|p| p.to_string())
+    .collect();
     assert_eq!(displays.len(), 3);
 }
 
@@ -387,7 +414,10 @@ fn enrichment_high_risk_category_display() {
         HighRiskCategory::DataExport,
         HighRiskCategory::CrossZoneAction,
         HighRiskCategory::ExtensionLifecycleChange,
-    ].iter().map(|c| c.to_string()).collect();
+    ]
+    .iter()
+    .map(|c| c.to_string())
+    .collect();
     assert_eq!(displays.len(), 5);
 }
 
@@ -427,12 +457,20 @@ fn enrichment_denial_display_transitive_without_root() {
         transitive_root: None,
         enforcement_point: EnforcementPoint::HighRiskOperation,
     };
-    assert!(denial.to_string().contains("transitively revoked via unknown"));
+    assert!(
+        denial
+            .to_string()
+            .contains("transitively revoked via unknown")
+    );
 }
 
 #[test]
 fn enrichment_enforcement_point_serde_all() {
-    for p in [EnforcementPoint::TokenAcceptance, EnforcementPoint::HighRiskOperation, EnforcementPoint::ExtensionActivation] {
+    for p in [
+        EnforcementPoint::TokenAcceptance,
+        EnforcementPoint::HighRiskOperation,
+        EnforcementPoint::ExtensionActivation,
+    ] {
         let json = serde_json::to_string(&p).unwrap();
         let back: EnforcementPoint = serde_json::from_str(&json).unwrap();
         assert_eq!(p, back);
@@ -441,7 +479,13 @@ fn enrichment_enforcement_point_serde_all() {
 
 #[test]
 fn enrichment_high_risk_category_serde_all() {
-    for c in [HighRiskCategory::PolicyChange, HighRiskCategory::KeyOperation, HighRiskCategory::DataExport, HighRiskCategory::CrossZoneAction, HighRiskCategory::ExtensionLifecycleChange] {
+    for c in [
+        HighRiskCategory::PolicyChange,
+        HighRiskCategory::KeyOperation,
+        HighRiskCategory::DataExport,
+        HighRiskCategory::CrossZoneAction,
+        HighRiskCategory::ExtensionLifecycleChange,
+    ] {
         let json = serde_json::to_string(&c).unwrap();
         let back: HighRiskCategory = serde_json::from_str(&json).unwrap();
         assert_eq!(c, back);
@@ -514,9 +558,22 @@ fn enrichment_stats_default() {
 #[test]
 fn enrichment_stats_across_all_points() {
     let mut enforcer = make_enforcer();
-    enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &VerificationKey::from_bytes([2; 32]), "t1");
-    enforcer.check_high_risk_operation(&EngineObjectId([3; 32]), &VerificationKey::from_bytes([4; 32]), HighRiskCategory::PolicyChange, "t2");
-    enforcer.check_extension_activation(&EngineObjectId([5; 32]), &VerificationKey::from_bytes([6; 32]), "t3");
+    enforcer.check_token_acceptance(
+        &EngineObjectId([1; 32]),
+        &VerificationKey::from_bytes([2; 32]),
+        "t1",
+    );
+    enforcer.check_high_risk_operation(
+        &EngineObjectId([3; 32]),
+        &VerificationKey::from_bytes([4; 32]),
+        HighRiskCategory::PolicyChange,
+        "t2",
+    );
+    enforcer.check_extension_activation(
+        &EngineObjectId([5; 32]),
+        &VerificationKey::from_bytes([6; 32]),
+        "t3",
+    );
     let stats = enforcer.stats();
     assert_eq!(stats.len(), 3);
     for s in stats.values() {
@@ -529,9 +586,17 @@ fn enrichment_stats_across_all_points() {
 fn enrichment_set_tick_updates_timestamps() {
     let mut enforcer = make_enforcer();
     enforcer.set_tick(1000);
-    enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &VerificationKey::from_bytes([2; 32]), "t1");
+    enforcer.check_token_acceptance(
+        &EngineObjectId([1; 32]),
+        &VerificationKey::from_bytes([2; 32]),
+        "t1",
+    );
     enforcer.set_tick(2000);
-    enforcer.check_token_acceptance(&EngineObjectId([3; 32]), &VerificationKey::from_bytes([4; 32]), "t2");
+    enforcer.check_token_acceptance(
+        &EngineObjectId([3; 32]),
+        &VerificationKey::from_bytes([4; 32]),
+        "t2",
+    );
     let events = enforcer.drain_audit_log();
     assert_eq!(events[0].checked_at, DeterministicTimestamp(1000));
     assert_eq!(events[2].checked_at, DeterministicTimestamp(2000));
@@ -540,7 +605,11 @@ fn enrichment_set_tick_updates_timestamps() {
 #[test]
 fn enrichment_drain_audit_log_idempotent() {
     let mut enforcer = make_enforcer();
-    enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &VerificationKey::from_bytes([2; 32]), "t");
+    enforcer.check_token_acceptance(
+        &EngineObjectId([1; 32]),
+        &VerificationKey::from_bytes([2; 32]),
+        "t",
+    );
     assert!(!enforcer.drain_audit_log().is_empty());
     assert!(enforcer.drain_audit_log().is_empty());
     assert!(enforcer.drain_audit_log().is_empty());
@@ -549,8 +618,17 @@ fn enrichment_drain_audit_log_idempotent() {
 #[test]
 fn enrichment_audit_ordering_matches_call_order() {
     let mut enforcer = make_enforcer();
-    enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &VerificationKey::from_bytes([2; 32]), "trace-A");
-    enforcer.check_high_risk_operation(&EngineObjectId([3; 32]), &VerificationKey::from_bytes([4; 32]), HighRiskCategory::PolicyChange, "trace-B");
+    enforcer.check_token_acceptance(
+        &EngineObjectId([1; 32]),
+        &VerificationKey::from_bytes([2; 32]),
+        "trace-A",
+    );
+    enforcer.check_high_risk_operation(
+        &EngineObjectId([3; 32]),
+        &VerificationKey::from_bytes([4; 32]),
+        HighRiskCategory::PolicyChange,
+        "trace-B",
+    );
     let events = enforcer.drain_audit_log();
     assert_eq!(events[0].trace_id, "trace-A");
     assert_eq!(events[1].trace_id, "trace-A");
@@ -580,10 +658,15 @@ fn enrichment_direct_beats_transitive_when_both_revoked() {
 fn enrichment_all_high_risk_categories_accepted() {
     let mut enforcer = make_enforcer();
     for (i, cat) in [
-        HighRiskCategory::PolicyChange, HighRiskCategory::KeyOperation,
-        HighRiskCategory::DataExport, HighRiskCategory::CrossZoneAction,
+        HighRiskCategory::PolicyChange,
+        HighRiskCategory::KeyOperation,
+        HighRiskCategory::DataExport,
+        HighRiskCategory::CrossZoneAction,
         HighRiskCategory::ExtensionLifecycleChange,
-    ].iter().enumerate() {
+    ]
+    .iter()
+    .enumerate()
+    {
         let result = enforcer.check_high_risk_operation(
             &EngineObjectId([(i as u8) + 100; 32]),
             &VerificationKey::from_bytes([(i as u8) + 200; 32]),
@@ -645,11 +728,27 @@ fn enrichment_key_id_from_all_zeros() {
 #[test]
 fn enrichment_cleared_checks_performed_is_two() {
     let mut enforcer = make_enforcer();
-    let r1 = enforcer.check_token_acceptance(&EngineObjectId([1; 32]), &VerificationKey::from_bytes([2; 32]), "t1");
-    let r2 = enforcer.check_high_risk_operation(&EngineObjectId([3; 32]), &VerificationKey::from_bytes([4; 32]), HighRiskCategory::PolicyChange, "t2");
-    let r3 = enforcer.check_extension_activation(&EngineObjectId([5; 32]), &VerificationKey::from_bytes([6; 32]), "t3");
+    let r1 = enforcer.check_token_acceptance(
+        &EngineObjectId([1; 32]),
+        &VerificationKey::from_bytes([2; 32]),
+        "t1",
+    );
+    let r2 = enforcer.check_high_risk_operation(
+        &EngineObjectId([3; 32]),
+        &VerificationKey::from_bytes([4; 32]),
+        HighRiskCategory::PolicyChange,
+        "t2",
+    );
+    let r3 = enforcer.check_extension_activation(
+        &EngineObjectId([5; 32]),
+        &VerificationKey::from_bytes([6; 32]),
+        "t3",
+    );
     for r in [r1, r2, r3] {
-        if let EnforcementResult::Cleared { checks_performed, .. } = r {
+        if let EnforcementResult::Cleared {
+            checks_performed, ..
+        } = r
+        {
             assert_eq!(checks_performed, 2);
         } else {
             panic!("expected cleared");

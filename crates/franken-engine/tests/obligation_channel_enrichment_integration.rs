@@ -212,7 +212,8 @@ fn integ_commit_resolves_obligation() {
 fn integ_abort_resolves_obligation() {
     let mut chan = test_channel();
     let id = chan.send("t").unwrap();
-    chan.abort(id, &AbortReason::UpstreamFailure, "hash-2").unwrap();
+    chan.abort(id, &AbortReason::UpstreamFailure, "hash-2")
+        .unwrap();
     assert_eq!(chan.pending_count(), 0);
 }
 
@@ -243,7 +244,9 @@ fn integ_commit_nonexistent_fails() {
 #[test]
 fn integ_abort_nonexistent_fails() {
     let mut chan = test_channel();
-    let err = chan.abort(999, &AbortReason::DrainTimeout, "h").unwrap_err();
+    let err = chan
+        .abort(999, &AbortReason::DrainTimeout, "h")
+        .unwrap_err();
     assert_eq!(err, ObligationError::NotFound { obligation_id: 999 });
 }
 
@@ -253,7 +256,14 @@ fn integ_abort_nonexistent_fails() {
 
 #[test]
 fn integ_backpressure_at_limit() {
-    let mut chan = ObligationChannel::new("c", "t", ChannelConfig { max_pending: 3, lab_mode: false });
+    let mut chan = ObligationChannel::new(
+        "c",
+        "t",
+        ChannelConfig {
+            max_pending: 3,
+            lab_mode: false,
+        },
+    );
     chan.send("t").unwrap();
     chan.send("t").unwrap();
     chan.send("t").unwrap();
@@ -263,7 +273,14 @@ fn integ_backpressure_at_limit() {
 
 #[test]
 fn integ_backpressure_clears_after_resolution() {
-    let mut chan = ObligationChannel::new("c", "t", ChannelConfig { max_pending: 2, lab_mode: false });
+    let mut chan = ObligationChannel::new(
+        "c",
+        "t",
+        ChannelConfig {
+            max_pending: 2,
+            lab_mode: false,
+        },
+    );
     let id1 = chan.send("t").unwrap();
     chan.send("t").unwrap();
     assert!(chan.send("t").is_err());
@@ -273,9 +290,19 @@ fn integ_backpressure_clears_after_resolution() {
 
 #[test]
 fn integ_backpressure_zero_max_blocks_all() {
-    let mut chan = ObligationChannel::new("c", "t", ChannelConfig { max_pending: 0, lab_mode: false });
+    let mut chan = ObligationChannel::new(
+        "c",
+        "t",
+        ChannelConfig {
+            max_pending: 0,
+            lab_mode: false,
+        },
+    );
     let err = chan.send("t").unwrap_err();
-    assert!(matches!(err, ObligationError::Backpressure { max_pending: 0 }));
+    assert!(matches!(
+        err,
+        ObligationError::Backpressure { max_pending: 0 }
+    ));
 }
 
 // ===========================================================================
@@ -412,7 +439,10 @@ fn integ_event_fields_correct() {
     assert_eq!(commit_event.trace_id, "trace-test");
     assert_eq!(commit_event.channel_id, "chan-test");
     assert_eq!(commit_event.resolution_type, Some("commit".to_string()));
-    assert_eq!(commit_event.evidence_hash, Some("evidence-hash".to_string()));
+    assert_eq!(
+        commit_event.evidence_hash,
+        Some("evidence-hash".to_string())
+    );
 }
 
 #[test]
@@ -467,7 +497,10 @@ fn integ_deterministic_complex_lifecycle() {
         let mut chan = ObligationChannel::new(
             "replay",
             "replay-trace",
-            ChannelConfig { max_pending: 10, lab_mode: true },
+            ChannelConfig {
+                max_pending: 10,
+                lab_mode: true,
+            },
         );
         chan.set_tick(100);
         let id1 = chan.send("t").unwrap();
@@ -477,7 +510,8 @@ fn integ_deterministic_complex_lifecycle() {
         let id3 = chan.send("t").unwrap();
         chan.commit(id1, "h1").unwrap();
         chan.mark_leaked(id2).unwrap();
-        chan.abort(id3, &AbortReason::PolicyViolation, "h3").unwrap();
+        chan.abort(id3, &AbortReason::PolicyViolation, "h3")
+            .unwrap();
         chan.drain_events()
     };
     let e1 = run();
@@ -527,7 +561,14 @@ fn integ_obligation_event_clone_independence() {
 
 #[test]
 fn integ_stress_20_send_commit() {
-    let mut chan = ObligationChannel::new("stress", "t", ChannelConfig { max_pending: 20, lab_mode: false });
+    let mut chan = ObligationChannel::new(
+        "stress",
+        "t",
+        ChannelConfig {
+            max_pending: 20,
+            lab_mode: false,
+        },
+    );
     let mut ids = Vec::new();
     for i in 0..20 {
         chan.set_tick(i as u64);
@@ -564,7 +605,14 @@ fn integ_stress_interleaved_send_commit_abort() {
 
 #[test]
 fn integ_lab_mode_flag() {
-    let chan = ObligationChannel::new("c", "t", ChannelConfig { max_pending: 10, lab_mode: true });
+    let chan = ObligationChannel::new(
+        "c",
+        "t",
+        ChannelConfig {
+            max_pending: 10,
+            lab_mode: true,
+        },
+    );
     assert!(chan.is_lab_mode());
 }
 

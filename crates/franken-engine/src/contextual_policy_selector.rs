@@ -1663,10 +1663,7 @@ mod tests {
         let d = sel.select(&basic_context(), epoch());
         assert!(d.has_selection());
         // Highest index = highest reward => picked
-        assert_eq!(
-            d.selected_strategy_id.as_deref(),
-            Some("strat-31")
-        );
+        assert_eq!(d.selected_strategy_id.as_deref(), Some("strat-31"));
         assert_eq!(d.feasible_count, MAX_STRATEGIES);
         assert_eq!(d.infeasible_count, 0);
     }

@@ -444,9 +444,17 @@ pub enum Ir1Op {
     /// Declare a function and bind it.
     DeclareFunction { name: String, binding_id: BindingId },
     /// Begin a try block; on exception, jump to catch_label.
-    BeginTry { catch_label: u32 },
+    /// If a finally block exists, `finally_label` points to its entry.
+    BeginTry {
+        catch_label: u32,
+        finally_label: Option<u32>,
+    },
     /// End a try block.
     EndTry,
+    /// Mark entry into a finally block.  Lowered to `Ir3Instruction::EnterFinally`.
+    EnterFinally,
+    /// End a finally block.  Lowered to `Ir3Instruction::EndFinally`.
+    EndFinally,
     /// Pop/discard top-of-stack value.
     Pop,
     /// Initialize a for..in enumeration: pop object from stack, push internal
@@ -695,7 +703,10 @@ impl Ir1Op {
                     CanonicalValue::U64(u64::from(*binding_id)),
                 );
             }
-            Self::BeginTry { catch_label } => {
+            Self::BeginTry {
+                catch_label,
+                finally_label,
+            } => {
                 map.insert(
                     "op".to_string(),
                     CanonicalValue::String("begin_try".to_string()),
@@ -704,11 +715,29 @@ impl Ir1Op {
                     "catch_label".to_string(),
                     CanonicalValue::U64(u64::from(*catch_label)),
                 );
+                if let Some(fl) = finally_label {
+                    map.insert(
+                        "finally_label".to_string(),
+                        CanonicalValue::U64(u64::from(*fl)),
+                    );
+                }
             }
             Self::EndTry => {
                 map.insert(
                     "op".to_string(),
                     CanonicalValue::String("end_try".to_string()),
+                );
+            }
+            Self::EnterFinally => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("enter_finally".to_string()),
+                );
+            }
+            Self::EndFinally => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("end_finally".to_string()),
                 );
             }
             Self::Pop => {
@@ -1217,6 +1246,29 @@ pub enum Ir3Instruction {
     TemplateLiteral { parts: RegRange, dst: Reg },
     /// Halt execution.
     Halt,
+
+    // ── Exception handling (unwind-capable IR) ────────────────────────
+
+    /// Push a catch frame onto the exception handler stack.
+    /// `catch_target` is the instruction index of the catch handler.
+    /// `finally_target` is the instruction index of the finally block
+    /// (if present).
+    BeginTry {
+        catch_target: InstrIndex,
+        finally_target: Option<InstrIndex>,
+    },
+    /// Pop the current catch frame (try block completed normally).
+    EndTry,
+    /// Throw an exception value; unwind to nearest catch frame.
+    Throw { value: Reg },
+    /// Store the caught exception value into `dst` on catch-handler entry.
+    EnterCatch { dst: Reg },
+    /// Mark entry into a finally block.  The runtime records whether
+    /// execution arrived via normal completion or exception propagation.
+    EnterFinally,
+    /// End a finally block.  If a pending exception exists, re-throw it;
+    /// otherwise continue to the next instruction.
+    EndFinally,
 }
 
 impl Ir3Instruction {
@@ -1476,6 +1528,57 @@ impl Ir3Instruction {
             }
             Self::Halt => {
                 map.insert("op".to_string(), CanonicalValue::String("halt".to_string()));
+            }
+            Self::BeginTry {
+                catch_target,
+                finally_target,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("begin_try".to_string()),
+                );
+                map.insert(
+                    "catch_target".to_string(),
+                    CanonicalValue::U64(u64::from(*catch_target)),
+                );
+                if let Some(ft) = finally_target {
+                    map.insert(
+                        "finally_target".to_string(),
+                        CanonicalValue::U64(u64::from(*ft)),
+                    );
+                }
+            }
+            Self::EndTry => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("end_try".to_string()),
+                );
+            }
+            Self::Throw { value } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("throw".to_string()),
+                );
+                map.insert("value".to_string(), CanonicalValue::U64(u64::from(*value)));
+            }
+            Self::EnterCatch { dst } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("enter_catch".to_string()),
+                );
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+            }
+            Self::EnterFinally => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("enter_finally".to_string()),
+                );
+            }
+            Self::EndFinally => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("end_finally".to_string()),
+                );
             }
             Self::Mod { dst, lhs, rhs } => {
                 map.insert("op".to_string(), CanonicalValue::String("mod".to_string()));
@@ -2865,6 +2968,19 @@ mod tests {
                 dst: 2,
             },
             Ir3Instruction::Halt,
+            Ir3Instruction::BeginTry {
+                catch_target: 10,
+                finally_target: Some(20),
+            },
+            Ir3Instruction::BeginTry {
+                catch_target: 10,
+                finally_target: None,
+            },
+            Ir3Instruction::EndTry,
+            Ir3Instruction::Throw { value: 0 },
+            Ir3Instruction::EnterCatch { dst: 0 },
+            Ir3Instruction::EnterFinally,
+            Ir3Instruction::EndFinally,
         ];
         for instr in &instructions {
             let cv = instr.canonical_value();

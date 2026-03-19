@@ -74,7 +74,10 @@ fn enrich_all_schema_versions_start_with_franken_engine() {
         RUN_MANIFEST_SCHEMA_VERSION,
     ];
     for v in &versions {
-        assert!(v.starts_with("franken-engine."), "version {v} missing prefix");
+        assert!(
+            v.starts_with("franken-engine."),
+            "version {v} missing prefix"
+        );
     }
 }
 

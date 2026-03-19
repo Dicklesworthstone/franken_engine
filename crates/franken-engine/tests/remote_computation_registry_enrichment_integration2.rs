@@ -83,8 +83,8 @@ fn enrichment_register_and_lookup_round_trip() {
 fn enrichment_register_ten_computations_deterministic_order() {
     let mut reg = RemoteComputationRegistry::new();
     let names = [
-        "zulu", "yankee", "xray", "whiskey", "victor",
-        "uniform", "tango", "sierra", "romeo", "papa",
+        "zulu", "yankee", "xray", "whiskey", "victor", "uniform", "tango", "sierra", "romeo",
+        "papa",
     ];
     for n in &names {
         reg.register(make_registration(n)).unwrap();
@@ -125,15 +125,31 @@ fn enrichment_validate_input_different_values_different_hashes() {
     let name = ComputationName::new("diff_hash").unwrap();
 
     let mut map1 = BTreeMap::new();
-    map1.insert("alpha".to_string(), CanonicalValue::String("val1".to_string()));
-    map1.insert("beta".to_string(), CanonicalValue::String("val2".to_string()));
+    map1.insert(
+        "alpha".to_string(),
+        CanonicalValue::String("val1".to_string()),
+    );
+    map1.insert(
+        "beta".to_string(),
+        CanonicalValue::String("val2".to_string()),
+    );
 
     let mut map2 = BTreeMap::new();
-    map2.insert("alpha".to_string(), CanonicalValue::String("val3".to_string()));
-    map2.insert("beta".to_string(), CanonicalValue::String("val4".to_string()));
+    map2.insert(
+        "alpha".to_string(),
+        CanonicalValue::String("val3".to_string()),
+    );
+    map2.insert(
+        "beta".to_string(),
+        CanonicalValue::String("val4".to_string()),
+    );
 
-    let h1 = reg.validate_input(&name, &CanonicalValue::Map(map1), "t1").unwrap();
-    let h2 = reg.validate_input(&name, &CanonicalValue::Map(map2), "t2").unwrap();
+    let h1 = reg
+        .validate_input(&name, &CanonicalValue::Map(map1), "t1")
+        .unwrap();
+    let h2 = reg
+        .validate_input(&name, &CanonicalValue::Map(map2), "t2")
+        .unwrap();
     assert_ne!(h1, h2);
 }
 
@@ -195,32 +211,44 @@ fn enrichment_capability_compute_only_denied_for_remote() {
 #[test]
 fn enrichment_version_negotiation_matrix() {
     let mut reg = RemoteComputationRegistry::new();
-    reg.register(make_registration_with_version("vneg", 2, 3)).unwrap();
+    reg.register(make_registration_with_version("vneg", 2, 3))
+        .unwrap();
     let name = ComputationName::new("vneg").unwrap();
 
     // same major, higher minor => compatible
-    let r = reg.negotiate_version(&name, SchemaVersion::new(2, 5, 0)).unwrap();
+    let r = reg
+        .negotiate_version(&name, SchemaVersion::new(2, 5, 0))
+        .unwrap();
     assert!(r.compatible);
 
     // same major, same minor => compatible
-    let r = reg.negotiate_version(&name, SchemaVersion::new(2, 3, 0)).unwrap();
+    let r = reg
+        .negotiate_version(&name, SchemaVersion::new(2, 3, 0))
+        .unwrap();
     assert!(r.compatible);
 
     // same major, lower minor => incompatible
-    let r = reg.negotiate_version(&name, SchemaVersion::new(2, 1, 0)).unwrap();
+    let r = reg
+        .negotiate_version(&name, SchemaVersion::new(2, 1, 0))
+        .unwrap();
     assert!(!r.compatible);
 
     // different major => incompatible
-    let r = reg.negotiate_version(&name, SchemaVersion::new(3, 0, 0)).unwrap();
+    let r = reg
+        .negotiate_version(&name, SchemaVersion::new(3, 0, 0))
+        .unwrap();
     assert!(!r.compatible);
 }
 
 #[test]
 fn enrichment_version_negotiation_result_fields() {
     let mut reg = RemoteComputationRegistry::new();
-    reg.register(make_registration_with_version("vfields", 1, 2)).unwrap();
+    reg.register(make_registration_with_version("vfields", 1, 2))
+        .unwrap();
     let name = ComputationName::new("vfields").unwrap();
-    let r = reg.negotiate_version(&name, SchemaVersion::new(1, 5, 0)).unwrap();
+    let r = reg
+        .negotiate_version(&name, SchemaVersion::new(1, 5, 0))
+        .unwrap();
     assert_eq!(r.computation_name.as_str(), "vfields");
     assert_eq!(r.local_version, SchemaVersion::new(1, 2, 0));
     assert_eq!(r.remote_version, SchemaVersion::new(1, 5, 0));
@@ -250,7 +278,10 @@ fn enrichment_compute_input_hash_domain_separation() {
     let input = valid_map_input();
     let h_a = RemoteComputationRegistry::compute_input_hash(&name_a, &input);
     let h_b = RemoteComputationRegistry::compute_input_hash(&name_b, &input);
-    assert_ne!(h_a, h_b, "different computation names must produce different hashes");
+    assert_ne!(
+        h_a, h_b,
+        "different computation names must produce different hashes"
+    );
 }
 
 #[test]
@@ -296,7 +327,8 @@ fn enrichment_drain_events_idempotent() {
 fn enrichment_event_counts_accumulate_registrations() {
     let mut reg = RemoteComputationRegistry::new();
     for i in 0..5u32 {
-        reg.register(make_registration(&format!("reg_{i}"))).unwrap();
+        reg.register(make_registration(&format!("reg_{i}")))
+            .unwrap();
     }
     assert_eq!(reg.event_counts().get("registration"), Some(&5));
 }
@@ -346,28 +378,60 @@ fn enrichment_computation_name_rejects_unicode() {
 #[test]
 fn enrichment_registry_error_display_all_variants_nonempty() {
     let errors: Vec<RegistryError> = vec![
-        RegistryError::InvalidComputationName { name: "x".into(), reason: "r".into() },
+        RegistryError::InvalidComputationName {
+            name: "x".into(),
+            reason: "r".into(),
+        },
         RegistryError::DuplicateRegistration { name: "x".into() },
         RegistryError::ComputationNotFound { name: "x".into() },
-        RegistryError::SchemaValidationFailed { computation_name: "x".into(), reason: "r".into() },
-        RegistryError::CapabilityDenied { computation_name: "x".into(), required: ProfileKind::Full, held: ProfileKind::ComputeOnly },
-        RegistryError::VersionIncompatible { computation_name: "x".into(), registered: SchemaVersion::new(1,0,0), requested: SchemaVersion::new(2,0,0) },
+        RegistryError::SchemaValidationFailed {
+            computation_name: "x".into(),
+            reason: "r".into(),
+        },
+        RegistryError::CapabilityDenied {
+            computation_name: "x".into(),
+            required: ProfileKind::Full,
+            held: ProfileKind::ComputeOnly,
+        },
+        RegistryError::VersionIncompatible {
+            computation_name: "x".into(),
+            registered: SchemaVersion::new(1, 0, 0),
+            requested: SchemaVersion::new(2, 0, 0),
+        },
         RegistryError::ClosureRejected { reason: "r".into() },
         RegistryError::HotRegistrationDenied { reason: "r".into() },
     ];
     let displays: BTreeSet<String> = errors.iter().map(|e| e.to_string()).collect();
-    assert_eq!(displays.len(), errors.len(), "all error variants must have distinct display");
+    assert_eq!(
+        displays.len(),
+        errors.len(),
+        "all error variants must have distinct display"
+    );
 }
 
 #[test]
 fn enrichment_registry_error_serde_round_trip_all_variants() {
     let errors: Vec<RegistryError> = vec![
-        RegistryError::InvalidComputationName { name: "n".into(), reason: "r".into() },
+        RegistryError::InvalidComputationName {
+            name: "n".into(),
+            reason: "r".into(),
+        },
         RegistryError::DuplicateRegistration { name: "n".into() },
         RegistryError::ComputationNotFound { name: "n".into() },
-        RegistryError::SchemaValidationFailed { computation_name: "n".into(), reason: "r".into() },
-        RegistryError::CapabilityDenied { computation_name: "n".into(), required: ProfileKind::EngineCore, held: ProfileKind::Remote },
-        RegistryError::VersionIncompatible { computation_name: "n".into(), registered: SchemaVersion::new(1,0,0), requested: SchemaVersion::new(2,0,0) },
+        RegistryError::SchemaValidationFailed {
+            computation_name: "n".into(),
+            reason: "r".into(),
+        },
+        RegistryError::CapabilityDenied {
+            computation_name: "n".into(),
+            required: ProfileKind::EngineCore,
+            held: ProfileKind::Remote,
+        },
+        RegistryError::VersionIncompatible {
+            computation_name: "n".into(),
+            registered: SchemaVersion::new(1, 0, 0),
+            requested: SchemaVersion::new(2, 0, 0),
+        },
         RegistryError::ClosureRejected { reason: "r".into() },
         RegistryError::HotRegistrationDenied { reason: "r".into() },
     ];
@@ -402,11 +466,15 @@ fn enrichment_full_lifecycle_register_validate_capability_negotiate() {
     reg.check_capability(&name, &profile, "t-cap").unwrap();
 
     // validate input
-    let hash = reg.validate_input(&name, &valid_map_input(), "t-val").unwrap();
+    let hash = reg
+        .validate_input(&name, &valid_map_input(), "t-val")
+        .unwrap();
     assert_eq!(hash.as_bytes().len(), 32);
 
     // negotiate version
-    let neg = reg.negotiate_version(&name, SchemaVersion::new(1, 1, 0)).unwrap();
+    let neg = reg
+        .negotiate_version(&name, SchemaVersion::new(1, 1, 0))
+        .unwrap();
     assert!(neg.compatible);
 
     // compute idempotency hash
@@ -438,14 +506,18 @@ fn enrichment_validate_input_emits_event_with_correct_component() {
     let mut reg = RemoteComputationRegistry::new();
     reg.register(make_registration("comp_ev")).unwrap();
     let name = ComputationName::new("comp_ev").unwrap();
-    reg.validate_input(&name, &valid_map_input(), "t-comp").unwrap();
+    reg.validate_input(&name, &valid_map_input(), "t-comp")
+        .unwrap();
     let events = reg.drain_events();
     assert_eq!(events[0].component, "registry");
 }
 
 #[test]
 fn enrichment_idempotency_class_display_values() {
-    assert_eq!(IdempotencyClass::NaturallyIdempotent.to_string(), "naturally_idempotent");
+    assert_eq!(
+        IdempotencyClass::NaturallyIdempotent.to_string(),
+        "naturally_idempotent"
+    );
     assert_eq!(IdempotencyClass::RequiresKey.to_string(), "requires_key");
 }
 

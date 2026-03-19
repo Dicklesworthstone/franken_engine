@@ -19,7 +19,11 @@ fn epoch() -> SecurityEpoch {
     SecurityEpoch::from_raw(1)
 }
 
-fn make_placeholder(subsystem: Subsystem, kind: PlaceholderKind, severity: PlaceholderSeverity) -> PlaceholderEntry {
+fn make_placeholder(
+    subsystem: Subsystem,
+    kind: PlaceholderKind,
+    severity: PlaceholderSeverity,
+) -> PlaceholderEntry {
     PlaceholderEntry::new(
         subsystem,
         kind,
@@ -147,14 +151,26 @@ fn enrichment_severity_serde_roundtrip() {
 
 #[test]
 fn enrichment_placeholder_entry_hash_deterministic() {
-    let p1 = make_placeholder(Subsystem::Parser, PlaceholderKind::TodoMacro, PlaceholderSeverity::Medium);
-    let p2 = make_placeholder(Subsystem::Parser, PlaceholderKind::TodoMacro, PlaceholderSeverity::Medium);
+    let p1 = make_placeholder(
+        Subsystem::Parser,
+        PlaceholderKind::TodoMacro,
+        PlaceholderSeverity::Medium,
+    );
+    let p2 = make_placeholder(
+        Subsystem::Parser,
+        PlaceholderKind::TodoMacro,
+        PlaceholderSeverity::Medium,
+    );
     assert_eq!(p1.content_hash, p2.content_hash);
 }
 
 #[test]
 fn enrichment_placeholder_entry_serde_roundtrip() {
-    let p = make_placeholder(Subsystem::Runtime, PlaceholderKind::StubReturn, PlaceholderSeverity::High);
+    let p = make_placeholder(
+        Subsystem::Runtime,
+        PlaceholderKind::StubReturn,
+        PlaceholderSeverity::High,
+    );
     let json = serde_json::to_string(&p).unwrap();
     let back: PlaceholderEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(p.subsystem, back.subsystem);
@@ -167,7 +183,10 @@ fn enrichment_placeholder_entry_serde_roundtrip() {
 #[test]
 fn enrichment_gate_config_default_blocking_blocks() {
     let cfg = GateConfig::default_config();
-    assert_eq!(cfg.action_for(PlaceholderSeverity::Blocking), GateAction::Block);
+    assert_eq!(
+        cfg.action_for(PlaceholderSeverity::Blocking),
+        GateAction::Block
+    );
 }
 
 #[test]
@@ -205,7 +224,11 @@ fn enrichment_scan_result_clean() {
 
 #[test]
 fn enrichment_scan_result_with_entries() {
-    let entries = vec![make_placeholder(Subsystem::Parser, PlaceholderKind::TodoMacro, PlaceholderSeverity::Medium)];
+    let entries = vec![make_placeholder(
+        Subsystem::Parser,
+        PlaceholderKind::TodoMacro,
+        PlaceholderSeverity::Medium,
+    )];
     let scan = make_scan(Subsystem::Parser, entries);
     assert!(!scan.is_clean());
     assert_eq!(scan.placeholder_count(), 1);
@@ -248,7 +271,11 @@ fn enrichment_gate_verdict_serde_roundtrip() {
 
 #[test]
 fn enrichment_waiver_status_serde_roundtrip() {
-    for s in [WaiverStatus::Active, WaiverStatus::Expired, WaiverStatus::Revoked] {
+    for s in [
+        WaiverStatus::Active,
+        WaiverStatus::Expired,
+        WaiverStatus::Revoked,
+    ] {
         let json = serde_json::to_string(&s).unwrap();
         let back: WaiverStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(s, back);
@@ -271,7 +298,11 @@ fn enrichment_evaluate_gate_clean_pass() {
 #[test]
 fn enrichment_evaluate_gate_blocking_placeholder_blocks() {
     let cfg = GateConfig::default_config();
-    let entries = vec![make_placeholder(Subsystem::Runtime, PlaceholderKind::StubReturn, PlaceholderSeverity::Blocking)];
+    let entries = vec![make_placeholder(
+        Subsystem::Runtime,
+        PlaceholderKind::StubReturn,
+        PlaceholderSeverity::Blocking,
+    )];
     let scans = vec![make_scan(Subsystem::Runtime, entries)];
     let report = evaluate_gate(&scans, &[], &cfg, &epoch(), 1000).unwrap();
     assert!(report.is_block());
@@ -281,7 +312,11 @@ fn enrichment_evaluate_gate_blocking_placeholder_blocks() {
 #[test]
 fn enrichment_evaluate_gate_high_warns() {
     let cfg = GateConfig::default_config();
-    let entries = vec![make_placeholder(Subsystem::Lowering, PlaceholderKind::TodoMacro, PlaceholderSeverity::High)];
+    let entries = vec![make_placeholder(
+        Subsystem::Lowering,
+        PlaceholderKind::TodoMacro,
+        PlaceholderSeverity::High,
+    )];
     let scans = vec![make_scan(Subsystem::Lowering, entries)];
     let report = evaluate_gate(&scans, &[], &cfg, &epoch(), 1000).unwrap();
     assert!(!report.is_block());

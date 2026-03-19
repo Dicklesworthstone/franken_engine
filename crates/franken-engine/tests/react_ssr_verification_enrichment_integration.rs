@@ -43,7 +43,12 @@ fn make_evidence(
 }
 
 fn ssr_evidence(id: &str, content: &[u8]) -> PathEvidence {
-    make_evidence(id, ExecutionPathKind::Ssr, VerificationMode::FullDifferential, content)
+    make_evidence(
+        id,
+        ExecutionPathKind::Ssr,
+        VerificationMode::FullDifferential,
+        content,
+    )
 }
 
 fn client_evidence(id: &str, content: &[u8]) -> PathEvidence {
@@ -216,7 +221,8 @@ fn enrichment_compute_divergence_score_additive() {
         make_mismatch(MismatchKind::EventOrderViolation),
     ];
     let score = compute_divergence_score(&mismatches);
-    let expected = MismatchKind::TimingAnomaly.weight() + MismatchKind::EventOrderViolation.weight();
+    let expected =
+        MismatchKind::TimingAnomaly.weight() + MismatchKind::EventOrderViolation.weight();
     assert_eq!(score, expected);
 }
 
@@ -237,8 +243,18 @@ fn enrichment_verify_pair_kind_mismatch_rejected() {
 
 #[test]
 fn enrichment_verify_pair_mode_mismatch_rejected() {
-    let ref_ev = make_evidence("ref", ExecutionPathKind::Ssr, VerificationMode::FullDifferential, b"a");
-    let cand_ev = make_evidence("cand", ExecutionPathKind::Ssr, VerificationMode::HashEquivalence, b"a");
+    let ref_ev = make_evidence(
+        "ref",
+        ExecutionPathKind::Ssr,
+        VerificationMode::FullDifferential,
+        b"a",
+    );
+    let cand_ev = make_evidence(
+        "cand",
+        ExecutionPathKind::Ssr,
+        VerificationMode::HashEquivalence,
+        b"a",
+    );
     let pair = DifferentialPair::new(ref_ev, cand_ev);
     let err = verify_path_pair(&pair, &default_config()).unwrap_err();
     assert!(matches!(err, VerificationError::ModeMismatch { .. }));
@@ -426,7 +442,13 @@ fn enrichment_compute_receipt_previous_hash_changes_result() {
     let input_hash = ContentHash::compute(b"input");
     let prev = ContentHash::compute(b"prev");
     let r1 = compute_receipt(input_hash, &PathVerdict::Verified, &epoch(), None, 100);
-    let r2 = compute_receipt(input_hash, &PathVerdict::Verified, &epoch(), Some(prev), 100);
+    let r2 = compute_receipt(
+        input_hash,
+        &PathVerdict::Verified,
+        &epoch(),
+        Some(prev),
+        100,
+    );
     assert_ne!(r1.content_hash(), r2.content_hash());
 }
 
@@ -469,10 +491,7 @@ fn enrichment_differential_pair_content_hash_stable() {
 
 #[test]
 fn enrichment_differential_pair_kinds_match_same_kind() {
-    let pair = DifferentialPair::new(
-        streaming_evidence("r", b"a"),
-        streaming_evidence("c", b"b"),
-    );
+    let pair = DifferentialPair::new(streaming_evidence("r", b"a"), streaming_evidence("c", b"b"));
     assert!(pair.kinds_match());
     assert!(pair.modes_match());
 }
@@ -488,11 +507,21 @@ fn enrichment_verification_error_display_all_variants() {
             reference: VerificationMode::FullDifferential,
             candidate: VerificationMode::HashEquivalence,
         },
-        VerificationError::TooManyMismatches { count: 20000, max: 10000 },
-        VerificationError::BatchTooLarge { count: 6000, max: 5000 },
+        VerificationError::TooManyMismatches {
+            count: 20000,
+            max: 10000,
+        },
+        VerificationError::BatchTooLarge {
+            count: 6000,
+            max: 5000,
+        },
         VerificationError::BatchTooSmall { count: 0, min: 2 },
-        VerificationError::InvalidConfig { reason: "bad".to_string() },
-        VerificationError::DuplicatePathId { path_id: "dup".to_string() },
+        VerificationError::InvalidConfig {
+            reason: "bad".to_string(),
+        },
+        VerificationError::DuplicatePathId {
+            path_id: "dup".to_string(),
+        },
     ];
     for err in &errors {
         assert!(!err.to_string().is_empty());

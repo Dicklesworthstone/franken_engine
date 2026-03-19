@@ -260,12 +260,20 @@ fn integ_all_measurement_methods_serde_roundtrip() {
 fn integ_contract_error_serde_all_variants() {
     let errors = [
         ContractError::EmptyContractId,
-        ContractError::InvalidHypothesis { reason: "bad".into() },
+        ContractError::InvalidHypothesis {
+            reason: "bad".into(),
+        },
         ContractError::EmptyTargetMetrics,
-        ContractError::InvalidEvModel { reason: "bad".into() },
-        ContractError::InvalidRiskBudget { reason: "bad".into() },
+        ContractError::InvalidEvModel {
+            reason: "bad".into(),
+        },
+        ContractError::InvalidRiskBudget {
+            reason: "bad".into(),
+        },
         ContractError::EmptyKillCriteria,
-        ContractError::InvalidRollback { reason: "bad".into() },
+        ContractError::InvalidRollback {
+            reason: "bad".into(),
+        },
     ];
     for err in &errors {
         let json = serde_json::to_string(err).unwrap();
@@ -346,56 +354,80 @@ fn integ_contract_rejects_empty_contract_id() {
 fn integ_hypothesis_rejects_empty_problem() {
     let mut c = make_contract();
     c.hypothesis.problem = String::new();
-    assert!(matches!(c.validate(), Err(ContractError::InvalidHypothesis { .. })));
+    assert!(matches!(
+        c.validate(),
+        Err(ContractError::InvalidHypothesis { .. })
+    ));
 }
 
 #[test]
 fn integ_hypothesis_rejects_empty_mechanism() {
     let mut c = make_contract();
     c.hypothesis.mechanism = String::new();
-    assert!(matches!(c.validate(), Err(ContractError::InvalidHypothesis { .. })));
+    assert!(matches!(
+        c.validate(),
+        Err(ContractError::InvalidHypothesis { .. })
+    ));
 }
 
 #[test]
 fn integ_hypothesis_rejects_empty_outcome() {
     let mut c = make_contract();
     c.hypothesis.expected_outcome = String::new();
-    assert!(matches!(c.validate(), Err(ContractError::InvalidHypothesis { .. })));
+    assert!(matches!(
+        c.validate(),
+        Err(ContractError::InvalidHypothesis { .. })
+    ));
 }
 
 #[test]
 fn integ_hypothesis_rejects_empty_falsification() {
     let mut c = make_contract();
     c.hypothesis.falsification_criteria = vec![];
-    assert!(matches!(c.validate(), Err(ContractError::InvalidHypothesis { .. })));
+    assert!(matches!(
+        c.validate(),
+        Err(ContractError::InvalidHypothesis { .. })
+    ));
 }
 
 #[test]
 fn integ_contract_rejects_empty_metrics() {
     let mut c = make_contract();
     c.target_metrics = vec![];
-    assert!(matches!(c.validate(), Err(ContractError::EmptyTargetMetrics)));
+    assert!(matches!(
+        c.validate(),
+        Err(ContractError::EmptyTargetMetrics)
+    ));
 }
 
 #[test]
 fn integ_contract_rejects_empty_kill_criteria() {
     let mut c = make_contract();
     c.kill_criteria = vec![];
-    assert!(matches!(c.validate(), Err(ContractError::EmptyKillCriteria)));
+    assert!(matches!(
+        c.validate(),
+        Err(ContractError::EmptyKillCriteria)
+    ));
 }
 
 #[test]
 fn integ_rollback_rejects_empty_steps() {
     let mut c = make_contract();
     c.rollback_plan.steps = vec![];
-    assert!(matches!(c.validate(), Err(ContractError::InvalidRollback { .. })));
+    assert!(matches!(
+        c.validate(),
+        Err(ContractError::InvalidRollback { .. })
+    ));
 }
 
 #[test]
 fn integ_rollback_rejects_empty_expected_state() {
     let mut c = make_contract();
     c.rollback_plan.expected_state_after_rollback = String::new();
-    assert!(matches!(c.validate(), Err(ContractError::InvalidRollback { .. })));
+    assert!(matches!(
+        c.validate(),
+        Err(ContractError::InvalidRollback { .. })
+    ));
 }
 
 // ===========================================================================
@@ -411,14 +443,20 @@ fn integ_ev_model_validates_ok() {
 fn integ_ev_model_rejects_zero_cost() {
     let mut ev = make_ev_model();
     ev.cost_millionths = 0;
-    assert!(matches!(ev.validate(), Err(ContractError::InvalidEvModel { .. })));
+    assert!(matches!(
+        ev.validate(),
+        Err(ContractError::InvalidEvModel { .. })
+    ));
 }
 
 #[test]
 fn integ_ev_model_rejects_negative_cost() {
     let mut ev = make_ev_model();
     ev.cost_millionths = -100;
-    assert!(matches!(ev.validate(), Err(ContractError::InvalidEvModel { .. })));
+    assert!(matches!(
+        ev.validate(),
+        Err(ContractError::InvalidEvModel { .. })
+    ));
 }
 
 #[test]
@@ -430,7 +468,10 @@ fn integ_ev_model_point_estimate_requires_value() {
         benefit_on_success_millionths: 1_000_000,
         harm_on_failure_millionths: -50_000,
     };
-    assert!(matches!(ev.validate(), Err(ContractError::InvalidEvModel { .. })));
+    assert!(matches!(
+        ev.validate(),
+        Err(ContractError::InvalidEvModel { .. })
+    ));
 }
 
 #[test]
@@ -442,7 +483,10 @@ fn integ_ev_model_beta_requires_alpha_beta() {
         benefit_on_success_millionths: 1_000_000,
         harm_on_failure_millionths: -50_000,
     };
-    assert!(matches!(ev.validate(), Err(ContractError::InvalidEvModel { .. })));
+    assert!(matches!(
+        ev.validate(),
+        Err(ContractError::InvalidEvModel { .. })
+    ));
 }
 
 #[test]
@@ -454,7 +498,10 @@ fn integ_ev_model_uniform_requires_low_high() {
         benefit_on_success_millionths: 1_000_000,
         harm_on_failure_millionths: -50_000,
     };
-    assert!(matches!(ev.validate(), Err(ContractError::InvalidEvModel { .. })));
+    assert!(matches!(
+        ev.validate(),
+        Err(ContractError::InvalidEvModel { .. })
+    ));
 }
 
 #[test]
@@ -466,7 +513,10 @@ fn integ_ev_model_lognormal_requires_mu_sigma() {
         benefit_on_success_millionths: 1_000_000,
         harm_on_failure_millionths: -50_000,
     };
-    assert!(matches!(ev.validate(), Err(ContractError::InvalidEvModel { .. })));
+    assert!(matches!(
+        ev.validate(),
+        Err(ContractError::InvalidEvModel { .. })
+    ));
 }
 
 #[test]
@@ -575,7 +625,11 @@ fn integ_kill_time_expiry_triggered() {
     let c = make_contract();
     let metrics = BTreeMap::new();
     let triggered = c.check_kill_criteria(&metrics, 17_280_000_000_000_000, 0);
-    assert!(triggered.iter().any(|k| k.trigger == KillTrigger::TimeExpiry));
+    assert!(
+        triggered
+            .iter()
+            .any(|k| k.trigger == KillTrigger::TimeExpiry)
+    );
 }
 
 #[test]
@@ -583,7 +637,11 @@ fn integ_kill_time_expiry_not_triggered_at_boundary() {
     let c = make_contract();
     let metrics = BTreeMap::new();
     let triggered = c.check_kill_criteria(&metrics, 15_552_000_000_000_000, 0);
-    assert!(!triggered.iter().any(|k| k.trigger == KillTrigger::TimeExpiry));
+    assert!(
+        !triggered
+            .iter()
+            .any(|k| k.trigger == KillTrigger::TimeExpiry)
+    );
 }
 
 #[test]
@@ -592,7 +650,11 @@ fn integ_kill_metric_regression_triggered() {
     let mut metrics = BTreeMap::new();
     metrics.insert("latency_p50".into(), 600_000_000i64);
     let triggered = c.check_kill_criteria(&metrics, 0, 0);
-    assert!(triggered.iter().any(|k| k.trigger == KillTrigger::MetricRegression));
+    assert!(
+        triggered
+            .iter()
+            .any(|k| k.trigger == KillTrigger::MetricRegression)
+    );
 }
 
 #[test]
@@ -752,7 +814,9 @@ fn integ_risk_budget_all_dimensions() {
     caps.insert(RiskDimension::PerformanceRegression, 100_000);
     caps.insert(RiskDimension::OperationalBurden, 75_000);
     caps.insert(RiskDimension::CrossInitiativeInterference, 25_000);
-    let rb = RiskBudget { dimension_caps: caps };
+    let rb = RiskBudget {
+        dimension_caps: caps,
+    };
     rb.validate().unwrap();
     let json = serde_json::to_string(&rb).unwrap();
     let back: RiskBudget = serde_json::from_str(&json).unwrap();

@@ -20,8 +20,8 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::frankenlab_surface_gap_matrix::{
-    CapabilityId, CoverageLevel, GapCell, GapMatrix, MigrationDecision, SurfaceAssessment,
-    SurfaceId, BEAD_ID, COMPONENT, GAP_MATRIX_SCHEMA_VERSION, build_canonical_gap_matrix,
+    BEAD_ID, COMPONENT, CapabilityId, CoverageLevel, GAP_MATRIX_SCHEMA_VERSION, GapCell, GapMatrix,
+    MigrationDecision, SurfaceAssessment, SurfaceId, build_canonical_gap_matrix,
 };
 
 // ===========================================================================

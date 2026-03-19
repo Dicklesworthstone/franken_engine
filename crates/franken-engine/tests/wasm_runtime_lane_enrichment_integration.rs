@@ -116,7 +116,9 @@ fn enrichment_bounded_queue_clear() {
 fn enrichment_signal_graph_register_and_get() {
     let mut graph = WasmSignalGraph::new(8, 100);
     let id = WasmSignalId(0);
-    graph.register(id, WasmSignalKind::Source, BTreeSet::new()).unwrap();
+    graph
+        .register(id, WasmSignalKind::Source, BTreeSet::new())
+        .unwrap();
     let node = graph.get(id).unwrap();
     assert_eq!(node.kind, WasmSignalKind::Source);
 }
@@ -126,7 +128,9 @@ fn enrichment_signal_graph_active_count() {
     let mut graph = WasmSignalGraph::new(8, 100);
     assert_eq!(graph.active_count(), 0);
     let id = graph.next_id();
-    graph.register(id, WasmSignalKind::Effect, BTreeSet::new()).unwrap();
+    graph
+        .register(id, WasmSignalKind::Effect, BTreeSet::new())
+        .unwrap();
     assert_eq!(graph.active_count(), 1);
 }
 
@@ -134,10 +138,14 @@ fn enrichment_signal_graph_active_count() {
 fn enrichment_signal_graph_propagate_dirty() {
     let mut graph = WasmSignalGraph::new(8, 100);
     let id1 = graph.next_id();
-    graph.register(id1, WasmSignalKind::Source, BTreeSet::new()).unwrap();
+    graph
+        .register(id1, WasmSignalKind::Source, BTreeSet::new())
+        .unwrap();
     graph.mark_clean(id1).unwrap();
     let id2 = graph.next_id();
-    graph.register(id2, WasmSignalKind::Derived, BTreeSet::from([id1])).unwrap();
+    graph
+        .register(id2, WasmSignalKind::Derived, BTreeSet::from([id1]))
+        .unwrap();
     graph.mark_clean(id2).unwrap();
 
     let dirty = graph.propagate_dirty(id1).unwrap();
@@ -148,7 +156,9 @@ fn enrichment_signal_graph_propagate_dirty() {
 fn enrichment_signal_graph_dispose() {
     let mut graph = WasmSignalGraph::new(8, 100);
     let id = graph.next_id();
-    graph.register(id, WasmSignalKind::Source, BTreeSet::new()).unwrap();
+    graph
+        .register(id, WasmSignalKind::Source, BTreeSet::new())
+        .unwrap();
     assert_eq!(graph.active_count(), 1);
     graph.dispose(id).unwrap();
     assert_eq!(graph.active_count(), 0);
@@ -158,9 +168,13 @@ fn enrichment_signal_graph_dispose() {
 fn enrichment_signal_graph_max_nodes() {
     let mut graph = WasmSignalGraph::new(8, 2);
     let id1 = graph.next_id();
-    graph.register(id1, WasmSignalKind::Source, BTreeSet::new()).unwrap();
+    graph
+        .register(id1, WasmSignalKind::Source, BTreeSet::new())
+        .unwrap();
     let id2 = graph.next_id();
-    graph.register(id2, WasmSignalKind::Source, BTreeSet::new()).unwrap();
+    graph
+        .register(id2, WasmSignalKind::Source, BTreeSet::new())
+        .unwrap();
     let id3 = graph.next_id();
     let result = graph.register(id3, WasmSignalKind::Source, BTreeSet::new());
     assert!(result.is_err());
@@ -216,11 +230,26 @@ fn enrichment_lane_mode_serde_roundtrip() {
 #[test]
 fn enrichment_safe_mode_reason_serde_roundtrip() {
     let reasons = vec![
-        SafeModeReason::QueueOverflow { queue_len: 100, limit: 50 },
-        SafeModeReason::DepthExceeded { depth: 16, limit: 8 },
-        SafeModeReason::EvalBudgetExhausted { evals: 1000, limit: 500 },
-        SafeModeReason::DomOpBudgetExhausted { ops: 200, limit: 100 },
-        SafeModeReason::SignalBudgetExhausted { signals: 64, limit: 32 },
+        SafeModeReason::QueueOverflow {
+            queue_len: 100,
+            limit: 50,
+        },
+        SafeModeReason::DepthExceeded {
+            depth: 16,
+            limit: 8,
+        },
+        SafeModeReason::EvalBudgetExhausted {
+            evals: 1000,
+            limit: 500,
+        },
+        SafeModeReason::DomOpBudgetExhausted {
+            ops: 200,
+            limit: 100,
+        },
+        SafeModeReason::SignalBudgetExhausted {
+            signals: 64,
+            limit: 32,
+        },
     ];
     for reason in &reasons {
         let json = serde_json::to_string(reason).unwrap();
@@ -303,7 +332,10 @@ fn enrichment_runtime_lane_reset_mode() {
 
 #[test]
 fn enrichment_abi_dom_op_target_element() {
-    let op = AbiDomOp::Create { element_id: 42, tag_index: 1 };
+    let op = AbiDomOp::Create {
+        element_id: 42,
+        tag_index: 1,
+    };
     assert_eq!(op.target_element(), 42);
 }
 
@@ -316,10 +348,20 @@ fn enrichment_abi_dom_op_remove_target() {
 #[test]
 fn enrichment_abi_dom_op_serde_roundtrip() {
     let ops = vec![
-        AbiDomOp::Create { element_id: 1, tag_index: 0 },
+        AbiDomOp::Create {
+            element_id: 1,
+            tag_index: 0,
+        },
         AbiDomOp::Remove { element_id: 2 },
-        AbiDomOp::SetProp { element_id: 3, prop_index: 0, value: vec![1, 2] },
-        AbiDomOp::SetText { element_id: 4, text: vec![65, 66] },
+        AbiDomOp::SetProp {
+            element_id: 3,
+            prop_index: 0,
+            value: vec![1, 2],
+        },
+        AbiDomOp::SetText {
+            element_id: 4,
+            text: vec![65, 66],
+        },
     ];
     for op in &ops {
         let json = serde_json::to_string(op).unwrap();
@@ -342,7 +384,10 @@ fn enrichment_abi_dom_batch_empty() {
 #[test]
 fn enrichment_abi_dom_batch_push_and_derive_id() {
     let mut batch = AbiDomBatch::new(1);
-    batch.push(AbiDomOp::Create { element_id: 1, tag_index: 0 });
+    batch.push(AbiDomOp::Create {
+        element_id: 1,
+        tag_index: 0,
+    });
     assert!(!batch.is_empty());
     let _id = batch.derive_id();
 }

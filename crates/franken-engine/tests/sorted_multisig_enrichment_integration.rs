@@ -232,7 +232,12 @@ fn enrichment_quorum_fails_by_one() {
             verify_signature(vk, &preimage, sig)
         })
         .unwrap_err();
-    if let MultiSigError::QuorumNotMet { required, valid, total } = err {
+    if let MultiSigError::QuorumNotMet {
+        required,
+        valid,
+        total,
+    } = err
+    {
         assert_eq!(required, 2);
         assert_eq!(valid, 1);
         assert_eq!(total, 2);
@@ -488,10 +493,14 @@ fn enrichment_quorum_deterministic_same_inputs() {
     let authorized = vec![vk1.clone(), vk2.clone()];
 
     let r1 = arr
-        .verify_quorum(2, &authorized, |vk, sig| verify_signature(vk, &preimage, sig))
+        .verify_quorum(2, &authorized, |vk, sig| {
+            verify_signature(vk, &preimage, sig)
+        })
         .unwrap();
     let r2 = arr
-        .verify_quorum(2, &authorized, |vk, sig| verify_signature(vk, &preimage, sig))
+        .verify_quorum(2, &authorized, |vk, sig| {
+            verify_signature(vk, &preimage, sig)
+        })
         .unwrap();
     assert_eq!(r1, r2);
 }
@@ -560,11 +569,25 @@ fn enrichment_quorum_result_display_format_values() {
 fn enrichment_all_event_types_display_nonempty() {
     let events = vec![
         MultiSigEventType::ArrayCreated { signer_count: 10 },
-        MultiSigEventType::SignatureInserted { signer_hex: "abcdef".to_string() },
-        MultiSigEventType::QuorumVerified { valid: 3, threshold: 2, total: 5 },
-        MultiSigEventType::QuorumFailed { valid: 1, threshold: 3, total: 5 },
-        MultiSigEventType::SortingViolation { detail: "wrong order".to_string() },
-        MultiSigEventType::DuplicateSigner { key_hex: "ff00".to_string() },
+        MultiSigEventType::SignatureInserted {
+            signer_hex: "abcdef".to_string(),
+        },
+        MultiSigEventType::QuorumVerified {
+            valid: 3,
+            threshold: 2,
+            total: 5,
+        },
+        MultiSigEventType::QuorumFailed {
+            valid: 1,
+            threshold: 3,
+            total: 5,
+        },
+        MultiSigEventType::SortingViolation {
+            detail: "wrong order".to_string(),
+        },
+        MultiSigEventType::DuplicateSigner {
+            key_hex: "ff00".to_string(),
+        },
     ];
     for evt in &events {
         let msg = evt.to_string();

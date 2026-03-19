@@ -1183,7 +1183,10 @@ mod tests {
     fn registry_content_hash_deterministic() {
         let r1 = HarnessMigrationRegistry::with_default_scenarios(test_epoch());
         let r2 = HarnessMigrationRegistry::with_default_scenarios(test_epoch());
-        assert_eq!(r1.build_report().content_hash, r2.build_report().content_hash);
+        assert_eq!(
+            r1.build_report().content_hash,
+            r2.build_report().content_hash
+        );
     }
 
     #[test]

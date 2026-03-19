@@ -13,9 +13,9 @@ use frankenengine_engine::native_addon_parity_gate::{
     AddonCohort, BEAD_ID, COMPONENT, DEFAULT_MAX_SECURITY_FINDINGS,
     DEFAULT_MAX_THROUGHPUT_OVERHEAD_MILLIONTHS, DEFAULT_MIN_PARITY_MILLIONTHS,
     DEFAULT_MIN_SAMPLE_COUNT, DEFAULT_MIN_SUPPORT_COVERAGE_MILLIONTHS, FindingCategory,
-    FindingSeverity, GateAxis, GateConfig, GateEvaluator, GateSummary, GateVerdict,
-    MILLIONTHS, POLICY_ID, ParityEntry, SCHEMA_VERSION, SecurityFinding, SupportSurfaceEntry,
-    ThroughputEntry, Violation, native_addon_parity_gate_manifest,
+    FindingSeverity, GateAxis, GateConfig, GateEvaluator, GateSummary, GateVerdict, MILLIONTHS,
+    POLICY_ID, ParityEntry, SCHEMA_VERSION, SecurityFinding, SupportSurfaceEntry, ThroughputEntry,
+    Violation, native_addon_parity_gate_manifest,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -231,14 +231,29 @@ fn integ_finding_severity_blocking() {
 
 #[test]
 fn integ_security_finding_deterministic_hash() {
-    let a = SecurityFinding::new(FindingSeverity::High, FindingCategory::UseAfterFree, "addon-a", "uaf");
-    let b = SecurityFinding::new(FindingSeverity::High, FindingCategory::UseAfterFree, "addon-a", "uaf");
+    let a = SecurityFinding::new(
+        FindingSeverity::High,
+        FindingCategory::UseAfterFree,
+        "addon-a",
+        "uaf",
+    );
+    let b = SecurityFinding::new(
+        FindingSeverity::High,
+        FindingCategory::UseAfterFree,
+        "addon-a",
+        "uaf",
+    );
     assert_eq!(a.content_hash, b.content_hash);
 }
 
 #[test]
 fn integ_security_finding_blocking_flag() {
-    let f = SecurityFinding::new(FindingSeverity::Critical, FindingCategory::BufferOverflow, "x", "desc");
+    let f = SecurityFinding::new(
+        FindingSeverity::Critical,
+        FindingCategory::BufferOverflow,
+        "x",
+        "desc",
+    );
     assert!(f.is_blocking());
     let f2 = SecurityFinding::new(FindingSeverity::Low, FindingCategory::InfoLeak, "x", "desc");
     assert!(!f2.is_blocking());
@@ -250,21 +265,39 @@ fn integ_security_finding_blocking_flag() {
 
 #[test]
 fn integ_throughput_entry_no_overhead() {
-    let e = ThroughputEntry::new(AddonCohort::Crypto, "fast", 1_000_000, 1_000_000, DEFAULT_MAX_THROUGHPUT_OVERHEAD_MILLIONTHS);
+    let e = ThroughputEntry::new(
+        AddonCohort::Crypto,
+        "fast",
+        1_000_000,
+        1_000_000,
+        DEFAULT_MAX_THROUGHPUT_OVERHEAD_MILLIONTHS,
+    );
     assert_eq!(e.overhead_millionths, 0);
     assert!(e.within_budget);
 }
 
 #[test]
 fn integ_throughput_entry_over_budget() {
-    let e = ThroughputEntry::new(AddonCohort::Database, "slow", 1_000_000, 800_000, DEFAULT_MAX_THROUGHPUT_OVERHEAD_MILLIONTHS);
+    let e = ThroughputEntry::new(
+        AddonCohort::Database,
+        "slow",
+        1_000_000,
+        800_000,
+        DEFAULT_MAX_THROUGHPUT_OVERHEAD_MILLIONTHS,
+    );
     assert_eq!(e.overhead_millionths, 200_000);
     assert!(!e.within_budget);
 }
 
 #[test]
 fn integ_throughput_entry_zero_native() {
-    let e = ThroughputEntry::new(AddonCohort::Networking, "tls", 0, 100, DEFAULT_MAX_THROUGHPUT_OVERHEAD_MILLIONTHS);
+    let e = ThroughputEntry::new(
+        AddonCohort::Networking,
+        "tls",
+        0,
+        100,
+        DEFAULT_MAX_THROUGHPUT_OVERHEAD_MILLIONTHS,
+    );
     assert_eq!(e.overhead_millionths, 0);
     assert!(e.within_budget);
 }
@@ -275,19 +308,43 @@ fn integ_throughput_entry_zero_native() {
 
 #[test]
 fn integ_parity_entry_passes() {
-    let e = ParityEntry::new(AddonCohort::Crypto, "aes", GateAxis::Parity, MILLIONTHS, 50, DEFAULT_MIN_PARITY_MILLIONTHS, DEFAULT_MIN_SAMPLE_COUNT);
+    let e = ParityEntry::new(
+        AddonCohort::Crypto,
+        "aes",
+        GateAxis::Parity,
+        MILLIONTHS,
+        50,
+        DEFAULT_MIN_PARITY_MILLIONTHS,
+        DEFAULT_MIN_SAMPLE_COUNT,
+    );
     assert!(e.passes);
 }
 
 #[test]
 fn integ_parity_entry_fails_low_parity() {
-    let e = ParityEntry::new(AddonCohort::Crypto, "aes", GateAxis::Parity, 900_000, 50, DEFAULT_MIN_PARITY_MILLIONTHS, DEFAULT_MIN_SAMPLE_COUNT);
+    let e = ParityEntry::new(
+        AddonCohort::Crypto,
+        "aes",
+        GateAxis::Parity,
+        900_000,
+        50,
+        DEFAULT_MIN_PARITY_MILLIONTHS,
+        DEFAULT_MIN_SAMPLE_COUNT,
+    );
     assert!(!e.passes);
 }
 
 #[test]
 fn integ_parity_entry_fails_low_samples() {
-    let e = ParityEntry::new(AddonCohort::Crypto, "aes", GateAxis::Parity, MILLIONTHS, 5, DEFAULT_MIN_PARITY_MILLIONTHS, DEFAULT_MIN_SAMPLE_COUNT);
+    let e = ParityEntry::new(
+        AddonCohort::Crypto,
+        "aes",
+        GateAxis::Parity,
+        MILLIONTHS,
+        5,
+        DEFAULT_MIN_PARITY_MILLIONTHS,
+        DEFAULT_MIN_SAMPLE_COUNT,
+    );
     assert!(!e.passes);
 }
 
@@ -352,7 +409,12 @@ fn integ_evaluator_parity_violation() {
 #[test]
 fn integ_evaluator_security_blocking() {
     let mut g = GateEvaluator::with_defaults(ep(1));
-    g.add_security_finding(FindingSeverity::Critical, FindingCategory::BufferOverflow, "x", "heap overflow");
+    g.add_security_finding(
+        FindingSeverity::Critical,
+        FindingCategory::BufferOverflow,
+        "x",
+        "heap overflow",
+    );
     let receipt = g.evaluate();
     assert_eq!(receipt.verdict, GateVerdict::SecurityBlocking);
     assert_eq!(receipt.blocking_finding_count(), 1);
@@ -539,7 +601,13 @@ fn integ_deterministic_multi_cohort_evaluation() {
             .with_required_cohort(AddonCohort::Compression);
         let mut g = GateEvaluator::new(config, ep(1));
         g.add_parity(AddonCohort::Crypto, "aes", GateAxis::Parity, MILLIONTHS, 50);
-        g.add_parity(AddonCohort::Compression, "zstd", GateAxis::Parity, MILLIONTHS, 50);
+        g.add_parity(
+            AddonCohort::Compression,
+            "zstd",
+            GateAxis::Parity,
+            MILLIONTHS,
+            50,
+        );
         g.add_throughput(AddonCohort::Crypto, "aes", 1_000_000, 950_000);
         g.add_throughput(AddonCohort::Compression, "zstd", 1_000_000, 960_000);
         g.add_support_surface(AddonCohort::Crypto, 95, 100);

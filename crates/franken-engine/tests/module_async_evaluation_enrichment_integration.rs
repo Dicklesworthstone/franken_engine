@@ -353,7 +353,10 @@ fn config_serde_roundtrip() {
 fn evaluator_register_sync() {
     let mut eval = AsyncModuleEvaluator::with_defaults();
     eval.register_module("sync.js", false, &[], None);
-    assert_eq!(eval.states()["sync.js"].phase, AsyncModulePhase::Synchronous);
+    assert_eq!(
+        eval.states()["sync.js"].phase,
+        AsyncModulePhase::Synchronous
+    );
 }
 
 #[test]
@@ -367,7 +370,8 @@ fn evaluator_register_async() {
 fn evaluator_suspend_and_resume() {
     let mut eval = AsyncModuleEvaluator::with_defaults();
     eval.register_module("tla.js", true, &[], Some(PromiseHandle(1)));
-    eval.suspend_at_top_level_await("tla.js", PromiseHandle(2)).unwrap();
+    eval.suspend_at_top_level_await("tla.js", PromiseHandle(2))
+        .unwrap();
     assert_eq!(eval.states()["tla.js"].suspensions.len(), 1);
     eval.resume_evaluation("tla.js").unwrap();
     assert!(eval.states()["tla.js"].suspensions[0].resolved);
@@ -452,12 +456,17 @@ fn evaluator_suspension_limit() {
     };
     let mut eval = AsyncModuleEvaluator::new(config);
     eval.register_module("m.js", true, &[], Some(PromiseHandle(1)));
-    eval.suspend_at_top_level_await("m.js", PromiseHandle(2)).unwrap();
-    eval.suspend_at_top_level_await("m.js", PromiseHandle(3)).unwrap();
+    eval.suspend_at_top_level_await("m.js", PromiseHandle(2))
+        .unwrap();
+    eval.suspend_at_top_level_await("m.js", PromiseHandle(3))
+        .unwrap();
     let err = eval
         .suspend_at_top_level_await("m.js", PromiseHandle(4))
         .unwrap_err();
-    assert!(matches!(err, AsyncEvalError::SuspensionLimitExceeded { .. }));
+    assert!(matches!(
+        err,
+        AsyncEvalError::SuspensionLimitExceeded { .. }
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -497,9 +506,11 @@ fn evaluator_rejection_propagation_transitive() {
     let mut eval = AsyncModuleEvaluator::with_defaults();
     eval.register_module("root.js", true, &[], Some(PromiseHandle(1)));
     eval.register_module("mid.js", true, &["root.js".into()], Some(PromiseHandle(2)));
-    eval.suspend_on_dependency("mid.js", "root.js", PromiseHandle(1)).unwrap();
+    eval.suspend_on_dependency("mid.js", "root.js", PromiseHandle(1))
+        .unwrap();
     eval.register_module("leaf.js", true, &["mid.js".into()], Some(PromiseHandle(3)));
-    eval.suspend_on_dependency("leaf.js", "mid.js", PromiseHandle(2)).unwrap();
+    eval.suspend_on_dependency("leaf.js", "mid.js", PromiseHandle(2))
+        .unwrap();
 
     let mut bindings = empty_live_bindings();
     let linkage = eval
@@ -520,9 +531,11 @@ fn evaluator_rejection_no_transitive_when_disabled() {
     let mut eval = AsyncModuleEvaluator::new(config);
     eval.register_module("root.js", true, &[], Some(PromiseHandle(1)));
     eval.register_module("mid.js", true, &["root.js".into()], Some(PromiseHandle(2)));
-    eval.suspend_on_dependency("mid.js", "root.js", PromiseHandle(1)).unwrap();
+    eval.suspend_on_dependency("mid.js", "root.js", PromiseHandle(1))
+        .unwrap();
     eval.register_module("leaf.js", true, &["mid.js".into()], Some(PromiseHandle(3)));
-    eval.suspend_on_dependency("leaf.js", "mid.js", PromiseHandle(2)).unwrap();
+    eval.suspend_on_dependency("leaf.js", "mid.js", PromiseHandle(2))
+        .unwrap();
 
     let mut bindings = empty_live_bindings();
     let linkage = eval
@@ -542,9 +555,24 @@ fn evaluator_reject_marks_bindings_dead() {
     eval.register_module("lib.js", true, &[], Some(PromiseHandle(1)));
 
     let mut bindings = empty_live_bindings();
-    let id1 = bindings.register_cell(BindingCell::new("lib.js", "alpha", "alpha", BindingType::Direct));
-    let id2 = bindings.register_cell(BindingCell::new("lib.js", "beta", "beta", BindingType::Direct));
-    let id_other = bindings.register_cell(BindingCell::new("other.js", "gamma", "gamma", BindingType::Direct));
+    let id1 = bindings.register_cell(BindingCell::new(
+        "lib.js",
+        "alpha",
+        "alpha",
+        BindingType::Direct,
+    ));
+    let id2 = bindings.register_cell(BindingCell::new(
+        "lib.js",
+        "beta",
+        "beta",
+        BindingType::Direct,
+    ));
+    let id_other = bindings.register_cell(BindingCell::new(
+        "other.js",
+        "gamma",
+        "gamma",
+        BindingType::Direct,
+    ));
 
     let linkage = eval
         .reject_module("lib.js", &js_error("err"), &mut bindings)
@@ -553,8 +581,14 @@ fn evaluator_reject_marks_bindings_dead() {
     assert!(linkage.dead_bindings.contains(&id1));
     assert!(linkage.dead_bindings.contains(&id2));
     assert!(!linkage.dead_bindings.contains(&id_other));
-    assert_eq!(bindings.get_cell(&id1).unwrap().state, BindingCellState::Dead);
-    assert_ne!(bindings.get_cell(&id_other).unwrap().state, BindingCellState::Dead);
+    assert_eq!(
+        bindings.get_cell(&id1).unwrap().state,
+        BindingCellState::Dead
+    );
+    assert_ne!(
+        bindings.get_cell(&id_other).unwrap().state,
+        BindingCellState::Dead
+    );
 }
 
 #[test]
@@ -562,7 +596,12 @@ fn evaluator_reject_already_dead_not_double_counted() {
     let mut eval = AsyncModuleEvaluator::with_defaults();
     eval.register_module("lib.js", true, &[], Some(PromiseHandle(1)));
     let mut bindings = empty_live_bindings();
-    let id = bindings.register_cell(BindingCell::new("lib.js", "val", "val", BindingType::Direct));
+    let id = bindings.register_cell(BindingCell::new(
+        "lib.js",
+        "val",
+        "val",
+        BindingType::Direct,
+    ));
     bindings.mark_dead(&id).unwrap();
 
     let linkage = eval
@@ -593,7 +632,8 @@ fn evaluator_finalize_with_rejection() {
     let mut eval = AsyncModuleEvaluator::with_defaults();
     eval.register_module("bad.js", true, &[], Some(PromiseHandle(1)));
     let mut bindings = empty_live_bindings();
-    eval.reject_module("bad.js", &js_error("err"), &mut bindings).unwrap();
+    eval.reject_module("bad.js", &js_error("err"), &mut bindings)
+        .unwrap();
     let result = eval.finalize();
     assert!(!result.all_settled);
     assert_eq!(result.total_rejections, 1);
@@ -753,7 +793,8 @@ fn topo_order_external_dep_ignored() {
 fn witness_events_monotonic_seq() {
     let mut eval = AsyncModuleEvaluator::with_defaults();
     eval.register_module("a.js", true, &[], Some(PromiseHandle(1)));
-    eval.suspend_at_top_level_await("a.js", PromiseHandle(2)).unwrap();
+    eval.suspend_at_top_level_await("a.js", PromiseHandle(2))
+        .unwrap();
     eval.resume_evaluation("a.js").unwrap();
     eval.settle_module("a.js").unwrap();
 
@@ -767,11 +808,13 @@ fn witness_events_monotonic_seq() {
 fn witness_events_contain_expected_types() {
     let mut eval = AsyncModuleEvaluator::with_defaults();
     eval.register_module("m.js", true, &[], Some(PromiseHandle(1)));
-    eval.suspend_at_top_level_await("m.js", PromiseHandle(2)).unwrap();
+    eval.suspend_at_top_level_await("m.js", PromiseHandle(2))
+        .unwrap();
     eval.resume_evaluation("m.js").unwrap();
     eval.settle_module("m.js").unwrap();
 
-    let types: Vec<AsyncEvalEventType> = eval.witness_events().iter().map(|e| e.event_type).collect();
+    let types: Vec<AsyncEvalEventType> =
+        eval.witness_events().iter().map(|e| e.event_type).collect();
     assert!(types.contains(&AsyncEvalEventType::EvaluationStarted));
     assert!(types.contains(&AsyncEvalEventType::TopLevelAwaitSuspended));
     assert!(types.contains(&AsyncEvalEventType::EvaluationResumed));
@@ -814,8 +857,10 @@ fn evaluator_full_lifecycle() {
     let mut eval = AsyncModuleEvaluator::with_defaults();
     eval.register_module("dep.js", true, &[], Some(PromiseHandle(1)));
     eval.register_module("app.js", true, &["dep.js".into()], Some(PromiseHandle(2)));
-    eval.suspend_at_top_level_await("app.js", PromiseHandle(10)).unwrap();
-    eval.suspend_on_dependency("app.js", "dep.js", PromiseHandle(1)).unwrap();
+    eval.suspend_at_top_level_await("app.js", PromiseHandle(10))
+        .unwrap();
+    eval.suspend_on_dependency("app.js", "dep.js", PromiseHandle(1))
+        .unwrap();
     eval.settle_module("dep.js").unwrap();
     assert!(eval.states()["app.js"].all_dependencies_settled());
     eval.resume_evaluation("app.js").unwrap();

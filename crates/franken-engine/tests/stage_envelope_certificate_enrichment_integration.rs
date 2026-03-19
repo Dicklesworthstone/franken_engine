@@ -408,10 +408,7 @@ fn enrichment_total_budget_shares_across_standard_stages() {
         .map(|s| default_envelope(*s).budget_share_millionths)
         .sum();
     // Total should be roughly 100% (1_000_000) or close
-    assert!(
-        total_share > 0,
-        "total budget share should be positive"
-    );
+    assert!(total_share > 0, "total budget share should be positive");
 }
 
 // ===========================================================================
@@ -553,8 +550,12 @@ fn enrichment_remediation_clone_and_compare() {
 
 #[test]
 fn enrichment_severity_serde_all() {
-    for s in [ViolationSeverity::Minor, ViolationSeverity::Moderate,
-              ViolationSeverity::Severe, ViolationSeverity::Catastrophic] {
+    for s in [
+        ViolationSeverity::Minor,
+        ViolationSeverity::Moderate,
+        ViolationSeverity::Severe,
+        ViolationSeverity::Catastrophic,
+    ] {
         let json = serde_json::to_string(&s).unwrap();
         let back: ViolationSeverity = serde_json::from_str(&json).unwrap();
         assert_eq!(s, back);
@@ -563,9 +564,14 @@ fn enrichment_severity_serde_all() {
 
 #[test]
 fn enrichment_remediation_serde_all() {
-    for r in [RemediationAction::Monitor, RemediationAction::IncreaseBudget,
-              RemediationAction::ReduceWorkload, RemediationAction::DeferToBackground,
-              RemediationAction::SplitStage, RemediationAction::Downgrade] {
+    for r in [
+        RemediationAction::Monitor,
+        RemediationAction::IncreaseBudget,
+        RemediationAction::ReduceWorkload,
+        RemediationAction::DeferToBackground,
+        RemediationAction::SplitStage,
+        RemediationAction::Downgrade,
+    ] {
         let json = serde_json::to_string(&r).unwrap();
         let back: RemediationAction = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
@@ -582,8 +588,12 @@ fn enrichment_envelope_serde_roundtrip() {
 
 #[test]
 fn enrichment_verdict_serde_all() {
-    for v in [EnvelopeVerdict::Compliant, EnvelopeVerdict::NearLimit,
-              EnvelopeVerdict::Violated, EnvelopeVerdict::InsufficientData] {
+    for v in [
+        EnvelopeVerdict::Compliant,
+        EnvelopeVerdict::NearLimit,
+        EnvelopeVerdict::Violated,
+        EnvelopeVerdict::InsufficientData,
+    ] {
         let json = serde_json::to_string(&v).unwrap();
         let back: EnvelopeVerdict = serde_json::from_str(&json).unwrap();
         assert_eq!(v, back);
@@ -592,8 +602,12 @@ fn enrichment_verdict_serde_all() {
 
 #[test]
 fn enrichment_percentile_serde_all() {
-    for p in [LatencyPercentile::P50, LatencyPercentile::P95,
-              LatencyPercentile::P99, LatencyPercentile::P999] {
+    for p in [
+        LatencyPercentile::P50,
+        LatencyPercentile::P95,
+        LatencyPercentile::P99,
+        LatencyPercentile::P999,
+    ] {
         let json = serde_json::to_string(&p).unwrap();
         let back: LatencyPercentile = serde_json::from_str(&json).unwrap();
         assert_eq!(p, back);

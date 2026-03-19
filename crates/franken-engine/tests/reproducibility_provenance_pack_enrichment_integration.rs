@@ -432,7 +432,11 @@ fn enrich_legal_multiple_medium_summary() {
 
 #[test]
 fn enrich_builder_no_env_returns_none() {
-    assert!(PackBuilder::new("FRX-X".to_string(), epoch()).build().is_none());
+    assert!(
+        PackBuilder::new("FRX-X".to_string(), epoch())
+            .build()
+            .is_none()
+    );
 }
 
 #[test]
@@ -449,8 +453,7 @@ fn enrich_builder_schema_version_correct() {
 
 #[test]
 fn enrich_builder_with_many_artifacts() {
-    let mut builder = PackBuilder::new("FRX-MANY".to_string(), epoch())
-        .environment(sample_env());
+    let mut builder = PackBuilder::new("FRX-MANY".to_string(), epoch()).environment(sample_env());
     for i in 0..20 {
         builder = builder.artifact(make_artifact(
             &format!("file_{i:02}.rs"),
@@ -464,8 +467,7 @@ fn enrich_builder_with_many_artifacts() {
 
 #[test]
 fn enrich_builder_with_many_deps() {
-    let mut builder = PackBuilder::new("FRX-DEPS".to_string(), epoch())
-        .environment(sample_env());
+    let mut builder = PackBuilder::new("FRX-DEPS".to_string(), epoch()).environment(sample_env());
     for i in 0..15 {
         builder = builder.dependency(make_dep(&format!("dep_{i:02}"), "1.0.0"));
     }
@@ -625,5 +627,8 @@ fn enrich_report_serde_roundtrip() {
 
 #[test]
 fn enrich_schema_version_value() {
-    assert_eq!(SCHEMA_VERSION, "franken-engine.reproducibility-provenance.v1");
+    assert_eq!(
+        SCHEMA_VERSION,
+        "franken-engine.reproducibility-provenance.v1"
+    );
 }

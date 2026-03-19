@@ -33,7 +33,12 @@ fn make_cert(
     DescentCertificate::new(id, surface, coverage, confidence, obstructions, excluded)
 }
 
-fn make_claim(id: &str, surface: SupportSurface, regions: BTreeSet<String>, shipped: bool) -> SupportClaim {
+fn make_claim(
+    id: &str,
+    surface: SupportSurface,
+    regions: BTreeSet<String>,
+    shipped: bool,
+) -> SupportClaim {
     SupportClaim {
         claim_id: id.into(),
         surface,
@@ -172,35 +177,98 @@ fn obstruction_clone_equality() {
 
 #[test]
 fn cert_hash_deterministic_same_inputs() {
-    let c1 = make_cert("cert-x", SupportSurface::Latency, 960_000, 900_000, vec![], BTreeSet::new());
-    let c2 = make_cert("cert-x", SupportSurface::Latency, 960_000, 900_000, vec![], BTreeSet::new());
+    let c1 = make_cert(
+        "cert-x",
+        SupportSurface::Latency,
+        960_000,
+        900_000,
+        vec![],
+        BTreeSet::new(),
+    );
+    let c2 = make_cert(
+        "cert-x",
+        SupportSurface::Latency,
+        960_000,
+        900_000,
+        vec![],
+        BTreeSet::new(),
+    );
     assert_eq!(c1.content_hash, c2.content_hash);
 }
 
 #[test]
 fn cert_hash_differs_on_id() {
-    let c1 = make_cert("cert-a", SupportSurface::Latency, 960_000, 900_000, vec![], BTreeSet::new());
-    let c2 = make_cert("cert-b", SupportSurface::Latency, 960_000, 900_000, vec![], BTreeSet::new());
+    let c1 = make_cert(
+        "cert-a",
+        SupportSurface::Latency,
+        960_000,
+        900_000,
+        vec![],
+        BTreeSet::new(),
+    );
+    let c2 = make_cert(
+        "cert-b",
+        SupportSurface::Latency,
+        960_000,
+        900_000,
+        vec![],
+        BTreeSet::new(),
+    );
     assert_ne!(c1.content_hash, c2.content_hash);
 }
 
 #[test]
 fn cert_hash_differs_on_surface() {
-    let c1 = make_cert("cert-x", SupportSurface::Latency, 960_000, 900_000, vec![], BTreeSet::new());
-    let c2 = make_cert("cert-x", SupportSurface::Throughput, 960_000, 900_000, vec![], BTreeSet::new());
+    let c1 = make_cert(
+        "cert-x",
+        SupportSurface::Latency,
+        960_000,
+        900_000,
+        vec![],
+        BTreeSet::new(),
+    );
+    let c2 = make_cert(
+        "cert-x",
+        SupportSurface::Throughput,
+        960_000,
+        900_000,
+        vec![],
+        BTreeSet::new(),
+    );
     assert_ne!(c1.content_hash, c2.content_hash);
 }
 
 #[test]
 fn cert_hash_differs_on_coverage() {
-    let c1 = make_cert("cert-x", SupportSurface::Latency, 960_000, 900_000, vec![], BTreeSet::new());
-    let c2 = make_cert("cert-x", SupportSurface::Latency, 500_000, 900_000, vec![], BTreeSet::new());
+    let c1 = make_cert(
+        "cert-x",
+        SupportSurface::Latency,
+        960_000,
+        900_000,
+        vec![],
+        BTreeSet::new(),
+    );
+    let c2 = make_cert(
+        "cert-x",
+        SupportSurface::Latency,
+        500_000,
+        900_000,
+        vec![],
+        BTreeSet::new(),
+    );
     assert_ne!(c1.content_hash, c2.content_hash);
 }
 
 #[test]
 fn cert_is_obstruction_free_when_empty() {
-    let c = make_cert("c", SupportSurface::Latency, 960_000, 900_000, vec![], BTreeSet::new());
+    let c = make_cert(
+        "c",
+        SupportSurface::Latency,
+        960_000,
+        900_000,
+        vec![],
+        BTreeSet::new(),
+    );
     assert!(c.is_obstruction_free());
 }
 
@@ -213,20 +281,41 @@ fn cert_is_not_obstruction_free_when_has_obstructions() {
         severity_millionths: 100_000,
         description: "d".into(),
     };
-    let c = make_cert("c", SupportSurface::Latency, 960_000, 900_000, vec![obs], BTreeSet::new());
+    let c = make_cert(
+        "c",
+        SupportSurface::Latency,
+        960_000,
+        900_000,
+        vec![obs],
+        BTreeSet::new(),
+    );
     assert!(!c.is_obstruction_free());
 }
 
 #[test]
 fn cert_meets_coverage_boundary() {
-    let c = make_cert("c", SupportSurface::Latency, 950_000, 900_000, vec![], BTreeSet::new());
+    let c = make_cert(
+        "c",
+        SupportSurface::Latency,
+        950_000,
+        900_000,
+        vec![],
+        BTreeSet::new(),
+    );
     assert!(c.meets_coverage_threshold(950_000));
     assert!(!c.meets_coverage_threshold(950_001));
 }
 
 #[test]
 fn cert_meets_confidence_boundary() {
-    let c = make_cert("c", SupportSurface::Latency, 960_000, 850_000, vec![], BTreeSet::new());
+    let c = make_cert(
+        "c",
+        SupportSurface::Latency,
+        960_000,
+        850_000,
+        vec![],
+        BTreeSet::new(),
+    );
     assert!(c.meets_confidence_threshold(850_000));
     assert!(!c.meets_confidence_threshold(850_001));
 }
@@ -421,7 +510,10 @@ fn verdict_serde_roundtrip_all_variants() {
         },
         GateVerdict::Rejected {
             claim_id: "z".into(),
-            reasons: vec![GateRejection::NoCertificate, GateRejection::NoParityEvidence],
+            reasons: vec![
+                GateRejection::NoCertificate,
+                GateRejection::NoParityEvidence,
+            ],
         },
         GateVerdict::NoCertificate {
             claim_id: "w".into(),
@@ -472,7 +564,14 @@ fn config_serde_roundtrip() {
 fn gate_evaluate_supports_clean_cert() {
     let gate = default_gate();
     let claim = make_claim("cl-1", SupportSurface::Latency, BTreeSet::new(), false);
-    let cert = make_cert("cert-1", SupportSurface::Latency, 960_000, 900_000, vec![], BTreeSet::new());
+    let cert = make_cert(
+        "cert-1",
+        SupportSurface::Latency,
+        960_000,
+        900_000,
+        vec![],
+        BTreeSet::new(),
+    );
     let v = gate.evaluate(&claim, Some(&cert), false);
     assert!(v.is_supported());
 }
@@ -489,7 +588,14 @@ fn gate_evaluate_no_certificate() {
 fn gate_evaluate_rejects_surface_mismatch() {
     let gate = default_gate();
     let claim = make_claim("cl-3", SupportSurface::Latency, BTreeSet::new(), false);
-    let cert = make_cert("cert-1", SupportSurface::Memory, 960_000, 900_000, vec![], BTreeSet::new());
+    let cert = make_cert(
+        "cert-1",
+        SupportSurface::Memory,
+        960_000,
+        900_000,
+        vec![],
+        BTreeSet::new(),
+    );
     let v = gate.evaluate(&claim, Some(&cert), false);
     assert!(v.is_rejected());
 }
@@ -498,7 +604,14 @@ fn gate_evaluate_rejects_surface_mismatch() {
 fn gate_evaluate_rejects_low_coverage() {
     let gate = default_gate();
     let claim = make_claim("cl-4", SupportSurface::Latency, BTreeSet::new(), false);
-    let cert = make_cert("cert-1", SupportSurface::Latency, 800_000, 900_000, vec![], BTreeSet::new());
+    let cert = make_cert(
+        "cert-1",
+        SupportSurface::Latency,
+        800_000,
+        900_000,
+        vec![],
+        BTreeSet::new(),
+    );
     let v = gate.evaluate(&claim, Some(&cert), false);
     assert!(v.is_rejected());
 }
@@ -507,7 +620,14 @@ fn gate_evaluate_rejects_low_coverage() {
 fn gate_evaluate_rejects_low_confidence() {
     let gate = default_gate();
     let claim = make_claim("cl-5", SupportSurface::Latency, BTreeSet::new(), false);
-    let cert = make_cert("cert-1", SupportSurface::Latency, 960_000, 700_000, vec![], BTreeSet::new());
+    let cert = make_cert(
+        "cert-1",
+        SupportSurface::Latency,
+        960_000,
+        700_000,
+        vec![],
+        BTreeSet::new(),
+    );
     let v = gate.evaluate(&claim, Some(&cert), false);
     assert!(v.is_rejected());
 }
@@ -523,7 +643,14 @@ fn gate_evaluate_rejects_obstructed_cert() {
         severity_millionths: 200_000,
         description: "d".into(),
     };
-    let cert = make_cert("cert-1", SupportSurface::Latency, 960_000, 900_000, vec![obs], BTreeSet::new());
+    let cert = make_cert(
+        "cert-1",
+        SupportSurface::Latency,
+        960_000,
+        900_000,
+        vec![obs],
+        BTreeSet::new(),
+    );
     let v = gate.evaluate(&claim, Some(&cert), false);
     assert!(v.is_rejected());
 }
@@ -553,7 +680,14 @@ fn gate_evaluate_rejects_uncovered_regions() {
 fn gate_evaluate_shipped_without_parity_rejected() {
     let gate = default_gate();
     let claim = make_claim("cl-8", SupportSurface::ShippedPath, BTreeSet::new(), true);
-    let cert = make_cert("cert-1", SupportSurface::ShippedPath, 960_000, 900_000, vec![], BTreeSet::new());
+    let cert = make_cert(
+        "cert-1",
+        SupportSurface::ShippedPath,
+        960_000,
+        900_000,
+        vec![],
+        BTreeSet::new(),
+    );
     let v = gate.evaluate(&claim, Some(&cert), false);
     assert!(v.is_rejected());
 }
@@ -562,7 +696,14 @@ fn gate_evaluate_shipped_without_parity_rejected() {
 fn gate_evaluate_shipped_with_parity_supported() {
     let gate = default_gate();
     let claim = make_claim("cl-9", SupportSurface::ShippedPath, BTreeSet::new(), true);
-    let cert = make_cert("cert-1", SupportSurface::ShippedPath, 960_000, 900_000, vec![], BTreeSet::new());
+    let cert = make_cert(
+        "cert-1",
+        SupportSurface::ShippedPath,
+        960_000,
+        900_000,
+        vec![],
+        BTreeSet::new(),
+    );
     let v = gate.evaluate(&claim, Some(&cert), true);
     assert!(v.is_supported());
 }
@@ -578,7 +719,14 @@ fn gate_permissive_accepts_everything() {
         description: "d".into(),
     };
     let claim = make_claim("cl-10", SupportSurface::Latency, BTreeSet::new(), true);
-    let cert = make_cert("cert-1", SupportSurface::Latency, 100, 100, vec![obs], BTreeSet::new());
+    let cert = make_cert(
+        "cert-1",
+        SupportSurface::Latency,
+        100,
+        100,
+        vec![obs],
+        BTreeSet::new(),
+    );
     let v = gate.evaluate(&claim, Some(&cert), false);
     assert!(v.is_supported());
 }
@@ -604,7 +752,14 @@ fn gate_batch_mixed_results() {
     let mut certs = BTreeMap::new();
     certs.insert(
         "cl-a".to_string(),
-        make_cert("cert-a", SupportSurface::Latency, 960_000, 900_000, vec![], BTreeSet::new()),
+        make_cert(
+            "cert-a",
+            SupportSurface::Latency,
+            960_000,
+            900_000,
+            vec![],
+            BTreeSet::new(),
+        ),
     );
     // cl-b has no certificate
     let verdicts = gate.evaluate_batch(&claims, &certs, &BTreeSet::new());
@@ -650,8 +805,14 @@ fn report_empty_verdicts() {
 #[test]
 fn report_all_supported() {
     let verdicts = vec![
-        GateVerdict::Supported { claim_id: "a".into(), certificate_id: "c1".into() },
-        GateVerdict::Supported { claim_id: "b".into(), certificate_id: "c2".into() },
+        GateVerdict::Supported {
+            claim_id: "a".into(),
+            certificate_id: "c1".into(),
+        },
+        GateVerdict::Supported {
+            claim_id: "b".into(),
+            certificate_id: "c2".into(),
+        },
     ];
     let r = GateReport::new(epoch(2), verdicts);
     assert!(r.all_supported());
@@ -663,9 +824,17 @@ fn report_all_supported() {
 #[test]
 fn report_mixed_counts() {
     let verdicts = vec![
-        GateVerdict::Supported { claim_id: "a".into(), certificate_id: "c1".into() },
-        GateVerdict::Rejected { claim_id: "b".into(), reasons: vec![GateRejection::NoCertificate] },
-        GateVerdict::NoCertificate { claim_id: "c".into() },
+        GateVerdict::Supported {
+            claim_id: "a".into(),
+            certificate_id: "c1".into(),
+        },
+        GateVerdict::Rejected {
+            claim_id: "b".into(),
+            reasons: vec![GateRejection::NoCertificate],
+        },
+        GateVerdict::NoCertificate {
+            claim_id: "c".into(),
+        },
     ];
     let r = GateReport::new(epoch(3), verdicts);
     assert_eq!(r.supported_count, 1);
@@ -680,9 +849,10 @@ fn report_mixed_counts() {
 
 #[test]
 fn report_hash_deterministic() {
-    let v = vec![
-        GateVerdict::Supported { claim_id: "a".into(), certificate_id: "c1".into() },
-    ];
+    let v = vec![GateVerdict::Supported {
+        claim_id: "a".into(),
+        certificate_id: "c1".into(),
+    }];
     let r1 = GateReport::new(epoch(1), v.clone());
     let r2 = GateReport::new(epoch(1), v);
     assert_eq!(r1.content_hash, r2.content_hash);
@@ -690,9 +860,10 @@ fn report_hash_deterministic() {
 
 #[test]
 fn report_hash_differs_on_epoch() {
-    let v = vec![
-        GateVerdict::Supported { claim_id: "a".into(), certificate_id: "c1".into() },
-    ];
+    let v = vec![GateVerdict::Supported {
+        claim_id: "a".into(),
+        certificate_id: "c1".into(),
+    }];
     let r1 = GateReport::new(epoch(1), v.clone());
     let r2 = GateReport::new(epoch(2), v);
     assert_ne!(r1.content_hash, r2.content_hash);
@@ -701,7 +872,10 @@ fn report_hash_differs_on_epoch() {
 #[test]
 fn report_serde_roundtrip() {
     let verdicts = vec![
-        GateVerdict::Supported { claim_id: "a".into(), certificate_id: "c1".into() },
+        GateVerdict::Supported {
+            claim_id: "a".into(),
+            certificate_id: "c1".into(),
+        },
         GateVerdict::Rejected {
             claim_id: "b".into(),
             reasons: vec![GateRejection::ActiveObstructions { count: 2 }],

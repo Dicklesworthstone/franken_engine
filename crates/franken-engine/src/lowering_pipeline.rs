@@ -1211,7 +1211,15 @@ fn lower_statement_to_ir1_with_flow(
         Statement::TryCatch(tc) => {
             let catch_label = alloc_label(label_counter);
             let end_label = alloc_label(label_counter);
-            ops.push(Ir1Op::BeginTry { catch_label });
+            let finally_label = if tc.finalizer.is_some() {
+                Some(alloc_label(label_counter))
+            } else {
+                None
+            };
+            ops.push(Ir1Op::BeginTry {
+                catch_label,
+                finally_label,
+            });
             for inner in &tc.block.body {
                 lower_statement_to_ir1_with_flow(
                     inner,
@@ -1225,8 +1233,10 @@ fn lower_statement_to_ir1_with_flow(
                 )?;
             }
             ops.push(Ir1Op::EndTry);
+            // Normal completion: jump past catch to finally (or end).
+            let after_try_target = finally_label.unwrap_or(end_label);
             ops.push(Ir1Op::Jump {
-                label_id: end_label,
+                label_id: after_try_target,
             });
             ops.push(Ir1Op::Label { id: catch_label });
             if let Some(handler) = &tc.handler {
@@ -1256,21 +1266,33 @@ fn lower_statement_to_ir1_with_flow(
                     )?;
                 }
             }
-            ops.push(Ir1Op::Label { id: end_label });
-            if let Some(finalizer) = &tc.finalizer {
-                for inner in &finalizer.body {
-                    lower_statement_to_ir1_with_flow(
-                        inner,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        scope_id,
-                        label_counter,
-                        control_flow,
-                    )?;
-                }
+            // After catch: jump to finally (or end).
+            if finally_label.is_some() {
+                ops.push(Ir1Op::Jump {
+                    label_id: after_try_target,
+                });
             }
+            // Emit finally block if present.
+            if let Some(fl) = finally_label {
+                ops.push(Ir1Op::Label { id: fl });
+                ops.push(Ir1Op::EnterFinally);
+                if let Some(finalizer) = &tc.finalizer {
+                    for inner in &finalizer.body {
+                        lower_statement_to_ir1_with_flow(
+                            inner,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                            control_flow,
+                        )?;
+                    }
+                }
+                ops.push(Ir1Op::EndFinally);
+            }
+            ops.push(Ir1Op::Label { id: end_label });
         }
         Statement::Switch(switch_stmt) => {
             lower_switch_to_ir1(
@@ -1567,6 +1589,11 @@ pub fn lower_ir2_to_ir3(
             instruction_index: usize,
             label_id: u32,
         },
+        TryCatch {
+            instruction_index: usize,
+            catch_label_id: u32,
+            finally_label_id: Option<u32>,
+        },
     }
 
     let ir2_hash = ir2.content_hash();
@@ -1578,6 +1605,7 @@ pub fn lower_ir2_to_ir3(
     let mut label_targets = BTreeMap::<u32, u32>::new();
     let mut iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
     let mut pending_jumps = Vec::<PendingJump>::new();
+    let mut catch_entry_labels = BTreeSet::<u32>::new();
 
     for op in &ir2.ops {
         if matches!(op.effect, EffectBoundary::HostcallEffect) {
@@ -1718,18 +1746,40 @@ pub fn lower_ir2_to_ir3(
                 let value = value_stack.pop().unwrap_or(0);
                 ir3.instructions.push(Ir3Instruction::Return { value });
             }
-            Ir1Op::Nop | Ir1Op::Pop | Ir1Op::BeginTry { .. } | Ir1Op::EndTry => {
+            Ir1Op::Nop | Ir1Op::Pop => {
                 let register = value_stack.pop().unwrap_or(0);
                 ir3.instructions.push(Ir3Instruction::Move {
                     dst: register,
                     src: register,
                 });
-                if matches!(
-                    op.inner,
-                    Ir1Op::Nop | Ir1Op::BeginTry { .. } | Ir1Op::EndTry
-                ) {
+                if matches!(op.inner, Ir1Op::Nop) {
                     value_stack.push(register);
                 }
+            }
+            Ir1Op::BeginTry {
+                catch_label,
+                finally_label,
+            } => {
+                catch_entry_labels.insert(*catch_label);
+                let instr_idx = ir3.instructions.len();
+                ir3.instructions.push(Ir3Instruction::BeginTry {
+                    catch_target: 0,
+                    finally_target: None,
+                });
+                pending_jumps.push(PendingJump::TryCatch {
+                    instruction_index: instr_idx,
+                    catch_label_id: *catch_label,
+                    finally_label_id: *finally_label,
+                });
+            }
+            Ir1Op::EndTry => {
+                ir3.instructions.push(Ir3Instruction::EndTry);
+            }
+            Ir1Op::EnterFinally => {
+                ir3.instructions.push(Ir3Instruction::EnterFinally);
+            }
+            Ir1Op::EndFinally => {
+                ir3.instructions.push(Ir3Instruction::EndFinally);
             }
             Ir1Op::BinaryOp { operator } => {
                 let rhs = value_stack.pop().unwrap_or(0);
@@ -1895,6 +1945,13 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(dst);
             }
             Ir1Op::Label { id } => {
+                // If this label is a catch handler entry, emit EnterCatch
+                // so the runtime can provide the exception value.
+                if catch_entry_labels.contains(id) {
+                    let dst = alloc_register(&mut register_cursor);
+                    ir3.instructions.push(Ir3Instruction::EnterCatch { dst });
+                    value_stack.push(dst);
+                }
                 let target = u32::try_from(ir3.instructions.len()).map_err(|_| {
                     LoweringPipelineError::InvariantViolation {
                         detail: "IR3 instruction stream exceeds addressable size",
@@ -2093,10 +2150,8 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(dst);
             }
             Ir1Op::Throw => {
-                // Throw halts execution — the runtime does not yet model
-                // exception propagation, so fail-closed via Halt.
-                let _value = value_stack.pop().unwrap_or(0);
-                ir3.instructions.push(Ir3Instruction::Halt);
+                let value = value_stack.pop().unwrap_or(0);
+                ir3.instructions.push(Ir3Instruction::Throw { value });
             }
             Ir1Op::LoadThis => {
                 let dst = alloc_register(&mut register_cursor);
@@ -2350,6 +2405,30 @@ pub fn lower_ir2_to_ir3(
                         });
                     }
                 }
+            }
+            PendingJump::TryCatch {
+                instruction_index,
+                catch_label_id,
+                finally_label_id,
+            } => {
+                let catch_target = *label_targets.get(&catch_label_id).ok_or(
+                    LoweringPipelineError::InvariantViolation {
+                        detail: "try/catch lowering references missing catch label",
+                    },
+                )?;
+                let finally_target = if let Some(fl_id) = finally_label_id {
+                    Some(*label_targets.get(&fl_id).ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "try/finally lowering references missing finally label",
+                        },
+                    )?)
+                } else {
+                    None
+                };
+                ir3.instructions[instruction_index] = Ir3Instruction::BeginTry {
+                    catch_target,
+                    finally_target,
+                };
             }
         }
     }
@@ -3384,12 +3463,186 @@ fn lower_expression_to_ir1(
             )?;
             ops.push(Ir1Op::GetProperty { key });
         }
-        Expression::OptionalCall { .. } | Expression::OptionalMember { .. } => {
-            return Err(unsupported_frontier_expression_error(
-                "optional_chaining",
-                "optional chaining lowering is not implemented; fail-closed frontier contract rejected the expression",
-                None,
-            ));
+        Expression::OptionalMember {
+            object,
+            property,
+            computed,
+        } => {
+            // Desugar `obj?.prop` / `obj?.[expr]` into:
+            //   temp_obj = <object>
+            //   if (temp_obj == null || temp_obj == undefined) goto skip
+            //   result = temp_obj.<property>
+            //   goto end
+            //   skip: result = undefined
+            //   end: push result
+            let temp_obj = alloc_internal_binding(
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                "opt_member_obj",
+            )?;
+            let result_binding = alloc_internal_binding(
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                "opt_member_result",
+            )?;
+            let skip_label = alloc_label(label_counter);
+            let end_label = alloc_label(label_counter);
+
+            // Evaluate the object expression and store into temp.
+            lower_expression_to_ir1(
+                object,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+            )?;
+            ops.push(Ir1Op::StoreBinding {
+                binding_id: temp_obj,
+            });
+            ops.push(Ir1Op::Pop);
+
+            // Nullish check: if object is null/undefined, short-circuit.
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: temp_obj,
+            });
+            ops.push(Ir1Op::JumpIfNullish {
+                label_id: skip_label,
+            });
+
+            // Not-nullish path: perform property access.
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: temp_obj,
+            });
+            let key = lower_member_property_key_to_ir1(
+                property,
+                *computed,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+            )?;
+            ops.push(Ir1Op::GetProperty { key });
+            ops.push(Ir1Op::StoreBinding {
+                binding_id: result_binding,
+            });
+            ops.push(Ir1Op::Pop);
+            ops.push(Ir1Op::Jump {
+                label_id: end_label,
+            });
+
+            // Nullish path: produce undefined.
+            ops.push(Ir1Op::Label { id: skip_label });
+            ops.push(Ir1Op::LoadLiteral {
+                value: Ir1Literal::Undefined,
+            });
+            ops.push(Ir1Op::StoreBinding {
+                binding_id: result_binding,
+            });
+            ops.push(Ir1Op::Pop);
+
+            // End: load the result.
+            ops.push(Ir1Op::Label { id: end_label });
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: result_binding,
+            });
+        }
+        Expression::OptionalCall { callee, arguments } => {
+            // Desugar `fn?.()` / `obj.m?.()` into:
+            //   temp_callee = <callee>
+            //   if (temp_callee == null || temp_callee == undefined) goto skip
+            //   result = temp_callee(<args...>)
+            //   goto end
+            //   skip: result = undefined
+            //   end: push result
+            let temp_callee = alloc_internal_binding(
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                "opt_call_callee",
+            )?;
+            let result_binding = alloc_internal_binding(
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                "opt_call_result",
+            )?;
+            let skip_label = alloc_label(label_counter);
+            let end_label = alloc_label(label_counter);
+
+            // Evaluate the callee and store into temp.
+            lower_expression_to_ir1(
+                callee,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+            )?;
+            ops.push(Ir1Op::StoreBinding {
+                binding_id: temp_callee,
+            });
+            ops.push(Ir1Op::Pop);
+
+            // Nullish check: if callee is null/undefined, short-circuit.
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: temp_callee,
+            });
+            ops.push(Ir1Op::JumpIfNullish {
+                label_id: skip_label,
+            });
+
+            // Not-nullish path: perform the call.
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: temp_callee,
+            });
+            for arg in arguments {
+                lower_expression_to_ir1(
+                    arg,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+            }
+            ops.push(Ir1Op::Call {
+                arg_count: arguments.len() as u32,
+            });
+            ops.push(Ir1Op::StoreBinding {
+                binding_id: result_binding,
+            });
+            ops.push(Ir1Op::Pop);
+            ops.push(Ir1Op::Jump {
+                label_id: end_label,
+            });
+
+            // Nullish path: produce undefined.
+            ops.push(Ir1Op::Label { id: skip_label });
+            ops.push(Ir1Op::LoadLiteral {
+                value: Ir1Literal::Undefined,
+            });
+            ops.push(Ir1Op::StoreBinding {
+                binding_id: result_binding,
+            });
+            ops.push(Ir1Op::Pop);
+
+            // End: load the result.
+            ops.push(Ir1Op::Label { id: end_label });
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: result_binding,
+            });
         }
         Expression::This => {
             ops.push(Ir1Op::LoadThis);
@@ -3620,7 +3873,11 @@ fn classify_ir1_op(
             }
             (EffectBoundary::Pure, None, None)
         }
-        Ir1Op::Throw | Ir1Op::BeginTry { .. } | Ir1Op::EndTry => (
+        Ir1Op::Throw
+        | Ir1Op::BeginTry { .. }
+        | Ir1Op::EndTry
+        | Ir1Op::EnterFinally
+        | Ir1Op::EndFinally => (
             EffectBoundary::ReadEffect,
             None,
             Some(FlowAnnotation {
@@ -4117,10 +4374,10 @@ mod tests {
     }
 
     #[test]
-    fn lower_ir2_to_ir3_treats_begin_try_as_noop_until_ir3_support_exists() {
+    fn lower_ir2_to_ir3_emits_begin_try_end_try_instructions() {
         let mut ir2 = Ir2Module::new(ContentHash::compute(b"begin-try"), "begin_try.js");
         ir2.ops.push(Ir2Op {
-            inner: Ir1Op::BeginTry { catch_label: 9 },
+            inner: Ir1Op::BeginTry { catch_label: 1 },
             effect: EffectBoundary::Pure,
             required_capability: None,
             flow: None,
@@ -4140,6 +4397,12 @@ mod tests {
             flow: None,
         });
         ir2.ops.push(Ir2Op {
+            inner: Ir1Op::Label { id: 1 },
+            effect: EffectBoundary::Pure,
+            required_capability: None,
+            flow: None,
+        });
+        ir2.ops.push(Ir2Op {
             inner: Ir1Op::Return,
             effect: EffectBoundary::Pure,
             required_capability: None,
@@ -4147,26 +4410,23 @@ mod tests {
         });
 
         let ir3 = lower_ir2_to_ir3(&ir2)
-            .expect("IR2->IR3 should preserve linear execution for try placeholders")
+            .expect("IR2->IR3 should emit BeginTry/EndTry instructions")
             .module;
 
         assert!(matches!(
             ir3.instructions.first(),
-            Some(Ir3Instruction::Move { dst: 0, src: 0 })
+            Some(Ir3Instruction::BeginTry { .. })
         ));
-        assert_eq!(
+        assert!(
             ir3.instructions
                 .iter()
-                .filter(|instruction| {
-                    matches!(
-                        instruction,
-                        Ir3Instruction::Jump { .. }
-                            | Ir3Instruction::JumpIf { .. }
-                            | Ir3Instruction::JumpIfNullish { .. }
-                    )
-                })
-                .count(),
-            0
+                .any(|i| matches!(i, Ir3Instruction::EndTry))
+        );
+        // Catch label should produce an EnterCatch instruction
+        assert!(
+            ir3.instructions
+                .iter()
+                .any(|i| matches!(i, Ir3Instruction::EnterCatch { .. }))
         );
     }
 
@@ -6184,6 +6444,114 @@ mod tests {
     }
 
     #[test]
+    fn lower_optional_member_expression_uses_nullish_short_circuit() {
+        let ir0 = expr_ir0(Expression::OptionalMember {
+            object: Box::new(Expression::Identifier("obj".into())),
+            property: Box::new(Expression::Identifier("key".into())),
+            computed: false,
+        });
+        let result = lower_ir0_to_ir1(&ir0).expect("optional member should lower");
+
+        assert!(
+            result
+                .module
+                .ops
+                .iter()
+                .any(|op| matches!(op, Ir1Op::JumpIfNullish { .. })),
+            "optional member should branch on nullish bases"
+        );
+        assert!(result.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Static(key)
+            } if key == "key"
+        )));
+        assert!(result.module.ops.iter().any(|op| matches!(
+            op,
+            Ir1Op::LoadLiteral {
+                value: Ir1Literal::Undefined
+            }
+        )));
+    }
+
+    #[test]
+    fn lower_optional_computed_member_checks_nullish_before_key_evaluation() {
+        let ir0 = expr_ir0(Expression::OptionalMember {
+            object: Box::new(Expression::Identifier("obj".into())),
+            property: Box::new(Expression::NumericLiteral(7)),
+            computed: true,
+        });
+        let result = lower_ir0_to_ir1(&ir0).expect("computed optional member should lower");
+
+        let jump_index = result
+            .module
+            .ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::JumpIfNullish { .. }))
+            .expect("optional member should emit JumpIfNullish");
+        let key_eval_index = result
+            .module
+            .ops
+            .iter()
+            .position(|op| {
+                matches!(
+                    op,
+                    Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Integer(7)
+                    }
+                )
+            })
+            .expect("computed key should still be lowered");
+        let get_property_index = result
+            .module
+            .ops
+            .iter()
+            .position(|op| {
+                matches!(
+                    op,
+                    Ir1Op::GetProperty {
+                        key: Ir1PropertyKey::Dynamic
+                    }
+                )
+            })
+            .expect("computed optional member should use dynamic key access");
+
+        assert!(
+            jump_index < key_eval_index,
+            "computed key evaluation must happen after the nullish short-circuit guard"
+        );
+        assert!(
+            key_eval_index < get_property_index,
+            "computed key must still feed the property read on the non-nullish path"
+        );
+    }
+
+    #[test]
+    fn lower_nested_optional_member_expression_emits_two_nullish_checks() {
+        let ir0 = expr_ir0(Expression::OptionalMember {
+            object: Box::new(Expression::OptionalMember {
+                object: Box::new(Expression::Identifier("obj".into())),
+                property: Box::new(Expression::Identifier("nested".into())),
+                computed: false,
+            }),
+            property: Box::new(Expression::Identifier("value".into())),
+            computed: false,
+        });
+        let result = lower_ir0_to_ir1(&ir0).expect("nested optional member should lower");
+
+        let jump_count = result
+            .module
+            .ops
+            .iter()
+            .filter(|op| matches!(op, Ir1Op::JumpIfNullish { .. }))
+            .count();
+        assert_eq!(
+            jump_count, 2,
+            "nested optional member should guard each optional segment"
+        );
+    }
+
+    #[test]
     fn lower_this_expression() {
         let ir0 = expr_ir0(Expression::This);
         let result = lower_ir0_to_ir1(&ir0).expect("this should lower");
@@ -6750,6 +7118,64 @@ mod tests {
                 .iter()
                 .any(|op| matches!(op, Ir1Op::BeginTry { .. }))
         );
+    }
+
+    #[test]
+    fn throw_statement_emits_ir3_throw() {
+        let ir0 = stmt_ir0(vec![Statement::Throw(ThrowStatement {
+            argument: Expression::StringLiteral("err".into()),
+            span: span(),
+        })]);
+        let ir1 = lower_ir0_to_ir1(&ir0).expect("throw should lower to IR1").module;
+        let ir2 = lower_ir1_to_ir2(&ir1).expect("IR1->IR2").module;
+        let ir3 = lower_ir2_to_ir3(&ir2).expect("IR2->IR3").module;
+        assert!(ir3
+            .instructions
+            .iter()
+            .any(|i| matches!(i, Ir3Instruction::Throw { .. })));
+    }
+
+    #[test]
+    fn try_catch_emits_ir3_exception_instructions() {
+        let ir0 = stmt_ir0(vec![Statement::TryCatch(TryCatchStatement {
+            block: BlockStatement {
+                body: vec![Statement::Expression(ExpressionStatement {
+                    expression: Expression::NumericLiteral(1),
+                    span: span(),
+                })],
+                span: span(),
+            },
+            handler: Some(CatchClause {
+                parameter: Some("e".into()),
+                body: BlockStatement {
+                    body: vec![Statement::Expression(ExpressionStatement {
+                        expression: Expression::Identifier("e".into()),
+                        span: span(),
+                    })],
+                    span: span(),
+                },
+                span: span(),
+            }),
+            finalizer: None,
+            span: span(),
+        })]);
+        let ir1 = lower_ir0_to_ir1(&ir0)
+            .expect("try-catch IR0->IR1")
+            .module;
+        let ir2 = lower_ir1_to_ir2(&ir1).expect("IR1->IR2").module;
+        let ir3 = lower_ir2_to_ir3(&ir2).expect("IR2->IR3").module;
+        assert!(ir3
+            .instructions
+            .iter()
+            .any(|i| matches!(i, Ir3Instruction::BeginTry { .. })));
+        assert!(ir3
+            .instructions
+            .iter()
+            .any(|i| matches!(i, Ir3Instruction::EndTry)));
+        assert!(ir3
+            .instructions
+            .iter()
+            .any(|i| matches!(i, Ir3Instruction::EnterCatch { .. })));
     }
 
     #[test]

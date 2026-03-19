@@ -69,8 +69,16 @@ fn valid_policy() -> PolicyIr {
         policy_id: pid("test-policy"),
         version: 1,
         nodes: vec![
-            simple_node("n1", MergeOperator::Intersection, vec![grant("ext-A", "fs.read", "zone-1")]),
-            simple_node("n2", MergeOperator::Intersection, vec![grant("ext-B", "net.egress", "zone-2")]),
+            simple_node(
+                "n1",
+                MergeOperator::Intersection,
+                vec![grant("ext-A", "fs.read", "zone-1")],
+            ),
+            simple_node(
+                "n2",
+                MergeOperator::Intersection,
+                vec![grant("ext-B", "net.egress", "zone-2")],
+            ),
         ],
         capability_universe: test_universe(),
         verified_properties: BTreeSet::new(),
@@ -152,7 +160,12 @@ fn merge_operator_all_display_distinct() {
 
 #[test]
 fn merge_operator_serde_roundtrip() {
-    for op in [MergeOperator::Union, MergeOperator::Intersection, MergeOperator::Attenuation, MergeOperator::Precedence] {
+    for op in [
+        MergeOperator::Union,
+        MergeOperator::Intersection,
+        MergeOperator::Attenuation,
+        MergeOperator::Precedence,
+    ] {
         let json = serde_json::to_string(&op).expect("serialize");
         let restored: MergeOperator = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(op, restored);
@@ -238,7 +251,11 @@ fn decision_point_serde_roundtrip() {
 
 #[test]
 fn policy_ir_node_with_decision_point() {
-    let mut node = simple_node("n1", MergeOperator::Precedence, vec![grant("user", "fs.read", "scope")]);
+    let mut node = simple_node(
+        "n1",
+        MergeOperator::Precedence,
+        vec![grant("user", "fs.read", "scope")],
+    );
     node.priority = 5;
     let mut action_map = BTreeMap::new();
     action_map.insert("high_risk".into(), "deny".into());
@@ -253,7 +270,11 @@ fn policy_ir_node_with_decision_point() {
 
 #[test]
 fn policy_ir_node_serde_roundtrip() {
-    let mut node = simple_node("n1", MergeOperator::Intersection, vec![grant("s", "fs.read", "z")]);
+    let mut node = simple_node(
+        "n1",
+        MergeOperator::Intersection,
+        vec![grant("s", "fs.read", "z")],
+    );
     node.property_claims.insert(FormalProperty::Monotonicity);
     node.constraints.push(Constraint::Invariant("test".into()));
     let json = serde_json::to_string(&node).expect("serialize");
@@ -318,7 +339,11 @@ fn compile_empty_policy_error() {
 fn compile_too_large_policy_error() {
     let compiler = PolicyTheoremCompiler::with_limits(2, true);
     let mut ir = valid_policy();
-    ir.nodes.push(simple_node("n3", MergeOperator::Intersection, vec![grant("ext-C", "fs.write", "zone-3")]));
+    ir.nodes.push(simple_node(
+        "n3",
+        MergeOperator::Intersection,
+        vec![grant("ext-C", "fs.write", "zone-3")],
+    ));
     let err = compiler.compile(&ir).unwrap_err();
     assert!(matches!(err, CompilerError::PolicyTooLarge { .. }));
 }
@@ -327,7 +352,11 @@ fn compile_too_large_policy_error() {
 fn compile_union_without_monotonicity_claim_fails() {
     let compiler = PolicyTheoremCompiler::new();
     let ir = PolicyIr {
-        nodes: vec![simple_node("n1", MergeOperator::Union, vec![grant("ext-A", "fs.read", "zone-1")])],
+        nodes: vec![simple_node(
+            "n1",
+            MergeOperator::Union,
+            vec![grant("ext-A", "fs.read", "zone-1")],
+        )],
         ..valid_policy()
     };
     let result = compiler.compile(&ir).expect("compile");
@@ -338,7 +367,11 @@ fn compile_union_without_monotonicity_claim_fails() {
 #[test]
 fn compile_union_with_monotonicity_claim_passes() {
     let compiler = PolicyTheoremCompiler::new();
-    let mut node = simple_node("n1", MergeOperator::Union, vec![grant("ext-A", "fs.read", "zone-1")]);
+    let mut node = simple_node(
+        "n1",
+        MergeOperator::Union,
+        vec![grant("ext-A", "fs.read", "zone-1")],
+    );
     node.property_claims.insert(FormalProperty::Monotonicity);
     let ir = PolicyIr {
         nodes: vec![node],
@@ -355,7 +388,11 @@ fn compile_union_with_monotonicity_claim_passes() {
 #[test]
 fn precedence_zero_priority_fails_stability() {
     let compiler = PolicyTheoremCompiler::new();
-    let node = simple_node("n1", MergeOperator::Precedence, vec![grant("ext-A", "fs.read", "zone-1")]);
+    let node = simple_node(
+        "n1",
+        MergeOperator::Precedence,
+        vec![grant("ext-A", "fs.read", "zone-1")],
+    );
     let ir = PolicyIr {
         nodes: vec![node],
         ..valid_policy()
@@ -368,10 +405,18 @@ fn precedence_zero_priority_fails_stability() {
 #[test]
 fn precedence_distinct_priorities_passes() {
     let compiler = PolicyTheoremCompiler::new();
-    let mut n1 = simple_node("n1", MergeOperator::Precedence, vec![grant("ext-A", "fs.read", "zone-1")]);
+    let mut n1 = simple_node(
+        "n1",
+        MergeOperator::Precedence,
+        vec![grant("ext-A", "fs.read", "zone-1")],
+    );
     n1.priority = 1;
     n1.property_claims.insert(FormalProperty::Monotonicity);
-    let mut n2 = simple_node("n2", MergeOperator::Precedence, vec![grant("ext-B", "net.egress", "zone-2")]);
+    let mut n2 = simple_node(
+        "n2",
+        MergeOperator::Precedence,
+        vec![grant("ext-B", "net.egress", "zone-2")],
+    );
     n2.priority = 2;
     n2.property_claims.insert(FormalProperty::Monotonicity);
     let ir = PolicyIr {
@@ -385,9 +430,17 @@ fn precedence_distinct_priorities_passes() {
 #[test]
 fn precedence_duplicate_priorities_fail_merge_determinism() {
     let compiler = PolicyTheoremCompiler::new();
-    let mut n1 = simple_node("n1", MergeOperator::Precedence, vec![grant("ext-A", "fs.read", "zone-1")]);
+    let mut n1 = simple_node(
+        "n1",
+        MergeOperator::Precedence,
+        vec![grant("ext-A", "fs.read", "zone-1")],
+    );
     n1.priority = 5;
-    let mut n2 = simple_node("n2", MergeOperator::Precedence, vec![grant("ext-B", "net.egress", "zone-2")]);
+    let mut n2 = simple_node(
+        "n2",
+        MergeOperator::Precedence,
+        vec![grant("ext-B", "net.egress", "zone-2")],
+    );
     n2.priority = 5;
     let ir = PolicyIr {
         nodes: vec![n1, n2],
@@ -404,7 +457,11 @@ fn precedence_duplicate_priorities_fail_merge_determinism() {
 #[test]
 fn compile_without_precedence_stability_skips_pass() {
     let compiler = PolicyTheoremCompiler::with_limits(10_000, false);
-    let node = simple_node("n1", MergeOperator::Precedence, vec![grant("ext-A", "fs.read", "zone-1")]);
+    let node = simple_node(
+        "n1",
+        MergeOperator::Precedence,
+        vec![grant("ext-A", "fs.read", "zone-1")],
+    );
     // priority=0 would fail precedence-stability, but it's not required
     let ir = PolicyIr {
         nodes: vec![node],
@@ -422,8 +479,16 @@ fn compile_without_precedence_stability_skips_pass() {
 #[test]
 fn attenuation_within_base_authority_passes() {
     let compiler = PolicyTheoremCompiler::new();
-    let base = simple_node("base", MergeOperator::Intersection, vec![grant("ext-A", "fs.read", "zone-1")]);
-    let att = simple_node("att", MergeOperator::Attenuation, vec![grant("ext-B", "fs.read", "zone-2")]);
+    let base = simple_node(
+        "base",
+        MergeOperator::Intersection,
+        vec![grant("ext-A", "fs.read", "zone-1")],
+    );
+    let att = simple_node(
+        "att",
+        MergeOperator::Attenuation,
+        vec![grant("ext-B", "fs.read", "zone-2")],
+    );
     let ir = PolicyIr {
         nodes: vec![base, att],
         ..valid_policy()
@@ -436,9 +501,17 @@ fn attenuation_within_base_authority_passes() {
 fn attenuation_outside_base_authority_fails() {
     let compiler = PolicyTheoremCompiler::new();
     // Base only grants fs.read
-    let base = simple_node("base", MergeOperator::Intersection, vec![grant("ext-A", "fs.read", "zone-1")]);
+    let base = simple_node(
+        "base",
+        MergeOperator::Intersection,
+        vec![grant("ext-A", "fs.read", "zone-1")],
+    );
     // Attenuation tries to grant fs.write which isn't in base
-    let att = simple_node("att", MergeOperator::Attenuation, vec![grant("ext-B", "fs.write", "zone-2")]);
+    let att = simple_node(
+        "att",
+        MergeOperator::Attenuation,
+        vec![grant("ext-B", "fs.write", "zone-2")],
+    );
     let ir = PolicyIr {
         nodes: vec![base, att],
         ..valid_policy()
@@ -504,7 +577,10 @@ fn runtime_check_valid_policy_passes() {
 fn runtime_check_empty_policy_error() {
     let compiler = PolicyTheoremCompiler::new();
     let mut hooks = MachineCheckHooks::new(compiler);
-    let ir = PolicyIr { nodes: vec![], ..valid_policy() };
+    let ir = PolicyIr {
+        nodes: vec![],
+        ..valid_policy()
+    };
     let err = hooks.runtime_check(&ir).unwrap_err();
     assert!(matches!(err, CompilerError::EmptyPolicy { .. }));
 }
@@ -602,7 +678,9 @@ fn receipt_fields_populated() {
 
 #[test]
 fn compiler_error_display_all() {
-    let e1 = CompilerError::EmptyPolicy { policy_id: pid("p1") };
+    let e1 = CompilerError::EmptyPolicy {
+        policy_id: pid("p1"),
+    };
     assert!(e1.to_string().contains("empty policy"));
 
     let e2 = CompilerError::PolicyTooLarge {
@@ -622,9 +700,18 @@ fn compiler_error_display_all() {
 #[test]
 fn compiler_error_serde_roundtrip() {
     let errors = vec![
-        CompilerError::EmptyPolicy { policy_id: pid("p") },
-        CompilerError::PolicyTooLarge { policy_id: pid("p"), node_count: 10, max_nodes: 5 },
-        CompilerError::HookFailed { hook_name: "hook".into(), diagnostics: vec![] },
+        CompilerError::EmptyPolicy {
+            policy_id: pid("p"),
+        },
+        CompilerError::PolicyTooLarge {
+            policy_id: pid("p"),
+            node_count: 10,
+            max_nodes: 5,
+        },
+        CompilerError::HookFailed {
+            hook_name: "hook".into(),
+            diagnostics: vec![],
+        },
     ];
     for err in &errors {
         let json = serde_json::to_string(err).expect("serialize");
@@ -650,5 +737,8 @@ fn compilation_result_serde_roundtrip() {
 fn compilation_result_witnesses_match_passes() {
     let compiler = PolicyTheoremCompiler::new();
     let result = compiler.compile(&valid_policy()).expect("compile");
-    assert_eq!(result.witnesses.len(), result.pass_results.iter().filter(|p| p.is_ok()).count());
+    assert_eq!(
+        result.witnesses.len(),
+        result.pass_results.iter().filter(|p| p.is_ok()).count()
+    );
 }

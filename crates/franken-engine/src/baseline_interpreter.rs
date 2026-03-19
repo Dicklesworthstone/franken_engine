@@ -1038,6 +1038,30 @@ impl InterpreterCore {
                 Ir3Instruction::Halt => {
                     return Err(InterpreterError::Halted);
                 }
+                // Exception handling instructions — the runtime unwinder
+                // (RGC-313B) will provide full semantics.  Until then these
+                // are fail-closed stubs: BeginTry/EndTry/EnterFinally/EndFinally
+                // are structural noops, Throw halts, and EnterCatch loads
+                // undefined into the catch binding.
+                Ir3Instruction::BeginTry { .. } => {
+                    self.ip += 1;
+                }
+                Ir3Instruction::EndTry => {
+                    self.ip += 1;
+                }
+                Ir3Instruction::Throw { .. } => {
+                    return Err(InterpreterError::Halted);
+                }
+                Ir3Instruction::EnterCatch { dst } => {
+                    self.write_reg(dst, Value::Undefined)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::EnterFinally => {
+                    self.ip += 1;
+                }
+                Ir3Instruction::EndFinally => {
+                    self.ip += 1;
+                }
             }
         }
     }

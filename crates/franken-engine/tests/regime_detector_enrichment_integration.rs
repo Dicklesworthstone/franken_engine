@@ -304,8 +304,7 @@ fn enrichment_detector_drain_events_idempotent() {
 #[test]
 fn enrichment_detector_deterministic_replay() {
     let observations: Vec<i64> = vec![
-        300_000, 300_000, 500_000, 700_000, 950_000,
-        950_000, 950_000, 200_000, 200_000, 300_000,
+        300_000, 300_000, 500_000, 700_000, 950_000, 950_000, 950_000, 200_000, 200_000, 300_000,
     ];
     let run = |obs: &[i64]| -> (Vec<Regime>, Vec<RegimeChangeEvent>) {
         let mut det = test_detector("det");

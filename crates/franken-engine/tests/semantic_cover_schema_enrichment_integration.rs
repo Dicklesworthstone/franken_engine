@@ -241,9 +241,15 @@ fn enrich_feature_single_surface_supported() {
 fn enrich_overlap_restriction_display_all() {
     let expected = [
         (OverlapRestriction::Allowed, "allowed"),
-        (OverlapRestriction::DelegationRequired, "delegation_required"),
+        (
+            OverlapRestriction::DelegationRequired,
+            "delegation_required",
+        ),
         (OverlapRestriction::Exclusive, "exclusive"),
-        (OverlapRestriction::ReconciliationRequired, "reconciliation_required"),
+        (
+            OverlapRestriction::ReconciliationRequired,
+            "reconciliation_required",
+        ),
     ];
     for (r, text) in &expected {
         assert_eq!(r.to_string(), *text);
@@ -322,21 +328,20 @@ fn enrich_overlap_map_module_runtime_in_entries() {
 #[test]
 fn enrich_overlap_map_scoped_ts_lookup() {
     let map = default_overlap_map();
-    let entries = map.restrictions_for_scope(EngineSurface::Parser, EngineSurface::TypeScript, "ts.enum");
+    let entries =
+        map.restrictions_for_scope(EngineSurface::Parser, EngineSurface::TypeScript, "ts.enum");
     assert!(!entries.is_empty());
 }
 
 #[test]
 fn enrich_overlap_map_custom_entries() {
-    let entries = vec![
-        OverlapEntry {
-            surface_a: EngineSurface::Parser,
-            surface_b: EngineSurface::Runtime,
-            restriction: OverlapRestriction::Exclusive,
-            scope_prefix: None,
-            rationale: "test".into(),
-        },
-    ];
+    let entries = vec![OverlapEntry {
+        surface_a: EngineSurface::Parser,
+        surface_b: EngineSurface::Runtime,
+        restriction: OverlapRestriction::Exclusive,
+        scope_prefix: None,
+        rationale: "test".into(),
+    }];
     let map = OverlapRestrictionMap::new(entries);
     assert_eq!(map.len(), 1);
     assert_eq!(
@@ -455,7 +460,11 @@ fn enrich_semantic_cover_with_gap() {
     let gaps = cover.find_gaps();
     assert_eq!(gaps.len(), 1);
     assert_eq!(gaps[0].feature_key, "has_gap");
-    assert!(gaps[0].unsupported_surfaces.contains(&EngineSurface::Runtime));
+    assert!(
+        gaps[0]
+            .unsupported_surfaces
+            .contains(&EngineSurface::Runtime)
+    );
 }
 
 #[test]
@@ -667,7 +676,10 @@ fn enrich_cover_specimen_serde() {
         id: "test-specimen".into(),
         family: CoverSpecimenFamily::FullCoverage,
         description: "A test specimen".into(),
-        feature: make_feature("spec_test", &[(EngineSurface::Parser, SupportStatus::Supported)]),
+        feature: make_feature(
+            "spec_test",
+            &[(EngineSurface::Parser, SupportStatus::Supported)],
+        ),
     };
     let json = serde_json::to_string(&specimen).unwrap();
     let back: CoverSpecimen = serde_json::from_str(&json).unwrap();

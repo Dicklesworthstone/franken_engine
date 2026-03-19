@@ -229,10 +229,7 @@ fn cusum_triggers_on_large_shift() {
     }
     assert!(monitor.is_triggered());
     let reason = monitor.check().unwrap();
-    assert!(matches!(
-        reason,
-        DemotionReason::ChangePointDetected { .. }
-    ));
+    assert!(matches!(reason, DemotionReason::ChangePointDetected { .. }));
 }
 
 #[test]
@@ -634,8 +631,14 @@ fn deterministic_identical_observation_sequences() {
         r2.observe(LaneChoice::Js, &obs, Some(500_000));
     }
     assert_eq!(r1.round, r2.round);
-    assert_eq!(r1.risk.cumulative_regret_millionths, r2.risk.cumulative_regret_millionths);
-    assert_eq!(r1.conformal.total_observations, r2.conformal.total_observations);
+    assert_eq!(
+        r1.risk.cumulative_regret_millionths,
+        r2.risk.cumulative_regret_millionths
+    );
+    assert_eq!(
+        r1.conformal.total_observations,
+        r2.conformal.total_observations
+    );
 }
 
 #[test]

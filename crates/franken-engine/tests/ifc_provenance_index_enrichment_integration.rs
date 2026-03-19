@@ -66,6 +66,7 @@ fn declass_receipt(
         source_label: src,
         sink_clearance: sink,
         declassification_route_ref: format!("route-{id}"),
+        decision_contract_id: format!("decision-{id}"),
         timestamp_ms: 2000,
     }
 }
@@ -1432,6 +1433,10 @@ fn enrichment_join_events_with_matching_receipt() {
         joined[0].1.as_ref().unwrap().declassification_route_ref,
         "route-r1"
     );
+    assert_eq!(
+        joined[0].1.as_ref().unwrap().decision_contract_id,
+        "decision-r1"
+    );
 }
 
 #[test]
@@ -1918,6 +1923,7 @@ fn enrichment_json_fields_declass_receipt() {
     assert!(v.get("source_label").is_some());
     assert!(v.get("sink_clearance").is_some());
     assert!(v.get("declassification_route_ref").is_some());
+    assert!(v.get("decision_contract_id").is_some());
     assert!(v.get("timestamp_ms").is_some());
 }
 

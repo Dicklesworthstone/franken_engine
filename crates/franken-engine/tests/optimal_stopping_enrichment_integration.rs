@@ -22,9 +22,8 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::optimal_stopping::{
-    CusumChart, EscalationPolicy, GittinsIndexComputer, Observation,
-    OptimalStoppingCertificate, STOPPING_SCHEMA_VERSION, SecretarySelector, SnellEnvelope,
-    StoppingDecision, StoppingError,
+    CusumChart, EscalationPolicy, GittinsIndexComputer, Observation, OptimalStoppingCertificate,
+    STOPPING_SCHEMA_VERSION, SecretarySelector, SnellEnvelope, StoppingDecision, StoppingError,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -95,7 +94,10 @@ fn enrichment_cusum_signals_after_sustained_anomaly() {
 fn enrichment_cusum_continues_on_benign() {
     let mut chart = CusumChart::new(5_000_000, 500_000).unwrap();
     for i in 0..50u64 {
-        assert_eq!(chart.observe(&obs(100_000, 50_000, i)), StoppingDecision::Continue);
+        assert_eq!(
+            chart.observe(&obs(100_000, 50_000, i)),
+            StoppingDecision::Continue
+        );
     }
     assert!(!chart.signaled);
 }
@@ -162,10 +164,22 @@ fn enrichment_gittins_creation_and_validation() {
     assert_eq!(gc.arms.len(), 2);
     assert_eq!(gc.discount_millionths, 900_000);
 
-    assert!(matches!(GittinsIndexComputer::new(vec![], 900_000, 100), Err(StoppingError::EmptyObservations)));
-    assert!(matches!(GittinsIndexComputer::new(vec!["a".into()], 0, 100), Err(StoppingError::InvalidDiscount { .. })));
-    assert!(matches!(GittinsIndexComputer::new(vec!["a".into()], MILLION, 100), Err(StoppingError::InvalidDiscount { .. })));
-    assert!(matches!(GittinsIndexComputer::new(vec!["a".into()], 900_000, 10_001), Err(StoppingError::HorizonTooLarge { .. })));
+    assert!(matches!(
+        GittinsIndexComputer::new(vec![], 900_000, 100),
+        Err(StoppingError::EmptyObservations)
+    ));
+    assert!(matches!(
+        GittinsIndexComputer::new(vec!["a".into()], 0, 100),
+        Err(StoppingError::InvalidDiscount { .. })
+    ));
+    assert!(matches!(
+        GittinsIndexComputer::new(vec!["a".into()], MILLION, 100),
+        Err(StoppingError::InvalidDiscount { .. })
+    ));
+    assert!(matches!(
+        GittinsIndexComputer::new(vec!["a".into()], 900_000, 10_001),
+        Err(StoppingError::HorizonTooLarge { .. })
+    ));
 }
 
 #[test]
@@ -185,7 +199,8 @@ fn enrichment_gittins_success_increases_failure_decreases_index() {
 
 #[test]
 fn enrichment_gittins_select_arm_and_ranked_arms() {
-    let mut gc = GittinsIndexComputer::new(vec!["a".into(), "b".into(), "c".into()], 900_000, 100).unwrap();
+    let mut gc =
+        GittinsIndexComputer::new(vec!["a".into(), "b".into(), "c".into()], 900_000, 100).unwrap();
     for _ in 0..10 {
         gc.observe(0, true).unwrap();
         gc.observe(1, false).unwrap();
@@ -203,7 +218,10 @@ fn enrichment_gittins_select_arm_and_ranked_arms() {
 #[test]
 fn enrichment_gittins_out_of_bounds_rejected() {
     let mut gc = GittinsIndexComputer::new(vec!["a".into()], 900_000, 100).unwrap();
-    assert!(matches!(gc.observe(5, true), Err(StoppingError::IndexOutOfBounds { index: 5, size: 1 })));
+    assert!(matches!(
+        gc.observe(5, true),
+        Err(StoppingError::IndexOutOfBounds { index: 5, size: 1 })
+    ));
 }
 
 // --- Snell Envelope ---
@@ -216,7 +234,8 @@ fn enrichment_snell_optimal_stopping_scenarios() {
     assert_eq!(env.optimal_value_millionths, 5_000_000);
 
     // Monotone increasing -> wait till end
-    let env2 = SnellEnvelope::compute(vec![1_000_000, 2_000_000, 3_000_000, 4_000_000], MILLION).unwrap();
+    let env2 =
+        SnellEnvelope::compute(vec![1_000_000, 2_000_000, 3_000_000, 4_000_000], MILLION).unwrap();
     assert_eq!(env2.optimal_stopping_time, 3);
 
     // Monotone decreasing -> stop immediately
@@ -231,9 +250,18 @@ fn enrichment_snell_optimal_stopping_scenarios() {
 
 #[test]
 fn enrichment_snell_validation_errors() {
-    assert!(matches!(SnellEnvelope::compute(vec![], MILLION), Err(StoppingError::EmptyObservations)));
-    assert!(matches!(SnellEnvelope::compute(vec![MILLION], -1), Err(StoppingError::InvalidDiscount { .. })));
-    assert!(matches!(SnellEnvelope::compute(vec![MILLION], MILLION + 1), Err(StoppingError::InvalidDiscount { .. })));
+    assert!(matches!(
+        SnellEnvelope::compute(vec![], MILLION),
+        Err(StoppingError::EmptyObservations)
+    ));
+    assert!(matches!(
+        SnellEnvelope::compute(vec![MILLION], -1),
+        Err(StoppingError::InvalidDiscount { .. })
+    ));
+    assert!(matches!(
+        SnellEnvelope::compute(vec![MILLION], MILLION + 1),
+        Err(StoppingError::InvalidDiscount { .. })
+    ));
 }
 
 #[test]
@@ -325,7 +353,10 @@ fn enrichment_escalation_creation_and_cusum_trigger() {
 
 #[test]
 fn enrichment_escalation_invalid_threshold_propagates() {
-    assert!(matches!(EscalationPolicy::new(0, 500_000, 100), Err(StoppingError::InvalidThreshold { .. })));
+    assert!(matches!(
+        EscalationPolicy::new(0, 500_000, 100),
+        Err(StoppingError::InvalidThreshold { .. })
+    ));
 }
 
 // --- StoppingDecision ---
@@ -333,7 +364,9 @@ fn enrichment_escalation_invalid_threshold_propagates() {
 #[test]
 fn enrichment_stopping_decision_display_ord_copy() {
     let set: BTreeSet<String> = [StoppingDecision::Continue, StoppingDecision::Stop]
-        .iter().map(|d| d.to_string()).collect();
+        .iter()
+        .map(|d| d.to_string())
+        .collect();
     assert_eq!(set.len(), 2);
 
     assert!(StoppingDecision::Continue < StoppingDecision::Stop);
@@ -348,7 +381,10 @@ fn enrichment_stopping_decision_display_ord_copy() {
 #[test]
 fn enrichment_stopping_error_display_unique_and_std_error() {
     let errors = [
-        StoppingError::HorizonTooLarge { horizon: 20_000, max: 10_000 },
+        StoppingError::HorizonTooLarge {
+            horizon: 20_000,
+            max: 10_000,
+        },
         StoppingError::InvalidThreshold { threshold: -1 },
         StoppingError::InvalidDiscount { discount: 0 },
         StoppingError::EmptyObservations,
@@ -366,12 +402,20 @@ fn enrichment_stopping_error_display_unique_and_std_error() {
 #[test]
 fn enrichment_stopping_error_serde_all_variants() {
     let variants = [
-        StoppingError::HorizonTooLarge { horizon: 50_000, max: 10_000 },
+        StoppingError::HorizonTooLarge {
+            horizon: 50_000,
+            max: 10_000,
+        },
         StoppingError::InvalidThreshold { threshold: -42 },
-        StoppingError::InvalidDiscount { discount: 2_000_000 },
+        StoppingError::InvalidDiscount {
+            discount: 2_000_000,
+        },
         StoppingError::EmptyObservations,
         StoppingError::DegenerateKL,
-        StoppingError::IndexOutOfBounds { index: 99, size: 10 },
+        StoppingError::IndexOutOfBounds {
+            index: 99,
+            size: 10,
+        },
     ];
     for v in &variants {
         let json = serde_json::to_string(v).unwrap();
@@ -472,5 +516,8 @@ fn enrichment_secretary_deterministic_replay() {
 
 #[test]
 fn enrichment_schema_version_constant() {
-    assert_eq!(STOPPING_SCHEMA_VERSION, "franken-engine.optimal-stopping.v1");
+    assert_eq!(
+        STOPPING_SCHEMA_VERSION,
+        "franken-engine.optimal-stopping.v1"
+    );
 }

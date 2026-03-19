@@ -296,7 +296,11 @@ fn enrichment_supremacy_constraint_hash_deterministic() {
 #[test]
 fn enrichment_decision_receipt_new() {
     let hash = ContentHash::compute(b"test-evidence");
-    let receipt = DecisionReceipt::new(SecurityEpoch::from_raw(5), GovernanceAction::AllowRollout, hash);
+    let receipt = DecisionReceipt::new(
+        SecurityEpoch::from_raw(5),
+        GovernanceAction::AllowRollout,
+        hash,
+    );
     assert_eq!(receipt.component, COMPONENT);
     assert_eq!(receipt.action, GovernanceAction::AllowRollout);
 }

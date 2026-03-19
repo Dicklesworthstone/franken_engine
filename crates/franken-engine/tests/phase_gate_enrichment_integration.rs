@@ -135,9 +135,7 @@ fn gate_status_failed_display_joins_reasons() {
 
 #[test]
 fn gate_status_failed_empty_reasons() {
-    let status = GateStatus::Failed {
-        reasons: vec![],
-    };
+    let status = GateStatus::Failed { reasons: vec![] };
     assert!(!status.is_passed());
     assert!(status.is_terminal());
     let display = status.to_string();

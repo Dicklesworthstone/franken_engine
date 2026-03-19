@@ -255,10 +255,7 @@ fn enrichment_rank_ev_stable_with_identical_scores() {
 
 #[test]
 fn enrichment_rank_gain_stable_with_identical_gains() {
-    let results = vec![
-        result("z", 0, 42),
-        result("a", 0, 42),
-    ];
+    let results = vec![result("z", 0, 42), result("a", 0, 42)];
     let ranked = rank_by_gain(&results);
     assert_eq!(ranked, vec!["a", "z"]);
 }
@@ -281,10 +278,7 @@ fn enrichment_selected_always_matches_first_rank_by_ev() {
 
 #[test]
 fn enrichment_selected_with_two_equal_ev_prefers_lex_smaller_id() {
-    let results = vec![
-        result("beta", 100, 0),
-        result("alpha", 100, 0),
-    ];
+    let results = vec![result("beta", 100, 0), result("alpha", 100, 0)];
     assert_eq!(selected_campaign(&results), "alpha");
 }
 
@@ -369,7 +363,13 @@ fn enrichment_classify_deeply_nested() {
 
 #[test]
 fn enrichment_classify_all_none_paths() {
-    for path in &["src/lib.rs", "Cargo.toml", "", "random_file.rs", "src/scheduler.rs"] {
+    for path in &[
+        "src/lib.rs",
+        "Cargo.toml",
+        "",
+        "random_file.rs",
+        "src/scheduler.rs",
+    ] {
         assert_eq!(classify_runtime_lever(path), None);
     }
 }

@@ -159,7 +159,10 @@ fn enrichment_gc_config_serde_roundtrip() {
         let json = serde_json::to_string(&cfg).unwrap();
         let back: GcConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(cfg.deterministic, back.deterministic);
-        assert_eq!(cfg.pressure_threshold_percent, back.pressure_threshold_percent);
+        assert_eq!(
+            cfg.pressure_threshold_percent,
+            back.pressure_threshold_percent
+        );
     }
 }
 

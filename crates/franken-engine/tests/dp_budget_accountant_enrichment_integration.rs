@@ -12,8 +12,8 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::dp_budget_accountant::{
-    AccountantConfig, AccountantError, BudgetAccountant, BudgetConsumption,
-    BudgetForecast, EpochBudget, EpochSummary,
+    AccountantConfig, AccountantError, BudgetAccountant, BudgetConsumption, BudgetForecast,
+    EpochBudget, EpochSummary,
 };
 use frankenengine_engine::privacy_learning_contract::CompositionMethod;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -162,7 +162,9 @@ fn new_rejects_zero_lifetime_delta() {
 #[test]
 fn consume_basic_ok() {
     let mut acc = make_accountant();
-    let rec = acc.consume(100_000, 10_000, "noise", 2_000_000_000).unwrap();
+    let rec = acc
+        .consume(100_000, 10_000, "noise", 2_000_000_000)
+        .unwrap();
     assert_eq!(rec.operation_id, 1);
     assert_eq!(rec.epsilon_consumed_millionths, 100_000);
     assert_eq!(rec.delta_consumed_millionths, 10_000);
@@ -208,7 +210,9 @@ fn consume_rejects_negative_delta() {
 fn epoch_exhaustion_trips_latch() {
     let mut acc = make_accountant();
     acc.consume(900_000, 0, "big", 2_000_000_000).unwrap();
-    let err = acc.consume(200_000, 0, "overflow", 3_000_000_000).unwrap_err();
+    let err = acc
+        .consume(200_000, 0, "overflow", 3_000_000_000)
+        .unwrap_err();
     assert!(matches!(err, AccountantError::BudgetExhausted { .. }));
     assert!(acc.is_exhausted());
 }
@@ -227,7 +231,9 @@ fn exhaustion_latch_permanent() {
 fn delta_exhaustion() {
     let mut acc = make_accountant();
     acc.consume(0, 90_000, "delta-op", 2_000_000_000).unwrap();
-    let err = acc.consume(0, 20_000, "overflow", 3_000_000_000).unwrap_err();
+    let err = acc
+        .consume(0, 20_000, "overflow", 3_000_000_000)
+        .unwrap_err();
     assert!(matches!(err, AccountantError::BudgetExhausted { .. }));
 }
 
@@ -256,7 +262,9 @@ fn lifetime_exhaustion() {
 fn advance_epoch_ok() {
     let mut acc = make_accountant();
     acc.consume(300_000, 30_000, "op1", 2_000_000_000).unwrap();
-    let summary = acc.advance_epoch(SecurityEpoch::from_raw(2), 10_000_000_000).unwrap();
+    let summary = acc
+        .advance_epoch(SecurityEpoch::from_raw(2), 10_000_000_000)
+        .unwrap();
     assert_eq!(summary.epoch, SecurityEpoch::from_raw(1));
     assert_eq!(summary.total_epsilon_spent_millionths, 300_000);
     assert_eq!(summary.total_delta_spent_millionths, 30_000);
@@ -273,22 +281,28 @@ fn advance_epoch_clears_exhaustion() {
     acc.consume(900_000, 0, "big", 2_000_000_000).unwrap();
     let _ = acc.consume(200_000, 0, "overflow", 3_000_000_000);
     assert!(acc.is_exhausted());
-    acc.advance_epoch(SecurityEpoch::from_raw(2), 10_000_000_000).unwrap();
+    acc.advance_epoch(SecurityEpoch::from_raw(2), 10_000_000_000)
+        .unwrap();
     assert!(!acc.is_exhausted());
 }
 
 #[test]
 fn advance_epoch_rejects_non_advancing() {
     let mut acc = make_accountant();
-    let err = acc.advance_epoch(SecurityEpoch::from_raw(1), 10_000_000_000).unwrap_err();
+    let err = acc
+        .advance_epoch(SecurityEpoch::from_raw(1), 10_000_000_000)
+        .unwrap_err();
     assert!(matches!(err, AccountantError::EpochNotAdvanced { .. }));
 }
 
 #[test]
 fn advance_epoch_rejects_backward() {
     let mut acc = make_accountant();
-    acc.advance_epoch(SecurityEpoch::from_raw(5), 10_000_000_000).unwrap();
-    let err = acc.advance_epoch(SecurityEpoch::from_raw(3), 20_000_000_000).unwrap_err();
+    acc.advance_epoch(SecurityEpoch::from_raw(5), 10_000_000_000)
+        .unwrap();
+    let err = acc
+        .advance_epoch(SecurityEpoch::from_raw(3), 20_000_000_000)
+        .unwrap_err();
     assert!(matches!(err, AccountantError::EpochNotAdvanced { .. }));
 }
 
@@ -296,8 +310,10 @@ fn advance_epoch_rejects_backward() {
 fn advance_epoch_preserves_summaries() {
     let mut acc = make_accountant();
     acc.consume(100_000, 10_000, "op", 2_000_000_000).unwrap();
-    acc.advance_epoch(SecurityEpoch::from_raw(2), 10_000_000_000).unwrap();
-    acc.advance_epoch(SecurityEpoch::from_raw(3), 20_000_000_000).unwrap();
+    acc.advance_epoch(SecurityEpoch::from_raw(2), 10_000_000_000)
+        .unwrap();
+    acc.advance_epoch(SecurityEpoch::from_raw(3), 20_000_000_000)
+        .unwrap();
     assert_eq!(acc.epoch_summaries().len(), 2);
 }
 
@@ -531,7 +547,9 @@ fn advanced_composition_consumes_less_than_basic() {
         ..test_config()
     })
     .unwrap();
-    let adv_rec = advanced.consume(100_000, 10_000, "op", 2_000_000_000).unwrap();
+    let adv_rec = advanced
+        .consume(100_000, 10_000, "op", 2_000_000_000)
+        .unwrap();
 
     // Advanced composition should give same or less epsilon
     assert!(adv_rec.composed_epsilon_millionths <= basic_rec.composed_epsilon_millionths);

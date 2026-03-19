@@ -43,7 +43,10 @@ fn make_entry(id: &str, domain: MismatchDomain, severity: MismatchSeverity) -> M
         evidence_hash: ContentHash::compute(id.as_bytes()),
         detected_epoch: epoch(1),
         verified_epoch: epoch(2),
-        tags: ["react", "enrichment"].iter().map(|s| s.to_string()).collect(),
+        tags: ["react", "enrichment"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
     }
 }
 
@@ -262,14 +265,26 @@ fn enrichment_target_display_matches_as_str() {
 
 #[test]
 fn enrichment_entry_content_hash_deterministic() {
-    let e1 = make_entry("det-1", MismatchDomain::CompileOutput, MismatchSeverity::Error);
-    let e2 = make_entry("det-1", MismatchDomain::CompileOutput, MismatchSeverity::Error);
+    let e1 = make_entry(
+        "det-1",
+        MismatchDomain::CompileOutput,
+        MismatchSeverity::Error,
+    );
+    let e2 = make_entry(
+        "det-1",
+        MismatchDomain::CompileOutput,
+        MismatchSeverity::Error,
+    );
     assert_eq!(e1.content_hash(), e2.content_hash());
 }
 
 #[test]
 fn enrichment_entry_content_hash_varies_by_severity() {
-    let e1 = make_entry("x", MismatchDomain::CompileOutput, MismatchSeverity::Warning);
+    let e1 = make_entry(
+        "x",
+        MismatchDomain::CompileOutput,
+        MismatchSeverity::Warning,
+    );
     let e2 = make_entry("x", MismatchDomain::CompileOutput, MismatchSeverity::Error);
     assert_ne!(e1.content_hash(), e2.content_hash());
 }
@@ -334,10 +349,18 @@ fn enrichment_catalog_add_multiple_entries() {
 #[test]
 fn enrichment_catalog_duplicate_rejected() {
     let mut cat = MismatchCatalog::new(epoch(1));
-    cat.add_entry(make_entry("dup", MismatchDomain::CompileOutput, MismatchSeverity::Info))
-        .unwrap();
+    cat.add_entry(make_entry(
+        "dup",
+        MismatchDomain::CompileOutput,
+        MismatchSeverity::Info,
+    ))
+    .unwrap();
     let err = cat
-        .add_entry(make_entry("dup", MismatchDomain::Diagnostics, MismatchSeverity::Warning))
+        .add_entry(make_entry(
+            "dup",
+            MismatchDomain::Diagnostics,
+            MismatchSeverity::Warning,
+        ))
         .unwrap_err();
     assert!(matches!(err, CatalogError::DuplicateEntry { .. }));
 }
@@ -345,8 +368,12 @@ fn enrichment_catalog_duplicate_rejected() {
 #[test]
 fn enrichment_catalog_remove_and_verify() {
     let mut cat = MismatchCatalog::new(epoch(1));
-    cat.add_entry(make_entry("rm-1", MismatchDomain::CompileOutput, MismatchSeverity::Error))
-        .unwrap();
+    cat.add_entry(make_entry(
+        "rm-1",
+        MismatchDomain::CompileOutput,
+        MismatchSeverity::Error,
+    ))
+    .unwrap();
     let removed = cat.remove_entry("rm-1").unwrap();
     assert_eq!(removed.entry_id, "rm-1");
     assert!(cat.is_empty());
@@ -362,17 +389,26 @@ fn enrichment_catalog_remove_nonexistent() {
 #[test]
 fn enrichment_catalog_update_remediation() {
     let mut cat = MismatchCatalog::new(epoch(1));
-    cat.add_entry(make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Error))
-        .unwrap();
+    cat.add_entry(make_entry(
+        "e1",
+        MismatchDomain::CompileOutput,
+        MismatchSeverity::Error,
+    ))
+    .unwrap();
     assert_eq!(cat.open_count(), 1);
-    cat.update_remediation("e1", RemediationStatus::Resolved).unwrap();
+    cat.update_remediation("e1", RemediationStatus::Resolved)
+        .unwrap();
     assert_eq!(cat.open_count(), 0);
 }
 
 #[test]
 fn enrichment_catalog_advisory_too_long() {
     let mut cat = MismatchCatalog::new(epoch(1));
-    let mut e = make_entry("long", MismatchDomain::CompileOutput, MismatchSeverity::Error);
+    let mut e = make_entry(
+        "long",
+        MismatchDomain::CompileOutput,
+        MismatchSeverity::Error,
+    );
     e.advisory = "x".repeat(5000);
     let err = cat.add_entry(e).unwrap_err();
     assert!(matches!(err, CatalogError::AdvisoryTooLong { .. }));
@@ -381,7 +417,11 @@ fn enrichment_catalog_advisory_too_long() {
 #[test]
 fn enrichment_catalog_invalid_epoch() {
     let mut cat = MismatchCatalog::new(epoch(1));
-    let mut e = make_entry("inv", MismatchDomain::CompileOutput, MismatchSeverity::Error);
+    let mut e = make_entry(
+        "inv",
+        MismatchDomain::CompileOutput,
+        MismatchSeverity::Error,
+    );
     e.detected_epoch = epoch(10);
     e.verified_epoch = epoch(5);
     let err = cat.add_entry(e).unwrap_err();
@@ -395,8 +435,12 @@ fn enrichment_catalog_invalid_epoch() {
 #[test]
 fn enrichment_aggregate_open_score_mixed() {
     let mut cat = MismatchCatalog::new(epoch(1));
-    cat.add_entry(make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Error))
-        .unwrap();
+    cat.add_entry(make_entry(
+        "e1",
+        MismatchDomain::CompileOutput,
+        MismatchSeverity::Error,
+    ))
+    .unwrap();
     cat.add_entry(make_entry_full(
         "e2",
         MismatchDomain::Diagnostics,
@@ -412,12 +456,24 @@ fn enrichment_aggregate_open_score_mixed() {
 #[test]
 fn enrichment_count_by_severity() {
     let mut cat = MismatchCatalog::new(epoch(1));
-    cat.add_entry(make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Info))
-        .unwrap();
-    cat.add_entry(make_entry("e2", MismatchDomain::Diagnostics, MismatchSeverity::Info))
-        .unwrap();
-    cat.add_entry(make_entry("e3", MismatchDomain::SourceMap, MismatchSeverity::Error))
-        .unwrap();
+    cat.add_entry(make_entry(
+        "e1",
+        MismatchDomain::CompileOutput,
+        MismatchSeverity::Info,
+    ))
+    .unwrap();
+    cat.add_entry(make_entry(
+        "e2",
+        MismatchDomain::Diagnostics,
+        MismatchSeverity::Info,
+    ))
+    .unwrap();
+    cat.add_entry(make_entry(
+        "e3",
+        MismatchDomain::SourceMap,
+        MismatchSeverity::Error,
+    ))
+    .unwrap();
     assert_eq!(cat.count_by_severity(MismatchSeverity::Info), 2);
     assert_eq!(cat.count_by_severity(MismatchSeverity::Error), 1);
     assert_eq!(cat.count_by_severity(MismatchSeverity::Critical), 0);
@@ -426,10 +482,18 @@ fn enrichment_count_by_severity() {
 #[test]
 fn enrichment_covered_domains() {
     let mut cat = MismatchCatalog::new(epoch(1));
-    cat.add_entry(make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Info))
-        .unwrap();
-    cat.add_entry(make_entry("e2", MismatchDomain::HookSemantics, MismatchSeverity::Warning))
-        .unwrap();
+    cat.add_entry(make_entry(
+        "e1",
+        MismatchDomain::CompileOutput,
+        MismatchSeverity::Info,
+    ))
+    .unwrap();
+    cat.add_entry(make_entry(
+        "e2",
+        MismatchDomain::HookSemantics,
+        MismatchSeverity::Warning,
+    ))
+    .unwrap();
     let domains = cat.covered_domains();
     assert_eq!(domains.len(), 2);
     assert!(domains.contains(&MismatchDomain::CompileOutput));
@@ -451,8 +515,12 @@ fn enrichment_gate_pass_full_catalog_resolved() {
 #[test]
 fn enrichment_gate_incomplete_single_domain() {
     let mut cat = MismatchCatalog::new(epoch(1));
-    cat.add_entry(make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Info))
-        .unwrap();
+    cat.add_entry(make_entry(
+        "e1",
+        MismatchDomain::CompileOutput,
+        MismatchSeverity::Info,
+    ))
+    .unwrap();
     let config = CatalogConfig::default();
     let verdict = cat.evaluate(&config);
     assert!(matches!(verdict, GateVerdict::Incomplete { .. }));
@@ -526,8 +594,12 @@ fn enrichment_advisories_skip_all_resolved() {
 #[test]
 fn enrichment_advisories_id_format() {
     let mut cat = MismatchCatalog::new(epoch(1));
-    cat.add_entry(make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Error))
-        .unwrap();
+    cat.add_entry(make_entry(
+        "e1",
+        MismatchDomain::CompileOutput,
+        MismatchSeverity::Error,
+    ))
+    .unwrap();
     let advisories = generate_advisories(&cat);
     assert!(advisories[0].advisory_id.starts_with("ADV-"));
 }
@@ -551,8 +623,12 @@ fn enrichment_domain_coverage_full() {
 #[test]
 fn enrichment_resolution_ratio_none_resolved() {
     let mut cat = MismatchCatalog::new(epoch(1));
-    cat.add_entry(make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Error))
-        .unwrap();
+    cat.add_entry(make_entry(
+        "e1",
+        MismatchDomain::CompileOutput,
+        MismatchSeverity::Error,
+    ))
+    .unwrap();
     assert_eq!(resolution_ratio(&cat), 0);
 }
 
@@ -577,10 +653,18 @@ fn enrichment_all_tags_collects() {
 #[test]
 fn enrichment_filter_entry_ids_by_domain() {
     let mut cat = MismatchCatalog::new(epoch(1));
-    cat.add_entry(make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Error))
-        .unwrap();
-    cat.add_entry(make_entry("e2", MismatchDomain::Diagnostics, MismatchSeverity::Warning))
-        .unwrap();
+    cat.add_entry(make_entry(
+        "e1",
+        MismatchDomain::CompileOutput,
+        MismatchSeverity::Error,
+    ))
+    .unwrap();
+    cat.add_entry(make_entry(
+        "e2",
+        MismatchDomain::Diagnostics,
+        MismatchSeverity::Warning,
+    ))
+    .unwrap();
     let compile = filter_entry_ids(&cat, |e| e.domain == MismatchDomain::CompileOutput);
     assert_eq!(compile, vec!["e1"]);
 }
@@ -593,16 +677,24 @@ fn enrichment_filter_entry_ids_by_domain() {
 fn enrichment_catalog_hash_changes_on_add() {
     let mut cat = MismatchCatalog::new(epoch(1));
     let h0 = cat.catalog_hash;
-    cat.add_entry(make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Error))
-        .unwrap();
+    cat.add_entry(make_entry(
+        "e1",
+        MismatchDomain::CompileOutput,
+        MismatchSeverity::Error,
+    ))
+    .unwrap();
     assert_ne!(cat.catalog_hash, h0);
 }
 
 #[test]
 fn enrichment_catalog_hash_changes_on_remove() {
     let mut cat = MismatchCatalog::new(epoch(1));
-    cat.add_entry(make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Error))
-        .unwrap();
+    cat.add_entry(make_entry(
+        "e1",
+        MismatchDomain::CompileOutput,
+        MismatchSeverity::Error,
+    ))
+    .unwrap();
     let h1 = cat.catalog_hash;
     cat.remove_entry("e1").unwrap();
     assert_ne!(cat.catalog_hash, h1);
@@ -611,10 +703,15 @@ fn enrichment_catalog_hash_changes_on_remove() {
 #[test]
 fn enrichment_catalog_hash_changes_on_remediation() {
     let mut cat = MismatchCatalog::new(epoch(1));
-    cat.add_entry(make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Error))
-        .unwrap();
+    cat.add_entry(make_entry(
+        "e1",
+        MismatchDomain::CompileOutput,
+        MismatchSeverity::Error,
+    ))
+    .unwrap();
     let h1 = cat.catalog_hash;
-    cat.update_remediation("e1", RemediationStatus::Resolved).unwrap();
+    cat.update_remediation("e1", RemediationStatus::Resolved)
+        .unwrap();
     assert_ne!(cat.catalog_hash, h1);
 }
 
@@ -625,8 +722,12 @@ fn enrichment_catalog_hash_changes_on_remediation() {
 #[test]
 fn enrichment_serde_roundtrip_catalog() {
     let mut cat = MismatchCatalog::new(epoch(1));
-    cat.add_entry(make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Error))
-        .unwrap();
+    cat.add_entry(make_entry(
+        "e1",
+        MismatchDomain::CompileOutput,
+        MismatchSeverity::Error,
+    ))
+    .unwrap();
     let json = serde_json::to_string(&cat).unwrap();
     let back: MismatchCatalog = serde_json::from_str(&json).unwrap();
     assert_eq!(cat, back);
@@ -643,8 +744,12 @@ fn enrichment_serde_roundtrip_config() {
 #[test]
 fn enrichment_serde_roundtrip_report() {
     let mut cat = MismatchCatalog::new(epoch(1));
-    cat.add_entry(make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Error))
-        .unwrap();
+    cat.add_entry(make_entry(
+        "e1",
+        MismatchDomain::CompileOutput,
+        MismatchSeverity::Error,
+    ))
+    .unwrap();
     let report = cat.report();
     let json = serde_json::to_string(&report).unwrap();
     let back: CatalogReport = serde_json::from_str(&json).unwrap();
@@ -654,11 +759,24 @@ fn enrichment_serde_roundtrip_report() {
 #[test]
 fn enrichment_serde_roundtrip_error() {
     let errors = vec![
-        CatalogError::CapacityExceeded { current: 10000, max: 10000 },
-        CatalogError::DuplicateEntry { entry_id: "dup".to_string() },
-        CatalogError::AdvisoryTooLong { entry_id: "x".to_string(), len: 5000 },
-        CatalogError::EntryNotFound { entry_id: "missing".to_string() },
-        CatalogError::InvalidEpoch { entry_id: "x".to_string(), reason: "bad".to_string() },
+        CatalogError::CapacityExceeded {
+            current: 10000,
+            max: 10000,
+        },
+        CatalogError::DuplicateEntry {
+            entry_id: "dup".to_string(),
+        },
+        CatalogError::AdvisoryTooLong {
+            entry_id: "x".to_string(),
+            len: 5000,
+        },
+        CatalogError::EntryNotFound {
+            entry_id: "missing".to_string(),
+        },
+        CatalogError::InvalidEpoch {
+            entry_id: "x".to_string(),
+            reason: "bad".to_string(),
+        },
     ];
     for err in &errors {
         let json = serde_json::to_string(err).unwrap();
@@ -675,10 +793,24 @@ fn enrichment_serde_roundtrip_error() {
 fn enrichment_error_display_all_unique() {
     let errors: Vec<String> = vec![
         CatalogError::CapacityExceeded { current: 1, max: 1 }.to_string(),
-        CatalogError::DuplicateEntry { entry_id: "x".to_string() }.to_string(),
-        CatalogError::AdvisoryTooLong { entry_id: "x".to_string(), len: 1 }.to_string(),
-        CatalogError::EntryNotFound { entry_id: "x".to_string() }.to_string(),
-        CatalogError::InvalidEpoch { entry_id: "x".to_string(), reason: "y".to_string() }.to_string(),
+        CatalogError::DuplicateEntry {
+            entry_id: "x".to_string(),
+        }
+        .to_string(),
+        CatalogError::AdvisoryTooLong {
+            entry_id: "x".to_string(),
+            len: 1,
+        }
+        .to_string(),
+        CatalogError::EntryNotFound {
+            entry_id: "x".to_string(),
+        }
+        .to_string(),
+        CatalogError::InvalidEpoch {
+            entry_id: "x".to_string(),
+            reason: "y".to_string(),
+        }
+        .to_string(),
     ];
     let unique: BTreeSet<String> = errors.into_iter().collect();
     assert_eq!(unique.len(), 5);
@@ -691,10 +823,18 @@ fn enrichment_error_display_all_unique() {
 #[test]
 fn enrichment_report_reflects_catalog() {
     let mut cat = MismatchCatalog::new(epoch(1));
-    cat.add_entry(make_entry("e1", MismatchDomain::CompileOutput, MismatchSeverity::Error))
-        .unwrap();
-    cat.add_entry(make_entry("e2", MismatchDomain::Diagnostics, MismatchSeverity::Warning))
-        .unwrap();
+    cat.add_entry(make_entry(
+        "e1",
+        MismatchDomain::CompileOutput,
+        MismatchSeverity::Error,
+    ))
+    .unwrap();
+    cat.add_entry(make_entry(
+        "e2",
+        MismatchDomain::Diagnostics,
+        MismatchSeverity::Warning,
+    ))
+    .unwrap();
     let report = cat.report();
     assert_eq!(report.total_entries, 2);
     assert_eq!(report.open_entries, 2);

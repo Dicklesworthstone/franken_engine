@@ -138,15 +138,9 @@ fn integ_lease_status_ordering() {
 #[test]
 fn integ_escalation_display_all_unique() {
     let actions = [
-        EscalationAction::MarkEndpointUnreachable {
-            holder: "a".into(),
-        },
-        EscalationAction::CancelOperation {
-            holder: "b".into(),
-        },
-        EscalationAction::TerminateSession {
-            holder: "c".into(),
-        },
+        EscalationAction::MarkEndpointUnreachable { holder: "a".into() },
+        EscalationAction::CancelOperation { holder: "b".into() },
+        EscalationAction::TerminateSession { holder: "c".into() },
     ];
     let mut displays = BTreeSet::new();
     for a in &actions {
@@ -655,8 +649,7 @@ fn integ_store_scan_detects_expired() {
     let mut s = store();
     s.grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t1")
         .unwrap();
-    s.grant("op-1", LeaseType::Operation, 50, 10, "t2")
-        .unwrap();
+    s.grant("op-1", LeaseType::Operation, 50, 10, "t2").unwrap();
     // At tick 70, only op-1 (expires_at=60) is expired
     let actions = s.scan_expired(70, "trace-scan");
     assert_eq!(actions.len(), 1);
@@ -671,8 +664,7 @@ fn integ_store_scan_multiple_expirations() {
     let mut s = store();
     s.grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t1")
         .unwrap();
-    s.grant("sess-1", LeaseType::Session, 50, 0, "t2")
-        .unwrap();
+    s.grant("sess-1", LeaseType::Session, 50, 0, "t2").unwrap();
     let actions = s.scan_expired(200, "t-scan");
     assert_eq!(actions.len(), 2);
 }

@@ -267,7 +267,10 @@ fn enrichment_golden_vector_serde_empty_maps() {
 #[test]
 fn enrichment_golden_vector_serde_complex_nested() {
     let mut input = BTreeMap::new();
-    input.insert("nested".into(), serde_json::json!({"a": [1,2,3], "b": null}));
+    input.insert(
+        "nested".into(),
+        serde_json::json!({"a": [1,2,3], "b": null}),
+    );
     let v = GoldenVector {
         test_name: "complex".into(),
         description: "nested".into(),

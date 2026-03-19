@@ -23,10 +23,10 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::hierarchical_delta_debug::{
     COMPONENT, DEFAULT_MAX_REDUCTION_STEPS, DEFAULT_MAX_REDUCTION_TIME_MS,
-    DEFAULT_MIN_PROGRAM_SIZE, DeltaDebugSpecimenFamily, DeltaDebugger, DefectClass,
-    MinimalRepro, ProgramFragment, REDUCTION_SCHEMA_VERSION, ReductionConfig,
-    ReductionEvidenceInventory, ReductionLevel, ReductionStep, ReductionStrategy,
-    ReductionSummary, StepOutcome, delta_debug_corpus, run_delta_debug_corpus,
+    DEFAULT_MIN_PROGRAM_SIZE, DefectClass, DeltaDebugSpecimenFamily, DeltaDebugger, MinimalRepro,
+    ProgramFragment, REDUCTION_SCHEMA_VERSION, ReductionConfig, ReductionEvidenceInventory,
+    ReductionLevel, ReductionStep, ReductionStrategy, ReductionSummary, StepOutcome,
+    delta_debug_corpus, run_delta_debug_corpus,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -116,7 +116,9 @@ fn enrichment_defect_class_serde_roundtrip_builtin() {
 
 #[test]
 fn enrichment_defect_class_serde_roundtrip_custom() {
-    let dc = DefectClass::Custom { tag: "my-defect".into() };
+    let dc = DefectClass::Custom {
+        tag: "my-defect".into(),
+    };
     let json = serde_json::to_string(&dc).unwrap();
     let back: DefectClass = serde_json::from_str(&json).unwrap();
     assert_eq!(dc, back);
@@ -129,7 +131,9 @@ fn enrichment_defect_class_ordering() {
 
 #[test]
 fn enrichment_defect_class_custom_display_contains_tag() {
-    let dc = DefectClass::Custom { tag: "fuzzer".into() };
+    let dc = DefectClass::Custom {
+        tag: "fuzzer".into(),
+    };
     let s = format!("{dc}");
     assert!(s.contains("fuzzer"));
 }
@@ -176,7 +180,10 @@ fn enrichment_reduction_level_ordering() {
 
 #[test]
 fn enrichment_reduction_level_display_unique() {
-    let labels: BTreeSet<String> = ReductionLevel::all().iter().map(|l| format!("{l}")).collect();
+    let labels: BTreeSet<String> = ReductionLevel::all()
+        .iter()
+        .map(|l| format!("{l}"))
+        .collect();
     assert_eq!(labels.len(), 5);
 }
 
@@ -250,7 +257,10 @@ fn enrichment_config_hash_deterministic() {
 #[test]
 fn enrichment_config_hash_differs_on_change() {
     let c1 = ReductionConfig::default();
-    let c2 = ReductionConfig { max_steps: 500, ..ReductionConfig::default() };
+    let c2 = ReductionConfig {
+        max_steps: 500,
+        ..ReductionConfig::default()
+    };
     assert_ne!(c1.config_hash(), c2.config_hash());
 }
 
@@ -386,16 +396,30 @@ fn enrichment_reduction_step_serde_roundtrip() {
 
 #[test]
 fn enrichment_debugger_fragment_creates_fragments() {
-    let mut d = DeltaDebugger::new(sample_program(), DefectClass::Crash, ReductionConfig::default(), ep(1));
+    let mut d = DeltaDebugger::new(
+        sample_program(),
+        DefectClass::Crash,
+        ReductionConfig::default(),
+        ep(1),
+    );
     d.fragment();
     assert!(d.fragment_count() > 0);
 }
 
 #[test]
 fn enrichment_debugger_reduce_full_pipeline() {
-    let mut d = DeltaDebugger::new(sample_program(), DefectClass::Crash, ReductionConfig::default(), ep(1));
+    let mut d = DeltaDebugger::new(
+        sample_program(),
+        DefectClass::Crash,
+        ReductionConfig::default(),
+        ep(1),
+    );
     let repro = d.reduce(|source| {
-        if source.contains("add") { StepOutcome::DefectPreserved } else { StepOutcome::DefectLost }
+        if source.contains("add") {
+            StepOutcome::DefectPreserved
+        } else {
+            StepOutcome::DefectLost
+        }
     });
     assert!(repro.repro_id.starts_with("mr-"));
     assert!(repro.source.contains("add"));
@@ -405,7 +429,12 @@ fn enrichment_debugger_reduce_full_pipeline() {
 
 #[test]
 fn enrichment_debugger_summary_fields() {
-    let mut d = DeltaDebugger::new(sample_program(), DefectClass::Crash, ReductionConfig::default(), ep(1));
+    let mut d = DeltaDebugger::new(
+        sample_program(),
+        DefectClass::Crash,
+        ReductionConfig::default(),
+        ep(1),
+    );
     d.fragment();
     let summary = d.summary();
     assert_eq!(summary.defect_class, DefectClass::Crash);
@@ -418,7 +447,12 @@ fn enrichment_debugger_summary_fields() {
 
 #[test]
 fn enrichment_minimal_repro_serde_roundtrip() {
-    let mut d = DeltaDebugger::new("test source", DefectClass::Crash, ReductionConfig::default(), ep(1));
+    let mut d = DeltaDebugger::new(
+        "test source",
+        DefectClass::Crash,
+        ReductionConfig::default(),
+        ep(1),
+    );
     let repro = d.reduce(|_| StepOutcome::DefectPreserved);
     let json = serde_json::to_string(&repro).unwrap();
     let back: MinimalRepro = serde_json::from_str(&json).unwrap();

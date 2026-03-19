@@ -19,8 +19,8 @@
 
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::spectral_fleet_convergence::{
-    ConvergenceCertificate, GossipTopology, LaplacianMatrix, SpectralAnalysis,
-    SpectralAnalyzer, SpectralError, SPECTRAL_SCHEMA_VERSION,
+    ConvergenceCertificate, GossipTopology, LaplacianMatrix, SPECTRAL_SCHEMA_VERSION,
+    SpectralAnalysis, SpectralAnalyzer, SpectralError,
 };
 
 // ---------------------------------------------------------------------------
@@ -113,7 +113,9 @@ fn enrichment_topology_negative_weight_rejected() {
     let result = topo.add_edge(0, 1, -1);
     assert!(matches!(
         result,
-        Err(SpectralError::InvalidEdgeWeight { weight_millionths: -1 })
+        Err(SpectralError::InvalidEdgeWeight {
+            weight_millionths: -1
+        })
     ));
 }
 
@@ -123,7 +125,9 @@ fn enrichment_topology_zero_weight_rejected() {
     let result = topo.add_edge(0, 1, 0);
     assert!(matches!(
         result,
-        Err(SpectralError::InvalidEdgeWeight { weight_millionths: 0 })
+        Err(SpectralError::InvalidEdgeWeight {
+            weight_millionths: 0
+        })
     ));
 }
 
@@ -394,13 +398,25 @@ fn enrichment_certificate_from_analysis_fields_correct() {
     assert_eq!(cert.num_nodes, 5);
     assert_eq!(cert.schema, SPECTRAL_SCHEMA_VERSION);
     assert_eq!(cert.epoch, epoch);
-    assert_eq!(cert.spectral_gap_millionths, analysis.spectral_gap_millionths);
+    assert_eq!(
+        cert.spectral_gap_millionths,
+        analysis.spectral_gap_millionths
+    );
     assert_eq!(cert.mixing_time_rounds, analysis.mixing_time_bound);
     assert_eq!(cert.lambda_max_millionths, analysis.lambda_max_millionths);
     assert_eq!(cert.fiedler_iterations, analysis.fiedler_iterations);
-    assert_eq!(cert.fiedler_residual_millionths, analysis.fiedler_residual_millionths);
-    assert_eq!(cert.cheeger_lower_millionths, analysis.cheeger_lower_bound_millionths);
-    assert_eq!(cert.cheeger_upper_millionths, analysis.cheeger_upper_bound_millionths);
+    assert_eq!(
+        cert.fiedler_residual_millionths,
+        analysis.fiedler_residual_millionths
+    );
+    assert_eq!(
+        cert.cheeger_lower_millionths,
+        analysis.cheeger_lower_bound_millionths
+    );
+    assert_eq!(
+        cert.cheeger_upper_millionths,
+        analysis.cheeger_upper_bound_millionths
+    );
 }
 
 #[test]
@@ -480,7 +496,10 @@ fn enrichment_certificate_serde_roundtrip() {
 
 #[test]
 fn enrichment_error_display_too_many_nodes() {
-    let err = SpectralError::TooManyNodes { count: 2000, max: 1024 };
+    let err = SpectralError::TooManyNodes {
+        count: 2000,
+        max: 1024,
+    };
     let msg = format!("{err}");
     assert!(msg.contains("2000"));
     assert!(msg.contains("1024"));
@@ -510,7 +529,9 @@ fn enrichment_error_display_node_out_of_bounds() {
 
 #[test]
 fn enrichment_error_display_invalid_edge_weight() {
-    let err = SpectralError::InvalidEdgeWeight { weight_millionths: -42 };
+    let err = SpectralError::InvalidEdgeWeight {
+        weight_millionths: -42,
+    };
     let msg = format!("{err}");
     assert!(msg.contains("-42"));
 }
@@ -536,11 +557,16 @@ fn enrichment_error_display_degenerate() {
 #[test]
 fn enrichment_error_serde_all_variants() {
     let errors = vec![
-        SpectralError::TooManyNodes { count: 2000, max: 1024 },
+        SpectralError::TooManyNodes {
+            count: 2000,
+            max: 1024,
+        },
         SpectralError::EmptyGraph,
         SpectralError::Disconnected { components: 3 },
         SpectralError::NodeOutOfBounds { index: 5, size: 3 },
-        SpectralError::InvalidEdgeWeight { weight_millionths: -1 },
+        SpectralError::InvalidEdgeWeight {
+            weight_millionths: -1,
+        },
         SpectralError::ConvergenceFailure { iterations: 100 },
         SpectralError::DegenerateSpectralGap,
     ];

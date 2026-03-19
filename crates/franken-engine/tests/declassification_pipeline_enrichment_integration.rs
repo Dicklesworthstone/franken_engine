@@ -304,21 +304,27 @@ fn loss_default_threshold_value() {
 
 #[test]
 fn policy_eval_result_is_approved_only_for_route_approved() {
-    assert!(PolicyEvalResult::RouteApproved {
-        route_id: "r".to_string(),
-        conditions_met: vec![],
-    }
-    .is_approved());
+    assert!(
+        PolicyEvalResult::RouteApproved {
+            route_id: "r".to_string(),
+            conditions_met: vec![],
+        }
+        .is_approved()
+    );
     assert!(!PolicyEvalResult::NoMatchingRoute.is_approved());
-    assert!(!PolicyEvalResult::ConditionsNotMet {
-        route_id: "r".to_string(),
-        failed_conditions: vec![],
-    }
-    .is_approved());
-    assert!(!PolicyEvalResult::PolicyUnavailable {
-        reason: "x".to_string(),
-    }
-    .is_approved());
+    assert!(
+        !PolicyEvalResult::ConditionsNotMet {
+            route_id: "r".to_string(),
+            failed_conditions: vec![],
+        }
+        .is_approved()
+    );
+    assert!(
+        !PolicyEvalResult::PolicyUnavailable {
+            reason: "x".to_string(),
+        }
+        .is_approved()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -449,9 +455,11 @@ fn pipeline_emergency_review_completion() {
     let grant_id = format!("emg-{}", request.request_id);
     assert!(pipeline.complete_emergency_review(&grant_id));
     // After review, grant should not be found (reviewed = true)
-    assert!(pipeline
-        .check_emergency_grant(&Label::Secret, &Label::Public, request.timestamp_ms)
-        .is_none());
+    assert!(
+        pipeline
+            .check_emergency_grant(&Label::Secret, &Label::Public, request.timestamp_ms)
+            .is_none()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -466,11 +474,7 @@ fn pipeline_events_contain_all_stages_on_allow() {
     pipeline
         .process(&request, &policy, &low_loss(), &test_key())
         .unwrap();
-    let stages: BTreeSet<String> = pipeline
-        .events()
-        .iter()
-        .map(|e| e.stage.clone())
-        .collect();
+    let stages: BTreeSet<String> = pipeline.events().iter().map(|e| e.stage.clone()).collect();
     assert!(stages.contains("request_validation"));
     assert!(stages.contains("policy_evaluation"));
     assert!(stages.contains("loss_assessment"));

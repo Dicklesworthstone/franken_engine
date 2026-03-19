@@ -62,13 +62,34 @@ fn all_transitions() -> Vec<LifecycleTransition> {
 
 fn all_lifecycle_errors() -> Vec<LifecycleError> {
     vec![
-        LifecycleError::InvalidTransition { extension_id: "x".to_string(), current_state: ExtensionState::Running, attempted: LifecycleTransition::Validate },
-        LifecycleError::ExtensionNotFound { extension_id: "x".to_string() },
-        LifecycleError::ExtensionAlreadyExists { extension_id: "x".to_string() },
-        LifecycleError::BudgetExhausted { extension_id: "x".to_string(), remaining_millionths: 0, required_millionths: 1 },
-        LifecycleError::GracePeriodExpired { extension_id: "x".to_string(), elapsed_ns: 10, budget_ns: 5 },
-        LifecycleError::ManifestRejected { extension_id: "x".to_string(), reason: "bad".to_string() },
-        LifecycleError::Internal { detail: "oops".to_string() },
+        LifecycleError::InvalidTransition {
+            extension_id: "x".to_string(),
+            current_state: ExtensionState::Running,
+            attempted: LifecycleTransition::Validate,
+        },
+        LifecycleError::ExtensionNotFound {
+            extension_id: "x".to_string(),
+        },
+        LifecycleError::ExtensionAlreadyExists {
+            extension_id: "x".to_string(),
+        },
+        LifecycleError::BudgetExhausted {
+            extension_id: "x".to_string(),
+            remaining_millionths: 0,
+            required_millionths: 1,
+        },
+        LifecycleError::GracePeriodExpired {
+            extension_id: "x".to_string(),
+            elapsed_ns: 10,
+            budget_ns: 5,
+        },
+        LifecycleError::ManifestRejected {
+            extension_id: "x".to_string(),
+            reason: "bad".to_string(),
+        },
+        LifecycleError::Internal {
+            detail: "oops".to_string(),
+        },
     ]
 }
 
@@ -76,30 +97,81 @@ fn all_lifecycle_errors() -> Vec<LifecycleError> {
 
 #[test]
 fn enrichment_state_is_alive_classification() {
-    let alive = [ExtensionState::Running, ExtensionState::Starting, ExtensionState::Resuming, ExtensionState::Loading, ExtensionState::Validating];
-    let not_alive = [ExtensionState::Unloaded, ExtensionState::Suspended, ExtensionState::Suspending, ExtensionState::Terminating, ExtensionState::Terminated, ExtensionState::Quarantined];
-    for s in &alive { assert!(s.is_alive(), "{s} should be alive"); }
-    for s in &not_alive { assert!(!s.is_alive(), "{s} should not be alive"); }
+    let alive = [
+        ExtensionState::Running,
+        ExtensionState::Starting,
+        ExtensionState::Resuming,
+        ExtensionState::Loading,
+        ExtensionState::Validating,
+    ];
+    let not_alive = [
+        ExtensionState::Unloaded,
+        ExtensionState::Suspended,
+        ExtensionState::Suspending,
+        ExtensionState::Terminating,
+        ExtensionState::Terminated,
+        ExtensionState::Quarantined,
+    ];
+    for s in &alive {
+        assert!(s.is_alive(), "{s} should be alive");
+    }
+    for s in &not_alive {
+        assert!(!s.is_alive(), "{s} should not be alive");
+    }
 }
 
 // ── test: ExtensionState is_terminal classification ──────────────────────
 
 #[test]
 fn enrichment_state_is_terminal_classification() {
-    let terminal = [ExtensionState::Terminated, ExtensionState::Quarantined, ExtensionState::Unloaded];
-    let non_terminal = [ExtensionState::Running, ExtensionState::Starting, ExtensionState::Suspending, ExtensionState::Suspended, ExtensionState::Loading, ExtensionState::Validating, ExtensionState::Resuming, ExtensionState::Terminating];
-    for s in &terminal { assert!(s.is_terminal(), "{s} should be terminal"); }
-    for s in &non_terminal { assert!(!s.is_terminal(), "{s} should not be terminal"); }
+    let terminal = [
+        ExtensionState::Terminated,
+        ExtensionState::Quarantined,
+        ExtensionState::Unloaded,
+    ];
+    let non_terminal = [
+        ExtensionState::Running,
+        ExtensionState::Starting,
+        ExtensionState::Suspending,
+        ExtensionState::Suspended,
+        ExtensionState::Loading,
+        ExtensionState::Validating,
+        ExtensionState::Resuming,
+        ExtensionState::Terminating,
+    ];
+    for s in &terminal {
+        assert!(s.is_terminal(), "{s} should be terminal");
+    }
+    for s in &non_terminal {
+        assert!(!s.is_terminal(), "{s} should not be terminal");
+    }
 }
 
 // ── test: ExtensionState is_executing classification ─────────────────────
 
 #[test]
 fn enrichment_state_is_executing_classification() {
-    let executing = [ExtensionState::Running, ExtensionState::Starting, ExtensionState::Resuming];
-    let not_executing = [ExtensionState::Unloaded, ExtensionState::Validating, ExtensionState::Loading, ExtensionState::Suspending, ExtensionState::Suspended, ExtensionState::Terminating, ExtensionState::Terminated, ExtensionState::Quarantined];
-    for s in &executing { assert!(s.is_executing(), "{s} should be executing"); }
-    for s in &not_executing { assert!(!s.is_executing(), "{s} should not be executing"); }
+    let executing = [
+        ExtensionState::Running,
+        ExtensionState::Starting,
+        ExtensionState::Resuming,
+    ];
+    let not_executing = [
+        ExtensionState::Unloaded,
+        ExtensionState::Validating,
+        ExtensionState::Loading,
+        ExtensionState::Suspending,
+        ExtensionState::Suspended,
+        ExtensionState::Terminating,
+        ExtensionState::Terminated,
+        ExtensionState::Quarantined,
+    ];
+    for s in &executing {
+        assert!(s.is_executing(), "{s} should be executing");
+    }
+    for s in &not_executing {
+        assert!(!s.is_executing(), "{s} should not be executing");
+    }
 }
 
 // ── test: ExtensionState Display uniqueness (all 11) ─────────────────────
@@ -140,10 +212,30 @@ fn enrichment_transition_as_str_matches_display() {
 
 #[test]
 fn enrichment_transition_is_failure() {
-    let failures = [LifecycleTransition::RejectManifest, LifecycleTransition::LoadFailed, LifecycleTransition::StartFailed];
-    let non_failures = [LifecycleTransition::Validate, LifecycleTransition::Load, LifecycleTransition::Start, LifecycleTransition::Activate, LifecycleTransition::Suspend, LifecycleTransition::Freeze, LifecycleTransition::Resume, LifecycleTransition::Reactivate, LifecycleTransition::Terminate, LifecycleTransition::Finalize, LifecycleTransition::Quarantine];
-    for t in &failures { assert!(t.is_failure(), "{t} should be failure"); }
-    for t in &non_failures { assert!(!t.is_failure(), "{t} should not be failure"); }
+    let failures = [
+        LifecycleTransition::RejectManifest,
+        LifecycleTransition::LoadFailed,
+        LifecycleTransition::StartFailed,
+    ];
+    let non_failures = [
+        LifecycleTransition::Validate,
+        LifecycleTransition::Load,
+        LifecycleTransition::Start,
+        LifecycleTransition::Activate,
+        LifecycleTransition::Suspend,
+        LifecycleTransition::Freeze,
+        LifecycleTransition::Resume,
+        LifecycleTransition::Reactivate,
+        LifecycleTransition::Terminate,
+        LifecycleTransition::Finalize,
+        LifecycleTransition::Quarantine,
+    ];
+    for t in &failures {
+        assert!(t.is_failure(), "{t} should be failure");
+    }
+    for t in &non_failures {
+        assert!(!t.is_failure(), "{t} should not be failure");
+    }
 }
 
 // ── test: ResourceBudget new and initial values ──────────────────────────
@@ -252,7 +344,8 @@ fn enrichment_cancellation_config_clamped() {
         grace_period_ns: 999_000_000_000,
         force_on_timeout: true,
         propagate_to_children: true,
-    }.clamped();
+    }
+    .clamped();
     assert_eq!(cfg.grace_period_ns, 30_000_000_000);
 }
 
@@ -264,7 +357,8 @@ fn enrichment_cancellation_config_within_range() {
         grace_period_ns: 10_000_000_000,
         force_on_timeout: false,
         propagate_to_children: false,
-    }.clamped();
+    }
+    .clamped();
     assert_eq!(cfg.grace_period_ns, 10_000_000_000);
     assert!(!cfg.force_on_timeout);
 }
@@ -273,7 +367,10 @@ fn enrichment_cancellation_config_within_range() {
 
 #[test]
 fn enrichment_error_code_uniqueness() {
-    let codes: BTreeSet<String> = all_lifecycle_errors().iter().map(|e| e.error_code().to_string()).collect();
+    let codes: BTreeSet<String> = all_lifecycle_errors()
+        .iter()
+        .map(|e| e.error_code().to_string())
+        .collect();
     assert_eq!(codes.len(), 7);
 }
 
@@ -281,20 +378,72 @@ fn enrichment_error_code_uniqueness() {
 
 #[test]
 fn enrichment_error_code_stable_values() {
-    assert_eq!(LifecycleError::InvalidTransition { extension_id: "x".to_string(), current_state: ExtensionState::Running, attempted: LifecycleTransition::Validate }.error_code(), "LIFECYCLE_INVALID_TRANSITION");
-    assert_eq!(LifecycleError::ExtensionNotFound { extension_id: "x".to_string() }.error_code(), "LIFECYCLE_EXTENSION_NOT_FOUND");
-    assert_eq!(LifecycleError::ExtensionAlreadyExists { extension_id: "x".to_string() }.error_code(), "LIFECYCLE_EXTENSION_EXISTS");
-    assert_eq!(LifecycleError::BudgetExhausted { extension_id: "x".to_string(), remaining_millionths: 0, required_millionths: 1 }.error_code(), "LIFECYCLE_BUDGET_EXHAUSTED");
-    assert_eq!(LifecycleError::GracePeriodExpired { extension_id: "x".to_string(), elapsed_ns: 0, budget_ns: 0 }.error_code(), "LIFECYCLE_GRACE_EXPIRED");
-    assert_eq!(LifecycleError::ManifestRejected { extension_id: "x".to_string(), reason: "b".to_string() }.error_code(), "LIFECYCLE_MANIFEST_REJECTED");
-    assert_eq!(LifecycleError::Internal { detail: "d".to_string() }.error_code(), "LIFECYCLE_INTERNAL");
+    assert_eq!(
+        LifecycleError::InvalidTransition {
+            extension_id: "x".to_string(),
+            current_state: ExtensionState::Running,
+            attempted: LifecycleTransition::Validate
+        }
+        .error_code(),
+        "LIFECYCLE_INVALID_TRANSITION"
+    );
+    assert_eq!(
+        LifecycleError::ExtensionNotFound {
+            extension_id: "x".to_string()
+        }
+        .error_code(),
+        "LIFECYCLE_EXTENSION_NOT_FOUND"
+    );
+    assert_eq!(
+        LifecycleError::ExtensionAlreadyExists {
+            extension_id: "x".to_string()
+        }
+        .error_code(),
+        "LIFECYCLE_EXTENSION_EXISTS"
+    );
+    assert_eq!(
+        LifecycleError::BudgetExhausted {
+            extension_id: "x".to_string(),
+            remaining_millionths: 0,
+            required_millionths: 1
+        }
+        .error_code(),
+        "LIFECYCLE_BUDGET_EXHAUSTED"
+    );
+    assert_eq!(
+        LifecycleError::GracePeriodExpired {
+            extension_id: "x".to_string(),
+            elapsed_ns: 0,
+            budget_ns: 0
+        }
+        .error_code(),
+        "LIFECYCLE_GRACE_EXPIRED"
+    );
+    assert_eq!(
+        LifecycleError::ManifestRejected {
+            extension_id: "x".to_string(),
+            reason: "b".to_string()
+        }
+        .error_code(),
+        "LIFECYCLE_MANIFEST_REJECTED"
+    );
+    assert_eq!(
+        LifecycleError::Internal {
+            detail: "d".to_string()
+        }
+        .error_code(),
+        "LIFECYCLE_INTERNAL"
+    );
 }
 
 // ── test: LifecycleError Display all unique ──────────────────────────────
 
 #[test]
 fn enrichment_lifecycle_error_display_all_unique() {
-    let strs: BTreeSet<String> = all_lifecycle_errors().iter().map(|e| e.to_string()).collect();
+    let strs: BTreeSet<String> = all_lifecycle_errors()
+        .iter()
+        .map(|e| e.to_string())
+        .collect();
     assert_eq!(strs.len(), 7);
 }
 
@@ -302,7 +451,11 @@ fn enrichment_lifecycle_error_display_all_unique() {
 
 #[test]
 fn enrichment_lifecycle_error_display_content() {
-    let err = LifecycleError::InvalidTransition { extension_id: "ext-a".to_string(), current_state: ExtensionState::Running, attempted: LifecycleTransition::Validate };
+    let err = LifecycleError::InvalidTransition {
+        extension_id: "ext-a".to_string(),
+        current_state: ExtensionState::Running,
+        attempted: LifecycleTransition::Validate,
+    };
     let msg = err.to_string();
     assert!(msg.contains("ext-a"));
     assert!(msg.contains("running"));

@@ -1857,7 +1857,12 @@ mod tests {
             // "bcorr_" prefix + 64 hex chars from ContentHash
             assert!(key.starts_with("bcorr_"));
             let hex_part = &key["bcorr_".len()..];
-            assert_eq!(hex_part.len(), 64, "hex portion should be 64 chars for {:?}", class);
+            assert_eq!(
+                hex_part.len(),
+                64,
+                "hex portion should be 64 chars for {:?}",
+                class
+            );
             assert!(hex_part.chars().all(|c| c.is_ascii_hexdigit()));
         }
     }
@@ -2076,7 +2081,11 @@ mod tests {
         let schema = MinimalReplayInputSchema::from_catalog(&catalog);
         for (entry, rule) in schema.entries.iter().zip(catalog.rules.iter()) {
             assert_eq!(entry.boundary_class, rule.boundary_class);
-            let rule_fields: Vec<String> = rule.minimal_fields.iter().map(|f| f.field.clone()).collect();
+            let rule_fields: Vec<String> = rule
+                .minimal_fields
+                .iter()
+                .map(|f| f.field.clone())
+                .collect();
             assert_eq!(entry.required_fields, rule_fields);
         }
     }
@@ -2086,7 +2095,11 @@ mod tests {
         let catalog = BoundaryCatalog::default_v1();
         let schema = MinimalReplayInputSchema::from_catalog(&catalog);
         for (entry, rule) in schema.entries.iter().zip(catalog.rules.iter()) {
-            let rule_ids: Vec<String> = rule.escalation_cases.iter().map(|e| e.case_id.clone()).collect();
+            let rule_ids: Vec<String> = rule
+                .escalation_cases
+                .iter()
+                .map(|e| e.case_id.clone())
+                .collect();
             assert_eq!(entry.escalation_cases, rule_ids);
         }
     }
@@ -2095,7 +2108,10 @@ mod tests {
     fn boundary_redaction_map_from_catalog_covers_all_fields() {
         let catalog = BoundaryCatalog::default_v1();
         let redaction_map = BoundaryRedactionMap::from_catalog(&catalog);
-        assert_eq!(redaction_map.schema_version, BOUNDARY_REDACTION_MAP_SCHEMA_VERSION);
+        assert_eq!(
+            redaction_map.schema_version,
+            BOUNDARY_REDACTION_MAP_SCHEMA_VERSION
+        );
         assert_eq!(redaction_map.bead_id, BEAD_ID);
         // Total entries should be the sum of redaction_rules across all rules
         let expected_count: usize = catalog.rules.iter().map(|r| r.redaction_rules.len()).sum();
@@ -2110,7 +2126,9 @@ mod tests {
         let fs_path_entry = redaction_map
             .entries
             .iter()
-            .find(|e| e.boundary_class == BoundaryClass::FilesystemInput && e.field == "path_digest")
+            .find(|e| {
+                e.boundary_class == BoundaryClass::FilesystemInput && e.field == "path_digest"
+            })
             .expect("fs path_digest entry");
         assert_eq!(fs_path_entry.privacy_class, PrivacyClass::PathDigest);
         assert_eq!(fs_path_entry.treatment, RedactionTreatment::DigestOnly);
@@ -2121,14 +2139,18 @@ mod tests {
         let mut session = BoundaryCaptureSession::default_v1();
         // Two captures with the same (trace, decision, policy)
         let ctx1 = BoundaryContext::new("t", "d", "p", "clock", 1);
-        session.capture_clock_read(&ctx1, "mono", "monotonic", 1, None).unwrap();
+        session
+            .capture_clock_read(&ctx1, "mono", "monotonic", 1, None)
+            .unwrap();
         let ctx2 = BoundaryContext::new("t", "d", "p", "rng", 2);
         session
             .capture_randomness_draw(&ctx2, "gen-1", 0, "sample", None)
             .unwrap();
         // One capture with a different trace
         let ctx3 = BoundaryContext::new("t-other", "d", "p", "clock", 3);
-        session.capture_clock_read(&ctx3, "mono", "monotonic", 3, None).unwrap();
+        session
+            .capture_clock_read(&ctx3, "mono", "monotonic", 3, None)
+            .unwrap();
 
         let plans = session.minimal_replay_plans().unwrap();
         assert_eq!(plans.len(), 2);
@@ -2417,20 +2439,28 @@ mod tests {
     #[test]
     fn hardware_surface_read_redaction_has_hardware_fingerprint_privacy() {
         let catalog = BoundaryCatalog::default_v1();
-        let rule = catalog.rule_for(BoundaryClass::HardwareSurfaceRead).unwrap();
+        let rule = catalog
+            .rule_for(BoundaryClass::HardwareSurfaceRead)
+            .unwrap();
         let driver_fp_entry = rule
             .redaction_rules
             .iter()
             .find(|e| e.field == "driver_fingerprint")
             .unwrap();
-        assert_eq!(driver_fp_entry.privacy_class, PrivacyClass::HardwareFingerprint);
+        assert_eq!(
+            driver_fp_entry.privacy_class,
+            PrivacyClass::HardwareFingerprint
+        );
         assert_eq!(driver_fp_entry.treatment, RedactionTreatment::DigestOnly);
         let measurement_entry = rule
             .redaction_rules
             .iter()
             .find(|e| e.field == "measurement_digest")
             .unwrap();
-        assert_eq!(measurement_entry.privacy_class, PrivacyClass::HardwareFingerprint);
+        assert_eq!(
+            measurement_entry.privacy_class,
+            PrivacyClass::HardwareFingerprint
+        );
     }
 
     #[test]
@@ -2442,6 +2472,9 @@ mod tests {
             .iter()
             .find(|e| e.field == "policy_digest")
             .unwrap();
-        assert_eq!(policy_digest_entry.privacy_class, PrivacyClass::PolicyDigest);
+        assert_eq!(
+            policy_digest_entry.privacy_class,
+            PrivacyClass::PolicyDigest
+        );
     }
 }

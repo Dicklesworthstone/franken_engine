@@ -26,19 +26,40 @@ use frankenengine_engine::feature_parity_tracker::*;
 // ── helpers ──────────────────────────────────────────────────────────────
 
 fn all_feature_statuses() -> Vec<FeatureStatus> {
-    vec![FeatureStatus::NotStarted, FeatureStatus::InProgress, FeatureStatus::Passing, FeatureStatus::Waived]
+    vec![
+        FeatureStatus::NotStarted,
+        FeatureStatus::InProgress,
+        FeatureStatus::Passing,
+        FeatureStatus::Waived,
+    ]
 }
 
 fn all_parity_errors() -> Vec<ParityTrackerError> {
     vec![
-        ParityTrackerError::FeatureNotFound { feature_id: "f1".to_string() },
-        ParityTrackerError::WaiverNotFound { waiver_id: "w1".to_string() },
-        ParityTrackerError::WaiverAlreadyExists { waiver_id: "w2".to_string() },
-        ParityTrackerError::WaiverSealed { waiver_id: "w3".to_string() },
-        ParityTrackerError::InvalidWaiver { detail: "bad waiver".to_string() },
-        ParityTrackerError::InvalidMetrics { detail: "bad metrics".to_string() },
-        ParityTrackerError::DuplicateFeature { feature_id: "f2".to_string() },
-        ParityTrackerError::GateEvaluationFailed { detail: "gate fail".to_string() },
+        ParityTrackerError::FeatureNotFound {
+            feature_id: "f1".to_string(),
+        },
+        ParityTrackerError::WaiverNotFound {
+            waiver_id: "w1".to_string(),
+        },
+        ParityTrackerError::WaiverAlreadyExists {
+            waiver_id: "w2".to_string(),
+        },
+        ParityTrackerError::WaiverSealed {
+            waiver_id: "w3".to_string(),
+        },
+        ParityTrackerError::InvalidWaiver {
+            detail: "bad waiver".to_string(),
+        },
+        ParityTrackerError::InvalidMetrics {
+            detail: "bad metrics".to_string(),
+        },
+        ParityTrackerError::DuplicateFeature {
+            feature_id: "f2".to_string(),
+        },
+        ParityTrackerError::GateEvaluationFailed {
+            detail: "gate fail".to_string(),
+        },
     ]
 }
 
@@ -102,7 +123,10 @@ fn enrichment_feature_area_as_str_matches_display() {
 
 #[test]
 fn enrichment_feature_status_display_uniqueness() {
-    let strs: BTreeSet<String> = all_feature_statuses().iter().map(|s| s.to_string()).collect();
+    let strs: BTreeSet<String> = all_feature_statuses()
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     assert_eq!(strs.len(), 4);
 }
 
@@ -159,7 +183,12 @@ fn enrichment_feature_entry_id_unique_per_area() {
 
 #[test]
 fn enrichment_test262_validate_passing_exceeds_total() {
-    let r = Test262Result { area: FeatureArea::BigInt, total: 10, passing: 15, failing_test_ids: vec![] };
+    let r = Test262Result {
+        area: FeatureArea::BigInt,
+        total: 10,
+        passing: 15,
+        failing_test_ids: vec![],
+    };
     let err = r.validate().unwrap_err();
     assert_eq!(err.code(), "FE-FPT-0006");
     assert!(err.to_string().contains("exceeds total"));
@@ -169,7 +198,12 @@ fn enrichment_test262_validate_passing_exceeds_total() {
 
 #[test]
 fn enrichment_test262_validate_ok() {
-    let r = Test262Result { area: FeatureArea::BigInt, total: 10, passing: 8, failing_test_ids: vec!["t1".to_string(), "t2".to_string()] };
+    let r = Test262Result {
+        area: FeatureArea::BigInt,
+        total: 10,
+        passing: 8,
+        failing_test_ids: vec!["t1".to_string(), "t2".to_string()],
+    };
     assert!(r.validate().is_ok());
 }
 
@@ -177,7 +211,12 @@ fn enrichment_test262_validate_ok() {
 
 #[test]
 fn enrichment_test262_validate_all_passing() {
-    let r = Test262Result { area: FeatureArea::BigInt, total: 10, passing: 10, failing_test_ids: vec![] };
+    let r = Test262Result {
+        area: FeatureArea::BigInt,
+        total: 10,
+        passing: 10,
+        failing_test_ids: vec![],
+    };
     assert!(r.validate().is_ok());
 }
 
@@ -185,7 +224,13 @@ fn enrichment_test262_validate_all_passing() {
 
 #[test]
 fn enrichment_lockstep_validate_matches_exceeds_total() {
-    let r = LockstepResult { area: FeatureArea::BigInt, runtime: LockstepRuntime::Node, total_comparisons: 5, matches: 10, mismatches: vec![] };
+    let r = LockstepResult {
+        area: FeatureArea::BigInt,
+        runtime: LockstepRuntime::Node,
+        total_comparisons: 5,
+        matches: 10,
+        mismatches: vec![],
+    };
     let err = r.validate().unwrap_err();
     assert_eq!(err.code(), "FE-FPT-0006");
 }
@@ -199,9 +244,11 @@ fn enrichment_lockstep_validate_mismatch_count_inconsistent() {
         runtime: LockstepRuntime::Bun,
         total_comparisons: 10,
         matches: 7,
-        mismatches: vec![
-            LockstepMismatch { test_id: "t1".to_string(), expected: "a".to_string(), actual: "b".to_string() },
-        ],
+        mismatches: vec![LockstepMismatch {
+            test_id: "t1".to_string(),
+            expected: "a".to_string(),
+            actual: "b".to_string(),
+        }],
     };
     // 10-7=3 mismatches expected but only 1 provided
     let err = r.validate().unwrap_err();
@@ -218,8 +265,16 @@ fn enrichment_lockstep_validate_ok() {
         total_comparisons: 5,
         matches: 3,
         mismatches: vec![
-            LockstepMismatch { test_id: "t1".to_string(), expected: "a".to_string(), actual: "b".to_string() },
-            LockstepMismatch { test_id: "t2".to_string(), expected: "c".to_string(), actual: "d".to_string() },
+            LockstepMismatch {
+                test_id: "t1".to_string(),
+                expected: "a".to_string(),
+                actual: "b".to_string(),
+            },
+            LockstepMismatch {
+                test_id: "t2".to_string(),
+                expected: "c".to_string(),
+                actual: "d".to_string(),
+            },
         ],
     };
     assert!(r.validate().is_ok());
@@ -310,7 +365,10 @@ fn enrichment_waiver_validate_no_until_ok() {
 
 #[test]
 fn enrichment_error_code_uniqueness() {
-    let codes: BTreeSet<String> = all_parity_errors().iter().map(|e| e.code().to_string()).collect();
+    let codes: BTreeSet<String> = all_parity_errors()
+        .iter()
+        .map(|e| e.code().to_string())
+        .collect();
     assert_eq!(codes.len(), 8);
 }
 
@@ -318,14 +376,62 @@ fn enrichment_error_code_uniqueness() {
 
 #[test]
 fn enrichment_error_code_stable_values() {
-    assert_eq!(ParityTrackerError::FeatureNotFound { feature_id: "f".to_string() }.code(), "FE-FPT-0001");
-    assert_eq!(ParityTrackerError::WaiverNotFound { waiver_id: "w".to_string() }.code(), "FE-FPT-0002");
-    assert_eq!(ParityTrackerError::WaiverAlreadyExists { waiver_id: "w".to_string() }.code(), "FE-FPT-0003");
-    assert_eq!(ParityTrackerError::WaiverSealed { waiver_id: "w".to_string() }.code(), "FE-FPT-0004");
-    assert_eq!(ParityTrackerError::InvalidWaiver { detail: "d".to_string() }.code(), "FE-FPT-0005");
-    assert_eq!(ParityTrackerError::InvalidMetrics { detail: "d".to_string() }.code(), "FE-FPT-0006");
-    assert_eq!(ParityTrackerError::DuplicateFeature { feature_id: "f".to_string() }.code(), "FE-FPT-0007");
-    assert_eq!(ParityTrackerError::GateEvaluationFailed { detail: "d".to_string() }.code(), "FE-FPT-0008");
+    assert_eq!(
+        ParityTrackerError::FeatureNotFound {
+            feature_id: "f".to_string()
+        }
+        .code(),
+        "FE-FPT-0001"
+    );
+    assert_eq!(
+        ParityTrackerError::WaiverNotFound {
+            waiver_id: "w".to_string()
+        }
+        .code(),
+        "FE-FPT-0002"
+    );
+    assert_eq!(
+        ParityTrackerError::WaiverAlreadyExists {
+            waiver_id: "w".to_string()
+        }
+        .code(),
+        "FE-FPT-0003"
+    );
+    assert_eq!(
+        ParityTrackerError::WaiverSealed {
+            waiver_id: "w".to_string()
+        }
+        .code(),
+        "FE-FPT-0004"
+    );
+    assert_eq!(
+        ParityTrackerError::InvalidWaiver {
+            detail: "d".to_string()
+        }
+        .code(),
+        "FE-FPT-0005"
+    );
+    assert_eq!(
+        ParityTrackerError::InvalidMetrics {
+            detail: "d".to_string()
+        }
+        .code(),
+        "FE-FPT-0006"
+    );
+    assert_eq!(
+        ParityTrackerError::DuplicateFeature {
+            feature_id: "f".to_string()
+        }
+        .code(),
+        "FE-FPT-0007"
+    );
+    assert_eq!(
+        ParityTrackerError::GateEvaluationFailed {
+            detail: "d".to_string()
+        }
+        .code(),
+        "FE-FPT-0008"
+    );
 }
 
 // ── test: ParityTrackerError Display uniqueness ──────────────────────────
@@ -342,7 +448,10 @@ fn enrichment_error_display_uniqueness() {
 fn enrichment_error_display_contains_code() {
     for err in all_parity_errors() {
         let msg = err.to_string();
-        assert!(msg.contains(err.code()), "Display should contain error code: {msg}");
+        assert!(
+            msg.contains(err.code()),
+            "Display should contain error code: {msg}"
+        );
     }
 }
 
@@ -424,7 +533,12 @@ fn enrichment_serde_feature_entry() {
 
 #[test]
 fn enrichment_serde_test262_result() {
-    let r = Test262Result { area: FeatureArea::BigInt, total: 100, passing: 95, failing_test_ids: vec!["t1".to_string()] };
+    let r = Test262Result {
+        area: FeatureArea::BigInt,
+        total: 100,
+        passing: 95,
+        failing_test_ids: vec!["t1".to_string()],
+    };
     let json = serde_json::to_string(&r).unwrap();
     let back: Test262Result = serde_json::from_str(&json).unwrap();
     assert_eq!(r, back);
@@ -440,8 +554,16 @@ fn enrichment_serde_lockstep_result() {
         total_comparisons: 50,
         matches: 48,
         mismatches: vec![
-            LockstepMismatch { test_id: "t1".to_string(), expected: "a".to_string(), actual: "b".to_string() },
-            LockstepMismatch { test_id: "t2".to_string(), expected: "c".to_string(), actual: "d".to_string() },
+            LockstepMismatch {
+                test_id: "t1".to_string(),
+                expected: "a".to_string(),
+                actual: "b".to_string(),
+            },
+            LockstepMismatch {
+                test_id: "t2".to_string(),
+                expected: "c".to_string(),
+                actual: "d".to_string(),
+            },
         ],
     };
     let json = serde_json::to_string(&r).unwrap();
@@ -489,7 +611,11 @@ fn enrichment_serde_release_gate_decision() {
 
 #[test]
 fn enrichment_serde_unwaived_failure() {
-    let f = UnwaivedFailure { feature_id: "f1".to_string(), failure_type: "test262".to_string(), test_id: "t1".to_string() };
+    let f = UnwaivedFailure {
+        feature_id: "f1".to_string(),
+        failure_type: "test262".to_string(),
+        test_id: "t1".to_string(),
+    };
     let json = serde_json::to_string(&f).unwrap();
     let back: UnwaivedFailure = serde_json::from_str(&json).unwrap();
     assert_eq!(f, back);
@@ -528,7 +654,11 @@ fn enrichment_serde_parity_error_all() {
 
 #[test]
 fn enrichment_serde_lockstep_mismatch() {
-    let m = LockstepMismatch { test_id: "t1".to_string(), expected: "exp".to_string(), actual: "act".to_string() };
+    let m = LockstepMismatch {
+        test_id: "t1".to_string(),
+        expected: "exp".to_string(),
+        actual: "act".to_string(),
+    };
     let json = serde_json::to_string(&m).unwrap();
     let back: LockstepMismatch = serde_json::from_str(&json).unwrap();
     assert_eq!(m, back);

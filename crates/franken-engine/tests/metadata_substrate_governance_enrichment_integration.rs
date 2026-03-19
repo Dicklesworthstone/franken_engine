@@ -13,11 +13,10 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::metadata_substrate_governance::{
-    BEAD_ID, COMPONENT, CacheMissEntry, DEFAULT_MAX_CACHE_MISS_RATE,
-    DEFAULT_MAX_NUMA_REMOTE_RATIO, DEFAULT_MIN_OBSERVABILITY_COVERAGE,
-    DEFAULT_MIN_PORTABILITY_SCORE, DEFAULT_MIN_SAMPLES, FIXED_ONE, GovernanceConfig,
-    GovernanceEvaluator, GovernanceReceipt, GovernanceVerdict, LocalityDimension, NumaEntry,
-    POLICY_ID, PortabilityEntry, PortabilityTarget, SCHEMA_VERSION,
+    BEAD_ID, COMPONENT, CacheMissEntry, DEFAULT_MAX_CACHE_MISS_RATE, DEFAULT_MAX_NUMA_REMOTE_RATIO,
+    DEFAULT_MIN_OBSERVABILITY_COVERAGE, DEFAULT_MIN_PORTABILITY_SCORE, DEFAULT_MIN_SAMPLES,
+    FIXED_ONE, GovernanceConfig, GovernanceEvaluator, GovernanceReceipt, GovernanceVerdict,
+    LocalityDimension, NumaEntry, POLICY_ID, PortabilityEntry, PortabilityTarget, SCHEMA_VERSION,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -353,14 +352,26 @@ fn integ_numa_exceeds_budget() {
 
 #[test]
 fn integ_numa_exactly_at_threshold() {
-    let n = NumaEntry::new("boundary".into(), 10000, 1000, 2, DEFAULT_MAX_NUMA_REMOTE_RATIO);
+    let n = NumaEntry::new(
+        "boundary".into(),
+        10000,
+        1000,
+        2,
+        DEFAULT_MAX_NUMA_REMOTE_RATIO,
+    );
     assert_eq!(n.remote_ratio_millionths, 100_000);
     assert!(n.within_budget);
 }
 
 #[test]
 fn integ_numa_one_over_threshold() {
-    let n = NumaEntry::new("boundary".into(), 10000, 1001, 2, DEFAULT_MAX_NUMA_REMOTE_RATIO);
+    let n = NumaEntry::new(
+        "boundary".into(),
+        10000,
+        1001,
+        2,
+        DEFAULT_MAX_NUMA_REMOTE_RATIO,
+    );
     assert!(!n.within_budget);
 }
 
@@ -386,7 +397,13 @@ fn integ_numa_hash_differs_on_node_count() {
 
 #[test]
 fn integ_numa_serde_roundtrip() {
-    let entry = NumaEntry::new("remote_scan".into(), 80000, 4000, 4, DEFAULT_MAX_NUMA_REMOTE_RATIO);
+    let entry = NumaEntry::new(
+        "remote_scan".into(),
+        80000,
+        4000,
+        4,
+        DEFAULT_MAX_NUMA_REMOTE_RATIO,
+    );
     let json = serde_json::to_string(&entry).unwrap();
     let back: NumaEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(entry, back);
@@ -672,9 +689,17 @@ fn integ_covered_targets_only_functional() {
     eval.add_portability("op".into(), PortabilityTarget::Arm64Linux, false, 0);
     eval.add_portability("op".into(), PortabilityTarget::Wasm, true, FIXED_ONE);
     let receipt = eval.evaluate(ep(1));
-    assert!(receipt.targets_covered.contains(&PortabilityTarget::X64Linux));
+    assert!(
+        receipt
+            .targets_covered
+            .contains(&PortabilityTarget::X64Linux)
+    );
     assert!(receipt.targets_covered.contains(&PortabilityTarget::Wasm));
-    assert!(!receipt.targets_covered.contains(&PortabilityTarget::Arm64Linux));
+    assert!(
+        !receipt
+            .targets_covered
+            .contains(&PortabilityTarget::Arm64Linux)
+    );
 }
 
 #[test]
@@ -687,7 +712,11 @@ fn integ_targets_missing_partial() {
     let receipt = eval.evaluate(ep(1));
     assert_eq!(receipt.verdict, GovernanceVerdict::TargetsMissing);
     assert!(receipt.targets_missing.contains(&PortabilityTarget::Wasm));
-    assert!(!receipt.targets_missing.contains(&PortabilityTarget::X64Linux));
+    assert!(
+        !receipt
+            .targets_missing
+            .contains(&PortabilityTarget::X64Linux)
+    );
 }
 
 #[test]

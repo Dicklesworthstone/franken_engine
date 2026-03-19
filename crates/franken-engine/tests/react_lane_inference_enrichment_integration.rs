@@ -120,7 +120,6 @@ fn make_hook_manifest(name: &str, hooks: Vec<HookKind>) -> HookManifest {
     HookManifest::new(name, slots)
 }
 
-
 // ===========================================================================
 // Constants verification
 // ===========================================================================

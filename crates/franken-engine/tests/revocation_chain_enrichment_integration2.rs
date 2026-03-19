@@ -40,19 +40,17 @@ const TEST_ZONE: &str = "enrichment2-zone";
 
 fn test_signing_key() -> SigningKey {
     SigningKey::from_bytes([
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-        0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
-        0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
-        0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E,
+        0x1F, 0x20,
     ])
 }
 
 fn revocation_signing_key() -> SigningKey {
     SigningKey::from_bytes([
-        0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8,
-        0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF, 0xB0,
-        0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8,
-        0xB9, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF, 0xC0,
+        0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF,
+        0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE,
+        0xBF, 0xC0,
     ])
 }
 
@@ -113,7 +111,11 @@ fn enrichment_empty_chain_hash_is_genesis_sentinel() {
 fn enrichment_append_genesis_event() {
     let mut chain = RevocationChain::new(TEST_ZONE);
     let sk = test_signing_key();
-    let rev = make_revocation(RevocationTargetType::Key, RevocationReason::Compromised, [1; 32]);
+    let rev = make_revocation(
+        RevocationTargetType::Key,
+        RevocationReason::Compromised,
+        [1; 32],
+    );
     let seq = chain.append(rev, &sk, "t-genesis").unwrap();
     assert_eq!(seq, 0);
     assert_eq!(chain.len(), 1);
@@ -129,7 +131,11 @@ fn enrichment_append_multiple_events_chain_links() {
     let mut chain = RevocationChain::new(TEST_ZONE);
     let sk = test_signing_key();
     for i in 0..5u8 {
-        let rev = make_revocation(RevocationTargetType::Token, RevocationReason::Expired, [i + 10; 32]);
+        let rev = make_revocation(
+            RevocationTargetType::Token,
+            RevocationReason::Expired,
+            [i + 10; 32],
+        );
         chain.append(rev, &sk, &format!("t-{i}")).unwrap();
     }
     assert_eq!(chain.len(), 5);
@@ -145,7 +151,11 @@ fn enrichment_append_multiple_events_chain_links() {
 fn enrichment_is_revoked_after_append() {
     let mut chain = RevocationChain::new(TEST_ZONE);
     let sk = test_signing_key();
-    let rev = make_revocation(RevocationTargetType::Key, RevocationReason::Compromised, [42; 32]);
+    let rev = make_revocation(
+        RevocationTargetType::Key,
+        RevocationReason::Compromised,
+        [42; 32],
+    );
     chain.append(rev, &sk, "t").unwrap();
     assert!(chain.is_revoked(&EngineObjectId([42; 32])));
     assert!(!chain.is_revoked(&EngineObjectId([99; 32])));
@@ -155,7 +165,11 @@ fn enrichment_is_revoked_after_append() {
 fn enrichment_lookup_revocation_returns_details() {
     let mut chain = RevocationChain::new(TEST_ZONE);
     let sk = test_signing_key();
-    let rev = make_revocation(RevocationTargetType::Extension, RevocationReason::PolicyViolation, [55; 32]);
+    let rev = make_revocation(
+        RevocationTargetType::Extension,
+        RevocationReason::PolicyViolation,
+        [55; 32],
+    );
     chain.append(rev, &sk, "t").unwrap();
     let found = chain.lookup_revocation(&EngineObjectId([55; 32])).unwrap();
     assert_eq!(found.target_type, RevocationTargetType::Extension);
@@ -172,19 +186,37 @@ fn enrichment_lookup_revocation_returns_none_for_non_revoked() {
 fn enrichment_duplicate_target_rejected() {
     let mut chain = RevocationChain::new(TEST_ZONE);
     let sk = test_signing_key();
-    let rev1 = make_revocation(RevocationTargetType::Key, RevocationReason::Compromised, [1; 32]);
+    let rev1 = make_revocation(
+        RevocationTargetType::Key,
+        RevocationReason::Compromised,
+        [1; 32],
+    );
     chain.append(rev1, &sk, "t1").unwrap();
-    let rev2 = make_revocation(RevocationTargetType::Key, RevocationReason::Administrative, [1; 32]);
-    assert!(matches!(chain.append(rev2, &sk, "t2").unwrap_err(), ChainError::DuplicateTarget { .. }));
+    let rev2 = make_revocation(
+        RevocationTargetType::Key,
+        RevocationReason::Administrative,
+        [1; 32],
+    );
+    assert!(matches!(
+        chain.append(rev2, &sk, "t2").unwrap_err(),
+        ChainError::DuplicateTarget { .. }
+    ));
 }
 
 #[test]
 fn enrichment_zone_mismatch_rejected() {
     let mut chain = RevocationChain::new(TEST_ZONE);
     let sk = test_signing_key();
-    let mut rev = make_revocation(RevocationTargetType::Key, RevocationReason::Compromised, [1; 32]);
+    let mut rev = make_revocation(
+        RevocationTargetType::Key,
+        RevocationReason::Compromised,
+        [1; 32],
+    );
     rev.zone = "wrong-zone".to_string();
-    assert!(matches!(chain.append(rev, &sk, "t").unwrap_err(), ChainError::ChainIntegrity { .. }));
+    assert!(matches!(
+        chain.append(rev, &sk, "t").unwrap_err(),
+        ChainError::ChainIntegrity { .. }
+    ));
 }
 
 #[test]
@@ -198,7 +230,11 @@ fn enrichment_verify_chain_after_appends() {
     let mut chain = RevocationChain::new(TEST_ZONE);
     let sk = test_signing_key();
     for i in 0..10u8 {
-        let rev = make_revocation(RevocationTargetType::Token, RevocationReason::Superseded, [i + 100; 32]);
+        let rev = make_revocation(
+            RevocationTargetType::Token,
+            RevocationReason::Superseded,
+            [i + 100; 32],
+        );
         chain.append(rev, &sk, &format!("t-{i}")).unwrap();
     }
     assert!(chain.verify_chain("t").is_ok());
@@ -209,7 +245,11 @@ fn enrichment_verify_head_signature() {
     let mut chain = RevocationChain::new(TEST_ZONE);
     let sk = test_signing_key();
     let vk = sk.verification_key();
-    let rev = make_revocation(RevocationTargetType::Key, RevocationReason::Compromised, [1; 32]);
+    let rev = make_revocation(
+        RevocationTargetType::Key,
+        RevocationReason::Compromised,
+        [1; 32],
+    );
     chain.append(rev, &sk, "t").unwrap();
     assert!(chain.verify_head_signature(&vk).is_ok());
 }
@@ -218,17 +258,27 @@ fn enrichment_verify_head_signature() {
 fn enrichment_verify_head_wrong_key_fails() {
     let mut chain = RevocationChain::new(TEST_ZONE);
     let sk = test_signing_key();
-    let rev = make_revocation(RevocationTargetType::Key, RevocationReason::Compromised, [1; 32]);
+    let rev = make_revocation(
+        RevocationTargetType::Key,
+        RevocationReason::Compromised,
+        [1; 32],
+    );
     chain.append(rev, &sk, "t").unwrap();
     let wrong_vk = VerificationKey::from_bytes([0xFF; 32]);
-    assert!(matches!(chain.verify_head_signature(&wrong_vk).unwrap_err(), ChainError::SignatureInvalid { .. }));
+    assert!(matches!(
+        chain.verify_head_signature(&wrong_vk).unwrap_err(),
+        ChainError::SignatureInvalid { .. }
+    ));
 }
 
 #[test]
 fn enrichment_verify_head_empty_chain_error() {
     let chain = RevocationChain::new(TEST_ZONE);
     let vk = test_signing_key().verification_key();
-    assert!(matches!(chain.verify_head_signature(&vk).unwrap_err(), ChainError::EmptyChain));
+    assert!(matches!(
+        chain.verify_head_signature(&vk).unwrap_err(),
+        ChainError::EmptyChain
+    ));
 }
 
 #[test]
@@ -237,7 +287,11 @@ fn enrichment_chain_hash_deterministic() {
         let mut chain = RevocationChain::new(TEST_ZONE);
         let sk = test_signing_key();
         for i in 0..3u8 {
-            let rev = make_revocation(RevocationTargetType::Key, RevocationReason::Compromised, [i + 150; 32]);
+            let rev = make_revocation(
+                RevocationTargetType::Key,
+                RevocationReason::Compromised,
+                [i + 150; 32],
+            );
             chain.append(rev, &sk, &format!("t-{i}")).unwrap();
         }
         *chain.chain_hash()
@@ -250,7 +304,11 @@ fn enrichment_rebuild_from_events_preserves_chain_hash() {
     let mut chain = RevocationChain::new(TEST_ZONE);
     let sk = test_signing_key();
     for i in 0..5u8 {
-        let rev = make_revocation(RevocationTargetType::Token, RevocationReason::Superseded, [i + 70; 32]);
+        let rev = make_revocation(
+            RevocationTargetType::Token,
+            RevocationReason::Superseded,
+            [i + 70; 32],
+        );
         chain.append(rev, &sk, &format!("t-{i}")).unwrap();
     }
     let events = chain.events().to_vec();
@@ -286,8 +344,10 @@ fn enrichment_all_target_types_revoked() {
     let mut chain = RevocationChain::new(TEST_ZONE);
     let sk = test_signing_key();
     let types = [
-        RevocationTargetType::Key, RevocationTargetType::Token,
-        RevocationTargetType::Attestation, RevocationTargetType::Extension,
+        RevocationTargetType::Key,
+        RevocationTargetType::Token,
+        RevocationTargetType::Attestation,
+        RevocationTargetType::Extension,
         RevocationTargetType::Checkpoint,
     ];
     for (i, tt) in types.iter().enumerate() {
@@ -300,20 +360,30 @@ fn enrichment_all_target_types_revoked() {
 #[test]
 fn enrichment_target_type_display_unique() {
     let displays: BTreeSet<String> = [
-        RevocationTargetType::Key, RevocationTargetType::Token,
-        RevocationTargetType::Attestation, RevocationTargetType::Extension,
+        RevocationTargetType::Key,
+        RevocationTargetType::Token,
+        RevocationTargetType::Attestation,
+        RevocationTargetType::Extension,
         RevocationTargetType::Checkpoint,
-    ].iter().map(|t| t.to_string()).collect();
+    ]
+    .iter()
+    .map(|t| t.to_string())
+    .collect();
     assert_eq!(displays.len(), 5);
 }
 
 #[test]
 fn enrichment_reason_display_unique() {
     let displays: BTreeSet<String> = [
-        RevocationReason::Compromised, RevocationReason::Expired,
-        RevocationReason::Superseded, RevocationReason::PolicyViolation,
+        RevocationReason::Compromised,
+        RevocationReason::Expired,
+        RevocationReason::Superseded,
+        RevocationReason::PolicyViolation,
         RevocationReason::Administrative,
-    ].iter().map(|r| r.to_string()).collect();
+    ]
+    .iter()
+    .map(|r| r.to_string())
+    .collect();
     assert_eq!(displays.len(), 5);
 }
 
@@ -342,17 +412,29 @@ fn enrichment_schema_ids_distinct() {
 fn enrichment_audit_events_on_append() {
     let mut chain = RevocationChain::new(TEST_ZONE);
     let sk = test_signing_key();
-    let rev = make_revocation(RevocationTargetType::Key, RevocationReason::Compromised, [1; 32]);
+    let rev = make_revocation(
+        RevocationTargetType::Key,
+        RevocationReason::Compromised,
+        [1; 32],
+    );
     chain.append(rev, &sk, "t-audit").unwrap();
     let events = chain.drain_events();
-    assert!(events.iter().any(|e| matches!(e.event_type, ChainEventType::RevocationAppended { .. })));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e.event_type, ChainEventType::RevocationAppended { .. }))
+    );
 }
 
 #[test]
 fn enrichment_drain_events_idempotent() {
     let mut chain = RevocationChain::new(TEST_ZONE);
     let sk = test_signing_key();
-    let rev = make_revocation(RevocationTargetType::Key, RevocationReason::Compromised, [1; 32]);
+    let rev = make_revocation(
+        RevocationTargetType::Key,
+        RevocationReason::Compromised,
+        [1; 32],
+    );
     chain.append(rev, &sk, "t").unwrap();
     assert!(!chain.drain_events().is_empty());
     assert!(chain.drain_events().is_empty());
@@ -363,7 +445,11 @@ fn enrichment_drain_events_idempotent() {
 fn enrichment_verify_chain_mut_emits_audit() {
     let mut chain = RevocationChain::new(TEST_ZONE);
     let sk = test_signing_key();
-    let rev = make_revocation(RevocationTargetType::Key, RevocationReason::Compromised, [1; 32]);
+    let rev = make_revocation(
+        RevocationTargetType::Key,
+        RevocationReason::Compromised,
+        [1; 32],
+    );
     chain.append(rev, &sk, "t").unwrap();
     chain.drain_events();
     chain.verify_chain_mut("t-vcm").unwrap();
@@ -380,13 +466,31 @@ fn enrichment_is_revoked_audited_emits_event() {
 #[test]
 fn enrichment_chain_error_display_distinct() {
     let errors: Vec<ChainError> = vec![
-        ChainError::HeadSequenceRegression { current_seq: 5, attempted_seq: 3 },
-        ChainError::HashLinkMismatch { event_seq: 3, expected_prev: None, actual_prev: None },
-        ChainError::SequenceDiscontinuity { expected_seq: 5, actual_seq: 8 },
-        ChainError::InvalidGenesis { detail: "bad".into() },
-        ChainError::ChainIntegrity { detail: "corrupt".into() },
-        ChainError::SignatureInvalid { detail: "invalid".into() },
-        ChainError::DuplicateTarget { target_id: EngineObjectId([42; 32]) },
+        ChainError::HeadSequenceRegression {
+            current_seq: 5,
+            attempted_seq: 3,
+        },
+        ChainError::HashLinkMismatch {
+            event_seq: 3,
+            expected_prev: None,
+            actual_prev: None,
+        },
+        ChainError::SequenceDiscontinuity {
+            expected_seq: 5,
+            actual_seq: 8,
+        },
+        ChainError::InvalidGenesis {
+            detail: "bad".into(),
+        },
+        ChainError::ChainIntegrity {
+            detail: "corrupt".into(),
+        },
+        ChainError::SignatureInvalid {
+            detail: "invalid".into(),
+        },
+        ChainError::DuplicateTarget {
+            target_id: EngineObjectId([42; 32]),
+        },
         ChainError::MutationRejected { event_seq: 7 },
         ChainError::EmptyChain,
     ];
@@ -397,13 +501,31 @@ fn enrichment_chain_error_display_distinct() {
 #[test]
 fn enrichment_chain_error_serde_all() {
     let errors: Vec<ChainError> = vec![
-        ChainError::HeadSequenceRegression { current_seq: 5, attempted_seq: 3 },
-        ChainError::HashLinkMismatch { event_seq: 3, expected_prev: None, actual_prev: None },
-        ChainError::SequenceDiscontinuity { expected_seq: 5, actual_seq: 8 },
-        ChainError::InvalidGenesis { detail: "bad".into() },
-        ChainError::ChainIntegrity { detail: "corrupt".into() },
-        ChainError::SignatureInvalid { detail: "invalid".into() },
-        ChainError::DuplicateTarget { target_id: EngineObjectId([42; 32]) },
+        ChainError::HeadSequenceRegression {
+            current_seq: 5,
+            attempted_seq: 3,
+        },
+        ChainError::HashLinkMismatch {
+            event_seq: 3,
+            expected_prev: None,
+            actual_prev: None,
+        },
+        ChainError::SequenceDiscontinuity {
+            expected_seq: 5,
+            actual_seq: 8,
+        },
+        ChainError::InvalidGenesis {
+            detail: "bad".into(),
+        },
+        ChainError::ChainIntegrity {
+            detail: "corrupt".into(),
+        },
+        ChainError::SignatureInvalid {
+            detail: "invalid".into(),
+        },
+        ChainError::DuplicateTarget {
+            target_id: EngineObjectId([42; 32]),
+        },
         ChainError::MutationRejected { event_seq: 7 },
         ChainError::EmptyChain,
     ];
@@ -416,7 +538,11 @@ fn enrichment_chain_error_serde_all() {
 
 #[test]
 fn enrichment_revocation_serde_round_trip() {
-    let rev = make_revocation(RevocationTargetType::Token, RevocationReason::Expired, [44; 32]);
+    let rev = make_revocation(
+        RevocationTargetType::Token,
+        RevocationReason::Expired,
+        [44; 32],
+    );
     let json = serde_json::to_string(&rev).unwrap();
     let back: Revocation = serde_json::from_str(&json).unwrap();
     assert_eq!(rev, back);
@@ -425,7 +551,10 @@ fn enrichment_revocation_serde_round_trip() {
 #[test]
 fn enrichment_chain_event_serde_round_trip() {
     let event = ChainEvent {
-        event_type: ChainEventType::HeadAdvanced { old_seq: 0, new_seq: 1 },
+        event_type: ChainEventType::HeadAdvanced {
+            old_seq: 0,
+            new_seq: 1,
+        },
         zone: TEST_ZONE.to_string(),
         trace_id: "t-serde".to_string(),
     };
@@ -436,7 +565,11 @@ fn enrichment_chain_event_serde_round_trip() {
 
 #[test]
 fn enrichment_revocation_event_content_hash_deterministic() {
-    let rev = make_revocation(RevocationTargetType::Key, RevocationReason::Compromised, [77; 32]);
+    let rev = make_revocation(
+        RevocationTargetType::Key,
+        RevocationReason::Compromised,
+        [77; 32],
+    );
     let event = RevocationEvent {
         event_id: EngineObjectId([11; 32]),
         revocation: rev,
@@ -458,7 +591,11 @@ fn enrichment_events_accessor_returns_all() {
     let mut chain = RevocationChain::new(TEST_ZONE);
     let sk = test_signing_key();
     for i in 0..3u8 {
-        let rev = make_revocation(RevocationTargetType::Token, RevocationReason::Expired, [i + 50; 32]);
+        let rev = make_revocation(
+            RevocationTargetType::Token,
+            RevocationReason::Expired,
+            [i + 50; 32],
+        );
         chain.append(rev, &sk, &format!("t-{i}")).unwrap();
     }
     assert_eq!(chain.events().len(), 3);
@@ -468,20 +605,38 @@ fn enrichment_events_accessor_returns_all() {
 fn enrichment_head_advanced_emitted_on_second_append() {
     let mut chain = RevocationChain::new(TEST_ZONE);
     let sk = test_signing_key();
-    let rev1 = make_revocation(RevocationTargetType::Key, RevocationReason::Compromised, [1; 32]);
+    let rev1 = make_revocation(
+        RevocationTargetType::Key,
+        RevocationReason::Compromised,
+        [1; 32],
+    );
     chain.append(rev1, &sk, "t1").unwrap();
     chain.drain_events();
-    let rev2 = make_revocation(RevocationTargetType::Token, RevocationReason::Expired, [2; 32]);
+    let rev2 = make_revocation(
+        RevocationTargetType::Token,
+        RevocationReason::Expired,
+        [2; 32],
+    );
     chain.append(rev2, &sk, "t2").unwrap();
     let events = chain.drain_events();
-    assert!(events.iter().any(|e| matches!(&e.event_type, ChainEventType::HeadAdvanced { old_seq: 0, new_seq: 1 })));
+    assert!(events.iter().any(|e| matches!(
+        &e.event_type,
+        ChainEventType::HeadAdvanced {
+            old_seq: 0,
+            new_seq: 1
+        }
+    )));
 }
 
 #[test]
 fn enrichment_chain_hash_accessor_matches_head() {
     let mut chain = RevocationChain::new(TEST_ZONE);
     let sk = test_signing_key();
-    let rev = make_revocation(RevocationTargetType::Key, RevocationReason::Compromised, [77; 32]);
+    let rev = make_revocation(
+        RevocationTargetType::Key,
+        RevocationReason::Compromised,
+        [77; 32],
+    );
     chain.append(rev, &sk, "t").unwrap();
     assert_eq!(chain.chain_hash(), &chain.head().unwrap().chain_hash);
 }

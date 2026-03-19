@@ -94,17 +94,24 @@ fn enrichment_escalation_level_display_values() {
 #[test]
 fn enrichment_escalation_level_display_unique() {
     let labels: BTreeSet<String> = [
-        EscalationLevel::Minimal, EscalationLevel::Extended,
-        EscalationLevel::Full, EscalationLevel::Forensic,
-    ].iter().map(|l| format!("{l}")).collect();
+        EscalationLevel::Minimal,
+        EscalationLevel::Extended,
+        EscalationLevel::Full,
+        EscalationLevel::Forensic,
+    ]
+    .iter()
+    .map(|l| format!("{l}"))
+    .collect();
     assert_eq!(labels.len(), 4);
 }
 
 #[test]
 fn enrichment_escalation_level_serde_roundtrip() {
     for level in [
-        EscalationLevel::Minimal, EscalationLevel::Extended,
-        EscalationLevel::Full, EscalationLevel::Forensic,
+        EscalationLevel::Minimal,
+        EscalationLevel::Extended,
+        EscalationLevel::Full,
+        EscalationLevel::Forensic,
     ] {
         let json = serde_json::to_string(&level).unwrap();
         let back: EscalationLevel = serde_json::from_str(&json).unwrap();
@@ -156,15 +163,32 @@ fn enrichment_trigger_category_serde_roundtrip_all() {
 
 #[test]
 fn enrichment_trigger_severity_minimum_escalation() {
-    assert_eq!(TriggerSeverity::Info.minimum_escalation(), EscalationLevel::Extended);
-    assert_eq!(TriggerSeverity::Warning.minimum_escalation(), EscalationLevel::Extended);
-    assert_eq!(TriggerSeverity::Critical.minimum_escalation(), EscalationLevel::Full);
-    assert_eq!(TriggerSeverity::Fatal.minimum_escalation(), EscalationLevel::Forensic);
+    assert_eq!(
+        TriggerSeverity::Info.minimum_escalation(),
+        EscalationLevel::Extended
+    );
+    assert_eq!(
+        TriggerSeverity::Warning.minimum_escalation(),
+        EscalationLevel::Extended
+    );
+    assert_eq!(
+        TriggerSeverity::Critical.minimum_escalation(),
+        EscalationLevel::Full
+    );
+    assert_eq!(
+        TriggerSeverity::Fatal.minimum_escalation(),
+        EscalationLevel::Forensic
+    );
 }
 
 #[test]
 fn enrichment_trigger_severity_serde_roundtrip() {
-    for s in [TriggerSeverity::Info, TriggerSeverity::Warning, TriggerSeverity::Critical, TriggerSeverity::Fatal] {
+    for s in [
+        TriggerSeverity::Info,
+        TriggerSeverity::Warning,
+        TriggerSeverity::Critical,
+        TriggerSeverity::Fatal,
+    ] {
         let json = serde_json::to_string(&s).unwrap();
         let back: TriggerSeverity = serde_json::from_str(&json).unwrap();
         assert_eq!(s, back);
@@ -273,7 +297,10 @@ fn enrichment_policy_resolve_level_severity_precedence() {
 
 #[test]
 fn enrichment_policy_resolve_level_clamps_forensic() {
-    let p = EscalationPolicy { allow_forensic: false, ..Default::default() };
+    let p = EscalationPolicy {
+        allow_forensic: false,
+        ..Default::default()
+    };
     let t = test_trigger(TriggerCategory::SecurityEvent, TriggerSeverity::Fatal);
     assert_eq!(p.resolve_level(&t), EscalationLevel::Full);
 }
@@ -320,7 +347,9 @@ fn enrichment_policy_serde_roundtrip() {
 
 #[test]
 fn enrichment_verdict_display_approved() {
-    let v = EscalationVerdict::Approved { level: EscalationLevel::Full };
+    let v = EscalationVerdict::Approved {
+        level: EscalationLevel::Full,
+    };
     let s = format!("{v}");
     assert!(s.contains("approved"));
     assert!(s.contains("full"));
@@ -328,14 +357,19 @@ fn enrichment_verdict_display_approved() {
 
 #[test]
 fn enrichment_verdict_display_suppressed_capacity() {
-    let v = EscalationVerdict::SuppressedCapacity { active_count: 5, max_allowed: 5 };
+    let v = EscalationVerdict::SuppressedCapacity {
+        active_count: 5,
+        max_allowed: 5,
+    };
     let s = format!("{v}");
     assert!(s.contains("suppressed_capacity"));
 }
 
 #[test]
 fn enrichment_verdict_serde_roundtrip_approved() {
-    let v = EscalationVerdict::Approved { level: EscalationLevel::Extended };
+    let v = EscalationVerdict::Approved {
+        level: EscalationLevel::Extended,
+    };
     let json = serde_json::to_string(&v).unwrap();
     let back: EscalationVerdict = serde_json::from_str(&json).unwrap();
     assert_eq!(v, back);
@@ -343,7 +377,10 @@ fn enrichment_verdict_serde_roundtrip_approved() {
 
 #[test]
 fn enrichment_verdict_serde_roundtrip_suppressed() {
-    let v = EscalationVerdict::SuppressedCapacity { active_count: 10, max_allowed: 10 };
+    let v = EscalationVerdict::SuppressedCapacity {
+        active_count: 10,
+        max_allowed: 10,
+    };
     let json = serde_json::to_string(&v).unwrap();
     let back: EscalationVerdict = serde_json::from_str(&json).unwrap();
     assert_eq!(v, back);
@@ -365,18 +402,34 @@ fn enrichment_escalator_approve_basic() {
 
 #[test]
 fn enrichment_escalator_suppress_capacity() {
-    let policy = EscalationPolicy { max_active_escalations: 1, ..Default::default() };
+    let policy = EscalationPolicy {
+        max_active_escalations: 1,
+        ..Default::default()
+    };
     let mut esc = HindsightTraceEscalator::new(policy, ep(100));
     let t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
     esc.evaluate(t1);
-    let t2 = EscalationTrigger::new("trigger-002", TriggerCategory::SecurityEvent, TriggerSeverity::Warning, "another", "other", ep(100));
+    let t2 = EscalationTrigger::new(
+        "trigger-002",
+        TriggerCategory::SecurityEvent,
+        TriggerSeverity::Warning,
+        "another",
+        "other",
+        ep(100),
+    );
     let d2 = esc.evaluate(t2);
-    assert!(matches!(d2.verdict, EscalationVerdict::SuppressedCapacity { .. }));
+    assert!(matches!(
+        d2.verdict,
+        EscalationVerdict::SuppressedCapacity { .. }
+    ));
 }
 
 #[test]
 fn enrichment_escalator_complete_frees_capacity() {
-    let policy = EscalationPolicy { max_active_escalations: 1, ..Default::default() };
+    let policy = EscalationPolicy {
+        max_active_escalations: 1,
+        ..Default::default()
+    };
     let mut esc = HindsightTraceEscalator::new(policy, ep(100));
     let t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
     esc.evaluate(t1);
@@ -387,7 +440,10 @@ fn enrichment_escalator_complete_frees_capacity() {
 
 #[test]
 fn enrichment_escalator_cooldown_expires_on_advance() {
-    let policy = EscalationPolicy { cooldown_epochs: 3, ..Default::default() };
+    let policy = EscalationPolicy {
+        cooldown_epochs: 3,
+        ..Default::default()
+    };
     let mut esc = HindsightTraceEscalator::new(policy, ep(100));
     let mut t1 = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
     t1.correlation_id = Some("corr-1".into());

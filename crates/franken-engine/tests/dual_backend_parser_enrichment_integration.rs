@@ -15,13 +15,11 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::ast::{ParseGoal, SourceSpan, SyntaxTree};
 use frankenengine_engine::dual_backend_parser::{
-    BackendCapability, BackendId, BackendParseResult, BackendRegistration,
-    BackendRequirements, BackendSelectionPolicy, DUAL_BACKEND_SCHEMA_VERSION,
-    DiagnosticCategory, DiagnosticSeverity, DiagnosticsEnvelope,
-    DifferentialComparisonResult, DivergenceClass, DualBackendEventKind,
-    DualBackendParseEvent, DualBackendParser, DualBackendParserError,
-    FidelityReport, NormalizedDiagnostic, NormalizedParseOutput,
-    SpanMappingEntry,
+    BackendCapability, BackendId, BackendParseResult, BackendRegistration, BackendRequirements,
+    BackendSelectionPolicy, DUAL_BACKEND_SCHEMA_VERSION, DiagnosticCategory, DiagnosticSeverity,
+    DiagnosticsEnvelope, DifferentialComparisonResult, DivergenceClass, DualBackendEventKind,
+    DualBackendParseEvent, DualBackendParser, DualBackendParserError, FidelityReport,
+    NormalizedDiagnostic, NormalizedParseOutput, SpanMappingEntry,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -61,9 +59,12 @@ fn make_parser() -> DualBackendParser {
         BackendSelectionPolicy::default_swc_primary(),
         epoch(1),
     );
-    p.register_backend(make_reg(BackendId::swc(), 1, true)).unwrap();
-    p.register_backend(make_reg(BackendId::oxc(), 2, true)).unwrap();
-    p.register_backend(make_reg(BackendId::franken_canonical(), 3, true)).unwrap();
+    p.register_backend(make_reg(BackendId::swc(), 1, true))
+        .unwrap();
+    p.register_backend(make_reg(BackendId::oxc(), 2, true))
+        .unwrap();
+    p.register_backend(make_reg(BackendId::franken_canonical(), 3, true))
+        .unwrap();
     p
 }
 
@@ -124,7 +125,11 @@ fn backend_id_franken_canonical() {
 
 #[test]
 fn backend_id_display_distinctness() {
-    let ids = [BackendId::swc(), BackendId::oxc(), BackendId::franken_canonical()];
+    let ids = [
+        BackendId::swc(),
+        BackendId::oxc(),
+        BackendId::franken_canonical(),
+    ];
     let displays: BTreeSet<String> = ids.iter().map(|id| id.to_string()).collect();
     assert_eq!(displays.len(), 3);
 }
@@ -604,24 +609,39 @@ fn error_is_std_error() {
 
 #[test]
 fn parser_new_no_backends() {
-    let p = DualBackendParser::new("test", BackendSelectionPolicy::default_swc_primary(), epoch(1));
+    let p = DualBackendParser::new(
+        "test",
+        BackendSelectionPolicy::default_swc_primary(),
+        epoch(1),
+    );
     assert_eq!(p.backend_count(), 0);
     assert_eq!(p.healthy_backend_count(), 0);
 }
 
 #[test]
 fn parser_register_backend() {
-    let mut p = DualBackendParser::new("test", BackendSelectionPolicy::default_swc_primary(), epoch(1));
-    p.register_backend(make_reg(BackendId::swc(), 1, true)).unwrap();
+    let mut p = DualBackendParser::new(
+        "test",
+        BackendSelectionPolicy::default_swc_primary(),
+        epoch(1),
+    );
+    p.register_backend(make_reg(BackendId::swc(), 1, true))
+        .unwrap();
     assert_eq!(p.backend_count(), 1);
     assert_eq!(p.healthy_backend_count(), 1);
 }
 
 #[test]
 fn parser_register_duplicate_updates() {
-    let mut p = DualBackendParser::new("test", BackendSelectionPolicy::default_swc_primary(), epoch(1));
-    p.register_backend(make_reg(BackendId::swc(), 1, true)).unwrap();
-    p.register_backend(make_reg(BackendId::swc(), 2, false)).unwrap();
+    let mut p = DualBackendParser::new(
+        "test",
+        BackendSelectionPolicy::default_swc_primary(),
+        epoch(1),
+    );
+    p.register_backend(make_reg(BackendId::swc(), 1, true))
+        .unwrap();
+    p.register_backend(make_reg(BackendId::swc(), 2, false))
+        .unwrap();
     assert_eq!(p.backend_count(), 1);
     assert_eq!(p.healthy_backend_count(), 0);
 }
@@ -635,7 +655,11 @@ fn parser_select_backend_primary() {
 
 #[test]
 fn parser_select_backend_no_backends_error() {
-    let mut p = DualBackendParser::new("test", BackendSelectionPolicy::default_swc_primary(), epoch(1));
+    let mut p = DualBackendParser::new(
+        "test",
+        BackendSelectionPolicy::default_swc_primary(),
+        epoch(1),
+    );
     let err = p.select_backend(ParseGoal::Module, None).unwrap_err();
     assert!(matches!(err, DualBackendParserError::NoBackendsRegistered));
 }
@@ -652,7 +676,9 @@ fn parser_select_backend_fallback() {
 #[test]
 fn parser_set_backend_health_not_found() {
     let mut p = make_parser();
-    let err = p.set_backend_health(&BackendId("unknown".into()), true).unwrap_err();
+    let err = p
+        .set_backend_health(&BackendId("unknown".into()), true)
+        .unwrap_err();
     assert!(matches!(err, DualBackendParserError::BackendNotFound(_)));
 }
 
@@ -692,7 +718,10 @@ fn parser_verify_normalization_mismatch() {
     let mut output = make_output(BackendId::swc());
     output.canonical_hash = "wrong-hash".to_string();
     let err = p.verify_normalization(&output).unwrap_err();
-    assert!(matches!(err, DualBackendParserError::NormalizationVerificationFailed { .. }));
+    assert!(matches!(
+        err,
+        DualBackendParserError::NormalizationVerificationFailed { .. }
+    ));
     assert_eq!(p.normalization_failure_count, 1);
 }
 
@@ -763,12 +792,21 @@ fn parse_event_serde_roundtrip() {
 fn event_kind_serde_roundtrip_all() {
     let kinds = vec![
         DualBackendEventKind::BackendSelected,
-        DualBackendEventKind::ParseCompleted { latency_us: 100, hash: "h".into() },
-        DualBackendEventKind::ParseFailed { error: "err".into() },
+        DualBackendEventKind::ParseCompleted {
+            latency_us: 100,
+            hash: "h".into(),
+        },
+        DualBackendEventKind::ParseFailed {
+            error: "err".into(),
+        },
         DualBackendEventKind::FallbackSelected,
         DualBackendEventKind::NormalizationVerified,
-        DualBackendEventKind::FidelityReported { score_millionths: 990_000 },
-        DualBackendEventKind::DifferentialCompleted { all_equivalent: true },
+        DualBackendEventKind::FidelityReported {
+            score_millionths: 990_000,
+        },
+        DualBackendEventKind::DifferentialCompleted {
+            all_equivalent: true,
+        },
         DualBackendEventKind::BackendRegistered,
         DualBackendEventKind::HealthChanged { healthy: false },
     ];

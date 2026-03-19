@@ -66,7 +66,11 @@ fn enrichment_scheduler_lane_display() {
 
 #[test]
 fn enrichment_scheduler_lane_serde_all() {
-    for lane in &[SchedulerLane::Cancel, SchedulerLane::Timed, SchedulerLane::Ready] {
+    for lane in &[
+        SchedulerLane::Cancel,
+        SchedulerLane::Timed,
+        SchedulerLane::Ready,
+    ] {
         let json = serde_json::to_string(lane).unwrap();
         let back: SchedulerLane = serde_json::from_str(&json).unwrap();
         assert_eq!(*lane, back);
@@ -75,7 +79,11 @@ fn enrichment_scheduler_lane_serde_all() {
 
 #[test]
 fn enrichment_scheduler_lane_ordering_deterministic() {
-    let mut lanes = vec![SchedulerLane::Ready, SchedulerLane::Cancel, SchedulerLane::Timed];
+    let mut lanes = vec![
+        SchedulerLane::Ready,
+        SchedulerLane::Cancel,
+        SchedulerLane::Timed,
+    ];
     lanes.sort();
     let mut lanes2 = lanes.clone();
     lanes2.sort();
@@ -88,16 +96,28 @@ fn enrichment_scheduler_lane_ordering_deterministic() {
 
 #[test]
 fn enrichment_task_type_cancel_lane_types() {
-    assert_eq!(TaskType::CancelCleanup.required_lane(), SchedulerLane::Cancel);
-    assert_eq!(TaskType::QuarantineExec.required_lane(), SchedulerLane::Cancel);
+    assert_eq!(
+        TaskType::CancelCleanup.required_lane(),
+        SchedulerLane::Cancel
+    );
+    assert_eq!(
+        TaskType::QuarantineExec.required_lane(),
+        SchedulerLane::Cancel
+    );
     assert_eq!(TaskType::ForcedDrain.required_lane(), SchedulerLane::Cancel);
 }
 
 #[test]
 fn enrichment_task_type_timed_lane_types() {
     assert_eq!(TaskType::LeaseRenewal.required_lane(), SchedulerLane::Timed);
-    assert_eq!(TaskType::MonitoringProbe.required_lane(), SchedulerLane::Timed);
-    assert_eq!(TaskType::EvidenceFlush.required_lane(), SchedulerLane::Timed);
+    assert_eq!(
+        TaskType::MonitoringProbe.required_lane(),
+        SchedulerLane::Timed
+    );
+    assert_eq!(
+        TaskType::EvidenceFlush.required_lane(),
+        SchedulerLane::Timed
+    );
     assert_eq!(
         TaskType::EpochBarrierTimeout.required_lane(),
         SchedulerLane::Timed
@@ -111,7 +131,10 @@ fn enrichment_task_type_ready_lane_types() {
         SchedulerLane::Ready
     );
     assert_eq!(TaskType::GcCycle.required_lane(), SchedulerLane::Ready);
-    assert_eq!(TaskType::PolicyIteration.required_lane(), SchedulerLane::Ready);
+    assert_eq!(
+        TaskType::PolicyIteration.required_lane(),
+        SchedulerLane::Ready
+    );
     assert_eq!(TaskType::RemoteSync.required_lane(), SchedulerLane::Ready);
     assert_eq!(TaskType::SagaStepExec.required_lane(), SchedulerLane::Ready);
 }
@@ -277,7 +300,8 @@ fn enrichment_submit_queue_full_rejected() {
 fn enrichment_cancel_tasks_scheduled_before_timed() {
     let mut s = default_scheduler();
     s.submit(timed_label("t-timed"), 10, "p-timed", 0).unwrap();
-    s.submit(cancel_label("t-cancel"), 0, "p-cancel", 0).unwrap();
+    s.submit(cancel_label("t-cancel"), 0, "p-cancel", 0)
+        .unwrap();
     let batch = s.schedule_batch(10, 100);
     assert!(batch.len() >= 2);
     assert_eq!(batch[0].label.lane, SchedulerLane::Cancel);
@@ -291,8 +315,12 @@ fn enrichment_timed_tasks_scheduled_before_ready() {
     s.submit(timed_label("t-timed"), 10, "p-timed", 0).unwrap();
     let batch = s.schedule_batch(10, 100);
     // timed should be before ready (but after cancel if any)
-    let timed_idx = batch.iter().position(|t| t.label.lane == SchedulerLane::Timed);
-    let ready_idx = batch.iter().position(|t| t.label.lane == SchedulerLane::Ready);
+    let timed_idx = batch
+        .iter()
+        .position(|t| t.label.lane == SchedulerLane::Timed);
+    let ready_idx = batch
+        .iter()
+        .position(|t| t.label.lane == SchedulerLane::Ready);
     assert!(timed_idx.unwrap() < ready_idx.unwrap());
 }
 
@@ -370,7 +398,10 @@ fn enrichment_ready_tasks_get_minimum_throughput() {
         .iter()
         .filter(|t| t.label.lane == SchedulerLane::Ready)
         .count();
-    assert!(ready_count >= 2, "anti-starvation should guarantee at least 2 ready tasks, got {ready_count}");
+    assert!(
+        ready_count >= 2,
+        "anti-starvation should guarantee at least 2 ready tasks, got {ready_count}"
+    );
 }
 
 // =========================================================================

@@ -132,14 +132,18 @@ fn reaction_kind_serde_roundtrip() {
 
 #[test]
 fn promise_error_already_settled_display() {
-    let err = PromiseError::AlreadySettled { handle: PromiseHandle(3) };
+    let err = PromiseError::AlreadySettled {
+        handle: PromiseHandle(3),
+    };
     assert!(err.to_string().contains("already settled"));
     assert!(err.to_string().contains("Promise(3)"));
 }
 
 #[test]
 fn promise_error_invalid_handle_display() {
-    let err = PromiseError::InvalidHandle { handle: PromiseHandle(999) };
+    let err = PromiseError::InvalidHandle {
+        handle: PromiseHandle(999),
+    };
     assert!(err.to_string().contains("invalid promise handle"));
 }
 
@@ -156,8 +160,12 @@ fn promise_error_label_violation_display() {
 #[test]
 fn promise_error_serde_roundtrip() {
     let errors = vec![
-        PromiseError::AlreadySettled { handle: PromiseHandle(1) },
-        PromiseError::InvalidHandle { handle: PromiseHandle(2) },
+        PromiseError::AlreadySettled {
+            handle: PromiseHandle(1),
+        },
+        PromiseError::InvalidHandle {
+            handle: PromiseHandle(2),
+        },
         PromiseError::LabelViolation {
             handle: PromiseHandle(3),
             value_label: Label::Public,
@@ -214,7 +222,9 @@ fn store_fulfill_sets_state() {
     let mut store = PromiseStore::new();
     let mut queue = MicrotaskQueue::new();
     let h = store.create();
-    store.fulfill(h, js_int(100), Label::Public, &mut queue).unwrap();
+    store
+        .fulfill(h, js_int(100), Label::Public, &mut queue)
+        .unwrap();
     let p = store.get(h).unwrap();
     assert_eq!(p.state, PromiseState::Fulfilled(js_int(100)));
 }
@@ -224,7 +234,9 @@ fn store_reject_sets_state() {
     let mut store = PromiseStore::new();
     let mut queue = MicrotaskQueue::new();
     let h = store.create();
-    store.reject(h, js_str("fail"), Label::Public, &mut queue).unwrap();
+    store
+        .reject(h, js_str("fail"), Label::Public, &mut queue)
+        .unwrap();
     let p = store.get(h).unwrap();
     assert_eq!(p.state, PromiseState::Rejected(js_str("fail")));
 }
@@ -234,8 +246,12 @@ fn store_double_fulfill_error() {
     let mut store = PromiseStore::new();
     let mut queue = MicrotaskQueue::new();
     let h = store.create();
-    store.fulfill(h, js_int(1), Label::Public, &mut queue).unwrap();
-    let err = store.fulfill(h, js_int(2), Label::Public, &mut queue).unwrap_err();
+    store
+        .fulfill(h, js_int(1), Label::Public, &mut queue)
+        .unwrap();
+    let err = store
+        .fulfill(h, js_int(2), Label::Public, &mut queue)
+        .unwrap_err();
     assert!(matches!(err, PromiseError::AlreadySettled { .. }));
 }
 
@@ -244,8 +260,12 @@ fn store_double_reject_error() {
     let mut store = PromiseStore::new();
     let mut queue = MicrotaskQueue::new();
     let h = store.create();
-    store.reject(h, js_str("a"), Label::Public, &mut queue).unwrap();
-    let err = store.reject(h, js_str("b"), Label::Public, &mut queue).unwrap_err();
+    store
+        .reject(h, js_str("a"), Label::Public, &mut queue)
+        .unwrap();
+    let err = store
+        .reject(h, js_str("b"), Label::Public, &mut queue)
+        .unwrap_err();
     assert!(matches!(err, PromiseError::AlreadySettled { .. }));
 }
 
@@ -273,8 +293,12 @@ fn store_unhandled_rejections() {
     let mut queue = MicrotaskQueue::new();
     let h1 = store.create();
     let h2 = store.create();
-    store.reject(h1, js_str("err1"), Label::Public, &mut queue).unwrap();
-    store.reject(h2, js_str("err2"), Label::Public, &mut queue).unwrap();
+    store
+        .reject(h1, js_str("err1"), Label::Public, &mut queue)
+        .unwrap();
+    store
+        .reject(h2, js_str("err2"), Label::Public, &mut queue)
+        .unwrap();
     let unhandled = store.unhandled_rejections();
     assert_eq!(unhandled.len(), 2);
 }
@@ -284,7 +308,9 @@ fn store_witness_log_records_events() {
     let mut store = PromiseStore::new();
     let mut queue = MicrotaskQueue::new();
     let h = store.create();
-    store.fulfill(h, js_int(1), Label::Public, &mut queue).unwrap();
+    store
+        .fulfill(h, js_int(1), Label::Public, &mut queue)
+        .unwrap();
     let log = store.witness_log();
     assert!(log.len() >= 2); // created + fulfilled
 }
@@ -417,8 +443,18 @@ fn macrotask_queue_not_ready_before_time() {
 #[test]
 fn macrotask_queue_priority_order() {
     let mut q = MacrotaskQueue::new();
-    q.schedule(MacrotaskSource::IoCompletion, ClosureHandle(0), 0, Label::Public);
-    q.schedule(MacrotaskSource::MessageChannel, ClosureHandle(1), 0, Label::Public);
+    q.schedule(
+        MacrotaskSource::IoCompletion,
+        ClosureHandle(0),
+        0,
+        Label::Public,
+    );
+    q.schedule(
+        MacrotaskSource::MessageChannel,
+        ClosureHandle(1),
+        0,
+        Label::Public,
+    );
     q.schedule(MacrotaskSource::Timer, ClosureHandle(2), 0, Label::Public);
 
     let first = q.dequeue_ready(0).unwrap();
@@ -530,7 +566,8 @@ fn event_loop_turn_drains_microtasks() {
 #[test]
 fn event_loop_turn_picks_macrotask() {
     let mut el = EventLoop::new();
-    el.macrotasks.schedule(MacrotaskSource::Timer, ClosureHandle(0), 0, Label::Public);
+    el.macrotasks
+        .schedule(MacrotaskSource::Timer, ClosureHandle(0), 0, Label::Public);
     let result = el.turn();
     assert!(result.macrotask.is_some());
 }
@@ -538,7 +575,8 @@ fn event_loop_turn_picks_macrotask() {
 #[test]
 fn event_loop_turn_advances_clock_for_future_macrotask() {
     let mut el = EventLoop::new();
-    el.macrotasks.schedule(MacrotaskSource::Timer, ClosureHandle(0), 500, Label::Public);
+    el.macrotasks
+        .schedule(MacrotaskSource::Timer, ClosureHandle(0), 500, Label::Public);
     let result = el.turn();
     assert!(result.clock_advanced);
     assert_eq!(el.clock.now_ms(), 500);
@@ -588,7 +626,10 @@ fn promise_all_tracker_collect_missing_yields_undefined() {
         settled: false,
     };
     let values = tracker.collect_values();
-    assert_eq!(values, vec![JsValue::Undefined, JsValue::Undefined, JsValue::Undefined]);
+    assert_eq!(
+        values,
+        vec![JsValue::Undefined, JsValue::Undefined, JsValue::Undefined]
+    );
 }
 
 // ===========================================================================
@@ -664,13 +705,30 @@ fn promise_any_settled_ignores_further() {
 #[test]
 fn witness_event_all_variants_serde() {
     let events = vec![
-        WitnessEvent::PromiseCreated { handle: PromiseHandle(0), seq: 0 },
-        WitnessEvent::PromiseFulfilled { handle: PromiseHandle(1), value: js_int(42), label: Label::Public },
-        WitnessEvent::PromiseRejected { handle: PromiseHandle(2), reason: js_str("err"), label: Label::Secret },
+        WitnessEvent::PromiseCreated {
+            handle: PromiseHandle(0),
+            seq: 0,
+        },
+        WitnessEvent::PromiseFulfilled {
+            handle: PromiseHandle(1),
+            value: js_int(42),
+            label: Label::Public,
+        },
+        WitnessEvent::PromiseRejected {
+            handle: PromiseHandle(2),
+            reason: js_str("err"),
+            label: Label::Secret,
+        },
         WitnessEvent::MicrotaskEnqueued { index: 0 },
         WitnessEvent::MicrotaskDequeued { index: 0 },
-        WitnessEvent::MacrotaskExecuted { source: MacrotaskSource::Timer, registration_seq: 0 },
-        WitnessEvent::ClockAdvanced { from_ms: 0, to_ms: 100 },
+        WitnessEvent::MacrotaskExecuted {
+            source: MacrotaskSource::Timer,
+            registration_seq: 0,
+        },
+        WitnessEvent::ClockAdvanced {
+            from_ms: 0,
+            to_ms: 100,
+        },
     ];
     for ev in &events {
         let json = serde_json::to_string(ev).expect("serialize");
@@ -690,8 +748,12 @@ fn promise_operations_deterministic() {
         let mut queue = MicrotaskQueue::new();
         let h1 = store.create();
         let h2 = store.create();
-        store.fulfill(h1, js_int(1), Label::Public, &mut queue).unwrap();
-        store.reject(h2, js_str("err"), Label::Public, &mut queue).unwrap();
+        store
+            .fulfill(h1, js_int(1), Label::Public, &mut queue)
+            .unwrap();
+        store
+            .reject(h2, js_str("err"), Label::Public, &mut queue)
+            .unwrap();
         store.witness_log().to_vec()
     };
     let log1 = run();

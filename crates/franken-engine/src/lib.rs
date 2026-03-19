@@ -399,8 +399,8 @@ pub mod swarm_control_loop;
 pub mod synthesis_budget;
 pub mod synthesis_eligibility_envelope;
 pub mod synthesis_kernel_promotion;
-pub mod tail_latency_feedback_control;
 pub mod tail_latency_control_plane;
+pub mod tail_latency_feedback_control;
 pub mod tee_attestation_policy;
 pub mod test262_release_gate;
 pub mod test_depth_gate;
@@ -1285,7 +1285,7 @@ fn patch_eval_completion_value(instructions: &mut [Ir3Instruction]) {
     for instr in instructions.iter().rev() {
         match instr {
             Ir3Instruction::Move { dst, src } if dst == src => continue,
-            Ir3Instruction::Halt => continue,
+            Ir3Instruction::Halt | Ir3Instruction::Throw { .. } => continue,
             Ir3Instruction::Return { .. } => continue,
             _ => {
                 completion_reg = ir3_destination_register(instr);
@@ -1354,7 +1354,8 @@ fn ir3_destination_register(instr: &Ir3Instruction) -> Option<u32> {
         | Ir3Instruction::Construct { dst, .. }
         | Ir3Instruction::TemplateLiteral { dst, .. }
         | Ir3Instruction::Call { dst, .. }
-        | Ir3Instruction::HostCall { dst, .. } => Some(*dst),
+        | Ir3Instruction::HostCall { dst, .. }
+        | Ir3Instruction::EnterCatch { dst } => Some(*dst),
         _ => None,
     }
 }

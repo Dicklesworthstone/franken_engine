@@ -106,8 +106,14 @@ fn enrichment_snapshot_hash_same_when_epoch_differs() {
 #[test]
 fn enrichment_snapshot_with_many_features_hash_stable() {
     let feats: Vec<(&str, i64)> = vec![
-        ("f0", 0), ("f1", 100_000), ("f2", 200_000), ("f3", 300_000),
-        ("f4", 400_000), ("f5", 500_000), ("f6", 600_000), ("f7", 700_000),
+        ("f0", 0),
+        ("f1", 100_000),
+        ("f2", 200_000),
+        ("f3", 300_000),
+        ("f4", 400_000),
+        ("f5", 500_000),
+        ("f6", 600_000),
+        ("f7", 700_000),
     ];
     let a = snap("multi", normal(), &feats, 50, epoch(10));
     let b = snap("multi", normal(), &feats, 50, epoch(10));
@@ -139,14 +145,28 @@ fn enrichment_drift_both_zero() {
 #[test]
 fn enrichment_drift_many_shared_dimensions() {
     let feats_bl: Vec<(&str, i64)> = vec![
-        ("d0", 500_000), ("d1", 500_000), ("d2", 500_000), ("d3", 500_000),
-        ("d4", 500_000), ("d5", 500_000), ("d6", 500_000), ("d7", 500_000),
-        ("d8", 500_000), ("d9", 500_000),
+        ("d0", 500_000),
+        ("d1", 500_000),
+        ("d2", 500_000),
+        ("d3", 500_000),
+        ("d4", 500_000),
+        ("d5", 500_000),
+        ("d6", 500_000),
+        ("d7", 500_000),
+        ("d8", 500_000),
+        ("d9", 500_000),
     ];
     let feats_cur: Vec<(&str, i64)> = vec![
-        ("d0", 510_000), ("d1", 510_000), ("d2", 510_000), ("d3", 510_000),
-        ("d4", 510_000), ("d5", 510_000), ("d6", 510_000), ("d7", 510_000),
-        ("d8", 510_000), ("d9", 510_000),
+        ("d0", 510_000),
+        ("d1", 510_000),
+        ("d2", 510_000),
+        ("d3", 510_000),
+        ("d4", 510_000),
+        ("d5", 510_000),
+        ("d6", 510_000),
+        ("d7", 510_000),
+        ("d8", 510_000),
+        ("d9", 510_000),
     ];
     let bl = snap("bl", normal(), &feats_bl, 100, epoch(1));
     let cur = snap("cur", normal(), &feats_cur, 100, epoch(1));
@@ -158,8 +178,20 @@ fn enrichment_drift_many_shared_dimensions() {
 
 #[test]
 fn enrichment_drift_asymmetric_features() {
-    let bl = snap("bl", normal(), &[("a", 100), ("b", 200), ("c", 300)], 100, epoch(1));
-    let cur = snap("cur", normal(), &[("b", 210), ("c", 350), ("d", 400)], 100, epoch(1));
+    let bl = snap(
+        "bl",
+        normal(),
+        &[("a", 100), ("b", 200), ("c", 300)],
+        100,
+        epoch(1),
+    );
+    let cur = snap(
+        "cur",
+        normal(),
+        &[("b", 210), ("c", 350), ("d", 400)],
+        100,
+        epoch(1),
+    );
     let d = compute_drift(&bl, &cur);
     assert_eq!(d.shared_dimensions, 2);
     assert!(d.missing_features.contains("a"));
@@ -170,8 +202,20 @@ fn enrichment_drift_asymmetric_features() {
 
 #[test]
 fn enrichment_drift_deterministic_across_calls() {
-    let bl = snap("bl", normal(), &[("x", 100_000), ("y", 200_000)], 100, epoch(1));
-    let cur = snap("cur", normal(), &[("x", 150_000), ("y", 220_000)], 100, epoch(1));
+    let bl = snap(
+        "bl",
+        normal(),
+        &[("x", 100_000), ("y", 200_000)],
+        100,
+        epoch(1),
+    );
+    let cur = snap(
+        "cur",
+        normal(),
+        &[("x", 150_000), ("y", 220_000)],
+        100,
+        epoch(1),
+    );
     let d1 = compute_drift(&bl, &cur);
     let d2 = compute_drift(&bl, &cur);
     assert_eq!(d1, d2);
@@ -249,8 +293,14 @@ fn enrichment_gate_downgrade_l1_and_linf_together() {
     let cur = snap("cur", normal(), &[("a", 40_000), ("b", 20_000)], 100, ep);
     let budget = fresh_budget(ep);
     let d = evaluate_gate("claim-both-drift", &bl, &cur, &budget, &cfg, ep);
-    assert!(d.downgrade_reasons.contains(&DowngradeReason::ExcessiveL1Drift));
-    assert!(d.downgrade_reasons.contains(&DowngradeReason::ExcessiveLinfDrift));
+    assert!(
+        d.downgrade_reasons
+            .contains(&DowngradeReason::ExcessiveL1Drift)
+    );
+    assert!(
+        d.downgrade_reasons
+            .contains(&DowngradeReason::ExcessiveLinfDrift)
+    );
 }
 
 #[test]
@@ -263,8 +313,14 @@ fn enrichment_gate_block_l1_drift_and_budget() {
     budget.record_transition(normal(), normal(), 0, ep);
     let d = evaluate_gate("claim-block-combo", &bl, &cur, &budget, &default_cfg(), ep);
     assert!(d.is_blocked());
-    assert!(d.downgrade_reasons.contains(&DowngradeReason::ExcessiveL1Drift));
-    assert!(d.downgrade_reasons.contains(&DowngradeReason::TransitionBudgetExhausted));
+    assert!(
+        d.downgrade_reasons
+            .contains(&DowngradeReason::ExcessiveL1Drift)
+    );
+    assert!(
+        d.downgrade_reasons
+            .contains(&DowngradeReason::TransitionBudgetExhausted)
+    );
 }
 
 #[test]
@@ -290,8 +346,20 @@ fn enrichment_gate_pass_with_all_checks_at_boundary() {
         max_linf_drift_millionths: 100_000,
         ..default_cfg()
     };
-    let bl = snap("bl", normal(), &[("a", 0)], MIN_OBSERVATIONS_FOR_DRIFT, boundary_ep);
-    let cur = snap("cur", normal(), &[("a", 100_000)], MIN_OBSERVATIONS_FOR_DRIFT, ep);
+    let bl = snap(
+        "bl",
+        normal(),
+        &[("a", 0)],
+        MIN_OBSERVATIONS_FOR_DRIFT,
+        boundary_ep,
+    );
+    let cur = snap(
+        "cur",
+        normal(),
+        &[("a", 100_000)],
+        MIN_OBSERVATIONS_FOR_DRIFT,
+        ep,
+    );
     let budget = fresh_budget(ep);
     let d = evaluate_gate("boundary-pass", &bl, &cur, &budget, &cfg, ep);
     assert!(d.is_pass());
@@ -322,7 +390,14 @@ fn enrichment_gate_decision_id_prefix_matches_verdict() {
 
     // Use only stale baseline (low drift) to get a downgrade with just 1 reason
     let bl_stale = snap("bl2", normal(), &[("a", 505_000)], 100, epoch(1));
-    let d2 = evaluate_gate("claim-prefix2", &bl_stale, &cur, &budget, &default_cfg(), ep);
+    let d2 = evaluate_gate(
+        "claim-prefix2",
+        &bl_stale,
+        &cur,
+        &budget,
+        &default_cfg(),
+        ep,
+    );
     // Stale baseline alone -> downgrade
     assert!(d2.decision_id.starts_with("dg-downgrade-"));
 }
@@ -333,7 +408,14 @@ fn enrichment_gate_decision_abstain_id_prefix() {
     let bl = snap("bl", normal(), &[("a", 500_000)], 3, ep);
     let cur = snap("cur", normal(), &[("a", 505_000)], 100, ep);
     let budget = fresh_budget(ep);
-    let d = evaluate_gate("claim-abstain-prefix", &bl, &cur, &budget, &default_cfg(), ep);
+    let d = evaluate_gate(
+        "claim-abstain-prefix",
+        &bl,
+        &cur,
+        &budget,
+        &default_cfg(),
+        ep,
+    );
     assert!(d.decision_id.starts_with("dg-abstain-"));
 }
 
@@ -362,7 +444,10 @@ fn enrichment_config_zero_max_staleness() {
     let cur = snap("cur", normal(), &[("a", 505_000)], 100, ep);
     let budget = fresh_budget(ep);
     let d = evaluate_gate("claim-zero-stale", &bl, &cur, &budget, &cfg, ep);
-    assert!(d.downgrade_reasons.contains(&DowngradeReason::StaleBaseline));
+    assert!(
+        d.downgrade_reasons
+            .contains(&DowngradeReason::StaleBaseline)
+    );
 }
 
 #[test]
@@ -403,7 +488,14 @@ fn enrichment_batch_verdict_counts_correct() {
     let ep = epoch(50);
     let bl = snap("bl", normal(), &[("a", 500_000)], 100, ep);
     let budget = fresh_budget(ep);
-    let r = batch_evaluate(&["c1", "c2", "c3", "c4"], &bl, &bl, &budget, &default_cfg(), ep);
+    let r = batch_evaluate(
+        &["c1", "c2", "c3", "c4"],
+        &bl,
+        &bl,
+        &budget,
+        &default_cfg(),
+        ep,
+    );
     assert_eq!(*r.verdict_counts.get("pass").unwrap_or(&0), 4);
 }
 
@@ -435,13 +527,19 @@ fn enrichment_ledger_multiple_apply_updates_max_drift() {
     let d1 = evaluate_gate("c1", &bl, &cur1, &budget, &default_cfg(), ep);
     assert!(d1.is_pass());
     ledger.apply_decision(&d1);
-    let drift1 = ledger.get_record("c1").unwrap().max_passing_drift_millionths;
+    let drift1 = ledger
+        .get_record("c1")
+        .unwrap()
+        .max_passing_drift_millionths;
 
     let cur2 = snap("cur2", normal(), &[("a", 530_000)], 100, ep);
     let d2 = evaluate_gate("c1", &bl, &cur2, &budget, &default_cfg(), ep);
     assert!(d2.is_pass());
     ledger.apply_decision(&d2);
-    let drift2 = ledger.get_record("c1").unwrap().max_passing_drift_millionths;
+    let drift2 = ledger
+        .get_record("c1")
+        .unwrap()
+        .max_passing_drift_millionths;
 
     assert!(drift2 >= drift1);
 }
@@ -489,7 +587,9 @@ fn enrichment_ledger_serde_roundtrip() {
 #[test]
 fn enrichment_evidence_corpus_stable_family_passes() {
     let (specimens, _) = run_evidence_corpus(epoch(50));
-    let stable = specimens.iter().find(|s| s.family == DriftGateSpecimenFamily::StableLowDrift);
+    let stable = specimens
+        .iter()
+        .find(|s| s.family == DriftGateSpecimenFamily::StableLowDrift);
     assert!(stable.is_some());
     assert_eq!(stable.unwrap().decision.verdict, GateVerdict::Pass);
 }
@@ -497,7 +597,9 @@ fn enrichment_evidence_corpus_stable_family_passes() {
 #[test]
 fn enrichment_evidence_corpus_excessive_family_not_pass() {
     let (specimens, _) = run_evidence_corpus(epoch(50));
-    let excessive = specimens.iter().find(|s| s.family == DriftGateSpecimenFamily::ExcessiveDrift);
+    let excessive = specimens
+        .iter()
+        .find(|s| s.family == DriftGateSpecimenFamily::ExcessiveDrift);
     assert!(excessive.is_some());
     assert_ne!(excessive.unwrap().decision.verdict, GateVerdict::Pass);
 }
@@ -505,7 +607,9 @@ fn enrichment_evidence_corpus_excessive_family_not_pass() {
 #[test]
 fn enrichment_evidence_corpus_insufficient_data_abstains() {
     let (specimens, _) = run_evidence_corpus(epoch(50));
-    let insuff = specimens.iter().find(|s| s.family == DriftGateSpecimenFamily::InsufficientData);
+    let insuff = specimens
+        .iter()
+        .find(|s| s.family == DriftGateSpecimenFamily::InsufficientData);
     assert!(insuff.is_some());
     assert_eq!(insuff.unwrap().decision.verdict, GateVerdict::Abstain);
 }
@@ -546,8 +650,20 @@ fn enrichment_transition_event_serde_roundtrip() {
 #[test]
 fn enrichment_gate_decision_full_serde_roundtrip() {
     let ep = epoch(50);
-    let bl = snap("bl", normal(), &[("cpu", 500_000), ("mem", 300_000)], 100, ep);
-    let cur = snap("cur", elevated(), &[("cpu", 700_000), ("mem", 400_000)], 100, ep);
+    let bl = snap(
+        "bl",
+        normal(),
+        &[("cpu", 500_000), ("mem", 300_000)],
+        100,
+        ep,
+    );
+    let cur = snap(
+        "cur",
+        elevated(),
+        &[("cpu", 700_000), ("mem", 400_000)],
+        100,
+        ep,
+    );
     let mut budget = TransitionBudgetTracker::new(3, ep);
     budget.record_transition(normal(), elevated(), 50_000, epoch(51));
     let d = evaluate_gate("serde-test", &bl, &cur, &budget, &default_cfg(), ep);
@@ -607,8 +723,14 @@ fn enrichment_exactly_two_reasons_downgrade_not_block() {
     let cur = snap("cur", elevated(), &[("a", 500_000)], 100, ep);
     let budget = fresh_budget(ep);
     let d = evaluate_gate("2reasons", &bl, &cur, &budget, &default_cfg(), ep);
-    assert!(d.downgrade_reasons.contains(&DowngradeReason::StaleBaseline));
-    assert!(d.downgrade_reasons.contains(&DowngradeReason::RegimeChanged));
+    assert!(
+        d.downgrade_reasons
+            .contains(&DowngradeReason::StaleBaseline)
+    );
+    assert!(
+        d.downgrade_reasons
+            .contains(&DowngradeReason::RegimeChanged)
+    );
     if d.reason_count() == 2 {
         assert_eq!(d.verdict, GateVerdict::Downgrade);
     }
@@ -631,13 +753,25 @@ fn enrichment_single_reason_downgrade() {
 
 #[test]
 fn enrichment_snapshot_trustworthy_exactly_at_min() {
-    let s = snap("t", normal(), &[("a", 1)], MIN_OBSERVATIONS_FOR_DRIFT, epoch(1));
+    let s = snap(
+        "t",
+        normal(),
+        &[("a", 1)],
+        MIN_OBSERVATIONS_FOR_DRIFT,
+        epoch(1),
+    );
     assert!(s.is_trustworthy());
 }
 
 #[test]
 fn enrichment_snapshot_untrustworthy_one_below_min() {
-    let s = snap("u", normal(), &[("a", 1)], MIN_OBSERVATIONS_FOR_DRIFT - 1, epoch(1));
+    let s = snap(
+        "u",
+        normal(),
+        &[("a", 1)],
+        MIN_OBSERVATIONS_FOR_DRIFT - 1,
+        epoch(1),
+    );
     assert!(!s.is_trustworthy());
 }
 

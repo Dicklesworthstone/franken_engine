@@ -18,12 +18,12 @@ use frankenengine_engine::callback_stdlib_dispatch::{
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::stdlib_workload_verification::{
-    build_canonical_pure_suite, build_verification_report, check_mutation_contract,
-    infer_mutation_contract, suite_coverage_millionths, MutationContract,
-    MutationViolation, ScenarioResult, VerificationReport, WorkloadOutcome, WorkloadScenario,
-    WorkloadSuite, COMPONENT, MAX_MUTATION_VIOLATIONS, MIN_PASS_RATE_MILLIONTHS,
-    VERIFICATION_BEAD_ID, VERIFICATION_POLICY_ID, VERIFICATION_SCHEMA_VERSION,
-    franken_engine_stdlib_verification_manifest,
+    COMPONENT, MAX_MUTATION_VIOLATIONS, MIN_PASS_RATE_MILLIONTHS, MutationContract,
+    MutationViolation, ScenarioResult, VERIFICATION_BEAD_ID, VERIFICATION_POLICY_ID,
+    VERIFICATION_SCHEMA_VERSION, VerificationReport, WorkloadOutcome, WorkloadScenario,
+    WorkloadSuite, build_canonical_pure_suite, build_verification_report, check_mutation_contract,
+    franken_engine_stdlib_verification_manifest, infer_mutation_contract,
+    suite_coverage_millionths,
 };
 
 fn ep(n: u64) -> SecurityEpoch {
@@ -62,8 +62,10 @@ fn enrichment_mutation_contract_all_variants() {
 
 #[test]
 fn enrichment_mutation_contract_display_distinct() {
-    let displays: std::collections::BTreeSet<String> =
-        MutationContract::ALL.iter().map(|c| c.to_string()).collect();
+    let displays: std::collections::BTreeSet<String> = MutationContract::ALL
+        .iter()
+        .map(|c| c.to_string())
+        .collect();
     assert_eq!(displays.len(), 4);
 }
 
@@ -115,29 +117,46 @@ fn enrichment_workload_outcome_serde_all() {
 
 #[test]
 fn enrichment_infer_contract_sort() {
-    assert_eq!(infer_mutation_contract(StdlibMethod::ArraySort), MutationContract::MayMutate);
+    assert_eq!(
+        infer_mutation_contract(StdlibMethod::ArraySort),
+        MutationContract::MayMutate
+    );
 }
 
 #[test]
 fn enrichment_infer_contract_reduce() {
-    assert_eq!(infer_mutation_contract(StdlibMethod::ArrayReduce), MutationContract::Accumulator);
+    assert_eq!(
+        infer_mutation_contract(StdlibMethod::ArrayReduce),
+        MutationContract::Accumulator
+    );
 }
 
 #[test]
 fn enrichment_infer_contract_foreach() {
-    assert_eq!(infer_mutation_contract(StdlibMethod::ArrayForEach), MutationContract::SideEffectOnly);
+    assert_eq!(
+        infer_mutation_contract(StdlibMethod::ArrayForEach),
+        MutationContract::SideEffectOnly
+    );
 }
 
 #[test]
 fn enrichment_infer_contract_map() {
-    assert_eq!(infer_mutation_contract(StdlibMethod::ArrayMap), MutationContract::ReadOnly);
+    assert_eq!(
+        infer_mutation_contract(StdlibMethod::ArrayMap),
+        MutationContract::ReadOnly
+    );
 }
 
 #[test]
 fn enrichment_scenario_new_and_display() {
     let s = WorkloadScenario::new(
-        "test-1", StdlibMethod::ArrayMap, CallbackKind::PureFunction,
-        MutationContract::ReadOnly, 100, DispatchStrategy::InlinedCallback, "test",
+        "test-1",
+        StdlibMethod::ArrayMap,
+        CallbackKind::PureFunction,
+        MutationContract::ReadOnly,
+        100,
+        DispatchStrategy::InlinedCallback,
+        "test",
     );
     assert_eq!(s.scenario_id, "test-1");
     let d = format!("{s}");
@@ -147,8 +166,13 @@ fn enrichment_scenario_new_and_display() {
 #[test]
 fn enrichment_scenario_content_hash_deterministic() {
     let a = WorkloadScenario::new(
-        "s1", StdlibMethod::ArrayFilter, CallbackKind::PureFunction,
-        MutationContract::ReadOnly, 50, DispatchStrategy::InlinedCallback, "desc",
+        "s1",
+        StdlibMethod::ArrayFilter,
+        CallbackKind::PureFunction,
+        MutationContract::ReadOnly,
+        50,
+        DispatchStrategy::InlinedCallback,
+        "desc",
     );
     let b = a.clone();
     assert_eq!(a.content_hash(), b.content_hash());
@@ -157,8 +181,13 @@ fn enrichment_scenario_content_hash_deterministic() {
 #[test]
 fn enrichment_scenario_serde_roundtrip() {
     let s = WorkloadScenario::new(
-        "s1", StdlibMethod::ArrayMap, CallbackKind::PureFunction,
-        MutationContract::ReadOnly, 100, DispatchStrategy::InlinedCallback, "desc",
+        "s1",
+        StdlibMethod::ArrayMap,
+        CallbackKind::PureFunction,
+        MutationContract::ReadOnly,
+        100,
+        DispatchStrategy::InlinedCallback,
+        "desc",
     );
     let json = serde_json::to_string(&s).unwrap();
     let back: WorkloadScenario = serde_json::from_str(&json).unwrap();
@@ -175,8 +204,13 @@ fn enrichment_suite_new_empty() {
 fn enrichment_suite_add_scenario() {
     let mut suite = WorkloadSuite::new("suite-1", "test");
     suite.add_scenario(WorkloadScenario::new(
-        "s1", StdlibMethod::ArrayMap, CallbackKind::PureFunction,
-        MutationContract::ReadOnly, 10, DispatchStrategy::InlinedCallback, "d",
+        "s1",
+        StdlibMethod::ArrayMap,
+        CallbackKind::PureFunction,
+        MutationContract::ReadOnly,
+        10,
+        DispatchStrategy::InlinedCallback,
+        "d",
     ));
     assert_eq!(suite.scenario_count(), 1);
 }
@@ -190,7 +224,11 @@ fn enrichment_canonical_suite_covers_all_methods() {
 #[test]
 fn enrichment_canonical_suite_ids_unique() {
     let suite = build_canonical_pure_suite();
-    let ids: std::collections::BTreeSet<&str> = suite.scenarios.iter().map(|s| s.scenario_id.as_str()).collect();
+    let ids: std::collections::BTreeSet<&str> = suite
+        .scenarios
+        .iter()
+        .map(|s| s.scenario_id.as_str())
+        .collect();
     assert_eq!(ids.len(), suite.scenarios.len());
 }
 
@@ -286,6 +324,9 @@ fn enrichment_mutation_violation_serde() {
 #[test]
 fn enrichment_check_mutation_contract_always_true() {
     for contract in MutationContract::ALL {
-        assert!(check_mutation_contract(*contract, &DispatchStrategy::InlinedCallback));
+        assert!(check_mutation_contract(
+            *contract,
+            &DispatchStrategy::InlinedCallback
+        ));
     }
 }

@@ -25,13 +25,34 @@ use frankenengine_engine::region_lifecycle::RegionState;
 
 fn all_error_variants() -> Vec<HostLifecycleError> {
     vec![
-        HostLifecycleError::ExtensionAlreadyLoaded { extension_id: "ext-a".to_string() },
-        HostLifecycleError::ExtensionNotFound { extension_id: "ext-b".to_string() },
-        HostLifecycleError::ExtensionNotRunning { extension_id: "ext-c".to_string(), state: RegionState::Closed },
-        HostLifecycleError::SessionAlreadyExists { extension_id: "ext-d".to_string(), session_id: "s1".to_string() },
-        HostLifecycleError::SessionNotFound { extension_id: "ext-e".to_string(), session_id: "s2".to_string() },
-        HostLifecycleError::CellError { extension_id: "ext-f".to_string(), error_code: "E001".to_string(), message: "cell failed".to_string() },
-        HostLifecycleError::CancellationError { extension_id: "ext-g".to_string(), error_code: "C001".to_string(), message: "cancel failed".to_string() },
+        HostLifecycleError::ExtensionAlreadyLoaded {
+            extension_id: "ext-a".to_string(),
+        },
+        HostLifecycleError::ExtensionNotFound {
+            extension_id: "ext-b".to_string(),
+        },
+        HostLifecycleError::ExtensionNotRunning {
+            extension_id: "ext-c".to_string(),
+            state: RegionState::Closed,
+        },
+        HostLifecycleError::SessionAlreadyExists {
+            extension_id: "ext-d".to_string(),
+            session_id: "s1".to_string(),
+        },
+        HostLifecycleError::SessionNotFound {
+            extension_id: "ext-e".to_string(),
+            session_id: "s2".to_string(),
+        },
+        HostLifecycleError::CellError {
+            extension_id: "ext-f".to_string(),
+            error_code: "E001".to_string(),
+            message: "cell failed".to_string(),
+        },
+        HostLifecycleError::CancellationError {
+            extension_id: "ext-g".to_string(),
+            error_code: "C001".to_string(),
+            message: "cancel failed".to_string(),
+        },
         HostLifecycleError::HostShuttingDown,
     ]
 }
@@ -53,7 +74,11 @@ fn sample_event() -> HostLifecycleEvent {
 #[test]
 fn enrichment_error_display_all_unique() {
     let strs: BTreeSet<String> = all_error_variants().iter().map(|e| e.to_string()).collect();
-    assert_eq!(strs.len(), 8, "all 8 variants must produce distinct Display strings");
+    assert_eq!(
+        strs.len(),
+        8,
+        "all 8 variants must produce distinct Display strings"
+    );
 }
 
 // ── test: error Display non-empty ────────────────────────────────────────
@@ -61,7 +86,11 @@ fn enrichment_error_display_all_unique() {
 #[test]
 fn enrichment_error_display_non_empty() {
     for err in all_error_variants() {
-        assert!(!err.to_string().is_empty(), "Display for {:?} should be non-empty", err);
+        assert!(
+            !err.to_string().is_empty(),
+            "Display for {:?} should be non-empty",
+            err
+        );
     }
 }
 
@@ -69,7 +98,10 @@ fn enrichment_error_display_non_empty() {
 
 #[test]
 fn enrichment_error_code_strings_unique() {
-    let codes: BTreeSet<String> = all_error_variants().iter().map(|e| e.error_code().to_string()).collect();
+    let codes: BTreeSet<String> = all_error_variants()
+        .iter()
+        .map(|e| e.error_code().to_string())
+        .collect();
     assert_eq!(codes.len(), 8);
 }
 
@@ -78,7 +110,11 @@ fn enrichment_error_code_strings_unique() {
 #[test]
 fn enrichment_error_codes_start_with_host() {
     for err in all_error_variants() {
-        assert!(err.error_code().starts_with("host_"), "code should start with host_: {}", err.error_code());
+        assert!(
+            err.error_code().starts_with("host_"),
+            "code should start with host_: {}",
+            err.error_code()
+        );
     }
 }
 
@@ -86,14 +122,66 @@ fn enrichment_error_codes_start_with_host() {
 
 #[test]
 fn enrichment_error_code_stable_values() {
-    assert_eq!(HostLifecycleError::ExtensionAlreadyLoaded { extension_id: "x".to_string() }.error_code(), "host_extension_already_loaded");
-    assert_eq!(HostLifecycleError::ExtensionNotFound { extension_id: "x".to_string() }.error_code(), "host_extension_not_found");
-    assert_eq!(HostLifecycleError::ExtensionNotRunning { extension_id: "x".to_string(), state: RegionState::Closed }.error_code(), "host_extension_not_running");
-    assert_eq!(HostLifecycleError::SessionAlreadyExists { extension_id: "x".to_string(), session_id: "s".to_string() }.error_code(), "host_session_already_exists");
-    assert_eq!(HostLifecycleError::SessionNotFound { extension_id: "x".to_string(), session_id: "s".to_string() }.error_code(), "host_session_not_found");
-    assert_eq!(HostLifecycleError::CellError { extension_id: "x".to_string(), error_code: "e".to_string(), message: "m".to_string() }.error_code(), "host_cell_error");
-    assert_eq!(HostLifecycleError::CancellationError { extension_id: "x".to_string(), error_code: "e".to_string(), message: "m".to_string() }.error_code(), "host_cancellation_error");
-    assert_eq!(HostLifecycleError::HostShuttingDown.error_code(), "host_shutting_down");
+    assert_eq!(
+        HostLifecycleError::ExtensionAlreadyLoaded {
+            extension_id: "x".to_string()
+        }
+        .error_code(),
+        "host_extension_already_loaded"
+    );
+    assert_eq!(
+        HostLifecycleError::ExtensionNotFound {
+            extension_id: "x".to_string()
+        }
+        .error_code(),
+        "host_extension_not_found"
+    );
+    assert_eq!(
+        HostLifecycleError::ExtensionNotRunning {
+            extension_id: "x".to_string(),
+            state: RegionState::Closed
+        }
+        .error_code(),
+        "host_extension_not_running"
+    );
+    assert_eq!(
+        HostLifecycleError::SessionAlreadyExists {
+            extension_id: "x".to_string(),
+            session_id: "s".to_string()
+        }
+        .error_code(),
+        "host_session_already_exists"
+    );
+    assert_eq!(
+        HostLifecycleError::SessionNotFound {
+            extension_id: "x".to_string(),
+            session_id: "s".to_string()
+        }
+        .error_code(),
+        "host_session_not_found"
+    );
+    assert_eq!(
+        HostLifecycleError::CellError {
+            extension_id: "x".to_string(),
+            error_code: "e".to_string(),
+            message: "m".to_string()
+        }
+        .error_code(),
+        "host_cell_error"
+    );
+    assert_eq!(
+        HostLifecycleError::CancellationError {
+            extension_id: "x".to_string(),
+            error_code: "e".to_string(),
+            message: "m".to_string()
+        }
+        .error_code(),
+        "host_cancellation_error"
+    );
+    assert_eq!(
+        HostLifecycleError::HostShuttingDown.error_code(),
+        "host_shutting_down"
+    );
 }
 
 // ── test: error implements std::error::Error ─────────────────────────────
@@ -120,7 +208,9 @@ fn enrichment_error_std_error_all_variants() {
 
 #[test]
 fn enrichment_error_display_extension_already_loaded() {
-    let err = HostLifecycleError::ExtensionAlreadyLoaded { extension_id: "ext-abc".to_string() };
+    let err = HostLifecycleError::ExtensionAlreadyLoaded {
+        extension_id: "ext-abc".to_string(),
+    };
     let msg = err.to_string();
     assert!(msg.contains("ext-abc"));
     assert!(msg.contains("already loaded"));
@@ -128,7 +218,9 @@ fn enrichment_error_display_extension_already_loaded() {
 
 #[test]
 fn enrichment_error_display_extension_not_found() {
-    let err = HostLifecycleError::ExtensionNotFound { extension_id: "ext-xyz".to_string() };
+    let err = HostLifecycleError::ExtensionNotFound {
+        extension_id: "ext-xyz".to_string(),
+    };
     let msg = err.to_string();
     assert!(msg.contains("ext-xyz"));
     assert!(msg.contains("not found"));
@@ -136,7 +228,10 @@ fn enrichment_error_display_extension_not_found() {
 
 #[test]
 fn enrichment_error_display_extension_not_running() {
-    let err = HostLifecycleError::ExtensionNotRunning { extension_id: "ext-q".to_string(), state: RegionState::Closed };
+    let err = HostLifecycleError::ExtensionNotRunning {
+        extension_id: "ext-q".to_string(),
+        state: RegionState::Closed,
+    };
     let msg = err.to_string();
     assert!(msg.contains("ext-q"));
     assert!(msg.contains("not running"));
@@ -144,7 +239,10 @@ fn enrichment_error_display_extension_not_running() {
 
 #[test]
 fn enrichment_error_display_session_already_exists() {
-    let err = HostLifecycleError::SessionAlreadyExists { extension_id: "ext-a".to_string(), session_id: "s1".to_string() };
+    let err = HostLifecycleError::SessionAlreadyExists {
+        extension_id: "ext-a".to_string(),
+        session_id: "s1".to_string(),
+    };
     let msg = err.to_string();
     assert!(msg.contains("s1"));
     assert!(msg.contains("already exists"));
@@ -152,7 +250,10 @@ fn enrichment_error_display_session_already_exists() {
 
 #[test]
 fn enrichment_error_display_session_not_found() {
-    let err = HostLifecycleError::SessionNotFound { extension_id: "ext-a".to_string(), session_id: "s-gone".to_string() };
+    let err = HostLifecycleError::SessionNotFound {
+        extension_id: "ext-a".to_string(),
+        session_id: "s-gone".to_string(),
+    };
     let msg = err.to_string();
     assert!(msg.contains("s-gone"));
     assert!(msg.contains("not found"));
@@ -160,7 +261,11 @@ fn enrichment_error_display_session_not_found() {
 
 #[test]
 fn enrichment_error_display_cell_error() {
-    let err = HostLifecycleError::CellError { extension_id: "ext-x".to_string(), error_code: "E42".to_string(), message: "cell failed".to_string() };
+    let err = HostLifecycleError::CellError {
+        extension_id: "ext-x".to_string(),
+        error_code: "E42".to_string(),
+        message: "cell failed".to_string(),
+    };
     let msg = err.to_string();
     assert!(msg.contains("ext-x"));
     assert!(msg.contains("E42"));
@@ -169,7 +274,11 @@ fn enrichment_error_display_cell_error() {
 
 #[test]
 fn enrichment_error_display_cancellation_error() {
-    let err = HostLifecycleError::CancellationError { extension_id: "ext-y".to_string(), error_code: "C99".to_string(), message: "cancel failed".to_string() };
+    let err = HostLifecycleError::CancellationError {
+        extension_id: "ext-y".to_string(),
+        error_code: "C99".to_string(),
+        message: "cancel failed".to_string(),
+    };
     let msg = err.to_string();
     assert!(msg.contains("ext-y"));
     assert!(msg.contains("C99"));
@@ -197,7 +306,10 @@ fn enrichment_error_serde_all_variants() {
 
 #[test]
 fn enrichment_error_serde_json_variant_keys_distinct() {
-    let jsons: BTreeSet<String> = all_error_variants().iter().map(|e| serde_json::to_string(e).unwrap()).collect();
+    let jsons: BTreeSet<String> = all_error_variants()
+        .iter()
+        .map(|e| serde_json::to_string(e).unwrap())
+        .collect();
     assert_eq!(jsons.len(), 8);
 }
 
@@ -205,7 +317,10 @@ fn enrichment_error_serde_json_variant_keys_distinct() {
 
 #[test]
 fn enrichment_error_debug_all_distinct() {
-    let debugs: BTreeSet<String> = all_error_variants().iter().map(|e| format!("{e:?}")).collect();
+    let debugs: BTreeSet<String> = all_error_variants()
+        .iter()
+        .map(|e| format!("{e:?}"))
+        .collect();
     assert_eq!(debugs.len(), 8);
 }
 
@@ -261,7 +376,15 @@ fn enrichment_event_json_field_names() {
     let event = sample_event();
     let val = serde_json::to_value(&event).unwrap();
     let obj = val.as_object().unwrap();
-    for key in ["trace_id", "extension_id", "session_id", "component", "event", "outcome", "error_code"] {
+    for key in [
+        "trace_id",
+        "extension_id",
+        "session_id",
+        "component",
+        "event",
+        "outcome",
+        "error_code",
+    ] {
         assert!(obj.contains_key(key), "missing field: {key}");
     }
     assert_eq!(obj.len(), 7);
@@ -293,8 +416,12 @@ fn enrichment_event_debug_contains_fields() {
 
 #[test]
 fn enrichment_error_different_ids_different_display() {
-    let e1 = HostLifecycleError::ExtensionNotFound { extension_id: "alpha".to_string() };
-    let e2 = HostLifecycleError::ExtensionNotFound { extension_id: "beta".to_string() };
+    let e1 = HostLifecycleError::ExtensionNotFound {
+        extension_id: "alpha".to_string(),
+    };
+    let e2 = HostLifecycleError::ExtensionNotFound {
+        extension_id: "beta".to_string(),
+    };
     assert_ne!(e1.to_string(), e2.to_string());
     assert!(e1.to_string().contains("alpha"));
     assert!(e2.to_string().contains("beta"));
@@ -304,8 +431,12 @@ fn enrichment_error_different_ids_different_display() {
 
 #[test]
 fn enrichment_error_same_variant_same_code() {
-    let e1 = HostLifecycleError::ExtensionNotFound { extension_id: "a".to_string() };
-    let e2 = HostLifecycleError::ExtensionNotFound { extension_id: "b".to_string() };
+    let e1 = HostLifecycleError::ExtensionNotFound {
+        extension_id: "a".to_string(),
+    };
+    let e2 = HostLifecycleError::ExtensionNotFound {
+        extension_id: "b".to_string(),
+    };
     assert_eq!(e1.error_code(), e2.error_code());
 }
 
@@ -313,7 +444,9 @@ fn enrichment_error_same_variant_same_code() {
 
 #[test]
 fn enrichment_error_json_extension_already_loaded_fields() {
-    let err = HostLifecycleError::ExtensionAlreadyLoaded { extension_id: "ext-z".to_string() };
+    let err = HostLifecycleError::ExtensionAlreadyLoaded {
+        extension_id: "ext-z".to_string(),
+    };
     let val = serde_json::to_value(&err).unwrap();
     let obj = val.as_object().unwrap();
     assert!(obj.contains_key("ExtensionAlreadyLoaded"));
@@ -323,7 +456,10 @@ fn enrichment_error_json_extension_already_loaded_fields() {
 
 #[test]
 fn enrichment_error_json_session_not_found_fields() {
-    let err = HostLifecycleError::SessionNotFound { extension_id: "e".to_string(), session_id: "s".to_string() };
+    let err = HostLifecycleError::SessionNotFound {
+        extension_id: "e".to_string(),
+        session_id: "s".to_string(),
+    };
     let val = serde_json::to_value(&err).unwrap();
     let obj = val.as_object().unwrap();
     assert!(obj.contains_key("SessionNotFound"));

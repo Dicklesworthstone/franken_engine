@@ -1224,6 +1224,34 @@ fn default_matrix_includes_cyclic_import_edge_case() {
 }
 
 #[test]
+fn default_matrix_pins_extensionless_relative_esm_contract() {
+    let m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let entry = m
+        .entry("package-type-module-extensionless-relative")
+        .expect("default matrix should include extensionless-relative ESM case");
+    assert_eq!(entry.feature, ModuleFeature::PackageJsonFields);
+    assert_eq!(entry.node_behavior, "reject_extensionless_relative");
+    assert_eq!(entry.bun_behavior, "resolve_extensionless_relative");
+    assert_eq!(
+        entry.franken_native_behavior,
+        "reject_extensionless_relative"
+    );
+    assert_eq!(
+        entry.franken_node_compat_behavior,
+        "reject_extensionless_relative"
+    );
+    assert_eq!(
+        entry.franken_bun_compat_behavior,
+        "resolve_extensionless_relative"
+    );
+    assert!(
+        entry
+            .lockstep_case_refs
+            .contains(&"lockstep/module/package-type-module-extensionless-relative".to_string())
+    );
+}
+
+#[test]
 fn scenario_report_summarizes_divergence_categories_and_guidance() {
     let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
     let required = m.required_waiver_ids();

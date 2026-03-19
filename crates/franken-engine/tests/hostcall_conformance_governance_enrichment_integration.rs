@@ -40,7 +40,10 @@ fn ep(n: u64) -> SecurityEpoch {
 
 #[test]
 fn enrichment_constants_schema_version() {
-    assert_eq!(SCHEMA_VERSION, "franken-engine.hostcall-conformance-governance.v1");
+    assert_eq!(
+        SCHEMA_VERSION,
+        "franken-engine.hostcall-conformance-governance.v1"
+    );
 }
 
 #[test]
@@ -191,7 +194,10 @@ fn enrichment_replay_drop_category_all_count() {
 
 #[test]
 fn enrichment_replay_drop_category_display_unique() {
-    let labels: BTreeSet<String> = ReplayDropCategory::ALL.iter().map(|c| c.to_string()).collect();
+    let labels: BTreeSet<String> = ReplayDropCategory::ALL
+        .iter()
+        .map(|c| c.to_string())
+        .collect();
     assert_eq!(labels.len(), 5);
 }
 
@@ -264,7 +270,10 @@ fn enrichment_degraded_mode_kind_all_count() {
 
 #[test]
 fn enrichment_degraded_mode_kind_display_unique() {
-    let labels: BTreeSet<String> = DegradedModeKind::ALL.iter().map(|k| k.to_string()).collect();
+    let labels: BTreeSet<String> = DegradedModeKind::ALL
+        .iter()
+        .map(|k| k.to_string())
+        .collect();
     assert_eq!(labels.len(), 5);
 }
 
@@ -384,7 +393,10 @@ fn enrichment_governance_config_default_values() {
     assert_eq!(c.min_conformance, DEFAULT_MIN_CONFORMANCE);
     assert_eq!(c.max_drop_rate, DEFAULT_MAX_DROP_RATE);
     assert_eq!(c.max_degraded_duration, DEFAULT_MAX_DEGRADED_DURATION_NS);
-    assert_eq!(c.min_observability_tolerance, DEFAULT_OBSERVABILITY_TOLERANCE);
+    assert_eq!(
+        c.min_observability_tolerance,
+        DEFAULT_OBSERVABILITY_TOLERANCE
+    );
     assert_eq!(c.required_axes, DEFAULT_MIN_REQUIRED_AXES);
 }
 
@@ -423,7 +435,10 @@ fn enrichment_governance_verdict_all_count() {
 
 #[test]
 fn enrichment_governance_verdict_display_unique() {
-    let labels: BTreeSet<String> = GovernanceVerdict::ALL.iter().map(|v| v.to_string()).collect();
+    let labels: BTreeSet<String> = GovernanceVerdict::ALL
+        .iter()
+        .map(|v| v.to_string())
+        .collect();
     assert_eq!(labels.len(), 7);
 }
 
@@ -431,7 +446,10 @@ fn enrichment_governance_verdict_display_unique() {
 fn enrichment_governance_verdict_is_approved_flag() {
     assert!(GovernanceVerdict::Approved.is_approved());
     assert!(!GovernanceVerdict::Approved.is_failure());
-    for v in GovernanceVerdict::ALL.iter().filter(|v| **v != GovernanceVerdict::Approved) {
+    for v in GovernanceVerdict::ALL
+        .iter()
+        .filter(|v| **v != GovernanceVerdict::Approved)
+    {
         assert!(!v.is_approved());
         assert!(v.is_failure());
     }
@@ -511,7 +529,10 @@ fn enrichment_evaluator_degraded_mode_violation() {
     eval.add_conformance(ConformanceAxis::Timeout, 950, 50);
     eval.add_degraded_mode(DegradedModeKind::ReducedBandwidth, u64::MAX, true);
     let receipt = eval.evaluate(ep(42));
-    assert_eq!(receipt.verdict, GovernanceVerdict::DegradedModePolicyViolation);
+    assert_eq!(
+        receipt.verdict,
+        GovernanceVerdict::DegradedModePolicyViolation
+    );
 }
 
 #[test]

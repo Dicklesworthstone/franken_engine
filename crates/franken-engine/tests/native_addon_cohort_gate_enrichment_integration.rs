@@ -11,10 +11,9 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::native_addon_cohort_gate::{
-    AddonDescriptor, BEAD_ID, COMPONENT, CohortTier,
-    GateConfig, GateVerdict, GovernanceAction, ParityDimension,
-    ParityFinding, POLICY_ID, SCHEMA_VERSION, SecurityClass, SecurityFinding, SecurityVerdict,
-    ThroughputMetric, ThroughputSample, compute_parity_verdict, compute_receipt,
+    AddonDescriptor, BEAD_ID, COMPONENT, CohortTier, GateConfig, GateVerdict, GovernanceAction,
+    POLICY_ID, ParityDimension, ParityFinding, SCHEMA_VERSION, SecurityClass, SecurityFinding,
+    SecurityVerdict, ThroughputMetric, ThroughputSample, compute_parity_verdict, compute_receipt,
     compute_security_verdict, compute_throughput_verdict, compute_tier_coverage,
     derive_governance_action, evaluate_addon, evaluate_cohort_gate,
 };
@@ -58,13 +57,22 @@ fn make_security(addon: &str, class: SecurityClass, verdict: SecurityVerdict) ->
         class,
         addon_name: addon.to_string(),
         verdict,
-        vulnerability_count: if verdict == SecurityVerdict::Vulnerable { 1 } else { 0 },
+        vulnerability_count: if verdict == SecurityVerdict::Vulnerable {
+            1
+        } else {
+            0
+        },
         detail: format!("{} on {}", class, addon),
         content_hash: ContentHash::compute(addon.as_bytes()),
     }
 }
 
-fn make_throughput(addon: &str, metric: ThroughputMetric, baseline: u64, candidate: u64) -> ThroughputSample {
+fn make_throughput(
+    addon: &str,
+    metric: ThroughputMetric,
+    baseline: u64,
+    candidate: u64,
+) -> ThroughputSample {
     ThroughputSample {
         metric,
         addon_name: addon.to_string(),
@@ -213,7 +221,10 @@ fn integ_gate_verdict_adoptability() {
 
 #[test]
 fn integ_parity_verdict_empty_is_insufficient() {
-    assert_eq!(compute_parity_verdict(&[], 800_000), GateVerdict::InsufficientEvidence);
+    assert_eq!(
+        compute_parity_verdict(&[], 800_000),
+        GateVerdict::InsufficientEvidence
+    );
 }
 
 #[test]
@@ -222,7 +233,10 @@ fn integ_parity_verdict_all_pass() {
         .iter()
         .map(|d| make_parity("test", *d, true))
         .collect();
-    assert_eq!(compute_parity_verdict(&findings, 800_000), GateVerdict::Pass);
+    assert_eq!(
+        compute_parity_verdict(&findings, 800_000),
+        GateVerdict::Pass
+    );
 }
 
 #[test]
@@ -232,7 +246,10 @@ fn integ_parity_verdict_below_threshold_fails() {
         .enumerate()
         .map(|(i, d)| make_parity("test", *d, i < 2))
         .collect();
-    assert_eq!(compute_parity_verdict(&findings, 800_000), GateVerdict::Fail);
+    assert_eq!(
+        compute_parity_verdict(&findings, 800_000),
+        GateVerdict::Fail
+    );
 }
 
 #[test]
@@ -242,7 +259,10 @@ fn integ_parity_verdict_conditional_at_half_threshold() {
         .enumerate()
         .map(|(i, d)| make_parity("test", *d, i < 3))
         .collect();
-    assert_eq!(compute_parity_verdict(&findings, 800_000), GateVerdict::ConditionalPass);
+    assert_eq!(
+        compute_parity_verdict(&findings, 800_000),
+        GateVerdict::ConditionalPass
+    );
 }
 
 // ===========================================================================
@@ -266,19 +286,41 @@ fn integ_security_verdict_all_secure() {
 #[test]
 fn integ_security_verdict_one_vulnerable_overrides() {
     let findings = vec![
-        make_security("test", SecurityClass::MemoryIsolation, SecurityVerdict::Secure),
-        make_security("test", SecurityClass::InputValidation, SecurityVerdict::Vulnerable),
+        make_security(
+            "test",
+            SecurityClass::MemoryIsolation,
+            SecurityVerdict::Secure,
+        ),
+        make_security(
+            "test",
+            SecurityClass::InputValidation,
+            SecurityVerdict::Vulnerable,
+        ),
     ];
-    assert_eq!(compute_security_verdict(&findings), SecurityVerdict::Vulnerable);
+    assert_eq!(
+        compute_security_verdict(&findings),
+        SecurityVerdict::Vulnerable
+    );
 }
 
 #[test]
 fn integ_security_verdict_conditionally_secure() {
     let findings = vec![
-        make_security("test", SecurityClass::MemoryIsolation, SecurityVerdict::Secure),
-        make_security("test", SecurityClass::OutputSanitization, SecurityVerdict::ConditionallySecure),
+        make_security(
+            "test",
+            SecurityClass::MemoryIsolation,
+            SecurityVerdict::Secure,
+        ),
+        make_security(
+            "test",
+            SecurityClass::OutputSanitization,
+            SecurityVerdict::ConditionallySecure,
+        ),
     ];
-    assert_eq!(compute_security_verdict(&findings), SecurityVerdict::ConditionallySecure);
+    assert_eq!(
+        compute_security_verdict(&findings),
+        SecurityVerdict::ConditionallySecure
+    );
 }
 
 // ===========================================================================
@@ -287,38 +329,76 @@ fn integ_security_verdict_conditionally_secure() {
 
 #[test]
 fn integ_throughput_verdict_empty_is_insufficient() {
-    assert_eq!(compute_throughput_verdict(&[], 100_000, 30), GateVerdict::InsufficientEvidence);
+    assert_eq!(
+        compute_throughput_verdict(&[], 100_000, 30),
+        GateVerdict::InsufficientEvidence
+    );
 }
 
 #[test]
 fn integ_throughput_verdict_no_regression_passes() {
-    let samples = vec![make_throughput("test", ThroughputMetric::CallLatency, MILLIONTHS, MILLIONTHS)];
-    assert_eq!(compute_throughput_verdict(&samples, 100_000, 30), GateVerdict::Pass);
+    let samples = vec![make_throughput(
+        "test",
+        ThroughputMetric::CallLatency,
+        MILLIONTHS,
+        MILLIONTHS,
+    )];
+    assert_eq!(
+        compute_throughput_verdict(&samples, 100_000, 30),
+        GateVerdict::Pass
+    );
 }
 
 #[test]
 fn integ_throughput_verdict_regression_above_threshold_fails() {
-    let samples = vec![make_throughput("test", ThroughputMetric::CallLatency, MILLIONTHS, 1_200_000)];
-    assert_eq!(compute_throughput_verdict(&samples, 100_000, 30), GateVerdict::Fail);
+    let samples = vec![make_throughput(
+        "test",
+        ThroughputMetric::CallLatency,
+        MILLIONTHS,
+        1_200_000,
+    )];
+    assert_eq!(
+        compute_throughput_verdict(&samples, 100_000, 30),
+        GateVerdict::Fail
+    );
 }
 
 #[test]
 fn integ_throughput_verdict_regression_between_half_and_full_conditional() {
-    let samples = vec![make_throughput("test", ThroughputMetric::CallLatency, MILLIONTHS, 1_070_000)];
-    assert_eq!(compute_throughput_verdict(&samples, 100_000, 30), GateVerdict::ConditionalPass);
+    let samples = vec![make_throughput(
+        "test",
+        ThroughputMetric::CallLatency,
+        MILLIONTHS,
+        1_070_000,
+    )];
+    assert_eq!(
+        compute_throughput_verdict(&samples, 100_000, 30),
+        GateVerdict::ConditionalPass
+    );
 }
 
 #[test]
 fn integ_throughput_verdict_insufficient_samples() {
     let mut sample = make_throughput("test", ThroughputMetric::CallLatency, MILLIONTHS, 1_200_000);
     sample.sample_count = 5;
-    assert_eq!(compute_throughput_verdict(&[sample], 100_000, 30), GateVerdict::InsufficientEvidence);
+    assert_eq!(
+        compute_throughput_verdict(&[sample], 100_000, 30),
+        GateVerdict::InsufficientEvidence
+    );
 }
 
 #[test]
 fn integ_throughput_zero_baseline_skipped() {
-    let samples = vec![make_throughput("test", ThroughputMetric::CallLatency, 0, 1_200_000)];
-    assert_eq!(compute_throughput_verdict(&samples, 100_000, 30), GateVerdict::Pass);
+    let samples = vec![make_throughput(
+        "test",
+        ThroughputMetric::CallLatency,
+        0,
+        1_200_000,
+    )];
+    assert_eq!(
+        compute_throughput_verdict(&samples, 100_000, 30),
+        GateVerdict::Pass
+    );
 }
 
 // ===========================================================================
@@ -328,7 +408,11 @@ fn integ_throughput_zero_baseline_skipped() {
 #[test]
 fn integ_governance_pass_secure_allows() {
     assert_eq!(
-        derive_governance_action(&GateVerdict::Pass, &SecurityVerdict::Secure, &CohortTier::Medium),
+        derive_governance_action(
+            &GateVerdict::Pass,
+            &SecurityVerdict::Secure,
+            &CohortTier::Medium
+        ),
         GovernanceAction::AllowAdoption
     );
 }
@@ -336,7 +420,11 @@ fn integ_governance_pass_secure_allows() {
 #[test]
 fn integ_governance_vulnerable_critical_blocks() {
     assert_eq!(
-        derive_governance_action(&GateVerdict::Pass, &SecurityVerdict::Vulnerable, &CohortTier::Critical),
+        derive_governance_action(
+            &GateVerdict::Pass,
+            &SecurityVerdict::Vulnerable,
+            &CohortTier::Critical
+        ),
         GovernanceAction::BlockAdoption
     );
 }
@@ -344,7 +432,11 @@ fn integ_governance_vulnerable_critical_blocks() {
 #[test]
 fn integ_governance_vulnerable_low_remediates() {
     assert_eq!(
-        derive_governance_action(&GateVerdict::Pass, &SecurityVerdict::Vulnerable, &CohortTier::Low),
+        derive_governance_action(
+            &GateVerdict::Pass,
+            &SecurityVerdict::Vulnerable,
+            &CohortTier::Low
+        ),
         GovernanceAction::RequireRemediation
     );
 }
@@ -352,7 +444,11 @@ fn integ_governance_vulnerable_low_remediates() {
 #[test]
 fn integ_governance_fail_medium_remediates() {
     assert_eq!(
-        derive_governance_action(&GateVerdict::Fail, &SecurityVerdict::Secure, &CohortTier::Medium),
+        derive_governance_action(
+            &GateVerdict::Fail,
+            &SecurityVerdict::Secure,
+            &CohortTier::Medium
+        ),
         GovernanceAction::RequireRemediation
     );
 }
@@ -360,7 +456,11 @@ fn integ_governance_fail_medium_remediates() {
 #[test]
 fn integ_governance_fail_low_downgrades() {
     assert_eq!(
-        derive_governance_action(&GateVerdict::Fail, &SecurityVerdict::Secure, &CohortTier::Low),
+        derive_governance_action(
+            &GateVerdict::Fail,
+            &SecurityVerdict::Secure,
+            &CohortTier::Low
+        ),
         GovernanceAction::DowngradeTier
     );
 }
@@ -368,7 +468,11 @@ fn integ_governance_fail_low_downgrades() {
 #[test]
 fn integ_governance_unassessed_high_audits() {
     assert_eq!(
-        derive_governance_action(&GateVerdict::Pass, &SecurityVerdict::Unassessed, &CohortTier::High),
+        derive_governance_action(
+            &GateVerdict::Pass,
+            &SecurityVerdict::Unassessed,
+            &CohortTier::High
+        ),
         GovernanceAction::RequireAudit
     );
 }
@@ -419,9 +523,18 @@ fn integ_empty_cohort_insufficient_evidence() {
 fn integ_single_addon_all_pass() {
     let config = GateConfig::default();
     let addon = make_addon("good", CohortTier::Medium);
-    let parity: Vec<_> = ParityDimension::ALL.iter().map(|d| make_parity("good", *d, true)).collect();
-    let security: Vec<_> = SecurityClass::ALL.iter().map(|c| make_security("good", *c, SecurityVerdict::Secure)).collect();
-    let throughput: Vec<_> = ThroughputMetric::ALL.iter().map(|m| make_throughput("good", *m, MILLIONTHS, MILLIONTHS)).collect();
+    let parity: Vec<_> = ParityDimension::ALL
+        .iter()
+        .map(|d| make_parity("good", *d, true))
+        .collect();
+    let security: Vec<_> = SecurityClass::ALL
+        .iter()
+        .map(|c| make_security("good", *c, SecurityVerdict::Secure))
+        .collect();
+    let throughput: Vec<_> = ThroughputMetric::ALL
+        .iter()
+        .map(|m| make_throughput("good", *m, MILLIONTHS, MILLIONTHS))
+        .collect();
     let report = evaluate_cohort_gate(&config, &[addon], &parity, &security, &throughput, ep(1));
     assert_eq!(report.overall_verdict, GateVerdict::Pass);
     assert_eq!(report.passing_addons, 1);
@@ -432,7 +545,11 @@ fn integ_single_addon_all_pass() {
 fn integ_critical_failure_propagates() {
     let config = GateConfig::default();
     let addon = make_addon("vuln", CohortTier::Critical);
-    let security = vec![make_security("vuln", SecurityClass::MemoryIsolation, SecurityVerdict::Vulnerable)];
+    let security = vec![make_security(
+        "vuln",
+        SecurityClass::MemoryIsolation,
+        SecurityVerdict::Vulnerable,
+    )];
     let report = evaluate_cohort_gate(&config, &[addon], &[], &security, &[], ep(1));
     assert_eq!(report.overall_verdict, GateVerdict::Fail);
     assert_eq!(report.governance_action, GovernanceAction::BlockAdoption);
@@ -452,9 +569,18 @@ fn integ_tier_coverage_empty() {
 fn integ_tier_coverage_all_pass_is_100_percent() {
     let config = GateConfig::default();
     let addon = make_addon("a1", CohortTier::Medium);
-    let parity: Vec<_> = ParityDimension::ALL.iter().map(|d| make_parity("a1", *d, true)).collect();
-    let security: Vec<_> = SecurityClass::ALL.iter().map(|c| make_security("a1", *c, SecurityVerdict::Secure)).collect();
-    let throughput: Vec<_> = ThroughputMetric::ALL.iter().map(|m| make_throughput("a1", *m, MILLIONTHS, MILLIONTHS)).collect();
+    let parity: Vec<_> = ParityDimension::ALL
+        .iter()
+        .map(|d| make_parity("a1", *d, true))
+        .collect();
+    let security: Vec<_> = SecurityClass::ALL
+        .iter()
+        .map(|c| make_security("a1", *c, SecurityVerdict::Secure))
+        .collect();
+    let throughput: Vec<_> = ThroughputMetric::ALL
+        .iter()
+        .map(|m| make_throughput("a1", *m, MILLIONTHS, MILLIONTHS))
+        .collect();
     let result = evaluate_addon(&addon, &parity, &security, &throughput, &config);
     let coverage = compute_tier_coverage(&[result]);
     assert_eq!(coverage.len(), 1);

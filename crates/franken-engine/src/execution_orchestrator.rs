@@ -1334,6 +1334,12 @@ impl ExecutionOrchestrator {
             crate::ir_contract::Ir3Instruction::Construct { .. } => "construct",
             crate::ir_contract::Ir3Instruction::TemplateLiteral { .. } => "template_literal",
             crate::ir_contract::Ir3Instruction::Halt => "halt",
+            crate::ir_contract::Ir3Instruction::BeginTry { .. } => "begin_try",
+            crate::ir_contract::Ir3Instruction::EndTry => "end_try",
+            crate::ir_contract::Ir3Instruction::Throw { .. } => "throw",
+            crate::ir_contract::Ir3Instruction::EnterCatch { .. } => "enter_catch",
+            crate::ir_contract::Ir3Instruction::EnterFinally => "enter_finally",
+            crate::ir_contract::Ir3Instruction::EndFinally => "end_finally",
         }
     }
 
@@ -1383,7 +1389,26 @@ impl ExecutionOrchestrator {
                 }
             }
             crate::ir_contract::Ir3Instruction::Return { .. }
-            | crate::ir_contract::Ir3Instruction::Halt => {}
+            | crate::ir_contract::Ir3Instruction::Halt
+            | crate::ir_contract::Ir3Instruction::Throw { .. } => {}
+            crate::ir_contract::Ir3Instruction::BeginTry {
+                catch_target,
+                finally_target,
+            } => {
+                if next < instruction_count {
+                    out.push(next);
+                }
+                let ct = *catch_target as usize;
+                if ct < instruction_count {
+                    out.push(ct);
+                }
+                if let Some(ft) = finally_target {
+                    let ft = *ft as usize;
+                    if ft < instruction_count {
+                        out.push(ft);
+                    }
+                }
+            }
             _ => {
                 if next < instruction_count {
                     out.push(next);

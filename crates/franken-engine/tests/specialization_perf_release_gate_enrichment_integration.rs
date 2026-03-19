@@ -23,9 +23,9 @@ use std::collections::BTreeSet;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::specialization_perf_release_gate::{
-    BenchmarkComparison, BenchmarkSample, FallbackTestResult, GateDecision, GateFailureCode,
-    GateFinding, GateInput, GateLogEvent, LaneType, ReceiptChainReplayResult,
-    ReceiptCoverageEntry, StatisticalSummary, evaluate, GATE_COMPONENT, GATE_SCHEMA_VERSION,
+    BenchmarkComparison, BenchmarkSample, FallbackTestResult, GATE_COMPONENT, GATE_SCHEMA_VERSION,
+    GateDecision, GateFailureCode, GateFinding, GateInput, GateLogEvent, LaneType,
+    ReceiptChainReplayResult, ReceiptCoverageEntry, StatisticalSummary, evaluate,
 };
 
 // ---------------------------------------------------------------------------
@@ -329,7 +329,9 @@ fn enrichment_stats_empty_comparisons() {
 
 #[test]
 fn enrichment_stats_all_positive_significant() {
-    let comps: Vec<_> = (0..20).map(|i| comparison(&format!("w{i}"), 80, 100)).collect();
+    let comps: Vec<_> = (0..20)
+        .map(|i| comparison(&format!("w{i}"), 80, 100))
+        .collect();
     let s = StatisticalSummary::from_comparisons(&comps);
     assert_eq!(s.sample_count, 20);
     assert!(s.has_positive_delta());
@@ -339,7 +341,9 @@ fn enrichment_stats_all_positive_significant() {
 
 #[test]
 fn enrichment_stats_mixed_not_significant() {
-    let mut comps: Vec<_> = (0..10).map(|i| comparison(&format!("p{i}"), 80, 100)).collect();
+    let mut comps: Vec<_> = (0..10)
+        .map(|i| comparison(&format!("p{i}"), 80, 100))
+        .collect();
     comps.extend((0..10).map(|i| comparison(&format!("n{i}"), 120, 100)));
     let s = StatisticalSummary::from_comparisons(&comps);
     assert!(!s.significance_met);
@@ -347,14 +351,18 @@ fn enrichment_stats_mixed_not_significant() {
 
 #[test]
 fn enrichment_stats_few_samples_not_significant() {
-    let comps: Vec<_> = (0..4).map(|i| comparison(&format!("t{i}"), 50, 100)).collect();
+    let comps: Vec<_> = (0..4)
+        .map(|i| comparison(&format!("t{i}"), 50, 100))
+        .collect();
     let s = StatisticalSummary::from_comparisons(&comps);
     assert!(!s.significance_met);
 }
 
 #[test]
 fn enrichment_stats_serde_roundtrip() {
-    let comps: Vec<_> = (0..10).map(|i| comparison(&format!("s{i}"), 85, 100)).collect();
+    let comps: Vec<_> = (0..10)
+        .map(|i| comparison(&format!("s{i}"), 85, 100))
+        .collect();
     let s = StatisticalSummary::from_comparisons(&comps);
     let json = serde_json::to_string(&s).unwrap();
     let back: StatisticalSummary = serde_json::from_str(&json).unwrap();
@@ -420,7 +428,11 @@ fn enrichment_gate_fails_empty_comparisons() {
     input.comparisons.clear();
     let d = evaluate(&input);
     assert!(!d.pass);
-    assert!(d.findings.iter().any(|f| f.code == GateFailureCode::EmptyInput));
+    assert!(
+        d.findings
+            .iter()
+            .any(|f| f.code == GateFailureCode::EmptyInput)
+    );
 }
 
 #[test]
@@ -483,7 +495,11 @@ fn enrichment_gate_fails_on_fallback_hung() {
     input.fallback_tests[0].hung = true;
     let d = evaluate(&input);
     assert!(!d.pass);
-    assert!(d.findings.iter().any(|f| f.code == GateFailureCode::FallbackHung));
+    assert!(
+        d.findings
+            .iter()
+            .any(|f| f.code == GateFailureCode::FallbackHung)
+    );
 }
 
 #[test]

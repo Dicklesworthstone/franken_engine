@@ -28,7 +28,11 @@ fn make_schema(desc: &str, def: &[u8], fields: Vec<&str>) -> ComputationSchema {
     ComputationSchema::new(desc, def, fields.into_iter().map(String::from).collect())
 }
 
-fn make_registration(name: &str, kind: ProfileKind, class: IdempotencyClass) -> ComputationRegistration {
+fn make_registration(
+    name: &str,
+    kind: ProfileKind,
+    class: IdempotencyClass,
+) -> ComputationRegistration {
     ComputationRegistration {
         name: ComputationName::new(name).unwrap(),
         input_schema: make_schema("in", b"in-schema", vec!["field_a", "field_b"]),
@@ -45,8 +49,14 @@ fn default_reg(name: &str) -> ComputationRegistration {
 
 fn valid_input() -> CanonicalValue {
     let mut map = BTreeMap::new();
-    map.insert("field_a".to_string(), CanonicalValue::String("alpha".to_string()));
-    map.insert("field_b".to_string(), CanonicalValue::String("beta".to_string()));
+    map.insert(
+        "field_a".to_string(),
+        CanonicalValue::String("alpha".to_string()),
+    );
+    map.insert(
+        "field_b".to_string(),
+        CanonicalValue::String("beta".to_string()),
+    );
     CanonicalValue::Map(map)
 }
 
@@ -173,7 +183,8 @@ fn enrich_registry_new_equals_default() {
 fn enrich_hot_register_with_full_profile() {
     let mut reg = RemoteComputationRegistry::new();
     let profile = CapabilityProfile::full();
-    reg.hot_register(default_reg("hot_full"), &profile, "t-f").unwrap();
+    reg.hot_register(default_reg("hot_full"), &profile, "t-f")
+        .unwrap();
     assert_eq!(reg.len(), 1);
 }
 
@@ -182,7 +193,9 @@ fn enrich_hot_register_with_engine_core_denied() {
     let mut reg = RemoteComputationRegistry::new();
     let profile = CapabilityProfile::engine_core();
     // engine_core lacks EvidenceEmit, so hot-registration is denied
-    let err = reg.hot_register(default_reg("hot_ec"), &profile, "t-ec").unwrap_err();
+    let err = reg
+        .hot_register(default_reg("hot_ec"), &profile, "t-ec")
+        .unwrap_err();
     assert!(matches!(err, RegistryError::HotRegistrationDenied { .. }));
 }
 
@@ -206,7 +219,9 @@ fn enrich_validate_input_null_rejected() {
     let mut reg = RemoteComputationRegistry::new();
     reg.register(default_reg("comp")).unwrap();
     let name = ComputationName::new("comp").unwrap();
-    let err = reg.validate_input(&name, &CanonicalValue::Null, "t").unwrap_err();
+    let err = reg
+        .validate_input(&name, &CanonicalValue::Null, "t")
+        .unwrap_err();
     assert!(matches!(err, RegistryError::SchemaValidationFailed { .. }));
 }
 
@@ -215,7 +230,9 @@ fn enrich_validate_input_u64_rejected() {
     let mut reg = RemoteComputationRegistry::new();
     reg.register(default_reg("comp")).unwrap();
     let name = ComputationName::new("comp").unwrap();
-    let err = reg.validate_input(&name, &CanonicalValue::U64(42), "t").unwrap_err();
+    let err = reg
+        .validate_input(&name, &CanonicalValue::U64(42), "t")
+        .unwrap_err();
     assert!(matches!(err, RegistryError::SchemaValidationFailed { .. }));
 }
 
@@ -224,7 +241,9 @@ fn enrich_validate_input_bool_rejected() {
     let mut reg = RemoteComputationRegistry::new();
     reg.register(default_reg("comp")).unwrap();
     let name = ComputationName::new("comp").unwrap();
-    let err = reg.validate_input(&name, &CanonicalValue::Bool(true), "t").unwrap_err();
+    let err = reg
+        .validate_input(&name, &CanonicalValue::Bool(true), "t")
+        .unwrap_err();
     assert!(matches!(err, RegistryError::SchemaValidationFailed { .. }));
 }
 
@@ -282,7 +301,10 @@ fn enrich_capability_check_compute_only_registration() {
     reg.register(comp).unwrap();
     let name = ComputationName::new("co_comp").unwrap();
     // compute_only profile should pass for ComputeOnly requirement
-    assert!(reg.check_capability(&name, &CapabilityProfile::compute_only(), "t").is_ok());
+    assert!(
+        reg.check_capability(&name, &CapabilityProfile::compute_only(), "t")
+            .is_ok()
+    );
 }
 
 #[test]
@@ -300,7 +322,10 @@ fn enrich_capability_check_full_always_passes() {
         comp.capability_required = kind;
         reg.register(comp).unwrap();
         let name = ComputationName::new(name_str).unwrap();
-        assert!(reg.check_capability(&name, &CapabilityProfile::full(), "t").is_ok());
+        assert!(
+            reg.check_capability(&name, &CapabilityProfile::full(), "t")
+                .is_ok()
+        );
     }
 }
 
@@ -315,7 +340,9 @@ fn enrich_negotiate_same_version_compatible() {
     comp.version = SchemaVersion::new(3, 5, 2);
     reg.register(comp).unwrap();
     let name = ComputationName::new("comp").unwrap();
-    let result = reg.negotiate_version(&name, SchemaVersion::new(3, 5, 2)).unwrap();
+    let result = reg
+        .negotiate_version(&name, SchemaVersion::new(3, 5, 2))
+        .unwrap();
     assert!(result.compatible);
 }
 
@@ -326,7 +353,9 @@ fn enrich_negotiate_higher_minor_compatible() {
     comp.version = SchemaVersion::new(2, 3, 0);
     reg.register(comp).unwrap();
     let name = ComputationName::new("comp").unwrap();
-    let result = reg.negotiate_version(&name, SchemaVersion::new(2, 10, 0)).unwrap();
+    let result = reg
+        .negotiate_version(&name, SchemaVersion::new(2, 10, 0))
+        .unwrap();
     assert!(result.compatible);
 }
 
@@ -337,7 +366,9 @@ fn enrich_negotiate_lower_minor_incompatible() {
     comp.version = SchemaVersion::new(2, 5, 0);
     reg.register(comp).unwrap();
     let name = ComputationName::new("comp").unwrap();
-    let result = reg.negotiate_version(&name, SchemaVersion::new(2, 4, 0)).unwrap();
+    let result = reg
+        .negotiate_version(&name, SchemaVersion::new(2, 4, 0))
+        .unwrap();
     assert!(!result.compatible);
 }
 
@@ -348,7 +379,9 @@ fn enrich_negotiate_version_result_fields() {
     comp.version = SchemaVersion::new(1, 2, 3);
     reg.register(comp).unwrap();
     let name = ComputationName::new("comp").unwrap();
-    let result = reg.negotiate_version(&name, SchemaVersion::new(1, 5, 0)).unwrap();
+    let result = reg
+        .negotiate_version(&name, SchemaVersion::new(1, 5, 0))
+        .unwrap();
     assert_eq!(result.computation_name.as_str(), "comp");
     assert_eq!(result.local_version, SchemaVersion::new(1, 2, 3));
     assert_eq!(result.remote_version, SchemaVersion::new(1, 5, 0));
@@ -410,14 +443,18 @@ fn enrich_registration_event_count() {
 
 #[test]
 fn enrich_error_display_duplicate_registration() {
-    let err = RegistryError::DuplicateRegistration { name: "dup".to_string() };
+    let err = RegistryError::DuplicateRegistration {
+        name: "dup".to_string(),
+    };
     assert!(err.to_string().contains("dup"));
     assert!(err.to_string().contains("already registered"));
 }
 
 #[test]
 fn enrich_error_display_computation_not_found() {
-    let err = RegistryError::ComputationNotFound { name: "missing".to_string() };
+    let err = RegistryError::ComputationNotFound {
+        name: "missing".to_string(),
+    };
     assert!(err.to_string().contains("missing"));
     assert!(err.to_string().contains("not found"));
 }
@@ -458,7 +495,9 @@ fn enrich_error_display_version_incompatible() {
 
 #[test]
 fn enrich_error_display_hot_registration_denied() {
-    let err = RegistryError::HotRegistrationDenied { reason: "no caps".to_string() };
+    let err = RegistryError::HotRegistrationDenied {
+        reason: "no caps".to_string(),
+    };
     assert!(err.to_string().contains("no caps"));
 }
 
@@ -469,10 +508,20 @@ fn enrich_error_display_hot_registration_denied() {
 #[test]
 fn enrich_serde_registry_error_all_variants() {
     let errors: Vec<RegistryError> = vec![
-        RegistryError::InvalidComputationName { name: "BAD".to_string(), reason: "upper".to_string() },
-        RegistryError::DuplicateRegistration { name: "dup".to_string() },
-        RegistryError::ComputationNotFound { name: "missing".to_string() },
-        RegistryError::SchemaValidationFailed { computation_name: "c".to_string(), reason: "r".to_string() },
+        RegistryError::InvalidComputationName {
+            name: "BAD".to_string(),
+            reason: "upper".to_string(),
+        },
+        RegistryError::DuplicateRegistration {
+            name: "dup".to_string(),
+        },
+        RegistryError::ComputationNotFound {
+            name: "missing".to_string(),
+        },
+        RegistryError::SchemaValidationFailed {
+            computation_name: "c".to_string(),
+            reason: "r".to_string(),
+        },
         RegistryError::CapabilityDenied {
             computation_name: "c".to_string(),
             required: ProfileKind::Full,
@@ -483,8 +532,12 @@ fn enrich_serde_registry_error_all_variants() {
             registered: SchemaVersion::new(1, 0, 0),
             requested: SchemaVersion::new(2, 0, 0),
         },
-        RegistryError::ClosureRejected { reason: "closure".to_string() },
-        RegistryError::HotRegistrationDenied { reason: "denied".to_string() },
+        RegistryError::ClosureRejected {
+            reason: "closure".to_string(),
+        },
+        RegistryError::HotRegistrationDenied {
+            reason: "denied".to_string(),
+        },
     ];
     for err in errors {
         let json = serde_json::to_string(&err).unwrap();
@@ -534,7 +587,10 @@ fn enrich_naturally_idempotent_registration() {
     reg.register(comp).unwrap();
     let name = ComputationName::new("read_only").unwrap();
     let found = reg.lookup(&name).unwrap();
-    assert_eq!(found.idempotency_class, IdempotencyClass::NaturallyIdempotent);
+    assert_eq!(
+        found.idempotency_class,
+        IdempotencyClass::NaturallyIdempotent
+    );
 }
 
 #[test]

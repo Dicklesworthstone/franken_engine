@@ -22,11 +22,11 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::dp_budget_accountant::{AccountantConfig, BudgetAccountant};
 use frankenengine_engine::governance_scorecard::{
-    AttestedReceiptObservation, CrossRepoConformanceInput, GovernanceScorecardError,
-    GovernanceScorecardOutcome, GovernanceScorecardRequest, GovernanceScorecardThresholds,
-    GovernanceScorecardTrendPoint, MoonshotGovernorHealthInput, PrivacyBudgetHealthInput,
-    GOVERNANCE_SCORECARD_COMPONENT, GOVERNANCE_SCORECARD_SCHEMA_VERSION,
-    publish_governance_scorecard, verify_governance_scorecard_signature,
+    AttestedReceiptObservation, CrossRepoConformanceInput, GOVERNANCE_SCORECARD_COMPONENT,
+    GOVERNANCE_SCORECARD_SCHEMA_VERSION, GovernanceScorecardError, GovernanceScorecardOutcome,
+    GovernanceScorecardRequest, GovernanceScorecardThresholds, GovernanceScorecardTrendPoint,
+    MoonshotGovernorHealthInput, PrivacyBudgetHealthInput, publish_governance_scorecard,
+    verify_governance_scorecard_signature,
 };
 use frankenengine_engine::portfolio_governor::governance_audit_ledger::{
     GovernanceActor, GovernanceAuditLedger, GovernanceLedgerConfig, GovernanceReport,
@@ -278,7 +278,8 @@ fn enrichment_thresholds_validate_receipt_coverage_over_million() {
         min_attested_receipt_coverage_millionths: 1_000_001,
         ..GovernanceScorecardThresholds::default()
     });
-    let result = publish_governance_scorecard(&req, &test_signing_key(), &mut test_ledger(), test_actor());
+    let result =
+        publish_governance_scorecard(&req, &test_signing_key(), &mut test_ledger(), test_actor());
     assert!(result.is_err());
     if let Err(GovernanceScorecardError::InvalidInput { field, .. }) = &result {
         assert!(field.contains("min_attested_receipt_coverage"));
@@ -292,7 +293,8 @@ fn enrichment_thresholds_validate_privacy_consumption_over_million() {
         max_privacy_epoch_consumption_millionths: 1_000_001,
         ..GovernanceScorecardThresholds::default()
     });
-    let result = publish_governance_scorecard(&req, &test_signing_key(), &mut test_ledger(), test_actor());
+    let result =
+        publish_governance_scorecard(&req, &test_signing_key(), &mut test_ledger(), test_actor());
     assert!(result.is_err());
     if let Err(GovernanceScorecardError::InvalidInput { field, .. }) = &result {
         assert!(field.contains("max_privacy_epoch_consumption"));
@@ -306,7 +308,8 @@ fn enrichment_thresholds_validate_moonshot_override_over_million() {
         max_moonshot_override_frequency_millionths: 1_000_001,
         ..GovernanceScorecardThresholds::default()
     });
-    let result = publish_governance_scorecard(&req, &test_signing_key(), &mut test_ledger(), test_actor());
+    let result =
+        publish_governance_scorecard(&req, &test_signing_key(), &mut test_ledger(), test_actor());
     assert!(result.is_err());
 }
 
@@ -317,7 +320,8 @@ fn enrichment_thresholds_validate_moonshot_kill_rate_over_million() {
         max_moonshot_kill_rate_millionths: 1_000_001,
         ..GovernanceScorecardThresholds::default()
     });
-    let result = publish_governance_scorecard(&req, &test_signing_key(), &mut test_ledger(), test_actor());
+    let result =
+        publish_governance_scorecard(&req, &test_signing_key(), &mut test_ledger(), test_actor());
     assert!(result.is_err());
 }
 
@@ -328,7 +332,8 @@ fn enrichment_thresholds_validate_conformance_pass_rate_over_million() {
         min_conformance_pass_rate_millionths: 1_000_001,
         ..GovernanceScorecardThresholds::default()
     });
-    let result = publish_governance_scorecard(&req, &test_signing_key(), &mut test_ledger(), test_actor());
+    let result =
+        publish_governance_scorecard(&req, &test_signing_key(), &mut test_ledger(), test_actor());
     assert!(result.is_err());
 }
 
@@ -343,7 +348,8 @@ fn enrichment_thresholds_validate_at_boundary_million() {
         min_conformance_pass_rate_millionths: 1_000_000,
         ..GovernanceScorecardThresholds::default()
     });
-    let result = publish_governance_scorecard(&req, &test_signing_key(), &mut test_ledger(), test_actor());
+    let result =
+        publish_governance_scorecard(&req, &test_signing_key(), &mut test_ledger(), test_actor());
     assert!(result.is_ok());
 }
 
@@ -496,10 +502,8 @@ fn enrichment_publish_signature_verifies() {
 fn enrichment_publish_deterministic() {
     let req = test_request();
     let key = test_signing_key();
-    let pub1 =
-        publish_governance_scorecard(&req, &key, &mut test_ledger(), test_actor()).unwrap();
-    let pub2 =
-        publish_governance_scorecard(&req, &key, &mut test_ledger(), test_actor()).unwrap();
+    let pub1 = publish_governance_scorecard(&req, &key, &mut test_ledger(), test_actor()).unwrap();
+    let pub2 = publish_governance_scorecard(&req, &key, &mut test_ledger(), test_actor()).unwrap();
     assert_eq!(pub1.scorecard_id, pub2.scorecard_id);
     assert_eq!(pub1.artifact_hash_hex, pub2.artifact_hash_hex);
 }

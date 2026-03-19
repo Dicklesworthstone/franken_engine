@@ -1252,9 +1252,8 @@ mod tests {
 
     #[test]
     fn descriptor_clone_is_deep_and_equal() {
-        let desc = LoweringGapSiteDescriptor::from_site(
-            LoweringGapSiteId::NewExpressionCallPlaceholder,
-        );
+        let desc =
+            LoweringGapSiteDescriptor::from_site(LoweringGapSiteId::NewExpressionCallPlaceholder);
         let cloned = desc.clone();
         assert_eq!(desc, cloned);
         assert_eq!(desc.site_id, cloned.site_id);
@@ -1280,23 +1279,20 @@ mod tests {
             sites: Vec::new(),
         };
         // Add sites with different statuses by mutating descriptors
-        let mut desc_fc = LoweringGapSiteDescriptor::from_site(
-            LoweringGapSiteId::ForInStatementPlaceholder,
-        );
+        let mut desc_fc =
+            LoweringGapSiteDescriptor::from_site(LoweringGapSiteId::ForInStatementPlaceholder);
         desc_fc.status = LoweringGapStatus::FailClosed;
         desc_fc.execution_ready_semantics = false;
         desc_fc.parser_ready_syntax = false;
 
-        let mut desc_op = LoweringGapSiteDescriptor::from_site(
-            LoweringGapSiteId::ForOfStatementPlaceholder,
-        );
+        let mut desc_op =
+            LoweringGapSiteDescriptor::from_site(LoweringGapSiteId::ForOfStatementPlaceholder);
         desc_op.status = LoweringGapStatus::OpenPlaceholder;
         desc_op.execution_ready_semantics = false;
         desc_op.parser_ready_syntax = true;
 
-        let mut desc_resolved = LoweringGapSiteDescriptor::from_site(
-            LoweringGapSiteId::NewExpressionCallPlaceholder,
-        );
+        let mut desc_resolved =
+            LoweringGapSiteDescriptor::from_site(LoweringGapSiteId::NewExpressionCallPlaceholder);
         desc_resolved.execution_ready_semantics = true;
 
         inv.sites.push(desc_fc);
@@ -1395,8 +1391,14 @@ mod tests {
             detail: None,
         };
         let json = serde_json::to_string(&event).unwrap();
-        assert!(!json.contains("site_id"), "None site_id should be omitted from JSON");
-        assert!(!json.contains("diagnostic_code"), "None diagnostic_code should be omitted");
+        assert!(
+            !json.contains("site_id"),
+            "None site_id should be omitted from JSON"
+        );
+        assert!(
+            !json.contains("diagnostic_code"),
+            "None diagnostic_code should be omitted"
+        );
         assert!(!json.contains("detail"), "None detail should be omitted");
     }
 
@@ -1527,9 +1529,8 @@ mod tests {
 
     #[test]
     fn template_literal_descriptor_has_expected_ir_shape() {
-        let desc = LoweringGapSiteDescriptor::from_site(
-            LoweringGapSiteId::TemplateLiteralRawPlaceholder,
-        );
+        let desc =
+            LoweringGapSiteDescriptor::from_site(LoweringGapSiteId::TemplateLiteralRawPlaceholder);
         assert_eq!(desc.emitted_ir_shape, "ir3.instruction.template_literal");
         assert_eq!(desc.diagnostic_code, "FE-PARSER-GAP-TEMPLATE-0001");
         assert_eq!(desc.ast_node_family, "expression.template_literal");
@@ -1547,9 +1548,8 @@ mod tests {
 
     #[test]
     fn new_expression_descriptor_fields() {
-        let desc = LoweringGapSiteDescriptor::from_site(
-            LoweringGapSiteId::NewExpressionCallPlaceholder,
-        );
+        let desc =
+            LoweringGapSiteDescriptor::from_site(LoweringGapSiteId::NewExpressionCallPlaceholder);
         assert_eq!(desc.emitted_ir_shape, "ir3.instruction.construct");
         assert_eq!(desc.ast_node_family, "expression.new");
         assert!(desc.source_reference.contains("Expression::New"));

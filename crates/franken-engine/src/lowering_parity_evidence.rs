@@ -984,15 +984,51 @@ mod tests {
     fn compute_verdict_exhaustive_3x3_matrix() {
         // Verify all 9 combinations of 3 parser statuses x 3 lowering statuses.
         let cases = [
-            (ParserGapRemediationStatus::Resolved, LoweringGapStatus::Resolved, ParityVerdict::Covered),
-            (ParserGapRemediationStatus::Resolved, LoweringGapStatus::FailClosed, ParityVerdict::ParserLeadsLowering),
-            (ParserGapRemediationStatus::Resolved, LoweringGapStatus::OpenPlaceholder, ParityVerdict::ParserLeadsLowering),
-            (ParserGapRemediationStatus::FailClosed, LoweringGapStatus::Resolved, ParityVerdict::LoweringLeadsParser),
-            (ParserGapRemediationStatus::FailClosed, LoweringGapStatus::FailClosed, ParityVerdict::FailClosedAgreed),
-            (ParserGapRemediationStatus::FailClosed, LoweringGapStatus::OpenPlaceholder, ParityVerdict::OpenGap),
-            (ParserGapRemediationStatus::OpenPlaceholder, LoweringGapStatus::Resolved, ParityVerdict::LoweringLeadsParser),
-            (ParserGapRemediationStatus::OpenPlaceholder, LoweringGapStatus::FailClosed, ParityVerdict::OpenGap),
-            (ParserGapRemediationStatus::OpenPlaceholder, LoweringGapStatus::OpenPlaceholder, ParityVerdict::OpenGap),
+            (
+                ParserGapRemediationStatus::Resolved,
+                LoweringGapStatus::Resolved,
+                ParityVerdict::Covered,
+            ),
+            (
+                ParserGapRemediationStatus::Resolved,
+                LoweringGapStatus::FailClosed,
+                ParityVerdict::ParserLeadsLowering,
+            ),
+            (
+                ParserGapRemediationStatus::Resolved,
+                LoweringGapStatus::OpenPlaceholder,
+                ParityVerdict::ParserLeadsLowering,
+            ),
+            (
+                ParserGapRemediationStatus::FailClosed,
+                LoweringGapStatus::Resolved,
+                ParityVerdict::LoweringLeadsParser,
+            ),
+            (
+                ParserGapRemediationStatus::FailClosed,
+                LoweringGapStatus::FailClosed,
+                ParityVerdict::FailClosedAgreed,
+            ),
+            (
+                ParserGapRemediationStatus::FailClosed,
+                LoweringGapStatus::OpenPlaceholder,
+                ParityVerdict::OpenGap,
+            ),
+            (
+                ParserGapRemediationStatus::OpenPlaceholder,
+                LoweringGapStatus::Resolved,
+                ParityVerdict::LoweringLeadsParser,
+            ),
+            (
+                ParserGapRemediationStatus::OpenPlaceholder,
+                LoweringGapStatus::FailClosed,
+                ParityVerdict::OpenGap,
+            ),
+            (
+                ParserGapRemediationStatus::OpenPlaceholder,
+                LoweringGapStatus::OpenPlaceholder,
+                ParityVerdict::OpenGap,
+            ),
         ];
         for (i, (parser, lowering, expected)) in cases.iter().enumerate() {
             let actual = compute_verdict(*parser, *lowering);
@@ -1169,9 +1205,27 @@ mod tests {
         let finding_event = &events[1];
         assert_eq!(finding_event.site_id.as_deref(), Some("my.site.id"));
         assert_eq!(finding_event.verdict.as_deref(), Some("covered"));
-        assert!(finding_event.detail.as_ref().unwrap().contains("parser=resolved"));
-        assert!(finding_event.detail.as_ref().unwrap().contains("lowering=resolved"));
-        assert!(finding_event.detail.as_ref().unwrap().contains("verdict=covered"));
+        assert!(
+            finding_event
+                .detail
+                .as_ref()
+                .unwrap()
+                .contains("parser=resolved")
+        );
+        assert!(
+            finding_event
+                .detail
+                .as_ref()
+                .unwrap()
+                .contains("lowering=resolved")
+        );
+        assert!(
+            finding_event
+                .detail
+                .as_ref()
+                .unwrap()
+                .contains("verdict=covered")
+        );
     }
 
     #[test]
@@ -1382,8 +1436,7 @@ mod tests {
     #[test]
     fn write_bundle_events_jsonl_each_line_is_valid_json() {
         let out_dir = unique_temp_dir("parity-jsonl");
-        let artifacts =
-            write_parity_evidence_bundle(&out_dir, &["test".to_string()]).unwrap();
+        let artifacts = write_parity_evidence_bundle(&out_dir, &["test".to_string()]).unwrap();
         let content = fs::read_to_string(&artifacts.events_path).unwrap();
         for line in content.lines() {
             let parsed: Result<serde_json::Value, _> = serde_json::from_str(line);
@@ -1394,13 +1447,15 @@ mod tests {
     #[test]
     fn write_bundle_manifest_trace_id_derived_from_hash() {
         let out_dir = unique_temp_dir("parity-trace");
-        let artifacts =
-            write_parity_evidence_bundle(&out_dir, &["test".to_string()]).unwrap();
+        let artifacts = write_parity_evidence_bundle(&out_dir, &["test".to_string()]).unwrap();
         let manifest_json = fs::read_to_string(&artifacts.run_manifest_path).unwrap();
-        let manifest: ParityEvidenceRunManifest =
-            serde_json::from_str(&manifest_json).unwrap();
+        let manifest: ParityEvidenceRunManifest = serde_json::from_str(&manifest_json).unwrap();
         assert!(manifest.trace_id.starts_with("parity-evidence-"));
-        assert!(manifest.decision_id.starts_with("decision-parity-evidence-"));
+        assert!(
+            manifest
+                .decision_id
+                .starts_with("decision-parity-evidence-")
+        );
         // Trace ID should embed 12 chars of the inventory hash
         let hash_prefix: String = artifacts.inventory_hash.chars().take(12).collect();
         assert!(manifest.trace_id.contains(&hash_prefix));
@@ -1409,13 +1464,16 @@ mod tests {
     #[test]
     fn write_bundle_manifest_artifact_paths_are_filenames_only() {
         let out_dir = unique_temp_dir("parity-paths");
-        let artifacts =
-            write_parity_evidence_bundle(&out_dir, &["test".to_string()]).unwrap();
+        let artifacts = write_parity_evidence_bundle(&out_dir, &["test".to_string()]).unwrap();
         let manifest_json = fs::read_to_string(&artifacts.run_manifest_path).unwrap();
-        let manifest: ParityEvidenceRunManifest =
-            serde_json::from_str(&manifest_json).unwrap();
+        let manifest: ParityEvidenceRunManifest = serde_json::from_str(&manifest_json).unwrap();
         // Paths should be relative filenames, not absolute paths
-        assert!(!manifest.artifact_paths.parity_evidence_inventory.contains('/'));
+        assert!(
+            !manifest
+                .artifact_paths
+                .parity_evidence_inventory
+                .contains('/')
+        );
         assert!(!manifest.artifact_paths.run_manifest.contains('/'));
         assert!(!manifest.artifact_paths.events_jsonl.contains('/'));
         assert!(!manifest.artifact_paths.commands_txt.contains('/'));
@@ -1423,20 +1481,16 @@ mod tests {
 
     #[test]
     fn write_bundle_creates_output_directory() {
-        let out_dir = unique_temp_dir("parity-mkdir")
-            .join("nested")
-            .join("deep");
+        let out_dir = unique_temp_dir("parity-mkdir").join("nested").join("deep");
         assert!(!out_dir.exists());
-        let _artifacts =
-            write_parity_evidence_bundle(&out_dir, &["test".to_string()]).unwrap();
+        let _artifacts = write_parity_evidence_bundle(&out_dir, &["test".to_string()]).unwrap();
         assert!(out_dir.exists());
     }
 
     #[test]
     fn inventory_hash_is_hex_string() {
         let out_dir = unique_temp_dir("parity-hex");
-        let artifacts =
-            write_parity_evidence_bundle(&out_dir, &["test".to_string()]).unwrap();
+        let artifacts = write_parity_evidence_bundle(&out_dir, &["test".to_string()]).unwrap();
         assert!(!artifacts.inventory_hash.is_empty());
         assert!(
             artifacts

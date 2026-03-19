@@ -807,11 +807,13 @@ mod tests {
 
     #[test]
     fn route_owner_returns_none_for_equivalent() {
-        assert!(route_owner(
-            BehaviorEquivalenceClass::Equivalent,
-            OwnerRouteHint::RuntimeSemantics,
-        )
-        .is_none());
+        assert!(
+            route_owner(
+                BehaviorEquivalenceClass::Equivalent,
+                OwnerRouteHint::RuntimeSemantics,
+            )
+            .is_none()
+        );
     }
 
     #[test]

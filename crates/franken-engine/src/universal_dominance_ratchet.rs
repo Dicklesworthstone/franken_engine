@@ -1843,7 +1843,11 @@ mod tests {
     fn advance_unproven_directly_to_proven_skipping_claimed() {
         let mut board = RatchetBoard::new();
         let mut log = RatchetEventLog::new();
-        let cell = make_cell(CellDomain::ModuleLoading, ComparisonTarget::Deno, "skip-claimed");
+        let cell = make_cell(
+            CellDomain::ModuleLoading,
+            ComparisonTarget::Deno,
+            "skip-claimed",
+        );
         let cell_id = cell.cell_id.clone();
         add_cell(&mut board, &mut log, cell).unwrap();
 
@@ -1907,7 +1911,11 @@ mod tests {
     fn proven_cell_margin_can_increase() {
         let mut board = RatchetBoard::new();
         let mut log = RatchetEventLog::new();
-        let cell = make_cell(CellDomain::Throughput, ComparisonTarget::V8Node, "margin-up");
+        let cell = make_cell(
+            CellDomain::Throughput,
+            ComparisonTarget::V8Node,
+            "margin-up",
+        );
         let cell_id = cell.cell_id.clone();
         add_cell(&mut board, &mut log, cell).unwrap();
 
@@ -1940,7 +1948,11 @@ mod tests {
     fn proven_cell_margin_stays_same_is_ok() {
         let mut board = RatchetBoard::new();
         let mut log = RatchetEventLog::new();
-        let cell = make_cell(CellDomain::TailLatency, ComparisonTarget::Jsc, "margin-same");
+        let cell = make_cell(
+            CellDomain::TailLatency,
+            ComparisonTarget::Jsc,
+            "margin-same",
+        );
         let cell_id = cell.cell_id.clone();
         add_cell(&mut board, &mut log, cell).unwrap();
 
@@ -2025,10 +2037,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            board.find_cell(&cell_id).unwrap().last_advanced_epoch,
-            5
-        );
+        assert_eq!(board.find_cell(&cell_id).unwrap().last_advanced_epoch, 5);
 
         advance_epoch(&mut board, &mut log, 10).unwrap();
         advance_cell(
@@ -2041,10 +2050,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            board.find_cell(&cell_id).unwrap().last_advanced_epoch,
-            10
-        );
+        assert_eq!(board.find_cell(&cell_id).unwrap().last_advanced_epoch, 10);
     }
 
     #[test]
@@ -2275,7 +2281,11 @@ mod tests {
         let mut log = RatchetEventLog::new();
         let mut ledger = FrontierGapLedger::new();
 
-        let cell = make_cell(CellDomain::ColdStart, ComparisonTarget::V8Node, "univ-block");
+        let cell = make_cell(
+            CellDomain::ColdStart,
+            ComparisonTarget::V8Node,
+            "univ-block",
+        );
         let cell_id = cell.cell_id.clone();
         add_cell(&mut board, &mut log, cell).unwrap();
         advance_cell(
@@ -2337,7 +2347,11 @@ mod tests {
         register_gap(
             &mut ledger,
             &mut log,
-            make_gap("res-gap", CellDomain::Throughput, GapKind::PartiallyExplored),
+            make_gap(
+                "res-gap",
+                CellDomain::Throughput,
+                GapKind::PartiallyExplored,
+            ),
         )
         .unwrap();
 
@@ -2673,7 +2687,11 @@ mod tests {
         let mut board = RatchetBoard::new();
         let mut log = RatchetEventLog::new();
 
-        let domains = [CellDomain::ColdStart, CellDomain::Throughput, CellDomain::Memory];
+        let domains = [
+            CellDomain::ColdStart,
+            CellDomain::Throughput,
+            CellDomain::Memory,
+        ];
         let targets = [
             ComparisonTarget::V8Node,
             ComparisonTarget::Bun,
@@ -2692,20 +2710,52 @@ mod tests {
 
         // Prove 3, claim 2, leave 4 unproven
         let proven_ids: Vec<CellId> = vec![
-            make_cell_id(CellDomain::ColdStart, ComparisonTarget::V8Node, "cold_start-v8_node"),
-            make_cell_id(CellDomain::Throughput, ComparisonTarget::Bun, "throughput-bun"),
+            make_cell_id(
+                CellDomain::ColdStart,
+                ComparisonTarget::V8Node,
+                "cold_start-v8_node",
+            ),
+            make_cell_id(
+                CellDomain::Throughput,
+                ComparisonTarget::Bun,
+                "throughput-bun",
+            ),
             make_cell_id(CellDomain::Memory, ComparisonTarget::Deno, "memory-deno"),
         ];
         for cid in &proven_ids {
-            advance_cell(&mut board, &mut log, cid, CellState::Proven, 100_000, vec![]).unwrap();
+            advance_cell(
+                &mut board,
+                &mut log,
+                cid,
+                CellState::Proven,
+                100_000,
+                vec![],
+            )
+            .unwrap();
         }
 
         let claimed_ids: Vec<CellId> = vec![
-            make_cell_id(CellDomain::ColdStart, ComparisonTarget::Bun, "cold_start-bun"),
-            make_cell_id(CellDomain::Memory, ComparisonTarget::V8Node, "memory-v8_node"),
+            make_cell_id(
+                CellDomain::ColdStart,
+                ComparisonTarget::Bun,
+                "cold_start-bun",
+            ),
+            make_cell_id(
+                CellDomain::Memory,
+                ComparisonTarget::V8Node,
+                "memory-v8_node",
+            ),
         ];
         for cid in &claimed_ids {
-            advance_cell(&mut board, &mut log, cid, CellState::Claimed, 50_000, vec![]).unwrap();
+            advance_cell(
+                &mut board,
+                &mut log,
+                cid,
+                CellState::Claimed,
+                50_000,
+                vec![],
+            )
+            .unwrap();
         }
 
         let counts = board.state_counts();
@@ -2718,7 +2768,11 @@ mod tests {
 
     #[test]
     fn gap_with_specific_target_serde_round_trip() {
-        let mut gap = make_gap("target-gap", CellDomain::ColdStart, GapKind::PartiallyExplored);
+        let mut gap = make_gap(
+            "target-gap",
+            CellDomain::ColdStart,
+            GapKind::PartiallyExplored,
+        );
         gap.target = Some(ComparisonTarget::Bun);
 
         let json = serde_json::to_string(&gap).expect("serialize");

@@ -1384,7 +1384,10 @@ mod tests {
             .iter()
             .filter(|f| f.severity == RiskSeverity::Info)
             .collect();
-        assert!(!info_flags.is_empty(), "NotYetProven should produce info-severity flags");
+        assert!(
+            !info_flags.is_empty(),
+            "NotYetProven should produce info-severity flags"
+        );
     }
 
     #[test]
@@ -1401,7 +1404,10 @@ mod tests {
             .iter()
             .filter(|f| f.severity == RiskSeverity::Critical)
             .collect();
-        assert!(!critical_flags.is_empty(), "counterexample should produce critical flags");
+        assert!(
+            !critical_flags.is_empty(),
+            "counterexample should produce critical flags"
+        );
     }
 
     #[test]
@@ -1434,7 +1440,10 @@ mod tests {
             .iter()
             .filter(|f| f.description.contains("staleness"))
             .collect();
-        assert!(stale_flags.is_empty(), "staleness at exact boundary should not be flagged");
+        assert!(
+            stale_flags.is_empty(),
+            "staleness at exact boundary should not be flagged"
+        );
         let sup_claims = eval.surface_claims.get("supremacy");
         assert!(sup_claims.is_some_and(|c| !c.is_empty()));
     }
@@ -1455,7 +1464,10 @@ mod tests {
             .iter()
             .filter(|f| f.description.contains("staleness"))
             .collect();
-        assert!(!stale_flags.is_empty(), "staleness 1 over boundary should be flagged");
+        assert!(
+            !stale_flags.is_empty(),
+            "staleness 1 over boundary should be flagged"
+        );
         // The claim should NOT appear in surface_claims because it was skipped
         let sup_claims = eval.surface_claims.get("supremacy");
         assert!(sup_claims.is_none() || sup_claims.is_some_and(|c| c.is_empty()));
@@ -1473,7 +1485,10 @@ mod tests {
         let eval =
             evaluate_publication_gate(&verdicts, &[], &default_config(), 1).expect("evaluate");
         let docs_claims = eval.surface_claims.get("docs");
-        assert!(docs_claims.is_some_and(|c| !c.is_empty()), "335h should be within docs limit");
+        assert!(
+            docs_claims.is_some_and(|c| !c.is_empty()),
+            "335h should be within docs limit"
+        );
     }
 
     #[test]
@@ -1839,7 +1854,11 @@ mod tests {
 
     #[test]
     fn risk_severity_serde_round_trip() {
-        for severity in [RiskSeverity::Info, RiskSeverity::Warning, RiskSeverity::Critical] {
+        for severity in [
+            RiskSeverity::Info,
+            RiskSeverity::Warning,
+            RiskSeverity::Critical,
+        ] {
             let json = serde_json::to_string(&severity).expect("serialize");
             let deser: RiskSeverity = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(severity, deser);
@@ -1968,8 +1987,7 @@ mod tests {
             "compatibility",
             "shipped_fact",
         )];
-        let eval =
-            evaluate_publication_gate(&verdicts, &[], &config, 1).expect("evaluate");
+        let eval = evaluate_publication_gate(&verdicts, &[], &config, 1).expect("evaluate");
         // No domain routing => no claims anywhere
         assert_eq!(eval.summary.total_publishable_claims, 0);
         for decision in eval.gate_decisions.values() {
@@ -1980,10 +1998,7 @@ mod tests {
     #[test]
     fn custom_config_no_min_tier_allows_all() {
         let mut domain_to_surfaces = BTreeMap::new();
-        domain_to_surfaces.insert(
-            "custom".to_string(),
-            vec![PublicationSurface::Supremacy],
-        );
+        domain_to_surfaces.insert("custom".to_string(), vec![PublicationSurface::Supremacy]);
         let config = SurfaceRoutingConfig {
             domain_to_surfaces,
             min_tier_for_surface: BTreeMap::new(),
@@ -1995,8 +2010,7 @@ mod tests {
             "custom",
             "frontier_ambition",
         )];
-        let eval =
-            evaluate_publication_gate(&verdicts, &[], &config, 1).expect("evaluate");
+        let eval = evaluate_publication_gate(&verdicts, &[], &config, 1).expect("evaluate");
         let sup_claims = eval.surface_claims.get("supremacy");
         assert!(sup_claims.is_some_and(|c| !c.is_empty()));
     }
@@ -2036,7 +2050,10 @@ mod tests {
             .iter()
             .filter(|f| f.flag_id.starts_with("stale-"))
             .collect();
-        assert!(stale_flags.len() >= 2, "should produce flags for multiple surfaces");
+        assert!(
+            stale_flags.len() >= 2,
+            "should produce flags for multiple surfaces"
+        );
         // All flag IDs should be unique
         let mut flag_ids: Vec<_> = stale_flags.iter().map(|f| &f.flag_id).collect();
         let pre_dedup = flag_ids.len();

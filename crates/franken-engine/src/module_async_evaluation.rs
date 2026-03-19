@@ -1760,21 +1760,27 @@ mod tests {
         let err = eval
             .suspend_on_dependency("ghost.js", "dep.js", PromiseHandle(1))
             .unwrap_err();
-        assert!(matches!(err, AsyncEvalError::ModuleNotFound { ref specifier } if specifier == "ghost.js"));
+        assert!(
+            matches!(err, AsyncEvalError::ModuleNotFound { ref specifier } if specifier == "ghost.js")
+        );
     }
 
     #[test]
     fn evaluator_resume_evaluation_module_not_found() {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         let err = eval.resume_evaluation("ghost.js").unwrap_err();
-        assert!(matches!(err, AsyncEvalError::ModuleNotFound { ref specifier } if specifier == "ghost.js"));
+        assert!(
+            matches!(err, AsyncEvalError::ModuleNotFound { ref specifier } if specifier == "ghost.js")
+        );
     }
 
     #[test]
     fn evaluator_settle_module_not_found() {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         let err = eval.settle_module("ghost.js").unwrap_err();
-        assert!(matches!(err, AsyncEvalError::ModuleNotFound { ref specifier } if specifier == "ghost.js"));
+        assert!(
+            matches!(err, AsyncEvalError::ModuleNotFound { ref specifier } if specifier == "ghost.js")
+        );
     }
 
     #[test]
@@ -1784,7 +1790,9 @@ mod tests {
         let err = eval
             .reject_module("ghost.js", &js_error("err"), &mut bindings)
             .unwrap_err();
-        assert!(matches!(err, AsyncEvalError::ModuleNotFound { ref specifier } if specifier == "ghost.js"));
+        assert!(
+            matches!(err, AsyncEvalError::ModuleNotFound { ref specifier } if specifier == "ghost.js")
+        );
     }
 
     // -- Evaluator: complex graph scenarios --
@@ -1825,12 +1833,7 @@ mod tests {
         // chain: root -> mid -> leaf
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("root.js", true, &[], Some(PromiseHandle(1)));
-        eval.register_module(
-            "mid.js",
-            true,
-            &["root.js".into()],
-            Some(PromiseHandle(2)),
-        );
+        eval.register_module("mid.js", true, &["root.js".into()], Some(PromiseHandle(2)));
         eval.suspend_on_dependency("mid.js", "root.js", PromiseHandle(1))
             .unwrap();
         eval.register_module("leaf.js", true, &["mid.js".into()], Some(PromiseHandle(3)));
@@ -1857,12 +1860,7 @@ mod tests {
         };
         let mut eval = AsyncModuleEvaluator::new(config);
         eval.register_module("root.js", true, &[], Some(PromiseHandle(1)));
-        eval.register_module(
-            "mid.js",
-            true,
-            &["root.js".into()],
-            Some(PromiseHandle(2)),
-        );
+        eval.register_module("mid.js", true, &["root.js".into()], Some(PromiseHandle(2)));
         eval.suspend_on_dependency("mid.js", "root.js", PromiseHandle(1))
             .unwrap();
         eval.register_module("leaf.js", true, &["mid.js".into()], Some(PromiseHandle(3)));
@@ -1909,17 +1907,14 @@ mod tests {
             .unwrap();
 
         // Now register a consumer that depends on the rejected module.
-        eval.register_module(
-            "consumer.js",
-            false,
-            &["dep.js".into()],
-            None,
-        );
+        eval.register_module("consumer.js", false, &["dep.js".into()], None);
         // rejected module has is_terminal() == true AND phase == Rejected,
         // so dep.js should be added as pending.
-        assert!(eval.states()["consumer.js"]
-            .pending_dependencies
-            .contains("dep.js"));
+        assert!(
+            eval.states()["consumer.js"]
+                .pending_dependencies
+                .contains("dep.js")
+        );
     }
 
     #[test]
@@ -2057,12 +2052,7 @@ mod tests {
 
     #[test]
     fn topological_order_deterministic_across_runs() {
-        let modules: Vec<String> = vec![
-            "z.js".into(),
-            "y.js".into(),
-            "x.js".into(),
-            "w.js".into(),
-        ];
+        let modules: Vec<String> = vec!["z.js".into(), "y.js".into(), "x.js".into(), "w.js".into()];
         let deps = BTreeMap::new();
         let order1 = compute_async_evaluation_order(&modules, &deps).unwrap();
         let order2 = compute_async_evaluation_order(&modules, &deps).unwrap();
@@ -2197,12 +2187,7 @@ mod tests {
 
         // Register a dep and a consumer with TLA.
         eval.register_module("dep.js", true, &[], Some(PromiseHandle(1)));
-        eval.register_module(
-            "app.js",
-            true,
-            &["dep.js".into()],
-            Some(PromiseHandle(2)),
-        );
+        eval.register_module("app.js", true, &["dep.js".into()], Some(PromiseHandle(2)));
 
         // app.js suspends on TLA, then suspends on dep.js
         eval.suspend_at_top_level_await("app.js", PromiseHandle(10))

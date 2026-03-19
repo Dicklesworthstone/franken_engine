@@ -1090,7 +1090,10 @@ mod tests {
             api_surface: "x".to_string(),
             line_hint: None,
         };
-        assert!(bp_a < bp_b, "BoundaryPoint should order by source_module first");
+        assert!(
+            bp_a < bp_b,
+            "BoundaryPoint should order by source_module first"
+        );
     }
 
     #[test]
@@ -1102,7 +1105,10 @@ mod tests {
             line_hint: None,
         };
         let json = serde_json::to_string(&bp).unwrap();
-        assert!(json.contains("null"), "None line_hint should serialize as null");
+        assert!(
+            json.contains("null"),
+            "None line_hint should serialize as null"
+        );
         let back: BoundaryPoint = serde_json::from_str(&json).unwrap();
         assert_eq!(bp, back);
     }
@@ -1146,7 +1152,10 @@ mod tests {
             TranslationKind::Dropped,
             FlatteningClassification::Intentional,
         );
-        assert_ne!(h1, h2, "Different translation kinds should produce different hashes");
+        assert_ne!(
+            h1, h2,
+            "Different translation kinds should produce different hashes"
+        );
     }
 
     #[test]
@@ -1166,7 +1175,10 @@ mod tests {
             TranslationKind::Preserved,
             FlatteningClassification::MustFix,
         );
-        assert_ne!(h1, h2, "Different classifications should produce different hashes");
+        assert_ne!(
+            h1, h2,
+            "Different classifications should produce different hashes"
+        );
     }
 
     #[test]
@@ -1228,7 +1240,10 @@ mod tests {
             TranslationKind::Preserved,
             FlatteningClassification::Intentional,
         );
-        assert_ne!(h1, h2, "Swapped source/target should produce different hashes");
+        assert_ne!(
+            h1, h2,
+            "Swapped source/target should produce different hashes"
+        );
     }
 
     // -- Additional tests: occurrence Display edge cases --
@@ -1379,7 +1394,10 @@ mod tests {
         inv1.add(sample_occurrence("GROW-2"));
         let h2 = inv1.content_hash();
 
-        assert_ne!(h1, h2, "Adding an occurrence should change the inventory hash");
+        assert_ne!(
+            h1, h2,
+            "Adding an occurrence should change the inventory hash"
+        );
     }
 
     // -- Additional tests: summary with all-one-classification --
@@ -1450,7 +1468,11 @@ mod tests {
         ));
         let s = inv.summary();
         let keys: Vec<&String> = s.by_domain.keys().collect();
-        assert_eq!(keys, vec!["Budget", "TraceId"], "BTreeMap keys should be sorted");
+        assert_eq!(
+            keys,
+            vec!["Budget", "TraceId"],
+            "BTreeMap keys should be sorted"
+        );
     }
 
     // -- Additional tests: serde round-trip for full inventory with multiple items --
@@ -1580,7 +1602,11 @@ mod tests {
         let mut set = BTreeSet::new();
         set.insert(sample_boundary());
         set.insert(sample_boundary());
-        assert_eq!(set.len(), 1, "Identical BoundaryPoints should deduplicate in BTreeSet");
+        assert_eq!(
+            set.len(),
+            1,
+            "Identical BoundaryPoints should deduplicate in BTreeSet"
+        );
 
         let other = BoundaryPoint {
             source_module: "other".to_string(),
@@ -1656,7 +1682,10 @@ mod tests {
         let occ_a = sample_occurrence("AAA");
         let occ_b = sample_occurrence("BBB");
         // FlatteningOccurrence derives Ord; first field is `id`
-        assert!(occ_a < occ_b, "Occurrences should be ordered by id (first field)");
+        assert!(
+            occ_a < occ_b,
+            "Occurrences should be ordered by id (first field)"
+        );
     }
 
     // -- Additional tests: inventory schema version preserved --

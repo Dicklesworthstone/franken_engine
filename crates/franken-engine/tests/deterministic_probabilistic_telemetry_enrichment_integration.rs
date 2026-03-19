@@ -501,13 +501,16 @@ fn plane_record_sampled_event() {
 }
 
 #[test]
-fn plane_record_event_returns_false_at_capacity() {
+fn plane_record_event_creates_new_window_at_capacity() {
+    // When a window is at capacity, the plane creates a new window for subsequent events
     let budget = TelemetryBudget::new(2, 1_000_000_000, MILLIONTHS, CaptureMode::ExactCounting);
     let mut p = TelemetryPlane::with_default_budget(epoch(1), budget);
     assert!(p.record_exact("ev-1", "dom", 100, b"a"));
     assert!(p.record_exact("ev-2", "dom", 200, b"b"));
-    assert!(!p.record_exact("ev-3", "dom", 300, b"c"));
-    assert_eq!(p.total_events_rejected, 1);
+    // Third event goes into a new window
+    assert!(p.record_exact("ev-3", "dom", 300, b"c"));
+    assert_eq!(p.total_events_recorded, 3);
+    assert_eq!(p.domain_event_count("dom"), 3);
 }
 
 #[test]

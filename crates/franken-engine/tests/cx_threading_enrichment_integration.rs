@@ -15,7 +15,6 @@
 
 use std::collections::BTreeSet;
 
-use frankenengine_engine::control_plane::ContextAdapter;
 use frankenengine_engine::control_plane::mocks::{MockBudget, MockCx, trace_id_from_seed};
 use frankenengine_engine::cx_threading::{
     CxThreadedEvent, CxThreadedGateway, CxThreadingError, EffectAuditLog, EffectCategory,
@@ -645,7 +644,7 @@ fn telemetry_descriptor_serde_roundtrip() {
 #[test]
 fn audit_log_deterministic_50_times() {
     let mut audit_jsons = BTreeSet::new();
-    for i in 0..50 {
+    for _i in 0..50 {
         let mut gw = make_gateway(100, 10000);
         gw.register_hostcall("hc", None);
         gw.transition_lifecycle(LifecyclePhase::Loaded).unwrap();

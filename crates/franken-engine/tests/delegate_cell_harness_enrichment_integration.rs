@@ -13,11 +13,10 @@
 
 //! Enrichment integration tests for the delegate_cell_harness module.
 
-use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 use frankenengine_engine::delegate_cell_harness::{
-    CellLifecycle, DelegateCellError, DelegateCellHarness, HarnessEvent, HarnessEventType,
+    CellLifecycle, DelegateCellError, DelegateCellHarness, HarnessEventType,
     InvocationOutcome, InvocationRecord, PerformanceMetrics, ReplayVerification, ResourceUsage,
     ResourceViolation,
 };
@@ -568,7 +567,7 @@ fn harness_check_permitted_capability_succeeds() {
 fn harness_check_denied_capability_fails() {
     let mut harness = test_harness();
     let err = harness
-        .check_capability(&SlotCapability::ModifyState, 1000)
+        .check_capability(&SlotCapability::HeapAlloc, 1000)
         .unwrap_err();
     assert!(matches!(err, DelegateCellError::CapabilityDenied { .. }));
 }
@@ -697,11 +696,16 @@ fn harness_replay_emits_verification_event() {
 #[test]
 fn harness_from_manifest_has_correct_initial_state() {
     let manifest = DelegateCellManifest {
+        manifest_id: frankenengine_engine::engine_object_id::EngineObjectId([0; 32]),
+        schema_version: frankenengine_engine::self_replacement::SchemaVersion::V1,
         slot_id: test_slot_id(),
         delegate_type: DelegateType::QuickJsBacked,
         sandbox: test_sandbox(),
         capability_envelope: test_authority(),
+        monitoring_hooks: Vec::new(),
         expected_behavior_hash: [0xCDu8; 32],
+        zone: "test".to_string(),
+        signature: frankenengine_engine::signature_preimage::Signature { lower: [0; 32], upper: [0; 32] },
     };
     let harness = DelegateCellHarness::from_manifest(&manifest);
     assert_eq!(harness.lifecycle, CellLifecycle::Created);

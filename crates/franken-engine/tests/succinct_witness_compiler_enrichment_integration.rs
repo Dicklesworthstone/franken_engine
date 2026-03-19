@@ -14,15 +14,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use frankenengine_engine::proof_obligations::ObligationCategory;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::succinct_witness_compiler::{
-    canonical_witness_schemas, generate_report, hash_pair, CompilationError, CompilationResult,
-    EvidenceChunk, InclusionProof, MerkleTree, PackVerificationResult, PackVerifier,
+    canonical_witness_schemas, generate_report, hash_pair, CompilationError,
+    EvidenceChunk, MerkleTree, PackVerifier,
     ProvenanceAttachment, ReconstructionKind, SufficiencyCertificate, SufficiencyConstraint,
-    SufficiencyDimension, SufficiencyResult, SufficiencyViolation, WitnessCompiler, WitnessPack,
-    WitnessPackReport, WitnessSchema, DEFAULT_MAX_CHUNK_BYTES, MIN_SUFFICIENCY_SCORE,
-    SCHEMA_VERSION,
+    SufficiencyDimension, WitnessCompiler, WitnessPack,
+    WitnessSchema, SCHEMA_VERSION,
 };
 
 fn ep(n: u64) -> SecurityEpoch {

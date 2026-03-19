@@ -13,17 +13,17 @@
 )]
 
 use frankenengine_engine::callback_stdlib_dispatch::{
-    CallbackKind, DispatchDecision, DispatchStrategy, StdlibMethod,
+    CallbackKind, DispatchStrategy, StdlibMethod,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::stdlib_workload_verification::{
     build_canonical_pure_suite, build_verification_report, check_mutation_contract,
-    infer_mutation_contract, suite_coverage_millionths, verify_scenario, MutationContract,
+    infer_mutation_contract, suite_coverage_millionths, MutationContract,
     MutationViolation, ScenarioResult, VerificationReport, WorkloadOutcome, WorkloadScenario,
     WorkloadSuite, COMPONENT, MAX_MUTATION_VIOLATIONS, MIN_PASS_RATE_MILLIONTHS,
     VERIFICATION_BEAD_ID, VERIFICATION_POLICY_ID, VERIFICATION_SCHEMA_VERSION,
-    franken_engine_stdlib_verification_manifest, MethodVerificationSummary,
+    franken_engine_stdlib_verification_manifest,
 };
 
 fn ep(n: u64) -> SecurityEpoch {

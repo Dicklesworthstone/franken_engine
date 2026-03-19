@@ -28,7 +28,7 @@ use frankenengine_engine::signature_preimage::{
     SignaturePreimage, SigningKey, VerificationKey, verify_signature,
 };
 use frankenengine_engine::sorted_multisig::{
-    MultiSigContext, MultiSigError, MultiSigEventType, QuorumResult,
+    MultiSigContext, MultiSigError, MultiSigEvent, MultiSigEventType, QuorumResult,
     SignerSignature, SortedSignatureArray, is_sorted,
 };
 
@@ -654,4 +654,88 @@ fn enrichment_e2e_multiple_failures_then_success() {
     assert_eq!(counts.get("duplicate_signer"), Some(&1));
     assert_eq!(counts.get("array_created"), Some(&1));
     assert_eq!(counts.get("quorum_verified"), Some(&1));
+}
+
+// ===========================================================================
+// Section 11: Additional serde and Display coverage
+// ===========================================================================
+
+#[test]
+fn enrichment_signer_signature_serde_roundtrip() {
+    let obj = test_obj();
+    let (sk, vk) = make_sig_pair(42);
+    let ss = SignerSignature::new(vk, sign_with(&sk, &obj));
+    let json = serde_json::to_string(&ss).unwrap();
+    let back: SignerSignature = serde_json::from_str(&json).unwrap();
+    assert_eq!(ss, back);
+}
+
+#[test]
+fn enrichment_multisig_error_serde_all_variants() {
+    let variants = vec![
+        MultiSigError::EmptyArray,
+        MultiSigError::ZeroQuorumThreshold,
+        MultiSigError::UnsortedSignatureArray {
+            position: 2,
+            prev_key_hex: "aa".to_string(),
+            current_key_hex: "bb".to_string(),
+        },
+        MultiSigError::DuplicateSignerKey {
+            key_hex: "cc".to_string(),
+            positions: (0, 1),
+        },
+        MultiSigError::QuorumNotMet {
+            required: 3,
+            valid: 1,
+            total: 5,
+        },
+        MultiSigError::ThresholdExceedsSignerCount {
+            threshold: 10,
+            signer_count: 3,
+        },
+        MultiSigError::SignatureError {
+            detail: "bad".to_string(),
+        },
+    ];
+    for v in &variants {
+        let json = serde_json::to_string(v).unwrap();
+        let back: MultiSigError = serde_json::from_str(&json).unwrap();
+        assert_eq!(*v, back);
+    }
+}
+
+#[test]
+fn enrichment_multisig_event_serde_roundtrip() {
+    let event = MultiSigEvent {
+        event_type: MultiSigEventType::QuorumVerified {
+            valid: 2,
+            threshold: 2,
+            total: 3,
+        },
+        trace_id: "t-serde".to_string(),
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let back: MultiSigEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(event, back);
+}
+
+#[test]
+fn enrichment_multisig_error_implements_std_error() {
+    let err: Box<dyn std::error::Error> = Box::new(MultiSigError::EmptyArray);
+    assert!(!err.to_string().is_empty());
+    assert!(std::error::Error::source(err.as_ref()).is_none());
+}
+
+#[test]
+fn enrichment_signer_signature_ordering_by_key_only() {
+    let (_, vk) = make_sig_pair(1);
+    let a = SignerSignature::new(vk.clone(), Signature::from_bytes([0x00; SIGNATURE_LEN]));
+    let b = SignerSignature::new(vk, Signature::from_bytes([0xFF; SIGNATURE_LEN]));
+    assert_eq!(a.cmp(&b), std::cmp::Ordering::Equal);
+}
+
+#[test]
+fn enrichment_context_default_has_empty_event_counts() {
+    let ctx = MultiSigContext::default();
+    assert!(ctx.event_counts().is_empty());
 }

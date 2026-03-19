@@ -514,7 +514,7 @@ fn enrichment_evidence_corpus_insufficient_data_abstains() {
 fn enrichment_evidence_corpus_different_epochs_produce_different_hashes() {
     // Epochs affect decision content (staleness, etc.) so corpus hash should differ
     let (_, h1) = run_evidence_corpus(epoch(50));
-    let (_, h2) = run_evidence_corpus(epoch(500));
+    let (_, _h2) = run_evidence_corpus(epoch(500));
     // Different epochs may or may not produce different hashes depending on
     // whether the epoch affects any intermediate computations. Test determinism instead.
     let (_, h1b) = run_evidence_corpus(epoch(50));

@@ -48,7 +48,7 @@ struct MatrixContractRef {
     bead_id: String,
     contract_doc: String,
     contract_json: String,
-    coverage_row_id: String,
+    required_coverage_row_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,8 +167,11 @@ fn rgc_016a_contract_is_versioned_and_matrix_bound() {
         "docs/rgc_executable_compatibility_target_matrix_v1.json"
     );
     assert_eq!(
-        contract.extends_matrix_contract.coverage_row_id,
-        "rgc-react-capability-contract"
+        contract.extends_matrix_contract.required_coverage_row_ids,
+        vec![
+            "rgc-react-capability-contract".to_string(),
+            "rgc-react-capability-contract-replay".to_string()
+        ]
     );
 }
 
@@ -580,9 +583,15 @@ fn rgc_016a_matrix_contract_ref_fields_are_non_empty() {
         "matrix contract_json must be non-empty"
     );
     assert!(
-        !mcr.coverage_row_id.trim().is_empty(),
-        "matrix coverage_row_id must be non-empty"
+        !mcr.required_coverage_row_ids.is_empty(),
+        "matrix required_coverage_row_ids must be non-empty"
     );
+    for coverage_row_id in &mcr.required_coverage_row_ids {
+        assert!(
+            !coverage_row_id.trim().is_empty(),
+            "matrix required coverage row ids must be non-empty"
+        );
+    }
 }
 
 #[test]
@@ -781,6 +790,34 @@ fn rgc_016a_capability_index_has_unique_keys() {
         index.len(),
         contract.capability_rows.len(),
         "capability index length must match row count (no duplicates)"
+    );
+}
+
+#[test]
+fn rgc_016a_matrix_binding_requires_integration_and_replay_rows() {
+    let contract = parse_contract();
+    let required: BTreeSet<&str> = contract
+        .extends_matrix_contract
+        .required_coverage_row_ids
+        .iter()
+        .map(String::as_str)
+        .collect();
+
+    assert_eq!(
+        required,
+        BTreeSet::from([
+            "rgc-react-capability-contract",
+            "rgc-react-capability-contract-replay",
+        ]),
+        "React contract must bind to both integration and replay matrix rows"
+    );
+    assert_eq!(
+        required.len(),
+        contract
+            .extends_matrix_contract
+            .required_coverage_row_ids
+            .len(),
+        "required matrix coverage row ids must be unique"
     );
 }
 

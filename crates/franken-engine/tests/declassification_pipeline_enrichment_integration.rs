@@ -426,6 +426,11 @@ fn pipeline_emergency_bypasses_route() {
         .unwrap();
     assert_eq!(receipt.decision, DeclassificationDecision::Allow);
     assert_eq!(receipt.declassification_route_ref, "emergency");
+    assert_eq!(receipt.decision_contract_id, request.decision_contract_id);
+    assert_eq!(
+        receipt.replay_command(),
+        "frankenctl replay run --trace <trace.json> --mode strict"
+    );
 }
 
 #[test]

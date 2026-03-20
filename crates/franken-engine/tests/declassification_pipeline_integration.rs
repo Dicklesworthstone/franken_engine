@@ -608,11 +608,16 @@ fn successful_allow_receipt_fields() {
         receipt.declassification_route_ref,
         "declass-secret-internal"
     );
+    assert_eq!(receipt.decision_contract_id, request.decision_contract_id);
     assert_eq!(receipt.loss_assessment_milli, loss.expected_loss_milli);
     assert_eq!(receipt.replay_linkage, "trace-001");
     assert_eq!(receipt.timestamp_ms, 1_700_000_000_000);
     assert_eq!(receipt.schema_version, IfcSchemaVersion::CURRENT);
     assert_eq!(receipt.authorized_by, key.verification_key());
+    assert_eq!(
+        receipt.replay_command(),
+        "frankenctl replay run --trace <trace.json> --mode strict"
+    );
 }
 
 #[test]
@@ -1008,6 +1013,11 @@ fn emergency_bypasses_route_check() {
         .unwrap();
     assert_eq!(receipt.decision, DeclassificationDecision::Allow);
     assert_eq!(receipt.declassification_route_ref, "emergency");
+    assert_eq!(receipt.decision_contract_id, request.decision_contract_id);
+    assert_eq!(
+        receipt.replay_command(),
+        "frankenctl replay run --trace <trace.json> --mode strict"
+    );
 }
 
 #[test]

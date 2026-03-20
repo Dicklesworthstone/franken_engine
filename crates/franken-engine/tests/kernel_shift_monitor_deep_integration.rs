@@ -5,10 +5,11 @@
 //! and constant validation.
 
 use frankenengine_engine::kernel_shift_monitor::{
-    BEAD_ID, COMPONENT, DEFAULT_FALSE_ALARM_BUDGET, DEFAULT_MMD_THRESHOLD, DEFAULT_WINDOW_SIZE,
-    KernelKind, MAX_MONITORS, MIN_WINDOW_SIZE, MonitorAbstention, SCHEMA_VERSION,
-    WorkloadDimension,
+    AggregateShiftReport, BEAD_ID, COMPONENT, DEFAULT_FALSE_ALARM_BUDGET, DEFAULT_MMD_THRESHOLD,
+    DEFAULT_WINDOW_SIZE, KernelKind, MAX_MONITORS, MIN_WINDOW_SIZE, MonitorAbstention,
+    MonitorConfig, MonitorResult, SCHEMA_VERSION, ShiftVerdict, WorkloadDimension,
 };
+use frankenengine_engine::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -154,4 +155,186 @@ fn deep_kernel_as_str_unique() {
     for kind in KernelKind::ALL {
         assert!(names.insert(kind.as_str()), "Duplicate: {}", kind.as_str());
     }
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: ShiftVerdict
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_shift_verdict_all_count() {
+    assert_eq!(ShiftVerdict::ALL.len(), 4);
+}
+
+#[test]
+fn deep_shift_verdict_as_str_unique() {
+    let mut names = std::collections::BTreeSet::new();
+    for verdict in ShiftVerdict::ALL {
+        assert!(
+            names.insert(verdict.as_str()),
+            "Duplicate: {}",
+            verdict.as_str()
+        );
+    }
+}
+
+#[test]
+fn deep_shift_verdict_recommends_reevaluation() {
+    // Marginal and Significant should recommend reevaluation
+    assert!(ShiftVerdict::SignificantShift.recommends_reevaluation());
+    assert!(!ShiftVerdict::NoShift.recommends_reevaluation());
+}
+
+#[test]
+fn deep_shift_verdict_is_concerning() {
+    assert!(ShiftVerdict::SignificantShift.is_concerning());
+    assert!(!ShiftVerdict::NoShift.is_concerning());
+}
+
+#[test]
+fn deep_shift_verdict_serde_roundtrip() {
+    for verdict in ShiftVerdict::ALL {
+        let json = serde_json::to_string(verdict).unwrap();
+        let decoded: ShiftVerdict = serde_json::from_str(&json).unwrap();
+        assert_eq!(*verdict, decoded);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: MonitorConfig
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_monitor_config_default_for_dimension() {
+    for dim in WorkloadDimension::ALL {
+        let config = MonitorConfig::default_for(*dim);
+        assert_eq!(config.dimension, *dim);
+        assert!(config.window_size >= MIN_WINDOW_SIZE);
+        assert!(config.mmd_threshold_millionths > 0);
+    }
+}
+
+#[test]
+fn deep_monitor_config_serde_roundtrip() {
+    let config = MonitorConfig::default_for(WorkloadDimension::IoSchedulingPattern);
+    let json = serde_json::to_string(&config).unwrap();
+    let decoded: MonitorConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(config, decoded);
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: MonitorResult
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_monitor_result_abstained_accessors() {
+    let result = MonitorResult::Abstained {
+        dimension: WorkloadDimension::ComputeIntensity,
+        reason: MonitorAbstention::InsufficientSamples {
+            available: 5,
+            required: 32,
+        },
+    };
+    assert_eq!(result.dimension(), WorkloadDimension::ComputeIntensity);
+    assert!(!result.is_measured());
+    assert!(result.is_abstained());
+    assert!(result.verdict().is_none());
+    assert!(result.mmd_millionths().is_none());
+}
+
+#[test]
+fn deep_monitor_result_serde_roundtrip() {
+    let result = MonitorResult::Abstained {
+        dimension: WorkloadDimension::AllocationPattern,
+        reason: MonitorAbstention::DisabledByPolicy,
+    };
+    let json = serde_json::to_string(&result).unwrap();
+    let decoded: MonitorResult = serde_json::from_str(&json).unwrap();
+    assert_eq!(result, decoded);
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: MonitorAbstention tag
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_abstention_tag_nonempty() {
+    let abstentions = [
+        MonitorAbstention::InsufficientSamples {
+            available: 0,
+            required: 1,
+        },
+        MonitorAbstention::UncalibratedBandwidth,
+        MonitorAbstention::EmptyReferenceDistribution,
+        MonitorAbstention::IncompleteWindow {
+            filled: 0,
+            window_size: 1,
+        },
+        MonitorAbstention::DisabledByPolicy,
+    ];
+    for ab in &abstentions {
+        assert!(!ab.tag().is_empty());
+    }
+}
+
+#[test]
+fn deep_abstention_tag_unique() {
+    let tags: std::collections::BTreeSet<_> = [
+        MonitorAbstention::InsufficientSamples {
+            available: 0,
+            required: 1,
+        },
+        MonitorAbstention::UncalibratedBandwidth,
+        MonitorAbstention::EmptyReferenceDistribution,
+        MonitorAbstention::IncompleteWindow {
+            filled: 0,
+            window_size: 1,
+        },
+        MonitorAbstention::DisabledByPolicy,
+    ]
+    .iter()
+    .map(|a| a.tag())
+    .collect();
+    assert_eq!(tags.len(), 5);
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: AggregateShiftReport
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_aggregate_report_empty() {
+    let report = AggregateShiftReport::new(SecurityEpoch::from_raw(1), vec![]);
+    assert_eq!(report.monitor_count(), 0);
+    assert_eq!(report.measured_count(), 0);
+}
+
+#[test]
+fn deep_aggregate_report_with_abstentions() {
+    let results = vec![
+        MonitorResult::Abstained {
+            dimension: WorkloadDimension::ComputeIntensity,
+            reason: MonitorAbstention::DisabledByPolicy,
+        },
+        MonitorResult::Abstained {
+            dimension: WorkloadDimension::AllocationPattern,
+            reason: MonitorAbstention::UncalibratedBandwidth,
+        },
+    ];
+    let report = AggregateShiftReport::new(SecurityEpoch::from_raw(2), results);
+    assert_eq!(report.monitor_count(), 2);
+    assert_eq!(report.measured_count(), 0);
+    assert_eq!(report.coverage_millionths(), 0);
+}
+
+#[test]
+fn deep_aggregate_report_serde_roundtrip() {
+    let results = vec![MonitorResult::Abstained {
+        dimension: WorkloadDimension::HostcallProfile,
+        reason: MonitorAbstention::EmptyReferenceDistribution,
+    }];
+    let report = AggregateShiftReport::new(SecurityEpoch::from_raw(5), results);
+    let json = serde_json::to_string(&report).unwrap();
+    let decoded: AggregateShiftReport = serde_json::from_str(&json).unwrap();
+    assert_eq!(report, decoded);
 }

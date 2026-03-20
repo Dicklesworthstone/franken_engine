@@ -156,6 +156,17 @@ fn provenance_error_display_empty_extension_id() {
 }
 
 #[test]
+fn provenance_error_display_empty_required_field() {
+    let err = ProvenanceError::EmptyRequiredField {
+        record_type: "declass_receipt".to_string(),
+        field_name: "decision_contract_id".to_string(),
+    };
+    assert!(err.to_string().contains("declass_receipt"));
+    assert!(err.to_string().contains("decision_contract_id"));
+    assert!(err.to_string().contains("empty"));
+}
+
+#[test]
 fn provenance_error_display_duplicate() {
     let err = ProvenanceError::DuplicateRecord {
         key: "test-key".to_string(),
@@ -199,6 +210,13 @@ fn error_codes_stable_for_all_variants() {
     assert_eq!(
         error_code(&ProvenanceError::EmptyExtensionId),
         "PROV_EMPTY_EXTENSION_ID"
+    );
+    assert_eq!(
+        error_code(&ProvenanceError::EmptyRequiredField {
+            record_type: "declass_receipt".to_string(),
+            field_name: "decision_contract_id".to_string()
+        }),
+        "PROV_EMPTY_REQUIRED_FIELD"
     );
     assert_eq!(
         error_code(&ProvenanceError::DuplicateRecord {
@@ -568,6 +586,52 @@ fn reject_empty_extension_id_on_receipt() {
     );
     let err = idx.insert_declass_receipt(&receipt, &ctx).unwrap_err();
     assert_eq!(err, ProvenanceError::EmptyExtensionId);
+}
+
+#[test]
+fn reject_empty_route_ref_on_receipt() {
+    let mut idx = make_index();
+    let ctx = test_ctx();
+    let mut receipt = declass_receipt(
+        "r1",
+        "ext-a",
+        Label::Secret,
+        Label::Public,
+        DeclassificationDecision::Allow,
+    );
+    receipt.declassification_route_ref.clear();
+
+    let err = idx.insert_declass_receipt(&receipt, &ctx).unwrap_err();
+    assert_eq!(
+        err,
+        ProvenanceError::EmptyRequiredField {
+            record_type: "declass_receipt".to_string(),
+            field_name: "declassification_route_ref".to_string(),
+        }
+    );
+}
+
+#[test]
+fn reject_empty_decision_contract_on_receipt() {
+    let mut idx = make_index();
+    let ctx = test_ctx();
+    let mut receipt = declass_receipt(
+        "r1",
+        "ext-a",
+        Label::Secret,
+        Label::Public,
+        DeclassificationDecision::Allow,
+    );
+    receipt.decision_contract_id.clear();
+
+    let err = idx.insert_declass_receipt(&receipt, &ctx).unwrap_err();
+    assert_eq!(
+        err,
+        ProvenanceError::EmptyRequiredField {
+            record_type: "declass_receipt".to_string(),
+            field_name: "decision_contract_id".to_string(),
+        }
+    );
 }
 
 #[test]
@@ -1732,6 +1796,10 @@ fn provenance_error_serde_roundtrip_all_variants() {
             record_type: "flow_event".to_string(),
         },
         ProvenanceError::EmptyExtensionId,
+        ProvenanceError::EmptyRequiredField {
+            record_type: "declass_receipt".to_string(),
+            field_name: "decision_contract_id".to_string(),
+        },
         ProvenanceError::DuplicateRecord {
             key: "k1".to_string(),
         },

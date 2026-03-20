@@ -382,12 +382,12 @@ fn emit_diagnostic_evidence_ref_propagated() {
         InternalFailureKind::BudgetExhaustion,
         "exhausted",
         "evidence-bundle-abc",
-        "frankenctl replay --trace t-123",
+        "frankenctl replay run --trace ./artifacts/t-123.json --mode strict",
     );
     assert_eq!(diag.evidence_ref.as_deref(), Some("evidence-bundle-abc"));
     assert_eq!(
         diag.replay_ref.as_deref(),
-        Some("frankenctl replay --trace t-123")
+        Some("frankenctl replay run --trace ./artifacts/t-123.json --mode strict")
     );
 }
 
@@ -709,7 +709,7 @@ fn full_diagnostic_pipeline() {
         InternalFailureKind::BudgetExhaustion,
         "cell close budget exhausted at 5ms remaining",
         Some("evidence-bundle-xyz"),
-        Some("frankenctl replay --trace trace-42"),
+        Some("frankenctl replay run --trace ./artifacts/trace-42.json --mode strict"),
         ctx,
     );
 
@@ -744,7 +744,7 @@ fn full_diagnostic_pipeline_fatal_path() {
         InternalFailureKind::PanicClass,
         "interpreter panicked on invalid instruction at pc=42",
         Some("evidence-panic-001"),
-        Some("frankenctl replay --trace trace-panic"),
+        Some("frankenctl replay run --trace ./artifacts/trace-panic.json --mode strict"),
         BTreeMap::from([("pc".to_string(), "42".to_string())]),
     );
 

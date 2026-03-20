@@ -222,6 +222,25 @@ fn emit_fails_on_empty_trace_id() {
 }
 
 #[test]
+fn emit_fails_on_whitespace_trace_id() {
+    let mut emitter = CanonicalEvidenceEmitter::with_defaults();
+    let mut ctx = test_context(HighImpactAction::Sandbox);
+    ctx.trace_id = "   ".into();
+    let result = emitter.emit(
+        &ctx,
+        test_candidates(),
+        test_constraints(),
+        test_chosen(),
+        test_witnesses(),
+        test_metadata(),
+    );
+    assert!(matches!(
+        result,
+        Err(EmissionError::MissingField { ref field }) if field == "trace_id"
+    ));
+}
+
+#[test]
 fn emit_fails_on_empty_decision_id() {
     let mut emitter = CanonicalEvidenceEmitter::with_defaults();
     let mut ctx = test_context(HighImpactAction::Sandbox);
@@ -241,10 +260,48 @@ fn emit_fails_on_empty_decision_id() {
 }
 
 #[test]
+fn emit_fails_on_whitespace_decision_id() {
+    let mut emitter = CanonicalEvidenceEmitter::with_defaults();
+    let mut ctx = test_context(HighImpactAction::Sandbox);
+    ctx.decision_id = "\t\n".into();
+    let result = emitter.emit(
+        &ctx,
+        test_candidates(),
+        test_constraints(),
+        test_chosen(),
+        test_witnesses(),
+        test_metadata(),
+    );
+    assert!(matches!(
+        result,
+        Err(EmissionError::MissingField { ref field }) if field == "decision_id"
+    ));
+}
+
+#[test]
 fn emit_fails_on_empty_policy_id() {
     let mut emitter = CanonicalEvidenceEmitter::with_defaults();
     let mut ctx = test_context(HighImpactAction::Sandbox);
     ctx.policy_id = String::new();
+    let result = emitter.emit(
+        &ctx,
+        test_candidates(),
+        test_constraints(),
+        test_chosen(),
+        test_witnesses(),
+        test_metadata(),
+    );
+    assert!(matches!(
+        result,
+        Err(EmissionError::MissingField { ref field }) if field == "policy_id"
+    ));
+}
+
+#[test]
+fn emit_fails_on_whitespace_policy_id() {
+    let mut emitter = CanonicalEvidenceEmitter::with_defaults();
+    let mut ctx = test_context(HighImpactAction::Sandbox);
+    ctx.policy_id = "   ".into();
     let result = emitter.emit(
         &ctx,
         test_candidates(),

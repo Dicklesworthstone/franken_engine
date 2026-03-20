@@ -233,3 +233,164 @@ fn scanner_error_display_all_distinct() {
 fn constants_valid() {
     assert!(BIFURCATION_SCHEMA_VERSION.contains("bifurcation"));
 }
+
+// ---------------------------------------------------------------------------
+// Enrichment: multiple parameters
+// ---------------------------------------------------------------------------
+
+#[test]
+fn scanner_multiple_params_all_scanned() {
+    let config = ScannerConfig::default();
+    let params = vec![
+        make_param("p1", ParameterDomain::RiskThreshold, 500_000),
+        make_param("p2", ParameterDomain::Calibration, 300_000),
+        make_param("p3", ParameterDomain::ResourceAllocation, 700_000),
+    ];
+    let envelopes = vec![
+        make_envelope("p1", 100_000, 900_000),
+        make_envelope("p2", 100_000, 800_000),
+        make_envelope("p3", 200_000, 900_000),
+    ];
+    let mut scanner = BifurcationBoundaryScanner::new(config, params, envelopes).unwrap();
+    assert_eq!(scanner.parameter_count(), 3);
+    let result = scanner.scan().unwrap();
+    assert_eq!(result.parameters_scanned, 3);
+}
+
+#[test]
+fn scanner_parameter_at_nominal_no_warnings() {
+    let config = ScannerConfig::default();
+    // Parameter at nominal (middle of envelope)
+    let p = make_param("centered", ParameterDomain::Calibration, 500_000);
+    let env = make_envelope("centered", 100_000, 900_000);
+    let mut scanner = BifurcationBoundaryScanner::new(config, vec![p], vec![env]).unwrap();
+    let result = scanner.scan().unwrap();
+    // Centered parameter should not trigger boundary warnings
+    assert!(
+        result.bifurcation_points.is_empty(),
+        "parameter at nominal should not produce bifurcation points"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: multiple observations create scan history
+// ---------------------------------------------------------------------------
+
+#[test]
+fn scanner_many_observations_builds_history() {
+    let config = ScannerConfig::default();
+    let p = make_param("hist", ParameterDomain::Environment, 500_000);
+    let env = make_envelope("hist", 100_000, 900_000);
+    let mut scanner = BifurcationBoundaryScanner::new(config, vec![p], vec![env]).unwrap();
+    // Simulate a drift toward the boundary
+    for i in 0..20 {
+        scanner.observe(ParameterObservation {
+            parameter_id: "hist".to_string(),
+            value_millionths: 500_000 + i * 20_000,
+            tick: i as u64,
+            regime: RegimeLabel::Normal,
+        });
+    }
+    let result = scanner.scan().unwrap();
+    assert!(result.parameters_scanned > 0);
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: ParameterDomain serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parameter_domain_serde_roundtrip() {
+    let domains = [
+        ParameterDomain::RiskThreshold,
+        ParameterDomain::Calibration,
+        ParameterDomain::ResourceAllocation,
+        ParameterDomain::LaneRouting,
+        ParameterDomain::SafetyBoundary,
+        ParameterDomain::Environment,
+    ];
+    for domain in domains {
+        let json = serde_json::to_string(&domain).unwrap();
+        let decoded: ParameterDomain = serde_json::from_str(&json).unwrap();
+        assert_eq!(domain, decoded);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: BifurcationType serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn bifurcation_type_serde_roundtrip() {
+    let types = [
+        BifurcationType::SaddleNode,
+        BifurcationType::Transcritical,
+        BifurcationType::Pitchfork,
+        BifurcationType::Hopf,
+        BifurcationType::Catastrophic,
+        BifurcationType::Gradual,
+    ];
+    for btype in types {
+        let json = serde_json::to_string(&btype).unwrap();
+        let decoded: BifurcationType = serde_json::from_str(&json).unwrap();
+        assert_eq!(btype, decoded);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: ScannerError serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn scanner_error_too_many_params() {
+    let config = ScannerConfig::default();
+    let mut params = Vec::new();
+    for i in 0..200 {
+        params.push(make_param(&format!("p{i}"), ParameterDomain::Calibration, 500_000));
+    }
+    let err = BifurcationBoundaryScanner::new(config, params, vec![]);
+    assert!(err.is_err());
+}
+
+#[test]
+fn scanner_error_duplicate_parameter() {
+    let config = ScannerConfig::default();
+    let params = vec![
+        make_param("dup", ParameterDomain::Calibration, 500_000),
+        make_param("dup", ParameterDomain::Calibration, 600_000),
+    ];
+    let err = BifurcationBoundaryScanner::new(config, params, vec![]);
+    assert!(err.is_err());
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: ParameterObservation serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parameter_observation_serde_roundtrip() {
+    let obs = ParameterObservation {
+        parameter_id: "p1".to_string(),
+        value_millionths: 555_000,
+        tick: 42,
+        regime: RegimeLabel::Normal,
+    };
+    let json = serde_json::to_string(&obs).unwrap();
+    let decoded: ParameterObservation = serde_json::from_str(&json).unwrap();
+    assert_eq!(obs, decoded);
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: ScannerConfig customization
+// ---------------------------------------------------------------------------
+
+#[test]
+fn scanner_config_custom_thresholds() {
+    let mut cfg = ScannerConfig::default();
+    cfg.proximity_threshold_millionths = 200_000;
+    cfg.risk_budget_millionths = 100_000;
+    let json = serde_json::to_string(&cfg).unwrap();
+    let decoded: ScannerConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(cfg, decoded);
+    assert_eq!(decoded.proximity_threshold_millionths, 200_000);
+}

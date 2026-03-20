@@ -2,7 +2,7 @@
 //! the 69 inline unit tests.
 //!
 //! Focus areas:
-//! - Empty extension_id validation for all 4 record types (inline only tests flow_event)
+//! - Empty/blank extension_id and receipt-linkage validation boundaries
 //! - Storage error propagation via fail_writes
 //! - MAX_LINEAGE_DEPTH (16) boundary
 //! - Blocked/Declassified events in lineage edges
@@ -121,7 +121,7 @@ fn claim(id: &str, ext: &str, strength: ClaimStrength, epoch: u64) -> Confinemen
 }
 
 // =========================================================================
-// 1. Empty extension_id validation for all 4 record types
+// 1. Empty/blank validation boundaries for identifying and linkage fields
 // =========================================================================
 
 #[test]
@@ -134,18 +134,64 @@ fn empty_extension_id_rejected_for_flow_proof() {
 }
 
 #[test]
-fn empty_extension_id_rejected_for_declass_receipt() {
+fn blank_extension_id_rejected_for_declass_receipt() {
     let mut idx = make_index();
     let c = ctx();
     let r = receipt(
         "r1",
-        "",
+        "   ",
         Label::Secret,
         Label::Public,
         DeclassificationDecision::Allow,
     );
     let err = idx.insert_declass_receipt(&r, &c).unwrap_err();
     assert_eq!(err, ProvenanceError::EmptyExtensionId);
+}
+
+#[test]
+fn blank_route_ref_rejected_for_declass_receipt() {
+    let mut idx = make_index();
+    let c = ctx();
+    let mut r = receipt(
+        "r1",
+        "ext-a",
+        Label::Secret,
+        Label::Public,
+        DeclassificationDecision::Allow,
+    );
+    r.declassification_route_ref = "   ".to_string();
+
+    let err = idx.insert_declass_receipt(&r, &c).unwrap_err();
+    assert_eq!(
+        err,
+        ProvenanceError::EmptyRequiredField {
+            record_type: "declass_receipt".to_string(),
+            field_name: "declassification_route_ref".to_string(),
+        }
+    );
+}
+
+#[test]
+fn blank_decision_contract_id_rejected_for_declass_receipt() {
+    let mut idx = make_index();
+    let c = ctx();
+    let mut r = receipt(
+        "r1",
+        "ext-a",
+        Label::Secret,
+        Label::Public,
+        DeclassificationDecision::Allow,
+    );
+    r.decision_contract_id = "   ".to_string();
+
+    let err = idx.insert_declass_receipt(&r, &c).unwrap_err();
+    assert_eq!(
+        err,
+        ProvenanceError::EmptyRequiredField {
+            record_type: "declass_receipt".to_string(),
+            field_name: "decision_contract_id".to_string(),
+        }
+    );
 }
 
 #[test]
@@ -173,6 +219,18 @@ fn provenance_error_display_empty_id() {
 fn provenance_error_display_empty_extension_id() {
     let err = ProvenanceError::EmptyExtensionId;
     assert_eq!(err.to_string(), "extension_id is empty");
+}
+
+#[test]
+fn provenance_error_display_empty_required_field() {
+    let err = ProvenanceError::EmptyRequiredField {
+        record_type: "declass_receipt".to_string(),
+        field_name: "decision_contract_id".to_string(),
+    };
+    assert_eq!(
+        err.to_string(),
+        "declass_receipt field decision_contract_id is empty"
+    );
 }
 
 #[test]
@@ -217,6 +275,13 @@ fn error_code_all_variants() {
     assert_eq!(
         error_code(&ProvenanceError::EmptyExtensionId),
         "PROV_EMPTY_EXTENSION_ID"
+    );
+    assert_eq!(
+        error_code(&ProvenanceError::EmptyRequiredField {
+            record_type: "declass_receipt".to_string(),
+            field_name: "decision_contract_id".to_string()
+        }),
+        "PROV_EMPTY_REQUIRED_FIELD"
     );
     assert_eq!(
         error_code(&ProvenanceError::DuplicateRecord {
@@ -1823,6 +1888,10 @@ fn provenance_error_serde_all_variants() {
             record_type: "flow_event".to_string(),
         },
         ProvenanceError::EmptyExtensionId,
+        ProvenanceError::EmptyRequiredField {
+            record_type: "declass_receipt".to_string(),
+            field_name: "decision_contract_id".to_string(),
+        },
         ProvenanceError::DuplicateRecord {
             key: "flow_event::ev1".to_string(),
         },

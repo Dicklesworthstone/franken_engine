@@ -552,6 +552,63 @@ fn test_receipt_hash_changes_with_epoch() {
     assert_ne!(r1.content_hash, r2.content_hash);
 }
 
+#[test]
+fn test_receipt_hash_changes_with_missing_dimensions_and_tail_risk() {
+    let mut gc_pause_policy = PublicationPolicy::relaxed();
+    gc_pause_policy
+        .required_dimensions
+        .insert(ResourceDimension::GcPause);
+    let gc_pause_receipt = GovernanceEvaluator::new(gc_pause_policy).evaluate(epoch());
+
+    let mut fd_policy = PublicationPolicy::relaxed();
+    fd_policy
+        .required_dimensions
+        .insert(ResourceDimension::FileDescriptors);
+    let fd_receipt = GovernanceEvaluator::new(fd_policy).evaluate(epoch());
+
+    let mut approved_without_tail = GovernanceEvaluator::new(PublicationPolicy::relaxed());
+    approved_without_tail.add_certificate(
+        ResourceDimension::CpuTime,
+        "w_tail".into(),
+        1000,
+        500,
+        50,
+    );
+    let approved_without_tail_receipt = approved_without_tail.evaluate(epoch());
+
+    let mut approved_with_tail = GovernanceEvaluator::new(PublicationPolicy::relaxed());
+    approved_with_tail.add_certificate(ResourceDimension::CpuTime, "w_tail".into(), 1000, 500, 50);
+    approved_with_tail.add_tail_risk(
+        ResourceDimension::CpuTime,
+        "w_tail".into(),
+        2_100_000,
+        2_050_000,
+    );
+    let approved_with_tail_receipt = approved_with_tail.evaluate(epoch());
+
+    assert_eq!(
+        gc_pause_receipt.verdict,
+        GovernanceVerdict::InsufficientCoverage
+    );
+    assert_eq!(fd_receipt.verdict, GovernanceVerdict::InsufficientCoverage);
+    assert_eq!(gc_pause_receipt.violations.len(), 1);
+    assert_eq!(fd_receipt.violations.len(), 1);
+    assert_ne!(gc_pause_receipt.content_hash, fd_receipt.content_hash);
+
+    assert_eq!(
+        approved_without_tail_receipt.verdict,
+        GovernanceVerdict::Approved
+    );
+    assert_eq!(
+        approved_with_tail_receipt.verdict,
+        GovernanceVerdict::Approved
+    );
+    assert_ne!(
+        approved_without_tail_receipt.content_hash,
+        approved_with_tail_receipt.content_hash
+    );
+}
+
 // ---------------------------------------------------------------------------
 // E2E scenarios
 // ---------------------------------------------------------------------------

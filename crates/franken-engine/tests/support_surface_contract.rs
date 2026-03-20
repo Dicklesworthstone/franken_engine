@@ -704,6 +704,42 @@ fn rgc_911b_gate_script_uses_repo_local_rch_target_and_rejects_local_fallback() 
         "gate script should use a dedicated repo-local remote target dir"
     );
     assert!(
+        script.contains("toolchain=\"${RUSTUP_TOOLCHAIN:-nightly}\""),
+        "gate script should default remote RUSTUP_TOOLCHAIN to nightly"
+    );
+    assert!(
+        script.contains("\"RUSTUP_TOOLCHAIN=${toolchain}\""),
+        "gate script should pass RUSTUP_TOOLCHAIN through to rch"
+    );
+    assert!(
+        script.contains("cargo_build_jobs=\"${CARGO_BUILD_JOBS:-1}\""),
+        "gate script should default remote CARGO_BUILD_JOBS to 1"
+    );
+    assert!(
+        script.contains("\"CARGO_BUILD_JOBS=${cargo_build_jobs}\""),
+        "gate script should pass CARGO_BUILD_JOBS through to rch"
+    );
+    assert!(
+        script.contains("cargo_incremental=\"${CARGO_INCREMENTAL:-0}\""),
+        "gate script should default remote CARGO_INCREMENTAL to 0"
+    );
+    assert!(
+        script.contains("\"CARGO_INCREMENTAL=${cargo_incremental}\""),
+        "gate script should pass CARGO_INCREMENTAL through to rch"
+    );
+    assert!(
+        script.contains("\":(exclude)${artifact_root%/}/\""),
+        "gate script should exclude its artifact root from dirty-worktree detection"
+    );
+    assert!(
+        script.contains("\":(exclude).beads/\""),
+        "gate script should exclude beads metadata from dirty-worktree detection"
+    );
+    assert!(
+        script.contains("\":(exclude).claude/\""),
+        "gate script should exclude local agent workspace metadata from dirty-worktree detection"
+    );
+    assert!(
         !script.contains("/tmp/rch_target_rgc_support_surface_contract_"),
         "gate script must not default to /tmp for the remote cargo target dir"
     );
@@ -728,6 +764,14 @@ fn rgc_911b_gate_script_manifest_reuses_contract_operator_verification_commands(
     assert!(
         script.contains("] + $contract_operator_verification"),
         "gate manifest should append the published operator verification commands"
+    );
+    assert!(
+        !script.contains("\"jq empty docs/support_surface_contract.json\""),
+        "gate manifest should not hardcode duplicated contract jq validation commands"
+    );
+    assert!(
+        !script.contains("\"jq empty docs/support_surface_mode_matrix.json\""),
+        "gate manifest should not hardcode duplicated mode-matrix jq validation commands"
     );
     assert!(
         script.contains("support_surface_schema_report: $schema_report"),
@@ -1029,8 +1073,29 @@ fn rgc_911b_operator_verification_commands_reference_correct_contract() {
         contract
             .operator_verification
             .iter()
+            .any(|cmd| cmd.contains("RUSTUP_TOOLCHAIN=nightly")),
+        "operator verification should pin the nightly toolchain used by the gate runner"
+    );
+    assert!(
+        contract
+            .operator_verification
+            .iter()
             .any(|cmd| cmd.contains("$PWD/target_rch_rgc_support_surface_contract_verify")),
         "operator verification should document the repo-local target dir example"
+    );
+    assert!(
+        contract
+            .operator_verification
+            .iter()
+            .any(|cmd| cmd.contains("CARGO_BUILD_JOBS=1")),
+        "operator verification should document the serialized remote cargo job count"
+    );
+    assert!(
+        contract
+            .operator_verification
+            .iter()
+            .any(|cmd| cmd.contains("CARGO_INCREMENTAL=0")),
+        "operator verification should document the non-incremental remote cargo setting"
     );
     assert!(
         !contract

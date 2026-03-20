@@ -181,3 +181,194 @@ fn constants_valid() {
     assert!(DEFAULT_MIN_ELISION_CONFIDENCE > 0);
     assert!(DEFAULT_MAX_REGION_SPAN > 0);
 }
+
+// ---------------------------------------------------------------------------
+// Enrichment: DispatchSite builder
+// ---------------------------------------------------------------------------
+
+#[test]
+fn dispatch_site_new() {
+    let site = DispatchSite::new(10, "hostcall.fs.read");
+    assert_eq!(site.offset, 10);
+    assert_eq!(site.hostcall_id, "hostcall.fs.read");
+    assert!(site.required_capabilities.is_empty());
+}
+
+#[test]
+fn dispatch_site_require_adds_capability() {
+    use frankenengine_engine::policy_theorem_compiler::Capability;
+    let cap = Capability::new("network_outbound");
+    let site = DispatchSite::new(20, "hostcall.net.connect")
+        .require(cap.clone());
+    assert!(site.required_capabilities.contains(&cap));
+}
+
+#[test]
+fn dispatch_site_with_ifc_flow() {
+    let site = DispatchSite::new(30, "hostcall.declassify")
+        .with_ifc_flow("secret", "public");
+    assert_eq!(site.source_label.as_deref(), Some("secret"));
+    assert_eq!(site.sink_clearance.as_deref(), Some("public"));
+}
+
+#[test]
+fn dispatch_site_content_hash_deterministic() {
+    let s1 = DispatchSite::new(5, "hostcall.timer");
+    let s2 = DispatchSite::new(5, "hostcall.timer");
+    assert_eq!(s1.content_hash(), s2.content_hash());
+}
+
+#[test]
+fn dispatch_site_content_hash_changes_on_diff() {
+    let s1 = DispatchSite::new(5, "hostcall.timer");
+    let s2 = DispatchSite::new(6, "hostcall.timer");
+    assert_ne!(s1.content_hash(), s2.content_hash());
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: CapabilityProof
+// ---------------------------------------------------------------------------
+
+#[test]
+fn capability_proof_meets_confidence() {
+    use frankenengine_engine::policy_theorem_compiler::Capability;
+    let proof = CapabilityProof::new(
+        Capability::new("network_outbound"),
+        "witness-001",
+        950_000,
+        true,
+    );
+    assert!(proof.meets_confidence(950_000));
+    assert!(proof.meets_confidence(900_000));
+    assert!(!proof.meets_confidence(960_000));
+}
+
+#[test]
+fn capability_proof_serde_roundtrip() {
+    use frankenengine_engine::policy_theorem_compiler::Capability;
+    let proof = CapabilityProof::new(
+        Capability::new("file_read"),
+        "witness-serde",
+        800_000,
+        true,
+    );
+    let json = serde_json::to_string(&proof).unwrap();
+    let restored: CapabilityProof = serde_json::from_str(&json).unwrap();
+    assert_eq!(proof, restored);
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: DispatchDecisionRecord
+// ---------------------------------------------------------------------------
+
+#[test]
+fn dispatch_decision_record_fast_path() {
+    let policy = PruningPolicy::default();
+    let mut compiler = DispatchCompiler::new(policy, epoch(1));
+    use frankenengine_engine::policy_theorem_compiler::Capability;
+    let cap = Capability::new("network_outbound");
+    compiler.register_capability_proofs(vec![CapabilityProof::new(
+        cap.clone(),
+        "full-cap",
+        999_000,
+        true,
+    )]);
+    let site = DispatchSite::new(0, "hostcall.net.ping")
+        .require(cap);
+    let decision = compiler.decide(&site);
+    if decision.is_fast_path() {
+        assert!(!decision.is_rejected());
+    }
+}
+
+#[test]
+fn dispatch_decision_record_id_deterministic() {
+    let policy = PruningPolicy::default();
+    let compiler = DispatchCompiler::new(policy, epoch(1));
+    let site = DispatchSite::new(0, "hostcall.noop");
+    let d1 = compiler.decide(&site);
+    let d2 = compiler.decide(&site);
+    assert_eq!(d1.decision_id, d2.decision_id);
+}
+
+#[test]
+fn dispatch_decision_record_serde_roundtrip() {
+    let policy = PruningPolicy::default();
+    let compiler = DispatchCompiler::new(policy, epoch(1));
+    let site = DispatchSite::new(0, "hostcall.noop");
+    let decision = compiler.decide(&site);
+    let json = serde_json::to_string(&decision).unwrap();
+    let restored: DispatchDecisionRecord = serde_json::from_str(&json).unwrap();
+    assert_eq!(decision, restored);
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: CheckElidableRegion
+// ---------------------------------------------------------------------------
+
+#[test]
+fn check_elidable_region_new() {
+    let region = CheckElidableRegion::new(10, 50, epoch(1));
+    assert_eq!(region.span(), 40);
+    assert!(region.contains_offset(25));
+    assert!(!region.contains_offset(5));
+    assert!(!region.contains_offset(51));
+}
+
+#[test]
+fn check_elidable_region_invalidate() {
+    let mut region = CheckElidableRegion::new(0, 100, epoch(1));
+    region.add_fast_path_site(10);
+    assert_eq!(region.fast_path_count(), 1);
+    region.invalidate();
+    assert_eq!(region.fast_path_count(), 0);
+}
+
+#[test]
+fn check_elidable_region_serde_roundtrip() {
+    let mut region = CheckElidableRegion::new(0, 64, epoch(2));
+    region.add_fast_path_site(10);
+    region.add_fast_path_site(20);
+    let json = serde_json::to_string(&region).unwrap();
+    let restored: CheckElidableRegion = serde_json::from_str(&json).unwrap();
+    assert_eq!(region, restored);
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: SpecializationEnvelope
+// ---------------------------------------------------------------------------
+
+#[test]
+fn specialization_envelope_compile_and_summary() {
+    let policy = PruningPolicy::default();
+    let compiler = DispatchCompiler::new(policy, epoch(1));
+    let sites = vec![
+        DispatchSite::new(0, "hostcall.noop"),
+        DispatchSite::new(10, "hostcall.timer"),
+    ];
+    let envelope = compiler.compile_envelope("test-scope", &sites, 0);
+    let summary = envelope.summary();
+    assert!(summary.total_sites >= 2);
+}
+
+#[test]
+fn specialization_envelope_content_hash_deterministic() {
+    let policy = PruningPolicy::default();
+    let c1 = DispatchCompiler::new(policy.clone(), epoch(1));
+    let c2 = DispatchCompiler::new(policy, epoch(1));
+    let sites = vec![DispatchSite::new(0, "hostcall.noop")];
+    let e1 = c1.compile_envelope("scope", &sites, 0);
+    let e2 = c2.compile_envelope("scope", &sites, 0);
+    assert_eq!(e1.content_hash(), e2.content_hash());
+}
+
+#[test]
+fn specialization_envelope_serde_roundtrip() {
+    let policy = PruningPolicy::default();
+    let compiler = DispatchCompiler::new(policy, epoch(1));
+    let sites = vec![DispatchSite::new(0, "hostcall.noop")];
+    let envelope = compiler.compile_envelope("scope", &sites, 0);
+    let json = serde_json::to_string(&envelope).unwrap();
+    let restored: SpecializationEnvelope = serde_json::from_str(&json).unwrap();
+    assert_eq!(envelope, restored);
+}

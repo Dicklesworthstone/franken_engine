@@ -121,6 +121,39 @@ fn binary_emits_expected_artifact_bundle() {
         8
     );
 
+    let remediation_index: serde_json::Value = serde_json::from_slice(
+        &fs::read(out_dir.join("remediation_linkage_index.json"))
+            .expect("read remediation linkage index"),
+    )
+    .expect("deserialize remediation linkage index");
+    let replay_links: Vec<&serde_json::Value> = remediation_index["operator_links"]
+        .as_array()
+        .expect("operator_links must be an array")
+        .iter()
+        .filter(|link| link["replay_available"].as_bool() == Some(true))
+        .collect();
+    assert!(
+        !replay_links.is_empty(),
+        "expected replay-capable operator links"
+    );
+    for link in replay_links {
+        let sample = link["sample_replay_ref"]
+            .as_str()
+            .expect("replay-capable link must include sample_replay_ref");
+        assert!(
+            sample.starts_with("frankenctl replay run --trace "),
+            "sample replay ref must use shipped replay run syntax: {sample}"
+        );
+        assert!(
+            sample.ends_with(" --mode strict"),
+            "sample replay ref must pin strict mode: {sample}"
+        );
+        assert!(
+            !sample.contains("frankenctl replay --trace "),
+            "sample replay ref must not use phantom top-level replay syntax: {sample}"
+        );
+    }
+
     let events_jsonl = fs::read_to_string(out_dir.join("events.jsonl")).expect("read events");
     assert_eq!(events_jsonl.lines().count(), 10);
 

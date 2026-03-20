@@ -429,6 +429,16 @@ fn enrichment_error_display_missing_observation() {
 }
 
 #[test]
+fn enrichment_error_display_unexpected_observation() {
+    let err = SecurityConformanceError::UnexpectedObservation {
+        workload_id: "w-404".into(),
+    };
+    let msg = format!("{err}");
+    assert!(msg.contains("unexpected observation"));
+    assert!(msg.contains("w-404"));
+}
+
+#[test]
 fn enrichment_error_display_invalid_ratio_config() {
     let err = SecurityConformanceError::InvalidRatioConfig {
         field: "tpr_min",
@@ -919,6 +929,31 @@ fn test_evaluate_missing_observation_returns_error() {
     assert!(result.is_err());
     let msg = format!("{}", result.unwrap_err());
     assert!(msg.contains("b-missing"));
+}
+
+#[test]
+fn test_evaluate_unexpected_observation_returns_error() {
+    let records = vec![label_record(benign_label("b-1"))];
+    let observations = vec![
+        benign_observation("b-1"),
+        SecurityWorkloadObservation {
+            workload_id: "b-ghost".into(),
+            actual_outcome: SecurityOutcome::Contain,
+            detection_latency_us: 5_000,
+            sentinel_posterior: 0.7,
+            policy_action: "contain".into(),
+            containment_action: "sandbox".into(),
+            error_code: None,
+        },
+    ];
+    let result = evaluate_security_conformance(
+        &records,
+        &observations,
+        &SecurityConformanceThresholds::default(),
+    );
+    assert!(result.is_err());
+    let msg = format!("{}", result.unwrap_err());
+    assert!(msg.contains("unexpected observation") || msg.contains("b-ghost"));
 }
 
 // ===========================================================================

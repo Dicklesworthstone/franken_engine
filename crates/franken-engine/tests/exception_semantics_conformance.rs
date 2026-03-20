@@ -12,8 +12,8 @@
 #![allow(clippy::needless_borrows_for_generic_args, clippy::too_many_arguments)]
 
 use frankenengine_engine::ast::{
-    BlockStatement, CatchClause, Expression, ExpressionStatement, ParseGoal, SourceSpan, Statement,
-    SyntaxTree, ThrowStatement, TryCatchStatement,
+    BlockStatement, CatchClause, Expression, ExpressionStatement, ParseGoal, ReturnStatement,
+    SourceSpan, Statement, SyntaxTree, ThrowStatement, TryCatchStatement,
 };
 use frankenengine_engine::baseline_interpreter::{InterpreterError, QuickJsLane, Value};
 use frankenengine_engine::hash_tiers::ContentHash;
@@ -272,28 +272,27 @@ fn conformance_runtime_try_catch_normal_path() {
 
 #[test]
 fn conformance_runtime_finally_executes_on_normal_path() {
-    // try { r0 = 10; } finally { r0 = r0 (identity, but EnterFinally/EndFinally run) }
+    // try { r0 = 10; } finally { r0 = 20; }
+    // For try/finally (no catch), catch_target points directly to
+    // EnterFinally — no EnterCatch is emitted, so the pending exception
+    // (if any) is preserved for EndFinally to re-throw.
     let m = test_module(vec![
-        // 0: BeginTry → catch at 3, finally at 5
+        // 0: BeginTry → catch and finally both at 3 (no catch handler)
         Ir3Instruction::BeginTry {
             catch_target: 3,
-            finally_target: Some(5),
+            finally_target: Some(3),
         },
         // 1: LoadInt 10
         Ir3Instruction::LoadInt { dst: 0, value: 10 },
-        // 2: EndTry + Jump to finally
+        // 2: EndTry (normal completion pops catch frame, falls through)
         Ir3Instruction::EndTry,
-        // 3: EnterCatch (exception path)
-        Ir3Instruction::EnterCatch { dst: 1 },
-        // 4: Jump to finally
-        Ir3Instruction::Jump { target: 5 },
-        // 5: EnterFinally
+        // 3: EnterFinally (reached by normal path or exception path)
         Ir3Instruction::EnterFinally,
-        // 6: LoadInt 20 (finally body overwrites r0)
+        // 4: LoadInt 20 (finally body overwrites r0)
         Ir3Instruction::LoadInt { dst: 0, value: 20 },
-        // 7: EndFinally
+        // 5: EndFinally (normal mode → continue)
         Ir3Instruction::EndFinally,
-        // 8: Halt
+        // 6: Halt
         Ir3Instruction::Halt,
     ]);
     let result = QuickJsLane::new()
@@ -301,6 +300,137 @@ fn conformance_runtime_finally_executes_on_normal_path() {
         .expect("finally on normal path should succeed");
     // r0 should be 20 because finally body executed
     assert_eq!(result.value, Value::Int(20));
+}
+
+#[test]
+fn conformance_runtime_try_finally_rethrows_on_exception_path() {
+    // try { throw 42; } finally { r0 = 99; }
+    // Exception should propagate through finally as UncaughtException.
+    let m = test_module(vec![
+        // 0: BeginTry → exception goes directly to finally (no catch)
+        Ir3Instruction::BeginTry {
+            catch_target: 4,
+            finally_target: Some(4),
+        },
+        // 1: LoadInt 42 into r1
+        Ir3Instruction::LoadInt { dst: 1, value: 42 },
+        // 2: Throw r1
+        Ir3Instruction::Throw { value: 1 },
+        // 3: EndTry (never reached)
+        Ir3Instruction::EndTry,
+        // 4: EnterFinally (exception pending → mode = Exception)
+        Ir3Instruction::EnterFinally,
+        // 5: LoadInt 99 (finally body still executes)
+        Ir3Instruction::LoadInt { dst: 0, value: 99 },
+        // 6: EndFinally (mode = Exception → re-throw → UncaughtException)
+        Ir3Instruction::EndFinally,
+        // 7: Halt (never reached)
+        Ir3Instruction::Halt,
+    ]);
+    let err = QuickJsLane::new().execute(&m, "conformance").unwrap_err();
+    assert!(
+        matches!(err, InterpreterError::UncaughtException { .. }),
+        "try/finally with throw must re-throw from EndFinally: {err:?}"
+    );
+}
+
+#[test]
+fn conformance_lowered_try_catch_finally_runs_finally_on_rethrow_from_catch() {
+    let ir3 = lower_to_ir3(vec![Statement::TryCatch(TryCatchStatement {
+        block: BlockStatement {
+            body: vec![Statement::Throw(ThrowStatement {
+                argument: Expression::NumericLiteral(42),
+                span: span(),
+            })],
+            span: span(),
+        },
+        handler: Some(CatchClause {
+            parameter: Some("e".into()),
+            body: BlockStatement {
+                body: vec![Statement::Throw(ThrowStatement {
+                    argument: Expression::Identifier("e".into()),
+                    span: span(),
+                })],
+                span: span(),
+            },
+            span: span(),
+        }),
+        finalizer: Some(BlockStatement {
+            body: vec![Statement::Throw(ThrowStatement {
+                argument: Expression::NumericLiteral(99),
+                span: span(),
+            })],
+            span: span(),
+        }),
+        span: span(),
+    })]);
+    let err = QuickJsLane::new().execute(&ir3, "conformance").unwrap_err();
+    match err {
+        InterpreterError::UncaughtException { value } => assert_eq!(value, "99"),
+        other => panic!("expected finalizer throw to override rethrow, got {other:?}"),
+    }
+}
+
+#[test]
+fn conformance_lowered_try_finally_return_in_finally_overrides_try_return() {
+    let ir3 = lower_to_ir3(vec![Statement::TryCatch(TryCatchStatement {
+        block: BlockStatement {
+            body: vec![Statement::Return(ReturnStatement {
+                argument: Some(Expression::NumericLiteral(1)),
+                span: span(),
+            })],
+            span: span(),
+        },
+        handler: None,
+        finalizer: Some(BlockStatement {
+            body: vec![Statement::Return(ReturnStatement {
+                argument: Some(Expression::NumericLiteral(2)),
+                span: span(),
+            })],
+            span: span(),
+        }),
+        span: span(),
+    })]);
+    let result = QuickJsLane::new()
+        .execute(&ir3, "conformance")
+        .expect("finally return should override try return");
+    assert_eq!(result.value, Value::Int(2));
+}
+
+#[test]
+fn conformance_lowered_try_catch_finally_return_in_finally_overrides_catch_return() {
+    let ir3 = lower_to_ir3(vec![Statement::TryCatch(TryCatchStatement {
+        block: BlockStatement {
+            body: vec![Statement::Throw(ThrowStatement {
+                argument: Expression::NumericLiteral(1),
+                span: span(),
+            })],
+            span: span(),
+        },
+        handler: Some(CatchClause {
+            parameter: Some("e".into()),
+            body: BlockStatement {
+                body: vec![Statement::Return(ReturnStatement {
+                    argument: Some(Expression::Identifier("e".into())),
+                    span: span(),
+                })],
+                span: span(),
+            },
+            span: span(),
+        }),
+        finalizer: Some(BlockStatement {
+            body: vec![Statement::Return(ReturnStatement {
+                argument: Some(Expression::NumericLiteral(2)),
+                span: span(),
+            })],
+            span: span(),
+        }),
+        span: span(),
+    })]);
+    let result = QuickJsLane::new()
+        .execute(&ir3, "conformance")
+        .expect("finally return should override catch return");
+    assert_eq!(result.value, Value::Int(2));
 }
 
 // ---------------------------------------------------------------------------

@@ -43,6 +43,7 @@ use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
 
 const TEST_DECLASS_ROUTE_ID: &str = "declassify.audit";
+const EXPECTED_REPLAY_HINT: &str = "frankenctl replay run --trace <trace.json> --mode strict";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -209,6 +210,31 @@ fn approved_receipt_for_prepared_declassification(
     (obligation.obligation_id.clone(), receipt)
 }
 
+fn assert_required_declassification_summary_in_detail(
+    detail: &str,
+    obligation: &frankenengine_engine::lowering_pipeline::RequiredDeclassificationArtifactEntry,
+) {
+    let mut expected_parts = vec![format!(
+        "{}@op{}",
+        obligation.obligation_id, obligation.op_index
+    )];
+    if let Some(capability) = obligation.capability.as_deref() {
+        expected_parts.push(format!("capability={capability}"));
+    }
+    expected_parts.push(format!(
+        "decision_contract={}",
+        obligation.decision_contract_id
+    ));
+    if let Some(route) = obligation.declassification_route_ref.as_deref() {
+        expected_parts.push(format!("route={route}"));
+    }
+    expected_parts.push(format!("replay_hint='{EXPECTED_REPLAY_HINT}'"));
+
+    let expected_summary = expected_parts.join(" ");
+    assert!(detail.contains(&expected_summary));
+    assert!(!detail.contains("--obligation"));
+}
+
 // =========================================================================
 // Section 1: End-to-end pipeline
 // =========================================================================
@@ -318,6 +344,37 @@ fn staged_receipt_allows_public_orchestrator_declassification_without_internal_g
 }
 
 #[test]
+fn unresolved_declassification_obligation_surfaces_operator_detail_on_execute_path() {
+    let mut orch = default_orch();
+    let pkg = package_with_caps(
+        "ext-declassify-unresolved",
+        r#""hostcall<\"declassify.audit\"> secret_token";"#,
+        &["declassify.audit"],
+    );
+
+    let prepared = orch
+        .prepare_next_runtime_flow_guards(&pkg)
+        .expect("preflight should expose the declassification obligation");
+    let obligation = prepared
+        .ir2_flow_proof_artifact
+        .required_declassifications
+        .first()
+        .expect("preflight should expose one declassification obligation");
+
+    let err = orch
+        .execute(&pkg)
+        .expect_err("unresolved declassification should fail closed on the execute path");
+    match err {
+        OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
+            assert!(detail.contains("unresolved IFC runtime obligations"));
+            assert!(detail.contains("pending declassifications=1"));
+            assert_required_declassification_summary_in_detail(&detail, obligation);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn staged_receipt_with_route_mismatch_fails_closed_after_preflight() {
     let mut orch = default_orch();
     let pkg = package_with_caps(
@@ -360,6 +417,7 @@ fn staged_receipt_with_route_mismatch_fails_closed_after_preflight() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("receipt-linked declassification failed"));
             assert!(detail.contains("route"));
+            assert_required_declassification_summary_in_detail(&detail, obligation);
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -408,6 +466,7 @@ fn failed_staged_receipt_with_decision_contract_mismatch_allows_clean_retry() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("receipt-linked declassification failed"));
             assert!(detail.contains("decision contract"));
+            assert_required_declassification_summary_in_detail(&detail, first_obligation);
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -482,6 +541,7 @@ fn failed_staged_receipt_with_source_label_mismatch_allows_clean_retry() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("receipt-linked declassification failed"));
             assert!(detail.contains("source label does not match"));
+            assert_required_declassification_summary_in_detail(&detail, first_obligation);
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -556,6 +616,7 @@ fn failed_staged_receipt_with_sink_clearance_mismatch_allows_clean_retry() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("receipt-linked declassification failed"));
             assert!(detail.contains("sink clearance internal cannot flow"));
+            assert_required_declassification_summary_in_detail(&detail, first_obligation);
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -629,6 +690,7 @@ fn failed_staged_receipt_allows_clean_retry_via_fresh_preflight_and_receipt() {
         OrchestratorError::IfcRuntimeGuardBlocked { detail } => {
             assert!(detail.contains("receipt-linked declassification failed"));
             assert!(detail.contains("replay linkage does not match trace"));
+            assert_required_declassification_summary_in_detail(&detail, first_obligation);
         }
         other => panic!("unexpected error: {other:?}"),
     }

@@ -3,10 +3,14 @@
 //! Covers: failure kind enumeration, error code prefixes, severity ordering,
 //! user/operator impact classification, Display impls, serde roundtrips.
 
+use std::collections::BTreeMap;
+
 use frankenengine_engine::operator_diagnostic_contract::{
-    BEAD_ID, COMPONENT, DiagnosticSeverity, InternalFailureKind, OperatorImpact, POLICY_ID,
-    SCHEMA_VERSION, UserImpact,
+    BEAD_ID, BoundaryPolicyMappingContract, COMPONENT, DiagnosticEntry, DiagnosticSeverity,
+    InternalFailureKind, NextAction, OperatorImpact, POLICY_ID, PolicyMapping, SCHEMA_VERSION,
+    UserImpact, build_diagnostic_event,
 };
+use frankenengine_engine::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -190,4 +194,219 @@ fn deep_operator_impact_serde_roundtrip() {
         let decoded: OperatorImpact = serde_json::from_str(&json).unwrap();
         assert_eq!(impact, decoded);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: OperatorImpact as_str + Display
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_operator_impact_as_str() {
+    assert_eq!(OperatorImpact::ImmediateAction.as_str(), "immediate_action");
+    assert_eq!(OperatorImpact::TriageRequired.as_str(), "triage_required");
+    assert_eq!(
+        OperatorImpact::InformationalOnly.as_str(),
+        "informational_only"
+    );
+}
+
+#[test]
+fn deep_operator_impact_display() {
+    assert_eq!(
+        format!("{}", OperatorImpact::ImmediateAction),
+        "immediate_action"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: NextAction
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_next_action_serde_roundtrip() {
+    let actions = [
+        NextAction::Retry,
+        NextAction::IncreaseBudget,
+        NextAction::GrantCapability,
+        NextAction::UpdatePolicy,
+        NextAction::UpgradeVersion,
+        NextAction::FileBugReport,
+        NextAction::NoAction,
+        NextAction::InvestigateInfra,
+    ];
+    for action in actions {
+        let json = serde_json::to_string(&action).unwrap();
+        let decoded: NextAction = serde_json::from_str(&json).unwrap();
+        assert_eq!(action, decoded);
+    }
+}
+
+#[test]
+fn deep_next_action_display_all_distinct() {
+    let mut names = std::collections::BTreeSet::new();
+    for action in [
+        NextAction::Retry,
+        NextAction::IncreaseBudget,
+        NextAction::GrantCapability,
+        NextAction::UpdatePolicy,
+        NextAction::UpgradeVersion,
+        NextAction::FileBugReport,
+        NextAction::NoAction,
+        NextAction::InvestigateInfra,
+    ] {
+        assert!(names.insert(format!("{action}")), "Duplicate: {action}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: PolicyMapping
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_policy_mapping_serde_roundtrip() {
+    let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
+    let mapping = contract
+        .mapping_for(InternalFailureKind::BudgetExhaustion)
+        .expect("canonical contract must map BudgetExhaustion");
+    let json = serde_json::to_string(mapping).unwrap();
+    let decoded: PolicyMapping = serde_json::from_str(&json).unwrap();
+    assert_eq!(*mapping, decoded);
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: BoundaryPolicyMappingContract
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_canonical_contract_covers_all_kinds() {
+    let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
+    assert_eq!(
+        contract.coverage_count(),
+        InternalFailureKind::all().len(),
+        "canonical contract must map every failure kind"
+    );
+}
+
+#[test]
+fn deep_canonical_contract_integrity_check() {
+    let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
+    assert!(
+        contract.verify_integrity(),
+        "canonical contract must pass integrity check"
+    );
+}
+
+#[test]
+fn deep_canonical_contract_mapping_for_each_kind() {
+    let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(5));
+    for kind in InternalFailureKind::all() {
+        let mapping = contract.mapping_for(*kind);
+        assert!(
+            mapping.is_some(),
+            "canonical contract must have a mapping for {kind}"
+        );
+        let m = mapping.unwrap();
+        assert_eq!(m.failure_kind, *kind);
+        assert!(m.error_code.starts_with(kind.error_code_prefix()));
+    }
+}
+
+#[test]
+fn deep_canonical_contract_serde_roundtrip() {
+    let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(2));
+    let json = serde_json::to_string(&contract).unwrap();
+    let decoded: BoundaryPolicyMappingContract = serde_json::from_str(&json).unwrap();
+    assert_eq!(contract, decoded);
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: emit_diagnostic
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_emit_diagnostic_produces_entry() {
+    let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
+    let entry = contract.emit_diagnostic(
+        InternalFailureKind::Cancellation,
+        "operation timed out",
+        Some("evidence-ref-001"),
+        Some("frankenctl replay run --trace ./artifacts/t.json --mode strict"),
+        BTreeMap::new(),
+    );
+    assert_eq!(entry.failure_kind, InternalFailureKind::Cancellation);
+    assert_eq!(entry.severity, DiagnosticSeverity::Warning);
+    assert!(entry.message.contains("timed out"));
+    assert_eq!(entry.evidence_ref.as_deref(), Some("evidence-ref-001"));
+    assert!(entry
+        .replay_ref
+        .as_deref()
+        .unwrap()
+        .contains("replay run"));
+}
+
+#[test]
+fn deep_emit_diagnostic_fatal_kind() {
+    let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
+    let entry = contract.emit_diagnostic(
+        InternalFailureKind::PanicClass,
+        "interpreter panicked",
+        Some("panic-evidence"),
+        Some("frankenctl replay run --trace ./artifacts/panic.json --mode strict"),
+        BTreeMap::new(),
+    );
+    assert_eq!(entry.severity, DiagnosticSeverity::Fatal);
+    assert_eq!(entry.operator_impact, OperatorImpact::ImmediateAction);
+}
+
+#[test]
+fn deep_diagnostic_entry_serde_roundtrip() {
+    let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
+    let entry = contract.emit_diagnostic(
+        InternalFailureKind::DomainError,
+        "test error",
+        Some("ev-serde"),
+        Some("replay cmd"),
+        BTreeMap::new(),
+    );
+    let json = serde_json::to_string(&entry).unwrap();
+    let decoded: DiagnosticEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(entry, decoded);
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: build_diagnostic_event
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_build_diagnostic_event_has_required_fields() {
+    let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
+    let entry = contract.emit_diagnostic(
+        InternalFailureKind::CapabilityDenial,
+        "denied",
+        Some("evidence-001"),
+        Some("frankenctl replay run --trace ./artifacts/t.json --mode strict"),
+        BTreeMap::new(),
+    );
+    let event = build_diagnostic_event("trace-001", "decision-001", "scenario-001", &entry);
+    assert_eq!(event.trace_id, "trace-001");
+    assert_eq!(event.decision_id, "decision-001");
+    assert_eq!(event.component, COMPONENT);
+    assert!(!event.event.is_empty());
+}
+
+#[test]
+fn deep_build_diagnostic_event_serde_roundtrip() {
+    let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
+    let entry = contract.emit_diagnostic(
+        InternalFailureKind::Unknown,
+        "unknown failure",
+        Some("ev-serde"),
+        Some("replay cmd"),
+        BTreeMap::new(),
+    );
+    let event = build_diagnostic_event("trace-serde", "decision-serde", "scenario-serde", &entry);
+    let json = serde_json::to_string(&event).unwrap();
+    let decoded = serde_json::from_str::<serde_json::Value>(&json).unwrap();
+    assert_eq!(decoded["trace_id"], "trace-serde");
+    assert_eq!(decoded["component"], COMPONENT);
 }

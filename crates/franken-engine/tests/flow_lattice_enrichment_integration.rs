@@ -712,6 +712,34 @@ fn enrichment_flow_lattice_event_serde_roundtrip() {
     assert_eq!(event, restored);
 }
 
+#[test]
+fn enrichment_flow_lattice_event_serde_roundtrip_with_receipt_linkage_fields() {
+    let event = FlowLatticeEvent {
+        trace_id: "trace-ifc-1".into(),
+        decision_id: "decision-ifc-1".into(),
+        policy_id: "policy-ifc-1".into(),
+        component: "flow_lattice".into(),
+        event: "use_declassification".into(),
+        outcome: "ok".into(),
+        error_code: None,
+        obligation_id: Some("obligation-ifc-1".into()),
+        decision_contract_id: Some("decision-contract-ifc-1".into()),
+        declassification_route_ref: Some("declassify.audit".into()),
+        receipt_id: Some("receipt-ifc-1".into()),
+        receipt_replay_command: Some(
+            "frankenctl replay run --trace <trace.json> --mode strict".into(),
+        ),
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    assert!(json.contains("\"decision_contract_id\""));
+    assert!(json.contains("\"declassification_route_ref\""));
+    assert!(json.contains("\"receipt_id\""));
+    assert!(json.contains("\"receipt_replay_command\""));
+
+    let restored: FlowLatticeEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(event, restored);
+}
+
 // =========================================================================
 // L. DataSource serde
 // =========================================================================

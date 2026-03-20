@@ -1656,6 +1656,54 @@ fn normalize_namespace_lowering_produces_iife() {
 }
 
 #[test]
+fn normalize_namespace_export_function_lowering_produces_function_and_binding() {
+    let source =
+        "namespace Utils { export function add(a: number, b: number): number { return a + b; } }";
+    let output = normalize(source).unwrap();
+    assert!(output.normalized_source.contains("const Utils = (() => {"));
+    assert!(
+        output
+            .normalized_source
+            .contains("function add(a, b) { return a + b; }")
+    );
+    assert!(output.normalized_source.contains("ns.add = add;"));
+    assert!(output.normalized_source.contains("return ns;"));
+}
+
+#[test]
+fn normalize_namespace_export_function_allows_comment_before_next_export() {
+    let source = r#"
+namespace Utils {
+  export function add(a: number, b: number): number { return a + b; } // keep this export documented
+  export const version: number = 1;
+}
+"#;
+    let output = normalize(source).unwrap();
+    assert!(
+        output
+            .normalized_source
+            .contains("function add(a, b) { return a + b; }")
+    );
+    assert!(output.normalized_source.contains("ns.add = add;"));
+    assert!(output.normalized_source.contains("ns.version = 1;"));
+    assert!(output.normalized_source.contains("return ns;"));
+}
+
+#[test]
+fn normalize_namespace_export_function_with_object_return_type_fails_closed() {
+    let source =
+        "namespace Utils { export function make(): { value: number } { return { value: 1 }; } }";
+    let error = normalize(source)
+        .expect_err("object-shaped return types are still unsupported and must fail closed");
+    assert_eq!(
+        error,
+        TsNormalizationError::UnsupportedSyntax {
+            feature: "unsupported namespace export form",
+        }
+    );
+}
+
+#[test]
 fn normalize_decorator_lowering_produces_helper() {
     let source = "@logged\nclass Service { }";
     let output = normalize(source).unwrap();

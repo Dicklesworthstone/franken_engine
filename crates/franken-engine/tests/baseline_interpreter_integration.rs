@@ -1390,6 +1390,45 @@ fn re_execution_on_same_core_resets_ip_and_count() {
     assert_eq!(r2.instructions_executed, 2);
 }
 
+#[test]
+fn re_execution_on_same_core_clears_runtime_state_after_error() {
+    let failing = test_module(vec![
+        Ir3Instruction::LoadInt { dst: 0, value: 7 },
+        Ir3Instruction::LoadInt { dst: 1, value: 1 },
+        Ir3Instruction::LoadInt { dst: 2, value: 0 },
+        Ir3Instruction::Div {
+            dst: 0,
+            lhs: 1,
+            rhs: 2,
+        },
+    ]);
+    let halted = test_module(vec![Ir3Instruction::Halt]);
+    let config = InterpreterConfig::quickjs_defaults();
+    let mut core = InterpreterCore::new(config, "integ");
+
+    let err = core.execute(&failing).unwrap_err();
+    assert!(matches!(err, InterpreterError::DivisionByZero));
+
+    let rerun = core.execute(&halted).unwrap();
+    assert_eq!(rerun.value, Value::Undefined);
+    assert_eq!(rerun.instructions_executed, 1);
+    assert_eq!(
+        rerun
+            .events
+            .iter()
+            .filter(|event| event.event == "execution_started")
+            .count(),
+        1
+    );
+    assert!(
+        !rerun
+            .events
+            .iter()
+            .any(|event| event.event == "execution_failed"),
+        "events from the prior failed execution must not leak into a rerun"
+    );
+}
+
 // ============================================================================
 // 27. Witness sequence monotonicity
 // ============================================================================

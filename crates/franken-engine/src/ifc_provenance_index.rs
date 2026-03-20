@@ -190,6 +190,11 @@ pub enum ProvenanceError {
     EmptyId { record_type: String },
     /// Extension ID is empty.
     EmptyExtensionId,
+    /// Required record field is empty.
+    EmptyRequiredField {
+        record_type: String,
+        field_name: String,
+    },
     /// Duplicate record.
     DuplicateRecord { key: String },
     /// Storage backend error.
@@ -205,6 +210,10 @@ impl fmt::Display for ProvenanceError {
                 write!(f, "{record_type} has empty ID")
             }
             Self::EmptyExtensionId => write!(f, "extension_id is empty"),
+            Self::EmptyRequiredField {
+                record_type,
+                field_name,
+            } => write!(f, "{record_type} field {field_name} is empty"),
             Self::DuplicateRecord { key } => write!(f, "duplicate record: {key}"),
             Self::StorageError(msg) => write!(f, "storage: {msg}"),
             Self::SerializationError(msg) => write!(f, "serialization: {msg}"),
@@ -219,6 +228,7 @@ pub fn error_code(err: &ProvenanceError) -> &'static str {
     match err {
         ProvenanceError::EmptyId { .. } => "PROV_EMPTY_ID",
         ProvenanceError::EmptyExtensionId => "PROV_EMPTY_EXTENSION_ID",
+        ProvenanceError::EmptyRequiredField { .. } => "PROV_EMPTY_REQUIRED_FIELD",
         ProvenanceError::DuplicateRecord { .. } => "PROV_DUPLICATE",
         ProvenanceError::StorageError(_) => "PROV_STORAGE_ERROR",
         ProvenanceError::SerializationError(_) => "PROV_SERIALIZATION_ERROR",
@@ -298,13 +308,25 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         record: &DeclassReceiptRecord,
         ctx: &EventContext,
     ) -> Result<(), ProvenanceError> {
-        if record.receipt_id.is_empty() {
+        if record.receipt_id.trim().is_empty() {
             return Err(ProvenanceError::EmptyId {
                 record_type: "declass_receipt".to_string(),
             });
         }
-        if record.extension_id.is_empty() {
+        if record.extension_id.trim().is_empty() {
             return Err(ProvenanceError::EmptyExtensionId);
+        }
+        if record.declassification_route_ref.trim().is_empty() {
+            return Err(ProvenanceError::EmptyRequiredField {
+                record_type: "declass_receipt".to_string(),
+                field_name: "declassification_route_ref".to_string(),
+            });
+        }
+        if record.decision_contract_id.trim().is_empty() {
+            return Err(ProvenanceError::EmptyRequiredField {
+                record_type: "declass_receipt".to_string(),
+                field_name: "decision_contract_id".to_string(),
+            });
         }
         let key = format!("{DECLASS_RECEIPT_PREFIX}{}", record.receipt_id);
         self.put_record(&key, record, ctx)?;
@@ -1024,11 +1046,11 @@ mod tests {
     }
 
     #[test]
-    fn reject_empty_receipt_id() {
+    fn reject_blank_receipt_id() {
         let mut idx = make_index();
         let ctx = test_ctx();
         let receipt = declass_receipt(
-            "",
+            "   ",
             "ext-a",
             Label::Public,
             Label::Internal,
@@ -1036,6 +1058,52 @@ mod tests {
         );
         let err = idx.insert_declass_receipt(&receipt, &ctx).unwrap_err();
         assert!(matches!(err, ProvenanceError::EmptyId { .. }));
+    }
+
+    #[test]
+    fn reject_blank_declass_receipt_route_ref() {
+        let mut idx = make_index();
+        let ctx = test_ctx();
+        let mut receipt = declass_receipt(
+            "r1",
+            "ext-a",
+            Label::Public,
+            Label::Internal,
+            DeclassificationDecision::Allow,
+        );
+        receipt.declassification_route_ref = "   ".to_string();
+
+        let err = idx.insert_declass_receipt(&receipt, &ctx).unwrap_err();
+        assert_eq!(
+            err,
+            ProvenanceError::EmptyRequiredField {
+                record_type: "declass_receipt".to_string(),
+                field_name: "declassification_route_ref".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn reject_blank_declass_receipt_decision_contract_id() {
+        let mut idx = make_index();
+        let ctx = test_ctx();
+        let mut receipt = declass_receipt(
+            "r1",
+            "ext-a",
+            Label::Public,
+            Label::Internal,
+            DeclassificationDecision::Allow,
+        );
+        receipt.decision_contract_id = "   ".to_string();
+
+        let err = idx.insert_declass_receipt(&receipt, &ctx).unwrap_err();
+        assert_eq!(
+            err,
+            ProvenanceError::EmptyRequiredField {
+                record_type: "declass_receipt".to_string(),
+                field_name: "decision_contract_id".to_string(),
+            }
+        );
     }
 
     #[test]
@@ -1529,6 +1597,10 @@ mod tests {
                 record_type: "flow_event".to_string(),
             },
             ProvenanceError::EmptyExtensionId,
+            ProvenanceError::EmptyRequiredField {
+                record_type: "declass_receipt".to_string(),
+                field_name: "decision_contract_id".to_string(),
+            },
             ProvenanceError::DuplicateRecord {
                 key: "k1".to_string(),
             },
@@ -1581,6 +1653,11 @@ mod tests {
     fn error_display_coverage() {
         let err = ProvenanceError::EmptyExtensionId;
         assert!(err.to_string().contains("empty"));
+        let err = ProvenanceError::EmptyRequiredField {
+            record_type: "declass_receipt".to_string(),
+            field_name: "decision_contract_id".to_string(),
+        };
+        assert!(err.to_string().contains("decision_contract_id"));
         let err = ProvenanceError::DuplicateRecord {
             key: "k".to_string(),
         };
@@ -1598,6 +1675,13 @@ mod tests {
         assert_eq!(
             error_code(&ProvenanceError::EmptyExtensionId),
             "PROV_EMPTY_EXTENSION_ID"
+        );
+        assert_eq!(
+            error_code(&ProvenanceError::EmptyRequiredField {
+                record_type: "declass_receipt".to_string(),
+                field_name: "decision_contract_id".to_string(),
+            }),
+            "PROV_EMPTY_REQUIRED_FIELD"
         );
         assert_eq!(
             error_code(&ProvenanceError::DuplicateRecord {
@@ -2502,6 +2586,10 @@ mod tests {
                 record_type: "flow".into(),
             }),
             Box::new(ProvenanceError::EmptyExtensionId),
+            Box::new(ProvenanceError::EmptyRequiredField {
+                record_type: "declass_receipt".into(),
+                field_name: "decision_contract_id".into(),
+            }),
             Box::new(ProvenanceError::DuplicateRecord { key: "k1".into() }),
             Box::new(ProvenanceError::StorageError("full".into())),
             Box::new(ProvenanceError::SerializationError("bad json".into())),
@@ -2510,7 +2598,7 @@ mod tests {
         for v in &variants {
             displays.insert(format!("{v}"));
         }
-        assert_eq!(displays.len(), 5);
+        assert_eq!(displays.len(), 6);
     }
 
     // -- Enrichment: PearlTower 2026-02-26 --
@@ -2667,7 +2755,7 @@ mod tests {
     // -- Enrichment: PearlTower 2026-03-02 --
 
     #[test]
-    fn provenance_error_display_exact_all_5() {
+    fn provenance_error_display_exact_all_6() {
         assert_eq!(
             ProvenanceError::EmptyId {
                 record_type: "flow_event".to_string()
@@ -2678,6 +2766,14 @@ mod tests {
         assert_eq!(
             ProvenanceError::EmptyExtensionId.to_string(),
             "extension_id is empty"
+        );
+        assert_eq!(
+            ProvenanceError::EmptyRequiredField {
+                record_type: "declass_receipt".to_string(),
+                field_name: "decision_contract_id".to_string(),
+            }
+            .to_string(),
+            "declass_receipt field decision_contract_id is empty"
         );
         assert_eq!(
             ProvenanceError::DuplicateRecord {
@@ -2704,6 +2800,10 @@ mod tests {
                 record_type: "x".into(),
             },
             ProvenanceError::EmptyExtensionId,
+            ProvenanceError::EmptyRequiredField {
+                record_type: "declass_receipt".into(),
+                field_name: "decision_contract_id".into(),
+            },
             ProvenanceError::DuplicateRecord { key: "k".into() },
             ProvenanceError::StorageError("e".into()),
             ProvenanceError::SerializationError("e".into()),

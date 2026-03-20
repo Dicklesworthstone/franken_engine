@@ -1209,12 +1209,20 @@ fn lower_statement_to_ir1_with_flow(
             ops.push(Ir1Op::Throw);
         }
         Statement::TryCatch(tc) => {
-            let catch_label = alloc_label(label_counter);
             let end_label = alloc_label(label_counter);
             let finally_label = if tc.finalizer.is_some() {
                 Some(alloc_label(label_counter))
             } else {
                 None
+            };
+            // When there is a catch handler, allocate a distinct catch label.
+            // When there is only a finally (no catch), route exceptions
+            // directly to the finally label so `EnterCatch` is NOT emitted
+            // and the pending exception is preserved for `EndFinally`.
+            let catch_label = if tc.handler.is_some() {
+                alloc_label(label_counter)
+            } else {
+                finally_label.unwrap_or_else(|| alloc_label(label_counter))
             };
             ops.push(Ir1Op::BeginTry {
                 catch_label,
@@ -1238,39 +1246,59 @@ fn lower_statement_to_ir1_with_flow(
             ops.push(Ir1Op::Jump {
                 label_id: after_try_target,
             });
-            ops.push(Ir1Op::Label { id: catch_label });
-            if let Some(handler) = &tc.handler {
-                if let Some(param) = &handler.parameter {
-                    let bid = alloc_binding(
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        scope_id,
-                        param,
-                        BindingKind::Let,
-                    )
-                    .map_err(LoweringPipelineError::SemanticViolation)?;
-                    ops.push(Ir1Op::StoreBinding { binding_id: bid });
-                    ops.push(Ir1Op::Pop);
+            // Emit catch handler section only when there is a real handler.
+            // When catch_label == finally_label (try/finally with no catch),
+            // exceptions route directly to the finally block and we must NOT
+            // emit EnterCatch which would consume the pending exception.
+            if tc.handler.is_some() {
+                ops.push(Ir1Op::Label { id: catch_label });
+                let catch_requires_finally_guard = finally_label.is_some();
+                if let Some(finally_guard_label) = finally_label {
+                    // A throw inside `catch` must still execute the enclosing
+                    // `finally` block before propagating outward. Guard the
+                    // catch body with a nested try/finally-without-catch so
+                    // rethrows route directly to the finalizer label.
+                    ops.push(Ir1Op::BeginTry {
+                        catch_label: finally_guard_label,
+                        finally_label: Some(finally_guard_label),
+                    });
                 }
-                for inner in &handler.body.body {
-                    lower_statement_to_ir1_with_flow(
-                        inner,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        scope_id,
-                        label_counter,
-                        control_flow,
-                    )?;
+                if let Some(handler) = &tc.handler {
+                    if let Some(param) = &handler.parameter {
+                        let bid = alloc_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            param,
+                            BindingKind::Let,
+                        )
+                        .map_err(LoweringPipelineError::SemanticViolation)?;
+                        ops.push(Ir1Op::StoreBinding { binding_id: bid });
+                        ops.push(Ir1Op::Pop);
+                    }
+                    for inner in &handler.body.body {
+                        lower_statement_to_ir1_with_flow(
+                            inner,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                            control_flow,
+                        )?;
+                    }
                 }
-            }
-            // After catch: jump to finally (or end).
-            if finally_label.is_some() {
-                ops.push(Ir1Op::Jump {
-                    label_id: after_try_target,
-                });
+                if catch_requires_finally_guard {
+                    ops.push(Ir1Op::EndTry);
+                    // After catch: enter the same finally block used by the
+                    // surrounding try. The nested guard ensures abrupt exits
+                    // from the catch body also land there.
+                    ops.push(Ir1Op::Jump {
+                        label_id: after_try_target,
+                    });
+                }
             }
             // Emit finally block if present.
             if let Some(fl) = finally_label {
@@ -1760,7 +1788,14 @@ pub fn lower_ir2_to_ir3(
                 catch_label,
                 finally_label,
             } => {
-                catch_entry_labels.insert(*catch_label);
+                // Only mark as catch-entry when there is a real catch handler
+                // (i.e., catch_label != finally_label).  For try/finally without
+                // catch, exceptions go directly to the finally block and
+                // EnterCatch must NOT be emitted — it would consume the pending
+                // exception before EndFinally can re-throw it.
+                if finally_label.as_ref() != Some(catch_label) {
+                    catch_entry_labels.insert(*catch_label);
+                }
                 let instr_idx = ir3.instructions.len();
                 ir3.instructions.push(Ir3Instruction::BeginTry {
                     catch_target: 0,
@@ -1945,13 +1980,8 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(dst);
             }
             Ir1Op::Label { id } => {
-                // If this label is a catch handler entry, emit EnterCatch
-                // so the runtime can provide the exception value.
-                if catch_entry_labels.contains(id) {
-                    let dst = alloc_register(&mut register_cursor);
-                    ir3.instructions.push(Ir3Instruction::EnterCatch { dst });
-                    value_stack.push(dst);
-                }
+                // Record the label target FIRST so that catch_target in
+                // BeginTry points TO the EnterCatch instruction, not past it.
                 let target = u32::try_from(ir3.instructions.len()).map_err(|_| {
                     LoweringPipelineError::InvariantViolation {
                         detail: "IR3 instruction stream exceeds addressable size",
@@ -1961,6 +1991,13 @@ pub fn lower_ir2_to_ir3(
                     return Err(LoweringPipelineError::InvariantViolation {
                         detail: "IR2 contains duplicate label ids",
                     });
+                }
+                // If this label is a catch handler entry, emit EnterCatch
+                // so the runtime can provide the exception value.
+                if catch_entry_labels.contains(id) {
+                    let dst = alloc_register(&mut register_cursor);
+                    ir3.instructions.push(Ir3Instruction::EnterCatch { dst });
+                    value_stack.push(dst);
                 }
                 if iterator_cleanup_labels
                     .get(id)

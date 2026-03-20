@@ -1462,6 +1462,11 @@ fn find_top_level_char(source: &str, start: usize, target: char) -> Option<usize
     let mut state = LexicalRewriteState::Code;
 
     while let Some((index, ch)) = next_code_scan_char(source, &mut cursor, &mut state) {
+        // Check target match BEFORE adjusting depth so that delimiter
+        // characters like '(' can themselves be found at depth 0.
+        if ch == target && paren_depth == 0 && bracket_depth == 0 && angle_depth == 0 {
+            return Some(index);
+        }
         match ch {
             '(' => paren_depth += 1,
             ')' => paren_depth = paren_depth.saturating_sub(1),
@@ -1469,9 +1474,6 @@ fn find_top_level_char(source: &str, start: usize, target: char) -> Option<usize
             ']' => bracket_depth = bracket_depth.saturating_sub(1),
             '<' => angle_depth += 1,
             '>' => angle_depth = angle_depth.saturating_sub(1),
-            _ if ch == target && paren_depth == 0 && bracket_depth == 0 && angle_depth == 0 => {
-                return Some(index);
-            }
             _ => {}
         }
     }
@@ -1708,6 +1710,15 @@ fn starts_with_keyword(source: &str, index: usize, keyword: &str) -> bool {
         && has_token_boundary_after(source, index + keyword.len())
 }
 
+fn strip_leading_keyword<'a>(source: &'a str, keyword: &str) -> Option<&'a str> {
+    if !starts_with_keyword(source, 0, keyword) {
+        return None;
+    }
+
+    let after = skip_ascii_whitespace(source, keyword.len());
+    Some(&source[after..])
+}
+
 fn skip_ascii_whitespace(source: &str, mut index: usize) -> usize {
     while index < source.len() {
         let ch = source[index..]
@@ -1831,98 +1842,146 @@ fn trim_trailing_inline_whitespace(output: &mut String) {
 fn lower_simple_namespaces(source: &str) -> Result<String, TsNormalizationError> {
     let mut namespace_order = Vec::<String>::new();
     let mut namespace_assignments = BTreeMap::<String, Vec<String>>::new();
-    let mut with_placeholders = Vec::<String>::new();
+    let mut rewritten = String::with_capacity(source.len());
+    let mut emit_cursor = 0usize;
+    let mut scan_cursor = 0usize;
+    let mut state = LexicalRewriteState::Code;
 
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if !trimmed.starts_with("namespace ") {
-            with_placeholders.push(line.to_string());
+    while let Some((index, _)) = next_code_scan_char(source, &mut scan_cursor, &mut state) {
+        if !is_statement_start(source, index) || !starts_with_keyword(source, index, "namespace") {
             continue;
         }
 
-        let Some(rest) = trimmed.strip_prefix("namespace ") else {
-            return Err(TsNormalizationError::UnsupportedSyntax {
-                feature: "unsupported namespace declaration form",
-            });
-        };
-        let Some(brace_start) = rest.find('{') else {
-            return Err(TsNormalizationError::UnsupportedSyntax {
-                feature: "unsupported namespace declaration form",
-            });
-        };
-        let Some(brace_end) = rest.rfind('}') else {
-            return Err(TsNormalizationError::UnsupportedSyntax {
-                feature: "unsupported namespace declaration form",
-            });
-        };
-        if brace_end < brace_start {
-            return Err(TsNormalizationError::UnsupportedSyntax {
-                feature: "unsupported namespace declaration form",
-            });
-        }
+        let (namespace_name, body_start, body_end, declaration_end) =
+            parse_simple_namespace_declaration(source, index)?;
+        rewritten.push_str(&source[emit_cursor..index]);
 
-        let namespace_name = rest[..brace_start].trim();
-        if namespace_name.is_empty() {
-            return Err(TsNormalizationError::UnsupportedSyntax {
-                feature: "unsupported namespace declaration form",
-            });
-        }
-
-        let body = rest[brace_start + 1..brace_end].trim();
+        let body = source[body_start + 1..body_end].trim();
         let parsed_assignments = parse_namespace_exports(body)?;
-        if !namespace_assignments.contains_key(namespace_name) {
-            namespace_order.push(namespace_name.to_string());
-            namespace_assignments.insert(namespace_name.to_string(), Vec::new());
-            with_placeholders.push(format!("/*__namespace:{namespace_name}__*/"));
+        if !namespace_assignments.contains_key(&namespace_name) {
+            namespace_order.push(namespace_name.clone());
+            namespace_assignments.insert(namespace_name.clone(), Vec::new());
+            rewritten.push_str(&format!("/*__namespace:{namespace_name}__*/"));
         }
 
-        if let Some(assignments) = namespace_assignments.get_mut(namespace_name) {
+        if let Some(assignments) = namespace_assignments.get_mut(&namespace_name) {
             assignments.extend(parsed_assignments);
         }
-    }
 
-    let mut rendered = Vec::<String>::new();
-    for line in with_placeholders {
-        if let Some(namespace_name) = line
-            .strip_prefix("/*__namespace:")
-            .and_then(|value| value.strip_suffix("__*/"))
-        {
-            if let Some(assignments) = namespace_assignments.get(namespace_name) {
-                rendered.extend(render_namespace_block(namespace_name, assignments));
-            }
-            continue;
-        }
-        rendered.push(line);
+        emit_cursor = declaration_end;
+        scan_cursor = declaration_end;
+        state = LexicalRewriteState::Code;
     }
 
     if namespace_order.is_empty() {
-        Ok(source.to_string())
-    } else {
-        Ok(rendered.join("\n"))
+        return Ok(source.to_string());
     }
+
+    rewritten.push_str(&source[emit_cursor..]);
+
+    let mut rendered = rewritten;
+    for namespace_name in namespace_order {
+        let placeholder = format!("/*__namespace:{namespace_name}__*/");
+        let namespace_block = render_namespace_block(
+            &namespace_name,
+            &namespace_assignments
+                .remove(&namespace_name)
+                .unwrap_or_default(),
+        )
+        .join("\n");
+        rendered = rendered.replacen(&placeholder, &namespace_block, 1);
+    }
+
+    Ok(rendered)
+}
+
+fn parse_simple_namespace_declaration(
+    source: &str,
+    start: usize,
+) -> Result<(String, usize, usize, usize), TsNormalizationError> {
+    let mut cursor = skip_ascii_whitespace(source, start + "namespace".len());
+    let name_start = cursor;
+    let name_end =
+        skip_identifier(source, cursor).ok_or(TsNormalizationError::UnsupportedSyntax {
+            feature: "unsupported namespace declaration form",
+        })?;
+    let namespace_name = source[name_start..name_end].trim().to_string();
+    if namespace_name.is_empty() {
+        return Err(TsNormalizationError::UnsupportedSyntax {
+            feature: "unsupported namespace declaration form",
+        });
+    }
+
+    cursor =
+        next_code_token_index(source, name_end).ok_or(TsNormalizationError::UnsupportedSyntax {
+            feature: "unsupported namespace declaration form",
+        })?;
+    if !source[cursor..].starts_with('{') {
+        return Err(TsNormalizationError::UnsupportedSyntax {
+            feature: "unsupported namespace declaration form",
+        });
+    }
+    let body_start = cursor;
+    let body_end = find_matching_delimiter(source, body_start, '{', '}').ok_or(
+        TsNormalizationError::UnsupportedSyntax {
+            feature: "unsupported namespace declaration form",
+        },
+    )?;
+
+    let mut declaration_end = body_end + '}'.len_utf8();
+    if let Some(next_index) = next_code_token_index(source, declaration_end)
+        && source[next_index..].starts_with(';')
+    {
+        declaration_end = next_index + ';'.len_utf8();
+    }
+
+    Ok((namespace_name, body_start, body_end, declaration_end))
 }
 
 fn parse_namespace_exports(body: &str) -> Result<Vec<String>, TsNormalizationError> {
     let mut assignments = Vec::<String>::new();
+    let mut cursor = 0usize;
 
-    for statement in body.split(';') {
-        let normalized = statement.trim();
+    while cursor < body.len() {
+        cursor = next_code_token_index(body, cursor).unwrap_or(body.len());
+        if cursor >= body.len() {
+            break;
+        }
+
+        let statement_end = if is_namespace_export_function(body, cursor) {
+            find_namespace_export_function_end(body, cursor)
+        } else {
+            find_top_level_statement_terminator(body, cursor)
+        }
+        .ok_or(TsNormalizationError::UnsupportedSyntax {
+            feature: "unsupported namespace export form",
+        })?;
+
+        let normalized = body[cursor..statement_end]
+            .trim()
+            .trim_end_matches(';')
+            .trim();
         if normalized.is_empty() {
+            cursor = statement_end;
             continue;
         }
 
-        let Some(exported) = normalized.strip_prefix("export ") else {
+        let Some(exported) = strip_leading_keyword(normalized, "export") else {
             return Err(TsNormalizationError::UnsupportedSyntax {
                 feature: "unsupported namespace export form",
             });
         };
 
-        let declaration = if let Some(value) = exported.strip_prefix("const ") {
+        let declaration = if let Some(value) = strip_leading_keyword(exported, "const") {
             value
-        } else if let Some(value) = exported.strip_prefix("let ") {
+        } else if let Some(value) = strip_leading_keyword(exported, "let") {
             value
-        } else if let Some(value) = exported.strip_prefix("var ") {
+        } else if let Some(value) = strip_leading_keyword(exported, "var") {
             value
+        } else if is_exported_function_declaration(exported) {
+            assignments.extend(render_namespace_export_function(exported)?);
+            cursor = statement_end;
+            continue;
         } else {
             return Err(TsNormalizationError::UnsupportedSyntax {
                 feature: "unsupported namespace export form",
@@ -1942,9 +2001,91 @@ fn parse_namespace_exports(body: &str) -> Result<Vec<String>, TsNormalizationErr
         }
 
         assignments.push(format!("  ns.{symbol} = {};", rhs.trim()));
+        cursor = statement_end;
     }
 
     Ok(assignments)
+}
+
+fn is_namespace_export_function(source: &str, start: usize) -> bool {
+    strip_leading_keyword(&source[start..], "export").is_some_and(is_exported_function_declaration)
+}
+
+fn is_exported_function_declaration(exported: &str) -> bool {
+    parse_exported_function_name_range(exported).is_some()
+}
+
+fn find_namespace_export_function_end(source: &str, start: usize) -> Option<usize> {
+    let source_from_start = &source[start..];
+    let exported = strip_leading_keyword(source_from_start, "export")?;
+    let exported_start = source_from_start.len() - exported.len();
+    let (_, name_end) = parse_exported_function_name_range(exported)?;
+    let params_start = find_top_level_char(exported, name_end, '(')?;
+    let params_end = find_matching_delimiter(exported, params_start, '(', ')')?;
+    let mut search_cursor = params_end + ')'.len_utf8();
+
+    while search_cursor < exported.len() {
+        let body_start = find_top_level_char(exported, search_cursor, '{')?;
+        let body_end = find_matching_delimiter(exported, body_start, '{', '}')?;
+        let mut next_statement_start = next_code_token_index(exported, body_end + '}'.len_utf8());
+        while let Some(index) = next_statement_start {
+            if !exported[index..].starts_with(';') {
+                break;
+            }
+            next_statement_start = next_code_token_index(exported, index + ';'.len_utf8());
+        }
+
+        if let Some(index) = next_statement_start {
+            if starts_with_keyword(exported, index, "export") {
+                return Some(start + exported_start + body_end + '}'.len_utf8());
+            }
+            search_cursor = index;
+            continue;
+        }
+
+        return Some(start + exported_start + body_end + '}'.len_utf8());
+    }
+
+    None
+}
+
+fn render_namespace_export_function(exported: &str) -> Result<Vec<String>, TsNormalizationError> {
+    let (name_start, name_end) = parse_exported_function_name_range(exported).ok_or(
+        TsNormalizationError::UnsupportedSyntax {
+            feature: "unsupported namespace export form",
+        },
+    )?;
+    let name = exported[name_start..name_end].trim();
+    if name.is_empty() {
+        return Err(TsNormalizationError::UnsupportedSyntax {
+            feature: "unsupported namespace export form",
+        });
+    }
+
+    let mut rendered = exported
+        .lines()
+        .map(|line| format!("  {}", line.trim_end()))
+        .collect::<Vec<_>>();
+    rendered.push(format!("  ns.{name} = {name};"));
+    Ok(rendered)
+}
+
+fn parse_exported_function_name_range(exported: &str) -> Option<(usize, usize)> {
+    let mut cursor = 0usize;
+    if let Some(async_rest) = strip_leading_keyword(exported, "async") {
+        cursor = exported.len() - async_rest.len();
+    }
+    if !starts_with_keyword(exported, cursor, "function") {
+        return None;
+    }
+    cursor = skip_ascii_whitespace(exported, cursor + "function".len());
+    if exported[cursor..].starts_with('*') {
+        cursor += 1;
+        cursor = skip_ascii_whitespace(exported, cursor);
+    }
+    let name_start = cursor;
+    let name_end = skip_identifier(exported, name_start)?;
+    Some((name_start, name_end))
 }
 
 fn render_namespace_block(namespace_name: &str, assignments: &[String]) -> Vec<String> {
@@ -2758,8 +2899,100 @@ const route = "/api/x";"#;
     }
 
     #[test]
-    fn rejects_unsupported_namespace_export_forms() {
+    fn lowers_namespace_export_function_declarations() {
         let source = "namespace Demo { export function run() { return 1; } }";
+        let output = normalize_typescript_to_es2020(
+            source,
+            &TsNormalizationConfig::default(),
+            "trace",
+            "decision",
+            "policy",
+        )
+        .expect("namespace export function should lower");
+
+        assert!(
+            output
+                .normalized_source
+                .contains("function run() { return 1; }")
+        );
+        assert!(output.normalized_source.contains("ns.run = run;"));
+    }
+
+    #[test]
+    fn lowers_multiline_namespace_export_function_declarations() {
+        let source = r#"
+namespace Demo {
+  export function run() { return 1; } // preserve separation before the next export
+  export const version = 1;
+}
+"#;
+        let output = normalize_typescript_to_es2020(
+            source,
+            &TsNormalizationConfig::default(),
+            "trace",
+            "decision",
+            "policy",
+        )
+        .expect("multiline namespace export function should lower");
+
+        assert!(
+            output
+                .normalized_source
+                .contains("function run() { return 1; }")
+        );
+        assert!(output.normalized_source.contains("ns.run = run;"));
+        assert!(output.normalized_source.contains("ns.version = 1;"));
+    }
+
+    #[test]
+    fn parses_namespace_exports_with_comment_after_function() {
+        let body = r#"
+export function run() { return 1; } // preserve separation before the next export
+export const version = 1;
+"#
+        .trim();
+
+        assert_eq!(
+            find_namespace_export_function_end(body, 0),
+            body.find("} //").map(|index| index + '}'.len_utf8())
+        );
+        assert_eq!(
+            parse_namespace_exports(body).expect("namespace exports should parse"),
+            vec![
+                "  function run() { return 1; }".to_string(),
+                "  ns.run = run;".to_string(),
+                "  ns.version = 1;".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn lowers_namespace_export_function_with_return_type() {
+        // Uses a simple return type (not object-shaped) to avoid the known limitation
+        // where strip_type_annotations cannot distinguish object-literal colons
+        // (e.g. { key: value }) from type annotation colons.
+        let source = "namespace Demo { export function make(): number { return 42; } }";
+        let output = normalize_typescript_to_es2020(
+            source,
+            &TsNormalizationConfig::default(),
+            "trace",
+            "decision",
+            "policy",
+        )
+        .expect("namespace export function with return type should lower");
+
+        // After strip_type_annotations removes `: number`, the space before `{`
+        // is consumed, producing `make(){` instead of `make() {`. This is a
+        // known formatting artifact of the current type-stripping pass.
+        assert!(output.normalized_source.contains("function make()"));
+        assert!(output.normalized_source.contains("return 42;"));
+        assert!(output.normalized_source.contains("ns.make = make;"));
+    }
+
+    #[test]
+    fn rejects_namespace_export_function_with_object_shaped_return_type() {
+        let source =
+            "namespace Demo { export function make(): { value: number } { return { value: 1 }; } }";
         let error = normalize_typescript_to_es2020(
             source,
             &TsNormalizationConfig::default(),
@@ -2767,7 +3000,27 @@ const route = "/api/x";"#;
             "decision",
             "policy",
         )
-        .expect_err("unsupported namespace export should fail");
+        .expect_err("object-shaped return types remain unsupported");
+
+        assert_eq!(
+            error,
+            TsNormalizationError::UnsupportedSyntax {
+                feature: "unsupported namespace export form",
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_namespace_export_class_forms() {
+        let source = "namespace Demo { export class Worker {} }";
+        let error = normalize_typescript_to_es2020(
+            source,
+            &TsNormalizationConfig::default(),
+            "trace",
+            "decision",
+            "policy",
+        )
+        .expect_err("unsupported namespace class export should fail");
 
         assert_eq!(
             error,

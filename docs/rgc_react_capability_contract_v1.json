@@ -11,7 +11,10 @@
     "bead_id": "bd-1lsy.1.1",
     "contract_doc": "docs/RGC_EXECUTABLE_COMPATIBILITY_TARGET_MATRIX_V1.md",
     "contract_json": "docs/rgc_executable_compatibility_target_matrix_v1.json",
-    "coverage_row_id": "rgc-react-capability-contract"
+    "required_coverage_row_ids": [
+      "rgc-react-capability-contract",
+      "rgc-react-capability-contract-replay"
+    ]
   },
   "required_structured_log_fields": [
     "schema_version",

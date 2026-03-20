@@ -11,6 +11,11 @@ Matrix extension: `docs/rgc_executable_compatibility_target_matrix_v1.json`
 `RGC-016A` extends the RGC compatibility target matrix so React support is
 described as explicit capability rows instead of a hand-wavy claim.
 
+Its machine-readable matrix binding is intentionally fail-closed: the React
+contract is only considered bound when both required matrix rows remain present,
+the integration row `rgc-react-capability-contract` and the replay row
+`rgc-react-capability-contract-replay`.
+
 The contract exists to prevent false equivalence between:
 
 - "TS compiles"

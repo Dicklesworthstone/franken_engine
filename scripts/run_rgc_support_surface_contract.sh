@@ -10,6 +10,7 @@ parser_frontier_bootstrap_env
 mode="${1:-ci}"
 toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
 cargo_build_jobs="${CARGO_BUILD_JOBS:-1}"
+cargo_incremental="${CARGO_INCREMENTAL:-0}"
 artifact_root="${RGC_SUPPORT_SURFACE_CONTRACT_ARTIFACT_ROOT:-artifacts/rgc_support_surface_contract}"
 rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -35,6 +36,19 @@ policy_id="policy-rgc-support-surface-contract-v1"
 component="rgc_support_surface_contract_gate"
 scenario_id="rgc-408a"
 replay_command="./scripts/e2e/rgc_support_surface_contract_replay.sh ${mode}"
+dirty_worktree_json="true"
+
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  worktree_status="$(
+    git status --short --untracked-files=normal -- . \
+      ":(exclude)${artifact_root%/}/" \
+      ":(exclude).beads/" \
+      ":(exclude).claude/" 2>/dev/null || true
+  )"
+  if [[ -z "$worktree_status" ]]; then
+    dirty_worktree_json="false"
+  fi
+fi
 
 mkdir -p "$run_dir" "$step_logs_dir"
 
@@ -74,6 +88,7 @@ run_rch() {
     "RUSTUP_TOOLCHAIN=${toolchain}" \
     "CARGO_TARGET_DIR=${target_dir}" \
     "CARGO_BUILD_JOBS=${cargo_build_jobs}" \
+    "CARGO_INCREMENTAL=${cargo_incremental}" \
     "$@"
 }
 
@@ -338,7 +353,7 @@ write_report() {
 
 write_manifest() {
   local exit_code="${1:-0}"
-  local outcome git_commit dirty_worktree_json error_code_json contract_operator_verification_json
+  local outcome git_commit error_code_json contract_operator_verification_json
 
   if [[ "$manifest_written" == true ]]; then
     return
@@ -358,11 +373,6 @@ write_manifest() {
   contract_operator_verification_json="$(jq '.operator_verification' "$contract_json")"
 
   git_commit="$(git rev-parse HEAD 2>/dev/null || echo "unknown")"
-  if [[ -z "$(git status --short --untracked-files=normal 2>/dev/null)" ]]; then
-    dirty_worktree_json="false"
-  else
-    dirty_worktree_json="true"
-  fi
 
   printf '%s\n' "${commands_run[@]}" >"$commands_path"
 
@@ -444,9 +454,7 @@ write_manifest() {
         ("cat " + $events),
         ("cat " + $commands),
         ("cat " + $trace_ids),
-        ("cat " + $schema_report),
-        "jq empty docs/support_surface_contract.json",
-        "jq empty docs/support_surface_mode_matrix.json"
+        ("cat " + $schema_report)
       ] + $contract_operator_verification
     }' >"$manifest_path"
 

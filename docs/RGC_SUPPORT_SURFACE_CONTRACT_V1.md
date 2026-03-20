@@ -122,7 +122,7 @@ copied contract artifacts, replayable commands, trace IDs, and first step log.
 jq empty docs/support_surface_contract.json
 jq empty docs/support_surface_mode_matrix.json
 
-rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_rgc_support_surface_contract_verify \
+rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=$PWD/target_rch_rgc_support_surface_contract_verify CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 \
   cargo test -p frankenengine-engine --test support_surface_contract
 
 ./scripts/run_rgc_support_surface_contract.sh ci

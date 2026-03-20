@@ -730,12 +730,12 @@ fn is_near(observed: u64, budget: u64, threshold_fraction_millionths: u64) -> bo
 fn classify_severity(overshoot_fraction_millionths: u64) -> ViolationSeverity {
     if overshoot_fraction_millionths > 2_000_000 {
         ViolationSeverity::Catastrophic // > 200%
-    } else if overshoot_fraction_millionths > 500_000 {
-        ViolationSeverity::Severe // > 50%
-    } else if overshoot_fraction_millionths > 100_000 {
-        ViolationSeverity::Moderate // > 10%
+    } else if overshoot_fraction_millionths >= 500_000 {
+        ViolationSeverity::Severe // ≥ 50%
+    } else if overshoot_fraction_millionths >= 100_000 {
+        ViolationSeverity::Moderate // ≥ 10%
     } else {
-        ViolationSeverity::Minor // ≤ 10%
+        ViolationSeverity::Minor // < 10%
     }
 }
 

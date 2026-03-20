@@ -759,6 +759,7 @@ fn unique_temp_path(path: &Path) -> PathBuf {
     }
     temp_name.push(format!(".{}.{}.tmp", std::process::id(), sequence));
     path.parent()
+        .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."))
         .join(temp_name)
 }

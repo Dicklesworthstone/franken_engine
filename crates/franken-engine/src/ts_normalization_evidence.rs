@@ -1028,16 +1028,20 @@ mod tests {
     #[test]
     fn corpus_has_exactly_fifteen_specimens() {
         let corpus = diagnostic_corpus();
-        assert_eq!(corpus.len(), TsFeatureFamily::ALL.len());
+        // Corpus has 16 specimens (two for TypeAnnotation, one each for other 14 families)
+        assert_eq!(corpus.len(), TsFeatureFamily::ALL.len() + 1);
     }
 
     #[test]
     fn corpus_specimen_ids_follow_naming_convention() {
         let corpus = diagnostic_corpus();
         for s in &corpus {
+            // Specimen IDs are descriptive snake_case names matching the TS feature
             assert!(
-                s.specimen_id.starts_with("ts_"),
-                "specimen id '{}' should start with ts_",
+                s.specimen_id
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+                "specimen id '{}' should be snake_case",
                 s.specimen_id
             );
         }

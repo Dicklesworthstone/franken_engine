@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -363,6 +363,9 @@ pub enum SecurityConformanceError {
     DuplicateObservation {
         workload_id: String,
     },
+    UnexpectedObservation {
+        workload_id: String,
+    },
     InvalidRatioConfig {
         field: &'static str,
         value: String,
@@ -473,6 +476,12 @@ impl fmt::Display for SecurityConformanceError {
             }
             Self::DuplicateObservation { workload_id } => {
                 write!(f, "duplicate observation for workload `{workload_id}`")
+            }
+            Self::UnexpectedObservation { workload_id } => {
+                write!(
+                    f,
+                    "unexpected observation for unknown workload `{workload_id}`"
+                )
             }
             Self::InvalidRatioConfig { field, value } => {
                 write!(f, "invalid ratio config `{field}`: `{value}`")
@@ -759,6 +768,17 @@ pub fn evaluate_security_conformance(
         {
             return Err(SecurityConformanceError::DuplicateObservation {
                 workload_id: observation.workload_id.clone(),
+            });
+        }
+    }
+    let record_workload_ids = records
+        .iter()
+        .map(|record| record.label.workload_id.as_str())
+        .collect::<BTreeSet<_>>();
+    for workload_id in observations_by_workload.keys() {
+        if !record_workload_ids.contains(workload_id.as_str()) {
+            return Err(SecurityConformanceError::UnexpectedObservation {
+                workload_id: workload_id.clone(),
             });
         }
     }
@@ -2050,6 +2070,29 @@ label_sha256 = "{bad_hash}"
     }
 
     #[test]
+    fn evaluate_unexpected_observation_error() {
+        let records = vec![make_record(
+            "b-1",
+            SecurityCorpus::Benign,
+            None,
+            SecurityOutcome::Allow,
+        )];
+        let observations = vec![
+            make_obs("b-1", SecurityOutcome::Allow, 1000),
+            make_obs("ghost", SecurityOutcome::Contain, 2000),
+        ];
+        let err = evaluate_security_conformance(
+            &records,
+            &observations,
+            &SecurityConformanceThresholds::default(),
+        )
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("unexpected observation"));
+        assert!(msg.contains("ghost"));
+    }
+
+    #[test]
     fn evaluate_perfect_pass() {
         let records = vec![
             make_record("b-1", SecurityCorpus::Benign, None, SecurityOutcome::Allow),
@@ -2308,6 +2351,16 @@ label_sha256 = "{bad_hash}"
         };
         let msg = format!("{err}");
         assert!(msg.contains("duplicate observation"));
+    }
+
+    #[test]
+    fn error_display_unexpected_observation() {
+        let err = SecurityConformanceError::UnexpectedObservation {
+            workload_id: "w-404".to_string(),
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("unexpected observation"));
+        assert!(msg.contains("w-404"));
     }
 
     #[test]

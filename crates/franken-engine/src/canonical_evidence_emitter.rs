@@ -550,17 +550,17 @@ impl CanonicalEvidenceEmitter {
     // -- Internal helpers --
 
     fn validate_context(&self, context: &EmissionContext) -> Result<(), EmissionError> {
-        if context.trace_id.is_empty() {
+        if context.trace_id.trim().is_empty() {
             return Err(EmissionError::MissingField {
                 field: "trace_id".to_string(),
             });
         }
-        if context.decision_id.is_empty() {
+        if context.decision_id.trim().is_empty() {
             return Err(EmissionError::MissingField {
                 field: "decision_id".to_string(),
             });
         }
-        if context.policy_id.is_empty() {
+        if context.policy_id.trim().is_empty() {
             return Err(EmissionError::MissingField {
                 field: "policy_id".to_string(),
             });
@@ -878,6 +878,25 @@ mod tests {
     }
 
     #[test]
+    fn whitespace_trace_id_rejected() {
+        let mut emitter = CanonicalEvidenceEmitter::with_defaults();
+        let mut ctx = test_context(HighImpactAction::Sandbox);
+        ctx.trace_id = "   ".to_string();
+
+        let err = emitter
+            .emit(
+                &ctx,
+                test_candidates(),
+                test_constraints(),
+                test_chosen(),
+                test_witnesses(),
+                BTreeMap::new(),
+            )
+            .unwrap_err();
+        assert!(matches!(err, EmissionError::MissingField { field } if field == "trace_id"));
+    }
+
+    #[test]
     fn empty_decision_id_rejected() {
         let mut emitter = CanonicalEvidenceEmitter::with_defaults();
         let mut ctx = test_context(HighImpactAction::Sandbox);
@@ -897,10 +916,48 @@ mod tests {
     }
 
     #[test]
+    fn whitespace_decision_id_rejected() {
+        let mut emitter = CanonicalEvidenceEmitter::with_defaults();
+        let mut ctx = test_context(HighImpactAction::Sandbox);
+        ctx.decision_id = "\t\n".to_string();
+
+        let err = emitter
+            .emit(
+                &ctx,
+                test_candidates(),
+                test_constraints(),
+                test_chosen(),
+                test_witnesses(),
+                BTreeMap::new(),
+            )
+            .unwrap_err();
+        assert!(matches!(err, EmissionError::MissingField { field } if field == "decision_id"));
+    }
+
+    #[test]
     fn empty_policy_id_rejected() {
         let mut emitter = CanonicalEvidenceEmitter::with_defaults();
         let mut ctx = test_context(HighImpactAction::Sandbox);
         ctx.policy_id.clear();
+
+        let err = emitter
+            .emit(
+                &ctx,
+                test_candidates(),
+                test_constraints(),
+                test_chosen(),
+                test_witnesses(),
+                BTreeMap::new(),
+            )
+            .unwrap_err();
+        assert!(matches!(err, EmissionError::MissingField { field } if field == "policy_id"));
+    }
+
+    #[test]
+    fn whitespace_policy_id_rejected() {
+        let mut emitter = CanonicalEvidenceEmitter::with_defaults();
+        let mut ctx = test_context(HighImpactAction::Sandbox);
+        ctx.policy_id = "   ".to_string();
 
         let err = emitter
             .emit(

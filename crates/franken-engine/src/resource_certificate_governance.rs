@@ -478,6 +478,10 @@ impl GovernanceReceipt {
         for d in &self.dimensions_evaluated {
             append_str(&mut buf, &d.to_string());
         }
+        append_u64(&mut buf, self.dimensions_missing.len() as u64);
+        for d in &self.dimensions_missing {
+            append_str(&mut buf, &d.to_string());
+        }
         append_u64(&mut buf, self.certificates.len() as u64);
         for c in &self.certificates {
             buf.extend_from_slice(c.evidence_hash.as_bytes());
@@ -486,7 +490,19 @@ impl GovernanceReceipt {
         for r in &self.regressions {
             buf.extend_from_slice(r.entry_hash.as_bytes());
         }
+        append_u64(&mut buf, self.tail_risks.len() as u64);
+        for t in &self.tail_risks {
+            buf.extend_from_slice(t.entry_hash.as_bytes());
+        }
         append_u64(&mut buf, self.violations.len() as u64);
+        for violation in &self.violations {
+            append_str(&mut buf, &violation.dimension.to_string());
+            append_str(&mut buf, &violation.workload_id);
+            append_str(&mut buf, &violation.category.to_string());
+            append_str(&mut buf, &violation.summary);
+            append_u64(&mut buf, violation.measured_millionths);
+            append_u64(&mut buf, violation.threshold_millionths);
+        }
         compute_digest(&buf)
     }
 }
@@ -1491,6 +1507,54 @@ mod tests {
         let r_bad = eval_bad.evaluate(epoch());
 
         assert_ne!(r_ok.content_hash, r_bad.content_hash);
+    }
+
+    #[test]
+    fn test_receipt_hash_changes_with_missing_dimension_set() {
+        let mut gc_pause_policy = PublicationPolicy::relaxed();
+        gc_pause_policy
+            .required_dimensions
+            .insert(ResourceDimension::GcPause);
+        let gc_pause_receipt = GovernanceEvaluator::new(gc_pause_policy).evaluate(epoch());
+
+        let mut fd_policy = PublicationPolicy::relaxed();
+        fd_policy
+            .required_dimensions
+            .insert(ResourceDimension::FileDescriptors);
+        let fd_receipt = GovernanceEvaluator::new(fd_policy).evaluate(epoch());
+
+        assert_eq!(
+            gc_pause_receipt.verdict,
+            GovernanceVerdict::InsufficientCoverage
+        );
+        assert_eq!(fd_receipt.verdict, GovernanceVerdict::InsufficientCoverage);
+        assert_eq!(gc_pause_receipt.violations.len(), 1);
+        assert_eq!(fd_receipt.violations.len(), 1);
+        assert_ne!(gc_pause_receipt.content_hash, fd_receipt.content_hash);
+    }
+
+    #[test]
+    fn test_receipt_hash_changes_with_tail_risk_entries() {
+        let mut without_tail = GovernanceEvaluator::new(PublicationPolicy::relaxed());
+        without_tail.add_certificate(ResourceDimension::CpuTime, "w1".into(), 1000, 500, 50);
+        let without_tail_receipt = without_tail.evaluate(epoch());
+
+        let mut with_tail = GovernanceEvaluator::new(PublicationPolicy::relaxed());
+        with_tail.add_certificate(ResourceDimension::CpuTime, "w1".into(), 1000, 500, 50);
+        with_tail.add_tail_risk(
+            ResourceDimension::CpuTime,
+            "w1".into(),
+            2_100_000,
+            2_050_000,
+        );
+        let with_tail_receipt = with_tail.evaluate(epoch());
+
+        assert_eq!(without_tail_receipt.verdict, GovernanceVerdict::Approved);
+        assert_eq!(with_tail_receipt.verdict, GovernanceVerdict::Approved);
+        assert_ne!(
+            without_tail_receipt.content_hash,
+            with_tail_receipt.content_hash
+        );
     }
 
     #[test]

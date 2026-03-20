@@ -59,6 +59,9 @@ pub const DEFAULT_MAX_REGRESSION: u64 = 50_000;
 /// Default maximum unresolved blocker count.
 pub const DEFAULT_MAX_UNRESOLVED: u64 = 0;
 
+const SHIPPED_REPLAY_VALIDATE_HINT: &str =
+    "frankenctl replay run --trace <trace.json> --mode validate";
+
 // ---------------------------------------------------------------------------
 // OracleKind
 // ---------------------------------------------------------------------------
@@ -526,10 +529,9 @@ pub fn build_triage_bundle(
             OracleKind::Scenario => {
                 "Re-run frankenlab scenarios with --verbose and investigate failures.".to_string()
             }
-            OracleKind::Replay => {
-                "Check replay logs for divergence. Run `frankenctl replay --diff` to isolate."
-                    .to_string()
-            }
+            OracleKind::Replay => format!(
+                "Check replay logs for divergence. Run `{SHIPPED_REPLAY_VALIDATE_HINT}` to isolate."
+            ),
             OracleKind::Contract => {
                 "Verify cross-repo contract test alignment. Check pinned versions.".to_string()
             }
@@ -997,6 +999,38 @@ mod tests {
         let bundle = build_triage_bundle(&report, &conditions);
         assert!(bundle.has_blockers());
         assert_eq!(bundle.blocker_count, 1);
+    }
+
+    #[test]
+    fn replay_triage_bundle_uses_shipped_replay_run_command() {
+        let condition = OracleGateCondition {
+            condition_id: "replay".to_string(),
+            description: "replay drift".to_string(),
+            oracle_kind: OracleKind::Replay,
+            threshold: BlockerThreshold {
+                name: "replay_failures".to_string(),
+                threshold_value: 0,
+                direction: ThresholdDirection::Exactly,
+                is_hard_blocker: true,
+            },
+            policy_ref: POLICY_ID.to_string(),
+            bead_ref: None,
+        };
+        let evals = vec![evaluate_condition(&condition, 1, None, Some("replay-ref"))];
+        let report = build_report(SecurityEpoch::from_raw(1), "rc-replay", evals);
+        let bundle = build_triage_bundle(&report, &[condition]);
+
+        assert_eq!(bundle.entries.len(), 1);
+        assert!(
+            bundle.entries[0]
+                .remediation
+                .contains(SHIPPED_REPLAY_VALIDATE_HINT)
+        );
+        assert!(
+            !bundle.entries[0]
+                .remediation
+                .contains("frankenctl replay --diff")
+        );
     }
 
     #[test]

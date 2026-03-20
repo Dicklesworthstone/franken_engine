@@ -37,6 +37,7 @@ const RUN_MANIFEST_SCHEMA_VERSION: &str =
     "franken-engine.control-plane-policy-diagnostics.run-manifest.v1";
 const REPORT_EVENT_SCHEMA_VERSION: &str =
     "franken-engine.control-plane-policy-diagnostics.events.v1";
+const OPERATOR_SAMPLE_REPLAY_MODE: &str = "strict";
 const BOUNDARY_POLICY_MAPPING_CONTRACT_FILE: &str = "boundary_policy_mapping_contract.json";
 const OPERATOR_DIAGNOSTIC_CONTRACT_FILE: &str = "operator_diagnostic_contract.json";
 const USER_ERROR_TRANSLATION_MATRIX_FILE: &str = "user_error_translation_matrix.json";
@@ -694,6 +695,8 @@ fn build_operator_samples(
     let mut trace_ids = Vec::new();
 
     for (index, kind) in InternalFailureKind::all().iter().copied().enumerate() {
+        let trace_id = format!("trace-operator-diagnostic-{index:02}");
+        let trace_path = format!("./artifacts/{trace_id}.json");
         let mapping = contract.mapping_for(kind).ok_or_else(|| {
             format!(
                 "canonical operator contract is missing required mapping for {}",
@@ -703,9 +706,11 @@ fn build_operator_samples(
         let evidence_ref = mapping
             .has_evidence_ref
             .then(|| format!("evidence-{}", kind.as_str()));
-        let replay_ref = mapping
-            .has_replay_ref
-            .then(|| format!("frankenctl replay --trace trace-operator-diagnostic-{index:02}"));
+        let replay_ref = mapping.has_replay_ref.then(|| {
+            format!(
+                "frankenctl replay run --trace {trace_path} --mode {OPERATOR_SAMPLE_REPLAY_MODE}"
+            )
+        });
         let diagnostic = contract.emit_diagnostic(
             kind,
             sample_operator_message(kind),
@@ -713,7 +718,6 @@ fn build_operator_samples(
             replay_ref.as_deref(),
             sample_operator_context(kind),
         );
-        let trace_id = format!("trace-operator-diagnostic-{index:02}");
         let decision_id = format!("decision-operator-diagnostic-{index:02}");
         let event = build_diagnostic_event(&trace_id, &decision_id, kind.as_str(), &diagnostic);
         diagnostics.push(diagnostic);

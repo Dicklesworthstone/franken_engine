@@ -739,7 +739,7 @@ mod tests {
             InternalFailureKind::BudgetExhaustion,
             "cell close budget exhausted at 5ms remaining",
             Some("evidence-12345"),
-            Some("frankenctl replay --trace trace-id"),
+            Some("frankenctl replay run --trace ./artifacts/trace-id.json --mode strict"),
             BTreeMap::new(),
         );
         assert_eq!(diag.error_code, "FE-BUDGET-001");

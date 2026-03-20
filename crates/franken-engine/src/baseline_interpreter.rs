@@ -227,6 +227,9 @@ enum FinallyMode {
     /// Entered because an exception was in flight.  The pending exception is
     /// stored in `InterpreterCore::pending_exception`.
     Exception,
+    /// Entered because a return was in flight.  The pending value is stored
+    /// in `InterpreterCore::pending_return`.
+    Return,
 }
 
 /// A call stack frame.
@@ -245,6 +248,13 @@ struct CallFrame {
     /// entering the constructor body. If the constructor returns a non-object,
     /// this value is used as the result instead (ES2020 §9.2.2 step 13).
     construct_this: Option<Value>,
+    /// Caller exception state saved across the call so callee control flow
+    /// cannot clobber an outer in-flight abrupt completion.
+    saved_pending_exception: Option<Value>,
+    /// Caller return state saved for the same reason.
+    saved_pending_return: Option<Value>,
+    /// Count of active finally modes before entering the callee.
+    saved_finally_mode_depth: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -452,6 +462,8 @@ pub struct InterpreterCore {
     /// A pending exception value during unwinding (set by `Throw`,
     /// consumed by `EnterCatch` or re-thrown by `EndFinally`).
     pending_exception: Option<Value>,
+    /// A pending return value during unwinding through finally blocks.
+    pending_return: Option<Value>,
     /// Stack of finally-entry modes.  Pushed by `EnterFinally`, popped by
     /// `EndFinally`.  When `Exception`, `EndFinally` re-throws the pending
     /// exception.
@@ -479,14 +491,14 @@ impl InterpreterCore {
             register_base: 0,
             catch_frames: Vec::new(),
             pending_exception: None,
+            pending_return: None,
             finally_modes: Vec::new(),
         }
     }
 
     /// Execute an IR3 module and return the result.
     pub fn execute(&mut self, module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
-        self.ip = 0;
-        self.instructions_executed = 0;
+        self.reset_execution_state();
 
         self.push_event("execution_started", "ok", None);
 
@@ -522,14 +534,110 @@ impl InterpreterCore {
         })
     }
 
+    fn reset_execution_state(&mut self) {
+        let max_regs = self.config.max_registers as usize;
+        self.register_base = 0;
+        self.registers.resize(max_regs, Value::Undefined);
+        self.registers.fill(Value::Undefined);
+        self.call_stack.clear();
+        self.heap.clear();
+        self.iterators.clear();
+        self.function_prototypes.clear();
+        self.ip = 0;
+        self.instructions_executed = 0;
+        self.witness_events.clear();
+        self.hostcall_decisions.clear();
+        self.events.clear();
+        self.witness_seq = 0;
+        self.catch_frames.clear();
+        self.pending_exception = None;
+        self.pending_return = None;
+        self.finally_modes.clear();
+    }
+
+    fn complete_return(&mut self, return_val: Value) -> Result<Option<Value>, InterpreterError> {
+        let current_depth = self.call_stack.len();
+        // A function can return from inside an active try block before `EndTry`
+        // executes. Those catch frames belong to the returning callee and must
+        // not leak into the caller's unwind state.
+        self.catch_frames
+            .retain(|frame| frame.call_depth < current_depth);
+        if let Some(frame) = self.call_stack.pop() {
+            self.register_base = frame.register_base;
+            self.finally_modes.truncate(frame.saved_finally_mode_depth);
+            self.pending_exception = frame.saved_pending_exception;
+            self.pending_return = frame.saved_pending_return;
+            // ES2020 §9.2.2 step 13: if this is a constructor call and the
+            // return value is not an object, use the allocated `this` object
+            // instead.
+            let effective_val = if let Some(this_obj) = frame.construct_this {
+                match &return_val {
+                    Value::Object(_) => return_val,
+                    _ => this_obj,
+                }
+            } else {
+                return_val
+            };
+            self.write_reg(frame.return_reg, effective_val)?;
+            self.ip = frame.return_ip;
+            Ok(None)
+        } else {
+            self.finally_modes.clear();
+            Ok(Some(return_val))
+        }
+    }
+
+    fn unwind_call_stack_to(&mut self, target_depth: usize) {
+        while self.call_stack.len() > target_depth {
+            if let Some(frame) = self.call_stack.pop() {
+                self.register_base = frame.register_base;
+                self.finally_modes.truncate(frame.saved_finally_mode_depth);
+            }
+        }
+    }
+
+    fn pop_current_try_frame(&mut self) -> Option<CatchFrame> {
+        let current_depth = self.call_stack.len();
+        let idx = self
+            .catch_frames
+            .iter()
+            .rposition(|f| f.call_depth == current_depth)?;
+        let frame = self.catch_frames[idx].clone();
+        self.catch_frames.truncate(idx);
+        Some(frame)
+    }
+
+    fn pop_exception_target_frame(&mut self) -> Option<CatchFrame> {
+        let current_depth = self.call_stack.len();
+        let idx = self
+            .catch_frames
+            .iter()
+            .rposition(|f| f.call_depth <= current_depth)?;
+        let frame = self.catch_frames[idx].clone();
+        self.catch_frames.truncate(idx);
+        self.unwind_call_stack_to(frame.call_depth);
+        Some(frame)
+    }
+
+    fn pop_current_finally_target(&mut self) -> Option<usize> {
+        let current_depth = self.call_stack.len();
+        let idx = self
+            .catch_frames
+            .iter()
+            .rposition(|f| f.call_depth == current_depth && f.finally_target.is_some())?;
+        let frame = self.catch_frames[idx].clone();
+        self.catch_frames.truncate(idx);
+        frame.finally_target
+    }
+
     fn run_loop(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
         loop {
             if self.ip >= module.instructions.len() {
                 // Fell off the end of the instruction stream.
-                if let Some(frame) = self.call_stack.pop() {
-                    self.register_base = frame.register_base;
-                    self.write_reg(frame.return_reg, Value::Undefined)?;
-                    self.ip = frame.return_ip;
+                if !self.call_stack.is_empty() {
+                    if let Some(final_value) = self.complete_return(Value::Undefined)? {
+                        return Ok(final_value);
+                    }
                     continue;
                 } else {
                     return self.read_reg(0);
@@ -698,6 +806,9 @@ impl InterpreterCore {
                                 register_base: self.register_base,
                                 function_index: Some(func_idx),
                                 construct_this: None,
+                                saved_pending_exception: self.pending_exception.take(),
+                                saved_pending_return: self.pending_return.take(),
+                                saved_finally_mode_depth: self.finally_modes.len(),
                             });
 
                             self.register_base += self.config.max_registers as usize;
@@ -727,24 +838,19 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::Return { value } => {
                     let return_val = self.read_reg(value)?;
-                    if let Some(frame) = self.call_stack.pop() {
-                        self.register_base = frame.register_base;
-                        // ES2020 §9.2.2 step 13: if this is a constructor call
-                        // and the return value is not an object, use the
-                        // allocated `this` object instead.
-                        let effective_val = if let Some(this_obj) = frame.construct_this {
-                            match return_val {
-                                Value::Object(_) => return_val,
-                                _ => this_obj,
-                            }
-                        } else {
-                            return_val
-                        };
-                        self.write_reg(frame.return_reg, effective_val)?;
-                        self.ip = frame.return_ip;
+                    // A return from inside a finally overrides any in-flight
+                    // exception, and a return from inside try/catch must still
+                    // unwind through enclosing finally blocks before it can
+                    // complete.
+                    self.pending_exception = None;
+                    self.pending_return = Some(return_val.clone());
+                    if let Some(finally_target) = self.pop_current_finally_target() {
+                        self.ip = finally_target;
                     } else {
-                        // Top-level return.
-                        return Ok(return_val);
+                        self.pending_return = None;
+                        if let Some(final_value) = self.complete_return(return_val)? {
+                            return Ok(final_value);
+                        }
                     }
                 }
                 Ir3Instruction::HostCall {
@@ -1023,6 +1129,9 @@ impl InterpreterCore {
                                 register_base: self.register_base,
                                 function_index: Some(func_idx),
                                 construct_this: Some(this_val.clone()),
+                                saved_pending_exception: self.pending_exception.take(),
+                                saved_pending_return: self.pending_return.take(),
+                                saved_finally_mode_depth: self.finally_modes.len(),
                             });
 
                             self.register_base += self.config.max_registers as usize;
@@ -1094,34 +1203,18 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::EndTry => {
                     // Normal completion of the try block — pop the catch frame.
-                    if !self.catch_frames.is_empty() {
-                        self.catch_frames.pop();
-                    }
+                    let _ = self.pop_current_try_frame();
                     self.ip += 1;
                 }
                 Ir3Instruction::Throw { value } => {
                     let thrown = self.read_reg(value)?;
+                    self.pending_return = None;
                     self.pending_exception = Some(thrown.clone());
                     // Walk the catch frame stack to find the nearest valid handler.
-                    let current_depth = self.call_stack.len();
-                    if let Some(frame) = self
-                        .catch_frames
-                        .iter()
-                        .rev()
-                        .find(|f| f.call_depth <= current_depth)
-                        .cloned()
-                    {
-                        // Remove all catch frames at or above the matched one.
-                        let target_depth = frame.call_depth;
-                        while self
-                            .catch_frames
-                            .last()
-                            .is_some_and(|f| f.call_depth >= target_depth)
-                        {
-                            self.catch_frames.pop();
-                        }
-                        // Jump to catch handler (the EnterCatch instruction
-                        // will load the pending exception into the binding).
+                    // Use rposition to find the topmost matching frame by index,
+                    // then truncate to remove it and any frames above it — but
+                    // NOT frames below it (which belong to outer try blocks).
+                    if let Some(frame) = self.pop_exception_target_frame() {
                         self.ip = frame.catch_target;
                     } else {
                         // No catch handler found — uncaught exception.
@@ -1144,9 +1237,11 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::EnterFinally => {
                     // Track whether we entered the finally block via normal
-                    // control flow or exception unwinding.
+                    // control flow, exception unwinding, or return unwinding.
                     if self.pending_exception.is_some() {
                         self.finally_modes.push(FinallyMode::Exception);
+                    } else if self.pending_return.is_some() {
+                        self.finally_modes.push(FinallyMode::Return);
                     } else {
                         self.finally_modes.push(FinallyMode::Normal);
                     }
@@ -1154,45 +1249,49 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::EndFinally => {
                     let mode = self.finally_modes.pop().unwrap_or(FinallyMode::Normal);
-                    if mode == FinallyMode::Exception {
-                        // Re-throw the pending exception after finally completes.
-                        if let Some(thrown) = &self.pending_exception {
-                            let desc = match thrown {
-                                Value::Str(s) => s.clone(),
-                                Value::Int(n) => n.to_string(),
-                                Value::Bool(b) => b.to_string(),
-                                Value::Undefined => "undefined".to_string(),
-                                Value::Null => "null".to_string(),
-                                _ => "[object]".to_string(),
-                            };
-                            // Look for another catch frame to propagate to.
-                            let current_depth = self.call_stack.len();
-                            if let Some(frame) = self
-                                .catch_frames
-                                .iter()
-                                .rev()
-                                .find(|f| f.call_depth <= current_depth)
-                                .cloned()
-                            {
-                                let target_depth = frame.call_depth;
-                                while self
-                                    .catch_frames
-                                    .last()
-                                    .is_some_and(|f| f.call_depth >= target_depth)
-                                {
-                                    self.catch_frames.pop();
+                    match mode {
+                        FinallyMode::Exception => {
+                            // Re-throw the pending exception after finally completes.
+                            if let Some(thrown) = &self.pending_exception {
+                                let desc = match thrown {
+                                    Value::Str(s) => s.clone(),
+                                    Value::Int(n) => n.to_string(),
+                                    Value::Bool(b) => b.to_string(),
+                                    Value::Undefined => "undefined".to_string(),
+                                    Value::Null => "null".to_string(),
+                                    _ => "[object]".to_string(),
+                                };
+                                // Look for another catch frame to propagate to.
+                                if let Some(frame) = self.pop_exception_target_frame() {
+                                    self.ip = frame.catch_target;
+                                } else {
+                                    return Err(InterpreterError::UncaughtException {
+                                        value: desc,
+                                    });
                                 }
-                                self.ip = frame.catch_target;
                             } else {
-                                return Err(InterpreterError::UncaughtException { value: desc });
+                                // Exception was consumed (shouldn't happen, but safe fallthrough).
+                                self.ip += 1;
                             }
-                        } else {
-                            // Exception was consumed (shouldn't happen, but safe fallthrough).
+                        }
+                        FinallyMode::Return => {
+                            if let Some(return_val) = self.pending_return.take() {
+                                if let Some(finally_target) = self.pop_current_finally_target() {
+                                    self.pending_return = Some(return_val);
+                                    self.ip = finally_target;
+                                } else {
+                                    if let Some(final_value) = self.complete_return(return_val)? {
+                                        return Ok(final_value);
+                                    }
+                                }
+                            } else {
+                                self.ip += 1;
+                            }
+                        }
+                        FinallyMode::Normal => {
+                            // Normal completion — just continue.
                             self.ip += 1;
                         }
-                    } else {
-                        // Normal completion — just continue.
-                        self.ip += 1;
                     }
                 }
             }
@@ -4958,6 +5057,216 @@ mod tests {
         ]);
         let result = quickjs_execute(&m).unwrap();
         assert_eq!(result.value, Value::Int(7));
+    }
+
+    #[test]
+    fn returning_callee_does_not_leak_catch_frames_into_caller() {
+        let m = test_module_with_functions(
+            vec![
+                Ir3Instruction::BeginTry {
+                    catch_target: 6,
+                    finally_target: None,
+                },
+                Ir3Instruction::Call {
+                    callee: 3,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 0,
+                },
+                Ir3Instruction::EndTry,
+                Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                Ir3Instruction::Throw { value: 0 },
+                Ir3Instruction::Halt,
+                Ir3Instruction::EnterCatch { dst: 1 },
+                Ir3Instruction::Move { dst: 0, src: 1 },
+                Ir3Instruction::Halt,
+                Ir3Instruction::BeginTry {
+                    catch_target: 13,
+                    finally_target: None,
+                },
+                Ir3Instruction::LoadInt { dst: 0, value: 1 },
+                Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::EndTry,
+                Ir3Instruction::EnterCatch { dst: 1 },
+                Ir3Instruction::LoadInt { dst: 0, value: 99 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 9,
+                arity: 0,
+                frame_size: 4,
+                name: Some("return_inside_try".to_string()),
+            }],
+        );
+
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "test");
+        core.registers[3] = Value::Function(0);
+
+        let err = core.execute(&m).unwrap_err();
+        match err {
+            InterpreterError::UncaughtException { value } => assert_eq!(value, "7"),
+            other => panic!("expected uncaught caller throw after callee cleanup, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn throwing_callee_unwinds_into_caller_catch_frame() {
+        let m = test_module_with_functions(
+            vec![
+                Ir3Instruction::BeginTry {
+                    catch_target: 5,
+                    finally_target: None,
+                },
+                Ir3Instruction::Call {
+                    callee: 3,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 0,
+                },
+                Ir3Instruction::EndTry,
+                Ir3Instruction::Jump { target: 8 },
+                Ir3Instruction::Halt,
+                Ir3Instruction::EnterCatch { dst: 1 },
+                Ir3Instruction::Call {
+                    callee: 4,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadInt { dst: 0, value: 41 },
+                Ir3Instruction::Throw { value: 0 },
+                Ir3Instruction::LoadInt { dst: 0, value: 42 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 9,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("thrower".to_string()),
+                },
+                Ir3FunctionDesc {
+                    entry: 11,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("recovery".to_string()),
+                },
+            ],
+        );
+
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "test");
+        core.registers[3] = Value::Function(0);
+        core.registers[4] = Value::Function(1);
+
+        let result = core.execute(&m).unwrap();
+        assert_eq!(result.value, Value::Int(42));
+    }
+
+    #[test]
+    fn call_inside_finally_preserves_pending_return() {
+        let m = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 3,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::BeginTry {
+                    catch_target: 6,
+                    finally_target: Some(6),
+                },
+                Ir3Instruction::LoadInt { dst: 1, value: 1 },
+                Ir3Instruction::Return { value: 1 },
+                Ir3Instruction::EndTry,
+                Ir3Instruction::EnterFinally,
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 2,
+                },
+                Ir3Instruction::EndFinally,
+                Ir3Instruction::LoadInt { dst: 1, value: 99 },
+                Ir3Instruction::Return { value: 1 },
+                Ir3Instruction::LoadInt { dst: 0, value: 2 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 1,
+                    frame_size: 3,
+                    name: Some("outer".to_string()),
+                },
+                Ir3FunctionDesc {
+                    entry: 11,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("inner".to_string()),
+                },
+            ],
+        );
+
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "test");
+        core.registers[1] = Value::Function(1);
+        core.registers[3] = Value::Function(0);
+
+        let result = core.execute(&m).unwrap();
+        assert_eq!(result.value, Value::Int(1));
+    }
+
+    #[test]
+    fn call_inside_finally_preserves_pending_exception() {
+        let m = test_module_with_functions(
+            vec![
+                Ir3Instruction::BeginTry {
+                    catch_target: 10,
+                    finally_target: None,
+                },
+                Ir3Instruction::BeginTry {
+                    catch_target: 5,
+                    finally_target: Some(5),
+                },
+                Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                Ir3Instruction::Throw { value: 0 },
+                Ir3Instruction::EndTry,
+                Ir3Instruction::EnterFinally,
+                Ir3Instruction::Call {
+                    callee: 4,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 1,
+                },
+                Ir3Instruction::EndFinally,
+                Ir3Instruction::EndTry,
+                Ir3Instruction::Jump { target: 14 },
+                Ir3Instruction::EnterCatch { dst: 2 },
+                Ir3Instruction::LoadInt { dst: 3, value: 1 },
+                Ir3Instruction::Add {
+                    dst: 0,
+                    lhs: 2,
+                    rhs: 3,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadInt { dst: 0, value: 1 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 15,
+                arity: 0,
+                frame_size: 1,
+                name: Some("inner".to_string()),
+            }],
+        );
+
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "test");
+        core.registers[4] = Value::Function(0);
+
+        let result = core.execute(&m).unwrap();
+        assert_eq!(result.value, Value::Int(8));
     }
 
     #[test]

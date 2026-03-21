@@ -1097,6 +1097,30 @@ fn classify_no_label_with_enum_marker() {
 }
 
 #[test]
+fn classify_no_label_with_namespace_marker() {
+    assert_eq!(
+        classify_source_language(None, "namespace Demo { export const value = 1; }"),
+        SourceLanguage::TypeScript
+    );
+}
+
+#[test]
+fn classify_no_label_with_decorator_marker() {
+    assert_eq!(
+        classify_source_language(None, "@sealed\nclass Foo { }"),
+        SourceLanguage::TypeScript
+    );
+}
+
+#[test]
+fn classify_no_label_with_abstract_class_marker() {
+    assert_eq!(
+        classify_source_language(None, "abstract class Base { run() { return 0; } }"),
+        SourceLanguage::TypeScript
+    );
+}
+
+#[test]
 fn classify_no_label_with_implements_marker() {
     assert_eq!(
         classify_source_language(None, "class Foo implements Bar { }"),
@@ -1147,11 +1171,26 @@ fn classify_no_label_ignores_strings_and_comments_with_ts_keywords() {
         SourceLanguage::JavaScript
     );
     assert_eq!(
+        classify_source_language(
+            None,
+            "const note = \"namespace Demo { export const value = 1; }\";"
+        ),
+        SourceLanguage::JavaScript
+    );
+    assert_eq!(
         classify_source_language(None, "// enum Status { Ready }\nconst value = 1;"),
         SourceLanguage::JavaScript
     );
     assert_eq!(
+        classify_source_language(None, "// @sealed\nconst value = 1;"),
+        SourceLanguage::JavaScript
+    );
+    assert_eq!(
         classify_source_language(None, "class Message { note = \" implements \"; }"),
+        SourceLanguage::JavaScript
+    );
+    assert_eq!(
+        classify_source_language(None, "/* abstract class Base {} */\nconst value = 1;"),
         SourceLanguage::JavaScript
     );
 }
@@ -1219,6 +1258,63 @@ fn prepare_source_entry_ts_applies_normalization() {
     assert!(!prepared.prepared_source.contains(": number"));
     assert!(prepared.normalization_output.is_some());
     assert!(prepared.source_ingestion.ts_decision_count > 0);
+}
+
+#[test]
+fn prepare_source_entry_js_namespace_syntax_routes_through_normalization() {
+    let prepared = prepare_source_entry_for_public_entrypoints(
+        "namespace Demo { export const value = 1; }",
+        "namespace_input.js",
+        "t-namespace",
+        "d-namespace",
+        "p-namespace",
+    )
+    .unwrap();
+    assert_eq!(
+        prepared.source_ingestion.source_language,
+        SourceLanguage::TypeScript
+    );
+    assert!(prepared.source_ingestion.normalization_applied);
+    assert!(prepared.prepared_source.contains("const Demo = (() => {"));
+    assert!(!prepared.prepared_source.contains("namespace Demo"));
+}
+
+#[test]
+fn prepare_source_entry_js_decorator_syntax_routes_through_normalization() {
+    let prepared = prepare_source_entry_for_public_entrypoints(
+        "@sealed\nclass Foo { }",
+        "decorator_input.js",
+        "t-decorator",
+        "d-decorator",
+        "p-decorator",
+    )
+    .unwrap();
+    assert_eq!(
+        prepared.source_ingestion.source_language,
+        SourceLanguage::TypeScript
+    );
+    assert!(prepared.source_ingestion.normalization_applied);
+    assert!(prepared.prepared_source.contains("__applyClassDecorator"));
+    assert!(!prepared.prepared_source.contains("@sealed"));
+}
+
+#[test]
+fn prepare_source_entry_js_abstract_class_syntax_routes_through_normalization() {
+    let prepared = prepare_source_entry_for_public_entrypoints(
+        "abstract class Base { run() { return 0; } }",
+        "abstract_input.js",
+        "t-abstract",
+        "d-abstract",
+        "p-abstract",
+    )
+    .unwrap();
+    assert_eq!(
+        prepared.source_ingestion.source_language,
+        SourceLanguage::TypeScript
+    );
+    assert!(prepared.source_ingestion.normalization_applied);
+    assert!(!prepared.prepared_source.contains("abstract class"));
+    assert!(prepared.prepared_source.contains("class Base"));
 }
 
 #[test]

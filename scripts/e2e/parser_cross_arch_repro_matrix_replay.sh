@@ -30,6 +30,8 @@ latest_complete_run_dir() {
     [[ -f "${candidate}/run_manifest.json" ]] || continue
     [[ -f "${candidate}/matrix_summary.json" ]] || continue
     [[ -f "${candidate}/events.jsonl" ]] || continue
+    [[ -f "${candidate}/commands.txt" ]] || continue
+    [[ -f "${candidate}/matrix_lane_deltas.jsonl" ]] || continue
     printf '%s\n' "${candidate}"
   done | tail -n 1
 }
@@ -65,5 +67,9 @@ echo "[parser-cross-arch-repro] latest matrix summary: ${latest_run_dir}/matrix_
 cat "${latest_run_dir}/matrix_summary.json"
 echo "[parser-cross-arch-repro] latest events: ${latest_run_dir}/events.jsonl"
 cat "${latest_run_dir}/events.jsonl"
+echo "[parser-cross-arch-repro] latest commands: ${latest_run_dir}/commands.txt"
+cat "${latest_run_dir}/commands.txt"
+echo "[parser-cross-arch-repro] latest matrix lane deltas: ${latest_run_dir}/matrix_lane_deltas.jsonl"
+cat "${latest_run_dir}/matrix_lane_deltas.jsonl"
 
 exit "$main_exit"

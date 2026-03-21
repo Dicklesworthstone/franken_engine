@@ -791,6 +791,11 @@ fn line_looks_like_typescript_construct(line: &str) -> bool {
         || trimmed.starts_with("export interface ")
         || trimmed.starts_with("enum ")
         || trimmed.starts_with("export enum ")
+        || trimmed.starts_with("namespace ")
+        || trimmed.starts_with("export namespace ")
+        || trimmed.starts_with("abstract class ")
+        || trimmed.starts_with("export abstract class ")
+        || trimmed.starts_with('@')
         || class_declaration_uses_implements_clause(trimmed)
     {
         return true;

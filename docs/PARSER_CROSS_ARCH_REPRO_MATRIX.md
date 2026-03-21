@@ -137,7 +137,10 @@ scratch-only partial directories from interrupted or fallback-detected runs
 the newest directory is incomplete, the wrapper warns and then falls back to
 the latest complete directory before printing artifacts. If no complete run
 directory exists, the wrapper fails closed with a non-zero exit instead of
-returning success.
+returning success. A run directory is considered complete only if it contains
+`run_manifest.json`, `matrix_summary.json`, `events.jsonl`, `commands.txt`, and
+`matrix_lane_deltas.jsonl`, so operators never triage from a bundle that is
+missing either the exact command transcript or the lane-delta evidence rows.
 
 All heavy Rust checks/tests are executed through `rch`.
 If `rch` reports a local fallback, the gate must terminate that local path
@@ -175,6 +178,8 @@ Each run emits:
 
    - It should print artifacts from the latest complete run directory rather
      than a scratch-only partial directory.
+   - It should print `run_manifest.json`, `matrix_summary.json`, `events.jsonl`,
+     `commands.txt`, and `matrix_lane_deltas.jsonl` from that selected bundle.
    - If the newest directory is incomplete, it should emit a warning before
      falling back to the latest complete directory.
    - If no complete run directory exists, it should fail non-zero.

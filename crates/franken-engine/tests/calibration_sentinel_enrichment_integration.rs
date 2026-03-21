@@ -389,7 +389,7 @@ fn promotion_decision_display() {
 
 #[test]
 fn promotion_rule_display_all_distinct() {
-    let rules = vec![
+    let rules = [
         PromotionRule::FailClosed,
         PromotionRule::RequireCalibration,
         PromotionRule::RequireObservability,
@@ -496,7 +496,7 @@ fn manifest_has_cells() {
 
 #[test]
 fn sentinel_error_display_all_distinct() {
-    let errors = vec![
+    let errors = [
         SentinelError::ThresholdViolation,
         SentinelError::MissingSentinel,
         SentinelError::CalibrationStale,

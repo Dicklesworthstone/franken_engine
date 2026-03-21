@@ -769,7 +769,7 @@ fn microtask_queue_deterministic_ordering() {
             q.enqueue(Microtask::PromiseReaction {
                 handler: Some(ClosureHandle(i)),
                 argument: js_int(i as i64),
-                result_promise: PromiseHandle(i as u32),
+                result_promise: PromiseHandle(i),
                 label: Label::Public,
             });
         }

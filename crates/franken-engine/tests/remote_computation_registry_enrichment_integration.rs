@@ -154,8 +154,8 @@ fn enrich_registry_ten_registrations() {
     assert_eq!(reg.len(), 10);
     let names = reg.computation_names();
     // BTreeMap order: comp_00, comp_01, ... comp_09
-    for i in 0..10 {
-        assert_eq!(names[i], format!("comp_{i:02}"));
+    for (i, name) in names.iter().enumerate().take(10) {
+        assert_eq!(*name, format!("comp_{i:02}"));
     }
 }
 

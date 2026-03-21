@@ -24,8 +24,7 @@ use frankenengine_engine::declassification_pipeline::{
     PipelineConfig, PipelineError, PipelineEvent, PipelineStats, PolicyEvalResult,
 };
 use frankenengine_engine::ifc_artifacts::{
-    DeclassificationDecision, DeclassificationReceipt, DeclassificationRoute, FlowPolicy,
-    IfcSchemaVersion, Label,
+    DeclassificationDecision, DeclassificationRoute, FlowPolicy, IfcSchemaVersion, Label,
 };
 use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
 
@@ -1875,7 +1874,8 @@ fn receipt_is_signed_before_counter_mutation_deny_path() {
 fn stats_at_filters_expired_emergency_grants() {
     let mut pipeline = DeclassificationPipeline::default();
     let policy = make_policy();
-    let mut request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
+    // Use a route that doesn't match any policy route so emergency pathway is taken
+    let mut request = make_request("bad-route", Label::Secret, Label::Public);
     request.is_emergency = true;
     request.timestamp_ms = 1_000_000;
 

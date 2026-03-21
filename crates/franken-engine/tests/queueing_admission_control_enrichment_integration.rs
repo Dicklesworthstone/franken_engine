@@ -18,7 +18,7 @@
     clippy::manual_abs_diff
 )]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use frankenengine_engine::queueing_admission_control::*;
 use frankenengine_engine::stage_envelope_certificate::{ExecutionStage, LatencyPercentile};

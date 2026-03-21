@@ -103,7 +103,7 @@ fn posterior_new_normalizes_to_million() {
     let p = Posterior::new(100, 200, 300);
     assert!(p.is_normalized(), "posterior should be normalized");
     let sum = p.recoverable + p.ambiguous + p.unrecoverable;
-    assert!(sum >= 999_999 && sum <= 1_000_001);
+    assert!((999_999..=1_000_001).contains(&sum));
 }
 
 #[test]
@@ -583,7 +583,7 @@ fn evidence_features_different_inputs_different_hashes() {
 
 #[test]
 fn recovery_error_display_all_variants_distinct() {
-    let errors = vec![
+    let errors = [
         RecoveryError::BudgetExhausted {
             attempts: 5,
             max: 5,
@@ -600,7 +600,7 @@ fn recovery_error_display_all_variants_distinct() {
 
 #[test]
 fn recovery_error_code_all_unique() {
-    let errors = vec![
+    let errors = [
         RecoveryError::BudgetExhausted {
             attempts: 5,
             max: 5,
@@ -621,7 +621,7 @@ fn recovery_error_code_all_unique() {
 
 #[test]
 fn recovery_mode_display_all_distinct() {
-    let modes = vec![
+    let modes = [
         RecoveryMode::StrictDefault,
         RecoveryMode::DiagnosticRecovery,
         RecoveryMode::ExecutionRecovery,
@@ -633,7 +633,7 @@ fn recovery_mode_display_all_distinct() {
 
 #[test]
 fn recovery_action_display_all_distinct() {
-    let actions = vec![
+    let actions = [
         RecoveryAction::RecoverContinue,
         RecoveryAction::PartialRecover,
         RecoveryAction::FailStrict,
@@ -645,7 +645,7 @@ fn recovery_action_display_all_distinct() {
 
 #[test]
 fn error_state_display_all_distinct() {
-    let states = vec![
+    let states = [
         ErrorState::Recoverable,
         ErrorState::Ambiguous,
         ErrorState::Unrecoverable,
@@ -660,6 +660,7 @@ fn error_state_display_all_distinct() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[allow(clippy::assertions_on_constants)]
 fn constants_valid() {
     assert_eq!(COMPONENT, "bayesian_error_recovery");
     assert!(SCHEMA_VERSION.contains("bayesian"));

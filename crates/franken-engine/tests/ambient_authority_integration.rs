@@ -59,9 +59,9 @@ fn category_ordering_is_deterministic() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn standard_config_has_twelve_patterns() {
+fn standard_config_has_fourteen_patterns() {
     let config = AuditConfig::standard();
-    assert_eq!(config.patterns.len(), 12);
+    assert_eq!(config.patterns.len(), 14);
 }
 
 #[test]
@@ -495,7 +495,7 @@ fn custom_pattern_detected() {
 #[test]
 fn config_accessor() {
     let auditor = standard_auditor();
-    assert_eq!(auditor.config().patterns.len(), 12);
+    assert_eq!(auditor.config().patterns.len(), 14);
 }
 
 #[test]
@@ -1268,7 +1268,7 @@ fn audit_config_with_modules_and_custom_patterns_serde_roundtrip() {
     let json = serde_json::to_string(&config).unwrap();
     let restored: AuditConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(config, restored);
-    assert_eq!(restored.patterns.len(), 13);
+    assert_eq!(restored.patterns.len(), 15);
     assert!(restored.audited_modules.contains("engine::raw"));
     assert!(restored.audited_modules.contains("engine::io"));
 }
@@ -2024,30 +2024,26 @@ fn file_and_open_options_both_detected_in_same_source() {
 }
 
 #[test]
-fn file_pattern_exemption_suppresses_finding() {
+fn file_pattern_exemption_marks_finding_as_exempted() {
     let mut reg = ExemptionRegistry::new();
     reg.add(Exemption {
-        module_name: "m".to_string(),
+        exemption_id: "exempt-file-open".to_string(),
+        module_path: "m".to_string(),
         pattern_id: "file_open".to_string(),
         reason: "legacy code".to_string(),
-        approved_by: "reviewer".to_string(),
+        witness: "reviewer-signed".to_string(),
+        line: 0,
     });
     let auditor = SourceAuditor::new(AuditConfig::standard(), reg);
     let source = r#"let f = File::open("data.txt");"#;
     let findings = auditor.audit_source("m", "f.rs", source);
+    let file_finding = findings
+        .iter()
+        .find(|f| f.pattern_id == "file_open")
+        .expect("file_open finding should still be present in findings");
     assert!(
-        !findings.iter().any(|f| f.pattern_id == "file_open"),
-        "exempted file_open should not appear in findings"
-    );
-}
-
-#[test]
-fn standard_config_has_fourteen_patterns_integration() {
-    let config = AuditConfig::standard();
-    assert_eq!(
-        config.patterns.len(),
-        14,
-        "standard config should have 14 patterns (including File:: and OpenOptions::)"
+        file_finding.exempted,
+        "file_open finding should be marked as exempted"
     );
 }
 

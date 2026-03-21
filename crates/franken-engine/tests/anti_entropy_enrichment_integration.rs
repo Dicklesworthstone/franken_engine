@@ -373,7 +373,7 @@ fn config_serde_roundtrip() {
 
 #[test]
 fn error_display_all_variants_distinct() {
-    let errors = vec![
+    let errors = [
         ReconcileError::IbltSizeMismatch {
             local_cells: 64,
             remote_cells: 128,
@@ -462,7 +462,7 @@ fn fallback_protocol_execute_incremental() {
 
 #[test]
 fn fallback_trigger_display_all_variants() {
-    let triggers = vec![
+    let triggers = [
         FallbackTrigger::PeelFailed { remaining_cells: 1 },
         FallbackTrigger::VerificationFailed {
             object_hash: "h1".into(),

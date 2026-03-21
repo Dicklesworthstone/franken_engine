@@ -24,12 +24,14 @@ fn deep_constants_nonempty() {
 }
 
 #[test]
+#[allow(clippy::assertions_on_constants)]
 fn deep_window_size_bounds() {
     assert!(DEFAULT_WINDOW_SIZE >= MIN_WINDOW_SIZE);
     assert!(MIN_WINDOW_SIZE > 0);
 }
 
 #[test]
+#[allow(clippy::assertions_on_constants)]
 fn deep_thresholds_valid() {
     assert!(DEFAULT_MMD_THRESHOLD > 0);
     assert!(DEFAULT_MMD_THRESHOLD <= 1_000_000);

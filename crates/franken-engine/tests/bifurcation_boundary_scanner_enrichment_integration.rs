@@ -205,7 +205,7 @@ fn scanner_config_serde_roundtrip() {
 
 #[test]
 fn scanner_error_display_all_distinct() {
-    let errs = vec![
+    let errs = [
         ScannerError::TooManyParameters {
             count: 200,
             max: 128,

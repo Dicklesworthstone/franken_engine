@@ -305,8 +305,8 @@ fn evaluate_claims_deterministic() {
         owning_beads: vec!["bd-test".to_string()],
         required_morphisms: Vec::new(),
     };
-    let r1 = evaluate_claims(&[atom.clone()], &[], &[], &[], 1);
-    let r2 = evaluate_claims(&[atom], &[], &[], &[], 1);
+    let r1 = evaluate_claims(std::slice::from_ref(&atom), &[], &[], &[], 1);
+    let r2 = evaluate_claims(std::slice::from_ref(&atom), &[], &[], &[], 1);
     assert_eq!(r1.evaluations.len(), r2.evaluations.len());
     for (e1, e2) in r1.evaluations.iter().zip(r2.evaluations.iter()) {
         assert_eq!(e1.state, e2.state);
@@ -369,8 +369,8 @@ fn evaluation_is_deterministic() {
         owning_beads: vec![],
         required_morphisms: vec![],
     };
-    let r1 = evaluate_claims(&[atom.clone()], &[], &[], &[], 1);
-    let r2 = evaluate_claims(&[atom], &[], &[], &[], 1);
+    let r1 = evaluate_claims(std::slice::from_ref(&atom), &[], &[], &[], 1);
+    let r2 = evaluate_claims(std::slice::from_ref(&atom), &[], &[], &[], 1);
     assert_eq!(r1.overall_state, r2.overall_state);
     assert_eq!(r1.evaluations.len(), r2.evaluations.len());
 }

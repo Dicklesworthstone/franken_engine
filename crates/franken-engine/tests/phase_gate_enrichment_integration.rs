@@ -504,7 +504,7 @@ fn summary_reflects_all_evaluated() {
     pass_all_gates(&mut eval);
     let summary = eval.summary();
     assert_eq!(summary.len(), 4);
-    for (_, status) in &summary {
+    for status in summary.values() {
         assert!(status.is_passed());
     }
 }

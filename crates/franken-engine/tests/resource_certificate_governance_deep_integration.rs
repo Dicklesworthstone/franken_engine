@@ -7,7 +7,8 @@
 use frankenengine_engine::resource_certificate_governance::{
     BEAD_ID, COMPONENT, CertificateEvidence, DEFAULT_MAX_REGRESSION_MILLIONTHS,
     DEFAULT_MAX_TAIL_RISK_MILLIONTHS, DEFAULT_MAX_UTILISATION_MILLIONTHS, DEFAULT_MIN_SAMPLES,
-    FIXED_ONE, POLICY_ID, ResourceDimension, SCHEMA_VERSION,
+    FIXED_ONE, GovernanceVerdict, POLICY_ID, PublicationPolicy, RegressionEntry, ResourceDimension,
+    SCHEMA_VERSION, TailRiskEntry,
 };
 
 // ---------------------------------------------------------------------------
@@ -29,6 +30,7 @@ fn deep_fixed_one_is_million() {
 }
 
 #[test]
+#[allow(clippy::assertions_on_constants)]
 fn deep_default_thresholds_sane() {
     assert!(DEFAULT_MAX_REGRESSION_MILLIONTHS < FIXED_ONE);
     assert!(DEFAULT_MAX_TAIL_RISK_MILLIONTHS < FIXED_ONE);
@@ -246,4 +248,171 @@ fn deep_evidence_serde_roundtrip() {
     let json = serde_json::to_string(&ev).unwrap();
     let decoded: CertificateEvidence = serde_json::from_str(&json).unwrap();
     assert_eq!(ev, decoded);
+}
+
+// ---------------------------------------------------------------------------
+// RegressionEntry
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_regression_within_budget() {
+    let entry = RegressionEntry::new(
+        ResourceDimension::CpuTime,
+        "workload-reg".to_string(),
+        1000, // previous
+        1020, // current (2% increase)
+        DEFAULT_MAX_REGRESSION_MILLIONTHS,
+    );
+    assert!(entry.within_budget);
+    assert_eq!(entry.regression_millionths, 20_000); // 2%
+}
+
+#[test]
+fn deep_regression_over_budget() {
+    let entry = RegressionEntry::new(
+        ResourceDimension::HeapMemory,
+        "workload-reg-bad".to_string(),
+        1000,
+        1200, // 20% increase
+        DEFAULT_MAX_REGRESSION_MILLIONTHS,
+    );
+    assert!(!entry.within_budget);
+    assert_eq!(entry.regression_millionths, 200_000); // 20%
+}
+
+#[test]
+fn deep_regression_serde_roundtrip() {
+    let entry = RegressionEntry::new(
+        ResourceDimension::WallTime,
+        "serde-reg".to_string(),
+        500,
+        510,
+        DEFAULT_MAX_REGRESSION_MILLIONTHS,
+    );
+    let json = serde_json::to_string(&entry).unwrap();
+    let decoded: RegressionEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(entry, decoded);
+}
+
+#[test]
+fn deep_regression_hash_deterministic() {
+    let e1 = RegressionEntry::new(
+        ResourceDimension::CpuTime,
+        "det-reg".to_string(),
+        1000,
+        1050,
+        DEFAULT_MAX_REGRESSION_MILLIONTHS,
+    );
+    let e2 = RegressionEntry::new(
+        ResourceDimension::CpuTime,
+        "det-reg".to_string(),
+        1000,
+        1050,
+        DEFAULT_MAX_REGRESSION_MILLIONTHS,
+    );
+    assert_eq!(e1.entry_hash, e2.entry_hash);
+}
+
+// ---------------------------------------------------------------------------
+// TailRiskEntry
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_tail_risk_within_budget() {
+    let entry = TailRiskEntry::new(
+        ResourceDimension::GcPause,
+        "workload-tail".to_string(),
+        2_500_000, // p99/p50 ratio: 2.5x
+        2_400_000, // baseline: 2.4x
+        DEFAULT_MAX_TAIL_RISK_MILLIONTHS,
+    );
+    assert!(entry.within_budget);
+    assert_eq!(entry.drift_millionths, 100_000); // 10% drift
+}
+
+#[test]
+fn deep_tail_risk_over_budget() {
+    let entry = TailRiskEntry::new(
+        ResourceDimension::StackDepth,
+        "workload-tail-bad".to_string(),
+        3_500_000, // p99/p50 ratio: 3.5x
+        2_000_000, // baseline: 2.0x
+        DEFAULT_MAX_TAIL_RISK_MILLIONTHS,
+    );
+    assert!(!entry.within_budget);
+    assert_eq!(entry.drift_millionths, 1_500_000); // 150% drift
+}
+
+// ---------------------------------------------------------------------------
+// PublicationPolicy
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_publication_policy_strict_requires_all_dimensions() {
+    let strict = PublicationPolicy::strict();
+    assert_eq!(strict.required_dimensions.len(), 10);
+    assert!(strict.min_samples >= DEFAULT_MIN_SAMPLES);
+}
+
+#[test]
+fn deep_publication_policy_relaxed_defaults() {
+    let relaxed = PublicationPolicy::relaxed();
+    assert!(relaxed.required_dimensions.is_empty());
+    assert_eq!(
+        relaxed.max_regression_millionths,
+        DEFAULT_MAX_REGRESSION_MILLIONTHS
+    );
+    assert_eq!(
+        relaxed.max_tail_risk_millionths,
+        DEFAULT_MAX_TAIL_RISK_MILLIONTHS
+    );
+}
+
+#[test]
+fn deep_publication_policy_serde_roundtrip() {
+    let policy = PublicationPolicy::strict();
+    let json = serde_json::to_string(&policy).unwrap();
+    let decoded: PublicationPolicy = serde_json::from_str(&json).unwrap();
+    assert_eq!(policy, decoded);
+}
+
+// ---------------------------------------------------------------------------
+// GovernanceVerdict
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_verdict_approved_does_not_block() {
+    assert!(!GovernanceVerdict::Approved.blocks_publication());
+}
+
+#[test]
+fn deep_verdict_non_approved_blocks() {
+    let blocking = [
+        GovernanceVerdict::UtilisationExceeded,
+        GovernanceVerdict::RegressionDetected,
+        GovernanceVerdict::TailRiskExceeded,
+        GovernanceVerdict::InsufficientCoverage,
+        GovernanceVerdict::InsufficientSamples,
+        GovernanceVerdict::MultipleViolations,
+    ];
+    for v in blocking {
+        assert!(v.blocks_publication(), "{v:?} should block");
+    }
+}
+
+#[test]
+fn deep_verdict_serde_roundtrip() {
+    let verdict = GovernanceVerdict::RegressionDetected;
+    let json = serde_json::to_string(&verdict).unwrap();
+    let decoded: GovernanceVerdict = serde_json::from_str(&json).unwrap();
+    assert_eq!(verdict, decoded);
+}
+
+#[test]
+fn deep_verdict_display_matches_serde() {
+    let v = GovernanceVerdict::TailRiskExceeded;
+    let display = format!("{v}");
+    let json = serde_json::to_string(&v).unwrap();
+    // serde uses rename_all = snake_case which should match Display
+    assert_eq!(json, format!("\"{display}\""));
 }

@@ -484,7 +484,7 @@ fn verdict_no_certificate_methods() {
 
 #[test]
 fn verdict_display_distinctness() {
-    let verdicts = vec![
+    let verdicts = [
         GateVerdict::Supported {
             claim_id: "a".into(),
             certificate_id: "cert".into(),

@@ -3,7 +3,7 @@
 //! Tests cover corpus management, behavior-equivalence gating, provenance
 //! tracking, verdict computation, and deterministic evidence hashing.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::workload_corpus_gate::*;

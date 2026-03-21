@@ -68,7 +68,7 @@ fn handshake_custom(
         extension_id: ext_id.to_string(),
         host_id: host_id.to_string(),
         extension_nonce: ext_nonce,
-        host_nonce: host_nonce,
+        host_nonce,
         timestamp_ticks: tick,
         trace_id: "trace-custom".to_string(),
     }

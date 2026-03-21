@@ -96,6 +96,18 @@ fn shipped_path_parity_binary_emits_artifacts_and_zero_mismatches() {
     assert!(events_path.exists(), "events should exist");
     assert!(commands_path.exists(), "commands should exist");
 
+    let run_manifest: Value =
+        serde_json::from_slice(&fs::read(&manifest_path).expect("run manifest should be readable"))
+            .expect("run manifest should parse");
+    let expected_replay = format!(
+        "FRANKEN_SHIPPED_PATH_PARITY_REPLAY_RUN_DIR={} ./scripts/e2e/franken_shipped_path_parity_replay.sh",
+        run_dir.display()
+    );
+    assert_eq!(
+        run_manifest["replay_command"].as_str(),
+        Some(expected_replay.as_str())
+    );
+
     let report_json: Value =
         serde_json::from_slice(&fs::read(&report_path).expect("report should be readable"))
             .expect("report should parse");
@@ -170,6 +182,15 @@ fn shipped_path_parity_binary_emits_artifacts_and_zero_mismatches() {
     assert!(commands.contains("compile"));
     assert!(commands.contains("run"));
     assert!(commands.contains("verify compile-artifact"));
+    assert!(commands.contains("franken_shipped_path_parity_replay.sh"));
+    assert!(commands.contains(&format!(
+        "FRANKEN_SHIPPED_PATH_PARITY_REPLAY_RUN_DIR={} ./scripts/e2e/franken_shipped_path_parity_replay.sh",
+        run_dir.display()
+    )));
+    assert!(
+        !commands.contains("./scripts/e2e/franken_shipped_path_parity_replay.sh run"),
+        "commands.txt should not point replay at the default artifact root via a generic rerun"
+    );
 }
 
 #[test]
@@ -204,8 +225,14 @@ fn shipped_path_parity_replay_wrapper_uses_latest_complete_bundle_and_prints_new
     let script = load_replay_script();
 
     for snippet in [
-        "latest_complete_run_dir",
+        "run_dir_is_complete()",
+        "latest_complete_run_dir()",
+        "FRANKEN_SHIPPED_PATH_PARITY_REPLAY_RUN_DIR",
+        "explicit run directory is incomplete",
         "newest directory ${latest_artifact_dir_path} is incomplete",
+        "warn_about_failed_gate_replay_source()",
+        "replay output reflects latest complete run directory",
+        "replay output reflects current run directory",
         "run_manifest.json",
         "events.jsonl",
         "commands.txt",

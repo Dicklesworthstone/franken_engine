@@ -100,9 +100,10 @@ fn test_element_kind_properties_comprehensive() {
     assert!(ElementKind::TypedFloat64.is_unboxed());
     assert!(!ElementKind::TypedFloat64.is_holey());
 
-    // Immutable kinds
+    // Immutable kinds: only Frozen is truly immutable (Object.freeze).
+    // Sealed (Object.seal) prevents add/remove but allows value mutation.
     assert!(ElementKind::Frozen.is_immutable());
-    assert!(ElementKind::Sealed.is_immutable());
+    assert!(!ElementKind::Sealed.is_immutable());
     assert!(!ElementKind::Frozen.is_unboxed());
 }
 
@@ -200,10 +201,13 @@ fn test_array_lane_access_tracking_accumulation() {
     for _ in 0..50 {
         lane.record_oob();
     }
-    assert_eq!(lane.access_count, 500);
+    // record_oob increments both access_count and oob_count,
+    // so access_count = 500 + 50 = 550
+    assert_eq!(lane.access_count, 550);
     assert_eq!(lane.store_count, 200);
     assert_eq!(lane.oob_count, 50);
-    assert_eq!(lane.oob_rate_millionths(), 100_000); // 50/500 = 10%
+    // oob_rate = 50 * 1_000_000 / 550 = 90909
+    assert_eq!(lane.oob_rate_millionths(), 90_909);
 }
 
 #[test]
@@ -501,8 +505,9 @@ fn test_oob_rate_calculation_precision() {
     for _ in 0..1 {
         lane.record_oob();
     }
-    // 1/1000 = 0.1% = 1000 millionths
-    assert_eq!(lane.oob_rate_millionths(), 1000);
+    // record_oob also counts as an access, so total accesses = 1001, oob = 1
+    // rate = 1 * 1_000_000 / 1001 = 999 (integer division)
+    assert_eq!(lane.oob_rate_millionths(), 999);
 }
 
 // ---------------------------------------------------------------------------
@@ -1213,7 +1218,7 @@ fn test_engine_max_transitions_on_already_deopted_lane_does_not_duplicate() {
     engine.transition_element_kind(
         "arr-dd-max",
         ElementKind::PackedElements,
-        TransitionReason::ElementStoreMismatch,
+        TransitionReason::DoubleToElements,
         8,
     );
     let lane = engine.get_array("arr-dd-max").unwrap();

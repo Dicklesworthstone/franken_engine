@@ -12,15 +12,10 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::benchmark_coverage_saturation::*;
-use frankenengine_engine::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-fn epoch(n: u64) -> SecurityEpoch {
-    SecurityEpoch::from_raw(n)
-}
 
 fn tags(ts: &[&str]) -> BTreeSet<String> {
     ts.iter().map(|s| (*s).to_string()).collect()
@@ -312,7 +307,7 @@ fn report_display_nonempty() {
 
 #[test]
 fn board_error_display_distinct() {
-    let errs = vec![
+    let errs = [
         BoardError::TooManyEntries {
             count: 5000,
             max: 4096,
@@ -331,7 +326,7 @@ fn board_error_display_distinct() {
 
 #[test]
 fn board_error_tags_all_distinct() {
-    let errs = vec![
+    let errs = [
         BoardError::TooManyEntries { count: 1, max: 1 },
         BoardError::TooManyFeatureTags {
             name: "x".into(),

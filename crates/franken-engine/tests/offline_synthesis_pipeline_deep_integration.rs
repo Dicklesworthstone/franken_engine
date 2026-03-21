@@ -2692,7 +2692,7 @@ fn negative_bounded_int_domain() {
     // All grid points should be in [-1_000_000, -500_000]
     for row in &table.rows {
         let x = row.state.values.get("x").copied().unwrap();
-        assert!(x >= -1_000_000 && x <= -500_000, "x={x} out of range");
+        assert!((-1_000_000..=-500_000).contains(&x), "x={x} out of range");
     }
 }
 

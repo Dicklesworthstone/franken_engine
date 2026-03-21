@@ -67,7 +67,7 @@ fn default_evaluator() -> CounterfactualEvaluator {
 
 #[test]
 fn estimator_kind_display_all_distinct() {
-    let kinds = vec![
+    let kinds = [
         EstimatorKind::Ips,
         EstimatorKind::DoublyRobust,
         EstimatorKind::DirectMethod,
@@ -194,7 +194,7 @@ fn envelope_serde_roundtrip() {
 
 #[test]
 fn envelope_status_display_all_distinct() {
-    let statuses = vec![
+    let statuses = [
         EnvelopeStatus::Safe,
         EnvelopeStatus::Inconclusive,
         EnvelopeStatus::Unsafe,
@@ -474,7 +474,7 @@ fn observed_regimes_single() {
 
 #[test]
 fn error_display_all_variants_distinct() {
-    let errors = vec![
+    let errors = [
         CounterfactualError::EmptyBatch,
         CounterfactualError::BatchTooLarge {
             size: 200_000,

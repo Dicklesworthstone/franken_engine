@@ -167,7 +167,7 @@ fn enrichment_derive_version_slots_serde_roundtrip() {
 #[test]
 fn enrichment_derive_version_matrix_produces_plan() {
     let spec = make_spec();
-    let plan = derive_version_matrix(&[spec.clone()]).unwrap();
+    let plan = derive_version_matrix(std::slice::from_ref(&spec)).unwrap();
     assert_eq!(plan.schema_version, VERSION_MATRIX_SCHEMA);
     assert!(!plan.cells.is_empty());
 }
@@ -175,7 +175,7 @@ fn enrichment_derive_version_matrix_produces_plan() {
 #[test]
 fn enrichment_derive_version_matrix_cells_have_boundary() {
     let spec = make_spec();
-    let plan = derive_version_matrix(&[spec.clone()]).unwrap();
+    let plan = derive_version_matrix(std::slice::from_ref(&spec)).unwrap();
     for cell in &plan.cells {
         assert_eq!(cell.boundary_surface, "http-api");
     }
@@ -184,7 +184,7 @@ fn enrichment_derive_version_matrix_cells_have_boundary() {
 #[test]
 fn enrichment_derive_version_matrix_plan_serde_roundtrip() {
     let spec = make_spec();
-    let plan = derive_version_matrix(&[spec.clone()]).unwrap();
+    let plan = derive_version_matrix(std::slice::from_ref(&spec)).unwrap();
     let json = serde_json::to_string(&plan).unwrap();
     let back: VersionMatrixPlan = serde_json::from_str(&json).unwrap();
     assert_eq!(plan.cells.len(), back.cells.len());
@@ -229,7 +229,7 @@ fn enrichment_matrix_cell_result_serde_roundtrip() {
 #[test]
 fn enrichment_classify_failure_scopes_no_failures() {
     let spec = make_spec();
-    let plan = derive_version_matrix(&[spec.clone()]).unwrap();
+    let plan = derive_version_matrix(std::slice::from_ref(&spec)).unwrap();
     let results: Vec<MatrixCellResult> = plan
         .cells
         .iter()
@@ -253,7 +253,7 @@ fn enrichment_classify_failure_scopes_no_failures() {
 #[test]
 fn enrichment_classify_failure_scopes_with_failure() {
     let spec = make_spec();
-    let plan = derive_version_matrix(&[spec.clone()]).unwrap();
+    let plan = derive_version_matrix(std::slice::from_ref(&spec)).unwrap();
     let results: Vec<MatrixCellResult> = plan
         .cells
         .iter()
@@ -281,7 +281,7 @@ fn enrichment_classify_failure_scopes_with_failure() {
 #[test]
 fn enrichment_summarize_health_all_pass() {
     let spec = make_spec();
-    let plan = derive_version_matrix(&[spec.clone()]).unwrap();
+    let plan = derive_version_matrix(std::slice::from_ref(&spec)).unwrap();
     let results: Vec<MatrixCellResult> = plan
         .cells
         .iter()

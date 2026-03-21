@@ -50,6 +50,7 @@ fn integ_constants() {
 }
 
 #[test]
+#[allow(clippy::assertions_on_constants)]
 fn integ_default_thresholds() {
     assert!(DEFAULT_MAX_CACHE_MISS_RATE <= 100_000);
     assert!(DEFAULT_MAX_NUMA_REMOTE_RATIO <= 200_000);
@@ -547,7 +548,7 @@ fn integ_verdict_blocks_publication() {
 
 #[test]
 fn integ_verdict_ordering() {
-    let mut verdicts = vec![
+    let mut verdicts = [
         GovernanceVerdict::MultipleViolations,
         GovernanceVerdict::Approved,
         GovernanceVerdict::CacheMissExceeded,

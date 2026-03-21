@@ -863,6 +863,7 @@ fn enrichment_constants_schema_version() {
 }
 
 #[test]
+#[allow(clippy::assertions_on_constants)]
 fn enrichment_constants_defaults_are_positive() {
     assert!(DEFAULT_MAX_REGRESSION_MILLIONTHS > 0);
     assert!(DEFAULT_MAX_TAIL_RISK_MILLIONTHS > 0);
@@ -872,6 +873,7 @@ fn enrichment_constants_defaults_are_positive() {
 }
 
 #[test]
+#[allow(clippy::assertions_on_constants)]
 fn enrichment_constants_defaults_below_fixed_one() {
     assert!(DEFAULT_MAX_REGRESSION_MILLIONTHS < FIXED_ONE);
     assert!(DEFAULT_MAX_TAIL_RISK_MILLIONTHS < FIXED_ONE);

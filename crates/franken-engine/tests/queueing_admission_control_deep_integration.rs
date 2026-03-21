@@ -22,6 +22,7 @@ fn deep_constants_nonempty() {
 }
 
 #[test]
+#[allow(clippy::assertions_on_constants)]
 fn deep_defaults_sane() {
     assert!(DEFAULT_MAX_QUEUE_DEPTH > 0);
     assert!(DEFAULT_TARGET_UTILIZATION_MILLIONTHS > 0);
@@ -47,8 +48,8 @@ fn deep_priority_rank_ordering() {
         assert!(
             window[0].rank() < window[1].rank(),
             "{} should have lower rank than {}",
-            format!("{}", window[0]),
-            format!("{}", window[1])
+            format_args!("{}", window[0]),
+            format_args!("{}", window[1])
         );
     }
 }
@@ -245,5 +246,88 @@ fn deep_shed_reason_serde_roundtrip_all() {
         let json = serde_json::to_string(reason).unwrap();
         let decoded: ShedReason = serde_json::from_str(&json).unwrap();
         assert_eq!(*reason, decoded);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cross-type interactions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_priority_rank_unique_per_variant() {
+    let all = [
+        AdmissionPriority::Critical,
+        AdmissionPriority::High,
+        AdmissionPriority::Normal,
+        AdmissionPriority::Low,
+        AdmissionPriority::BestEffort,
+    ];
+    let mut ranks = std::collections::BTreeSet::new();
+    for prio in all {
+        assert!(ranks.insert(prio.rank()), "{prio} has duplicate rank");
+    }
+    assert_eq!(ranks.len(), 5);
+}
+
+#[test]
+fn deep_decision_admit_is_not_shed() {
+    let d = AdmissionDecision::Admit;
+    let json = serde_json::to_string(&d).unwrap();
+    assert!(!json.contains("shed"));
+    assert!(!json.contains("queue"));
+}
+
+#[test]
+fn deep_decision_queue_preserves_fields() {
+    let d = AdmissionDecision::Queue {
+        estimated_wait_ns: 42_000,
+        position: 7,
+    };
+    let json = serde_json::to_string(&d).unwrap();
+    let decoded: AdmissionDecision = serde_json::from_str(&json).unwrap();
+    if let AdmissionDecision::Queue {
+        estimated_wait_ns,
+        position,
+    } = decoded
+    {
+        assert_eq!(estimated_wait_ns, 42_000);
+        assert_eq!(position, 7);
+    } else {
+        panic!("Expected Queue variant");
+    }
+}
+
+#[test]
+fn deep_shed_reason_display_unique_per_variant() {
+    let reasons = [
+        ShedReason::QueueFull {
+            current_depth: 1,
+            max_depth: 1,
+        },
+        ShedReason::TokensExhausted {
+            tokens_available: 0,
+            tokens_required: 1,
+        },
+        ShedReason::UtilizationOverload {
+            current_utilization_millionths: 1,
+            shed_threshold_millionths: 0,
+        },
+        ShedReason::PriorityShed {
+            item_priority: AdmissionPriority::Low,
+            min_admitted_priority: AdmissionPriority::High,
+        },
+        ShedReason::StageBudgetExhausted {
+            stage: ExecutionStage::Parse,
+            stage_queue_depth: 1,
+            stage_max_depth: 0,
+        },
+    ];
+    let mut displays = std::collections::BTreeSet::new();
+    for reason in &reasons {
+        let display = format!("{reason}");
+        assert!(
+            displays.insert(display.clone()),
+            "Duplicate display: {display}"
+        );
     }
 }

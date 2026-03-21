@@ -534,7 +534,7 @@ fn emit_default_bundle_creates_files() {
     assert!(report.run_manifest_path.exists());
     assert!(report.trace_ids_path.exists());
     assert!(!report.written_files.is_empty());
-    for (_name, hash) in &report.written_files {
+    for hash in report.written_files.values() {
         assert!(hash.starts_with("sha256:"));
     }
     let _ = std::fs::remove_dir_all(&artifact_dir);

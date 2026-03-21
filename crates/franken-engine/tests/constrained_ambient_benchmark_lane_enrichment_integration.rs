@@ -13,8 +13,6 @@
 
 //! Enrichment integration tests for `constrained_ambient_benchmark_lane`.
 
-use std::collections::BTreeSet;
-
 use frankenengine_engine::constrained_ambient_benchmark_lane::{
     CONSTRAINED_AMBIENT_COMPONENT, CONSTRAINED_AMBIENT_SCHEMA_VERSION,
     ConstrainedAmbientBenchmarkDecision, ConstrainedAmbientBenchmarkRequest,

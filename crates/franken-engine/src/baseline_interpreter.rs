@@ -554,7 +554,7 @@ impl InterpreterCore {
         }
         self.last_post_run_seed = Some(self.capture_execution_seed());
 
-        let outcome = match result {
+        match result {
             Ok(v) => {
                 self.emit_witness(WitnessEventKind::ExecutionCompleted, None);
 
@@ -580,8 +580,7 @@ impl InterpreterCore {
                 })
             }
             Err(e) => Err(e),
-        };
-        outcome
+        }
     }
 
     fn capture_execution_seed(&self) -> ExecutionSeed {

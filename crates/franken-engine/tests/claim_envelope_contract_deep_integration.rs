@@ -280,7 +280,9 @@ fn make_scenario(
         phrase_text: match tier {
             ClaimEnvelopeTier::FrontierObjective => format!("Frontier objective {id}"),
             ClaimEnvelopeTier::PublishableUniversal => format!("Universal claim {id}"),
-            ClaimEnvelopeTier::PublishableScoped => format!("Observed and declared scoped claim {id}"),
+            ClaimEnvelopeTier::PublishableScoped => {
+                format!("Observed and declared scoped claim {id}")
+            }
             ClaimEnvelopeTier::Target => format!("Target claim {id}"),
             ClaimEnvelopeTier::Hypothesis => format!("Hypothesis claim {id}"),
         },

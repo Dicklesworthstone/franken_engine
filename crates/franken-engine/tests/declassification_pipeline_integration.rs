@@ -1336,6 +1336,108 @@ fn emergency_active_grant_counted_in_stats() {
 }
 
 #[test]
+fn emergency_expired_grant_not_counted_in_stats_at_boundary() {
+    let mut pipeline = DeclassificationPipeline::default();
+    let policy = make_policy();
+    let mut request = make_request("bad-route", Label::Secret, Label::Public);
+    request.is_emergency = true;
+    request.timestamp_ms = 1_000_000;
+
+    pipeline
+        .process(&request, &policy, &low_loss(), &test_key())
+        .unwrap();
+
+    let expiry = request.timestamp_ms + PipelineConfig::default().emergency_max_duration_ms;
+    assert_eq!(pipeline.stats_at(expiry - 1).emergency_grants_active, 1);
+    assert_eq!(pipeline.stats_at(expiry).emergency_grants_active, 0);
+}
+
+#[test]
+fn later_pipeline_activity_expires_default_emergency_grant_stats() {
+    let mut pipeline = DeclassificationPipeline::default();
+    let policy = make_policy();
+    let key = test_key();
+
+    let mut emergency = make_request("bad-route", Label::Secret, Label::Public);
+    emergency.is_emergency = true;
+    emergency.timestamp_ms = 1_000_000;
+    pipeline
+        .process(&emergency, &policy, &low_loss(), &key)
+        .unwrap();
+    assert_eq!(pipeline.stats().emergency_grants_active, 1);
+
+    let mut later = make_request("declass-secret-internal", Label::Secret, Label::Internal);
+    later.request_id = "req-later".to_string();
+    later.timestamp_ms =
+        emergency.timestamp_ms + PipelineConfig::default().emergency_max_duration_ms + 1;
+    pipeline
+        .process(&later, &policy, &low_loss(), &key)
+        .unwrap();
+
+    assert_eq!(pipeline.stats().emergency_grants_active, 0);
+}
+
+#[test]
+fn failed_signing_does_not_advance_default_emergency_stats_time() {
+    let mut pipeline = DeclassificationPipeline::default();
+    let policy = make_policy();
+    let key = test_key();
+
+    let mut emergency = make_request("bad-route", Label::Secret, Label::Public);
+    emergency.is_emergency = true;
+    emergency.timestamp_ms = 1_000_000;
+    pipeline
+        .process(&emergency, &policy, &low_loss(), &key)
+        .unwrap();
+
+    let zero_key = SigningKey::from_bytes([0u8; 32]);
+    let mut later = make_request("declass-secret-internal", Label::Secret, Label::Internal);
+    later.request_id = "req-later-signing-fail".to_string();
+    later.timestamp_ms =
+        emergency.timestamp_ms + PipelineConfig::default().emergency_max_duration_ms + 1;
+
+    let err = pipeline
+        .process(&later, &policy, &low_loss(), &zero_key)
+        .unwrap_err();
+    assert!(matches!(err, PipelineError::SigningError { .. }));
+    assert_eq!(pipeline.stats().decision_count, 1);
+    assert_eq!(pipeline.stats().allow_count, 1);
+    assert_eq!(pipeline.receipts().len(), 1);
+    assert_eq!(pipeline.stats().emergency_grants_active, 1);
+}
+
+#[test]
+fn emergency_signing_failure_does_not_persist_grant_or_counts() {
+    let mut pipeline = DeclassificationPipeline::default();
+    let policy = make_policy();
+    let zero_key = SigningKey::from_bytes([0u8; 32]);
+    let mut request = make_request("bad-route", Label::Secret, Label::Public);
+    request.is_emergency = true;
+    request.timestamp_ms = 1_000_000;
+
+    let err = pipeline
+        .process(&request, &policy, &low_loss(), &zero_key)
+        .unwrap_err();
+    assert!(matches!(err, PipelineError::SigningError { .. }));
+    assert!(pipeline.receipts().is_empty());
+    assert_eq!(pipeline.stats().decision_count, 0);
+    assert_eq!(pipeline.stats().allow_count, 0);
+    assert_eq!(pipeline.stats().deny_count, 0);
+    assert_eq!(pipeline.stats().emergency_grants_active, 0);
+    assert!(
+        pipeline
+            .check_emergency_grant(
+                &request.extension_id,
+                &request.source_label,
+                &request.sink_clearance,
+                &request.decision_contract_id,
+                request.timestamp_ms,
+            )
+            .is_none()
+    );
+}
+
+#[test]
 fn emergency_emits_stage_events() {
     let mut pipeline = DeclassificationPipeline::default();
     let policy = make_policy();
@@ -1348,6 +1450,29 @@ fn emergency_emits_stage_events() {
 
     let stages: Vec<&str> = pipeline.events().iter().map(|e| e.stage.as_str()).collect();
     assert!(stages.contains(&"emergency_pathway"));
+}
+
+#[test]
+fn emergency_grant_issued_before_signed_receipt_event() {
+    let mut pipeline = DeclassificationPipeline::default();
+    let policy = make_policy();
+    let mut request = make_request("bad-route", Label::Secret, Label::Public);
+    request.is_emergency = true;
+
+    pipeline
+        .process(&request, &policy, &low_loss(), &test_key())
+        .unwrap();
+
+    let events = pipeline.events();
+    let grant_issued_index = events
+        .iter()
+        .position(|event| event.stage == "emergency_pathway" && event.outcome == "grant_issued")
+        .unwrap();
+    let signed_receipt_index = events
+        .iter()
+        .position(|event| event.stage == "signed_receipt" && event.outcome == "emitted")
+        .unwrap();
+    assert!(grant_issued_index < signed_receipt_index);
 }
 
 #[test]

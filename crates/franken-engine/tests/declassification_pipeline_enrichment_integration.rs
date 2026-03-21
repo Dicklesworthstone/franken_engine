@@ -568,6 +568,24 @@ fn pipeline_stats_after_allow_and_deny() {
     assert_eq!(stats.deny_count, 1);
 }
 
+#[test]
+fn pipeline_stats_at_excludes_expired_emergency_grants() {
+    let mut pipeline = DeclassificationPipeline::default();
+    let policy = make_policy();
+    let key = test_key();
+    let mut request = make_request("bad-route", Label::Secret, Label::Public);
+    request.is_emergency = true;
+    request.timestamp_ms = 10_000;
+
+    pipeline
+        .process(&request, &policy, &low_loss(), &key)
+        .unwrap();
+
+    let expiry = request.timestamp_ms + PipelineConfig::default().emergency_max_duration_ms;
+    assert_eq!(pipeline.stats_at(expiry - 1).emergency_grants_active, 1);
+    assert_eq!(pipeline.stats_at(expiry).emergency_grants_active, 0);
+}
+
 // ---------------------------------------------------------------------------
 // Pipeline: config with events disabled
 // ---------------------------------------------------------------------------

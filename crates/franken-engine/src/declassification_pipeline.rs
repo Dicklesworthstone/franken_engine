@@ -281,6 +281,9 @@ pub struct DeclassificationPipeline {
     allow_count: u64,
     /// Deny count.
     deny_count: u64,
+    /// Latest successfully receipted request timestamp, used as the
+    /// deterministic reference time for default stats snapshots.
+    latest_timestamp_ms: u64,
 }
 
 impl Default for DeclassificationPipeline {
@@ -300,6 +303,7 @@ impl DeclassificationPipeline {
             decision_count: 0,
             allow_count: 0,
             deny_count: 0,
+            latest_timestamp_ms: 0,
         }
     }
 
@@ -388,34 +392,38 @@ impl DeclassificationPipeline {
             self.emit_stage_event(request, "decision", "deny", Some("loss_exceeds_threshold"));
 
             // Deny — loss too high
-            self.decision_count += 1;
-            self.deny_count += 1;
-            return self.emit_receipt(
+            let receipt = self.build_signed_receipt(
                 request,
                 DeclassificationDecision::Deny,
                 &route_id,
                 loss,
                 signing_key,
                 "loss exceeds threshold",
-            );
+            )?;
+            self.decision_count += 1;
+            self.deny_count += 1;
+            self.record_signed_receipt(request, &receipt);
+            return Ok(receipt);
         }
 
         self.emit_stage_event(request, "loss_assessment", "below_threshold", None);
 
         // Stage 4: Decision — allow
         self.emit_stage_event(request, "decision", "allow", None);
-        self.decision_count += 1;
-        self.allow_count += 1;
 
         // Stage 5: Signed receipt
-        self.emit_receipt(
+        let receipt = self.build_signed_receipt(
             request,
             DeclassificationDecision::Allow,
             &route_id,
             loss,
             signing_key,
             "policy evaluation passed, loss below threshold",
-        )
+        )?;
+        self.decision_count += 1;
+        self.allow_count += 1;
+        self.record_signed_receipt(request, &receipt);
+        Ok(receipt)
     }
 
     /// Check for an active emergency grant.
@@ -464,6 +472,11 @@ impl DeclassificationPipeline {
 
     /// Pipeline statistics.
     pub fn stats(&self) -> PipelineStats {
+        self.stats_at(self.latest_timestamp_ms)
+    }
+
+    /// Pipeline statistics at an explicit reference timestamp.
+    pub fn stats_at(&self, now_ms: u64) -> PipelineStats {
         PipelineStats {
             decision_count: self.decision_count,
             allow_count: self.allow_count,
@@ -471,7 +484,7 @@ impl DeclassificationPipeline {
             emergency_grants_active: self
                 .emergency_grants
                 .values()
-                .filter(|g| !g.review_completed)
+                .filter(|g| !g.review_completed && !g.is_expired(now_ms))
                 .count() as u64,
         }
     }
@@ -534,25 +547,25 @@ impl DeclassificationPipeline {
             expiry_ms,
             review_completed: false,
         };
-        self.emergency_grants.insert(grant_id, grant);
-
-        self.emit_stage_event(request, "emergency_pathway", "grant_issued", None);
-
-        self.decision_count += 1;
-        self.allow_count += 1;
-
-        self.emit_receipt(
+        let receipt = self.build_signed_receipt(
             request,
             DeclassificationDecision::Allow,
             "emergency",
             loss,
             signing_key,
             "emergency declassification granted; post-incident review required",
-        )
+        )?;
+
+        self.emergency_grants.insert(grant_id, grant);
+        self.emit_stage_event(request, "emergency_pathway", "grant_issued", None);
+        self.decision_count += 1;
+        self.allow_count += 1;
+        self.record_signed_receipt(request, &receipt);
+        Ok(receipt)
     }
 
-    fn emit_receipt(
-        &mut self,
+    fn build_signed_receipt(
+        &self,
         request: &DeclassificationRequest,
         decision: DeclassificationDecision,
         route_ref: &str,
@@ -583,9 +596,17 @@ impl DeclassificationPipeline {
                 detail: e.to_string(),
             })?;
 
+        Ok(receipt)
+    }
+
+    fn record_signed_receipt(
+        &mut self,
+        request: &DeclassificationRequest,
+        receipt: &DeclassificationReceipt,
+    ) {
+        self.latest_timestamp_ms = self.latest_timestamp_ms.max(request.timestamp_ms);
         self.emit_stage_event(request, "signed_receipt", "emitted", None);
         self.receipts.push(receipt.clone());
-        Ok(receipt)
     }
 
     fn emit_stage_event(

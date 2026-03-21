@@ -1995,7 +1995,7 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         let restored: AuditConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, restored);
-        assert_eq!(restored.patterns.len(), 13);
+        assert_eq!(restored.patterns.len(), 15);
         assert!(restored.audited_modules.contains("engine::raw"));
     }
 

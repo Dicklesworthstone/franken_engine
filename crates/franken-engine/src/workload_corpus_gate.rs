@@ -1756,8 +1756,10 @@ mod tests {
                 DivergenceClass::Identical,
             ));
         }
-        let mut config = GateConfig::default();
-        config.min_per_family = 1; // Seed has only 1 per family
+        let config = GateConfig {
+            min_per_family: 1, // Seed has only 1 per family
+            ..GateConfig::default()
+        };
         let gate = WorkloadCorpusGate::new(config);
         let report = gate.evaluate(&corpus);
         assert!(report.verdict.permits_publication());
@@ -1775,8 +1777,10 @@ mod tests {
                 DivergenceClass::SemanticDivergence,
             ));
         }
-        let mut config = GateConfig::default();
-        config.min_per_family = 1;
+        let config = GateConfig {
+            min_per_family: 1,
+            ..GateConfig::default()
+        };
         let gate = WorkloadCorpusGate::new(config);
         let report = gate.evaluate(&corpus);
         assert!(!report.verdict.permits_publication());
@@ -1786,8 +1790,10 @@ mod tests {
     fn missing_baseline_fails_gate() {
         let corpus = build_seed_corpus();
         // No equivalence results at all
-        let mut config = GateConfig::default();
-        config.min_per_family = 1;
+        let config = GateConfig {
+            min_per_family: 1,
+            ..GateConfig::default()
+        };
         let gate = WorkloadCorpusGate::new(config);
         let report = gate.evaluate(&corpus);
         assert!(!report.verdict.permits_publication());
@@ -1932,8 +1938,10 @@ mod tests {
             };
             corpus.record_equivalence(make_equivalence(id, BaselineRuntime::NodeJs, class));
         }
-        let mut config = GateConfig::default();
-        config.min_per_family = 1;
+        let config = GateConfig {
+            min_per_family: 1,
+            ..GateConfig::default()
+        };
         let gate = WorkloadCorpusGate::new(config);
         let report = gate.evaluate(&corpus);
         // 8 acceptable out of 16 = 500_000
@@ -1975,9 +1983,14 @@ mod tests {
                 DivergenceClass::Identical,
             ));
         }
-        let mut config = GateConfig::default();
-        config.min_per_family = 1;
-        config.required_baselines.insert(BaselineRuntime::Bun);
+        let default_cfg = GateConfig::default();
+        let mut baselines = default_cfg.required_baselines.clone();
+        baselines.insert(BaselineRuntime::Bun);
+        let config = GateConfig {
+            min_per_family: 1,
+            required_baselines: baselines,
+            ..default_cfg
+        };
         let gate = WorkloadCorpusGate::new(config);
         let report = gate.evaluate(&corpus);
         assert!(report.verdict.permits_publication());
@@ -1993,8 +2006,10 @@ mod tests {
                 DivergenceClass::CosmeticOnly,
             ));
         }
-        let mut config = GateConfig::default();
-        config.min_per_family = 1;
+        let config = GateConfig {
+            min_per_family: 1,
+            ..GateConfig::default()
+        };
         let gate = WorkloadCorpusGate::new(config);
         let report = gate.evaluate(&corpus);
         assert!(report.verdict.permits_publication());

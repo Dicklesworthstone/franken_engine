@@ -786,19 +786,20 @@ impl ArrayFastLaneEngine {
         let epoch = self.epoch;
         if let Some(lane) = self.array_lanes.get_mut(array_id) {
             lane.record_oob();
-            if lane.access_count >= min_access && lane.oob_rate_millionths() > max_oob {
-                if lane.fast_lane_active {
-                    lane.deopt(
-                        DeoptReason::ExcessiveOob {
-                            oob_rate_millionths: lane.oob_rate_millionths(),
-                        },
-                        epoch,
-                        trigger_offset,
-                    );
-                    let record = lane.deopt_records.last().cloned();
-                    if let Some(r) = record {
-                        self.deopt_log.push(r);
-                    }
+            if lane.access_count >= min_access
+                && lane.oob_rate_millionths() > max_oob
+                && lane.fast_lane_active
+            {
+                lane.deopt(
+                    DeoptReason::ExcessiveOob {
+                        oob_rate_millionths: lane.oob_rate_millionths(),
+                    },
+                    epoch,
+                    trigger_offset,
+                );
+                let record = lane.deopt_records.last().cloned();
+                if let Some(r) = record {
+                    self.deopt_log.push(r);
                 }
             }
             true

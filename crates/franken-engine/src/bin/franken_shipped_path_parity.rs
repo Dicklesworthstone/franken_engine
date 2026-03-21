@@ -524,6 +524,13 @@ fn default_frankenctl_bin() -> Result<PathBuf, String> {
     Ok(bin_dir.join(frankenctl_name))
 }
 
+fn replay_run_dir_command(run_dir: &Path) -> String {
+    format!(
+        "FRANKEN_SHIPPED_PATH_PARITY_REPLAY_RUN_DIR={} ./scripts/e2e/franken_shipped_path_parity_replay.sh",
+        run_dir.display()
+    )
+}
+
 fn execute_parity(args: &CliArgs) -> Result<CliOutputSummary, String> {
     let context = DeterministicTestContext::new(
         PARITY_SCENARIO_ID,
@@ -647,12 +654,14 @@ fn execute_parity(args: &CliArgs) -> Result<CliOutputSummary, String> {
         },
     )?;
 
+    let replay_command = replay_run_dir_command(&run_dir);
+    commands.push(replay_command.clone());
     let manifest = HarnessRunManifest::from_context(
         &context,
         run_id.clone(),
         events.len(),
         commands.len(),
-        "./scripts/e2e/franken_shipped_path_parity_replay.sh run",
+        replay_command,
         current_unix_ms(),
     );
     write_artifact_triad(&args.out_dir, &manifest, &events, &commands)

@@ -581,6 +581,20 @@ fn interference_metadata_different_entries_different_hash() {
 }
 
 #[test]
+fn interference_metadata_different_detail_different_hash() {
+    let mut changed = make_interference("x", "y", RuleInterferenceKind::PatternConflict, false);
+    changed.detail = "rewritten detail".into();
+    let m1 = InterferenceMetadata::build(vec![make_interference(
+        "x",
+        "y",
+        RuleInterferenceKind::PatternConflict,
+        false,
+    )]);
+    let m2 = InterferenceMetadata::build(vec![changed]);
+    assert_ne!(m1.content_hash, m2.content_hash);
+}
+
+#[test]
 fn interference_metadata_serde_roundtrip() {
     let meta = InterferenceMetadata::build(vec![
         make_interference("r1", "r2", RuleInterferenceKind::OrderDependent, true),
@@ -798,6 +812,42 @@ fn pack_different_rules_different_hash() {
 fn pack_different_id_different_hash() {
     let p1 = make_pack("id-a", vec![]);
     let p2 = make_pack("id-b", vec![]);
+    assert_ne!(p1.content_hash, p2.content_hash);
+}
+
+#[test]
+fn pack_different_cost_model_id_different_hash() {
+    let rules = vec![enabled_rule("r1", RewriteCategory::Custom, true)];
+    let p1 = RewritePack::new(
+        "same-id",
+        PackVersion::CURRENT,
+        test_epoch(),
+        "desc",
+        rules.clone(),
+        empty_interference(),
+        "cost-a",
+    );
+    let p2 = RewritePack::new(
+        "same-id",
+        PackVersion::CURRENT,
+        test_epoch(),
+        "desc",
+        rules,
+        empty_interference(),
+        "cost-b",
+    );
+    assert_ne!(p1.content_hash, p2.content_hash);
+}
+
+#[test]
+fn pack_different_rule_metadata_different_hash() {
+    let p1 = make_pack(
+        "same-id",
+        vec![enabled_rule("r1", RewriteCategory::Custom, true)],
+    );
+    let mut changed = enabled_rule("r1", RewriteCategory::Custom, true);
+    changed.enabled = false;
+    let p2 = make_pack("same-id", vec![changed]);
     assert_ne!(p1.content_hash, p2.content_hash);
 }
 

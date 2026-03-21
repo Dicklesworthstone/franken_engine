@@ -236,7 +236,7 @@ impl DeterministicCostModel {
         let mut hasher = Sha256::new();
         hasher.update(model_id.as_bytes());
         for (class, &cost) in instruction_costs {
-            hasher.update([*class as u8]);
+            hasher.update(class.to_string().as_bytes());
             hasher.update(cost.to_le_bytes());
         }
         for (rule_id, &gain) in rule_gains {
@@ -423,8 +423,9 @@ impl InterferenceMetadata {
         for entry in entries {
             hasher.update(entry.rule_a.as_bytes());
             hasher.update(entry.rule_b.as_bytes());
-            hasher.update([entry.kind as u8]);
+            hasher.update(entry.kind.to_string().as_bytes());
             hasher.update([u8::from(entry.is_blocking)]);
+            hasher.update(entry.detail.as_bytes());
         }
         ContentHash::compute(&hasher.finalize())
     }
@@ -475,7 +476,15 @@ impl RewritePack {
         let categories: BTreeSet<RewriteCategory> = rules.iter().map(|r| r.category).collect();
         let proven_sound_count = rules.iter().filter(|r| r.proven_sound).count();
 
-        let content_hash = Self::compute_hash(pack_id, version, epoch, &rules);
+        let content_hash = Self::compute_hash(
+            pack_id,
+            version,
+            epoch,
+            description,
+            &rules,
+            &interference,
+            cost_model_id,
+        );
 
         Self {
             schema_version: PACK_SCHEMA_VERSION.into(),
@@ -533,17 +542,31 @@ impl RewritePack {
         pack_id: &str,
         version: PackVersion,
         epoch: SecurityEpoch,
+        description: &str,
         rules: &[RewriteRuleEntry],
+        interference: &InterferenceMetadata,
+        cost_model_id: &str,
     ) -> ContentHash {
         let mut hasher = Sha256::new();
         hasher.update(pack_id.as_bytes());
         hasher.update(version.major.to_le_bytes());
         hasher.update(version.minor.to_le_bytes());
         hasher.update(epoch.as_u64().to_le_bytes());
+        hasher.update(description.as_bytes());
+        hasher.update(cost_model_id.as_bytes());
+        hasher.update(interference.content_hash.as_bytes());
         for rule in rules {
             hasher.update(rule.rule_id.as_bytes());
+            hasher.update(rule.category.to_string().as_bytes());
+            hasher.update(rule.description.as_bytes());
             hasher.update(rule.pattern_hash.as_bytes());
             hasher.update(rule.replacement_hash.as_bytes());
+            hasher.update([u8::from(rule.proven_sound)]);
+            hasher.update(rule.priority_millionths.to_le_bytes());
+            for class in &rule.affected_cost_classes {
+                hasher.update(class.to_string().as_bytes());
+            }
+            hasher.update([u8::from(rule.enabled)]);
         }
         ContentHash::compute(&hasher.finalize())
     }
@@ -933,6 +956,19 @@ mod tests {
         assert_eq!(m1.content_hash, m2.content_hash);
     }
 
+    #[test]
+    fn interference_metadata_detail_changes_hash() {
+        let mut changed = test_interference("x", "y", RuleInterferenceKind::PatternConflict);
+        changed.detail = "rewritten detail".to_string();
+        let m1 = InterferenceMetadata::build(vec![test_interference(
+            "x",
+            "y",
+            RuleInterferenceKind::PatternConflict,
+        )]);
+        let m2 = InterferenceMetadata::build(vec![changed]);
+        assert_ne!(m1.content_hash, m2.content_hash);
+    }
+
     // --- RewritePack ---
 
     #[test]
@@ -1217,6 +1253,39 @@ mod tests {
     fn pack_content_hash_changes_with_rules() {
         let p1 = test_pack("same", vec![]);
         let p2 = test_pack("same", vec![test_rule("r1", RewriteCategory::Custom, true)]);
+        assert_ne!(p1.content_hash, p2.content_hash);
+    }
+
+    #[test]
+    fn pack_content_hash_changes_with_cost_model_id() {
+        let rules = vec![test_rule("r1", RewriteCategory::Custom, true)];
+        let p1 = RewritePack::new(
+            "same",
+            PackVersion::CURRENT,
+            test_epoch(),
+            "desc",
+            rules.clone(),
+            InterferenceMetadata::build(vec![]),
+            "cost-a",
+        );
+        let p2 = RewritePack::new(
+            "same",
+            PackVersion::CURRENT,
+            test_epoch(),
+            "desc",
+            rules,
+            InterferenceMetadata::build(vec![]),
+            "cost-b",
+        );
+        assert_ne!(p1.content_hash, p2.content_hash);
+    }
+
+    #[test]
+    fn pack_content_hash_changes_with_rule_metadata() {
+        let p1 = test_pack("same", vec![test_rule("r1", RewriteCategory::Custom, true)]);
+        let mut changed = test_rule("r1", RewriteCategory::Custom, true);
+        changed.enabled = false;
+        let p2 = test_pack("same", vec![changed]);
         assert_ne!(p1.content_hash, p2.content_hash);
     }
 

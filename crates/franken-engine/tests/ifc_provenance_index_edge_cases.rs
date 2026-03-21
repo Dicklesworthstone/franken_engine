@@ -125,10 +125,34 @@ fn claim(id: &str, ext: &str, strength: ClaimStrength, epoch: u64) -> Confinemen
 // =========================================================================
 
 #[test]
+fn blank_extension_id_rejected_for_flow_event() {
+    let mut idx = make_index();
+    let c = ctx();
+    let ev = event(
+        "e1",
+        "   ",
+        Label::Public,
+        Label::Internal,
+        FlowDecision::Allowed,
+    );
+    let err = idx.insert_flow_event(&ev, &c).unwrap_err();
+    assert_eq!(err, ProvenanceError::EmptyExtensionId);
+}
+
+#[test]
 fn empty_extension_id_rejected_for_flow_proof() {
     let mut idx = make_index();
     let c = ctx();
     let p = proof("p1", "", Label::Public, Label::Internal, 1);
+    let err = idx.insert_flow_proof(&p, &c).unwrap_err();
+    assert_eq!(err, ProvenanceError::EmptyExtensionId);
+}
+
+#[test]
+fn blank_extension_id_rejected_for_flow_proof() {
+    let mut idx = make_index();
+    let c = ctx();
+    let p = proof("p1", "   ", Label::Public, Label::Internal, 1);
     let err = idx.insert_flow_proof(&p, &c).unwrap_err();
     assert_eq!(err, ProvenanceError::EmptyExtensionId);
 }
@@ -195,10 +219,64 @@ fn blank_decision_contract_id_rejected_for_declass_receipt() {
 }
 
 #[test]
+fn declassified_flow_event_without_receipt_ref_rejected() {
+    let mut idx = make_index();
+    let c = ctx();
+    let ev = event(
+        "ev-missing-ref",
+        "ext-a",
+        Label::Confidential,
+        Label::Public,
+        FlowDecision::Declassified,
+    );
+
+    let err = idx.insert_flow_event(&ev, &c).unwrap_err();
+    assert_eq!(
+        err,
+        ProvenanceError::EmptyRequiredField {
+            record_type: "flow_event".to_string(),
+            field_name: "receipt_ref".to_string(),
+        }
+    );
+}
+
+#[test]
+fn declassified_flow_event_with_blank_receipt_ref_rejected() {
+    let mut idx = make_index();
+    let c = ctx();
+    let mut ev = event(
+        "ev-blank-ref",
+        "ext-a",
+        Label::Confidential,
+        Label::Public,
+        FlowDecision::Declassified,
+    );
+    ev.receipt_ref = Some("   ".to_string());
+
+    let err = idx.insert_flow_event(&ev, &c).unwrap_err();
+    assert_eq!(
+        err,
+        ProvenanceError::EmptyRequiredField {
+            record_type: "flow_event".to_string(),
+            field_name: "receipt_ref".to_string(),
+        }
+    );
+}
+
+#[test]
 fn empty_extension_id_rejected_for_confinement_claim() {
     let mut idx = make_index();
     let c = ctx();
     let cl = claim("c1", "", ClaimStrength::Full, 1);
+    let err = idx.insert_confinement_claim(&cl, &c).unwrap_err();
+    assert_eq!(err, ProvenanceError::EmptyExtensionId);
+}
+
+#[test]
+fn blank_extension_id_rejected_for_confinement_claim() {
+    let mut idx = make_index();
+    let c = ctx();
+    let cl = claim("c1", "   ", ClaimStrength::Full, 1);
     let err = idx.insert_confinement_claim(&cl, &c).unwrap_err();
     assert_eq!(err, ProvenanceError::EmptyExtensionId);
 }
@@ -439,13 +517,17 @@ fn declassified_events_appear_in_lineage() {
     let c = ctx();
 
     idx.insert_flow_event(
-        &event(
-            "declass-ev",
-            "ext-a",
-            Label::Secret,
-            Label::Public,
-            FlowDecision::Declassified,
-        ),
+        &{
+            let mut ev = event(
+                "declass-ev",
+                "ext-a",
+                Label::Secret,
+                Label::Public,
+                FlowDecision::Declassified,
+            );
+            ev.receipt_ref = Some("receipt-declass-ev".to_string());
+            ev
+        },
         &c,
     )
     .unwrap();
@@ -995,6 +1077,33 @@ fn flow_event_fields_preserved() {
 }
 
 #[test]
+fn flow_event_extension_id_trimmed_before_persisting() {
+    let mut idx = make_index();
+    let c = ctx();
+
+    let ev = FlowEventRecord {
+        event_id: "ev-trimmed-ext".to_string(),
+        extension_id: "  ext-fields  ".to_string(),
+        source_label: Label::Confidential,
+        sink_clearance: Label::Internal,
+        flow_location: "crates/test/src/lib.rs:42".to_string(),
+        decision: FlowDecision::Allowed,
+        receipt_ref: None,
+        timestamp_ms: 987_654_321,
+    };
+    idx.insert_flow_event(&ev, &c).unwrap();
+
+    let got = idx.get_flow_event("ev-trimmed-ext", &c).unwrap().unwrap();
+    assert_eq!(got.extension_id, "ext-fields");
+    assert_eq!(
+        idx.flow_events_by_extension("ext-fields", &c)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn flow_proof_fields_preserved() {
     let mut idx = make_index();
     let c = ctx();
@@ -1016,6 +1125,34 @@ fn flow_proof_fields_preserved() {
     assert_eq!(got.sink_clearance, Label::Confidential);
     assert_eq!(got.proof_method, ProofMethod::StaticAnalysis);
     assert_eq!(got.epoch_id, 42);
+}
+
+#[test]
+fn flow_proof_extension_id_trimmed_before_persisting() {
+    let mut idx = make_index();
+    let c = ctx();
+
+    let p = FlowProofRecord {
+        proof_id: "proof-trimmed-ext".to_string(),
+        extension_id: "  ext-fields  ".to_string(),
+        source_label: Label::Secret,
+        sink_clearance: Label::Confidential,
+        proof_method: ProofMethod::StaticAnalysis,
+        epoch_id: 42,
+    };
+    idx.insert_flow_proof(&p, &c).unwrap();
+
+    let got = idx
+        .get_flow_proof("proof-trimmed-ext", &c)
+        .unwrap()
+        .unwrap();
+    assert_eq!(got.extension_id, "ext-fields");
+    assert_eq!(
+        idx.flow_proofs_by_extension("ext-fields", &c)
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -1070,6 +1207,32 @@ fn confinement_claim_fields_preserved() {
     assert_eq!(got.extension_id, "ext-fields");
     assert_eq!(got.claim_strength, ClaimStrength::Full);
     assert_eq!(got.epoch_id, 99);
+}
+
+#[test]
+fn confinement_claim_extension_id_trimmed_before_persisting() {
+    let mut idx = make_index();
+    let c = ctx();
+
+    let cl = ConfinementClaimRecord {
+        claim_id: "claim-trimmed-ext".to_string(),
+        extension_id: "  ext-fields  ".to_string(),
+        claim_strength: ClaimStrength::Full,
+        epoch_id: 99,
+    };
+    idx.insert_confinement_claim(&cl, &c).unwrap();
+
+    let got = idx
+        .get_confinement_claim("claim-trimmed-ext", &c)
+        .unwrap()
+        .unwrap();
+    assert_eq!(got.extension_id, "ext-fields");
+    assert_eq!(
+        idx.confinement_claims_by_extension("ext-fields", &c)
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 // =========================================================================

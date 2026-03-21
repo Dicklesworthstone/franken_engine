@@ -282,13 +282,19 @@ impl CheckpointGuard {
     }
 
     /// Insert an explicit checkpoint (e.g., at a logical boundary).
+    ///
+    /// Explicit checkpoints still honor cancellation and total-iteration budget
+    /// limits so a loop cannot bypass hard-stop policy by only using manual
+    /// checkpoint sites.
     pub fn explicit_checkpoint(&mut self) -> CheckpointAction {
-        let action = if self.token.is_cancelled() {
-            CheckpointAction::Drain
+        let (reason, action) = if self.token.is_cancelled() {
+            (CheckpointReason::CancelPending, CheckpointAction::Drain)
+        } else if self.total_iterations >= self.config.max_total_iterations {
+            (CheckpointReason::BudgetExhausted, CheckpointAction::Abort)
         } else {
-            CheckpointAction::Continue
+            (CheckpointReason::Explicit, CheckpointAction::Continue)
         };
-        self.emit_event(CheckpointReason::Explicit, action);
+        self.emit_event(reason, action);
         self.iterations_since_checkpoint = 0;
         action
     }
@@ -332,7 +338,7 @@ impl CheckpointGuard {
 // ---------------------------------------------------------------------------
 
 /// Records which loop sites have checkpoint instrumentation.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckpointCoverage {
     /// Map from loop site name -> whether it has checkpoint instrumentation.
     coverage: BTreeMap<String, bool>,
@@ -387,6 +393,12 @@ impl CheckpointCoverage {
     /// Number of covered sites.
     pub fn covered_count(&self) -> usize {
         self.coverage.values().filter(|&&v| v).count()
+    }
+}
+
+impl Default for CheckpointCoverage {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -591,6 +603,53 @@ mod tests {
         token.cancel();
         let action = guard.explicit_checkpoint();
         assert_eq!(action, CheckpointAction::Drain);
+        let events = guard.drain_events();
+        assert_eq!(events[0].reason, CheckpointReason::CancelPending);
+    }
+
+    #[test]
+    fn explicit_checkpoint_respects_budget_exhaustion() {
+        let token = CancellationToken::new();
+        let mut guard = CheckpointGuard::new(
+            LoopSite::IrCompilation,
+            "compiler",
+            "t",
+            DensityConfig {
+                max_iterations: 1_000,
+                max_total_iterations: 3,
+            },
+            token,
+        );
+        for _ in 0..3 {
+            guard.tick();
+        }
+        let action = guard.explicit_checkpoint();
+        assert_eq!(action, CheckpointAction::Abort);
+        let events = guard.drain_events();
+        assert_eq!(events[0].reason, CheckpointReason::BudgetExhausted);
+    }
+
+    #[test]
+    fn explicit_checkpoint_cancel_priority_over_budget() {
+        let token = CancellationToken::new();
+        let mut guard = CheckpointGuard::new(
+            LoopSite::GcScanning,
+            "gc",
+            "t",
+            DensityConfig {
+                max_iterations: 1_000,
+                max_total_iterations: 2,
+            },
+            token.clone(),
+        );
+        for _ in 0..2 {
+            guard.tick();
+        }
+        token.cancel();
+        let action = guard.explicit_checkpoint();
+        assert_eq!(action, CheckpointAction::Drain);
+        let events = guard.drain_events();
+        assert_eq!(events[0].reason, CheckpointReason::CancelPending);
     }
 
     // -- CheckpointGuard: event structure --
@@ -879,10 +938,11 @@ mod tests {
     }
 
     #[test]
-    fn coverage_default_is_empty() {
+    fn coverage_default_matches_new_contract() {
         let cov = CheckpointCoverage::default();
-        assert!(cov.all_covered());
-        assert_eq!(cov.total(), 0);
+        assert!(!cov.all_covered());
+        assert_eq!(cov.total(), 10);
+        assert_eq!(cov.covered_count(), 0);
     }
 
     #[test]
@@ -1087,7 +1147,7 @@ mod tests {
         assert_eq!(action, CheckpointAction::Drain);
         let events = guard.drain_events();
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].reason, CheckpointReason::Explicit);
+        assert_eq!(events[0].reason, CheckpointReason::CancelPending);
         assert_eq!(events[0].action, CheckpointAction::Drain);
     }
 
@@ -1841,13 +1901,12 @@ mod tests {
     }
 
     #[test]
-    fn coverage_default_all_covered_trivially() {
-        // Default coverage has no mandatory sites, so all_covered() = true vacuously
+    fn coverage_default_matches_mandatory_contract() {
         let cov = CheckpointCoverage::default();
-        assert!(cov.all_covered());
-        assert_eq!(cov.total(), 0);
+        assert!(!cov.all_covered());
+        assert_eq!(cov.total(), 10);
         assert_eq!(cov.covered_count(), 0);
-        assert!(cov.uncovered().is_empty());
+        assert_eq!(cov.uncovered().len(), 10);
     }
 
     #[test]
@@ -1856,7 +1915,7 @@ mod tests {
         let json = serde_json::to_string(&cov).unwrap();
         let restored: CheckpointCoverage = serde_json::from_str(&json).unwrap();
         assert_eq!(cov, restored);
-        assert!(restored.all_covered());
+        assert!(!restored.all_covered());
     }
 
     #[test]

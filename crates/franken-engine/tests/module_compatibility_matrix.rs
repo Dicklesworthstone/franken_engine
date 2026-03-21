@@ -11,7 +11,7 @@
     clippy::manual_abs_diff
 )]
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, fs, path::PathBuf};
 
 use frankenengine_engine::feature_parity_tracker::{
     FeatureParityTracker, TrackerContext, WaiverRecord,
@@ -28,6 +28,10 @@ fn context() -> CompatibilityContext {
         "decision-modcompat-integration",
         "policy-modcompat-integration",
     )
+}
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
 #[test]
@@ -174,6 +178,90 @@ fn canonical_hash_is_stable_across_reloads() {
     let a = ModuleCompatibilityMatrix::from_default_json().expect("load default matrix a");
     let b = ModuleCompatibilityMatrix::from_default_json().expect("load default matrix b");
     assert_eq!(a.canonical_hash(), b.canonical_hash());
+}
+
+#[test]
+fn module_interop_gate_script_surfaces_replay_and_trace_artifacts() {
+    let path = repo_root().join("scripts/run_rgc_module_interop_verification_matrix.sh");
+    let script = fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+
+    assert!(
+        script.contains(
+            "replay_command=\"./scripts/e2e/rgc_module_interop_verification_matrix_replay.sh ${mode}\""
+        ),
+        "gate script must reference the replay wrapper"
+    );
+    assert!(
+        script
+            .contains("module_resolution_trace_path=\"${run_dir}/module_resolution_trace.jsonl\""),
+        "gate script must define the module resolution trace artifact path"
+    );
+    assert!(
+        script.contains("\"module_resolution_trace\": \"${module_resolution_trace_path}\""),
+        "run manifest must publish the module resolution trace artifact path"
+    );
+    assert!(
+        script.contains("cat ${commands_path}"),
+        "operator verification must surface the commands artifact"
+    );
+    assert!(
+        script.contains("cat ${module_resolution_trace_path}"),
+        "operator verification must surface the module resolution trace artifact"
+    );
+    assert!(
+        script.contains("rgc module interop verification matrix commands: ${commands_path}"),
+        "gate script must print the commands artifact path"
+    );
+    assert!(
+        script.contains(
+            "rgc module interop verification matrix module resolution trace: ${module_resolution_trace_path}"
+        ),
+        "gate script must print the module resolution trace artifact path"
+    );
+}
+
+#[test]
+fn module_interop_replay_wrapper_requires_complete_bundle() {
+    let path = repo_root().join("scripts/e2e/rgc_module_interop_verification_matrix_replay.sh");
+    let script = fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+
+    for required in [
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "module_resolution_trace.jsonl",
+    ] {
+        assert!(
+            script.contains(required),
+            "replay wrapper must require {required}"
+        );
+    }
+
+    assert!(
+        script.contains("latest_complete_run_dir()"),
+        "replay wrapper must scan for the latest complete bundle"
+    );
+    assert!(
+        script.contains("newest directory")
+            && script.contains("is incomplete")
+            && script.contains("complete run directory"),
+        "replay wrapper must fail closed on incomplete artifact bundles"
+    );
+    assert!(
+        script.contains("gate exited with status")
+            && script.contains("replay output reflects latest complete run directory"),
+        "replay wrapper must warn when it falls back to an older complete run after a failed gate invocation"
+    );
+    assert!(
+        script.contains("latest module resolution trace"),
+        "replay wrapper must print the module resolution trace artifact"
+    );
+    assert!(
+        script.contains("rgc_module_resolution_trace_contract_smoke.sh"),
+        "replay wrapper must re-run the trace smoke contract"
+    );
 }
 
 // ---------- context helper ----------

@@ -232,6 +232,14 @@ enum FinallyMode {
     Return,
 }
 
+/// A suspended abrupt completion that should resume if a newer one is later
+/// consumed locally.
+#[derive(Debug, Clone)]
+enum AbruptCompletion {
+    Exception(Value),
+    Return(Value),
+}
+
 /// A call stack frame.
 #[derive(Debug, Clone)]
 struct CallFrame {
@@ -253,6 +261,8 @@ struct CallFrame {
     saved_pending_exception: Option<Value>,
     /// Caller return state saved for the same reason.
     saved_pending_return: Option<Value>,
+    /// Count of suspended abrupt completions before entering the callee.
+    saved_suspended_abrupt_depth: usize,
     /// Count of active finally modes before entering the callee.
     saved_finally_mode_depth: usize,
 }
@@ -424,6 +434,13 @@ pub struct ExecutionResult {
     pub events: Vec<InterpreterEvent>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExecutionSeed {
+    registers: Vec<Value>,
+    heap: Vec<HeapObject>,
+    function_prototypes: BTreeMap<u32, ObjectId>,
+}
+
 // ---------------------------------------------------------------------------
 // InterpreterCore — shared execution engine
 // ---------------------------------------------------------------------------
@@ -464,10 +481,19 @@ pub struct InterpreterCore {
     pending_exception: Option<Value>,
     /// A pending return value during unwinding through finally blocks.
     pending_return: Option<Value>,
+    /// Saved outer abrupt completion state that was temporarily suspended by a
+    /// newer local throw/return or by exception unwinding across nested calls
+    /// or intermediary finally blocks. If the newer abrupt completion is
+    /// consumed locally, the most recent suspended completion resumes.
+    suspended_abrupt_completions: Vec<AbruptCompletion>,
     /// Stack of finally-entry modes.  Pushed by `EnterFinally`, popped by
     /// `EndFinally`.  When `Exception`, `EndFinally` re-throws the pending
     /// exception.
     finally_modes: Vec<FinallyMode>,
+    /// Pre-run caller-visible seed used for the most recent execute().
+    last_pre_run_seed: Option<ExecutionSeed>,
+    /// Caller-visible state immediately after the most recent execute().
+    last_post_run_seed: Option<ExecutionSeed>,
 }
 
 impl InterpreterCore {
@@ -492,13 +518,26 @@ impl InterpreterCore {
             catch_frames: Vec::new(),
             pending_exception: None,
             pending_return: None,
+            suspended_abrupt_completions: Vec::new(),
             finally_modes: Vec::new(),
+            last_pre_run_seed: None,
+            last_post_run_seed: None,
         }
     }
 
     /// Execute an IR3 module and return the result.
     pub fn execute(&mut self, module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
-        self.reset_execution_state();
+        let current_seed = self.capture_execution_seed();
+        let seed = match (&self.last_pre_run_seed, &self.last_post_run_seed) {
+            (Some(previous_pre_run), Some(previous_post_run))
+                if current_seed == *previous_post_run =>
+            {
+                previous_pre_run.clone()
+            }
+            _ => current_seed,
+        };
+        self.last_pre_run_seed = Some(seed.clone());
+        self.reset_execution_state_from_seed(&seed);
 
         self.push_event("execution_started", "ok", None);
 
@@ -513,36 +552,57 @@ impl InterpreterCore {
                 self.push_event("execution_failed", "fail", Some(&format!("{e}")));
             }
         }
+        self.last_post_run_seed = Some(self.capture_execution_seed());
 
-        let final_value = match result {
-            Ok(v) => v,
+        let outcome = match result {
+            Ok(v) => {
+                self.emit_witness(WitnessEventKind::ExecutionCompleted, None);
+
+                Ok(ExecutionResult {
+                    value: v,
+                    instructions_executed: self.instructions_executed,
+                    witness_events: std::mem::take(&mut self.witness_events),
+                    hostcall_decisions: std::mem::take(&mut self.hostcall_decisions),
+                    events: std::mem::take(&mut self.events),
+                })
+            }
             Err(InterpreterError::Halted) => {
                 // Halt is normal termination; return whatever is in r0.
-                self.read_reg(0).unwrap_or(Value::Undefined)
+                let final_value = self.read_reg(0).unwrap_or(Value::Undefined);
+                self.emit_witness(WitnessEventKind::ExecutionCompleted, None);
+
+                Ok(ExecutionResult {
+                    value: final_value,
+                    instructions_executed: self.instructions_executed,
+                    witness_events: std::mem::take(&mut self.witness_events),
+                    hostcall_decisions: std::mem::take(&mut self.hostcall_decisions),
+                    events: std::mem::take(&mut self.events),
+                })
             }
-            Err(e) => return Err(e),
+            Err(e) => Err(e),
         };
-
-        self.emit_witness(WitnessEventKind::ExecutionCompleted, None);
-
-        Ok(ExecutionResult {
-            value: final_value,
-            instructions_executed: self.instructions_executed,
-            witness_events: std::mem::take(&mut self.witness_events),
-            hostcall_decisions: std::mem::take(&mut self.hostcall_decisions),
-            events: std::mem::take(&mut self.events),
-        })
+        outcome
     }
 
-    fn reset_execution_state(&mut self) {
+    fn capture_execution_seed(&self) -> ExecutionSeed {
         let max_regs = self.config.max_registers as usize;
+        let mut registers = self.registers.clone();
+        registers.resize(max_regs, Value::Undefined);
+        registers.truncate(max_regs);
+        ExecutionSeed {
+            registers,
+            heap: self.heap.clone(),
+            function_prototypes: self.function_prototypes.clone(),
+        }
+    }
+
+    fn reset_execution_state_from_seed(&mut self, seed: &ExecutionSeed) {
         self.register_base = 0;
-        self.registers.resize(max_regs, Value::Undefined);
-        self.registers.fill(Value::Undefined);
+        self.registers = seed.registers.clone();
         self.call_stack.clear();
-        self.heap.clear();
+        self.heap = seed.heap.clone();
         self.iterators.clear();
-        self.function_prototypes.clear();
+        self.function_prototypes = seed.function_prototypes.clone();
         self.ip = 0;
         self.instructions_executed = 0;
         self.witness_events.clear();
@@ -552,6 +612,7 @@ impl InterpreterCore {
         self.catch_frames.clear();
         self.pending_exception = None;
         self.pending_return = None;
+        self.suspended_abrupt_completions.clear();
         self.finally_modes.clear();
     }
 
@@ -564,6 +625,8 @@ impl InterpreterCore {
             .retain(|frame| frame.call_depth < current_depth);
         if let Some(frame) = self.call_stack.pop() {
             self.register_base = frame.register_base;
+            self.suspended_abrupt_completions
+                .truncate(frame.saved_suspended_abrupt_depth);
             self.finally_modes.truncate(frame.saved_finally_mode_depth);
             self.pending_exception = frame.saved_pending_exception;
             self.pending_return = frame.saved_pending_return;
@@ -582,18 +645,35 @@ impl InterpreterCore {
             self.ip = frame.return_ip;
             Ok(None)
         } else {
+            self.pending_exception = None;
+            self.pending_return = None;
+            self.suspended_abrupt_completions.clear();
             self.finally_modes.clear();
             Ok(Some(return_val))
         }
     }
 
-    fn unwind_call_stack_to(&mut self, target_depth: usize) {
+    fn unwind_call_stack_to(&mut self, target_depth: usize) -> (Option<Value>, Option<Value>) {
+        let mut restored_pending_exception = None;
+        let mut restored_pending_return = None;
+        let mut restored_suspended_abrupt_depth = None;
         while self.call_stack.len() > target_depth {
             if let Some(frame) = self.call_stack.pop() {
                 self.register_base = frame.register_base;
                 self.finally_modes.truncate(frame.saved_finally_mode_depth);
+                if restored_pending_exception.is_none() {
+                    restored_pending_exception = frame.saved_pending_exception;
+                }
+                if restored_pending_return.is_none() {
+                    restored_pending_return = frame.saved_pending_return;
+                }
+                restored_suspended_abrupt_depth = Some(frame.saved_suspended_abrupt_depth);
             }
         }
+        if let Some(depth) = restored_suspended_abrupt_depth {
+            self.suspended_abrupt_completions.truncate(depth);
+        }
+        (restored_pending_exception, restored_pending_return)
     }
 
     fn pop_current_try_frame(&mut self) -> Option<CatchFrame> {
@@ -615,8 +695,69 @@ impl InterpreterCore {
             .rposition(|f| f.call_depth <= current_depth)?;
         let frame = self.catch_frames[idx].clone();
         self.catch_frames.truncate(idx);
-        self.unwind_call_stack_to(frame.call_depth);
+        let (restored_pending_exception, restored_pending_return) =
+            self.unwind_call_stack_to(frame.call_depth);
+        self.suspend_abrupt_completion(restored_pending_exception, restored_pending_return);
         Some(frame)
+    }
+
+    fn take_current_abrupt_completion(&mut self) -> Option<AbruptCompletion> {
+        if let Some(exception) = self.pending_exception.take() {
+            self.pending_return = None;
+            Some(AbruptCompletion::Exception(exception))
+        } else {
+            self.pending_return.take().map(AbruptCompletion::Return)
+        }
+    }
+
+    fn suspend_abrupt_completion(
+        &mut self,
+        pending_exception: Option<Value>,
+        pending_return: Option<Value>,
+    ) {
+        debug_assert!(
+            pending_exception.is_none() || pending_return.is_none(),
+            "only one abrupt completion should be active at a time"
+        );
+
+        match (pending_exception, pending_return) {
+            (Some(exception), None) => self
+                .suspended_abrupt_completions
+                .push(AbruptCompletion::Exception(exception)),
+            (None, Some(return_val)) => self
+                .suspended_abrupt_completions
+                .push(AbruptCompletion::Return(return_val)),
+            (None, None) => {}
+            (Some(exception), Some(return_val)) => {
+                self.suspended_abrupt_completions
+                    .push(AbruptCompletion::Exception(exception));
+                self.suspended_abrupt_completions
+                    .push(AbruptCompletion::Return(return_val));
+            }
+        }
+    }
+
+    fn suspend_current_abrupt_completion(&mut self) {
+        if let Some(completion) = self.take_current_abrupt_completion() {
+            self.suspended_abrupt_completions.push(completion);
+        }
+    }
+
+    fn restore_suspended_abrupt_completion(&mut self) {
+        if self.pending_exception.is_some() || self.pending_return.is_some() {
+            return;
+        }
+
+        if let Some(completion) = self.suspended_abrupt_completions.pop() {
+            match completion {
+                AbruptCompletion::Exception(exception) => {
+                    self.pending_exception = Some(exception);
+                }
+                AbruptCompletion::Return(return_val) => {
+                    self.pending_return = Some(return_val);
+                }
+            }
+        }
     }
 
     fn pop_current_finally_target(&mut self) -> Option<usize> {
@@ -808,6 +949,9 @@ impl InterpreterCore {
                                 construct_this: None,
                                 saved_pending_exception: self.pending_exception.take(),
                                 saved_pending_return: self.pending_return.take(),
+                                saved_suspended_abrupt_depth: self
+                                    .suspended_abrupt_completions
+                                    .len(),
                                 saved_finally_mode_depth: self.finally_modes.len(),
                             });
 
@@ -842,6 +986,7 @@ impl InterpreterCore {
                     // exception, and a return from inside try/catch must still
                     // unwind through enclosing finally blocks before it can
                     // complete.
+                    self.suspend_current_abrupt_completion();
                     self.pending_exception = None;
                     self.pending_return = Some(return_val.clone());
                     if let Some(finally_target) = self.pop_current_finally_target() {
@@ -1131,6 +1276,9 @@ impl InterpreterCore {
                                 construct_this: Some(this_val.clone()),
                                 saved_pending_exception: self.pending_exception.take(),
                                 saved_pending_return: self.pending_return.take(),
+                                saved_suspended_abrupt_depth: self
+                                    .suspended_abrupt_completions
+                                    .len(),
                                 saved_finally_mode_depth: self.finally_modes.len(),
                             });
 
@@ -1208,6 +1356,7 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::Throw { value } => {
                     let thrown = self.read_reg(value)?;
+                    self.suspend_current_abrupt_completion();
                     self.pending_return = None;
                     self.pending_exception = Some(thrown.clone());
                     // Walk the catch frame stack to find the nearest valid handler.
@@ -1218,6 +1367,7 @@ impl InterpreterCore {
                         self.ip = frame.catch_target;
                     } else {
                         // No catch handler found — uncaught exception.
+                        self.suspended_abrupt_completions.clear();
                         let desc = match &thrown {
                             Value::Str(s) => s.clone(),
                             Value::Int(n) => n.to_string(),
@@ -1232,6 +1382,7 @@ impl InterpreterCore {
                 Ir3Instruction::EnterCatch { dst } => {
                     // Load the pending exception into the catch binding register.
                     let exception = self.pending_exception.take().unwrap_or(Value::Undefined);
+                    self.restore_suspended_abrupt_completion();
                     self.write_reg(dst, exception)?;
                     self.ip += 1;
                 }
@@ -1252,8 +1403,8 @@ impl InterpreterCore {
                     match mode {
                         FinallyMode::Exception => {
                             // Re-throw the pending exception after finally completes.
-                            if let Some(thrown) = &self.pending_exception {
-                                let desc = match thrown {
+                            if let Some(thrown) = self.pending_exception.clone() {
+                                let desc = match &thrown {
                                     Value::Str(s) => s.clone(),
                                     Value::Int(n) => n.to_string(),
                                     Value::Bool(b) => b.to_string(),
@@ -1265,6 +1416,7 @@ impl InterpreterCore {
                                 if let Some(frame) = self.pop_exception_target_frame() {
                                     self.ip = frame.catch_target;
                                 } else {
+                                    self.suspended_abrupt_completions.clear();
                                     return Err(InterpreterError::UncaughtException {
                                         value: desc,
                                     });
@@ -2565,6 +2717,45 @@ mod tests {
         core.registers[1] = Value::Int(5);
         let result = core.execute(&m).unwrap();
         assert_eq!(result.value, Value::Int(15));
+    }
+
+    #[test]
+    fn reexecution_restores_initial_register_seed_without_runtime_leakage() {
+        let m = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 3,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadInt { dst: 1, value: 10 },
+                Ir3Instruction::Add {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::Return { value: 2 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 3,
+                name: Some("add_ten".to_string()),
+            }],
+        );
+
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.instruction_budget = 1000;
+        let mut core = InterpreterCore::new(config, "test");
+        core.registers[1] = Value::Int(5);
+        core.registers[3] = Value::Function(0);
+
+        let first = core.execute(&m).unwrap();
+        assert_eq!(first.value, Value::Int(15));
+
+        let second = core.execute(&m).unwrap();
+        assert_eq!(second.value, Value::Int(15));
     }
 
     #[test]
@@ -5267,6 +5458,137 @@ mod tests {
 
         let result = core.execute(&m).unwrap();
         assert_eq!(result.value, Value::Int(8));
+    }
+
+    #[test]
+    fn caught_callee_throw_inside_finally_preserves_outer_pending_exception() {
+        let m = test_module_with_functions(
+            vec![
+                Ir3Instruction::BeginTry {
+                    catch_target: 4,
+                    finally_target: Some(4),
+                },
+                Ir3Instruction::LoadInt { dst: 0, value: 1 },
+                Ir3Instruction::Throw { value: 0 },
+                Ir3Instruction::EndTry,
+                Ir3Instruction::EnterFinally,
+                Ir3Instruction::BeginTry {
+                    catch_target: 9,
+                    finally_target: None,
+                },
+                Ir3Instruction::Call {
+                    callee: 4,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 1,
+                },
+                Ir3Instruction::EndTry,
+                Ir3Instruction::EndFinally,
+                Ir3Instruction::EnterCatch { dst: 2 },
+                Ir3Instruction::EndFinally,
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadInt { dst: 0, value: 2 },
+                Ir3Instruction::Throw { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 12,
+                arity: 0,
+                frame_size: 1,
+                name: Some("helper_throw".to_string()),
+            }],
+        );
+
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "test");
+        core.registers[4] = Value::Function(0);
+
+        let err = core.execute(&m).unwrap_err();
+        match err {
+            InterpreterError::UncaughtException { value } => assert_eq!(value, "1"),
+            other => panic!(
+                "expected original outer exception to survive caught helper throw, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn caught_nested_throw_across_intermediary_finally_preserves_outer_pending_exception() {
+        let m = test_module(vec![
+            Ir3Instruction::BeginTry {
+                catch_target: 4,
+                finally_target: Some(4),
+            },
+            Ir3Instruction::LoadInt { dst: 0, value: 1 },
+            Ir3Instruction::Throw { value: 0 },
+            Ir3Instruction::EndTry,
+            Ir3Instruction::EnterFinally,
+            Ir3Instruction::BeginTry {
+                catch_target: 11,
+                finally_target: None,
+            },
+            Ir3Instruction::BeginTry {
+                catch_target: 9,
+                finally_target: Some(9),
+            },
+            Ir3Instruction::LoadInt { dst: 1, value: 2 },
+            Ir3Instruction::Throw { value: 1 },
+            Ir3Instruction::EnterFinally,
+            Ir3Instruction::EndFinally,
+            Ir3Instruction::EnterCatch { dst: 2 },
+            Ir3Instruction::EndFinally,
+            Ir3Instruction::Halt,
+        ]);
+
+        let err = quickjs_execute(&m).unwrap_err();
+        match err {
+            InterpreterError::UncaughtException { value } => assert_eq!(value, "1"),
+            other => panic!(
+                "expected original outer exception to survive throw routed through intermediary finally, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn multiple_suspended_exceptions_resume_in_lifo_order() {
+        let m = test_module(vec![
+            Ir3Instruction::BeginTry {
+                catch_target: 4,
+                finally_target: Some(4),
+            },
+            Ir3Instruction::LoadInt { dst: 0, value: 1 },
+            Ir3Instruction::Throw { value: 0 },
+            Ir3Instruction::EndTry,
+            Ir3Instruction::EnterFinally,
+            Ir3Instruction::BeginTry {
+                catch_target: 15,
+                finally_target: None,
+            },
+            Ir3Instruction::BeginTry {
+                catch_target: 9,
+                finally_target: Some(9),
+            },
+            Ir3Instruction::LoadInt { dst: 1, value: 2 },
+            Ir3Instruction::Throw { value: 1 },
+            Ir3Instruction::EnterFinally,
+            Ir3Instruction::BeginTry {
+                catch_target: 13,
+                finally_target: None,
+            },
+            Ir3Instruction::LoadInt { dst: 2, value: 3 },
+            Ir3Instruction::Throw { value: 2 },
+            Ir3Instruction::EnterCatch { dst: 3 },
+            Ir3Instruction::EndFinally,
+            Ir3Instruction::EnterCatch { dst: 4 },
+            Ir3Instruction::EndFinally,
+            Ir3Instruction::Halt,
+        ]);
+
+        let err = quickjs_execute(&m).unwrap_err();
+        match err {
+            InterpreterError::UncaughtException { value } => assert_eq!(value, "1"),
+            other => panic!(
+                "expected suspended exceptions to resume in LIFO order back to the outer throw, got {other:?}"
+            ),
+        }
     }
 
     #[test]

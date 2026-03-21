@@ -1210,9 +1210,28 @@ impl DeterministicModuleResolver {
             };
             let allow_probes = self.allow_relative_import_probes(request, referrer);
             if let Some(external_referrer) = referrer.strip_prefix("external:") {
+                let package_root = external_package_root(external_referrer);
                 let base_dir = external_referrer_directory(external_referrer);
                 let resolved_base =
                     normalize_external_specifier_path(&join_paths(&base_dir, specifier));
+                if !is_within_external_package_root(&package_root, &resolved_base) {
+                    return Err(Box::new(
+                        ResolutionError::new(
+                            ResolutionErrorCode::UnsupportedSpecifier,
+                            format!(
+                                "relative specifier '{}' escapes external package root '{}'",
+                                request.specifier, package_root
+                            ),
+                            context,
+                        )
+                        .with_resolution_attempt(
+                            request.specifier.clone(),
+                            Some(resolved_base),
+                            Some(ModuleSourceKind::ExternalRegistry),
+                            probe_sequence,
+                        ),
+                    ));
+                }
                 let (relative_probes, candidate) =
                     self.lookup_external_candidate(&resolved_base, request.style, allow_probes);
                 probe_sequence.extend(relative_probes);
@@ -1486,6 +1505,13 @@ impl DeterministicModuleResolver {
             return true;
         }
 
+        if referrer.starts_with("external:") {
+            return matches!(
+                self.referrer_module_syntax(referrer),
+                Some(ModuleSyntax::CommonJs)
+            );
+        }
+
         !matches!(
             self.referrer_module_syntax(referrer),
             Some(ModuleSyntax::EsModule)
@@ -1682,6 +1708,42 @@ fn normalize_external_specifier_path(path: &str) -> String {
         .to_string()
 }
 
+fn external_package_root(referrer: &str) -> String {
+    let normalized = normalize_external_specifier_path(referrer);
+    let segments: Vec<&str> = normalized
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    if segments.is_empty() {
+        return normalized;
+    }
+
+    let package_root_len = if segments[0].starts_with('@') {
+        segments.len().min(2)
+    } else {
+        1
+    };
+    let mut package_root = segments[..package_root_len]
+        .iter()
+        .map(|segment| (*segment).to_string())
+        .collect::<Vec<_>>();
+    let subpath = &segments[package_root_len..];
+    if subpath.is_empty()
+        && let Some(last) = package_root.last_mut()
+        && is_module_file_name(last)
+    {
+        *last = strip_module_file_extension(last);
+    }
+    package_root.join("/")
+}
+
+fn is_within_external_package_root(package_root: &str, path: &str) -> bool {
+    path == package_root
+        || path
+            .strip_prefix(package_root)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
 fn external_referrer_directory(referrer: &str) -> String {
     let normalized = normalize_external_specifier_path(referrer);
     let segments: Vec<&str> = normalized
@@ -1846,6 +1908,95 @@ mod tests {
             require_outcome.module.probe_sequence,
             vec!["/app/lib", "/app/lib.cjs"]
         );
+    }
+
+    #[test]
+    fn external_relative_import_requires_explicit_extension_outside_bun_compat() {
+        let mut resolver = DeterministicModuleResolver::new("/repo");
+        resolver
+            .register_external_module(
+                "some-pkg/sub.mjs",
+                ModuleDefinition::new(ModuleSyntax::EsModule, "export default 'sub';"),
+            )
+            .unwrap();
+
+        let native_error = resolver
+            .resolve(
+                &ModuleRequest::new("./sub", ImportStyle::Import)
+                    .with_referrer("external:some-pkg"),
+                &context(),
+                &AllowAllPolicy,
+            )
+            .expect_err("native mode should reject extensionless external ESM relatives");
+        assert_eq!(native_error.code, ResolutionErrorCode::ModuleNotFound);
+        assert_eq!(native_error.probe_sequence, vec!["some-pkg/sub"]);
+
+        let node_error = resolver
+            .resolve(
+                &ModuleRequest::new("./sub", ImportStyle::Import)
+                    .with_referrer("external:some-pkg")
+                    .with_compatibility_mode(CompatibilityMode::NodeCompat),
+                &context(),
+                &AllowAllPolicy,
+            )
+            .expect_err("node_compat should reject extensionless external ESM relatives");
+        assert_eq!(node_error.code, ResolutionErrorCode::ModuleNotFound);
+        assert_eq!(node_error.probe_sequence, vec!["some-pkg/sub"]);
+
+        let bun_outcome = resolver
+            .resolve(
+                &ModuleRequest::new("./sub", ImportStyle::Import)
+                    .with_referrer("external:some-pkg")
+                    .with_compatibility_mode(CompatibilityMode::BunCompat),
+                &context(),
+                &AllowAllPolicy,
+            )
+            .expect("bun_compat should keep probing external ESM relatives");
+        assert_eq!(bun_outcome.module.canonical_specifier, "some-pkg/sub.mjs");
+        assert_eq!(
+            bun_outcome.module.probe_sequence,
+            vec!["some-pkg/sub", "some-pkg/sub.mjs"]
+        );
+    }
+
+    #[test]
+    fn external_relative_specifier_cannot_escape_package_root() {
+        let mut resolver = DeterministicModuleResolver::new("/repo");
+        resolver
+            .register_external_module(
+                "some-pkg/entry.mjs",
+                ModuleDefinition::new(ModuleSyntax::EsModule, "import '../other-pkg/private.mjs';"),
+            )
+            .unwrap();
+        resolver
+            .register_external_module(
+                "other-pkg/private.mjs",
+                ModuleDefinition::new(ModuleSyntax::EsModule, "export default 'secret';"),
+            )
+            .unwrap();
+
+        let error = resolver
+            .resolve(
+                &ModuleRequest::new("../other-pkg/private.mjs", ImportStyle::Import)
+                    .with_referrer("external:some-pkg/entry.mjs"),
+                &context(),
+                &AllowAllPolicy,
+            )
+            .expect_err("external relative import must not escape its package root");
+        assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
+        assert!(
+            error
+                .message
+                .contains("escapes external package root 'some-pkg'")
+        );
+        assert!(error.probe_sequence.is_empty());
+    }
+
+    #[test]
+    fn external_package_root_strips_extension_probe_entry_suffix() {
+        assert_eq!(external_package_root("pkg.js"), "pkg");
+        assert_eq!(external_package_root("@scope/pkg.js"), "@scope/pkg");
+        assert_eq!(external_package_root("pkg/index.cjs"), "pkg");
     }
 
     #[test]

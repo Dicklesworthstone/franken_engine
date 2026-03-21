@@ -778,6 +778,64 @@ fn evaluator_reject_propagates_transitively() {
 }
 
 #[test]
+fn evaluator_reject_uses_declared_dependency_graph_after_non_pending_registration() {
+    let mut eval = AsyncModuleEvaluator::with_defaults();
+    eval.register_module("root.js", false, &[], None);
+    eval.register_module("mid.js", true, &["root.js".into()], Some(PromiseHandle(1)));
+    eval.register_module("leaf.js", true, &["mid.js".into()], Some(PromiseHandle(2)));
+    eval.suspend_on_dependency("leaf.js", "mid.js", PromiseHandle(1))
+        .unwrap();
+
+    assert!(
+        !eval.states()["mid.js"]
+            .pending_dependencies
+            .contains("root.js")
+    );
+
+    let mut bindings = empty_bindings();
+    let linkage = eval
+        .reject_module("root.js", &js_error("late failure"), &mut bindings)
+        .unwrap();
+
+    assert!(
+        linkage
+            .linked_modules
+            .iter()
+            .any(|module| module.module_specifier == "mid.js")
+    );
+    assert!(linkage.transitive_closure.contains("mid.js"));
+    assert!(linkage.transitive_closure.contains("leaf.js"));
+    assert_eq!(eval.states()["mid.js"].phase, AsyncModulePhase::Rejected);
+    assert_eq!(eval.states()["leaf.js"].phase, AsyncModulePhase::Rejected);
+}
+
+#[test]
+fn evaluator_reject_ignores_undeclared_dependency_suspension() {
+    let mut eval = AsyncModuleEvaluator::with_defaults();
+    eval.register_module("provider.js", false, &[], None);
+    eval.register_module("consumer.js", true, &[], Some(PromiseHandle(1)));
+    eval.suspend_on_dependency("consumer.js", "provider.js", PromiseHandle(2))
+        .unwrap();
+
+    let mut bindings = empty_bindings();
+    let linkage = eval
+        .reject_module("provider.js", &js_error("late failure"), &mut bindings)
+        .unwrap();
+
+    assert!(
+        linkage
+            .linked_modules
+            .iter()
+            .all(|module| module.module_specifier != "consumer.js")
+    );
+    assert!(!linkage.transitive_closure.contains("consumer.js"));
+    assert_eq!(
+        eval.states()["consumer.js"].phase,
+        AsyncModulePhase::AwaitingDependencies
+    );
+}
+
+#[test]
 fn evaluator_reject_without_transitive_propagation() {
     let config = AsyncEvalConfig {
         transitive_rejection_propagation: false,

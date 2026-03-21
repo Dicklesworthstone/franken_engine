@@ -3,15 +3,13 @@
 //! Covers: policy defaults, serde roundtrips, candidate ID determinism,
 //! hot path sample properties, and decision structure.
 
-use frankenengine_engine::tier_up_profiler::{
-    HotPathProfile, HotPathSample, TIER_UP_POLICY_SCHEMA_VERSION, TierUpCandidate,
-    TierUpDecision, TierUpDecisionEvent, TierUpPolicy, TierUpRejection,
-    build_hot_path_profile, evaluate_tier_up_eligibility,
-};
-use frankenengine_engine::bytecode_vm::{
-    ExecutionReport, InlineCacheStats, Value, VmEvent,
-};
+use frankenengine_engine::bytecode_vm::{ExecutionReport, InlineCacheStats, Value, VmEvent};
 use frankenengine_engine::shape_transition_algebra::ShapeTransitionAlgebra;
+use frankenengine_engine::tier_up_profiler::{
+    HotPathProfile, HotPathSample, TIER_UP_POLICY_SCHEMA_VERSION, TierUpCandidate, TierUpDecision,
+    TierUpDecisionEvent, TierUpPolicy, TierUpRejection, build_hot_path_profile,
+    evaluate_tier_up_eligibility,
+};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -54,8 +52,10 @@ fn deep_policy_hash_deterministic() {
 #[test]
 fn deep_policy_hash_changes_on_modification() {
     let p1 = TierUpPolicy::default();
-    let mut p2 = TierUpPolicy::default();
-    p2.min_total_steps = 999;
+    let p2 = TierUpPolicy {
+        min_total_steps: 999,
+        ..TierUpPolicy::default()
+    };
     assert_ne!(p1.policy_hash(), p2.policy_hash());
 }
 

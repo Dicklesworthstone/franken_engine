@@ -1669,6 +1669,7 @@ mod tests {
                 let mut m = BTreeMap::new();
                 m.insert("allow".to_string(), 0.1);
                 m.insert("deny".to_string(), 0.4);
+                m.insert(action.to_string(), 0.1);
                 m
             },
             chosen_expected_loss: 0.1,

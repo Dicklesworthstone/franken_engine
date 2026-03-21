@@ -337,11 +337,7 @@ fn deep_emit_diagnostic_produces_entry() {
     assert_eq!(entry.severity, DiagnosticSeverity::Warning);
     assert!(entry.message.contains("timed out"));
     assert_eq!(entry.evidence_ref.as_deref(), Some("evidence-ref-001"));
-    assert!(entry
-        .replay_ref
-        .as_deref()
-        .unwrap()
-        .contains("replay run"));
+    assert!(entry.replay_ref.as_deref().unwrap().contains("replay run"));
 }
 
 #[test]

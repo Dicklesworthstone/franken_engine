@@ -679,6 +679,20 @@ fn enrichment_envelope_determinism_five_runs() {
     assert_eq!(hashes.len(), 1);
 }
 
+#[test]
+fn enrichment_envelope_hash_changes_when_conditional_payload_changes() {
+    let lower_purity = low_purity_schema("same-kernel");
+    let even_lower_purity = KernelSchema {
+        purity_score_millionths: 400_000,
+        ..low_purity_schema("same-kernel")
+    };
+
+    let first = build_synthesis_envelope(&[lower_purity]);
+    let second = build_synthesis_envelope(&[even_lower_purity]);
+
+    assert_ne!(first.envelope_hash, second.envelope_hash);
+}
+
 // ===========================================================================
 // Cross-cutting: constants stability
 // ===========================================================================

@@ -431,9 +431,7 @@ pub fn build_synthesis_envelope(schemas: &[KernelSchema]) -> SynthesisEnvelope {
         }
     }
 
-    // Compute envelope hash over serialised eligible + forbidden + deferred.
-    let hash_input = envelope_hash_input(&eligible, &forbidden, &deferred);
-    let envelope_hash = ContentHash::compute(&hash_input);
+    let envelope_hash = compute_envelope_hash(&eligible, &forbidden, &deferred);
 
     SynthesisEnvelope {
         eligible,
@@ -468,15 +466,7 @@ pub fn validate_schemas(schemas: &[KernelSchema]) -> Result<(), KernelSynthError
 pub fn mine_canonical_kernels() -> KernelCorpus {
     let schemas = canonical_schemas();
     let decisions: Vec<EligibilityDecision> = schemas.iter().map(evaluate_eligibility).collect();
-
-    let mut corpus_bytes = Vec::new();
-    for s in &schemas {
-        corpus_bytes.extend_from_slice(s.id.as_bytes());
-    }
-    for d in &decisions {
-        corpus_bytes.extend_from_slice(d.kernel_id.as_bytes());
-    }
-    let corpus_hash = ContentHash::compute(&corpus_bytes);
+    let corpus_hash = compute_corpus_hash(&schemas, &decisions);
 
     KernelCorpus {
         schemas,
@@ -511,11 +501,7 @@ pub fn run_kernel_synth_evidence() -> KernelSynthEvidenceManifest {
             }
         }
 
-        let cert_bytes = format!(
-            "{}:{}:{}",
-            KERNEL_SYNTH_SCHEMA_VERSION, decision.kernel_id, decision.confidence_millionths
-        );
-        let certificate_hash = ContentHash::compute(cert_bytes.as_bytes());
+        let certificate_hash = compute_certificate_hash(decision, &default_budget);
 
         certificates.push(KernelSynthCertificate {
             schema_version: KERNEL_SYNTH_SCHEMA_VERSION.to_string(),
@@ -527,16 +513,15 @@ pub fn run_kernel_synth_evidence() -> KernelSynthEvidenceManifest {
     }
 
     let kernels_evaluated = corpus.schemas.len() as u32;
-
-    let manifest_bytes = format!(
-        "{}:{}:{}:{}:{}",
-        KERNEL_SYNTH_SCHEMA_VERSION,
+    let error = None;
+    let manifest_hash = compute_manifest_hash(
         kernels_evaluated,
         eligible_count,
         forbidden_count,
-        deferred_count
+        deferred_count,
+        &certificates,
+        error.as_deref(),
     );
-    let manifest_hash = ContentHash::compute(manifest_bytes.as_bytes());
 
     KernelSynthEvidenceManifest {
         schema_version: KERNEL_SYNTH_SCHEMA_VERSION.to_string(),
@@ -546,7 +531,7 @@ pub fn run_kernel_synth_evidence() -> KernelSynthEvidenceManifest {
         deferred_count,
         certificates,
         manifest_hash,
-        error: None,
+        error,
     }
 }
 
@@ -554,29 +539,96 @@ pub fn run_kernel_synth_evidence() -> KernelSynthEvidenceManifest {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Build a deterministic byte sequence for hashing envelope contents.
-fn envelope_hash_input(
+fn compute_structural_hash<T: Serialize>(value: &T) -> ContentHash {
+    let bytes = serde_json::to_vec(value)
+        .expect("kernel synthesis contract hash payload serialization should succeed");
+    ContentHash::compute(&bytes)
+}
+
+fn compute_envelope_hash(
     eligible: &[EligibilityDecision],
     forbidden: &[EligibilityDecision],
     deferred: &[EligibilityDecision],
-) -> Vec<u8> {
-    let mut buf = Vec::new();
-    buf.extend_from_slice(b"eligible:");
-    for d in eligible {
-        buf.extend_from_slice(d.kernel_id.as_bytes());
-        buf.push(b':');
+) -> ContentHash {
+    #[derive(Serialize)]
+    struct EnvelopeHashPayload<'a> {
+        schema_version: &'a str,
+        eligible: &'a [EligibilityDecision],
+        forbidden: &'a [EligibilityDecision],
+        deferred: &'a [EligibilityDecision],
     }
-    buf.extend_from_slice(b"forbidden:");
-    for d in forbidden {
-        buf.extend_from_slice(d.kernel_id.as_bytes());
-        buf.push(b':');
+
+    compute_structural_hash(&EnvelopeHashPayload {
+        schema_version: KERNEL_SYNTH_SCHEMA_VERSION,
+        eligible,
+        forbidden,
+        deferred,
+    })
+}
+
+fn compute_corpus_hash(schemas: &[KernelSchema], decisions: &[EligibilityDecision]) -> ContentHash {
+    #[derive(Serialize)]
+    struct CorpusHashPayload<'a> {
+        schema_version: &'a str,
+        schemas: &'a [KernelSchema],
+        decisions: &'a [EligibilityDecision],
     }
-    buf.extend_from_slice(b"deferred:");
-    for d in deferred {
-        buf.extend_from_slice(d.kernel_id.as_bytes());
-        buf.push(b':');
+
+    compute_structural_hash(&CorpusHashPayload {
+        schema_version: KERNEL_SYNTH_SCHEMA_VERSION,
+        schemas,
+        decisions,
+    })
+}
+
+fn compute_certificate_hash(
+    decision: &EligibilityDecision,
+    budget_consumed: &SynthesisBudget,
+) -> ContentHash {
+    #[derive(Serialize)]
+    struct CertificateHashPayload<'a> {
+        schema_version: &'a str,
+        kernel_id: &'a str,
+        decision: &'a EligibilityDecision,
+        budget_consumed: &'a SynthesisBudget,
     }
-    buf
+
+    compute_structural_hash(&CertificateHashPayload {
+        schema_version: KERNEL_SYNTH_SCHEMA_VERSION,
+        kernel_id: &decision.kernel_id,
+        decision,
+        budget_consumed,
+    })
+}
+
+fn compute_manifest_hash(
+    kernels_evaluated: u32,
+    eligible_count: u32,
+    forbidden_count: u32,
+    deferred_count: u32,
+    certificates: &[KernelSynthCertificate],
+    error: Option<&str>,
+) -> ContentHash {
+    #[derive(Serialize)]
+    struct ManifestHashPayload<'a> {
+        schema_version: &'a str,
+        kernels_evaluated: u32,
+        eligible_count: u32,
+        forbidden_count: u32,
+        deferred_count: u32,
+        certificates: &'a [KernelSynthCertificate],
+        error: Option<&'a str>,
+    }
+
+    compute_structural_hash(&ManifestHashPayload {
+        schema_version: KERNEL_SYNTH_SCHEMA_VERSION,
+        kernels_evaluated,
+        eligible_count,
+        forbidden_count,
+        deferred_count,
+        certificates,
+        error,
+    })
 }
 
 /// Helper: create a `KernelSchema` with all fields.
@@ -1096,6 +1148,30 @@ mod tests {
         assert_eq!(e1.envelope_hash, e2.envelope_hash);
     }
 
+    #[test]
+    fn test_envelope_hash_changes_when_forbidden_reason_set_changes() {
+        let only_side_effect = make_schema(
+            "same-kernel",
+            KernelFamily::HostcallBatch,
+            "host call batch with side effect",
+            18,
+            850_000,
+            MILLIONTHS,
+            false,
+            true,
+            true,
+        );
+        let side_effect_and_nondeterministic = KernelSchema {
+            deterministic: false,
+            ..only_side_effect.clone()
+        };
+
+        let first = build_synthesis_envelope(&[only_side_effect]);
+        let second = build_synthesis_envelope(&[side_effect_and_nondeterministic]);
+
+        assert_ne!(first.envelope_hash, second.envelope_hash);
+    }
+
     // -- validate_schemas --
 
     #[test]
@@ -1188,6 +1264,23 @@ mod tests {
         assert_eq!(c1.schemas.len(), c2.schemas.len());
     }
 
+    #[test]
+    fn test_corpus_hash_changes_when_schema_payload_changes() {
+        let original = sample_eligible_schema();
+        let modified = KernelSchema {
+            pattern_description: "same id but different schema payload".into(),
+            ..original.clone()
+        };
+
+        let original_decisions = vec![evaluate_eligibility(&original)];
+        let modified_decisions = vec![evaluate_eligibility(&modified)];
+
+        let original_hash = compute_corpus_hash(&[original], &original_decisions);
+        let modified_hash = compute_corpus_hash(&[modified], &modified_decisions);
+
+        assert_ne!(original_hash, modified_hash);
+    }
+
     // -- run_kernel_synth_evidence --
 
     #[test]
@@ -1231,6 +1324,68 @@ mod tests {
         let m1 = run_kernel_synth_evidence();
         let m2 = run_kernel_synth_evidence();
         assert_eq!(m1.manifest_hash, m2.manifest_hash);
+    }
+
+    #[test]
+    fn test_certificate_hash_changes_when_decision_payload_changes() {
+        let budget = SynthesisBudget {
+            max_kernels: 64,
+            max_instruction_expansion: 4,
+            time_budget_millionths: 5 * MILLIONTHS,
+            proof_requirement: ProofRequirement::BestEffort,
+        };
+        let eligible = evaluate_eligibility(&sample_eligible_schema());
+        let forbidden = evaluate_eligibility(&make_schema(
+            "test-eligible",
+            KernelFamily::ArithmeticLoop,
+            "same kernel id with different verdict",
+            12,
+            950_000,
+            MILLIONTHS,
+            false,
+            true,
+            true,
+        ));
+
+        let eligible_hash = compute_certificate_hash(&eligible, &budget);
+        let forbidden_hash = compute_certificate_hash(&forbidden, &budget);
+
+        assert_ne!(eligible_hash, forbidden_hash);
+    }
+
+    #[test]
+    fn test_manifest_hash_changes_when_certificate_payload_changes() {
+        let budget = SynthesisBudget {
+            max_kernels: 64,
+            max_instruction_expansion: 4,
+            time_budget_millionths: 5 * MILLIONTHS,
+            proof_requirement: ProofRequirement::BestEffort,
+        };
+        let decision = evaluate_eligibility(&sample_eligible_schema());
+
+        let base_certificate = KernelSynthCertificate {
+            schema_version: KERNEL_SYNTH_SCHEMA_VERSION.to_string(),
+            kernel_id: decision.kernel_id.clone(),
+            decision: decision.clone(),
+            budget_consumed: budget.clone(),
+            certificate_hash: compute_certificate_hash(&decision, &budget),
+        };
+        let tighter_budget = SynthesisBudget {
+            max_kernels: 32,
+            ..budget.clone()
+        };
+        let changed_certificate = KernelSynthCertificate {
+            schema_version: KERNEL_SYNTH_SCHEMA_VERSION.to_string(),
+            kernel_id: decision.kernel_id.clone(),
+            decision,
+            budget_consumed: tighter_budget.clone(),
+            certificate_hash: compute_certificate_hash(&base_certificate.decision, &tighter_budget),
+        };
+
+        let base_hash = compute_manifest_hash(1, 1, 0, 0, &[base_certificate], None);
+        let changed_hash = compute_manifest_hash(1, 1, 0, 0, &[changed_certificate], None);
+
+        assert_ne!(base_hash, changed_hash);
     }
 
     // -- KernelSynthError --

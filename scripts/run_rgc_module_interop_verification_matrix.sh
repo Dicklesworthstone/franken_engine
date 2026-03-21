@@ -270,6 +270,8 @@ write_manifest() {
 
   echo "rgc module interop verification matrix manifest: ${manifest_path}"
   echo "rgc module interop verification matrix events: ${events_path}"
+  echo "rgc module interop verification matrix commands: ${commands_path}"
+  echo "rgc module interop verification matrix module resolution trace: ${module_resolution_trace_path}"
 }
 
 main_exit=0

@@ -310,6 +310,20 @@ fn integration_envelope_hash_determinism() {
 }
 
 #[test]
+fn integration_envelope_hash_changes_when_forbidden_details_change() {
+    let side_effect_only = side_effectful_schema("same-kernel");
+    let side_effect_and_nondeterministic = KernelSchema {
+        deterministic: false,
+        ..side_effectful_schema("same-kernel")
+    };
+
+    let first = build_synthesis_envelope(&[side_effect_only]);
+    let second = build_synthesis_envelope(&[side_effect_and_nondeterministic]);
+
+    assert_ne!(first.envelope_hash, second.envelope_hash);
+}
+
+#[test]
 fn integration_envelope_serde_roundtrip() {
     let schemas = vec![eligible_schema("s1")];
     let envelope = build_synthesis_envelope(&schemas);

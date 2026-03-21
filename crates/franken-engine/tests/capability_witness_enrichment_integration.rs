@@ -22,12 +22,16 @@
 
 use std::collections::BTreeSet;
 
+use std::collections::BTreeMap;
+
 use frankenengine_engine::capability_witness::{
-    ConfidenceInterval, DenialRecord, LifecycleState, PromotionTheoremKind, ProofKind,
-    ProofObligation, PublicationEntryKind, RollbackToken, WitnessBuilder, WitnessError,
+    CapabilityWitness, ConfidenceInterval, CustomTheoremExtension, DenialRecord, LifecycleState,
+    PromotionTheoremInput, PromotionTheoremKind, PromotionTheoremReport, ProofKind,
+    ProofObligation, PublicationEntryKind, RollbackToken, SourceCapabilitySet, WitnessBuilder,
+    WitnessError, WitnessIndexQuery, WitnessPublicationConfig, WitnessPublicationPipeline,
     WitnessSchemaVersion, WitnessStore, WitnessValidator,
 };
-use frankenengine_engine::engine_object_id::EngineObjectId;
+use frankenengine_engine::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::policy_theorem_compiler::Capability;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -1181,4 +1185,1502 @@ fn promotion_theorem_kind_btreeset_ordering() {
     for i in 1..ordered.len() {
         assert!(ordered[i - 1] < ordered[i]);
     }
+}
+
+// ===========================================================================
+// Helpers for deep integration tests
+// ===========================================================================
+
+fn test_signing_key() -> SigningKey {
+    SigningKey::from_bytes([0x42u8; 32])
+}
+
+fn test_extension_id() -> EngineObjectId {
+    engine_object_id::derive_id(
+        ObjectDomain::PolicyObject,
+        "test-ext",
+        &SchemaId::from_definition(b"test-ext-schema"),
+        b"ext-seed",
+    )
+    .unwrap()
+}
+
+fn test_policy_id() -> EngineObjectId {
+    engine_object_id::derive_id(
+        ObjectDomain::PolicyObject,
+        "test-policy",
+        &SchemaId::from_definition(b"test-policy-schema"),
+        b"policy-seed",
+    )
+    .unwrap()
+}
+
+fn test_proof_artifact_id(tag: &str) -> EngineObjectId {
+    engine_object_id::derive_id(
+        ObjectDomain::EvidenceRecord,
+        "test-proof",
+        &SchemaId::from_definition(b"test-proof-schema"),
+        tag.as_bytes(),
+    )
+    .unwrap()
+}
+
+fn make_proof(cap: &Capability, kind: ProofKind, tag: &str) -> ProofObligation {
+    ProofObligation {
+        capability: cap.clone(),
+        kind,
+        proof_artifact_id: test_proof_artifact_id(tag),
+        justification: format!("justification for {}", cap.as_str()),
+        artifact_hash: ContentHash::compute(tag.as_bytes()),
+    }
+}
+
+/// Build a minimal valid witness in Draft state via WitnessBuilder.
+fn build_minimal_witness() -> CapabilityWitness {
+    let cap = Capability::new("fs.read");
+    WitnessBuilder::new(
+        test_extension_id(),
+        test_policy_id(),
+        SecurityEpoch::from_raw(1),
+        1_000_000_000,
+        test_signing_key(),
+    )
+    .require(cap.clone())
+    .proof(make_proof(&cap, ProofKind::StaticAnalysis, "proof-fs-read"))
+    .confidence(ConfidenceInterval::from_trials(1000, 980))
+    .replay_seed(42)
+    .build()
+    .expect("build minimal witness")
+}
+
+/// Build a witness with multiple capabilities and denial records.
+fn build_rich_witness() -> CapabilityWitness {
+    let cap_read = Capability::new("fs.read");
+    let cap_write = Capability::new("fs.write");
+    let cap_net = Capability::new("net.connect");
+    WitnessBuilder::new(
+        test_extension_id(),
+        test_policy_id(),
+        SecurityEpoch::from_raw(5),
+        2_000_000_000,
+        test_signing_key(),
+    )
+    .require(cap_read.clone())
+    .require(cap_write.clone())
+    .require(cap_net.clone())
+    .deny(Capability::new("sys.exec"), "not needed for this extension")
+    .proof(make_proof(&cap_read, ProofKind::StaticAnalysis, "p-read"))
+    .proof(make_proof(
+        &cap_write,
+        ProofKind::DynamicAblation,
+        "p-write",
+    ))
+    .proof(make_proof(
+        &cap_net,
+        ProofKind::OperatorAttestation,
+        "p-net",
+    ))
+    .confidence(ConfidenceInterval::from_trials(500, 490))
+    .replay_seed(99)
+    .transcript_hash(ContentHash::compute(b"rich-transcript"))
+    .meta("owner", "test-team")
+    .meta("version", "3")
+    .build()
+    .expect("build rich witness")
+}
+
+fn make_promotion_input(witness: &CapabilityWitness) -> PromotionTheoremInput {
+    let caps = witness.required_capabilities.clone();
+    PromotionTheoremInput {
+        source_capability_sets: vec![SourceCapabilitySet {
+            source_id: "src-1".to_string(),
+            capabilities: caps.clone(),
+        }],
+        manifest_capabilities: caps,
+        capability_lattice: BTreeMap::new(),
+        non_interference_dependencies: BTreeMap::new(),
+        custom_extensions: Vec::new(),
+    }
+}
+
+fn promote_witness(witness: &mut CapabilityWitness) {
+    let input = make_promotion_input(witness);
+    let report = witness.evaluate_promotion_theorems(&input).unwrap();
+    witness.apply_promotion_theorem_report(&report);
+    witness.transition_to(LifecycleState::Validated).unwrap();
+    witness.transition_to(LifecycleState::Promoted).unwrap();
+}
+
+// ===========================================================================
+// 34) WitnessBuilder — required/denied overlap
+// ===========================================================================
+
+#[test]
+fn builder_required_denied_overlap_errors() {
+    let cap = Capability::new("fs.read");
+    let result = WitnessBuilder::new(
+        test_extension_id(),
+        test_policy_id(),
+        SecurityEpoch::from_raw(1),
+        1000,
+        test_signing_key(),
+    )
+    .require(cap.clone())
+    .deny(cap, "overlapping")
+    .build();
+    assert!(matches!(
+        result,
+        Err(WitnessError::RequiredDeniedOverlap { .. })
+    ));
+}
+
+// ===========================================================================
+// 35) WitnessBuilder — produces Draft state
+// ===========================================================================
+
+#[test]
+fn builder_produces_draft_state_with_correct_fields() {
+    let witness = build_minimal_witness();
+    assert_eq!(witness.lifecycle_state, LifecycleState::Draft);
+    assert_eq!(witness.schema_version, WitnessSchemaVersion::CURRENT);
+    assert_eq!(witness.epoch, SecurityEpoch::from_raw(1));
+    assert_eq!(witness.replay_seed, 42);
+    assert!(
+        witness
+            .required_capabilities
+            .contains(&Capability::new("fs.read"))
+    );
+    assert!(!witness.synthesizer_signature.is_empty());
+}
+
+// ===========================================================================
+// 36) WitnessBuilder — require_all
+// ===========================================================================
+
+#[test]
+fn builder_require_all_adds_multiple_capabilities() {
+    let caps = vec![
+        Capability::new("a"),
+        Capability::new("b"),
+        Capability::new("c"),
+    ];
+    let mut builder = WitnessBuilder::new(
+        test_extension_id(),
+        test_policy_id(),
+        SecurityEpoch::from_raw(1),
+        1000,
+        test_signing_key(),
+    )
+    .require_all(caps.clone());
+    for cap in &caps {
+        builder = builder.proof(make_proof(cap, ProofKind::StaticAnalysis, cap.as_str()));
+    }
+    let witness = builder.build().unwrap();
+    assert_eq!(witness.required_capabilities.len(), 3);
+}
+
+// ===========================================================================
+// 37) WitnessBuilder — metadata preserved
+// ===========================================================================
+
+#[test]
+fn builder_metadata_preserved_in_witness() {
+    let cap = Capability::new("fs.read");
+    let witness = WitnessBuilder::new(
+        test_extension_id(),
+        test_policy_id(),
+        SecurityEpoch::from_raw(1),
+        1000,
+        test_signing_key(),
+    )
+    .require(cap.clone())
+    .proof(make_proof(&cap, ProofKind::StaticAnalysis, "p"))
+    .meta("env", "staging")
+    .meta("team", "infra")
+    .build()
+    .unwrap();
+    assert_eq!(witness.metadata.get("env").unwrap(), "staging");
+    assert_eq!(witness.metadata.get("team").unwrap(), "infra");
+}
+
+// ===========================================================================
+// 38) WitnessBuilder — rollback token
+// ===========================================================================
+
+#[test]
+fn builder_with_rollback_token_preserved() {
+    let cap = Capability::new("fs.read");
+    let token = RollbackToken {
+        previous_witness_hash: ContentHash::compute(b"old-witness"),
+        previous_witness_id: None,
+        created_epoch: SecurityEpoch::from_raw(0),
+        sequence: 0,
+    };
+    let witness = WitnessBuilder::new(
+        test_extension_id(),
+        test_policy_id(),
+        SecurityEpoch::from_raw(1),
+        1000,
+        test_signing_key(),
+    )
+    .require(cap.clone())
+    .proof(make_proof(&cap, ProofKind::StaticAnalysis, "p1"))
+    .rollback(token.clone())
+    .build()
+    .unwrap();
+    assert_eq!(witness.rollback_token, Some(token));
+}
+
+// ===========================================================================
+// 39) CapabilityWitness serde roundtrip
+// ===========================================================================
+
+#[test]
+fn capability_witness_serde_roundtrip() {
+    let witness = build_rich_witness();
+    let json = serde_json::to_string(&witness).unwrap();
+    let back: CapabilityWitness = serde_json::from_str(&json).unwrap();
+    assert_eq!(witness, back);
+}
+
+// ===========================================================================
+// 40) Unsigned bytes deterministic
+// ===========================================================================
+
+#[test]
+fn witness_unsigned_bytes_deterministic() {
+    let w1 = build_minimal_witness();
+    let w2 = build_minimal_witness();
+    assert_eq!(w1.unsigned_bytes(), w2.unsigned_bytes());
+}
+
+// ===========================================================================
+// 41) Content hash deterministic
+// ===========================================================================
+
+#[test]
+fn witness_content_hash_deterministic() {
+    let w1 = build_minimal_witness();
+    let w2 = build_minimal_witness();
+    assert_eq!(w1.content_hash, w2.content_hash);
+}
+
+// ===========================================================================
+// 42) Witness ID is content-addressed and deterministic
+// ===========================================================================
+
+#[test]
+fn witness_id_deterministic_across_builds() {
+    let w1 = build_minimal_witness();
+    let w2 = build_minimal_witness();
+    assert_eq!(w1.witness_id, w2.witness_id);
+}
+
+// ===========================================================================
+// 43) Different inputs produce different IDs
+// ===========================================================================
+
+#[test]
+fn different_inputs_produce_different_witness_ids() {
+    let cap = Capability::new("fs.read");
+    let w1 = WitnessBuilder::new(
+        test_extension_id(),
+        test_policy_id(),
+        SecurityEpoch::from_raw(1),
+        1000,
+        test_signing_key(),
+    )
+    .require(cap.clone())
+    .proof(make_proof(&cap, ProofKind::StaticAnalysis, "p"))
+    .replay_seed(1)
+    .build()
+    .unwrap();
+    let w2 = WitnessBuilder::new(
+        test_extension_id(),
+        test_policy_id(),
+        SecurityEpoch::from_raw(1),
+        1000,
+        test_signing_key(),
+    )
+    .require(cap.clone())
+    .proof(make_proof(&cap, ProofKind::StaticAnalysis, "p"))
+    .replay_seed(2)
+    .build()
+    .unwrap();
+    assert_ne!(w1.witness_id, w2.witness_id);
+    assert_ne!(w1.content_hash, w2.content_hash);
+}
+
+// ===========================================================================
+// 44) verify_integrity passes for valid witness
+// ===========================================================================
+
+#[test]
+fn verify_integrity_passes_for_valid_witness() {
+    let witness = build_minimal_witness();
+    assert!(witness.verify_integrity().is_ok());
+}
+
+// ===========================================================================
+// 45) verify_integrity fails after tamper
+// ===========================================================================
+
+#[test]
+fn verify_integrity_fails_after_tamper() {
+    let mut witness = build_minimal_witness();
+    witness.replay_seed = 999;
+    let err = witness.verify_integrity().unwrap_err();
+    assert!(matches!(err, WitnessError::IntegrityFailure { .. }));
+}
+
+// ===========================================================================
+// 46) verify_proof_coverage passes when covered
+// ===========================================================================
+
+#[test]
+fn verify_proof_coverage_passes_when_covered() {
+    let witness = build_minimal_witness();
+    assert!(witness.verify_proof_coverage().is_ok());
+}
+
+// ===========================================================================
+// 47) verify_proof_coverage fails with missing proof
+// ===========================================================================
+
+#[test]
+fn verify_proof_coverage_fails_missing_proof() {
+    let mut witness = build_minimal_witness();
+    witness
+        .required_capabilities
+        .insert(Capability::new("extra.cap"));
+    let err = witness.verify_proof_coverage().unwrap_err();
+    assert!(matches!(err, WitnessError::MissingProofObligation { .. }));
+}
+
+// ===========================================================================
+// 48) verify_synthesizer_signature passes with correct key
+// ===========================================================================
+
+#[test]
+fn verify_synthesizer_signature_correct_key() {
+    let witness = build_minimal_witness();
+    let vk = test_signing_key().verification_key();
+    assert!(witness.verify_synthesizer_signature(&vk).is_ok());
+}
+
+// ===========================================================================
+// 49) verify_synthesizer_signature fails with wrong key
+// ===========================================================================
+
+#[test]
+fn verify_synthesizer_signature_wrong_key() {
+    let witness = build_minimal_witness();
+    let wrong_vk = SigningKey::from_bytes([0xAA; 32]).verification_key();
+    assert!(witness.verify_synthesizer_signature(&wrong_vk).is_err());
+}
+
+// ===========================================================================
+// 50) transition_to Draft -> Validated
+// ===========================================================================
+
+#[test]
+fn transition_draft_to_validated() {
+    let mut witness = build_minimal_witness();
+    assert!(witness.transition_to(LifecycleState::Validated).is_ok());
+    assert_eq!(witness.lifecycle_state, LifecycleState::Validated);
+}
+
+// ===========================================================================
+// 51) transition_to invalid returns error
+// ===========================================================================
+
+#[test]
+fn transition_invalid_returns_error() {
+    let mut witness = build_minimal_witness();
+    let err = witness.transition_to(LifecycleState::Active).unwrap_err();
+    assert!(matches!(err, WitnessError::InvalidTransition { .. }));
+}
+
+// ===========================================================================
+// 52) synthesis_unsigned_bytes strips theorem metadata
+// ===========================================================================
+
+#[test]
+fn synthesis_unsigned_bytes_strips_theorem_metadata() {
+    let mut witness = build_minimal_witness();
+    witness.metadata.insert(
+        "promotion_theorem.merge_legality".to_string(),
+        "pass".to_string(),
+    );
+    let synth_bytes = witness.synthesis_unsigned_bytes();
+    let clean = build_minimal_witness();
+    assert_eq!(synth_bytes, clean.synthesis_unsigned_bytes());
+}
+
+// ===========================================================================
+// 53) evaluate_promotion_theorems all pass
+// ===========================================================================
+
+#[test]
+fn evaluate_promotion_theorems_all_pass() {
+    let witness = build_rich_witness();
+    let input = make_promotion_input(&witness);
+    let report = witness.evaluate_promotion_theorems(&input).unwrap();
+    assert!(report.all_passed);
+    assert_eq!(report.results.len(), 3);
+}
+
+// ===========================================================================
+// 54) evaluate_promotion_theorems merge fails with partial sources
+// ===========================================================================
+
+#[test]
+fn evaluate_promotion_theorems_merge_fails_with_partial_sources() {
+    let witness = build_rich_witness();
+    let partial: BTreeSet<Capability> = vec![Capability::new("fs.read")].into_iter().collect();
+    let input = PromotionTheoremInput {
+        source_capability_sets: vec![SourceCapabilitySet {
+            source_id: "partial".to_string(),
+            capabilities: partial,
+        }],
+        manifest_capabilities: witness.required_capabilities.clone(),
+        capability_lattice: BTreeMap::new(),
+        non_interference_dependencies: BTreeMap::new(),
+        custom_extensions: Vec::new(),
+    };
+    let report = witness.evaluate_promotion_theorems(&input).unwrap();
+    assert!(!report.all_passed);
+    let merge = report
+        .results
+        .iter()
+        .find(|r| r.theorem == PromotionTheoremKind::MergeLegality)
+        .unwrap();
+    assert!(!merge.passed);
+    assert!(merge.counterexample.is_some());
+}
+
+// ===========================================================================
+// 55) apply_promotion_theorem_report inserts metadata
+// ===========================================================================
+
+#[test]
+fn apply_promotion_theorem_report_inserts_metadata() {
+    let mut witness = build_rich_witness();
+    let input = make_promotion_input(&witness);
+    let report = witness.evaluate_promotion_theorems(&input).unwrap();
+    witness.apply_promotion_theorem_report(&report);
+    assert_eq!(
+        witness
+            .metadata
+            .get("promotion_theorem.all_passed")
+            .unwrap(),
+        "true"
+    );
+    assert!(
+        witness
+            .metadata
+            .contains_key("promotion_theorem.merge_legality")
+    );
+    assert!(
+        witness
+            .metadata
+            .contains_key("promotion_theorem.attenuation_legality")
+    );
+    assert!(
+        witness
+            .metadata
+            .contains_key("promotion_theorem.non_interference")
+    );
+}
+
+// ===========================================================================
+// 56) apply_promotion_theorem_report adds PolicyTheoremCheck proofs
+// ===========================================================================
+
+#[test]
+fn apply_promotion_theorem_report_adds_theorem_proofs() {
+    let mut witness = build_rich_witness();
+    let initial_proofs = witness.proof_obligations.len();
+    let input = make_promotion_input(&witness);
+    let report = witness.evaluate_promotion_theorems(&input).unwrap();
+    witness.apply_promotion_theorem_report(&report);
+    let theorem_proofs = witness
+        .proof_obligations
+        .iter()
+        .filter(|po| po.kind == ProofKind::PolicyTheoremCheck)
+        .count();
+    assert!(theorem_proofs > 0);
+    assert!(witness.proof_obligations.len() > initial_proofs);
+}
+
+// ===========================================================================
+// 57) Custom theorem extension passes
+// ===========================================================================
+
+#[test]
+fn custom_theorem_extension_passes() {
+    let witness = build_rich_witness();
+    let caps = witness.required_capabilities.clone();
+    let ext = CustomTheoremExtension {
+        name: "custom-check".to_string(),
+        required_capabilities: vec![Capability::new("fs.read")].into_iter().collect(),
+        forbidden_capabilities: BTreeSet::new(),
+    };
+    let input = PromotionTheoremInput {
+        source_capability_sets: vec![SourceCapabilitySet {
+            source_id: "src".to_string(),
+            capabilities: caps.clone(),
+        }],
+        manifest_capabilities: caps,
+        capability_lattice: BTreeMap::new(),
+        non_interference_dependencies: BTreeMap::new(),
+        custom_extensions: vec![ext],
+    };
+    let report = witness.evaluate_promotion_theorems(&input).unwrap();
+    assert!(report.all_passed);
+    assert_eq!(report.results.len(), 4);
+}
+
+// ===========================================================================
+// 58) Custom theorem extension fails with forbidden
+// ===========================================================================
+
+#[test]
+fn custom_theorem_extension_fails_with_forbidden() {
+    let witness = build_rich_witness();
+    let caps = witness.required_capabilities.clone();
+    let ext = CustomTheoremExtension {
+        name: "strict-check".to_string(),
+        required_capabilities: BTreeSet::new(),
+        forbidden_capabilities: vec![Capability::new("fs.read")].into_iter().collect(),
+    };
+    let input = PromotionTheoremInput {
+        source_capability_sets: vec![SourceCapabilitySet {
+            source_id: "src".to_string(),
+            capabilities: caps.clone(),
+        }],
+        manifest_capabilities: caps,
+        capability_lattice: BTreeMap::new(),
+        non_interference_dependencies: BTreeMap::new(),
+        custom_extensions: vec![ext],
+    };
+    let report = witness.evaluate_promotion_theorems(&input).unwrap();
+    assert!(!report.all_passed);
+}
+
+// ===========================================================================
+// 59) Non-interference fails when required depends on denied
+// ===========================================================================
+
+#[test]
+fn non_interference_fails_when_required_depends_on_denied() {
+    let witness = build_rich_witness();
+    let caps = witness.required_capabilities.clone();
+    let mut deps = BTreeMap::new();
+    deps.insert(
+        Capability::new("fs.read"),
+        vec![Capability::new("sys.exec")].into_iter().collect(),
+    );
+    let input = PromotionTheoremInput {
+        source_capability_sets: vec![SourceCapabilitySet {
+            source_id: "src".to_string(),
+            capabilities: caps.clone(),
+        }],
+        manifest_capabilities: caps,
+        capability_lattice: BTreeMap::new(),
+        non_interference_dependencies: deps,
+        custom_extensions: Vec::new(),
+    };
+    let report = witness.evaluate_promotion_theorems(&input).unwrap();
+    assert!(!report.all_passed);
+    let ni = report
+        .results
+        .iter()
+        .find(|r| r.theorem == PromotionTheoremKind::NonInterference)
+        .unwrap();
+    assert!(!ni.passed);
+    assert!(ni.counterexample.is_some());
+}
+
+// ===========================================================================
+// 60) Attenuation passes with lattice expansion
+// ===========================================================================
+
+#[test]
+fn attenuation_passes_with_lattice_expansion() {
+    let cap_a = Capability::new("a");
+    let cap_b = Capability::new("b");
+    let witness = WitnessBuilder::new(
+        test_extension_id(),
+        test_policy_id(),
+        SecurityEpoch::from_raw(1),
+        1000,
+        test_signing_key(),
+    )
+    .require(cap_a.clone())
+    .require(cap_b.clone())
+    .proof(make_proof(&cap_a, ProofKind::StaticAnalysis, "pa"))
+    .proof(make_proof(&cap_b, ProofKind::StaticAnalysis, "pb"))
+    .confidence(ConfidenceInterval::from_trials(1000, 990))
+    .build()
+    .unwrap();
+    let mut lattice = BTreeMap::new();
+    lattice.insert(cap_a.clone(), vec![cap_b.clone()].into_iter().collect());
+    let input = PromotionTheoremInput {
+        source_capability_sets: vec![SourceCapabilitySet {
+            source_id: "src".to_string(),
+            capabilities: vec![cap_a.clone(), cap_b.clone()].into_iter().collect(),
+        }],
+        manifest_capabilities: vec![cap_a].into_iter().collect(),
+        capability_lattice: lattice,
+        non_interference_dependencies: BTreeMap::new(),
+        custom_extensions: Vec::new(),
+    };
+    let report = witness.evaluate_promotion_theorems(&input).unwrap();
+    let att = report
+        .results
+        .iter()
+        .find(|r| r.theorem == PromotionTheoremKind::AttenuationLegality)
+        .unwrap();
+    assert!(att.passed);
+}
+
+// ===========================================================================
+// 61) Structured events from promotion report
+// ===========================================================================
+
+#[test]
+fn promotion_theorem_report_structured_events() {
+    let witness = build_rich_witness();
+    let input = make_promotion_input(&witness);
+    let report = witness.evaluate_promotion_theorems(&input).unwrap();
+    let events = report.structured_events("trace-1", "dec-1", "pol-1");
+    assert_eq!(events.len(), 4);
+    let gate_event = events.last().unwrap();
+    assert_eq!(gate_event.event, "promotion_theorem_gate");
+    assert_eq!(gate_event.outcome, "pass");
+    assert!(gate_event.error_code.is_none());
+}
+
+// ===========================================================================
+// 62) Structured events for failed report contain error codes
+// ===========================================================================
+
+#[test]
+fn promotion_theorem_report_failed_events_have_error_codes() {
+    let witness = build_rich_witness();
+    let partial: BTreeSet<Capability> = vec![Capability::new("fs.read")].into_iter().collect();
+    let input = PromotionTheoremInput {
+        source_capability_sets: vec![SourceCapabilitySet {
+            source_id: "partial".to_string(),
+            capabilities: partial,
+        }],
+        manifest_capabilities: witness.required_capabilities.clone(),
+        capability_lattice: BTreeMap::new(),
+        non_interference_dependencies: BTreeMap::new(),
+        custom_extensions: Vec::new(),
+    };
+    let report = witness.evaluate_promotion_theorems(&input).unwrap();
+    assert!(!report.all_passed);
+    let events = report.structured_events("t", "d", "p");
+    let gate_event = events.last().unwrap();
+    assert_eq!(gate_event.outcome, "fail");
+    assert!(gate_event.error_code.is_some());
+}
+
+// ===========================================================================
+// 63) PromotionTheoremReport serde roundtrip
+// ===========================================================================
+
+#[test]
+fn promotion_theorem_report_serde_roundtrip() {
+    let witness = build_rich_witness();
+    let input = make_promotion_input(&witness);
+    let report = witness.evaluate_promotion_theorems(&input).unwrap();
+    let json = serde_json::to_string(&report).unwrap();
+    let back: PromotionTheoremReport = serde_json::from_str(&json).unwrap();
+    assert_eq!(report, back);
+}
+
+// ===========================================================================
+// 64) Full lifecycle: Draft -> Validated -> Promoted -> Active -> Revoked
+// ===========================================================================
+
+#[test]
+fn full_lifecycle_transition_chain() {
+    let mut witness = build_rich_witness();
+    witness.transition_to(LifecycleState::Validated).unwrap();
+    assert_eq!(witness.lifecycle_state, LifecycleState::Validated);
+
+    let input = make_promotion_input(&witness);
+    let report = witness.evaluate_promotion_theorems(&input).unwrap();
+    assert!(report.all_passed);
+    witness.apply_promotion_theorem_report(&report);
+    witness.transition_to(LifecycleState::Promoted).unwrap();
+    assert_eq!(witness.lifecycle_state, LifecycleState::Promoted);
+
+    witness.transition_to(LifecycleState::Active).unwrap();
+    assert_eq!(witness.lifecycle_state, LifecycleState::Active);
+
+    witness.transition_to(LifecycleState::Revoked).unwrap();
+    assert_eq!(witness.lifecycle_state, LifecycleState::Revoked);
+    assert!(witness.lifecycle_state.is_terminal());
+}
+
+// ===========================================================================
+// 65) Promotion without theorem proofs fails
+// ===========================================================================
+
+#[test]
+fn promotion_without_theorem_proofs_fails() {
+    let mut witness = build_rich_witness();
+    witness.transition_to(LifecycleState::Validated).unwrap();
+    let result = witness.transition_to(LifecycleState::Promoted);
+    assert!(matches!(
+        result,
+        Err(WitnessError::MissingPromotionTheoremProofs { .. })
+    ));
+}
+
+// ===========================================================================
+// 66) WitnessValidator passes for valid witness
+// ===========================================================================
+
+#[test]
+fn validator_passes_for_valid_witness() {
+    let witness = build_minimal_witness();
+    let validator = WitnessValidator::new();
+    let errors = validator.validate(&witness);
+    assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+}
+
+// ===========================================================================
+// 67) WitnessValidator reports zero trials
+// ===========================================================================
+
+#[test]
+fn validator_reports_zero_trials() {
+    let cap = Capability::new("fs.read");
+    let witness = WitnessBuilder::new(
+        test_extension_id(),
+        test_policy_id(),
+        SecurityEpoch::from_raw(1),
+        1000,
+        test_signing_key(),
+    )
+    .require(cap.clone())
+    .proof(make_proof(&cap, ProofKind::StaticAnalysis, "p"))
+    .build()
+    .unwrap();
+    let validator = WitnessValidator::new();
+    let errors = validator.validate(&witness);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, WitnessError::InvalidConfidence { .. }))
+    );
+}
+
+// ===========================================================================
+// 68) WitnessValidator reports low confidence
+// ===========================================================================
+
+#[test]
+fn validator_reports_low_confidence() {
+    let cap = Capability::new("fs.read");
+    let witness = WitnessBuilder::new(
+        test_extension_id(),
+        test_policy_id(),
+        SecurityEpoch::from_raw(1),
+        1000,
+        test_signing_key(),
+    )
+    .require(cap.clone())
+    .proof(make_proof(&cap, ProofKind::StaticAnalysis, "p"))
+    .confidence(ConfidenceInterval::from_trials(100, 50))
+    .build()
+    .unwrap();
+    let validator = WitnessValidator::new();
+    let errors = validator.validate(&witness);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, WitnessError::InvalidConfidence { .. }))
+    );
+}
+
+// ===========================================================================
+// 69) WitnessValidator reports schema incompatibility
+// ===========================================================================
+
+#[test]
+fn validator_reports_schema_incompatibility() {
+    let mut witness = build_minimal_witness();
+    witness.schema_version = WitnessSchemaVersion {
+        major: 99,
+        minor: 0,
+    };
+    let validator = WitnessValidator::new();
+    let errors = validator.validate(&witness);
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, WitnessError::IncompatibleSchema { .. }))
+    );
+}
+
+// ===========================================================================
+// 70) WitnessStore insert and get
+// ===========================================================================
+
+#[test]
+fn store_insert_and_get() {
+    let mut store = WitnessStore::new();
+    let witness = build_minimal_witness();
+    let wid = witness.witness_id.clone();
+    store.insert(witness.clone());
+    assert_eq!(store.len(), 1);
+    assert!(!store.is_empty());
+    let retrieved = store.get(&wid).unwrap();
+    assert_eq!(retrieved.witness_id, wid);
+}
+
+// ===========================================================================
+// 71) WitnessStore by_state
+// ===========================================================================
+
+#[test]
+fn store_by_state_filters_correctly() {
+    let mut store = WitnessStore::new();
+    store.insert(build_minimal_witness());
+    let drafts = store.by_state(LifecycleState::Draft);
+    assert_eq!(drafts.len(), 1);
+    let actives = store.by_state(LifecycleState::Active);
+    assert!(actives.is_empty());
+}
+
+// ===========================================================================
+// 72) WitnessStore transition
+// ===========================================================================
+
+#[test]
+fn store_transition_draft_to_validated() {
+    let mut store = WitnessStore::new();
+    let witness = build_minimal_witness();
+    let wid = witness.witness_id.clone();
+    store.insert(witness);
+    store.transition(&wid, LifecycleState::Validated).unwrap();
+    assert_eq!(
+        store.get(&wid).unwrap().lifecycle_state,
+        LifecycleState::Validated
+    );
+}
+
+// ===========================================================================
+// 73) WitnessStore active_for_extension
+// ===========================================================================
+
+#[test]
+fn store_active_for_extension_tracks_active_witness() {
+    let mut store = WitnessStore::new();
+    let mut witness = build_minimal_witness();
+    let ext_id = witness.extension_id.clone();
+    promote_witness(&mut witness);
+    witness.transition_to(LifecycleState::Active).unwrap();
+    let wid = witness.witness_id.clone();
+    store.insert(witness);
+    let active = store.active_for_extension(&ext_id).unwrap();
+    assert_eq!(active.witness_id, wid);
+}
+
+// ===========================================================================
+// 74) WitnessStore serde roundtrip
+// ===========================================================================
+
+#[test]
+fn store_serde_roundtrip() {
+    let mut store = WitnessStore::new();
+    store.insert(build_minimal_witness());
+    let json = serde_json::to_string(&store).unwrap();
+    let back: WitnessStore = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.len(), 1);
+}
+
+// ===========================================================================
+// 75) WitnessStore iter returns all witnesses
+// ===========================================================================
+
+#[test]
+fn store_iter_returns_all_witnesses() {
+    let mut store = WitnessStore::new();
+    store.insert(build_minimal_witness());
+    store.insert(build_rich_witness());
+    let count = store.iter().count();
+    assert_eq!(count, 2);
+}
+
+// ===========================================================================
+// 76) WitnessIndexQuery default
+// ===========================================================================
+
+#[test]
+fn witness_index_query_default_values() {
+    let q = WitnessIndexQuery::default();
+    assert!(q.extension_id.is_none());
+    assert!(q.policy_id.is_none());
+    assert!(q.epoch.is_none());
+    assert!(q.lifecycle_state.is_none());
+    assert!(q.capability.is_none());
+    assert_eq!(q.limit, 128);
+    assert!(q.include_revoked);
+}
+
+// ===========================================================================
+// 77) WitnessIndexQuery serde roundtrip
+// ===========================================================================
+
+#[test]
+fn witness_index_query_serde_roundtrip() {
+    let q = WitnessIndexQuery {
+        extension_id: Some(test_extension_id()),
+        policy_id: None,
+        epoch: Some(SecurityEpoch::from_raw(3)),
+        lifecycle_state: Some(LifecycleState::Active),
+        capability: Some(Capability::new("net.connect")),
+        start_timestamp_ns: Some(100),
+        end_timestamp_ns: Some(200),
+        include_revoked: false,
+        cursor: Some("cursor-abc".to_string()),
+        limit: 50,
+    };
+    let json = serde_json::to_string(&q).unwrap();
+    let back: WitnessIndexQuery = serde_json::from_str(&json).unwrap();
+    assert_eq!(q, back);
+}
+
+// ===========================================================================
+// 78) WitnessPublicationConfig default
+// ===========================================================================
+
+#[test]
+fn publication_config_default_values() {
+    let cfg = WitnessPublicationConfig::default();
+    assert_eq!(cfg.checkpoint_interval, 8);
+    assert_eq!(cfg.policy_id, "capability-witness-policy");
+    assert!(cfg.governance_ledger_config.is_none());
+}
+
+// ===========================================================================
+// 79) WitnessPublicationConfig serde roundtrip
+// ===========================================================================
+
+#[test]
+fn publication_config_serde_roundtrip() {
+    let cfg = WitnessPublicationConfig {
+        checkpoint_interval: 16,
+        policy_id: "custom-policy".to_string(),
+        governance_ledger_config: None,
+    };
+    let json = serde_json::to_string(&cfg).unwrap();
+    let back: WitnessPublicationConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(cfg, back);
+}
+
+// ===========================================================================
+// 80) Pipeline zero checkpoint interval errors
+// ===========================================================================
+
+#[test]
+fn pipeline_zero_checkpoint_interval_errors() {
+    let cfg = WitnessPublicationConfig {
+        checkpoint_interval: 0,
+        ..WitnessPublicationConfig::default()
+    };
+    let result =
+        WitnessPublicationPipeline::new(SecurityEpoch::from_raw(1), test_signing_key(), cfg);
+    assert!(matches!(
+        result,
+        Err(WitnessPublicationError::InvalidConfig { .. })
+    ));
+}
+
+// ===========================================================================
+// 81) Pipeline empty policy ID errors
+// ===========================================================================
+
+#[test]
+fn pipeline_empty_policy_id_errors() {
+    let cfg = WitnessPublicationConfig {
+        policy_id: "  ".to_string(),
+        ..WitnessPublicationConfig::default()
+    };
+    let result =
+        WitnessPublicationPipeline::new(SecurityEpoch::from_raw(1), test_signing_key(), cfg);
+    assert!(matches!(
+        result,
+        Err(WitnessPublicationError::InvalidConfig { .. })
+    ));
+}
+
+// ===========================================================================
+// 82) Pipeline publish and query
+// ===========================================================================
+
+use frankenengine_engine::capability_witness::WitnessPublicationQuery;
+
+#[test]
+fn pipeline_publish_and_query() {
+    let mut pipeline = WitnessPublicationPipeline::new(
+        SecurityEpoch::from_raw(1),
+        test_signing_key(),
+        WitnessPublicationConfig::default(),
+    )
+    .unwrap();
+    let mut witness = build_rich_witness();
+    promote_witness(&mut witness);
+    let pub_id = pipeline.publish_witness(witness, 100).unwrap();
+    let results = pipeline.query(&WitnessPublicationQuery::all());
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].publication_id, pub_id);
+    assert!(!results[0].is_revoked());
+}
+
+// ===========================================================================
+// 83) Pipeline publish draft fails
+// ===========================================================================
+
+#[test]
+fn pipeline_publish_draft_fails() {
+    let mut pipeline = WitnessPublicationPipeline::new(
+        SecurityEpoch::from_raw(1),
+        test_signing_key(),
+        WitnessPublicationConfig::default(),
+    )
+    .unwrap();
+    let witness = build_minimal_witness();
+    let result = pipeline.publish_witness(witness, 100);
+    assert!(matches!(
+        result,
+        Err(WitnessPublicationError::WitnessNotPromoted { .. })
+    ));
+}
+
+// ===========================================================================
+// 84) Pipeline duplicate publish fails
+// ===========================================================================
+
+#[test]
+fn pipeline_duplicate_publish_fails() {
+    let mut pipeline = WitnessPublicationPipeline::new(
+        SecurityEpoch::from_raw(1),
+        test_signing_key(),
+        WitnessPublicationConfig::default(),
+    )
+    .unwrap();
+    let mut witness = build_rich_witness();
+    promote_witness(&mut witness);
+    let witness_clone = witness.clone();
+    pipeline.publish_witness(witness, 100).unwrap();
+    let result = pipeline.publish_witness(witness_clone, 200);
+    assert!(matches!(
+        result,
+        Err(WitnessPublicationError::DuplicatePublication { .. })
+    ));
+}
+
+// ===========================================================================
+// 85) Pipeline revoke and query excluding revoked
+// ===========================================================================
+
+#[test]
+fn pipeline_revoke_and_query_excluding_revoked() {
+    let mut pipeline = WitnessPublicationPipeline::new(
+        SecurityEpoch::from_raw(1),
+        test_signing_key(),
+        WitnessPublicationConfig::default(),
+    )
+    .unwrap();
+    let mut witness = build_rich_witness();
+    promote_witness(&mut witness);
+    let wid = witness.witness_id.clone();
+    pipeline.publish_witness(witness, 100).unwrap();
+    pipeline.revoke_witness(&wid, "compromised", 200).unwrap();
+    let all = pipeline.query(&WitnessPublicationQuery::all());
+    assert_eq!(all.len(), 1);
+    assert!(all[0].is_revoked());
+    let active_only = pipeline.query(&WitnessPublicationQuery {
+        include_revoked: false,
+        ..WitnessPublicationQuery::all()
+    });
+    assert!(active_only.is_empty());
+}
+
+// ===========================================================================
+// 86) Pipeline revoke empty reason fails
+// ===========================================================================
+
+#[test]
+fn pipeline_revoke_empty_reason_fails() {
+    let mut pipeline = WitnessPublicationPipeline::new(
+        SecurityEpoch::from_raw(1),
+        test_signing_key(),
+        WitnessPublicationConfig::default(),
+    )
+    .unwrap();
+    let mut witness = build_rich_witness();
+    promote_witness(&mut witness);
+    let wid = witness.witness_id.clone();
+    pipeline.publish_witness(witness, 100).unwrap();
+    let result = pipeline.revoke_witness(&wid, "  ", 200);
+    assert!(matches!(
+        result,
+        Err(WitnessPublicationError::EmptyRevocationReason)
+    ));
+}
+
+// ===========================================================================
+// 87) Pipeline revoke already revoked fails
+// ===========================================================================
+
+#[test]
+fn pipeline_revoke_already_revoked_fails() {
+    let mut pipeline = WitnessPublicationPipeline::new(
+        SecurityEpoch::from_raw(1),
+        test_signing_key(),
+        WitnessPublicationConfig::default(),
+    )
+    .unwrap();
+    let mut witness = build_rich_witness();
+    promote_witness(&mut witness);
+    let wid = witness.witness_id.clone();
+    pipeline.publish_witness(witness, 100).unwrap();
+    pipeline.revoke_witness(&wid, "reason-1", 200).unwrap();
+    let result = pipeline.revoke_witness(&wid, "reason-2", 300);
+    assert!(matches!(
+        result,
+        Err(WitnessPublicationError::AlreadyRevoked { .. })
+    ));
+}
+
+// ===========================================================================
+// 88) Pipeline events emitted
+// ===========================================================================
+
+#[test]
+fn pipeline_events_emitted() {
+    let mut pipeline = WitnessPublicationPipeline::new(
+        SecurityEpoch::from_raw(1),
+        test_signing_key(),
+        WitnessPublicationConfig::default(),
+    )
+    .unwrap();
+    let mut witness = build_rich_witness();
+    promote_witness(&mut witness);
+    let wid = witness.witness_id.clone();
+    pipeline.publish_witness(witness, 100).unwrap();
+    pipeline.revoke_witness(&wid, "bad", 200).unwrap();
+    let events = pipeline.events();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].event, "publish_witness");
+    assert_eq!(events[1].event, "revoke_witness");
+}
+
+// ===========================================================================
+// 89) Pipeline evidence entries emitted
+// ===========================================================================
+
+#[test]
+fn pipeline_evidence_entries_emitted() {
+    let mut pipeline = WitnessPublicationPipeline::new(
+        SecurityEpoch::from_raw(1),
+        test_signing_key(),
+        WitnessPublicationConfig::default(),
+    )
+    .unwrap();
+    let mut witness = build_rich_witness();
+    promote_witness(&mut witness);
+    pipeline.publish_witness(witness, 100).unwrap();
+    assert!(!pipeline.evidence_entries().is_empty());
+}
+
+// ===========================================================================
+// 90) Pipeline verify_publication succeeds
+// ===========================================================================
+
+#[test]
+fn pipeline_verify_publication_succeeds() {
+    let sk = test_signing_key();
+    let vk = sk.verification_key();
+    let mut pipeline = WitnessPublicationPipeline::new(
+        SecurityEpoch::from_raw(1),
+        sk,
+        WitnessPublicationConfig::default(),
+    )
+    .unwrap();
+    let mut witness = build_rich_witness();
+    promote_witness(&mut witness);
+    let pub_id = pipeline.publish_witness(witness, 100).unwrap();
+    let result = pipeline.verify_publication(&pub_id, &vk, &vk);
+    assert!(result.is_ok());
+}
+
+// ===========================================================================
+// 91) Pipeline log entries and checkpoints
+// ===========================================================================
+
+#[test]
+fn pipeline_log_entries_grow_with_publications() {
+    let mut pipeline = WitnessPublicationPipeline::new(
+        SecurityEpoch::from_raw(1),
+        test_signing_key(),
+        WitnessPublicationConfig {
+            checkpoint_interval: 1,
+            ..WitnessPublicationConfig::default()
+        },
+    )
+    .unwrap();
+    let mut witness = build_rich_witness();
+    promote_witness(&mut witness);
+    pipeline.publish_witness(witness, 100).unwrap();
+    assert_eq!(pipeline.log_entries().len(), 1);
+    assert!(!pipeline.checkpoints().is_empty());
+}
+
+// ===========================================================================
+// 92) Pipeline query by extension_id
+// ===========================================================================
+
+#[test]
+fn pipeline_query_by_extension_id() {
+    let mut pipeline = WitnessPublicationPipeline::new(
+        SecurityEpoch::from_raw(1),
+        test_signing_key(),
+        WitnessPublicationConfig::default(),
+    )
+    .unwrap();
+    let mut witness = build_rich_witness();
+    promote_witness(&mut witness);
+    let ext_id = witness.extension_id.clone();
+    pipeline.publish_witness(witness, 100).unwrap();
+    let results = pipeline.query(&WitnessPublicationQuery {
+        extension_id: Some(ext_id),
+        ..WitnessPublicationQuery::all()
+    });
+    assert_eq!(results.len(), 1);
+    let no_match = pipeline.query(&WitnessPublicationQuery {
+        extension_id: Some(oid(0xFF)),
+        ..WitnessPublicationQuery::all()
+    });
+    assert!(no_match.is_empty());
+}
+
+// ===========================================================================
+// 93) ConfidenceInterval successes clamped to trials
+// ===========================================================================
+
+#[test]
+fn confidence_interval_successes_clamped_to_trials() {
+    let ci = ConfidenceInterval::from_trials(10, 20);
+    assert_eq!(ci.n_successes, 10);
+    assert_eq!(ci.n_trials, 10);
+}
+
+// ===========================================================================
+// 94) WitnessError RequiredDeniedOverlap display
+// ===========================================================================
+
+#[test]
+fn witness_error_required_denied_overlap_display() {
+    let err = WitnessError::RequiredDeniedOverlap {
+        capabilities: vec!["a".to_string(), "b".to_string()],
+    };
+    let display = err.to_string();
+    assert!(display.contains("a,b"));
+    assert!(display.contains("overlap"));
+}
+
+// ===========================================================================
+// 95) SourceCapabilitySet serde roundtrip
+// ===========================================================================
+
+#[test]
+fn source_capability_set_serde_roundtrip() {
+    let scs = SourceCapabilitySet {
+        source_id: "test-src".to_string(),
+        capabilities: vec![Capability::new("a"), Capability::new("b")]
+            .into_iter()
+            .collect(),
+    };
+    let json = serde_json::to_string(&scs).unwrap();
+    let back: SourceCapabilitySet = serde_json::from_str(&json).unwrap();
+    assert_eq!(scs, back);
+}
+
+// ===========================================================================
+// 96) CustomTheoremExtension serde roundtrip
+// ===========================================================================
+
+#[test]
+fn custom_theorem_extension_serde_roundtrip() {
+    let ext = CustomTheoremExtension {
+        name: "my-ext".to_string(),
+        required_capabilities: vec![Capability::new("x")].into_iter().collect(),
+        forbidden_capabilities: vec![Capability::new("y")].into_iter().collect(),
+    };
+    let json = serde_json::to_string(&ext).unwrap();
+    let back: CustomTheoremExtension = serde_json::from_str(&json).unwrap();
+    assert_eq!(ext, back);
+}
+
+// ===========================================================================
+// 97) Promotion to Active then Superseded via new witness in store
+// ===========================================================================
+
+#[test]
+fn store_supersedes_previous_active_witness_on_new_active() {
+    let mut store = WitnessStore::new();
+
+    // First witness -> Active
+    let mut w1 = build_minimal_witness();
+    promote_witness(&mut w1);
+    w1.transition_to(LifecycleState::Active).unwrap();
+    let w1_id = w1.witness_id.clone();
+    let ext_id = w1.extension_id.clone();
+    store.insert(w1);
+
+    // Second witness for same extension -> Active
+    let cap = Capability::new("fs.read");
+    let mut w2 = WitnessBuilder::new(
+        ext_id.clone(),
+        test_policy_id(),
+        SecurityEpoch::from_raw(2),
+        3_000_000_000,
+        test_signing_key(),
+    )
+    .require(cap.clone())
+    .proof(make_proof(&cap, ProofKind::StaticAnalysis, "proof2"))
+    .confidence(ConfidenceInterval::from_trials(1000, 990))
+    .build()
+    .unwrap();
+    promote_witness(&mut w2);
+    w2.transition_to(LifecycleState::Active).unwrap();
+    let w2_id = w2.witness_id.clone();
+    store.insert(w2);
+
+    // w1 should be superseded
+    assert_eq!(
+        store.get(&w1_id).unwrap().lifecycle_state,
+        LifecycleState::Superseded
+    );
+    // w2 should be active
+    let active = store.active_for_extension(&ext_id).unwrap();
+    assert_eq!(active.witness_id, w2_id);
+}
+
+// ===========================================================================
+// 98) WitnessPublicationQuery::all()
+// ===========================================================================
+
+#[test]
+fn publication_query_all_defaults() {
+    let q = WitnessPublicationQuery::all();
+    assert!(q.extension_id.is_none());
+    assert!(q.policy_id.is_none());
+    assert!(q.epoch.is_none());
+    assert!(q.content_hash.is_none());
+    assert!(q.include_revoked);
+}
+
+// ===========================================================================
+// 99) ConfidenceInterval bounds are clamped to [0, 1_000_000]
+// ===========================================================================
+
+#[test]
+fn confidence_interval_bounds_clamped() {
+    let ci = ConfidenceInterval::from_trials(1, 1);
+    assert!(ci.lower_millionths >= 0);
+    assert!(ci.upper_millionths <= 1_000_000);
+
+    let ci = ConfidenceInterval::from_trials(1, 0);
+    assert!(ci.lower_millionths >= 0);
+    assert!(ci.upper_millionths <= 1_000_000);
+}
+
+// ===========================================================================
+// 100) apply_promotion_theorem_report does not add proofs on failure
+// ===========================================================================
+
+#[test]
+fn apply_promotion_theorem_report_no_proofs_on_failure() {
+    let mut witness = build_rich_witness();
+    let partial: BTreeSet<Capability> = vec![Capability::new("fs.read")].into_iter().collect();
+    let input = PromotionTheoremInput {
+        source_capability_sets: vec![SourceCapabilitySet {
+            source_id: "partial".to_string(),
+            capabilities: partial,
+        }],
+        manifest_capabilities: witness.required_capabilities.clone(),
+        capability_lattice: BTreeMap::new(),
+        non_interference_dependencies: BTreeMap::new(),
+        custom_extensions: Vec::new(),
+    };
+    let report = witness.evaluate_promotion_theorems(&input).unwrap();
+    assert!(!report.all_passed);
+    let proofs_before = witness.proof_obligations.len();
+    witness.apply_promotion_theorem_report(&report);
+    let theorem_proofs = witness
+        .proof_obligations
+        .iter()
+        .filter(|po| po.kind == ProofKind::PolicyTheoremCheck)
+        .count();
+    assert_eq!(theorem_proofs, 0);
+    assert_eq!(witness.proof_obligations.len(), proofs_before);
+    assert_eq!(
+        witness
+            .metadata
+            .get("promotion_theorem.all_passed")
+            .unwrap(),
+        "false"
+    );
+}
+
+// ===========================================================================
+// 101) Pipeline with governance ledger is None by default
+// ===========================================================================
+
+#[test]
+fn pipeline_governance_ledger_none_by_default() {
+    let pipeline = WitnessPublicationPipeline::new(
+        SecurityEpoch::from_raw(1),
+        test_signing_key(),
+        WitnessPublicationConfig::default(),
+    )
+    .unwrap();
+    assert!(pipeline.governance_ledger().is_none());
+}
+
+// ===========================================================================
+// 102) WitnessStore transition to nonexistent witness errors
+// ===========================================================================
+
+#[test]
+fn store_transition_nonexistent_witness_errors() {
+    let mut store = WitnessStore::new();
+    let result = store.transition(&oid(0xFF), LifecycleState::Validated);
+    assert!(result.is_err());
+}
+
+// ===========================================================================
+// 103) Verify integrity roundtrip on promoted witness
+// ===========================================================================
+
+#[test]
+fn verify_integrity_stable_after_promotion_theorem_application() {
+    let mut witness = build_rich_witness();
+    let input = make_promotion_input(&witness);
+    let report = witness.evaluate_promotion_theorems(&input).unwrap();
+    witness.apply_promotion_theorem_report(&report);
+    // verify_integrity uses synthesis_unsigned_bytes which strips theorem
+    // metadata, so integrity should still hold
+    assert!(witness.verify_integrity().is_ok());
 }

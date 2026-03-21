@@ -409,8 +409,32 @@ fn enrichment_explicit_checkpoint_while_cancelled_drain_event() {
 
     let events = guard.drain_events();
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].reason, CheckpointReason::Explicit);
+    assert_eq!(events[0].reason, CheckpointReason::CancelPending);
     assert_eq!(events[0].action, CheckpointAction::Drain);
+}
+
+#[test]
+fn enrichment_explicit_checkpoint_budget_exhaustion_aborts() {
+    let token = CancellationToken::new();
+    let mut guard = CheckpointGuard::new(
+        LoopSite::ModuleVerify,
+        "verifier",
+        "t",
+        DensityConfig {
+            max_iterations: 100,
+            max_total_iterations: 2,
+        },
+        token,
+    );
+    for _ in 0..2 {
+        guard.tick();
+    }
+    let action = guard.explicit_checkpoint();
+    assert_eq!(action, CheckpointAction::Abort);
+    let events = guard.drain_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].reason, CheckpointReason::BudgetExhausted);
+    assert_eq!(events[0].action, CheckpointAction::Abort);
 }
 
 // =========================================================================
@@ -440,6 +464,15 @@ fn enrichment_coverage_partial_count_tracking() {
     assert!(cov.all_covered());
     assert_eq!(cov.covered_count(), 10);
     assert!(cov.uncovered().is_empty());
+}
+
+#[test]
+fn enrichment_coverage_default_includes_mandatory_sites() {
+    let cov = CheckpointCoverage::default();
+    assert!(!cov.all_covered());
+    assert_eq!(cov.total(), 10);
+    assert_eq!(cov.covered_count(), 0);
+    assert_eq!(cov.uncovered().len(), 10);
 }
 
 // =========================================================================

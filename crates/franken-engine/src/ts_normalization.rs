@@ -2061,6 +2061,11 @@ fn render_namespace_export_function(exported: &str) -> Result<Vec<String>, TsNor
             feature: "unsupported namespace export form",
         });
     }
+    if has_object_shaped_return_type(exported) {
+        return Err(TsNormalizationError::UnsupportedSyntax {
+            feature: "unsupported namespace export form",
+        });
+    }
 
     let mut rendered = exported
         .lines()
@@ -2086,6 +2091,31 @@ fn parse_exported_function_name_range(exported: &str) -> Option<(usize, usize)> 
     let name_start = cursor;
     let name_end = skip_identifier(exported, name_start)?;
     Some((name_start, name_end))
+}
+
+fn has_object_shaped_return_type(exported: &str) -> bool {
+    let (_, name_end) = match parse_exported_function_name_range(exported) {
+        Some(range) => range,
+        None => return false,
+    };
+    let params_start = match find_top_level_char(exported, name_end, '(') {
+        Some(index) => index,
+        None => return false,
+    };
+    let params_end = match find_matching_delimiter(exported, params_start, '(', ')') {
+        Some(index) => index,
+        None => return false,
+    };
+    let Some(after_params) = next_code_token_index(exported, params_end + ')'.len_utf8()) else {
+        return false;
+    };
+    if !exported[after_params..].starts_with(':') {
+        return false;
+    }
+    let Some(type_start) = next_code_token_index(exported, after_params + ':'.len_utf8()) else {
+        return false;
+    };
+    exported[type_start..].starts_with('{')
 }
 
 fn render_namespace_block(namespace_name: &str, assignments: &[String]) -> Vec<String> {
@@ -2991,6 +3021,9 @@ export const version = 1;
 
     #[test]
     fn rejects_namespace_export_function_with_object_shaped_return_type() {
+        // Object-shaped return types are currently rejected in namespace export
+        // functions because the type-stripping pass is not yet context-aware
+        // enough to preserve object-literal colons in the runtime body.
         let source =
             "namespace Demo { export function make(): { value: number } { return { value: 1 }; } }";
         let error = normalize_typescript_to_es2020(

@@ -476,8 +476,10 @@ fn emergency_grant_not_expired_before_expiry() {
     let grant = EmergencyGrant {
         grant_id: "emg-1".to_string(),
         request_id: "req-1".to_string(),
+        extension_id: "ext-test".to_string(),
         source_label: Label::Secret,
         sink_clearance: Label::Public,
+        decision_contract_id: "decision-contract-test".to_string(),
         expiry_ms: 1_700_000_300_000,
         review_completed: false,
     };
@@ -490,8 +492,10 @@ fn emergency_grant_expired_at_exact_expiry() {
     let grant = EmergencyGrant {
         grant_id: "emg-1".to_string(),
         request_id: "req-1".to_string(),
+        extension_id: "ext-test".to_string(),
         source_label: Label::Secret,
         sink_clearance: Label::Public,
+        decision_contract_id: "decision-contract-test".to_string(),
         expiry_ms: 1_700_000_300_000,
         review_completed: false,
     };
@@ -503,8 +507,10 @@ fn emergency_grant_expired_after_expiry() {
     let grant = EmergencyGrant {
         grant_id: "emg-1".to_string(),
         request_id: "req-1".to_string(),
+        extension_id: "ext-test".to_string(),
         source_label: Label::Secret,
         sink_clearance: Label::Public,
+        decision_contract_id: "decision-contract-test".to_string(),
         expiry_ms: 1_700_000_300_000,
         review_completed: false,
     };
@@ -516,8 +522,10 @@ fn emergency_grant_serde_roundtrip() {
     let grant = EmergencyGrant {
         grant_id: "emg-1".to_string(),
         request_id: "req-1".to_string(),
+        extension_id: "ext-test".to_string(),
         source_label: Label::Secret,
         sink_clearance: Label::Public,
+        decision_contract_id: "decision-contract-test".to_string(),
         expiry_ms: 1_700_000_300_000,
         review_completed: false,
     };
@@ -1032,10 +1040,18 @@ fn emergency_creates_grant() {
         .unwrap();
 
     let grant = pipeline
-        .check_emergency_grant(&Label::Secret, &Label::Public, request.timestamp_ms)
+        .check_emergency_grant(
+            &request.extension_id,
+            &Label::Secret,
+            &Label::Public,
+            &request.decision_contract_id,
+            request.timestamp_ms,
+        )
         .unwrap();
     assert!(!grant.review_completed);
     assert!(!grant.is_expired(request.timestamp_ms));
+    assert_eq!(grant.extension_id, request.extension_id);
+    assert_eq!(grant.decision_contract_id, request.decision_contract_id);
     assert_eq!(grant.source_label, Label::Secret);
     assert_eq!(grant.sink_clearance, Label::Public);
 }
@@ -1052,7 +1068,13 @@ fn emergency_grant_id_format() {
         .unwrap();
 
     let grant = pipeline
-        .check_emergency_grant(&Label::Secret, &Label::Public, request.timestamp_ms)
+        .check_emergency_grant(
+            &request.extension_id,
+            &Label::Secret,
+            &Label::Public,
+            &request.decision_contract_id,
+            request.timestamp_ms,
+        )
         .unwrap();
     assert_eq!(grant.grant_id, "emg-req-bad-route");
 }
@@ -1074,7 +1096,13 @@ fn emergency_grant_expiry_uses_config_duration() {
         .unwrap();
 
     let grant = pipeline
-        .check_emergency_grant(&Label::Secret, &Label::Public, 1_000_000)
+        .check_emergency_grant(
+            &request.extension_id,
+            &Label::Secret,
+            &Label::Public,
+            &request.decision_contract_id,
+            1_000_000,
+        )
         .unwrap();
     assert_eq!(grant.expiry_ms, 1_060_000); // 1_000_000 + 60_000
 }
@@ -1096,7 +1124,13 @@ fn emergency_grant_expiry_saturates_on_overflow() {
         .unwrap();
 
     let grant = pipeline
-        .check_emergency_grant(&Label::Secret, &Label::Public, u64::MAX - 1)
+        .check_emergency_grant(
+            &request.extension_id,
+            &Label::Secret,
+            &Label::Public,
+            &request.decision_contract_id,
+            u64::MAX - 1,
+        )
         .unwrap();
     assert_eq!(grant.expiry_ms, u64::MAX);
 }
@@ -1117,13 +1151,25 @@ fn emergency_grant_expires_at_boundary() {
     // Just before
     assert!(
         pipeline
-            .check_emergency_grant(&Label::Secret, &Label::Public, expiry - 1)
+            .check_emergency_grant(
+                &request.extension_id,
+                &Label::Secret,
+                &Label::Public,
+                &request.decision_contract_id,
+                expiry - 1,
+            )
             .is_some()
     );
     // At expiry
     assert!(
         pipeline
-            .check_emergency_grant(&Label::Secret, &Label::Public, expiry)
+            .check_emergency_grant(
+                &request.extension_id,
+                &Label::Secret,
+                &Label::Public,
+                &request.decision_contract_id,
+                expiry,
+            )
             .is_none()
     );
 }
@@ -1141,12 +1187,59 @@ fn emergency_grant_no_match_wrong_labels() {
 
     assert!(
         pipeline
-            .check_emergency_grant(&Label::Confidential, &Label::Public, request.timestamp_ms)
+            .check_emergency_grant(
+                &request.extension_id,
+                &Label::Confidential,
+                &Label::Public,
+                &request.decision_contract_id,
+                request.timestamp_ms,
+            )
             .is_none()
     );
     assert!(
         pipeline
-            .check_emergency_grant(&Label::Secret, &Label::Internal, request.timestamp_ms)
+            .check_emergency_grant(
+                &request.extension_id,
+                &Label::Secret,
+                &Label::Internal,
+                &request.decision_contract_id,
+                request.timestamp_ms,
+            )
+            .is_none()
+    );
+}
+
+#[test]
+fn emergency_grant_not_visible_to_other_extension_or_contract() {
+    let mut pipeline = DeclassificationPipeline::default();
+    let policy = make_policy();
+    let mut request = make_request("bad-route", Label::Secret, Label::Public);
+    request.is_emergency = true;
+
+    pipeline
+        .process(&request, &policy, &low_loss(), &test_key())
+        .unwrap();
+
+    assert!(
+        pipeline
+            .check_emergency_grant(
+                "other-ext",
+                &Label::Secret,
+                &Label::Public,
+                &request.decision_contract_id,
+                request.timestamp_ms,
+            )
+            .is_none()
+    );
+    assert!(
+        pipeline
+            .check_emergency_grant(
+                &request.extension_id,
+                &Label::Secret,
+                &Label::Public,
+                "other-contract",
+                request.timestamp_ms,
+            )
             .is_none()
     );
 }
@@ -1177,14 +1270,26 @@ fn reviewed_emergency_grant_not_returned_as_active() {
         .unwrap();
     assert!(
         pipeline
-            .check_emergency_grant(&Label::Secret, &Label::Public, request.timestamp_ms)
+            .check_emergency_grant(
+                &request.extension_id,
+                &Label::Secret,
+                &Label::Public,
+                &request.decision_contract_id,
+                request.timestamp_ms,
+            )
             .is_some()
     );
 
     assert!(pipeline.complete_emergency_review("emg-req-bad-route"));
     assert!(
         pipeline
-            .check_emergency_grant(&Label::Secret, &Label::Public, request.timestamp_ms)
+            .check_emergency_grant(
+                &request.extension_id,
+                &Label::Secret,
+                &Label::Public,
+                &request.decision_contract_id,
+                request.timestamp_ms,
+            )
             .is_none()
     );
 }

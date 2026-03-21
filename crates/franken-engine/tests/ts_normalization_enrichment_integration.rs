@@ -606,3 +606,111 @@ fn serde_roundtrip_normalization_config() {
     let rt: TsNormalizationConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(config, rt);
 }
+
+// ===========================================================================
+// 20) Namespace export function lowering
+// ===========================================================================
+
+use frankenengine_engine::ts_normalization::normalize_typescript_to_es2020;
+
+fn norm(source: &str) -> String {
+    normalize_typescript_to_es2020(
+        source,
+        &TsNormalizationConfig::default(),
+        "trace",
+        "decision",
+        "policy",
+    )
+    .expect("normalization should pass")
+    .normalized_source
+}
+
+#[test]
+fn namespace_export_function_produces_iife_with_assignment() {
+    let out = norm("namespace Demo { export function run() { return 1; } }");
+    assert!(out.contains("const Demo"));
+    assert!(out.contains("ns.run = run;"));
+    assert!(out.contains("return ns;"));
+}
+
+#[test]
+fn namespace_export_async_function_produces_assignment() {
+    let out = norm("namespace Api {\n  export async function fetch() { return null; }\n}");
+    assert!(out.contains("const Api"));
+    assert!(out.contains("ns.fetch = fetch;"));
+}
+
+#[test]
+fn namespace_export_generator_function_produces_assignment() {
+    let out = norm("namespace Gen {\n  export function* items() { yield 1; }\n}");
+    assert!(out.contains("const Gen"));
+    assert!(out.contains("ns.items = items;"));
+}
+
+#[test]
+fn namespace_mixed_const_and_function_exports() {
+    let out = norm(
+        "namespace Mix {\n  export const VERSION = 1;\n  export function init() { return true; }\n}",
+    );
+    assert!(out.contains("const Mix"));
+    assert!(out.contains("ns.VERSION = 1;"));
+    assert!(out.contains("ns.init = init;"));
+}
+
+#[test]
+fn namespace_function_with_simple_return_type_strips_annotation() {
+    let out = norm("namespace Typed {\n  export function count(): number { return 42; }\n}");
+    assert!(out.contains("const Typed"));
+    assert!(out.contains("ns.count = count;"));
+    assert!(out.contains("return 42;"));
+    // The `: number` return type annotation should be stripped
+    assert!(!out.contains(": number"));
+}
+
+#[test]
+fn namespace_multiline_function_with_comment() {
+    let out = norm(
+        "namespace Svc {\n  export function start() { return true; } // initializer\n  export const name = \"svc\";\n}",
+    );
+    assert!(out.contains("const Svc"));
+    assert!(out.contains("ns.start = start;"));
+    assert!(out.contains("ns.name ="));
+}
+
+#[test]
+fn namespace_function_body_with_braces_handled_correctly() {
+    let out = norm(
+        "namespace Logic {\n  export function check(x: number) {\n    if (x > 0) { return true; }\n    return false;\n  }\n}",
+    );
+    assert!(out.contains("const Logic"));
+    assert!(out.contains("ns.check = check;"));
+}
+
+#[test]
+fn duplicate_namespace_with_functions_merges() {
+    let out =
+        norm("namespace Ns { export function a() {} }\nnamespace Ns { export function b() {} }");
+    assert!(out.contains("const Ns"));
+    assert!(out.contains("ns.a = a;"));
+    assert!(out.contains("ns.b = b;"));
+    // Should appear only once (merged)
+    assert_eq!(out.matches("const Ns").count(), 1);
+}
+
+#[test]
+fn namespace_single_line_function_no_trailing_semicolon() {
+    let out = norm("namespace X { export function f() { return 0; } }");
+    assert!(out.contains("ns.f = f;"));
+}
+
+#[test]
+fn namespace_export_let_still_works_after_function_fix() {
+    let out = norm("namespace Y { export let count = 0; }");
+    assert!(out.contains("ns.count = 0;"));
+}
+
+#[test]
+fn namespace_export_var_still_works_after_function_fix() {
+    let out = norm("namespace Z { export var flag = true; }");
+    assert!(out.contains("ns.flag = true;"));
+}

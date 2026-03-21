@@ -289,12 +289,12 @@ fn new_coverage_uncovered() {
 }
 
 #[test]
-fn default_coverage_empty() {
+fn default_coverage_matches_mandatory_contract() {
     let cov = CheckpointCoverage::default();
-    // Default derives empty BTreeMap — vacuously all_covered.
-    assert!(cov.all_covered());
-    assert_eq!(cov.total(), 0);
+    assert!(!cov.all_covered());
+    assert_eq!(cov.total(), 10);
     assert_eq!(cov.covered_count(), 0);
+    assert_eq!(cov.uncovered().len(), 10);
 }
 
 #[test]
@@ -960,8 +960,32 @@ fn test_explicit_checkpoint_cancelled_emits_drain_action() {
     assert_eq!(action, CheckpointAction::Drain);
     let events = guard.drain_events();
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].reason, CheckpointReason::Explicit);
+    assert_eq!(events[0].reason, CheckpointReason::CancelPending);
     assert_eq!(events[0].action, CheckpointAction::Drain);
+}
+
+#[test]
+fn test_explicit_checkpoint_budget_exhaustion_emits_abort() {
+    let token = CancellationToken::new();
+    let mut guard = CheckpointGuard::new(
+        LoopSite::IrCompilation,
+        "compiler",
+        "trace-explicit-budget",
+        DensityConfig {
+            max_iterations: 100,
+            max_total_iterations: 3,
+        },
+        token,
+    );
+    for _ in 0..3 {
+        guard.tick();
+    }
+    let action = guard.explicit_checkpoint();
+    assert_eq!(action, CheckpointAction::Abort);
+    let events = guard.drain_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].reason, CheckpointReason::BudgetExhausted);
+    assert_eq!(events[0].action, CheckpointAction::Abort);
 }
 
 // Guard: budget = 0 aborts immediately after first tick

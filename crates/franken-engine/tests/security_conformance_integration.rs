@@ -631,7 +631,108 @@ fn evaluate_duplicate_observation_fails() {
 }
 
 // ===========================================================================
-// 19. SecurityConformanceSummary serde
+// 19. evaluate: duplicate label record error
+// ===========================================================================
+
+#[test]
+fn evaluate_duplicate_label_record_fails() {
+    let mut first = label_record(benign_label("b-1"));
+    first.label_path = PathBuf::from("one/workload_label.toml");
+    let mut second = label_record(benign_label("b-1"));
+    second.label_path = PathBuf::from("two/workload_label.toml");
+
+    let thresholds = SecurityConformanceThresholds::default();
+    let result =
+        evaluate_security_conformance(&[first, second], &[benign_observation("b-1")], &thresholds);
+
+    match result.unwrap_err() {
+        SecurityConformanceError::DuplicateWorkloadId {
+            workload_id,
+            first_path,
+            second_path,
+        } => {
+            assert_eq!(workload_id, "b-1");
+            assert_eq!(first_path, PathBuf::from("one/workload_label.toml"));
+            assert_eq!(second_path, PathBuf::from("two/workload_label.toml"));
+        }
+        other => panic!("expected duplicate workload error, got {other:?}"),
+    }
+}
+
+// ===========================================================================
+// 20. evaluate: invalid label record error
+// ===========================================================================
+
+#[test]
+fn evaluate_invalid_label_record_fails() {
+    let records = vec![label_record(SecurityWorkloadLabel {
+        workload_id: "m-1".into(),
+        corpus: SecurityCorpus::Malicious,
+        attack_taxonomy: None,
+        expected_outcome: SecurityOutcome::Contain,
+        expected_detection_latency_bound_ms: 50,
+        hostcall_sequence_hash: hex64('b'),
+        semantic_domain: "security/malicious".into(),
+    })];
+    let thresholds = SecurityConformanceThresholds::default();
+    let result =
+        evaluate_security_conformance(&records, &[malicious_observation("m-1")], &thresholds);
+
+    match result.unwrap_err() {
+        SecurityConformanceError::InvalidLabelField { field, detail } => {
+            assert_eq!(field, "attack_taxonomy");
+            assert!(detail.contains("must declare"));
+        }
+        other => panic!("expected invalid label error, got {other:?}"),
+    }
+}
+
+// ===========================================================================
+// 21. evaluate: padded workload IDs fail closed
+// ===========================================================================
+
+#[test]
+fn evaluate_padded_label_workload_id_fails() {
+    let records = vec![label_record(SecurityWorkloadLabel {
+        workload_id: " b-1 ".into(),
+        corpus: SecurityCorpus::Benign,
+        attack_taxonomy: None,
+        expected_outcome: SecurityOutcome::Allow,
+        expected_detection_latency_bound_ms: 50,
+        hostcall_sequence_hash: hex64('b'),
+        semantic_domain: "security/benign".into(),
+    })];
+    let thresholds = SecurityConformanceThresholds::default();
+    let result = evaluate_security_conformance(&records, &[benign_observation("b-1")], &thresholds);
+
+    match result.unwrap_err() {
+        SecurityConformanceError::InvalidLabelField { field, detail } => {
+            assert_eq!(field, "workload_id");
+            assert!(detail.contains("leading or trailing whitespace"));
+        }
+        other => panic!("expected invalid label workload_id error, got {other:?}"),
+    }
+}
+
+#[test]
+fn evaluate_padded_observation_workload_id_fails() {
+    let records = vec![label_record(benign_label("b-1"))];
+    let mut observation = benign_observation("b-1");
+    observation.workload_id = " b-1 ".into();
+    let thresholds = SecurityConformanceThresholds::default();
+    let result = evaluate_security_conformance(&records, &[observation], &thresholds);
+
+    match result.unwrap_err() {
+        SecurityConformanceError::InvalidObservationField { field, detail } => {
+            assert_eq!(field, "workload_id");
+            assert!(detail.contains("leading or trailing whitespace"));
+        }
+        other => panic!("expected invalid observation workload_id error, got {other:?}"),
+    }
+}
+
+// ===========================================================================
+// 22. SecurityConformanceSummary serde
 // ===========================================================================
 
 #[test]
@@ -666,7 +767,7 @@ fn conformance_summary_serde_round_trip() {
 }
 
 // ===========================================================================
-// 20. SecurityConformanceError display
+// 23. SecurityConformanceError display
 // ===========================================================================
 
 #[test]
@@ -686,7 +787,7 @@ fn error_display_duplicate_observation() {
 }
 
 // ===========================================================================
-// 21. File-based: load_security_labels and validate_corpus_manifest
+// 24. File-based: load_security_labels and validate_corpus_manifest
 // ===========================================================================
 
 #[test]
@@ -734,7 +835,7 @@ semantic_domain = "security/benign"
 }
 
 // ===========================================================================
-// 22. evaluate: large corpus
+// 25. evaluate: large corpus
 // ===========================================================================
 
 #[test]
@@ -778,7 +879,7 @@ fn evaluate_large_corpus_gate_pass() {
 }
 
 // ===========================================================================
-// 23. evaluate: observations by workload map
+// 26. evaluate: observations by workload map
 // ===========================================================================
 
 #[test]
@@ -799,7 +900,7 @@ fn evaluate_returns_observations_by_workload() {
 }
 
 // ===========================================================================
-// 24. Malicious with different outcomes
+// 27. Malicious with different outcomes
 // ===========================================================================
 
 #[test]

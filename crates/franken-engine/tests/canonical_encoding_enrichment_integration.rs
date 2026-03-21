@@ -309,3 +309,173 @@ fn enrichment_guard_validate_tracks_events() {
         "Validation should produce at least one event"
     );
 }
+
+// ===========================================================================
+// Additional enrichment: edge cases and behavioral properties
+// ===========================================================================
+
+#[test]
+fn guard_fresh_has_zero_counts() {
+    let g = guard();
+    assert_eq!(g.acceptance_count(), 0);
+    assert_eq!(g.rejection_count(), 0);
+}
+
+#[test]
+fn guard_drain_events_is_idempotent() {
+    let mut g = guard();
+    let first = g.drain_events();
+    let second = g.drain_events();
+    assert!(first.is_empty());
+    assert!(second.is_empty());
+}
+
+#[test]
+fn guard_register_same_class_twice_no_panic() {
+    let mut g = guard();
+    g.register_class(ObjectDomain::PolicyObject, "schema-a", 1, b"def-a");
+    g.register_class(ObjectDomain::PolicyObject, "schema-b", 2, b"def-b");
+    // Should not panic; behavior is implementation-defined but safe
+}
+
+#[test]
+fn guard_register_different_domains() {
+    let mut g = guard();
+    g.register_class(ObjectDomain::PolicyObject, "schema-policy", 1, b"def-p");
+    g.register_class(ObjectDomain::EvidenceRecord, "schema-evidence", 1, b"def-e");
+    assert!(g.is_class_registered(&ObjectDomain::PolicyObject));
+    assert!(g.is_class_registered(&ObjectDomain::EvidenceRecord));
+    assert_eq!(g.registered_class_count(), 2);
+}
+
+#[test]
+fn violation_display_all_variants() {
+    let variants: Vec<CanonicalViolation> = vec![
+        CanonicalViolation::NonLexicographicKeys {
+            prev_key: "b".to_string(),
+            current_key: "a".to_string(),
+        },
+        CanonicalViolation::DuplicateKey {
+            key: "dup".to_string(),
+        },
+        CanonicalViolation::TrailingBytes { count: 3 },
+        CanonicalViolation::LeadingPadding { byte_count: 2 },
+        CanonicalViolation::DeserializationFailed {
+            detail: "bad input".to_string(),
+        },
+        CanonicalViolation::InvalidTag {
+            tag: 0xFF,
+            offset: 0,
+        },
+        CanonicalViolation::SchemaViolation {
+            detail: "mismatch".to_string(),
+        },
+    ];
+    let mut displays = BTreeSet::new();
+    for v in &variants {
+        let d = format!("{v}");
+        assert!(!d.is_empty(), "violation Display should be nonempty");
+        displays.insert(d);
+    }
+    // All displays should be unique
+    assert_eq!(displays.len(), variants.len());
+}
+
+#[test]
+fn violation_serde_roundtrip() {
+    let v = CanonicalViolation::DuplicateKey {
+        key: "test_key".to_string(),
+    };
+    let json = serde_json::to_string(&v).unwrap();
+    let back: CanonicalViolation = serde_json::from_str(&json).unwrap();
+    assert_eq!(v, back);
+}
+
+#[test]
+fn non_canonical_error_display_nonempty() {
+    let err = NonCanonicalError {
+        object_class: ObjectDomain::PolicyObject,
+        input_hash: [0u8; 32],
+        violation: CanonicalViolation::TrailingBytes { count: 5 },
+        trace_id: "t1".to_string(),
+    };
+    let display = format!("{err}");
+    assert!(!display.is_empty());
+    assert!(display.contains("trailing"));
+}
+
+#[test]
+fn non_canonical_error_is_std_error() {
+    let err = NonCanonicalError {
+        object_class: ObjectDomain::PolicyObject,
+        input_hash: [0u8; 32],
+        violation: CanonicalViolation::InvalidTag {
+            tag: 0xAB,
+            offset: 0,
+        },
+        trace_id: "t2".to_string(),
+    };
+    // Verify it implements std::error::Error
+    let _: &dyn std::error::Error = &err;
+}
+
+#[test]
+fn guard_event_type_accepted_distinct_from_rejected() {
+    let accepted = GuardEventType::Accepted;
+    let rejected = GuardEventType::Rejected {
+        violation: CanonicalViolation::TrailingBytes { count: 1 },
+    };
+    assert_ne!(format!("{accepted:?}"), format!("{rejected:?}"));
+}
+
+#[test]
+fn guard_event_type_serde_accepted() {
+    let variant = GuardEventType::Accepted;
+    let json = serde_json::to_string(&variant).unwrap();
+    let back: GuardEventType = serde_json::from_str(&json).unwrap();
+    assert_eq!(variant, back);
+}
+
+#[test]
+fn guard_event_type_serde_unregistered() {
+    let variant = GuardEventType::UnregisteredClass;
+    let json = serde_json::to_string(&variant).unwrap();
+    let back: GuardEventType = serde_json::from_str(&json).unwrap();
+    assert_eq!(variant, back);
+}
+
+#[test]
+fn is_canonical_raw_rejects_empty_bytes() {
+    let result = CanonicalGuard::is_canonical_raw(&[]);
+    assert!(result.is_err());
+}
+
+#[test]
+fn is_canonical_raw_accepts_valid_canonical_bytes() {
+    use frankenengine_engine::deterministic_serde::encode_value;
+    let bytes = encode_value(&CanonicalValue::U64(42));
+    let result = CanonicalGuard::is_canonical_raw(&bytes);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn guard_validate_unregistered_domain_produces_event() {
+    use frankenengine_engine::deterministic_serde::encode_value;
+    let mut g = guard();
+    // Don't register any domain
+    let bytes = encode_value(&CanonicalValue::Bool(false));
+    let _ = g.validate(ObjectDomain::PolicyObject, &bytes, "trace-unreg");
+    let events = g.drain_events();
+    assert!(
+        !events.is_empty(),
+        "unregistered domain should produce an event"
+    );
+}
+
+#[test]
+fn guard_event_counts_return_btreemap() {
+    let g = guard();
+    let counts = g.event_counts();
+    // Fresh guard should have empty or zero counts
+    assert!(counts.values().all(|v| *v == 0) || counts.is_empty());
+}

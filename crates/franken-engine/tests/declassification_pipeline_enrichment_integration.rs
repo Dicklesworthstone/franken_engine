@@ -226,8 +226,10 @@ fn emergency_grant_serde_roundtrip() {
     let grant = EmergencyGrant {
         grant_id: "emg-1".to_string(),
         request_id: "req-1".to_string(),
+        extension_id: "ext-test".to_string(),
         source_label: Label::Secret,
         sink_clearance: Label::Public,
+        decision_contract_id: "decision-contract-test".to_string(),
         expiry_ms: 1_700_000_300_000,
         review_completed: false,
     };
@@ -336,8 +338,10 @@ fn emergency_grant_is_expired_at_exact_expiry() {
     let grant = EmergencyGrant {
         grant_id: "emg-1".to_string(),
         request_id: "req-1".to_string(),
+        extension_id: "ext-test".to_string(),
         source_label: Label::Secret,
         sink_clearance: Label::Public,
+        decision_contract_id: "decision-contract-test".to_string(),
         expiry_ms: 1000,
         review_completed: false,
     };
@@ -443,7 +447,13 @@ fn pipeline_emergency_grant_created_and_findable() {
         .process(&request, &policy, &low_loss(), &test_key())
         .unwrap();
     let grant = pipeline
-        .check_emergency_grant(&Label::Secret, &Label::Public, request.timestamp_ms)
+        .check_emergency_grant(
+            &request.extension_id,
+            &Label::Secret,
+            &Label::Public,
+            &request.decision_contract_id,
+            request.timestamp_ms,
+        )
         .unwrap();
     assert!(!grant.review_completed);
 }
@@ -462,7 +472,13 @@ fn pipeline_emergency_review_completion() {
     // After review, grant should not be found (reviewed = true)
     assert!(
         pipeline
-            .check_emergency_grant(&Label::Secret, &Label::Public, request.timestamp_ms)
+            .check_emergency_grant(
+                &request.extension_id,
+                &Label::Secret,
+                &Label::Public,
+                &request.decision_contract_id,
+                request.timestamp_ms,
+            )
             .is_none()
     );
 }

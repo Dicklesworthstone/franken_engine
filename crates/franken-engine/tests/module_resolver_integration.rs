@@ -358,6 +358,118 @@ fn register_and_resolve_external_module() {
 }
 
 #[test]
+fn external_package_extensionless_relative_native_requires_explicit_extension() {
+    let mut resolver = DeterministicModuleResolver::default();
+    resolver
+        .register_external_module("some-pkg/sub.mjs", esm_def("export default 'sub';"))
+        .unwrap();
+
+    let error = resolver
+        .resolve(
+            &ModuleRequest::new("./sub", ImportStyle::Import).with_referrer("external:some-pkg"),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect_err("native mode should reject extensionless external ESM relatives");
+    assert_eq!(error.code, ResolutionErrorCode::ModuleNotFound);
+    assert_eq!(error.probe_sequence, vec!["some-pkg/sub"]);
+}
+
+#[test]
+fn external_package_extensionless_relative_bun_compat_resolves() {
+    let mut resolver = DeterministicModuleResolver::default();
+    resolver
+        .register_external_module("some-pkg/sub.mjs", esm_def("export default 'sub';"))
+        .unwrap();
+
+    let outcome = resolver
+        .resolve(
+            &ModuleRequest::new("./sub", ImportStyle::Import)
+                .with_referrer("external:some-pkg")
+                .with_compatibility_mode(CompatibilityMode::BunCompat),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect("bun_compat should resolve extensionless external ESM relatives");
+    assert_eq!(outcome.module.canonical_specifier, "some-pkg/sub.mjs");
+    assert_eq!(
+        outcome.module.probe_sequence,
+        vec!["some-pkg/sub", "some-pkg/sub.mjs"]
+    );
+}
+
+#[test]
+fn external_package_extensionless_relative_node_compat_requires_explicit_extension() {
+    let mut resolver = DeterministicModuleResolver::default();
+    resolver
+        .register_external_module("some-pkg/sub.mjs", esm_def("export default 'sub';"))
+        .unwrap();
+
+    let error = resolver
+        .resolve(
+            &ModuleRequest::new("./sub", ImportStyle::Import)
+                .with_referrer("external:some-pkg")
+                .with_compatibility_mode(CompatibilityMode::NodeCompat),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect_err("node_compat should reject extensionless external ESM relatives");
+    assert_eq!(error.code, ResolutionErrorCode::ModuleNotFound);
+    assert_eq!(error.probe_sequence, vec!["some-pkg/sub"]);
+}
+
+#[test]
+fn external_package_explicit_relative_extension_resolves_outside_bun_compat() {
+    let mut resolver = DeterministicModuleResolver::default();
+    resolver
+        .register_external_module("some-pkg/sub.mjs", esm_def("export default 'sub';"))
+        .unwrap();
+
+    for request in [
+        ModuleRequest::new("./sub.mjs", ImportStyle::Import).with_referrer("external:some-pkg"),
+        ModuleRequest::new("./sub.mjs", ImportStyle::Import)
+            .with_referrer("external:some-pkg")
+            .with_compatibility_mode(CompatibilityMode::NodeCompat),
+    ] {
+        let outcome = resolver
+            .resolve(&request, &test_context(), &allow_all())
+            .expect("explicit external ESM relative extension should resolve");
+        assert_eq!(outcome.module.canonical_specifier, "some-pkg/sub.mjs");
+        assert_eq!(outcome.module.probe_sequence, vec!["some-pkg/sub.mjs"]);
+    }
+}
+
+#[test]
+fn external_package_relative_traversal_cannot_escape_package_root() {
+    let mut resolver = DeterministicModuleResolver::default();
+    resolver
+        .register_external_module(
+            "some-pkg/entry.mjs",
+            esm_def("import '../other-pkg/private.mjs';"),
+        )
+        .unwrap();
+    resolver
+        .register_external_module("other-pkg/private.mjs", esm_def("export default 'secret';"))
+        .unwrap();
+
+    let error = resolver
+        .resolve(
+            &ModuleRequest::new("../other-pkg/private.mjs", ImportStyle::Import)
+                .with_referrer("external:some-pkg/entry.mjs"),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect_err("external package relatives must not escape the package root");
+    assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
+    assert!(
+        error
+            .message
+            .contains("escapes external package root 'some-pkg'")
+    );
+    assert!(error.probe_sequence.is_empty());
+}
+
+#[test]
 fn register_external_empty_key_fails() {
     let mut resolver = DeterministicModuleResolver::default();
     let result = resolver.register_external_module("", esm_def("x"));

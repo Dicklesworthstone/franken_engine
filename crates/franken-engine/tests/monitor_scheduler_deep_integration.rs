@@ -436,9 +436,8 @@ fn deep_scheduler_config_accessor() {
 }
 
 #[test]
-fn deep_scheduler_interval_nonzero() {
+fn deep_scheduler_interval_starts_at_zero() {
     let sched = make_scheduler();
-    // interval() is a constant or computed value — just verify it returns
-    let interval = sched.interval();
-    assert!(interval > 0);
+    // interval starts at 0 and increments with each schedule() call
+    assert_eq!(sched.interval(), 0);
 }

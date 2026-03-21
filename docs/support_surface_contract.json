@@ -27,6 +27,20 @@
     "shipped_fact",
     "target_only"
   ],
+  "readiness_answer_contract": {
+    "engine_ready_when_support_status_in": [
+      "shipped"
+    ],
+    "engine_blocked_when_support_status_in": [
+      "deferred",
+      "unsupported",
+      "candidate"
+    ],
+    "product_ready_state": "delegated_to_franken_node_handoff",
+    "product_ready_owner_repo": "franken_node",
+    "product_ready_handoff_bead_id": "bd-1lsy.5.10.2",
+    "operator_rule_summary": "Within this engine-owned contract, support_status in [shipped] means engine-ready. support_status in [deferred, unsupported, candidate] means engine-blocked. Product-ready claims are delegated to downstream franken_node handoff evidence."
+  },
   "surface_rows": [
     {
       "surface_id": "parser.unsupported_syntax_scaffold",
@@ -475,6 +489,7 @@
     "commands.txt",
     "trace_ids.json",
     "support_surface_schema_report.json",
+    "summary.md",
     "support_surface_contract.json",
     "support_surface_mode_matrix.json",
     "step_logs/step_*.log"

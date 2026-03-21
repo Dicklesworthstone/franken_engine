@@ -280,3 +280,233 @@ fn decision_with_no_candidates_not_eligible() {
     assert!(!decision.eligible);
     assert!(decision.selected_candidates.is_empty());
 }
+
+// ===========================================================================
+// Additional enrichment: edge cases and behavioral properties
+// ===========================================================================
+
+use frankenengine_engine::bytecode_vm::{ExecutionReport, InlineCacheStats, Value, VmEvent};
+use frankenengine_engine::shape_transition_algebra::ShapeTransitionAlgebra;
+use frankenengine_engine::tier_up_profiler::{
+    build_hot_path_profile, evaluate_tier_up_eligibility,
+};
+
+fn make_enrichment_event(ip: u32, opcode: &str, cache_hit: Option<bool>) -> VmEvent {
+    VmEvent {
+        trace_id: "enrich-trace".to_string(),
+        component: "bytecode_vm".to_string(),
+        step: 0,
+        ip,
+        opcode: opcode.to_string(),
+        event: "instruction".to_string(),
+        outcome: "ok".to_string(),
+        error_code: None,
+        cache_hit,
+    }
+}
+
+fn make_enrichment_report(steps: u64, events: Vec<VmEvent>) -> ExecutionReport {
+    ExecutionReport {
+        trace_id: "enrich-trace".to_string(),
+        result: Value::Int(0),
+        steps,
+        cache_stats: InlineCacheStats {
+            entries: 0,
+            hits: 0,
+            misses: 0,
+        },
+        state_hash: String::new(),
+        events,
+        shape_lattice: ShapeTransitionAlgebra::new().manifest(),
+        shape_trace: Vec::new(),
+    }
+}
+
+#[test]
+fn policy_min_total_steps_is_reasonable_lower_bound() {
+    let policy = TierUpPolicy::default();
+    // Should be at least 16 to avoid noise from trivial programs
+    assert!(policy.min_total_steps >= 16);
+    // But not so large that real hot paths are ignored
+    assert!(policy.min_total_steps <= 1024);
+}
+
+#[test]
+fn policy_profile_top_k_is_bounded() {
+    let policy = TierUpPolicy::default();
+    assert!(policy.profile_top_k >= 1);
+    assert!(policy.profile_top_k <= 100);
+}
+
+#[test]
+fn policy_max_candidates_respects_top_k() {
+    let policy = TierUpPolicy::default();
+    // max_candidates should be at most profile_top_k
+    assert!(policy.max_candidates <= policy.profile_top_k);
+}
+
+#[test]
+fn candidate_id_includes_ip_in_hash() {
+    let c1 = TierUpCandidate {
+        ip: 10,
+        opcode: "Call".to_string(),
+        invocations: 100,
+        cache_hit_rate_millionths: 900_000,
+        rationale: "hot".to_string(),
+    };
+    let c2 = TierUpCandidate {
+        ip: 20,
+        opcode: "Call".to_string(),
+        invocations: 100,
+        cache_hit_rate_millionths: 900_000,
+        rationale: "hot".to_string(),
+    };
+    // Different IPs should produce different candidate IDs
+    assert_ne!(c1.candidate_id("trace"), c2.candidate_id("trace"));
+}
+
+#[test]
+fn candidate_id_prefix_is_stable() {
+    let candidate = TierUpCandidate {
+        ip: 5,
+        opcode: "LoadLocal".to_string(),
+        invocations: 50,
+        cache_hit_rate_millionths: 500_000,
+        rationale: "moderate".to_string(),
+    };
+    let id = candidate.candidate_id("t1");
+    assert!(
+        id.starts_with("tc-"),
+        "candidate_id should start with 'tc-' prefix"
+    );
+    assert!(
+        id.len() > 3,
+        "candidate_id should have content after prefix"
+    );
+}
+
+#[test]
+fn hot_path_profile_hash_varies_by_content() {
+    let events1 = vec![make_enrichment_event(0, "Add", Some(true))];
+    let events2 = vec![make_enrichment_event(0, "Sub", Some(true))];
+    let report1 = make_enrichment_report(1, events1);
+    let report2 = make_enrichment_report(1, events2);
+    let p1 = build_hot_path_profile(&report1, 5);
+    let p2 = build_hot_path_profile(&report2, 5);
+    assert_ne!(p1.profile_hash, p2.profile_hash);
+}
+
+#[test]
+fn hot_path_profile_with_no_cache_events() {
+    let events = vec![make_enrichment_event(0, "Nop", None)];
+    let report = make_enrichment_report(1, events);
+    let profile = build_hot_path_profile(&report, 5);
+    assert_eq!(profile.top_paths.len(), 1);
+    assert_eq!(profile.top_paths[0].cache_hits, 0);
+    assert_eq!(profile.top_paths[0].cache_misses, 0);
+}
+
+#[test]
+fn evaluate_empty_report_not_eligible() {
+    let report = make_enrichment_report(0, vec![]);
+    let policy = TierUpPolicy::default();
+    let decision = evaluate_tier_up_eligibility(&report, &policy);
+    assert!(!decision.eligible);
+    assert!(decision.selected_candidates.is_empty());
+}
+
+#[test]
+fn evaluate_decision_schema_version_matches_policy() {
+    let events = vec![make_enrichment_event(0, "Add", Some(true))];
+    let report = make_enrichment_report(100, events);
+    let policy = TierUpPolicy::default();
+    let decision = evaluate_tier_up_eligibility(&report, &policy);
+    assert_eq!(decision.schema_version, TIER_UP_POLICY_SCHEMA_VERSION);
+}
+
+#[test]
+fn evaluate_decision_trace_id_matches_report() {
+    let events = vec![make_enrichment_event(0, "Add", Some(true))];
+    let report = make_enrichment_report(100, events);
+    let policy = TierUpPolicy::default();
+    let decision = evaluate_tier_up_eligibility(&report, &policy);
+    assert_eq!(decision.trace_id, report.trace_id);
+}
+
+#[test]
+fn evaluate_decision_events_nonempty() {
+    let events = vec![make_enrichment_event(0, "Add", Some(true))];
+    let report = make_enrichment_report(100, events);
+    let policy = TierUpPolicy::default();
+    let decision = evaluate_tier_up_eligibility(&report, &policy);
+    assert!(
+        !decision.events.is_empty(),
+        "decision should always emit at least one event"
+    );
+}
+
+#[test]
+fn rejection_reason_is_human_readable() {
+    let rejection = TierUpRejection {
+        ip: 0,
+        opcode: "Nop".to_string(),
+        invocations: 1,
+        cache_hit_rate_millionths: 0,
+        reason: "Below minimum invocations threshold".to_string(),
+    };
+    assert!(!rejection.reason.is_empty());
+    assert!(
+        rejection.reason.len() > 5,
+        "rejection reason should be descriptive"
+    );
+}
+
+#[test]
+fn decision_event_component_is_tier_up_profiler() {
+    let event = TierUpDecisionEvent {
+        trace_id: "t1".to_string(),
+        component: "tier_up_profiler".to_string(),
+        event: "evaluate".to_string(),
+        outcome: "not_eligible".to_string(),
+        reason: "below min steps".to_string(),
+    };
+    assert_eq!(event.component, "tier_up_profiler");
+}
+
+#[test]
+fn multiple_hot_paths_sorted_by_invocations() {
+    let mut events = Vec::new();
+    // ip=0: 10 invocations, ip=1: 50 invocations, ip=2: 30 invocations
+    for _ in 0..10 {
+        events.push(make_enrichment_event(0, "LoadConst", Some(true)));
+    }
+    for _ in 0..50 {
+        events.push(make_enrichment_event(1, "Call", Some(true)));
+    }
+    for _ in 0..30 {
+        events.push(make_enrichment_event(2, "Add", Some(false)));
+    }
+    let report = make_enrichment_report(90, events);
+    let profile = build_hot_path_profile(&report, 10);
+    assert_eq!(profile.top_paths.len(), 3);
+    // Should be sorted descending by invocations
+    assert!(profile.top_paths[0].invocations >= profile.top_paths[1].invocations);
+    assert!(profile.top_paths[1].invocations >= profile.top_paths[2].invocations);
+}
+
+#[test]
+fn cache_hit_rate_millionths_is_correct() {
+    let mut events = Vec::new();
+    for _ in 0..3 {
+        events.push(make_enrichment_event(0, "GetProp", Some(true)));
+    }
+    events.push(make_enrichment_event(0, "GetProp", Some(false)));
+    let report = make_enrichment_report(4, events);
+    let profile = build_hot_path_profile(&report, 5);
+    assert_eq!(profile.top_paths.len(), 1);
+    let sample = &profile.top_paths[0];
+    assert_eq!(sample.cache_hits, 3);
+    assert_eq!(sample.cache_misses, 1);
+    // 3/4 = 750_000 millionths
+    assert_eq!(sample.cache_hit_rate_millionths, 750_000);
+}

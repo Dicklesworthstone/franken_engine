@@ -253,6 +253,14 @@ pub struct IfcProvenanceIndex<S: StorageAdapter> {
 }
 
 impl<S: StorageAdapter> IfcProvenanceIndex<S> {
+    fn normalize_extension_id(extension_id: &str) -> Result<String, ProvenanceError> {
+        let trimmed = extension_id.trim();
+        if trimmed.is_empty() {
+            return Err(ProvenanceError::EmptyExtensionId);
+        }
+        Ok(trimmed.to_string())
+    }
+
     pub fn new(store: S) -> Self {
         Self {
             store,
@@ -273,11 +281,25 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
                 record_type: "flow_event".to_string(),
             });
         }
-        if record.extension_id.is_empty() {
-            return Err(ProvenanceError::EmptyExtensionId);
+        let mut stored = record.clone();
+        stored.extension_id = Self::normalize_extension_id(&stored.extension_id)?;
+        if matches!(stored.decision, FlowDecision::Declassified) {
+            let Some(receipt_ref) = stored.receipt_ref.as_mut() else {
+                return Err(ProvenanceError::EmptyRequiredField {
+                    record_type: "flow_event".to_string(),
+                    field_name: "receipt_ref".to_string(),
+                });
+            };
+            *receipt_ref = receipt_ref.trim().to_string();
+            if receipt_ref.is_empty() {
+                return Err(ProvenanceError::EmptyRequiredField {
+                    record_type: "flow_event".to_string(),
+                    field_name: "receipt_ref".to_string(),
+                });
+            }
         }
-        let key = format!("{FLOW_EVENT_PREFIX}{}", record.event_id);
-        self.put_record(&key, record, ctx)?;
+        let key = format!("{FLOW_EVENT_PREFIX}{}", stored.event_id);
+        self.put_record(&key, &stored, ctx)?;
         self.push_event(&ctx.trace_id, "flow_event_inserted", "ok", None);
         Ok(())
     }
@@ -293,11 +315,10 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
                 record_type: "flow_proof".to_string(),
             });
         }
-        if record.extension_id.is_empty() {
-            return Err(ProvenanceError::EmptyExtensionId);
-        }
-        let key = format!("{FLOW_PROOF_PREFIX}{}", record.proof_id);
-        self.put_record(&key, record, ctx)?;
+        let mut stored = record.clone();
+        stored.extension_id = Self::normalize_extension_id(&stored.extension_id)?;
+        let key = format!("{FLOW_PROOF_PREFIX}{}", stored.proof_id);
+        self.put_record(&key, &stored, ctx)?;
         self.push_event(&ctx.trace_id, "flow_proof_inserted", "ok", None);
         Ok(())
     }
@@ -308,28 +329,30 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         record: &DeclassReceiptRecord,
         ctx: &EventContext,
     ) -> Result<(), ProvenanceError> {
-        if record.receipt_id.trim().is_empty() {
+        let mut stored = record.clone();
+        stored.receipt_id = stored.receipt_id.trim().to_string();
+        if stored.receipt_id.is_empty() {
             return Err(ProvenanceError::EmptyId {
                 record_type: "declass_receipt".to_string(),
             });
         }
-        if record.extension_id.trim().is_empty() {
-            return Err(ProvenanceError::EmptyExtensionId);
-        }
-        if record.declassification_route_ref.trim().is_empty() {
+        stored.extension_id = Self::normalize_extension_id(&stored.extension_id)?;
+        stored.declassification_route_ref = stored.declassification_route_ref.trim().to_string();
+        if stored.declassification_route_ref.is_empty() {
             return Err(ProvenanceError::EmptyRequiredField {
                 record_type: "declass_receipt".to_string(),
                 field_name: "declassification_route_ref".to_string(),
             });
         }
-        if record.decision_contract_id.trim().is_empty() {
+        stored.decision_contract_id = stored.decision_contract_id.trim().to_string();
+        if stored.decision_contract_id.is_empty() {
             return Err(ProvenanceError::EmptyRequiredField {
                 record_type: "declass_receipt".to_string(),
                 field_name: "decision_contract_id".to_string(),
             });
         }
-        let key = format!("{DECLASS_RECEIPT_PREFIX}{}", record.receipt_id);
-        self.put_record(&key, record, ctx)?;
+        let key = format!("{DECLASS_RECEIPT_PREFIX}{}", stored.receipt_id);
+        self.put_record(&key, &stored, ctx)?;
         self.push_event(&ctx.trace_id, "declass_receipt_inserted", "ok", None);
         Ok(())
     }
@@ -345,11 +368,10 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
                 record_type: "confinement_claim".to_string(),
             });
         }
-        if record.extension_id.is_empty() {
-            return Err(ProvenanceError::EmptyExtensionId);
-        }
-        let key = format!("{CONFINEMENT_CLAIM_PREFIX}{}", record.claim_id);
-        self.put_record(&key, record, ctx)?;
+        let mut stored = record.clone();
+        stored.extension_id = Self::normalize_extension_id(&stored.extension_id)?;
+        let key = format!("{CONFINEMENT_CLAIM_PREFIX}{}", stored.claim_id);
+        self.put_record(&key, &stored, ctx)?;
         self.push_event(&ctx.trace_id, "confinement_claim_inserted", "ok", None);
         Ok(())
     }
@@ -362,13 +384,21 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         extension_id: &str,
         ctx: &EventContext,
     ) -> Result<Vec<FlowEventRecord>, ProvenanceError> {
+        let extension_id = extension_id.trim();
+        if extension_id.is_empty() {
+            return Ok(Vec::new());
+        }
         let records = self.query_prefix(FLOW_EVENT_PREFIX, ctx)?;
         let mut results = Vec::new();
         for r in records {
-            if let Ok(rec) = serde_json::from_slice::<FlowEventRecord>(&r.value)
-                && rec.extension_id == extension_id
-            {
-                results.push(rec);
+            if let Ok(mut rec) = serde_json::from_slice::<FlowEventRecord>(&r.value) {
+                rec.extension_id = rec.extension_id.trim().to_string();
+                if rec.extension_id.is_empty() {
+                    continue;
+                }
+                if rec.extension_id == extension_id {
+                    results.push(rec);
+                }
             }
         }
         results.sort();
@@ -381,13 +411,21 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         extension_id: &str,
         ctx: &EventContext,
     ) -> Result<Vec<FlowProofRecord>, ProvenanceError> {
+        let extension_id = extension_id.trim();
+        if extension_id.is_empty() {
+            return Ok(Vec::new());
+        }
         let records = self.query_prefix(FLOW_PROOF_PREFIX, ctx)?;
         let mut results = Vec::new();
         for r in records {
-            if let Ok(rec) = serde_json::from_slice::<FlowProofRecord>(&r.value)
-                && rec.extension_id == extension_id
-            {
-                results.push(rec);
+            if let Ok(mut rec) = serde_json::from_slice::<FlowProofRecord>(&r.value) {
+                rec.extension_id = rec.extension_id.trim().to_string();
+                if rec.extension_id.is_empty() {
+                    continue;
+                }
+                if rec.extension_id == extension_id {
+                    results.push(rec);
+                }
             }
         }
         results.sort();
@@ -400,13 +438,21 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         extension_id: &str,
         ctx: &EventContext,
     ) -> Result<Vec<DeclassReceiptRecord>, ProvenanceError> {
+        let extension_id = extension_id.trim();
+        if extension_id.is_empty() {
+            return Ok(Vec::new());
+        }
         let records = self.query_prefix(DECLASS_RECEIPT_PREFIX, ctx)?;
         let mut results = Vec::new();
         for r in records {
-            if let Ok(rec) = serde_json::from_slice::<DeclassReceiptRecord>(&r.value)
-                && rec.extension_id == extension_id
-            {
-                results.push(rec);
+            if let Ok(mut rec) = serde_json::from_slice::<DeclassReceiptRecord>(&r.value) {
+                rec.extension_id = rec.extension_id.trim().to_string();
+                if rec.extension_id.is_empty() {
+                    continue;
+                }
+                if rec.extension_id == extension_id {
+                    results.push(rec);
+                }
             }
         }
         results.sort();
@@ -419,13 +465,21 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         extension_id: &str,
         ctx: &EventContext,
     ) -> Result<Vec<ConfinementClaimRecord>, ProvenanceError> {
+        let extension_id = extension_id.trim();
+        if extension_id.is_empty() {
+            return Ok(Vec::new());
+        }
         let records = self.query_prefix(CONFINEMENT_CLAIM_PREFIX, ctx)?;
         let mut results = Vec::new();
         for r in records {
-            if let Ok(rec) = serde_json::from_slice::<ConfinementClaimRecord>(&r.value)
-                && rec.extension_id == extension_id
-            {
-                results.push(rec);
+            if let Ok(mut rec) = serde_json::from_slice::<ConfinementClaimRecord>(&r.value) {
+                rec.extension_id = rec.extension_id.trim().to_string();
+                if rec.extension_id.is_empty() {
+                    continue;
+                }
+                if rec.extension_id == extension_id {
+                    results.push(rec);
+                }
             }
         }
         results.sort();
@@ -449,6 +503,7 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         source_label: &Label,
         ctx: &EventContext,
     ) -> Result<Vec<LineagePath>, ProvenanceError> {
+        let extension_id = extension_id.trim();
         let edges = self.collect_edges(extension_id, ctx)?;
 
         let mut paths = Vec::new();
@@ -621,6 +676,7 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         extension_id: &str,
         ctx: &EventContext,
     ) -> Result<ConfinementStatus, ProvenanceError> {
+        let extension_id = extension_id.trim();
         let events = self.flow_events_by_extension(extension_id, ctx)?;
         let proofs = self.flow_proofs_by_extension(extension_id, ctx)?;
         let claims = self.confinement_claims_by_extension(extension_id, ctx)?;
@@ -672,7 +728,10 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
 
         let receipt_map: BTreeMap<String, DeclassReceiptRecord> = receipts
             .into_iter()
-            .map(|r| (r.receipt_id.clone(), r))
+            .map(|mut r| {
+                r.receipt_id = r.receipt_id.trim().to_string();
+                (r.receipt_id.clone(), r)
+            })
             .collect();
 
         let results: Vec<(FlowEventRecord, Option<DeclassReceiptRecord>)> = events
@@ -681,7 +740,7 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
                 let receipt = ev
                     .receipt_ref
                     .as_ref()
-                    .and_then(|ref_id| receipt_map.get(ref_id).cloned());
+                    .and_then(|ref_id| receipt_map.get(ref_id.trim()).cloned());
                 (ev, receipt)
             })
             .collect();
@@ -1034,6 +1093,113 @@ mod tests {
         );
         let err = idx.insert_flow_event(&ev, &ctx).unwrap_err();
         assert_eq!(err, ProvenanceError::EmptyExtensionId);
+    }
+
+    #[test]
+    fn reject_blank_extension_id() {
+        let mut idx = make_index();
+        let ctx = test_ctx();
+        let ev = flow_event(
+            "ev1",
+            "   ",
+            Label::Public,
+            Label::Internal,
+            FlowDecision::Allowed,
+        );
+        let err = idx.insert_flow_event(&ev, &ctx).unwrap_err();
+        assert_eq!(err, ProvenanceError::EmptyExtensionId);
+    }
+
+    #[test]
+    fn reject_declassified_flow_event_without_receipt_ref() {
+        let mut idx = make_index();
+        let ctx = test_ctx();
+        let ev = flow_event(
+            "ev1",
+            "ext-a",
+            Label::Confidential,
+            Label::Public,
+            FlowDecision::Declassified,
+        );
+
+        let err = idx.insert_flow_event(&ev, &ctx).unwrap_err();
+        assert_eq!(
+            err,
+            ProvenanceError::EmptyRequiredField {
+                record_type: "flow_event".to_string(),
+                field_name: "receipt_ref".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn reject_declassified_flow_event_with_blank_receipt_ref() {
+        let mut idx = make_index();
+        let ctx = test_ctx();
+        let mut ev = flow_event(
+            "ev1",
+            "ext-a",
+            Label::Confidential,
+            Label::Public,
+            FlowDecision::Declassified,
+        );
+        ev.receipt_ref = Some("   ".to_string());
+
+        let err = idx.insert_flow_event(&ev, &ctx).unwrap_err();
+        assert_eq!(
+            err,
+            ProvenanceError::EmptyRequiredField {
+                record_type: "flow_event".to_string(),
+                field_name: "receipt_ref".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn declassified_flow_event_trims_receipt_ref_before_persisting() {
+        let mut idx = make_index();
+        let ctx = test_ctx();
+        let mut ev = flow_event(
+            "ev1",
+            "ext-a",
+            Label::Confidential,
+            Label::Public,
+            FlowDecision::Declassified,
+        );
+        ev.receipt_ref = Some("  r1  ".to_string());
+
+        idx.insert_flow_event(&ev, &ctx).unwrap();
+
+        let stored = idx.get_flow_event("ev1", &ctx).unwrap().unwrap();
+        assert_eq!(stored.receipt_ref.as_deref(), Some("r1"));
+    }
+
+    #[test]
+    fn flow_event_trims_extension_id_before_persisting() {
+        let mut idx = make_index();
+        let ctx = test_ctx();
+        let ev = flow_event(
+            "ev1",
+            "  ext-a  ",
+            Label::Public,
+            Label::Internal,
+            FlowDecision::Allowed,
+        );
+
+        idx.insert_flow_event(&ev, &ctx).unwrap();
+
+        let stored = idx.get_flow_event("ev1", &ctx).unwrap().unwrap();
+        assert_eq!(stored.extension_id, "ext-a");
+        assert_eq!(
+            idx.flow_events_by_extension("ext-a", &ctx).unwrap().len(),
+            1
+        );
+        assert_eq!(
+            idx.flow_events_by_extension("  ext-a  ", &ctx)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -2333,13 +2499,17 @@ mod tests {
         )
         .unwrap();
         idx.insert_flow_event(
-            &flow_event(
-                "ev-m",
-                "ext-a",
-                Label::Internal,
-                Label::Confidential,
-                FlowDecision::Declassified,
-            ),
+            &{
+                let mut ev = flow_event(
+                    "ev-m",
+                    "ext-a",
+                    Label::Internal,
+                    Label::Confidential,
+                    FlowDecision::Declassified,
+                );
+                ev.receipt_ref = Some("r-ev-m".to_string());
+                ev
+            },
             &ctx,
         )
         .unwrap();
@@ -2895,6 +3065,15 @@ mod tests {
     }
 
     #[test]
+    fn reject_blank_extension_id_on_proof_insert() {
+        let mut idx = make_index();
+        let ctx = test_ctx();
+        let proof = flow_proof("p1", "   ", Label::Public, Label::Internal, 1);
+        let err = idx.insert_flow_proof(&proof, &ctx).unwrap_err();
+        assert_eq!(err, ProvenanceError::EmptyExtensionId);
+    }
+
+    #[test]
     fn reject_empty_extension_id_on_receipt_insert() {
         let mut idx = make_index();
         let ctx = test_ctx();
@@ -2919,6 +3098,15 @@ mod tests {
     }
 
     #[test]
+    fn reject_blank_extension_id_on_claim_insert() {
+        let mut idx = make_index();
+        let ctx = test_ctx();
+        let claim = confinement_claim("c1", "   ", ClaimStrength::Full, 1);
+        let err = idx.insert_confinement_claim(&claim, &ctx).unwrap_err();
+        assert_eq!(err, ProvenanceError::EmptyExtensionId);
+    }
+
+    #[test]
     fn flow_event_serde_with_receipt_ref() {
         let mut ev = flow_event(
             "ev1",
@@ -2932,6 +3120,75 @@ mod tests {
         let back: FlowEventRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(ev, back);
         assert_eq!(back.receipt_ref, Some("r1".to_string()));
+    }
+
+    #[test]
+    fn declass_receipt_trims_id_and_linkage_fields_before_persisting() {
+        let mut idx = make_index();
+        let ctx = test_ctx();
+        let mut receipt = declass_receipt(
+            "  r1  ",
+            "  ext-a  ",
+            Label::Confidential,
+            Label::Public,
+            DeclassificationDecision::Allow,
+        );
+        receipt.declassification_route_ref = "  route-r1  ".to_string();
+        receipt.decision_contract_id = "  decision-r1  ".to_string();
+
+        idx.insert_declass_receipt(&receipt, &ctx).unwrap();
+
+        let stored = idx.get_declass_receipt("r1", &ctx).unwrap().unwrap();
+        assert_eq!(stored.receipt_id, "r1");
+        assert_eq!(stored.extension_id, "ext-a");
+        assert_eq!(stored.declassification_route_ref, "route-r1");
+        assert_eq!(stored.decision_contract_id, "decision-r1");
+    }
+
+    #[test]
+    fn flow_proof_trims_extension_id_before_persisting() {
+        let mut idx = make_index();
+        let ctx = test_ctx();
+        let proof = flow_proof("p1", "  ext-a  ", Label::Public, Label::Internal, 1);
+
+        idx.insert_flow_proof(&proof, &ctx).unwrap();
+
+        let stored = idx.get_flow_proof("p1", &ctx).unwrap().unwrap();
+        assert_eq!(stored.extension_id, "ext-a");
+        assert_eq!(
+            idx.flow_proofs_by_extension("ext-a", &ctx).unwrap().len(),
+            1
+        );
+        assert_eq!(
+            idx.flow_proofs_by_extension("  ext-a  ", &ctx)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn confinement_claim_trims_extension_id_before_persisting() {
+        let mut idx = make_index();
+        let ctx = test_ctx();
+        let claim = confinement_claim("c1", "  ext-a  ", ClaimStrength::Full, 1);
+
+        idx.insert_confinement_claim(&claim, &ctx).unwrap();
+
+        let stored = idx.get_confinement_claim("c1", &ctx).unwrap().unwrap();
+        assert_eq!(stored.extension_id, "ext-a");
+        assert_eq!(
+            idx.confinement_claims_by_extension("ext-a", &ctx)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            idx.confinement_claims_by_extension("  ext-a  ", &ctx)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]

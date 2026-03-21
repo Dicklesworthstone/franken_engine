@@ -335,6 +335,74 @@ fn conformance_runtime_try_finally_rethrows_on_exception_path() {
 }
 
 #[test]
+fn conformance_runtime_caught_nested_throw_inside_finally_preserves_outer_exception() {
+    let m = test_module(vec![
+        Ir3Instruction::BeginTry {
+            catch_target: 4,
+            finally_target: Some(4),
+        },
+        Ir3Instruction::LoadInt { dst: 0, value: 1 },
+        Ir3Instruction::Throw { value: 0 },
+        Ir3Instruction::EndTry,
+        Ir3Instruction::EnterFinally,
+        Ir3Instruction::BeginTry {
+            catch_target: 9,
+            finally_target: None,
+        },
+        Ir3Instruction::LoadInt { dst: 1, value: 2 },
+        Ir3Instruction::Throw { value: 1 },
+        Ir3Instruction::EndTry,
+        Ir3Instruction::EnterCatch { dst: 2 },
+        Ir3Instruction::EndFinally,
+        Ir3Instruction::Halt,
+    ]);
+    let err = QuickJsLane::new().execute(&m, "conformance").unwrap_err();
+    match err {
+        InterpreterError::UncaughtException { value } => assert_eq!(value, "1"),
+        other => {
+            panic!("expected original outer throw to survive caught inner throw, got {other:?}")
+        }
+    }
+}
+
+#[test]
+fn conformance_runtime_throw_routed_through_intermediary_finally_preserves_outer_exception() {
+    let m = test_module(vec![
+        Ir3Instruction::BeginTry {
+            catch_target: 4,
+            finally_target: Some(4),
+        },
+        Ir3Instruction::LoadInt { dst: 0, value: 1 },
+        Ir3Instruction::Throw { value: 0 },
+        Ir3Instruction::EndTry,
+        Ir3Instruction::EnterFinally,
+        Ir3Instruction::BeginTry {
+            catch_target: 11,
+            finally_target: None,
+        },
+        Ir3Instruction::BeginTry {
+            catch_target: 9,
+            finally_target: Some(9),
+        },
+        Ir3Instruction::LoadInt { dst: 1, value: 2 },
+        Ir3Instruction::Throw { value: 1 },
+        Ir3Instruction::EnterFinally,
+        Ir3Instruction::EndFinally,
+        Ir3Instruction::EnterCatch { dst: 2 },
+        Ir3Instruction::EndFinally,
+        Ir3Instruction::Halt,
+    ]);
+
+    let err = QuickJsLane::new().execute(&m, "conformance").unwrap_err();
+    match err {
+        InterpreterError::UncaughtException { value } => assert_eq!(value, "1"),
+        other => panic!(
+            "expected outer throw to survive intermediary finally before later catch, got {other:?}"
+        ),
+    }
+}
+
+#[test]
 fn conformance_lowered_try_catch_finally_runs_finally_on_rethrow_from_catch() {
     let ir3 = lower_to_ir3(vec![Statement::TryCatch(TryCatchStatement {
         block: BlockStatement {

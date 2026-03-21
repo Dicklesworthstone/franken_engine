@@ -236,10 +236,14 @@ pub struct EmergencyGrant {
     pub grant_id: String,
     /// Request that triggered this grant.
     pub request_id: String,
+    /// Extension the grant is scoped to.
+    pub extension_id: String,
     /// Source label.
     pub source_label: Label,
     /// Sink clearance.
     pub sink_clearance: Label,
+    /// Decision contract the grant is scoped to.
+    pub decision_contract_id: String,
     /// Expiry timestamp (unix ms).
     pub expiry_ms: u64,
     /// Whether post-incident review has been completed.
@@ -417,13 +421,17 @@ impl DeclassificationPipeline {
     /// Check for an active emergency grant.
     pub fn check_emergency_grant(
         &self,
+        extension_id: &str,
         source: &Label,
         sink: &Label,
+        decision_contract_id: &str,
         now_ms: u64,
     ) -> Option<&EmergencyGrant> {
         self.emergency_grants.values().find(|g| {
-            g.source_label == *source
+            g.extension_id == extension_id
+                && g.source_label == *source
                 && g.sink_clearance == *sink
+                && g.decision_contract_id == decision_contract_id
                 && !g.review_completed
                 && !g.is_expired(now_ms)
         })
@@ -519,8 +527,10 @@ impl DeclassificationPipeline {
         let grant = EmergencyGrant {
             grant_id: grant_id.clone(),
             request_id: request.request_id.clone(),
+            extension_id: request.extension_id.clone(),
             source_label: request.source_label.clone(),
             sink_clearance: request.sink_clearance.clone(),
+            decision_contract_id: request.decision_contract_id.clone(),
             expiry_ms,
             review_completed: false,
         };
@@ -824,10 +834,18 @@ mod tests {
             .unwrap();
 
         let grant = pipeline
-            .check_emergency_grant(&Label::Secret, &Label::Public, request.timestamp_ms)
+            .check_emergency_grant(
+                &request.extension_id,
+                &Label::Secret,
+                &Label::Public,
+                &request.decision_contract_id,
+                request.timestamp_ms,
+            )
             .unwrap();
         assert!(!grant.review_completed);
         assert!(!grant.is_expired(request.timestamp_ms));
+        assert_eq!(grant.extension_id, request.extension_id);
+        assert_eq!(grant.decision_contract_id, request.decision_contract_id);
     }
 
     #[test]
@@ -845,7 +863,13 @@ mod tests {
         let far_future = request.timestamp_ms + 1_000_000;
         assert!(
             pipeline
-                .check_emergency_grant(&Label::Secret, &Label::Public, far_future)
+                .check_emergency_grant(
+                    &request.extension_id,
+                    &Label::Secret,
+                    &Label::Public,
+                    &request.decision_contract_id,
+                    far_future,
+                )
                 .is_none()
         );
     }
@@ -1033,8 +1057,10 @@ mod tests {
         let grant = EmergencyGrant {
             grant_id: "emg-1".to_string(),
             request_id: "req-1".to_string(),
+            extension_id: "ext-test".to_string(),
             source_label: Label::Secret,
             sink_clearance: Label::Public,
+            decision_contract_id: "decision-contract-test".to_string(),
             expiry_ms: 1_700_000_300_000,
             review_completed: false,
         };
@@ -1213,8 +1239,10 @@ mod tests {
         let grant = EmergencyGrant {
             grant_id: "g".to_string(),
             request_id: "r".to_string(),
+            extension_id: "ext-test".to_string(),
             source_label: Label::Secret,
             sink_clearance: Label::Public,
+            decision_contract_id: "decision-contract-test".to_string(),
             expiry_ms: 1000,
             review_completed: false,
         };
@@ -1315,7 +1343,13 @@ mod tests {
         let grant_id = format!("emg-{}", request.request_id);
         assert!(
             pipeline
-                .check_emergency_grant(&Label::Secret, &Label::Public, request.timestamp_ms)
+                .check_emergency_grant(
+                    &request.extension_id,
+                    &Label::Secret,
+                    &Label::Public,
+                    &request.decision_contract_id,
+                    request.timestamp_ms,
+                )
                 .is_some()
         );
 
@@ -1323,7 +1357,13 @@ mod tests {
         // After review, grant should no longer be found
         assert!(
             pipeline
-                .check_emergency_grant(&Label::Secret, &Label::Public, request.timestamp_ms)
+                .check_emergency_grant(
+                    &request.extension_id,
+                    &Label::Secret,
+                    &Label::Public,
+                    &request.decision_contract_id,
+                    request.timestamp_ms,
+                )
                 .is_none()
         );
     }
@@ -1809,8 +1849,10 @@ mod tests {
         let original = EmergencyGrant {
             grant_id: "g-1".to_string(),
             request_id: "r-1".to_string(),
+            extension_id: "ext-test".to_string(),
             source_label: Label::Secret,
             sink_clearance: Label::Public,
+            decision_contract_id: "decision-contract-test".to_string(),
             expiry_ms: 5000,
             review_completed: false,
         };
@@ -1944,8 +1986,10 @@ mod tests {
         let grant = EmergencyGrant {
             grant_id: "g".into(),
             request_id: "r".into(),
+            extension_id: "ext-test".into(),
             source_label: Label::Secret,
             sink_clearance: Label::Public,
+            decision_contract_id: "decision-contract-test".into(),
             expiry_ms: 100,
             review_completed: false,
         };
@@ -1953,8 +1997,10 @@ mod tests {
         for field in &[
             "grant_id",
             "request_id",
+            "extension_id",
             "source_label",
             "sink_clearance",
+            "decision_contract_id",
             "expiry_ms",
             "review_completed",
         ] {
@@ -2141,8 +2187,10 @@ mod tests {
         let grant = EmergencyGrant {
             grant_id: "g".into(),
             request_id: "r".into(),
+            extension_id: "ext-test".into(),
             source_label: Label::Secret,
             sink_clearance: Label::Public,
+            decision_contract_id: "decision-contract-test".into(),
             expiry_ms: 0,
             review_completed: false,
         };
@@ -2155,8 +2203,10 @@ mod tests {
         let grant = EmergencyGrant {
             grant_id: "g".into(),
             request_id: "r".into(),
+            extension_id: "ext-test".into(),
             source_label: Label::Secret,
             sink_clearance: Label::Public,
+            decision_contract_id: "decision-contract-test".into(),
             expiry_ms: u64::MAX,
             review_completed: false,
         };
@@ -2313,8 +2363,10 @@ mod tests {
         let grant = EmergencyGrant {
             grant_id: "emg-review".into(),
             request_id: "r-review".into(),
+            extension_id: "ext-test".into(),
             source_label: Label::TopSecret,
             sink_clearance: Label::Internal,
+            decision_contract_id: "decision-contract-test".into(),
             expiry_ms: u64::MAX,
             review_completed: true,
         };
@@ -2448,8 +2500,10 @@ mod tests {
         let grant = EmergencyGrant {
             grant_id: "g".into(),
             request_id: "r".into(),
+            extension_id: "ext-test".into(),
             source_label: Label::Secret,
             sink_clearance: Label::Public,
+            decision_contract_id: "decision-contract-test".into(),
             expiry_ms: 100,
             review_completed: false,
         };
@@ -2573,13 +2627,25 @@ mod tests {
         // Grant should be active at timestamp + 59_999
         assert!(
             pipeline
-                .check_emergency_grant(&Label::Secret, &Label::Public, 1_059_999)
+                .check_emergency_grant(
+                    &request.extension_id,
+                    &Label::Secret,
+                    &Label::Public,
+                    &request.decision_contract_id,
+                    1_059_999,
+                )
                 .is_some()
         );
         // Grant should be expired at timestamp + 60_000
         assert!(
             pipeline
-                .check_emergency_grant(&Label::Secret, &Label::Public, 1_060_000)
+                .check_emergency_grant(
+                    &request.extension_id,
+                    &Label::Secret,
+                    &Label::Public,
+                    &request.decision_contract_id,
+                    1_060_000,
+                )
                 .is_none()
         );
     }
@@ -2598,19 +2664,60 @@ mod tests {
         // Correct labels find the grant
         assert!(
             pipeline
-                .check_emergency_grant(&Label::Secret, &Label::Public, request.timestamp_ms)
+                .check_emergency_grant(
+                    &request.extension_id,
+                    &Label::Secret,
+                    &Label::Public,
+                    &request.decision_contract_id,
+                    request.timestamp_ms,
+                )
                 .is_some()
         );
         // Wrong source label
         assert!(
             pipeline
-                .check_emergency_grant(&Label::Internal, &Label::Public, request.timestamp_ms)
+                .check_emergency_grant(
+                    &request.extension_id,
+                    &Label::Internal,
+                    &Label::Public,
+                    &request.decision_contract_id,
+                    request.timestamp_ms,
+                )
                 .is_none()
         );
         // Wrong sink label
         assert!(
             pipeline
-                .check_emergency_grant(&Label::Secret, &Label::Internal, request.timestamp_ms)
+                .check_emergency_grant(
+                    &request.extension_id,
+                    &Label::Secret,
+                    &Label::Internal,
+                    &request.decision_contract_id,
+                    request.timestamp_ms,
+                )
+                .is_none()
+        );
+        // Wrong extension or decision contract should not reuse the grant.
+        assert!(
+            pipeline
+                .check_emergency_grant(
+                    "other-ext",
+                    &Label::Secret,
+                    &Label::Public,
+                    &request.decision_contract_id,
+                    request.timestamp_ms,
+                )
+                .is_none()
+        );
+        assert!(
+            pipeline
+                .check_emergency_grant(
+                    &request.extension_id,
+                    &Label::Secret,
+                    &Label::Public,
+                    "other-contract",
+                    request.timestamp_ms,
+                )
                 .is_none()
         );
     }

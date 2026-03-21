@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -97,6 +97,12 @@ impl SecurityWorkloadLabel {
                 detail: "must not be empty".to_string(),
             });
         }
+        if has_surrounding_whitespace(self.workload_id.as_str()) {
+            return Err(SecurityConformanceError::InvalidLabelField {
+                field: "workload_id",
+                detail: "must not have leading or trailing whitespace".to_string(),
+            });
+        }
         if self.semantic_domain.trim().is_empty() {
             return Err(SecurityConformanceError::InvalidLabelField {
                 field: "semantic_domain",
@@ -193,6 +199,12 @@ impl SecurityWorkloadObservation {
             return Err(SecurityConformanceError::InvalidObservationField {
                 field: "workload_id",
                 detail: "must not be empty".to_string(),
+            });
+        }
+        if has_surrounding_whitespace(self.workload_id.as_str()) {
+            return Err(SecurityConformanceError::InvalidObservationField {
+                field: "workload_id",
+                detail: "must not have leading or trailing whitespace".to_string(),
             });
         }
         if self.policy_action.trim().is_empty() {
@@ -639,6 +651,14 @@ pub fn validate_corpus_manifest(
                 detail: "workload_id must not be empty".to_string(),
             });
         }
+        if has_surrounding_whitespace(entry.workload_id.as_str()) {
+            return Err(SecurityConformanceError::ManifestInvalidEntry {
+                detail: format!(
+                    "workload_id {:?} must not have leading or trailing whitespace",
+                    entry.workload_id
+                ),
+            });
+        }
         if !is_valid_sha256_hex(entry.label_sha256.as_str()) {
             return Err(SecurityConformanceError::ManifestInvalidEntry {
                 detail: format!(
@@ -759,6 +779,20 @@ pub fn evaluate_security_conformance(
         return Err(SecurityConformanceError::EmptyDataset);
     }
 
+    let mut record_paths_by_workload = BTreeMap::<String, PathBuf>::new();
+    for record in records {
+        record.label.validate()?;
+        if let Some(first_path) = record_paths_by_workload
+            .insert(record.label.workload_id.clone(), record.label_path.clone())
+        {
+            return Err(SecurityConformanceError::DuplicateWorkloadId {
+                workload_id: record.label.workload_id.clone(),
+                first_path,
+                second_path: record.label_path.clone(),
+            });
+        }
+    }
+
     let mut observations_by_workload = BTreeMap::<String, SecurityWorkloadObservation>::new();
     for observation in observations {
         observation.validate()?;
@@ -771,12 +805,8 @@ pub fn evaluate_security_conformance(
             });
         }
     }
-    let record_workload_ids = records
-        .iter()
-        .map(|record| record.label.workload_id.as_str())
-        .collect::<BTreeSet<_>>();
     for workload_id in observations_by_workload.keys() {
-        if !record_workload_ids.contains(workload_id.as_str()) {
+        if !record_paths_by_workload.contains_key(workload_id.as_str()) {
             return Err(SecurityConformanceError::UnexpectedObservation {
                 workload_id: workload_id.clone(),
             });
@@ -1039,6 +1069,10 @@ fn parse_ratio_string(value: &str, field: &'static str) -> Result<f64, SecurityC
     Ok(parsed)
 }
 
+fn has_surrounding_whitespace(value: &str) -> bool {
+    value.trim() != value
+}
+
 fn is_valid_sha256_hex(value: &str) -> bool {
     value.len() == 64
         && value
@@ -1230,6 +1264,49 @@ label_sha256 = "{bad_hash}"
             }
             _ => panic!("expected manifest hash mismatch"),
         }
+    }
+
+    #[test]
+    fn validate_manifest_rejects_padded_workload_id() {
+        let root = test_temp_dir("manifest-padded-workload-id");
+        let label_path = root.join("benign/a/workload_label.toml");
+        let label = r#"
+workload_id = "benign-ok"
+corpus = "benign"
+expected_outcome = "allow"
+expected_detection_latency_bound_ms = 10
+hostcall_sequence_hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+semantic_domain = "security/benign"
+"#;
+        write_label(&label_path, label);
+
+        let records = load_security_labels(&root).unwrap();
+        let record = &records[0];
+        let relative = record
+            .label_path
+            .strip_prefix(&root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        let manifest = format!(
+            r#"schema_version = "{schema}"
+corpus_version = "0.1.0-test"
+generated_at_utc = "2026-02-26T00:00:00Z"
+
+[[entries]]
+workload_id = " benign-ok "
+corpus = "benign"
+label_path = "{relative}"
+label_sha256 = "{hash}"
+"#,
+            schema = SECURITY_CORPUS_MANIFEST_SCHEMA_VERSION,
+            hash = record.label_hash
+        );
+        write_label(&root.join(SECURITY_CORPUS_MANIFEST_FILE_NAME), &manifest);
+
+        let err = validate_corpus_manifest(&root, &records).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("leading or trailing whitespace"));
     }
 
     #[test]
@@ -1497,6 +1574,15 @@ label_sha256 = "{bad_hash}"
     }
 
     #[test]
+    fn label_rejects_padded_workload_id() {
+        let mut label = valid_benign_label();
+        label.workload_id = " wl-1 ".to_string();
+        let err = label.validate().unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("leading or trailing whitespace"));
+    }
+
+    #[test]
     fn label_rejects_empty_semantic_domain() {
         let mut label = valid_benign_label();
         label.semantic_domain = "".to_string();
@@ -1587,6 +1673,15 @@ label_sha256 = "{bad_hash}"
         let err = obs.validate().unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("workload_id"));
+    }
+
+    #[test]
+    fn observation_rejects_padded_workload_id() {
+        let mut obs = valid_observation();
+        obs.workload_id = " wl-1 ".to_string();
+        let err = obs.validate().unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("leading or trailing whitespace"));
     }
 
     #[test]
@@ -2067,6 +2162,59 @@ label_sha256 = "{bad_hash}"
         .unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("duplicate observation"));
+    }
+
+    #[test]
+    fn evaluate_duplicate_record_error() {
+        let mut first = make_record("b-1", SecurityCorpus::Benign, None, SecurityOutcome::Allow);
+        first.label_path = PathBuf::from("first/workload_label.toml");
+        let mut second = make_record("b-1", SecurityCorpus::Benign, None, SecurityOutcome::Allow);
+        second.label_path = PathBuf::from("second/workload_label.toml");
+
+        let err = evaluate_security_conformance(
+            &[first, second],
+            &[make_obs("b-1", SecurityOutcome::Allow, 1000)],
+            &SecurityConformanceThresholds::default(),
+        )
+        .unwrap_err();
+
+        match err {
+            SecurityConformanceError::DuplicateWorkloadId {
+                workload_id,
+                first_path,
+                second_path,
+            } => {
+                assert_eq!(workload_id, "b-1");
+                assert_eq!(first_path, PathBuf::from("first/workload_label.toml"));
+                assert_eq!(second_path, PathBuf::from("second/workload_label.toml"));
+            }
+            other => panic!("expected duplicate record error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn evaluate_invalid_record_label_error() {
+        let records = vec![make_record(
+            "m-1",
+            SecurityCorpus::Malicious,
+            None,
+            SecurityOutcome::Contain,
+        )];
+
+        let err = evaluate_security_conformance(
+            &records,
+            &[make_obs("m-1", SecurityOutcome::Contain, 1000)],
+            &SecurityConformanceThresholds::default(),
+        )
+        .unwrap_err();
+
+        match err {
+            SecurityConformanceError::InvalidLabelField { field, detail } => {
+                assert_eq!(field, "attack_taxonomy");
+                assert!(detail.contains("must declare"));
+            }
+            other => panic!("expected invalid label error, got {other:?}"),
+        }
     }
 
     #[test]

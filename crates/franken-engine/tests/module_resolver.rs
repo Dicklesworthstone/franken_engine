@@ -177,15 +177,38 @@ fn native_external_relative_dependency_requires_explicit_extension() {
         )
         .unwrap();
 
-    let outcome = resolver
+    let error = resolver
         .resolve(
             &ModuleRequest::new("./sub", ImportStyle::Import).with_referrer("external:some-pkg"),
             &context(),
             &AllowAllPolicy,
         )
-        .expect("native mode should resolve external ESM relative via extension probing");
+        .expect_err("native mode should reject extensionless external ESM relative imports");
+    assert_eq!(error.code, ResolutionErrorCode::ModuleNotFound);
+    assert_eq!(error.probe_sequence, vec!["some-pkg/sub"]);
+}
+
+#[test]
+fn native_external_relative_dependency_with_explicit_extension_resolves() {
+    let mut resolver = DeterministicModuleResolver::new("/repo");
+    resolver
+        .register_external_module(
+            "some-pkg/sub.mjs",
+            ModuleDefinition::new(ModuleSyntax::EsModule, "export default 'sub';"),
+        )
+        .unwrap();
+
+    let outcome = resolver
+        .resolve(
+            &ModuleRequest::new("./sub.mjs", ImportStyle::Import)
+                .with_referrer("external:some-pkg"),
+            &context(),
+            &AllowAllPolicy,
+        )
+        .expect("native mode should allow explicit external ESM relative extensions");
     assert_eq!(outcome.module.canonical_specifier, "some-pkg/sub.mjs");
     assert_eq!(outcome.module.record.id, "external:some-pkg/sub.mjs");
+    assert_eq!(outcome.module.probe_sequence, vec!["some-pkg/sub.mjs"]);
 }
 
 #[test]
@@ -221,7 +244,7 @@ fn node_compat_external_relative_dependency_requires_explicit_extension() {
         )
         .unwrap();
 
-    let outcome = resolver
+    let error = resolver
         .resolve(
             &ModuleRequest::new("./sub", ImportStyle::Import)
                 .with_referrer("external:some-pkg")
@@ -229,9 +252,69 @@ fn node_compat_external_relative_dependency_requires_explicit_extension() {
             &context(),
             &AllowAllPolicy,
         )
-        .expect("node_compat should resolve external ESM relative via extension probing");
+        .expect_err("node_compat should reject extensionless external ESM relative imports");
+    assert_eq!(error.code, ResolutionErrorCode::ModuleNotFound);
+    assert_eq!(error.probe_sequence, vec!["some-pkg/sub"]);
+}
+
+#[test]
+fn node_compat_external_relative_dependency_with_explicit_extension_resolves() {
+    let mut resolver = DeterministicModuleResolver::new("/repo");
+    resolver
+        .register_external_module(
+            "some-pkg/sub.mjs",
+            ModuleDefinition::new(ModuleSyntax::EsModule, "export default 'sub';"),
+        )
+        .unwrap();
+
+    let outcome = resolver
+        .resolve(
+            &ModuleRequest::new("./sub.mjs", ImportStyle::Import)
+                .with_referrer("external:some-pkg")
+                .with_compatibility_mode(CompatibilityMode::NodeCompat),
+            &context(),
+            &AllowAllPolicy,
+        )
+        .expect("node_compat should allow explicit external ESM relative extensions");
     assert_eq!(outcome.module.canonical_specifier, "some-pkg/sub.mjs");
     assert_eq!(outcome.module.record.id, "external:some-pkg/sub.mjs");
+    assert_eq!(outcome.module.probe_sequence, vec!["some-pkg/sub.mjs"]);
+}
+
+#[test]
+fn external_relative_dependency_cannot_escape_package_root() {
+    let mut resolver = DeterministicModuleResolver::new("/repo");
+    resolver
+        .register_external_module(
+            "some-pkg/entry.cjs",
+            ModuleDefinition::new(
+                ModuleSyntax::CommonJs,
+                "const value = require('../other-pkg/private.cjs'); module.exports = value;",
+            ),
+        )
+        .unwrap();
+    resolver
+        .register_external_module(
+            "other-pkg/private.cjs",
+            ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 'secret';"),
+        )
+        .unwrap();
+
+    let error = resolver
+        .resolve(
+            &ModuleRequest::new("../other-pkg/private.cjs", ImportStyle::Require)
+                .with_referrer("external:some-pkg/entry.cjs"),
+            &context(),
+            &AllowAllPolicy,
+        )
+        .expect_err("external relatives must not escape the package root");
+    assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
+    assert!(
+        error
+            .message
+            .contains("escapes external package root 'some-pkg'")
+    );
+    assert!(error.probe_sequence.is_empty());
 }
 
 // ────────────────────────────────────────────────────────────

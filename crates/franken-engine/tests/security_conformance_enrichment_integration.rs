@@ -494,6 +494,13 @@ fn enrichment_observation_whitespace_containment_action_fails() {
     assert!(obs.validate().is_err());
 }
 
+#[test]
+fn enrichment_observation_padded_workload_id_fails() {
+    let mut obs = benign_observation("b-1");
+    obs.workload_id = " b-1 ".into();
+    assert!(obs.validate().is_err());
+}
+
 // ===========================================================================
 // F. Label validation edges (4 tests)
 // ===========================================================================
@@ -502,6 +509,13 @@ fn enrichment_observation_whitespace_containment_action_fails() {
 fn enrichment_label_whitespace_workload_id_fails() {
     let mut label = benign_label("  ");
     label.workload_id = "  ".into();
+    assert!(label.validate().is_err());
+}
+
+#[test]
+fn enrichment_label_padded_workload_id_fails() {
+    let mut label = benign_label("b-1");
+    label.workload_id = " b-1 ".into();
     assert!(label.validate().is_err());
 }
 
@@ -912,6 +926,42 @@ fn test_evaluate_duplicate_observation_returns_error() {
     assert!(result.is_err());
     let msg = format!("{}", result.unwrap_err());
     assert!(msg.contains("duplicate") || msg.contains("b-1"));
+}
+
+#[test]
+fn test_evaluate_duplicate_label_record_returns_error() {
+    let mut first = label_record(benign_label("b-1"));
+    first.label_path = PathBuf::from("one/workload_label.toml");
+    let mut second = label_record(benign_label("b-1"));
+    second.label_path = PathBuf::from("two/workload_label.toml");
+    let result = evaluate_security_conformance(
+        &[first, second],
+        &[benign_observation("b-1")],
+        &SecurityConformanceThresholds::default(),
+    );
+    let msg = format!("{}", result.unwrap_err());
+    assert!(msg.contains("duplicate workload_id"));
+    assert!(msg.contains("b-1"));
+}
+
+#[test]
+fn test_evaluate_invalid_label_record_returns_error() {
+    let result = evaluate_security_conformance(
+        &[label_record(SecurityWorkloadLabel {
+            workload_id: "m-1".into(),
+            corpus: SecurityCorpus::Malicious,
+            attack_taxonomy: None,
+            expected_outcome: SecurityOutcome::Contain,
+            expected_detection_latency_bound_ms: 50,
+            hostcall_sequence_hash: hex64('b'),
+            semantic_domain: "security/malicious".into(),
+        })],
+        &[malicious_observation("m-1")],
+        &SecurityConformanceThresholds::default(),
+    );
+    let msg = format!("{}", result.unwrap_err());
+    assert!(msg.contains("attack_taxonomy"));
+    assert!(msg.contains("must declare"));
 }
 
 #[test]

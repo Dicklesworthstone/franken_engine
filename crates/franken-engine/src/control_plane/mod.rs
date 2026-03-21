@@ -559,6 +559,12 @@ mod tests {
     }
 
     fn evidence(ts: u64, action: &str) -> EvidenceLedger {
+        let chosen_loss = match action {
+            "allow" => 0.1,
+            "deny" => 0.2,
+            "timeout" => 0.3,
+            _ => 0.1, // default for unknown actions
+        };
         EvidenceLedgerBuilder::new()
             .ts_unix_ms(ts)
             .component("control_plane_adapter_test")
@@ -567,7 +573,7 @@ mod tests {
             .expected_loss("allow", 0.1)
             .expected_loss("deny", 0.2)
             .expected_loss("timeout", 0.3)
-            .chosen_expected_loss(0.1)
+            .chosen_expected_loss(chosen_loss)
             .calibration_score(0.94)
             .fallback_active(false)
             .build()

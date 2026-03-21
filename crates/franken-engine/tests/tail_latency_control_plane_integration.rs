@@ -13,12 +13,10 @@ use frankenengine_engine::tail_latency_control_plane::{
 };
 
 use frankenengine_engine::tail_latency_control_plane::{
-    TailLatencyControlPlaneEvent, default_stage_envelopes,
-    TAIL_LATENCY_CONTROL_PLANE_SCHEMA_VERSION,
-    TAIL_LATENCY_CONTROL_PLANE_POLICY_ID,
+    TAIL_LATENCY_CONTROL_PLANE_EVENT_SCHEMA_VERSION, TAIL_LATENCY_CONTROL_PLANE_POLICY_ID,
     TAIL_LATENCY_CONTROL_PLANE_RUN_MANIFEST_SCHEMA_VERSION,
-    TAIL_LATENCY_CONTROL_PLANE_TRACE_IDS_SCHEMA_VERSION,
-    TAIL_LATENCY_CONTROL_PLANE_EVENT_SCHEMA_VERSION,
+    TAIL_LATENCY_CONTROL_PLANE_SCHEMA_VERSION, TAIL_LATENCY_CONTROL_PLANE_TRACE_IDS_SCHEMA_VERSION,
+    TailLatencyControlPlaneEvent, default_stage_envelopes,
 };
 
 fn unique_dir(label: &str) -> PathBuf {
@@ -235,7 +233,10 @@ fn trace_ids_serde_roundtrip() {
 #[test]
 fn balanced_report_schema_version_and_policy_id() {
     let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1).unwrap();
-    assert_eq!(report.schema_version, TAIL_LATENCY_CONTROL_PLANE_SCHEMA_VERSION);
+    assert_eq!(
+        report.schema_version,
+        TAIL_LATENCY_CONTROL_PLANE_SCHEMA_VERSION
+    );
     assert_eq!(report.policy_id, TAIL_LATENCY_CONTROL_PLANE_POLICY_ID);
     assert_eq!(report.component, TAIL_LATENCY_CONTROL_PLANE_COMPONENT);
 }
@@ -244,7 +245,10 @@ fn balanced_report_schema_version_and_policy_id() {
 fn contention_report_schema_version_and_policy_id() {
     let report =
         build_tail_latency_control_plane_report(StressProfile::SyntheticContention, 1).unwrap();
-    assert_eq!(report.schema_version, TAIL_LATENCY_CONTROL_PLANE_SCHEMA_VERSION);
+    assert_eq!(
+        report.schema_version,
+        TAIL_LATENCY_CONTROL_PLANE_SCHEMA_VERSION
+    );
     assert_eq!(report.policy_id, TAIL_LATENCY_CONTROL_PLANE_POLICY_ID);
     assert_eq!(report.component, TAIL_LATENCY_CONTROL_PLANE_COMPONENT);
 }
@@ -470,7 +474,10 @@ fn events_jsonl_lines_are_valid_json() {
     for line in events_text.lines() {
         let event: TailLatencyControlPlaneEvent =
             serde_json::from_str(line).expect("each events.jsonl line must be valid JSON");
-        assert_eq!(event.schema_version, TAIL_LATENCY_CONTROL_PLANE_EVENT_SCHEMA_VERSION);
+        assert_eq!(
+            event.schema_version,
+            TAIL_LATENCY_CONTROL_PLANE_EVENT_SCHEMA_VERSION
+        );
         assert_eq!(event.component, TAIL_LATENCY_CONTROL_PLANE_COMPONENT);
         assert!(!event.trace_id.is_empty());
         assert!(!event.decision_id.is_empty());
@@ -486,7 +493,10 @@ fn events_jsonl_lines_are_valid_json() {
 #[test]
 fn default_stage_envelopes_cover_expected_stages() {
     let envelopes = default_stage_envelopes();
-    assert!(envelopes.len() >= 7, "expected at least 7 default stage envelopes");
+    assert!(
+        envelopes.len() >= 7,
+        "expected at least 7 default stage envelopes"
+    );
     let stages: Vec<_> = envelopes.iter().map(|e| e.stage).collect();
     use frankenengine_engine::stage_envelope_certificate::ExecutionStage;
     assert!(stages.contains(&ExecutionStage::Parse));

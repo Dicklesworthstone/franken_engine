@@ -46,6 +46,20 @@ Each row names:
 - the evidence sources that justify the status
 - the diagnostic and fallback policy when the surface is not fully shipped
 
+The top-level `readiness_answer_contract` is the machine-readable answer key for
+operators:
+
+- `engine_ready_when_support_status_in`: support statuses that count as
+  engine-ready inside this contract
+- `engine_blocked_when_support_status_in`: support statuses that count as
+  engine-blocked inside this contract
+- `product_ready_state`: explicit statement that product-ready is delegated
+- `product_ready_owner_repo`: downstream repo that owns product-ready closure
+- `product_ready_handoff_bead_id`: downstream handoff/bead anchor for product
+  readiness
+- `operator_rule_summary`: compact human-readable rule derived from the same
+  contract
+
 ## Current Support Boundary
 
 Current notable rows:
@@ -106,6 +120,7 @@ Gate runs emit:
 - `commands.txt`
 - `trace_ids.json`
 - `support_surface_schema_report.json`
+- `summary.md`
 - `support_surface_contract.json`
 - `support_surface_mode_matrix.json`
 - `step_logs/`
@@ -114,7 +129,10 @@ under `artifacts/rgc_support_surface_contract/<UTC_TIMESTAMP>/`.
 
 The replay wrapper resolves the latest complete artifact bundle, warns when a
 newer run directory is incomplete, and prints the selected manifest, report,
-copied contract artifacts, replayable commands, trace IDs, and first step log.
+operator-readable summary, copied contract artifacts, replayable commands,
+trace IDs, and first step log. The summary derives its engine-ready versus
+engine-blocked rule from `readiness_answer_contract` and keeps downstream
+`franken_node` product-ready status explicit as delegated/out-of-scope here.
 
 ## Operator Verification
 

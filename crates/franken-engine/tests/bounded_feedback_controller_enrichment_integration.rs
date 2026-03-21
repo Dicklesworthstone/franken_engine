@@ -276,3 +276,210 @@ fn constants_valid() {
     assert!(DEFAULT_OUTPUT_CLAMP_MILLIONTHS > 0);
     assert!(MIN_WARMUP_EPOCHS > 0);
 }
+
+// ---------------------------------------------------------------------------
+// Enrichment helpers
+// ---------------------------------------------------------------------------
+
+fn make_target(stage: ExecutionStage) -> LatencyTarget {
+    LatencyTarget {
+        stage,
+        percentile: LatencyPercentile::P99,
+        target_ns: 1_000_000,
+        deadband_ns: 50_000,
+        emergency_ns: 3_000_000,
+    }
+}
+
+fn make_obs(stage: ExecutionStage, observed_ns: u64) -> LatencyObservation {
+    LatencyObservation {
+        stage,
+        percentile: LatencyPercentile::P99,
+        observed_ns,
+        sample_count: 100,
+        epoch: epoch(1),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: LatencyTarget
+// ---------------------------------------------------------------------------
+
+#[test]
+fn latency_target_serde_roundtrip() {
+    let target = make_target(ExecutionStage::Parse);
+    let json = serde_json::to_string(&target).unwrap();
+    let restored: LatencyTarget = serde_json::from_str(&json).unwrap();
+    assert_eq!(target, restored);
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: LatencyObservation serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn latency_observation_serde_roundtrip() {
+    let obs = make_obs(ExecutionStage::Parse, 800_000);
+    let json = serde_json::to_string(&obs).unwrap();
+    let restored: LatencyObservation = serde_json::from_str(&json).unwrap();
+    assert_eq!(obs, restored);
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: PiController reset
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pi_controller_reset_clears_state() {
+    let cfg = ControllerConfig::default();
+    let target = make_target(ExecutionStage::Parse);
+    let mut controller = PiController::new(cfg, target);
+    // Drive some state
+    controller.tick(&make_obs(ExecutionStage::Parse, 2_000_000));
+    controller.tick(&make_obs(ExecutionStage::Parse, 2_000_000));
+    // Reset
+    controller.reset();
+    assert_eq!(controller.state.integrator_ns, 0);
+    assert_eq!(controller.state.last_error_ns, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: PiController observe mode
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pi_controller_observe_mode_still_ticks() {
+    let mut cfg = ControllerConfig::default();
+    cfg.mode = ControllerMode::Observe;
+    let target = make_target(ExecutionStage::Parse);
+    let mut controller = PiController::new(cfg, target);
+    let obs = make_obs(ExecutionStage::Parse, 2_000_000);
+    let decision = controller.tick(&obs);
+    // Observe mode should produce a valid decision (may still compute actions)
+    assert!(!decision.schema_version.is_empty());
+    assert!(decision.target_ns > 0);
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: ControllerDecision serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn controller_decision_serde_roundtrip() {
+    let cfg = ControllerConfig::default();
+    let target = make_target(ExecutionStage::GcPause);
+    let mut controller = PiController::new(cfg, target);
+    let decision = controller.tick(&make_obs(ExecutionStage::GcPause, 800_000));
+    let json = serde_json::to_string(&decision).unwrap();
+    let restored: ControllerDecision = serde_json::from_str(&json).unwrap();
+    assert_eq!(decision, restored);
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: ControllerConfig content hash
+// ---------------------------------------------------------------------------
+
+#[test]
+fn controller_config_hash_deterministic() {
+    let c1 = ControllerConfig::default();
+    let c2 = ControllerConfig::default();
+    assert_eq!(c1.content_hash(), c2.content_hash());
+}
+
+#[test]
+fn controller_config_hash_changes_on_modification() {
+    let c1 = ControllerConfig::default();
+    let mut c2 = ControllerConfig::default();
+    c2.kp_millionths = 999_000;
+    assert_ne!(c1.content_hash(), c2.content_hash());
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: FeedbackCoordinator lifecycle
+// ---------------------------------------------------------------------------
+
+#[test]
+fn coordinator_disable_all() {
+    let policy = FeedbackPolicy::default();
+    let mut coordinator = FeedbackCoordinator::new(policy, epoch(1));
+    coordinator.disable_all();
+    // All controllers should be disabled after this
+    let health = coordinator.health_summary();
+    assert_eq!(health.active_controllers, 0);
+}
+
+#[test]
+fn coordinator_observe_only() {
+    let policy = FeedbackPolicy::default();
+    let mut coordinator = FeedbackCoordinator::new(policy, epoch(1));
+    coordinator.observe_only();
+    let health = coordinator.health_summary();
+    assert_eq!(health.active_controllers, 0);
+}
+
+#[test]
+fn coordinator_reset_all() {
+    let policy = FeedbackPolicy::default();
+    let mut coordinator = FeedbackCoordinator::new(policy, epoch(1));
+    coordinator.reset_all();
+    let health = coordinator.health_summary();
+    // After reset, should still have controllers but in initial state
+    let _ = health.total_controllers;
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: FeedbackEvidenceManifest
+// ---------------------------------------------------------------------------
+
+#[test]
+fn evidence_manifest_from_coordinator_serde_roundtrip() {
+    let policy = FeedbackPolicy::default();
+    let coordinator = FeedbackCoordinator::new(policy, epoch(5));
+    let manifest = FeedbackEvidenceManifest::from_coordinator(&coordinator);
+    let json = serde_json::to_string(&manifest).unwrap();
+    let restored: FeedbackEvidenceManifest = serde_json::from_str(&json).unwrap();
+    assert_eq!(manifest, restored);
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: CoordinatorHealthSummary serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn coordinator_health_summary_serde_roundtrip() {
+    let policy = FeedbackPolicy::default();
+    let coordinator = FeedbackCoordinator::new(policy, epoch(1));
+    let health = coordinator.health_summary();
+    let json = serde_json::to_string(&health).unwrap();
+    let restored: CoordinatorHealthSummary = serde_json::from_str(&json).unwrap();
+    assert_eq!(health, restored);
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: FeedbackPolicy content hash
+// ---------------------------------------------------------------------------
+
+#[test]
+fn feedback_policy_hash_deterministic() {
+    let p1 = FeedbackPolicy::default();
+    let p2 = FeedbackPolicy::default();
+    assert_eq!(p1.content_hash(), p2.content_hash());
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: ActuatorKind serde
+// ---------------------------------------------------------------------------
+
+#[test]
+fn actuator_kind_serde_roundtrip() {
+    for kind in [
+        ActuatorKind::AdmissionRate,
+        ActuatorKind::WorkerConcurrency,
+        ActuatorKind::TierThreshold,
+        ActuatorKind::GcBudget,
+    ] {
+        let json = serde_json::to_string(&kind).unwrap();
+        let restored: ActuatorKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(kind, restored);
+    }
+}

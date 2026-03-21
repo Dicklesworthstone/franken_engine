@@ -602,6 +602,9 @@ mod tests {
                 let mut m = BTreeMap::new();
                 m.insert("allow".to_string(), 0.1);
                 m.insert("deny".to_string(), 0.9);
+                // Include the action itself so validation passes for
+                // dynamically-named actions like "decision_contract_action".
+                m.insert(action.to_string(), 0.1);
                 m
             },
             chosen_expected_loss: 0.1,

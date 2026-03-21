@@ -507,6 +507,9 @@ impl Default for AsyncEvalConfig {
 pub struct AsyncModuleEvaluator {
     /// Per-module async state.
     states: BTreeMap<String, AsyncModuleState>,
+    /// Declared dependency graph, distinct from the mutable pending set used
+    /// for wake-up bookkeeping.
+    declared_dependencies: BTreeMap<String, BTreeSet<String>>,
     /// Rejection linkages computed during evaluation.
     rejection_linkages: Vec<RejectionLinkage>,
     /// Witness events for deterministic replay.
@@ -521,6 +524,7 @@ impl AsyncModuleEvaluator {
     pub fn new(config: AsyncEvalConfig) -> Self {
         Self {
             states: BTreeMap::new(),
+            declared_dependencies: BTreeMap::new(),
             rejection_linkages: Vec::new(),
             witness_events: Vec::new(),
             global_seq: 0,
@@ -556,6 +560,11 @@ impl AsyncModuleEvaluator {
         dependencies: &[String],
         evaluation_promise: Option<PromiseHandle>,
     ) {
+        self.declared_dependencies.insert(
+            specifier.to_string(),
+            dependencies.iter().cloned().collect(),
+        );
+
         let mut state = if has_top_level_await {
             AsyncModuleState::async_pending(
                 specifier.to_string(),
@@ -891,11 +900,15 @@ impl AsyncModuleEvaluator {
 
     fn find_linked_modules(&self, rejected_module: &str) -> Vec<LinkedModule> {
         let mut linked = Vec::new();
-        for (specifier, state) in &self.states {
+        for specifier in self.states.keys() {
             if specifier == rejected_module {
                 continue;
             }
-            if state.pending_dependencies.contains(rejected_module) {
+            if self
+                .declared_dependencies
+                .get(specifier)
+                .is_some_and(|deps| deps.contains(rejected_module))
+            {
                 linked.push(LinkedModule {
                     module_specifier: specifier.clone(),
                     import_bindings: Vec::new(),
@@ -910,11 +923,15 @@ impl AsyncModuleEvaluator {
         let mut closure = BTreeSet::new();
         let mut worklist = vec![rejected_module.to_string()];
         while let Some(current) = worklist.pop() {
-            for (specifier, state) in &self.states {
+            for specifier in self.states.keys() {
                 if closure.contains(specifier.as_str()) || specifier == &current {
                     continue;
                 }
-                if state.pending_dependencies.contains(&current) {
+                if self
+                    .declared_dependencies
+                    .get(specifier)
+                    .is_some_and(|deps| deps.contains(&current))
+                {
                     closure.insert(specifier.clone());
                     worklist.push(specifier.clone());
                 }
@@ -1230,6 +1247,73 @@ mod tests {
 
         assert!(linkage.transitive_closure.contains("child.js"));
         assert_eq!(eval.states()["child.js"].phase, AsyncModulePhase::Rejected);
+    }
+
+    #[test]
+    fn evaluator_rejection_uses_declared_dependencies_even_when_not_pending() {
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        eval.register_module("provider.js", false, &[], None);
+        eval.register_module(
+            "consumer.js",
+            true,
+            &["provider.js".to_string()],
+            Some(PromiseHandle(1)),
+        );
+
+        assert!(
+            !eval.states()["consumer.js"]
+                .pending_dependencies
+                .contains("provider.js")
+        );
+
+        let mut bindings = empty_live_bindings();
+        let linkage = eval
+            .reject_module("provider.js", &js_error("fail"), &mut bindings)
+            .unwrap();
+
+        assert!(
+            linkage
+                .linked_modules
+                .iter()
+                .any(|module| module.module_specifier == "consumer.js")
+        );
+        assert!(linkage.transitive_closure.contains("consumer.js"));
+        assert_eq!(
+            eval.states()["consumer.js"].phase,
+            AsyncModulePhase::Rejected
+        );
+    }
+
+    #[test]
+    fn evaluator_suspend_on_dependency_keeps_declared_graph_static() {
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        eval.register_module("provider.js", false, &[], None);
+        eval.register_module("consumer.js", true, &[], Some(PromiseHandle(1)));
+
+        eval.suspend_on_dependency("consumer.js", "provider.js", PromiseHandle(2))
+            .unwrap();
+
+        assert!(
+            eval.declared_dependencies["consumer.js"].is_empty(),
+            "runtime suspension bookkeeping must not rewrite the static import graph"
+        );
+
+        let mut bindings = empty_live_bindings();
+        let linkage = eval
+            .reject_module("provider.js", &js_error("fail"), &mut bindings)
+            .unwrap();
+
+        assert!(
+            linkage
+                .linked_modules
+                .iter()
+                .all(|module| module.module_specifier != "consumer.js")
+        );
+        assert!(!linkage.transitive_closure.contains("consumer.js"));
+        assert_eq!(
+            eval.states()["consumer.js"].phase,
+            AsyncModulePhase::AwaitingDependencies
+        );
     }
 
     #[test]
@@ -1776,6 +1860,7 @@ mod tests {
         assert!(
             matches!(err, AsyncEvalError::ModuleNotFound { ref specifier } if specifier == "ghost.js")
         );
+        assert!(!eval.declared_dependencies.contains_key("ghost.js"));
     }
 
     #[test]
@@ -1859,6 +1944,26 @@ mod tests {
             .unwrap();
 
         // mid.js depends on root.js, leaf.js depends on mid.js
+        assert!(linkage.transitive_closure.contains("mid.js"));
+        assert!(linkage.transitive_closure.contains("leaf.js"));
+        assert_eq!(eval.states()["mid.js"].phase, AsyncModulePhase::Rejected);
+        assert_eq!(eval.states()["leaf.js"].phase, AsyncModulePhase::Rejected);
+    }
+
+    #[test]
+    fn evaluator_transitive_rejection_uses_declared_dependency_graph() {
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        eval.register_module("root.js", false, &[], None);
+        eval.register_module("mid.js", true, &["root.js".into()], Some(PromiseHandle(1)));
+        eval.register_module("leaf.js", true, &["mid.js".into()], Some(PromiseHandle(2)));
+        eval.suspend_on_dependency("leaf.js", "mid.js", PromiseHandle(1))
+            .unwrap();
+
+        let mut bindings = empty_live_bindings();
+        let linkage = eval
+            .reject_module("root.js", &js_error("cascade"), &mut bindings)
+            .unwrap();
+
         assert!(linkage.transitive_closure.contains("mid.js"));
         assert!(linkage.transitive_closure.contains("leaf.js"));
         assert_eq!(eval.states()["mid.js"].phase, AsyncModulePhase::Rejected);

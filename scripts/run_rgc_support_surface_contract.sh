@@ -22,6 +22,7 @@ events_path="${run_dir}/events.jsonl"
 commands_path="${run_dir}/commands.txt"
 trace_ids_path="${run_dir}/trace_ids.json"
 schema_report_path="${run_dir}/support_surface_schema_report.json"
+summary_path="${run_dir}/summary.md"
 copied_contract_path="${run_dir}/support_surface_contract.json"
 copied_mode_matrix_path="${run_dir}/support_surface_mode_matrix.json"
 step_logs_dir="${run_dir}/step_logs"
@@ -304,11 +305,11 @@ write_report() {
   local outcome="$1"
   local source_inputs_json areas_json status_counts_json non_shipped_json mode_rows_json
 
-  source_inputs_json="$(jq '.source_inputs' "$contract_json")"
-  areas_json="$(jq '[.surface_rows[].area] | unique' "$contract_json")"
-  status_counts_json="$(jq '[.surface_rows[].support_status] | reduce .[] as $status ({}; .[$status] = ((.[$status] // 0) + 1))' "$contract_json")"
-  non_shipped_json="$(jq '[.surface_rows[] | select(.support_status != "shipped") | .surface_id]' "$contract_json")"
-  mode_rows_json="$(jq '.surface_mode_rows' "$mode_matrix_json")"
+  source_inputs_json="$(jq '.source_inputs' "$copied_contract_path")"
+  areas_json="$(jq '[.surface_rows[].area] | unique' "$copied_contract_path")"
+  status_counts_json="$(jq '[.surface_rows[].support_status] | reduce .[] as $status ({}; .[$status] = ((.[$status] // 0) + 1))' "$copied_contract_path")"
+  non_shipped_json="$(jq '[.surface_rows[] | select(.support_status != "shipped") | .surface_id]' "$copied_contract_path")"
+  mode_rows_json="$(jq '.surface_mode_rows' "$copied_mode_matrix_path")"
 
   jq -n \
     --arg schema_version "franken-engine.rgc-support-surface-contract.schema-report.v1" \
@@ -351,6 +352,71 @@ write_report() {
     }' >"$schema_report_path"
 }
 
+write_summary() {
+  local outcome="$1"
+  local status_counts_summary shipped_surfaces blocked_surfaces readiness_rule_summary
+  local product_ready_state product_ready_owner_repo product_ready_handoff_bead_id
+  local engine_blocked_statuses_summary
+
+  status_counts_summary="$(jq -r '
+      [.surface_rows[].support_status]
+      | sort
+      | group_by(.)
+      | map("- `\(.[0])`: \(length)")
+      | join("\n")
+    ' "$copied_contract_path")"
+  shipped_surfaces="$(jq -r '
+      .readiness_answer_contract.engine_ready_when_support_status_in as $engine_ready
+      | [.surface_rows[] | select(($engine_ready | index(.support_status)) != null)
+        | "- `\(.surface_id)` — \(.entry_surface)"]
+      | if length == 0 then "- None" else join("\n") end
+    ' "$copied_contract_path")"
+  blocked_surfaces="$(jq -r '
+      .readiness_answer_contract.engine_blocked_when_support_status_in as $engine_blocked
+      | [.surface_rows[] | select(($engine_blocked | index(.support_status)) != null)
+        | "- `\(.surface_id)` — \(.support_status); \(.user_visible_diagnostic.diagnostic_surface // "diagnostic unavailable")"]
+      | if length == 0 then "- None" else join("\n") end
+    ' "$copied_contract_path")"
+  readiness_rule_summary="$(jq -r '.readiness_answer_contract.operator_rule_summary' "$copied_contract_path")"
+  engine_blocked_statuses_summary="$(jq -r '.readiness_answer_contract.engine_blocked_when_support_status_in | join(", ")' "$copied_contract_path")"
+  product_ready_state="$(jq -r '.readiness_answer_contract.product_ready_state' "$copied_contract_path")"
+  product_ready_owner_repo="$(jq -r '.readiness_answer_contract.product_ready_owner_repo' "$copied_contract_path")"
+  product_ready_handoff_bead_id="$(jq -r '.readiness_answer_contract.product_ready_handoff_bead_id' "$copied_contract_path")"
+
+  cat >"$summary_path" <<EOF
+# RGC Support Surface Contract Summary
+
+- Outcome: ${outcome}
+- Trace ID: \`${trace_id}\`
+- Decision ID: \`${decision_id}\`
+- Policy ID: \`${policy_id}\`
+- Contract JSON: \`${copied_contract_path}\`
+- Mode matrix JSON: \`${copied_mode_matrix_path}\`
+
+## Status Counts
+
+${status_counts_summary}
+
+## Engine-Ready Surfaces
+
+${readiness_rule_summary}
+
+${shipped_surfaces}
+
+## Still-Blocked Surfaces
+
+Rows whose \`support_status\` is in [${engine_blocked_statuses_summary}] remain blocked in the engine contract and must stay target-only in downstream claims.
+
+${blocked_surfaces}
+
+## Product-Ready Note
+
+- Product-ready state: \`${product_ready_state}\`
+- Downstream owner repo: \`${product_ready_owner_repo}\`
+- Downstream handoff bead: \`${product_ready_handoff_bead_id}\`
+EOF
+}
+
 write_manifest() {
   local exit_code="${1:-0}"
   local outcome git_commit error_code_json contract_operator_verification_json
@@ -369,6 +435,7 @@ write_manifest() {
   fi
 
   write_report "$outcome"
+  write_summary "$outcome"
   jq -n --arg trace_id "$trace_id" '[$trace_id]' >"$trace_ids_path"
   contract_operator_verification_json="$(jq '.operator_verification' "$contract_json")"
 
@@ -409,6 +476,7 @@ write_manifest() {
     --arg commands "$commands_path" \
     --arg trace_ids "$trace_ids_path" \
     --arg schema_report "$schema_report_path" \
+    --arg summary "$summary_path" \
     --arg contract_json_path "$copied_contract_path" \
     --arg mode_matrix_json_path "$copied_mode_matrix_path" \
     --arg contract_doc_path "$contract_doc" \
@@ -443,6 +511,7 @@ write_manifest() {
         commands: $commands,
         trace_ids: $trace_ids,
         support_surface_schema_report: $schema_report,
+        summary: $summary,
         support_surface_contract: $contract_json_path,
         support_surface_mode_matrix: $mode_matrix_json_path,
         contract_doc: $contract_doc_path,
@@ -454,7 +523,8 @@ write_manifest() {
         ("cat " + $events),
         ("cat " + $commands),
         ("cat " + $trace_ids),
-        ("cat " + $schema_report)
+        ("cat " + $schema_report),
+        ("cat " + $summary)
       ] + $contract_operator_verification
     }' >"$manifest_path"
 

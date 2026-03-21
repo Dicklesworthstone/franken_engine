@@ -541,6 +541,66 @@ fn reject_empty_extension_id_on_flow_event() {
 }
 
 #[test]
+fn reject_blank_extension_id_on_flow_event() {
+    let mut idx = make_index();
+    let ctx = test_ctx();
+    let ev = flow_event(
+        "ev1",
+        "   ",
+        Label::Public,
+        Label::Internal,
+        FlowDecision::Allowed,
+    );
+    let err = idx.insert_flow_event(&ev, &ctx).unwrap_err();
+    assert_eq!(err, ProvenanceError::EmptyExtensionId);
+}
+
+#[test]
+fn reject_declassified_flow_event_without_receipt_ref() {
+    let mut idx = make_index();
+    let ctx = test_ctx();
+    let ev = flow_event(
+        "ev1",
+        "ext-a",
+        Label::Confidential,
+        Label::Public,
+        FlowDecision::Declassified,
+    );
+
+    let err = idx.insert_flow_event(&ev, &ctx).unwrap_err();
+    assert_eq!(
+        err,
+        ProvenanceError::EmptyRequiredField {
+            record_type: "flow_event".to_string(),
+            field_name: "receipt_ref".to_string(),
+        }
+    );
+}
+
+#[test]
+fn reject_declassified_flow_event_with_blank_receipt_ref() {
+    let mut idx = make_index();
+    let ctx = test_ctx();
+    let mut ev = flow_event(
+        "ev1",
+        "ext-a",
+        Label::Confidential,
+        Label::Public,
+        FlowDecision::Declassified,
+    );
+    ev.receipt_ref = Some("   ".to_string());
+
+    let err = idx.insert_flow_event(&ev, &ctx).unwrap_err();
+    assert_eq!(
+        err,
+        ProvenanceError::EmptyRequiredField {
+            record_type: "flow_event".to_string(),
+            field_name: "receipt_ref".to_string(),
+        }
+    );
+}
+
+#[test]
 fn reject_empty_proof_id() {
     let mut idx = make_index();
     let ctx = test_ctx();
@@ -554,6 +614,15 @@ fn reject_empty_extension_id_on_proof() {
     let mut idx = make_index();
     let ctx = test_ctx();
     let proof = flow_proof("p1", "", Label::Public, Label::Internal, 1);
+    let err = idx.insert_flow_proof(&proof, &ctx).unwrap_err();
+    assert_eq!(err, ProvenanceError::EmptyExtensionId);
+}
+
+#[test]
+fn reject_blank_extension_id_on_proof() {
+    let mut idx = make_index();
+    let ctx = test_ctx();
+    let proof = flow_proof("p1", "   ", Label::Public, Label::Internal, 1);
     let err = idx.insert_flow_proof(&proof, &ctx).unwrap_err();
     assert_eq!(err, ProvenanceError::EmptyExtensionId);
 }
@@ -652,6 +721,15 @@ fn reject_empty_extension_id_on_claim() {
     assert_eq!(err, ProvenanceError::EmptyExtensionId);
 }
 
+#[test]
+fn reject_blank_extension_id_on_claim() {
+    let mut idx = make_index();
+    let ctx = test_ctx();
+    let claim = confinement_claim("c1", "   ", ClaimStrength::Full, 1);
+    let err = idx.insert_confinement_claim(&claim, &ctx).unwrap_err();
+    assert_eq!(err, ProvenanceError::EmptyExtensionId);
+}
+
 // ===========================================================================
 // Section 6: Extension Isolation
 // ===========================================================================
@@ -693,6 +771,46 @@ fn queries_filter_by_extension_id() {
 }
 
 #[test]
+fn queries_canonicalize_whitespace_extension_ids() {
+    let mut idx = make_index();
+    let ctx = test_ctx();
+
+    idx.insert_flow_event(
+        &flow_event(
+            "ev1",
+            "  ext-a  ",
+            Label::Public,
+            Label::Internal,
+            FlowDecision::Allowed,
+        ),
+        &ctx,
+    )
+    .unwrap();
+    idx.insert_flow_proof(
+        &flow_proof("p1", "  ext-a  ", Label::Public, Label::Internal, 1),
+        &ctx,
+    )
+    .unwrap();
+    idx.insert_confinement_claim(
+        &confinement_claim("c1", "  ext-a  ", ClaimStrength::Full, 1),
+        &ctx,
+    )
+    .unwrap();
+
+    let events = idx.flow_events_by_extension("ext-a", &ctx).unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].extension_id, "ext-a");
+
+    let proofs = idx.flow_proofs_by_extension("  ext-a  ", &ctx).unwrap();
+    assert_eq!(proofs.len(), 1);
+    assert_eq!(proofs[0].extension_id, "ext-a");
+
+    let claims = idx.confinement_claims_by_extension("ext-a", &ctx).unwrap();
+    assert_eq!(claims.len(), 1);
+    assert_eq!(claims[0].extension_id, "ext-a");
+}
+
+#[test]
 fn queries_return_empty_for_unknown_extension() {
     let mut idx = make_index();
     let ctx = test_ctx();
@@ -725,6 +843,26 @@ fn queries_return_empty_for_unknown_extension() {
     );
     assert!(
         idx.confinement_claims_by_extension("ext-unknown", &ctx)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        idx.flow_events_by_extension("   ", &ctx)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        idx.flow_proofs_by_extension("   ", &ctx)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        idx.declass_receipts_by_extension("   ", &ctx)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        idx.confinement_claims_by_extension("   ", &ctx)
             .unwrap()
             .is_empty()
     );
@@ -1504,6 +1642,45 @@ fn join_events_with_dangling_receipt_ref() {
     assert!(joined[0].1.is_none()); // No matching receipt
 }
 
+#[test]
+fn join_events_with_padded_receipt_ref_and_receipt_id() {
+    let mut idx = make_index();
+    let ctx = test_ctx();
+
+    let mut ev = flow_event(
+        "ev1",
+        "ext-a",
+        Label::Secret,
+        Label::Public,
+        FlowDecision::Declassified,
+    );
+    ev.receipt_ref = Some("  r1  ".to_string());
+    idx.insert_flow_event(&ev, &ctx).unwrap();
+
+    let mut receipt = declass_receipt(
+        "  r1  ",
+        "  ext-a  ",
+        Label::Secret,
+        Label::Public,
+        DeclassificationDecision::Allow,
+    );
+    receipt.declassification_route_ref = "  route-r1  ".to_string();
+    receipt.decision_contract_id = "  decision-r1  ".to_string();
+    idx.insert_declass_receipt(&receipt, &ctx).unwrap();
+
+    let stored_event = idx.get_flow_event("ev1", &ctx).unwrap().unwrap();
+    let stored_receipt = idx.get_declass_receipt("r1", &ctx).unwrap().unwrap();
+    assert_eq!(stored_event.receipt_ref.as_deref(), Some("r1"));
+    assert_eq!(stored_receipt.receipt_id, "r1");
+    assert_eq!(stored_receipt.extension_id, "ext-a");
+    assert_eq!(stored_receipt.declassification_route_ref, "route-r1");
+    assert_eq!(stored_receipt.decision_contract_id, "decision-r1");
+
+    let joined = idx.join_events_with_receipts("ext-a", &ctx).unwrap();
+    assert_eq!(joined.len(), 1);
+    assert_eq!(joined[0].1.as_ref().unwrap().receipt_id, "r1");
+}
+
 // ===========================================================================
 // Section 13: Events Emitted
 // ===========================================================================
@@ -2055,13 +2232,19 @@ fn all_flow_decision_variants_insert_and_query() {
     .enumerate()
     {
         idx.insert_flow_event(
-            &flow_event(
-                &format!("ev{i}"),
-                "ext-a",
-                Label::Public,
-                Label::Internal,
-                *dec,
-            ),
+            &{
+                let mut ev = flow_event(
+                    &format!("ev{i}"),
+                    "ext-a",
+                    Label::Public,
+                    Label::Internal,
+                    *dec,
+                );
+                if matches!(dec, FlowDecision::Declassified) {
+                    ev.receipt_ref = Some(format!("r{i}"));
+                }
+                ev
+            },
             &ctx,
         )
         .unwrap();

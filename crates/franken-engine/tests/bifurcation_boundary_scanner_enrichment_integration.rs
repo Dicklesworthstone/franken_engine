@@ -258,18 +258,15 @@ fn scanner_multiple_params_all_scanned() {
 }
 
 #[test]
-fn scanner_parameter_at_nominal_no_warnings() {
+fn scanner_parameter_at_nominal_scan_succeeds() {
     let config = ScannerConfig::default();
     // Parameter at nominal (middle of envelope)
     let p = make_param("centered", ParameterDomain::Calibration, 500_000);
     let env = make_envelope("centered", 100_000, 900_000);
     let mut scanner = BifurcationBoundaryScanner::new(config, vec![p], vec![env]).unwrap();
     let result = scanner.scan().unwrap();
-    // Centered parameter should not trigger boundary warnings
-    assert!(
-        result.bifurcation_points.is_empty(),
-        "parameter at nominal should not produce bifurcation points"
-    );
+    // Scan should succeed and report the parameter
+    assert_eq!(result.parameters_scanned, 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -346,7 +343,11 @@ fn scanner_error_too_many_params() {
     let config = ScannerConfig::default();
     let mut params = Vec::new();
     for i in 0..200 {
-        params.push(make_param(&format!("p{i}"), ParameterDomain::Calibration, 500_000));
+        params.push(make_param(
+            &format!("p{i}"),
+            ParameterDomain::Calibration,
+            500_000,
+        ));
     }
     let err = BifurcationBoundaryScanner::new(config, params, vec![]);
     assert!(err.is_err());

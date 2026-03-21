@@ -38,11 +38,23 @@ struct SupportSurfaceContract {
     source_inputs: Vec<String>,
     allowed_support_statuses: Vec<String>,
     claim_language_states: Vec<String>,
+    readiness_answer_contract: ReadinessAnswerContract,
     surface_rows: Vec<SurfaceRow>,
     required_log_keys: Vec<String>,
     required_artifacts: Vec<String>,
     gate_runner: GateRunner,
     operator_verification: Vec<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct ReadinessAnswerContract {
+    engine_ready_when_support_status_in: Vec<String>,
+    engine_blocked_when_support_status_in: Vec<String>,
+    product_ready_state: String,
+    product_ready_owner_repo: String,
+    product_ready_handoff_bead_id: String,
+    operator_rule_summary: String,
 }
 
 #[allow(dead_code)]
@@ -250,6 +262,37 @@ fn rgc_911b_contract_is_versioned_and_covers_required_areas() {
             "missing claim language state {state}"
         );
     }
+
+    let readiness = &contract.readiness_answer_contract;
+    let engine_ready_statuses: BTreeSet<_> = readiness
+        .engine_ready_when_support_status_in
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let engine_blocked_statuses: BTreeSet<_> = readiness
+        .engine_blocked_when_support_status_in
+        .iter()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(engine_ready_statuses, BTreeSet::from(["shipped"]));
+    assert_eq!(
+        engine_blocked_statuses,
+        BTreeSet::from(["candidate", "deferred", "unsupported"])
+    );
+    assert_eq!(
+        readiness.product_ready_state,
+        "delegated_to_franken_node_handoff"
+    );
+    assert_eq!(readiness.product_ready_owner_repo, "franken_node");
+    assert_eq!(readiness.product_ready_handoff_bead_id, "bd-1lsy.5.10.2");
+    assert!(
+        readiness.operator_rule_summary.contains("engine-ready"),
+        "readiness operator summary should describe engine-ready semantics"
+    );
+    assert!(
+        readiness.operator_rule_summary.contains("franken_node"),
+        "readiness operator summary should describe downstream product handoff"
+    );
 
     let areas: BTreeSet<_> = contract
         .surface_rows
@@ -652,6 +695,7 @@ fn rgc_911b_contract_references_gate_and_expected_artifacts() {
         "commands.txt",
         "trace_ids.json",
         "support_surface_schema_report.json",
+        "summary.md",
         "support_surface_contract.json",
         "support_surface_mode_matrix.json",
         "step_logs/step_*.log",
@@ -777,6 +821,59 @@ fn rgc_911b_gate_script_manifest_reuses_contract_operator_verification_commands(
         script.contains("support_surface_schema_report: $schema_report"),
         "gate manifest should expose the schema report artifact under an explicit key"
     );
+    assert!(
+        script.contains("source_inputs_json=\"$(jq '.source_inputs' \"$copied_contract_path\")\""),
+        "schema report should derive source_inputs from the copied contract artifact"
+    );
+    assert!(
+        script
+            .contains("mode_rows_json=\"$(jq '.surface_mode_rows' \"$copied_mode_matrix_path\")\""),
+        "schema report should derive mode rows from the copied mode-matrix artifact"
+    );
+    assert!(
+        script.contains("summary_path=\"${run_dir}/summary.md\""),
+        "gate script should emit an operator-readable summary artifact"
+    );
+    assert!(
+        script.contains(
+            ".readiness_answer_contract.engine_ready_when_support_status_in as $engine_ready"
+        ),
+        "summary should derive engine-ready surfaces from the contract readiness-answer rule"
+    );
+    assert!(
+        script.contains(
+            ".readiness_answer_contract.engine_blocked_when_support_status_in as $engine_blocked"
+        ),
+        "summary should derive blocked surfaces from the contract readiness-answer rule"
+    );
+    assert!(
+        script.contains("readiness_rule_summary=\"$(jq -r '.readiness_answer_contract.operator_rule_summary' \"$copied_contract_path\")\""),
+        "summary should read the operator readiness rule from the copied contract artifact"
+    );
+    assert!(
+        script.contains("product_ready_handoff_bead_id=\"$(jq -r '.readiness_answer_contract.product_ready_handoff_bead_id' \"$copied_contract_path\")\""),
+        "summary should expose the downstream handoff bead from the copied contract artifact"
+    );
+    assert!(
+        script.contains("engine_blocked_statuses_summary=\"$(jq -r '.readiness_answer_contract.engine_blocked_when_support_status_in | join(\", \")' \"$copied_contract_path\")\""),
+        "summary should read blocked-status labels from the copied contract artifact"
+    );
+    assert!(
+        script.contains("write_summary \"$outcome\""),
+        "gate manifest flow should write the summary alongside the schema report"
+    );
+    assert!(
+        script.contains("' \"$copied_contract_path\")"),
+        "summary/report derivation should read from the copied contract artifact inside the bundle"
+    );
+    assert!(
+        script.contains("summary: $summary"),
+        "gate manifest should expose the summary artifact under an explicit key"
+    );
+    assert!(
+        script.contains("(\"cat \" + $summary)"),
+        "gate manifest operator_verification should surface the summary artifact"
+    );
 }
 
 #[test]
@@ -803,6 +900,10 @@ fn rgc_911b_replay_wrapper_uses_latest_complete_bundle() {
         script
             .contains("latest schema report: ${latest_run_dir}/support_surface_schema_report.json"),
         "replay wrapper should print the support-surface schema report"
+    );
+    assert!(
+        script.contains("latest summary: ${latest_run_dir}/summary.md"),
+        "replay wrapper should print the operator-readable support-surface summary"
     );
     assert!(
         script.contains("latest contract: ${latest_run_dir}/support_surface_contract.json"),

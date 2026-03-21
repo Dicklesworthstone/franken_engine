@@ -70,6 +70,7 @@ struct SurfaceRow {
     evidence_sources: Vec<String>,
     ownership: OwnershipRoute,
     linked_capability_ids: Option<Vec<String>>,
+    linked_policy_ids: Option<Vec<String>>,
     linked_platform_targets: Option<Vec<String>>,
     linked_fallback_reasons: Option<Vec<String>>,
     mode_matrix_row_id: Option<String>,
@@ -512,6 +513,12 @@ fn rgc_911b_react_rows_reference_real_capability_ids() {
         .iter()
         .find(|row| row.surface_id == "runtime.react_compile_contract")
         .expect("compile row must exist");
+    let compile_policy_ids = compile_row
+        .linked_policy_ids
+        .as_ref()
+        .expect("compile row must pin linked policy ids");
+    assert_eq!(compile_policy_ids.len(), 1);
+    assert_eq!(compile_policy_ids[0], REACT_CONTRACT_POLICY_ID);
     for capability_id in compile_row
         .linked_capability_ids
         .as_ref()
@@ -533,6 +540,12 @@ fn rgc_911b_react_rows_reference_real_capability_ids() {
         .iter()
         .find(|row| row.surface_id == "runtime.react_execution_entrypoints")
         .expect("execution row must exist");
+    let execution_policy_ids = execution_row
+        .linked_policy_ids
+        .as_ref()
+        .expect("execution row must pin linked policy ids");
+    assert_eq!(execution_policy_ids.len(), 1);
+    assert_eq!(execution_policy_ids[0], REACT_CONTRACT_POLICY_ID);
     for capability_id in execution_row
         .linked_capability_ids
         .as_ref()

@@ -285,6 +285,9 @@
         "tsx-automatic-runtime-compile",
         "react-diagnostics-source-maps"
       ],
+      "linked_policy_ids": [
+        "policy-rgc-react-capability-contract-v1"
+      ],
       "mode_matrix_row_id": null,
       "user_visible_diagnostic": {
         "error_code": "FE-RGC-016A-CAP-0001",
@@ -322,6 +325,9 @@
         "react-ssr-entrypoint",
         "react-client-entry-preparation",
         "react-hydration-handoff-artifacts"
+      ],
+      "linked_policy_ids": [
+        "policy-rgc-react-capability-contract-v1"
       ],
       "mode_matrix_row_id": null,
       "user_visible_diagnostic": {

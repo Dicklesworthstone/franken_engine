@@ -188,9 +188,9 @@ fn module_interop_gate_script_surfaces_replay_and_trace_artifacts() {
 
     assert!(
         script.contains(
-            "replay_command=\"./scripts/e2e/rgc_module_interop_verification_matrix_replay.sh ${mode}\""
+            "replay_command=\"RGC_MODULE_INTEROP_MATRIX_REPLAY_RUN_DIR=${run_dir} ./scripts/e2e/rgc_module_interop_verification_matrix_replay.sh\""
         ),
-        "gate script must reference the replay wrapper"
+        "gate script must emit an exact-run-dir replay command for the current bundle"
     );
     assert!(
         script
@@ -242,6 +242,14 @@ fn module_interop_replay_wrapper_requires_complete_bundle() {
     assert!(
         script.contains("latest_complete_run_dir()"),
         "replay wrapper must scan for the latest complete bundle"
+    );
+    assert!(
+        script.contains("RGC_MODULE_INTEROP_MATRIX_REPLAY_RUN_DIR"),
+        "replay wrapper must support exact-run-dir targeting for emitted bundles"
+    );
+    assert!(
+        script.contains("explicit run directory is incomplete"),
+        "replay wrapper must fail closed when an explicitly targeted run directory is incomplete"
     );
     assert!(
         script.contains("newest directory")

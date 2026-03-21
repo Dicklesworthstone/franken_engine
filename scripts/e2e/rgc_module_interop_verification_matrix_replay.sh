@@ -8,10 +8,22 @@ source "${root_dir}/scripts/e2e/parser_deterministic_env.sh"
 parser_frontier_bootstrap_env
 
 artifact_root="${RGC_MODULE_INTEROP_MATRIX_ARTIFACT_ROOT:-${root_dir}/artifacts/rgc_module_interop_verification_matrix}"
+explicit_run_dir="${RGC_MODULE_INTEROP_MATRIX_REPLAY_RUN_DIR:-}"
 mode="${1:-ci}"
 main_exit=0
 
-"${root_dir}/scripts/run_rgc_module_interop_verification_matrix.sh" "${mode}" || main_exit=$?
+run_dir_is_complete() {
+  local candidate="${1:-}"
+  [[ -n "${candidate}" ]] || return 1
+  [[ -f "${candidate}/run_manifest.json" ]] || return 1
+  [[ -f "${candidate}/events.jsonl" ]] || return 1
+  [[ -f "${candidate}/commands.txt" ]] || return 1
+  [[ -f "${candidate}/module_resolution_trace.jsonl" ]] || return 1
+}
+
+if [[ -z "${explicit_run_dir}" ]]; then
+  "${root_dir}/scripts/run_rgc_module_interop_verification_matrix.sh" "${mode}" || main_exit=$?
+fi
 
 latest_artifact_dir() {
   if [[ ! -d "${artifact_root}" ]]; then
@@ -27,10 +39,7 @@ latest_complete_run_dir() {
   fi
 
   find "${artifact_root}" -mindepth 1 -maxdepth 1 -type d | sort | while IFS= read -r candidate; do
-    [[ -f "${candidate}/run_manifest.json" ]] || continue
-    [[ -f "${candidate}/events.jsonl" ]] || continue
-    [[ -f "${candidate}/commands.txt" ]] || continue
-    [[ -f "${candidate}/module_resolution_trace.jsonl" ]] || continue
+    run_dir_is_complete "${candidate}" || continue
     printf '%s\n' "${candidate}"
   done | tail -n 1
 }
@@ -61,7 +70,19 @@ warn_about_failed_gate_replay_source() {
 
 latest_artifact_dir_path="$(latest_artifact_dir)"
 latest_run_dir="$(latest_complete_run_dir)"
+if [[ -n "${explicit_run_dir}" ]]; then
+  latest_artifact_dir_path="${explicit_run_dir}"
+  latest_run_dir=""
+  if run_dir_is_complete "${explicit_run_dir}"; then
+    latest_run_dir="${explicit_run_dir}"
+  fi
+fi
+
 if [[ -z "${latest_run_dir}" ]]; then
+  if [[ -n "${explicit_run_dir}" ]]; then
+    echo "rgc module interop verification matrix replay explicit run directory is incomplete: ${explicit_run_dir}" >&2
+    exit 1
+  fi
   if [[ -n "${latest_artifact_dir_path}" ]]; then
     echo "rgc module interop verification matrix replay could not locate a complete run directory under ${artifact_root}; newest directory ${latest_artifact_dir_path} is incomplete" >&2
   else

@@ -26,7 +26,7 @@ decision_id="decision-rgc-module-interop-matrix-${timestamp}"
 policy_id="policy-rgc-module-interop-matrix-v1"
 component="rgc_module_interop_verification_matrix"
 scenario_id="rgc-058"
-replay_command="./scripts/e2e/rgc_module_interop_verification_matrix_replay.sh ${mode}"
+replay_command="RGC_MODULE_INTEROP_MATRIX_REPLAY_RUN_DIR=${run_dir} ./scripts/e2e/rgc_module_interop_verification_matrix_replay.sh"
 
 mkdir -p "$run_dir"
 

@@ -26,6 +26,11 @@ already governs:
 Unsupported or deferred surfaces are acceptable only when they are visible,
 diagnostic, and paired with concrete remediation guidance.
 
+For the React rows, the machine-readable support-surface contract now pins
+`policy-rgc-react-capability-contract-v1` directly in row metadata so the
+operator-facing support boundary cannot silently drift away from the React
+capability contract while keeping the same evidence file paths.
+
 ## Surface Families
 
 The machine-readable contract covers these areas:
@@ -44,6 +49,8 @@ Each row names:
 - the allowed public claim language (`shipped_fact` or `target_only`)
 - the operator-facing entry surface
 - the evidence sources that justify the status
+- any pinned upstream contract policy ids when the row is derived from another
+  machine-readable contract
 - the diagnostic and fallback policy when the surface is not fully shipped
 
 The top-level `readiness_answer_contract` is the machine-readable answer key for

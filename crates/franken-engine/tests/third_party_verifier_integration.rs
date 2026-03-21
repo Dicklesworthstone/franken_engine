@@ -493,11 +493,13 @@ fn containment_all_pass_yields_verified() {
 }
 
 #[test]
-fn containment_empty_scenarios_yields_verified() {
+fn containment_empty_scenarios_yields_failed() {
+    // Empty scenarios now fail-closed (containment verification requires
+    // at least one scenario result).
     let result = make_gate_result(Vec::new());
     let bundle = make_containment_bundle(result);
     let report = verify_containment_claim(&bundle);
-    assert_eq!(report.verdict, VerificationVerdict::Verified);
+    assert_eq!(report.verdict, VerificationVerdict::Failed);
 }
 
 #[test]

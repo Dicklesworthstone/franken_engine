@@ -603,6 +603,17 @@ fn enrichment_build_report_integrity_detects_tampered_evaluation() {
 }
 
 #[test]
+fn enrichment_build_report_integrity_detects_tampered_evidence_ref() {
+    let mut eval = make_eval("x", 100, 100, GateVerdict::Pass);
+    eval.evidence_ref = Some("ev-1".to_string());
+    eval.replay_ref = Some("replay-1".to_string());
+    let mut report = build_report(SecurityEpoch::from_raw(1), "rc-1", vec![eval]);
+    assert!(report.verify_integrity());
+    report.evaluations[0].evidence_ref = Some("ev-2".to_string());
+    assert!(!report.verify_integrity());
+}
+
+#[test]
 fn enrichment_build_report_blockers_returns_only_blocking() {
     let evals = vec![
         make_eval("pass", 100, 100, GateVerdict::Pass),
@@ -873,6 +884,28 @@ fn enrichment_triage_bundle_verify_integrity() {
     let report = build_report(SecurityEpoch::from_raw(1), "rc-int", evals);
     let bundle = build_triage_bundle(&report, &[cond]);
     assert!(bundle.verify_integrity());
+}
+
+#[test]
+fn enrichment_triage_bundle_detects_tampered_remediation() {
+    let cond = make_condition(
+        "x",
+        OracleKind::Replay,
+        0,
+        ThresholdDirection::Exactly,
+        true,
+    );
+    let evals = vec![evaluate_condition(
+        &cond,
+        1,
+        Some("ev-ref"),
+        Some("replay-ref"),
+    )];
+    let report = build_report(SecurityEpoch::from_raw(1), "rc-int", evals);
+    let mut bundle = build_triage_bundle(&report, &[cond]);
+    assert!(bundle.verify_integrity());
+    bundle.entries[0].remediation = "tampered remediation".to_string();
+    assert!(!bundle.verify_integrity());
 }
 
 #[test]

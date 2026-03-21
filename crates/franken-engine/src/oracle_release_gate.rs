@@ -25,11 +25,9 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -369,7 +367,20 @@ pub fn build_report(
         GateVerdict::Pass
     };
 
-    let content_hash = compute_report_hash(&evaluations, release_candidate_id, epoch);
+    let content_hash = compute_report_hash(
+        SCHEMA_VERSION,
+        BEAD_ID,
+        POLICY_ID,
+        COMPONENT,
+        &evaluations,
+        release_candidate_id,
+        epoch,
+        overall_verdict,
+        pass_count,
+        fail_count,
+        advisory_count,
+        inconclusive_count,
+    );
 
     OracleReleaseGateReport {
         schema_version: SCHEMA_VERSION.to_string(),
@@ -401,8 +412,20 @@ impl OracleReleaseGateReport {
 
     /// Verify content hash integrity.
     pub fn verify_integrity(&self) -> bool {
-        let expected =
-            compute_report_hash(&self.evaluations, &self.release_candidate_id, self.epoch);
+        let expected = compute_report_hash(
+            &self.schema_version,
+            &self.bead_id,
+            &self.policy_id,
+            &self.component,
+            &self.evaluations,
+            &self.release_candidate_id,
+            self.epoch,
+            self.overall_verdict,
+            self.pass_count,
+            self.fail_count,
+            self.advisory_count,
+            self.inconclusive_count,
+        );
         self.content_hash == expected
     }
 
@@ -560,7 +583,14 @@ pub fn build_triage_bundle(
         });
     }
 
-    let content_hash = compute_triage_hash(&entries, &report.release_candidate_id);
+    let content_hash = compute_triage_hash(
+        SCHEMA_VERSION,
+        &entries,
+        &report.release_candidate_id,
+        blocker_count,
+        warning_count,
+        info_count,
+    );
 
     TriageBundle {
         schema_version: SCHEMA_VERSION.to_string(),
@@ -586,7 +616,14 @@ impl TriageBundle {
 
     /// Verify integrity.
     pub fn verify_integrity(&self) -> bool {
-        let expected = compute_triage_hash(&self.entries, &self.release_candidate_id);
+        let expected = compute_triage_hash(
+            &self.schema_version,
+            &self.entries,
+            &self.release_candidate_id,
+            self.blocker_count,
+            self.warning_count,
+            self.info_count,
+        );
         self.content_hash == expected
     }
 }
@@ -735,32 +772,85 @@ pub fn default_gate_conditions() -> Vec<OracleGateCondition> {
 // Helpers
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn compute_report_hash(
+    schema_version: &str,
+    bead_id: &str,
+    policy_id: &str,
+    component: &str,
     evaluations: &[GateEvaluation],
     release_candidate_id: &str,
     epoch: SecurityEpoch,
+    overall_verdict: GateVerdict,
+    pass_count: u64,
+    fail_count: u64,
+    advisory_count: u64,
+    inconclusive_count: u64,
 ) -> ContentHash {
-    let mut hasher = Sha256::new();
-    hasher.update(SCHEMA_VERSION.as_bytes());
-    hasher.update(release_candidate_id.as_bytes());
-    hasher.update(epoch.as_u64().to_le_bytes());
-    for eval in evaluations {
-        hasher.update(eval.condition_id.as_bytes());
-        hasher.update(eval.observed_value.to_le_bytes());
-        hasher.update(eval.verdict.as_str().as_bytes());
+    #[derive(Serialize)]
+    struct ReportHashInput<'a> {
+        schema_version: &'a str,
+        bead_id: &'a str,
+        policy_id: &'a str,
+        component: &'a str,
+        release_candidate_id: &'a str,
+        epoch: u64,
+        overall_verdict: &'static str,
+        pass_count: u64,
+        fail_count: u64,
+        advisory_count: u64,
+        inconclusive_count: u64,
+        evaluations: &'a [GateEvaluation],
     }
-    ContentHash::compute(&hasher.finalize())
+
+    let payload = ReportHashInput {
+        schema_version,
+        bead_id,
+        policy_id,
+        component,
+        release_candidate_id,
+        epoch: epoch.as_u64(),
+        overall_verdict: overall_verdict.as_str(),
+        pass_count,
+        fail_count,
+        advisory_count,
+        inconclusive_count,
+        evaluations,
+    };
+    let bytes = serde_json::to_vec(&payload)
+        .expect("oracle release gate report hash input serialization must succeed");
+    ContentHash::compute(&bytes)
 }
 
-fn compute_triage_hash(entries: &[TriageBundleEntry], release_candidate_id: &str) -> ContentHash {
-    let mut hasher = Sha256::new();
-    hasher.update(SCHEMA_VERSION.as_bytes());
-    hasher.update(release_candidate_id.as_bytes());
-    for entry in entries {
-        hasher.update(entry.condition_id.as_bytes());
-        hasher.update(entry.severity.as_str().as_bytes());
+fn compute_triage_hash(
+    schema_version: &str,
+    entries: &[TriageBundleEntry],
+    release_candidate_id: &str,
+    blocker_count: u64,
+    warning_count: u64,
+    info_count: u64,
+) -> ContentHash {
+    #[derive(Serialize)]
+    struct TriageHashInput<'a> {
+        schema_version: &'a str,
+        release_candidate_id: &'a str,
+        blocker_count: u64,
+        warning_count: u64,
+        info_count: u64,
+        entries: &'a [TriageBundleEntry],
     }
-    ContentHash::compute(&hasher.finalize())
+
+    let payload = TriageHashInput {
+        schema_version,
+        release_candidate_id,
+        blocker_count,
+        warning_count,
+        info_count,
+        entries,
+    };
+    let bytes = serde_json::to_vec(&payload)
+        .expect("oracle release gate triage hash input serialization must succeed");
+    ContentHash::compute(&bytes)
 }
 
 // ---------------------------------------------------------------------------
@@ -1120,6 +1210,33 @@ mod tests {
         assert!(bundle.verify_integrity());
     }
 
+    #[test]
+    fn triage_bundle_integrity_detects_remediation_tamper() {
+        let conditions = default_gate_conditions();
+        let evals = vec![evaluate_condition(
+            &conditions[0],
+            500_000,
+            Some("ev-1"),
+            None,
+        )];
+        let report = build_report(SecurityEpoch::from_raw(1), "rc-1", evals);
+        let mut bundle = build_triage_bundle(&report, &conditions);
+        assert!(bundle.verify_integrity());
+        bundle.entries[0].remediation.push_str(" tampered");
+        assert!(!bundle.verify_integrity());
+    }
+
+    #[test]
+    fn triage_bundle_integrity_detects_schema_version_tamper() {
+        let conditions = default_gate_conditions();
+        let evals = vec![evaluate_condition(&conditions[0], 500_000, None, None)];
+        let report = build_report(SecurityEpoch::from_raw(1), "rc-1", evals);
+        let mut bundle = build_triage_bundle(&report, &conditions);
+        assert!(bundle.verify_integrity());
+        bundle.schema_version = "tampered.schema".to_string();
+        assert!(!bundle.verify_integrity());
+    }
+
     // --- Enrichment tests (PearlTower 2026-03-16) ---
 
     #[test]
@@ -1369,6 +1486,40 @@ mod tests {
         let mut report = build_report(SecurityEpoch::from_raw(1), "rc-1", evals);
         assert!(report.verify_integrity());
         report.release_candidate_id = "tampered".to_string();
+        assert!(!report.verify_integrity());
+    }
+
+    #[test]
+    fn report_verify_integrity_detects_evidence_ref_tamper() {
+        let evals = vec![GateEvaluation {
+            condition_id: "a".to_string(),
+            observed_value: 100,
+            threshold_value: 100,
+            verdict: GateVerdict::Pass,
+            evidence_ref: Some("ev-1".to_string()),
+            replay_ref: Some("replay-1".to_string()),
+            margin_millionths: 0,
+        }];
+        let mut report = build_report(SecurityEpoch::from_raw(1), "rc-1", evals);
+        assert!(report.verify_integrity());
+        report.evaluations[0].evidence_ref = Some("ev-2".to_string());
+        assert!(!report.verify_integrity());
+    }
+
+    #[test]
+    fn report_verify_integrity_detects_component_tamper() {
+        let evals = vec![GateEvaluation {
+            condition_id: "a".to_string(),
+            observed_value: 100,
+            threshold_value: 100,
+            verdict: GateVerdict::Pass,
+            evidence_ref: None,
+            replay_ref: None,
+            margin_millionths: 0,
+        }];
+        let mut report = build_report(SecurityEpoch::from_raw(1), "rc-1", evals);
+        assert!(report.verify_integrity());
+        report.component = "tampered_component".to_string();
         assert!(!report.verify_integrity());
     }
 

@@ -455,6 +455,17 @@ fn build_report_integrity_detects_tampering() {
 }
 
 #[test]
+fn build_report_integrity_detects_evidence_ref_tampering() {
+    let mut eval = make_pass_eval("x", 42);
+    eval.evidence_ref = Some("ev-1".to_string());
+    eval.replay_ref = Some("replay-1".to_string());
+    let mut report = build_report(epoch(), "rc-int", vec![eval]);
+    assert!(report.verify_integrity());
+    report.evaluations[0].evidence_ref = Some("ev-2".to_string());
+    assert!(!report.verify_integrity());
+}
+
+#[test]
 fn build_report_serde_roundtrip() {
     let conditions = default_gate_conditions();
     let evals: Vec<GateEvaluation> = conditions
@@ -686,6 +697,28 @@ fn triage_bundle_integrity_detects_tampering() {
     let report = build_report(epoch(), "rc-int", evals);
     let mut bundle = build_triage_bundle(&report, &conditions);
     bundle.release_candidate_id = "tampered".to_string();
+    assert!(!bundle.verify_integrity());
+}
+
+#[test]
+fn triage_bundle_integrity_detects_remediation_tampering() {
+    let cond = make_condition(
+        "x",
+        OracleKind::Replay,
+        ThresholdDirection::Exactly,
+        0,
+        true,
+    );
+    let evals = vec![evaluate_condition(
+        &cond,
+        1,
+        Some("ev-ref"),
+        Some("replay-ref"),
+    )];
+    let report = build_report(epoch(), "rc-int", evals);
+    let mut bundle = build_triage_bundle(&report, &[cond]);
+    assert!(bundle.verify_integrity());
+    bundle.entries[0].remediation = "tampered remediation".to_string();
     assert!(!bundle.verify_integrity());
 }
 

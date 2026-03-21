@@ -739,3 +739,280 @@ fn relative_path(root: &Path, path: &Path) -> String {
 fn hash_label(label: &str) -> ContentHash {
     ContentHash::compute(label.as_bytes())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // Constants
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn constants_nonempty() {
+        assert!(!BEAD_ID.is_empty());
+        assert!(BEAD_ID.starts_with("bd-"));
+        assert!(!COMPONENT.is_empty());
+        assert!(!POLICY_ID.is_empty());
+        assert!(!REPORT_SCHEMA_VERSION.is_empty());
+        assert!(!AOT_BUNDLE_SCHEMA_VERSION.is_empty());
+    }
+
+    #[test]
+    fn file_names_nonempty() {
+        assert!(!REPORT_FILE.is_empty());
+        assert!(REPORT_FILE.ends_with(".json"));
+        assert!(!OBSERVABILITY_DELTA_FILE.is_empty());
+        assert!(!AOT_BUNDLE_FILE.is_empty());
+        assert!(!RUNTIME_IMAGE_MANIFEST_FILE.is_empty());
+        assert!(!SUMMARY_FILE.is_empty());
+        assert!(!TRACE_IDS_FILE.is_empty());
+    }
+
+    #[test]
+    fn schema_versions_are_versioned() {
+        assert!(REPORT_SCHEMA_VERSION.contains(".v1"));
+        assert!(AOT_BUNDLE_SCHEMA_VERSION.contains(".v1"));
+        assert!(RUNTIME_IMAGE_MANIFEST_SCHEMA_VERSION.contains(".v1"));
+        assert!(OBSERVABILITY_DELTA_SCHEMA_VERSION.contains(".v1"));
+        assert!(TRACE_IDS_SCHEMA_VERSION.contains(".v1"));
+    }
+
+    // -----------------------------------------------------------------------
+    // ArtifactContext
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn artifact_context_new_fills_defaults() {
+        let ctx = ArtifactContext::new("/tmp/test-artifacts");
+        assert_eq!(ctx.artifact_dir, PathBuf::from("/tmp/test-artifacts"));
+        assert!(ctx.run_id.starts_with("run-cold_start_compilation_lane-"));
+        assert_eq!(ctx.trace_id, "trace-rgc-610");
+        assert_eq!(ctx.decision_id, "decision-rgc-610");
+        assert_eq!(ctx.policy_id, POLICY_ID);
+        assert!(!ctx.generated_at_utc.is_empty());
+    }
+
+    #[test]
+    fn artifact_context_serde_roundtrip() {
+        let ctx = ArtifactContext::new("/tmp/serde-test");
+        let json = serde_json::to_string(&ctx).unwrap();
+        let decoded: ArtifactContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(ctx, decoded);
+    }
+
+    // -----------------------------------------------------------------------
+    // TraceIdsArtifact
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn trace_ids_artifact_serde_roundtrip() {
+        let artifact = TraceIdsArtifact {
+            schema_version: TRACE_IDS_SCHEMA_VERSION.to_string(),
+            trace_ids: vec!["trace-1".to_string(), "trace-2".to_string()],
+            decision_id: "dec-1".to_string(),
+            policy_id: POLICY_ID.to_string(),
+            subordinate_trace_ids: BTreeMap::new(),
+        };
+        let json = serde_json::to_string(&artifact).unwrap();
+        let decoded: TraceIdsArtifact = serde_json::from_str(&json).unwrap();
+        assert_eq!(artifact, decoded);
+    }
+
+    // -----------------------------------------------------------------------
+    // EntryKindSummary
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn entry_kind_summary_serde_roundtrip() {
+        let summary = EntryKindSummary {
+            total_graphs: 10,
+            usable_graphs: 8,
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        let decoded: EntryKindSummary = serde_json::from_str(&json).unwrap();
+        assert_eq!(summary, decoded);
+    }
+
+    // -----------------------------------------------------------------------
+    // ColdStartObservabilityDeltaRow
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn observability_delta_row_serde_roundtrip() {
+        let row = ColdStartObservabilityDeltaRow {
+            mode_id: "shipped_budgeted".to_string(),
+            startup_path: StartupPathKind::AotRestored,
+            baseline_nanos: 100_000_000,
+            candidate_nanos: 82_000_000,
+            speedup_millionths: 180_000,
+            preserves_claim: true,
+        };
+        let json = serde_json::to_string(&row).unwrap();
+        let decoded: ColdStartObservabilityDeltaRow = serde_json::from_str(&json).unwrap();
+        assert_eq!(row, decoded);
+    }
+
+    #[test]
+    fn observability_delta_row_negative_speedup() {
+        let row = ColdStartObservabilityDeltaRow {
+            mode_id: "regression".to_string(),
+            startup_path: StartupPathKind::ZygoteFork,
+            baseline_nanos: 80_000_000,
+            candidate_nanos: 100_000_000,
+            speedup_millionths: -250_000,
+            preserves_claim: false,
+        };
+        assert!(row.speedup_millionths < 0);
+        assert!(!row.preserves_claim);
+    }
+
+    // -----------------------------------------------------------------------
+    // ColdStartObservabilityDeltaArtifact
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn observability_delta_artifact_serde_roundtrip() {
+        let artifact = ColdStartObservabilityDeltaArtifact {
+            schema_version: OBSERVABILITY_DELTA_SCHEMA_VERSION.to_string(),
+            component: COMPONENT.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            policy_id: POLICY_ID.to_string(),
+            rows: Vec::new(),
+        };
+        let json = serde_json::to_string(&artifact).unwrap();
+        let decoded: ColdStartObservabilityDeltaArtifact = serde_json::from_str(&json).unwrap();
+        assert_eq!(artifact, decoded);
+    }
+
+    // -----------------------------------------------------------------------
+    // RuntimeImageManifestArtifact
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn runtime_image_manifest_artifact_serde_roundtrip() {
+        let manifest = RuntimeImageManifestArtifact {
+            schema_version: RUNTIME_IMAGE_MANIFEST_SCHEMA_VERSION.to_string(),
+            component: COMPONENT.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            registry_hash: ContentHash::compute(b"test-registry"),
+            image_count: 3,
+            total_bytes: 1024,
+            best_warm_start_image_id: Some("img-1".to_string()),
+            best_warm_start_mode: Some("prewarmed_pool".to_string()),
+            registry: ImageRegistry::new(),
+        };
+        let json = serde_json::to_string(&manifest).unwrap();
+        let decoded: RuntimeImageManifestArtifact = serde_json::from_str(&json).unwrap();
+        assert_eq!(manifest, decoded);
+    }
+
+    // -----------------------------------------------------------------------
+    // MODE_SAMPLES
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn mode_samples_have_four_entries() {
+        assert_eq!(MODE_SAMPLES.len(), 4);
+    }
+
+    #[test]
+    fn mode_samples_all_have_unique_ids() {
+        let mut ids = std::collections::BTreeSet::new();
+        for sample in &MODE_SAMPLES {
+            assert!(ids.insert(sample.mode_id), "Duplicate: {}", sample.mode_id);
+        }
+    }
+
+    #[test]
+    fn mode_samples_candidate_nanos_increasing() {
+        for window in MODE_SAMPLES.windows(2) {
+            assert!(
+                window[0].candidate_nanos <= window[1].candidate_nanos,
+                "{} ({}) should be <= {} ({})",
+                window[0].mode_id,
+                window[0].candidate_nanos,
+                window[1].mode_id,
+                window[1].candidate_nanos,
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // render_summary
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn render_summary_contains_header() {
+        let report = ColdStartCompilationReport {
+            schema_version: REPORT_SCHEMA_VERSION.to_string(),
+            component: COMPONENT.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            policy_id: POLICY_ID.to_string(),
+            generated_at_utc: "2026-01-01T00:00:00Z".to_string(),
+            run_id: "run-test".to_string(),
+            source_commit: "abc123".to_string(),
+            toolchain: "nightly".to_string(),
+            persistent_cache_contract_path: "cache.json".to_string(),
+            cache_contract_receipt_count: 3,
+            aot_bundle_report_path: "aot.json".to_string(),
+            runtime_image_manifest_path: "manifest.json".to_string(),
+            observability_delta_path: "delta.json".to_string(),
+            governance_verdict: GovernanceVerdict::Approved,
+            aggregate_benchmark_verdict: BenchmarkVerdict::Faster,
+            aggregate_speedup_millionths: 150_000,
+            rollback_triggers: Vec::new(),
+            governance_receipt: GovernanceDecisionReceipt::default(),
+            evidence: Vec::new(),
+            parity_results: Vec::new(),
+            required_artifacts: vec!["artifact1.json".to_string()],
+            operator_verification: vec!["verify cmd".to_string()],
+        };
+        let summary = render_summary(&report);
+        assert!(summary.contains("Cold-Start Compilation Lane Summary"));
+        assert!(summary.contains(BEAD_ID));
+        assert!(summary.contains("artifact1.json"));
+        assert!(summary.contains("verify cmd"));
+    }
+
+    // -----------------------------------------------------------------------
+    // FileArtifact
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn file_artifact_markdown_creates_utf8() {
+        let artifact = FileArtifact::markdown("test.md", "# Hello".to_string());
+        assert_eq!(artifact.relative_path, "test.md");
+        assert_eq!(std::str::from_utf8(&artifact.contents).unwrap(), "# Hello");
+    }
+
+    #[test]
+    fn file_artifact_json_creates_valid_json() {
+        let data = EntryKindSummary {
+            total_graphs: 5,
+            usable_graphs: 3,
+        };
+        let artifact = FileArtifact::json("test.json", &data).unwrap();
+        assert_eq!(artifact.relative_path, "test.json");
+        let decoded: EntryKindSummary = serde_json::from_slice(&artifact.contents).unwrap();
+        assert_eq!(decoded.total_graphs, 5);
+    }
+
+    // -----------------------------------------------------------------------
+    // hash_label helper
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn hash_label_deterministic() {
+        let h1 = hash_label("hello");
+        let h2 = hash_label("hello");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn hash_label_distinct_for_different_inputs() {
+        let h1 = hash_label("hello");
+        let h2 = hash_label("world");
+        assert_ne!(h1, h2);
+    }
+}

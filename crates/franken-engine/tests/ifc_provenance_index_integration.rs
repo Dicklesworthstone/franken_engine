@@ -467,6 +467,44 @@ fn get_single_flow_event_missing() {
 }
 
 #[test]
+fn single_record_getters_trim_lookup_ids() {
+    let mut idx = make_index();
+    let ctx = test_ctx();
+    let ev = flow_event(
+        "ev1",
+        "ext-a",
+        Label::Public,
+        Label::Internal,
+        FlowDecision::Allowed,
+    );
+    let proof = flow_proof("p1", "ext-a", Label::Public, Label::Internal, 1);
+    let receipt = declass_receipt(
+        "r1",
+        "ext-a",
+        Label::Secret,
+        Label::Public,
+        DeclassificationDecision::Allow,
+    );
+    let claim = confinement_claim("c1", "ext-a", ClaimStrength::Partial, 2);
+
+    idx.insert_flow_event(&ev, &ctx).unwrap();
+    idx.insert_flow_proof(&proof, &ctx).unwrap();
+    idx.insert_declass_receipt(&receipt, &ctx).unwrap();
+    idx.insert_confinement_claim(&claim, &ctx).unwrap();
+
+    assert_eq!(idx.get_flow_event("  ev1  ", &ctx).unwrap(), Some(ev));
+    assert_eq!(idx.get_flow_proof("  p1  ", &ctx).unwrap(), Some(proof));
+    assert_eq!(
+        idx.get_declass_receipt("  r1  ", &ctx).unwrap(),
+        Some(receipt)
+    );
+    assert_eq!(
+        idx.get_confinement_claim("  c1  ", &ctx).unwrap(),
+        Some(claim)
+    );
+}
+
+#[test]
 fn get_single_flow_proof_by_id() {
     let mut idx = make_index();
     let ctx = test_ctx();
@@ -515,6 +553,22 @@ fn reject_empty_event_id() {
     let ctx = test_ctx();
     let ev = flow_event(
         "",
+        "ext-a",
+        Label::Public,
+        Label::Internal,
+        FlowDecision::Allowed,
+    );
+    let err = idx.insert_flow_event(&ev, &ctx).unwrap_err();
+    assert!(matches!(err, ProvenanceError::EmptyId { .. }));
+    assert_eq!(error_code(&err), "PROV_EMPTY_ID");
+}
+
+#[test]
+fn reject_blank_event_id() {
+    let mut idx = make_index();
+    let ctx = test_ctx();
+    let ev = flow_event(
+        "   ",
         "ext-a",
         Label::Public,
         Label::Internal,
@@ -605,6 +659,15 @@ fn reject_empty_proof_id() {
     let mut idx = make_index();
     let ctx = test_ctx();
     let proof = flow_proof("", "ext-a", Label::Public, Label::Internal, 1);
+    let err = idx.insert_flow_proof(&proof, &ctx).unwrap_err();
+    assert!(matches!(err, ProvenanceError::EmptyId { .. }));
+}
+
+#[test]
+fn reject_blank_proof_id() {
+    let mut idx = make_index();
+    let ctx = test_ctx();
+    let proof = flow_proof("   ", "ext-a", Label::Public, Label::Internal, 1);
     let err = idx.insert_flow_proof(&proof, &ctx).unwrap_err();
     assert!(matches!(err, ProvenanceError::EmptyId { .. }));
 }
@@ -708,6 +771,15 @@ fn reject_empty_claim_id() {
     let mut idx = make_index();
     let ctx = test_ctx();
     let claim = confinement_claim("", "ext-a", ClaimStrength::Full, 1);
+    let err = idx.insert_confinement_claim(&claim, &ctx).unwrap_err();
+    assert!(matches!(err, ProvenanceError::EmptyId { .. }));
+}
+
+#[test]
+fn reject_blank_claim_id() {
+    let mut idx = make_index();
+    let ctx = test_ctx();
+    let claim = confinement_claim("   ", "ext-a", ClaimStrength::Full, 1);
     let err = idx.insert_confinement_claim(&claim, &ctx).unwrap_err();
     assert!(matches!(err, ProvenanceError::EmptyId { .. }));
 }

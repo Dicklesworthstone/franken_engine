@@ -2068,6 +2068,90 @@ fn provenance_error_serde_all_variants() {
     }
 }
 
+#[test]
+fn canonical_primary_ids_reject_blank_writes_and_trim_direct_lookups() {
+    let mut idx = make_index();
+    let c = ctx();
+
+    let blank_event = event(
+        "   ",
+        "ext-a",
+        Label::Public,
+        Label::Internal,
+        FlowDecision::Allowed,
+    );
+    assert!(matches!(
+        idx.insert_flow_event(&blank_event, &c).unwrap_err(),
+        ProvenanceError::EmptyId { .. }
+    ));
+
+    let blank_proof = proof("   ", "ext-a", Label::Public, Label::Internal, 1);
+    assert!(matches!(
+        idx.insert_flow_proof(&blank_proof, &c).unwrap_err(),
+        ProvenanceError::EmptyId { .. }
+    ));
+
+    let blank_claim = claim("   ", "ext-a", ClaimStrength::Full, 1);
+    assert!(matches!(
+        idx.insert_confinement_claim(&blank_claim, &c).unwrap_err(),
+        ProvenanceError::EmptyId { .. }
+    ));
+
+    idx.insert_flow_event(
+        &event(
+            "  ev1  ",
+            "ext-a",
+            Label::Public,
+            Label::Internal,
+            FlowDecision::Allowed,
+        ),
+        &c,
+    )
+    .unwrap();
+    idx.insert_flow_proof(
+        &proof("  p1  ", "ext-a", Label::Public, Label::Internal, 1),
+        &c,
+    )
+    .unwrap();
+    idx.insert_declass_receipt(
+        &receipt(
+            "  r1  ",
+            "ext-a",
+            Label::Secret,
+            Label::Public,
+            DeclassificationDecision::Allow,
+        ),
+        &c,
+    )
+    .unwrap();
+    idx.insert_confinement_claim(&claim("  c1  ", "ext-a", ClaimStrength::Full, 1), &c)
+        .unwrap();
+
+    assert_eq!(
+        idx.get_flow_event("  ev1  ", &c).unwrap().unwrap().event_id,
+        "ev1"
+    );
+    assert_eq!(
+        idx.get_flow_proof("  p1  ", &c).unwrap().unwrap().proof_id,
+        "p1"
+    );
+    assert_eq!(
+        idx.get_declass_receipt("  r1  ", &c)
+            .unwrap()
+            .unwrap()
+            .receipt_id,
+        "r1"
+    );
+    assert_eq!(
+        idx.get_confinement_claim("  c1  ", &c)
+            .unwrap()
+            .unwrap()
+            .claim_id,
+        "c1"
+    );
+    assert!(idx.get_flow_event("   ", &c).unwrap().is_none());
+}
+
 // =========================================================================
 // 27. Mixed evidence lineage with transitive closure
 // =========================================================================

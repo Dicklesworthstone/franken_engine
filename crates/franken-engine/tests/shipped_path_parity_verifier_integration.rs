@@ -283,6 +283,37 @@ fn classify_schema_drift_on_different_hashes() {
 }
 
 #[test]
+fn classify_cli_extra_metadata_when_only_cli_has_artifact_hash() {
+    let output_hash = ContentHash::compute(b"same_out");
+    let lib = ExecutionOutcome::Success {
+        output_hash,
+        artifact_hash: None,
+    };
+    let cli = ExecutionOutcome::Success {
+        output_hash,
+        artifact_hash: Some(ContentHash::compute(b"cli_artifact")),
+    };
+    assert_eq!(classify_parity(&lib, &cli), ParityStatus::CliExtraMetadata);
+}
+
+#[test]
+fn classify_schema_drift_when_artifact_hashes_differ() {
+    let output_hash = ContentHash::compute(b"same_out");
+    let lib = ExecutionOutcome::Success {
+        output_hash,
+        artifact_hash: Some(ContentHash::compute(b"lib_artifact")),
+    };
+    let cli = ExecutionOutcome::Success {
+        output_hash,
+        artifact_hash: Some(ContentHash::compute(b"cli_artifact")),
+    };
+    assert_eq!(
+        classify_parity(&lib, &cli),
+        ParityStatus::ArtifactSchemaDrift
+    );
+}
+
+#[test]
 fn classify_success_failure_split() {
     let lib = ExecutionOutcome::Success {
         output_hash: ContentHash::compute(b"ok"),

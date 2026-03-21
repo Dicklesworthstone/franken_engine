@@ -839,15 +839,19 @@ pub fn classify_parity(library: &ExecutionOutcome, cli: &ExecutionOutcome) -> Pa
         (
             ExecutionOutcome::Success {
                 output_hash: lib_hash,
-                ..
+                artifact_hash: lib_artifact_hash,
             },
             ExecutionOutcome::Success {
                 output_hash: cli_hash,
-                ..
+                artifact_hash: cli_artifact_hash,
             },
         ) => {
-            if lib_hash == cli_hash {
+            if lib_hash != cli_hash {
+                ParityStatus::ArtifactSchemaDrift
+            } else if lib_artifact_hash == cli_artifact_hash {
                 ParityStatus::Identical
+            } else if lib_artifact_hash.is_none() && cli_artifact_hash.is_some() {
+                ParityStatus::CliExtraMetadata
             } else {
                 ParityStatus::ArtifactSchemaDrift
             }
@@ -1441,6 +1445,37 @@ mod tests {
         let cli = ExecutionOutcome::Success {
             output_hash: ContentHash::compute(b"cli"),
             artifact_hash: None,
+        };
+        assert_eq!(
+            classify_parity(&lib, &cli),
+            ParityStatus::ArtifactSchemaDrift
+        );
+    }
+
+    #[test]
+    fn classify_cli_extra_metadata_when_only_cli_has_artifact_hash() {
+        let output_hash = ContentHash::compute(b"same-output");
+        let lib = ExecutionOutcome::Success {
+            output_hash,
+            artifact_hash: None,
+        };
+        let cli = ExecutionOutcome::Success {
+            output_hash,
+            artifact_hash: Some(ContentHash::compute(b"cli-artifact")),
+        };
+        assert_eq!(classify_parity(&lib, &cli), ParityStatus::CliExtraMetadata);
+    }
+
+    #[test]
+    fn classify_artifact_schema_drift_when_artifact_hashes_differ() {
+        let output_hash = ContentHash::compute(b"same-output");
+        let lib = ExecutionOutcome::Success {
+            output_hash,
+            artifact_hash: Some(ContentHash::compute(b"lib-artifact")),
+        };
+        let cli = ExecutionOutcome::Success {
+            output_hash,
+            artifact_hash: Some(ContentHash::compute(b"cli-artifact")),
         };
         assert_eq!(
             classify_parity(&lib, &cli),

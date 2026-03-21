@@ -438,6 +438,7 @@ pub mod version_matrix_lane;
 pub mod versioned_rewrite_pack;
 pub mod wasm_runtime_lane;
 pub mod wave_handoff_contract;
+pub mod workload_corpus_gate;
 pub mod workload_embedding;
 pub mod workload_policy_manifold;
 pub mod workload_transfer_prior;

@@ -69,6 +69,7 @@ pub mod claim_publication_gate;
 pub mod cliff_margin_certificate;
 pub mod closure_model;
 pub mod cold_start_aot_governance;
+pub mod cold_start_compilation_lane;
 pub mod compiler_policy;
 pub mod component_shape_catalog;
 pub mod compression_residual_gate;

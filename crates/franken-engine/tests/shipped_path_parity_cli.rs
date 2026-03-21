@@ -35,6 +35,11 @@ fn load_runner_script() -> String {
         .expect("runner script should be readable")
 }
 
+fn load_replay_script() -> String {
+    fs::read_to_string("../../scripts/e2e/franken_shipped_path_parity_replay.sh")
+        .expect("replay script should be readable")
+}
+
 #[test]
 fn shipped_path_parity_binary_emits_artifacts_and_zero_mismatches() {
     let out_dir = temp_dir("franken_shipped_path_parity");
@@ -71,12 +76,22 @@ fn shipped_path_parity_binary_emits_artifacts_and_zero_mismatches() {
     );
     let report_path = run_dir.join("parity_report.json");
     let trace_ids_path = run_dir.join("trace_ids.json");
+    let mismatch_catalog_path = run_dir.join("shipped_path_mismatch_catalog.json");
+    let operator_summary_path = run_dir.join("shipped_path_operator_summary.json");
     let manifest_path = run_dir.join("run_manifest.json");
     let events_path = run_dir.join("events.jsonl");
     let commands_path = run_dir.join("commands.txt");
 
     assert!(report_path.exists(), "parity report should exist");
     assert!(trace_ids_path.exists(), "trace_ids should exist");
+    assert!(
+        mismatch_catalog_path.exists(),
+        "mismatch catalog should exist"
+    );
+    assert!(
+        operator_summary_path.exists(),
+        "operator summary should exist"
+    );
     assert!(manifest_path.exists(), "run manifest should exist");
     assert!(events_path.exists(), "events should exist");
     assert!(commands_path.exists(), "commands should exist");
@@ -101,6 +116,49 @@ fn shipped_path_parity_binary_emits_artifacts_and_zero_mismatches() {
                 specimen["command_family"].as_str() == Some("verify_compile_artifact")
             }),
         "parity report should include verify compile-artifact specimens"
+    );
+
+    let mismatch_catalog_json: Value = serde_json::from_slice(
+        &fs::read(&mismatch_catalog_path).expect("mismatch catalog should be readable"),
+    )
+    .expect("mismatch catalog should parse");
+    assert_eq!(
+        mismatch_catalog_json["schema_version"].as_str(),
+        Some("franken-engine.shipped-path-parity.mismatch-catalog.v1")
+    );
+    assert_eq!(mismatch_catalog_json["mismatch_count"].as_u64(), Some(0));
+    assert_eq!(
+        mismatch_catalog_json["mismatches"]
+            .as_array()
+            .expect("mismatches should be an array")
+            .len(),
+        0
+    );
+
+    let operator_summary_json: Value = serde_json::from_slice(
+        &fs::read(&operator_summary_path).expect("operator summary should be readable"),
+    )
+    .expect("operator summary should parse");
+    assert_eq!(
+        operator_summary_json["schema_version"].as_str(),
+        Some("franken-engine.shipped-path-parity.operator-summary.v1")
+    );
+    assert_eq!(operator_summary_json["status"].as_str(), Some("pass"));
+    assert_eq!(
+        operator_summary_json["contract_satisfied"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(operator_summary_json["mismatch_count"].as_u64(), Some(0));
+    assert!(
+        operator_summary_json["summary_lines"]
+            .as_array()
+            .expect("summary lines should be an array")
+            .iter()
+            .any(|line| line
+                .as_str()
+                .unwrap_or_default()
+                .contains("no shipped-path mismatches detected")),
+        "operator summary should include the zero-mismatch operator verdict"
     );
 
     let events = fs::read_to_string(&events_path).expect("events should be readable");
@@ -139,4 +197,25 @@ fn shipped_path_parity_runner_script_uses_unique_repo_local_namespaces() {
         !script.contains("${artifact_root}/${run_stamp}"),
         "runner script must not use a timestamp-only artifact namespace"
     );
+}
+
+#[test]
+fn shipped_path_parity_replay_wrapper_uses_latest_complete_bundle_and_prints_new_artifacts() {
+    let script = load_replay_script();
+
+    for snippet in [
+        "latest_complete_run_dir",
+        "newest directory ${latest_artifact_dir_path} is incomplete",
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "parity_report.json",
+        "shipped_path_mismatch_catalog.json",
+        "shipped_path_operator_summary.json",
+    ] {
+        assert!(
+            script.contains(snippet),
+            "replay script missing required snippet: {snippet}"
+        );
+    }
 }

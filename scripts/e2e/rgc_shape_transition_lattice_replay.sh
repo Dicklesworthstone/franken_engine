@@ -5,10 +5,23 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root_dir"
 
 artifact_root="${RGC_SHAPE_TRANSITION_LATTICE_ARTIFACT_ROOT:-artifacts/rgc_shape_transition_lattice}"
+explicit_run_dir="${RGC_SHAPE_TRANSITION_LATTICE_REPLAY_RUN_DIR:-}"
 mode="${1:-run}"
 main_exit=0
 
-"${root_dir}/scripts/run_rgc_shape_transition_lattice.sh" "${mode}" || main_exit=$?
+run_dir_is_complete() {
+  local candidate="${1:-}"
+  [[ -n "${candidate}" ]] || return 1
+  [[ -f "${candidate}/run_manifest.json" ]] || return 1
+  [[ -f "${candidate}/shape_lattice_manifest.json" ]] || return 1
+  [[ -f "${candidate}/events.jsonl" ]] || return 1
+  [[ -f "${candidate}/commands.txt" ]] || return 1
+  [[ -f "${candidate}/trace_ids.json" ]] || return 1
+}
+
+if [[ -z "${explicit_run_dir}" ]]; then
+  "${root_dir}/scripts/run_rgc_shape_transition_lattice.sh" "${mode}" || main_exit=$?
+fi
 
 latest_artifact_dir() {
   if [[ ! -d "${artifact_root}" ]]; then
@@ -24,11 +37,7 @@ latest_complete_run_dir() {
   fi
 
   find "${artifact_root}" -mindepth 1 -maxdepth 1 -type d | sort | while IFS= read -r candidate; do
-    [[ -f "${candidate}/run_manifest.json" ]] || continue
-    [[ -f "${candidate}/shape_lattice_manifest.json" ]] || continue
-    [[ -f "${candidate}/events.jsonl" ]] || continue
-    [[ -f "${candidate}/commands.txt" ]] || continue
-    [[ -f "${candidate}/trace_ids.json" ]] || continue
+    run_dir_is_complete "${candidate}" || continue
     printf '%s\n' "${candidate}"
   done | tail -n 1
 }
@@ -43,9 +52,35 @@ missing_bundle_exit_code() {
   echo "${prior_exit}"
 }
 
+warn_about_failed_gate_replay_source() {
+  local prior_exit="${1:-0}"
+  if [[ "${prior_exit}" -eq 0 ]]; then
+    return
+  fi
+
+  if [[ -n "${latest_artifact_dir_path}" && "${latest_artifact_dir_path}" != "${latest_run_dir}" ]]; then
+    echo "[shape-transition-lattice] gate exited with status ${prior_exit}; replay output reflects latest complete run directory ${latest_run_dir}" >&2
+    return
+  fi
+
+  echo "[shape-transition-lattice] gate exited with status ${prior_exit}; replay output reflects current run directory ${latest_run_dir}" >&2
+}
+
 latest_artifact_dir_path="$(latest_artifact_dir)"
 latest_run_dir="$(latest_complete_run_dir)"
+if [[ -n "${explicit_run_dir}" ]]; then
+  latest_artifact_dir_path="${explicit_run_dir}"
+  latest_run_dir=""
+  if run_dir_is_complete "${explicit_run_dir}"; then
+    latest_run_dir="${explicit_run_dir}"
+  fi
+fi
+
 if [[ -z "${latest_run_dir}" ]]; then
+  if [[ -n "${explicit_run_dir}" ]]; then
+    echo "shape transition lattice replay explicit run directory is incomplete: ${explicit_run_dir}" >&2
+    exit 1
+  fi
   if [[ -n "${latest_artifact_dir_path}" ]]; then
     echo "shape transition lattice replay could not locate a complete run directory under ${artifact_root}; newest directory ${latest_artifact_dir_path} is incomplete" >&2
   else
@@ -57,6 +92,8 @@ fi
 if [[ -n "${latest_artifact_dir_path}" && "${latest_artifact_dir_path}" != "${latest_run_dir}" ]]; then
   echo "[shape-transition-lattice] newest directory ${latest_artifact_dir_path} is incomplete; using latest complete run directory ${latest_run_dir}" >&2
 fi
+
+warn_about_failed_gate_replay_source "${main_exit}"
 
 echo "[shape-transition-lattice] latest manifest: ${latest_run_dir}/run_manifest.json"
 cat "${latest_run_dir}/run_manifest.json"

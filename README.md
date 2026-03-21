@@ -224,6 +224,30 @@ captured help output, and first step log.
 - `./scripts/run_rgc_docs_help_surface_audit.sh ci`
 - `./scripts/e2e/rgc_docs_help_surface_audit_replay.sh ci`
 
+## RGC Zero-Placeholder Gate
+
+`bd-1lsy.9.5` hardens the shipped surface against placeholder regressions with
+two complementary operator lanes:
+
+- `./scripts/run_rgc_zero_placeholder_scan.sh ci`
+- `./scripts/e2e/rgc_zero_placeholder_scan_replay.sh ci`
+- `./scripts/run_rgc_zero_placeholder_gate.sh ci`
+- `./scripts/e2e/rgc_zero_placeholder_gate_replay.sh ci`
+
+The gate runner wraps the existing zero-placeholder inventory in a release-style
+verdict and emits:
+
+- `placeholder_gate_report.json`
+- `waiver_manifest.json`
+- `run_manifest.json`
+- `trace_ids.json`
+- `events.jsonl`
+- `commands.txt`
+
+Pass an explicit waiver bundle with
+`RGC_ZERO_PLACEHOLDER_GATE_WAIVERS=/abs/path/waivers.json` when a time-bounded
+waiver is intentionally part of the evaluation.
+
 ## Execution Profile Contract Migration
 
 Operator-facing execution labels now use the honest profile contract:

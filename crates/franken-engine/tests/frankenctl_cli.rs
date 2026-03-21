@@ -219,8 +219,24 @@ fn frankenctl_react_contract_emits_machine_readable_contract() {
         Some("trace-react-contract")
     );
     assert_eq!(
+        stdout_json["decision_id"].as_str(),
+        Some("decision-react-contract")
+    );
+    assert_eq!(
+        stdout_json["policy_id"].as_str(),
+        Some("policy-react-contract")
+    );
+    assert_eq!(
         stdout_json["capability_contract_schema_version"].as_str(),
         Some("rgc.react-capability-contract.v1")
+    );
+    assert_eq!(
+        stdout_json["capability_contract_bead"].as_str(),
+        Some("bd-1lsy.1.6.1")
+    );
+    assert_eq!(
+        stdout_json["capability_contract_policy_id"].as_str(),
+        Some("policy-rgc-react-capability-contract-v1")
     );
     assert!(
         stdout_json["commands"]

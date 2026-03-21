@@ -61,6 +61,7 @@ fn run() -> Result<(), String> {
         .map_err(|error| format!("failed to create output directory: {error}"))?;
 
     let report = run_scenario()?;
+    let replay_run_dir = out_dir.display().to_string();
     let commands = vec![
         format!(
             "franken_shape_lattice_bundle --out-dir {}",
@@ -73,7 +74,10 @@ fn run() -> Result<(), String> {
             "jq '.transitions[].transition_kind' {}/shape_lattice_manifest.json",
             out_dir.display()
         ),
-        "./scripts/e2e/rgc_shape_transition_lattice_replay.sh ci".to_string(),
+        format!(
+            "RGC_SHAPE_TRANSITION_LATTICE_REPLAY_RUN_DIR={} ./scripts/e2e/rgc_shape_transition_lattice_replay.sh",
+            replay_run_dir
+        ),
     ];
     let bundle = ShapeLatticeBundle {
         manifest: report.shape_lattice.clone(),

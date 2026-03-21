@@ -17,6 +17,9 @@
 )]
 
 use std::collections::BTreeMap;
+use std::fs;
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -115,6 +118,25 @@ fn clean_scan(sub: Subsystem) -> ScanResult {
 
 fn scan_with(sub: Subsystem, entries: Vec<PlaceholderEntry>) -> ScanResult {
     ScanResult::new(sub, entries, epoch(100))
+}
+
+fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock drift")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
+    fs::create_dir_all(&dir).expect("create temp dir");
+    dir
+}
+
+fn read_repo_text(path: &str) -> String {
+    fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(path),
+    )
+    .expect("read repo text")
 }
 
 // ===========================================================================
@@ -1297,4 +1319,179 @@ fn gate_expired_waivers_not_counted_toward_limit() {
     let r = evaluate_gate(&scans, &[w1, w2], &cfg, &epoch(100), 1).unwrap();
     assert_eq!(r.verdict, GateVerdict::Warn); // e2 not waived -> high -> warn
     assert_eq!(r.waived_count(), 1);
+}
+
+#[test]
+fn zero_placeholder_gate_cli_help_exits_successfully() {
+    let output = Command::new(env!("CARGO_BIN_EXE_franken_zero_placeholder_gate"))
+        .arg("--help")
+        .output()
+        .expect("run help");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8");
+    assert!(stdout.contains("Usage: franken_zero_placeholder_gate --out-dir <DIR>"));
+    assert!(stdout.contains("--waivers <FILE>"));
+    assert!(stdout.contains("--epoch <U64>"));
+}
+
+#[test]
+fn zero_placeholder_gate_cli_writes_artifact_bundle() {
+    let out_dir = unique_temp_dir("zero-placeholder-gate-cli");
+    let output = Command::new(env!("CARGO_BIN_EXE_franken_zero_placeholder_gate"))
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .output()
+        .expect("run gate cli");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    for artifact in [
+        "placeholder_gate_report.json",
+        "waiver_manifest.json",
+        "trace_ids.json",
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+    ] {
+        assert!(out_dir.join(artifact).exists(), "missing {artifact}");
+    }
+
+    let report: serde_json::Value = serde_json::from_slice(
+        &fs::read(out_dir.join("placeholder_gate_report.json")).expect("read report"),
+    )
+    .expect("parse report");
+    assert_eq!(report["verdict"], "block");
+    assert_eq!(report["blocked_count"], 2);
+    assert_eq!(report["warned_count"], 0);
+    assert_eq!(report["waived_count"], 0);
+
+    let run_manifest: serde_json::Value = serde_json::from_slice(
+        &fs::read(out_dir.join("run_manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest");
+    assert_eq!(run_manifest["epoch_raw"], 100);
+    assert_eq!(
+        run_manifest["artifact_paths"]["placeholder_gate_report"],
+        "placeholder_gate_report.json"
+    );
+    assert_eq!(
+        run_manifest["artifact_paths"]["waiver_manifest"],
+        "waiver_manifest.json"
+    );
+
+    let trace_ids: serde_json::Value =
+        serde_json::from_slice(&fs::read(out_dir.join("trace_ids.json")).expect("read trace ids"))
+            .expect("parse trace ids");
+    assert_eq!(trace_ids["epoch_raw"], 100);
+
+    let waiver_manifest: serde_json::Value = serde_json::from_slice(
+        &fs::read(out_dir.join("waiver_manifest.json")).expect("read waiver manifest"),
+    )
+    .expect("parse waiver manifest");
+    assert_eq!(waiver_manifest["evaluation_epoch_raw"], 100);
+    assert_eq!(report["report"]["receipt"]["epoch"], 100);
+}
+
+#[test]
+fn zero_placeholder_gate_script_uses_repo_local_rch_target_dir() {
+    let script = read_repo_text("scripts/run_rgc_zero_placeholder_gate.sh");
+    assert!(
+        script.contains("target_rch_rgc_zero_placeholder_gate_"),
+        "gate runner should use repo-local target dir namespace"
+    );
+    assert!(
+        script.contains("${root_dir}/target_rch_rgc_zero_placeholder_gate_"),
+        "gate runner should pin repo-local CARGO_TARGET_DIR"
+    );
+    assert!(
+        !script.contains("/tmp/rch_target_rgc_zero_placeholder_gate_"),
+        "gate runner must not use /tmp-backed rch targets"
+    );
+    assert!(
+        script.contains("rch exec --color never -- env"),
+        "gate runner should offload the gate command via rch"
+    );
+    assert!(
+        script.contains("epoch_raw=\"${RGC_ZERO_PLACEHOLDER_GATE_EPOCH:-100}\""),
+        "gate runner should expose an env-configurable evaluation epoch with the deterministic default"
+    );
+    assert!(
+        script.contains("--epoch \"$epoch_raw\""),
+        "gate runner should pass the chosen evaluation epoch explicitly to the binary"
+    );
+    assert!(
+        script.contains("rch reported local fallback; refusing local execution for heavy command"),
+        "gate runner should fail closed on rch local fallback"
+    );
+    assert!(
+        script.contains("rch output missing remote exit marker; failing closed"),
+        "gate runner should require a remote exit marker before accepting success"
+    );
+    assert!(
+        script.contains("out_dir=\"$(cd \"$out_dir\" && pwd)\""),
+        "gate runner should normalize the artifact directory to an absolute path before remote execution"
+    );
+    assert!(
+        script.contains("staged_waivers_path=\"${out_dir}/input_waivers.json\""),
+        "gate runner should stage local waiver input into the artifact directory before remote execution"
+    );
+    assert!(
+        script.contains("cp \"$waivers_path\" \"$staged_waivers_path\""),
+        "gate runner should copy the requested waiver file into the staged remote path"
+    );
+    assert!(
+        script.contains("cmd+=(--waivers \"$staged_waivers_path\")"),
+        "gate runner should pass the staged waiver path to remote execution rather than the original local path"
+    );
+    assert!(
+        script.contains("worker_identity_file"),
+        "gate runner should resolve the selected worker identity before artifact sync"
+    );
+}
+
+#[test]
+fn zero_placeholder_gate_replay_wrapper_resolves_latest_complete_bundle_and_prints_artifacts() {
+    let script = read_repo_text("scripts/e2e/rgc_zero_placeholder_gate_replay.sh");
+    for artifact in [
+        "placeholder_gate_report.json",
+        "waiver_manifest.json",
+        "trace_ids.json",
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+    ] {
+        assert!(
+            script.contains(artifact),
+            "replay wrapper should reference {artifact}"
+        );
+    }
+    assert!(
+        script.contains("latest complete run directory"),
+        "replay wrapper should warn when newest artifact dir is incomplete"
+    );
+    assert!(
+        script.contains("warn_about_failed_gate_replay_source"),
+        "replay wrapper should explain whether a failing gate replay is showing the current or fallback bundle"
+    );
+    assert!(
+        script.contains("replay output reflects latest complete run directory"),
+        "replay wrapper should warn when a failing gate replays an older complete bundle"
+    );
+    assert!(
+        script.contains("replay output reflects current run directory"),
+        "replay wrapper should also describe failing current-run replay output"
+    );
+}
+
+#[test]
+fn readme_mentions_zero_placeholder_gate_runner_and_replay() {
+    let readme = read_repo_text("README.md");
+    assert!(readme.contains("## RGC Zero-Placeholder Gate"));
+    assert!(readme.contains("./scripts/run_rgc_zero_placeholder_gate.sh ci"));
+    assert!(readme.contains("./scripts/e2e/rgc_zero_placeholder_gate_replay.sh ci"));
+    assert!(readme.contains("placeholder_gate_report.json"));
+    assert!(readme.contains("waiver_manifest.json"));
 }

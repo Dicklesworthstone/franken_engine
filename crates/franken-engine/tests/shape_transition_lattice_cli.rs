@@ -159,6 +159,14 @@ fn shape_transition_lattice_binary_emits_required_bundle() {
     assert!(commands.contains("franken_shape_lattice_bundle"));
     assert!(commands.contains("shape_lattice_manifest.json"));
     assert!(commands.contains("rgc_shape_transition_lattice_replay.sh"));
+    assert!(commands.contains(&format!(
+        "RGC_SHAPE_TRANSITION_LATTICE_REPLAY_RUN_DIR={} ./scripts/e2e/rgc_shape_transition_lattice_replay.sh",
+        out_dir.display()
+    )));
+    assert!(
+        !commands.contains("./scripts/e2e/rgc_shape_transition_lattice_replay.sh ci"),
+        "commands.txt should not point replay at the default artifact root via a generic ci rerun"
+    );
 }
 
 #[test]
@@ -196,8 +204,28 @@ fn shape_transition_lattice_replay_uses_latest_complete_bundle() {
         "replay wrapper should locate the latest complete artifact directory"
     );
     assert!(
+        script.contains("RGC_SHAPE_TRANSITION_LATTICE_REPLAY_RUN_DIR"),
+        "replay wrapper should support exact-run-dir targeting for emitted bundles outside the default artifact root"
+    );
+    assert!(
+        script.contains("explicit run directory is incomplete"),
+        "replay wrapper should fail closed when an explicitly targeted run directory is incomplete"
+    );
+    assert!(
         script.contains("newest directory ${latest_artifact_dir_path} is incomplete"),
         "replay wrapper should warn when it skips an incomplete newest directory"
+    );
+    assert!(
+        script.contains("warn_about_failed_gate_replay_source()"),
+        "replay wrapper should centralize failed-gate replay warnings in a dedicated helper"
+    );
+    assert!(
+        script.contains("replay output reflects latest complete run directory"),
+        "replay wrapper should warn explicitly when it falls back to an older complete run after a failed gate invocation"
+    );
+    assert!(
+        script.contains("replay output reflects current run directory"),
+        "replay wrapper should distinguish a failed gate that still produced the current complete run bundle"
     );
     assert!(
         script.contains("latest manifest: ${latest_run_dir}/run_manifest.json"),

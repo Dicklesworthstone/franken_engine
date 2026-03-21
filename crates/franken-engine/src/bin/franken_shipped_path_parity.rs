@@ -26,6 +26,10 @@ use serde::{Deserialize, Serialize};
 
 const PARITY_SCHEMA_VERSION: &str = "franken-engine.shipped-path-parity.v1";
 const PARITY_TRACE_IDS_SCHEMA_VERSION: &str = "franken-engine.shipped-path-parity.trace-ids.v1";
+const PARITY_MISMATCH_CATALOG_SCHEMA_VERSION: &str =
+    "franken-engine.shipped-path-parity.mismatch-catalog.v1";
+const PARITY_OPERATOR_SUMMARY_SCHEMA_VERSION: &str =
+    "franken-engine.shipped-path-parity.operator-summary.v1";
 const PARITY_COMPONENT: &str = "shipped_path_parity";
 const PARITY_SCENARIO_ID: &str = "rgc-204c-shipped-path-parity";
 const PARITY_FIXTURE_ID: &str = "js-ts-library-frankenctl";
@@ -94,6 +98,26 @@ enum MismatchKind {
     VerificationPassed,
     VerificationErrors,
     ArtifactMissing,
+}
+
+impl MismatchKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::UnexpectedOutcome => "unexpected_outcome",
+            Self::ExitCode => "exit_code",
+            Self::FailureClass => "failure_class",
+            Self::ParseGoal => "parse_goal",
+            Self::SourceIngestion => "source_ingestion",
+            Self::Hashes => "hashes",
+            Self::LoweringCounts => "lowering_counts",
+            Self::ExecutionValue => "execution_value",
+            Self::Lane => "lane",
+            Self::ContainmentAction => "containment_action",
+            Self::VerificationPassed => "verification_passed",
+            Self::VerificationErrors => "verification_errors",
+            Self::ArtifactMissing => "artifact_missing",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -293,11 +317,76 @@ struct TraceIds {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct MismatchCatalogEntry {
+    specimen_id: String,
+    description: String,
+    command_family: String,
+    source_language: SourceLanguage,
+    mismatch_kind: String,
+    expected_outcome: ExpectedOutcome,
+    library_entrypoint: String,
+    cli_entrypoint: String,
+    library_exit_code: i32,
+    cli_exit_code: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    library_failure_class: Option<FailureClass>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cli_failure_class: Option<FailureClass>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    library_error_detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cli_error_detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    library_artifact_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cli_artifact_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct MismatchCatalog {
+    schema_version: String,
+    component: String,
+    scenario_id: String,
+    fixture_id: String,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
+    mismatch_count: u64,
+    mismatches: Vec<MismatchCatalogEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct OperatorSummary {
+    schema_version: String,
+    component: String,
+    scenario_id: String,
+    fixture_id: String,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_code: Option<String>,
+    contract_satisfied: bool,
+    specimen_count: u64,
+    match_count: u64,
+    mismatch_count: u64,
+    mismatch_kind_counts: BTreeMap<String, u64>,
+    mismatched_command_families: BTreeMap<String, u64>,
+    mismatched_source_languages: BTreeMap<String, u64>,
+    blocking_specimens: Vec<String>,
+    summary_lines: Vec<String>,
+    recommended_action: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct CliOutputSummary {
     schema_version: String,
     run_dir: String,
     parity_report_path: String,
     trace_ids_path: String,
+    mismatch_catalog_path: String,
+    operator_summary_path: String,
     specimen_count: u64,
     match_count: u64,
     mismatch_count: u64,
@@ -541,6 +630,12 @@ fn execute_parity(args: &CliArgs) -> Result<CliOutputSummary, String> {
 
     let parity_report_path = run_dir.join("parity_report.json");
     write_json_file(&parity_report_path, &report)?;
+    let mismatch_catalog = build_mismatch_catalog(&report);
+    let mismatch_catalog_path = run_dir.join("shipped_path_mismatch_catalog.json");
+    write_json_file(&mismatch_catalog_path, &mismatch_catalog)?;
+    let operator_summary = build_operator_summary(&report, &mismatch_catalog);
+    let operator_summary_path = run_dir.join("shipped_path_operator_summary.json");
+    write_json_file(&operator_summary_path, &operator_summary)?;
     let trace_ids_path = run_dir.join("trace_ids.json");
     write_json_file(
         &trace_ids_path,
@@ -568,11 +663,159 @@ fn execute_parity(args: &CliArgs) -> Result<CliOutputSummary, String> {
         run_dir: run_dir.display().to_string(),
         parity_report_path: parity_report_path.display().to_string(),
         trace_ids_path: trace_ids_path.display().to_string(),
+        mismatch_catalog_path: mismatch_catalog_path.display().to_string(),
+        operator_summary_path: operator_summary_path.display().to_string(),
         specimen_count: report.specimen_count,
         match_count: report.match_count,
         mismatch_count: report.mismatch_count,
         contract_satisfied: report.contract_satisfied,
     })
+}
+
+fn build_mismatch_catalog(report: &ParityReport) -> MismatchCatalog {
+    let mismatches = report
+        .specimens
+        .iter()
+        .filter(|specimen| specimen.verdict == ParityVerdict::Mismatch)
+        .map(|specimen| MismatchCatalogEntry {
+            specimen_id: specimen.specimen_id.clone(),
+            description: specimen.description.clone(),
+            command_family: specimen.command_family.clone(),
+            source_language: specimen.source_language,
+            mismatch_kind: specimen
+                .mismatch_kind
+                .map(MismatchKind::as_str)
+                .unwrap_or("unclassified")
+                .to_string(),
+            expected_outcome: specimen.expected_outcome,
+            library_entrypoint: specimen.library.entrypoint.clone(),
+            cli_entrypoint: specimen.cli.entrypoint.clone(),
+            library_exit_code: specimen.library.exit_code,
+            cli_exit_code: specimen.cli.exit_code,
+            library_failure_class: specimen.library.failure_class,
+            cli_failure_class: specimen.cli.failure_class,
+            library_error_detail: specimen.library.error_detail.clone(),
+            cli_error_detail: specimen.cli.error_detail.clone(),
+            library_artifact_path: specimen.library.artifact_path.clone(),
+            cli_artifact_path: specimen.cli.artifact_path.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    MismatchCatalog {
+        schema_version: PARITY_MISMATCH_CATALOG_SCHEMA_VERSION.to_string(),
+        component: report.component.clone(),
+        scenario_id: report.scenario_id.clone(),
+        fixture_id: report.fixture_id.clone(),
+        trace_id: report.trace_id.clone(),
+        decision_id: report.decision_id.clone(),
+        policy_id: report.policy_id.clone(),
+        mismatch_count: mismatches.len() as u64,
+        mismatches,
+    }
+}
+
+fn increment_count(counts: &mut BTreeMap<String, u64>, key: impl Into<String>) {
+    *counts.entry(key.into()).or_insert(0) += 1;
+}
+
+fn render_count_map(counts: &BTreeMap<String, u64>) -> String {
+    counts
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn build_operator_summary(
+    report: &ParityReport,
+    mismatch_catalog: &MismatchCatalog,
+) -> OperatorSummary {
+    let mut mismatch_kind_counts = BTreeMap::new();
+    let mut mismatched_command_families = BTreeMap::new();
+    let mut mismatched_source_languages = BTreeMap::new();
+    let mut blocking_specimens = Vec::new();
+
+    for mismatch in &mismatch_catalog.mismatches {
+        increment_count(&mut mismatch_kind_counts, mismatch.mismatch_kind.clone());
+        increment_count(
+            &mut mismatched_command_families,
+            mismatch.command_family.clone(),
+        );
+        increment_count(
+            &mut mismatched_source_languages,
+            mismatch.source_language.as_str().to_string(),
+        );
+        blocking_specimens.push(mismatch.specimen_id.clone());
+    }
+
+    let status = if report.contract_satisfied {
+        "pass"
+    } else {
+        "fail_closed"
+    };
+
+    let mut summary_lines = vec![
+        format!(
+            "specimens evaluated: {} (javascript={}, typescript={})",
+            report.specimen_count, report.js_specimen_count, report.ts_specimen_count
+        ),
+        format!(
+            "parity verdict: {status} (matches={}, mismatches={})",
+            report.match_count, report.mismatch_count
+        ),
+    ];
+
+    if report.contract_satisfied {
+        summary_lines.push(
+            "no shipped-path mismatches detected across library and frankenctl entrypoints"
+                .to_string(),
+        );
+    } else {
+        summary_lines.push(format!(
+            "mismatch kinds: {}",
+            render_count_map(&mismatch_kind_counts)
+        ));
+        summary_lines.push(format!(
+            "mismatched command families: {}",
+            render_count_map(&mismatched_command_families)
+        ));
+        summary_lines.push(format!(
+            "blocking specimens: {}",
+            blocking_specimens.join(", ")
+        ));
+    }
+
+    let recommended_action = if report.contract_satisfied {
+        "No shipped-path mismatches detected; downstream docs, support-surface, and GA consumers can rely on this parity bundle.".to_string()
+    } else {
+        "Treat shipped-path parity as fail-closed; replay the emitted bundle and triage the blocking specimens before promoting downstream consumers.".to_string()
+    };
+
+    OperatorSummary {
+        schema_version: PARITY_OPERATOR_SUMMARY_SCHEMA_VERSION.to_string(),
+        component: report.component.clone(),
+        scenario_id: report.scenario_id.clone(),
+        fixture_id: report.fixture_id.clone(),
+        trace_id: report.trace_id.clone(),
+        decision_id: report.decision_id.clone(),
+        policy_id: report.policy_id.clone(),
+        status: status.to_string(),
+        error_code: if report.contract_satisfied {
+            None
+        } else {
+            Some(MISMATCH_ERROR_CODE.to_string())
+        },
+        contract_satisfied: report.contract_satisfied,
+        specimen_count: report.specimen_count,
+        match_count: report.match_count,
+        mismatch_count: report.mismatch_count,
+        mismatch_kind_counts,
+        mismatched_command_families,
+        mismatched_source_languages,
+        blocking_specimens,
+        summary_lines,
+        recommended_action,
+    }
 }
 
 fn run_specimen(
@@ -1576,6 +1819,145 @@ mod tests {
                 ParityVerdict::Mismatch,
                 Some(MismatchKind::VerificationErrors)
             )
+        );
+    }
+
+    fn specimen_record(
+        specimen_id: &str,
+        verdict: ParityVerdict,
+        mismatch_kind: Option<MismatchKind>,
+        command_family: ParityCommandFamily,
+        source_language: SourceLanguage,
+    ) -> SpecimenParityRecord {
+        SpecimenParityRecord {
+            specimen_id: specimen_id.to_string(),
+            description: format!("specimen {specimen_id}"),
+            command_family: command_family.as_str().to_string(),
+            source_language,
+            expected_outcome: ExpectedOutcome::Success,
+            verdict,
+            mismatch_kind,
+            library: compile_record_with_hash("library"),
+            cli: compile_record_with_hash("cli"),
+        }
+    }
+
+    fn parity_report_with_specimens(specimens: Vec<SpecimenParityRecord>) -> ParityReport {
+        let match_count = specimens
+            .iter()
+            .filter(|specimen| specimen.verdict == ParityVerdict::Match)
+            .count() as u64;
+        let mismatch_count = specimens.len() as u64 - match_count;
+        let js_specimen_count = specimens
+            .iter()
+            .filter(|specimen| specimen.source_language == SourceLanguage::JavaScript)
+            .count() as u64;
+        let ts_specimen_count = specimens
+            .iter()
+            .filter(|specimen| specimen.source_language == SourceLanguage::TypeScript)
+            .count() as u64;
+        let contract_satisfied = mismatch_count == 0;
+
+        ParityReport {
+            schema_version: PARITY_SCHEMA_VERSION.to_string(),
+            component: PARITY_COMPONENT.to_string(),
+            scenario_id: PARITY_SCENARIO_ID.to_string(),
+            fixture_id: PARITY_FIXTURE_ID.to_string(),
+            trace_id: "trace-test".to_string(),
+            decision_id: "decision-test".to_string(),
+            policy_id: "policy-test".to_string(),
+            specimen_count: specimens.len() as u64,
+            match_count,
+            mismatch_count,
+            js_specimen_count,
+            ts_specimen_count,
+            contract_satisfied,
+            specimens,
+        }
+    }
+
+    #[test]
+    fn mismatch_catalog_only_emits_mismatched_specimens() {
+        let report = parity_report_with_specimens(vec![
+            specimen_record(
+                "js-match",
+                ParityVerdict::Match,
+                None,
+                ParityCommandFamily::Compile,
+                SourceLanguage::JavaScript,
+            ),
+            specimen_record(
+                "ts-mismatch",
+                ParityVerdict::Mismatch,
+                Some(MismatchKind::ExecutionValue),
+                ParityCommandFamily::Run,
+                SourceLanguage::TypeScript,
+            ),
+        ]);
+
+        let catalog = build_mismatch_catalog(&report);
+        assert_eq!(catalog.mismatch_count, 1);
+        assert_eq!(catalog.mismatches.len(), 1);
+        assert_eq!(catalog.mismatches[0].specimen_id, "ts-mismatch");
+        assert_eq!(catalog.mismatches[0].mismatch_kind, "execution_value");
+        assert_eq!(catalog.mismatches[0].command_family, "run");
+    }
+
+    #[test]
+    fn operator_summary_counts_kinds_and_lists_blocking_specimens() {
+        let report = parity_report_with_specimens(vec![
+            specimen_record(
+                "compile-exit",
+                ParityVerdict::Mismatch,
+                Some(MismatchKind::ExitCode),
+                ParityCommandFamily::Compile,
+                SourceLanguage::JavaScript,
+            ),
+            specimen_record(
+                "run-execution",
+                ParityVerdict::Mismatch,
+                Some(MismatchKind::ExecutionValue),
+                ParityCommandFamily::Run,
+                SourceLanguage::TypeScript,
+            ),
+            specimen_record(
+                "verify-match",
+                ParityVerdict::Match,
+                None,
+                ParityCommandFamily::VerifyCompileArtifact,
+                SourceLanguage::JavaScript,
+            ),
+        ]);
+
+        let catalog = build_mismatch_catalog(&report);
+        let summary = build_operator_summary(&report, &catalog);
+        assert_eq!(summary.status, "fail_closed");
+        assert_eq!(summary.error_code.as_deref(), Some(MISMATCH_ERROR_CODE));
+        assert_eq!(summary.mismatch_kind_counts.get("exit_code"), Some(&1));
+        assert_eq!(
+            summary.mismatch_kind_counts.get("execution_value"),
+            Some(&1)
+        );
+        assert_eq!(summary.mismatched_command_families.get("compile"), Some(&1));
+        assert_eq!(summary.mismatched_command_families.get("run"), Some(&1));
+        assert_eq!(
+            summary.mismatched_source_languages.get("javascript"),
+            Some(&1)
+        );
+        assert_eq!(
+            summary.mismatched_source_languages.get("typescript"),
+            Some(&1)
+        );
+        assert_eq!(
+            summary.blocking_specimens,
+            vec!["compile-exit", "run-execution"]
+        );
+        assert!(
+            summary
+                .summary_lines
+                .iter()
+                .any(|line| line.contains("blocking specimens")),
+            "summary should include blocking specimen guidance"
         );
     }
 

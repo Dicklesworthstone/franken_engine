@@ -346,3 +346,45 @@ fn constants_valid() {
     assert!(CLAIM_ATOM_LATTICE_BEAD_ID.starts_with("bd-"));
     assert!(ENTITLEMENT_RESULT_SCHEMA_VERSION.contains("entitlement"));
 }
+
+// ===========================================================================
+// Additional enrichment: lattice properties
+// ===========================================================================
+
+#[test]
+fn empty_evaluation_produces_clean_result() {
+    let result = evaluate_claims(&[], &[], &[], &[], 1);
+    assert!(result.evaluations.is_empty());
+    assert_eq!(result.entitled_count, 0);
+}
+
+#[test]
+fn evaluation_is_deterministic() {
+    let atom = ClaimAtom {
+        atom_id: "claim-hash".to_string(),
+        domain: ClaimDomain::Security,
+        tier: ClaimTier::ScopedObserved,
+        statement: "hash test".to_string(),
+        surface: "test".to_string(),
+        owning_beads: vec![],
+        required_morphisms: vec![],
+    };
+    let r1 = evaluate_claims(&[atom.clone()], &[], &[], &[], 1);
+    let r2 = evaluate_claims(&[atom], &[], &[], &[], 1);
+    assert_eq!(r1.overall_state, r2.overall_state);
+    assert_eq!(r1.evaluations.len(), r2.evaluations.len());
+}
+
+#[test]
+fn claim_state_serde_roundtrip() {
+    for state in [
+        ClaimState::NotYetProven,
+        ClaimState::Entitled,
+        ClaimState::BlockedByMissingEvidence,
+        ClaimState::Invalidated,
+    ] {
+        let json = serde_json::to_string(&state).unwrap();
+        let back: ClaimState = serde_json::from_str(&json).unwrap();
+        assert_eq!(state, back);
+    }
+}

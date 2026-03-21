@@ -762,11 +762,50 @@ impl DeclassificationReceipt {
         ContentHash::compute(&self.preimage_bytes())
     }
 
+    /// Validate receipt linkage fields required for deterministic replay and
+    /// decision-contract provenance.
+    pub fn validate(&self) -> Result<(), IfcValidationError> {
+        let artifact_id = trimmed_artifact_id(&self.receipt_id, "<empty-receipt-id>");
+
+        validate_required_field(
+            "declassification_receipt",
+            artifact_id,
+            "receipt_id",
+            &self.receipt_id,
+        )?;
+        validate_required_field(
+            "declassification_receipt",
+            artifact_id,
+            "declassification_route_ref",
+            &self.declassification_route_ref,
+        )?;
+        validate_required_field(
+            "declassification_receipt",
+            artifact_id,
+            "decision_contract_id",
+            &self.decision_contract_id,
+        )?;
+        validate_required_field(
+            "declassification_receipt",
+            artifact_id,
+            "policy_evaluation_summary",
+            &self.policy_evaluation_summary,
+        )?;
+        validate_required_field(
+            "declassification_receipt",
+            artifact_id,
+            "replay_linkage",
+            &self.replay_linkage,
+        )?;
+        Ok(())
+    }
+
     /// Sign this receipt.
     pub fn sign(
         &mut self,
         key: &SigningKey,
     ) -> Result<(), crate::signature_preimage::SignatureError> {
+        self.validate().map_err(signature_error_from_validation)?;
         self.signature = sign_object(self, key)?;
         Ok(())
     }
@@ -776,6 +815,7 @@ impl DeclassificationReceipt {
         &self,
         key: &VerificationKey,
     ) -> Result<(), crate::signature_preimage::SignatureError> {
+        self.validate().map_err(signature_error_from_validation)?;
         verify_signature(key, &self.preimage_bytes(), &self.signature)
     }
 
@@ -787,6 +827,39 @@ impl DeclassificationReceipt {
     /// must anchor operators on the shipped trace replay surface instead.
     pub fn replay_command(&self) -> String {
         "frankenctl replay run --trace <trace.json> --mode strict".to_string()
+    }
+}
+
+fn trimmed_artifact_id<'a>(artifact_id: &'a str, fallback: &'a str) -> &'a str {
+    let trimmed = artifact_id.trim();
+    if trimmed.is_empty() {
+        fallback
+    } else {
+        trimmed
+    }
+}
+
+fn validate_required_field(
+    artifact_kind: &str,
+    artifact_id: &str,
+    field_name: &str,
+    value: &str,
+) -> Result<(), IfcValidationError> {
+    if value.trim().is_empty() {
+        return Err(IfcValidationError::EmptyRequiredField {
+            artifact_kind: artifact_kind.to_string(),
+            artifact_id: artifact_id.to_string(),
+            field_name: field_name.to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn signature_error_from_validation(
+    error: IfcValidationError,
+) -> crate::signature_preimage::SignatureError {
+    crate::signature_preimage::SignatureError::NonCanonicalObject {
+        detail: error.to_string(),
     }
 }
 
@@ -946,6 +1019,12 @@ pub enum IfcValidationError {
         expected: IfcSchemaVersion,
         actual: IfcSchemaVersion,
     },
+    /// A required artifact field is empty after trimming.
+    EmptyRequiredField {
+        artifact_kind: String,
+        artifact_id: String,
+        field_name: String,
+    },
     /// Flow is prohibited by policy.
     FlowProhibited { source: Label, sink: Label },
 }
@@ -971,6 +1050,16 @@ impl fmt::Display for IfcValidationError {
                     "schema version {actual} incompatible with expected {expected}"
                 )
             }
+            Self::EmptyRequiredField {
+                artifact_kind,
+                artifact_id,
+                field_name,
+            } => {
+                write!(
+                    f,
+                    "{artifact_kind} {artifact_id} has empty required field {field_name}"
+                )
+            }
             Self::FlowProhibited { source, sink } => {
                 write!(f, "flow from {source} to {sink} is prohibited")
             }
@@ -987,6 +1076,7 @@ impl std::error::Error for IfcValidationError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::signature_preimage::SignatureError;
 
     fn test_key() -> SigningKey {
         SigningKey::from_bytes([42u8; 32])
@@ -1359,6 +1449,57 @@ mod tests {
     }
 
     #[test]
+    fn receipt_validate_accepts_linked_receipt() {
+        let receipt = make_receipt();
+        receipt.validate().unwrap();
+    }
+
+    #[test]
+    fn receipt_validate_rejects_blank_replay_linkage() {
+        let mut receipt = make_receipt();
+        receipt.replay_linkage = " \t ".to_string();
+
+        let err = receipt.validate().unwrap_err();
+        assert_eq!(
+            err,
+            IfcValidationError::EmptyRequiredField {
+                artifact_kind: "declassification_receipt".to_string(),
+                artifact_id: "receipt-001".to_string(),
+                field_name: "replay_linkage".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn receipt_sign_rejects_blank_decision_contract_id() {
+        let key = test_key();
+        let mut receipt = make_receipt();
+        receipt.decision_contract_id = String::new();
+
+        let err = receipt.sign(&key).unwrap_err();
+        assert!(matches!(
+            err,
+            SignatureError::NonCanonicalObject { detail }
+            if detail.contains("decision_contract_id")
+        ));
+    }
+
+    #[test]
+    fn receipt_verify_rejects_blank_replay_linkage_after_signing() {
+        let key = test_key();
+        let mut receipt = make_receipt();
+        receipt.sign(&key).unwrap();
+        receipt.replay_linkage = "\n".to_string();
+
+        let err = receipt.verify(&key.verification_key()).unwrap_err();
+        assert!(matches!(
+            err,
+            SignatureError::NonCanonicalObject { detail }
+            if detail.contains("replay_linkage")
+        ));
+    }
+
+    #[test]
     fn receipt_replay_command_matches_shipped_trace_replay_surface() {
         let receipt = make_receipt();
         let command = receipt.replay_command();
@@ -1496,6 +1637,13 @@ mod tests {
             sink: Label::Public,
         };
         assert!(err.to_string().contains("prohibited"));
+
+        let err = IfcValidationError::EmptyRequiredField {
+            artifact_kind: "declassification_receipt".to_string(),
+            artifact_id: "receipt-1".to_string(),
+            field_name: "replay_linkage".to_string(),
+        };
+        assert!(err.to_string().contains("replay_linkage"));
     }
 
     #[test]
@@ -1511,6 +1659,11 @@ mod tests {
             IfcValidationError::IncompatibleSchema {
                 expected: IfcSchemaVersion::CURRENT,
                 actual: IfcSchemaVersion::new(2, 0, 0),
+            },
+            IfcValidationError::EmptyRequiredField {
+                artifact_kind: "declassification_receipt".to_string(),
+                artifact_id: "receipt-1".to_string(),
+                field_name: "replay_linkage".to_string(),
             },
             IfcValidationError::FlowProhibited {
                 source: Label::Secret,

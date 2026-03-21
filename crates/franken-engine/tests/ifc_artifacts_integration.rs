@@ -29,7 +29,9 @@ use frankenengine_engine::ifc_artifacts::{
     FlowEnvelope, FlowPolicy, FlowProof, FlowRule, IfcSchemaVersion, IfcValidationError,
     Ir2LabelSource, Label, ProofMethod,
 };
-use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
+use frankenengine_engine::signature_preimage::{
+    SIGNATURE_SENTINEL, Signature, SignatureError, SigningKey,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1140,6 +1142,57 @@ fn receipt_verify_fails_wrong_key() {
 }
 
 #[test]
+fn receipt_validate_accepts_well_formed_linkage() {
+    let receipt = make_receipt();
+    receipt.validate().unwrap();
+}
+
+#[test]
+fn receipt_validate_rejects_blank_decision_contract_id() {
+    let mut receipt = make_receipt();
+    receipt.decision_contract_id = "   ".to_string();
+
+    let err = receipt.validate().unwrap_err();
+    assert_eq!(
+        err,
+        IfcValidationError::EmptyRequiredField {
+            artifact_kind: "declassification_receipt".to_string(),
+            artifact_id: "receipt-integ-001".to_string(),
+            field_name: "decision_contract_id".to_string(),
+        }
+    );
+}
+
+#[test]
+fn receipt_sign_fails_closed_on_blank_replay_linkage() {
+    let key = test_key();
+    let mut receipt = make_receipt();
+    receipt.replay_linkage = "\n\t".to_string();
+
+    let err = receipt.sign(&key).unwrap_err();
+    assert!(matches!(
+        err,
+        SignatureError::NonCanonicalObject { detail }
+        if detail.contains("replay_linkage")
+    ));
+}
+
+#[test]
+fn receipt_verify_fails_closed_on_blank_replay_linkage_after_signing() {
+    let key = test_key();
+    let mut receipt = make_receipt();
+    receipt.sign(&key).unwrap();
+    receipt.replay_linkage = "   ".to_string();
+
+    let err = receipt.verify(&key.verification_key()).unwrap_err();
+    assert!(matches!(
+        err,
+        SignatureError::NonCanonicalObject { detail }
+        if detail.contains("replay_linkage")
+    ));
+}
+
+#[test]
 fn receipt_replay_command_uses_shipped_trace_replay_surface() {
     let receipt = make_receipt();
     let command = receipt.replay_command();
@@ -1327,6 +1380,19 @@ fn validation_error_flow_prohibited_display() {
 }
 
 #[test]
+fn validation_error_empty_required_field_display() {
+    let err = IfcValidationError::EmptyRequiredField {
+        artifact_kind: "declassification_receipt".to_string(),
+        artifact_id: "receipt-integ-001".to_string(),
+        field_name: "replay_linkage".to_string(),
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("declassification_receipt"));
+    assert!(msg.contains("receipt-integ-001"));
+    assert!(msg.contains("replay_linkage"));
+}
+
+#[test]
 fn validation_error_is_std_error() {
     let err = IfcValidationError::EmptyClaim {
         claim_id: "x".to_string(),
@@ -1347,6 +1413,11 @@ fn validation_error_serde_roundtrip_all_variants() {
         IfcValidationError::IncompatibleSchema {
             expected: IfcSchemaVersion::CURRENT,
             actual: IfcSchemaVersion::new(2, 0, 0),
+        },
+        IfcValidationError::EmptyRequiredField {
+            artifact_kind: "declassification_receipt".to_string(),
+            artifact_id: "receipt-integ-001".to_string(),
+            field_name: "replay_linkage".to_string(),
         },
         IfcValidationError::FlowProhibited {
             source: Label::Secret,

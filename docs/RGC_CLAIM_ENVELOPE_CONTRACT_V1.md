@@ -60,6 +60,11 @@ The publishable envelope is linked directly to the declared supremacy board:
   `measurement_family`
 - families: parse/compile, startup, throughput, async, module graphs, npm,
   React compile, React SSR, React client, macro workloads, tail latency, memory
+- React linkage is pinned to
+  `docs/rgc_react_capability_contract_v1.json` with policy id
+  `policy-rgc-react-capability-contract-v1`, so downstream publication
+  consumers cannot silently retarget the React board contract while keeping the
+  same file path.
 
 Known uncovered regions must not disappear silently. They route into the
 open-world frontier gap ledger owned by `bd-1lsy.1.6.4`.

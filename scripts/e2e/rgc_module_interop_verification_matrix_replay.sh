@@ -45,6 +45,20 @@ missing_bundle_exit_code() {
   echo "${prior_exit}"
 }
 
+warn_about_failed_gate_replay_source() {
+  local prior_exit="${1:-0}"
+  if [[ "${prior_exit}" -eq 0 ]]; then
+    return
+  fi
+
+  if [[ -n "${latest_artifact_dir_path}" && "${latest_artifact_dir_path}" != "${latest_run_dir}" ]]; then
+    echo "[rgc-module-interop-verification-matrix] gate exited with status ${prior_exit}; replay output reflects latest complete run directory ${latest_run_dir}" >&2
+    return
+  fi
+
+  echo "[rgc-module-interop-verification-matrix] gate exited with status ${prior_exit}; replay output reflects current run directory ${latest_run_dir}" >&2
+}
+
 latest_artifact_dir_path="$(latest_artifact_dir)"
 latest_run_dir="$(latest_complete_run_dir)"
 if [[ -z "${latest_run_dir}" ]]; then
@@ -60,9 +74,7 @@ if [[ -n "${latest_artifact_dir_path}" && "${latest_artifact_dir_path}" != "${la
   echo "[rgc-module-interop-verification-matrix] newest directory ${latest_artifact_dir_path} is incomplete; using latest complete run directory ${latest_run_dir}" >&2
 fi
 
-if [[ "${main_exit}" -ne 0 ]]; then
-  echo "[rgc-module-interop-verification-matrix] gate exited with status ${main_exit}; replay output reflects latest complete run directory ${latest_run_dir}" >&2
-fi
+warn_about_failed_gate_replay_source "${main_exit}"
 
 echo "[rgc-module-interop-verification-matrix] latest manifest: ${latest_run_dir}/run_manifest.json"
 cat "${latest_run_dir}/run_manifest.json"

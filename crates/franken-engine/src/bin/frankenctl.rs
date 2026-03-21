@@ -55,6 +55,7 @@ const FRANKENCTL_SCHEMA_VERSION: &str = "franken-engine.frankenctl.v1";
 const COMPILE_ARTIFACT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.compile-artifact.v1";
 const REACT_CLI_CONTRACT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.react-cli-contract.v1";
 const REACT_CLI_REPORT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.react-cli-report.v1";
+const REACT_CAPABILITY_CONTRACT_POLICY_ID: &str = "policy-rgc-react-capability-contract-v1";
 const REACT_CAPABILITY_CONTRACT_JSON: &str =
     include_str!("../../../../docs/rgc_react_capability_contract_v1.json");
 const CODE_BUNDLE_MISSING_FILE: &str = "FE-TPV-BUNDLE-0001";
@@ -637,6 +638,7 @@ struct DoctorCommandOutput {
 struct ReactCapabilityContract {
     schema_version: String,
     bead_id: String,
+    policy_id: String,
     product_surfaces: Vec<ReactProductSurface>,
     capability_rows: Vec<ReactCapabilityRow>,
 }
@@ -690,6 +692,7 @@ struct ReactCliContractOutput {
     policy_id: String,
     capability_contract_schema_version: String,
     capability_contract_bead: String,
+    capability_contract_policy_id: String,
     commands: Vec<ReactCliCommandContract>,
     compile_capabilities: Vec<ReactCliCapabilitySummary>,
     build_capabilities: Vec<ReactCliCapabilitySummary>,
@@ -2968,6 +2971,7 @@ fn execute_react_contract(args: ReactContractArgs) -> Result<i32, String> {
         policy_id: args.policy_id,
         capability_contract_schema_version: contract.schema_version,
         capability_contract_bead: contract.bead_id,
+        capability_contract_policy_id: contract.policy_id,
         commands: vec![
             ReactCliCommandContract {
                 name: "react compile".to_string(),
@@ -3010,8 +3014,18 @@ fn execute_react_contract(args: ReactContractArgs) -> Result<i32, String> {
 }
 
 fn parse_react_capability_contract() -> Result<ReactCapabilityContract, String> {
-    serde_json::from_str(REACT_CAPABILITY_CONTRACT_JSON)
-        .map_err(|error| format!("failed to parse embedded React capability contract: {error}"))
+    let contract: ReactCapabilityContract = serde_json::from_str(REACT_CAPABILITY_CONTRACT_JSON)
+        .map_err(|error| format!("failed to parse embedded React capability contract: {error}"))?;
+    if contract.policy_id.trim().is_empty() {
+        return Err("embedded React capability contract is missing policy_id".to_string());
+    }
+    if contract.policy_id != REACT_CAPABILITY_CONTRACT_POLICY_ID {
+        return Err(format!(
+            "embedded React capability contract policy_id `{}` does not match expected `{}`",
+            contract.policy_id, REACT_CAPABILITY_CONTRACT_POLICY_ID
+        ));
+    }
+    Ok(contract)
 }
 
 fn select_react_compile_row(
@@ -3918,6 +3932,40 @@ mod tests {
             }
             other => panic!("expected react contract command, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn embedded_react_contract_policy_id_is_pinned() {
+        let contract = parse_react_capability_contract()
+            .expect("embedded react capability contract should parse");
+        assert_eq!(contract.policy_id, REACT_CAPABILITY_CONTRACT_POLICY_ID);
+    }
+
+    #[test]
+    fn execute_react_contract_emits_embedded_capability_contract_policy_id() {
+        let out = std::env::temp_dir().join(format!(
+            "frankenctl-react-contract-{}.json",
+            current_unix_ns()
+        ));
+        let exit_code = execute_react_contract(ReactContractArgs {
+            out: Some(out.clone()),
+            trace_id: "trace-react-contract".to_string(),
+            decision_id: "decision-react-contract".to_string(),
+            policy_id: "policy-react-cli-invocation".to_string(),
+        })
+        .expect("react contract execution should succeed");
+
+        assert_eq!(exit_code, 0);
+        let output: serde_json::Value =
+            load_json_file(&out).expect("react contract output should parse");
+        assert_eq!(
+            output["policy_id"].as_str(),
+            Some("policy-react-cli-invocation")
+        );
+        assert_eq!(
+            output["capability_contract_policy_id"].as_str(),
+            Some(REACT_CAPABILITY_CONTRACT_POLICY_ID)
+        );
     }
 
     #[test]

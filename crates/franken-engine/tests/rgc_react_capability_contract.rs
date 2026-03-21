@@ -21,12 +21,14 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 const CONTRACT_SCHEMA_VERSION: &str = "rgc.react-capability-contract.v1";
+const CONTRACT_POLICY_ID: &str = "policy-rgc-react-capability-contract-v1";
 const CONTRACT_JSON: &str = include_str!("../../../docs/rgc_react_capability_contract_v1.json");
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct ReactCapabilityContract {
     schema_version: String,
     bead_id: String,
+    policy_id: String,
     generated_by: String,
     generated_at_utc: String,
     track: ContractTrack,
@@ -152,6 +154,7 @@ fn rgc_016a_contract_is_versioned_and_matrix_bound() {
 
     assert_eq!(contract.schema_version, CONTRACT_SCHEMA_VERSION);
     assert_eq!(contract.bead_id, "bd-1lsy.1.6.1");
+    assert_eq!(contract.policy_id, CONTRACT_POLICY_ID);
     assert_eq!(contract.generated_by, "bd-1lsy.1.6.1");
     assert_eq!(contract.track.id, "RGC-016A");
     assert_eq!(contract.track.name, "React Capability Contract");
@@ -336,6 +339,7 @@ fn rgc_016a_required_log_fields_and_product_surface_index_are_present() {
         "scenario_id",
         "trace_id",
         "decision_id",
+        "policy_id",
         "component",
         "event",
         "runtime_lane",
@@ -401,6 +405,26 @@ fn rgc_016a_operator_verification_commands_are_present() {
 }
 
 #[test]
+fn rgc_016a_gate_script_rejects_policy_id_drift() {
+    let path = repo_root().join("scripts/run_rgc_react_capability_contract.sh");
+    let script = fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+
+    assert!(
+        script.contains("jq -r '.policy_id // empty'"),
+        "gate script must read policy_id from the machine-readable contract"
+    );
+    assert!(
+        script.contains("missing policy_id in ${contract_json}"),
+        "gate script must fail closed when the contract omits policy_id"
+    );
+    assert!(
+        script.contains("does not match runner policy_id"),
+        "gate script must fail closed when contract and runner policy ids drift"
+    );
+}
+
+#[test]
 fn rgc_016a_gate_script_emits_trace_ids_and_manifest_references_it() {
     let path = repo_root().join("scripts/run_rgc_react_capability_contract.sh");
     let script = fs::read_to_string(&path)
@@ -421,6 +445,47 @@ fn rgc_016a_gate_script_emits_trace_ids_and_manifest_references_it() {
     assert!(
         script.contains("cat ${trace_ids_path}"),
         "operator verification must surface the trace_ids artifact"
+    );
+}
+
+#[test]
+fn rgc_016a_gate_script_snapshots_dirty_worktree_before_artifact_writes() {
+    let path = repo_root().join("scripts/run_rgc_react_capability_contract.sh");
+    let script = fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+    let snapshot_pos = script
+        .find("initial_dirty_worktree=false")
+        .expect("gate script must snapshot repo dirtiness before writing artifacts");
+    let mkdir_pos = script
+        .find("mkdir -p \"$run_dir\"")
+        .expect("gate script must create the run directory");
+    let copy_pos = script
+        .find("cp \"$contract_json\" \"$contract_artifact_path\"")
+        .expect("gate script must copy the contract artifact");
+
+    assert!(
+        script.contains("worktree_is_dirty()"),
+        "gate script must centralize dirty-worktree detection"
+    );
+    assert!(
+        script.contains("git status --porcelain --untracked-files=normal --ignore-submodules=all"),
+        "dirty_worktree must account for untracked files as well as tracked diffs"
+    );
+    assert!(
+        script.contains("initial_dirty_worktree=false"),
+        "gate script must snapshot repo dirtiness before writing artifacts"
+    );
+    assert!(
+        script.contains("dirty_worktree=\"${initial_dirty_worktree}\""),
+        "run manifest must use the pre-run dirty-worktree snapshot"
+    );
+    assert!(
+        snapshot_pos < mkdir_pos,
+        "repo dirtiness must be snapshotted before creating the run directory"
+    );
+    assert!(
+        snapshot_pos < copy_pos,
+        "repo dirtiness must be snapshotted before writing gate-owned artifacts"
     );
 }
 
@@ -630,6 +695,7 @@ fn rgc_016a_required_log_fields_include_all_mandatory() {
         "scenario_id",
         "trace_id",
         "decision_id",
+        "policy_id",
         "component",
         "event",
         "runtime_lane",
@@ -742,6 +808,19 @@ fn rgc_016a_schema_version_matches_constant() {
     assert_eq!(
         contract.schema_version, CONTRACT_SCHEMA_VERSION,
         "contract schema version must match the expected constant"
+    );
+}
+
+#[test]
+fn rgc_016a_policy_id_matches_constant() {
+    let contract = parse_contract();
+    assert_eq!(
+        contract.policy_id, CONTRACT_POLICY_ID,
+        "contract policy_id must match the expected constant"
+    );
+    assert!(
+        contract.policy_id.starts_with("policy-"),
+        "contract policy_id must use the stable policy-* prefix"
     );
 }
 

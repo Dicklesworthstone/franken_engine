@@ -99,6 +99,7 @@ Validation and replay runs must emit structured logs with these required fields:
 - `scenario_id`
 - `trace_id`
 - `decision_id`
+- `policy_id`
 - `component`
 - `event`
 - `runtime_lane`
@@ -113,6 +114,13 @@ Artifacts are emitted under:
 with:
 
 - `run_manifest.json`
+- the emitted `policy_id` must stay pinned to
+  `policy-rgc-react-capability-contract-v1`, matching the machine-readable
+  contract and the gate runner.
+- `dirty_worktree` inside `run_manifest.json` must snapshot repository state
+  before the current gate writes its own artifacts, and must flip to `true` for
+  pre-existing tracked edits or untracked repository files so replay evidence
+  never overstates repo cleanliness.
 - `trace_ids.json`
 - `events.jsonl`
 - `commands.txt`

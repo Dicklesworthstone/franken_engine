@@ -22,7 +22,7 @@ mod claim_envelope_contract;
 use claim_envelope_contract::{
     CLAIM_ENVELOPE_CONTRACT_COMPONENT, CLAIM_ENVELOPE_CONTRACT_POLICY_ID,
     CLAIM_ENVELOPE_CONTRACT_SCHEMA_VERSION, ClaimEnvelopeContract, ClaimEnvelopeScenario,
-    ClaimEnvelopeTier, ClaimEnvelopeVerdict,
+    ClaimEnvelopeTier, ClaimEnvelopeVerdict, REACT_CAPABILITY_CONTRACT_POLICY_ID,
 };
 
 #[derive(Debug, Deserialize)]
@@ -170,6 +170,10 @@ fn rgc_016c_contract_inputs_and_board_linkage_are_stable() {
     assert_eq!(
         contract.board_linkage.react_contract_json,
         "docs/rgc_react_capability_contract_v1.json"
+    );
+    assert_eq!(
+        contract.board_linkage.react_contract_policy_id,
+        REACT_CAPABILITY_CONTRACT_POLICY_ID
     );
     assert_eq!(
         contract.board_linkage.supremacy_contract_json,

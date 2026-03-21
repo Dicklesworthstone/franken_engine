@@ -32,8 +32,6 @@ contract_json="docs/rgc_react_capability_contract_v1.json"
 matrix_doc="docs/RGC_EXECUTABLE_COMPATIBILITY_TARGET_MATRIX_V1.md"
 matrix_json="docs/rgc_executable_compatibility_target_matrix_v1.json"
 
-mkdir -p "$run_dir"
-
 if [[ ! -f "$contract_doc" || ! -f "$contract_json" ]]; then
   echo "FE-RGC-016A-CONTRACT-0001: missing React capability contract inputs" >&2
   exit 1
@@ -49,12 +47,21 @@ if ! jq -e '.' "$contract_json" >/dev/null 2>&1; then
   exit 1
 fi
 
+contract_policy_id="$(jq -r '.policy_id // empty' "$contract_json" 2>/dev/null)"
+if [[ -z "$contract_policy_id" ]]; then
+  echo "FE-RGC-016A-CONTRACT-0005: missing policy_id in ${contract_json}" >&2
+  exit 1
+fi
+
+if [[ "$contract_policy_id" != "$policy_id" ]]; then
+  echo "FE-RGC-016A-CONTRACT-0006: ${contract_json} policy_id '${contract_policy_id}' does not match runner policy_id '${policy_id}'" >&2
+  exit 1
+fi
+
 if ! jq -e '.' "$matrix_json" >/dev/null 2>&1; then
   echo "FE-RGC-016A-CONTRACT-0004: failed to parse ${matrix_json}" >&2
   exit 1
 fi
-
-cp "$contract_json" "$contract_artifact_path"
 
 if ! command -v rch >/dev/null 2>&1; then
   echo "rch is required for RGC React capability contract heavy commands" >&2
@@ -67,6 +74,26 @@ run_rch() {
     "CARGO_TARGET_DIR=${target_dir}" \
     "$@"
 }
+
+worktree_is_dirty() {
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    return 1
+  fi
+
+  if ! git diff --quiet --ignore-submodules HEAD -- >/dev/null 2>&1; then
+    return 0
+  fi
+
+  [[ -n "$(git status --porcelain --untracked-files=normal --ignore-submodules=all 2>/dev/null)" ]]
+}
+
+initial_dirty_worktree=false
+if worktree_is_dirty; then
+  initial_dirty_worktree=true
+fi
+
+mkdir -p "$run_dir"
+cp "$contract_json" "$contract_artifact_path"
 
 rch_reject_local_fallback() {
   local log_path="$1"
@@ -169,11 +196,7 @@ write_manifest() {
   fi
 
   git_commit="$(git rev-parse HEAD 2>/dev/null || echo "unknown")"
-  if git diff --quiet --ignore-submodules HEAD -- >/dev/null 2>&1; then
-    dirty_worktree=false
-  else
-    dirty_worktree=true
-  fi
+  dirty_worktree="${initial_dirty_worktree}"
 
   printf '%s\n' "${commands_run[@]}" >"$commands_path"
 

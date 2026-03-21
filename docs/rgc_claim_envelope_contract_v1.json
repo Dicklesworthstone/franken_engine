@@ -122,6 +122,7 @@
     "supremacy_contract_json": "crates/franken-engine/tests/fixtures/rgc_v8_supremacy_claim_contract_v1.json",
     "react_contract_doc": "docs/RGC_REACT_CAPABILITY_CONTRACT_V1.md",
     "react_contract_json": "docs/rgc_react_capability_contract_v1.json",
+    "react_contract_policy_id": "policy-rgc-react-capability-contract-v1",
     "declared_board_dimensions": [
       "workload_cell",
       "environment",

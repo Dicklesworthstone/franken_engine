@@ -8,6 +8,7 @@ pub const CLAIM_ENVELOPE_CONTRACT_SCHEMA_VERSION: &str =
     "franken-engine.rgc-claim-envelope-contract.v1";
 pub const CLAIM_ENVELOPE_CONTRACT_COMPONENT: &str = "rgc_claim_envelope_contract";
 pub const CLAIM_ENVELOPE_CONTRACT_POLICY_ID: &str = "policy-rgc-claim-envelope-contract-v1";
+pub const REACT_CAPABILITY_CONTRACT_POLICY_ID: &str = "policy-rgc-react-capability-contract-v1";
 pub const CLAIM_ENVELOPE_CONTRACT_JSON: &str =
     include_str!("../../../docs/rgc_claim_envelope_contract_v1.json");
 pub const MAX_PUBLISHABLE_STALENESS_HOURS: u64 = 168;
@@ -71,6 +72,7 @@ pub struct BoardLinkage {
     pub supremacy_contract_json: String,
     pub react_contract_doc: String,
     pub react_contract_json: String,
+    pub react_contract_policy_id: String,
     pub declared_board_dimensions: Vec<String>,
     pub declared_board_families: Vec<String>,
     pub frontier_gap_artifact: String,
@@ -233,6 +235,20 @@ impl ClaimEnvelopeContract {
             .any(|input| input.bead_id == "bd-1lsy.1.6.2")
         {
             errors.push("missing V8 supremacy contract input".to_string());
+        }
+        if self
+            .board_linkage
+            .react_contract_policy_id
+            .trim()
+            .is_empty()
+        {
+            errors.push("missing React contract policy id linkage".to_string());
+        } else if self.board_linkage.react_contract_policy_id != REACT_CAPABILITY_CONTRACT_POLICY_ID
+        {
+            errors.push(format!(
+                "unexpected React contract policy id `{}`",
+                self.board_linkage.react_contract_policy_id
+            ));
         }
 
         for family in [
@@ -469,6 +485,7 @@ mod tests {
                 supremacy_contract_json: "supremacy.json".to_string(),
                 react_contract_doc: "react.md".to_string(),
                 react_contract_json: "react.json".to_string(),
+                react_contract_policy_id: REACT_CAPABILITY_CONTRACT_POLICY_ID.to_string(),
                 declared_board_dimensions: vec![
                     "workload_cell".to_string(),
                     "environment".to_string(),
@@ -1304,6 +1321,26 @@ mod tests {
     }
 
     #[test]
+    fn validate_react_contract_policy_linkage_missing_or_drifted() {
+        let mut contract = minimal_contract();
+        contract.board_linkage.react_contract_policy_id.clear();
+        let errors = contract.validate().expect_err("should fail");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("missing React contract policy id linkage"))
+        );
+
+        contract.board_linkage.react_contract_policy_id = "policy-react-other".to_string();
+        let errors = contract.validate().expect_err("should fail");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("unexpected React contract policy id"))
+        );
+    }
+
+    #[test]
     fn contract_input_serde_round_trip() {
         let input = ContractInput {
             input_id: "test-input".to_string(),
@@ -1324,6 +1361,7 @@ mod tests {
             supremacy_contract_json: "s.json".to_string(),
             react_contract_doc: "r.md".to_string(),
             react_contract_json: "r.json".to_string(),
+            react_contract_policy_id: "policy-react-v1".to_string(),
             declared_board_dimensions: vec!["dim1".to_string()],
             declared_board_families: vec!["fam1".to_string()],
             frontier_gap_artifact: "gap.json".to_string(),

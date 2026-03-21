@@ -324,6 +324,9 @@ impl ArrayLaneDescriptor {
 
     /// Deoptimize this array lane.
     pub fn deopt(&mut self, reason: DeoptReason, epoch: SecurityEpoch, offset: u32) {
+        if !self.fast_lane_active {
+            return;
+        }
         self.fast_lane_active = false;
         self.deopt_records.push(DeoptRecord {
             record_id: format!("deopt-{}-{}", self.array_id, self.deopt_records.len()),
@@ -720,20 +723,24 @@ impl ArrayFastLaneEngine {
 
         // Check transition validity.
         if !self.valid_transitions.contains(&(old_kind, new_kind)) && old_kind != new_kind {
-            lane.deopt(DeoptReason::ElementKindChanged, self.epoch, trigger_offset);
-            let record = lane.deopt_records.last().cloned();
-            if let Some(r) = record {
-                self.deopt_log.push(r);
+            if lane.fast_lane_active {
+                lane.deopt(DeoptReason::ElementKindChanged, self.epoch, trigger_offset);
+                let record = lane.deopt_records.last().cloned();
+                if let Some(r) = record {
+                    self.deopt_log.push(r);
+                }
             }
             return None;
         }
 
         // Check max transitions.
         if lane.transition_count() >= self.policy.max_transitions {
-            lane.deopt(DeoptReason::ElementKindChanged, self.epoch, trigger_offset);
-            let record = lane.deopt_records.last().cloned();
-            if let Some(r) = record {
-                self.deopt_log.push(r);
+            if lane.fast_lane_active {
+                lane.deopt(DeoptReason::ElementKindChanged, self.epoch, trigger_offset);
+                let record = lane.deopt_records.last().cloned();
+                if let Some(r) = record {
+                    self.deopt_log.push(r);
+                }
             }
             return None;
         }
@@ -780,16 +787,18 @@ impl ArrayFastLaneEngine {
         if let Some(lane) = self.array_lanes.get_mut(array_id) {
             lane.record_oob();
             if lane.access_count >= min_access && lane.oob_rate_millionths() > max_oob {
-                lane.deopt(
-                    DeoptReason::ExcessiveOob {
-                        oob_rate_millionths: lane.oob_rate_millionths(),
-                    },
-                    epoch,
-                    trigger_offset,
-                );
-                let record = lane.deopt_records.last().cloned();
-                if let Some(r) = record {
-                    self.deopt_log.push(r);
+                if lane.fast_lane_active {
+                    lane.deopt(
+                        DeoptReason::ExcessiveOob {
+                            oob_rate_millionths: lane.oob_rate_millionths(),
+                        },
+                        epoch,
+                        trigger_offset,
+                    );
+                    let record = lane.deopt_records.last().cloned();
+                    if let Some(r) = record {
+                        self.deopt_log.push(r);
+                    }
                 }
             }
             true
@@ -1014,7 +1023,7 @@ mod tests {
     }
 
     #[test]
-    fn test_transition_non_widening() {
+    fn test_transition_to_frozen_is_widening() {
         let t = ElementKindTransition::new(
             ElementKind::PackedElements,
             ElementKind::Frozen,
@@ -1022,8 +1031,21 @@ mod tests {
             epoch(1),
             0,
         );
-        // Frozen rank == PackedElements rank (both 7 vs 3) → actually widening
+        // Frozen rank > PackedElements rank (7 vs 3) → actually widening
         assert!(t.is_widening);
+    }
+
+    #[test]
+    fn test_transition_non_widening() {
+        let t = ElementKindTransition::new(
+            ElementKind::HoleyElements,
+            ElementKind::PackedElements,
+            TransitionReason::LengthContraction,
+            epoch(1),
+            0,
+        );
+        // PackedElements rank < HoleyElements rank (3 vs 6) → non-widening
+        assert!(!t.is_widening);
     }
 
     // --- ArrayLaneDescriptor tests ---

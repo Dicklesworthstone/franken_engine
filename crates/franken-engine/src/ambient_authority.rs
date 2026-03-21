@@ -207,6 +207,20 @@ impl AuditConfig {
                 suggested_alternative: "Use capability-mediated FileSystemCap::write".to_string(),
             },
             ForbiddenPattern {
+                pattern_id: "file_open".to_string(),
+                category: ForbiddenCallCategory::FileSystem,
+                pattern: "File::".to_string(),
+                reason: "Direct file access bypasses capability checks".to_string(),
+                suggested_alternative: "Use capability-mediated FileSystemCap".to_string(),
+            },
+            ForbiddenPattern {
+                pattern_id: "open_options".to_string(),
+                category: ForbiddenCallCategory::FileSystem,
+                pattern: "OpenOptions::".to_string(),
+                reason: "Direct file open bypasses capability checks".to_string(),
+                suggested_alternative: "Use capability-mediated FileSystemCap".to_string(),
+            },
+            ForbiddenPattern {
                 pattern_id: "std_net".to_string(),
                 category: ForbiddenCallCategory::Network,
                 pattern: "std::net::".to_string(),
@@ -927,9 +941,9 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn standard_config_has_twelve_patterns() {
+    fn standard_config_has_fourteen_patterns() {
         let config = AuditConfig::standard();
-        assert_eq!(config.patterns.len(), 12);
+        assert_eq!(config.patterns.len(), 14);
         assert!(config.audited_modules.is_empty());
     }
 

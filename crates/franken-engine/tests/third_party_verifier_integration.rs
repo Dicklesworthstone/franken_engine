@@ -544,6 +544,19 @@ fn containment_overall_pass_flag_mismatch_fails() {
 }
 
 #[test]
+fn containment_empty_scenarios_fail_closed() {
+    let bundle = make_containment_bundle(make_gate_result(Vec::new()));
+    let report = verify_containment_claim(&bundle);
+    assert_eq!(report.verdict, VerificationVerdict::Failed);
+    let failed = report
+        .checks
+        .iter()
+        .find(|c| c.name == "scenario_set_non_empty")
+        .unwrap();
+    assert!(!failed.passed);
+}
+
+#[test]
 fn containment_criteria_consistency_mismatch_fails() {
     let mut scenario = make_scenario("s1", true, 100_000);
     scenario.criteria = vec![CriterionResult {
@@ -627,32 +640,32 @@ fn containment_recovery_not_verified_fails() {
 }
 
 #[test]
-fn containment_failed_scenario_not_checked_for_sla_or_invariants() {
+fn containment_failed_scenario_still_checks_sla_and_invariants() {
     let mut scenario = make_scenario("s1", false, 999_999_999);
     scenario.isolation_verified = false;
     scenario.recovery_verified = false;
     let result = make_gate_result(vec![scenario]);
     let bundle = make_containment_bundle(result);
     let report = verify_containment_claim(&bundle);
-    // SLA/isolation/recovery only checked when scenario.passed=true
+    assert_eq!(report.verdict, VerificationVerdict::Failed);
     let sla = report
         .checks
         .iter()
         .find(|c| c.name == "latency_sla:s1")
         .unwrap();
-    assert!(sla.passed);
+    assert!(!sla.passed);
     let iso = report
         .checks
         .iter()
         .find(|c| c.name == "isolation_verified:s1")
         .unwrap();
-    assert!(iso.passed);
+    assert!(!iso.passed);
     let rec = report
         .checks
         .iter()
         .find(|c| c.name == "recovery_verified:s1")
         .unwrap();
-    assert!(rec.passed);
+    assert!(!rec.passed);
 }
 
 #[test]
@@ -1418,6 +1431,7 @@ fn enrichment_containment_mixed_pass_fail_reports_failed() {
     let result = make_gate_result(scenarios);
     let bundle = make_containment_bundle(result);
     let report = verify_containment_claim(&bundle);
+    assert_eq!(report.verdict, VerificationVerdict::Failed);
     // overall_pass_flag should reflect partial failure
     assert!(
         report
@@ -1506,20 +1520,20 @@ fn enrichment_containment_zero_latency_passes() {
 }
 
 #[test]
-fn enrichment_containment_max_latency_on_failed_scenario_skips_sla_check() {
+fn enrichment_containment_max_latency_on_failed_scenario_fails_sla_check() {
     let mut scenario = make_scenario("max-lat-fail", false, u64::MAX);
     scenario.isolation_verified = false;
     scenario.recovery_verified = false;
     let result = make_gate_result(vec![scenario]);
     let bundle = make_containment_bundle(result);
     let report = verify_containment_claim(&bundle);
-    // SLA check for failed scenarios is not triggered (passed is false)
+    assert_eq!(report.verdict, VerificationVerdict::Failed);
     let check = report
         .checks
         .iter()
         .find(|c| c.name == "latency_sla:max-lat-fail")
         .unwrap();
-    assert!(check.passed);
+    assert!(!check.passed);
 }
 
 #[test]
@@ -1592,19 +1606,19 @@ fn enrichment_containment_one_criterion_fails_consistency_check_fails() {
 }
 
 #[test]
-fn enrichment_containment_empty_criteria_on_passed_scenario_passes() {
+fn enrichment_containment_empty_criteria_on_passed_scenario_fails() {
     let mut scenario = make_scenario("empty-crit", true, 100);
     scenario.criteria = Vec::new();
     let result = make_gate_result(vec![scenario]);
     let bundle = make_containment_bundle(result);
     let report = verify_containment_claim(&bundle);
+    assert_eq!(report.verdict, VerificationVerdict::Failed);
     let check = report
         .checks
         .iter()
         .find(|c| c.name == "criteria_consistency:empty-crit")
         .unwrap();
-    // Empty criteria -> all() returns true -> consistency with passed=true
-    assert!(check.passed);
+    assert!(!check.passed);
 }
 
 #[test]

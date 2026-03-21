@@ -47,6 +47,7 @@ fn all_priorities() -> Vec<AdmissionPriority> {
     ]
 }
 
+#[allow(dead_code)]
 fn all_stages() -> Vec<ExecutionStage> {
     vec![
         ExecutionStage::Parse,

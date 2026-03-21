@@ -22,6 +22,7 @@ const CONTRACT_SCHEMA_VERSION: &str = "franken-engine.rgc-support-surface-contra
 const MODE_MATRIX_SCHEMA_VERSION: &str = "franken-engine.rgc-support-surface-mode-matrix.v1";
 const CONTRACT_JSON: &str = include_str!("../../../docs/support_surface_contract.json");
 const MODE_MATRIX_JSON: &str = include_str!("../../../docs/support_surface_mode_matrix.json");
+const REACT_CONTRACT_POLICY_ID: &str = "policy-rgc-react-capability-contract-v1";
 const REACT_CONTRACT_JSON: &str =
     include_str!("../../../docs/rgc_react_capability_contract_v1.json");
 const PLATFORM_MATRIX_JSON: &str = include_str!("../../../docs/rgc_cross_platform_matrix_v1.json");
@@ -140,6 +141,7 @@ struct SurfaceModeRow {
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct ReactCapabilityContract {
+    policy_id: String,
     capability_rows: Vec<ReactCapabilityRow>,
 }
 
@@ -498,6 +500,7 @@ fn rgc_911b_callback_stdlib_gap_tracks_shipped_fail_closed_builtin_text() {
 fn rgc_911b_react_rows_reference_real_capability_ids() {
     let contract = parse_contract();
     let react_contract = parse_react_contract();
+    assert_eq!(react_contract.policy_id, REACT_CONTRACT_POLICY_ID);
     let capability_statuses: BTreeMap<_, _> = react_contract
         .capability_rows
         .iter()

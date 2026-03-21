@@ -17,7 +17,7 @@
     clippy::manual_abs_diff
 )]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::supremacy_cell_matrix::*;

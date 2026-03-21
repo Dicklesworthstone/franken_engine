@@ -809,8 +809,8 @@ fn enrichment_exception_boundary_kind_all_variants_distinct() {
 
 #[test]
 fn enrichment_bridge_witness_event_deterministic_across_runs() {
-    let mut store = PromiseStore::new();
-    let mut queue = MicrotaskQueue::new();
+    let store = PromiseStore::new();
+    let queue = MicrotaskQueue::new();
 
     let run = |store: &mut PromiseStore, queue: &mut MicrotaskQueue| {
         let mut bridge = ExceptionToRejectionBridge::new();

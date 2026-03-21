@@ -402,6 +402,21 @@ pub fn verify_containment_claim(bundle: &ContainmentClaimBundle) -> ThirdPartyVe
     )];
 
     let total = bundle.result.scenarios.len();
+    if total == 0 {
+        fail_check(
+            &mut checks,
+            "scenario_set_non_empty",
+            CODE_CONTAINMENT_COUNTS,
+            "containment verification requires at least one scenario result".to_string(),
+        );
+    } else {
+        pass_check(
+            &mut checks,
+            "scenario_set_non_empty",
+            format!("scenario count={total}"),
+        );
+    }
+
     if total == bundle.result.total_scenarios {
         pass_check(
             &mut checks,
@@ -469,7 +484,14 @@ pub fn verify_containment_claim(bundle: &ContainmentClaimBundle) -> ThirdPartyVe
 
     for scenario in &bundle.result.scenarios {
         let criteria_all_pass = scenario.criteria.iter().all(|c| c.passed);
-        if criteria_all_pass == scenario.passed {
+        if scenario.criteria.is_empty() {
+            fail_check(
+                &mut checks,
+                format!("criteria_consistency:{}", scenario.scenario_id),
+                CODE_CONTAINMENT_CRITERIA,
+                "scenario criteria list is empty".to_string(),
+            );
+        } else if criteria_all_pass == scenario.passed {
             pass_check(
                 &mut checks,
                 format!("criteria_consistency:{}", scenario.scenario_id),
@@ -484,7 +506,7 @@ pub fn verify_containment_claim(bundle: &ContainmentClaimBundle) -> ThirdPartyVe
             );
         }
 
-        if scenario.passed && scenario.detection_latency_ns > bundle.detection_latency_sla_ns {
+        if scenario.detection_latency_ns > bundle.detection_latency_sla_ns {
             fail_check(
                 &mut checks,
                 format!("latency_sla:{}", scenario.scenario_id),
@@ -505,7 +527,7 @@ pub fn verify_containment_claim(bundle: &ContainmentClaimBundle) -> ThirdPartyVe
             );
         }
 
-        if scenario.passed && !scenario.isolation_verified {
+        if !scenario.isolation_verified {
             fail_check(
                 &mut checks,
                 format!("isolation_verified:{}", scenario.scenario_id),
@@ -520,7 +542,7 @@ pub fn verify_containment_claim(bundle: &ContainmentClaimBundle) -> ThirdPartyVe
             );
         }
 
-        if scenario.passed && !scenario.recovery_verified {
+        if !scenario.recovery_verified {
             fail_check(
                 &mut checks,
                 format!("recovery_verified:{}", scenario.scenario_id),
@@ -1589,36 +1611,61 @@ mod tests {
     }
 
     #[test]
-    fn containment_empty_scenarios_verified() {
+    fn containment_empty_scenarios_fail_closed() {
         let result = make_gate_result(Vec::new());
         let bundle = make_containment_bundle(result);
         let report = verify_containment_claim(&bundle);
-        assert_eq!(report.verdict, VerificationVerdict::Verified);
+        assert_eq!(report.verdict, VerificationVerdict::Failed);
+        let failed = report
+            .checks
+            .iter()
+            .find(|c| c.name == "scenario_set_non_empty")
+            .unwrap();
+        assert!(!failed.passed);
     }
 
     #[test]
-    fn containment_failed_scenario_not_checked_for_sla() {
-        // Failed scenarios don't trigger SLA/isolation/recovery failures
+    fn containment_failed_scenario_still_audits_sla_and_invariants() {
         let mut scenario = make_scenario("s1", false, 999_999_999);
         scenario.isolation_verified = false;
         scenario.recovery_verified = false;
         let result = make_gate_result(vec![scenario]);
         let bundle = make_containment_bundle(result);
         let report = verify_containment_claim(&bundle);
-        // Scenario says passed=false and criteria say passed=false → consistent
-        // SLA/isolation/recovery only checked when scenario.passed=true
         let latency_check = report
             .checks
             .iter()
             .find(|c| c.name == "latency_sla:s1")
             .unwrap();
-        assert!(latency_check.passed);
+        assert!(!latency_check.passed);
         let isolation_check = report
             .checks
             .iter()
             .find(|c| c.name == "isolation_verified:s1")
             .unwrap();
-        assert!(isolation_check.passed);
+        assert!(!isolation_check.passed);
+        let recovery_check = report
+            .checks
+            .iter()
+            .find(|c| c.name == "recovery_verified:s1")
+            .unwrap();
+        assert!(!recovery_check.passed);
+    }
+
+    #[test]
+    fn containment_passed_scenario_requires_criteria() {
+        let mut scenario = make_scenario("s1", true, 100_000);
+        scenario.criteria.clear();
+        let result = make_gate_result(vec![scenario]);
+        let bundle = make_containment_bundle(result);
+        let report = verify_containment_claim(&bundle);
+        assert_eq!(report.verdict, VerificationVerdict::Failed);
+        let failed = report
+            .checks
+            .iter()
+            .find(|c| c.name == "criteria_consistency:s1")
+            .unwrap();
+        assert!(!failed.passed);
     }
 
     #[test]
@@ -1630,7 +1677,7 @@ mod tests {
         let result = make_gate_result(scenarios);
         let bundle = make_containment_bundle(result);
         let report = verify_containment_claim(&bundle);
-        assert_eq!(report.verdict, VerificationVerdict::Verified);
+        assert_eq!(report.verdict, VerificationVerdict::Failed);
     }
 
     #[test]

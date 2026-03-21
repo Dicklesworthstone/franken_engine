@@ -1113,8 +1113,9 @@ pub fn exec_array_method(
     match builtin {
         BuiltinId::ArrayPrototypeIndexOf => {
             let search = args.first().unwrap_or(&JsValue::Undefined);
+            let len = elements.len() as i64;
             let from = opt_int_arg(args, 1)
-                .map(|n| (n / FP_SCALE).max(0) as usize)
+                .map(|n| resolve_array_index(n / FP_SCALE, len) as usize)
                 .unwrap_or(0);
             for (i, elem) in elements.iter().enumerate().skip(from) {
                 if same_value(elem, search) {
@@ -1147,8 +1148,9 @@ pub fn exec_array_method(
         }
         BuiltinId::ArrayPrototypeIncludes => {
             let search = args.first().unwrap_or(&JsValue::Undefined);
+            let len = elements.len() as i64;
             let from = opt_int_arg(args, 1)
-                .map(|n| (n / FP_SCALE).max(0) as usize)
+                .map(|n| resolve_array_index(n / FP_SCALE, len) as usize)
                 .unwrap_or(0);
             let found = elements.iter().skip(from).any(|e| same_value(e, search));
             Ok(ArrayMethodResult::Value(JsValue::Bool(found)))
@@ -2158,23 +2160,56 @@ pub fn exec_string_method(
         }
         BuiltinId::StringPrototypeEndsWith => {
             let search = require_str("String.prototype.endsWith", args, 0)?;
-            Ok(JsValue::Bool(this.ends_with(search.as_str())))
+            let utf16_len = utf16_code_units(this) as i64;
+            let end_pos = opt_int_arg(args, 1)
+                .map(|n| (n / FP_SCALE).clamp(0, utf16_len) as usize)
+                .unwrap_or(utf16_len as usize);
+            let haystack = if search.is_empty() {
+                this.to_string()
+            } else {
+                utf16_slice_lossless(this, 0, end_pos, "String.prototype.endsWith")?
+            };
+            Ok(JsValue::Bool(haystack.ends_with(search.as_str())))
         }
         BuiltinId::StringPrototypeIndexOf => {
             let search = require_str("String.prototype.indexOf", args, 0)?;
-            match this.find(search.as_str()) {
+            let utf16_len = utf16_code_units(this) as i64;
+            let pos = opt_int_arg(args, 1)
+                .map(|n| (n / FP_SCALE).clamp(0, utf16_len) as usize)
+                .unwrap_or(0);
+
+            if search.is_empty() {
+                return Ok(JsValue::Int(pos as i64 * FP_SCALE));
+            }
+
+            let haystack =
+                utf16_slice_lossless(this, pos, utf16_len as usize, "String.prototype.indexOf")?;
+            match haystack.find(search.as_str()) {
                 Some(byte_idx) => {
-                    let utf16_idx = utf16_offset_for_match(this, byte_idx) as i64;
-                    Ok(JsValue::Int(utf16_idx * FP_SCALE))
+                    let match_utf16_idx = utf16_offset_for_match(&haystack, byte_idx);
+                    Ok(JsValue::Int((pos + match_utf16_idx) as i64 * FP_SCALE))
                 }
                 None => Ok(JsValue::Int(-FP_SCALE)),
             }
         }
         BuiltinId::StringPrototypeLastIndexOf => {
             let search = require_str("String.prototype.lastIndexOf", args, 0)?;
-            match this.rfind(search.as_str()) {
+            let utf16_len = utf16_code_units(this) as i64;
+            let pos = opt_int_arg(args, 1)
+                .map(|n| (n / FP_SCALE).clamp(0, utf16_len) as usize)
+                .unwrap_or(utf16_len as usize);
+
+            if search.is_empty() {
+                return Ok(JsValue::Int(pos as i64 * FP_SCALE));
+            }
+
+            let search_len = utf16_code_units(&search);
+            let end_pos = (pos + search_len).min(utf16_len as usize);
+            let haystack = utf16_slice_lossless(this, 0, end_pos, "String.prototype.lastIndexOf")?;
+
+            match haystack.rfind(search.as_str()) {
                 Some(byte_idx) => {
-                    let utf16_idx = utf16_offset_for_match(this, byte_idx) as i64;
+                    let utf16_idx = utf16_offset_for_match(&haystack, byte_idx) as i64;
                     Ok(JsValue::Int(utf16_idx * FP_SCALE))
                 }
                 None => Ok(JsValue::Int(-FP_SCALE)),

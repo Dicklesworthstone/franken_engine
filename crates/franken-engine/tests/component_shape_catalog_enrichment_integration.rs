@@ -17,9 +17,9 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::ast::SourceSpan;
 use frankenengine_engine::component_shape_catalog::{
-    CatalogReceipt, CatalogSummary, ComponentShape, ComponentShapeCatalog, HookProfile,
-    ImpurityReason, PropDescriptor, PropFlowKind, PropValueKind, PurityClassification,
-    PurityConfig, RenderPurityClass, RenderTreeAnalysis, analyze_render_tree, classify_purity,
+    CatalogSummary, ComponentShape, ComponentShapeCatalog, HookProfile, ImpurityReason,
+    PropDescriptor, PropFlowKind, PropValueKind, PurityClassification, PurityConfig,
+    RenderPurityClass, RenderTreeAnalysis, analyze_render_tree, classify_purity,
 };
 use frankenengine_engine::hook_effect_contract::{HookKind, HookManifest, HookSlot, HookSlotIndex};
 use frankenengine_engine::react_jsx_lowering::{

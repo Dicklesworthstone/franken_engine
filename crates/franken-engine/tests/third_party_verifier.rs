@@ -977,14 +977,33 @@ fn replay_claim_with_counterfactual_config_still_verifies() {
 }
 
 #[test]
-fn containment_claim_with_no_scenarios_passes_vacuously() {
+fn containment_claim_with_no_scenarios_fails_closed() {
     let mut bundle = make_containment_claim_bundle();
     bundle.result.scenarios.clear();
     bundle.result.total_scenarios = 0;
     bundle.result.passed_scenarios = 0;
     let report = verify_containment_claim(&bundle);
-    // With no scenarios the checks pass vacuously
-    assert_eq!(report.verdict, VerificationVerdict::Verified);
+    assert_eq!(report.verdict, VerificationVerdict::Failed);
+    assert!(
+        report
+            .checks
+            .iter()
+            .any(|check| check.name == "scenario_set_non_empty" && !check.passed)
+    );
+}
+
+#[test]
+fn containment_claim_with_passed_scenario_missing_criteria_fails() {
+    let mut bundle = make_containment_claim_bundle();
+    bundle.result.scenarios[0].criteria.clear();
+    let report = verify_containment_claim(&bundle);
+    assert_eq!(report.verdict, VerificationVerdict::Failed);
+    assert!(
+        report
+            .checks
+            .iter()
+            .any(|check| check.name == "criteria_consistency:scenario-1" && !check.passed)
+    );
 }
 
 // ────────────────────────────────────────────────────────────

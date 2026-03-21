@@ -405,27 +405,7 @@ fn remediation_guidance_serde_preserves_steps() {
 
 #[test]
 fn diagnostics_at_severity_filters_correctly() {
-    let mut emitter = DiagnosticEmitter::with_defaults();
-    // Add diagnostics at different severities manually
-    let warning_diag = ControlPlaneDiagnostic {
-        error_code: DiagnosticErrorCode {
-            code: "CP-TEST-W".to_string(),
-            category: DiagnosticCategory::CapabilityNarrowing,
-            severity: DiagnosticSeverity::Warning,
-        },
-        message: "test warning".to_string(),
-        remediation: RemediationGuidance {
-            summary: "s".to_string(),
-            detail: "d".to_string(),
-            steps: vec![],
-            doc_refs: vec![],
-            auto_remediable: true,
-        },
-        trace_ids: vec!["t1".to_string()],
-        boundary_label: None,
-        context: BTreeMap::new(),
-        sequence: 0,
-    };
+    let emitter = DiagnosticEmitter::with_defaults();
     // We can't easily emit at different severities without the budget/narrowing API,
     // so just verify the filter function works on an empty emitter
     let filtered = emitter.diagnostics_at_severity(DiagnosticSeverity::Warning);

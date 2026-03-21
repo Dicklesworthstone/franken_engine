@@ -250,9 +250,16 @@ fn module_interop_replay_wrapper_requires_complete_bundle() {
         "replay wrapper must fail closed on incomplete artifact bundles"
     );
     assert!(
-        script.contains("gate exited with status")
-            && script.contains("replay output reflects latest complete run directory"),
+        script.contains("warn_about_failed_gate_replay_source()"),
+        "replay wrapper must centralize failed-gate replay warnings in a dedicated helper"
+    );
+    assert!(
+        script.contains("replay output reflects latest complete run directory"),
         "replay wrapper must warn when it falls back to an older complete run after a failed gate invocation"
+    );
+    assert!(
+        script.contains("replay output reflects current run directory"),
+        "replay wrapper must distinguish a failed gate that still produced the current complete run bundle"
     );
     assert!(
         script.contains("latest module resolution trace"),

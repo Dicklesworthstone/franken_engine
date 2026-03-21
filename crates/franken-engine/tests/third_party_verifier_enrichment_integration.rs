@@ -12,8 +12,6 @@
     clippy::identity_op
 )]
 
-use std::collections::BTreeMap;
-
 use frankenengine_engine::third_party_verifier::*;
 
 // ---------------------------------------------------------------------------

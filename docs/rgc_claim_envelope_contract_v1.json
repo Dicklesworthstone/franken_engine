@@ -34,6 +34,7 @@
       "bead_id": "bd-1lsy.1.6.1",
       "contract_doc": "docs/RGC_REACT_CAPABILITY_CONTRACT_V1.md",
       "contract_json": "docs/rgc_react_capability_contract_v1.json",
+      "contract_policy_id": "policy-rgc-react-capability-contract-v1",
       "role": "defines the React-native compilation support rows that may enter the publishable board over time"
     },
     {
@@ -41,6 +42,7 @@
       "bead_id": "bd-1lsy.1.6.2",
       "contract_doc": "docs/RGC_V8_SUPREMACY_CLAIM_CONTRACT_V1.md",
       "contract_json": "crates/franken-engine/tests/fixtures/rgc_v8_supremacy_claim_contract_v1.json",
+      "contract_policy_id": null,
       "role": "defines the declared supremacy board, required cells, and forbidden universal language"
     }
   ],

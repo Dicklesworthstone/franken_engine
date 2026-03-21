@@ -188,6 +188,7 @@ fn contract_input_serde_roundtrip() {
         bead_id: "bd-1".to_string(),
         contract_doc: "doc.md".to_string(),
         contract_json: "doc.json".to_string(),
+        contract_policy_id: Some("policy-enrich-001".to_string()),
         role: "primary".to_string(),
     };
     let json = serde_json::to_string(&input).unwrap();
@@ -225,6 +226,7 @@ fn board_linkage_serde_roundtrip() {
         supremacy_contract_json: "s.json".to_string(),
         react_contract_doc: "r.md".to_string(),
         react_contract_json: "r.json".to_string(),
+        react_contract_policy_id: "react-policy-enrich-001".to_string(),
         declared_board_dimensions: vec!["dim1".to_string()],
         declared_board_families: vec!["fam1".to_string()],
         frontier_gap_artifact: "gaps.json".to_string(),

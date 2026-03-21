@@ -166,6 +166,15 @@ fn rgc_016c_contract_inputs_and_board_linkage_are_stable() {
         .collect::<BTreeSet<_>>();
     assert!(input_beads.contains("bd-1lsy.1.6.1"));
     assert!(input_beads.contains("bd-1lsy.1.6.2"));
+    let react_input = contract
+        .contract_inputs
+        .iter()
+        .find(|input| input.bead_id == "bd-1lsy.1.6.1")
+        .expect("react input must exist");
+    assert_eq!(
+        react_input.contract_policy_id.as_deref(),
+        Some(REACT_CAPABILITY_CONTRACT_POLICY_ID)
+    );
 
     assert_eq!(
         contract.board_linkage.react_contract_json,
@@ -529,6 +538,22 @@ fn contract_inputs_are_non_empty() {
     assert!(
         !contract.contract_inputs.is_empty(),
         "contract_inputs must not be empty"
+    );
+}
+
+#[test]
+fn contract_input_bead_ids_are_unique() {
+    let contract = load_contract();
+    let bead_ids = contract
+        .contract_inputs
+        .iter()
+        .map(|input| input.bead_id.as_str())
+        .collect::<Vec<_>>();
+    let unique = bead_ids.iter().copied().collect::<BTreeSet<_>>();
+    assert_eq!(
+        unique.len(),
+        bead_ids.len(),
+        "contract_inputs must not repeat bead_id"
     );
 }
 

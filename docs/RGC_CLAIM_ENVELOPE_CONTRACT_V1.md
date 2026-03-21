@@ -51,6 +51,11 @@ This contract consumes the already-defined inputs from:
 
 The envelope contract does not redefine the board. It binds phrase classes and
 publication surfaces to those existing board and capability definitions.
+Each upstream contract bead appears exactly once in `contract_inputs`.
+For the React input, both `contract_inputs` and `board_linkage` pin
+`policy-rgc-react-capability-contract-v1` so downstream publication consumers
+cannot silently retarget the React contract while keeping the same doc/json
+paths.
 
 ## Declared Board Linkage
 

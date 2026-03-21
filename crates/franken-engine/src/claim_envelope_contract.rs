@@ -43,6 +43,7 @@ pub struct ContractInput {
     pub bead_id: String,
     pub contract_doc: String,
     pub contract_json: String,
+    pub contract_policy_id: Option<String>,
     pub role: String,
 }
 
@@ -146,6 +147,13 @@ impl ClaimEnvelopeContract {
             "contract input",
             &mut errors,
         );
+        collect_unique_ids(
+            self.contract_inputs
+                .iter()
+                .map(|input| input.bead_id.as_str()),
+            "contract input bead",
+            &mut errors,
+        );
         let class_ids = collect_unique_ids(
             self.claim_classes
                 .iter()
@@ -228,6 +236,19 @@ impl ClaimEnvelopeContract {
             .any(|input| input.bead_id == "bd-1lsy.1.6.1")
         {
             errors.push("missing React capability contract input".to_string());
+        }
+        if let Some(react_input) = self
+            .contract_inputs
+            .iter()
+            .find(|input| input.bead_id == "bd-1lsy.1.6.1")
+        {
+            match react_input.contract_policy_id.as_deref() {
+                Some(REACT_CAPABILITY_CONTRACT_POLICY_ID) => {}
+                Some(other) => errors.push(format!(
+                    "unexpected React contract input policy id `{other}`"
+                )),
+                None => errors.push("missing React contract input policy id linkage".to_string()),
+            }
         }
         if !self
             .contract_inputs
@@ -428,6 +449,7 @@ mod tests {
                     bead_id: "bd-1lsy.1.6.1".to_string(),
                     contract_doc: "react.md".to_string(),
                     contract_json: "react.json".to_string(),
+                    contract_policy_id: Some(REACT_CAPABILITY_CONTRACT_POLICY_ID.to_string()),
                     role: "react capability".to_string(),
                 },
                 ContractInput {
@@ -435,6 +457,7 @@ mod tests {
                     bead_id: "bd-1lsy.1.6.2".to_string(),
                     contract_doc: "v8.md".to_string(),
                     contract_json: "v8.json".to_string(),
+                    contract_policy_id: None,
                     role: "v8 supremacy".to_string(),
                 },
             ],
@@ -896,6 +919,18 @@ mod tests {
     }
 
     #[test]
+    fn validate_rejects_duplicate_input_bead_ids() {
+        let mut contract = minimal_contract();
+        contract.contract_inputs[1].bead_id = contract.contract_inputs[0].bead_id.clone();
+        let errors = contract.validate().expect_err("should fail");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("duplicate contract input bead"))
+        );
+    }
+
+    #[test]
     fn validate_rejects_duplicate_channel_ids() {
         let mut contract = minimal_contract();
         let dup = contract.consumer_channels[0].clone();
@@ -1253,6 +1288,7 @@ mod tests {
             bead_id: "bd-other".to_string(),
             contract_doc: "other.md".to_string(),
             contract_json: "other.json".to_string(),
+            contract_policy_id: None,
             role: "other".to_string(),
         }];
         let errors = contract.validate().expect_err("should fail");
@@ -1323,6 +1359,24 @@ mod tests {
     #[test]
     fn validate_react_contract_policy_linkage_missing_or_drifted() {
         let mut contract = minimal_contract();
+        contract.contract_inputs[0].contract_policy_id = None;
+        let errors = contract.validate().expect_err("should fail");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("missing React contract input policy id linkage"))
+        );
+
+        contract.contract_inputs[0].contract_policy_id = Some("policy-react-other".to_string());
+        let errors = contract.validate().expect_err("should fail");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("unexpected React contract input policy id"))
+        );
+
+        contract.contract_inputs[0].contract_policy_id =
+            Some(REACT_CAPABILITY_CONTRACT_POLICY_ID.to_string());
         contract.board_linkage.react_contract_policy_id.clear();
         let errors = contract.validate().expect_err("should fail");
         assert!(
@@ -1347,6 +1401,7 @@ mod tests {
             bead_id: "bd-test".to_string(),
             contract_doc: "doc.md".to_string(),
             contract_json: "contract.json".to_string(),
+            contract_policy_id: Some("policy-test".to_string()),
             role: "test role".to_string(),
         };
         let json = serde_json::to_string(&input).expect("serialize");

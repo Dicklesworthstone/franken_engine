@@ -18,6 +18,7 @@ fn deep_schema_version_nonempty() {
 }
 
 #[test]
+#[allow(clippy::assertions_on_constants)]
 fn deep_max_staleness_sane() {
     assert!(MAX_PUBLISHABLE_STALENESS_HOURS > 0);
     assert_eq!(MAX_PUBLISHABLE_STALENESS_HOURS, 168); // 7 days
@@ -264,6 +265,7 @@ fn deep_scenario_serde_roundtrip() {
 // Enrichment: evaluation — PublishableUniversal scenarios
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn make_scenario(
     id: &str,
     tier: ClaimEnvelopeTier,

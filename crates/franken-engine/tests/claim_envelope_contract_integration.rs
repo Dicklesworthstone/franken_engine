@@ -706,6 +706,7 @@ fn contract_input_serde() {
         bead_id: "bd-test".to_string(),
         contract_doc: "doc.md".to_string(),
         contract_json: "contract.json".to_string(),
+        contract_policy_id: Some("policy-test-001".to_string()),
         role: "source".to_string(),
     };
     let json = serde_json::to_string(&input).unwrap();
@@ -735,6 +736,7 @@ fn board_linkage_serde() {
         supremacy_contract_json: "sup.json".to_string(),
         react_contract_doc: "react.md".to_string(),
         react_contract_json: "react.json".to_string(),
+        react_contract_policy_id: "react-policy-001".to_string(),
         declared_board_dimensions: vec!["workload_cell".to_string()],
         declared_board_families: vec!["parse_compile".to_string()],
         frontier_gap_artifact: "gap.json".to_string(),

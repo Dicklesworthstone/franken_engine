@@ -532,6 +532,44 @@ fn exact_budget_schedules_matching_probe() {
 }
 
 #[test]
+fn negative_cost_probe_cannot_expand_budget() {
+    let config = SchedulerConfig {
+        scheduler_id: "negative-cost".to_string(),
+        base_budget_millionths: 100_000,
+        regime_budgets: BTreeMap::new(),
+        relevance_overrides: BTreeMap::new(),
+    };
+    let mut sched = MonitorScheduler::new(config);
+    sched
+        .register_probe(ProbeConfig {
+            probe_id: "neg".to_string(),
+            kind: ProbeKind::HealthCheck,
+            cost_millionths: -500_000,
+            information_gain_millionths: 2_000_000,
+            base_relevance_millionths: 1_000_000,
+        })
+        .unwrap();
+    sched.register_probe(health_probe("h1")).unwrap();
+
+    let result = sched.schedule(Regime::Normal);
+    let neg = result
+        .decisions
+        .iter()
+        .find(|decision| decision.probe_id == "neg")
+        .expect("negative-cost decision");
+    let health = result
+        .decisions
+        .iter()
+        .find(|decision| decision.probe_id == "h1")
+        .expect("health decision");
+
+    assert!(neg.scheduled);
+    assert_eq!(neg.cost, 1);
+    assert_eq!(result.budget_used, 1);
+    assert!(!health.scheduled);
+}
+
+#[test]
 fn large_budget_schedules_all_probes() {
     let config = SchedulerConfig {
         scheduler_id: "large".to_string(),

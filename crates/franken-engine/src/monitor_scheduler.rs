@@ -66,6 +66,16 @@ pub struct ProbeConfig {
     pub base_relevance_millionths: i64,
 }
 
+impl ProbeConfig {
+    /// Effective probe cost used by both VOI scoring and budget accounting.
+    ///
+    /// Non-positive configured costs are treated as a minimal positive unit so
+    /// the scheduler cannot mint budget by registering zero/negative-cost probes.
+    pub fn effective_cost_millionths(&self) -> i64 {
+        self.cost_millionths.max(1)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ProbeState — runtime state of a probe
 // ---------------------------------------------------------------------------
@@ -98,7 +108,7 @@ impl ProbeState {
     ///
     /// Returns millionths.  Higher is better.
     pub fn voi_score(&self, regime_relevance_multiplier: i64) -> i64 {
-        let cost = self.config.cost_millionths.max(1); // prevent div-by-zero
+        let cost = self.config.effective_cost_millionths();
         let staleness_factor = ((self.staleness + 1) as i64) * 1_000_000;
         let relevance = self.config.base_relevance_millionths as i128
             * regime_relevance_multiplier as i128
@@ -338,7 +348,7 @@ impl MonitorScheduler {
             .map(|(id, state)| {
                 let relevance_mult = self.config.relevance_multiplier(regime, state.config.kind);
                 let voi = state.voi_score(relevance_mult);
-                (id.clone(), voi, state.config.cost_millionths)
+                (id.clone(), voi, state.config.effective_cost_millionths())
             })
             .collect();
 
@@ -916,6 +926,34 @@ mod tests {
     }
 
     #[test]
+    fn effective_cost_clamps_non_positive_values() {
+        let zero = ProbeConfig {
+            probe_id: "zero".to_string(),
+            kind: ProbeKind::HealthCheck,
+            cost_millionths: 0,
+            information_gain_millionths: 1_000_000,
+            base_relevance_millionths: 1_000_000,
+        };
+        let negative = ProbeConfig {
+            probe_id: "negative".to_string(),
+            kind: ProbeKind::HealthCheck,
+            cost_millionths: -250_000,
+            information_gain_millionths: 1_000_000,
+            base_relevance_millionths: 1_000_000,
+        };
+        let positive = ProbeConfig {
+            probe_id: "positive".to_string(),
+            kind: ProbeKind::HealthCheck,
+            cost_millionths: 500_000,
+            information_gain_millionths: 1_000_000,
+            base_relevance_millionths: 1_000_000,
+        };
+        assert_eq!(zero.effective_cost_millionths(), 1);
+        assert_eq!(negative.effective_cost_millionths(), 1);
+        assert_eq!(positive.effective_cost_millionths(), 500_000);
+    }
+
+    #[test]
     fn voi_score_zero_information_gain() {
         let config = ProbeConfig {
             probe_id: "no-info".to_string(),
@@ -992,6 +1030,47 @@ mod tests {
         let result = sched.schedule(Regime::Normal);
         assert_eq!(result.probes_scheduled, 1);
         assert_eq!(result.budget_used, 100_000);
+    }
+
+    #[test]
+    fn schedule_negative_cost_probe_uses_floor_for_budget_accounting() {
+        let config = SchedulerConfig {
+            scheduler_id: "s".to_string(),
+            base_budget_millionths: 100_000,
+            regime_budgets: BTreeMap::new(),
+            relevance_overrides: BTreeMap::new(),
+        };
+        let mut sched = MonitorScheduler::new(config);
+        sched
+            .register_probe(ProbeConfig {
+                probe_id: "neg".to_string(),
+                kind: ProbeKind::HealthCheck,
+                cost_millionths: -500_000,
+                information_gain_millionths: 2_000_000,
+                base_relevance_millionths: 1_000_000,
+            })
+            .unwrap();
+        sched.register_probe(health_probe("h1")).unwrap();
+
+        let result = sched.schedule(Regime::Normal);
+        let neg = result
+            .decisions
+            .iter()
+            .find(|decision| decision.probe_id == "neg")
+            .expect("negative-cost probe decision");
+        let health = result
+            .decisions
+            .iter()
+            .find(|decision| decision.probe_id == "h1")
+            .expect("health probe decision");
+
+        assert!(neg.scheduled);
+        assert_eq!(neg.cost, 1);
+        assert_eq!(result.budget_used, 1);
+        assert!(
+            !health.scheduled,
+            "negative-cost probes must not expand remaining budget"
+        );
     }
 
     #[test]

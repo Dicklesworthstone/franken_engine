@@ -317,17 +317,98 @@ impl DocsAccuracyInventory {
 
     /// Compute a deterministic content hash.
     pub fn content_hash(&self) -> ContentHash {
-        let mut entries = Vec::new();
-        for s in &self.surfaces {
-            entries.push(CanonicalValue::Map(BTreeMap::from([
-                ("id".to_string(), CanonicalValue::String(s.id.clone())),
-                (
-                    "drift".to_string(),
-                    CanonicalValue::String(s.drift_class.as_str().to_string()),
-                ),
-            ])));
-        }
-        let canonical = CanonicalValue::Array(entries);
+        let surfaces = self
+            .surfaces
+            .iter()
+            .map(|surface| {
+                let sources = surface
+                    .sources
+                    .iter()
+                    .map(|source| CanonicalValue::String(source.as_str().to_string()))
+                    .collect();
+                CanonicalValue::Map(BTreeMap::from([
+                    ("id".to_string(), CanonicalValue::String(surface.id.clone())),
+                    (
+                        "name".to_string(),
+                        CanonicalValue::String(surface.name.clone()),
+                    ),
+                    (
+                        "surface_type".to_string(),
+                        CanonicalValue::String(surface.surface_type.as_str().to_string()),
+                    ),
+                    ("sources".to_string(), CanonicalValue::Array(sources)),
+                    (
+                        "documented_behavior".to_string(),
+                        CanonicalValue::String(surface.documented_behavior.clone()),
+                    ),
+                    (
+                        "shipped_behavior".to_string(),
+                        CanonicalValue::String(surface.shipped_behavior.clone()),
+                    ),
+                    (
+                        "drift_class".to_string(),
+                        CanonicalValue::String(surface.drift_class.as_str().to_string()),
+                    ),
+                    (
+                        "drift_notes".to_string(),
+                        CanonicalValue::String(surface.drift_notes.clone()),
+                    ),
+                    (
+                        "explicitly_unsupported".to_string(),
+                        CanonicalValue::Bool(surface.explicitly_unsupported),
+                    ),
+                ]))
+            })
+            .collect();
+        let unsupported_contracts = self
+            .unsupported_contracts
+            .iter()
+            .map(|contract| {
+                CanonicalValue::Map(BTreeMap::from([
+                    (
+                        "surface_name".to_string(),
+                        CanonicalValue::String(contract.surface_name.clone()),
+                    ),
+                    (
+                        "reason".to_string(),
+                        CanonicalValue::String(contract.reason.clone()),
+                    ),
+                    (
+                        "workaround".to_string(),
+                        contract
+                            .workaround
+                            .as_ref()
+                            .map_or(CanonicalValue::Null, |workaround| {
+                                CanonicalValue::String(workaround.clone())
+                            }),
+                    ),
+                    (
+                        "planned_support".to_string(),
+                        CanonicalValue::Bool(contract.planned_support),
+                    ),
+                    (
+                        "tracking_bead".to_string(),
+                        contract
+                            .tracking_bead
+                            .as_ref()
+                            .map_or(CanonicalValue::Null, |bead| {
+                                CanonicalValue::String(bead.clone())
+                            }),
+                    ),
+                ]))
+            })
+            .collect();
+        let canonical = CanonicalValue::Map(BTreeMap::from([
+            (
+                "version".to_string(),
+                CanonicalValue::String(self.version.clone()),
+            ),
+            ("surfaces".to_string(), CanonicalValue::Array(surfaces)),
+            (
+                "unsupported_contracts".to_string(),
+                CanonicalValue::Array(unsupported_contracts),
+            ),
+        ]));
         let bytes = encode_value(&canonical);
         ContentHash::compute(&bytes)
     }
@@ -866,6 +947,22 @@ mod tests {
         let i1 = build_seed_inventory();
         let mut i2 = build_seed_inventory();
         i2.add_surface(aligned_surface("extra")).unwrap();
+        assert_ne!(i1.content_hash(), i2.content_hash());
+    }
+
+    #[test]
+    fn content_hash_changes_when_surface_payload_changes() {
+        let i1 = build_seed_inventory();
+        let mut i2 = build_seed_inventory();
+        i2.surfaces[0].documented_behavior = "Different README claim".to_string();
+        assert_ne!(i1.content_hash(), i2.content_hash());
+    }
+
+    #[test]
+    fn content_hash_changes_when_unsupported_contract_changes() {
+        let i1 = build_seed_inventory();
+        let mut i2 = build_seed_inventory();
+        i2.unsupported_contracts[0].reason = "new unsupported reason".to_string();
         assert_ne!(i1.content_hash(), i2.content_hash());
     }
 

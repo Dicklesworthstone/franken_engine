@@ -207,6 +207,30 @@ failed_command=""
 manifest_written=false
 step_log_index=0
 
+write_validation_step_log() {
+  local validation_outcome="$1"
+  local log_path
+
+  log_path="${step_logs_dir}/step_$(printf '%03d' "${step_log_index}").log"
+  step_log_index=$((step_log_index + 1))
+  commands_run+=("validate source inputs")
+
+  {
+    echo "==> validate source inputs"
+    echo "bundle_contract_json=${bundle_contract_json}"
+    echo "resolved_support_contract_path=${resolved_support_contract_path:-}"
+    echo "resolved_blocker_ledger_path=${resolved_blocker_ledger_path:-}"
+    echo "sibling_repo_path=${sibling_repo_path}"
+    echo "stale_after_hours=${stale_after_hours}"
+    if [[ "${validation_outcome}" == "pass" ]]; then
+      echo "==> validation passed"
+    else
+      echo "==> validation failed"
+      printf '%s\n' "${validation_errors[@]}"
+    fi
+  } >"$log_path"
+}
+
 run_step() {
   local command_text="$1"
   local log_path status remote_exit_code
@@ -378,10 +402,12 @@ validate_source_inputs() {
   fi
 
   if (( ${#validation_errors[@]} > 0 )); then
+    write_validation_step_log "fail"
     printf '%s\n' "${validation_errors[@]}" >&2
     return 1
   fi
 
+  write_validation_step_log "pass"
   return 0
 }
 

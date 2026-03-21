@@ -1,0 +1,156 @@
+{
+  "schema_version": "franken-engine.ecosystem-capture-strategy.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-3bz4",
+  "policy_id": "policy-ecosystem-capture-strategy-v1",
+  "generated_by": "bd-3bz4",
+  "generated_at_utc": "2026-03-21T18:41:00Z",
+  "source_inputs": [
+    "PLAN_TO_CREATE_FRANKEN_ENGINE.md",
+    "docs/ECOSYSTEM_CAPTURE_STRATEGY_V1.md"
+  ],
+  "execution_pillars": [
+    {
+      "pillar_id": "signed_extension_registry",
+      "description": "Signed extension registry with provenance, attestation, and revocation enforcement.",
+      "delivery_beads": [
+        "bd-3bz4.1",
+        "bd-mrf8"
+      ],
+      "user_outcome": "Operators can publish, verify, and revoke extensions with deterministic trust evidence."
+    },
+    {
+      "pillar_id": "migration_validation",
+      "description": "Node/Bun-to-FrankenEngine migration kit with deterministic behavior validation artifacts.",
+      "delivery_beads": [
+        "bd-3bz4.2",
+        "bd-iqrn",
+        "bd-2wft"
+      ],
+      "user_outcome": "Migration cohorts can prove equivalence, divergences, and remediation paths before cutover."
+    },
+    {
+      "pillar_id": "enterprise_governance",
+      "description": "Policy-as-code, audit export, and compliance evidence contracts for enterprise adoption.",
+      "delivery_beads": [
+        "bd-3bz4.3",
+        "bd-2r0c"
+      ],
+      "user_outcome": "Enterprise operators can plug FrankenEngine into governance and audit workflows without bespoke glue."
+    },
+    {
+      "pillar_id": "reputation_graph_apis",
+      "description": "Ecosystem trust sharing and incident response through explainable trust-card APIs.",
+      "delivery_beads": [
+        "bd-2x4b"
+      ],
+      "user_outcome": "Trust and incident knowledge can propagate across organizations and environments."
+    },
+    {
+      "pillar_id": "partner_program",
+      "description": "Lighthouse adopters and public case studies that prove the ecosystem story in production.",
+      "delivery_beads": [
+        "bd-1wqa",
+        "bd-3j5s"
+      ],
+      "user_outcome": "External proof points exist for adoption, migration, and operational improvement claims."
+    }
+  ],
+  "adoption_targets": [
+    {
+      "target_id": "greenfield_onboarding",
+      "description": "Minimal-friction deterministic safe-extension setup workflow for new users.",
+      "delivery_beads": [
+        "bd-3qhv"
+      ]
+    },
+    {
+      "target_id": "migration_validation",
+      "description": "Representative Node/Bun extension packs migrated with deterministic validation artifacts.",
+      "delivery_beads": [
+        "bd-2wft"
+      ]
+    },
+    {
+      "target_id": "public_case_studies",
+      "description": "Public deployments documenting materially improved security and operational outcomes.",
+      "delivery_beads": [
+        "bd-3j5s"
+      ]
+    }
+  ],
+  "upstream_prerequisites": [
+    {
+      "bead_id": "bd-uvmm",
+      "reason": "Adoption artifacts need canonical evidence entries with trace-linked hashes."
+    },
+    {
+      "bead_id": "bd-3a5e",
+      "reason": "High-impact safety actions must route through explicit decision contracts."
+    },
+    {
+      "bead_id": "bd-1bzp",
+      "reason": "Public adoption claims depend on the benchmark specification and scoring methodology."
+    },
+    {
+      "bead_id": "bd-2vu",
+      "reason": "Migration claims require differential Node/Bun parity evidence."
+    },
+    {
+      "bead_id": "bd-3gsv",
+      "reason": "Third parties need an independent verifier toolkit for benchmark and replay claims."
+    },
+    {
+      "bead_id": "bd-3ovc",
+      "reason": "Trust sharing depends on low-latency reputation updates and explainable trust cards."
+    },
+    {
+      "bead_id": "bd-39f0",
+      "reason": "The reputation graph API needs a stable provenance and trust-transition schema."
+    },
+    {
+      "bead_id": "bd-26o",
+      "reason": "Serialization, signature, revocation, and epoch claims need conformance coverage."
+    }
+  ],
+  "closure_rule": {
+    "execution_pillars_must_be_closed": true,
+    "adoption_targets_must_be_closed": true,
+    "upstream_prerequisites_must_be_closed": true,
+    "parent_epic": "bd-1jak",
+    "parent_epic_note": "Closing bd-3bz4 advances Section 15, but bd-1jak still tracks other Section 15 outputs plus Sections 13 and 14 and master-program blockers."
+  },
+  "required_log_keys": [
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "outcome",
+    "error_code"
+  ],
+  "required_artifacts": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "trace_ids.json",
+    "milestone_status_report.json",
+    "blocker_status_report.json",
+    "strategy_summary.md",
+    "ecosystem_capture_strategy_v1.json",
+    "ecosystem_capture_strategy_v1.md",
+    "step_logs/step_*.log"
+  ],
+  "gate_runner": {
+    "script": "scripts/run_ecosystem_capture_strategy.sh",
+    "replay_wrapper": "scripts/e2e/ecosystem_capture_strategy_replay.sh",
+    "strict_mode": "set -euo pipefail",
+    "manifest_schema_version": "franken-engine.ecosystem-capture-strategy.run-manifest.v1"
+  },
+  "operator_verification": [
+    "jq empty docs/ecosystem_capture_strategy_v1.json",
+    "rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=$PWD/target_rch_ecosystem_capture_strategy_verify CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine --test ecosystem_capture_strategy",
+    "./scripts/run_ecosystem_capture_strategy.sh ci",
+    "./scripts/e2e/ecosystem_capture_strategy_replay.sh show"
+  ]
+}

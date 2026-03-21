@@ -1081,6 +1081,30 @@ Artifacts are written under:
 - `artifacts/compiler_hotspot_optimization_campaign/<timestamp>/events.jsonl`
 - `artifacts/compiler_hotspot_optimization_campaign/<timestamp>/commands.txt`
 
+## RGC Certified Optimization Harness
+
+`bd-1lsy.7.7` now has a parent-level certified-optimization harness that
+aggregates the existing rewrite-pack, translation-validation receipt, and
+governance modules into one replayable lane with a machine-readable proof
+index.
+
+```bash
+# certified optimization harness (rch-backed check + test + clippy)
+./scripts/run_rgc_certified_optimization_harness.sh ci
+
+# deterministic replay wrapper
+./scripts/e2e/rgc_certified_optimization_harness_replay.sh ci
+```
+
+Artifacts are written under:
+
+- `artifacts/rgc_certified_optimization_harness/<timestamp>/run_manifest.json`
+- `artifacts/rgc_certified_optimization_harness/<timestamp>/events.jsonl`
+- `artifacts/rgc_certified_optimization_harness/<timestamp>/commands.txt`
+- `artifacts/rgc_certified_optimization_harness/<timestamp>/trace_ids.json`
+- `artifacts/rgc_certified_optimization_harness/<timestamp>/rewrite_proof_index.json`
+- `artifacts/rgc_certified_optimization_harness/<timestamp>/rch-log.*`
+
 ## FRX Toolchain Lane Charter Gate
 
 `bd-mjh3.10.6` ships a deterministic gate for toolchain/ecosystem lane charter

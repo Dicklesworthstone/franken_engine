@@ -1,0 +1,90 @@
+{
+  "schema_version": "franken-engine.rgc-franken-node-handoff-bundle.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-1lsy.5.10.3",
+  "policy_id": "policy-rgc-franken-node-handoff-bundle-v1",
+  "generated_by": "bd-1lsy.5.10.3",
+  "generated_at_utc": "2026-03-21T16:40:00Z",
+  "source_inputs": [
+    "docs/RGC_FRANKEN_NODE_HANDOFF_BUNDLE_V1.md",
+    "docs/support_surface_contract.json",
+    "docs/REPO_SPLIT_CONTRACT.md"
+  ],
+  "input_resolution": {
+    "support_surface_contract_path": "docs/support_surface_contract.json",
+    "support_surface_contract_artifact_glob": "artifacts/rgc_support_surface_contract/*/support_surface_contract.json",
+    "blocker_ledger_env_var": "RGC_HANDOFF_BLOCKER_LEDGER_PATH",
+    "blocker_ledger_artifact_glob": "artifacts/**/engine_product_blocker_ledger.json",
+    "repo_split_contract_doc": "docs/REPO_SPLIT_CONTRACT.md",
+    "sibling_repo_path": "/dp/franken_node",
+    "stale_after_hours": 720
+  },
+  "required_log_keys": [
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "outcome",
+    "error_code"
+  ],
+  "required_artifacts": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "trace_ids.json",
+    "franken_node_handoff_manifest.json",
+    "sibling_smoke_verification.json",
+    "support_surface_summary.md",
+    "franken_node_handoff_bundle_contract.json",
+    "support_surface_contract.json",
+    "engine_product_blocker_ledger.json",
+    "repo_split_contract.md",
+    "step_logs/step_*.log"
+  ],
+  "failure_conditions": [
+    "missing_support_surface_contract",
+    "missing_blocker_ledger",
+    "stale_support_surface_contract",
+    "stale_blocker_ledger",
+    "missing_sibling_repo",
+    "repo_split_contract_drift",
+    "orphaned_unresolved_blocker_entries",
+    "missing_required_bundle_artifacts"
+  ],
+  "sibling_smoke_checks": [
+    {
+      "check_id": "sibling_repo_exists",
+      "description": "The downstream franken_node repository path exists."
+    },
+    {
+      "check_id": "one_way_dependency_contract",
+      "description": "The repo split contract still allows franken_node -> franken_engine and forbids the reverse direction."
+    },
+    {
+      "check_id": "support_contract_delegates_product_ready",
+      "description": "The support-surface contract keeps product-ready state delegated to franken_node handoff evidence."
+    },
+    {
+      "check_id": "unresolved_blockers_not_orphaned",
+      "description": "Unresolved blocking/degraded blockers retain either a tracking bead or an owner."
+    },
+    {
+      "check_id": "cohort_rollups_present",
+      "description": "The blocker ledger exposes at least one cohort rollup for downstream readiness consumption."
+    }
+  ],
+  "gate_runner": {
+    "script": "scripts/run_rgc_franken_node_handoff_bundle.sh",
+    "replay_wrapper": "scripts/e2e/rgc_franken_node_handoff_bundle_replay.sh",
+    "strict_mode": "ci",
+    "manifest_schema_version": "franken-engine.rgc-franken-node-handoff-bundle.run-manifest.v1"
+  },
+  "operator_verification": [
+    "jq empty docs/franken_node_handoff_bundle_v1.json",
+    "jq empty docs/support_surface_contract.json",
+    "RGC_HANDOFF_BLOCKER_LEDGER_PATH=/abs/path/engine_product_blocker_ledger.json ./scripts/run_rgc_franken_node_handoff_bundle.sh ci",
+    "RGC_HANDOFF_BLOCKER_LEDGER_PATH=/abs/path/engine_product_blocker_ledger.json ./scripts/e2e/rgc_franken_node_handoff_bundle_replay.sh ci",
+    "rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=$PWD/target_rch_rgc_franken_node_handoff_bundle_verify CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine --test franken_node_handoff_bundle"
+  ]
+}

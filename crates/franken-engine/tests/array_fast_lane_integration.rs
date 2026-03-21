@@ -1078,3 +1078,245 @@ fn test_deopt_and_transition_interleaving() {
     assert!(!engine.get_array("arr-1").unwrap().fast_lane_active);
     assert_eq!(engine.active_array_count(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// Double-deopt guard tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_double_deopt_on_lane_descriptor_is_idempotent() {
+    let mut lane = ArrayLaneDescriptor::new("arr-dd-1", ElementKind::PackedSmi, 0);
+    assert!(lane.fast_lane_active);
+
+    lane.deopt(DeoptReason::ElementKindChanged, epoch(1), 0);
+    assert!(!lane.fast_lane_active);
+    assert_eq!(lane.deopt_count(), 1);
+
+    // Second deopt on already-deoptimized lane should be a no-op
+    lane.deopt(DeoptReason::ElementKindChanged, epoch(1), 4);
+    assert!(!lane.fast_lane_active);
+    assert_eq!(
+        lane.deopt_count(),
+        1,
+        "second deopt should not add a record"
+    );
+}
+
+#[test]
+fn test_double_deopt_with_different_reasons_still_idempotent() {
+    let mut lane = ArrayLaneDescriptor::new("arr-dd-2", ElementKind::PackedDouble, 0);
+
+    lane.deopt(DeoptReason::ElementKindChanged, epoch(1), 0);
+    assert_eq!(lane.deopt_count(), 1);
+
+    lane.deopt(
+        DeoptReason::ExcessiveOob {
+            oob_rate_millionths: 500_000,
+        },
+        epoch(2),
+        8,
+    );
+    assert_eq!(
+        lane.deopt_count(),
+        1,
+        "different-reason deopt on inactive lane should still be no-op"
+    );
+}
+
+#[test]
+fn test_deopt_reopt_deopt_creates_two_records() {
+    let mut lane = ArrayLaneDescriptor::new("arr-dd-3", ElementKind::PackedSmi, 0);
+
+    lane.deopt(DeoptReason::ElementKindChanged, epoch(1), 0);
+    assert_eq!(lane.deopt_count(), 1);
+    assert!(!lane.fast_lane_active);
+
+    lane.reopt();
+    assert!(lane.fast_lane_active);
+
+    lane.deopt(
+        DeoptReason::ExcessiveOob {
+            oob_rate_millionths: 800_000,
+        },
+        epoch(2),
+        16,
+    );
+    assert_eq!(
+        lane.deopt_count(),
+        2,
+        "deopt after reopt should create a second record"
+    );
+    assert!(!lane.fast_lane_active);
+}
+
+#[test]
+fn test_engine_invalid_transition_on_already_deopted_lane_does_not_duplicate_record() {
+    let mut engine = ArrayFastLaneEngine::new(epoch(1));
+    engine.register_array("arr-dd-eng", ElementKind::PackedSmi, 100);
+
+    // First invalid transition → deopt
+    engine.transition_element_kind(
+        "arr-dd-eng",
+        ElementKind::Empty,
+        TransitionReason::DeoptReboxing,
+        0,
+    );
+    let lane = engine.get_array("arr-dd-eng").unwrap();
+    assert!(!lane.fast_lane_active);
+    assert_eq!(lane.deopt_count(), 1);
+    let initial_log_len = engine.deopt_log.len();
+
+    // Second invalid transition on already-deopted lane → no additional deopt
+    engine.transition_element_kind(
+        "arr-dd-eng",
+        ElementKind::Empty,
+        TransitionReason::DeoptReboxing,
+        4,
+    );
+    let lane = engine.get_array("arr-dd-eng").unwrap();
+    assert_eq!(lane.deopt_count(), 1);
+    assert_eq!(
+        engine.deopt_log.len(),
+        initial_log_len,
+        "engine deopt log should not grow on double deopt"
+    );
+}
+
+#[test]
+fn test_engine_max_transitions_on_already_deopted_lane_does_not_duplicate() {
+    let mut policy = FastLanePolicy::default();
+    policy.max_transitions = 1;
+    let mut engine = ArrayFastLaneEngine::with_policy(policy, epoch(1));
+    engine.register_array("arr-dd-max", ElementKind::Empty, 50);
+
+    // One valid transition
+    engine.transition_element_kind(
+        "arr-dd-max",
+        ElementKind::PackedSmi,
+        TransitionReason::InitialAllocation,
+        0,
+    );
+
+    // Second transition exceeds max → deopt
+    engine.transition_element_kind(
+        "arr-dd-max",
+        ElementKind::PackedDouble,
+        TransitionReason::SmiToDouble,
+        4,
+    );
+    let lane = engine.get_array("arr-dd-max").unwrap();
+    assert!(!lane.fast_lane_active);
+    assert_eq!(lane.deopt_count(), 1);
+    let log_len = engine.deopt_log.len();
+
+    // Third transition on already-deopted lane → no additional deopt
+    engine.transition_element_kind(
+        "arr-dd-max",
+        ElementKind::PackedElements,
+        TransitionReason::ElementStoreMismatch,
+        8,
+    );
+    let lane = engine.get_array("arr-dd-max").unwrap();
+    assert_eq!(lane.deopt_count(), 1);
+    assert_eq!(engine.deopt_log.len(), log_len);
+}
+
+#[test]
+fn test_engine_oob_on_already_deopted_lane_does_not_duplicate() {
+    let mut policy = FastLanePolicy::default();
+    policy.max_oob_rate_millionths = 100_000; // 10%
+    policy.min_access_count = 2;
+    let mut engine = ArrayFastLaneEngine::with_policy(policy, epoch(1));
+    engine.register_array("arr-dd-oob", ElementKind::PackedSmi, 100);
+
+    // Force a deopt via invalid transition first
+    engine.transition_element_kind(
+        "arr-dd-oob",
+        ElementKind::Empty,
+        TransitionReason::DeoptReboxing,
+        0,
+    );
+    let lane = engine.get_array("arr-dd-oob").unwrap();
+    assert!(!lane.fast_lane_active);
+    assert_eq!(lane.deopt_count(), 1);
+    let log_len = engine.deopt_log.len();
+
+    // Now generate OOB events that would normally trigger deopt
+    for i in 0..10 {
+        engine.record_oob("arr-dd-oob", i);
+    }
+    let lane = engine.get_array("arr-dd-oob").unwrap();
+    assert_eq!(
+        lane.deopt_count(),
+        1,
+        "OOB on already-deopted lane should not add deopt records"
+    );
+    assert_eq!(engine.deopt_log.len(), log_len);
+}
+
+#[test]
+fn test_triple_deopt_attempt_stays_at_one_record() {
+    let mut lane = ArrayLaneDescriptor::new("arr-dd-triple", ElementKind::HoleyElements, 0);
+
+    lane.deopt(DeoptReason::ElementKindChanged, epoch(1), 0);
+    lane.deopt(DeoptReason::ElementKindChanged, epoch(2), 4);
+    lane.deopt(
+        DeoptReason::ExcessiveOob {
+            oob_rate_millionths: 999_999,
+        },
+        epoch(3),
+        8,
+    );
+
+    assert!(!lane.fast_lane_active);
+    assert_eq!(
+        lane.deopt_count(),
+        1,
+        "only the first deopt should be recorded"
+    );
+}
+
+#[test]
+fn test_deopt_record_id_stability_across_reopt_cycles() {
+    let mut lane = ArrayLaneDescriptor::new("arr-dd-ids", ElementKind::PackedSmi, 0);
+
+    lane.deopt(DeoptReason::ElementKindChanged, epoch(1), 0);
+    let first_record = lane.deopt_records.last().unwrap().clone();
+    assert_eq!(first_record.record_id, "deopt-arr-dd-ids-0");
+
+    lane.reopt();
+    lane.deopt(DeoptReason::ElementKindChanged, epoch(2), 4);
+    let second_record = lane.deopt_records.last().unwrap().clone();
+    assert_eq!(second_record.record_id, "deopt-arr-dd-ids-1");
+    assert_ne!(first_record.record_id, second_record.record_id);
+}
+
+#[test]
+fn test_engine_diagnostics_after_double_deopt_attempts() {
+    let mut engine = ArrayFastLaneEngine::new(epoch(1));
+    engine.register_array("arr-diag", ElementKind::PackedSmi, 100);
+
+    // Deopt via invalid transition
+    engine.transition_element_kind(
+        "arr-diag",
+        ElementKind::Empty,
+        TransitionReason::DeoptReboxing,
+        0,
+    );
+
+    // Attempt second deopt via another invalid transition
+    engine.transition_element_kind(
+        "arr-diag",
+        ElementKind::Empty,
+        TransitionReason::DeoptReboxing,
+        4,
+    );
+
+    let diag = engine.diagnostics();
+    assert_eq!(diag.total_arrays, 1);
+    assert_eq!(diag.active_arrays, 0);
+    assert_eq!(
+        diag.total_deopts, 1,
+        "diagnostics should reflect exactly one deopt"
+    );
+}

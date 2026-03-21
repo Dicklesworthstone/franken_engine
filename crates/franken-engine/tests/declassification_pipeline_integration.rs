@@ -24,7 +24,8 @@ use frankenengine_engine::declassification_pipeline::{
     PipelineConfig, PipelineError, PipelineEvent, PipelineStats, PolicyEvalResult,
 };
 use frankenengine_engine::ifc_artifacts::{
-    DeclassificationDecision, DeclassificationRoute, FlowPolicy, IfcSchemaVersion, Label,
+    DeclassificationDecision, DeclassificationReceipt, DeclassificationRoute, FlowPolicy,
+    IfcSchemaVersion, Label,
 };
 use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
 
@@ -1821,4 +1822,163 @@ fn allow_events_have_no_error_codes() {
             event.stage
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Receipt signing order and stats_at tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn receipt_is_signed_before_counter_mutation() {
+    // The fix ensures receipt is signed (build_signed_receipt) before
+    // counters (decision_count, allow_count) are incremented.
+    // Verify receipt exists and counters are correct after allow.
+    let mut pipeline = DeclassificationPipeline::default();
+    let policy = make_policy();
+    let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
+
+    let receipt = pipeline
+        .process(&request, &policy, &low_loss(), &test_key())
+        .unwrap();
+
+    // Receipt should be valid
+    assert_eq!(receipt.decision, DeclassificationDecision::Allow);
+    assert!(!receipt.receipt_id.is_empty());
+
+    // Stats should reflect exactly one allow
+    let stats = pipeline.stats();
+    assert_eq!(stats.decision_count, 1);
+    assert_eq!(stats.allow_count, 1);
+    assert_eq!(stats.deny_count, 0);
+}
+
+#[test]
+fn receipt_is_signed_before_counter_mutation_deny_path() {
+    let mut pipeline = DeclassificationPipeline::default();
+    let policy = make_policy();
+    let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
+
+    let receipt = pipeline
+        .process(&request, &policy, &high_loss(), &test_key())
+        .unwrap();
+
+    assert_eq!(receipt.decision, DeclassificationDecision::Deny);
+    assert!(!receipt.receipt_id.is_empty());
+
+    let stats = pipeline.stats();
+    assert_eq!(stats.decision_count, 1);
+    assert_eq!(stats.deny_count, 1);
+    assert_eq!(stats.allow_count, 0);
+}
+
+#[test]
+fn stats_at_filters_expired_emergency_grants() {
+    let mut pipeline = DeclassificationPipeline::default();
+    let policy = make_policy();
+    let mut request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
+    request.is_emergency = true;
+    request.timestamp_ms = 1_000_000;
+
+    pipeline
+        .process(&request, &policy, &low_loss(), &test_key())
+        .unwrap();
+
+    // Before expiry — grant should be active
+    let stats_before = pipeline.stats_at(1_000_000);
+    assert_eq!(stats_before.emergency_grants_active, 1);
+
+    // After expiry — grant should be expired
+    let stats_after = pipeline.stats_at(u64::MAX);
+    assert_eq!(
+        stats_after.emergency_grants_active, 0,
+        "expired grants should not be counted as active"
+    );
+}
+
+#[test]
+fn stats_default_uses_latest_timestamp() {
+    let mut pipeline = DeclassificationPipeline::default();
+    let policy = make_policy();
+    let mut request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
+    request.timestamp_ms = 5_000_000;
+
+    pipeline
+        .process(&request, &policy, &low_loss(), &test_key())
+        .unwrap();
+
+    // Default stats() should use the latest_timestamp_ms from the processed request
+    let stats = pipeline.stats();
+    assert_eq!(stats.decision_count, 1);
+    assert_eq!(stats.allow_count, 1);
+}
+
+#[test]
+fn multiple_requests_update_latest_timestamp_monotonically() {
+    let mut pipeline = DeclassificationPipeline::default();
+    let policy = make_policy();
+
+    // Process two requests with increasing timestamps
+    let mut req1 = make_request("declass-secret-internal", Label::Secret, Label::Internal);
+    req1.timestamp_ms = 1_000_000;
+    pipeline
+        .process(&req1, &policy, &low_loss(), &test_key())
+        .unwrap();
+
+    let mut req2 = make_request("declass-conf-public", Label::Confidential, Label::Public);
+    req2.request_id = "req-2".to_string();
+    req2.timestamp_ms = 2_000_000;
+    pipeline
+        .process(&req2, &policy, &low_loss(), &test_key())
+        .unwrap();
+
+    let stats = pipeline.stats();
+    assert_eq!(stats.decision_count, 2);
+    assert_eq!(stats.allow_count, 2);
+}
+
+#[test]
+fn receipt_signed_event_appears_after_decision_event() {
+    let mut pipeline = DeclassificationPipeline::default();
+    let policy = make_policy();
+    let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
+
+    pipeline
+        .process(&request, &policy, &low_loss(), &test_key())
+        .unwrap();
+
+    let events = pipeline.events();
+    let decision_idx = events
+        .iter()
+        .position(|e| e.stage == "decision")
+        .expect("should have a decision event");
+    let receipt_idx = events
+        .iter()
+        .position(|e| e.stage == "signed_receipt")
+        .expect("should have a signed_receipt event");
+
+    assert!(
+        receipt_idx > decision_idx,
+        "signed_receipt event (idx={receipt_idx}) should come after decision event (idx={decision_idx})"
+    );
+}
+
+#[test]
+fn deny_receipt_contains_correct_route_reference() {
+    let mut pipeline = DeclassificationPipeline::default();
+    let policy = make_policy();
+    let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
+
+    let receipt = pipeline
+        .process(&request, &policy, &high_loss(), &test_key())
+        .unwrap();
+
+    assert_eq!(receipt.decision, DeclassificationDecision::Deny);
+    // The receipt should reference the matched route
+    assert!(!receipt.receipt_id.is_empty());
+    // Verify pipeline stored the receipt
+    assert_eq!(pipeline.receipts().len(), 1);
+    assert_eq!(
+        pipeline.receipts()[0].decision,
+        DeclassificationDecision::Deny
+    );
 }

@@ -1950,6 +1950,107 @@ fn audit_module_dedup_via_btreeset() {
 // Enrichment: AuditResult — passed field consistency
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// New forbidden patterns: File:: and OpenOptions::
+// ---------------------------------------------------------------------------
+
+#[test]
+fn detects_file_open_pattern() {
+    let auditor = standard_auditor();
+    let source = r#"let f = File::open("data.txt").unwrap();"#;
+    let findings = auditor.audit_source("m", "f.rs", source);
+    assert!(
+        findings.iter().any(|f| f.pattern_id == "file_open"),
+        "should detect File:: usage as forbidden ambient authority"
+    );
+}
+
+#[test]
+fn detects_file_create_pattern() {
+    let auditor = standard_auditor();
+    let source = r#"let f = File::create("output.txt").unwrap();"#;
+    let findings = auditor.audit_source("m", "f.rs", source);
+    assert!(
+        findings.iter().any(|f| f.pattern_id == "file_open"),
+        "should detect File::create as forbidden ambient authority"
+    );
+}
+
+#[test]
+fn detects_open_options_pattern() {
+    let auditor = standard_auditor();
+    let source = r#"OpenOptions::new().read(true).open("config.toml")"#;
+    let findings = auditor.audit_source("m", "f.rs", source);
+    assert!(
+        findings.iter().any(|f| f.pattern_id == "open_options"),
+        "should detect OpenOptions:: usage as forbidden ambient authority"
+    );
+}
+
+#[test]
+fn file_open_finding_has_correct_category() {
+    let auditor = standard_auditor();
+    let source = r#"let f = File::open("data.txt");"#;
+    let findings = auditor.audit_source("m", "f.rs", source);
+    let file_finding = findings
+        .iter()
+        .find(|f| f.pattern_id == "file_open")
+        .expect("should find file_open violation");
+    assert_eq!(file_finding.category, ForbiddenCallCategory::FileSystem);
+}
+
+#[test]
+fn open_options_finding_has_correct_category() {
+    let auditor = standard_auditor();
+    let source = r#"OpenOptions::new().write(true).open("out.txt")"#;
+    let findings = auditor.audit_source("m", "f.rs", source);
+    let oo_finding = findings
+        .iter()
+        .find(|f| f.pattern_id == "open_options")
+        .expect("should find open_options violation");
+    assert_eq!(oo_finding.category, ForbiddenCallCategory::FileSystem);
+}
+
+#[test]
+fn file_and_open_options_both_detected_in_same_source() {
+    let auditor = standard_auditor();
+    let source = r#"
+        let a = File::open("input.txt").unwrap();
+        let b = OpenOptions::new().append(true).open("log.txt").unwrap();
+    "#;
+    let findings = auditor.audit_source("m", "f.rs", source);
+    assert!(findings.iter().any(|f| f.pattern_id == "file_open"));
+    assert!(findings.iter().any(|f| f.pattern_id == "open_options"));
+}
+
+#[test]
+fn file_pattern_exemption_suppresses_finding() {
+    let mut reg = ExemptionRegistry::new();
+    reg.add(Exemption {
+        module_name: "m".to_string(),
+        pattern_id: "file_open".to_string(),
+        reason: "legacy code".to_string(),
+        approved_by: "reviewer".to_string(),
+    });
+    let auditor = SourceAuditor::new(AuditConfig::standard(), reg);
+    let source = r#"let f = File::open("data.txt");"#;
+    let findings = auditor.audit_source("m", "f.rs", source);
+    assert!(
+        !findings.iter().any(|f| f.pattern_id == "file_open"),
+        "exempted file_open should not appear in findings"
+    );
+}
+
+#[test]
+fn standard_config_has_fourteen_patterns_integration() {
+    let config = AuditConfig::standard();
+    assert_eq!(
+        config.patterns.len(),
+        14,
+        "standard config should have 14 patterns (including File:: and OpenOptions::)"
+    );
+}
+
 #[test]
 fn audit_result_passed_consistency() {
     let auditor = standard_auditor();

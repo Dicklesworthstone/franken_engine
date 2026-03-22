@@ -219,6 +219,19 @@ fn module_interop_gate_script_surfaces_replay_and_trace_artifacts() {
         ),
         "gate script must print the module resolution trace artifact path"
     );
+    for marker in [
+        "rch_has_recoverable_artifact_timeout",
+        "rch_reject_artifact_retrieval_failure",
+        "(rch-artifact-retrieval-failed)",
+        "(rch-exit=${run_rc})",
+        "(timeout-${rch_timeout_seconds}s)",
+        "(remote-exit=${remote_exit_code})",
+    ] {
+        assert!(
+            script.contains(marker),
+            "gate script must classify rch failure path marker: {marker}"
+        );
+    }
 }
 
 #[test]

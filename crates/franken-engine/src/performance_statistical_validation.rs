@@ -609,6 +609,13 @@ fn compute_stats(samples: &[u64]) -> Option<SampleStatsNs> {
         return None;
     }
 
+    // Use Bessel's correction (N-1) for unbiased sample variance.
+    // For n=1, fall back to population variance (N) to avoid division by zero.
+    let variance_divisor = if sample_count > 1 {
+        (sample_count - 1) as f64
+    } else {
+        sample_count_f64
+    };
     let variance = samples
         .iter()
         .map(|sample| {
@@ -616,7 +623,7 @@ fn compute_stats(samples: &[u64]) -> Option<SampleStatsNs> {
             delta * delta
         })
         .sum::<f64>()
-        / sample_count_f64;
+        / variance_divisor;
 
     let stddev = variance.sqrt();
     let cv_millionths = ((stddev / mean) * MILLION as f64).round();

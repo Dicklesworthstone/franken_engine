@@ -81,28 +81,36 @@ rch_reject_local_fallback() {
   fi
 }
 
+rch_has_recoverable_artifact_timeout() {
+  local log_path="$1"
+  rch_strip_ansi "$log_path" | grep -Eiq 'artifact retrieval timed out|artifact transfer timed out|timed out waiting for artifacts|failed to retrieve artifacts|failed to download artifacts'
+}
+
+rch_reject_artifact_retrieval_failure() {
+  local log_path="$1"
+  if rch_strip_ansi "$log_path" | grep -Eiq 'Artifact retrieval failed|Failed to retrieve artifacts:|rsync artifact retrieval failed|rsync error: .*code 23'; then
+    echo "rch artifact retrieval failed; refusing to mark heavy command as successful" >&2
+    return 1
+  fi
+}
+
 declare -a commands_run=()
 failed_command=""
 manifest_written=false
 
 run_step() {
   local command_text="$1"
-  local log_path remote_exit_code
+  local log_path run_rc remote_exit_code
   shift
 
   commands_run+=("$command_text")
   echo "==> $command_text"
   log_path="$(mktemp)"
 
-  if ! run_rch "$@" > >(tee "$log_path") 2>&1; then
-    if rch_strip_ansi "$log_path" | rg -q "Remote command finished: exit=0"; then
-      echo "==> recovered: remote execution succeeded; artifact retrieval timed out" \
-        | tee -a "$log_path"
-    else
-      rm -f "$log_path"
-      failed_command="$command_text"
-      return 1
-    fi
+  if run_rch "$@" > >(tee "$log_path") 2>&1; then
+    run_rc=0
+  else
+    run_rc=$?
   fi
 
   if ! rch_reject_local_fallback "$log_path"; then
@@ -111,7 +119,33 @@ run_step() {
     return 1
   fi
 
+  if ! rch_reject_artifact_retrieval_failure "$log_path"; then
+    rm -f "$log_path"
+    failed_command="${command_text} (rch-artifact-retrieval-failed)"
+    return 1
+  fi
+
   remote_exit_code="$(rch_remote_exit_code "$log_path" || true)"
+
+  if [[ "$run_rc" -ne 0 ]]; then
+    if [[ "$remote_exit_code" == "0" ]] && rch_has_recoverable_artifact_timeout "$log_path"; then
+      echo "==> recovered: remote execution succeeded; artifact retrieval timed out" \
+        | tee -a "$log_path"
+    elif [[ "$run_rc" -eq 124 ]]; then
+      rm -f "$log_path"
+      failed_command="${command_text} (timeout-${rch_timeout_seconds}s)"
+      return 1
+    elif [[ -n "$remote_exit_code" ]]; then
+      rm -f "$log_path"
+      failed_command="${command_text} (remote-exit=${remote_exit_code})"
+      return 1
+    else
+      rm -f "$log_path"
+      failed_command="${command_text} (rch-exit=${run_rc})"
+      return 1
+    fi
+  fi
+
   if [[ -z "$remote_exit_code" ]]; then
     echo "rch output missing remote exit marker; failing closed" | tee -a "$log_path"
     rm -f "$log_path"

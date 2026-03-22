@@ -301,8 +301,8 @@ impl EpochBarrier {
         }
 
         let guard_id = self.next_guard_id;
-        self.next_guard_id += 1;
-        self.in_flight_count += 1;
+        self.next_guard_id = self.next_guard_id.saturating_add(1);
+        self.in_flight_count = self.in_flight_count.saturating_add(1);
 
         Ok(EpochGuard {
             guard_id,

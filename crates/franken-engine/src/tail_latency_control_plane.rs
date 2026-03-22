@@ -1456,4 +1456,520 @@ mod tests {
         assert!(report.decomposition.synchronization_p99_ns > 0);
         assert!(report.decomposition.gc_p99_ns > 0);
     }
+
+    // --- Constant validation ---
+
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn constants_are_non_empty_and_well_formed() {
+        assert!(!TAIL_LATENCY_CONTROL_PLANE_SCHEMA_VERSION.is_empty());
+        assert!(!TAIL_LATENCY_CONTROL_PLANE_BEAD_ID.is_empty());
+        assert!(!TAIL_LATENCY_CONTROL_PLANE_POLICY_ID.is_empty());
+        assert!(!TAIL_LATENCY_CONTROL_PLANE_COMPONENT.is_empty());
+        assert!(!TAIL_LATENCY_CONTROL_PLANE_TRACE_IDS_SCHEMA_VERSION.is_empty());
+        assert!(!TAIL_LATENCY_CONTROL_PLANE_RUN_MANIFEST_SCHEMA_VERSION.is_empty());
+        assert!(!TAIL_LATENCY_CONTROL_PLANE_EVENT_SCHEMA_VERSION.is_empty());
+        assert!(!TAIL_LATENCY_CONTROL_PLANE_REPORT_FILE.is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn schema_version_constants_contain_version_tag() {
+        assert!(TAIL_LATENCY_CONTROL_PLANE_SCHEMA_VERSION.contains(".v1"));
+        assert!(TAIL_LATENCY_CONTROL_PLANE_TRACE_IDS_SCHEMA_VERSION.contains(".v1"));
+        assert!(TAIL_LATENCY_CONTROL_PLANE_RUN_MANIFEST_SCHEMA_VERSION.contains(".v1"));
+        assert!(TAIL_LATENCY_CONTROL_PLANE_EVENT_SCHEMA_VERSION.contains(".v1"));
+    }
+
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn report_file_constant_ends_with_json() {
+        assert!(TAIL_LATENCY_CONTROL_PLANE_REPORT_FILE.ends_with(".json"));
+    }
+
+    // --- StressProfile Display / as_str / FromStr ---
+
+    #[test]
+    fn stress_profile_display_balanced() {
+        assert_eq!(StressProfile::Balanced.to_string(), "balanced");
+    }
+
+    #[test]
+    fn stress_profile_display_synthetic_contention() {
+        assert_eq!(
+            StressProfile::SyntheticContention.to_string(),
+            "synthetic-contention"
+        );
+    }
+
+    #[test]
+    fn stress_profile_as_str_matches_display() {
+        for profile in [StressProfile::Balanced, StressProfile::SyntheticContention] {
+            assert_eq!(profile.as_str(), profile.to_string());
+        }
+    }
+
+    #[test]
+    fn stress_profile_from_str_roundtrip() {
+        for profile in [StressProfile::Balanced, StressProfile::SyntheticContention] {
+            let parsed: StressProfile = profile.as_str().parse().unwrap();
+            assert_eq!(parsed, profile);
+        }
+    }
+
+    #[test]
+    fn stress_profile_from_str_accepts_underscore_variant() {
+        let parsed: StressProfile = "synthetic_contention".parse().unwrap();
+        assert_eq!(parsed, StressProfile::SyntheticContention);
+    }
+
+    #[test]
+    fn stress_profile_from_str_rejects_unknown() {
+        let result = "unknown_profile".parse::<StressProfile>();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("unsupported stress profile"));
+    }
+
+    // --- GuardrailState Display ---
+
+    #[test]
+    fn guardrail_state_display_nominal() {
+        assert_eq!(GuardrailState::Nominal.to_string(), "nominal");
+    }
+
+    #[test]
+    fn guardrail_state_display_near_limit() {
+        assert_eq!(GuardrailState::NearLimit.to_string(), "near_limit");
+    }
+
+    #[test]
+    fn guardrail_state_display_fallback_engaged() {
+        assert_eq!(
+            GuardrailState::FallbackEngaged.to_string(),
+            "fallback_engaged"
+        );
+    }
+
+    // --- Serde roundtrips ---
+
+    #[test]
+    fn serde_roundtrip_stress_profile() {
+        for profile in [StressProfile::Balanced, StressProfile::SyntheticContention] {
+            let json = serde_json::to_string(&profile).unwrap();
+            let deserialized: StressProfile = serde_json::from_str(&json).unwrap();
+            assert_eq!(deserialized, profile);
+        }
+    }
+
+    #[test]
+    fn serde_stress_profile_uses_kebab_case() {
+        let json = serde_json::to_string(&StressProfile::SyntheticContention).unwrap();
+        assert_eq!(json, "\"synthetic-contention\"");
+        let json_balanced = serde_json::to_string(&StressProfile::Balanced).unwrap();
+        assert_eq!(json_balanced, "\"balanced\"");
+    }
+
+    #[test]
+    fn serde_roundtrip_guardrail_state() {
+        for state in [
+            GuardrailState::Nominal,
+            GuardrailState::NearLimit,
+            GuardrailState::FallbackEngaged,
+        ] {
+            let json = serde_json::to_string(&state).unwrap();
+            let deserialized: GuardrailState = serde_json::from_str(&json).unwrap();
+            assert_eq!(deserialized, state);
+        }
+    }
+
+    #[test]
+    fn serde_guardrail_state_uses_snake_case() {
+        let json = serde_json::to_string(&GuardrailState::NearLimit).unwrap();
+        assert_eq!(json, "\"near_limit\"");
+        let json_fallback = serde_json::to_string(&GuardrailState::FallbackEngaged).unwrap();
+        assert_eq!(json_fallback, "\"fallback_engaged\"");
+    }
+
+    #[test]
+    fn serde_roundtrip_end_to_end_latency_bounds() {
+        let bounds = EndToEndLatencyBounds {
+            composition_model: "serial_min_plus_sum".to_string(),
+            stage_count: 4,
+            budget_p50_ns: 100,
+            budget_p95_ns: 200,
+            budget_p99_ns: 300,
+            budget_p999_ns: 400,
+            observed_p50_ns: 90,
+            observed_p95_ns: 180,
+            observed_p99_ns: 270,
+            observed_p999_ns: 360,
+            queue_adjusted_p99_ns: 350,
+            queue_adjusted_p999_ns: 450,
+        };
+        let json = serde_json::to_string(&bounds).unwrap();
+        let deserialized: EndToEndLatencyBounds = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, bounds);
+    }
+
+    #[test]
+    fn serde_roundtrip_tail_latency_decomposition() {
+        let decomposition = TailLatencyDecomposition {
+            queue_p99_ns: 1000,
+            queue_p999_ns: 1500,
+            service_p99_ns: 2000,
+            service_p999_ns: 3000,
+            synchronization_p99_ns: 500,
+            synchronization_p999_ns: 750,
+            gc_p99_ns: 800,
+            gc_p999_ns: 1200,
+        };
+        let json = serde_json::to_string(&decomposition).unwrap();
+        let deserialized: TailLatencyDecomposition = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, decomposition);
+    }
+
+    #[test]
+    fn serde_roundtrip_runtime_guardrail_status() {
+        let mut modes = BTreeMap::new();
+        modes.insert("admission_rate".to_string(), ControllerMode::Active);
+        modes.insert("worker_concurrency".to_string(), ControllerMode::Fallback);
+        let status = RuntimeGuardrailStatus {
+            state: GuardrailState::FallbackEngaged,
+            fallback_activated: true,
+            reason_codes: vec![
+                "stage_envelope_violation".to_string(),
+                "queue_shed".to_string(),
+            ],
+            controller_modes_after_guardrail: modes,
+            shed_count: 5,
+            violated_stage_count: 2,
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        let deserialized: RuntimeGuardrailStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, status);
+    }
+
+    #[test]
+    fn serde_roundtrip_artifact_paths() {
+        let paths = TailLatencyControlPlaneArtifactPaths {
+            latency_control_plane_report: "report.json".to_string(),
+            trace_ids: "trace_ids.json".to_string(),
+            run_manifest: "run_manifest.json".to_string(),
+            events_jsonl: "events.jsonl".to_string(),
+            commands_txt: "commands.txt".to_string(),
+            step_logs_dir: "step_logs".to_string(),
+            summary_md: "summary.md".to_string(),
+            env_json: "env.json".to_string(),
+            repro_lock: "repro.lock".to_string(),
+        };
+        let json = serde_json::to_string(&paths).unwrap();
+        let deserialized: TailLatencyControlPlaneArtifactPaths =
+            serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, paths);
+    }
+
+    #[test]
+    fn serde_roundtrip_trace_ids() {
+        let trace_ids = TailLatencyControlPlaneTraceIds {
+            schema_version: TAIL_LATENCY_CONTROL_PLANE_TRACE_IDS_SCHEMA_VERSION.to_string(),
+            component: TAIL_LATENCY_CONTROL_PLANE_COMPONENT.to_string(),
+            trace_id: "trace-123".to_string(),
+            decision_id: "decision-456".to_string(),
+            policy_id: TAIL_LATENCY_CONTROL_PLANE_POLICY_ID.to_string(),
+            report_hash: "abcdef0123456789".to_string(),
+            profile: StressProfile::Balanced,
+        };
+        let json = serde_json::to_string(&trace_ids).unwrap();
+        let deserialized: TailLatencyControlPlaneTraceIds = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, trace_ids);
+    }
+
+    #[test]
+    fn serde_roundtrip_event_with_optional_fields() {
+        let event_full = TailLatencyControlPlaneEvent {
+            schema_version: TAIL_LATENCY_CONTROL_PLANE_EVENT_SCHEMA_VERSION.to_string(),
+            trace_id: "trace-1".to_string(),
+            decision_id: "decision-1".to_string(),
+            policy_id: TAIL_LATENCY_CONTROL_PLANE_POLICY_ID.to_string(),
+            component: TAIL_LATENCY_CONTROL_PLANE_COMPONENT.to_string(),
+            event: "stage_certificate_issued".to_string(),
+            outcome: "pass".to_string(),
+            stage: Some("parse".to_string()),
+            detail: Some("p99=100ns".to_string()),
+        };
+        let json = serde_json::to_string(&event_full).unwrap();
+        let deserialized: TailLatencyControlPlaneEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event_full);
+    }
+
+    #[test]
+    fn serde_event_omits_none_optional_fields() {
+        let event = TailLatencyControlPlaneEvent {
+            schema_version: TAIL_LATENCY_CONTROL_PLANE_EVENT_SCHEMA_VERSION.to_string(),
+            trace_id: "trace-2".to_string(),
+            decision_id: "decision-2".to_string(),
+            policy_id: TAIL_LATENCY_CONTROL_PLANE_POLICY_ID.to_string(),
+            component: TAIL_LATENCY_CONTROL_PLANE_COMPONENT.to_string(),
+            event: "control_plane_started".to_string(),
+            outcome: "started".to_string(),
+            stage: None,
+            detail: None,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(!json.contains("stage"));
+        assert!(!json.contains("detail"));
+        // Roundtrip still works
+        let deserialized: TailLatencyControlPlaneEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, event);
+    }
+
+    // --- default_stage_envelopes ---
+
+    #[test]
+    fn default_stage_envelopes_returns_seven_stages() {
+        let envelopes = default_stage_envelopes();
+        assert_eq!(envelopes.len(), 7);
+    }
+
+    #[test]
+    fn default_stage_envelopes_covers_all_expected_stages() {
+        let envelopes = default_stage_envelopes();
+        let stages: Vec<ExecutionStage> = envelopes.iter().map(|e| e.stage).collect();
+        assert!(stages.contains(&ExecutionStage::Parse));
+        assert!(stages.contains(&ExecutionStage::Lower));
+        assert!(stages.contains(&ExecutionStage::CompileOptimized));
+        assert!(stages.contains(&ExecutionStage::ModuleLoad));
+        assert!(stages.contains(&ExecutionStage::GcPause));
+        assert!(stages.contains(&ExecutionStage::SandboxInit));
+        assert!(stages.contains(&ExecutionStage::ExecutionQuantum));
+    }
+
+    #[test]
+    fn default_stage_envelopes_have_positive_budgets() {
+        let envelopes = default_stage_envelopes();
+        for envelope in &envelopes {
+            assert!(
+                envelope.p50_budget_ns > 0,
+                "stage {:?} p50 must be > 0",
+                envelope.stage
+            );
+            assert!(
+                envelope.p99_budget_ns > 0,
+                "stage {:?} p99 must be > 0",
+                envelope.stage
+            );
+            assert!(
+                envelope.p999_budget_ns > 0,
+                "stage {:?} p999 must be > 0",
+                envelope.stage
+            );
+        }
+    }
+
+    // --- Report structure: balanced ---
+
+    #[test]
+    fn balanced_report_has_correct_schema_fields() {
+        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1).unwrap();
+        assert_eq!(
+            report.schema_version,
+            TAIL_LATENCY_CONTROL_PLANE_SCHEMA_VERSION
+        );
+        assert_eq!(report.bead_id, TAIL_LATENCY_CONTROL_PLANE_BEAD_ID);
+        assert_eq!(report.policy_id, TAIL_LATENCY_CONTROL_PLANE_POLICY_ID);
+        assert_eq!(report.component, TAIL_LATENCY_CONTROL_PLANE_COMPONENT);
+        assert_eq!(report.profile, StressProfile::Balanced);
+        assert_eq!(report.bundle_epoch, 1);
+    }
+
+    #[test]
+    fn balanced_report_has_admission_receipts() {
+        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 3).unwrap();
+        // Balanced plan: 3 + 4 + 2 = 9 admission invocations
+        assert_eq!(report.admission_receipts.len(), 9);
+    }
+
+    #[test]
+    fn balanced_report_has_feedback_decisions() {
+        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 5).unwrap();
+        // At least one decision per controller for the tick
+        assert!(!report.controller_decisions.is_empty());
+    }
+
+    // --- Report structure: synthetic contention ---
+
+    #[test]
+    fn synthetic_contention_report_has_admission_receipts() {
+        let report =
+            build_tail_latency_control_plane_report(StressProfile::SyntheticContention, 10)
+                .unwrap();
+        // SyntheticContention plan: 3 + 3 + 4 + 4 = 14 admission invocations
+        assert_eq!(report.admission_receipts.len(), 14);
+    }
+
+    #[test]
+    fn synthetic_contention_has_shed_count_from_tight_policy() {
+        let report =
+            build_tail_latency_control_plane_report(StressProfile::SyntheticContention, 10)
+                .unwrap();
+        // With tight queue depths (2) and many admissions, shedding should occur
+        assert!(
+            report.guardrails.shed_count > 0
+                || report.admission_manifest.summary.total_shed > 0
+                || report.guardrails.fallback_activated
+        );
+    }
+
+    #[test]
+    fn synthetic_contention_reason_codes_non_empty() {
+        let report =
+            build_tail_latency_control_plane_report(StressProfile::SyntheticContention, 50)
+                .unwrap();
+        assert!(!report.guardrails.reason_codes.is_empty());
+    }
+
+    // --- Decomposition edge cases ---
+
+    #[test]
+    fn decomposition_p999_exceeds_p99_for_queue() {
+        let report =
+            build_tail_latency_control_plane_report(StressProfile::SyntheticContention, 77)
+                .unwrap();
+        // queue_p999 = sum of (p99_wait * 3/2), so it should be >= queue_p99
+        assert!(report.decomposition.queue_p999_ns >= report.decomposition.queue_p99_ns);
+    }
+
+    #[test]
+    fn decomposition_gc_comes_only_from_gc_pause_stage() {
+        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1).unwrap();
+        // GC p99 should equal the GcPause observation p99_ns
+        // From the balanced scenario: GcPause p99_ns = 8_600_000
+        assert_eq!(report.decomposition.gc_p99_ns, 8_600_000);
+        assert_eq!(report.decomposition.gc_p999_ns, 25_000_000);
+    }
+
+    #[test]
+    fn decomposition_synchronization_comes_from_sandbox_init() {
+        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1).unwrap();
+        // From the balanced scenario: SandboxInit p99_ns = 2_600_000, p999_ns = 9_000_000
+        assert_eq!(report.decomposition.synchronization_p99_ns, 2_600_000);
+        assert_eq!(report.decomposition.synchronization_p999_ns, 9_000_000);
+    }
+
+    // --- End-to-end bounds ---
+
+    #[test]
+    fn end_to_end_bounds_queue_adjusted_exceeds_observed() {
+        let report =
+            build_tail_latency_control_plane_report(StressProfile::SyntheticContention, 42)
+                .unwrap();
+        assert!(
+            report.end_to_end_bounds.queue_adjusted_p99_ns
+                >= report.end_to_end_bounds.observed_p99_ns
+        );
+        assert!(
+            report.end_to_end_bounds.queue_adjusted_p999_ns
+                >= report.end_to_end_bounds.observed_p999_ns
+        );
+    }
+
+    #[test]
+    fn end_to_end_bounds_composition_model_is_serial() {
+        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1).unwrap();
+        assert_eq!(
+            report.end_to_end_bounds.composition_model,
+            "serial_min_plus_sum"
+        );
+    }
+
+    #[test]
+    fn end_to_end_bounds_budget_ordering_p50_le_p95_le_p99_le_p999() {
+        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1).unwrap();
+        let b = &report.end_to_end_bounds;
+        assert!(b.budget_p50_ns <= b.budget_p95_ns);
+        assert!(b.budget_p95_ns <= b.budget_p99_ns);
+        assert!(b.budget_p99_ns <= b.budget_p999_ns);
+    }
+
+    // --- Serde roundtrip of full report ---
+
+    #[test]
+    fn serde_roundtrip_full_report() {
+        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1).unwrap();
+        let json = serde_json::to_string_pretty(&report).unwrap();
+        let deserialized: TailLatencyControlPlaneReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.schema_version, report.schema_version);
+        assert_eq!(deserialized.profile, report.profile);
+        assert_eq!(deserialized.bundle_epoch, report.bundle_epoch);
+        assert_eq!(deserialized.guardrails.state, report.guardrails.state);
+        assert_eq!(deserialized.decomposition, report.decomposition);
+        assert_eq!(deserialized.end_to_end_bounds, report.end_to_end_bounds);
+    }
+
+    // --- StageQueueCalibration serde roundtrip ---
+
+    #[test]
+    fn serde_roundtrip_stage_queue_calibration() {
+        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1).unwrap();
+        let calibration = &report.stage_calibrations[0];
+        let json = serde_json::to_string(calibration).unwrap();
+        let deserialized: StageQueueCalibration = serde_json::from_str(&json).unwrap();
+        assert_eq!(&deserialized, calibration);
+    }
+
+    // --- WriteError Display ---
+
+    #[test]
+    fn write_error_display_json_variant() {
+        let err = TailLatencyControlPlaneWriteError::PolicyValidation {
+            detail: "no targets defined".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("no targets defined"));
+        assert!(msg.contains("feedback policy validation failed"));
+    }
+
+    #[test]
+    fn write_error_display_busy_variant() {
+        let err = TailLatencyControlPlaneWriteError::Busy {
+            path: "/tmp/test.lock".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("/tmp/test.lock"));
+        assert!(msg.contains("locked"));
+    }
+
+    // --- Determinism: same inputs produce same output ---
+
+    #[test]
+    fn report_is_deterministic_for_same_inputs() {
+        let report_a =
+            build_tail_latency_control_plane_report(StressProfile::Balanced, 99).unwrap();
+        let report_b =
+            build_tail_latency_control_plane_report(StressProfile::Balanced, 99).unwrap();
+        let json_a = serde_json::to_string(&report_a).unwrap();
+        let json_b = serde_json::to_string(&report_b).unwrap();
+        assert_eq!(json_a, json_b);
+    }
+
+    // --- Clone / Debug impls ---
+
+    #[test]
+    fn stress_profile_clone_and_debug() {
+        let profile = StressProfile::Balanced;
+        let cloned = profile;
+        assert_eq!(profile, cloned);
+        let debug = format!("{:?}", profile);
+        assert!(debug.contains("Balanced"));
+    }
+
+    #[test]
+    fn guardrail_state_clone_and_debug() {
+        let state = GuardrailState::NearLimit;
+        let cloned = state;
+        assert_eq!(state, cloned);
+        let debug = format!("{:?}", state);
+        assert!(debug.contains("NearLimit"));
+    }
 }

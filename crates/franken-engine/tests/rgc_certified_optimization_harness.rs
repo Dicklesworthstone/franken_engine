@@ -649,6 +649,32 @@ fn rgc_607_gate_script_is_rch_backed_and_mentions_required_artifacts() {
 }
 
 #[test]
+fn rgc_607_check_mode_manifest_omits_proof_bundle_and_records_timeouts() {
+    let path = repo_root().join("scripts/run_rgc_certified_optimization_harness.sh");
+    let script = fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+
+    for required_fragment in [
+        "include_bundle_artifacts=false",
+        "if [[ \"$mode\" == \"test\" || \"$mode\" == \"ci\" ]]; then",
+        "failed_command",
+        "(outer-timeout=${rch_timeout_seconds}s)",
+        "\\\"manifest\\\":",
+        "\\\"events\\\":",
+        "\\\"commands\\\":",
+        "\\\"cat ${manifest_path}\\\"",
+        "\\\"cat ${events_path}\\\"",
+        "\\\"cat ${commands_path}\\\"",
+        "\\\"${replay_command}\\\"",
+    ] {
+        assert!(
+            script.contains(required_fragment),
+            "script missing check-mode fragment `{required_fragment}`"
+        );
+    }
+}
+
+#[test]
 fn rgc_607_replay_wrapper_invokes_gate_script() {
     let path = repo_root().join("scripts/e2e/rgc_certified_optimization_harness_replay.sh");
     let script = fs::read_to_string(&path)
@@ -671,6 +697,8 @@ fn rgc_607_readme_documents_harness_lane() {
         "rewrite_proof_index.json",
         "trace_ids.json",
         "rch-log.",
+        "`check` mode emits only",
+        "`test` and `ci` additionally emit",
     ] {
         assert!(
             readme.contains(required_fragment),

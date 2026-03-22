@@ -395,3 +395,47 @@ fn scanner_config_custom_thresholds() {
     assert_eq!(cfg, decoded);
     assert_eq!(decoded.proximity_threshold_millionths, 200_000);
 }
+
+// ---------------------------------------------------------------------------
+// Enrichment: ScanResult properties
+// ---------------------------------------------------------------------------
+
+#[test]
+fn scan_result_stable_when_nominal() {
+    let config = ScannerConfig::default();
+    let params = vec![make_param("p1", ParameterDomain::Calibration, 500_000)];
+    let envelopes = vec![make_envelope("p1", 100_000, 900_000)];
+    let mut scanner = BifurcationBoundaryScanner::new(config, params, envelopes).unwrap();
+    let result = scanner.scan().unwrap();
+    // A parameter at the center of its envelope should be stable
+    assert!(result.is_stable() || !result.has_active_warnings());
+}
+
+#[test]
+fn scan_count_increments() {
+    let config = ScannerConfig::default();
+    let params = vec![make_param("p1", ParameterDomain::Calibration, 500_000)];
+    let envelopes = vec![make_envelope("p1", 100_000, 900_000)];
+    let mut scanner = BifurcationBoundaryScanner::new(config, params, envelopes).unwrap();
+    assert_eq!(scanner.scan_count(), 0);
+    scanner.scan().unwrap();
+    assert_eq!(scanner.scan_count(), 1);
+    scanner.scan().unwrap();
+    assert_eq!(scanner.scan_count(), 2);
+}
+
+#[test]
+fn observation_count_tracks_additions() {
+    let config = ScannerConfig::default();
+    let params = vec![make_param("p1", ParameterDomain::Environment, 500_000)];
+    let envelopes = vec![make_envelope("p1", 100_000, 900_000)];
+    let mut scanner = BifurcationBoundaryScanner::new(config, params, envelopes).unwrap();
+    assert_eq!(scanner.observation_count(), 0);
+    scanner.observe(ParameterObservation {
+        parameter_id: "p1".to_string(),
+        value_millionths: 550_000,
+        tick: 1,
+        regime: RegimeLabel::Normal,
+    });
+    assert_eq!(scanner.observation_count(), 1);
+}

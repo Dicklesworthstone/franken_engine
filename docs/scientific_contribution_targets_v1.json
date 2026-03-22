@@ -1,0 +1,154 @@
+{
+  "schema_version": "franken-engine.scientific-contribution-targets.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-2501",
+  "policy_id": "policy-scientific-contribution-targets-v1",
+  "generated_by": "bd-2501",
+  "generated_at_utc": "2026-03-21T21:26:00Z",
+  "source_inputs": [
+    "PLAN_TO_CREATE_FRANKEN_ENGINE.md",
+    "docs/SCIENTIFIC_CONTRIBUTION_TARGETS_V1.md"
+  ],
+  "required_contributions": [
+    {
+      "contribution_id": "open_specifications",
+      "description": "Open specifications for trust, replay, and policy primitives.",
+      "delivery_beads": [
+        "bd-3ebk"
+      ],
+      "user_outcome": "Third parties can inspect and adopt the core trust/replay/policy contracts."
+    },
+    {
+      "contribution_id": "reproducible_datasets",
+      "description": "Reproducible datasets for incident replay and adversarial campaign evaluation.",
+      "delivery_beads": [
+        "bd-2pwr"
+      ],
+      "user_outcome": "Replay and adversarial evidence can be independently rerun from published datasets."
+    },
+    {
+      "contribution_id": "reference_proofs",
+      "description": "Reference proofs or proof sketches for key safety claims.",
+      "delivery_beads": [
+        "bd-16up"
+      ],
+      "user_outcome": "Safety claims are backed by explicit proof-oriented artifacts instead of prose-only assertions."
+    },
+    {
+      "contribution_id": "external_evaluations",
+      "description": "External red-team and academic-style evaluations with published methodology.",
+      "delivery_beads": [
+        "bd-52ko"
+      ],
+      "user_outcome": "External reviewers can inspect methodology and reproduce the evaluation surface."
+    },
+    {
+      "contribution_id": "public_technical_reports",
+      "description": "Public technical reports documenting failures, fixes, and frontier movement.",
+      "delivery_beads": [
+        "bd-2cc8"
+      ],
+      "user_outcome": "Scientific claims carry an auditable report trail that includes negative-result context."
+    }
+  ],
+  "output_contract_milestones": [
+    {
+      "milestone_id": "publishable_reports",
+      "description": "At least 4 publishable technical reports with reproducible artifact bundles.",
+      "status_bead_id": "bd-2501.1",
+      "supporting_delivery_beads": [
+        "bd-2zk0"
+      ],
+      "success_threshold": "at least 4 publishable technical reports with reproducible artifact bundles"
+    },
+    {
+      "milestone_id": "externally_replicated_claims",
+      "description": "At least 2 externally replicated high-impact claims.",
+      "status_bead_id": "bd-2501.2",
+      "supporting_delivery_beads": [
+        "bd-3c8n"
+      ],
+      "success_threshold": "at least 2 externally replicated high-impact claims"
+    },
+    {
+      "milestone_id": "adopted_open_tool",
+      "description": "At least 1 open benchmark or verification tool adopted outside the project.",
+      "status_bead_id": "bd-2501.3",
+      "supporting_delivery_beads": [
+        "bd-37cc"
+      ],
+      "success_threshold": "at least 1 open benchmark or verification tool adopted outside the project"
+    }
+  ],
+  "upstream_dependencies": [
+    {
+      "bead_id": "bd-19l0",
+      "reason": "Scientific claims rely on the benchmark suite specification staying closed and reproducible."
+    },
+    {
+      "bead_id": "bd-25b7",
+      "reason": "PLAS benchmark evidence anchors policy-safety publication claims."
+    },
+    {
+      "bead_id": "bd-3ab3",
+      "reason": "Verifier-pipeline closure keeps signature, transparency, and attestation claims externally checkable."
+    },
+    {
+      "bead_id": "bd-3gsv",
+      "reason": "Third-party verifier tooling is required for independent replication."
+    },
+    {
+      "bead_id": "bd-f7n",
+      "reason": "Category-shift reporting underpins Section 16 report and replication narratives."
+    },
+    {
+      "bead_id": "bd-3rd",
+      "reason": "Adversarial campaign evidence is part of the scientific evaluation surface."
+    },
+    {
+      "bead_id": "bd-1ze",
+      "reason": "Node/Bun comparison methodology is part of the publishable scientific evidence base."
+    }
+  ],
+  "closure_rule": {
+    "required_contributions_must_be_closed": true,
+    "output_contract_milestones_must_be_closed": true,
+    "upstream_dependencies_must_be_closed": true,
+    "parent_epic": "bd-esst",
+    "parent_epic_note": "Closing bd-2501 advances Section 16, but bd-esst and broader section/master epics still track cross-section closure."
+  },
+  "required_log_keys": [
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "outcome",
+    "error_code"
+  ],
+  "required_artifacts": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "trace_ids.json",
+    "contribution_status_report.json",
+    "output_contract_status_report.json",
+    "dependency_status_report.json",
+    "scientific_contribution_summary.md",
+    "scientific_contribution_targets_v1.json",
+    "scientific_contribution_targets_v1.md",
+    "step_logs/step_*.log"
+  ],
+  "gate_runner": {
+    "script": "scripts/run_scientific_contribution_targets.sh",
+    "replay_wrapper": "scripts/e2e/scientific_contribution_targets_replay.sh",
+    "strict_mode": "set -euo pipefail",
+    "manifest_schema_version": "franken-engine.scientific-contribution-targets.run-manifest.v1"
+  },
+  "operator_verification": [
+    "jq empty docs/scientific_contribution_targets_v1.json",
+    "./scripts/run_scientific_contribution_targets.sh bundle",
+    "./scripts/e2e/scientific_contribution_targets_replay.sh show",
+    "rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=$PWD/target_rch_scientific_contribution_targets_verify CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine --test scientific_contribution_targets"
+  ]
+}

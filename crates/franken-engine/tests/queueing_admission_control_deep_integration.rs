@@ -297,6 +297,165 @@ fn deep_decision_queue_preserves_fields() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// TokenBucket
+// ---------------------------------------------------------------------------
+
+use frankenengine_engine::queueing_admission_control::TokenBucket;
+
+#[test]
+fn deep_token_bucket_new() {
+    let bucket = TokenBucket::new(100, 10);
+    assert!(!bucket.is_empty());
+    assert_eq!(bucket.fill_ratio_millionths(), 1_000_000);
+}
+
+#[test]
+fn deep_token_bucket_consume_success() {
+    let mut bucket = TokenBucket::new(100, 10);
+    assert!(bucket.try_consume(50));
+    assert_eq!(bucket.fill_ratio_millionths(), 500_000);
+}
+
+#[test]
+fn deep_token_bucket_consume_failure() {
+    let mut bucket = TokenBucket::new(10, 5);
+    assert!(!bucket.try_consume(20));
+    // Tokens should not have been consumed on failure
+    assert_eq!(bucket.fill_ratio_millionths(), 1_000_000);
+}
+
+#[test]
+fn deep_token_bucket_drain_to_empty() {
+    let mut bucket = TokenBucket::new(10, 5);
+    assert!(bucket.try_consume(10));
+    assert!(bucket.is_empty());
+    assert_eq!(bucket.fill_ratio_millionths(), 0);
+}
+
+#[test]
+fn deep_token_bucket_refill() {
+    let mut bucket = TokenBucket::new(100, 25);
+    assert!(bucket.try_consume(100));
+    assert!(bucket.is_empty());
+    bucket.refill();
+    assert!(!bucket.is_empty());
+    assert_eq!(bucket.fill_ratio_millionths(), 250_000); // 25/100
+}
+
+#[test]
+fn deep_token_bucket_refill_capped() {
+    let mut bucket = TokenBucket::new(50, 100);
+    assert!(bucket.try_consume(10));
+    bucket.refill();
+    // Refill should not exceed capacity
+    assert_eq!(bucket.fill_ratio_millionths(), 1_000_000);
+}
+
+#[test]
+fn deep_token_bucket_serde_roundtrip() {
+    let mut bucket = TokenBucket::new(100, 10);
+    bucket.try_consume(30);
+    let json = serde_json::to_string(&bucket).unwrap();
+    let decoded: TokenBucket = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        bucket.fill_ratio_millionths(),
+        decoded.fill_ratio_millionths()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// QueuePartition
+// ---------------------------------------------------------------------------
+
+use frankenengine_engine::queueing_admission_control::QueuePartition;
+
+#[test]
+fn deep_queue_partition_new() {
+    let partition = QueuePartition::new(ExecutionStage::Parse, 100);
+    assert!(!partition.is_full());
+    assert_eq!(partition.utilization_millionths(), 0);
+}
+
+#[test]
+fn deep_queue_partition_admit_and_complete() {
+    let mut partition = QueuePartition::new(ExecutionStage::ExecutionQuantum, 10);
+    partition.admit();
+    partition.admit();
+    assert_eq!(partition.utilization_millionths(), 200_000); // 2/10
+    partition.complete();
+    assert_eq!(partition.utilization_millionths(), 100_000); // 1/10
+}
+
+#[test]
+fn deep_queue_partition_fills_up() {
+    let mut partition = QueuePartition::new(ExecutionStage::Parse, 3);
+    partition.admit();
+    partition.admit();
+    partition.admit();
+    assert!(partition.is_full());
+    assert_eq!(partition.utilization_millionths(), 1_000_000);
+}
+
+#[test]
+fn deep_queue_partition_record_shed() {
+    let mut partition = QueuePartition::new(ExecutionStage::Parse, 10);
+    partition.record_shed();
+    partition.record_shed();
+    // Shed doesn't increase depth, just records
+    assert!(!partition.is_full());
+}
+
+#[test]
+fn deep_queue_partition_serde_roundtrip() {
+    let mut partition = QueuePartition::new(ExecutionStage::ExecutionQuantum, 50);
+    partition.admit();
+    partition.admit();
+    partition.record_shed();
+    let json = serde_json::to_string(&partition).unwrap();
+    let decoded: QueuePartition = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        partition.utilization_millionths(),
+        decoded.utilization_millionths()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// WorkerPoolSizing
+// ---------------------------------------------------------------------------
+
+use frankenengine_engine::queueing_admission_control::{SizingInput, compute_worker_pool_sizing};
+
+#[test]
+fn deep_worker_pool_sizing_basic() {
+    let input = SizingInput {
+        arrival_rate_millionths: 100_000,
+        mean_service_ns: 1_000_000,
+        target_p99_ns: 10_000_000,
+        target_utilization_millionths: 800_000,
+        max_workers: 32,
+    };
+    let sizing = compute_worker_pool_sizing(&input);
+    assert!(sizing.recommended_workers > 0);
+    assert!(sizing.estimated_p99_wait_ns > 0);
+}
+
+#[test]
+fn deep_worker_pool_sizing_serde_roundtrip() {
+    let input = SizingInput {
+        arrival_rate_millionths: 200_000,
+        mean_service_ns: 500_000,
+        target_p99_ns: 5_000_000,
+        target_utilization_millionths: 700_000,
+        max_workers: 16,
+    };
+    let sizing = compute_worker_pool_sizing(&input);
+    let json = serde_json::to_string(&sizing).unwrap();
+    let decoded: frankenengine_engine::queueing_admission_control::WorkerPoolSizing =
+        serde_json::from_str(&json).unwrap();
+    assert_eq!(sizing.recommended_workers, decoded.recommended_workers);
+}
+
 #[test]
 fn deep_shed_reason_display_unique_per_variant() {
     let reasons = [

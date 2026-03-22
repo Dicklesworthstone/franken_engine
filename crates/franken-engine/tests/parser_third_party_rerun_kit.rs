@@ -297,12 +297,24 @@ fn parser_third_party_rerun_kit_replay_wrapper_surfaces_latest_artifacts() {
     let replay_wrapper = load_replay_wrapper();
     for marker in [
         "artifact_root=\"${PARSER_RERUN_KIT_ARTIFACT_ROOT:-artifacts/parser_third_party_rerun_kit}\"",
+        "latest_artifact_dir",
+        "latest_complete_run_dir",
+        "first_step_log_path",
+        "missing_bundle_exit_code",
+        "latest complete run directory",
+        "newest directory",
         "latest manifest:",
         "latest rerun kit index:",
         "latest events:",
+        "latest commands:",
+        "latest verifier notes:",
+        "latest first step log:",
         "run_manifest.json",
         "rerun_kit_index.json",
         "events.jsonl",
+        "commands.txt",
+        "verifier_notes.md",
+        "step_*.log",
     ] {
         assert!(
             replay_wrapper.contains(marker),
@@ -565,6 +577,8 @@ fn parser_third_party_rerun_kit_doc_mentions_auto_discovery_and_repo_local_targe
         "PARSER_RERUN_KIT_AUTO_DISCOVER_MATRIX=0",
         "target_rch_parser_third_party_rerun_kit_<timestamp>_<pid>",
         "`env`, `auto_discovered`, or `missing`",
+        "latest complete directory",
+        "newest directory",
     ] {
         assert!(
             doc.contains(marker),

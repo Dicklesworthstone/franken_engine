@@ -900,7 +900,7 @@ mod tests {
             total_bytes: 1024,
             best_warm_start_image_id: Some("img-1".to_string()),
             best_warm_start_mode: Some("prewarmed_pool".to_string()),
-            registry: ImageRegistry::new(),
+            registry: ImageRegistry::new(crate::runtime_image_contract::ImagePolicy::default()),
         };
         let json = serde_json::to_string(&manifest).unwrap();
         let decoded: RuntimeImageManifestArtifact = serde_json::from_str(&json).unwrap();
@@ -962,7 +962,12 @@ mod tests {
             aggregate_benchmark_verdict: BenchmarkVerdict::Faster,
             aggregate_speedup_millionths: 150_000,
             rollback_triggers: Vec::new(),
-            governance_receipt: GovernanceDecisionReceipt::default(),
+            governance_receipt: GovernanceDecisionReceipt::new(
+                crate::security_epoch::SecurityEpoch::from_raw(1),
+                GovernanceVerdict::Approved,
+                Vec::new(),
+                Vec::new(),
+            ),
             evidence: Vec::new(),
             parity_results: Vec::new(),
             required_artifacts: vec!["artifact1.json".to_string()],
@@ -1014,5 +1019,30 @@ mod tests {
         let h1 = hash_label("hello");
         let h2 = hash_label("world");
         assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn aot_bundle_compilation_report_serde_roundtrip() {
+        let report = AotBundleCompilationReport {
+            schema_version: AOT_BUNDLE_SCHEMA_VERSION.to_string(),
+            component: COMPONENT.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            policy_id: POLICY_ID.to_string(),
+            batch_report: BatchReport {
+                schema_version: "test".to_string(),
+                reports: Vec::new(),
+                batch_epoch: crate::security_epoch::SecurityEpoch::from_raw(1),
+                total_graphs: 0,
+                usable_graphs: 0,
+                aggregate_success_rate_millionths: 0,
+                batch_hash: crate::hash_tiers::ContentHash::compute(b"empty"),
+            },
+            receipts: Vec::new(),
+            entry_kind_summary: BTreeMap::new(),
+            target_summary: BTreeMap::new(),
+        };
+        let json = serde_json::to_string(&report).unwrap();
+        let decoded: AotBundleCompilationReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(report, decoded);
     }
 }

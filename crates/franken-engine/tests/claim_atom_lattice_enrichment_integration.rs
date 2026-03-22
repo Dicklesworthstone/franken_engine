@@ -388,3 +388,231 @@ fn claim_state_serde_roundtrip() {
         assert_eq!(state, back);
     }
 }
+
+// ===========================================================================
+// Additional enrichment: ConstraintLattice
+// ===========================================================================
+
+#[test]
+fn constraint_lattice_no_cycle_empty() {
+    let lattice = ConstraintLattice {
+        top_id: "top".into(),
+        bottom_id: "bottom".into(),
+        constraints: vec![],
+        covers: vec![],
+    };
+    assert!(!lattice.has_cycle());
+}
+
+#[test]
+fn constraint_lattice_no_cycle_chain() {
+    let lattice = ConstraintLattice {
+        top_id: "c".into(),
+        bottom_id: "a".into(),
+        constraints: vec![],
+        covers: vec![
+            CoverRelation {
+                lower: "a".into(),
+                higher: "b".into(),
+            },
+            CoverRelation {
+                lower: "b".into(),
+                higher: "c".into(),
+            },
+        ],
+    };
+    assert!(!lattice.has_cycle());
+}
+
+#[test]
+fn constraint_lattice_cycle_detected() {
+    let lattice = ConstraintLattice {
+        top_id: "b".into(),
+        bottom_id: "a".into(),
+        constraints: vec![],
+        covers: vec![
+            CoverRelation {
+                lower: "a".into(),
+                higher: "b".into(),
+            },
+            CoverRelation {
+                lower: "b".into(),
+                higher: "a".into(),
+            },
+        ],
+    };
+    assert!(lattice.has_cycle());
+}
+
+#[test]
+fn constraint_lattice_reachable_from_bottom() {
+    let lattice = ConstraintLattice {
+        top_id: "top".into(),
+        bottom_id: "bottom".into(),
+        constraints: vec![
+            SideConstraint {
+                constraint_id: "bottom".into(),
+                constraint_class: "base".into(),
+                description: "bottom constraint".into(),
+            },
+            SideConstraint {
+                constraint_id: "mid".into(),
+                constraint_class: "middle".into(),
+                description: "middle constraint".into(),
+            },
+            SideConstraint {
+                constraint_id: "top".into(),
+                constraint_class: "high".into(),
+                description: "top constraint".into(),
+            },
+        ],
+        covers: vec![
+            CoverRelation {
+                lower: "bottom".into(),
+                higher: "mid".into(),
+            },
+            CoverRelation {
+                lower: "mid".into(),
+                higher: "top".into(),
+            },
+        ],
+    };
+    assert!(lattice.is_reachable_from_bottom("top"));
+    assert!(lattice.is_reachable_from_bottom("mid"));
+    assert!(lattice.is_reachable_from_bottom("bottom"));
+}
+
+#[test]
+fn constraint_lattice_serde_roundtrip() {
+    let lattice = ConstraintLattice {
+        top_id: "b".into(),
+        bottom_id: "a".into(),
+        constraints: vec![SideConstraint {
+            constraint_id: "a".into(),
+            constraint_class: "test".into(),
+            description: "test constraint".into(),
+        }],
+        covers: vec![CoverRelation {
+            lower: "a".into(),
+            higher: "b".into(),
+        }],
+    };
+    let json = serde_json::to_string(&lattice).unwrap();
+    let decoded: ConstraintLattice = serde_json::from_str(&json).unwrap();
+    assert_eq!(lattice.covers.len(), decoded.covers.len());
+}
+
+// ===========================================================================
+// Additional enrichment: DisqualifierRule
+// ===========================================================================
+
+#[test]
+fn enrichment_disqualifier_rule_serde_roundtrip() {
+    let rule = DisqualifierRule {
+        rule_id: "dq-001".to_string(),
+        precedence: 1,
+        trigger_evidence_kind: "test262_pass".to_string(),
+        condition: "below 95% pass rate".to_string(),
+        target_atoms: vec!["claim-1".to_string()],
+        verdict: DisqualifierVerdict::Forbid,
+        remediation: "fix failing tests".to_string(),
+    };
+    let json = serde_json::to_string(&rule).unwrap();
+    let decoded: DisqualifierRule = serde_json::from_str(&json).unwrap();
+    assert_eq!(rule.rule_id, decoded.rule_id);
+    assert_eq!(rule.verdict, decoded.verdict);
+}
+
+#[test]
+fn enrichment_disqualifier_verdict_display_all() {
+    let verdicts = [
+        DisqualifierVerdict::Forbid,
+        DisqualifierVerdict::DowngradeToScoped,
+        DisqualifierVerdict::RequireOperatorGuidance,
+    ];
+    let displays: BTreeSet<String> = verdicts.iter().map(|v| format!("{v}")).collect();
+    assert_eq!(displays.len(), 3);
+}
+
+// ===========================================================================
+// Additional enrichment: evaluate_claims with morphisms and snapshots
+// ===========================================================================
+
+#[test]
+fn evaluation_with_fresh_evidence_entitles() {
+    let atom = ClaimAtom {
+        atom_id: "claim-sat".to_string(),
+        domain: ClaimDomain::Compatibility,
+        tier: ClaimTier::ScopedObserved,
+        statement: "test satisfied".to_string(),
+        surface: "test".to_string(),
+        owning_beads: vec![],
+        required_morphisms: vec!["morph-1".to_string()],
+    };
+    let morphism = EvidenceMorphism {
+        morphism_id: "morph-1".to_string(),
+        evidence_kind: "test262_pass".to_string(),
+        effect: MorphismEffect::Supports,
+        target_atoms: vec!["claim-sat".to_string()],
+        required_constraints: vec![],
+        blocked_by_rules: vec![],
+        rationale: "test evidence".to_string(),
+    };
+    let snapshot = EvidenceSnapshot {
+        evidence_kind: "test262_pass".to_string(),
+        is_fresh: true,
+        triggered_rules: vec![],
+    };
+    let result = evaluate_claims(
+        std::slice::from_ref(&atom),
+        std::slice::from_ref(&morphism),
+        &[],
+        std::slice::from_ref(&snapshot),
+        1,
+    );
+    assert_eq!(result.evaluations.len(), 1);
+}
+
+#[test]
+fn render_entitlement_summary_nonempty() {
+    let result = evaluate_claims(&[], &[], &[], &[], 1);
+    let summary = render_entitlement_summary(&result);
+    assert!(!summary.is_empty());
+}
+
+// ===========================================================================
+// Additional enrichment: MorphismEffect serde
+// ===========================================================================
+
+#[test]
+fn morphism_effect_serde_all() {
+    let effects = [
+        MorphismEffect::Supports,
+        MorphismEffect::Constrains,
+        MorphismEffect::Disqualifies,
+    ];
+    for effect in effects {
+        let json = serde_json::to_string(&effect).unwrap();
+        let decoded: MorphismEffect = serde_json::from_str(&json).unwrap();
+        assert_eq!(effect, decoded);
+    }
+}
+
+// ===========================================================================
+// Additional enrichment: ClaimTier serde
+// ===========================================================================
+
+#[test]
+fn enrichment_claim_tier_serde_roundtrip() {
+    let tiers = [
+        ClaimTier::ShippedFact,
+        ClaimTier::ScopedObserved,
+        ClaimTier::FrontierAmbition,
+        ClaimTier::UnsupportedSurface,
+    ];
+    for tier in tiers {
+        let json = serde_json::to_string(&tier).unwrap();
+        let decoded: ClaimTier = serde_json::from_str(&json).unwrap();
+        assert_eq!(tier, decoded);
+    }
+}

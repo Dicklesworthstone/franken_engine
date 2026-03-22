@@ -476,6 +476,18 @@ fn frankenctl_react_example_app_workflow_script_emits_expected_artifacts_and_rou
 }
 
 #[test]
+fn frankenctl_cli_workflow_script_emits_trace_ids_artifact_contract() {
+    let script = fs::read_to_string(repo_root().join("scripts/e2e/frankenctl_cli_workflow.sh"))
+        .expect("frankenctl cli workflow script should exist");
+
+    assert!(script.contains("trace_ids_path=\"${run_dir}/trace_ids.json\""));
+    assert!(script.contains("franken-engine.frankenctl.cli.workflow.trace-ids.v1"));
+    assert!(script.contains("\"trace_ids\": \"${trace_ids_path}\""));
+    assert!(script.contains("cat ${trace_ids_path}"));
+    assert!(script.contains("write_trace_ids"));
+}
+
+#[test]
 fn frankenctl_compile_then_verify_compile_artifact_round_trip() {
     let source_path = temp_path("frankenctl_compile_source", "js");
     let artifact_path = temp_path("frankenctl_compile_artifact", "json");

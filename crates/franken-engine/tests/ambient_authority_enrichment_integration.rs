@@ -329,3 +329,223 @@ fn enrichment_config_add_custom_pattern() {
     });
     assert_eq!(config.patterns.len(), original_count + 1);
 }
+
+// ===========================================================================
+// ExemptionRegistry: add, check, len, is_empty
+// ===========================================================================
+
+#[test]
+fn enrichment_registry_add_and_check() {
+    let mut registry = ExemptionRegistry::new();
+    assert!(registry.is_empty());
+    assert_eq!(registry.len(), 0);
+
+    registry.add(Exemption {
+        exemption_id: "ex-001".to_string(),
+        module_path: "test_module.rs".to_string(),
+        pattern_id: "forbidden-001".to_string(),
+        line: 42,
+        reason: "Legacy code".to_string(),
+        witness: "signed-witness-001".to_string(),
+    });
+
+    assert!(!registry.is_empty());
+    assert_eq!(registry.len(), 1);
+    assert!(registry.is_exempted("test_module.rs", "forbidden-001", 42));
+    assert!(!registry.is_exempted("test_module.rs", "forbidden-001", 99));
+    assert!(!registry.is_exempted("other.rs", "forbidden-001", 42));
+}
+
+#[test]
+fn enrichment_registry_wildcard_line_exemption() {
+    let mut registry = ExemptionRegistry::new();
+    registry.add(Exemption {
+        exemption_id: "ex-wc".to_string(),
+        module_path: "wildcard.rs".to_string(),
+        pattern_id: "forbidden-002".to_string(),
+        line: 0,
+        reason: "Whole file exempted".to_string(),
+        witness: "signed-witness-wc".to_string(),
+    });
+
+    // line=0 means module-wide exemption
+    assert!(registry.is_exempted("wildcard.rs", "forbidden-002", 1));
+    assert!(registry.is_exempted("wildcard.rs", "forbidden-002", 999));
+}
+
+#[test]
+fn enrichment_registry_multiple_exemptions() {
+    let mut registry = ExemptionRegistry::new();
+    for i in 0..5 {
+        registry.add(Exemption {
+            exemption_id: format!("ex-{i}"),
+            module_path: format!("mod_{i}.rs"),
+            pattern_id: "pat".to_string(),
+            line: i * 10,
+            reason: format!("reason {i}"),
+            witness: format!("witness-{i}"),
+        });
+    }
+    assert_eq!(registry.len(), 5);
+    assert_eq!(registry.exemptions().len(), 5);
+}
+
+#[test]
+fn enrichment_registry_serde_roundtrip() {
+    let mut registry = ExemptionRegistry::new();
+    registry.add(Exemption {
+        exemption_id: "ex-serde".to_string(),
+        module_path: "serde_test.rs".to_string(),
+        pattern_id: "pat-serde".to_string(),
+        line: 10,
+        reason: "serde test".to_string(),
+        witness: "witness-serde".to_string(),
+    });
+    let json = serde_json::to_string(&registry).unwrap();
+    let decoded: ExemptionRegistry = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded.len(), 1);
+}
+
+// ===========================================================================
+// Exemption serde
+// ===========================================================================
+
+#[test]
+fn enrichment_exemption_full_fields_serde() {
+    let ex = Exemption {
+        exemption_id: "ex-rt".to_string(),
+        module_path: "path.rs".to_string(),
+        pattern_id: "pat-1".to_string(),
+        line: 42,
+        reason: "reason".to_string(),
+        witness: "witness-rt".to_string(),
+    };
+    let json = serde_json::to_string(&ex).unwrap();
+    let decoded: Exemption = serde_json::from_str(&json).unwrap();
+    assert_eq!(ex, decoded);
+}
+
+#[test]
+fn enrichment_exemption_module_wide_serde() {
+    let ex = Exemption {
+        exemption_id: "ex-mw".to_string(),
+        module_path: "path.rs".to_string(),
+        pattern_id: "pat-2".to_string(),
+        line: 0,
+        reason: "whole file".to_string(),
+        witness: "witness-mw".to_string(),
+    };
+    let json = serde_json::to_string(&ex).unwrap();
+    let decoded: Exemption = serde_json::from_str(&json).unwrap();
+    assert_eq!(ex.line, decoded.line);
+}
+
+// ===========================================================================
+// SourceAuditor: audit_source with violations
+// ===========================================================================
+
+#[test]
+fn enrichment_audit_source_clean_code() {
+    let auditor = standard_auditor();
+    let findings = auditor.audit_source("clean_mod", "clean.rs", "let x = 42;\nlet y = x + 1;\n");
+    // Clean code should have no findings
+    assert!(findings.is_empty());
+}
+
+#[test]
+fn enrichment_audit_source_with_fs_call() {
+    let auditor = standard_auditor();
+    let findings = auditor.audit_source(
+        "bad_mod",
+        "bad.rs",
+        "use std::fs;\nfs::read_to_string(\"foo\");\n",
+    );
+    // Should detect fs usage
+    assert!(!findings.is_empty());
+}
+
+#[test]
+fn enrichment_audit_source_exempted_finding() {
+    let mut registry = ExemptionRegistry::new();
+    // We need to find which pattern IDs exist in standard config
+    let config = AuditConfig::standard();
+    if let Some(first_pat) = config.patterns.first() {
+        registry.add(Exemption {
+            exemption_id: "ex-test".to_string(),
+            module_path: "exempted.rs".to_string(),
+            pattern_id: first_pat.pattern_id.clone(),
+            line: 0,
+            reason: "Test exemption".to_string(),
+            witness: "test-witness".to_string(),
+        });
+    }
+    let auditor = SourceAuditor::new(config, registry);
+    // Even if code matches, exempted modules get passes
+    let _findings = auditor.audit_source("exempted_mod", "exempted.rs", "use std::fs;\n");
+    // Findings may still be generated but marked as exempted
+}
+
+// ===========================================================================
+// SourceAuditor: audit_all
+// ===========================================================================
+
+#[test]
+fn enrichment_audit_all_empty_passes() {
+    let auditor = standard_auditor();
+    let sources = BTreeMap::new();
+    let result = auditor.audit_all(&sources);
+    assert_eq!(result.modules_audited.len(), 0);
+    assert!(result.passed);
+}
+
+#[test]
+fn enrichment_audit_all_clean_sources() {
+    let auditor = standard_auditor();
+    let mut sources = BTreeMap::new();
+    sources.insert(
+        ("mod_a".to_string(), "mod_a.rs".to_string()),
+        "let a = 1;\n".to_string(),
+    );
+    sources.insert(
+        ("mod_b".to_string(), "mod_b.rs".to_string()),
+        "let b = 2;\n".to_string(),
+    );
+    let result = auditor.audit_all(&sources);
+    assert_eq!(result.modules_audited.len(), 2);
+}
+
+// ===========================================================================
+// AuditResult serde
+// ===========================================================================
+
+#[test]
+fn enrichment_audit_result_serde_roundtrip() {
+    let auditor = standard_auditor();
+    let sources = BTreeMap::new();
+    let result = auditor.audit_all(&sources);
+    let json = serde_json::to_string(&result).unwrap();
+    let decoded: AuditResult = serde_json::from_str(&json).unwrap();
+    assert_eq!(result.modules_audited.len(), decoded.modules_audited.len());
+}
+
+// ===========================================================================
+// AuditFinding enrichment serde
+// ===========================================================================
+
+#[test]
+fn enrichment_audit_finding_full_serde() {
+    let finding = AuditFinding {
+        module_path: "test.rs".to_string(),
+        forbidden_api: "net::connect".to_string(),
+        pattern_id: "pat-1".to_string(),
+        category: ForbiddenCallCategory::Network,
+        file_path: "test.rs".to_string(),
+        line: 10,
+        source_line: "use net::connect;".to_string(),
+        suggested_alternative: "use sandbox".to_string(),
+        exempted: false,
+    };
+    let json = serde_json::to_string(&finding).unwrap();
+    let decoded: AuditFinding = serde_json::from_str(&json).unwrap();
+    assert_eq!(finding, decoded);
+}

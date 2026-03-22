@@ -374,3 +374,140 @@ fn deep_evaluate_schema_version_matches_constant() {
     let decision = evaluate_tier_up_eligibility(&report, &policy);
     assert_eq!(decision.schema_version, TIER_UP_POLICY_SCHEMA_VERSION);
 }
+
+// ---------------------------------------------------------------------------
+// TierUpRejection enrichment
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_rejection_enrichment_serde() {
+    let rejection = TierUpRejection {
+        ip: 42,
+        opcode: "LoadProp".to_string(),
+        invocations: 5,
+        cache_hit_rate_millionths: 300_000,
+        reason: "insufficient invocations".to_string(),
+    };
+    let json = serde_json::to_string(&rejection).unwrap();
+    let decoded: TierUpRejection = serde_json::from_str(&json).unwrap();
+    assert_eq!(rejection, decoded);
+}
+
+#[test]
+fn deep_rejection_fields_correct() {
+    let rejection = TierUpRejection {
+        ip: 10,
+        opcode: "Call".to_string(),
+        invocations: 3,
+        cache_hit_rate_millionths: 0,
+        reason: "below_min_invocations".to_string(),
+    };
+    assert_eq!(rejection.ip, 10);
+    assert_eq!(rejection.invocations, 3);
+    assert!(!rejection.reason.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// TierUpDecisionEvent enrichment
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_decision_event_enrichment_serde() {
+    let event = TierUpDecisionEvent {
+        trace_id: "trace-001".to_string(),
+        component: "tier_up_profiler".to_string(),
+        event: "tier_up_started".to_string(),
+        outcome: "evaluating".to_string(),
+        reason: "policy check".to_string(),
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let decoded: TierUpDecisionEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(event, decoded);
+}
+
+// ---------------------------------------------------------------------------
+// HotPathProfile enrichment
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_hot_path_profile_empty() {
+    let report = make_report(0, vec![]);
+    let profile = build_hot_path_profile(&report, 5);
+    assert!(profile.top_paths.is_empty());
+    assert_eq!(profile.observed_instruction_events, 0);
+}
+
+#[test]
+fn deep_hot_path_profile_respects_max_paths() {
+    let mut events = Vec::new();
+    // Create many distinct IPs
+    for ip in 0..20 {
+        for _ in 0..10 {
+            events.push(make_vm_event(ip, "Nop", None));
+        }
+    }
+    let report = make_report(200, events);
+    let profile = build_hot_path_profile(&report, 5);
+    assert!(profile.top_paths.len() <= 5);
+}
+
+#[test]
+fn deep_hot_path_profile_serde_roundtrip() {
+    let events = vec![
+        make_vm_event(0, "LoadConst", Some(true)),
+        make_vm_event(0, "LoadConst", Some(false)),
+    ];
+    let report = make_report(2, events);
+    let profile = build_hot_path_profile(&report, 10);
+    let json = serde_json::to_string(&profile).unwrap();
+    let decoded: HotPathProfile = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        profile.observed_instruction_events,
+        decoded.observed_instruction_events
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Policy customization
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_policy_custom_thresholds() {
+    let policy = TierUpPolicy {
+        min_total_steps: 32,
+        min_invocations_per_path: 8,
+        ..TierUpPolicy::default()
+    };
+    let json = serde_json::to_string(&policy).unwrap();
+    let decoded: TierUpPolicy = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded.min_total_steps, 32);
+    assert_eq!(decoded.min_invocations_per_path, 8);
+}
+
+#[test]
+fn deep_evaluate_custom_policy_different_result() {
+    let events = vec![make_vm_event(0, "Call", Some(true)); 20];
+    let report = make_report(30, events);
+
+    // Strict policy (high thresholds)
+    let strict = TierUpPolicy {
+        min_total_steps: 100,
+        min_invocations_per_path: 50,
+        ..TierUpPolicy::default()
+    };
+    let d_strict = evaluate_tier_up_eligibility(&report, &strict);
+
+    // Relaxed policy (low thresholds)
+    let relaxed = TierUpPolicy {
+        min_total_steps: 10,
+        min_invocations_per_path: 5,
+        ..TierUpPolicy::default()
+    };
+    let d_relaxed = evaluate_tier_up_eligibility(&report, &relaxed);
+
+    // Strict should be less permissive
+    assert!(
+        d_strict.selected_candidates.len() <= d_relaxed.selected_candidates.len()
+            || !d_strict.eligible
+    );
+}

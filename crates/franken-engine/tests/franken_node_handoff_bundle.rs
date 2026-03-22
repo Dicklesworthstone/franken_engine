@@ -322,6 +322,7 @@ fn rgc_408c_runner_script_requires_rch_repo_local_targets_and_handoff_outputs() 
         "RGC_HANDOFF_BLOCKER_LEDGER_PATH",
         "RGC_HANDOFF_SIBLING_REPO_PATH",
         "docs/REPO_SPLIT_CONTRACT.md",
+        "json_file_is_valid()",
         "franken_node_handoff_manifest.json",
         "sibling_smoke_verification.json",
         "support_surface_summary.md",
@@ -333,6 +334,8 @@ fn rgc_408c_runner_script_requires_rch_repo_local_targets_and_handoff_outputs() 
         "target_rch_rgc_franken_node_handoff_bundle_",
         "engine-product blocker ledger contains orphaned unresolved blocking/degraded entries",
         "missing engine-product blocker ledger input",
+        "support contract JSON is invalid",
+        "blocker ledger JSON is invalid",
         "blocker ledger unavailable",
         "engine_product_blocker_ledger: (if ($blocker_ledger_path | length) > 0 then $blocker_ledger_path else null end)",
     ] {

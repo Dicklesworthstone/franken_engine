@@ -242,8 +242,19 @@ fn rgc_610_gate_script_uses_rch_and_targeted_commands() {
     let path = repo_root().join("scripts/run_rgc_cold_start_compilation_lane.sh");
     let script = read_to_string(&path);
 
+    assert!(script.contains("local selected_mode=\"${1:-$mode}\""));
+    assert!(script.contains("local mode_exit=0"));
+    assert!(script.contains("case \"$selected_mode\" in"));
+    assert!(script.contains("run_mode check || mode_exit=$?"));
+    assert!(script.contains("if ! run_mode; then"));
     assert!(script.contains("rch exec -- env"));
     assert!(script.contains("target_rch_rgc_cold_start_compilation_lane_"));
+    assert!(script.contains(
+        "cold_start_compilation_report: (if ($mode == \"run\" or $mode == \"ci\") then $report_path else null end)"
+    ));
+    assert!(script.contains(
+        "trace_ids: (if ($mode == \"run\" or $mode == \"ci\") then $trace_ids_path else null end)"
+    ));
     assert!(script.contains(
         "cargo check -p frankenengine-engine --test cold_start_compilation_lane --bin franken_cold_start_compilation_lane"
     ));
@@ -285,6 +296,10 @@ fn rgc_610_doc_wires_scripts_and_artifacts() {
 
     assert!(doc.contains("./scripts/run_rgc_cold_start_compilation_lane.sh ci"));
     assert!(doc.contains("./scripts/e2e/rgc_cold_start_compilation_lane_replay.sh ci"));
+    assert!(doc.contains(
+        "`check` mode emits only `run_manifest.json`, `events.jsonl`, `commands.txt`, and `step_logs/`."
+    ));
+    assert!(doc.contains("`run` and `ci` emit the full cold-start evidence bundle."));
     assert!(doc.contains(REPORT_FILE));
     assert!(doc.contains(OBSERVABILITY_DELTA_FILE));
     assert!(doc.contains(AOT_BUNDLE_FILE));

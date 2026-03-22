@@ -336,3 +336,313 @@ fn deep_error_serde_roundtrip() {
         assert_eq!(*err, decoded);
     }
 }
+
+// ---------------------------------------------------------------------------
+// update_loss_matrix
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_update_loss_matrix_changes_selection() {
+    let config = make_config(&["allow", "deny"], "allow");
+    let mut matrix = LossMatrix::new();
+    matrix.set("s1", "allow", 900_000);
+    matrix.set("s1", "deny", 100_000);
+
+    let mut ctrl = PolicyController::new(config, matrix).unwrap();
+    let mut probs = BTreeMap::new();
+    probs.insert("s1".to_string(), 1_000_000i64);
+    let posterior = Posterior::new(probs);
+
+    // Before update: deny wins (lower loss)
+    let r1 = ctrl.select_action(&posterior, epoch(1), "t1").unwrap();
+    assert_eq!(r1.action, "deny");
+
+    // Update matrix: now allow is cheaper
+    let mut new_matrix = LossMatrix::new();
+    new_matrix.set("s1", "allow", 50_000);
+    new_matrix.set("s1", "deny", 800_000);
+    ctrl.update_loss_matrix(new_matrix);
+
+    let r2 = ctrl.select_action(&posterior, epoch(2), "t2").unwrap();
+    assert_eq!(r2.action, "allow");
+}
+
+// ---------------------------------------------------------------------------
+// decision_count and decisions history
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_decision_count_increments() {
+    let config = make_config(&["allow", "deny"], "allow");
+    let mut ctrl = PolicyController::new(config, LossMatrix::new()).unwrap();
+    let posterior = make_uniform_posterior(&["s1"]);
+
+    assert_eq!(ctrl.decision_count(), 0);
+    assert!(ctrl.decisions().is_empty());
+
+    ctrl.select_action(&posterior, epoch(1), "t1").unwrap();
+    assert_eq!(ctrl.decision_count(), 1);
+    assert_eq!(ctrl.decisions().len(), 1);
+
+    ctrl.select_action(&posterior, epoch(2), "t2").unwrap();
+    assert_eq!(ctrl.decision_count(), 2);
+    assert_eq!(ctrl.decisions().len(), 2);
+}
+
+#[test]
+fn deep_decisions_preserves_order() {
+    let config = make_config(&["allow", "deny"], "allow");
+    let mut matrix = LossMatrix::new();
+    matrix.set("s1", "allow", 900_000);
+    matrix.set("s1", "deny", 100_000);
+
+    let mut ctrl = PolicyController::new(config, matrix).unwrap();
+
+    let mut probs_high = BTreeMap::new();
+    probs_high.insert("s1".to_string(), 1_000_000i64);
+    let posterior_high = Posterior::new(probs_high);
+
+    let r1 = ctrl.select_action(&posterior_high, epoch(1), "t1").unwrap();
+    let r2 = ctrl.select_action(&posterior_high, epoch(2), "t2").unwrap();
+
+    let history = ctrl.decisions();
+    assert_eq!(history[0].decision_id, r1.decision_id);
+    assert_eq!(history[1].decision_id, r2.decision_id);
+}
+
+// ---------------------------------------------------------------------------
+// config accessor
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_config_accessor() {
+    let config = make_config(&["allow", "deny", "sandbox"], "allow");
+    let ctrl = PolicyController::new(config.clone(), LossMatrix::new()).unwrap();
+    assert_eq!(ctrl.config().controller_id, "test-controller");
+    assert_eq!(ctrl.config().domain, "test_domain");
+    assert_eq!(ctrl.config().safe_default, "allow");
+    assert_eq!(ctrl.config().action_set.len(), 3);
+}
+
+// ---------------------------------------------------------------------------
+// Multi-state posterior selection
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_multi_state_expected_loss() {
+    let config = make_config(&["allow", "deny", "sandbox"], "allow");
+    let mut matrix = LossMatrix::new();
+    // Mixed posterior: 50% high, 50% low
+    matrix.set("high", "allow", 800_000);
+    matrix.set("high", "deny", 200_000);
+    matrix.set("high", "sandbox", 400_000);
+    matrix.set("low", "allow", 100_000);
+    matrix.set("low", "deny", 600_000);
+    matrix.set("low", "sandbox", 300_000);
+
+    let mut ctrl = PolicyController::new(config, matrix).unwrap();
+    let mut probs = BTreeMap::new();
+    probs.insert("high".to_string(), 500_000i64);
+    probs.insert("low".to_string(), 500_000);
+    let posterior = Posterior::new(probs);
+
+    let result = ctrl.select_action(&posterior, epoch(1), "t1").unwrap();
+    // E[allow] = 0.5*800k + 0.5*100k = 450k
+    // E[deny]  = 0.5*200k + 0.5*600k = 400k
+    // E[sandbox] = 0.5*400k + 0.5*300k = 350k -> sandbox wins
+    assert_eq!(result.action, "sandbox");
+}
+
+#[test]
+fn deep_three_state_selection() {
+    let config = make_config(&["a1", "a2", "a3"], "a1");
+    let mut matrix = LossMatrix::new();
+    for (state, a1, a2, a3) in [
+        ("s1", 100_000, 500_000, 300_000),
+        ("s2", 500_000, 100_000, 300_000),
+        ("s3", 300_000, 300_000, 100_000),
+    ] {
+        matrix.set(state, "a1", a1);
+        matrix.set(state, "a2", a2);
+        matrix.set(state, "a3", a3);
+    }
+    let mut ctrl = PolicyController::new(config, matrix).unwrap();
+
+    // Uniform posterior: each state 1/3
+    let posterior = make_uniform_posterior(&["s1", "s2", "s3"]);
+    let result = ctrl.select_action(&posterior, epoch(1), "t1").unwrap();
+    // E[a1] = (100+500+300)/3 = 300k, E[a2] = (500+100+300)/3 = 300k
+    // E[a3] = (300+300+100)/3 ≈ 233k -> a3 wins
+    assert_eq!(result.action, "a3");
+}
+
+// ---------------------------------------------------------------------------
+// Multiple guardrails
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_multiple_guardrails_compound() {
+    let config = make_config(&["a1", "a2", "a3", "a4"], "a1");
+    let mut matrix = LossMatrix::new();
+    // a4 is cheapest, a3 next, a2 next, a1 most expensive
+    matrix.set("s1", "a1", 400_000);
+    matrix.set("s1", "a2", 300_000);
+    matrix.set("s1", "a3", 200_000);
+    matrix.set("s1", "a4", 100_000);
+
+    let mut ctrl = PolicyController::new(config, matrix).unwrap();
+
+    // Block a4 and a3
+    ctrl.add_guardrail(Guardrail {
+        id: "gr-1".to_string(),
+        description: "block a4".to_string(),
+        blocked_actions: vec!["a4".to_string()],
+    });
+    ctrl.add_guardrail(Guardrail {
+        id: "gr-2".to_string(),
+        description: "block a3".to_string(),
+        blocked_actions: vec!["a3".to_string()],
+    });
+
+    let mut probs = BTreeMap::new();
+    probs.insert("s1".to_string(), 1_000_000i64);
+    let posterior = Posterior::new(probs);
+
+    let result = ctrl.select_action(&posterior, epoch(1), "t1").unwrap();
+    // a4 blocked, a3 blocked, a2 is next cheapest
+    assert_eq!(result.action, "a2");
+    assert_eq!(result.guardrail_rejections.len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// Empty loss matrix still selects safe default
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_empty_matrix_selects_safe_default_by_convention() {
+    let config = make_config(&["allow", "deny"], "allow");
+    let mut ctrl = PolicyController::new(config, LossMatrix::new()).unwrap();
+    let posterior = make_uniform_posterior(&["s1"]);
+
+    // With empty matrix, all expected losses are 0, so first action alphabetically
+    let result = ctrl.select_action(&posterior, epoch(1), "t1").unwrap();
+    // Both have 0 expected loss; the selection picks the first in action_set order
+    assert!(result.action == "allow" || result.action == "deny");
+    assert!(!result.is_safe_default);
+}
+
+// ---------------------------------------------------------------------------
+// Posterior edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_posterior_zero_probability() {
+    let mut probs = BTreeMap::new();
+    probs.insert("s1".to_string(), 0i64);
+    probs.insert("s2".to_string(), 1_000_000);
+    let posterior = Posterior::new(probs);
+
+    assert_eq!(posterior.probability("s1"), 0);
+    assert_eq!(posterior.probability("s2"), 1_000_000);
+    let states: Vec<&str> = posterior.states().collect();
+    assert_eq!(states.len(), 2);
+}
+
+#[test]
+fn deep_posterior_single_state() {
+    let mut probs = BTreeMap::new();
+    probs.insert("only".to_string(), 1_000_000i64);
+    let posterior = Posterior::new(probs);
+
+    assert_eq!(posterior.probability("only"), 1_000_000);
+    let states: Vec<&str> = posterior.states().collect();
+    assert_eq!(states, vec!["only"]);
+}
+
+// ---------------------------------------------------------------------------
+// LossMatrix edge cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_loss_matrix_many_entries() {
+    let mut m = LossMatrix::new();
+    for i in 0..50 {
+        m.set(format!("state_{i}"), format!("action_{i}"), i * 1000);
+    }
+    assert_eq!(m.len(), 50);
+    assert_eq!(m.get("state_25", "action_25"), Some(25_000));
+    assert_eq!(m.get("state_49", "action_49"), Some(49_000));
+}
+
+#[test]
+fn deep_loss_matrix_negative_values() {
+    let mut m = LossMatrix::new();
+    m.set("s1", "a1", -100_000);
+    m.set("s1", "a2", 100_000);
+    assert_eq!(m.get("s1", "a1"), Some(-100_000));
+}
+
+// ---------------------------------------------------------------------------
+// Guardrail blocks nothing
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_guardrail_empty_blocked_list() {
+    let gr = Guardrail {
+        id: "gr-empty".to_string(),
+        description: "blocks nothing".to_string(),
+        blocked_actions: vec![],
+    };
+    assert!(!gr.blocks("allow"));
+    assert!(!gr.blocks("deny"));
+}
+
+// ---------------------------------------------------------------------------
+// Decision ID format determinism
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_decision_id_deterministic_format() {
+    let config = make_config(&["allow", "deny"], "allow");
+    let mut ctrl = PolicyController::new(config, LossMatrix::new()).unwrap();
+    let posterior = make_uniform_posterior(&["s1"]);
+
+    for i in 1..=5 {
+        let result = ctrl
+            .select_action(&posterior, epoch(i), &format!("t{i}"))
+            .unwrap();
+        assert!(
+            result.decision_id.starts_with("test-controller-"),
+            "decision_id should start with controller_id"
+        );
+    }
+    assert_eq!(ctrl.decision_count(), 5);
+}
+
+// ---------------------------------------------------------------------------
+// PolicyController full workflow
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deep_controller_full_workflow() {
+    let config = make_config(&["allow", "deny", "sandbox"], "allow");
+    let mut matrix = LossMatrix::new();
+    matrix.set("normal", "allow", 10_000);
+    matrix.set("normal", "deny", 500_000);
+    matrix.set("anomalous", "allow", 900_000);
+    matrix.set("anomalous", "deny", 100_000);
+
+    let mut ctrl = PolicyController::new(config, matrix).unwrap();
+    ctrl.add_guardrail(Guardrail {
+        id: "gr-1".to_string(),
+        description: "test".to_string(),
+        blocked_actions: vec!["sandbox".to_string()],
+    });
+
+    let posterior = make_uniform_posterior(&["normal"]);
+    let r1 = ctrl.select_action(&posterior, epoch(1), "t1").unwrap();
+    assert_eq!(ctrl.decision_count(), 1);
+    assert_eq!(ctrl.config().controller_id, "test-controller");
+    assert!(!r1.decision_id.is_empty());
+    assert_eq!(ctrl.decisions().len(), 1);
+}

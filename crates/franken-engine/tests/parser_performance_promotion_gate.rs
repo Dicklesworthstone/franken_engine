@@ -504,9 +504,14 @@ fn parser_performance_gate_script_contains_fail_closed_rch_markers() {
     let script = load_script();
     let required_markers = [
         "policy-parser-performance-promotion-gate-v1",
+        "rch_strip_ansi",
         "rch_last_remote_exit_code",
         "rch_has_recoverable_artifact_timeout",
         "rch_reject_artifact_retrieval_failure",
+        "missing-remote-exit-marker",
+        "(rch-exit=${run_rc})",
+        "(timeout-${rch_timeout_seconds}s)",
+        "(remote-exit=${remote_exit_code})",
         "running locally",
         "RCH-E326",
         "rsync error: .*code 23",
@@ -563,6 +568,16 @@ fn parser_performance_doc_uses_repo_local_target_dir_example_and_step_logs() {
     assert!(
         doc.contains("step_logs/step_*.log"),
         "doc must advertise the step log artifact bundle"
+    );
+    assert!(
+        doc.contains("missing remote-exit markers are hard failures"),
+        "doc must describe missing remote-exit markers as fail-closed"
+    );
+    assert!(
+        doc.contains("`(rch-exit=<code>)`")
+            && doc.contains("`(remote-exit=<code>)`")
+            && doc.contains("`(timeout-<N>s)`"),
+        "doc must describe explicit rch failure classification suffixes"
     );
 }
 

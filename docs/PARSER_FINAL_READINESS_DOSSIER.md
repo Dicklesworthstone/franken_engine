@@ -115,6 +115,14 @@ Modes:
 - `clippy`: lint focused readiness dossier target with `-D warnings`
 - `ci`: check + test + clippy
 
+The replay wrapper reruns the selected mode, then prints the latest complete
+artifact bundle and warns when the newest directory is incomplete so operators
+do not get stranded on partial failure output:
+
+```bash
+./scripts/e2e/parser_final_readiness_dossier_replay.sh check
+```
+
 ## Required Artifacts
 
 Each run must publish:
@@ -141,4 +149,5 @@ Each run must publish:
 cat artifacts/parser_final_readiness_dossier/<timestamp>/run_manifest.json
 cat artifacts/parser_final_readiness_dossier/<timestamp>/events.jsonl
 cat artifacts/parser_final_readiness_dossier/<timestamp>/commands.txt
+./scripts/e2e/parser_final_readiness_dossier_replay.sh ci
 ```

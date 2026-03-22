@@ -212,6 +212,11 @@ fn load_doc() -> String {
     fs::read_to_string(path).expect("read parser final readiness dossier doc")
 }
 
+fn load_replay_script() -> String {
+    let path = Path::new("../../scripts/e2e/parser_final_readiness_dossier_replay.sh");
+    fs::read_to_string(path).expect("read parser final readiness dossier replay script")
+}
+
 fn comparison_matches(raw: &str) -> bool {
     matches!(raw, ">" | ">=" | "<" | "<=")
 }
@@ -496,6 +501,9 @@ fn parser_final_readiness_doc_has_required_sections() {
         "risk_register_hash is computed deterministically as `sha256`",
         "step_logs/step_*.log",
         "./scripts/run_parser_final_readiness_dossier.sh ci",
+        "./scripts/e2e/parser_final_readiness_dossier_replay.sh check",
+        "latest complete\nartifact bundle",
+        "newest directory is incomplete",
     ] {
         assert!(
             doc.contains(section),
@@ -700,6 +708,13 @@ fn load_doc_returns_nonempty_string() {
     let doc = load_doc();
     assert!(!doc.is_empty());
     assert!(doc.contains("Readiness"));
+}
+
+#[test]
+fn load_replay_script_returns_nonempty_string() {
+    let script = load_replay_script();
+    assert!(!script.is_empty());
+    assert!(script.contains("parser final readiness dossier replay"));
 }
 
 // ---------- comparison_matches ----------
@@ -924,6 +939,29 @@ fn rollback_trigger_ids_are_unique() {
             seen.insert(&trigger.trigger_id),
             "duplicate trigger_id: {}",
             trigger.trigger_id
+        );
+    }
+}
+
+#[test]
+fn replay_script_selects_latest_complete_bundle_and_prints_it() {
+    let script = load_replay_script();
+
+    for snippet in [
+        "run_parser_final_readiness_dossier.sh",
+        "main_exit=0",
+        "main_exit=$?",
+        "latest_complete_run_dir()",
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "step_logs",
+        "newest directory ${latest_artifact_dir_path} is incomplete",
+        "latest first step log",
+    ] {
+        assert!(
+            script.contains(snippet),
+            "replay script missing expected snippet: {snippet}"
         );
     }
 }

@@ -1243,14 +1243,23 @@ impl HspSpecimenFamily {
     ];
 }
 
-fn specimen_hash(name: &str, phase: SessionPhaseTag, transitions: usize) -> ContentHash {
+fn specimen_hash(
+    name: &str,
+    family: &HspSpecimenFamily,
+    phase: SessionPhaseTag,
+    transitions: usize,
+    clean_completion: bool,
+) -> ContentHash {
     let mut buf = Vec::new();
     buf.extend_from_slice(b"franken::hsp_specimen::");
     buf.extend_from_slice(name.as_bytes());
     buf.push(0);
+    buf.extend_from_slice(format!("{family:?}").as_bytes());
+    buf.push(0);
     buf.extend_from_slice(phase.to_string().as_bytes());
     buf.push(0);
     buf.extend_from_slice(&transitions.to_le_bytes());
+    buf.push(if clean_completion { 1 } else { 0 });
     ContentHash::compute(&buf)
 }
 
@@ -1294,7 +1303,13 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
         corpus.push(HspSpecimen {
             name: "happy_path_full".into(),
             family: HspSpecimenFamily::HappyPath,
-            content_hash: specimen_hash("happy_path_full", state.phase, tc),
+            content_hash: specimen_hash(
+                "happy_path_full",
+                &HspSpecimenFamily::HappyPath,
+                state.phase,
+                tc,
+                true,
+            ),
             transition_count: tc,
             clean_completion: true,
             final_state: state,
@@ -1328,7 +1343,13 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
         corpus.push(HspSpecimen {
             name: "handshake_rejected".into(),
             family: HspSpecimenFamily::HandshakeRejection,
-            content_hash: specimen_hash("handshake_rejected", state.phase, tc),
+            content_hash: specimen_hash(
+                "handshake_rejected",
+                &HspSpecimenFamily::HandshakeRejection,
+                state.phase,
+                tc,
+                true,
+            ),
             transition_count: tc,
             clean_completion: true,
             final_state: state,
@@ -1372,7 +1393,13 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
         corpus.push(HspSpecimen {
             name: "degraded_recovery".into(),
             family: HspSpecimenFamily::DegradedRecovery,
-            content_hash: specimen_hash("degraded_recovery", state.phase, tc),
+            content_hash: specimen_hash(
+                "degraded_recovery",
+                &HspSpecimenFamily::DegradedRecovery,
+                state.phase,
+                tc,
+                true,
+            ),
             transition_count: tc,
             clean_completion: true,
             final_state: state,
@@ -1419,7 +1446,13 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
         corpus.push(HspSpecimen {
             name: "degraded_budget_exhausted".into(),
             family: HspSpecimenFamily::DegradedBudgetExhaustion,
-            content_hash: specimen_hash("degraded_budget_exhausted", state.phase, tc),
+            content_hash: specimen_hash(
+                "degraded_budget_exhausted",
+                &HspSpecimenFamily::DegradedBudgetExhaustion,
+                state.phase,
+                tc,
+                exhausted,
+            ),
             transition_count: tc,
             clean_completion: exhausted,
             final_state: state,
@@ -1443,7 +1476,13 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
         corpus.push(HspSpecimen {
             name: "anti_replay_detection".into(),
             family: HspSpecimenFamily::AntiReplay,
-            content_hash: specimen_hash("anti_replay_detection", state.phase, tc),
+            content_hash: specimen_hash(
+                "anti_replay_detection",
+                &HspSpecimenFamily::AntiReplay,
+                state.phase,
+                tc,
+                replay_err,
+            ),
             transition_count: tc,
             clean_completion: replay_err,
             final_state: state,
@@ -1467,7 +1506,13 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
         corpus.push(HspSpecimen {
             name: "anti_replay_window_advance".into(),
             family: HspSpecimenFamily::AntiReplay,
-            content_hash: specimen_hash("anti_replay_window_advance", state.phase, tc),
+            content_hash: specimen_hash(
+                "anti_replay_window_advance",
+                &HspSpecimenFamily::AntiReplay,
+                state.phase,
+                tc,
+                below_floor,
+            ),
             transition_count: tc,
             clean_completion: below_floor,
             final_state: state,
@@ -1498,7 +1543,13 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
         corpus.push(HspSpecimen {
             name: "epoch_mismatch".into(),
             family: HspSpecimenFamily::EpochMismatch,
-            content_hash: specimen_hash("epoch_mismatch", state.phase, tc),
+            content_hash: specimen_hash(
+                "epoch_mismatch",
+                &HspSpecimenFamily::EpochMismatch,
+                state.phase,
+                tc,
+                mismatch,
+            ),
             transition_count: tc,
             clean_completion: mismatch,
             final_state: state,
@@ -1525,7 +1576,13 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
         corpus.push(HspSpecimen {
             name: "invalid_transition".into(),
             family: HspSpecimenFamily::InvalidTransition,
-            content_hash: specimen_hash("invalid_transition", state.phase, tc),
+            content_hash: specimen_hash(
+                "invalid_transition",
+                &HspSpecimenFamily::InvalidTransition,
+                state.phase,
+                tc,
+                err,
+            ),
             transition_count: tc,
             clean_completion: err,
             final_state: state,
@@ -1595,7 +1652,13 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
         corpus.push(HspSpecimen {
             name: "full_lifecycle".into(),
             family: HspSpecimenFamily::FullLifecycle,
-            content_hash: specimen_hash("full_lifecycle", state.phase, tc),
+            content_hash: specimen_hash(
+                "full_lifecycle",
+                &HspSpecimenFamily::FullLifecycle,
+                state.phase,
+                tc,
+                true,
+            ),
             transition_count: tc,
             clean_completion: true,
             final_state: state,
@@ -1638,7 +1701,13 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
         corpus.push(HspSpecimen {
             name: "session_expiry".into(),
             family: HspSpecimenFamily::HappyPath,
-            content_hash: specimen_hash("session_expiry", state.phase, tc),
+            content_hash: specimen_hash(
+                "session_expiry",
+                &HspSpecimenFamily::HappyPath,
+                state.phase,
+                tc,
+                true,
+            ),
             transition_count: tc,
             clean_completion: true,
             final_state: state,
@@ -1693,7 +1762,13 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
         corpus.push(HspSpecimen {
             name: "degraded_close".into(),
             family: HspSpecimenFamily::DegradedRecovery,
-            content_hash: specimen_hash("degraded_close", state.phase, tc),
+            content_hash: specimen_hash(
+                "degraded_close",
+                &HspSpecimenFamily::DegradedRecovery,
+                state.phase,
+                tc,
+                true,
+            ),
             transition_count: tc,
             clean_completion: true,
             final_state: state,
@@ -1737,7 +1812,13 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
         corpus.push(HspSpecimen {
             name: "replay_threshold_breach".into(),
             family: HspSpecimenFamily::AntiReplay,
-            content_hash: specimen_hash("replay_threshold_breach", state.phase, tc),
+            content_hash: specimen_hash(
+                "replay_threshold_breach",
+                &HspSpecimenFamily::AntiReplay,
+                state.phase,
+                tc,
+                true,
+            ),
             transition_count: tc,
             clean_completion: true,
             final_state: state,
@@ -1805,7 +1886,7 @@ pub fn write_hsp_evidence_bundle(dir: &std::path::Path) -> std::io::Result<()> {
                 "final_phase": s.final_state.phase.to_string(),
                 "transition_count": s.transition_count,
                 "clean_completion": s.clean_completion,
-                "content_hash": format!("{:?}", s.content_hash),
+                "content_hash": s.content_hash.to_hex(),
             })
         })
         .collect();
@@ -1819,7 +1900,7 @@ pub fn write_hsp_evidence_bundle(dir: &std::path::Path) -> std::io::Result<()> {
         "families_covered": result.families_covered.iter().map(|f| f.to_string()).collect::<Vec<_>>(),
         "all_clean": result.all_clean,
         "terminal_count": result.terminal_count,
-        "content_hash": format!("{:?}", result.content_hash),
+        "content_hash": result.content_hash.to_hex(),
     });
     let man_json = serde_json::to_string_pretty(&manifest).map_err(std::io::Error::other)?;
     std::fs::write(dir.join("hsp_manifest.json"), man_json)?;

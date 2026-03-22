@@ -99,10 +99,8 @@ fn corpus_specimen_names_unique() {
 #[test]
 fn corpus_specimen_hashes_unique() {
     let corpus = hsp_corpus();
-    let hashes: std::collections::BTreeSet<String> = corpus
-        .iter()
-        .map(|s| format!("{:?}", s.content_hash))
-        .collect();
+    let hashes: std::collections::BTreeSet<String> =
+        corpus.iter().map(|s| s.content_hash.to_hex()).collect();
     assert_eq!(hashes.len(), corpus.len());
 }
 
@@ -1123,6 +1121,11 @@ fn evidence_bundle_inventory_valid_json() {
     let inv = std::fs::read_to_string(dir.join("hsp_inventory.json")).unwrap();
     let parsed: Vec<serde_json::Value> = serde_json::from_str(&inv).unwrap();
     assert_eq!(parsed.len(), hsp_corpus().len());
+    for entry in &parsed {
+        let content_hash = entry["content_hash"].as_str().unwrap();
+        assert_eq!(content_hash.len(), 64);
+        assert!(content_hash.chars().all(|c| c.is_ascii_hexdigit()));
+    }
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1142,6 +1145,9 @@ fn evidence_bundle_manifest_has_schema() {
         "hostcall_session_protocol_evidence_v1"
     );
     assert!(parsed["specimen_count"].as_u64().unwrap() >= 10);
+    let content_hash = parsed["content_hash"].as_str().unwrap();
+    assert_eq!(content_hash.len(), 64);
+    assert!(content_hash.chars().all(|c| c.is_ascii_hexdigit()));
 
     let _ = std::fs::remove_dir_all(&dir);
 }

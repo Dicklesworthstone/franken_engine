@@ -1571,6 +1571,11 @@ fn enrichment_evidence_bundle_writes_files() {
     assert!(dir.join("hsp_manifest.json").exists());
     assert!(dir.join("hsp_events.jsonl").exists());
     assert!(dir.join("hsp_commands.txt").exists());
+    let manifest = std::fs::read_to_string(dir.join("hsp_manifest.json")).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+    let content_hash = parsed["content_hash"].as_str().unwrap();
+    assert_eq!(content_hash.len(), 64);
+    assert!(content_hash.chars().all(|c| c.is_ascii_hexdigit()));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

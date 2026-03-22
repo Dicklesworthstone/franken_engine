@@ -8,6 +8,37 @@ use frankenengine_engine::observability_publication_bundle::{
     BEAD_ID, ObservabilityMode, ObservabilityPublicationPolicyArtifact,
     SupportBundleObservabilityAttestationArtifact, write_observability_publication_bundle,
 };
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+struct ObservabilityPublicationPolicyDocContract {
+    schema_version: String,
+    contract_version: String,
+    bead_id: String,
+    policy_id: String,
+    audited_inputs: Vec<String>,
+    required_readme_fragments: Vec<String>,
+    required_doc_fragments: Vec<String>,
+    source_fragment_checks: Vec<SourceFragmentCheck>,
+    workload_classes: Vec<String>,
+    observability_modes: Vec<String>,
+    required_artifacts: Vec<String>,
+    gate_runner: GateRunnerContract,
+}
+
+#[derive(Debug, Deserialize)]
+struct SourceFragmentCheck {
+    path: String,
+    fragment: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GateRunnerContract {
+    script: String,
+    replay_wrapper: String,
+    strict_mode: String,
+    manifest_schema_version: String,
+}
 
 fn unique_dir(label: &str) -> PathBuf {
     let timestamp = SystemTime::now()
@@ -19,6 +50,30 @@ fn unique_dir(label: &str) -> PathBuf {
         std::process::id(),
         timestamp
     ))
+}
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("workspace root parent")
+        .parent()
+        .expect("repo root parent")
+        .to_path_buf()
+}
+
+fn read_repo_text(path: &str) -> String {
+    let full_path = repo_root().join(path);
+    fs::read_to_string(&full_path)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", full_path.display()))
+}
+
+fn parse_doc_contract() -> ObservabilityPublicationPolicyDocContract {
+    let path = repo_root().join("docs/rgc_observability_publication_policy_v1.json");
+    serde_json::from_slice(
+        &fs::read(&path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display())),
+    )
+    .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()))
 }
 
 #[test]
@@ -745,6 +800,132 @@ fn all_artifact_paths_are_under_out_dir() {
             "artifact path {} must be under out_dir {}",
             path.display(),
             out_dir.display()
+        );
+    }
+}
+
+#[test]
+fn rgc_066c_doc_contract_core_fields_are_expected() {
+    let contract = parse_doc_contract();
+
+    assert_eq!(
+        contract.schema_version,
+        "franken-engine.rgc-observability-publication-policy-contract.v1"
+    );
+    assert_eq!(contract.contract_version, "1.0.0");
+    assert_eq!(contract.bead_id, BEAD_ID);
+    assert_eq!(
+        contract.policy_id,
+        "policy-rgc-observability-publication-v1"
+    );
+    assert_eq!(
+        contract.workload_classes,
+        vec![
+            "dispatch_sensitive".to_string(),
+            "hostcall_sensitive".to_string(),
+            "startup_sensitive".to_string()
+        ]
+    );
+    assert_eq!(
+        contract.observability_modes,
+        vec![
+            "off".to_string(),
+            "budgeted".to_string(),
+            "exact_shadow".to_string()
+        ]
+    );
+    assert_eq!(
+        contract.gate_runner.script,
+        "scripts/run_rgc_observability_publication_policy.sh"
+    );
+    assert_eq!(
+        contract.gate_runner.replay_wrapper,
+        "scripts/e2e/rgc_observability_publication_policy_replay.sh"
+    );
+    assert_eq!(contract.gate_runner.strict_mode, "ci");
+    assert_eq!(
+        contract.gate_runner.manifest_schema_version,
+        "rgc.observability-publication-policy.gate.run-manifest.v1"
+    );
+    for artifact in [
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "trace_ids",
+        "step_logs/",
+        "observability_budget_sentinel_report.json",
+        "observability_on_supremacy_matrix.json",
+        "observability_claim_delta_report.json",
+        "telemetry_demotion_receipts.json",
+        "observability_publication_policy.json",
+        "support_bundle_observability_attestation.json",
+    ] {
+        assert!(
+            contract
+                .required_artifacts
+                .iter()
+                .any(|entry| entry == artifact),
+            "missing required artifact contract entry: {artifact}"
+        );
+    }
+}
+
+#[test]
+fn rgc_066c_doc_contract_audited_inputs_are_unique_and_exist() {
+    let contract = parse_doc_contract();
+    let root = repo_root();
+    let mut seen = std::collections::BTreeSet::new();
+    for input in &contract.audited_inputs {
+        assert!(
+            seen.insert(input.clone()),
+            "duplicate audited input in doc contract: {input}"
+        );
+        let path = root.join(input);
+        assert!(
+            path.exists(),
+            "audited input must exist: {}",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn rgc_066c_readme_section_documents_gate_commands_and_artifacts() {
+    let contract = parse_doc_contract();
+    let readme = read_repo_text("README.md");
+    for fragment in &contract.required_readme_fragments {
+        assert!(
+            readme.contains(fragment),
+            "README.md must contain required fragment: {fragment}"
+        );
+    }
+}
+
+#[test]
+fn rgc_066c_markdown_doc_contains_required_fragments() {
+    let contract = parse_doc_contract();
+    let doc = read_repo_text("docs/RGC_OBSERVABILITY_PUBLICATION_POLICY_V1.md");
+    for fragment in &contract.required_doc_fragments {
+        assert!(
+            doc.contains(fragment),
+            "RGC observability publication policy doc must contain fragment: {fragment}"
+        );
+    }
+}
+
+#[test]
+fn rgc_066c_source_fragment_checks_match_repo_sources() {
+    let contract = parse_doc_contract();
+    let root = repo_root();
+    for check in &contract.source_fragment_checks {
+        let path = root.join(&check.path);
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        assert!(
+            source.contains(&check.fragment),
+            "source file {} must contain fragment: {}",
+            check.path,
+            check.fragment
         );
     }
 }

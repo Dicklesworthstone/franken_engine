@@ -971,6 +971,43 @@ Artifacts are written under:
 - `artifacts/observability_information_theoretic/<timestamp>/events.jsonl`
 - `artifacts/observability_information_theoretic/<timestamp>/commands.txt`
 
+## RGC Observability Publication Policy Gate
+
+`bd-1lsy.11.20.3` turns observability-on publication into a fail-closed
+operator lane by composing calibration sentinels, supremacy-cell attribution,
+claim-delta reporting, demotion receipts, and support-bundle attestation into
+one deterministic bundle.
+
+```bash
+# RGC observability publication policy gate (rch-backed bundle/check/test/clippy)
+./scripts/run_rgc_observability_publication_policy.sh ci
+
+# deterministic replay wrapper
+./scripts/e2e/rgc_observability_publication_policy_replay.sh ci
+```
+
+Contract and integration surface:
+
+- [`docs/RGC_OBSERVABILITY_PUBLICATION_POLICY_V1.md`](./docs/RGC_OBSERVABILITY_PUBLICATION_POLICY_V1.md)
+- `docs/rgc_observability_publication_policy_v1.json`
+- `crates/franken-engine/src/observability_publication_bundle.rs`
+- `crates/franken-engine/src/bin/franken_observability_publication_bundle.rs`
+- `crates/franken-engine/tests/observability_publication_bundle_integration.rs`
+
+Artifacts are written under:
+
+- `artifacts/rgc_observability_publication_policy/<timestamp>/run_manifest.json`
+- `artifacts/rgc_observability_publication_policy/<timestamp>/events.jsonl`
+- `artifacts/rgc_observability_publication_policy/<timestamp>/commands.txt`
+- `artifacts/rgc_observability_publication_policy/<timestamp>/trace_ids`
+- `artifacts/rgc_observability_publication_policy/<timestamp>/step_logs/`
+- `artifacts/rgc_observability_publication_policy/<timestamp>/observability_budget_sentinel_report.json`
+- `artifacts/rgc_observability_publication_policy/<timestamp>/observability_on_supremacy_matrix.json`
+- `artifacts/rgc_observability_publication_policy/<timestamp>/observability_claim_delta_report.json`
+- `artifacts/rgc_observability_publication_policy/<timestamp>/telemetry_demotion_receipts.json`
+- `artifacts/rgc_observability_publication_policy/<timestamp>/observability_publication_policy.json`
+- `artifacts/rgc_observability_publication_policy/<timestamp>/support_bundle_observability_attestation.json`
+
 ## FRX Compiler Lane Charter Gate
 
 `bd-mjh3.10.2` ships a deterministic gate for compiler-lane charter contract
@@ -1702,6 +1739,37 @@ Artifacts are written under:
 - `artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/run_manifest.json`
 - `artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/events.jsonl`
 - `artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/commands.txt`
+
+## RGC Cross-Platform Matrix Gate
+
+`bd-1lsy.11.13` validates runtime and CLI workflow manifests across
+Linux/macOS/Windows and x64/arm64 targets, classifies drift with stable
+severity codes, and fails closed when strict matrix evaluation sees unresolved
+critical deltas. The gate can consume explicit per-target manifest env vars or
+auto-discover the latest complete manifest set under
+`artifacts/rgc_cross_platform_matrix_inputs`.
+
+```bash
+# RGC cross-platform matrix gate (rch-backed check + test + clippy + matrix)
+./scripts/run_rgc_cross_platform_matrix_gate.sh ci
+
+# deterministic replay / strict matrix wrapper
+./scripts/e2e/rgc_cross_platform_matrix_replay.sh matrix
+```
+
+Contract and vectors:
+
+- [`docs/RGC_CROSS_PLATFORM_MATRIX_V1.md`](./docs/RGC_CROSS_PLATFORM_MATRIX_V1.md)
+- `docs/rgc_cross_platform_matrix_v1.json`
+- `crates/franken-engine/tests/rgc_cross_platform_matrix.rs`
+
+Artifacts are written under:
+
+- `artifacts/rgc_cross_platform_matrix/<timestamp>/run_manifest.json`
+- `artifacts/rgc_cross_platform_matrix/<timestamp>/events.jsonl`
+- `artifacts/rgc_cross_platform_matrix/<timestamp>/commands.txt`
+- `artifacts/rgc_cross_platform_matrix/<timestamp>/matrix_target_deltas.jsonl`
+- `artifacts/rgc_cross_platform_matrix/<timestamp>/matrix_summary.json`
 
 ## Troubleshooting
 

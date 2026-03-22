@@ -1,0 +1,102 @@
+{
+  "schema_version": "franken-engine.rgc-observability-publication-policy-contract.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-1lsy.11.20.3",
+  "policy_id": "policy-rgc-observability-publication-v1",
+  "generated_at_utc": "2026-03-22T19:45:00Z",
+  "audited_inputs": [
+    "README.md",
+    "docs/RGC_OBSERVABILITY_PUBLICATION_POLICY_V1.md",
+    "docs/rgc_observability_publication_policy_v1.json",
+    "crates/franken-engine/src/observability_publication_bundle.rs",
+    "crates/franken-engine/src/bin/franken_observability_publication_bundle.rs",
+    "crates/franken-engine/tests/observability_publication_bundle_integration.rs",
+    "scripts/run_rgc_observability_publication_policy.sh",
+    "scripts/e2e/rgc_observability_publication_policy_replay.sh"
+  ],
+  "required_readme_fragments": [
+    "## RGC Observability Publication Policy Gate",
+    "./scripts/run_rgc_observability_publication_policy.sh ci",
+    "./scripts/e2e/rgc_observability_publication_policy_replay.sh ci",
+    "docs/rgc_observability_publication_policy_v1.json",
+    "support_bundle_observability_attestation.json"
+  ],
+  "required_doc_fragments": [
+    "# RGC Observability Publication Policy V1",
+    "`dispatch_sensitive`",
+    "`hostcall_sensitive`",
+    "`startup_sensitive`",
+    "`off`",
+    "`budgeted`",
+    "`exact_shadow`",
+    "franken_observability_publication_bundle --out-dir <DIR>",
+    "`observability_budget_sentinel_report.json`",
+    "`observability_on_supremacy_matrix.json`",
+    "`observability_claim_delta_report.json`",
+    "`telemetry_demotion_receipts.json`",
+    "`observability_publication_policy.json`",
+    "`support_bundle_observability_attestation.json`"
+  ],
+  "source_fragment_checks": [
+    {
+      "path": "crates/franken-engine/src/observability_publication_bundle.rs",
+      "fragment": "pub const PUBLICATION_POLICY_SCHEMA_VERSION: &str ="
+    },
+    {
+      "path": "crates/franken-engine/src/observability_publication_bundle.rs",
+      "fragment": "default_shipped_mode: ObservabilityMode::Budgeted,"
+    },
+    {
+      "path": "crates/franken-engine/src/observability_publication_bundle.rs",
+      "fragment": "observability_off cells are never publishable claim surfaces"
+    },
+    {
+      "path": "crates/franken-engine/src/bin/franken_observability_publication_bundle.rs",
+      "fragment": "Usage: franken_observability_publication_bundle --out-dir <DIR>"
+    },
+    {
+      "path": "scripts/run_rgc_observability_publication_policy.sh",
+      "fragment": "component=\"rgc_observability_publication_policy_gate\""
+    },
+    {
+      "path": "scripts/run_rgc_observability_publication_policy.sh",
+      "fragment": "replay_command=\"./scripts/e2e/rgc_observability_publication_policy_replay.sh ${mode}\""
+    }
+  ],
+  "workload_classes": [
+    "dispatch_sensitive",
+    "hostcall_sensitive",
+    "startup_sensitive"
+  ],
+  "observability_modes": [
+    "off",
+    "budgeted",
+    "exact_shadow"
+  ],
+  "required_artifacts": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "trace_ids",
+    "step_logs/",
+    "observability_budget_sentinel_report.json",
+    "observability_on_supremacy_matrix.json",
+    "observability_claim_delta_report.json",
+    "telemetry_demotion_receipts.json",
+    "observability_publication_policy.json",
+    "support_bundle_observability_attestation.json"
+  ],
+  "gate_runner": {
+    "script": "scripts/run_rgc_observability_publication_policy.sh",
+    "replay_wrapper": "scripts/e2e/rgc_observability_publication_policy_replay.sh",
+    "strict_mode": "ci",
+    "manifest_schema_version": "rgc.observability-publication-policy.gate.run-manifest.v1"
+  },
+  "operator_verification": [
+    "jq empty docs/rgc_observability_publication_policy_v1.json",
+    "./scripts/run_rgc_observability_publication_policy.sh ci",
+    "cat artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP>/trace_ids",
+    "ls artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP>/step_logs",
+    "./scripts/e2e/rgc_observability_publication_policy_replay.sh ci"
+  ]
+}

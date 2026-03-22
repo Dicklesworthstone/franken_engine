@@ -446,6 +446,19 @@ fn cost_model_different_id_different_hash() {
 }
 
 #[test]
+fn cost_model_hash_uses_length_framed_string_fields() {
+    let mut gains_a = BTreeMap::new();
+    gains_a.insert("c".to_string(), 7 * MILLION);
+    let mut gains_b = BTreeMap::new();
+    gains_b.insert("bc".to_string(), 7 * MILLION);
+
+    let left = DeterministicCostModel::new("ab", BTreeMap::new(), gains_a, BTreeMap::new());
+    let right = DeterministicCostModel::new("a", BTreeMap::new(), gains_b, BTreeMap::new());
+
+    assert_ne!(left.content_hash, right.content_hash);
+}
+
+#[test]
 fn cost_model_serde_roundtrip() {
     let mut gains = BTreeMap::new();
     gains.insert("r1".into(), 5 * MILLION);
@@ -852,6 +865,32 @@ fn pack_different_rule_metadata_different_hash() {
 }
 
 #[test]
+fn pack_hash_uses_length_framed_description_and_cost_model_fields() {
+    let rules = vec![enabled_rule("r1", RewriteCategory::Custom, true)];
+
+    let left = RewritePack::new(
+        "same-id",
+        PackVersion::CURRENT,
+        test_epoch(),
+        "ab",
+        rules.clone(),
+        empty_interference(),
+        "c",
+    );
+    let right = RewritePack::new(
+        "same-id",
+        PackVersion::CURRENT,
+        test_epoch(),
+        "a",
+        rules,
+        empty_interference(),
+        "bc",
+    );
+
+    assert_ne!(left.content_hash, right.content_hash);
+}
+
+#[test]
 fn pack_serde_roundtrip_with_rules() {
     let rules = vec![
         enabled_rule("r1", RewriteCategory::AlgebraicSimplification, true),
@@ -1060,6 +1099,24 @@ fn catalog_hash_changes_on_cross_interference() {
     let hash_before = cat.content_hash;
     cat.add_cross_interference("a", "b", empty_interference());
     assert_ne!(cat.content_hash, hash_before);
+}
+
+#[test]
+fn catalog_hash_uses_length_framed_identifiers() {
+    let shared_hash = ContentHash::compute(b"shared-pack-hash");
+
+    let mut left_pack = make_pack("c", vec![]);
+    left_pack.content_hash = shared_hash.clone();
+    let mut right_pack = make_pack("bc", vec![]);
+    right_pack.content_hash = shared_hash;
+
+    let mut left = PackCatalog::new("ab");
+    assert!(left.register(left_pack));
+
+    let mut right = PackCatalog::new("a");
+    assert!(right.register(right_pack));
+
+    assert_ne!(left.content_hash, right.content_hash);
 }
 
 #[test]

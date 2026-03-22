@@ -454,9 +454,13 @@ impl TelemetryRecorder {
     }
 
     /// Compute the overall content hash of all records.
+    /// Records are sorted by record_id for insertion-order independence.
     pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::new();
-        for record in &self.records {
+        let mut sorted: Vec<_> = self.records.iter().collect();
+        sorted.sort_by_key(|r| r.record_id);
+        for record in &sorted {
+            buf.extend_from_slice(&record.record_id.to_le_bytes());
             buf.extend_from_slice(record.content_hash.as_bytes());
         }
         ContentHash::compute(&buf)

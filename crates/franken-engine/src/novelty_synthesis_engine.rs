@@ -384,13 +384,17 @@ impl SynthesisBatch {
     }
 
     /// Compute the content hash over the entire batch.
+    /// Candidates are sorted by candidate_id for insertion-order independence.
     pub fn content_hash(&self) -> ContentHash {
         let mut h = Sha256::new();
         h.update(b"novelty-synthesis-batch-v1:");
         h.update(self.batch_id.as_bytes());
         h.update(b":");
         h.update(self.epoch.as_u64().to_le_bytes());
-        for c in &self.candidates {
+        let mut sorted: Vec<_> = self.candidates.iter().collect();
+        sorted.sort_by(|a, b| a.candidate_id.cmp(&b.candidate_id));
+        for c in &sorted {
+            h.update(c.candidate_id.as_bytes());
             h.update(c.content_hash.as_bytes());
         }
         ContentHash::compute(&h.finalize())

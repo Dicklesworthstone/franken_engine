@@ -111,7 +111,9 @@ impl SupportBoundary {
         h.update(self.persistent_holes.to_le_bytes());
         h.update(b"|struct:");
         h.update(self.structural_holes.to_le_bytes());
-        for id in &self.blocking_hole_ids {
+        let mut sorted_ids: Vec<_> = self.blocking_hole_ids.iter().collect();
+        sorted_ids.sort();
+        for id in &sorted_ids {
             h.update(b"|blk:");
             h.update(id.as_bytes());
         }

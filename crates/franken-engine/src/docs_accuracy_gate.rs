@@ -317,9 +317,10 @@ impl DocsAccuracyInventory {
 
     /// Compute a deterministic content hash.
     pub fn content_hash(&self) -> ContentHash {
-        let surfaces = self
-            .surfaces
-            .iter()
+        let mut surfaces: Vec<_> = self.surfaces.iter().collect();
+        surfaces.sort_by(|left, right| left.id.cmp(&right.id));
+        let surfaces = surfaces
+            .into_iter()
             .map(|surface| {
                 let sources = surface
                     .sources
@@ -360,9 +361,17 @@ impl DocsAccuracyInventory {
                 ]))
             })
             .collect();
-        let unsupported_contracts = self
-            .unsupported_contracts
-            .iter()
+        let mut unsupported_contracts: Vec<_> = self.unsupported_contracts.iter().collect();
+        unsupported_contracts.sort_by(|left, right| {
+            left.surface_name
+                .cmp(&right.surface_name)
+                .then(left.reason.cmp(&right.reason))
+                .then(left.workaround.cmp(&right.workaround))
+                .then(left.planned_support.cmp(&right.planned_support))
+                .then(left.tracking_bead.cmp(&right.tracking_bead))
+        });
+        let unsupported_contracts = unsupported_contracts
+            .into_iter()
             .map(|contract| {
                 CanonicalValue::Map(BTreeMap::from([
                     (
@@ -964,6 +973,15 @@ mod tests {
         let mut i2 = build_seed_inventory();
         i2.unsupported_contracts[0].reason = "new unsupported reason".to_string();
         assert_ne!(i1.content_hash(), i2.content_hash());
+    }
+
+    #[test]
+    fn content_hash_is_invariant_to_surface_and_contract_order() {
+        let i1 = build_seed_inventory();
+        let mut i2 = build_seed_inventory();
+        i2.surfaces.reverse();
+        i2.unsupported_contracts.reverse();
+        assert_eq!(i1.content_hash(), i2.content_hash());
     }
 
     #[test]

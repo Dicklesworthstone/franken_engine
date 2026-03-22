@@ -1,0 +1,61 @@
+{
+  "schema_version": "franken-engine.rgc-engine-product-blocker-ledger.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-1lsy.5.10.2",
+  "policy_id": "policy-rgc-engine-product-blocker-ledger-v1",
+  "generated_by": "bd-1lsy.5.10.2",
+  "generated_at_utc": "2026-03-21T21:45:00Z",
+  "source_inputs": [
+    "docs/RGC_ENGINE_PRODUCT_BLOCKER_LEDGER_V1.md",
+    "docs/support_surface_contract.json",
+    "crates/franken-engine/src/engine_product_blocker_ledger.rs"
+  ],
+  "input_resolution": {
+    "support_surface_contract_path": "docs/support_surface_contract.json",
+    "bead_snapshot_command": "br list --all --json",
+    "stale_after_hours": 720
+  },
+  "required_log_keys": [
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "outcome",
+    "error_code"
+  ],
+  "required_artifacts": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "trace_ids.json",
+    "engine_product_blocker_ledger.json",
+    "cohort_readiness_rollup.json",
+    "owner_routing_report.json",
+    "gate_report.json",
+    "support_surface_contract.json",
+    "beads_snapshot.json",
+    "step_logs/step_*.log"
+  ],
+  "failure_conditions": [
+    "missing_support_surface_contract",
+    "invalid_support_surface_contract",
+    "contradictory_support_contract_readiness_metadata",
+    "missing_tracking_bead_in_snapshot",
+    "unresolved_blocker_without_owner_or_bead",
+    "stale_support_surface_contract",
+    "missing_required_bundle_artifacts"
+  ],
+  "gate_runner": {
+    "script": "scripts/run_rgc_engine_product_blocker_ledger.sh",
+    "replay_wrapper": "scripts/e2e/rgc_engine_product_blocker_ledger_replay.sh",
+    "strict_mode": "ci",
+    "manifest_schema_version": "franken-engine.rgc-engine-product-blocker-ledger.run-manifest.v1"
+  },
+  "operator_verification": [
+    "jq empty docs/engine_product_blocker_ledger_v1.json",
+    "./scripts/run_rgc_engine_product_blocker_ledger.sh ci",
+    "./scripts/e2e/rgc_engine_product_blocker_ledger_replay.sh show",
+    "rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=$PWD/target_rch_rgc_engine_product_blocker_ledger_verify CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine --test engine_product_blocker_ledger"
+  ]
+}

@@ -383,25 +383,127 @@ impl BlockerLedger {
     }
 
     pub fn content_hash(&self) -> ContentHash {
-        let mut entries = Vec::new();
-        for b in &self.blockers {
-            entries.push(CanonicalValue::Map(BTreeMap::from([
-                ("id".to_string(), CanonicalValue::String(b.id.clone())),
-                (
-                    "surface".to_string(),
-                    CanonicalValue::String(b.surface.as_str().to_string()),
-                ),
-                (
-                    "severity".to_string(),
-                    CanonicalValue::String(b.severity.as_str().to_string()),
-                ),
-                (
-                    "remediation".to_string(),
-                    CanonicalValue::String(b.remediation.as_str().to_string()),
-                ),
-            ])));
-        }
-        let canonical = CanonicalValue::Array(entries);
+        let mut blockers: Vec<_> = self.blockers.iter().collect();
+        blockers.sort_by(|left, right| left.id.cmp(&right.id));
+        let blockers = blockers
+            .into_iter()
+            .map(|blocker| {
+                let tags = blocker
+                    .tags
+                    .iter()
+                    .map(|tag| CanonicalValue::String(tag.clone()))
+                    .collect();
+                CanonicalValue::Map(BTreeMap::from([
+                    ("id".to_string(), CanonicalValue::String(blocker.id.clone())),
+                    (
+                        "title".to_string(),
+                        CanonicalValue::String(blocker.title.clone()),
+                    ),
+                    (
+                        "surface".to_string(),
+                        CanonicalValue::String(blocker.surface.as_str().to_string()),
+                    ),
+                    (
+                        "severity".to_string(),
+                        CanonicalValue::String(blocker.severity.as_str().to_string()),
+                    ),
+                    (
+                        "remediation".to_string(),
+                        CanonicalValue::String(blocker.remediation.as_str().to_string()),
+                    ),
+                    (
+                        "tracking_bead".to_string(),
+                        blocker
+                            .tracking_bead
+                            .as_ref()
+                            .map_or(CanonicalValue::Null, |bead| {
+                                CanonicalValue::String(bead.clone())
+                            }),
+                    ),
+                    (
+                        "evidence_hash".to_string(),
+                        blocker
+                            .evidence_hash
+                            .as_ref()
+                            .map_or(CanonicalValue::Null, |hash| {
+                                CanonicalValue::Bytes(hash.as_bytes().to_vec())
+                            }),
+                    ),
+                    (
+                        "owner".to_string(),
+                        blocker
+                            .owner
+                            .as_ref()
+                            .map_or(CanonicalValue::Null, |owner| {
+                                CanonicalValue::String(owner.clone())
+                            }),
+                    ),
+                    (
+                        "user_impact".to_string(),
+                        CanonicalValue::String(blocker.user_impact.clone()),
+                    ),
+                    ("tags".to_string(), CanonicalValue::Array(tags)),
+                ]))
+            })
+            .collect();
+        let mut cohort_rollups: Vec<_> = self.cohort_rollups.iter().collect();
+        cohort_rollups.sort_by(|left, right| left.cohort_name.cmp(&right.cohort_name));
+        let cohort_rollups = cohort_rollups
+            .into_iter()
+            .map(|rollup| {
+                let mut blocker_ids: Vec<_> = rollup.blocker_ids.to_vec();
+                blocker_ids.sort();
+                let blocker_ids = blocker_ids
+                    .into_iter()
+                    .map(|id| CanonicalValue::String(id.clone()))
+                    .collect();
+                CanonicalValue::Map(BTreeMap::from([
+                    (
+                        "cohort_name".to_string(),
+                        CanonicalValue::String(rollup.cohort_name.clone()),
+                    ),
+                    (
+                        "readiness".to_string(),
+                        CanonicalValue::String(rollup.readiness.as_str().to_string()),
+                    ),
+                    (
+                        "blocker_count".to_string(),
+                        CanonicalValue::U64(rollup.blocker_count as u64),
+                    ),
+                    (
+                        "blocking_count".to_string(),
+                        CanonicalValue::U64(rollup.blocking_count as u64),
+                    ),
+                    (
+                        "degraded_count".to_string(),
+                        CanonicalValue::U64(rollup.degraded_count as u64),
+                    ),
+                    (
+                        "resolved_count".to_string(),
+                        CanonicalValue::U64(rollup.resolved_count as u64),
+                    ),
+                    (
+                        "readiness_rate_millionths".to_string(),
+                        CanonicalValue::U64(rollup.readiness_rate_millionths),
+                    ),
+                    (
+                        "blocker_ids".to_string(),
+                        CanonicalValue::Array(blocker_ids),
+                    ),
+                ]))
+            })
+            .collect();
+        let canonical = CanonicalValue::Map(BTreeMap::from([
+            (
+                "version".to_string(),
+                CanonicalValue::String(self.version.clone()),
+            ),
+            ("blockers".to_string(), CanonicalValue::Array(blockers)),
+            (
+                "cohort_rollups".to_string(),
+                CanonicalValue::Array(cohort_rollups),
+            ),
+        ]));
         let bytes = encode_value(&canonical);
         ContentHash::compute(&bytes)
     }
@@ -1009,6 +1111,32 @@ mod tests {
         ))
         .unwrap();
         assert_ne!(l1.content_hash(), l2.content_hash());
+    }
+
+    #[test]
+    fn content_hash_changes_when_blocker_payload_changes() {
+        let l1 = build_seed_ledger();
+        let mut l2 = build_seed_ledger();
+        l2.blockers[0].title = "Different blocker title".to_string();
+        assert_ne!(l1.content_hash(), l2.content_hash());
+    }
+
+    #[test]
+    fn content_hash_changes_when_cohort_rollup_changes() {
+        let l1 = build_seed_ledger();
+        let mut l2 = build_seed_ledger();
+        l2.cohort_rollups[0].readiness = CohortReadiness::ReadyWithAdvisories;
+        assert_ne!(l1.content_hash(), l2.content_hash());
+    }
+
+    #[test]
+    fn content_hash_is_invariant_to_blocker_and_cohort_order() {
+        let l1 = build_seed_ledger();
+        let mut l2 = build_seed_ledger();
+        l2.blockers.reverse();
+        l2.cohort_rollups.reverse();
+        l2.cohort_rollups[0].blocker_ids.reverse();
+        assert_eq!(l1.content_hash(), l2.content_hash());
     }
 
     #[test]

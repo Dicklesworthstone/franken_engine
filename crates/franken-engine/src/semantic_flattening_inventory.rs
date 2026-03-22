@@ -425,13 +425,16 @@ impl FlatteningInventory {
 
     /// Compute a content hash over the entire inventory.
     ///
-    /// The hash covers schema version, epoch, and all occurrence hashes
-    /// in order for deterministic verification.
+    /// The hash covers schema version, epoch, and all occurrence hashes.
+    /// Occurrences are sorted by id for insertion-order independence.
     pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::new();
         buf.extend_from_slice(self.schema_version.as_bytes());
         buf.extend_from_slice(&self.assessed_epoch.as_u64().to_le_bytes());
-        for occ in &self.occurrences {
+        let mut sorted: Vec<_> = self.occurrences.iter().collect();
+        sorted.sort_by(|a, b| a.id.cmp(&b.id));
+        for occ in &sorted {
+            buf.extend_from_slice(occ.id.as_bytes());
             buf.extend_from_slice(occ.content_hash.as_bytes());
         }
         ContentHash::compute(&buf)
@@ -1369,7 +1372,7 @@ mod tests {
     // -- Additional tests: inventory content hash sensitivity --
 
     #[test]
-    fn test_inventory_hash_changes_with_occurrence_order() {
+    fn test_inventory_hash_is_order_independent() {
         let mut inv1 = FlatteningInventory::new(SecurityEpoch::GENESIS);
         inv1.add(sample_occurrence("ORD-A"));
         inv1.add(sample_occurrence("ORD-B"));
@@ -1378,10 +1381,10 @@ mod tests {
         inv2.add(sample_occurrence("ORD-B"));
         inv2.add(sample_occurrence("ORD-A"));
 
-        assert_ne!(
+        assert_eq!(
             inv1.content_hash(),
             inv2.content_hash(),
-            "Inventory hash should be order-dependent"
+            "Inventory hash must be insertion-order independent"
         );
     }
 

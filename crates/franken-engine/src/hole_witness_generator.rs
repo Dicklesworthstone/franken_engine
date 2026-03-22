@@ -148,11 +148,15 @@ impl HoleReference {
         h.update(self.persistence_millionths.to_le_bytes());
         h.update(b"|surf:");
         h.update(format!("{}", self.surface).as_bytes());
-        for v in &self.representative_cycle {
+        let mut sorted_cycle: Vec<_> = self.representative_cycle.iter().collect();
+        sorted_cycle.sort();
+        for v in &sorted_cycle {
             h.update(b"|cyc:");
             h.update(v.as_bytes());
         }
-        for p in &self.affected_programs {
+        let mut sorted_programs: Vec<_> = self.affected_programs.iter().collect();
+        sorted_programs.sort();
+        for p in &sorted_programs {
             h.update(b"|prog:");
             h.update(p.as_bytes());
         }

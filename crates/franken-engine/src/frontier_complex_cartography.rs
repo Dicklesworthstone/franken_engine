@@ -172,11 +172,15 @@ impl Simplex {
     }
 
     /// Compute a content hash over the simplex's defining data.
+    /// Vertices are sorted for order-independent hashing (simplices are
+    /// unordered sets).
     pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::new();
         buf.extend_from_slice(self.simplex_id.as_bytes());
         buf.extend_from_slice(&self.dimension.as_u32().to_le_bytes());
-        for v in &self.vertices {
+        let mut sorted_verts: Vec<_> = self.vertices.iter().collect();
+        sorted_verts.sort();
+        for v in &sorted_verts {
             buf.extend_from_slice(v.as_bytes());
             buf.push(0xFF);
         }

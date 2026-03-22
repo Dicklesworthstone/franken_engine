@@ -52,6 +52,23 @@ pub const MAX_RULES_PER_PACK: usize = 256;
 /// Maximum number of interference entries per pack pair.
 pub const MAX_INTERFERENCE_ENTRIES: usize = 1024;
 
+fn hash_len(hasher: &mut Sha256, len: usize) {
+    hasher.update((len as u64).to_le_bytes());
+}
+
+fn hash_bytes(hasher: &mut Sha256, bytes: &[u8]) {
+    hash_len(hasher, bytes.len());
+    hasher.update(bytes);
+}
+
+fn hash_str(hasher: &mut Sha256, value: &str) {
+    hash_bytes(hasher, value.as_bytes());
+}
+
+fn hash_content_hash(hasher: &mut Sha256, value: &ContentHash) {
+    hash_bytes(hasher, value.as_bytes());
+}
+
 // ---------------------------------------------------------------------------
 // PackVersion — semantic versioning for packs
 // ---------------------------------------------------------------------------
@@ -234,17 +251,21 @@ impl DeterministicCostModel {
         rule_application_costs: &BTreeMap<String, i64>,
     ) -> ContentHash {
         let mut hasher = Sha256::new();
-        hasher.update(model_id.as_bytes());
+        hash_str(&mut hasher, COST_MODEL_SCHEMA_VERSION);
+        hash_str(&mut hasher, model_id);
+        hash_len(&mut hasher, instruction_costs.len());
         for (class, &cost) in instruction_costs {
-            hasher.update(class.to_string().as_bytes());
+            hash_str(&mut hasher, &class.to_string());
             hasher.update(cost.to_le_bytes());
         }
+        hash_len(&mut hasher, rule_gains.len());
         for (rule_id, &gain) in rule_gains {
-            hasher.update(rule_id.as_bytes());
+            hash_str(&mut hasher, rule_id);
             hasher.update(gain.to_le_bytes());
         }
+        hash_len(&mut hasher, rule_application_costs.len());
         for (rule_id, &cost) in rule_application_costs {
-            hasher.update(rule_id.as_bytes());
+            hash_str(&mut hasher, rule_id);
             hasher.update(cost.to_le_bytes());
         }
         ContentHash::compute(&hasher.finalize())
@@ -420,12 +441,14 @@ impl InterferenceMetadata {
 
     fn compute_hash(entries: &[RuleInterference]) -> ContentHash {
         let mut hasher = Sha256::new();
+        hash_str(&mut hasher, INTERFERENCE_SCHEMA_VERSION);
+        hash_len(&mut hasher, entries.len());
         for entry in entries {
-            hasher.update(entry.rule_a.as_bytes());
-            hasher.update(entry.rule_b.as_bytes());
-            hasher.update(entry.kind.to_string().as_bytes());
+            hash_str(&mut hasher, &entry.rule_a);
+            hash_str(&mut hasher, &entry.rule_b);
+            hash_str(&mut hasher, &entry.kind.to_string());
             hasher.update([u8::from(entry.is_blocking)]);
-            hasher.update(entry.detail.as_bytes());
+            hash_str(&mut hasher, &entry.detail);
         }
         ContentHash::compute(&hasher.finalize())
     }
@@ -548,23 +571,26 @@ impl RewritePack {
         cost_model_id: &str,
     ) -> ContentHash {
         let mut hasher = Sha256::new();
-        hasher.update(pack_id.as_bytes());
+        hash_str(&mut hasher, PACK_SCHEMA_VERSION);
+        hash_str(&mut hasher, pack_id);
         hasher.update(version.major.to_le_bytes());
         hasher.update(version.minor.to_le_bytes());
         hasher.update(epoch.as_u64().to_le_bytes());
-        hasher.update(description.as_bytes());
-        hasher.update(cost_model_id.as_bytes());
-        hasher.update(interference.content_hash.as_bytes());
+        hash_str(&mut hasher, description);
+        hash_str(&mut hasher, cost_model_id);
+        hash_content_hash(&mut hasher, &interference.content_hash);
+        hash_len(&mut hasher, rules.len());
         for rule in rules {
-            hasher.update(rule.rule_id.as_bytes());
-            hasher.update(rule.category.to_string().as_bytes());
-            hasher.update(rule.description.as_bytes());
-            hasher.update(rule.pattern_hash.as_bytes());
-            hasher.update(rule.replacement_hash.as_bytes());
+            hash_str(&mut hasher, &rule.rule_id);
+            hash_str(&mut hasher, &rule.category.to_string());
+            hash_str(&mut hasher, &rule.description);
+            hash_content_hash(&mut hasher, &rule.pattern_hash);
+            hash_content_hash(&mut hasher, &rule.replacement_hash);
             hasher.update([u8::from(rule.proven_sound)]);
             hasher.update(rule.priority_millionths.to_le_bytes());
+            hash_len(&mut hasher, rule.affected_cost_classes.len());
             for class in &rule.affected_cost_classes {
-                hasher.update(class.to_string().as_bytes());
+                hash_str(&mut hasher, &class.to_string());
             }
             hasher.update([u8::from(rule.enabled)]);
         }
@@ -596,14 +622,16 @@ pub struct PackCatalog {
 impl PackCatalog {
     /// Create an empty catalog.
     pub fn new(catalog_id: &str) -> Self {
-        Self {
+        let mut catalog = Self {
             schema_version: CATALOG_SCHEMA_VERSION.into(),
             catalog_id: catalog_id.into(),
             packs: BTreeMap::new(),
             cross_interference: BTreeMap::new(),
             total_rule_count: 0,
-            content_hash: ContentHash::compute(catalog_id.as_bytes()),
-        }
+            content_hash: ContentHash::compute(b"rewrite-pack-catalog-placeholder"),
+        };
+        catalog.recompute_hash();
+        catalog
     }
 
     /// Register a pack. Returns false if a pack with the same ID already exists.
@@ -665,14 +693,18 @@ impl PackCatalog {
 
     fn recompute_hash(&mut self) {
         let mut hasher = Sha256::new();
-        hasher.update(self.catalog_id.as_bytes());
+        hash_str(&mut hasher, CATALOG_SCHEMA_VERSION);
+        hash_str(&mut hasher, &self.catalog_id);
+        hasher.update((self.total_rule_count as u64).to_le_bytes());
+        hash_len(&mut hasher, self.packs.len());
         for (id, pack) in &self.packs {
-            hasher.update(id.as_bytes());
-            hasher.update(pack.content_hash.as_bytes());
+            hash_str(&mut hasher, id);
+            hash_content_hash(&mut hasher, &pack.content_hash);
         }
+        hash_len(&mut hasher, self.cross_interference.len());
         for (key, meta) in &self.cross_interference {
-            hasher.update(key.as_bytes());
-            hasher.update(meta.content_hash.as_bytes());
+            hash_str(&mut hasher, key);
+            hash_content_hash(&mut hasher, &meta.content_hash);
         }
         self.content_hash = ContentHash::compute(&hasher.finalize());
     }
@@ -969,6 +1001,26 @@ mod tests {
         assert_ne!(m1.content_hash, m2.content_hash);
     }
 
+    #[test]
+    fn interference_metadata_hash_frames_rule_boundaries() {
+        let left = InterferenceMetadata::build(vec![RuleInterference {
+            rule_a: "ab".into(),
+            rule_b: "c".into(),
+            kind: RuleInterferenceKind::PatternConflict,
+            is_blocking: false,
+            detail: "same".into(),
+        }]);
+        let right = InterferenceMetadata::build(vec![RuleInterference {
+            rule_a: "a".into(),
+            rule_b: "bc".into(),
+            kind: RuleInterferenceKind::PatternConflict,
+            is_blocking: false,
+            detail: "same".into(),
+        }]);
+
+        assert_ne!(left.content_hash, right.content_hash);
+    }
+
     // --- RewritePack ---
 
     #[test]
@@ -1212,6 +1264,19 @@ mod tests {
     }
 
     #[test]
+    fn cost_model_hash_frames_model_and_rule_boundaries() {
+        let mut gains_a = BTreeMap::new();
+        gains_a.insert("c".to_string(), 7 * MILLION);
+        let mut gains_b = BTreeMap::new();
+        gains_b.insert("bc".to_string(), 7 * MILLION);
+
+        let left = DeterministicCostModel::new("ab", BTreeMap::new(), gains_a, BTreeMap::new());
+        let right = DeterministicCostModel::new("a", BTreeMap::new(), gains_b, BTreeMap::new());
+
+        assert_ne!(left.content_hash, right.content_hash);
+    }
+
+    #[test]
     fn category_all_display_unique() {
         let names: BTreeSet<String> = [
             RewriteCategory::AlgebraicSimplification,
@@ -1281,6 +1346,33 @@ mod tests {
     }
 
     #[test]
+    fn pack_content_hash_frames_description_and_cost_model_boundaries() {
+        let rules = vec![test_rule("r1", RewriteCategory::Custom, true)];
+        let interference = InterferenceMetadata::build(vec![]);
+
+        let left = RewritePack::new(
+            "same",
+            PackVersion::CURRENT,
+            test_epoch(),
+            "ab",
+            rules.clone(),
+            interference.clone(),
+            "c",
+        );
+        let right = RewritePack::new(
+            "same",
+            PackVersion::CURRENT,
+            test_epoch(),
+            "a",
+            rules,
+            interference,
+            "bc",
+        );
+
+        assert_ne!(left.content_hash, right.content_hash);
+    }
+
+    #[test]
     fn pack_content_hash_changes_with_rule_metadata() {
         let p1 = test_pack("same", vec![test_rule("r1", RewriteCategory::Custom, true)]);
         let mut changed = test_rule("r1", RewriteCategory::Custom, true);
@@ -1322,7 +1414,7 @@ mod tests {
     fn catalog_deterministic_hash() {
         let c1 = PackCatalog::new("det");
         let c2 = PackCatalog::new("det");
-        assert_eq!(c1.catalog_id, c2.catalog_id);
+        assert_eq!(c1.content_hash, c2.content_hash);
     }
 
     #[test]
@@ -1371,6 +1463,24 @@ mod tests {
         }
         assert_eq!(catalog.pack_count(), 5);
         assert_eq!(catalog.total_rule_count, 5);
+    }
+
+    #[test]
+    fn catalog_hash_frames_catalog_and_pack_id_boundaries() {
+        let shared_hash = ContentHash::compute(b"shared-pack-hash");
+
+        let mut left_pack = test_pack("c", vec![]);
+        left_pack.content_hash = shared_hash;
+        let mut right_pack = test_pack("bc", vec![]);
+        right_pack.content_hash = shared_hash;
+
+        let mut left = PackCatalog::new("ab");
+        assert!(left.register(left_pack));
+
+        let mut right = PackCatalog::new("a");
+        assert!(right.register(right_pack));
+
+        assert_ne!(left.content_hash, right.content_hash);
     }
 
     #[test]

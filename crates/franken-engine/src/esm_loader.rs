@@ -402,7 +402,7 @@ impl ModuleGraph {
         cycles: &mut Vec<CycleInfo>,
         depth: usize,
     ) -> Result<u32, EsmLoaderError> {
-        if depth > MAX_MODULE_DEPTH {
+        if depth >= MAX_MODULE_DEPTH {
             return Err(EsmLoaderError::DepthExceeded {
                 specifier: specifier.to_string(),
                 depth,
@@ -534,7 +534,7 @@ impl ModuleGraph {
         eval_counter: &mut u32,
         depth: usize,
     ) -> Result<(), EsmLoaderError> {
-        if depth > MAX_MODULE_DEPTH {
+        if depth >= MAX_MODULE_DEPTH {
             return Err(EsmLoaderError::DepthExceeded {
                 specifier: specifier.to_string(),
                 depth,

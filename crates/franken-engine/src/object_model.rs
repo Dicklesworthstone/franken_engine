@@ -779,7 +779,7 @@ impl ObjectHeap {
         let mut visited = BTreeSet::new();
 
         while let Some(h) = current {
-            if depth > MAX_PROTOTYPE_CHAIN_DEPTH {
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
                 return Err(ObjectError::PrototypeChainTooDeep {
                     depth,
                     max: MAX_PROTOTYPE_CHAIN_DEPTH,
@@ -835,7 +835,7 @@ impl ObjectHeap {
         let mut visited = BTreeSet::new();
 
         while let Some(h) = current {
-            if depth > MAX_PROTOTYPE_CHAIN_DEPTH {
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
                 return Err(ObjectError::PrototypeChainTooDeep {
                     depth,
                     max: MAX_PROTOTYPE_CHAIN_DEPTH,
@@ -910,7 +910,7 @@ impl ObjectHeap {
         let mut visited = BTreeSet::new();
 
         while let Some(h) = current {
-            if depth > MAX_PROTOTYPE_CHAIN_DEPTH {
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
                 return Err(ObjectError::PrototypeChainTooDeep {
                     depth,
                     max: MAX_PROTOTYPE_CHAIN_DEPTH,
@@ -1162,7 +1162,7 @@ impl ObjectHeap {
         let mut visited = BTreeSet::new();
 
         while let Some(h) = current {
-            if depth > MAX_PROTOTYPE_CHAIN_DEPTH {
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
                 return Err(ObjectError::PrototypeChainTooDeep {
                     depth,
                     max: MAX_PROTOTYPE_CHAIN_DEPTH,
@@ -2066,7 +2066,7 @@ impl ObjectHeap {
         visited.insert(obj);
 
         while let Some(h) = current {
-            if depth > MAX_PROTOTYPE_CHAIN_DEPTH {
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
                 return Err(ObjectError::PrototypeChainTooDeep {
                     depth,
                     max: MAX_PROTOTYPE_CHAIN_DEPTH,

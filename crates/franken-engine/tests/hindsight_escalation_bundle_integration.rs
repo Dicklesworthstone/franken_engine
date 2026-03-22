@@ -324,6 +324,25 @@ fn pipeline_budget_exhaustion_defers() {
 }
 
 #[test]
+fn pipeline_forced_auto_escalation_receipt_keeps_actual_budget_before_decision() {
+    let mut policy = EscalationPolicy::default();
+    policy.cost_budget_millionths = 1;
+    policy.always_escalate.clear();
+    let mut pipeline = EscalationPipeline::new(policy, epoch(100));
+
+    let receipt = pipeline.process_trigger(trigger(
+        "t-budget-before",
+        EscalationTriggerKind::ResourceExhaustion,
+        TriggerSeverity::Critical,
+    ));
+
+    assert_eq!(receipt.decision, EscalationDecision::Escalate);
+    assert_eq!(receipt.cost_budget_millionths, 1);
+    assert!(receipt.cost_consumed_millionths > receipt.cost_budget_millionths);
+    assert_eq!(pipeline.remaining_budget_millionths, 0);
+}
+
+#[test]
 fn pipeline_covered_boundaries_from_trigger() {
     let mut pipeline = EscalationPipeline::new(EscalationPolicy::default(), epoch(100));
     let mut t = trigger(

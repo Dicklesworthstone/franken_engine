@@ -1133,6 +1133,25 @@ fn enrichment_pipeline_tiny_budget_defers_below_threshold() {
 }
 
 #[test]
+fn enrichment_pipeline_forced_auto_escalation_preserves_budget_before_decision() {
+    let mut policy = EscalationPolicy::default();
+    policy.cost_budget_millionths = 1;
+    policy.always_escalate.clear();
+    let mut pipeline = EscalationPipeline::new(policy, epoch(100));
+
+    let receipt = pipeline.process_trigger(make_trigger(
+        "tiny-budget-before",
+        EscalationTriggerKind::ResourceExhaustion,
+        TriggerSeverity::Critical,
+    ));
+
+    assert_eq!(receipt.decision, EscalationDecision::Escalate);
+    assert_eq!(receipt.cost_budget_millionths, 1);
+    assert!(receipt.cost_consumed_millionths > receipt.cost_budget_millionths);
+    assert_eq!(pipeline.remaining_budget_millionths, 0);
+}
+
+#[test]
 fn enrichment_pipeline_below_threshold_advisory_exceeds_budget_defers() {
     let mut policy = EscalationPolicy::default();
     policy.cost_budget_millionths = 1; // tiny budget

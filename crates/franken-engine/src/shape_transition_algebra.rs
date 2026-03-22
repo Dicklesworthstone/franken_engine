@@ -1533,12 +1533,14 @@ fn build_invalidation_receipt(
                 .join(", ")
         )
     };
+    let mut sorted_assumptions = invalidated_assumptions.to_vec();
+    sorted_assumptions.sort();
     let payload = serde_json::to_vec(&ReceiptSeed {
         transition_kind: &transition_kind,
         property_key: &property_key,
         from_shape_id,
         to_shape_id,
-        invalidated_assumptions,
+        invalidated_assumptions: &sorted_assumptions,
     })
     .expect("receipt seed must serialize");
     let receipt_id = hex::encode(Sha256::digest(payload));

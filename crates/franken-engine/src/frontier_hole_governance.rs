@@ -354,7 +354,9 @@ impl GovernanceDecision {
         h.update(format!("{}", self.action).as_bytes());
         h.update(b"|sev:");
         h.update(format!("{}", self.max_severity).as_bytes());
-        for r in &self.reasons {
+        let mut sorted_reasons = self.reasons.clone();
+        sorted_reasons.sort();
+        for r in &sorted_reasons {
             h.update(b"|r:");
             h.update(r.as_bytes());
         }
@@ -438,13 +440,24 @@ impl GovernanceReport {
         h.update(self.total_holes.to_le_bytes());
         h.update(b"|act:");
         h.update(self.actionable_holes.to_le_bytes());
-        for d in &self.decisions {
+        let mut sorted_dec_hashes: Vec<_> = self.decisions.iter().map(|d| d.content_hash).collect();
+        sorted_dec_hashes.sort();
+        for ch in &sorted_dec_hashes {
             h.update(b"|dec:");
-            h.update(d.content_hash.as_bytes());
+            h.update(ch.as_bytes());
         }
-        for b in &self.boundaries {
+        let mut sorted_bnd_hashes: Vec<_> =
+            self.boundaries.iter().map(|b| b.content_hash()).collect();
+        sorted_bnd_hashes.sort();
+        for ch in &sorted_bnd_hashes {
             h.update(b"|bnd:");
-            h.update(b.content_hash().as_bytes());
+            h.update(ch.as_bytes());
+        }
+        let mut sorted_mandatory = self.mandatory_experiments.clone();
+        sorted_mandatory.sort();
+        for experiment in &sorted_mandatory {
+            h.update(b"|exp:");
+            h.update(experiment.as_bytes());
         }
         h.update(b"|ratchet:");
         h.update(self.ratchet.content_hash.as_bytes());
@@ -880,22 +893,45 @@ pub struct GovernanceSummary {
 
 /// Build a summary from a governance report.
 pub fn summarize(report: &GovernanceReport) -> GovernanceSummary {
+    let decisions_count = report.decisions.len() as u64;
+    let suppressed = suppressed_count(report) as u64;
+    let allowed = allowed_count(report) as u64;
+    let mandatory_experiments_count = report.mandatory_experiments.len() as u64;
+    let overall_coverage_millionths = report.ratchet.overall_level_millionths;
+
     let mut h = Sha256::new();
     h.update(b"gov_summary:");
     h.update(report.report_id.as_bytes());
+    h.update(b"|ep:");
+    h.update(report.epoch.as_u64().to_le_bytes());
     h.update(b"|out:");
     h.update(format!("{}", report.outcome).as_bytes());
+    h.update(b"|total:");
+    h.update(report.total_holes.to_le_bytes());
+    h.update(b"|act:");
+    h.update(report.actionable_holes.to_le_bytes());
+    h.update(b"|dec:");
+    h.update(decisions_count.to_le_bytes());
+    h.update(b"|supp:");
+    h.update(suppressed.to_le_bytes());
+    h.update(b"|allow:");
+    h.update(allowed.to_le_bytes());
+    h.update(b"|exp:");
+    h.update(mandatory_experiments_count.to_le_bytes());
+    h.update(b"|cov:");
+    h.update(overall_coverage_millionths.to_le_bytes());
+
     GovernanceSummary {
         report_id: report.report_id.clone(),
         epoch: report.epoch,
         outcome: report.outcome,
         total_holes: report.total_holes,
         actionable_holes: report.actionable_holes,
-        decisions_count: report.decisions.len() as u64,
-        suppressed_count: suppressed_count(report) as u64,
-        allowed_count: allowed_count(report) as u64,
-        mandatory_experiments_count: report.mandatory_experiments.len() as u64,
-        overall_coverage_millionths: report.ratchet.overall_level_millionths,
+        decisions_count,
+        suppressed_count: suppressed,
+        allowed_count: allowed,
+        mandatory_experiments_count,
+        overall_coverage_millionths,
         content_hash: ContentHash::compute(&h.finalize()),
     }
 }
@@ -1420,6 +1456,22 @@ mod tests {
     }
 
     #[test]
+    fn report_hash_changes_when_mandatory_experiments_change() {
+        let holes = vec![make_hole("s1", "parser", true, false)];
+        let claims = vec![(ClaimCategory::Parity, "parser".to_string())];
+        let ratchet = RatchetState::new();
+        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config()).unwrap();
+
+        let mut modified = report.clone();
+        modified
+            .mandatory_experiments
+            .push("manual-rerun".to_string());
+        modified.seal();
+
+        assert_ne!(report.content_hash, modified.content_hash);
+    }
+
+    #[test]
     fn report_serde_roundtrip() {
         let holes = vec![make_hole("n1", "parser", false, false)];
         let claims = vec![(ClaimCategory::Parity, "parser".to_string())];
@@ -1428,5 +1480,23 @@ mod tests {
         let json = serde_json::to_string(&report).unwrap();
         let back: GovernanceReport = serde_json::from_str(&json).unwrap();
         assert_eq!(report, back);
+    }
+
+    #[test]
+    fn summary_hash_changes_when_summary_fields_change() {
+        let holes = vec![make_hole("s1", "parser", true, false)];
+        let claims = vec![(ClaimCategory::Parity, "parser".to_string())];
+        let ratchet = RatchetState::new();
+        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config()).unwrap();
+        let summary = summarize(&report);
+
+        let mut modified = report.clone();
+        modified
+            .mandatory_experiments
+            .push("manual-rerun".to_string());
+        modified.seal();
+        let modified_summary = summarize(&modified);
+
+        assert_ne!(summary.content_hash, modified_summary.content_hash);
     }
 }

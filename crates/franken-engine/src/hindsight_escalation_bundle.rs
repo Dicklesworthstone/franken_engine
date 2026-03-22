@@ -192,7 +192,9 @@ impl EscalationTrigger {
         data.extend_from_slice(format!("{:?}", self.kind).as_bytes());
         data.extend_from_slice(format!("{:?}", self.severity).as_bytes());
         data.extend_from_slice(self.description.as_bytes());
-        for boundary in &self.relevant_boundaries {
+        let mut sorted_boundaries: Vec<_> = self.relevant_boundaries.iter().collect();
+        sorted_boundaries.sort_by_key(|b| b.as_str());
+        for boundary in &sorted_boundaries {
             data.extend_from_slice(boundary.as_str().as_bytes());
         }
         data.extend_from_slice(self.source_component.as_bytes());
@@ -312,12 +314,22 @@ impl EscalationBundle {
         let mut data = Vec::new();
         data.extend_from_slice(self.bundle_id.as_bytes());
         data.extend_from_slice(self.trigger_id.as_bytes());
-        for entry in &self.entries {
+        let mut sorted_entries: Vec<_> = self.entries.iter().collect();
+        sorted_entries.sort_by_key(|e| &e.content_digest);
+        for entry in &sorted_entries {
             data.extend_from_slice(format!("{:?}", entry.kind).as_bytes());
             data.extend_from_slice(entry.content_digest.as_bytes());
+            data.extend_from_slice(match entry.redaction {
+                RedactionTreatment::Plaintext => b"plaintext",
+                RedactionTreatment::DigestOnly => b"digest_only",
+                RedactionTreatment::Omit => b"omit",
+            });
             data.extend_from_slice(&entry.size_bytes.to_le_bytes());
+            data.extend_from_slice(if entry.complete { b"1" } else { b"0" });
         }
-        for boundary in &self.covered_boundaries {
+        let mut sorted_boundaries: Vec<_> = self.covered_boundaries.iter().collect();
+        sorted_boundaries.sort_by_key(|b| b.as_str());
+        for boundary in &sorted_boundaries {
             data.extend_from_slice(boundary.as_str().as_bytes());
         }
         data.extend_from_slice(&self.total_cost_millionths.to_le_bytes());
@@ -525,6 +537,7 @@ impl EscalationPipeline {
 
         // Decide whether to escalate
         let (decision, rationale) = self.decide(&trigger_id, kind, severity);
+        let budget_before = self.remaining_budget_millionths;
 
         let (bundle_id, cost_consumed) = if decision == EscalationDecision::Escalate {
             let bundle = self.build_bundle(&trigger_id, severity, &relevant_boundaries);
@@ -544,7 +557,7 @@ impl EscalationPipeline {
             decision,
             bundle_id,
             rationale,
-            cost_budget_millionths: self.remaining_budget_millionths + cost_consumed,
+            cost_budget_millionths: budget_before,
             cost_consumed_millionths: cost_consumed,
             receipt_epoch: self.pipeline_epoch,
             receipt_hash: ContentHash::compute(b"escalation_receipt"),
@@ -621,7 +634,21 @@ impl EscalationPipeline {
         let mut hash_data = Vec::new();
         hash_data.extend_from_slice(&(total_triggers as u64).to_le_bytes());
         hash_data.extend_from_slice(&(escalated as u64).to_le_bytes());
+        hash_data.extend_from_slice(&(suppressed as u64).to_le_bytes());
+        hash_data.extend_from_slice(&(deferred as u64).to_le_bytes());
+        hash_data.extend_from_slice(&(total_bundles as u64).to_le_bytes());
         hash_data.extend_from_slice(&total_cost.to_le_bytes());
+        hash_data.extend_from_slice(&budget_utilization_millionths.to_le_bytes());
+        hash_data.extend_from_slice(&self.remaining_budget_millionths.to_le_bytes());
+        // by_kind and by_severity are built from sorted ALL arrays, so iteration order is stable.
+        for (kind, count) in &by_kind {
+            hash_data.extend_from_slice(format!("{kind:?}").as_bytes());
+            hash_data.extend_from_slice(&(*count as u64).to_le_bytes());
+        }
+        for (severity, count) in &by_severity {
+            hash_data.extend_from_slice(format!("{severity:?}").as_bytes());
+            hash_data.extend_from_slice(&(*count as u64).to_le_bytes());
+        }
         hash_data.extend_from_slice(&self.pipeline_epoch.as_u64().to_le_bytes());
 
         EscalationSummary {
@@ -1078,6 +1105,58 @@ mod tests {
     }
 
     #[test]
+    fn bundle_hash_changes_when_redaction_changes() {
+        let mut plain = EscalationBundle {
+            bundle_id: "b-1".to_string(),
+            trigger_id: "t-1".to_string(),
+            entries: vec![BundleContentEntry {
+                kind: BundleContentKind::FullBoundaryCapture,
+                content_digest: ContentHash::compute(b"content"),
+                redaction: RedactionTreatment::Plaintext,
+                size_bytes: 1024,
+                complete: true,
+            }],
+            covered_boundaries: BTreeSet::from([BoundaryClass::ClockRead]),
+            total_cost_millionths: 50_000,
+            bundle_epoch: test_epoch(),
+            bundle_hash: ContentHash::compute(b"placeholder"),
+        };
+        plain.recompute_hash();
+
+        let mut digest_only = plain.clone();
+        digest_only.entries[0].redaction = RedactionTreatment::DigestOnly;
+        digest_only.recompute_hash();
+
+        assert_ne!(plain.bundle_hash, digest_only.bundle_hash);
+    }
+
+    #[test]
+    fn bundle_hash_changes_when_completeness_changes() {
+        let mut complete = EscalationBundle {
+            bundle_id: "b-1".to_string(),
+            trigger_id: "t-1".to_string(),
+            entries: vec![BundleContentEntry {
+                kind: BundleContentKind::FullBoundaryCapture,
+                content_digest: ContentHash::compute(b"content"),
+                redaction: RedactionTreatment::DigestOnly,
+                size_bytes: 1024,
+                complete: true,
+            }],
+            covered_boundaries: BTreeSet::from([BoundaryClass::ClockRead]),
+            total_cost_millionths: 50_000,
+            bundle_epoch: test_epoch(),
+            bundle_hash: ContentHash::compute(b"placeholder"),
+        };
+        complete.recompute_hash();
+
+        let mut truncated = complete.clone();
+        truncated.entries[0].complete = false;
+        truncated.recompute_hash();
+
+        assert_ne!(complete.bundle_hash, truncated.bundle_hash);
+    }
+
+    #[test]
     fn bundle_serde_roundtrip() {
         let mut b = EscalationBundle {
             bundle_id: "b-1".to_string(),
@@ -1317,6 +1396,25 @@ mod tests {
         let remaining = pipeline.remaining_budget_millionths;
         // Depending on costs, budget may or may not be zero
         assert!(remaining < pipeline.policy.cost_budget_millionths || remaining == 0);
+    }
+
+    #[test]
+    fn pipeline_receipt_preserves_budget_before_for_forced_auto_escalation() {
+        let mut policy = EscalationPolicy::default();
+        policy.cost_budget_millionths = 1;
+        policy.always_escalate.clear();
+        let mut pipeline = EscalationPipeline::new(policy, test_epoch());
+
+        let receipt = pipeline.process_trigger(test_trigger(
+            "t-budget-before",
+            EscalationTriggerKind::ResourceExhaustion,
+            TriggerSeverity::Critical,
+        ));
+
+        assert_eq!(receipt.decision, EscalationDecision::Escalate);
+        assert_eq!(receipt.cost_budget_millionths, 1);
+        assert!(receipt.cost_consumed_millionths > receipt.cost_budget_millionths);
+        assert_eq!(pipeline.remaining_budget_millionths, 0);
     }
 
     #[test]

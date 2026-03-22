@@ -177,7 +177,11 @@ impl CategoryShiftClaim {
             self.evidence_hash.to_string(),
             self.reproduction_instructions.join("||"),
             source_beads.join("|"),
-            self.caveats.join("||"),
+            {
+                let mut sorted_caveats = self.caveats.clone();
+                sorted_caveats.sort();
+                sorted_caveats.join("||")
+            },
         ]
         .join("|");
         ContentHash::compute(canonical.as_bytes())
@@ -402,9 +406,21 @@ impl CategoryShiftReport {
         }
 
         parts.push(self.methodology.summary.clone());
-        parts.push(self.methodology.statistical_frameworks.join("|"));
-        parts.push(self.methodology.validation_methodology.join("|"));
-        parts.push(self.methodology.limitations.join("|"));
+        {
+            let mut sf = self.methodology.statistical_frameworks.clone();
+            sf.sort();
+            parts.push(sf.join("|"));
+        }
+        {
+            let mut vm = self.methodology.validation_methodology.clone();
+            vm.sort();
+            parts.push(vm.join("|"));
+        }
+        {
+            let mut lm = self.methodology.limitations.clone();
+            lm.sort();
+            parts.push(lm.join("|"));
+        }
 
         for gate in &self.prerequisite_gates {
             parts.push(gate.compute_hash().to_string());

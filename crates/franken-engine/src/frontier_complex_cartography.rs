@@ -495,11 +495,15 @@ impl FrontierHole {
         buf.extend_from_slice(&self.dimension.to_le_bytes());
         buf.extend_from_slice(&(self.significance as u32).to_le_bytes());
         buf.extend_from_slice(&self.persistence_millionths.to_le_bytes());
-        for s in &self.representative_cycle {
+        let mut sorted_cycle = self.representative_cycle.clone();
+        sorted_cycle.sort();
+        for s in &sorted_cycle {
             buf.extend_from_slice(s.as_bytes());
             buf.push(0xFF);
         }
-        for p in &self.affected_programs {
+        let mut sorted_programs = self.affected_programs.clone();
+        sorted_programs.sort();
+        for p in &sorted_programs {
             buf.extend_from_slice(p.as_bytes());
             buf.push(0xFE);
         }

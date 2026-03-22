@@ -225,7 +225,9 @@ impl ExperimentProposal {
         data.extend_from_slice(self.proposal_id.as_bytes());
         data.extend_from_slice(self.kind.as_str().as_bytes());
         data.extend_from_slice(self.target_cell.as_bytes());
-        for (signal, strength) in &self.signals {
+        let mut sorted_signals = self.signals.clone();
+        sorted_signals.sort_by_key(|(s, _)| *s);
+        for (signal, strength) in &sorted_signals {
             data.extend_from_slice(signal.as_str().as_bytes());
             data.extend_from_slice(&strength.to_le_bytes());
         }

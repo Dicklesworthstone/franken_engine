@@ -398,9 +398,11 @@ impl GenerationReport {
         h.update(self.epoch.as_u64().to_le_bytes());
         h.update(b"|out:");
         h.update(format!("{}", self.outcome).as_bytes());
-        for b in &self.batches {
+        let mut sorted_batch_hashes: Vec<_> = self.batches.iter().map(|b| b.content_hash).collect();
+        sorted_batch_hashes.sort();
+        for ch in &sorted_batch_hashes {
             h.update(b"|batch:");
-            h.update(b.content_hash.as_bytes());
+            h.update(ch.as_bytes());
         }
         self.content_hash = ContentHash::compute(&h.finalize());
     }

@@ -604,6 +604,10 @@ impl ContextualSelector {
         }
         h.update((feasible_count as u64).to_le_bytes());
         h.update((infeasible_count as u64).to_le_bytes());
+        if let Some(ref kind) = selected_kind {
+            h.update(b"|kind:");
+            h.update(kind.as_str().as_bytes());
+        }
         let content_hash = ContentHash::compute(&h.finalize());
 
         SelectionDecision {

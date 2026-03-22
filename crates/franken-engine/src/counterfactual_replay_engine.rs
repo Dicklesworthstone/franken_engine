@@ -712,11 +712,17 @@ impl CounterfactualReplayEngine {
 
         let net_improvement = total_counterfactual.saturating_sub(total_original);
 
-        // Compute regime breakdown (net improvement per regime)
+        // Compute regime breakdown (net improvement per regime).
+        // Must iterate BOTH maps to capture regimes unique to either side.
         let mut regime_breakdown = BTreeMap::new();
         for (regime, orig_sum) in &regime_original {
             let cf_sum = regime_counterfactual.get(regime).copied().unwrap_or(0);
             regime_breakdown.insert(regime.clone(), cf_sum.saturating_sub(*orig_sum));
+        }
+        for (regime, cf_sum) in &regime_counterfactual {
+            if !regime_breakdown.contains_key(regime) {
+                regime_breakdown.insert(regime.clone(), *cf_sum);
+            }
         }
 
         // Build confidence envelope

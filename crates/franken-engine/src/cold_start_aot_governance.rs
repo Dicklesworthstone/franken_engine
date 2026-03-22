@@ -578,10 +578,14 @@ impl DecisionReceipt {
         h.update(SCHEMA_VERSION.as_bytes());
         h.update(epoch.as_u64().to_le_bytes());
         h.update(verdict.to_string().as_bytes());
-        for eh in &evidence_hashes {
+        let mut sorted_eh = evidence_hashes.clone();
+        sorted_eh.sort();
+        for eh in &sorted_eh {
             h.update(eh.as_bytes());
         }
-        for ph in &parity_hashes {
+        let mut sorted_ph = parity_hashes.clone();
+        sorted_ph.sort();
+        for ph in &sorted_ph {
             h.update(ph.as_bytes());
         }
         let receipt_hash = ContentHash::compute(&h.finalize());

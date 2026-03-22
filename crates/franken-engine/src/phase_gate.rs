@@ -500,7 +500,7 @@ impl GateEvaluator {
         trace_id: &str,
         timestamp_ticks: u64,
     ) -> GateReport {
-        let report_input = format!(
+        let mut report_input = format!(
             "{}:{}:{}:{}:{}",
             gate_id,
             status,
@@ -508,6 +508,9 @@ impl GateEvaluator {
             self.current_epoch.as_u64(),
             timestamp_ticks,
         );
+        for (k, v) in &metrics.values {
+            report_input.push_str(&format!("|{k}={v}"));
+        }
         let report_hash = ContentHash::compute(report_input.as_bytes());
 
         let report = GateReport {

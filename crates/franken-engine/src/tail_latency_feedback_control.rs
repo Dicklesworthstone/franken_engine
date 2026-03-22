@@ -354,11 +354,15 @@ pub struct ControlDecision {
 }
 
 impl ControlDecision {
-    /// Compute content hash for this decision.
+    /// Compute content hash for this decision, covering all PID terms.
+    #[allow(clippy::too_many_arguments)]
     fn compute_hash(
         decision_id: &str,
         epoch: &SecurityEpoch,
         error: i64,
+        proportional: i64,
+        integral: i64,
+        derivative: i64,
         raw_output: i64,
         clamped_output: i64,
         action: &ControlAction,
@@ -369,6 +373,9 @@ impl ControlDecision {
         hasher.update(decision_id.as_bytes());
         hasher.update(epoch.as_u64().to_le_bytes());
         hasher.update(error.to_le_bytes());
+        hasher.update(proportional.to_le_bytes());
+        hasher.update(integral.to_le_bytes());
+        hasher.update(derivative.to_le_bytes());
         hasher.update(raw_output.to_le_bytes());
         hasher.update(clamped_output.to_le_bytes());
         hasher.update(format!("{action}").as_bytes());
@@ -616,6 +623,9 @@ pub fn pid_step(
         &decision_id,
         &state.epoch,
         error,
+        proportional,
+        integral,
+        derivative,
         raw_output,
         clamped_output,
         &action,

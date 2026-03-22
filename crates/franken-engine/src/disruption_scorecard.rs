@@ -316,13 +316,20 @@ impl ScorecardResult {
         parts.push(self.schema_version.clone());
         for (key, score) in &self.dimension_scores {
             parts.push(format!(
-                "{}:{}:{}",
-                key, score.raw_score_millionths, score.meets_floor
+                "{}:{}:{}:{}:{}:{}",
+                key,
+                score.raw_score_millionths,
+                score.meets_floor,
+                score.floor_millionths,
+                score.target_millionths,
+                score.meets_target,
             ));
         }
         parts.push(format!("outcome:{}", self.outcome));
+        parts.push(format!("targets_met:{}", self.targets_met));
         parts.push(format!("epoch:{}", self.epoch.as_u64()));
         parts.push(self.evidence_bundle_hash.to_string());
+        parts.push(self.environment_fingerprint.clone());
         let canonical = parts.join("|");
         ContentHash::compute(canonical.as_bytes())
     }

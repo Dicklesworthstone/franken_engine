@@ -1140,7 +1140,7 @@ impl ValidationReceiptEmitter {
     pub fn summary(&self) -> ReceiptSummary {
         let chain_integrity = self.chain.verify_integrity();
         let proven_rate_millionths = if self.stats.total_receipts > 0 {
-            (self.stats.total_proven as i64 * 1_000_000) / self.stats.total_receipts as i64
+            (self.stats.total_proven as i128 * 1_000_000 / self.stats.total_receipts as i128) as i64
         } else {
             0
         };

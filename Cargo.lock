@@ -129,7 +129,7 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
 name = "franken-decision"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "franken-evidence",
  "franken-kernel",
@@ -138,7 +138,7 @@ dependencies = [
 
 [[package]]
 name = "franken-evidence"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "serde",
  "serde_json",
@@ -146,7 +146,7 @@ dependencies = [
 
 [[package]]
 name = "franken-kernel"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "serde",
 ]

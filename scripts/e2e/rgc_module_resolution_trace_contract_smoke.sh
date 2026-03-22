@@ -5,12 +5,19 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root_dir"
 
 trace_path="${1:-}"
+emit_sample_if_missing="${RGC_MODULE_RESOLUTION_TRACE_EMIT_SAMPLE_IF_MISSING:-0}"
 if [[ -z "$trace_path" ]]; then
   timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
   trace_path="artifacts/rgc_module_resolution_trace_contract_smoke/${timestamp}/module_resolution_trace.jsonl"
+  emit_sample_if_missing=1
 fi
 
 if [[ ! -f "$trace_path" ]]; then
+  if [[ "$emit_sample_if_missing" != "1" ]]; then
+    echo "module_resolution_trace artifact missing: $trace_path" >&2
+    exit 1
+  fi
+
   mkdir -p "$(dirname "$trace_path")"
   {
     echo '{"schema_version":"rgc.module-resolution.trace.v1","trace_id":"trace-contract-smoke","decision_id":"decision-contract-smoke","policy_id":"policy-contract-smoke","component":"module_resolver","event":"resolution_probe","request_specifier":"./fixture-entry","canonical_specifier":"/workspace/fixture-entry.ts","source_kind":"workspace","probe_sequence":["/workspace/fixture-entry","/workspace/fixture-entry.ts"],"outcome":"allow","error_code":"none"}'

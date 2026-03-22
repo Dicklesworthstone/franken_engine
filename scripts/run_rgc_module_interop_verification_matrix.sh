@@ -282,6 +282,7 @@ write_manifest() {
     echo "    \"events\": \"${events_path}\"," 
     echo "    \"commands\": \"${commands_path}\"," 
     echo "    \"module_resolution_trace\": \"${module_resolution_trace_path}\"," 
+    echo '    "module_resolution_trace_source": "contract_smoke_sample",'
     echo '    "matrix_doc": "docs/module_compatibility_matrix_v1.json",'
     echo '    "matrix_impl": "crates/franken-engine/src/module_compatibility_matrix.rs",'
     echo '    "interop_parity_impl": "crates/franken-engine/src/esm_cjs_interop_parity.rs",'
@@ -311,7 +312,9 @@ write_manifest() {
 main_exit=0
 run_mode || main_exit=$?
 run_local_step \
-  "./scripts/e2e/rgc_module_resolution_trace_contract_smoke.sh ${module_resolution_trace_path}" \
+  "RGC_MODULE_RESOLUTION_TRACE_EMIT_SAMPLE_IF_MISSING=1 ./scripts/e2e/rgc_module_resolution_trace_contract_smoke.sh ${module_resolution_trace_path}" \
+  env \
+  "RGC_MODULE_RESOLUTION_TRACE_EMIT_SAMPLE_IF_MISSING=1" \
   "${root_dir}/scripts/e2e/rgc_module_resolution_trace_contract_smoke.sh" \
   "${module_resolution_trace_path}" \
   || main_exit=$?

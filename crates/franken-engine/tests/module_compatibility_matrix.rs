@@ -202,6 +202,10 @@ fn module_interop_gate_script_surfaces_replay_and_trace_artifacts() {
         "run manifest must publish the module resolution trace artifact path"
     );
     assert!(
+        script.contains("\"module_resolution_trace_source\": \"contract_smoke_sample\""),
+        "run manifest must disclose that the module resolution trace is a contract-smoke sample"
+    );
+    assert!(
         script.contains("cat ${commands_path}"),
         "operator verification must surface the commands artifact"
     );
@@ -226,6 +230,7 @@ fn module_interop_gate_script_surfaces_replay_and_trace_artifacts() {
         "(rch-exit=${run_rc})",
         "(timeout-${rch_timeout_seconds}s)",
         "(remote-exit=${remote_exit_code})",
+        "RGC_MODULE_RESOLUTION_TRACE_EMIT_SAMPLE_IF_MISSING=1",
     ] {
         assert!(
             script.contains(marker),
@@ -289,6 +294,22 @@ fn module_interop_replay_wrapper_requires_complete_bundle() {
     assert!(
         script.contains("rgc_module_resolution_trace_contract_smoke.sh"),
         "replay wrapper must re-run the trace smoke contract"
+    );
+}
+
+#[test]
+fn module_resolution_trace_contract_smoke_script_is_strict_for_explicit_paths() {
+    let path = repo_root().join("scripts/e2e/rgc_module_resolution_trace_contract_smoke.sh");
+    let script = fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+
+    assert!(
+        script.contains("RGC_MODULE_RESOLUTION_TRACE_EMIT_SAMPLE_IF_MISSING"),
+        "trace smoke helper must require explicit opt-in before seeding a sample artifact"
+    );
+    assert!(
+        script.contains("module_resolution_trace artifact missing:"),
+        "trace smoke helper must fail closed when an explicit trace path is missing"
     );
 }
 

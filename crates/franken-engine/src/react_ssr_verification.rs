@@ -1075,6 +1075,11 @@ pub fn verify_batch(
 
     let mut h = Sha256::new();
     h.update(SCHEMA_VERSION.as_bytes());
+    h.update(overall_verdict.as_str().as_bytes());
+    h.update(total_divergence_score.to_le_bytes());
+    h.update((verified_count as u64).to_le_bytes());
+    h.update((divergent_count as u64).to_le_bytes());
+    h.update((inconclusive_count as u64).to_le_bytes());
     h.update((results.len() as u64).to_le_bytes());
     for r in &results {
         h.update(r.verdict.as_str().as_bytes());

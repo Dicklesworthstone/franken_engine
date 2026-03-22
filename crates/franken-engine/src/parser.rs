@@ -5504,6 +5504,12 @@ impl<'a> Utf8BoundarySafeScanner<'a> {
                 continue;
             }
 
+            if byte == b'`' {
+                self.scan_template_literal();
+                self.bump_token();
+                continue;
+            }
+
             if lex_has_class(byte, LEX_CLASS_TWO_CHAR_OPERATOR_LEAD)
                 && self.index + 1 < self.bytes.len()
                 && is_two_char_operator(byte, self.bytes[self.index + 1])
@@ -5565,6 +5571,53 @@ impl<'a> Utf8BoundarySafeScanner<'a> {
                 break;
             }
 
+            if current.is_ascii() {
+                self.index = self.index.saturating_add(1);
+            } else {
+                self.index = advance_utf8_boundary_safe(self.bytes, self.index);
+            }
+        }
+    }
+
+    fn scan_template_literal(&mut self) {
+        // Skip opening backtick.
+        self.index = self.index.saturating_add(1);
+        let mut brace_depth: u32 = 0;
+        while self.index < self.bytes.len() {
+            let current = self.bytes[self.index];
+            if current == b'\\' {
+                // Skip escape sequence.
+                self.index = self.index.saturating_add(1);
+                if self.index < self.bytes.len() {
+                    if self.bytes[self.index].is_ascii() {
+                        self.index = self.index.saturating_add(1);
+                    } else {
+                        self.index = advance_utf8_boundary_safe(self.bytes, self.index);
+                    }
+                }
+                continue;
+            }
+            if brace_depth > 0 {
+                if current == b'{' {
+                    brace_depth = brace_depth.saturating_add(1);
+                } else if current == b'}' {
+                    brace_depth = brace_depth.saturating_sub(1);
+                }
+                self.index = self.index.saturating_add(1);
+                continue;
+            }
+            if current == b'$'
+                && self.index + 1 < self.bytes.len()
+                && self.bytes[self.index + 1] == b'{'
+            {
+                brace_depth = 1;
+                self.index = self.index.saturating_add(2);
+                continue;
+            }
+            if current == b'`' {
+                self.index = self.index.saturating_add(1);
+                break;
+            }
             if current.is_ascii() {
                 self.index = self.index.saturating_add(1);
             } else {
@@ -5652,6 +5705,41 @@ fn count_lexical_tokens_scalar_reference(input: &str) -> u64 {
                 // than the parser surface itself; keep unmatched quotes tokenized.
                 token_count = token_count.saturating_add(1);
                 continue;
+            }
+
+            token_count = token_count.saturating_add(1);
+            continue;
+        }
+
+        if byte == b'`' {
+            index = index.saturating_add(1);
+            let mut brace_depth = 0u32;
+
+            while index < bytes.len() {
+                let current = bytes[index];
+                if current == b'\\' {
+                    index = (index + 2).min(bytes.len());
+                    continue;
+                }
+                if brace_depth > 0 {
+                    if current == b'{' {
+                        brace_depth = brace_depth.saturating_add(1);
+                    } else if current == b'}' {
+                        brace_depth = brace_depth.saturating_sub(1);
+                    }
+                    index = index.saturating_add(1);
+                    continue;
+                }
+                if current == b'$' && index + 1 < bytes.len() && bytes[index + 1] == b'{' {
+                    brace_depth = 1;
+                    index = index.saturating_add(2);
+                    continue;
+                }
+                if current == b'`' {
+                    index = index.saturating_add(1);
+                    break;
+                }
+                index = index.saturating_add(1);
             }
 
             token_count = token_count.saturating_add(1);
@@ -8224,6 +8312,9 @@ mod tests {
             "\"unterminated\nstring\"",
             "await foo;\nbar + baz * 5",
             "_$token123 <= 42",
+            "`hello ${name}`",
+            "`value ${foo({ bar: 1 })}`",
+            "`unterminated ${value`",
         ];
 
         for source in cases {

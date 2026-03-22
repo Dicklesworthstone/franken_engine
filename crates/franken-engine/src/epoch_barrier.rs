@@ -372,7 +372,7 @@ impl EpochBarrier {
         }
 
         let cancelled = self.in_flight_count;
-        self.forced_cancellations += cancelled;
+        self.forced_cancellations = self.forced_cancellations.saturating_add(cancelled);
         self.in_flight_count = 0;
         Ok(cancelled)
     }

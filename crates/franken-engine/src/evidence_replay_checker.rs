@@ -1760,6 +1760,27 @@ mod tests {
     #[test]
     fn violation_type_display_all_variants() {
         assert_eq!(
+            ReplayViolationType::OutcomeDivergence.to_string(),
+            "outcome_divergence"
+        );
+        assert_eq!(
+            ReplayViolationType::ArtifactHashMismatch.to_string(),
+            "artifact_hash_mismatch"
+        );
+        assert_eq!(
+            ReplayViolationType::ChainHashMismatch.to_string(),
+            "chain_hash_mismatch"
+        );
+        assert_eq!(ReplayViolationType::SequenceGap.to_string(), "sequence_gap");
+        assert_eq!(
+            ReplayViolationType::TimestampMonotonicityViolation.to_string(),
+            "timestamp_monotonicity_violation"
+        );
+        assert_eq!(
+            ReplayViolationType::EntryTruncated.to_string(),
+            "entry_truncated"
+        );
+        assert_eq!(
             ReplayViolationType::CalibrationDivergence.to_string(),
             "calibration_divergence"
         );
@@ -1782,10 +1803,6 @@ mod tests {
         assert_eq!(
             ReplayViolationType::EpochRegression.to_string(),
             "epoch_regression"
-        );
-        assert_eq!(
-            ReplayViolationType::EntryTruncated.to_string(),
-            "entry_truncated"
         );
     }
 

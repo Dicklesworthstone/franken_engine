@@ -1633,7 +1633,10 @@ fn error_event(context: &ResolutionContext, code: ResolutionErrorCode) -> Resolu
 }
 
 fn is_relative_specifier(specifier: &str) -> bool {
-    specifier.starts_with("./") || specifier.starts_with("../")
+    specifier == "."
+        || specifier == ".."
+        || specifier.starts_with("./")
+        || specifier.starts_with("../")
 }
 
 fn candidate_paths(base: &str, style: ImportStyle) -> Vec<String> {

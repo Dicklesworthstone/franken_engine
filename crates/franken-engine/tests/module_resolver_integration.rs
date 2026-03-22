@@ -23,7 +23,10 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::capability::RuntimeCapability;
-use frankenengine_engine::module_compatibility_matrix::CompatibilityMode;
+use frankenengine_engine::module_compatibility_matrix::{
+    CompatibilityContext, CompatibilityMode, CompatibilityObservation, CompatibilityRuntime,
+    ModuleCompatibilityMatrix,
+};
 use frankenengine_engine::module_resolver::{
     AllowAllPolicy, CapabilityPolicyHook, CapabilitySafeHostApiSurface,
     DeterministicModuleResolver, HostApiErrorCode, HostApiRequest, ImportStyle,
@@ -43,12 +46,94 @@ fn allow_all() -> AllowAllPolicy {
     AllowAllPolicy
 }
 
+fn matrix_context() -> CompatibilityContext {
+    CompatibilityContext::new(
+        "trace-modcompat-1",
+        "decision-modcompat-1",
+        "policy-modcompat-1",
+    )
+}
+
+fn load_validated_default_matrix() -> ModuleCompatibilityMatrix {
+    let mut matrix = ModuleCompatibilityMatrix::from_default_json().expect("load default matrix");
+    let waivers = matrix.required_waiver_ids();
+    matrix
+        .validate_with_waivers(&waivers, &matrix_context())
+        .expect("default matrix should validate with declared waivers");
+    matrix
+}
+
 fn esm_def(source: &str) -> ModuleDefinition {
     ModuleDefinition::new(ModuleSyntax::EsModule, source)
 }
 
 fn cjs_def(source: &str) -> ModuleDefinition {
     ModuleDefinition::new(ModuleSyntax::CommonJs, source)
+}
+
+fn observe_require_of_esm_behavior(mode: CompatibilityMode) -> String {
+    let mut resolver = DeterministicModuleResolver::new("/repo");
+    resolver
+        .register_workspace_module("/repo/pkg/index.js", esm_def("export default 'esm';"))
+        .unwrap();
+
+    match resolver.resolve(
+        &ModuleRequest::new("pkg", ImportStyle::Require).with_compatibility_mode(mode),
+        &test_context(),
+        &allow_all(),
+    ) {
+        Ok(outcome) => {
+            assert_eq!(mode, CompatibilityMode::BunCompat);
+            assert_eq!(outcome.module.record.syntax, ModuleSyntax::EsModule);
+            "allow_via_sync_bridge".to_string()
+        }
+        Err(error) => {
+            assert!(matches!(
+                mode,
+                CompatibilityMode::Native | CompatibilityMode::NodeCompat
+            ));
+            assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
+            assert!(error.message.contains("ERR_REQUIRE_ESM"));
+            "throw_err_require_esm".to_string()
+        }
+    }
+}
+
+fn observe_extensionless_relative_import_behavior(mode: CompatibilityMode) -> String {
+    let mut resolver = DeterministicModuleResolver::new("/app");
+    resolver
+        .register_workspace_module("main.mjs", esm_def("import './lib';"))
+        .unwrap();
+    resolver
+        .register_workspace_module("lib.mjs", esm_def("export const value = 1;"))
+        .unwrap();
+
+    match resolver.resolve(
+        &ModuleRequest::new("./lib", ImportStyle::Import)
+            .with_referrer("/app/main.mjs")
+            .with_compatibility_mode(mode),
+        &test_context(),
+        &allow_all(),
+    ) {
+        Ok(outcome) => {
+            assert_eq!(mode, CompatibilityMode::BunCompat);
+            assert_eq!(outcome.module.canonical_specifier, "/app/lib.mjs");
+            assert_eq!(
+                outcome.module.probe_sequence,
+                vec!["/app/lib", "/app/lib.mjs"]
+            );
+            "resolve_extensionless_relative".to_string()
+        }
+        Err(error) => {
+            assert!(matches!(
+                mode,
+                CompatibilityMode::Native | CompatibilityMode::NodeCompat
+            ));
+            assert_eq!(error.code, ResolutionErrorCode::ModuleNotFound);
+            assert_eq!(error.probe_sequence, vec!["/app/lib"]);
+            "reject_extensionless_relative".to_string()
+        }
+    }
 }
 
 // =========================================================================
@@ -328,6 +413,66 @@ fn package_type_module_extensionless_relative_node_compat_requires_explicit_exte
         .expect_err("node_compat should reject extensionless relative ESM imports");
     assert_eq!(error.code, ResolutionErrorCode::ModuleNotFound);
     assert_eq!(error.probe_sequence, vec!["/app/lib"]);
+}
+
+#[test]
+fn resolver_require_of_esm_behavior_matches_matrix_contract_across_modes() {
+    let mut matrix = load_validated_default_matrix();
+
+    for (mode, expected_behavior) in [
+        (CompatibilityMode::Native, "throw_err_require_esm"),
+        (CompatibilityMode::NodeCompat, "throw_err_require_esm"),
+        (CompatibilityMode::BunCompat, "allow_via_sync_bridge"),
+    ] {
+        let observed_behavior = observe_require_of_esm_behavior(mode);
+        assert_eq!(observed_behavior, expected_behavior);
+
+        let outcome = matrix
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "cjs-require-esm",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    observed_behavior,
+                ),
+                &matrix_context(),
+            )
+            .expect("resolver require(esm) behavior should match matrix contract");
+        assert!(outcome.matched);
+    }
+}
+
+#[test]
+fn resolver_extensionless_relative_behavior_matches_matrix_contract_across_modes() {
+    let mut matrix = load_validated_default_matrix();
+
+    for (mode, expected_behavior) in [
+        (CompatibilityMode::Native, "reject_extensionless_relative"),
+        (
+            CompatibilityMode::NodeCompat,
+            "reject_extensionless_relative",
+        ),
+        (
+            CompatibilityMode::BunCompat,
+            "resolve_extensionless_relative",
+        ),
+    ] {
+        let observed_behavior = observe_extensionless_relative_import_behavior(mode);
+        assert_eq!(observed_behavior, expected_behavior);
+
+        let outcome = matrix
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "package-type-module-extensionless-relative",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    observed_behavior,
+                ),
+                &matrix_context(),
+            )
+            .expect("resolver extensionless-relative behavior should match matrix contract");
+        assert!(outcome.matched);
+    }
 }
 
 #[test]

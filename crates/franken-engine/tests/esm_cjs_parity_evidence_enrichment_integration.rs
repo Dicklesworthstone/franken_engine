@@ -20,9 +20,10 @@ use std::collections::BTreeSet;
 use frankenengine_engine::esm_cjs_parity_evidence::{
     ESM_CJS_PARITY_COMPONENT, ESM_CJS_PARITY_EVENT_SCHEMA_VERSION,
     ESM_CJS_PARITY_MANIFEST_SCHEMA_VERSION, ESM_CJS_PARITY_POLICY_ID,
-    ESM_CJS_PARITY_SCHEMA_VERSION, EsmCjsActualOutcome, EsmCjsExpectedOutcome,
-    EsmCjsParityArtifactPaths, EsmCjsParityEvent, EsmCjsParityRunManifest, EsmCjsParityVerdict,
-    InteropDirection, ModuleGraphTopology, esm_cjs_parity_corpus, run_esm_cjs_parity_corpus,
+    ESM_CJS_PARITY_SCHEMA_VERSION, EsmCjsActualOutcome, EsmCjsCompatibilityDisposition,
+    EsmCjsExpectedOutcome, EsmCjsParityArtifactPaths, EsmCjsParityEvent, EsmCjsParityRunManifest,
+    EsmCjsParityVerdict, EsmCjsRemediationGuidance, InteropDirection, ModuleGraphTopology,
+    esm_cjs_parity_corpus, run_esm_cjs_parity_corpus,
 };
 
 // ---------------------------------------------------------------------------
@@ -49,6 +50,9 @@ fn make_manifest() -> EsmCjsParityRunManifest {
         specimen_count: 16,
         pass_count: 16,
         fail_count: 0,
+        supported_count: 16,
+        degraded_count: 0,
+        unsupported_count: 0,
         contract_satisfied: true,
         artifact_paths: make_artifact_paths(),
     }
@@ -245,6 +249,35 @@ fn enrichment_verdict_debug_all_unique() {
     let all = [EsmCjsParityVerdict::Pass, EsmCjsParityVerdict::Fail];
     let dbgs: BTreeSet<String> = all.iter().map(|v| format!("{:?}", v)).collect();
     assert_eq!(dbgs.len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// EsmCjsCompatibilityDisposition / guidance
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_compatibility_disposition_all_variants_serde_and_display() {
+    for disposition in [
+        EsmCjsCompatibilityDisposition::Supported,
+        EsmCjsCompatibilityDisposition::Degraded,
+        EsmCjsCompatibilityDisposition::Unsupported,
+    ] {
+        let json = serde_json::to_string(&disposition).unwrap();
+        let back: EsmCjsCompatibilityDisposition = serde_json::from_str(&json).unwrap();
+        assert_eq!(disposition, back);
+        assert_eq!(disposition.to_string(), disposition.as_str());
+    }
+}
+
+#[test]
+fn enrichment_remediation_guidance_serde_roundtrip() {
+    let guidance = EsmCjsRemediationGuidance {
+        guidance_code: "repair_module_source".to_string(),
+        message: "fix the source contract".to_string(),
+    };
+    let json = serde_json::to_string(&guidance).unwrap();
+    let back: EsmCjsRemediationGuidance = serde_json::from_str(&json).unwrap();
+    assert_eq!(guidance, back);
 }
 
 // ---------------------------------------------------------------------------

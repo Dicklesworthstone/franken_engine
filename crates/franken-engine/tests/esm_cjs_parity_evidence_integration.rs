@@ -139,6 +139,10 @@ fn inventory_counts_add_up() {
     let inv = run_esm_cjs_parity_corpus();
     assert_eq!(inv.pass_count + inv.fail_count, inv.specimen_count);
     assert_eq!(
+        inv.supported_count + inv.degraded_count + inv.unsupported_count,
+        inv.specimen_count
+    );
+    assert_eq!(
         inv.pure_esm_count + inv.pure_cjs_count + inv.mixed_count,
         inv.specimen_count
     );
@@ -197,6 +201,9 @@ fn manifest_serde_roundtrip() {
         specimen_count: 10,
         pass_count: 10,
         fail_count: 0,
+        supported_count: 10,
+        degraded_count: 0,
+        unsupported_count: 0,
         contract_satisfied: true,
         artifact_paths: EsmCjsParityArtifactPaths {
             evidence_inventory: "inv.json".into(),
@@ -312,6 +319,9 @@ fn contract_satisfied_when_all_pass() {
         specimen_count: 20,
         pass_count: 20,
         fail_count: 0,
+        supported_count: 20,
+        degraded_count: 0,
+        unsupported_count: 0,
         pure_esm_count: 8,
         pure_cjs_count: 7,
         mixed_count: 5,
@@ -328,6 +338,9 @@ fn contract_not_satisfied_with_any_failure() {
         specimen_count: 20,
         pass_count: 19,
         fail_count: 1,
+        supported_count: 19,
+        degraded_count: 0,
+        unsupported_count: 1,
         pure_esm_count: 8,
         pure_cjs_count: 7,
         mixed_count: 5,
@@ -344,12 +357,50 @@ fn contract_not_satisfied_with_empty_corpus() {
         specimen_count: 0,
         pass_count: 0,
         fail_count: 0,
+        supported_count: 0,
+        degraded_count: 0,
+        unsupported_count: 0,
         pure_esm_count: 0,
         pure_cjs_count: 0,
         mixed_count: 0,
         evidence: vec![],
     };
     assert!(!inv.contract_satisfied());
+}
+
+#[test]
+fn all_evidence_has_explicit_disposition_and_guidance() {
+    let inv = run_esm_cjs_parity_corpus();
+    for ev in &inv.evidence {
+        assert!(!ev.remediation_guidance.guidance_code.is_empty());
+        assert!(!ev.remediation_guidance.message.is_empty());
+        match ev.compatibility_disposition {
+            EsmCjsCompatibilityDisposition::Supported
+            | EsmCjsCompatibilityDisposition::Degraded
+            | EsmCjsCompatibilityDisposition::Unsupported => {}
+        }
+    }
+}
+
+#[test]
+fn parse_failure_evidence_is_unsupported_with_source_guidance() {
+    let inv = run_esm_cjs_parity_corpus();
+    let parse_failures: Vec<_> = inv
+        .evidence
+        .iter()
+        .filter(|ev| ev.expected_outcome == EsmCjsExpectedOutcome::ParseFailure)
+        .collect();
+    assert!(!parse_failures.is_empty());
+    for ev in parse_failures {
+        assert_eq!(
+            ev.compatibility_disposition,
+            EsmCjsCompatibilityDisposition::Unsupported
+        );
+        assert_eq!(
+            ev.remediation_guidance.guidance_code,
+            "repair_module_source"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

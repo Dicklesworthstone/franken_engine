@@ -199,6 +199,36 @@ pub enum EsmCjsParityVerdict {
     Pass,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EsmCjsCompatibilityDisposition {
+    Supported,
+    Degraded,
+    Unsupported,
+}
+
+impl EsmCjsCompatibilityDisposition {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Supported => "supported",
+            Self::Degraded => "degraded",
+            Self::Unsupported => "unsupported",
+        }
+    }
+}
+
+impl fmt::Display for EsmCjsCompatibilityDisposition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EsmCjsRemediationGuidance {
+    pub guidance_code: String,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EsmCjsParitySpecimenEvidence {
     pub specimen_id: String,
@@ -208,6 +238,8 @@ pub struct EsmCjsParitySpecimenEvidence {
     pub expected_outcome: EsmCjsExpectedOutcome,
     pub actual_outcome: EsmCjsActualOutcome,
     pub verdict: EsmCjsParityVerdict,
+    pub compatibility_disposition: EsmCjsCompatibilityDisposition,
+    pub remediation_guidance: EsmCjsRemediationGuidance,
     pub error_detail: Option<String>,
 }
 
@@ -222,6 +254,9 @@ pub struct EsmCjsParityEvidenceInventory {
     pub specimen_count: u64,
     pub pass_count: u64,
     pub fail_count: u64,
+    pub supported_count: u64,
+    pub degraded_count: u64,
+    pub unsupported_count: u64,
     pub pure_esm_count: u64,
     pub pure_cjs_count: u64,
     pub mixed_count: u64,
@@ -249,6 +284,9 @@ pub struct EsmCjsParityRunManifest {
     pub specimen_count: u64,
     pub pass_count: u64,
     pub fail_count: u64,
+    pub supported_count: u64,
+    pub degraded_count: u64,
+    pub unsupported_count: u64,
     pub contract_satisfied: bool,
     pub artifact_paths: EsmCjsParityArtifactPaths,
 }
@@ -509,6 +547,9 @@ pub fn run_esm_cjs_parity_corpus() -> EsmCjsParityEvidenceInventory {
     let mut evidence = Vec::with_capacity(corpus.len());
     let mut pass_count: u64 = 0;
     let mut fail_count: u64 = 0;
+    let mut supported_count: u64 = 0;
+    let mut degraded_count: u64 = 0;
+    let mut unsupported_count: u64 = 0;
     let mut pure_esm_count: u64 = 0;
     let mut pure_cjs_count: u64 = 0;
     let mut mixed_count: u64 = 0;
@@ -525,6 +566,11 @@ pub fn run_esm_cjs_parity_corpus() -> EsmCjsParityEvidenceInventory {
         } else {
             fail_count += 1;
         }
+        match ev.compatibility_disposition {
+            EsmCjsCompatibilityDisposition::Supported => supported_count += 1,
+            EsmCjsCompatibilityDisposition::Degraded => degraded_count += 1,
+            EsmCjsCompatibilityDisposition::Unsupported => unsupported_count += 1,
+        }
         evidence.push(ev);
     }
 
@@ -534,10 +580,95 @@ pub fn run_esm_cjs_parity_corpus() -> EsmCjsParityEvidenceInventory {
         specimen_count: corpus.len() as u64,
         pass_count,
         fail_count,
+        supported_count,
+        degraded_count,
+        unsupported_count,
         pure_esm_count,
         pure_cjs_count,
         mixed_count,
         evidence,
+    }
+}
+
+fn remediation_guidance(
+    guidance_code: &str,
+    message: impl Into<String>,
+) -> EsmCjsRemediationGuidance {
+    EsmCjsRemediationGuidance {
+        guidance_code: guidance_code.to_string(),
+        message: message.into(),
+    }
+}
+
+fn classify_compatibility(
+    specimen: &EsmCjsParitySpecimen,
+    _actual_outcome: EsmCjsActualOutcome,
+    verdict: EsmCjsParityVerdict,
+) -> (EsmCjsCompatibilityDisposition, EsmCjsRemediationGuidance) {
+    if verdict == EsmCjsParityVerdict::Fail {
+        return (
+            EsmCjsCompatibilityDisposition::Unsupported,
+            remediation_guidance(
+                "interop_contract_violation",
+                format!(
+                    "specimen '{}' drifted from the shipped ESM/CJS parity contract; rerun the parity evidence bundle and inspect the emitted artifact set before shipping this boundary",
+                    specimen.specimen_id
+                ),
+            ),
+        );
+    }
+
+    match specimen.expected_outcome {
+        EsmCjsExpectedOutcome::ExecuteSuccess => (
+            EsmCjsCompatibilityDisposition::Supported,
+            remediation_guidance(
+                "no_remediation_required",
+                format!(
+                    "specimen '{}' is supported under the current shipped ESM/CJS parity contract; no mitigation is required",
+                    specimen.specimen_id
+                ),
+            ),
+        ),
+        EsmCjsExpectedOutcome::EvaluationFailure => (
+            EsmCjsCompatibilityDisposition::Degraded,
+            remediation_guidance(
+                "stabilize_async_boundary",
+                format!(
+                    "specimen '{}' degrades at evaluation time; isolate the async boundary or avoid crossing this interop edge until the evaluation failure is resolved",
+                    specimen.specimen_id
+                ),
+            ),
+        ),
+        EsmCjsExpectedOutcome::ResolutionFailure => (
+            EsmCjsCompatibilityDisposition::Unsupported,
+            remediation_guidance(
+                "repair_module_resolution",
+                format!(
+                    "specimen '{}' remains unsupported because resolution fails across the ESM/CJS boundary; align specifiers, extensions, and package conditions before retrying",
+                    specimen.specimen_id
+                ),
+            ),
+        ),
+        EsmCjsExpectedOutcome::LinkingFailure => (
+            EsmCjsCompatibilityDisposition::Unsupported,
+            remediation_guidance(
+                "repair_link_boundary",
+                format!(
+                    "specimen '{}' remains unsupported because the mixed graph does not link cleanly; repair the import/export contract or add an explicit shim before retrying",
+                    specimen.specimen_id
+                ),
+            ),
+        ),
+        EsmCjsExpectedOutcome::ParseFailure => (
+            EsmCjsCompatibilityDisposition::Unsupported,
+            remediation_guidance(
+                "repair_module_source",
+                format!(
+                    "specimen '{}' remains unsupported because the source does not parse under the shipped parity harness; fix the source contract before retrying this boundary",
+                    specimen.specimen_id
+                ),
+            ),
+        ),
     }
 }
 
@@ -590,6 +721,8 @@ fn run_single_esm_cjs_specimen(specimen: &EsmCjsParitySpecimen) -> EsmCjsParityS
     } else {
         EsmCjsParityVerdict::Fail
     };
+    let (compatibility_disposition, remediation_guidance) =
+        classify_compatibility(specimen, actual_outcome, verdict);
 
     EsmCjsParitySpecimenEvidence {
         specimen_id: specimen.specimen_id.clone(),
@@ -599,6 +732,8 @@ fn run_single_esm_cjs_specimen(specimen: &EsmCjsParitySpecimen) -> EsmCjsParityS
         expected_outcome: specimen.expected_outcome,
         actual_outcome,
         verdict,
+        compatibility_disposition,
+        remediation_guidance,
         error_detail,
     }
 }
@@ -639,6 +774,16 @@ pub fn write_esm_cjs_parity_evidence_bundle(
         detail: Some(format!("specimen_count={}", inv.specimen_count)),
     });
     for ev in &inv.evidence {
+        let detail = match &ev.error_detail {
+            Some(error_detail) => Some(format!(
+                "disposition={} guidance_code={} error={}",
+                ev.compatibility_disposition, ev.remediation_guidance.guidance_code, error_detail
+            )),
+            None => Some(format!(
+                "disposition={} guidance_code={}",
+                ev.compatibility_disposition, ev.remediation_guidance.guidance_code
+            )),
+        };
         events.push(EsmCjsParityEvent {
             schema_version: ESM_CJS_PARITY_EVENT_SCHEMA_VERSION.into(),
             component: ESM_CJS_PARITY_COMPONENT.into(),
@@ -646,7 +791,7 @@ pub fn write_esm_cjs_parity_evidence_bundle(
             policy_id: ESM_CJS_PARITY_POLICY_ID.into(),
             specimen_id: Some(ev.specimen_id.clone()),
             verdict: Some(format!("{:?}", ev.verdict)),
-            detail: ev.error_detail.clone(),
+            detail,
         });
     }
     events.push(EsmCjsParityEvent {
@@ -664,8 +809,15 @@ pub fn write_esm_cjs_parity_evidence_bundle(
             .into(),
         ),
         detail: Some(format!(
-            "pass={} fail={} pure_esm={} pure_cjs={} mixed={}",
-            inv.pass_count, inv.fail_count, inv.pure_esm_count, inv.pure_cjs_count, inv.mixed_count
+            "pass={} fail={} supported={} degraded={} unsupported={} pure_esm={} pure_cjs={} mixed={}",
+            inv.pass_count,
+            inv.fail_count,
+            inv.supported_count,
+            inv.degraded_count,
+            inv.unsupported_count,
+            inv.pure_esm_count,
+            inv.pure_cjs_count,
+            inv.mixed_count
         )),
     });
 
@@ -704,6 +856,9 @@ pub fn write_esm_cjs_parity_evidence_bundle(
         specimen_count: inv.specimen_count,
         pass_count: inv.pass_count,
         fail_count: inv.fail_count,
+        supported_count: inv.supported_count,
+        degraded_count: inv.degraded_count,
+        unsupported_count: inv.unsupported_count,
         contract_satisfied: inv.contract_satisfied(),
         artifact_paths,
     };
@@ -872,6 +1027,9 @@ mod tests {
             specimen_count: 1,
             pass_count: 1,
             fail_count: 0,
+            supported_count: 1,
+            degraded_count: 0,
+            unsupported_count: 0,
             contract_satisfied: true,
             artifact_paths: EsmCjsParityArtifactPaths {
                 evidence_inventory: "inv.json".into(),
@@ -909,6 +1067,9 @@ mod tests {
             specimen_count: 5,
             pass_count: 5,
             fail_count: 0,
+            supported_count: 5,
+            degraded_count: 0,
+            unsupported_count: 0,
             pure_esm_count: 2,
             pure_cjs_count: 2,
             mixed_count: 1,
@@ -995,6 +1156,28 @@ mod tests {
         assert_eq!(json, "\"pass\"");
         let json = serde_json::to_string(&EsmCjsParityVerdict::Fail).unwrap();
         assert_eq!(json, "\"fail\"");
+    }
+
+    #[test]
+    fn compatibility_disposition_serde_roundtrip() {
+        for disposition in [
+            EsmCjsCompatibilityDisposition::Supported,
+            EsmCjsCompatibilityDisposition::Degraded,
+            EsmCjsCompatibilityDisposition::Unsupported,
+        ] {
+            let json = serde_json::to_string(&disposition).unwrap();
+            let decoded: EsmCjsCompatibilityDisposition = serde_json::from_str(&json).unwrap();
+            assert_eq!(disposition, decoded);
+            assert_eq!(json, format!("\"{}\"", disposition.as_str()));
+        }
+    }
+
+    #[test]
+    fn remediation_guidance_serde_roundtrip() {
+        let guidance = remediation_guidance("guidance-code", "fix the boundary");
+        let json = serde_json::to_string(&guidance).unwrap();
+        let decoded: EsmCjsRemediationGuidance = serde_json::from_str(&json).unwrap();
+        assert_eq!(guidance, decoded);
     }
 
     #[test]
@@ -1120,6 +1303,11 @@ mod tests {
             expected_outcome: EsmCjsExpectedOutcome::ExecuteSuccess,
             actual_outcome: EsmCjsActualOutcome::OtherFailure,
             verdict: EsmCjsParityVerdict::Fail,
+            compatibility_disposition: EsmCjsCompatibilityDisposition::Unsupported,
+            remediation_guidance: remediation_guidance(
+                "interop_contract_violation",
+                "rerun the bundle",
+            ),
             error_detail: Some("something went wrong".into()),
         };
         let json = serde_json::to_string(&ev).unwrap();
@@ -1145,6 +1333,9 @@ mod tests {
             specimen_count: 1,
             pass_count: 1,
             fail_count: 0,
+            supported_count: 1,
+            degraded_count: 0,
+            unsupported_count: 0,
             pure_esm_count: 1,
             pure_cjs_count: 0,
             mixed_count: 0,
@@ -1301,6 +1492,32 @@ mod tests {
         assert_eq!(inv.mixed_count, counted_mixed);
     }
 
+    #[test]
+    fn inventory_disposition_counts_match_evidence() {
+        let inv = run_esm_cjs_parity_corpus();
+        let supported = inv
+            .evidence
+            .iter()
+            .filter(|ev| ev.compatibility_disposition == EsmCjsCompatibilityDisposition::Supported)
+            .count() as u64;
+        let degraded = inv
+            .evidence
+            .iter()
+            .filter(|ev| ev.compatibility_disposition == EsmCjsCompatibilityDisposition::Degraded)
+            .count() as u64;
+        let unsupported = inv
+            .evidence
+            .iter()
+            .filter(|ev| {
+                ev.compatibility_disposition == EsmCjsCompatibilityDisposition::Unsupported
+            })
+            .count() as u64;
+        assert_eq!(inv.supported_count, supported);
+        assert_eq!(inv.degraded_count, degraded);
+        assert_eq!(inv.unsupported_count, unsupported);
+        assert_eq!(supported + degraded + unsupported, inv.specimen_count);
+    }
+
     // ── enrichment: enum display completeness ─────────────────────
 
     #[test]
@@ -1406,6 +1623,36 @@ mod tests {
         }
     }
 
+    #[test]
+    fn all_evidence_has_explicit_guidance() {
+        let inv = run_esm_cjs_parity_corpus();
+        for ev in &inv.evidence {
+            assert!(!ev.remediation_guidance.guidance_code.is_empty());
+            assert!(!ev.remediation_guidance.message.is_empty());
+        }
+    }
+
+    #[test]
+    fn parse_failure_specimens_are_marked_unsupported() {
+        let inv = run_esm_cjs_parity_corpus();
+        let parse_failures: Vec<_> = inv
+            .evidence
+            .iter()
+            .filter(|ev| ev.expected_outcome == EsmCjsExpectedOutcome::ParseFailure)
+            .collect();
+        assert!(!parse_failures.is_empty());
+        for ev in parse_failures {
+            assert_eq!(
+                ev.compatibility_disposition,
+                EsmCjsCompatibilityDisposition::Unsupported
+            );
+            assert_eq!(
+                ev.remediation_guidance.guidance_code,
+                "repair_module_source"
+            );
+        }
+    }
+
     // ── enrichment: serde for additional types ────────────────────
 
     #[test]
@@ -1447,6 +1694,69 @@ mod tests {
         assert!(ModuleGraphTopology::Mixed < ModuleGraphTopology::PureCjs);
         assert!(ModuleGraphTopology::PureCjs < ModuleGraphTopology::PureEsm);
         assert!(ModuleGraphTopology::Mixed < ModuleGraphTopology::PureEsm);
+    }
+
+    #[test]
+    fn classify_compatibility_fail_is_unsupported() {
+        let specimen = EsmCjsParitySpecimen {
+            specimen_id: "fail_case".into(),
+            description: "test".into(),
+            source: "1".into(),
+            source_file: Some("fail_case.mjs".into()),
+            expected_syntax: ModuleSyntax::EsModule,
+            topology: ModuleGraphTopology::Mixed,
+            interop_direction: InteropDirection::Bidirectional,
+            expected_outcome: EsmCjsExpectedOutcome::ExecuteSuccess,
+        };
+        let (disposition, guidance) = classify_compatibility(
+            &specimen,
+            EsmCjsActualOutcome::OtherFailure,
+            EsmCjsParityVerdict::Fail,
+        );
+        assert_eq!(disposition, EsmCjsCompatibilityDisposition::Unsupported);
+        assert_eq!(guidance.guidance_code, "interop_contract_violation");
+    }
+
+    #[test]
+    fn classify_compatibility_success_is_supported() {
+        let specimen = EsmCjsParitySpecimen {
+            specimen_id: "success_case".into(),
+            description: "test".into(),
+            source: "1".into(),
+            source_file: Some("success_case.mjs".into()),
+            expected_syntax: ModuleSyntax::EsModule,
+            topology: ModuleGraphTopology::PureEsm,
+            interop_direction: InteropDirection::None,
+            expected_outcome: EsmCjsExpectedOutcome::ExecuteSuccess,
+        };
+        let (disposition, guidance) = classify_compatibility(
+            &specimen,
+            EsmCjsActualOutcome::ExecuteSuccess,
+            EsmCjsParityVerdict::Pass,
+        );
+        assert_eq!(disposition, EsmCjsCompatibilityDisposition::Supported);
+        assert_eq!(guidance.guidance_code, "no_remediation_required");
+    }
+
+    #[test]
+    fn classify_compatibility_eval_failure_is_degraded() {
+        let specimen = EsmCjsParitySpecimen {
+            specimen_id: "eval_case".into(),
+            description: "test".into(),
+            source: "1".into(),
+            source_file: Some("eval_case.mjs".into()),
+            expected_syntax: ModuleSyntax::EsModule,
+            topology: ModuleGraphTopology::Mixed,
+            interop_direction: InteropDirection::EsmImportsCjs,
+            expected_outcome: EsmCjsExpectedOutcome::EvaluationFailure,
+        };
+        let (disposition, guidance) = classify_compatibility(
+            &specimen,
+            EsmCjsActualOutcome::EvaluationFailure,
+            EsmCjsParityVerdict::Pass,
+        );
+        assert_eq!(disposition, EsmCjsCompatibilityDisposition::Degraded);
+        assert_eq!(guidance.guidance_code, "stabilize_async_boundary");
     }
 
     // ── enrichment: corpus source_file coverage ───────────────────

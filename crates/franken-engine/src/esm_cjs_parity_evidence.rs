@@ -199,6 +199,21 @@ pub enum EsmCjsParityVerdict {
     Pass,
 }
 
+impl EsmCjsParityVerdict {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fail => "fail",
+            Self::Pass => "pass",
+        }
+    }
+}
+
+impl fmt::Display for EsmCjsParityVerdict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EsmCjsCompatibilityDisposition {
@@ -790,7 +805,7 @@ pub fn write_esm_cjs_parity_evidence_bundle(
             event: "esm_cjs_parity_specimen_evaluated".into(),
             policy_id: ESM_CJS_PARITY_POLICY_ID.into(),
             specimen_id: Some(ev.specimen_id.clone()),
-            verdict: Some(format!("{:?}", ev.verdict)),
+            verdict: Some(ev.verdict.as_str().to_string()),
             detail,
         });
     }
@@ -1365,7 +1380,7 @@ mod tests {
     // ── enrichment: corpus structure ──────────────────────────────
 
     #[test]
-    fn corpus_specimen_count_is_eighteen() {
+    fn corpus_specimen_count_is_twenty() {
         let corpus = esm_cjs_parity_corpus();
         assert_eq!(corpus.len(), 20);
     }

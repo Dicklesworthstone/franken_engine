@@ -19,6 +19,7 @@ use frankenengine_engine::esm_cjs_interop_parity::{
 };
 use frankenengine_engine::esm_loader::ExportEntry;
 use frankenengine_engine::module_async_evaluation::AsyncModulePhase;
+use frankenengine_engine::module_compatibility_matrix::CompatibilityMode;
 use frankenengine_engine::module_live_binding::BindingCellState;
 use frankenengine_engine::module_resolver::ModuleSyntax;
 
@@ -221,6 +222,7 @@ fn specimen_evidence_serde_roundtrip() {
     let ev = InteropSpecimenEvidence {
         specimen_id: "test-001".into(),
         family: InteropFamily::MixedGraph,
+        compatibility_mode: CompatibilityMode::Native,
         expected_outcome: InteropExpectedOutcome::Success,
         actual_outcome: InteropActualOutcome::Success,
         verdict: InteropVerdict::Pass,
@@ -265,6 +267,7 @@ fn event_serde_roundtrip() {
         event: "test_event".into(),
         policy_id: INTEROP_PARITY_POLICY_ID.to_string(),
         specimen_id: Some("s1".into()),
+        compatibility_mode: Some(CompatibilityMode::BunCompat),
         verdict: Some("pass".into()),
         detail: Some("ok".into()),
     };
@@ -367,6 +370,13 @@ fn corpus_contract_satisfied() {
         "fail_count={}",
         inventory.fail_count
     );
+}
+
+#[test]
+fn corpus_contract_not_satisfied_when_live_evidence_hash_missing() {
+    let mut inventory = run_interop_parity_corpus();
+    inventory.evidence[0].evidence_hash = None;
+    assert!(!inventory.contract_satisfied());
 }
 
 #[test]
@@ -563,6 +573,7 @@ fn specimen_evidence_clone_independence() {
     let ev = InteropSpecimenEvidence {
         specimen_id: "ev-clone".into(),
         family: InteropFamily::CjsOnly,
+        compatibility_mode: CompatibilityMode::Native,
         expected_outcome: InteropExpectedOutcome::Success,
         actual_outcome: InteropActualOutcome::Success,
         verdict: InteropVerdict::Pass,
@@ -736,6 +747,74 @@ fn inventory_schema_fields_match_constants() {
     let inventory = run_interop_parity_corpus();
     assert_eq!(inventory.schema_version, INTEROP_PARITY_SCHEMA_VERSION);
     assert_eq!(inventory.component, INTEROP_PARITY_COMPONENT);
+}
+
+#[test]
+fn evidence_hash_changes_when_error_detail_changes() {
+    let base = InteropSpecimenEvidence {
+        specimen_id: "hash_mutation_case".into(),
+        family: InteropFamily::MixedGraph,
+        compatibility_mode: CompatibilityMode::Native,
+        expected_outcome: InteropExpectedOutcome::Success,
+        actual_outcome: InteropActualOutcome::Success,
+        verdict: InteropVerdict::Pass,
+        compatibility_disposition: InteropCompatibilityDisposition::Supported,
+        remediation_guidance: InteropRemediationGuidance {
+            guidance_code: "no_remediation_required".into(),
+            message: "baseline".into(),
+        },
+        module_count: 2,
+        linked_count: 2,
+        cycle_count: 0,
+        binding_verdicts: vec![],
+        async_phase_verdicts: vec![],
+        error_detail: None,
+        evidence_hash: None,
+    };
+    let mut mutated = base.clone();
+    mutated.error_detail = Some("ERR_REQUIRE_ESM".into());
+
+    assert_ne!(base.compute_hash(), mutated.compute_hash());
+}
+
+#[test]
+fn evidence_hash_changes_when_binding_verdict_changes() {
+    let base = InteropSpecimenEvidence {
+        specimen_id: "binding_hash_case".into(),
+        family: InteropFamily::LiveBinding,
+        compatibility_mode: CompatibilityMode::BunCompat,
+        expected_outcome: InteropExpectedOutcome::Success,
+        actual_outcome: InteropActualOutcome::Success,
+        verdict: InteropVerdict::Pass,
+        compatibility_disposition: InteropCompatibilityDisposition::Supported,
+        remediation_guidance: InteropRemediationGuidance {
+            guidance_code: "no_remediation_required".into(),
+            message: "baseline".into(),
+        },
+        module_count: 2,
+        linked_count: 2,
+        cycle_count: 0,
+        binding_verdicts: vec![BindingVerdict {
+            module_specifier: "dep.mjs".into(),
+            export_name: "value".into(),
+            expected_state: BindingCellState::Initialized,
+            actual_state: BindingCellState::Initialized,
+            pass: true,
+        }],
+        async_phase_verdicts: vec![AsyncPhaseVerdict {
+            module_specifier: "entry.mjs".into(),
+            expected_phase: AsyncModulePhase::Synchronous,
+            actual_phase: AsyncModulePhase::Synchronous,
+            pass: true,
+        }],
+        error_detail: None,
+        evidence_hash: None,
+    };
+    let mut mutated = base.clone();
+    mutated.binding_verdicts[0].actual_state = BindingCellState::Uninitialized;
+    mutated.binding_verdicts[0].pass = false;
+
+    assert_ne!(base.compute_hash(), mutated.compute_hash());
 }
 
 // ── write_interop_parity_bundle produces files ──────────────────────────

@@ -14,6 +14,7 @@
 )]
 
 use frankenengine_engine::esm_cjs_interop_parity::*;
+use frankenengine_engine::module_compatibility_matrix::CompatibilityMode;
 use frankenengine_engine::module_live_binding::BindingCellState;
 use frankenengine_engine::module_resolver::ModuleSyntax;
 use std::collections::BTreeSet;
@@ -68,6 +69,24 @@ fn corpus_has_failure_specimens() {
             .iter()
             .any(|s| s.expected_outcome != InteropExpectedOutcome::Success)
     );
+}
+
+#[test]
+fn corpus_distinguishes_native_and_bun_compat_cjs_requires_esm() {
+    let corpus = interop_parity_corpus();
+    let native = corpus
+        .iter()
+        .find(|s| s.specimen_id == "cjs_requires_esm_named_native")
+        .unwrap();
+    assert_eq!(native.family, InteropFamily::CjsRequiresEsm);
+    assert_eq!(native.expected_outcome, InteropExpectedOutcome::LinkFailure);
+
+    let bun_compat = corpus
+        .iter()
+        .find(|s| s.specimen_id == "cjs_requires_esm_named_bun_compat")
+        .unwrap();
+    assert_eq!(bun_compat.family, InteropFamily::CjsRequiresEsm);
+    assert_eq!(bun_compat.expected_outcome, InteropExpectedOutcome::Success);
 }
 
 #[test]
@@ -227,6 +246,13 @@ fn contract_satisfied() {
 }
 
 #[test]
+fn contract_not_satisfied_when_live_evidence_hash_is_tampered() {
+    let mut inventory = run_interop_parity_corpus();
+    inventory.evidence[0].evidence_hash = Some("0".repeat(64));
+    assert!(!inventory.contract_satisfied());
+}
+
+#[test]
 fn inventory_schema_matches() {
     let inv = run_interop_parity_corpus();
     assert_eq!(inv.schema_version, INTEROP_PARITY_SCHEMA_VERSION);
@@ -288,6 +314,66 @@ fn inventory_evidence_ids_match_corpus() {
     assert_eq!(corpus_ids, evidence_ids);
 }
 
+#[test]
+fn inventory_distinguishes_native_and_bun_compat_cjs_requires_esm() {
+    let inv = run_interop_parity_corpus();
+
+    let native = inv
+        .evidence
+        .iter()
+        .find(|ev| ev.specimen_id == "cjs_requires_esm_named_native")
+        .unwrap();
+    assert_eq!(native.compatibility_mode, CompatibilityMode::Native);
+    assert_eq!(native.actual_outcome, InteropActualOutcome::LinkFailure);
+    assert_eq!(native.verdict, InteropVerdict::Pass);
+    assert_eq!(
+        native.compatibility_disposition,
+        InteropCompatibilityDisposition::Unsupported
+    );
+    assert!(
+        native
+            .error_detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("ERR_REQUIRE_ESM"))
+    );
+
+    let bun_compat = inv
+        .evidence
+        .iter()
+        .find(|ev| ev.specimen_id == "cjs_requires_esm_named_bun_compat")
+        .unwrap();
+    assert_eq!(bun_compat.compatibility_mode, CompatibilityMode::BunCompat);
+    assert_eq!(bun_compat.actual_outcome, InteropActualOutcome::Success);
+    assert_eq!(bun_compat.verdict, InteropVerdict::Pass);
+    assert_eq!(
+        bun_compat.compatibility_disposition,
+        InteropCompatibilityDisposition::Supported
+    );
+    assert!(bun_compat.error_detail.is_none());
+}
+
+#[test]
+fn inventory_marks_legacy_cjs_requires_esm_boundary_cases_as_bun_compat() {
+    let inv = run_interop_parity_corpus();
+
+    for specimen_id in [
+        "mixed_three_module_graph",
+        "cycle_mixed_esm_cjs",
+        "default_export_esm_to_cjs",
+    ] {
+        let evidence = inv
+            .evidence
+            .iter()
+            .find(|ev| ev.specimen_id == specimen_id)
+            .unwrap();
+        assert_eq!(
+            evidence.compatibility_mode,
+            CompatibilityMode::BunCompat,
+            "legacy CJS->ESM boundary specimen should stay BunCompat: {specimen_id}"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Evidence hashes
 // ---------------------------------------------------------------------------
@@ -331,6 +417,25 @@ fn evidence_hashes_deterministic() {
     let b = run_interop_parity_corpus();
     for (ea, eb) in a.evidence.iter().zip(b.evidence.iter()) {
         assert_eq!(ea.evidence_hash, eb.evidence_hash);
+    }
+}
+
+#[test]
+fn stored_evidence_hash_matches_canonical_evidence_body() {
+    let inventory = run_interop_parity_corpus();
+    for evidence in &inventory.evidence {
+        let expected_hash = evidence.compute_hash();
+        assert!(
+            evidence.verify_hash(),
+            "specimen {} stored hash does not verify",
+            evidence.specimen_id
+        );
+        assert_eq!(
+            evidence.evidence_hash.as_deref(),
+            Some(expected_hash.as_str()),
+            "specimen {} stored hash does not match canonical evidence body",
+            evidence.specimen_id
+        );
     }
 }
 
@@ -447,6 +552,7 @@ fn event_serde_roundtrip() {
         event: "test_event".into(),
         policy_id: INTEROP_PARITY_POLICY_ID.into(),
         specimen_id: Some("spec1".into()),
+        compatibility_mode: Some(CompatibilityMode::BunCompat),
         verdict: Some("pass".into()),
         detail: Some("detail".into()),
     };
@@ -463,6 +569,7 @@ fn event_serde_with_none_fields() {
         event: "run_started".into(),
         policy_id: INTEROP_PARITY_POLICY_ID.into(),
         specimen_id: None,
+        compatibility_mode: None,
         verdict: None,
         detail: None,
     };

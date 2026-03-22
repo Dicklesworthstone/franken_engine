@@ -23,8 +23,12 @@ use crate::esm_loader::{
 };
 use crate::hash_tiers::ContentHash;
 use crate::module_async_evaluation::{AsyncModuleEvaluator, AsyncModulePhase};
+use crate::module_compatibility_matrix::CompatibilityMode;
 use crate::module_live_binding::{BindingCell, BindingCellState, BindingId, LiveBindingMap};
-use crate::module_resolver::ModuleSyntax;
+use crate::module_resolver::{
+    AllowAllPolicy, DeterministicModuleResolver, ImportStyle, ModuleDefinition, ModuleDependency,
+    ModuleRequest, ModuleResolver, ModuleSyntax, ResolutionContext,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -251,6 +255,7 @@ pub struct InteropRemediationGuidance {
 pub struct InteropSpecimenEvidence {
     pub specimen_id: String,
     pub family: InteropFamily,
+    pub compatibility_mode: CompatibilityMode,
     pub expected_outcome: InteropExpectedOutcome,
     pub actual_outcome: InteropActualOutcome,
     pub verdict: InteropVerdict,
@@ -263,6 +268,23 @@ pub struct InteropSpecimenEvidence {
     pub async_phase_verdicts: Vec<AsyncPhaseVerdict>,
     pub error_detail: Option<String>,
     pub evidence_hash: Option<String>,
+}
+
+impl InteropSpecimenEvidence {
+    /// Compute the deterministic hash for the evidence body.
+    pub fn compute_hash(&self) -> String {
+        let mut canonical = self.clone();
+        canonical.evidence_hash = None;
+        let canonical_json = serde_json::to_vec(&canonical)
+            .expect("interop specimen evidence serialization should not fail");
+        hex_encode(ContentHash::compute(&canonical_json).as_bytes())
+    }
+
+    /// Verify that the stored hash matches the canonical evidence body.
+    pub fn verify_hash(&self) -> bool {
+        let recomputed = self.compute_hash();
+        self.evidence_hash.as_deref() == Some(recomputed.as_str())
+    }
 }
 
 /// Verdict for a single binding check.
@@ -307,9 +329,16 @@ pub struct InteropParityInventory {
 }
 
 impl InteropParityInventory {
-    /// Contract is satisfied when all specimens pass and we have coverage.
+    /// Contract is satisfied when all specimens pass and the evidence hashes verify.
     pub fn contract_satisfied(&self) -> bool {
-        self.fail_count == 0 && self.specimen_count > 0
+        self.specimen_count > 0
+            && self.fail_count == 0
+            && self.pass_count == self.specimen_count
+            && self.evidence.len() as u64 == self.specimen_count
+            && self
+                .evidence
+                .iter()
+                .all(|evidence| evidence.verdict == InteropVerdict::Pass && evidence.verify_hash())
     }
 }
 
@@ -353,6 +382,7 @@ pub struct InteropParityEvent {
     pub event: String,
     pub policy_id: String,
     pub specimen_id: Option<String>,
+    pub compatibility_mode: Option<CompatibilityMode>,
     pub verdict: Option<String>,
     pub detail: Option<String>,
 }
@@ -561,8 +591,38 @@ pub fn interop_parity_corpus() -> Vec<InteropSpecimen> {
         },
         // ── CJS requires ESM ──
         InteropSpecimen {
-            specimen_id: "cjs_requires_esm_named".into(),
-            description: "CJS entry requires a named export from ESM module".into(),
+            specimen_id: "cjs_requires_esm_named_native".into(),
+            description: "Native CJS entry requires a named export from ESM module and fails with ERR_REQUIRE_ESM".into(),
+            family: InteropFamily::CjsRequiresEsm,
+            modules: vec![
+                SpecimenModule {
+                    specifier: "math.mjs".into(),
+                    syntax: ModuleSyntax::EsModule,
+                    source: "export function add(a, b) { return a + b; }".into(),
+                    imports: vec![],
+                    exports: vec![ExportEntry::direct("add", "add")],
+                    has_default_export: false,
+                    has_top_level_await: false,
+                },
+                SpecimenModule {
+                    specifier: "entry.cjs".into(),
+                    syntax: ModuleSyntax::CommonJs,
+                    source: "const { add } = require('./math.mjs');".into(),
+                    imports: vec![ImportEntry::new("math.mjs", "add", "add")],
+                    exports: vec![],
+                    has_default_export: false,
+                    has_top_level_await: false,
+                },
+            ],
+            entry_point: "entry.cjs".into(),
+            expected_outcome: InteropExpectedOutcome::LinkFailure,
+            expected_linked_count: None,
+            expected_binding_states: vec![],
+            expected_async_phases: vec![],
+        },
+        InteropSpecimen {
+            specimen_id: "cjs_requires_esm_named_bun_compat".into(),
+            description: "Bun-compat CJS entry requires a named export from ESM module via sync bridge semantics".into(),
             family: InteropFamily::CjsRequiresEsm,
             modules: vec![
                 SpecimenModule {
@@ -1144,34 +1204,6 @@ pub fn interop_parity_corpus() -> Vec<InteropSpecimen> {
 // Runner
 // ---------------------------------------------------------------------------
 
-/// Input for computing an evidence hash.
-struct EvidenceHashInput<'a> {
-    specimen_id: &'a str,
-    actual_outcome: InteropActualOutcome,
-    compatibility_disposition: InteropCompatibilityDisposition,
-    guidance_code: &'a str,
-    binding_count: usize,
-    async_count: usize,
-    linked_count: u64,
-    cycle_count: u64,
-}
-
-/// Compute evidence hash from components.
-fn compute_evidence_hash(input: &EvidenceHashInput<'_>) -> String {
-    let hash_input = format!(
-        "{}:{}:{}:{}:{}:{}:{}:{}",
-        input.specimen_id,
-        input.actual_outcome as u8,
-        input.compatibility_disposition as u8,
-        input.guidance_code,
-        input.binding_count,
-        input.async_count,
-        input.linked_count,
-        input.cycle_count,
-    );
-    hex_encode(ContentHash::compute(hash_input.as_bytes()).as_bytes())
-}
-
 /// Build an EsmModule from a SpecimenModule.
 fn build_esm_module(sm: &SpecimenModule) -> EsmModule {
     let mut module = EsmModule::new(&sm.specifier, &sm.source, sm.syntax);
@@ -1183,6 +1215,89 @@ fn build_esm_module(sm: &SpecimenModule) -> EsmModule {
         module.add_export(exp.clone());
     }
     module
+}
+
+fn module_request_style(syntax: ModuleSyntax) -> ImportStyle {
+    match syntax {
+        ModuleSyntax::EsModule => ImportStyle::Import,
+        ModuleSyntax::CommonJs => ImportStyle::Require,
+    }
+}
+
+fn build_module_definition(sm: &SpecimenModule) -> ModuleDefinition {
+    let mut definition = ModuleDefinition::new(sm.syntax, &sm.source);
+    let mut dependencies = BTreeSet::new();
+    for import in &sm.imports {
+        dependencies.insert(import.module_request.clone());
+    }
+    for export in &sm.exports {
+        if let Some(module_request) = &export.module_request {
+            dependencies.insert(module_request.clone());
+        }
+    }
+    for dependency in dependencies {
+        definition = definition.with_dependency(ModuleDependency::new(
+            dependency,
+            module_request_style(sm.syntax),
+        ));
+    }
+    definition
+}
+
+fn specimen_declared_compatibility_mode(specimen_id: &str) -> Option<CompatibilityMode> {
+    if specimen_id.contains("bun_compat") {
+        Some(CompatibilityMode::BunCompat)
+    } else if specimen_id.contains("node_compat") {
+        Some(CompatibilityMode::NodeCompat)
+    } else if specimen_id.contains("native") {
+        Some(CompatibilityMode::Native)
+    } else {
+        None
+    }
+}
+
+fn specimen_has_cjs_requires_esm(specimen: &InteropSpecimen) -> bool {
+    let syntaxes: BTreeMap<&str, ModuleSyntax> = specimen
+        .modules
+        .iter()
+        .map(|module| (module.specifier.as_str(), module.syntax))
+        .collect();
+
+    specimen
+        .modules
+        .iter()
+        .filter(|module| module.syntax == ModuleSyntax::CommonJs)
+        .any(|module| {
+            module.imports.iter().any(|import| {
+                matches!(
+                    syntaxes.get(import.module_request.as_str()),
+                    Some(ModuleSyntax::EsModule)
+                )
+            }) || module.exports.iter().any(|export| {
+                export
+                    .module_request
+                    .as_deref()
+                    .is_some_and(|module_request| {
+                        matches!(syntaxes.get(module_request), Some(ModuleSyntax::EsModule))
+                    })
+            })
+        })
+}
+
+// Legacy corpus specimens predate explicit compatibility-mode tagging. Any
+// specimen that crosses a CJS -> ESM require boundary and still expects to
+// progress past native linking must run under Bun-compatible bridge semantics;
+// native/node compatibility should fail closed with ERR_REQUIRE_ESM first.
+fn specimen_compatibility_mode(specimen: &InteropSpecimen) -> CompatibilityMode {
+    specimen_declared_compatibility_mode(&specimen.specimen_id).unwrap_or_else(|| {
+        if specimen_has_cjs_requires_esm(specimen)
+            && specimen.expected_outcome != InteropExpectedOutcome::LinkFailure
+        {
+            CompatibilityMode::BunCompat
+        } else {
+            CompatibilityMode::Native
+        }
+    })
 }
 
 fn remediation_guidance(
@@ -1260,6 +1375,7 @@ fn classify_compatibility(
 /// Build a quick evidence record for early-return scenarios.
 fn early_return_evidence(
     specimen: &InteropSpecimen,
+    compatibility_mode: CompatibilityMode,
     actual_outcome: InteropActualOutcome,
     module_count: u64,
     linked_count: u64,
@@ -1289,9 +1405,10 @@ fn early_return_evidence(
     };
     let (compatibility_disposition, remediation_guidance) =
         classify_compatibility(specimen, actual_outcome, verdict);
-    InteropSpecimenEvidence {
+    let mut evidence = InteropSpecimenEvidence {
         specimen_id: specimen.specimen_id.clone(),
         family: specimen.family,
+        compatibility_mode,
         expected_outcome: specimen.expected_outcome,
         actual_outcome,
         verdict,
@@ -1303,32 +1420,79 @@ fn early_return_evidence(
         binding_verdicts: vec![],
         async_phase_verdicts: vec![],
         error_detail,
-        evidence_hash: Some(compute_evidence_hash(&EvidenceHashInput {
-            specimen_id: &specimen.specimen_id,
-            actual_outcome,
-            compatibility_disposition,
-            guidance_code: &remediation_guidance.guidance_code,
-            binding_count: 0,
-            async_count: 0,
-            linked_count,
-            cycle_count,
-        })),
-    }
+        evidence_hash: None,
+    };
+    evidence.evidence_hash = Some(evidence.compute_hash());
+    evidence
 }
 
 /// Run a single specimen through the module graph pipeline.
 fn run_single_specimen(specimen: &InteropSpecimen) -> InteropSpecimenEvidence {
-    // Build the module graph — add entry point first (ModuleGraph sets first-added as entry).
-    let mut graph = ModuleGraph::new();
-
-    if let Some(entry_sm) = specimen
+    let compatibility_mode = specimen_compatibility_mode(specimen);
+    let Some(entry_sm) = specimen
         .modules
         .iter()
         .find(|m| m.specifier == specimen.entry_point)
-        && let Err(e) = graph.add_module(build_esm_module(entry_sm))
-    {
+    else {
         return early_return_evidence(
             specimen,
+            compatibility_mode,
+            InteropActualOutcome::GraphConstructionFailure,
+            0,
+            0,
+            0,
+            Some(format!(
+                "entry point '{}' missing from specimen module graph",
+                specimen.entry_point
+            )),
+        );
+    };
+
+    let mut resolver = DeterministicModuleResolver::new("/");
+    for sm in &specimen.modules {
+        if let Err(e) =
+            resolver.register_external_module(&sm.specifier, build_module_definition(sm))
+        {
+            return early_return_evidence(
+                specimen,
+                compatibility_mode,
+                InteropActualOutcome::GraphConstructionFailure,
+                0,
+                0,
+                0,
+                Some(format!("{e}")),
+            );
+        }
+    }
+    let context = ResolutionContext::new(
+        format!("interop-parity-trace-{}", specimen.specimen_id),
+        format!("interop-parity-decision-{}", specimen.specimen_id),
+        INTEROP_PARITY_POLICY_ID,
+    );
+    let entry_request = ModuleRequest::new(
+        specimen.entry_point.clone(),
+        module_request_style(entry_sm.syntax),
+    )
+    .with_compatibility_mode(compatibility_mode);
+    if let Err(e) = resolver.resolve_chain(&entry_request, &context, &AllowAllPolicy) {
+        return early_return_evidence(
+            specimen,
+            compatibility_mode,
+            InteropActualOutcome::LinkFailure,
+            specimen.modules.len() as u64,
+            0,
+            0,
+            Some(format!("{e}")),
+        );
+    }
+
+    // Build the module graph — add entry point first (ModuleGraph sets first-added as entry).
+    let mut graph = ModuleGraph::new();
+
+    if let Err(e) = graph.add_module(build_esm_module(entry_sm)) {
+        return early_return_evidence(
+            specimen,
+            compatibility_mode,
             InteropActualOutcome::GraphConstructionFailure,
             0,
             0,
@@ -1343,6 +1507,7 @@ fn run_single_specimen(specimen: &InteropSpecimen) -> InteropSpecimenEvidence {
         if let Err(e) = graph.add_module(build_esm_module(sm)) {
             return early_return_evidence(
                 specimen,
+                compatibility_mode,
                 InteropActualOutcome::GraphConstructionFailure,
                 0,
                 0,
@@ -1364,6 +1529,7 @@ fn run_single_specimen(specimen: &InteropSpecimen) -> InteropSpecimenEvidence {
     if link_result.is_err() {
         return early_return_evidence(
             specimen,
+            compatibility_mode,
             InteropActualOutcome::LinkFailure,
             module_count,
             linked_count,
@@ -1375,6 +1541,7 @@ fn run_single_specimen(specimen: &InteropSpecimen) -> InteropSpecimenEvidence {
     if cycle_count > 0 {
         return early_return_evidence(
             specimen,
+            compatibility_mode,
             InteropActualOutcome::CycleDetected,
             module_count,
             linked_count,
@@ -1532,12 +1699,10 @@ fn run_single_specimen(specimen: &InteropSpecimen) -> InteropSpecimenEvidence {
     let (compatibility_disposition, remediation_guidance) =
         classify_compatibility(specimen, actual_outcome, verdict);
 
-    let binding_count = binding_verdicts.len();
-    let async_count = async_phase_verdicts.len();
-
-    InteropSpecimenEvidence {
+    let mut evidence = InteropSpecimenEvidence {
         specimen_id: specimen.specimen_id.clone(),
         family: specimen.family,
+        compatibility_mode,
         expected_outcome: specimen.expected_outcome,
         actual_outcome,
         verdict,
@@ -1549,17 +1714,10 @@ fn run_single_specimen(specimen: &InteropSpecimen) -> InteropSpecimenEvidence {
         binding_verdicts,
         async_phase_verdicts,
         error_detail: None,
-        evidence_hash: Some(compute_evidence_hash(&EvidenceHashInput {
-            specimen_id: &specimen.specimen_id,
-            actual_outcome,
-            compatibility_disposition,
-            guidance_code: &remediation_guidance.guidance_code,
-            binding_count,
-            async_count,
-            linked_count,
-            cycle_count,
-        })),
-    }
+        evidence_hash: None,
+    };
+    evidence.evidence_hash = Some(evidence.compute_hash());
+    evidence
 }
 
 /// Run the full interop parity corpus and return the evidence inventory.
@@ -1652,6 +1810,7 @@ pub fn write_interop_parity_bundle(
         event: "interop_parity_run_started".to_string(),
         policy_id: INTEROP_PARITY_POLICY_ID.to_string(),
         specimen_id: None,
+        compatibility_mode: None,
         verdict: None,
         detail: None,
     };
@@ -1661,12 +1820,17 @@ pub fn write_interop_parity_bundle(
     for ev in &inv.evidence {
         let detail = match &ev.error_detail {
             Some(error_detail) => Some(format!(
-                "disposition={} guidance_code={} error={}",
-                ev.compatibility_disposition, ev.remediation_guidance.guidance_code, error_detail
+                "mode={} disposition={} guidance_code={} error={}",
+                ev.compatibility_mode.as_str(),
+                ev.compatibility_disposition,
+                ev.remediation_guidance.guidance_code,
+                error_detail
             )),
             None => Some(format!(
-                "disposition={} guidance_code={}",
-                ev.compatibility_disposition, ev.remediation_guidance.guidance_code,
+                "mode={} disposition={} guidance_code={}",
+                ev.compatibility_mode.as_str(),
+                ev.compatibility_disposition,
+                ev.remediation_guidance.guidance_code,
             )),
         };
         let specimen_event = InteropParityEvent {
@@ -1675,6 +1839,7 @@ pub fn write_interop_parity_bundle(
             event: "interop_specimen_evaluated".to_string(),
             policy_id: INTEROP_PARITY_POLICY_ID.to_string(),
             specimen_id: Some(ev.specimen_id.clone()),
+            compatibility_mode: Some(ev.compatibility_mode),
             verdict: Some(if ev.verdict == InteropVerdict::Pass {
                 "pass".to_string()
             } else {
@@ -1692,6 +1857,7 @@ pub fn write_interop_parity_bundle(
         event: "interop_parity_run_completed".to_string(),
         policy_id: INTEROP_PARITY_POLICY_ID.to_string(),
         specimen_id: None,
+        compatibility_mode: None,
         verdict: Some(if inv.contract_satisfied() {
             "satisfied".to_string()
         } else {
@@ -1770,6 +1936,31 @@ pub fn write_interop_parity_bundle(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn synthetic_passing_evidence(specimen_id: &str) -> InteropSpecimenEvidence {
+        let mut evidence = InteropSpecimenEvidence {
+            specimen_id: specimen_id.to_string(),
+            family: InteropFamily::MixedGraph,
+            compatibility_mode: CompatibilityMode::Native,
+            expected_outcome: InteropExpectedOutcome::Success,
+            actual_outcome: InteropActualOutcome::Success,
+            verdict: InteropVerdict::Pass,
+            compatibility_disposition: InteropCompatibilityDisposition::Supported,
+            remediation_guidance: InteropRemediationGuidance {
+                guidance_code: "no_remediation_required".to_string(),
+                message: "stable".to_string(),
+            },
+            module_count: 1,
+            linked_count: 1,
+            cycle_count: 0,
+            binding_verdicts: vec![],
+            async_phase_verdicts: vec![],
+            error_detail: None,
+            evidence_hash: None,
+        };
+        evidence.evidence_hash = Some(evidence.compute_hash());
+        evidence
+    }
 
     #[test]
     fn corpus_non_empty() {
@@ -2139,6 +2330,7 @@ mod tests {
             event: "test".to_string(),
             policy_id: INTEROP_PARITY_POLICY_ID.to_string(),
             specimen_id: Some("s".to_string()),
+            compatibility_mode: Some(CompatibilityMode::BunCompat),
             verdict: Some("pass".to_string()),
             detail: Some("d".to_string()),
         };
@@ -2338,68 +2530,133 @@ mod tests {
 
     #[test]
     fn evidence_hash_determinism_for_same_input() {
-        let input = EvidenceHashInput {
-            specimen_id: "test_determinism",
+        let evidence = InteropSpecimenEvidence {
+            specimen_id: "test_determinism".into(),
+            family: InteropFamily::MixedGraph,
+            compatibility_mode: CompatibilityMode::Native,
+            expected_outcome: InteropExpectedOutcome::Success,
             actual_outcome: InteropActualOutcome::Success,
+            verdict: InteropVerdict::Pass,
             compatibility_disposition: InteropCompatibilityDisposition::Supported,
-            guidance_code: "no_remediation_required",
-            binding_count: 2,
-            async_count: 0,
+            remediation_guidance: InteropRemediationGuidance {
+                guidance_code: "no_remediation_required".into(),
+                message: "stable".into(),
+            },
+            module_count: 3,
             linked_count: 3,
             cycle_count: 0,
+            binding_verdicts: vec![BindingVerdict {
+                module_specifier: "entry.mjs".into(),
+                export_name: "value".into(),
+                expected_state: BindingCellState::Initialized,
+                actual_state: BindingCellState::Initialized,
+                pass: true,
+            }],
+            async_phase_verdicts: vec![AsyncPhaseVerdict {
+                module_specifier: "entry.mjs".into(),
+                expected_phase: AsyncModulePhase::Synchronous,
+                actual_phase: AsyncModulePhase::Synchronous,
+                pass: true,
+            }],
+            error_detail: None,
+            evidence_hash: None,
         };
-        let h1 = compute_evidence_hash(&input);
-        let h2 = compute_evidence_hash(&input);
+        let h1 = evidence.compute_hash();
+        let h2 = evidence.compute_hash();
         assert_eq!(h1, h2);
     }
 
     #[test]
     fn evidence_hash_changes_with_different_specimen_id() {
-        let h1 = compute_evidence_hash(&EvidenceHashInput {
-            specimen_id: "alpha",
+        let h1 = InteropSpecimenEvidence {
+            specimen_id: "alpha".into(),
+            family: InteropFamily::MixedGraph,
+            compatibility_mode: CompatibilityMode::Native,
+            expected_outcome: InteropExpectedOutcome::Success,
             actual_outcome: InteropActualOutcome::Success,
+            verdict: InteropVerdict::Pass,
             compatibility_disposition: InteropCompatibilityDisposition::Supported,
-            guidance_code: "no_remediation_required",
-            binding_count: 0,
-            async_count: 0,
+            remediation_guidance: InteropRemediationGuidance {
+                guidance_code: "no_remediation_required".into(),
+                message: "stable".into(),
+            },
+            module_count: 1,
             linked_count: 1,
             cycle_count: 0,
-        });
-        let h2 = compute_evidence_hash(&EvidenceHashInput {
-            specimen_id: "beta",
+            binding_verdicts: vec![],
+            async_phase_verdicts: vec![],
+            error_detail: None,
+            evidence_hash: None,
+        }
+        .compute_hash();
+        let h2 = InteropSpecimenEvidence {
+            specimen_id: "beta".into(),
+            family: InteropFamily::MixedGraph,
+            compatibility_mode: CompatibilityMode::Native,
+            expected_outcome: InteropExpectedOutcome::Success,
             actual_outcome: InteropActualOutcome::Success,
+            verdict: InteropVerdict::Pass,
             compatibility_disposition: InteropCompatibilityDisposition::Supported,
-            guidance_code: "no_remediation_required",
-            binding_count: 0,
-            async_count: 0,
+            remediation_guidance: InteropRemediationGuidance {
+                guidance_code: "no_remediation_required".into(),
+                message: "stable".into(),
+            },
+            module_count: 1,
             linked_count: 1,
             cycle_count: 0,
-        });
+            binding_verdicts: vec![],
+            async_phase_verdicts: vec![],
+            error_detail: None,
+            evidence_hash: None,
+        }
+        .compute_hash();
         assert_ne!(h1, h2);
     }
 
     #[test]
     fn evidence_hash_changes_with_different_outcome() {
-        let h1 = compute_evidence_hash(&EvidenceHashInput {
-            specimen_id: "specimen_x",
+        let h1 = InteropSpecimenEvidence {
+            specimen_id: "specimen_x".into(),
+            family: InteropFamily::MixedGraph,
+            compatibility_mode: CompatibilityMode::Native,
+            expected_outcome: InteropExpectedOutcome::Success,
             actual_outcome: InteropActualOutcome::Success,
+            verdict: InteropVerdict::Pass,
             compatibility_disposition: InteropCompatibilityDisposition::Supported,
-            guidance_code: "g",
-            binding_count: 0,
-            async_count: 0,
+            remediation_guidance: InteropRemediationGuidance {
+                guidance_code: "g".into(),
+                message: "stable".into(),
+            },
+            module_count: 1,
             linked_count: 1,
             cycle_count: 0,
-        });
-        let h2 = compute_evidence_hash(&EvidenceHashInput {
-            specimen_id: "specimen_x",
+            binding_verdicts: vec![],
+            async_phase_verdicts: vec![],
+            error_detail: None,
+            evidence_hash: None,
+        }
+        .compute_hash();
+        let h2 = InteropSpecimenEvidence {
+            specimen_id: "specimen_x".into(),
+            family: InteropFamily::MixedGraph,
+            compatibility_mode: CompatibilityMode::Native,
+            expected_outcome: InteropExpectedOutcome::LinkFailure,
             actual_outcome: InteropActualOutcome::LinkFailure,
+            verdict: InteropVerdict::Pass,
             compatibility_disposition: InteropCompatibilityDisposition::Supported,
-            guidance_code: "g",
-            binding_count: 0,
-            async_count: 0,
+            remediation_guidance: InteropRemediationGuidance {
+                guidance_code: "g".into(),
+                message: "stable".into(),
+            },
+            module_count: 1,
             linked_count: 1,
             cycle_count: 0,
-        });
+            binding_verdicts: vec![],
+            async_phase_verdicts: vec![],
+            error_detail: None,
+            evidence_hash: None,
+        }
+        .compute_hash();
         assert_ne!(h1, h2);
     }
 
@@ -2670,6 +2927,7 @@ mod tests {
         };
         let ev = early_return_evidence(
             &specimen,
+            CompatibilityMode::Native,
             InteropActualOutcome::LinkFailure,
             2,
             0,
@@ -2697,6 +2955,7 @@ mod tests {
         };
         let ev = early_return_evidence(
             &specimen,
+            CompatibilityMode::Native,
             InteropActualOutcome::GraphConstructionFailure,
             0,
             0,
@@ -2915,6 +3174,7 @@ mod tests {
             event: "start".to_string(),
             policy_id: INTEROP_PARITY_POLICY_ID.to_string(),
             specimen_id: None,
+            compatibility_mode: None,
             verdict: None,
             detail: None,
         };
@@ -2964,19 +3224,63 @@ mod tests {
         let inv = InteropParityInventory {
             schema_version: INTEROP_PARITY_SCHEMA_VERSION.to_string(),
             component: INTEROP_PARITY_COMPONENT.to_string(),
-            specimen_count: 5,
-            pass_count: 5,
+            specimen_count: 1,
+            pass_count: 1,
             fail_count: 0,
-            supported_count: 4,
-            degraded_count: 1,
+            supported_count: 1,
+            degraded_count: 0,
             unsupported_count: 0,
             family_coverage: BTreeMap::new(),
-            esm_only_count: 2,
-            cjs_only_count: 1,
-            mixed_count: 2,
-            evidence: vec![],
+            esm_only_count: 0,
+            cjs_only_count: 0,
+            mixed_count: 1,
+            evidence: vec![synthetic_passing_evidence("contract_satisfied_case")],
         };
         assert!(inv.contract_satisfied());
+    }
+
+    #[test]
+    fn contract_not_satisfied_when_evidence_hash_missing() {
+        let mut evidence = synthetic_passing_evidence("missing_hash_case");
+        evidence.evidence_hash = None;
+        let inv = InteropParityInventory {
+            schema_version: INTEROP_PARITY_SCHEMA_VERSION.to_string(),
+            component: INTEROP_PARITY_COMPONENT.to_string(),
+            specimen_count: 1,
+            pass_count: 1,
+            fail_count: 0,
+            supported_count: 1,
+            degraded_count: 0,
+            unsupported_count: 0,
+            family_coverage: BTreeMap::new(),
+            esm_only_count: 0,
+            cjs_only_count: 0,
+            mixed_count: 1,
+            evidence: vec![evidence],
+        };
+        assert!(!inv.contract_satisfied());
+    }
+
+    #[test]
+    fn contract_not_satisfied_when_evidence_hash_mismatches() {
+        let mut evidence = synthetic_passing_evidence("tampered_hash_case");
+        evidence.evidence_hash = Some("0".repeat(64));
+        let inv = InteropParityInventory {
+            schema_version: INTEROP_PARITY_SCHEMA_VERSION.to_string(),
+            component: INTEROP_PARITY_COMPONENT.to_string(),
+            specimen_count: 1,
+            pass_count: 1,
+            fail_count: 0,
+            supported_count: 1,
+            degraded_count: 0,
+            unsupported_count: 0,
+            family_coverage: BTreeMap::new(),
+            esm_only_count: 0,
+            cjs_only_count: 0,
+            mixed_count: 1,
+            evidence: vec![evidence],
+        };
+        assert!(!inv.contract_satisfied());
     }
 
     #[test]

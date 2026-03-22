@@ -615,7 +615,7 @@ pub fn synthesize_candidate(
 
     // Compute novelty from strategy multiplier and seed entropy.
     let raw_novelty = strategy.base_novelty_multiplier();
-    let entropy_bonus = (seed_hash % 200_001).min(200_000); // 0..200_000
+    let entropy_bonus = seed_hash % 200_001; // 0..=200_000
     let novelty_score = raw_novelty.saturating_add(entropy_bonus).min(MILLIONTHS);
 
     if novelty_score < constraint.min_novelty_millionths {

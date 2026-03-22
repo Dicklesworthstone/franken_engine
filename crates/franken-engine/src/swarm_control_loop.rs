@@ -432,7 +432,7 @@ impl QueueArtifact {
         if self.total_tasks == 0 {
             return MILLION;
         }
-        (self.completed_tasks as i64 * MILLION) / self.total_tasks as i64
+        (self.completed_tasks as i128 * MILLION as i128 / self.total_tasks as i128) as i64
     }
 
     /// Whether conservative mode is active.

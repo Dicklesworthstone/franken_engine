@@ -247,7 +247,7 @@ impl PolicyComparisonReport {
         if self.decisions_evaluated == 0 {
             return 0;
         }
-        (self.divergence_count as i64 * MILLION) / self.decisions_evaluated as i64
+        (self.divergence_count as i128 * MILLION as i128 / self.decisions_evaluated as i128) as i64
     }
 }
 

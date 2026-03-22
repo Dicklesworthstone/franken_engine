@@ -552,7 +552,7 @@ impl FailoverController {
         if self.total_failovers == 0 {
             return MILLION;
         }
-        (self.successful_failovers as i64 * MILLION) / self.total_failovers as i64
+        (self.successful_failovers as i128 * MILLION as i128 / self.total_failovers as i128) as i64
     }
 
     pub fn derive_id(&self) -> EngineObjectId {

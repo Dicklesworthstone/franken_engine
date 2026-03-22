@@ -1,0 +1,97 @@
+{
+  "schema_version": "franken-engine.rgc-react-doctor-preflight.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-1lsy.10.12.2",
+  "generated_by": "bd-1lsy.10.12.2",
+  "generated_at_utc": "2026-03-22T00:00:00Z",
+  "policy_id": "policy-rgc-react-doctor-preflight-v1",
+  "track": {
+    "id": "RGC-912B",
+    "name": "React Doctor Preflight"
+  },
+  "module_contract": {
+    "schema_version": "franken-engine.react-doctor-preflight.v1",
+    "bead_id": "bd-1lsy.10.12.2",
+    "policy_id": "RGC-912B",
+    "component": "react_doctor_preflight"
+  },
+  "dependency_routes": [
+    {
+      "bead_id": "bd-1lsy.9.7.3",
+      "policy_id": "RGC-807C",
+      "component": "react_mismatch_catalog",
+      "contract_role": "mismatch_catalog",
+      "required_fields": [
+        "entry_id",
+        "domain",
+        "severity",
+        "target",
+        "reproduction",
+        "advisory",
+        "react_version_range"
+      ]
+    },
+    {
+      "bead_id": "bd-1lsy.5.7.3",
+      "policy_id": "RGC-405C",
+      "component": "minimized_repro_extraction",
+      "contract_role": "repro_index",
+      "required_fields": [
+        "input_id",
+        "category",
+        "owner",
+        "severity",
+        "repro_hash",
+        "recommended_action"
+      ]
+    }
+  ],
+  "verdict_classes": [
+    {
+      "verdict": "pass",
+      "blocks_compile_or_build": false,
+      "emitted_surface": "advisory_guidance"
+    },
+    {
+      "verdict": "fail",
+      "blocks_compile_or_build": true,
+      "emitted_surface": "blocking_preflight"
+    }
+  ],
+  "required_structured_log_fields": [
+    "schema_version",
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "runtime_lane",
+    "seed",
+    "outcome",
+    "error_code"
+  ],
+  "required_artifacts": [
+    "run_manifest.json",
+    "trace_ids.json",
+    "events.jsonl",
+    "commands.txt",
+    "react_doctor_support_contract.json",
+    "react_support_repro_index.json",
+    "rgc_react_doctor_preflight_v1.json",
+    "step_logs/step_000.log"
+  ],
+  "gate_runner": {
+    "script": "scripts/run_rgc_react_doctor_preflight.sh",
+    "replay_wrapper": "scripts/e2e/rgc_react_doctor_preflight_replay.sh",
+    "strict_mode": "rch_only_no_local_fallback",
+    "manifest_schema_version": "franken-engine.rgc-react-doctor-preflight.run-manifest.v1"
+  },
+  "operator_verification": [
+    "jq empty docs/rgc_react_doctor_preflight_v1.json",
+    "bash -n scripts/run_rgc_react_doctor_preflight.sh",
+    "bash -n scripts/e2e/rgc_react_doctor_preflight_replay.sh",
+    "./scripts/run_rgc_react_doctor_preflight.sh ci",
+    "env CARGO_TARGET_DIR=$PWD/target_rch_rgc_react_doctor_preflight_verify rch exec -- cargo test -p frankenengine-engine --test rgc_react_doctor_preflight",
+    "./scripts/e2e/rgc_react_doctor_preflight_replay.sh ci"
+  ]
+}

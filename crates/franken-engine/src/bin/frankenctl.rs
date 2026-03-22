@@ -395,6 +395,8 @@ struct BenchmarkScoreCommandOutput {
     blockers: Vec<String>,
     output: Option<String>,
     bundle: Option<String>,
+    bundle_env_path: Option<String>,
+    runtime: BenchmarkBundleRuntime,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -454,6 +456,15 @@ struct BenchmarkBundleRuntime {
     lane: String,
     safe_mode_enabled: bool,
     feature_flags: Vec<String>,
+}
+
+fn benchmark_bundle_runtime() -> BenchmarkBundleRuntime {
+    BenchmarkBundleRuntime {
+        mode: "deterministic-score".to_string(),
+        lane: "publication_gate".to_string(),
+        safe_mode_enabled: true,
+        feature_flags: vec!["benchmark-score-cli".to_string()],
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1774,6 +1785,11 @@ fn execute_benchmark_score(args: BenchmarkScoreArgs) -> Result<i32, String> {
 
     let bundle_dir = write_benchmark_score_output(&args, &claim_bundle)?;
 
+    let runtime = benchmark_bundle_runtime();
+    let bundle = bundle_dir.as_ref().map(|path| path.display().to_string());
+    let bundle_env_path = bundle_dir
+        .as_ref()
+        .map(|path| path.join("env.json").display().to_string());
     let output = BenchmarkScoreCommandOutput {
         schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
         trace_id: ctx.trace_id,
@@ -1784,7 +1800,9 @@ fn execute_benchmark_score(args: BenchmarkScoreArgs) -> Result<i32, String> {
         publish_allowed: claim_bundle.claimed.publish_allowed,
         blockers: claim_bundle.claimed.blockers,
         output: args.output.as_ref().map(|path| path.display().to_string()),
-        bundle: bundle_dir.map(|path| path.display().to_string()),
+        bundle,
+        bundle_env_path,
+        runtime,
     };
 
     print_json(&output)?;
@@ -1803,19 +1821,29 @@ fn write_benchmark_score_output(
         return Ok(None);
     };
 
-    if output_path.file_name().and_then(|name| name.to_str()) != Some("results.json") {
-        write_json_file(output_path, claim_bundle)?;
-        return Ok(None);
-    }
-
     let bundle_dir = benchmark_bundle_dir(output_path);
-    materialize_benchmark_score_bundle(&bundle_dir, output_path, args, claim_bundle)?;
+    let canonical_results_output =
+        output_path.file_name().and_then(|name| name.to_str()) == Some("results.json");
+    let bundle_results_path = if canonical_results_output {
+        output_path.clone()
+    } else {
+        bundle_dir.join("results.json")
+    };
+    let output_copy_path = (!canonical_results_output).then_some(output_path.as_path());
+    materialize_benchmark_score_bundle(
+        &bundle_dir,
+        &bundle_results_path,
+        output_copy_path,
+        args,
+        claim_bundle,
+    )?;
     Ok(Some(bundle_dir))
 }
 
 fn materialize_benchmark_score_bundle(
     bundle_dir: &Path,
     results_path: &Path,
+    output_copy_path: Option<&Path>,
     args: &BenchmarkScoreArgs,
     claim_bundle: &BenchmarkClaimBundle,
 ) -> Result<(), String> {
@@ -1878,12 +1906,7 @@ fn materialize_benchmark_score_bundle(
                 .unwrap_or_else(|| "unknown".to_string()),
             profile: env::var("PROFILE").unwrap_or_else(|_| "dev".to_string()),
         },
-        runtime: BenchmarkBundleRuntime {
-            mode: "deterministic-score".to_string(),
-            lane: "publication_gate".to_string(),
-            safe_mode_enabled: true,
-            feature_flags: vec!["benchmark-score-cli".to_string()],
-        },
+        runtime: benchmark_bundle_runtime(),
         policy: BenchmarkBundlePolicy {
             policy_id: claim_bundle.policy_id.clone(),
             policy_digest_sha256: sha256_prefixed(claim_bundle.policy_id.as_bytes()),
@@ -2036,6 +2059,9 @@ fn materialize_benchmark_score_bundle(
     )?;
 
     write_bytes_file(results_path, &results_bytes)?;
+    if let Some(output_copy_path) = output_copy_path {
+        write_bytes_file(output_copy_path, &results_bytes)?;
+    }
     write_bytes_file(&bundle_dir.join("env.json"), &env_bytes)?;
     write_bytes_file(&bundle_dir.join("commands.txt"), &commands_bytes)?;
     write_bytes_file(&bundle_dir.join("repro.lock"), &repro_bytes)?;
@@ -2446,6 +2472,51 @@ fn validate_benchmark_bundle_contract(
                     },
                 );
                 if !policy_ok {
+                    bundle_violations = true;
+                }
+
+                let runtime_contract_ok = env_artifact.runtime.mode == "deterministic-score"
+                    && env_artifact.runtime.lane == "publication_gate"
+                    && env_artifact.runtime.safe_mode_enabled;
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_env_runtime_contract_matches".to_string(),
+                    runtime_contract_ok,
+                    CODE_BUNDLE_CONTEXT_MISMATCH,
+                    if runtime_contract_ok {
+                        "env.json runtime block pins deterministic-score/publication_gate with safe mode enabled"
+                            .to_string()
+                    } else {
+                        format!(
+                            "env.json runtime contract mismatch: mode={} lane={} safe_mode_enabled={}",
+                            env_artifact.runtime.mode,
+                            env_artifact.runtime.lane,
+                            env_artifact.runtime.safe_mode_enabled
+                        )
+                    },
+                );
+                if !runtime_contract_ok {
+                    bundle_violations = true;
+                }
+
+                let feature_flag_ok = env_artifact
+                    .runtime
+                    .feature_flags
+                    .iter()
+                    .any(|flag| flag == "benchmark-score-cli");
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_env_runtime_feature_flag_present".to_string(),
+                    feature_flag_ok,
+                    CODE_BUNDLE_CONTEXT_MISMATCH,
+                    if feature_flag_ok {
+                        "env.json runtime feature_flags include benchmark-score-cli".to_string()
+                    } else {
+                        "env.json runtime feature_flags must include benchmark-score-cli"
+                            .to_string()
+                    },
+                );
+                if !feature_flag_ok {
                     bundle_violations = true;
                 }
             }
@@ -3333,11 +3404,26 @@ fn default_benchmark_out_dir(run_id: &str) -> PathBuf {
 }
 
 fn benchmark_bundle_dir(output_path: &Path) -> PathBuf {
-    output_path
+    let parent = output_path
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
         .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."))
+        .unwrap_or_else(|| PathBuf::from("."));
+    if output_path.file_name().and_then(|name| name.to_str()) == Some("results.json") {
+        return parent;
+    }
+
+    let stem = output_path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().to_string())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or_else(|| "benchmark_score".to_string());
+    let candidate = parent.join(format!("{stem}.bundle"));
+    if candidate == output_path {
+        parent.join(format!("{stem}.bundle.dir"))
+    } else {
+        candidate
+    }
 }
 
 fn current_utc_timestamp() -> String {
@@ -3557,7 +3643,7 @@ fn usage() -> String {
         "  frankenctl benchmark run [--seed <u64>] [--run-id <id>] [--run-date <YYYY-MM-DD>]",
         "      [--profile small|medium|large]... [--family <name>]... [--out-dir <path>]",
         "  frankenctl benchmark score --input <publication_gate_input.json>",
-        "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>] [--output <results.json>]",
+        "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>] [--output <path>]",
         "  frankenctl benchmark verify --bundle <dir> [--summary] [--output <report.json>]",
         "  frankenctl replay run --trace <trace.json> [--mode strict|best-effort|validate] [--out <report.json>]",
         "",
@@ -3673,7 +3759,7 @@ fn benchmark_usage() -> String {
         "  frankenctl benchmark run [--seed <u64>] [--run-id <id>] [--run-date <YYYY-MM-DD>]",
         "      [--profile small|medium|large]... [--family <name>]... [--out-dir <path>]",
         "  frankenctl benchmark score --input <publication_gate_input.json>",
-        "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>] [--output <results.json>]",
+        "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>] [--output <path>]",
         "  frankenctl benchmark verify --bundle <dir> [--summary] [--output <report.json>]",
     ]
     .join("\n")
@@ -3692,7 +3778,7 @@ fn benchmark_score_usage() -> String {
     [
         "benchmark score usage:",
         "  frankenctl benchmark score --input <publication_gate_input.json>",
-        "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>] [--output <results.json>]",
+        "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>] [--output <path>]",
     ]
     .join("\n")
 }
@@ -4088,7 +4174,7 @@ mod tests {
             "--policy-id".to_string(),
             "policy-score".to_string(),
             "--output".to_string(),
-            "artifacts/results.json".to_string(),
+            "artifacts/benchmark_score.json".to_string(),
         ];
         let parsed = parse_command(&args).expect("benchmark score should parse");
         match parsed {
@@ -4099,7 +4185,10 @@ mod tests {
                 assert_eq!(spec.trace_id, "trace-score");
                 assert_eq!(spec.decision_id, "decision-score");
                 assert_eq!(spec.policy_id, "policy-score");
-                assert_eq!(spec.output, Some(PathBuf::from("artifacts/results.json")));
+                assert_eq!(
+                    spec.output,
+                    Some(PathBuf::from("artifacts/benchmark_score.json"))
+                );
             }
             other => panic!("expected benchmark score command, got {other:?}"),
         }

@@ -1527,7 +1527,9 @@ fn frankenctl_run_output_has_execution_fields() {
 fn frankenctl_benchmark_score_and_verify_bundle_round_trip() {
     let score_input_path = temp_path("frankenctl_benchmark_score_input", "json");
     let verify_report_path = temp_path("frankenctl_benchmark_verify_report", "json");
-    let bundle_dir = temp_dir("frankenctl_benchmark_bundle");
+    let output_root = temp_dir("frankenctl_benchmark_bundle");
+    let score_output_path = output_root.join("benchmark_score.json");
+    let bundle_dir = output_root.join("benchmark_score.bundle");
     let bundle_results_path = bundle_dir.join("results.json");
 
     write_benchmark_score_input(&score_input_path);
@@ -1547,7 +1549,7 @@ fn frankenctl_benchmark_score_and_verify_bundle_round_trip() {
             "--policy-id",
             "policy-bench-score-cli",
             "--output",
-            bundle_results_path
+            score_output_path
                 .to_str()
                 .expect("score result path should be valid utf8"),
         ])
@@ -1578,6 +1580,42 @@ fn frankenctl_benchmark_score_and_verify_bundle_round_trip() {
     );
     assert_eq!(score_json["publish_allowed"].as_bool(), Some(true));
     assert_eq!(
+        score_json["output"].as_str(),
+        Some(
+            score_output_path
+                .to_str()
+                .expect("score output path should be valid utf8")
+        )
+    );
+    assert_eq!(
+        score_json["bundle_env_path"].as_str(),
+        Some(
+            bundle_dir
+                .join("env.json")
+                .to_str()
+                .expect("env path should be valid utf8")
+        )
+    );
+    assert_eq!(
+        score_json["runtime"]["mode"].as_str(),
+        Some("deterministic-score")
+    );
+    assert_eq!(
+        score_json["runtime"]["lane"].as_str(),
+        Some("publication_gate")
+    );
+    assert_eq!(
+        score_json["runtime"]["safe_mode_enabled"].as_bool(),
+        Some(true)
+    );
+    assert!(
+        score_json["runtime"]["feature_flags"]
+            .as_array()
+            .is_some_and(|flags| flags
+                .iter()
+                .any(|flag| flag.as_str() == Some("benchmark-score-cli")))
+    );
+    assert_eq!(
         score_json["bundle"].as_str(),
         Some(
             bundle_dir
@@ -1598,10 +1636,38 @@ fn frankenctl_benchmark_score_and_verify_bundle_round_trip() {
         results_json["claimed"]["publish_allowed"].as_bool(),
         Some(true)
     );
+    let score_output_json: serde_json::Value = serde_json::from_slice(
+        &fs::read(&score_output_path).expect("requested score output should be written"),
+    )
+    .expect("requested score output should parse");
+    assert_eq!(score_output_json, results_json);
     assert!(bundle_dir.join("env.json").is_file());
     assert!(bundle_dir.join("manifest.json").is_file());
     assert!(bundle_dir.join("repro.lock").is_file());
     assert!(bundle_dir.join("commands.txt").is_file());
+    let env_json: serde_json::Value = serde_json::from_slice(
+        &fs::read(bundle_dir.join("env.json")).expect("env.json should be written"),
+    )
+    .expect("env.json should parse");
+    assert_eq!(
+        env_json["runtime"]["mode"].as_str(),
+        Some("deterministic-score")
+    );
+    assert_eq!(
+        env_json["runtime"]["lane"].as_str(),
+        Some("publication_gate")
+    );
+    assert_eq!(
+        env_json["runtime"]["safe_mode_enabled"].as_bool(),
+        Some(true)
+    );
+    assert!(
+        env_json["runtime"]["feature_flags"]
+            .as_array()
+            .is_some_and(|flags| flags
+                .iter()
+                .any(|flag| flag.as_str() == Some("benchmark-score-cli")))
+    );
     let manifest_json: serde_json::Value = serde_json::from_slice(
         &fs::read(bundle_dir.join("manifest.json")).expect("manifest should be written"),
     )
@@ -1660,10 +1726,90 @@ fn frankenctl_benchmark_score_and_verify_bundle_round_trip() {
             .as_array()
             .is_some_and(|events| !events.is_empty())
     );
+    let check_names = verify_report["checks"]
+        .as_array()
+        .expect("checks should be an array")
+        .iter()
+        .filter_map(|check| check["name"].as_str())
+        .collect::<Vec<_>>();
+    assert!(check_names.contains(&"bundle_env_runtime_contract_matches"));
+    assert!(check_names.contains(&"bundle_env_runtime_feature_flag_present"));
 
     let _ = fs::remove_file(score_input_path);
     let _ = fs::remove_file(verify_report_path);
-    let _ = fs::remove_dir_all(bundle_dir);
+    let _ = fs::remove_dir_all(output_root);
+}
+
+#[test]
+fn frankenctl_benchmark_score_extensionless_output_path_materializes_bundle() {
+    let score_input_path = temp_path("frankenctl_benchmark_score_input_extensionless", "json");
+    let output_root = temp_dir("frankenctl_benchmark_bundle_extensionless");
+    let score_output_path = output_root.join("benchmark_score");
+    let bundle_dir = output_root.join("benchmark_score.bundle");
+    let bundle_results_path = bundle_dir.join("results.json");
+
+    write_benchmark_score_input(&score_input_path);
+
+    let score_output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "benchmark",
+            "score",
+            "--input",
+            score_input_path
+                .to_str()
+                .expect("score input path should be valid utf8"),
+            "--trace-id",
+            "trace-bench-score-extensionless",
+            "--decision-id",
+            "decision-bench-score-extensionless",
+            "--policy-id",
+            "policy-bench-score-extensionless",
+            "--output",
+            score_output_path
+                .to_str()
+                .expect("score output path should be valid utf8"),
+        ])
+        .output()
+        .expect("benchmark score command should execute");
+
+    assert!(
+        score_output.status.success(),
+        "benchmark score failed with stderr={}",
+        String::from_utf8_lossy(&score_output.stderr)
+    );
+    let score_json = parse_stdout_json(&score_output);
+    assert_eq!(
+        score_json["output"].as_str(),
+        Some(
+            score_output_path
+                .to_str()
+                .expect("score output path should be valid utf8")
+        )
+    );
+    assert_eq!(
+        score_json["bundle"].as_str(),
+        Some(
+            bundle_dir
+                .to_str()
+                .expect("bundle dir should be valid utf8")
+        )
+    );
+    assert!(score_output_path.is_file());
+    assert!(bundle_results_path.is_file());
+    assert!(bundle_dir.join("env.json").is_file());
+
+    let score_output_json: serde_json::Value = serde_json::from_slice(
+        &fs::read(&score_output_path).expect("requested score output should be written"),
+    )
+    .expect("requested score output should parse");
+    let bundle_results_json: serde_json::Value = serde_json::from_slice(
+        &fs::read(&bundle_results_path).expect("bundle results should be written"),
+    )
+    .expect("bundle results should parse");
+    assert_eq!(score_output_json, bundle_results_json);
+
+    let _ = fs::remove_file(score_input_path);
+    let _ = fs::remove_dir_all(output_root);
 }
 
 #[test]

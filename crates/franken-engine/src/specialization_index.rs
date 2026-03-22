@@ -1402,6 +1402,9 @@ mod tests {
                 old_epoch: 1,
                 new_epoch: 2,
             },
+            InvalidationReason::ProofExpired {
+                proof_id: make_id("p0"),
+            },
             InvalidationReason::ProofRevoked {
                 proof_id: make_id("p1"),
             },

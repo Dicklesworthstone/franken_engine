@@ -209,7 +209,7 @@ impl EffectSummary {
     ) -> Self {
         let mut kind_totals = BTreeMap::new();
         for entry in &entries {
-            *kind_totals.entry(entry.kind).or_insert(0) += entry.worst_case_count_millionths;
+            *kind_totals.entry(entry.kind).or_insert(0i64) += entry.worst_case_count_millionths;
         }
         let is_complete = abstention_points.is_empty();
 

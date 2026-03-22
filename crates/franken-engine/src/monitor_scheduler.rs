@@ -109,7 +109,7 @@ impl ProbeState {
     /// Returns millionths.  Higher is better.
     pub fn voi_score(&self, regime_relevance_multiplier: i64) -> i64 {
         let cost = self.config.effective_cost_millionths();
-        let staleness_factor = ((self.staleness + 1) as i64) * 1_000_000;
+        let staleness_factor = (self.staleness.saturating_add(1) as i64).saturating_mul(1_000_000);
         let relevance = self.config.base_relevance_millionths as i128
             * regime_relevance_multiplier as i128
             / 1_000_000;
@@ -125,13 +125,13 @@ impl ProbeState {
     /// Mark probe as executed (resets staleness).
     pub fn mark_executed(&mut self, success: bool) {
         self.staleness = 0;
-        self.execution_count += 1;
+        self.execution_count = self.execution_count.saturating_add(1);
         self.last_success = success;
     }
 
     /// Increment staleness (called each scheduling interval).
     pub fn tick_staleness(&mut self) {
-        self.staleness += 1;
+        self.staleness = self.staleness.saturating_add(1);
     }
 }
 

@@ -187,6 +187,12 @@ impl Posterior {
         self.p_malicious = (self.p_malicious as i128 * m / t) as i64;
         self.p_unknown = (self.p_unknown as i128 * m / t) as i64;
 
+        // Re-apply floor after scaling to maintain the floor invariant.
+        self.p_benign = self.p_benign.max(FLOOR_MASS);
+        self.p_anomalous = self.p_anomalous.max(FLOOR_MASS);
+        self.p_malicious = self.p_malicious.max(FLOOR_MASS);
+        self.p_unknown = self.p_unknown.max(FLOOR_MASS);
+
         // Distribute remainder to the largest to maintain exact sum.
         let remainder = MILLION - self.sum();
         if remainder != 0 {

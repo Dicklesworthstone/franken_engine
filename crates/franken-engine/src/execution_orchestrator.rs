@@ -1219,18 +1219,27 @@ impl ExecutionOrchestrator {
             (None, StoppingDecision::Stop) => "composite".to_string(),
             (None, StoppingDecision::Continue) => "none".to_string(),
         };
+        let cusum_stat = policy.cusum.statistic_millionths;
+        let arl0_bound = policy.cusum.arl0_lower_bound(SCALE_MILLION);
+        let decision_str = match decision {
+            StoppingDecision::Stop => "stop",
+            StoppingDecision::Continue => "continue",
+        };
         let cert_data = format!(
-            "{algorithm}:{}:{:?}:{}",
+            "{}:{algorithm}:{}:{}:{}:{}:{}",
+            STOPPING_SCHEMA_VERSION,
             policy.total_observations,
-            decision,
-            epoch.as_u64()
+            decision_str,
+            epoch.as_u64(),
+            cusum_stat,
+            arl0_bound,
         );
         OptimalStoppingCertificate {
             schema: STOPPING_SCHEMA_VERSION.to_string(),
             algorithm,
             observations_before_stop: policy.total_observations,
-            cusum_statistic_millionths: Some(policy.cusum.statistic_millionths),
-            arl0_lower_bound: Some(policy.cusum.arl0_lower_bound(SCALE_MILLION)),
+            cusum_statistic_millionths: Some(cusum_stat),
+            arl0_lower_bound: Some(arl0_bound),
             snell_optimal_value_millionths: None,
             gittins_index_millionths: None,
             epoch,

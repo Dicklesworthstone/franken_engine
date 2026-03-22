@@ -29,6 +29,7 @@ struct CrossPlatformMatrixContract {
     policy_id: String,
     required_log_keys: Vec<String>,
     required_artifacts: Vec<String>,
+    required_readme_fragments: Vec<String>,
     targets: Vec<TargetSpec>,
     drift_classes: Vec<DriftClass>,
     gate_runner: GateRunner,
@@ -94,6 +95,12 @@ fn parse_contract() -> CrossPlatformMatrixContract {
 
 fn load_doc() -> String {
     let path = repo_root().join("docs/RGC_CROSS_PLATFORM_MATRIX_V1.md");
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
+fn load_readme() -> String {
+    let path = repo_root().join("README.md");
     fs::read_to_string(&path)
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
 }
@@ -214,7 +221,7 @@ fn rgc_063_doc_contains_required_sections() {
 fn rgc_063_contract_is_versioned_and_target_complete() {
     let contract = parse_contract();
     assert_eq!(contract.schema_version, MATRIX_SCHEMA_VERSION);
-    assert_eq!(contract.contract_version, "1.1.1");
+    assert_eq!(contract.contract_version, "1.1.2");
     assert_eq!(contract.bead_id, "bd-1lsy.11.13");
     assert_eq!(contract.policy_id, "policy-rgc-cross-platform-matrix-v1");
 
@@ -314,6 +321,37 @@ fn rgc_063_contract_declares_required_logs_artifacts_and_drift_classes() {
             drift_classes.contains(&entry),
             "missing drift class {:?}",
             entry
+        );
+    }
+
+    let required_readme_fragments: BTreeSet<_> = contract
+        .required_readme_fragments
+        .iter()
+        .map(String::as_str)
+        .collect();
+    for fragment in [
+        "## RGC Cross-Platform Matrix Gate",
+        "./scripts/run_rgc_cross_platform_matrix_gate.sh ci",
+        "./scripts/e2e/rgc_cross_platform_matrix_replay.sh matrix",
+        "docs/rgc_cross_platform_matrix_v1.json",
+        "artifacts/rgc_cross_platform_matrix/<timestamp>/matrix_summary.json",
+    ] {
+        assert!(
+            required_readme_fragments.contains(fragment),
+            "missing required README fragment {fragment}"
+        );
+    }
+}
+
+#[test]
+fn rgc_063_readme_documents_gate_commands_and_artifacts() {
+    let contract = parse_contract();
+    let readme = load_readme();
+
+    for fragment in &contract.required_readme_fragments {
+        assert!(
+            readme.contains(fragment),
+            "README is missing required fragment: {fragment}"
         );
     }
 }

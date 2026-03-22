@@ -1,6 +1,6 @@
 {
   "schema_version": "franken-engine.rgc-cross-platform-matrix.v1",
-  "contract_version": "1.1.1",
+  "contract_version": "1.1.2",
   "bead_id": "bd-1lsy.11.13",
   "policy_id": "policy-rgc-cross-platform-matrix-v1",
   "required_log_keys": [
@@ -19,6 +19,13 @@
     "commands.txt",
     "matrix_target_deltas.jsonl",
     "matrix_summary.json"
+  ],
+  "required_readme_fragments": [
+    "## RGC Cross-Platform Matrix Gate",
+    "./scripts/run_rgc_cross_platform_matrix_gate.sh ci",
+    "./scripts/e2e/rgc_cross_platform_matrix_replay.sh matrix",
+    "docs/rgc_cross_platform_matrix_v1.json",
+    "artifacts/rgc_cross_platform_matrix/<timestamp>/matrix_summary.json"
   ],
   "targets": [
     {

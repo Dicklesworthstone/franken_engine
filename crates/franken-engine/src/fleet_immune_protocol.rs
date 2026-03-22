@@ -356,10 +356,12 @@ impl FleetMessage {
         match self {
             Self::Evidence(p) => &p.node_id,
             Self::Intent(i) => &i.node_id,
-            Self::Checkpoint(_) => {
-                // Checkpoints are collective; no single origin.
-                // Returning first participating node is a deterministic fallback.
-                panic!("checkpoints have no single originator; use participating_nodes")
+            Self::Checkpoint(c) => {
+                // Checkpoints are collective; return the first participating
+                // node (BTreeSet is sorted) as a deterministic fallback.
+                static EMPTY_NODE: std::sync::LazyLock<NodeId> =
+                    std::sync::LazyLock::new(|| NodeId::new("__checkpoint__"));
+                c.participating_nodes.iter().next().unwrap_or(&EMPTY_NODE)
             }
             Self::Heartbeat(h) => &h.node_id,
             Self::Reconciliation(r) => &r.node_id,

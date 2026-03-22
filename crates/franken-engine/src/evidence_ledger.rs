@@ -337,7 +337,7 @@ impl EvidenceEntryBuilder {
             }
         })?;
         let evidence_hash = deterministic_hash(&hash_input);
-        let entry_id = format!("ev-{}", evidence_hash.get(..16).unwrap_or(&evidence_hash));
+        let entry_id = format!("ev-{}", evidence_hash.get(..32).unwrap_or(&evidence_hash));
 
         temp_entry.entry_id = entry_id;
         temp_entry.evidence_hash = evidence_hash;

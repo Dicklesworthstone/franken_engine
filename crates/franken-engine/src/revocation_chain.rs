@@ -532,7 +532,8 @@ impl RevocationChain {
     pub fn lookup_revocation(&self, target_id: &EngineObjectId) -> Option<&Revocation> {
         self.revocation_index
             .get(target_id)
-            .map(|&seq| &self.events[seq as usize].revocation)
+            .and_then(|&seq| self.events.get(seq as usize))
+            .map(|event| &event.revocation)
     }
 
     /// Get an event by sequence number.

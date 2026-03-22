@@ -186,18 +186,21 @@ record_error() {
 }
 
 run_mode() {
-  case "$mode" in
+  local selected_mode="${1:-$mode}"
+  local mode_exit=0
+
+  case "$selected_mode" in
     check)
       run_step "cargo check -p frankenengine-engine --test cold_start_compilation_lane --bin franken_cold_start_compilation_lane" \
-        cargo check -p frankenengine-engine --test cold_start_compilation_lane --bin franken_cold_start_compilation_lane
+        cargo check -p frankenengine-engine --test cold_start_compilation_lane --bin franken_cold_start_compilation_lane || mode_exit=$?
       ;;
     test)
       run_step "cargo test -p frankenengine-engine --test cold_start_compilation_lane -- --nocapture" \
-        cargo test -p frankenengine-engine --test cold_start_compilation_lane -- --nocapture
+        cargo test -p frankenengine-engine --test cold_start_compilation_lane -- --nocapture || mode_exit=$?
       ;;
     clippy)
       run_step "cargo clippy -p frankenengine-engine --test cold_start_compilation_lane --bin franken_cold_start_compilation_lane -- -D warnings" \
-        cargo clippy -p frankenengine-engine --test cold_start_compilation_lane --bin franken_cold_start_compilation_lane -- -D warnings
+        cargo clippy -p frankenengine-engine --test cold_start_compilation_lane --bin franken_cold_start_compilation_lane -- -D warnings || mode_exit=$?
       ;;
     run)
       run_step "cargo run -p frankenengine-engine --bin franken_cold_start_compilation_lane -- --artifact-dir ${run_dir} --trace-id ${trace_id} --decision-id ${decision_id} --policy-id ${policy_id} --run-id ${timestamp} --generated-at-utc ${generated_at_utc} --source-commit ${source_commit} --toolchain ${toolchain} --summary --emit-local-bundle-json" \
@@ -211,19 +214,27 @@ run_mode() {
           --source-commit "${source_commit}" \
           --toolchain "${toolchain}" \
           --summary \
-          --emit-local-bundle-json
+          --emit-local-bundle-json || mode_exit=$?
       ;;
     ci)
-      run_mode check
-      run_mode test
-      run_mode clippy
-      run_mode run
+      run_mode check || mode_exit=$?
+      if [[ "${mode_exit}" -eq 0 ]]; then
+        run_mode test || mode_exit=$?
+      fi
+      if [[ "${mode_exit}" -eq 0 ]]; then
+        run_mode clippy || mode_exit=$?
+      fi
+      if [[ "${mode_exit}" -eq 0 ]]; then
+        run_mode run || mode_exit=$?
+      fi
       ;;
     *)
-      echo "unknown mode '${mode}' (expected: check|test|clippy|run|ci)" >&2
+      echo "unknown mode '${selected_mode}' (expected: check|test|clippy|run|ci)" >&2
       exit 1
       ;;
   esac
+
+  return "${mode_exit}"
 }
 
 extract_remote_bundle_json() {
@@ -374,13 +385,13 @@ write_manifest() {
       failed_command: (if $failed_command == "" then null else $failed_command end),
       validation_errors: $validation_errors,
       artifacts: {
-        cold_start_compilation_report: $report_path,
-        cold_start_observability_delta: $observability_delta_path,
-        aot_bundle_compilation_report: $aot_bundle_path,
-        runtime_image_manifest: $runtime_image_manifest_path,
-        trace_ids: $trace_ids_path,
-        summary: $summary_path,
-        persistent_cache_contract: ($report_path | sub("/cold_start_compilation_report.json$"; "/persistent_cache_contract/persistent_cache_contract.json")),
+        cold_start_compilation_report: (if ($mode == "run" or $mode == "ci") then $report_path else null end),
+        cold_start_observability_delta: (if ($mode == "run" or $mode == "ci") then $observability_delta_path else null end),
+        aot_bundle_compilation_report: (if ($mode == "run" or $mode == "ci") then $aot_bundle_path else null end),
+        runtime_image_manifest: (if ($mode == "run" or $mode == "ci") then $runtime_image_manifest_path else null end),
+        trace_ids: (if ($mode == "run" or $mode == "ci") then $trace_ids_path else null end),
+        summary: (if ($mode == "run" or $mode == "ci") then $summary_path else null end),
+        persistent_cache_contract: (if ($mode == "run" or $mode == "ci") then ($report_path | sub("/cold_start_compilation_report.json$"; "/persistent_cache_contract/persistent_cache_contract.json")) else null end),
         commands: $commands_path,
         events: $events_path,
         step_logs_dir: $step_logs_dir
@@ -421,14 +432,23 @@ write_events() {
     }' >"${events_path}"
 }
 
-run_mode
-ensure_local_bundle_materialized || true
-validate_artifacts
+mode_exit=0
+if ! run_mode; then
+  mode_exit=$?
+  if [[ -z "${failed_command}" ]]; then
+    failed_command="mode-${mode} exited ${mode_exit}"
+  fi
+fi
+
+if [[ "${mode_exit}" -eq 0 ]]; then
+  ensure_local_bundle_materialized || true
+  validate_artifacts
+fi
 write_commands_file
 write_manifest
 write_events
 
-if [[ -n "${failed_command}" || ${#validation_errors[@]} -gt 0 ]]; then
+if [[ "${mode_exit}" -ne 0 || -n "${failed_command}" || ${#validation_errors[@]} -gt 0 ]]; then
   printf '%s\n' "${validation_errors[@]}" >&2
   exit 1
 fi

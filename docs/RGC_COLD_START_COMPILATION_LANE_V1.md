@@ -67,6 +67,8 @@ Supported modes:
 - `ci`
 
 Every cargo build/test/clippy/run step in this lane is executed through `rch`.
+`check` mode emits only `run_manifest.json`, `events.jsonl`, `commands.txt`,
+and `step_logs/`. `run` and `ci` emit the full cold-start evidence bundle.
 
 ## Operator Verification
 

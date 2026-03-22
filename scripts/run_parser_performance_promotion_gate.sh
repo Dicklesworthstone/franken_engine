@@ -50,9 +50,14 @@ run_rch() {
     "$@"
 }
 
+rch_strip_ansi() {
+  local input="$1"
+  sed -E 's/\x1B\[[0-9;]*[[:alpha:]]//g' "$input"
+}
+
 rch_reject_local_fallback() {
   local log_path="$1"
-  if grep -Eiq 'Remote toolchain failure, falling back to local|falling back to local|fallback to local|local fallback|\[RCH\] local \(|Remote execution failed.*running locally|running locally|Dependency preflight blocked remote execution|RCH-E326' "$log_path"; then
+  if rch_strip_ansi "$log_path" | grep -Eiq 'Remote toolchain failure, falling back to local|falling back to local|fallback to local|local fallback|\[RCH\] local \(|Remote execution failed.*running locally|running locally|Dependency preflight blocked remote execution|RCH-E326'; then
     echo "rch reported local fallback; refusing local execution for heavy command" >&2
     return 1
   fi
@@ -61,7 +66,7 @@ rch_reject_local_fallback() {
 rch_last_remote_exit_code() {
   local log_path="$1"
   local exit_line
-  exit_line="$(grep -Eo 'Remote command finished: exit=[0-9]+' "$log_path" | tail -n 1 || true)"
+  exit_line="$(rch_strip_ansi "$log_path" | grep -Eo 'Remote command finished: exit=[0-9]+' | tail -n 1 || true)"
   if [[ -z "$exit_line" ]]; then
     echo ""
     return
@@ -71,12 +76,12 @@ rch_last_remote_exit_code() {
 
 rch_has_recoverable_artifact_timeout() {
   local log_path="$1"
-  grep -Eiq 'artifact retrieval timed out|artifact transfer timed out|timed out waiting for artifacts|failed to retrieve artifacts|failed to download artifacts' "$log_path"
+  rch_strip_ansi "$log_path" | grep -Eiq 'artifact retrieval timed out|artifact transfer timed out|timed out waiting for artifacts|failed to retrieve artifacts|failed to download artifacts'
 }
 
 rch_reject_artifact_retrieval_failure() {
   local log_path="$1"
-  if grep -Eiq 'Artifact retrieval failed|Failed to retrieve artifacts:|rsync artifact retrieval failed|rsync error: .*code 23' "$log_path"; then
+  if rch_strip_ansi "$log_path" | grep -Eiq 'Artifact retrieval failed|Failed to retrieve artifacts:|rsync artifact retrieval failed|rsync error: .*code 23'; then
     echo "rch artifact retrieval failed; refusing to mark heavy command as successful" >&2
     return 1
   fi
@@ -89,7 +94,7 @@ step_log_index=0
 
 run_step() {
   local command_text="$1"
-  local log_path
+  local log_path run_rc remote_exit_code
   shift
 
   commands_run+=("$command_text")
@@ -97,15 +102,10 @@ run_step() {
   log_path="${step_logs_dir}/step_$(printf '%03d' "${step_log_index}").log"
   step_log_index=$((step_log_index + 1))
 
-  if ! run_rch "$@" > >(tee "$log_path") 2>&1; then
-    local remote_exit_code
-    remote_exit_code="$(rch_last_remote_exit_code "$log_path")"
-    if [[ "$remote_exit_code" == "0" ]] && rch_has_recoverable_artifact_timeout "$log_path"; then
-      echo "==> recovered: remote execution succeeded; artifact retrieval timed out" | tee -a "$log_path"
-    else
-      failed_command="$command_text"
-      return 1
-    fi
+  if run_rch "$@" > >(tee "$log_path") 2>&1; then
+    run_rc=0
+  else
+    run_rc=$?
   fi
 
   if ! rch_reject_local_fallback "$log_path"; then
@@ -115,6 +115,33 @@ run_step() {
 
   if ! rch_reject_artifact_retrieval_failure "$log_path"; then
     failed_command="${command_text} (rch-artifact-retrieval-failed)"
+    return 1
+  fi
+
+  remote_exit_code="$(rch_last_remote_exit_code "$log_path")"
+
+  if [[ "$run_rc" -ne 0 ]]; then
+    if [[ "$remote_exit_code" == "0" ]] && rch_has_recoverable_artifact_timeout "$log_path"; then
+      echo "==> recovered: remote execution succeeded; artifact retrieval timed out" | tee -a "$log_path"
+    elif [[ "$run_rc" -eq 124 ]]; then
+      failed_command="${command_text} (timeout-${rch_timeout_seconds}s)"
+      return 1
+    elif [[ -n "$remote_exit_code" ]]; then
+      failed_command="${command_text} (remote-exit=${remote_exit_code})"
+      return 1
+    else
+      failed_command="${command_text} (rch-exit=${run_rc})"
+      return 1
+    fi
+  fi
+
+  if [[ -z "$remote_exit_code" ]]; then
+    failed_command="${command_text} (missing-remote-exit-marker)"
+    return 1
+  fi
+
+  if [[ "$remote_exit_code" != "0" ]]; then
+    failed_command="${command_text} (remote-exit=${remote_exit_code})"
     return 1
   fi
 }

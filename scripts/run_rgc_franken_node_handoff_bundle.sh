@@ -201,6 +201,11 @@ file_age_hours() {
   printf '%s\n' "$(( (now - modified) / 3600 ))"
 }
 
+json_file_is_valid() {
+  local path="$1"
+  [[ -f "$path" ]] && jq -e '.' "$path" >/dev/null 2>&1
+}
+
 declare -a commands_run=()
 declare -a validation_errors=()
 failed_command=""
@@ -456,7 +461,9 @@ write_smoke_verification() {
   local non_orphaned_blockers_json="false"
   local cohort_rollups_present_json="false"
   local support_contract_available_json="false"
+  local support_contract_valid_json="false"
   local blocker_ledger_available_json="false"
+  local blocker_ledger_valid_json="false"
   local orphaned_blocker_count="null"
   local cohort_rollup_count="null"
   local ready_cohort_count="null"
@@ -473,7 +480,10 @@ write_smoke_verification() {
 
   if [[ -f "$copied_support_contract_path" ]]; then
     support_contract_available_json="true"
-    if jq -e '
+    if json_file_is_valid "$copied_support_contract_path"; then
+      support_contract_valid_json="true"
+    fi
+    if [[ "$support_contract_valid_json" == "true" ]] && jq -e '
         .readiness_answer_contract.product_ready_owner_repo == "franken_node"
         and .readiness_answer_contract.product_ready_state == "delegated_to_franken_node_handoff"
       ' "$copied_support_contract_path" >/dev/null; then
@@ -483,7 +493,9 @@ write_smoke_verification() {
 
   if [[ -f "$copied_blocker_ledger_path" ]]; then
     blocker_ledger_available_json="true"
-    orphaned_blocker_count="$(jq '
+    if json_file_is_valid "$copied_blocker_ledger_path"; then
+      blocker_ledger_valid_json="true"
+      orphaned_blocker_count="$(jq '
         [.blockers[]
          | select((.severity == "blocking" or .severity == "degraded")
            and (.remediation != "verified" and .remediation != "wont_fix")
@@ -492,18 +504,19 @@ write_smoke_verification() {
          )]
         | length
       ' "$copied_blocker_ledger_path")"
-    cohort_rollup_count="$(jq '.cohort_rollups | length' "$copied_blocker_ledger_path")"
-    ready_cohort_count="$(jq '
+      cohort_rollup_count="$(jq '.cohort_rollups | length' "$copied_blocker_ledger_path")"
+      ready_cohort_count="$(jq '
         [.cohort_rollups[]
          | select(.readiness == "ready" or .readiness == "ready_with_advisories")]
         | length
       ' "$copied_blocker_ledger_path")"
 
-    if [[ "$orphaned_blocker_count" == "0" ]]; then
-      non_orphaned_blockers_json="true"
-    fi
-    if [[ "$cohort_rollup_count" != "0" ]]; then
-      cohort_rollups_present_json="true"
+      if [[ "$orphaned_blocker_count" == "0" ]]; then
+        non_orphaned_blockers_json="true"
+      fi
+      if [[ "$cohort_rollup_count" != "0" ]]; then
+        cohort_rollups_present_json="true"
+      fi
     fi
   fi
 
@@ -533,7 +546,9 @@ write_smoke_verification() {
     --arg repo_split_contract_path "$copied_repo_split_contract_path" \
     --arg outcome "$smoke_outcome" \
     --argjson support_contract_available "$support_contract_available_json" \
+    --argjson support_contract_valid "$support_contract_valid_json" \
     --argjson blocker_ledger_available "$blocker_ledger_available_json" \
+    --argjson blocker_ledger_valid "$blocker_ledger_valid_json" \
     --argjson sibling_repo_exists "$sibling_repo_exists_json" \
     --argjson split_contract_ok "$split_contract_ok_json" \
     --argjson support_delegate_ok "$support_delegate_ok_json" \
@@ -572,19 +587,19 @@ write_smoke_verification() {
           check_id: "support_contract_delegates_product_ready",
           outcome: (if $support_delegate_ok then "pass" else "fail" end),
           error_code: (if $support_delegate_ok then null else "FE-RGC-408C-SMOKE-0003" end),
-          detail: (if $support_delegate_ok then "support contract keeps product-ready state delegated to franken_node handoff" else (if $support_contract_available then "support contract readiness delegation is missing or malformed" else "support contract unavailable" end) end)
+          detail: (if $support_delegate_ok then "support contract keeps product-ready state delegated to franken_node handoff" else (if $support_contract_available then (if $support_contract_valid then "support contract readiness delegation is missing or malformed" else "support contract JSON is invalid" end) else "support contract unavailable" end) end)
         },
         {
           check_id: "unresolved_blockers_not_orphaned",
           outcome: (if $non_orphaned_blockers then "pass" else "fail" end),
           error_code: (if $non_orphaned_blockers then null else "FE-RGC-408C-SMOKE-0004" end),
-          detail: (if $non_orphaned_blockers then "all unresolved blocking/degraded blockers retain a bead or owner" else (if $blocker_ledger_available then ("orphaned unresolved blocking/degraded blockers: " + ($orphaned_blocker_count | tostring)) else "blocker ledger unavailable" end) end)
+          detail: (if $non_orphaned_blockers then "all unresolved blocking/degraded blockers retain a bead or owner" else (if $blocker_ledger_available then (if $blocker_ledger_valid then ("orphaned unresolved blocking/degraded blockers: " + ($orphaned_blocker_count | tostring)) else "blocker ledger JSON is invalid" end) else "blocker ledger unavailable" end) end)
         },
         {
           check_id: "cohort_rollups_present",
           outcome: (if $cohort_rollups_present then "pass" else "fail" end),
           error_code: (if $cohort_rollups_present then null else "FE-RGC-408C-SMOKE-0005" end),
-          detail: (if $cohort_rollups_present then ("cohort rollups present: " + ($cohort_rollup_count | tostring) + "; ready cohorts: " + ($ready_cohort_count | tostring)) else (if $blocker_ledger_available then "cohort rollups missing from blocker ledger" else "blocker ledger unavailable" end) end)
+          detail: (if $cohort_rollups_present then ("cohort rollups present: " + ($cohort_rollup_count | tostring) + "; ready cohorts: " + ($ready_cohort_count | tostring)) else (if $blocker_ledger_available then (if $blocker_ledger_valid then "cohort rollups missing from blocker ledger" else "blocker ledger JSON is invalid" end) else "blocker ledger unavailable" end) end)
         }
       ]
     }' >"$smoke_verification_path"
@@ -596,7 +611,7 @@ write_summary() {
   local product_ready_state product_ready_owner_repo product_ready_handoff_bead_id
   local blocker_summary orphaned_summary
 
-  if [[ -f "$copied_support_contract_path" ]]; then
+  if json_file_is_valid "$copied_support_contract_path"; then
     status_counts_summary="$(jq -r '
         [.surface_rows[].support_status]
         | sort
@@ -605,7 +620,7 @@ write_summary() {
         | join("\n")
       ' "$copied_support_contract_path")"
     engine_ready_surfaces="$(jq -r '
-        .readiness_answer_contract.engine_ready_when_support_status_in as $engine_ready
+        (.readiness_answer_contract.engine_ready_when_support_status_in // []) as $engine_ready
         | [.surface_rows[]
            | . as $row
            | select(($engine_ready | index($row.support_status)) != null)
@@ -613,17 +628,25 @@ write_summary() {
         | if length == 0 then "- None" else join("\n") end
       ' "$copied_support_contract_path")"
     blocked_surfaces="$(jq -r '
-        .readiness_answer_contract.engine_blocked_when_support_status_in as $engine_blocked
+        (.readiness_answer_contract.engine_blocked_when_support_status_in // []) as $engine_blocked
         | [.surface_rows[]
            | . as $row
            | select(($engine_blocked | index($row.support_status)) != null)
            | "- `\(.surface_id)` — \(.support_status)"]
         | if length == 0 then "- None" else join("\n") end
       ' "$copied_support_contract_path")"
-    readiness_rule_summary="$(jq -r '.readiness_answer_contract.operator_rule_summary' "$copied_support_contract_path")"
-    product_ready_state="$(jq -r '.readiness_answer_contract.product_ready_state' "$copied_support_contract_path")"
-    product_ready_owner_repo="$(jq -r '.readiness_answer_contract.product_ready_owner_repo' "$copied_support_contract_path")"
-    product_ready_handoff_bead_id="$(jq -r '.readiness_answer_contract.product_ready_handoff_bead_id' "$copied_support_contract_path")"
+    readiness_rule_summary="$(jq -r '.readiness_answer_contract.operator_rule_summary // "support-surface contract readiness metadata missing"' "$copied_support_contract_path")"
+    product_ready_state="$(jq -r '.readiness_answer_contract.product_ready_state // "missing"' "$copied_support_contract_path")"
+    product_ready_owner_repo="$(jq -r '.readiness_answer_contract.product_ready_owner_repo // "missing"' "$copied_support_contract_path")"
+    product_ready_handoff_bead_id="$(jq -r '.readiness_answer_contract.product_ready_handoff_bead_id // "missing"' "$copied_support_contract_path")"
+  elif [[ -f "$copied_support_contract_path" ]]; then
+    status_counts_summary="- support-surface contract invalid"
+    engine_ready_surfaces="- unavailable"
+    blocked_surfaces="- unavailable"
+    readiness_rule_summary="support-surface contract invalid"
+    product_ready_state="invalid"
+    product_ready_owner_repo="invalid"
+    product_ready_handoff_bead_id="invalid"
   else
     status_counts_summary="- support-surface contract unavailable"
     engine_ready_surfaces="- unavailable"
@@ -634,14 +657,14 @@ write_summary() {
     product_ready_handoff_bead_id="unknown"
   fi
 
-  if [[ -f "$copied_blocker_ledger_path" ]]; then
+  if json_file_is_valid "$copied_blocker_ledger_path"; then
     blocker_summary="$(jq -r '
         [
           "- total blockers: \(.blockers | length)",
-          "- unresolved release blockers: ([.blockers[] | select(.severity == "blocking" and (.remediation != "verified" and .remediation != "wont_fix"))] | length)",
-          "- unresolved degraded blockers: ([.blockers[] | select(.severity == "degraded" and (.remediation != "verified" and .remediation != "wont_fix"))] | length)",
+          "- unresolved release blockers: \([.blockers[] | select(.severity == "blocking" and (.remediation != "verified" and .remediation != "wont_fix"))] | length)",
+          "- unresolved degraded blockers: \([.blockers[] | select(.severity == "degraded" and (.remediation != "verified" and .remediation != "wont_fix"))] | length)",
           "- cohort rollups: \(.cohort_rollups | length)",
-          "- ready cohorts: ([.cohort_rollups[] | select(.readiness == "ready" or .readiness == "ready_with_advisories")] | length)"
+          "- ready cohorts: \([.cohort_rollups[] | select(.readiness == "ready" or .readiness == "ready_with_advisories")] | length)"
         ] | join("\n")
       ' "$copied_blocker_ledger_path")"
     orphaned_summary="$(jq -r '
@@ -654,6 +677,9 @@ write_summary() {
          | "- `\(.id)` — \(.title)"]
         | if length == 0 then "- None" else join("\n") end
       ' "$copied_blocker_ledger_path")"
+  elif [[ -f "$copied_blocker_ledger_path" ]]; then
+    blocker_summary="- blocker ledger invalid"
+    orphaned_summary="- blocker ledger invalid"
   else
     blocker_summary="- blocker ledger unavailable"
     orphaned_summary="- blocker ledger unavailable"
@@ -703,8 +729,10 @@ EOF
 
 write_handoff_manifest() {
   local outcome="$1"
-  local support_status_counts_json engine_ready_surfaces_json engine_blocked_surfaces_json
-  local blocker_summary_json
+  local support_status_counts_json='{}'
+  local engine_ready_surfaces_json='[]'
+  local engine_blocked_surfaces_json='[]'
+  local blocker_summary_json='null'
   local support_contract_input_path=""
   local blocker_ledger_input_path=""
   local product_ready_state="unknown"
@@ -714,32 +742,36 @@ write_handoff_manifest() {
 
   if [[ -f "$copied_support_contract_path" ]]; then
     support_contract_input_path="$copied_support_contract_path"
+  fi
+  if json_file_is_valid "$copied_support_contract_path"; then
     support_status_counts_json="$(jq '[.surface_rows[].support_status] | reduce .[] as $status ({}; .[$status] = ((.[$status] // 0) + 1))' "$copied_support_contract_path")"
     engine_ready_surfaces_json="$(jq '
-        .readiness_answer_contract.engine_ready_when_support_status_in as $engine_ready
+        (.readiness_answer_contract.engine_ready_when_support_status_in // []) as $engine_ready
         | [.surface_rows[]
            | . as $row
            | select(($engine_ready | index($row.support_status)) != null)
            | .surface_id]
       ' "$copied_support_contract_path")"
     engine_blocked_surfaces_json="$(jq '
-        .readiness_answer_contract.engine_blocked_when_support_status_in as $engine_blocked
+        (.readiness_answer_contract.engine_blocked_when_support_status_in // []) as $engine_blocked
         | [.surface_rows[]
            | . as $row
            | select(($engine_blocked | index($row.support_status)) != null)
            | .surface_id]
       ' "$copied_support_contract_path")"
-    product_ready_state="$(jq -r '.readiness_answer_contract.product_ready_state' "$copied_support_contract_path")"
-    product_ready_owner_repo="$(jq -r '.readiness_answer_contract.product_ready_owner_repo' "$copied_support_contract_path")"
-    product_ready_handoff_bead_id="$(jq -r '.readiness_answer_contract.product_ready_handoff_bead_id' "$copied_support_contract_path")"
-  else
-    support_status_counts_json='{}'
-    engine_ready_surfaces_json='[]'
-    engine_blocked_surfaces_json='[]'
+    product_ready_state="$(jq -r '.readiness_answer_contract.product_ready_state // "missing"' "$copied_support_contract_path")"
+    product_ready_owner_repo="$(jq -r '.readiness_answer_contract.product_ready_owner_repo // "missing"' "$copied_support_contract_path")"
+    product_ready_handoff_bead_id="$(jq -r '.readiness_answer_contract.product_ready_handoff_bead_id // "missing"' "$copied_support_contract_path")"
+  elif [[ -f "$copied_support_contract_path" ]]; then
+    product_ready_state="invalid"
+    product_ready_owner_repo="invalid"
+    product_ready_handoff_bead_id="invalid"
   fi
 
   if [[ -f "$copied_blocker_ledger_path" ]]; then
     blocker_ledger_input_path="$copied_blocker_ledger_path"
+  fi
+  if json_file_is_valid "$copied_blocker_ledger_path"; then
     blocker_summary_json="$(jq '
         {
           total_blockers: (.blockers | length),
@@ -749,8 +781,6 @@ write_handoff_manifest() {
           ready_cohort_count: ([.cohort_rollups[] | select(.readiness == "ready" or .readiness == "ready_with_advisories")] | length)
         }
       ' "$copied_blocker_ledger_path")"
-  else
-    blocker_summary_json='null'
   fi
 
   if [[ -f "$smoke_verification_path" ]]; then

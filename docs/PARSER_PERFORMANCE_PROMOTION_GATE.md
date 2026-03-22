@@ -116,8 +116,12 @@ Fail-closed `rch` policy:
   `RCH-E326`, dependency-preflight fallback) are hard failures.
 - artifact retrieval failures (`Artifact retrieval failed`, rsync code-23
   retrieval errors) are hard failures.
+- missing remote-exit markers are hard failures.
 - only remote `exit=0` paired with explicit artifact-timeout signatures is
   treated as recoverable (manifest remains fail-closed on any other ambiguity).
+- non-recoverable transport, timeout, or cancellation paths surface directly in
+  `failed_command` as `(rch-exit=<code>)`, `(remote-exit=<code>)`, or
+  `(timeout-<N>s)` so operators can distinguish them from compiler diagnostics.
 
 Canonical command:
 

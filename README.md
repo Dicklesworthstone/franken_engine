@@ -750,6 +750,12 @@ PARSER_RERUN_KIT_MATRIX_MANIFEST=artifacts/.../run_manifest.json \
 ./scripts/e2e/parser_third_party_rerun_kit_replay.sh
 ```
 
+The replay wrapper fails closed on incomplete newest directories and, when a
+newer partial bundle exists, warns and replays the latest complete directory
+instead. It prints the full operator-facing artifact set for the selected run:
+`run_manifest.json`, `rerun_kit_index.json`, `events.jsonl`, `commands.txt`,
+`verifier_notes.md`, and the first `step_logs/step_*.log`.
+
 Contract and vectors:
 
 - [`docs/PARSER_THIRD_PARTY_RERUN_KIT.md`](./docs/PARSER_THIRD_PARTY_RERUN_KIT.md)
@@ -1104,6 +1110,10 @@ Artifacts are written under:
 - `artifacts/rgc_certified_optimization_harness/<timestamp>/trace_ids.json`
 - `artifacts/rgc_certified_optimization_harness/<timestamp>/rewrite_proof_index.json`
 - `artifacts/rgc_certified_optimization_harness/<timestamp>/rch-log.*`
+
+`check` mode emits only `run_manifest.json`, `events.jsonl`, `commands.txt`,
+and retained `rch-log.*` artifacts. `test` and `ci` additionally emit
+`trace_ids.json` and `rewrite_proof_index.json`.
 
 ## FRX Toolchain Lane Charter Gate
 

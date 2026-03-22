@@ -97,6 +97,11 @@ One-command replay wrapper:
 ./scripts/e2e/parser_third_party_rerun_kit_replay.sh
 ```
 
+The replay wrapper must fail closed if the newest artifact directory is
+incomplete. When older complete evidence exists, it prints a warning naming the
+newest directory and then replays the latest complete directory instead of
+blindly trusting the lexicographically newest path.
+
 All heavy Rust build/test/lint commands must execute through `rch`.
 
 By default the gate script uses a run-scoped target directory under:
@@ -160,6 +165,7 @@ Each run emits:
    - `rerun_kit_index.json` has expected `matrix_input_status`.
    - `matrix_inputs` records exact paths plus `env`, `auto_discovered`, or `missing` source states for summary, delta, and manifest inputs.
    - `step_logs/` contains per-step `rch` logs for triage and remote-exit diagnostics.
+   - the replay wrapper fails closed on an incomplete newest directory and, when possible, warns and uses the latest complete directory instead.
    - the compile-smoke step in `commands.txt` uses `cargo test --no-run ... parser_third_party_rerun_kit` rather than `cargo check`, matching the shipped `rch` timeout-safe path.
    - `events.jsonl` validates with `scripts/validate_parser_log_schema.sh`.
 4. Replay through:
@@ -167,3 +173,7 @@ Each run emits:
 ```bash
 ./scripts/e2e/parser_third_party_rerun_kit_replay.sh
 ```
+
+The replay wrapper prints the complete operator bundle for the selected run:
+`run_manifest.json`, `rerun_kit_index.json`, `events.jsonl`, `commands.txt`,
+`verifier_notes.md`, and the first available `step_logs/step_*.log`.

@@ -855,7 +855,9 @@ pub fn validate_threading(
     let passed = all_contexts_valid && all_derivations_compliant && mock_free;
 
     let report_id = compute_report_id(epoch, contexts.len() as u64, events.len() as u64);
-    let content_hash = compute_report_hash(&report_id, epoch, passed, &failure_reasons);
+    let mut sorted_failure_reasons = failure_reasons.clone();
+    sorted_failure_reasons.sort();
+    let content_hash = compute_report_hash(&report_id, epoch, passed, &sorted_failure_reasons);
 
     ValidationReport {
         report_id,

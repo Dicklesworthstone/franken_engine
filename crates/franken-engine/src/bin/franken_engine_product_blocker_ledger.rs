@@ -488,6 +488,25 @@ fn build_cohort_rollup_artifact(
         .filter(|rollup| rollup.readiness.permits_release())
         .count();
     let blocked_or_partial_count = ledger.cohort_rollups.len() - ready_or_advisory_count;
+    let mut cohort_rollups = ledger
+        .cohort_rollups
+        .iter()
+        .map(|rollup| {
+            let mut blocker_ids = rollup.blocker_ids.clone();
+            blocker_ids.sort();
+            CohortRollupRow {
+                cohort_name: rollup.cohort_name.clone(),
+                readiness: rollup.readiness.as_str().to_string(),
+                blocker_count: rollup.blocker_count,
+                blocking_count: rollup.blocking_count,
+                degraded_count: rollup.degraded_count,
+                resolved_count: rollup.resolved_count,
+                readiness_rate_millionths: rollup.readiness_rate_millionths,
+                blocker_ids,
+            }
+        })
+        .collect::<Vec<_>>();
+    cohort_rollups.sort_by(|left, right| left.cohort_name.cmp(&right.cohort_name));
 
     CohortRollupArtifact {
         schema_version: COHORT_SCHEMA_VERSION.to_string(),
@@ -500,20 +519,7 @@ fn build_cohort_rollup_artifact(
         total_cohorts: ledger.cohort_rollups.len(),
         ready_or_advisory_count,
         blocked_or_partial_count,
-        cohort_rollups: ledger
-            .cohort_rollups
-            .iter()
-            .map(|rollup| CohortRollupRow {
-                cohort_name: rollup.cohort_name.clone(),
-                readiness: rollup.readiness.as_str().to_string(),
-                blocker_count: rollup.blocker_count,
-                blocking_count: rollup.blocking_count,
-                degraded_count: rollup.degraded_count,
-                resolved_count: rollup.resolved_count,
-                readiness_rate_millionths: rollup.readiness_rate_millionths,
-                blocker_ids: rollup.blocker_ids.clone(),
-            })
-            .collect(),
+        cohort_rollups,
     }
 }
 
@@ -523,7 +529,7 @@ fn build_owner_routing_report(
     support_contract: &SupportSurfaceContract,
     config: &EmitConfig,
 ) -> OwnerRoutingReport {
-    let routes = ledger
+    let mut routes = ledger
         .blockers
         .iter()
         .map(|blocker| {
@@ -576,6 +582,7 @@ fn build_owner_routing_report(
             }
         })
         .collect::<Vec<_>>();
+    routes.sort_by(|left, right| left.blocker_id.cmp(&right.blocker_id));
 
     let orphaned_unresolved_count = routes
         .iter()
@@ -616,4 +623,101 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
         .map_err(|error| format!("failed to encode {}: {error}", path.display()))?;
     fs::write(path, contents)
         .map_err(|error| format!("failed to write {}: {error}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use frankenengine_engine::engine_product_blocker_ledger::build_seed_ledger;
+
+    fn test_emit_config() -> EmitConfig {
+        EmitConfig {
+            artifact_dir: PathBuf::from("/tmp/rgc_engine_product_blocker_ledger_tests"),
+            beads_json: PathBuf::from("/tmp/unused_beads.json"),
+            support_contract_json: PathBuf::from("/tmp/unused_support_surface_contract.json"),
+            trace_id: "trace-test".to_string(),
+            decision_id: "decision-test".to_string(),
+            policy_id: "policy-test".to_string(),
+            generated_at_utc: "2026-03-22T16:20:00Z".to_string(),
+        }
+    }
+
+    fn test_support_contract() -> SupportSurfaceContract {
+        SupportSurfaceContract {
+            readiness_answer_contract: ReadinessAnswerContract {
+                engine_ready_when_support_status_in: vec!["shipped".to_string()],
+                engine_blocked_when_support_status_in: vec![
+                    "candidate".to_string(),
+                    "deferred".to_string(),
+                    "unsupported".to_string(),
+                ],
+                product_ready_state: "delegated_to_franken_node_handoff".to_string(),
+                product_ready_owner_repo: "franken_node".to_string(),
+                product_ready_handoff_bead_id: "bd-1lsy.5.10.3".to_string(),
+                operator_rule_summary: "engine-ready rows are shipped".to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn cohort_rollup_artifact_sorts_rows_and_blocker_ids() {
+        let mut ledger = build_seed_ledger();
+        ledger.cohort_rollups.reverse();
+        let tier_one = ledger
+            .cohort_rollups
+            .iter_mut()
+            .find(|rollup| rollup.cohort_name == "tier_1_critical")
+            .expect("tier_1_critical rollup must exist");
+        tier_one.blocker_ids.reverse();
+
+        let artifact = build_cohort_rollup_artifact(&ledger, &test_emit_config());
+        let cohort_names = artifact
+            .cohort_rollups
+            .iter()
+            .map(|rollup| rollup.cohort_name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            cohort_names,
+            vec!["cli_surface", "react_ecosystem", "tier_1_critical"]
+        );
+
+        let tier_one = artifact
+            .cohort_rollups
+            .iter()
+            .find(|rollup| rollup.cohort_name == "tier_1_critical")
+            .expect("tier_1_critical rollup must exist");
+        assert_eq!(
+            tier_one.blocker_ids,
+            vec!["blk_cjs_interop", "blk_native_addon"]
+        );
+    }
+
+    #[test]
+    fn owner_routing_report_sorts_routes_by_blocker_id() {
+        let mut ledger = build_seed_ledger();
+        ledger.blockers.reverse();
+
+        let report = build_owner_routing_report(
+            &ledger,
+            &BTreeMap::new(),
+            &test_support_contract(),
+            &test_emit_config(),
+        );
+        let route_ids = report
+            .routes
+            .iter()
+            .map(|route| route.blocker_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            route_ids,
+            vec![
+                "blk_cjs_interop",
+                "blk_cli_help",
+                "blk_native_addon",
+                "blk_obs_mode",
+                "blk_react_ssr",
+                "blk_regex_unicode",
+            ]
+        );
+    }
 }

@@ -1093,13 +1093,14 @@ fn build_publication_policy(
     supremacy_matrix: &ObservabilityOnSupremacyMatrixArtifact,
     hot_path_summary: &HotPathPublicationSummary,
 ) -> ObservabilityPublicationPolicyArtifact {
-    let allowed_cells = supremacy_matrix
+    let mut allowed_cells = supremacy_matrix
         .cells
         .iter()
         .filter(|cell| cell.decision.allowed)
         .map(|cell| cell.cell.cell_id.clone())
         .collect::<Vec<_>>();
-    let suppressed_claims = supremacy_matrix
+    allowed_cells.sort();
+    let mut suppressed_claims = supremacy_matrix
         .cells
         .iter()
         .filter(|cell| !cell.decision.allowed)
@@ -1110,6 +1111,7 @@ fn build_publication_policy(
             reasons: cell.decision.suppression_reasons.clone(),
         })
         .collect::<Vec<_>>();
+    suppressed_claims.sort_by(|a, b| a.workload_id.cmp(&b.workload_id));
 
     let mut fail_closed_conditions = vec![
         "observability_off cells are never publishable claim surfaces".to_string(),

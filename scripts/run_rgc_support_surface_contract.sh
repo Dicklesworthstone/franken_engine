@@ -437,7 +437,7 @@ write_manifest() {
   write_report "$outcome"
   write_summary "$outcome"
   jq -n --arg trace_id "$trace_id" '[$trace_id]' >"$trace_ids_path"
-  contract_operator_verification_json="$(jq '.operator_verification' "$contract_json")"
+  contract_operator_verification_json="$(jq '.operator_verification' "$copied_contract_path")"
 
   git_commit="$(git rev-parse HEAD 2>/dev/null || echo "unknown")"
 

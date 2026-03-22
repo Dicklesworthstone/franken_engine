@@ -818,8 +818,8 @@ fn rgc_911b_gate_script_manifest_reuses_contract_operator_verification_commands(
         "gate script should collect the published operator verification commands"
     );
     assert!(
-        script.contains("jq '.operator_verification' \"$contract_json\""),
-        "gate script should read operator verification commands from the contract JSON"
+        script.contains("jq '.operator_verification' \"$copied_contract_path\""),
+        "gate script should read operator verification commands from the copied contract artifact"
     );
     assert!(
         script.contains("] + $contract_operator_verification"),

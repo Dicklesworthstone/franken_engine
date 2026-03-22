@@ -241,7 +241,7 @@ impl ExtensionHeap {
     /// Allocate a new rooted object, returning its ID.
     pub fn allocate(&mut self, size_bytes: u64) -> GcObjectId {
         let id = GcObjectId(self.next_id);
-        self.next_id += 1;
+        self.next_id = self.next_id.saturating_add(1);
         self.objects.insert(
             id,
             GcObject {
@@ -251,7 +251,7 @@ impl ExtensionHeap {
                 rooted: true,
             },
         );
-        self.total_bytes += size_bytes;
+        self.total_bytes = self.total_bytes.saturating_add(size_bytes);
         id
     }
 
@@ -364,8 +364,8 @@ impl ExtensionHeap {
 
         let swept_count = before_count - self.objects.len() as u64;
         self.total_bytes = self.total_bytes.saturating_sub(bytes_reclaimed);
-        self.total_reclaimed += bytes_reclaimed;
-        self.collection_count += 1;
+        self.total_reclaimed = self.total_reclaimed.saturating_add(bytes_reclaimed);
+        self.collection_count = self.collection_count.saturating_add(1);
 
         CollectionStats {
             marked_count,
@@ -499,7 +499,7 @@ impl GcCollector {
 
         let stats = heap.collect_mark_sweep();
 
-        self.event_sequence += 1;
+        self.event_sequence = self.event_sequence.saturating_add(1);
         let event = GcEvent {
             sequence: self.event_sequence,
             extension_id: extension_id.to_string(),
@@ -519,6 +519,16 @@ impl GcCollector {
         extension_id: &str,
         registry: &mut DomainRegistry,
     ) -> Result<GcEvent, GcError> {
+        if !self.heaps.contains_key(extension_id) {
+            return Err(GcError::HeapNotFound {
+                extension_id: extension_id.to_string(),
+            });
+        }
+        if registry.get(&AllocationDomain::ExtensionHeap).is_none() {
+            return Err(GcError::DomainError(AllocDomainError::DomainNotFound {
+                domain: AllocationDomain::ExtensionHeap,
+            }));
+        }
         let event = self.collect(extension_id)?;
         if event.bytes_reclaimed > 0 {
             registry.release(AllocationDomain::ExtensionHeap, event.bytes_reclaimed)?;
@@ -919,6 +929,30 @@ mod tests {
                 .used_bytes,
             0
         );
+    }
+
+    #[test]
+    fn collect_tracked_missing_registry_domain_fails_without_mutation() {
+        let mut gc = deterministic_collector();
+        gc.register_heap("ext-a".into()).unwrap();
+
+        let obj_id = gc.allocate("ext-a", 400).unwrap();
+        gc.unroot("ext-a", obj_id).unwrap();
+
+        let mut reg = DomainRegistry::new();
+        let result = gc.collect_tracked("ext-a", &mut reg);
+        assert!(matches!(
+            result,
+            Err(GcError::DomainError(AllocDomainError::DomainNotFound {
+                domain: AllocationDomain::ExtensionHeap
+            }))
+        ));
+
+        let heap = gc.get_heap("ext-a").unwrap();
+        assert_eq!(heap.object_count(), 1);
+        assert_eq!(heap.total_bytes(), 400);
+        assert_eq!(gc.events().len(), 0);
+        assert_eq!(gc.event_sequence(), 0);
     }
 
     #[test]

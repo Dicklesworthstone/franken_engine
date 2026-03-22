@@ -718,6 +718,31 @@ fn enrichment_collect_tracked_releases_budget() {
 }
 
 #[test]
+fn enrichment_collect_tracked_missing_registry_domain_preserves_heap_state() {
+    let mut gc = det_collector();
+    gc.register_heap("ext".into()).unwrap();
+
+    let obj = gc.allocate("ext", 400).unwrap();
+    gc.unroot("ext", obj).unwrap();
+
+    let mut reg = DomainRegistry::new();
+    assert!(matches!(
+        gc.collect_tracked("ext", &mut reg),
+        Err(GcError::DomainError(
+            frankenengine_engine::alloc_domain::AllocDomainError::DomainNotFound {
+                domain: AllocationDomain::ExtensionHeap
+            }
+        ))
+    ));
+
+    let heap = gc.get_heap("ext").unwrap();
+    assert_eq!(heap.object_count(), 1);
+    assert_eq!(heap.total_bytes(), 400);
+    assert!(heap.contains(obj));
+    assert_eq!(gc.events().len(), 0);
+}
+
+#[test]
 fn enrichment_allocate_tracked_budget_exceeded() {
     let mut gc = det_collector();
     gc.register_heap("ext".into()).unwrap();

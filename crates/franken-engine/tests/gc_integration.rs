@@ -1235,6 +1235,33 @@ fn collect_tracked_partial_release() {
     );
 }
 
+#[test]
+fn collect_tracked_missing_registry_domain_does_not_mutate_heap_or_events() {
+    let mut gc = det_collector();
+    gc.register_heap("ext-a".into()).unwrap();
+
+    let obj = gc.allocate("ext-a", 400).unwrap();
+    gc.unroot("ext-a", obj).unwrap();
+
+    let mut reg = DomainRegistry::new();
+    let result = gc.collect_tracked("ext-a", &mut reg);
+    assert!(matches!(
+        result,
+        Err(GcError::DomainError(
+            frankenengine_engine::alloc_domain::AllocDomainError::DomainNotFound {
+                domain: AllocationDomain::ExtensionHeap
+            }
+        ))
+    ));
+
+    let heap = gc.get_heap("ext-a").unwrap();
+    assert_eq!(heap.object_count(), 1);
+    assert_eq!(heap.total_bytes(), 400);
+    assert!(heap.contains(obj));
+    assert_eq!(gc.events().len(), 0);
+    assert_eq!(gc.event_sequence(), 0);
+}
+
 // ===========================================================================
 // 20. Event recording
 // ===========================================================================

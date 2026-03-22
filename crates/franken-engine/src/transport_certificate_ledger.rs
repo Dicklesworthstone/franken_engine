@@ -461,7 +461,10 @@ impl TransportCertificate {
         hasher.update(outcome.as_str().as_bytes());
         hasher.update(source_perf.to_le_bytes());
         hasher.update(target_perf.to_le_bytes());
-        for reason in degradation_reasons {
+        let mut sorted_reasons = degradation_reasons.to_vec();
+        sorted_reasons.sort();
+        hasher.update((sorted_reasons.len() as u32).to_le_bytes());
+        for reason in &sorted_reasons {
             hasher.update(reason.as_str().as_bytes());
         }
         hasher.update(residual_fraction.to_le_bytes());
@@ -633,7 +636,9 @@ impl ResidualLedger {
         hasher.update(SCHEMA_VERSION.as_bytes());
         hasher.update(ledger_id.as_bytes());
         hasher.update(certificate_id.as_bytes());
-        for comp in components {
+        let mut sorted_components: Vec<_> = components.iter().collect();
+        sorted_components.sort_by(|a, b| a.component_name.cmp(&b.component_name));
+        for comp in &sorted_components {
             hasher.update(comp.component_name.as_bytes());
             hasher.update(comp.source_contribution_millionths.to_le_bytes());
             hasher.update(comp.transported_contribution_millionths.to_le_bytes());

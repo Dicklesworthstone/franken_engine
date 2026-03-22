@@ -1189,7 +1189,9 @@ fn build_artifact_id(
     hasher.update(evidence_link.trace_id.as_bytes());
     hasher.update(evidence_link.decision_id.as_bytes());
     hasher.update(evidence_link.policy_id.as_bytes());
+    hasher.update(evidence_link.benchmark_run_id.as_bytes());
     hasher.update(evidence_link.optimization_decision_id.as_bytes());
+    hasher.update(evidence_link.evidence_node_id.as_bytes());
     if let Some(reference) = diff_from_artifact_id {
         hasher.update(reference.as_bytes());
     }

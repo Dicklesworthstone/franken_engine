@@ -228,14 +228,33 @@ impl CompositionEvidence {
         }
     }
 
-    /// Compute content hash.
+    /// Compute content hash covering all semantically meaningful fields.
     pub fn content_hash(&self) -> ContentHash {
         let mut hasher = Sha256::new();
         hasher.update(self.composition_id.as_bytes());
         hasher.update(self.controller_count.to_le_bytes());
         hasher.update(self.confidence_millionths.to_le_bytes());
         hasher.update(self.evidence_epoch.to_le_bytes());
-        hasher.update(self.signals.len().to_le_bytes());
+        // Sort signals by signal_id for insertion-order independence.
+        let mut sorted_signals: Vec<_> = self.signals.iter().collect();
+        sorted_signals.sort_by(|a, b| a.signal_id.cmp(&b.signal_id));
+        hasher.update((sorted_signals.len() as u64).to_le_bytes());
+        for signal in &sorted_signals {
+            hasher.update(signal.signal_id.as_bytes());
+            hasher.update(signal.severity.to_string().as_bytes());
+            hasher.update(signal.risk_score_millionths.to_le_bytes());
+        }
+        // Include separation_bundle presence and stability_assessment presence.
+        hasher.update(if self.separation_bundle.is_some() {
+            &[1u8]
+        } else {
+            &[0u8]
+        });
+        hasher.update(if self.stability_assessment.is_some() {
+            &[1u8]
+        } else {
+            &[0u8]
+        });
         ContentHash::compute(&hasher.finalize())
     }
 }

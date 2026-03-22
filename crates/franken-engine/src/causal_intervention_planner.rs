@@ -287,6 +287,7 @@ impl CausalDag {
     /// the same hash.
     pub fn content_hash(&self) -> ContentHash {
         let mut entries = Vec::new();
+        entries.push(CanonicalValue::String(self.version.clone()));
 
         // Sort nodes by id for insertion-order independence.
         let mut sorted_nodes: Vec<_> = self.nodes.iter().collect();

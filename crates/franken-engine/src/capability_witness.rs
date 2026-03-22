@@ -686,6 +686,7 @@ impl CapabilityWitness {
             buf.extend_from_slice(po.capability.as_str().as_bytes());
             buf.push(po.kind as u8);
             buf.extend_from_slice(po.proof_artifact_id.as_bytes());
+            buf.extend_from_slice(po.justification.as_bytes());
             buf.extend_from_slice(po.artifact_hash.as_bytes());
         }
         buf.push(0xff);

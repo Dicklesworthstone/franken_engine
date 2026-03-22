@@ -237,10 +237,33 @@ impl RevocationEvent {
                 None => CanonicalValue::Null,
             },
         );
+        // Include full revocation content for tamper detection.
+        let rev = &self.revocation;
         map.insert(
             "revocation_id".to_string(),
-            CanonicalValue::Bytes(self.revocation.revocation_id.as_bytes().to_vec()),
+            CanonicalValue::Bytes(rev.revocation_id.as_bytes().to_vec()),
         );
+        map.insert(
+            "target_type".to_string(),
+            CanonicalValue::String(rev.target_type.to_string()),
+        );
+        map.insert(
+            "target_id".to_string(),
+            CanonicalValue::Bytes(rev.target_id.as_bytes().to_vec()),
+        );
+        map.insert(
+            "reason".to_string(),
+            CanonicalValue::String(rev.reason.to_string()),
+        );
+        map.insert(
+            "issued_by".to_string(),
+            CanonicalValue::Bytes(rev.issued_by.as_bytes().to_vec()),
+        );
+        map.insert(
+            "issued_at".to_string(),
+            CanonicalValue::U64(rev.issued_at.0),
+        );
+        map.insert("zone".to_string(), CanonicalValue::String(rev.zone.clone()));
         deterministic_serde::encode_value(&CanonicalValue::Map(map))
     }
 

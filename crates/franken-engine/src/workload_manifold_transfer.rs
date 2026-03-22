@@ -338,6 +338,7 @@ impl TransferManifest {
 
     pub fn content_hash(&self) -> ContentHash {
         let mut entries = Vec::new();
+        entries.push(CanonicalValue::String(self.version.clone()));
 
         // Hash embeddings (sorted by workload_id for determinism via BTreeMap)
         let mut sorted_embeddings: Vec<_> = self.embeddings.iter().collect();

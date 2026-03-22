@@ -498,7 +498,9 @@ impl DecisionReceipt {
         append_str(&mut buf, &self.envelope_id);
         append_str(&mut buf, self.kind.as_str());
         append_str(&mut buf, self.verdict.as_str());
-        for reason in &self.blocking_reasons {
+        let mut sorted_reasons = self.blocking_reasons.clone();
+        sorted_reasons.sort();
+        for reason in &sorted_reasons {
             append_str(&mut buf, &format!("{reason}"));
         }
         buf.extend_from_slice(self.evidence_hash.as_bytes());

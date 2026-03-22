@@ -862,6 +862,17 @@ pub fn build_evidence(
     h.update(epoch.as_u64().to_le_bytes());
     h.update(total_workloads.to_le_bytes());
     h.update((covered_families as u64).to_le_bytes());
+    h.update(profile.gini_coefficient.to_le_bytes());
+    h.update(profile.entropy.to_le_bytes());
+    h.update(profile.max_family_share.to_le_bytes());
+    h.update(profile.min_family_share.to_le_bytes());
+    for fc in &profile.family_coverages {
+        h.update(fc.family.as_str().as_bytes());
+        h.update(fc.workload_count.to_le_bytes());
+        h.update(fc.total_weight.to_le_bytes());
+        h.update(fc.coverage_fraction.to_le_bytes());
+        h.update(fc.max_gap_fraction.to_le_bytes());
+    }
     let receipt_hash = ContentHash::compute(&h.finalize());
 
     SaturationEvidence {

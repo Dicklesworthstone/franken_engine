@@ -89,6 +89,15 @@ pub enum ShiftSeverity {
 }
 
 impl ShiftSeverity {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Warning => "warning",
+            Self::Critical => "critical",
+            Self::Emergency => "emergency",
+        }
+    }
+
     /// Numeric weight in millionths.
     pub fn weight(&self) -> u64 {
         match self {
@@ -107,12 +116,7 @@ impl ShiftSeverity {
 
 impl fmt::Display for ShiftSeverity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Info => write!(f, "info"),
-            Self::Warning => write!(f, "warning"),
-            Self::Critical => write!(f, "critical"),
-            Self::Emergency => write!(f, "emergency"),
-        }
+        f.write_str(self.as_str())
     }
 }
 
@@ -144,15 +148,21 @@ pub enum ShiftDomain {
 
 impl fmt::Display for ShiftDomain {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl ShiftDomain {
+    pub const fn as_str(self) -> &'static str {
         match self {
-            Self::ProgramSize => write!(f, "program_size"),
-            Self::ApiUsage => write!(f, "api_usage"),
-            Self::ControlFlow => write!(f, "control_flow"),
-            Self::ModuleTopology => write!(f, "module_topology"),
-            Self::Concurrency => write!(f, "concurrency"),
-            Self::MemoryAllocation => write!(f, "memory_allocation"),
-            Self::IoPattern => write!(f, "io_pattern"),
-            Self::General => write!(f, "general"),
+            Self::ProgramSize => "program_size",
+            Self::ApiUsage => "api_usage",
+            Self::ControlFlow => "control_flow",
+            Self::ModuleTopology => "module_topology",
+            Self::Concurrency => "concurrency",
+            Self::MemoryAllocation => "memory_allocation",
+            Self::IoPattern => "io_pattern",
+            Self::General => "general",
         }
     }
 }
@@ -360,6 +370,15 @@ pub enum FreshnessLevel {
 }
 
 impl FreshnessLevel {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fresh => "fresh",
+            Self::Aging => "aging",
+            Self::Stale => "stale",
+            Self::Invalid => "invalid",
+        }
+    }
+
     /// Whether claims at full confidence are permitted.
     pub fn permits_full_confidence(&self) -> bool {
         matches!(self, Self::Fresh)
@@ -378,12 +397,7 @@ impl FreshnessLevel {
 
 impl fmt::Display for FreshnessLevel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Fresh => write!(f, "fresh"),
-            Self::Aging => write!(f, "aging"),
-            Self::Stale => write!(f, "stale"),
-            Self::Invalid => write!(f, "invalid"),
-        }
+        f.write_str(self.as_str())
     }
 }
 
@@ -678,6 +692,13 @@ impl AlarmLedger {
         hasher.update(self.total_alarms_recorded.to_le_bytes());
         hasher.update(self.cumulative_severity.to_le_bytes());
         hasher.update((self.active_alarms.len() as u64).to_le_bytes());
+        // Include individual alarm details (BTreeMap iterates deterministically).
+        for (id, alarm) in &self.active_alarms {
+            hasher.update(id.as_bytes());
+            hasher.update(alarm.domain.as_str().as_bytes());
+            hasher.update(alarm.severity.as_str().as_bytes());
+            hasher.update(alarm.drift_magnitude.to_le_bytes());
+        }
         ContentHash::compute(&hasher.finalize())
     }
 }
@@ -839,6 +860,15 @@ pub enum RolloutTrustLevel {
 }
 
 impl RolloutTrustLevel {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Conditional => "conditional",
+            Self::Reduced => "reduced",
+            Self::Blocked => "blocked",
+        }
+    }
+
     /// From freshness level.
     pub fn from_freshness(freshness: FreshnessLevel, permit_aging: bool) -> Self {
         match freshness {
@@ -853,12 +883,7 @@ impl RolloutTrustLevel {
 
 impl fmt::Display for RolloutTrustLevel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Full => write!(f, "full"),
-            Self::Conditional => write!(f, "conditional"),
-            Self::Reduced => write!(f, "reduced"),
-            Self::Blocked => write!(f, "blocked"),
-        }
+        f.write_str(self.as_str())
     }
 }
 
@@ -1104,6 +1129,19 @@ impl FreshnessGate {
         hasher.update(claim.claim_id.as_bytes());
         hasher.update(self.current_epoch.as_u64().to_le_bytes());
         hasher.update(adjusted_confidence.to_le_bytes());
+        hasher.update(claim.original_confidence.to_le_bytes());
+        hasher.update(freshness.as_str().as_bytes());
+        hasher.update(if rollout_permitted { &[1u8] } else { &[0u8] });
+        for alarm_id in &contributing_alarms {
+            hasher.update(alarm_id.as_bytes());
+        }
+        for (dom, level) in &domain_freshness {
+            hasher.update(dom.as_str().as_bytes());
+            hasher.update(level.as_str().as_bytes());
+        }
+        for reason in &reasons {
+            hasher.update(reason.as_bytes());
+        }
         let verdict_hash = ContentHash::compute(&hasher.finalize());
 
         FreshnessVerdict {
@@ -1158,6 +1196,16 @@ impl FreshnessGate {
         hasher.update(b"batch_verdict");
         hasher.update(self.current_epoch.as_u64().to_le_bytes());
         hasher.update((batch_claims.len() as u64).to_le_bytes());
+        hasher.update(worst_freshness.to_string().as_bytes());
+        hasher.update(rollout_trust.to_string().as_bytes());
+        hasher.update(full_count.to_le_bytes());
+        hasher.update(downgraded_count.to_le_bytes());
+        hasher.update(invalid_count.to_le_bytes());
+        // Include individual verdict hashes (BTreeMap iterates deterministically).
+        for (claim_id, verdict) in &verdicts {
+            hasher.update(claim_id.as_bytes());
+            hasher.update(verdict.verdict_hash.as_bytes());
+        }
         let batch_hash = ContentHash::compute(&hasher.finalize());
 
         BatchVerdict {
@@ -1336,7 +1384,9 @@ mod tests {
     #[test]
     fn test_severity_display() {
         assert_eq!(ShiftSeverity::Info.to_string(), "info");
+        assert_eq!(ShiftSeverity::Info.as_str(), "info");
         assert_eq!(ShiftSeverity::Emergency.to_string(), "emergency");
+        assert_eq!(ShiftSeverity::Emergency.as_str(), "emergency");
     }
 
     // --- ShiftAlarm ---
@@ -1448,6 +1498,18 @@ mod tests {
         assert!(FreshnessLevel::Fresh < FreshnessLevel::Aging);
         assert!(FreshnessLevel::Aging < FreshnessLevel::Stale);
         assert!(FreshnessLevel::Stale < FreshnessLevel::Invalid);
+    }
+
+    #[test]
+    fn test_freshness_as_str_matches_display() {
+        for freshness in [
+            FreshnessLevel::Fresh,
+            FreshnessLevel::Aging,
+            FreshnessLevel::Stale,
+            FreshnessLevel::Invalid,
+        ] {
+            assert_eq!(freshness.as_str(), freshness.to_string());
+        }
     }
 
     // --- BenchmarkClaim ---
@@ -2252,14 +2314,29 @@ mod tests {
     #[test]
     fn test_shift_domain_display() {
         assert_eq!(ShiftDomain::ProgramSize.to_string(), "program_size");
+        assert_eq!(ShiftDomain::ProgramSize.as_str(), "program_size");
         assert_eq!(ShiftDomain::ApiUsage.to_string(), "api_usage");
+        assert_eq!(ShiftDomain::ApiUsage.as_str(), "api_usage");
         assert_eq!(ShiftDomain::ControlFlow.to_string(), "control_flow");
+        assert_eq!(ShiftDomain::ControlFlow.as_str(), "control_flow");
     }
 
     #[test]
     fn test_claim_surface_display() {
         assert_eq!(ClaimSurface::Performance.to_string(), "performance");
         assert_eq!(ClaimSurface::Supremacy.to_string(), "supremacy");
+    }
+
+    #[test]
+    fn test_rollout_trust_as_str_matches_display() {
+        for trust in [
+            RolloutTrustLevel::Full,
+            RolloutTrustLevel::Conditional,
+            RolloutTrustLevel::Reduced,
+            RolloutTrustLevel::Blocked,
+        ] {
+            assert_eq!(trust.as_str(), trust.to_string());
+        }
     }
 
     #[test]

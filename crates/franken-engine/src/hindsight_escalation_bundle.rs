@@ -88,11 +88,9 @@ impl EscalationTriggerKind {
         Self::ResourceExhaustion,
         Self::OperatorRequest,
     ];
-}
 
-impl fmt::Display for EscalationTriggerKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let label = match self {
+    pub const fn as_str(self) -> &'static str {
+        match self {
             Self::AnomalyDetected => "anomaly_detected",
             Self::RegressionObserved => "regression_observed",
             Self::UserVisibleFailure => "user_visible_failure",
@@ -100,8 +98,13 @@ impl fmt::Display for EscalationTriggerKind {
             Self::ReplayDivergence => "replay_divergence",
             Self::ResourceExhaustion => "resource_exhaustion",
             Self::OperatorRequest => "operator_request",
-        };
-        write!(f, "{label}")
+        }
+    }
+}
+
+impl fmt::Display for EscalationTriggerKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -131,6 +134,15 @@ impl TriggerSeverity {
         Self::Emergency,
     ];
 
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Advisory => "advisory",
+            Self::Warning => "warning",
+            Self::Critical => "critical",
+            Self::Emergency => "emergency",
+        }
+    }
+
     /// Cost multiplier for this severity (millionths).
     /// Higher severity means more resources can be spent on capture.
     pub const fn cost_multiplier_millionths(self) -> u64 {
@@ -150,13 +162,7 @@ impl TriggerSeverity {
 
 impl fmt::Display for TriggerSeverity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let label = match self {
-            Self::Advisory => "advisory",
-            Self::Warning => "warning",
-            Self::Critical => "critical",
-            Self::Emergency => "emergency",
-        };
-        write!(f, "{label}")
+        f.write_str(self.as_str())
     }
 }
 
@@ -189,8 +195,8 @@ impl EscalationTrigger {
     fn recompute_hash(&mut self) {
         let mut data = Vec::new();
         data.extend_from_slice(self.trigger_id.as_bytes());
-        data.extend_from_slice(format!("{:?}", self.kind).as_bytes());
-        data.extend_from_slice(format!("{:?}", self.severity).as_bytes());
+        data.extend_from_slice(self.kind.as_str().as_bytes());
+        data.extend_from_slice(self.severity.as_str().as_bytes());
         data.extend_from_slice(self.description.as_bytes());
         let mut sorted_boundaries: Vec<_> = self.relevant_boundaries.iter().collect();
         sorted_boundaries.sort_by_key(|b| b.as_str());
@@ -317,7 +323,7 @@ impl EscalationBundle {
         let mut sorted_entries: Vec<_> = self.entries.iter().collect();
         sorted_entries.sort_by_key(|e| &e.content_digest);
         for entry in &sorted_entries {
-            data.extend_from_slice(format!("{:?}", entry.kind).as_bytes());
+            data.extend_from_slice(entry.kind.to_string().as_bytes());
             data.extend_from_slice(entry.content_digest.as_bytes());
             data.extend_from_slice(match entry.redaction {
                 RedactionTreatment::Plaintext => b"plaintext",
@@ -401,7 +407,7 @@ impl EscalationReceipt {
         let mut data = Vec::new();
         data.extend_from_slice(self.receipt_id.as_bytes());
         data.extend_from_slice(self.trigger_id.as_bytes());
-        data.extend_from_slice(format!("{:?}", self.decision).as_bytes());
+        data.extend_from_slice(self.decision.to_string().as_bytes());
         if let Some(ref bundle_id) = self.bundle_id {
             data.extend_from_slice(bundle_id.as_bytes());
         }
@@ -916,7 +922,15 @@ mod tests {
             "anomaly_detected"
         );
         assert_eq!(
+            EscalationTriggerKind::AnomalyDetected.as_str(),
+            "anomaly_detected"
+        );
+        assert_eq!(
             EscalationTriggerKind::RegressionObserved.to_string(),
+            "regression_observed"
+        );
+        assert_eq!(
+            EscalationTriggerKind::RegressionObserved.as_str(),
             "regression_observed"
         );
         assert_eq!(
@@ -924,7 +938,15 @@ mod tests {
             "user_visible_failure"
         );
         assert_eq!(
+            EscalationTriggerKind::UserVisibleFailure.as_str(),
+            "user_visible_failure"
+        );
+        assert_eq!(
             EscalationTriggerKind::PolicyViolation.to_string(),
+            "policy_violation"
+        );
+        assert_eq!(
+            EscalationTriggerKind::PolicyViolation.as_str(),
             "policy_violation"
         );
         assert_eq!(
@@ -932,13 +954,32 @@ mod tests {
             "replay_divergence"
         );
         assert_eq!(
+            EscalationTriggerKind::ReplayDivergence.as_str(),
+            "replay_divergence"
+        );
+        assert_eq!(
             EscalationTriggerKind::ResourceExhaustion.to_string(),
+            "resource_exhaustion"
+        );
+        assert_eq!(
+            EscalationTriggerKind::ResourceExhaustion.as_str(),
             "resource_exhaustion"
         );
         assert_eq!(
             EscalationTriggerKind::OperatorRequest.to_string(),
             "operator_request"
         );
+        assert_eq!(
+            EscalationTriggerKind::OperatorRequest.as_str(),
+            "operator_request"
+        );
+    }
+
+    #[test]
+    fn trigger_kind_as_str_matches_display() {
+        for kind in EscalationTriggerKind::ALL {
+            assert_eq!(kind.as_str(), kind.to_string());
+        }
     }
 
     #[test]
@@ -965,9 +1006,20 @@ mod tests {
     #[test]
     fn severity_display() {
         assert_eq!(TriggerSeverity::Advisory.to_string(), "advisory");
+        assert_eq!(TriggerSeverity::Advisory.as_str(), "advisory");
         assert_eq!(TriggerSeverity::Warning.to_string(), "warning");
+        assert_eq!(TriggerSeverity::Warning.as_str(), "warning");
         assert_eq!(TriggerSeverity::Critical.to_string(), "critical");
+        assert_eq!(TriggerSeverity::Critical.as_str(), "critical");
         assert_eq!(TriggerSeverity::Emergency.to_string(), "emergency");
+        assert_eq!(TriggerSeverity::Emergency.as_str(), "emergency");
+    }
+
+    #[test]
+    fn severity_as_str_matches_display() {
+        for severity in TriggerSeverity::ALL {
+            assert_eq!(severity.as_str(), severity.to_string());
+        }
     }
 
     #[test]

@@ -266,6 +266,15 @@ pub enum DriftCategory {
 }
 
 impl DriftCategory {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Semantic => "semantic",
+            Self::Diagnostics => "diagnostics",
+            Self::Harness => "harness",
+            Self::Artifact => "artifact",
+        }
+    }
+
     const fn owner_hint(self) -> &'static str {
         match self {
             Self::Semantic => "parser-core",
@@ -738,7 +747,7 @@ pub fn run_multi_engine_harness(
         }
         if let Some(classification) = evaluation.drift_classification.as_ref() {
             *drift_counts_by_category
-                .entry(format!("{:?}", classification.category).to_ascii_lowercase())
+                .entry(classification.category.as_str().to_string())
                 .or_insert(0) += 1;
             match classification.severity {
                 DriftSeverity::Minor => drift_minor_fixtures += 1,
@@ -907,7 +916,11 @@ fn derive_run_id(
     for engine in &config.engines {
         hasher.update(engine.engine_id.as_bytes());
         hasher.update(engine.version_pin.as_bytes());
-        hasher.update(format!("{:?}", engine.kind).as_bytes());
+        hasher.update(
+            serde_json::to_string(&engine.kind)
+                .expect("engine kind should serialize for deterministic hashing")
+                .as_bytes(),
+        );
         if let Some(command) = engine.command.as_ref() {
             hasher.update(command.as_bytes());
         }
@@ -1455,7 +1468,7 @@ fn execute_engine(
                 }
                 Err(error) => {
                     allocation_estimate = 1;
-                    EngineObservation::Error(format!("{:?}", error.code))
+                    EngineObservation::Error(error.code.as_str().to_string())
                 }
             }
         }

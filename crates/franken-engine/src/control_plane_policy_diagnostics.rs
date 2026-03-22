@@ -539,13 +539,20 @@ impl DiagnosticEmitter {
         let release_blocked = self.has_release_blockers();
         let max_severity = self.max_severity();
 
-        let content = format!(
-            "diagnostics={},release_blocked={},max_severity={},schema={}",
+        let mut content = format!(
+            "diagnostics={},release_blocked={},max_severity={},schema={},epoch={}",
             self.diagnostics.len(),
             release_blocked,
             max_severity.map_or("none", |s| s.as_str()),
             self.schema_version,
+            self.epoch.as_u64(),
         );
+        for (k, v) in &severity_counts {
+            content.push_str(&format!(",sev:{k}={v}"));
+        }
+        for (k, v) in &category_counts {
+            content.push_str(&format!(",cat:{k}={v}"));
+        }
         let content_hash = ContentHash::compute(content.as_bytes());
 
         DiagnosticReport {

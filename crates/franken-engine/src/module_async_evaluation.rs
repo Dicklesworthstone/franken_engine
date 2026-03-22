@@ -1032,6 +1032,7 @@ mod tests {
     fn empty_live_bindings() -> LiveBindingMap {
         LiveBindingMap {
             cells: BTreeMap::new(),
+            aliases: Vec::new(),
             namespaces: BTreeMap::new(),
             imports: Vec::new(),
             events: Vec::new(),

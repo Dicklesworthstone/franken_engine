@@ -337,7 +337,7 @@ impl EvidenceEntryBuilder {
             }
         })?;
         let evidence_hash = deterministic_hash(&hash_input);
-        let entry_id = format!("ev-{}", &evidence_hash[..16]);
+        let entry_id = format!("ev-{}", evidence_hash.get(..16).unwrap_or(&evidence_hash));
 
         temp_entry.entry_id = entry_id;
         temp_entry.evidence_hash = evidence_hash;
@@ -1120,8 +1120,12 @@ struct DocsContractFixture {
 }
 
 pub fn render_stitching_summary(bundle: &EvidenceLedgerStitchingBundle) -> String {
-    let query = &bundle.evidence_query_surface_snapshot.decisions[0];
-    let semantics = &bundle.decision_semantics_log[0];
+    let Some(query) = bundle.evidence_query_surface_snapshot.decisions.first() else {
+        return "# Evidence Ledger Stitching Summary\n\nNo decisions found.".to_string();
+    };
+    let Some(semantics) = bundle.decision_semantics_log.first() else {
+        return "# Evidence Ledger Stitching Summary\n\nNo semantics log entries.".to_string();
+    };
     let mut lines = vec![
         "# Evidence Ledger Stitching Summary".to_string(),
         String::new(),
@@ -1406,7 +1410,7 @@ fn write_stitching_bundle(
                 "node_count": evaluated.bundle.evidence_ledger_graph.nodes.len(),
                 "edge_count": evaluated.bundle.evidence_ledger_graph.edges.len(),
                 "artifact_count": evaluated.bundle.artifact_lineage_index.len(),
-                "boundary_count": evaluated.bundle.evidence_query_surface_snapshot.decisions[0].boundary_correlation_keys.len(),
+                "boundary_count": evaluated.bundle.evidence_query_surface_snapshot.decisions.first().map_or(0, |d| d.boundary_correlation_keys.len()),
                 "bundle_hash": digest_json(&serde_json::to_value(&evaluated.bundle).expect("bundle must serialize")),
                 "graph_hash": digest_json(&serde_json::to_value(&evaluated.bundle.evidence_ledger_graph).expect("graph must serialize")),
                 "query_snapshot_hash": digest_json(&serde_json::to_value(&evaluated.bundle.evidence_query_surface_snapshot).expect("query snapshot must serialize")),

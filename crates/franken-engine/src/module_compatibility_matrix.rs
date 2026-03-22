@@ -932,6 +932,25 @@ impl ModuleCompatibilityMatrix {
                     ),
                 ));
             }
+            let shim_ref_matches_entry = entry
+                .lockstep_case_refs
+                .iter()
+                .chain(entry.test262_refs.iter())
+                .any(|case_ref| case_ref == &shim.test_case_ref);
+            if !shim_ref_matches_entry {
+                return Err(self.error(
+                    context,
+                    CompatibilityMatrixErrorCode::InvalidMatrix,
+                    EventDraft::deny(
+                        "compatibility_entry_validation",
+                        entry.case_id.clone(),
+                        CompatibilityRuntime::FrankenEngine,
+                        shim.mode,
+                        CompatibilityMatrixErrorCode::InvalidMatrix,
+                        "explicit shim test_case_ref must match an entry lockstep_case_refs or test262_refs reference",
+                    ),
+                ));
+            }
             if !shim.removable {
                 return Err(self.error(
                     context,
@@ -1602,7 +1621,7 @@ mod tests {
             mode,
             description: "shim description".to_string(),
             removable: true,
-            test_case_ref: "test/ref.js".to_string(),
+            test_case_ref: "lockstep/ref".to_string(),
         }
     }
 
@@ -1682,6 +1701,21 @@ mod tests {
         entry.franken_node_compat_behavior = "different".to_string();
         let mut shim = valid_shim(CompatibilityMode::NodeCompat);
         shim.test_case_ref.clear();
+        entry.explicit_shims.push(shim);
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
+        let err = matrix
+            .validate_with_waivers(&BTreeSet::new(), &context())
+            .unwrap_err();
+        assert_eq!(err.code, CompatibilityMatrixErrorCode::InvalidMatrix);
+        assert!(err.message.contains("test_case_ref"));
+    }
+
+    #[test]
+    fn validate_entry_shim_detached_test_case_ref_fails() {
+        let mut entry = valid_entry("case-1");
+        entry.franken_node_compat_behavior = "different".to_string();
+        let mut shim = valid_shim(CompatibilityMode::NodeCompat);
+        shim.test_case_ref = "lockstep/unknown-ref".to_string();
         entry.explicit_shims.push(shim);
         let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
         let err = matrix

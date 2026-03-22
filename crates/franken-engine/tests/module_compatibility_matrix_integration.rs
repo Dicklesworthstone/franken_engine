@@ -72,7 +72,7 @@ fn make_shim(shim_id: &str, mode: CompatibilityMode) -> ExplicitShim {
         mode,
         description: "shim description".to_string(),
         removable: true,
-        test_case_ref: "lockstep/test/ref".to_string(),
+        test_case_ref: "lockstep/integ/ref".to_string(),
     }
 }
 
@@ -502,6 +502,20 @@ fn validate_shim_with_empty_test_case_ref_fails() {
     e.franken_node_compat_behavior = "different".to_string();
     let mut shim = make_shim("shim-1", CompatibilityMode::NodeCompat);
     shim.test_case_ref = "".to_string();
+    e.explicit_shims.push(shim);
+    let mut m = matrix_with(vec![e]);
+    let err = m
+        .validate_with_waivers(&BTreeSet::new(), &ctx())
+        .unwrap_err();
+    assert_eq!(err.code, CompatibilityMatrixErrorCode::InvalidMatrix);
+}
+
+#[test]
+fn validate_shim_with_detached_test_case_ref_fails() {
+    let mut e = base_entry("shim-detached-ref");
+    e.franken_node_compat_behavior = "different".to_string();
+    let mut shim = make_shim("shim-1", CompatibilityMode::NodeCompat);
+    shim.test_case_ref = "lockstep/not-declared".to_string();
     e.explicit_shims.push(shim);
     let mut m = matrix_with(vec![e]);
     let err = m

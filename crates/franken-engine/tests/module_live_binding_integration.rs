@@ -15,9 +15,12 @@
     clippy::manual_abs_diff
 )]
 
-use frankenengine_engine::esm_loader::BindingType;
+use frankenengine_engine::esm_loader::{
+    BindingType, EsmModule, ExportEntry, ImportEntry, ModuleGraph, ModuleStatus,
+};
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::module_live_binding::*;
+use frankenengine_engine::module_resolver::ModuleSyntax;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -889,13 +892,14 @@ fn re_export_binding_chain() {
 
     // mod_b re-exports "foo" from mod_a
     let cell_b = BindingCell::new("mod_b", "foo", "foo", BindingType::ReExport);
-    let _id_b = map.register_cell(cell_b);
+    let id_b = map.register_cell(cell_b);
+    map.register_alias(id_b.clone(), id_a.clone());
 
-    // mod_c imports "foo" from mod_b, but the live binding points to mod_a
+    // mod_c imports "foo" from mod_b, and the alias must resolve back to mod_a.
     map.wire_import(ImportBinding {
         importer: "mod_c".to_string(),
         local_name: "foo".to_string(),
-        target: id_a.clone(),
+        target: id_b.clone(),
         is_namespace: false,
     });
 
@@ -906,6 +910,51 @@ fn re_export_binding_chain() {
             .unwrap()
             .value_millionths,
         Some(200)
+    );
+}
+
+#[test]
+fn build_live_bindings_preserves_live_re_export_chain() {
+    let mut graph = ModuleGraph::new();
+
+    let mut mod_a = EsmModule::new("mod_a", "export const foo = 1;", ModuleSyntax::EsModule);
+    mod_a.add_export(ExportEntry::direct("foo", "foo"));
+    mod_a.status = ModuleStatus::Linked;
+
+    let mut mod_b = EsmModule::new(
+        "mod_b",
+        "export { foo } from 'mod_a';",
+        ModuleSyntax::EsModule,
+    );
+    mod_b.add_export(ExportEntry::re_export("foo", "mod_a", "foo"));
+    mod_b.status = ModuleStatus::Linked;
+
+    let mut mod_c = EsmModule::new(
+        "mod_c",
+        "import { foo } from 'mod_b';",
+        ModuleSyntax::EsModule,
+    );
+    mod_c.add_import(ImportEntry::new("mod_b", "foo", "foo"));
+    mod_c.status = ModuleStatus::Linked;
+
+    graph.add_module(mod_a).unwrap();
+    graph.add_module(mod_b).unwrap();
+    graph.add_module(mod_c).unwrap();
+
+    let mut map = build_live_bindings(&graph).unwrap();
+    let source_id = BindingId::new("mod_a", "foo");
+    let re_export_id = BindingId::new("mod_b", "foo");
+
+    map.initialize_millionths(&source_id, 1).unwrap();
+    map.mutate_millionths(&source_id, 2).unwrap();
+
+    let imported = map.read_through_import("mod_c", "foo").unwrap();
+    assert_eq!(imported.source_module, "mod_a");
+    assert_eq!(imported.value_millionths, Some(2));
+    assert_eq!(map.get_cell(&re_export_id).unwrap().source_module, "mod_a");
+    assert_eq!(
+        map.get_cell(&re_export_id).unwrap().value_millionths,
+        Some(2)
     );
 }
 

@@ -684,6 +684,7 @@ fn normalize_utc_timestamp(value: &str) -> Result<String, ReleaseChecklistError>
 
 fn build_checklist_id(checklist: &ReleaseChecklist) -> String {
     let mut hasher = Sha256::new();
+    hash_update(&mut hasher, &checklist.schema_version);
     hash_update(&mut hasher, &checklist.release_tag);
     hash_update(&mut hasher, &checklist.generated_at_utc);
     hash_update(&mut hasher, &checklist.trace_id);

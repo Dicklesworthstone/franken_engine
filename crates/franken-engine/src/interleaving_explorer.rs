@@ -276,7 +276,7 @@ impl ExplorationReport {
         if self.race_surfaces_total == 0 {
             return 0;
         }
-        (self.race_surfaces_covered as i64 * 1_000_000) / self.race_surfaces_total as i64
+        (self.race_surfaces_covered as i128 * 1_000_000 / self.race_surfaces_total as i128) as i64
     }
 
     /// Number of failures found.

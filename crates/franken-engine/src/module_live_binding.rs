@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -264,6 +264,17 @@ impl fmt::Display for NamespaceObject {
 }
 
 // ---------------------------------------------------------------------------
+// Binding alias — canonical live-binding indirection for re-exports
+// ---------------------------------------------------------------------------
+
+/// Alias relationship from a re-exported binding to its canonical source cell.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct BindingAlias {
+    pub alias: BindingId,
+    pub source: BindingId,
+}
+
+// ---------------------------------------------------------------------------
 // Import binding — how an importer references a live binding
 // ---------------------------------------------------------------------------
 
@@ -340,6 +351,10 @@ pub struct LiveBindingMap {
     /// All binding cells indexed by (module, export_name).
     #[serde(with = "binding_cell_map_serde")]
     pub cells: BTreeMap<BindingId, BindingCell>,
+    /// Alias indirections for re-exports so downstream importers observe the
+    /// canonical source cell instead of a stale alias placeholder.
+    #[serde(default)]
+    pub aliases: Vec<BindingAlias>,
     /// All namespace objects indexed by module specifier.
     pub namespaces: BTreeMap<String, NamespaceObject>,
     /// All import bindings indexed by (importer, local_name).
@@ -353,6 +368,7 @@ impl LiveBindingMap {
         Self {
             schema_version: MODULE_LIVE_BINDING_SCHEMA_VERSION.to_string(),
             cells: BTreeMap::new(),
+            aliases: Vec::new(),
             namespaces: BTreeMap::new(),
             imports: Vec::new(),
             events: Vec::new(),
@@ -370,14 +386,45 @@ impl LiveBindingMap {
         id
     }
 
+    /// Register an alias indirection for a re-exported binding.
+    pub fn register_alias(&mut self, alias: BindingId, source: BindingId) {
+        if let Some(existing) = self.aliases.iter_mut().find(|entry| entry.alias == alias) {
+            existing.source = source;
+        } else {
+            self.aliases.push(BindingAlias { alias, source });
+            self.aliases.sort();
+        }
+    }
+
+    fn resolve_binding_id(&self, id: &BindingId) -> BindingId {
+        let mut current = id.clone();
+        let mut visited = BTreeSet::new();
+
+        while visited.insert(current.clone()) {
+            let Some(next) = self
+                .aliases
+                .iter()
+                .find(|entry| entry.alias == current)
+                .map(|entry| entry.source.clone())
+            else {
+                break;
+            };
+            current = next;
+        }
+
+        current
+    }
+
     /// Get a binding cell by ID.
     pub fn get_cell(&self, id: &BindingId) -> Option<&BindingCell> {
-        self.cells.get(id)
+        let resolved = self.resolve_binding_id(id);
+        self.cells.get(&resolved)
     }
 
     /// Get a mutable binding cell by ID.
     pub fn get_cell_mut(&mut self, id: &BindingId) -> Option<&mut BindingCell> {
-        self.cells.get_mut(id)
+        let resolved = self.resolve_binding_id(id);
+        self.cells.get_mut(&resolved)
     }
 
     /// Initialize a binding cell with a millionths value.
@@ -386,16 +433,17 @@ impl LiveBindingMap {
         id: &BindingId,
         value: i64,
     ) -> Result<(), LiveBindingError> {
-        let cell = self
-            .cells
-            .get_mut(id)
-            .ok_or_else(|| LiveBindingError::BindingNotFound {
-                module: id.module_specifier.clone(),
-                export_name: id.export_name.clone(),
-            })?;
+        let resolved = self.resolve_binding_id(id);
+        let cell =
+            self.cells
+                .get_mut(&resolved)
+                .ok_or_else(|| LiveBindingError::BindingNotFound {
+                    module: resolved.module_specifier.clone(),
+                    export_name: resolved.export_name.clone(),
+                })?;
         cell.initialize_millionths(value);
         self.events.push(BindingEvent::CellInitialized {
-            binding_id: id.clone(),
+            binding_id: resolved,
             version: cell.version,
         });
         Ok(())
@@ -407,16 +455,17 @@ impl LiveBindingMap {
         id: &BindingId,
         value: String,
     ) -> Result<(), LiveBindingError> {
-        let cell = self
-            .cells
-            .get_mut(id)
-            .ok_or_else(|| LiveBindingError::BindingNotFound {
-                module: id.module_specifier.clone(),
-                export_name: id.export_name.clone(),
-            })?;
+        let resolved = self.resolve_binding_id(id);
+        let cell =
+            self.cells
+                .get_mut(&resolved)
+                .ok_or_else(|| LiveBindingError::BindingNotFound {
+                    module: resolved.module_specifier.clone(),
+                    export_name: resolved.export_name.clone(),
+                })?;
         cell.initialize_string(value);
         self.events.push(BindingEvent::CellInitialized {
-            binding_id: id.clone(),
+            binding_id: resolved,
             version: cell.version,
         });
         Ok(())
@@ -428,16 +477,17 @@ impl LiveBindingMap {
         id: &BindingId,
         value: i64,
     ) -> Result<(), LiveBindingError> {
-        let cell = self
-            .cells
-            .get_mut(id)
-            .ok_or_else(|| LiveBindingError::BindingNotFound {
-                module: id.module_specifier.clone(),
-                export_name: id.export_name.clone(),
-            })?;
+        let resolved = self.resolve_binding_id(id);
+        let cell =
+            self.cells
+                .get_mut(&resolved)
+                .ok_or_else(|| LiveBindingError::BindingNotFound {
+                    module: resolved.module_specifier.clone(),
+                    export_name: resolved.export_name.clone(),
+                })?;
         cell.mutate_millionths(value)?;
         self.events.push(BindingEvent::CellMutated {
-            binding_id: id.clone(),
+            binding_id: resolved,
             version: cell.version,
         });
         Ok(())
@@ -445,16 +495,17 @@ impl LiveBindingMap {
 
     /// Mutate a binding cell's string value.
     pub fn mutate_string(&mut self, id: &BindingId, value: String) -> Result<(), LiveBindingError> {
-        let cell = self
-            .cells
-            .get_mut(id)
-            .ok_or_else(|| LiveBindingError::BindingNotFound {
-                module: id.module_specifier.clone(),
-                export_name: id.export_name.clone(),
-            })?;
+        let resolved = self.resolve_binding_id(id);
+        let cell =
+            self.cells
+                .get_mut(&resolved)
+                .ok_or_else(|| LiveBindingError::BindingNotFound {
+                    module: resolved.module_specifier.clone(),
+                    export_name: resolved.export_name.clone(),
+                })?;
         cell.mutate_string(value)?;
         self.events.push(BindingEvent::CellMutated {
-            binding_id: id.clone(),
+            binding_id: resolved,
             version: cell.version,
         });
         Ok(())
@@ -462,16 +513,17 @@ impl LiveBindingMap {
 
     /// Mark a binding cell as dead.
     pub fn mark_dead(&mut self, id: &BindingId) -> Result<(), LiveBindingError> {
-        let cell = self
-            .cells
-            .get_mut(id)
-            .ok_or_else(|| LiveBindingError::BindingNotFound {
-                module: id.module_specifier.clone(),
-                export_name: id.export_name.clone(),
-            })?;
+        let resolved = self.resolve_binding_id(id);
+        let cell =
+            self.cells
+                .get_mut(&resolved)
+                .ok_or_else(|| LiveBindingError::BindingNotFound {
+                    module: resolved.module_specifier.clone(),
+                    export_name: resolved.export_name.clone(),
+                })?;
         cell.mark_dead();
         self.events.push(BindingEvent::CellDied {
-            binding_id: id.clone(),
+            binding_id: resolved,
         });
         Ok(())
     }
@@ -516,8 +568,7 @@ impl LiveBindingMap {
                 importer: importer.to_string(),
                 local_name: local_name.to_string(),
             })?;
-        self.cells
-            .get(&import.target)
+        self.get_cell(&import.target)
             .ok_or_else(|| LiveBindingError::BindingNotFound {
                 module: import.target.module_specifier.clone(),
                 export_name: import.target.export_name.clone(),
@@ -617,6 +668,7 @@ pub fn build_live_bindings(graph: &ModuleGraph) -> Result<LiveBindingMap, LiveBi
                     );
                     map.register_cell(cell);
                 }
+                map.register_alias(re_export_id, source_id);
             }
         }
     }
@@ -973,6 +1025,42 @@ mod tests {
                 .unwrap()
                 .value_millionths,
             Some(1_000_000)
+        );
+    }
+
+    #[test]
+    fn re_export_alias_resolves_to_source_cell() {
+        let mut map = LiveBindingMap::new();
+
+        let source_id = map.register_cell(make_cell("mod_a", "foo"));
+        let alias_id = map.register_cell(BindingCell::new(
+            "mod_b",
+            "foo",
+            "foo",
+            BindingType::ReExport,
+        ));
+        map.register_alias(alias_id.clone(), source_id.clone());
+        map.initialize_millionths(&source_id, 100).unwrap();
+
+        map.wire_import(ImportBinding {
+            importer: "mod_c".to_string(),
+            local_name: "foo".to_string(),
+            target: alias_id.clone(),
+            is_namespace: false,
+        });
+
+        assert_eq!(map.get_cell(&alias_id).unwrap().source_module, "mod_a");
+        assert_eq!(
+            map.read_through_import("mod_c", "foo")
+                .unwrap()
+                .value_millionths,
+            Some(100)
+        );
+
+        map.mutate_millionths(&alias_id, 200).unwrap();
+        assert_eq!(
+            map.get_cell(&source_id).unwrap().value_millionths,
+            Some(200)
         );
     }
 

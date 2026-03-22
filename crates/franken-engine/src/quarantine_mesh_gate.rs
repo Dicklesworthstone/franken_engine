@@ -353,11 +353,17 @@ impl QuarantineMeshGateRunner {
         let is_degraded = scenario.scenario_id == "degraded-coordinator";
         let quarantine_threshold: i64 = if is_degraded { 350_000 } else { 700_000 };
         let terminate_threshold: i64 = if is_degraded { 250_000 } else { 500_000 };
+        let suspend_threshold: i64 = if is_degraded { 150_000 } else { 300_000 };
+        let sandbox_threshold: i64 = if is_degraded { 50_000 } else { 100_000 };
 
         let action = if posterior_delta >= quarantine_threshold {
             ContainmentAction::Quarantine
         } else if posterior_delta >= terminate_threshold {
             ContainmentAction::Terminate
+        } else if posterior_delta >= suspend_threshold {
+            ContainmentAction::Suspend
+        } else if posterior_delta >= sandbox_threshold {
+            ContainmentAction::Sandbox
         } else {
             ContainmentAction::Allow
         };

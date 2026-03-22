@@ -624,6 +624,118 @@ fn enrichment_receipt_hash_sensitive_to_optimized_ir_hash() {
 }
 
 #[test]
+fn enrichment_receipt_hash_sensitive_to_cost_model_id() {
+    let r1 = TranslationValidationReceipt::new(
+        1,
+        "opt",
+        None,
+        epoch(1),
+        0,
+        hash(b"baseline"),
+        hash(b"optimized"),
+        vec![],
+        proven(),
+        "cm-a",
+    );
+    let r2 = TranslationValidationReceipt::new(
+        1,
+        "opt",
+        None,
+        epoch(1),
+        0,
+        hash(b"baseline"),
+        hash(b"optimized"),
+        vec![],
+        proven(),
+        "cm-b",
+    );
+    assert_ne!(r1.content_hash, r2.content_hash);
+}
+
+#[test]
+fn enrichment_receipt_hash_sensitive_to_rule_pack_metadata() {
+    let left_rule = rule("r1", -100);
+    let mut right_rule = left_rule.clone();
+    right_rule.pack_id = "different-pack".into();
+
+    let r1 = make_receipt(1, "opt", None, epoch(1), 0, vec![left_rule], proven());
+    let r2 = make_receipt(1, "opt", None, epoch(1), 0, vec![right_rule], proven());
+    assert_ne!(r1.content_hash, r2.content_hash);
+}
+
+#[test]
+fn enrichment_receipt_hash_sensitive_to_rule_pack_version() {
+    let left_rule = rule("r1", -100);
+    let mut right_rule = left_rule.clone();
+    right_rule.pack_version = PackVersion { major: 1, minor: 1 };
+
+    let r1 = make_receipt(1, "opt", None, epoch(1), 0, vec![left_rule], proven());
+    let r2 = make_receipt(1, "opt", None, epoch(1), 0, vec![right_rule], proven());
+    assert_ne!(r1.content_hash, r2.content_hash);
+}
+
+#[test]
+fn enrichment_receipt_hash_sensitive_to_rule_category_and_soundness() {
+    let left_rule = rule("r1", -100);
+    let mut right_rule = left_rule.clone();
+    right_rule.category = RewriteCategory::DeadCodeElimination;
+    right_rule.rule_proven_sound = false;
+
+    let r1 = make_receipt(1, "opt", None, epoch(1), 0, vec![left_rule], proven());
+    let r2 = make_receipt(1, "opt", None, epoch(1), 0, vec![right_rule], proven());
+    assert_ne!(r1.content_hash, r2.content_hash);
+}
+
+#[test]
+fn enrichment_receipt_hash_sensitive_to_proven_evidence_contents() {
+    let verdict_a = ReceiptVerdict::Proven {
+        evidence: ProofEvidence::new(ProofMode::Symbolic, hash(b"proof-a"), 50, 2000)
+            .with_metadata("solver", "z3"),
+    };
+    let verdict_b = ReceiptVerdict::Proven {
+        evidence: ProofEvidence::new(ProofMode::Symbolic, hash(b"proof-b"), 50, 2000)
+            .with_metadata("solver", "cvc5"),
+    };
+
+    let r1 = make_receipt(1, "opt", None, epoch(1), 0, vec![], verdict_a);
+    let r2 = make_receipt(1, "opt", None, epoch(1), 0, vec![], verdict_b);
+    assert_ne!(r1.content_hash, r2.content_hash);
+}
+
+#[test]
+fn enrichment_receipt_hash_sensitive_to_disproven_and_inconclusive_details() {
+    let disproven_a = ReceiptVerdict::Disproven {
+        counterexample_hash: hash(b"counter-a"),
+        divergence: "mismatch-a".into(),
+    };
+    let disproven_b = ReceiptVerdict::Disproven {
+        counterexample_hash: hash(b"counter-b"),
+        divergence: "mismatch-b".into(),
+    };
+    let inconclusive_a = ReceiptVerdict::Inconclusive {
+        reason: "solver timeout".into(),
+        budget_consumed_ticks: 10,
+        budget_limit_ticks: 20,
+    };
+    let inconclusive_b = ReceiptVerdict::Inconclusive {
+        reason: "memory limit".into(),
+        budget_consumed_ticks: 11,
+        budget_limit_ticks: 21,
+    };
+
+    let disproven_left = make_receipt(1, "opt", None, epoch(1), 0, vec![], disproven_a);
+    let disproven_right = make_receipt(1, "opt", None, epoch(1), 0, vec![], disproven_b);
+    let inconclusive_left = make_receipt(1, "opt", None, epoch(1), 0, vec![], inconclusive_a);
+    let inconclusive_right = make_receipt(1, "opt", None, epoch(1), 0, vec![], inconclusive_b);
+
+    assert_ne!(disproven_left.content_hash, disproven_right.content_hash);
+    assert_ne!(
+        inconclusive_left.content_hash,
+        inconclusive_right.content_hash
+    );
+}
+
+#[test]
 fn enrichment_proof_evidence_hash_sensitive_to_metadata() {
     let ev1 =
         ProofEvidence::new(ProofMode::Symbolic, hash(b"x"), 10, 100).with_metadata("key", "val1");
@@ -811,6 +923,64 @@ fn enrichment_failure_receipt_hash_sensitive_to_epoch() {
         None,
         false,
         epoch(2),
+        0,
+    );
+    assert_ne!(f1.content_hash, f2.content_hash);
+}
+
+#[test]
+fn enrichment_failure_receipt_hash_sensitive_to_pack_version_and_quarantine_flag() {
+    let f1 = FailureReceipt::new(
+        "opt",
+        "pack",
+        PackVersion::CURRENT,
+        vec!["r1".into()],
+        FailureKind::MalformedOutput { detail: "x".into() },
+        None,
+        false,
+        epoch(1),
+        0,
+    );
+    let f2 = FailureReceipt::new(
+        "opt",
+        "pack",
+        PackVersion { major: 1, minor: 1 },
+        vec!["r1".into()],
+        FailureKind::MalformedOutput { detail: "x".into() },
+        None,
+        true,
+        epoch(1),
+        0,
+    );
+    assert_ne!(f1.content_hash, f2.content_hash);
+}
+
+#[test]
+fn enrichment_failure_receipt_hash_sensitive_to_interference_rule_contents() {
+    let f1 = FailureReceipt::new(
+        "opt",
+        "pack",
+        PackVersion::CURRENT,
+        vec!["r1".into()],
+        FailureKind::InterferenceDetected {
+            conflicting_rules: vec!["a".into(), "b".into()],
+        },
+        None,
+        false,
+        epoch(1),
+        0,
+    );
+    let f2 = FailureReceipt::new(
+        "opt",
+        "pack",
+        PackVersion::CURRENT,
+        vec!["r1".into()],
+        FailureKind::InterferenceDetected {
+            conflicting_rules: vec!["a".into(), "c".into()],
+        },
+        None,
+        false,
+        epoch(1),
         0,
     );
     assert_ne!(f1.content_hash, f2.content_hash);
@@ -1062,7 +1232,7 @@ fn enrichment_chain_content_hash_changes_on_failure_record() {
         epoch(1),
         0,
     );
-    chain.record_failure(f);
+    chain.record_failure(f).unwrap();
     assert_ne!(chain.content_hash, hash_before);
 }
 
@@ -1083,10 +1253,33 @@ fn enrichment_chain_failure_pruning() {
             epoch(1),
             i,
         );
-        chain.record_failure(f);
+        chain.record_failure(f).unwrap();
     }
     assert!(chain.failures.len() <= 3);
     assert_eq!(chain.failures.last().unwrap().optimization_id, "opt-4");
+}
+
+#[test]
+fn enrichment_chain_record_failure_rejects_tampered_failure_hash() {
+    let mut chain = ReceiptChain::new("c", epoch(1));
+    let mut failure = FailureReceipt::new(
+        "opt",
+        "pack",
+        PackVersion::CURRENT,
+        vec!["r1".into()],
+        FailureKind::MalformedOutput { detail: "x".into() },
+        None,
+        false,
+        epoch(1),
+        0,
+    );
+    failure.quarantined = true;
+
+    let error = chain.record_failure(failure).unwrap_err();
+    assert!(matches!(
+        error,
+        ReceiptChainError::FailureContentHashMismatch { .. }
+    ));
 }
 
 #[test]
@@ -1676,7 +1869,7 @@ fn enrichment_verify_tampered_receipt_increments_failure_count() {
     let mut em = emitter();
     let result = em.emit(input("opt-tamper", proven()));
     let mut tampered = result.receipt().unwrap().clone();
-    tampered.content_hash = hash(b"tampered-hash");
+    tampered.cost_model_id = "tampered-cost-model".into();
 
     assert!(!em.verify_receipt(&tampered));
     assert_eq!(em.stats.total_verifications, 1);
@@ -1706,7 +1899,7 @@ fn enrichment_chain_with_failures_serde_roundtrip() {
         epoch(1),
         100,
     );
-    chain.record_failure(f);
+    chain.record_failure(f).unwrap();
 
     let json = serde_json::to_string(&chain).unwrap();
     let restored: ReceiptChain = serde_json::from_str(&json).unwrap();

@@ -50,6 +50,51 @@ pub const MAX_RULES_PER_RECEIPT: usize = 256;
 /// Threshold for cost improvement to count as "significant" (millionths).
 pub const SIGNIFICANT_IMPROVEMENT_THRESHOLD: i64 = 50_000; // 5%
 
+fn hash_len(hasher: &mut Sha256, len: usize) {
+    hasher.update((len as u64).to_le_bytes());
+}
+
+fn hash_bytes(hasher: &mut Sha256, bytes: &[u8]) {
+    hash_len(hasher, bytes.len());
+    hasher.update(bytes);
+}
+
+fn hash_str(hasher: &mut Sha256, value: &str) {
+    hash_bytes(hasher, value.as_bytes());
+}
+
+fn hash_bool(hasher: &mut Sha256, value: bool) {
+    hasher.update([u8::from(value)]);
+}
+
+fn hash_u64(hasher: &mut Sha256, value: u64) {
+    hasher.update(value.to_le_bytes());
+}
+
+fn hash_i64(hasher: &mut Sha256, value: i64) {
+    hasher.update(value.to_le_bytes());
+}
+
+fn hash_content_hash(hasher: &mut Sha256, value: &ContentHash) {
+    hash_bytes(hasher, value.as_bytes());
+}
+
+fn hash_optional_content_hash(hasher: &mut Sha256, value: Option<&ContentHash>) {
+    hash_bool(hasher, value.is_some());
+    if let Some(value) = value {
+        hash_content_hash(hasher, value);
+    }
+}
+
+fn hash_pack_version(hasher: &mut Sha256, value: &PackVersion) {
+    hasher.update(value.major.to_le_bytes());
+    hasher.update(value.minor.to_le_bytes());
+}
+
+fn hash_rewrite_category(hasher: &mut Sha256, value: RewriteCategory) {
+    hash_str(hasher, &value.to_string());
+}
+
 // ---------------------------------------------------------------------------
 // ProofMode — how equivalence was established
 // ---------------------------------------------------------------------------
@@ -70,15 +115,21 @@ pub enum ProofMode {
     Composite,
 }
 
+impl ProofMode {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Symbolic => "symbolic",
+            Self::GoldenCorpus => "golden_corpus",
+            Self::DifferentialTrace => "differential_trace",
+            Self::Axiomatic => "axiomatic",
+            Self::Composite => "composite",
+        }
+    }
+}
+
 impl fmt::Display for ProofMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Symbolic => write!(f, "symbolic"),
-            Self::GoldenCorpus => write!(f, "golden_corpus"),
-            Self::DifferentialTrace => write!(f, "differential_trace"),
-            Self::Axiomatic => write!(f, "axiomatic"),
-            Self::Composite => write!(f, "composite"),
-        }
+        f.write_str(self.as_str())
     }
 }
 
@@ -127,13 +178,13 @@ impl ProofEvidence {
     /// Compute content hash of this evidence.
     pub fn content_hash(&self) -> ContentHash {
         let mut hasher = Sha256::new();
-        hasher.update([self.mode.clone() as u8]);
-        hasher.update(self.artifact_hash.as_bytes());
-        hasher.update(self.verification_steps.to_le_bytes());
-        hasher.update(self.verification_ticks.to_le_bytes());
+        hash_str(&mut hasher, self.mode.as_str());
+        hash_content_hash(&mut hasher, &self.artifact_hash);
+        hash_u64(&mut hasher, self.verification_steps);
+        hash_u64(&mut hasher, self.verification_ticks);
         for (k, v) in &self.metadata {
-            hasher.update(k.as_bytes());
-            hasher.update(v.as_bytes());
+            hash_str(&mut hasher, k);
+            hash_str(&mut hasher, v);
         }
         ContentHash::compute(&hasher.finalize())
     }
@@ -173,6 +224,17 @@ impl AppliedRuleRecord {
     /// Whether improvement is significant (above threshold).
     pub fn is_significant_improvement(&self) -> bool {
         self.cost_delta_millionths < -SIGNIFICANT_IMPROVEMENT_THRESHOLD
+    }
+
+    fn update_hash(&self, hasher: &mut Sha256) {
+        hash_str(hasher, &self.pack_id);
+        hash_pack_version(hasher, &self.pack_version);
+        hash_str(hasher, &self.rule_id);
+        hash_rewrite_category(hasher, self.category);
+        hash_content_hash(hasher, &self.before_hash);
+        hash_content_hash(hasher, &self.after_hash);
+        hash_i64(hasher, self.cost_delta_millionths);
+        hash_bool(hasher, self.rule_proven_sound);
     }
 }
 
@@ -216,6 +278,33 @@ impl ReceiptVerdict {
     /// Whether the verdict is a hard failure (counterexample found).
     pub fn is_disproven(&self) -> bool {
         matches!(self, Self::Disproven { .. })
+    }
+
+    fn update_hash(&self, hasher: &mut Sha256) {
+        match self {
+            Self::Proven { evidence } => {
+                hash_str(hasher, "proven");
+                hash_content_hash(hasher, &evidence.content_hash());
+            }
+            Self::Disproven {
+                counterexample_hash,
+                divergence,
+            } => {
+                hash_str(hasher, "disproven");
+                hash_content_hash(hasher, counterexample_hash);
+                hash_str(hasher, divergence);
+            }
+            Self::Inconclusive {
+                reason,
+                budget_consumed_ticks,
+                budget_limit_ticks,
+            } => {
+                hash_str(hasher, "inconclusive");
+                hash_str(hasher, reason);
+                hash_u64(hasher, *budget_consumed_ticks);
+                hash_u64(hasher, *budget_limit_ticks);
+            }
+        }
     }
 }
 
@@ -298,19 +387,7 @@ impl TranslationValidationReceipt {
         let rewrite_categories: BTreeSet<RewriteCategory> =
             applied_rules.iter().map(|r| r.category).collect();
 
-        let content_hash = Self::compute_hash(
-            sequence,
-            optimization_id,
-            &parent_hash,
-            epoch,
-            timestamp_ticks,
-            &baseline_ir_hash,
-            &optimized_ir_hash,
-            &applied_rules,
-            &verdict,
-        );
-
-        Self {
+        let mut receipt = Self {
             schema_version: RECEIPT_SCHEMA_VERSION.into(),
             sequence,
             optimization_id: optimization_id.into(),
@@ -324,9 +401,11 @@ impl TranslationValidationReceipt {
             verdict,
             cost_model_id: cost_model_id.into(),
             rewrite_categories,
-            content_hash,
+            content_hash: ContentHash::compute(&[]),
             signature: AuthenticityHash::compute_keyed(&[], &[]),
-        }
+        };
+        receipt.content_hash = receipt.expected_content_hash();
+        receipt
     }
 
     /// Sign this receipt with the given key.
@@ -338,6 +417,9 @@ impl TranslationValidationReceipt {
 
     /// Verify the receipt signature.
     pub fn verify_signature(&self, key: &[u8]) -> bool {
+        if !self.has_valid_content_hash() {
+            return false;
+        }
         let preimage = self.signing_preimage();
         let expected = AuthenticityHash::compute_keyed(key, &preimage);
         self.signature == expected
@@ -384,45 +466,32 @@ impl TranslationValidationReceipt {
         pre
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn compute_hash(
-        sequence: u64,
-        optimization_id: &str,
-        parent_hash: &Option<ContentHash>,
-        epoch: SecurityEpoch,
-        timestamp_ticks: u64,
-        baseline_ir_hash: &ContentHash,
-        optimized_ir_hash: &ContentHash,
-        applied_rules: &[AppliedRuleRecord],
-        verdict: &ReceiptVerdict,
-    ) -> ContentHash {
+    fn expected_content_hash(&self) -> ContentHash {
         let mut hasher = Sha256::new();
-        hasher.update(RECEIPT_SCHEMA_VERSION.as_bytes());
-        hasher.update(sequence.to_le_bytes());
-        hasher.update(optimization_id.as_bytes());
-        if let Some(ph) = parent_hash {
-            hasher.update([1]);
-            hasher.update(ph.as_bytes());
-        } else {
-            hasher.update([0]);
+        hash_str(&mut hasher, &self.schema_version);
+        hash_u64(&mut hasher, self.sequence);
+        hash_str(&mut hasher, &self.optimization_id);
+        hash_optional_content_hash(&mut hasher, self.parent_hash.as_ref());
+        hash_u64(&mut hasher, self.epoch.as_u64());
+        hash_u64(&mut hasher, self.timestamp_ticks);
+        hash_content_hash(&mut hasher, &self.baseline_ir_hash);
+        hash_content_hash(&mut hasher, &self.optimized_ir_hash);
+        hash_len(&mut hasher, self.applied_rules.len());
+        for rule in &self.applied_rules {
+            rule.update_hash(&mut hasher);
         }
-        hasher.update(epoch.as_u64().to_le_bytes());
-        hasher.update(timestamp_ticks.to_le_bytes());
-        hasher.update(baseline_ir_hash.as_bytes());
-        hasher.update(optimized_ir_hash.as_bytes());
-        for rule in applied_rules {
-            hasher.update(rule.rule_id.as_bytes());
-            hasher.update(rule.before_hash.as_bytes());
-            hasher.update(rule.after_hash.as_bytes());
-            hasher.update(rule.cost_delta_millionths.to_le_bytes());
+        hash_i64(&mut hasher, self.total_cost_delta_millionths);
+        self.verdict.update_hash(&mut hasher);
+        hash_str(&mut hasher, &self.cost_model_id);
+        hash_len(&mut hasher, self.rewrite_categories.len());
+        for category in &self.rewrite_categories {
+            hash_rewrite_category(&mut hasher, *category);
         }
-        let verdict_tag: u8 = match verdict {
-            ReceiptVerdict::Proven { .. } => 1,
-            ReceiptVerdict::Disproven { .. } => 2,
-            ReceiptVerdict::Inconclusive { .. } => 3,
-        };
-        hasher.update([verdict_tag]);
         ContentHash::compute(&hasher.finalize())
+    }
+
+    fn has_valid_content_hash(&self) -> bool {
+        self.content_hash == self.expected_content_hash()
     }
 }
 
@@ -512,6 +581,46 @@ impl fmt::Display for FailureKind {
     }
 }
 
+impl FailureKind {
+    fn update_hash(&self, hasher: &mut Sha256) {
+        match self {
+            Self::CounterexampleFound { divergence } => {
+                hash_str(hasher, "counterexample_found");
+                hash_str(hasher, divergence);
+            }
+            Self::BudgetExceeded {
+                consumed_ticks,
+                limit_ticks,
+            } => {
+                hash_str(hasher, "budget_exceeded");
+                hash_u64(hasher, *consumed_ticks);
+                hash_u64(hasher, *limit_ticks);
+            }
+            Self::InterferenceDetected { conflicting_rules } => {
+                hash_str(hasher, "interference_detected");
+                hash_len(hasher, conflicting_rules.len());
+                for rule_id in conflicting_rules {
+                    hash_str(hasher, rule_id);
+                }
+            }
+            Self::ComplexityExceeded {
+                metric,
+                value,
+                limit,
+            } => {
+                hash_str(hasher, "complexity_exceeded");
+                hash_str(hasher, metric);
+                hash_u64(hasher, *value);
+                hash_u64(hasher, *limit);
+            }
+            Self::MalformedOutput { detail } => {
+                hash_str(hasher, "malformed_output");
+                hash_str(hasher, detail);
+            }
+        }
+    }
+}
+
 impl FailureReceipt {
     /// Create a new failure receipt.
     #[allow(clippy::too_many_arguments)]
@@ -526,16 +635,7 @@ impl FailureReceipt {
         epoch: SecurityEpoch,
         timestamp_ticks: u64,
     ) -> Self {
-        let content_hash = Self::compute_hash(
-            optimization_id,
-            pack_id,
-            &attempted_rules,
-            &failure_kind,
-            &counterexample_hash,
-            epoch,
-            timestamp_ticks,
-        );
-        Self {
+        let mut failure = Self {
             optimization_id: optimization_id.into(),
             pack_id: pack_id.into(),
             pack_version,
@@ -545,31 +645,26 @@ impl FailureReceipt {
             quarantined,
             epoch,
             timestamp_ticks,
-            content_hash,
-        }
+            content_hash: ContentHash::compute(&[]),
+        };
+        failure.content_hash = failure.expected_content_hash();
+        failure
     }
 
-    fn compute_hash(
-        optimization_id: &str,
-        pack_id: &str,
-        attempted_rules: &[String],
-        failure_kind: &FailureKind,
-        counterexample_hash: &Option<ContentHash>,
-        epoch: SecurityEpoch,
-        timestamp_ticks: u64,
-    ) -> ContentHash {
+    fn expected_content_hash(&self) -> ContentHash {
         let mut hasher = Sha256::new();
-        hasher.update(optimization_id.as_bytes());
-        hasher.update(pack_id.as_bytes());
-        for r in attempted_rules {
-            hasher.update(r.as_bytes());
+        hash_str(&mut hasher, &self.optimization_id);
+        hash_str(&mut hasher, &self.pack_id);
+        hash_pack_version(&mut hasher, &self.pack_version);
+        hash_len(&mut hasher, self.attempted_rules.len());
+        for rule_id in &self.attempted_rules {
+            hash_str(&mut hasher, rule_id);
         }
-        hasher.update(format!("{failure_kind}").as_bytes());
-        if let Some(h) = counterexample_hash {
-            hasher.update(h.as_bytes());
-        }
-        hasher.update(epoch.as_u64().to_le_bytes());
-        hasher.update(timestamp_ticks.to_le_bytes());
+        self.failure_kind.update_hash(&mut hasher);
+        hash_optional_content_hash(&mut hasher, self.counterexample_hash.as_ref());
+        hash_bool(&mut hasher, self.quarantined);
+        hash_u64(&mut hasher, self.epoch.as_u64());
+        hash_u64(&mut hasher, self.timestamp_ticks);
         ContentHash::compute(&hasher.finalize())
     }
 }
@@ -604,7 +699,7 @@ pub struct ReceiptChain {
 impl ReceiptChain {
     /// Create a new empty chain.
     pub fn new(chain_id: &str, epoch: SecurityEpoch) -> Self {
-        Self {
+        let mut chain = Self {
             schema_version: CHAIN_SCHEMA_VERSION.into(),
             chain_id: chain_id.into(),
             receipts: Vec::new(),
@@ -613,12 +708,15 @@ impl ReceiptChain {
             next_sequence: 1,
             created_epoch: epoch,
             content_hash: ContentHash::compute(&[]),
-        }
+        };
+        chain.content_hash = chain.expected_content_hash();
+        chain
     }
 
     /// Create a chain with a custom max length.
     pub fn with_max_length(mut self, max_length: usize) -> Self {
         self.max_length = max_length;
+        self.recompute_hash();
         self
     }
 
@@ -628,6 +726,21 @@ impl ReceiptChain {
         &mut self,
         receipt: TranslationValidationReceipt,
     ) -> Result<(), ReceiptChainError> {
+        let integrity = self.verify_integrity();
+        if !integrity.valid {
+            return Err(ReceiptChainError::ChainIntegrityInvalid {
+                issue_count: integrity.issues.len(),
+            });
+        }
+
+        let expected_hash = receipt.expected_content_hash();
+        if receipt.content_hash != expected_hash {
+            return Err(ReceiptChainError::ReceiptContentHashMismatch {
+                expected_hash,
+                actual_hash: receipt.content_hash,
+            });
+        }
+
         // Verify parent hash linkage
         let expected_parent = self.receipts.last().map(|r| r.content_hash);
         if receipt.parent_hash != expected_parent {
@@ -659,7 +772,22 @@ impl ReceiptChain {
     }
 
     /// Record a failure (rejected optimization).
-    pub fn record_failure(&mut self, failure: FailureReceipt) {
+    pub fn record_failure(&mut self, failure: FailureReceipt) -> Result<(), ReceiptChainError> {
+        let integrity = self.verify_integrity();
+        if !integrity.valid {
+            return Err(ReceiptChainError::ChainIntegrityInvalid {
+                issue_count: integrity.issues.len(),
+            });
+        }
+
+        let expected_hash = failure.expected_content_hash();
+        if failure.content_hash != expected_hash {
+            return Err(ReceiptChainError::FailureContentHashMismatch {
+                expected_hash,
+                actual_hash: failure.content_hash,
+            });
+        }
+
         self.failures.push(failure);
         // Keep failures bounded too
         if self.failures.len() > self.max_length {
@@ -667,6 +795,7 @@ impl ReceiptChain {
             self.failures.drain(..excess);
         }
         self.recompute_hash();
+        Ok(())
     }
 
     /// Number of successful receipts.
@@ -703,6 +832,15 @@ impl ReceiptChain {
         for i in 0..self.receipts.len() {
             let receipt = &self.receipts[i];
 
+            let expected_hash = receipt.expected_content_hash();
+            if receipt.content_hash != expected_hash {
+                issues.push(ChainIntegrityIssue::ReceiptContentHashMismatch {
+                    sequence: receipt.sequence,
+                    expected_hash,
+                    actual_hash: receipt.content_hash,
+                });
+            }
+
             // Check parent hash linkage
             if i == 0 {
                 // First receipt after pruning may have a parent hash
@@ -726,6 +864,37 @@ impl ReceiptChain {
                     previous_sequence: self.receipts[i - 1].sequence,
                 });
             }
+        }
+
+        for failure in &self.failures {
+            let expected_hash = failure.expected_content_hash();
+            if failure.content_hash != expected_hash {
+                issues.push(ChainIntegrityIssue::FailureContentHashMismatch {
+                    optimization_id: failure.optimization_id.clone(),
+                    expected_hash,
+                    actual_hash: failure.content_hash,
+                });
+            }
+        }
+
+        let expected_next_sequence = self
+            .receipts
+            .last()
+            .map(|receipt| receipt.sequence.saturating_add(1))
+            .unwrap_or(1);
+        if self.next_sequence != expected_next_sequence {
+            issues.push(ChainIntegrityIssue::NextSequenceMismatch {
+                expected_next_sequence,
+                actual_next_sequence: self.next_sequence,
+            });
+        }
+
+        let expected_chain_hash = self.expected_content_hash();
+        if self.content_hash != expected_chain_hash {
+            issues.push(ChainIntegrityIssue::ChainContentHashMismatch {
+                expected_hash: expected_chain_hash,
+                actual_hash: self.content_hash,
+            });
         }
 
         ChainIntegrityResult {
@@ -757,15 +926,25 @@ impl ReceiptChain {
     }
 
     fn recompute_hash(&mut self) {
+        self.content_hash = self.expected_content_hash();
+    }
+
+    fn expected_content_hash(&self) -> ContentHash {
         let mut hasher = Sha256::new();
-        hasher.update(self.chain_id.as_bytes());
+        hash_str(&mut hasher, &self.schema_version);
+        hash_str(&mut hasher, &self.chain_id);
+        hash_u64(&mut hasher, self.max_length as u64);
+        hash_u64(&mut hasher, self.next_sequence);
+        hash_u64(&mut hasher, self.created_epoch.as_u64());
+        hash_len(&mut hasher, self.receipts.len());
         for r in &self.receipts {
-            hasher.update(r.content_hash.as_bytes());
+            hash_content_hash(&mut hasher, &r.content_hash);
         }
+        hash_len(&mut hasher, self.failures.len());
         for f in &self.failures {
-            hasher.update(f.content_hash.as_bytes());
+            hash_content_hash(&mut hasher, &f.content_hash);
         }
-        self.content_hash = ContentHash::compute(&hasher.finalize());
+        ContentHash::compute(&hasher.finalize())
     }
 }
 
@@ -780,6 +959,18 @@ pub enum ReceiptChainError {
     },
     /// Sequence number gap.
     SequenceGap { expected: u64, actual: u64 },
+    /// Stored receipt hash does not match the receipt body.
+    ReceiptContentHashMismatch {
+        expected_hash: ContentHash,
+        actual_hash: ContentHash,
+    },
+    /// Stored failure hash does not match the failure body.
+    FailureContentHashMismatch {
+        expected_hash: ContentHash,
+        actual_hash: ContentHash,
+    },
+    /// Existing chain integrity problems make further appends unsafe.
+    ChainIntegrityInvalid { issue_count: usize },
 }
 
 impl fmt::Display for ReceiptChainError {
@@ -788,6 +979,18 @@ impl fmt::Display for ReceiptChainError {
             Self::ParentHashMismatch { .. } => write!(f, "parent hash mismatch"),
             Self::SequenceGap { expected, actual } => {
                 write!(f, "sequence gap: expected {expected}, got {actual}")
+            }
+            Self::ReceiptContentHashMismatch { .. } => {
+                write!(f, "receipt content hash mismatch")
+            }
+            Self::FailureContentHashMismatch { .. } => {
+                write!(f, "failure content hash mismatch")
+            }
+            Self::ChainIntegrityInvalid { issue_count } => {
+                write!(
+                    f,
+                    "receipt chain integrity invalid ({issue_count} issue(s))"
+                )
             }
         }
     }
@@ -808,6 +1011,12 @@ pub struct ChainIntegrityResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChainIntegrityIssue {
+    /// Stored receipt hash does not match the receipt body.
+    ReceiptContentHashMismatch {
+        sequence: u64,
+        expected_hash: ContentHash,
+        actual_hash: ContentHash,
+    },
     /// Parent hash doesn't match previous receipt's content hash.
     ParentHashBroken {
         sequence: u64,
@@ -819,6 +1028,22 @@ pub enum ChainIntegrityIssue {
         position: usize,
         sequence: u64,
         previous_sequence: u64,
+    },
+    /// Stored failure hash does not match the failure body.
+    FailureContentHashMismatch {
+        optimization_id: String,
+        expected_hash: ContentHash,
+        actual_hash: ContentHash,
+    },
+    /// Next sequence counter does not match the chain tail.
+    NextSequenceMismatch {
+        expected_next_sequence: u64,
+        actual_next_sequence: u64,
+    },
+    /// Stored chain hash does not match the chain body.
+    ChainContentHashMismatch {
+        expected_hash: ContentHash,
+        actual_hash: ContentHash,
     },
 }
 
@@ -1007,6 +1232,17 @@ impl ValidationReceiptEmitter {
             };
         }
 
+        let chain_integrity = self.chain.verify_integrity();
+        if !chain_integrity.valid {
+            return EmitResult::Quarantined {
+                optimization_id: input.optimization_id,
+                reason: format!(
+                    "receipt chain integrity invalid ({} issue(s))",
+                    chain_integrity.issues.len()
+                ),
+            };
+        }
+
         let cost_model_id = input
             .cost_model_id
             .unwrap_or_else(|| self.config.default_cost_model_id.clone());
@@ -1028,18 +1264,19 @@ impl ValidationReceiptEmitter {
         )
         .sign(&self.config.signing_key);
 
-        // Update stats
-        self.stats.total_receipts += 1;
-        self.stats.total_rules_applied += input.applied_rules.len() as u64;
-
         match &input.verdict {
             ReceiptVerdict::Proven { .. } => {
-                self.stats.total_proven += 1;
-                self.stats.total_cost_improvement_millionths += receipt.total_cost_delta_millionths;
+                if let Err(error) = self.chain.append(receipt.clone()) {
+                    return EmitResult::Quarantined {
+                        optimization_id: input.optimization_id,
+                        reason: format!("receipt chain append failed: {error}"),
+                    };
+                }
 
-                // Append to chain (ignore pruning errors from sequence mismatch
-                // after pruning — the chain handles that internally)
-                let _ = self.chain.append(receipt.clone());
+                self.stats.total_receipts += 1;
+                self.stats.total_proven += 1;
+                self.stats.total_rules_applied += input.applied_rules.len() as u64;
+                self.stats.total_cost_improvement_millionths += receipt.total_cost_delta_millionths;
 
                 EmitResult::Approved { receipt }
             }
@@ -1047,8 +1284,6 @@ impl ValidationReceiptEmitter {
                 counterexample_hash,
                 divergence,
             } => {
-                self.stats.total_disproven += 1;
-
                 let failure = FailureReceipt::new(
                     &input.optimization_id,
                     &input
@@ -1075,12 +1310,26 @@ impl ValidationReceiptEmitter {
                     self.current_ticks,
                 );
 
+                if let Err(error) = self.chain.append(receipt.clone()) {
+                    return EmitResult::Quarantined {
+                        optimization_id: input.optimization_id,
+                        reason: format!("receipt chain append failed: {error}"),
+                    };
+                }
+                if let Err(error) = self.chain.record_failure(failure.clone()) {
+                    return EmitResult::Quarantined {
+                        optimization_id: input.optimization_id,
+                        reason: format!("receipt failure recording failed: {error}"),
+                    };
+                }
+
                 if self.config.quarantine_on_first_failure {
                     self.quarantine_optimization(&input.optimization_id);
                 }
 
-                let _ = self.chain.append(receipt.clone());
-                self.chain.record_failure(failure.clone());
+                self.stats.total_receipts += 1;
+                self.stats.total_disproven += 1;
+                self.stats.total_rules_applied += input.applied_rules.len() as u64;
 
                 EmitResult::Rejected { receipt, failure }
             }
@@ -1089,8 +1338,6 @@ impl ValidationReceiptEmitter {
                 budget_consumed_ticks,
                 budget_limit_ticks,
             } => {
-                self.stats.total_inconclusive += 1;
-
                 let failure = FailureReceipt::new(
                     &input.optimization_id,
                     &input
@@ -1118,8 +1365,22 @@ impl ValidationReceiptEmitter {
                     self.current_ticks,
                 );
 
-                let _ = self.chain.append(receipt.clone());
-                self.chain.record_failure(failure.clone());
+                if let Err(error) = self.chain.append(receipt.clone()) {
+                    return EmitResult::Quarantined {
+                        optimization_id: input.optimization_id,
+                        reason: format!("receipt chain append failed: {error}"),
+                    };
+                }
+                if let Err(error) = self.chain.record_failure(failure.clone()) {
+                    return EmitResult::Quarantined {
+                        optimization_id: input.optimization_id,
+                        reason: format!("receipt failure recording failed: {error}"),
+                    };
+                }
+
+                self.stats.total_receipts += 1;
+                self.stats.total_inconclusive += 1;
+                self.stats.total_rules_applied += input.applied_rules.len() as u64;
 
                 EmitResult::Rejected { receipt, failure }
             }
@@ -1466,6 +1727,27 @@ mod tests {
 
         assert!(receipt.verify_signature(key));
         assert!(!receipt.verify_signature(b"wrong-key-wrong-key-wrong-key!!x"));
+    }
+
+    #[test]
+    fn test_receipt_verify_signature_fails_when_body_changes_without_hash_refresh() {
+        let key = b"test-signing-key-32-bytes-long!!";
+        let mut receipt = TranslationValidationReceipt::new(
+            1,
+            "opt-001",
+            None,
+            test_epoch(),
+            1000,
+            test_hash(b"baseline"),
+            test_hash(b"optimized"),
+            vec![test_rule("r1", -100_000)],
+            proven_verdict(),
+            "cm",
+        )
+        .sign(key);
+
+        receipt.optimization_id = "opt-002".into();
+        assert!(!receipt.verify_signature(key));
     }
 
     #[test]
@@ -1819,6 +2101,30 @@ mod tests {
     }
 
     #[test]
+    fn test_chain_append_rejects_tampered_receipt_hash() {
+        let mut chain = ReceiptChain::new("c1", test_epoch());
+        let mut receipt = TranslationValidationReceipt::new(
+            1,
+            "opt",
+            None,
+            test_epoch(),
+            0,
+            test_hash(b"b"),
+            test_hash(b"o"),
+            vec![],
+            proven_verdict(),
+            "cm",
+        );
+        receipt.optimization_id = "opt-tampered".into();
+
+        let error = chain.append(receipt).unwrap_err();
+        assert!(matches!(
+            error,
+            ReceiptChainError::ReceiptContentHashMismatch { .. }
+        ));
+    }
+
+    #[test]
     fn test_chain_sequence_gap() {
         let mut chain = ReceiptChain::new("c1", test_epoch());
         let r = TranslationValidationReceipt::new(
@@ -1949,6 +2255,60 @@ mod tests {
     }
 
     #[test]
+    fn test_chain_integrity_detects_tampered_receipt_body() {
+        let mut chain = ReceiptChain::new("c1", test_epoch());
+        let r = TranslationValidationReceipt::new(
+            1,
+            "opt",
+            None,
+            test_epoch(),
+            0,
+            test_hash(b"b"),
+            test_hash(b"o"),
+            vec![],
+            proven_verdict(),
+            "cm",
+        );
+        chain.append(r).unwrap();
+        chain.receipts[0].optimization_id = "opt-tampered".into();
+
+        let result = chain.verify_integrity();
+        assert!(!result.valid);
+        assert!(result.issues.iter().any(|issue| matches!(
+            issue,
+            ChainIntegrityIssue::ReceiptContentHashMismatch { .. }
+        )));
+    }
+
+    #[test]
+    fn test_chain_integrity_detects_next_sequence_mismatch() {
+        let mut chain = ReceiptChain::new("c1", test_epoch());
+        let receipt = TranslationValidationReceipt::new(
+            1,
+            "opt",
+            None,
+            test_epoch(),
+            0,
+            test_hash(b"b"),
+            test_hash(b"o"),
+            vec![],
+            proven_verdict(),
+            "cm",
+        );
+        chain.append(receipt).unwrap();
+        chain.next_sequence = 99;
+
+        let result = chain.verify_integrity();
+        assert!(!result.valid);
+        assert!(
+            result
+                .issues
+                .iter()
+                .any(|issue| matches!(issue, ChainIntegrityIssue::NextSequenceMismatch { .. }))
+        );
+    }
+
+    #[test]
     fn test_chain_record_failure() {
         let mut chain = ReceiptChain::new("c1", test_epoch());
         let f = FailureReceipt::new(
@@ -1964,8 +2324,33 @@ mod tests {
             test_epoch(),
             0,
         );
-        chain.record_failure(f);
+        chain.record_failure(f).unwrap();
         assert_eq!(chain.failure_count(), 1);
+    }
+
+    #[test]
+    fn test_chain_record_failure_rejects_tampered_failure_hash() {
+        let mut chain = ReceiptChain::new("c1", test_epoch());
+        let mut failure = FailureReceipt::new(
+            "opt-f",
+            "p1",
+            PackVersion::CURRENT,
+            vec!["r1".into()],
+            FailureKind::CounterexampleFound {
+                divergence: "bad".into(),
+            },
+            None,
+            false,
+            test_epoch(),
+            0,
+        );
+        failure.quarantined = true;
+
+        let error = chain.record_failure(failure).unwrap_err();
+        assert!(matches!(
+            error,
+            ReceiptChainError::FailureContentHashMismatch { .. }
+        ));
     }
 
     #[test]
@@ -2083,6 +2468,20 @@ mod tests {
         receipt.signature = AuthenticityHash::compute_keyed(b"wrong", b"data");
         assert!(!em.verify_receipt(&receipt));
         assert_eq!(em.stats.verification_failures, 1);
+    }
+
+    #[test]
+    fn test_emitter_emit_fails_closed_when_chain_is_corrupted() {
+        let mut em = default_emitter();
+        let first = em.emit(make_input("opt-1", proven_verdict()));
+        assert!(first.is_approved());
+
+        em.chain.next_sequence = 99;
+
+        let result = em.emit(make_input("opt-2", proven_verdict()));
+        assert!(matches!(result, EmitResult::Quarantined { .. }));
+        assert_eq!(em.chain.receipts.len(), 1);
+        assert_eq!(em.stats.total_receipts, 1);
     }
 
     #[test]
@@ -2289,8 +2688,8 @@ mod tests {
             test_epoch(),
             0,
         );
-        chain.record_failure(f1);
-        chain.record_failure(f2);
+        chain.record_failure(f1).unwrap();
+        chain.record_failure(f2).unwrap();
         assert_eq!(chain.failures_for_pack("pack-alpha").len(), 1);
         assert_eq!(chain.failures_for_pack("pack-beta").len(), 1);
         assert_eq!(chain.failures_for_pack("pack-gamma").len(), 0);

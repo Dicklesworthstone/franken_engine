@@ -306,14 +306,55 @@ fn test_tampered_receipt_fails_verification() {
     let result = em.emit(input("opt-tamper", proven()));
     let mut tampered = result.receipt().unwrap().clone();
     tampered.optimization_id = "opt-CHANGED".into();
-    // Content hash is still the original — but signing preimage uses content_hash,
-    // so the signature should still fail because the receipt content was tampered
-    // before content_hash computation (in this case content_hash was already baked in).
-    // The verification checks signature against the content_hash, so it should still pass
-    // unless we change the content_hash itself.
-    tampered.content_hash = hash(b"tampered-hash");
     assert!(!em.verify_receipt(&tampered));
     assert_eq!(em.stats.verification_failures, 1);
+}
+
+#[test]
+fn test_chain_integrity_detects_tampered_failure_body() {
+    let mut em = emitter();
+    em.emit(input("opt-1", disproven()));
+    assert_eq!(em.chain.failures.len(), 1);
+
+    em.chain.failures[0].quarantined = false;
+    let integrity = em.chain.verify_integrity();
+
+    assert!(!integrity.valid);
+    assert!(integrity.issues.iter().any(|issue| matches!(
+        issue,
+        ChainIntegrityIssue::FailureContentHashMismatch { .. }
+    )));
+}
+
+#[test]
+fn test_chain_integrity_detects_next_sequence_mismatch() {
+    let mut em = emitter();
+    em.emit(input("opt-1", proven()));
+    em.chain.next_sequence = 999;
+
+    let integrity = em.chain.verify_integrity();
+    assert!(!integrity.valid);
+    assert!(
+        integrity
+            .issues
+            .iter()
+            .any(|issue| matches!(issue, ChainIntegrityIssue::NextSequenceMismatch { .. }))
+    );
+}
+
+#[test]
+fn test_emit_fails_closed_when_chain_integrity_is_broken() {
+    let mut em = emitter();
+    let first = em.emit(input("opt-1", proven()));
+    assert!(first.is_approved());
+
+    em.chain.next_sequence = 999;
+    let result = em.emit(input("opt-2", proven()));
+
+    assert!(matches!(result, EmitResult::Quarantined { .. }));
+    assert_eq!(em.chain.receipts.len(), 1);
+    assert_eq!(em.stats.total_receipts, 1);
+    assert_eq!(em.stats.total_proven, 1);
 }
 
 // ---------------------------------------------------------------------------

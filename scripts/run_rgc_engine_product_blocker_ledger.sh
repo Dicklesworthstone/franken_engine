@@ -300,6 +300,10 @@ assert_required_artifacts() {
   local missing=()
   local artifact
   for artifact in \
+    "${manifest_path}" \
+    "${events_path}" \
+    "${commands_path}" \
+    "${trace_ids_path}" \
     "${ledger_path}" \
     "${cohort_rollup_path}" \
     "${owner_routing_path}" \
@@ -310,6 +314,10 @@ assert_required_artifacts() {
       missing+=("${artifact}")
     fi
   done
+
+  if ! find "${step_logs_dir}" -maxdepth 1 -type f -name 'step_*.log' | grep -q .; then
+    missing+=("${step_logs_dir}/step_*.log")
+  fi
 
   if (( ${#missing[@]} > 0 )); then
     printf 'missing required artifacts:\n%s\n' "${missing[*]}" >&2

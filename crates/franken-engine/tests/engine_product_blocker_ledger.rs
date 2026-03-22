@@ -60,6 +60,23 @@ struct GateRunner {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct OwnerRoutingReport {
     orphaned_unresolved_count: usize,
+    routes: Vec<OwnerRoutingEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct OwnerRoutingEntry {
+    blocker_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct CohortRollupArtifact {
+    cohort_rollups: Vec<CohortRollupArtifactRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct CohortRollupArtifactRow {
+    cohort_name: String,
+    blocker_ids: Vec<String>,
 }
 
 fn repo_root() -> PathBuf {
@@ -347,6 +364,45 @@ fn rgc_408b_emit_bundle_enriches_owners_from_bead_snapshot() {
     ))
     .expect("owner routing report should parse");
     assert_eq!(owner_routing.orphaned_unresolved_count, 0);
+    let route_ids = owner_routing
+        .routes
+        .iter()
+        .map(|route| route.blocker_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        route_ids,
+        vec![
+            "blk_cjs_interop",
+            "blk_cli_help",
+            "blk_native_addon",
+            "blk_obs_mode",
+            "blk_react_ssr",
+            "blk_regex_unicode",
+        ]
+    );
+
+    let cohort_rollup_artifact: CohortRollupArtifact = serde_json::from_str(&read_to_string(
+        &artifact_dir.join("cohort_readiness_rollup.json"),
+    ))
+    .expect("cohort rollup artifact should parse");
+    let cohort_names = cohort_rollup_artifact
+        .cohort_rollups
+        .iter()
+        .map(|rollup| rollup.cohort_name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cohort_names,
+        vec!["cli_surface", "react_ecosystem", "tier_1_critical"]
+    );
+    let tier_one = cohort_rollup_artifact
+        .cohort_rollups
+        .iter()
+        .find(|rollup| rollup.cohort_name == "tier_1_critical")
+        .expect("tier_1_critical cohort must exist");
+    assert_eq!(
+        tier_one.blocker_ids,
+        vec!["blk_cjs_interop", "blk_native_addon"]
+    );
 }
 
 #[test]

@@ -56,6 +56,9 @@
     "jq empty docs/engine_product_blocker_ledger_v1.json",
     "./scripts/run_rgc_engine_product_blocker_ledger.sh ci",
     "./scripts/e2e/rgc_engine_product_blocker_ledger_replay.sh show",
+    "cat artifacts/.../trace_ids.json",
+    "cat artifacts/.../commands.txt",
+    "cat artifacts/.../step_logs/step_000.log",
     "rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=$PWD/target_rch_rgc_engine_product_blocker_ledger_verify CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine --test engine_product_blocker_ledger"
   ]
 }

@@ -119,4 +119,22 @@ Use the replay wrapper to rerun the lane and print the latest complete bundle:
 ```
 
 The replay wrapper refuses incomplete newest directories and falls back to the
-latest complete run directory instead.
+latest complete run directory instead. A complete replayable bundle now
+requires:
+
+- `run_manifest.json`
+- `events.jsonl`
+- `commands.txt`
+- `trace_ids.json`
+- `engine_product_blocker_ledger.json`
+- `cohort_readiness_rollup.json`
+- `owner_routing_report.json`
+- `gate_report.json`
+- `support_surface_contract.json`
+- `beads_snapshot.json`
+- at least one `step_logs/step_*.log`
+
+The wrapper prints the manifest, trace IDs, command transcript, gate report,
+ledger, cohort rollup, owner-routing report, and the first step log so
+operators can triage the latest valid run without manually spelunking the
+artifact directory.

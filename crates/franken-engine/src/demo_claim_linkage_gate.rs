@@ -291,7 +291,7 @@ impl LinkageGateDecision {
         if self.total_claims == 0 {
             return 0;
         }
-        (self.linked_claims as i64 * MILLION) / self.total_claims as i64
+        (self.linked_claims as i128 * MILLION as i128 / self.total_claims as i128) as i64
     }
 }
 

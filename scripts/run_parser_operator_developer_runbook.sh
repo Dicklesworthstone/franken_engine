@@ -142,8 +142,8 @@ run_local_step() {
 run_mode() {
   case "$mode" in
     check)
-      run_step "cargo check -p frankenengine-engine --test parser_operator_developer_runbook" \
-        cargo check -p frankenengine-engine --test parser_operator_developer_runbook || return 1
+      run_step "cargo test --no-run -p frankenengine-engine --test parser_operator_developer_runbook" \
+        cargo test --no-run -p frankenengine-engine --test parser_operator_developer_runbook || return 1
       ;;
     test)
       run_step "cargo test -p frankenengine-engine --test parser_operator_developer_runbook" \
@@ -154,8 +154,8 @@ run_mode() {
         cargo clippy -p frankenengine-engine --test parser_operator_developer_runbook -- -D warnings || return 1
       ;;
     ci)
-      run_step "cargo check -p frankenengine-engine --test parser_operator_developer_runbook" \
-        cargo check -p frankenengine-engine --test parser_operator_developer_runbook || return 1
+      run_step "cargo test --no-run -p frankenengine-engine --test parser_operator_developer_runbook" \
+        cargo test --no-run -p frankenengine-engine --test parser_operator_developer_runbook || return 1
       run_step "cargo test -p frankenengine-engine --test parser_operator_developer_runbook" \
         cargo test -p frankenengine-engine --test parser_operator_developer_runbook || return 1
       run_step "cargo clippy -p frankenengine-engine --test parser_operator_developer_runbook -- -D warnings" \

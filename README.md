@@ -860,7 +860,9 @@ Artifacts are written under:
 operator drills for parser diagnostics/recovery/API/user-impact incidents.
 The gate now defaults heavy remote cargo work into a repo-local
 `target_rch_parser_operator_developer_runbook_<mode>_<pid>` target directory so
-fresh-operator reruns do not depend on fragile `/tmp` worker state.
+fresh-operator reruns do not depend on fragile `/tmp` worker state. Compile-only
+preflight runs `cargo test --no-run` for the integration-test target instead of
+`cargo check`, matching the timeout-safe `rch` path used by the shipped lane.
 
 ```bash
 # parser operator/developer runbook gate (rch-backed check + test + clippy)

@@ -43,6 +43,13 @@ The runbook wrapper defaults remote builds into a repo-local namespaced target
 directory (`target_rch_parser_operator_developer_runbook_<mode>_<pid>`) so
 fresh-operator drills do not depend on fragile `/tmp` worker state.
 
+Compile-only preflight for `check` and the first `ci` step uses
+`cargo test --no-run -p frankenengine-engine --test parser_operator_developer_runbook`
+instead of `cargo check`. This preserves the integration-test compile smoke path
+under `rch` and avoids the false-negative timeout/early-exit behavior that can
+make `cargo check` look like an infrastructure failure instead of a real build
+result.
+
 ## Fresh-Operator Dry Run
 
 Run from repository root:

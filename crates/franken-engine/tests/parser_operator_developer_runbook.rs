@@ -263,6 +263,7 @@ fn parser_operator_runbook_script_contains_required_markers() {
         "step_logs_dir=",
         "rch_reject_artifact_retrieval_failure",
         "rch-artifact-retrieval-failed",
+        "cargo test --no-run -p frankenengine-engine --test parser_operator_developer_runbook",
         "./scripts/e2e/parser_operator_developer_runbook_replay.sh",
         "cat ${step_logs_dir}/step_000.log",
         "parser_frontier_emit_manifest_environment_fields",
@@ -273,6 +274,23 @@ fn parser_operator_runbook_script_contains_required_markers() {
             "runbook script missing required marker: {marker}"
         );
     }
+}
+
+#[test]
+fn parser_operator_runbook_script_uses_timeout_safe_compile_smoke() {
+    let script = load_script();
+    assert!(
+        script.contains(
+            "cargo test --no-run -p frankenengine-engine --test parser_operator_developer_runbook"
+        ),
+        "runbook script must use cargo test --no-run for compile-only preflight"
+    );
+    assert!(
+        !script.contains(
+            "cargo check -p frankenengine-engine --test parser_operator_developer_runbook"
+        ),
+        "runbook script must not regress to cargo check for compile-only preflight"
+    );
 }
 
 #[test]
@@ -289,6 +307,14 @@ fn readme_references_operator_runbook_gate_and_replay() {
     assert!(
         readme.contains("target_rch_parser_operator_developer_runbook_"),
         "README missing repo-local parser operator/developer runbook target-dir guidance"
+    );
+    assert!(
+        readme.contains("cargo test --no-run"),
+        "README missing timeout-safe compile-smoke guidance"
+    );
+    assert!(
+        readme.contains("instead of `cargo check`"),
+        "README missing cargo-check replacement guidance"
     );
     assert!(
         readme.contains("step_logs/step_*.log"),
@@ -479,6 +505,22 @@ fn parser_operator_runbook_doc_contains_required_keywords() {
         assert!(
             doc.to_ascii_lowercase().contains(keyword),
             "runbook doc missing required keyword: {keyword}"
+        );
+    }
+}
+
+#[test]
+fn parser_operator_runbook_doc_mentions_timeout_safe_compile_smoke() {
+    let doc = load_doc();
+    for marker in [
+        "cargo test --no-run -p frankenengine-engine --test parser_operator_developer_runbook",
+        "instead of `cargo check`",
+        "cargo check",
+        "false-negative timeout",
+    ] {
+        assert!(
+            doc.contains(marker),
+            "runbook doc missing timeout-safe compile-smoke marker: {marker}"
         );
     }
 }

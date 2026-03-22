@@ -786,8 +786,8 @@ impl BytecodeVm {
             shape_trace: &self.shape_trace,
         };
 
-        let payload =
-            serde_json::to_vec(&envelope).expect("bytecode-vm hash envelope must be serializable");
+        let payload = serde_json::to_vec(&envelope)
+            .expect("vm state envelope should serialize for deterministic hashing");
         let digest = Sha256::digest(payload);
         hex::encode(digest)
     }

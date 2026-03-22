@@ -101,7 +101,11 @@ impl TsconfigSnapshot {
         let mut hasher = Sha256::new();
         hasher.update(self.root_dir.as_bytes());
         hasher.update(self.base_url.as_bytes());
-        hasher.update(format!("{:?}", self.module_resolution).as_bytes());
+        hasher.update(
+            serde_json::to_string(&self.module_resolution)
+                .expect("module resolution mode should serialize for deterministic hashing")
+                .as_bytes(),
+        );
         for (k, vs) in &self.paths {
             hasher.update(k.as_bytes());
             for v in vs {
@@ -148,11 +152,18 @@ impl TsResolutionReplayEntry {
     /// Compute a deterministic key for index lookups.
     pub fn lookup_key(&self) -> String {
         format!(
-            "{}|{}|{:?}",
+            "{}|{}|{}",
             self.specifier,
             self.referrer.as_deref().unwrap_or(""),
-            self.style
+            stable_request_style_key(self.style)
         )
+    }
+}
+
+fn stable_request_style_key(style: TsRequestStyle) -> &'static str {
+    match style {
+        TsRequestStyle::Import => "import",
+        TsRequestStyle::Require => "require",
     }
 }
 
@@ -242,7 +253,11 @@ impl TsResolutionReplayIndex {
 
         let mut hasher = Sha256::new();
         hasher.update(tsconfig_hash.as_bytes());
-        hasher.update(format!("{:?}", mode).as_bytes());
+        hasher.update(
+            serde_json::to_string(&mode)
+                .expect("resolution replay mode should serialize for deterministic hashing")
+                .as_bytes(),
+        );
         for (k, v) in &map {
             hasher.update(k.as_bytes());
             hasher.update(v.resolved_path.as_bytes());
@@ -266,7 +281,12 @@ impl TsResolutionReplayIndex {
         referrer: Option<&str>,
         style: TsRequestStyle,
     ) -> Option<&TsResolutionReplayEntry> {
-        let key = format!("{}|{}|{:?}", specifier, referrer.unwrap_or(""), style);
+        let key = format!(
+            "{}|{}|{}",
+            specifier,
+            referrer.unwrap_or(""),
+            stable_request_style_key(style)
+        );
         self.entries.get(&key)
     }
 
@@ -1239,7 +1259,7 @@ mod tests {
         let key = entry.lookup_key();
         assert!(key.contains("react"));
         assert!(key.contains("./app.tsx"));
-        assert!(key.contains("Import"));
+        assert!(key.contains("import"));
     }
 
     #[test]
@@ -1691,8 +1711,8 @@ mod tests {
             probe_count: 0,
         };
         let key = entry.lookup_key();
-        // Key should still be well-formed: "|...|Import"
-        assert!(key.contains("Import"));
+        // Key should still be well-formed: "|...|import"
+        assert!(key.contains("import"));
         assert!(key.starts_with('|'));
     }
 

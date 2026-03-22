@@ -334,16 +334,28 @@ impl HookSemanticContract {
 
     pub fn contract_hash(&self) -> ContentHash {
         let mut data = Vec::new();
-        data.extend_from_slice(format!("{:?}", self.hook_kind).as_bytes());
+        data.extend_from_slice(
+            serde_json::to_string(&self.hook_kind)
+                .expect("hook kind should serialize for deterministic hashing")
+                .as_bytes(),
+        );
         for rule in &self.invocation_rules {
-            data.extend_from_slice(format!("{:?}", rule).as_bytes());
+            data.extend_from_slice(
+                serde_json::to_string(rule)
+                    .expect("invocation rule should serialize for deterministic hashing")
+                    .as_bytes(),
+            );
         }
         for constraint in &self.ordering_constraints {
             data.extend_from_slice(constraint.before.as_bytes());
             data.extend_from_slice(constraint.after.as_bytes());
             data.push(u8::from(constraint.strict));
         }
-        data.extend_from_slice(format!("{:?}", self.cleanup_semantics).as_bytes());
+        data.extend_from_slice(
+            serde_json::to_string(&self.cleanup_semantics)
+                .expect("cleanup semantics should serialize for deterministic hashing")
+                .as_bytes(),
+        );
         for pat in &self.forbidden_patterns {
             data.extend_from_slice(pat.pattern_hash.as_bytes());
         }
@@ -419,13 +431,29 @@ impl EffectSemanticContract {
 
     pub fn contract_hash(&self) -> ContentHash {
         let mut data = Vec::new();
-        data.extend_from_slice(format!("{:?}", self.effect_kind).as_bytes());
-        data.extend_from_slice(format!("{:?}", self.timing).as_bytes());
+        data.extend_from_slice(
+            serde_json::to_string(&self.effect_kind)
+                .expect("effect kind should serialize for deterministic hashing")
+                .as_bytes(),
+        );
+        data.extend_from_slice(
+            serde_json::to_string(&self.timing)
+                .expect("effect timing should serialize for deterministic hashing")
+                .as_bytes(),
+        );
         for cap in &self.capability_requirements {
             data.extend_from_slice(cap.as_bytes());
         }
-        data.extend_from_slice(format!("{:?}", self.side_effect_boundary).as_bytes());
-        data.extend_from_slice(format!("{:?}", self.determinism_guarantee).as_bytes());
+        data.extend_from_slice(
+            serde_json::to_string(&self.side_effect_boundary)
+                .expect("side effect boundary should serialize for deterministic hashing")
+                .as_bytes(),
+        );
+        data.extend_from_slice(
+            serde_json::to_string(&self.determinism_guarantee)
+                .expect("determinism guarantee should serialize for deterministic hashing")
+                .as_bytes(),
+        );
         ContentHash::compute(&data)
     }
 
@@ -473,9 +501,17 @@ impl AdjudicationRule {
     pub fn rule_hash(&self) -> ContentHash {
         let mut data = Vec::new();
         data.extend_from_slice(self.name.as_bytes());
-        data.extend_from_slice(format!("{:?}", self.category).as_bytes());
+        data.extend_from_slice(
+            serde_json::to_string(&self.category)
+                .expect("adjudication category should serialize for deterministic hashing")
+                .as_bytes(),
+        );
         data.extend_from_slice(self.condition.as_bytes());
-        data.extend_from_slice(format!("{:?}", self.resolution).as_bytes());
+        data.extend_from_slice(
+            serde_json::to_string(&self.resolution)
+                .expect("adjudication resolution should serialize for deterministic hashing")
+                .as_bytes(),
+        );
         ContentHash::compute(&data)
     }
 }
@@ -1145,7 +1181,11 @@ impl DriftDetector {
             && contract.side_effect_boundary == SideEffectBoundary::Contained
         {
             let alert = DriftAlert {
-                id: derive_drift_alert_id(&format!("effect_boundary_{:?}_{epoch}", effect_kind)),
+                id: derive_drift_alert_id(&format!(
+                    "effect_boundary_{}_{epoch}",
+                    serde_json::to_string(effect_kind)
+                        .expect("effect kind should serialize for deterministic alert ids")
+                )),
                 kind: DriftKind::EffectBoundaryLeak,
                 severity: ViolationSeverity::Error,
                 source_lane: lane,
@@ -1185,7 +1225,11 @@ impl DriftDetector {
                 .contains(&InvocationRule::MustNotBeConditional)
         {
             let alert = DriftAlert {
-                id: derive_drift_alert_id(&format!("hook_ordering_{:?}_{epoch}", hook_kind)),
+                id: derive_drift_alert_id(&format!(
+                    "hook_ordering_{}_{epoch}",
+                    serde_json::to_string(hook_kind)
+                        .expect("hook kind should serialize for deterministic alert ids")
+                )),
                 kind: DriftKind::HookContractBreach,
                 severity: ViolationSeverity::Fatal,
                 source_lane: lane,

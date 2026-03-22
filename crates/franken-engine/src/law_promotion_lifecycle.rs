@@ -194,9 +194,17 @@ impl LifecycleEvent {
         let mut data = Vec::new();
         data.extend_from_slice(self.event_id.as_bytes());
         data.extend_from_slice(self.law_id.as_bytes());
-        data.extend_from_slice(format!("{:?}", self.kind).as_bytes());
+        data.extend_from_slice(
+            serde_json::to_string(&self.kind)
+                .expect("lifecycle event kind should serialize for deterministic hashing")
+                .as_bytes(),
+        );
         for target in &self.affected_targets {
-            data.extend_from_slice(format!("{target:?}").as_bytes());
+            data.extend_from_slice(
+                serde_json::to_string(target)
+                    .expect("affected promotion target should serialize for deterministic hashing")
+                    .as_bytes(),
+            );
         }
         data.extend_from_slice(self.rationale.as_bytes());
         if let Some(ref sid) = self.superseding_law_id {
@@ -277,9 +285,17 @@ impl RoutingDecision {
     fn recompute_hash(&mut self) {
         let mut data = Vec::new();
         data.extend_from_slice(self.law_id.as_bytes());
-        data.extend_from_slice(format!("{:?}", self.candidate_kind).as_bytes());
+        data.extend_from_slice(
+            serde_json::to_string(&self.candidate_kind)
+                .expect("candidate kind should serialize for deterministic hashing")
+                .as_bytes(),
+        );
         for target in &self.selected_targets {
-            data.extend_from_slice(format!("{target:?}").as_bytes());
+            data.extend_from_slice(
+                serde_json::to_string(target)
+                    .expect("promotion target should serialize for deterministic hashing")
+                    .as_bytes(),
+            );
         }
         data.extend_from_slice(&self.priority_millionths.to_le_bytes());
         self.decision_hash = ContentHash::compute(&data);

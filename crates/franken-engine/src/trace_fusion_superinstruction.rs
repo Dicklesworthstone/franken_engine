@@ -118,7 +118,11 @@ impl FusionCandidate {
         let mut data = Vec::new();
         for seg in segments {
             data.extend_from_slice(seg.id.as_bytes());
-            data.extend_from_slice(format!("{:?}", seg.motif).as_bytes());
+            data.extend_from_slice(
+                serde_json::to_string(&seg.motif)
+                    .expect("fusion segment motif should serialize for deterministic hashing")
+                    .as_bytes(),
+            );
             data.extend_from_slice(&seg.instruction_count.to_le_bytes());
         }
         ContentHash::compute(&data)
@@ -571,7 +575,11 @@ pub fn certify_fusion(
     let mut cert_data = Vec::new();
     cert_data.extend_from_slice(TRACE_FUSION_SCHEMA_VERSION.as_bytes());
     cert_data.extend_from_slice(candidate.fusion_hash.as_bytes());
-    cert_data.extend_from_slice(format!("{:?}", decision).as_bytes());
+    cert_data.extend_from_slice(
+        serde_json::to_string(&decision)
+            .expect("fusion decision should serialize for deterministic hashing")
+            .as_bytes(),
+    );
     if let Some(ref p) = proof {
         cert_data.extend_from_slice(p.proof_hash.as_bytes());
     }

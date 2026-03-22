@@ -141,7 +141,11 @@ impl FusionMotif {
     /// Content hash of this motif for deterministic identity.
     pub fn content_hash(&self) -> ContentHash {
         let mut data = Vec::new();
-        data.extend_from_slice(format!("{:?}", self.kind).as_bytes());
+        data.extend_from_slice(
+            serde_json::to_string(&self.kind)
+                .expect("fusion motif kind should serialize for deterministic hashing")
+                .as_bytes(),
+        );
         for op in &self.opcode_pattern {
             data.extend_from_slice(op.as_bytes());
             data.push(b'|');
@@ -317,8 +321,12 @@ pub enum FusionGuardKind {
 impl FusionGuard {
     /// Create a new guard.
     pub fn new(kind: FusionGuardKind, side_exit_offset: u32) -> Self {
-        let kind_bytes = format!("{kind:?}");
-        let hash = ContentHash::compute(kind_bytes.as_bytes());
+        let kind_bytes = serde_json::to_string(&kind)
+            .expect("fusion guard kind should serialize for deterministic hashing");
+        let mut hash_preimage = Vec::with_capacity(kind_bytes.len() + std::mem::size_of::<u32>());
+        hash_preimage.extend_from_slice(kind_bytes.as_bytes());
+        hash_preimage.extend_from_slice(&side_exit_offset.to_le_bytes());
+        let hash = ContentHash::compute(&hash_preimage);
         Self {
             guard_id: format!("fg-{}", &hash.to_hex()[..12]),
             kind,
@@ -1822,6 +1830,16 @@ mod tests {
         assert!(guard.guard_id.starts_with("fg-"));
         assert_eq!(guard.side_exit_offset, 42);
         assert!(!guard.factored);
+    }
+
+    #[test]
+    fn test_guard_id_changes_with_side_exit_offset() {
+        let kind = FusionGuardKind::CapabilityValid {
+            capability_name: "fs.read".into(),
+        };
+        let guard_a = FusionGuard::new(kind.clone(), 4);
+        let guard_b = FusionGuard::new(kind, 8);
+        assert_ne!(guard_a.guard_id, guard_b.guard_id);
     }
 
     #[test]

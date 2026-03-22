@@ -975,9 +975,11 @@ pub fn build_deopt_witness(
     };
 
     let witness_id = format!("dw_{}_{}", cert.site.site_id, transform_kind);
+    let triggers_str = serde_json::to_string(&triggers)
+        .expect("deopt triggers should serialize for deterministic hashing");
     let hash_input = format!(
-        "witness:{}:{}:{:?}:{}",
-        witness_id, transform_kind, triggers, cert.certificate_hash
+        "witness:{}:{}:{}:{}",
+        witness_id, transform_kind, triggers_str, cert.certificate_hash
     );
     let witness_hash = hex_encode(ContentHash::compute(hash_input.as_bytes()).as_bytes());
 

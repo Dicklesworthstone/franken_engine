@@ -2071,7 +2071,8 @@ fn build_collection_trace(
     mutated_keys: Vec<String>,
     events: Vec<CollectionMutationEvent>,
 ) -> CollectionMutationTrace {
-    let seed = serde_json::to_string(&events).unwrap_or_default();
+    let seed = serde_json::to_string(&events)
+        .expect("collection mutation events should serialize for deterministic hashing");
     let digest = hex::encode(Sha256::digest(
         format!(
             "{}|{}|{}|{}|{}|{}",
@@ -2949,7 +2950,7 @@ fn build_string_representation_receipt(
         && result_utf16_units > 0;
     let digest = hex::encode(Sha256::digest(
         format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{:?}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             builtin.name(),
             source,
             result,
@@ -2958,8 +2959,10 @@ fn build_string_representation_receipt(
             segment_count,
             flatten_required,
             flatten_budget_exhausted,
-            kind,
-            observation_mode,
+            serde_json::to_string(&kind)
+                .expect("string representation kind should serialize for deterministic hashing"),
+            serde_json::to_string(&observation_mode)
+                .expect("string observation mode should serialize for deterministic hashing"),
             view_eligible
         )
         .as_bytes(),

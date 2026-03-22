@@ -932,7 +932,7 @@ impl InterpreterCore {
                             for i in 0..args.count.min(func.arity) {
                                 let reg = args.start.checked_add(i).ok_or(
                                     InterpreterError::RegisterOutOfBounds {
-                                        register: u32::MAX,
+                                        register: args.start,
                                         max: self.config.max_registers,
                                     },
                                 )?;

@@ -899,7 +899,7 @@ impl MembraneState {
             });
         }
         let id = self.next_handle_id;
-        self.next_handle_id += 1;
+        self.next_handle_id = self.next_handle_id.saturating_add(1);
         let record = HandleRecord::new(id, kind, addon_id, epoch);
         self.handle_table.push(record);
         self.active_handles += 1;

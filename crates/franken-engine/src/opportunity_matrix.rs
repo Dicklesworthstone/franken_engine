@@ -618,12 +618,17 @@ fn build_matrix_id(request: &OpportunityMatrixRequest) -> String {
     hasher.update(request.policy_id.as_bytes());
     hasher.update(request.optimization_run_id.as_bytes());
     hasher.update(request.benchmark_pressure_millionths.to_le_bytes());
-    for hotspot in &request.hotspots {
+    // Sort hotspots and candidates for insertion-order independence.
+    let mut sorted_hotspots: Vec<_> = request.hotspots.iter().collect();
+    sorted_hotspots.sort_by(|a, b| (&a.module, &a.function).cmp(&(&b.module, &b.function)));
+    for hotspot in &sorted_hotspots {
         hasher.update(hotspot.module.as_bytes());
         hasher.update(hotspot.function.as_bytes());
         hasher.update(hotspot.sample_count.to_le_bytes());
     }
-    for candidate in &request.candidates {
+    let mut sorted_candidates: Vec<_> = request.candidates.iter().collect();
+    sorted_candidates.sort_by(|a, b| a.opportunity_id.cmp(&b.opportunity_id));
+    for candidate in &sorted_candidates {
         hasher.update(candidate.opportunity_id.as_bytes());
         hasher.update(candidate.target_module.as_bytes());
         hasher.update(candidate.target_function.as_bytes());

@@ -765,11 +765,16 @@ pub fn evaluate_gate(
     };
 
     // Compute input hash from all scan content hashes.
+    // Sort scans by subsystem and waivers by waiver_id for determinism.
+    let mut sorted_scans: Vec<_> = scans.iter().collect();
+    sorted_scans.sort_by_key(|a| a.subsystem);
+    let mut sorted_waivers: Vec<_> = waivers.iter().collect();
+    sorted_waivers.sort_by_key(|a| &a.waiver_id);
     let mut input_buf = Vec::new();
-    for scan in scans {
+    for scan in &sorted_scans {
         input_buf.extend_from_slice(scan.scan_content_hash.as_bytes());
     }
-    for w in waivers {
+    for w in &sorted_waivers {
         append_str(&mut input_buf, &w.waiver_id);
     }
     let input_hash = ContentHash::compute(&input_buf);

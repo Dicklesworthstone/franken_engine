@@ -714,7 +714,7 @@ impl ObjectHeap {
 
     /// Allocate a new ordinary object with the given prototype.
     pub fn alloc(&mut self, proto: Option<ObjectHandle>) -> ObjectHandle {
-        let handle = ObjectHandle(self.objects.len() as u32);
+        let handle = ObjectHandle(u32::try_from(self.objects.len()).unwrap_or(u32::MAX));
         self.objects
             .push(ManagedObject::Ordinary(OrdinaryObject::with_prototype(
                 proto,
@@ -729,7 +729,7 @@ impl ObjectHeap {
 
     /// Allocate a Proxy object.
     pub fn alloc_proxy(&mut self, target: ObjectHandle, handler: ObjectHandle) -> ObjectHandle {
-        let handle = ObjectHandle(self.objects.len() as u32);
+        let handle = ObjectHandle(u32::try_from(self.objects.len()).unwrap_or(u32::MAX));
         self.objects
             .push(ManagedObject::Proxy(ProxyObject::new(target, handler)));
         handle
@@ -738,7 +738,7 @@ impl ObjectHeap {
     /// Allocate a new unique symbol id.
     pub fn alloc_symbol(&mut self) -> SymbolId {
         let id = SymbolId(self.next_symbol);
-        self.next_symbol += 1;
+        self.next_symbol = self.next_symbol.saturating_add(1);
         id
     }
 
@@ -2036,7 +2036,7 @@ impl ObjectHeap {
 
     /// Allocate a callable (function) object with the given prototype.
     pub fn alloc_callable(&mut self, proto: Option<ObjectHandle>) -> ObjectHandle {
-        let handle = ObjectHandle(self.objects.len() as u32);
+        let handle = ObjectHandle(u32::try_from(self.objects.len()).unwrap_or(u32::MAX));
         let mut obj = OrdinaryObject::with_prototype(proto);
         obj.callable = true;
         self.objects.push(ManagedObject::Ordinary(obj));
@@ -2045,7 +2045,7 @@ impl ObjectHeap {
 
     /// Allocate a constructor object with the given prototype.
     pub fn alloc_constructor(&mut self, proto: Option<ObjectHandle>) -> ObjectHandle {
-        let handle = ObjectHandle(self.objects.len() as u32);
+        let handle = ObjectHandle(u32::try_from(self.objects.len()).unwrap_or(u32::MAX));
         let mut obj = OrdinaryObject::with_prototype(proto);
         obj.callable = true;
         obj.constructable = true;

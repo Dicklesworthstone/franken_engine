@@ -340,7 +340,11 @@ impl SignaturePreimage for DelegateCellManifest {
                 self.capability_envelope
                     .permitted
                     .iter()
-                    .map(|c| CanonicalValue::String(format!("{c:?}")))
+                    .map(|c| {
+                        CanonicalValue::String(
+                            serde_json::to_string(c).unwrap_or_default(),
+                        )
+                    })
                     .collect(),
             ),
         );
@@ -350,7 +354,11 @@ impl SignaturePreimage for DelegateCellManifest {
                 self.capability_envelope
                     .required
                     .iter()
-                    .map(|c| CanonicalValue::String(format!("{c:?}")))
+                    .map(|c| {
+                        CanonicalValue::String(
+                            serde_json::to_string(c).unwrap_or_default(),
+                        )
+                    })
                     .collect(),
             ),
         );
@@ -785,7 +793,7 @@ impl PromotionDecision {
         .map_err(SelfReplacementError::IdDerivationFailed)?;
 
         let verdict = if input.gate_results.is_empty() {
-            GateVerdict::Inconclusive
+            GateVerdict::Denied
         } else if input.gate_results.iter().all(|g| g.passed) {
             GateVerdict::Approved
         } else {

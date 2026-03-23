@@ -393,8 +393,14 @@ impl ClaimEvidence {
         h.update(self.residual_fraction.to_le_bytes());
         h.update(self.transport_certificate_hash.as_bytes());
         h.update(self.explanation.as_bytes());
-        for r in &self.degradation_reasons {
-            h.update(r.as_str().as_bytes());
+        let mut sorted_reasons: Vec<_> = self
+            .degradation_reasons
+            .iter()
+            .map(|r| r.as_str())
+            .collect();
+        sorted_reasons.sort();
+        for r in &sorted_reasons {
+            h.update(r.as_bytes());
         }
         ContentHash::compute(&h.finalize())
     }

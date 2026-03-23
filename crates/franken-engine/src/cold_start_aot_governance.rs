@@ -630,7 +630,7 @@ pub fn compute_speedup(baseline_nanos: u64, candidate_nanos: u64) -> i64 {
     // speedup = (baseline - candidate) / baseline  (in millionths)
     let diff = baseline_nanos as i128 - candidate_nanos as i128;
     let result = diff.saturating_mul(FIXED_ONE as i128) / baseline_nanos as i128;
-    result as i64
+    result.clamp(i64::MIN as i128, i64::MAX as i128) as i64
 }
 
 /// Validate a governance configuration.
@@ -828,7 +828,7 @@ pub fn aggregate_speedup(evidence: &[ColdStartEvidence]) -> i64 {
         .iter()
         .map(|e| e.speedup_millionths as i128 * e.sample_count as i128)
         .sum();
-    (weighted_sum / total_samples as i128) as i64
+    (weighted_sum / total_samples as i128).clamp(i64::MIN as i128, i64::MAX as i128) as i64
 }
 
 /// Determine the overall benchmark verdict from aggregated evidence.

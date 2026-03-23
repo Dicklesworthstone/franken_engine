@@ -199,7 +199,9 @@ impl LifecycleEvent {
                 .expect("lifecycle event kind should serialize for deterministic hashing")
                 .as_bytes(),
         );
-        for target in &self.affected_targets {
+        let mut sorted_targets = self.affected_targets.clone();
+        sorted_targets.sort();
+        for target in &sorted_targets {
             data.extend_from_slice(
                 serde_json::to_string(target)
                     .expect("affected promotion target should serialize for deterministic hashing")
@@ -290,7 +292,9 @@ impl RoutingDecision {
                 .expect("candidate kind should serialize for deterministic hashing")
                 .as_bytes(),
         );
-        for target in &self.selected_targets {
+        let mut sorted_selected = self.selected_targets.clone();
+        sorted_selected.sort();
+        for target in &sorted_selected {
             data.extend_from_slice(
                 serde_json::to_string(target)
                     .expect("promotion target should serialize for deterministic hashing")

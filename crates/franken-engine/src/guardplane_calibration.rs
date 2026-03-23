@@ -379,7 +379,7 @@ impl GuardplaneCalibrationEngine {
         // 6. Update dimension history for trend analysis
         let effectiveness = self.integrator.technique_effectiveness();
         for (dim, eff) in &effectiveness {
-            let key = format!("{dim:?}");
+            let key = serde_json::to_string(&dim).unwrap_or_default();
             self.dimension_history
                 .entry(key)
                 .or_default()
@@ -394,7 +394,7 @@ impl GuardplaneCalibrationEngine {
         let evidence_weights: BTreeMap<String, u64> = cal_state
             .evidence_weights_millionths
             .iter()
-            .map(|(k, v)| (format!("{k:?}"), *v))
+            .map(|(k, v)| (serde_json::to_string(&k).unwrap_or_default(), *v))
             .collect();
 
         let state_digest = compute_state_digest(cal_state);
@@ -507,12 +507,12 @@ impl GuardplaneCalibrationEngine {
                 .checked_div(*total as u64)
                 .unwrap_or(0);
 
-            if evasion_rate > self.evasion_alert_threshold_millionths {
+            if evasion_rate >= self.evasion_alert_threshold_millionths {
                 let alert_id = format!("{cycle_id}-alert-{}", self.alerts.len());
                 self.alerts.push(CalibrationAlert {
                     alert_id: alert_id.clone(),
                     severity: "critical".to_string(),
-                    subsystem: format!("{subsystem:?}"),
+                    subsystem: serde_json::to_string(&subsystem).unwrap_or_default(),
                     threat_category: "evasion".to_string(),
                     description: format!(
                         "evasion rate {:.1}% exceeds threshold {:.1}% for {subsystem:?}",
@@ -537,7 +537,7 @@ impl GuardplaneCalibrationEngine {
             .checked_div(outcomes.len() as u64)
             .unwrap_or(0);
 
-        if escape_rate > self.containment_escape_alert_threshold_millionths {
+        if escape_rate >= self.containment_escape_alert_threshold_millionths {
             let alert_id = format!("{cycle_id}-alert-{}", self.alerts.len());
             self.alerts.push(CalibrationAlert {
                 alert_id,
@@ -567,7 +567,7 @@ impl GuardplaneCalibrationEngine {
         let mut result = BTreeMap::new();
 
         for (dim, eff) in &effectiveness {
-            let key = format!("{dim:?}");
+            let key = serde_json::to_string(&dim).unwrap_or_default();
             let trend = if let Some(history) = self.dimension_history.get(&key) {
                 compute_trend(history)
             } else {
@@ -634,17 +634,21 @@ fn classify_outcomes(
     for o in outcomes {
         // Severity from score
         let severity = classify_severity(&o.score);
-        *severity_counts.entry(format!("{severity:?}")).or_default() += 1;
+        *severity_counts
+            .entry(serde_json::to_string(&severity).unwrap_or_default())
+            .or_default() += 1;
 
         // Defense subsystem
         let subsystem = classify_defense_subsystem(o);
         *subsystem_counts
-            .entry(format!("{subsystem:?}"))
+            .entry(serde_json::to_string(&subsystem).unwrap_or_default())
             .or_default() += 1;
 
         // Threat category from campaign
         let threat = classify_threat_category(o);
-        *threat_counts.entry(format!("{threat:?}")).or_default() += 1;
+        *threat_counts
+            .entry(serde_json::to_string(&threat).unwrap_or_default())
+            .or_default() += 1;
     }
 
     (severity_counts, subsystem_counts, threat_counts)

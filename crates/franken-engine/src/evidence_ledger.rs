@@ -322,10 +322,22 @@ impl EvidenceEntryBuilder {
             epoch_id: self.epoch_id,
             timestamp_ns: self.timestamp_ns,
             decision_type: self.decision_type,
-            candidates: self.candidates,
-            constraints: self.constraints,
+            candidates: {
+                let mut c = self.candidates;
+                c.sort_by(|a, b| a.action_name.cmp(&b.action_name));
+                c
+            },
+            constraints: {
+                let mut c = self.constraints;
+                c.sort_by(|a, b| a.constraint_id.cmp(&b.constraint_id));
+                c
+            },
             chosen_action,
-            witnesses: self.witnesses,
+            witnesses: {
+                let mut w = self.witnesses;
+                w.sort_by(|a, b| a.witness_id.cmp(&b.witness_id));
+                w
+            },
             evidence_hash: String::new(),
             metadata: self.metadata,
         };
@@ -2228,7 +2240,7 @@ mod tests {
     fn entry_id_format() {
         let entry = sample_entry();
         assert!(entry.entry_id.starts_with("ev-"));
-        assert_eq!(entry.entry_id.len(), 3 + 16);
+        assert_eq!(entry.entry_id.len(), 3 + 32);
     }
 
     #[test]

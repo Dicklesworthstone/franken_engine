@@ -570,6 +570,13 @@ fn verify_transparency_layer(input: &TransparencyLayerInput) -> LayerResult {
         );
     }
 
+    if input.consistency_proofs.is_empty() {
+        result.record_fail(
+            "consistency_proofs_present",
+            "transparency_no_consistency_proofs",
+            "no consistency proofs provided — cannot verify log append-only property".to_string(),
+        );
+    }
     for (idx, link) in input.consistency_proofs.iter().enumerate() {
         let check_name = format!("consistency_proof_{idx}_valid");
         match verify_consistency(&link.from_root, &link.proof) {
@@ -797,8 +804,9 @@ fn verify_attestation_layer(receipt: &OptReceipt, input: &AttestationLayerInput)
             "policy_quote_measurement_matches_attested_measurement",
             "attestation_policy_measurement_mismatch",
             format!(
-                "policy measurement ({:?}:{}) != expected (sha256:{})",
-                input.policy_quote.measurement.algorithm,
+                "policy measurement ({}:{}) != expected (sha256:{})",
+                serde_json::to_string(&input.policy_quote.measurement.algorithm)
+                    .unwrap_or_default(),
                 input.policy_quote.measurement.digest_hex,
                 expected_measurement_digest
             ),

@@ -480,12 +480,16 @@ impl ExtractionReport {
         append_str(&mut buf, &format!("{}", self.verdict));
         append_u64(&mut buf, self.epoch.as_u64());
         append_u64(&mut buf, self.inputs.len() as u64);
-        for i in &self.inputs {
-            buf.extend_from_slice(i.input_hash.as_bytes());
+        let mut sorted_input_hashes: Vec<_> = self.inputs.iter().map(|i| i.input_hash).collect();
+        sorted_input_hashes.sort();
+        for ch in &sorted_input_hashes {
+            buf.extend_from_slice(ch.as_bytes());
         }
         append_u64(&mut buf, self.repros.len() as u64);
-        for r in &self.repros {
-            buf.extend_from_slice(r.repro_hash.as_bytes());
+        let mut sorted_repro_hashes: Vec<_> = self.repros.iter().map(|r| r.repro_hash).collect();
+        sorted_repro_hashes.sort();
+        for ch in &sorted_repro_hashes {
+            buf.extend_from_slice(ch.as_bytes());
         }
         append_u64(&mut buf, self.findings.len() as u64);
         compute_digest(&buf)

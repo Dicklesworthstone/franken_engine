@@ -1090,6 +1090,13 @@ impl SessionProtocolState {
         op: DegradedOperationKind,
         tick: u64,
     ) -> Result<(), ProtocolError> {
+        // Reject ALL operations on terminal sessions before any other checks.
+        if self.phase.is_terminal() {
+            return Err(ProtocolError::IllegalTransition {
+                from: self.phase,
+                to: self.phase,
+            });
+        }
         match self.phase {
             SessionPhaseTag::Established => Ok(()),
             SessionPhaseTag::DegradedOpen => {

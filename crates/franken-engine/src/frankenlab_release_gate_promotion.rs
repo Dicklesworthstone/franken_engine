@@ -301,7 +301,15 @@ impl TriageBundle {
         let gates_involved: BTreeSet<String> =
             findings.iter().map(|f| f.gate.to_string()).collect();
 
-        let content_bytes = serde_json::to_vec(&findings).unwrap_or_default();
+        // Sort findings for deterministic hashing before computing content hash.
+        let mut sorted_for_hash = findings.clone();
+        sorted_for_hash.sort_by(|a, b| {
+            a.gate
+                .to_string()
+                .cmp(&b.gate.to_string())
+                .then_with(|| a.summary.cmp(&b.summary))
+        });
+        let content_bytes = serde_json::to_vec(&sorted_for_hash).unwrap_or_default();
         let content_hash = ContentHash::compute(&content_bytes);
 
         Self {
@@ -599,7 +607,9 @@ impl ReleaseGatePromotionRegistry {
                 .iter()
                 .any(|g| g.evaluation_runs > 0 && g.blocks_release());
 
-        let content_bytes = serde_json::to_vec(&self.gates).unwrap_or_default();
+        let mut sorted_gates = self.gates.clone();
+        sorted_gates.sort_by_key(|a| a.gate.to_string());
+        let content_bytes = serde_json::to_vec(&sorted_gates).unwrap_or_default();
         let content_hash = ContentHash::compute(&content_bytes);
 
         ReleaseGatePromotionReport {
@@ -1067,6 +1077,18 @@ mod tests {
         let r1 = make();
         let r2 = make();
         assert_eq!(r1.content_hash, r2.content_hash);
+    }
+
+    #[test]
+    fn report_content_hash_ignores_gate_insertion_order() {
+        let reg = ReleaseGatePromotionRegistry::with_defaults(test_epoch());
+        let mut reversed = reg.clone();
+        reversed.gates.reverse();
+
+        assert_eq!(
+            reg.build_report().content_hash,
+            reversed.build_report().content_hash
+        );
     }
 
     #[test]

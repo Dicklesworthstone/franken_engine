@@ -615,7 +615,10 @@ fn coupling_score_millionths(
         EdgeUncertainty::Partial => 100_000,
         EdgeUncertainty::Unknown => 200_000,
     };
-    (base + channel_bonus + resource_bonus + timescale_penalty + uncertainty_penalty)
+    base.saturating_add(channel_bonus)
+        .saturating_add(resource_bonus)
+        .saturating_add(timescale_penalty)
+        .saturating_add(uncertainty_penalty)
         .clamp(0, MILLION)
 }
 
@@ -911,8 +914,14 @@ impl ControllerCompositionMatrix {
     }
 
     fn to_canonical_value(&self) -> CanonicalValue {
-        let entries: Vec<CanonicalValue> = self
-            .entries
+        let mut sorted_entries: Vec<_> = self.entries.iter().collect();
+        sorted_entries.sort_by(|a, b| {
+            a.role_a
+                .to_string()
+                .cmp(&b.role_a.to_string())
+                .then_with(|| a.role_b.to_string().cmp(&b.role_b.to_string()))
+        });
+        let entries: Vec<CanonicalValue> = sorted_entries
             .iter()
             .map(|entry| {
                 let mut m = BTreeMap::new();

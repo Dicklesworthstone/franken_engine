@@ -97,6 +97,13 @@ impl IncidentTrace {
         buf.extend_from_slice(&self.metadata.start_timestamp_ns.to_le_bytes());
         buf.extend_from_slice(&self.metadata.end_timestamp_ns.to_le_bytes());
         buf.extend_from_slice(self.metadata.loss_matrix_id.as_bytes());
+        // Include initial prior and likelihood model in hash for tamper detection.
+        if let Ok(prior_bytes) = serde_json::to_vec(&self.metadata.initial_prior) {
+            buf.extend_from_slice(&prior_bytes);
+        }
+        if let Ok(model_bytes) = serde_json::to_vec(&self.likelihood_model) {
+            buf.extend_from_slice(&model_bytes);
+        }
         // Annotations are BTreeMap so iteration is deterministic.
         for (k, v) in &self.metadata.annotations {
             buf.extend_from_slice(k.as_bytes());

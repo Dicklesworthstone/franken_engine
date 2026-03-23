@@ -883,7 +883,7 @@ impl AutoDemotionMonitor {
         }
 
         // Unwaived divergence
-        self.state.divergence_count += 1;
+        self.state.divergence_count = self.state.divergence_count.saturating_add(1);
         if self.state.first_divergence_artifact.is_none() {
             // Use input hash as the artifact reference
             self.state.first_divergence_artifact = Some(*input_hash);
@@ -982,7 +982,8 @@ impl AutoDemotionMonitor {
                         last_value_millionths: value,
                         last_timestamp_ns: ts,
                     });
-                self.state.performance_breach_states.last_mut().unwrap()
+                let len = self.state.performance_breach_states.len();
+                &mut self.state.performance_breach_states[len - 1]
             }
         };
 

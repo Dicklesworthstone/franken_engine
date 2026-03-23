@@ -711,8 +711,8 @@ impl SafetyDecisionRouter {
         }
 
         match outcome.action_name.as_str() {
-            "allow" | "permit" | "continue" => SafetyVerdict::Allow,
-            "deny" | "reject" | "block" | "stop" => SafetyVerdict::Deny {
+            "allow" => SafetyVerdict::Allow,
+            "deny" | "reject" | "block" | "stop" | "permit" | "continue" => SafetyVerdict::Deny {
                 reason: format!(
                     "decision contract denied {}: expected_loss={:.3}",
                     action.as_str(),

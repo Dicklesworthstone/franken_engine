@@ -422,8 +422,11 @@ impl DifferentialPair {
         h.update(self.reference.content_hash().as_bytes());
         h.update(self.candidate.content_hash().as_bytes());
         h.update((self.mismatches.len() as u64).to_le_bytes());
-        for m in &self.mismatches {
-            h.update(m.content_hash().as_bytes());
+        let mut sorted_mismatch_hashes: Vec<_> =
+            self.mismatches.iter().map(|m| m.content_hash()).collect();
+        sorted_mismatch_hashes.sort();
+        for ch in &sorted_mismatch_hashes {
+            h.update(ch.as_bytes());
         }
         ContentHash::compute(&h.finalize())
     }

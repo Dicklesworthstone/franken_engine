@@ -453,7 +453,7 @@ impl TypedArrayDescriptor {
         Self {
             typed_array_id: typed_array_id.to_string(),
             element_kind,
-            byte_length: element_count * byte_width,
+            byte_length: element_count.saturating_mul(byte_width),
             byte_offset: 0,
             element_count,
             buffer_detached: false,

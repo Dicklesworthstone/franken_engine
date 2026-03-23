@@ -403,8 +403,14 @@ impl SpecializationEvidence {
         append_u64(&mut buf, self.tail_regression_millionths);
         append_u64(&mut buf, self.budget_usage_millionths);
         append_u64(&mut buf, self.max_interference_millionths);
-        for r in &self.interference_reports {
-            buf.extend_from_slice(r.content_hash.as_bytes());
+        let mut sorted_report_hashes: Vec<_> = self
+            .interference_reports
+            .iter()
+            .map(|r| r.content_hash)
+            .collect();
+        sorted_report_hashes.sort();
+        for ch in &sorted_report_hashes {
+            buf.extend_from_slice(ch.as_bytes());
         }
         self.content_hash = compute_digest(&buf);
     }

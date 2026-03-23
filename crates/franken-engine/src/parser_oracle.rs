@@ -543,7 +543,9 @@ fn classify_observation(
         }
         (ParseObservation::Error(first_error), ParseObservation::Error(second_error)) => {
             if first_error == second_error {
-                DriftClass::DiagnosticsDrift
+                // Both parsers fail with identical errors — deterministically
+                // equivalent behavior, not diagnostics drift.
+                DriftClass::Equivalent
             } else {
                 DriftClass::HarnessNondeterminism
             }
@@ -971,13 +973,14 @@ mod tests {
     }
 
     #[test]
-    fn classify_matching_errors_diagnostics_drift() {
+    fn classify_matching_errors_equivalent() {
         let class = classify_observation(
             "sha256:0000",
             ParseObservation::Error(ParseErrorCode::UnsupportedSyntax),
             ParseObservation::Error(ParseErrorCode::UnsupportedSyntax),
         );
-        assert_eq!(class, DriftClass::DiagnosticsDrift);
+        // Both parsers fail identically — deterministically equivalent.
+        assert_eq!(class, DriftClass::Equivalent);
     }
 
     #[test]

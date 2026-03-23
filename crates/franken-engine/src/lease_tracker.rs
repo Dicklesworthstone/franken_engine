@@ -336,7 +336,7 @@ impl LeaseStore {
             holder: holder.to_string(),
             lease_type,
             granted_at: current_ticks,
-            expires_at: current_ticks + ttl,
+            expires_at: current_ticks.saturating_add(ttl),
             ttl,
             epoch: self.current_epoch,
             renewal_count: 0,
@@ -422,8 +422,8 @@ impl LeaseStore {
         }
 
         // Extend.
-        lease.expires_at = current_ticks + lease.ttl;
-        lease.renewal_count += 1;
+        lease.expires_at = current_ticks.saturating_add(lease.ttl);
+        lease.renewal_count = lease.renewal_count.saturating_add(1);
 
         // Extract event data before dropping mutable lease borrow.
         let holder = lease.holder.clone();

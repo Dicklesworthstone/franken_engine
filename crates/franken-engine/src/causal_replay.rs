@@ -204,7 +204,9 @@ impl DecisionSnapshot {
             buf.extend_from_slice(action.as_bytes());
             buf.extend_from_slice(&cost.to_be_bytes());
         }
-        for hash in &self.evidence_hashes {
+        let mut sorted_evidence = self.evidence_hashes.clone();
+        sorted_evidence.sort();
+        for hash in &sorted_evidence {
             buf.extend_from_slice(hash.as_bytes());
         }
         buf.extend_from_slice(self.chosen_action.as_bytes());

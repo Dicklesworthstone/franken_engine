@@ -535,11 +535,15 @@ impl QuarantineMeshGateRunner {
             self.seed,
             results.len(),
             results.iter().filter(|r| r.passed).count(),
-            results
-                .iter()
-                .map(|r| format!("{}:{}", r.scenario_id, r.passed))
-                .collect::<Vec<_>>()
-                .join(","),
+            {
+                let mut sorted: Vec<_> = results.iter().collect();
+                sorted.sort_by(|a, b| a.scenario_id.cmp(&b.scenario_id));
+                sorted
+                    .iter()
+                    .map(|r| format!("{}:{}", r.scenario_id, r.passed))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            },
         );
         format!("{:016x}", fnv1a64(material.as_bytes()))
     }

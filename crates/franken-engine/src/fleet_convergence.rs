@@ -240,6 +240,12 @@ impl ContainmentReceipt {
         preimage.extend_from_slice(self.action_id.as_bytes());
         preimage.extend_from_slice(self.extension_id.as_bytes());
         preimage.extend_from_slice(&[self.action_type.severity()]);
+        // Sort evidence_ids for determinism before signing.
+        let mut sorted_evidence = self.evidence_ids.clone();
+        sorted_evidence.sort();
+        for eid in &sorted_evidence {
+            preimage.extend_from_slice(eid.as_bytes());
+        }
         preimage.extend_from_slice(&self.posterior_snapshot.to_le_bytes());
         preimage.extend_from_slice(&self.policy_version.to_le_bytes());
         preimage.extend_from_slice(self.node_id.as_str().as_bytes());

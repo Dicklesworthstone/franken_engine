@@ -554,7 +554,11 @@ impl BytecodeVm {
                             })?;
                     heap_object.shape_id = outcome.shape.shape_id;
                     if let Some(slot) = existing_slot {
-                        heap_object.slots[slot] = stored_value;
+                        if slot < heap_object.slots.len() {
+                            heap_object.slots[slot] = stored_value;
+                        } else {
+                            heap_object.slots.push(stored_value);
+                        }
                     } else {
                         let slot = heap_object.slots.len();
                         if let Some(layout) = outcome.transition.property_layout.as_ref() {

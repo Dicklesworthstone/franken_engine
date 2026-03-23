@@ -328,8 +328,8 @@ impl ExecutionCell {
                 remaining_ms: cx.budget().remaining_ms(),
             })?;
 
-        self.total_budget_consumed_ms += cost;
-        self.sequence_counter += 1;
+        self.total_budget_consumed_ms = self.total_budget_consumed_ms.saturating_add(cost);
+        self.sequence_counter = self.sequence_counter.saturating_add(1);
         let seq = self.sequence_counter;
 
         self.effect_log.push(CxThreadedEvent {
@@ -396,7 +396,9 @@ impl ExecutionCell {
                 remaining_ms: cx.budget().remaining_ms(),
             })?;
 
-        self.total_budget_consumed_ms += CELL_TRANSITION_BUDGET_MS;
+        self.total_budget_consumed_ms = self
+            .total_budget_consumed_ms
+            .saturating_add(CELL_TRANSITION_BUDGET_MS);
 
         self.region
             .cancel(reason)

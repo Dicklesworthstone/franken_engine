@@ -398,15 +398,27 @@ impl ContainmentExecutor {
                 ext.sandbox_policy = Some(context.sandbox_policy.clone());
             }
             ContainmentAction::Quarantine => {
+                // Build a content-addressed forensic snapshot from actual
+                // extension state rather than a synthetic placeholder.
+                let receipt_count = ext.receipts.len() as u64;
+                let mut mem_preimage = Vec::new();
+                mem_preimage.extend_from_slice(extension_id.as_bytes());
+                mem_preimage.extend_from_slice(&receipt_count.to_be_bytes());
+                mem_preimage.extend_from_slice(&context.timestamp_ns.to_be_bytes());
+                mem_preimage.extend_from_slice(context.decision_id.as_bytes());
+                for r in &ext.receipts {
+                    mem_preimage.extend_from_slice(r.receipt_id.as_bytes());
+                }
+                let mut manifest_preimage = Vec::new();
+                manifest_preimage.extend_from_slice(extension_id.as_bytes());
+                manifest_preimage
+                    .extend_from_slice(context.epoch.as_u64().to_be_bytes().as_slice());
+                manifest_preimage.extend_from_slice(&receipt_count.to_be_bytes());
                 ext.forensic_snapshot = Some(ForensicSnapshot {
-                    memory_hash: ContentHash::compute(
-                        format!("mem-snapshot-{}", extension_id).as_bytes(),
-                    ),
-                    hostcall_count: ext.receipts.len() as u64,
+                    memory_hash: ContentHash::compute(&mem_preimage),
+                    hostcall_count: receipt_count,
                     snapshot_ns: context.timestamp_ns,
-                    manifest_hash: ContentHash::compute(
-                        format!("manifest-{}", extension_id).as_bytes(),
-                    ),
+                    manifest_hash: ContentHash::compute(&manifest_preimage),
                 });
             }
             _ => {}
@@ -416,7 +428,7 @@ impl ContainmentExecutor {
 
         // Build receipt.
         let receipt_id = format!("cr-{:08x}", self.next_receipt_id);
-        self.next_receipt_id += 1;
+        self.next_receipt_id = self.next_receipt_id.saturating_add(1);
 
         let mut receipt = ContainmentReceipt {
             receipt_id,
@@ -520,7 +532,7 @@ impl ContainmentExecutor {
         ext.state = resume_target;
 
         let receipt_id = format!("cr-{:08x}", self.next_receipt_id);
-        self.next_receipt_id += 1;
+        self.next_receipt_id = self.next_receipt_id.saturating_add(1);
 
         let mut receipt = ContainmentReceipt {
             receipt_id,

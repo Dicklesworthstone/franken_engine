@@ -332,7 +332,7 @@ impl MonitorScheduler {
     /// 4. Greedily schedules probes until budget exhausted.
     /// 5. Returns the schedule.
     pub fn schedule(&mut self, regime: Regime) -> ScheduleResult {
-        self.interval += 1;
+        self.interval = self.interval.saturating_add(1);
 
         // Step 1: Increment staleness.
         for probe in self.probes.values_mut() {

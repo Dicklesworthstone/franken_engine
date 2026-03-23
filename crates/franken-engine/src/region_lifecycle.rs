@@ -224,7 +224,17 @@ impl Region {
     }
 
     /// Register an obligation that must resolve before finalize.
-    pub fn register_obligation(&mut self, id: impl Into<String>, description: impl Into<String>) {
+    ///
+    /// Returns `false` if the region is no longer in `Running` state (cancel
+    /// was already requested). Callers must not queue new work after cancel.
+    pub fn register_obligation(
+        &mut self,
+        id: impl Into<String>,
+        description: impl Into<String>,
+    ) -> bool {
+        if self.state != RegionState::Running {
+            return false;
+        }
         let id = id.into();
         self.obligations.insert(
             id.clone(),
@@ -234,6 +244,7 @@ impl Region {
                 status: ObligationStatus::Pending,
             },
         );
+        true
     }
 
     /// Resolve an obligation as committed.

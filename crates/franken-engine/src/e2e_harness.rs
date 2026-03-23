@@ -694,7 +694,7 @@ pub fn evaluate_replay_performance(
 fn digest_harness_event(event: &HarnessEvent) -> String {
     match serde_json::to_vec(event) {
         Ok(bytes) => digest_hex(&bytes),
-        Err(_) => "digest-error".to_string(),
+        Err(e) => format!("digest-error-{:016x}", fnv1a64(e.to_string().as_bytes())),
     }
 }
 
@@ -1190,10 +1190,16 @@ impl RunReport {
             .events
             .iter()
             .find_map(|event| event.error_code.clone());
+        // A run passes only when there are no error codes AND no events
+        // with an error/failure outcome.
+        let has_error_outcome = result
+            .events
+            .iter()
+            .any(|event| event.outcome == "error" || event.outcome == "failure");
         Self {
             fixture_id: result.fixture_id.clone(),
             run_id: result.run_id.clone(),
-            pass: first_error_code.is_none(),
+            pass: first_error_code.is_none() && !has_error_outcome,
             event_count: result.events.len(),
             output_digest: result.output_digest.clone(),
             first_error_code,
@@ -2083,7 +2089,7 @@ fn digest_run(
         events,
     }) {
         Ok(bytes) => digest_hex(&bytes),
-        Err(_) => "digest-error".to_string(),
+        Err(e) => format!("digest-error-{:016x}", fnv1a64(e.to_string().as_bytes())),
     }
 }
 

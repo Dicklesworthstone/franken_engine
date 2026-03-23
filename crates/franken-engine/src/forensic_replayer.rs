@@ -87,18 +87,53 @@ pub struct IncidentTrace {
 }
 
 impl IncidentTrace {
-    /// Compute content hash of the trace.
+    /// Compute content hash of the trace covering all metadata and log fields.
     pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::with_capacity(1024);
         buf.extend_from_slice(TRACE_SCHEMA_DEF);
         buf.extend_from_slice(self.metadata.trace_id.as_bytes());
         buf.extend_from_slice(self.metadata.extension_id.as_bytes());
+        buf.extend_from_slice(&self.metadata.start_epoch.as_u64().to_le_bytes());
         buf.extend_from_slice(&self.metadata.start_timestamp_ns.to_le_bytes());
         buf.extend_from_slice(&self.metadata.end_timestamp_ns.to_le_bytes());
+        buf.extend_from_slice(self.metadata.loss_matrix_id.as_bytes());
+        // Annotations are BTreeMap so iteration is deterministic.
+        for (k, v) in &self.metadata.annotations {
+            buf.extend_from_slice(k.as_bytes());
+            buf.extend_from_slice(v.as_bytes());
+        }
+        // Hash log contents (not just lengths) so evidence tampering is detected.
         buf.extend_from_slice(&(self.telemetry_log.len() as u64).to_le_bytes());
+        for entry in &self.telemetry_log {
+            if let Ok(bytes) = serde_json::to_vec(entry) {
+                buf.extend_from_slice(&bytes);
+            }
+        }
         buf.extend_from_slice(&(self.evidence_log.len() as u64).to_le_bytes());
+        for entry in &self.evidence_log {
+            if let Ok(bytes) = serde_json::to_vec(entry) {
+                buf.extend_from_slice(&bytes);
+            }
+        }
         buf.extend_from_slice(&(self.decision_log.len() as u64).to_le_bytes());
+        for entry in &self.decision_log {
+            if let Ok(bytes) = serde_json::to_vec(entry) {
+                buf.extend_from_slice(&bytes);
+            }
+        }
         buf.extend_from_slice(&(self.containment_log.len() as u64).to_le_bytes());
+        for entry in &self.containment_log {
+            if let Ok(bytes) = serde_json::to_vec(entry) {
+                buf.extend_from_slice(&bytes);
+            }
+        }
+        buf.extend_from_slice(&(self.posterior_history.len() as u64).to_le_bytes());
+        for entry in &self.posterior_history {
+            if let Ok(bytes) = serde_json::to_vec(entry) {
+                buf.extend_from_slice(&bytes);
+            }
+        }
+        buf.extend_from_slice(self.loss_matrix.content_hash().as_bytes());
         ContentHash::compute(&buf)
     }
 }
@@ -829,8 +864,9 @@ impl ForensicReplayer {
         let mut inject_idx = 0;
 
         for (i, ev) in original.iter().enumerate() {
-            // Insert any injections that should come before this index.
-            while inject_idx < sorted_inject.len() && sorted_inject[inject_idx].0 <= i {
+            // Insert any injections that should come at this index (before the
+            // original element at position i).
+            while inject_idx < sorted_inject.len() && sorted_inject[inject_idx].0 < i {
                 result.push(sorted_inject[inject_idx].1.clone());
                 inject_idx += 1;
             }

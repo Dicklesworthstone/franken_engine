@@ -203,13 +203,29 @@ impl HookManifest {
     }
 
     /// Derive a content-addressed ID for this manifest.
+    /// Includes all slot kinds and dependency tokens for collision resistance.
     pub fn derive_id(&self) -> EngineObjectId {
-        let canonical = format!(
+        let mut canonical = format!(
             "hook_manifest:{}:v{}:slots={}",
             self.component_name,
             self.version,
             self.slots.len()
         );
+        for slot in &self.slots {
+            canonical.push_str(&format!(
+                "|s{}:{:?}:{}",
+                slot.index.0,
+                slot.kind,
+                slot.deps
+                    .as_ref()
+                    .map(|d| d
+                        .iter()
+                        .map(|t| t.0.to_string())
+                        .collect::<Vec<_>>()
+                        .join(","))
+                    .unwrap_or_default()
+            ));
+        }
         derive_id(
             ObjectDomain::EvidenceRecord,
             "hook-effect",

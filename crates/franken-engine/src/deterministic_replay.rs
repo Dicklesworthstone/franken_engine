@@ -119,7 +119,7 @@ impl NondeterminismTrace {
         component: impl Into<String>,
     ) -> u64 {
         let seq = self.next_sequence;
-        self.next_sequence += 1;
+        self.next_sequence = self.next_sequence.saturating_add(1);
         self.events.push(TraceEvent {
             sequence: seq,
             source,
@@ -537,10 +537,10 @@ impl FailoverController {
             success,
         };
 
-        self.next_sequence += 1;
-        self.total_failovers += 1;
+        self.next_sequence = self.next_sequence.saturating_add(1);
+        self.total_failovers = self.total_failovers.saturating_add(1);
         if success {
-            self.successful_failovers += 1;
+            self.successful_failovers = self.successful_failovers.saturating_add(1);
         }
         self.records.push(record.clone());
 
@@ -875,14 +875,12 @@ impl IncidentBundleBuilder {
 // Utility
 // ---------------------------------------------------------------------------
 
-/// Simple deterministic hash (FNV-1a) for content hashing.
+/// Deterministic content hash for incident artifacts.
+///
+/// Uses the collision-resistant hash from `hash_tiers` rather than a
+/// non-cryptographic hash, so incident bundles are tamper-evident.
 fn compute_simple_hash(data: &[u8]) -> String {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for &byte in data {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0100_0000_01b3);
-    }
-    format!("{hash:016x}")
+    hex::encode(crate::hash_tiers::ContentHash::compute(data).as_bytes())
 }
 
 // ---------------------------------------------------------------------------

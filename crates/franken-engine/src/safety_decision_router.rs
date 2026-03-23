@@ -224,6 +224,12 @@ pub enum SafetyRouterError {
         index: usize,
         max: usize,
     },
+    /// Observation state index is out of bounds for the contract's state space.
+    InvalidStateIndex {
+        action: SafetyAction,
+        index: usize,
+        state_space_len: usize,
+    },
 }
 
 impl fmt::Display for SafetyRouterError {
@@ -242,6 +248,16 @@ impl fmt::Display for SafetyRouterError {
             }
             Self::InvalidActionIndex { action, index, max } => {
                 write!(f, "invalid action index {index} (max {max}) for {action}")
+            }
+            Self::InvalidStateIndex {
+                action,
+                index,
+                state_space_len,
+            } => {
+                write!(
+                    f,
+                    "invalid state index {index} (state space len {state_space_len}) for {action}"
+                )
             }
         }
     }
@@ -556,15 +572,19 @@ impl SafetyDecisionRouter {
         );
 
         // Track stats.
-        self.decision_count += 1;
+        self.decision_count = self.decision_count.saturating_add(1);
         match &verdict {
-            SafetyVerdict::Deny { .. } => self.deny_count += 1,
-            SafetyVerdict::Fallback { .. } => self.fallback_count += 1,
+            SafetyVerdict::Deny { .. } => {
+                self.deny_count = self.deny_count.saturating_add(1);
+            }
+            SafetyVerdict::Fallback { .. } => {
+                self.fallback_count = self.fallback_count.saturating_add(1);
+            }
             SafetyVerdict::Allow => {}
         }
 
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let expected_loss_milli = (outcome.expected_loss * 1_000.0) as u64;
+        #[allow(clippy::cast_possible_truncation)]
+        let expected_loss_milli = (outcome.expected_loss.max(0.0) * 1_000.0) as u64;
 
         let result = SafetyDecisionResult {
             action: request.action,
@@ -594,10 +614,18 @@ impl SafetyDecisionRouter {
             .contracts
             .get(&action)
             .ok_or(SafetyRouterError::NoContract { action })?;
+        let state_space_len = contract.state_space().len();
+        if state_index >= state_space_len {
+            return Err(SafetyRouterError::InvalidStateIndex {
+                action,
+                index: state_index,
+                state_space_len,
+            });
+        }
         let posterior = self
             .posteriors
             .entry(action)
-            .or_insert_with(|| Posterior::uniform(contract.state_space().len()));
+            .or_insert_with(|| Posterior::uniform(state_space_len));
         contract.update_posterior(posterior, state_index);
         Ok(())
     }
@@ -706,7 +734,7 @@ impl SafetyDecisionRouter {
         outcome: &str,
         error_code: Option<&str>,
     ) {
-        self.seq += 1;
+        self.seq = self.seq.saturating_add(1);
         self.events.push(SafetyDecisionEvent {
             seq: self.seq,
             trace_id: trace_id.to_string(),

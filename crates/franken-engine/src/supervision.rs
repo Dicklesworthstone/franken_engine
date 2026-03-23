@@ -353,7 +353,7 @@ impl Supervisor {
                     }
                 } else {
                     // Budget available — restart
-                    entry.restart_count += 1;
+                    entry.restart_count = entry.restart_count.saturating_add(1);
                     entry.restart_timestamps.push(now);
                     entry.state = ServiceState::Restarting;
 

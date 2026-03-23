@@ -289,7 +289,7 @@ impl GuardplaneCalibrationEngine {
             return Err(CalibrationError::EmptyCampaignBatch);
         }
 
-        self.cycle_count += 1;
+        self.cycle_count = self.cycle_count.saturating_add(1);
         let cycle_id = format!("gcal-{:04}", self.cycle_count);
 
         // 1. Classify and count outcomes

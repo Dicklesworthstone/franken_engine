@@ -264,6 +264,10 @@ impl RevocationEvent {
             CanonicalValue::U64(rev.issued_at.0),
         );
         map.insert("zone".to_string(), CanonicalValue::String(rev.zone.clone()));
+        let mut sig_bytes = Vec::with_capacity(64);
+        sig_bytes.extend_from_slice(&rev.signature.lower);
+        sig_bytes.extend_from_slice(&rev.signature.upper);
+        map.insert("signature".to_string(), CanonicalValue::Bytes(sig_bytes));
         deterministic_serde::encode_value(&CanonicalValue::Map(map))
     }
 
@@ -761,7 +765,7 @@ impl RevocationChain {
                 });
             }
             // Verify head seq matches last event.
-            let last_seq = self.events.len() as u64 - 1;
+            let last_seq = (self.events.len() as u64).saturating_sub(1);
             if head.head_seq != last_seq {
                 return Err(ChainError::ChainIntegrity {
                     detail: format!(
@@ -908,7 +912,7 @@ impl RevocationChain {
                     detail: "empty chain must not have a head".to_string(),
                 });
             }
-            let last_seq = events.len() as u64 - 1;
+            let last_seq = (events.len() as u64).saturating_sub(1);
             if h.head_seq != last_seq {
                 return Err(ChainError::ChainIntegrity {
                     detail: format!(

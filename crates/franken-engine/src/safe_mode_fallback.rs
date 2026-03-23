@@ -174,7 +174,7 @@ impl EvidenceRingBuffer {
             self.entries[self.write_pos] = entry;
         }
         self.write_pos = (self.write_pos + 1) % self.capacity;
-        self.total_written += 1;
+        self.total_written = self.total_written.saturating_add(1);
     }
 
     /// Number of entries currently stored.
@@ -1154,12 +1154,14 @@ impl AttestationFallbackManager {
                     AttestationFallbackState::Restoring,
                     "attestation_restored",
                 )?;
-                self.recovery_backlog = std::mem::take(&mut self.pending_decisions);
+                // Transition to Normal BEFORE moving pending_decisions so that
+                // on failure the pending_decisions buffer remains intact.
                 self.transition_state(
                     request,
                     AttestationFallbackState::Normal,
                     "attestation_recovery_complete",
                 )?;
+                self.recovery_backlog = std::mem::take(&mut self.pending_decisions);
                 self.degraded_since_ns = None;
                 self.operator_review_required = false;
                 self.emit_event(

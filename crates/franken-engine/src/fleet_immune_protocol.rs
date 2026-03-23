@@ -939,6 +939,10 @@ impl FleetProtocolState {
         let mut quorum_sigs = BTreeMap::new();
         quorum_sigs.insert(self.local_node_id.clone(), local_signature);
 
+        // Clear resolved pending intents to prevent duplicate containment
+        // decisions in subsequent checkpoints.
+        self.pending_intents.clear();
+
         Ok(QuorumCheckpoint {
             checkpoint_seq: self.last_checkpoint_seq,
             epoch: self.current_epoch,

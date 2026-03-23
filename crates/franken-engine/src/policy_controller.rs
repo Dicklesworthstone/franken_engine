@@ -321,7 +321,7 @@ impl PolicyController {
         _epoch: SecurityEpoch,
         _trace_id: &str,
     ) -> Result<ActionSelection, PolicyControllerError> {
-        self.decision_count += 1;
+        self.decision_count = self.decision_count.saturating_add(1);
         let decision_id = format!("{}-{:06}", self.config.controller_id, self.decision_count);
 
         // Compute expected loss for each action.

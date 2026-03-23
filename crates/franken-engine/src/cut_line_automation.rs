@@ -643,14 +643,19 @@ pub struct PromotionRecord {
 }
 
 impl PromotionRecord {
-    /// Compute the content hash from the record's deterministic fields.
+    /// Compute the content hash from all record fields.
+    #[allow(clippy::too_many_arguments)]
     fn compute_hash(
         cut_line: CutLine,
         verdict: &GateVerdict,
+        risk_level: &RiskLevel,
         evaluations: &[GateEvaluation],
         epoch: &SecurityEpoch,
         timestamp_ns: u64,
         zone: &str,
+        rationale: &str,
+        metadata: &BTreeMap<String, String>,
+        predecessor_hash: &Option<ContentHash>,
     ) -> ContentHash {
         let mut canonical = Vec::new();
         canonical.extend_from_slice(b"cut-line-promotion-record|");
@@ -658,15 +663,39 @@ impl PromotionRecord {
         canonical.push(b'|');
         canonical.extend_from_slice(format!("{verdict}").as_bytes());
         canonical.push(b'|');
+        canonical.extend_from_slice(format!("{risk_level}").as_bytes());
+        canonical.push(b'|');
         canonical.extend_from_slice(&epoch.as_u64().to_be_bytes());
         canonical.push(b'|');
         canonical.extend_from_slice(&timestamp_ns.to_be_bytes());
         canonical.push(b'|');
         canonical.extend_from_slice(zone.as_bytes());
         canonical.push(b'|');
-        for eval in evaluations {
+        canonical.extend_from_slice(rationale.as_bytes());
+        canonical.push(b'|');
+        // Metadata is BTreeMap so iteration is deterministic.
+        for (k, v) in metadata {
+            canonical.extend_from_slice(k.as_bytes());
+            canonical.push(b'=');
+            canonical.extend_from_slice(v.as_bytes());
+            canonical.push(b';');
+        }
+        canonical.push(b'|');
+        if let Some(pred) = predecessor_hash {
+            canonical.extend_from_slice(pred.as_bytes());
+        }
+        canonical.push(b'|');
+        // Sort evaluations by category for insertion-order independence.
+        let mut sorted_evals: Vec<_> = evaluations.iter().collect();
+        sorted_evals.sort_by(|a, b| a.category.as_str().cmp(b.category.as_str()));
+        for eval in &sorted_evals {
             canonical.extend_from_slice(eval.category.as_str().as_bytes());
+            canonical.push(if eval.mandatory { b'M' } else { b'm' });
             canonical.push(if eval.passed { b'1' } else { b'0' });
+            if let Some(score) = eval.score_millionths {
+                canonical.extend_from_slice(&score.to_le_bytes());
+            }
+            canonical.extend_from_slice(format!("{}", eval.input_validity).as_bytes());
         }
         ContentHash::compute(&canonical)
     }
@@ -1401,13 +1430,19 @@ impl CutLineEvaluator {
             let risk_level = RiskLevel::Critical;
             let rationale =
                 Self::build_rationale(input.cut_line, &verdict, std::slice::from_ref(&eval));
+            let metadata = BTreeMap::new();
+            let predecessor_hash = None;
             let record_hash = PromotionRecord::compute_hash(
                 input.cut_line,
                 &verdict,
+                &risk_level,
                 std::slice::from_ref(&eval),
                 &input.epoch,
                 input.now_ns,
                 &input.zone,
+                &rationale,
+                &metadata,
+                &predecessor_hash,
             );
 
             let record = PromotionRecord {
@@ -1420,8 +1455,8 @@ impl CutLineEvaluator {
                 timestamp_ns: input.now_ns,
                 zone: input.zone,
                 rationale,
-                metadata: BTreeMap::new(),
-                predecessor_hash: None,
+                metadata,
+                predecessor_hash,
             };
 
             self.history.push(record.clone());
@@ -1444,13 +1479,18 @@ impl CutLineEvaluator {
             .predecessor()
             .and_then(|p| self.promoted.get(&p).cloned());
 
+        let metadata = BTreeMap::new();
         let record_hash = PromotionRecord::compute_hash(
             input.cut_line,
             &verdict,
+            &risk_level,
             &evaluations,
             &input.epoch,
             input.now_ns,
             &input.zone,
+            &rationale,
+            &metadata,
+            &predecessor_hash,
         );
 
         let record = PromotionRecord {
@@ -1463,7 +1503,7 @@ impl CutLineEvaluator {
             timestamp_ns: input.now_ns,
             zone: input.zone,
             rationale,
-            metadata: BTreeMap::new(),
+            metadata,
             predecessor_hash,
         };
 

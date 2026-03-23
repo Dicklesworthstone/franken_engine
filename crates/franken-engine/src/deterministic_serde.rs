@@ -349,9 +349,15 @@ fn decode_at(
 }
 
 fn need_bytes(data: &[u8], offset: usize, count: usize) -> Result<(), SerdeError> {
-    if offset + count > data.len() {
+    let end = offset
+        .checked_add(count)
+        .ok_or(SerdeError::BufferTooShort {
+            expected: usize::MAX,
+            actual: data.len(),
+        })?;
+    if end > data.len() {
         return Err(SerdeError::BufferTooShort {
-            expected: offset + count,
+            expected: end,
             actual: data.len(),
         });
     }

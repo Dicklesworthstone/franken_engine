@@ -297,15 +297,33 @@ pub struct TraceRecord {
 
 impl TraceRecord {
     /// Compute the content hash of this trace for content-addressing.
+    /// Covers all semantically meaningful fields including recording mode,
+    /// extensions, policy versions, incident_id, and metadata.
     pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::new();
         buf.extend_from_slice(self.trace_id.as_bytes());
+        buf.extend_from_slice(format!("{:?}", self.recording_mode).as_bytes());
         buf.extend_from_slice(self.nondeterminism_hash.as_bytes());
         buf.extend_from_slice(self.chain_hash.as_bytes());
         buf.extend_from_slice(&self.start_epoch.as_u64().to_be_bytes());
         buf.extend_from_slice(&self.end_epoch.as_u64().to_be_bytes());
         buf.extend_from_slice(&self.start_tick.to_be_bytes());
         buf.extend_from_slice(&self.end_tick.to_be_bytes());
+        // BTreeSet/BTreeMap iteration is deterministic.
+        for ext in &self.extensions {
+            buf.extend_from_slice(ext.as_bytes());
+        }
+        for (k, v) in &self.policy_versions {
+            buf.extend_from_slice(k.as_bytes());
+            buf.extend_from_slice(&v.to_be_bytes());
+        }
+        if let Some(id) = &self.incident_id {
+            buf.extend_from_slice(id.as_bytes());
+        }
+        for (k, v) in &self.metadata {
+            buf.extend_from_slice(k.as_bytes());
+            buf.extend_from_slice(v.as_bytes());
+        }
         ContentHash::compute(&buf)
     }
 

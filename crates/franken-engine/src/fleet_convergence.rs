@@ -927,7 +927,7 @@ impl ConvergenceEngine {
                 "checkpoint_seq".into(),
                 checkpoint.checkpoint_seq.to_string(),
             );
-            fields.insert("local_hash".into(), format!("{:?}", local_hash.as_bytes()));
+            fields.insert("local_hash".into(), local_hash.to_hex());
             self.emit_event(
                 ConvergenceEventType::ConvergenceDiverged,
                 timestamp_ns,

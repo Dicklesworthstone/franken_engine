@@ -88,6 +88,12 @@ pub struct IbltCell {
     pub checksum_xor: u32,
 }
 
+impl IbltCell {
+    fn is_zero(&self) -> bool {
+        self.count == 0 && self.key_hash_xor == [0u8; 32] && self.checksum_xor == 0
+    }
+}
+
 /// Invertible Bloom Lookup Table for set-difference computation.
 ///
 /// Uses `k` hash functions to map each element to `k` cells.
@@ -193,14 +199,14 @@ impl Iblt {
         }
 
         // Verify all cells are empty.
-        let all_empty = work.cells.iter().all(|c| c.count == 0);
+        let all_empty = work.cells.iter().all(IbltCell::is_zero);
         if all_empty {
             positive.sort();
             negative.sort();
             Ok((positive, negative))
         } else {
             Err(ReconcileError::PeelFailed {
-                remaining_cells: work.cells.iter().filter(|c| c.count != 0).count(),
+                remaining_cells: work.cells.iter().filter(|c| !c.is_zero()).count(),
             })
         }
     }

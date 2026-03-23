@@ -20,7 +20,7 @@ The pack is evidence-first:
 ## Contract Version
 
 - `schema_version`: `franken-engine.rgc-cli-operator-workflow-verification-pack.v1`
-- `contract_version`: `1.0.0`
+- `contract_version`: `1.1.0`
 - `policy_id`: `policy-rgc-cli-operator-workflow-verification-pack-v1`
 
 ## Workflow Stages
@@ -89,19 +89,24 @@ operations (`rch` only, no local fallback).
 
 ## Required Artifacts
 
-Each run emits:
+Each gate run emits:
 
 - `run_manifest.json`
+- `trace_ids.json`
 - `events.jsonl`
 - `commands.txt`
-- `support_bundle/preflight_report.json` (from verified CLI workflow)
-- `support_bundle/onboarding_scorecard.json` (from verified CLI workflow)
+- `step_logs/step_*.log`
 
 under `artifacts/rgc_cli_operator_workflow_verification_pack/<UTC_TIMESTAMP>/`.
 
+The verified CLI workflow under test emits:
+
+- `support_bundle/preflight_report.json`
+- `support_bundle/onboarding_scorecard.json`
+
 The replay wrapper resolves the latest complete artifact bundle, warns when a
-newer run directory is incomplete, and prints the selected manifest, events,
-commands, and first step log for operator replay and triage.
+newer run directory is incomplete, and prints the selected manifest, trace IDs,
+events, commands, and first step log for operator replay and triage.
 
 ## Operator Verification
 
@@ -113,4 +118,6 @@ rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_rgc_cli_operator_workflow_verif
 
 ./scripts/run_rgc_cli_operator_workflow_verification_pack.sh ci
 ./scripts/e2e/rgc_cli_operator_workflow_verification_pack_replay.sh ci
+cat artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/trace_ids.json
+cat artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/step_logs/step_000.log
 ```

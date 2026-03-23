@@ -1777,8 +1777,10 @@ Contract and vectors:
 Artifacts are written under:
 
 - `artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/run_manifest.json`
+- `artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/trace_ids.json`
 - `artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/events.jsonl`
 - `artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/commands.txt`
+- `artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/step_logs/step_*.log`
 
 ## RGC Cross-Platform Matrix Gate
 

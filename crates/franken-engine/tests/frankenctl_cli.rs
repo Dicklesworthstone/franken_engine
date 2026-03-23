@@ -1625,12 +1625,17 @@ fn frankenctl_verify_missing_subcommand_fails() {
 
 #[test]
 fn frankenctl_verify_compile_artifact_nonexistent_file_fails() {
+    let artifact_path = temp_path("frankenctl_verify_compile_artifact_missing_input", "json");
+    let _ = fs::remove_file(&artifact_path);
+
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([
             "verify",
             "compile-artifact",
             "--input",
-            "/tmp/nonexistent_artifact_99999.json",
+            artifact_path
+                .to_str()
+                .expect("artifact path should be valid utf8"),
         ])
         .output()
         .expect("verify nonexistent file should execute");
@@ -1638,6 +1643,8 @@ fn frankenctl_verify_compile_artifact_nonexistent_file_fails() {
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
     assert!(stderr.contains("[frankenctl"));
+
+    let _ = fs::remove_file(artifact_path);
 }
 
 #[test]
@@ -1671,12 +1678,15 @@ fn frankenctl_verify_receipt_missing_receipt_id_fails_with_parse_remediation() {
 
 #[test]
 fn frankenctl_verify_receipt_nonexistent_file_fails_with_runtime_remediation() {
+    let input_path = temp_path("frankenctl_verify_receipt_missing_input", "json");
+    let _ = fs::remove_file(&input_path);
+
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([
             "verify",
             "receipt",
             "--input",
-            "/tmp/nonexistent_receipt_verifier_99999.json",
+            input_path.to_str().expect("path should be utf8"),
             "--receipt-id",
             "rcpt-1",
         ])
@@ -1699,6 +1709,8 @@ fn frankenctl_verify_receipt_nonexistent_file_fails_with_runtime_remediation() {
         ),
         "stderr should include runtime remediation, got: {stderr}"
     );
+
+    let _ = fs::remove_file(input_path);
 }
 
 #[test]
@@ -2714,23 +2726,160 @@ fn frankenctl_replay_unfinished_trace_fails_closed() {
 
 #[test]
 fn frankenctl_benchmark_verify_missing_bundle_dir_fails() {
+    let bundle_dir = temp_path("frankenctl_benchmark_verify_missing_bundle_dir", "bundle");
+    let missing_results_path = bundle_dir.join("results.json");
+
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([
             "benchmark",
             "verify",
             "--bundle",
-            "/tmp/nonexistent_bundle_dir_99999",
+            bundle_dir
+                .to_str()
+                .expect("bundle dir path should be valid utf8"),
         ])
         .output()
         .expect("benchmark verify with missing bundle should execute");
 
-    assert!(
-        !output.status.success(),
+    assert_eq!(
+        output.status.code(),
+        Some(2),
         "benchmark verify should fail for missing bundle dir"
     );
     let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
     assert!(
-        stderr.contains("[frankenctl"),
-        "error output should include frankenctl trace prefix: {stderr}"
+        stderr.contains("[frankenctl trace_id=frankenctl-"),
+        "stderr should include trace id, got: {stderr}"
     );
+    assert!(
+        stderr.contains("command=benchmark"),
+        "stderr should include benchmark command label, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("benchmark verify requires --bundle <dir> containing"),
+        "stderr should preserve missing-bundle failure, got: {stderr}"
+    );
+    assert!(
+        stderr.contains(
+            missing_results_path
+                .to_str()
+                .expect("missing results path should be valid utf8")
+        ),
+        "stderr should name the missing results path, got: {stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "remediation: Validate benchmark subcommand args (run|score|verify), then rerun `frankenctl benchmark ...`."
+        ),
+        "stderr should include runtime remediation, got: {stderr}"
+    );
+}
+
+#[test]
+fn frankenctl_benchmark_verify_missing_bundle_flag_fails_with_parse_remediation() {
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args(["benchmark", "verify", "--summary"])
+        .output()
+        .expect("benchmark verify parse failure should execute");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    assert!(
+        stderr.contains("[frankenctl trace_id=frankenctl-"),
+        "stderr should include trace id, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("command=parse"),
+        "stderr should include parse command label, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("benchmark verify requires --bundle <dir>"),
+        "stderr should preserve parse failure, got: {stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "remediation: Run `frankenctl --help` for full command usage and required arguments."
+        ),
+        "stderr should include parse remediation, got: {stderr}"
+    );
+}
+
+#[test]
+fn frankenctl_benchmark_verify_unknown_flag_fails_with_parse_remediation() {
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "benchmark",
+            "verify",
+            "--bundle",
+            "/tmp/frankenctl-benchmark-verify",
+            "--bogus",
+        ])
+        .output()
+        .expect("benchmark verify unknown flag should execute");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    assert!(
+        stderr.contains("[frankenctl trace_id=frankenctl-"),
+        "stderr should include trace id, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("command=parse"),
+        "stderr should include parse command label, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("unknown benchmark verify flag `--bogus`"),
+        "stderr should preserve parse failure, got: {stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "remediation: Run `frankenctl --help` for full command usage and required arguments."
+        ),
+        "stderr should include parse remediation, got: {stderr}"
+    );
+}
+
+#[test]
+fn frankenctl_benchmark_verify_incomplete_bundle_fails_with_runtime_remediation() {
+    let bundle_dir = temp_dir("frankenctl_benchmark_verify_incomplete_bundle");
+    fs::write(bundle_dir.join("env.json"), "{}\n").expect("env.json should write");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "benchmark",
+            "verify",
+            "--bundle",
+            bundle_dir
+                .to_str()
+                .expect("bundle dir path should be valid utf8"),
+        ])
+        .output()
+        .expect("benchmark verify incomplete bundle should execute");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    assert!(
+        stderr.contains("[frankenctl trace_id=frankenctl-"),
+        "stderr should include trace id, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("command=benchmark"),
+        "stderr should include benchmark command label, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("benchmark verify requires --bundle <dir> containing"),
+        "stderr should preserve incomplete-bundle failure, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("results.json"),
+        "stderr should identify the missing required bundle artifact, got: {stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "remediation: Validate benchmark subcommand args (run|score|verify), then rerun `frankenctl benchmark ...`."
+        ),
+        "stderr should include runtime remediation, got: {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(bundle_dir);
 }

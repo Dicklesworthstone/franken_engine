@@ -129,6 +129,8 @@ fn parser_operator_runbook_doc_has_required_sections() {
         "./scripts/run_parser_operator_developer_runbook.sh ci",
         "./scripts/e2e/parser_operator_developer_runbook_replay.sh drill",
         "latest complete directory",
+        "without rerunning the lane",
+        "PARSER_OPERATOR_DEVELOPER_RUNBOOK_REPLAY_RUN_DIR",
     ] {
         assert!(
             doc.contains(section),
@@ -648,10 +650,17 @@ fn parser_operator_runbook_replay_wrapper_surfaces_latest_complete_bundle() {
     let replay_script = load_replay_script();
     for marker in [
         "artifact_root=",
+        "run_dir_is_complete()",
         "latest_artifact_dir()",
         "latest_complete_run_dir()",
         "missing_bundle_exit_code()",
+        "warn_about_failed_gate_replay_source()",
+        "if [[ -z \"${explicit_run_dir}\" ]]; then",
+        "PARSER_OPERATOR_DEVELOPER_RUNBOOK_REPLAY_RUN_DIR",
+        "explicit run directory is incomplete",
         "newest directory ${latest_artifact_dir_path} is incomplete",
+        "replay output reflects latest complete run directory",
+        "replay output reflects current run directory",
         "[parser-operator-runbook] latest manifest:",
         "[parser-operator-runbook] latest events:",
         "[parser-operator-runbook] latest commands:",

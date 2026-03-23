@@ -108,11 +108,27 @@ One-command replay wrapper:
 ./scripts/e2e/parser_operator_developer_runbook_replay.sh drill
 ```
 
-The replay wrapper reruns the selected lane and then prints the latest complete
+By default, the replay wrapper reruns the selected lane and then prints the latest complete
 artifact bundle (`run_manifest.json`, `events.jsonl`, `commands.txt`, and
 `step_logs/step_000.log`). If the newest artifact directory is incomplete, it
 warns and falls back to the latest complete directory; if no complete bundle
 exists, it fails non-zero instead of presenting a partial run as trustworthy.
+If the rerun itself fails, the wrapper explicitly states whether the printed
+bundle came from the current failed invocation or from an older complete
+directory, so operators do not mistake stale evidence for the failed run's
+output.
+
+To replay a specific preserved bundle without rerunning the lane, point the
+wrapper at an exact complete run directory:
+
+```bash
+PARSER_OPERATOR_DEVELOPER_RUNBOOK_REPLAY_RUN_DIR=artifacts/parser_operator_developer_runbook/<timestamp> \
+./scripts/e2e/parser_operator_developer_runbook_replay.sh ci
+```
+
+The explicit run directory must already contain a complete bundle
+(`run_manifest.json`, `events.jsonl`, `commands.txt`, and
+`step_logs/step_000.log`) or the wrapper fails closed.
 
 ## Escalation And Rollback Posture
 

@@ -17,6 +17,8 @@ run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/run_manifest.json"
 events_path="${run_dir}/events.jsonl"
 commands_path="${run_dir}/commands.txt"
+trace_ids_path="${run_dir}/trace_ids.json"
+step_logs_dir="${run_dir}/step_logs"
 
 trace_id="trace-rgc-cli-operator-workflow-verification-pack-${timestamp}"
 decision_id="decision-rgc-cli-operator-workflow-verification-pack-${timestamp}"
@@ -25,7 +27,7 @@ component="rgc_cli_operator_workflow_verification_pack_gate"
 scenario_id="rgc-061"
 replay_command="./scripts/e2e/rgc_cli_operator_workflow_verification_pack_replay.sh ${mode}"
 
-mkdir -p "$run_dir"
+mkdir -p "$run_dir" "$step_logs_dir"
 
 if ! command -v rch >/dev/null 2>&1; then
   echo "rch is required for RGC CLI/operator workflow verification pack heavy commands" >&2
@@ -85,7 +87,7 @@ step_log_index=0
 
 run_step() {
   local command_text="$1"
-  local step_log_path="${run_dir}/step_$(printf '%03d' "$step_log_index").log"
+  local step_log_path="${step_logs_dir}/step_$(printf '%03d' "$step_log_index").log"
   local status remote_exit_code
   step_log_index=$((step_log_index + 1))
   shift
@@ -163,6 +165,34 @@ run_mode() {
   esac
 }
 
+write_trace_ids() {
+  jq -n \
+    --arg trace_id "$trace_id" \
+    --arg decision_id "$decision_id" \
+    --arg policy_id "$policy_id" \
+    --arg component "$component" \
+    --arg scenario_id "$scenario_id" \
+    --arg manifest_path "$manifest_path" \
+    --arg events_path "$events_path" \
+    --arg commands_path "$commands_path" \
+    --arg first_step_log "${step_logs_dir}/step_000.log" \
+    '{
+      schema_version: "franken-engine.rgc-cli-operator-workflow-verification-pack.trace-ids.v1",
+      bead_id: "bd-1lsy.11.11",
+      component: $component,
+      scenario_id: $scenario_id,
+      trace_ids: [$trace_id],
+      decision_ids: [$decision_id],
+      policy_ids: [$policy_id],
+      artifact_paths: {
+        run_manifest: $manifest_path,
+        events: $events_path,
+        commands: $commands_path,
+        first_step_log: $first_step_log
+      }
+    }' >"$trace_ids_path"
+}
+
 write_manifest() {
   local exit_code="${1:-0}"
   local outcome error_code_json git_commit dirty_worktree idx comma
@@ -228,8 +258,11 @@ write_manifest() {
     echo '  ],'
     echo '  "artifacts": {'
     echo "    \"manifest\": \"${manifest_path}\"," 
+    echo "    \"trace_ids\": \"${trace_ids_path}\","
     echo "    \"events\": \"${events_path}\"," 
     echo "    \"commands\": \"${commands_path}\"," 
+    echo "    \"step_logs\": \"${step_logs_dir}\","
+    echo "    \"first_step_log\": \"${step_logs_dir}/step_000.log\","
     echo '    "contract_doc": "docs/RGC_CLI_OPERATOR_WORKFLOW_VERIFICATION_PACK_V1.md",'
     echo '    "contract_json": "docs/rgc_cli_operator_workflow_verification_pack_v1.json",'
     echo '    "gate_tests": "crates/franken-engine/tests/rgc_cli_operator_workflow_verification_pack.rs",'
@@ -237,8 +270,10 @@ write_manifest() {
     echo '  },'
     echo '  "operator_verification": ['
     echo "    \"cat ${manifest_path}\"," 
+    echo "    \"cat ${trace_ids_path}\","
     echo "    \"cat ${events_path}\"," 
     echo "    \"cat ${commands_path}\"," 
+    echo "    \"cat ${step_logs_dir}/step_000.log\","
     echo '    "jq empty docs/rgc_cli_operator_workflow_verification_pack_v1.json",'
     echo "    \"${replay_command}\""
     echo '  ]'
@@ -246,10 +281,13 @@ write_manifest() {
   } >"$manifest_path"
 
   echo "rgc cli/operator workflow verification pack manifest: ${manifest_path}"
+  echo "rgc cli/operator workflow verification pack trace ids: ${trace_ids_path}"
   echo "rgc cli/operator workflow verification pack events: ${events_path}"
+  echo "rgc cli/operator workflow verification pack first step log: ${step_logs_dir}/step_000.log"
 }
 
 main_exit=0
 run_mode || main_exit=$?
+write_trace_ids
 write_manifest "$main_exit"
 exit "$main_exit"

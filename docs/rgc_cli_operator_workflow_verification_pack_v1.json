@@ -1,6 +1,6 @@
 {
   "schema_version": "franken-engine.rgc-cli-operator-workflow-verification-pack.v1",
-  "contract_version": "1.0.0",
+  "contract_version": "1.1.0",
   "bead_id": "bd-1lsy.11.11",
   "policy_id": "policy-rgc-cli-operator-workflow-verification-pack-v1",
   "workflow_stages": [
@@ -23,10 +23,14 @@
     "outcome",
     "error_code"
   ],
-  "required_artifacts": [
+  "required_gate_artifacts": [
     "run_manifest.json",
+    "trace_ids.json",
     "events.jsonl",
     "commands.txt",
+    "step_logs/step_000.log"
+  ],
+  "verified_workflow_artifacts": [
     "support_bundle/preflight_report.json",
     "support_bundle/onboarding_scorecard.json"
   ],
@@ -58,6 +62,8 @@
     "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_rgc_cli_operator_workflow_verification_pack_verify cargo test -p frankenengine-engine --test rgc_cli_operator_workflow_verification_pack",
     "./scripts/run_rgc_cli_operator_workflow_verification_pack.sh ci",
     "./scripts/e2e/rgc_cli_operator_workflow_verification_pack_replay.sh ci",
+    "cat artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/trace_ids.json",
+    "cat artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/step_logs/step_000.log",
     "jq empty docs/rgc_cli_operator_workflow_verification_pack_v1.json"
   ]
 }

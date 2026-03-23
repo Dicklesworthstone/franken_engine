@@ -1008,7 +1008,7 @@ fn parser_final_readiness_script_uses_repo_local_target_dir_and_retained_step_lo
         "script must not route readiness dossier remote builds through /tmp"
     );
     assert!(
-        script.contains("\"cat ${step_logs_dir}/step_01.log\""),
+        script.contains("cat ${step_logs_dir}/step_01.log"),
         "manifest operator verification should surface a retained step log"
     );
 }

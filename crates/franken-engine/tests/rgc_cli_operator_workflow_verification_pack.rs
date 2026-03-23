@@ -40,7 +40,8 @@ struct Rgc061Contract {
     policy_id: String,
     workflow_stages: Vec<String>,
     required_log_keys: Vec<String>,
-    required_artifacts: Vec<String>,
+    required_gate_artifacts: Vec<String>,
+    verified_workflow_artifacts: Vec<String>,
     failure_scenarios: Vec<Rgc061FailureScenario>,
     gate_runner: Rgc061GateRunner,
     operator_verification: Vec<String>,
@@ -203,6 +204,16 @@ fn rgc_061_doc_contains_required_sections() {
         !doc.contains("/tmp/rch_target_rgc_cli_operator_workflow_verification_pack"),
         "operator verification doc must not point back to /tmp-backed target dirs"
     );
+    for required_fragment in [
+        "trace_ids.json",
+        "step_logs/step_*.log",
+        "step_logs/step_000.log",
+    ] {
+        assert!(
+            doc.contains(required_fragment),
+            "operator workflow doc should mention {required_fragment}"
+        );
+    }
 }
 
 #[test]
@@ -210,7 +221,7 @@ fn rgc_061_contract_is_versioned_and_actionable() {
     let contract = parse_contract();
 
     assert_eq!(contract.schema_version, RGC_061_CONTRACT_SCHEMA_VERSION);
-    assert_eq!(contract.contract_version, "1.0.0");
+    assert_eq!(contract.contract_version, "1.1.0");
     assert_eq!(contract.bead_id, "bd-1lsy.11.11");
     assert_eq!(
         contract.policy_id,
@@ -257,21 +268,36 @@ fn rgc_061_contract_is_versioned_and_actionable() {
         );
     }
 
-    let required_artifacts: BTreeSet<_> = contract
-        .required_artifacts
+    let required_gate_artifacts: BTreeSet<_> = contract
+        .required_gate_artifacts
         .iter()
         .map(String::as_str)
         .collect();
     for artifact in [
         "run_manifest.json",
+        "trace_ids.json",
         "events.jsonl",
         "commands.txt",
+        "step_logs/step_000.log",
+    ] {
+        assert!(
+            required_gate_artifacts.contains(artifact),
+            "missing required gate artifact {artifact}"
+        );
+    }
+
+    let verified_workflow_artifacts: BTreeSet<_> = contract
+        .verified_workflow_artifacts
+        .iter()
+        .map(String::as_str)
+        .collect();
+    for artifact in [
         "support_bundle/preflight_report.json",
         "support_bundle/onboarding_scorecard.json",
     ] {
         assert!(
-            required_artifacts.contains(artifact),
-            "missing required artifact {artifact}"
+            verified_workflow_artifacts.contains(artifact),
+            "missing verified workflow artifact {artifact}"
         );
     }
 
@@ -320,6 +346,18 @@ fn rgc_061_contract_is_versioned_and_actionable() {
         contract
             .operator_verification
             .iter()
+            .any(|entry| entry.contains("trace_ids.json"))
+    );
+    assert!(
+        contract
+            .operator_verification
+            .iter()
+            .any(|entry| entry.contains("step_logs/step_000.log"))
+    );
+    assert!(
+        contract
+            .operator_verification
+            .iter()
             .any(|entry| entry.contains("run_rgc_cli_operator_workflow_verification_pack.sh ci"))
     );
     assert!(
@@ -328,6 +366,23 @@ fn rgc_061_contract_is_versioned_and_actionable() {
             .iter()
             .any(|entry| entry.contains("rgc_cli_operator_workflow_verification_pack_replay.sh"))
     );
+}
+
+#[test]
+fn readme_documents_rgc_061_trace_ids_and_step_logs_artifacts() {
+    let path = repo_root().join("README.md");
+    let readme = read_to_string(&path);
+
+    for required_fragment in [
+        "artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/trace_ids.json",
+        "artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/step_logs/step_*.log",
+    ] {
+        assert!(
+            readme.contains(required_fragment),
+            "README should document RGC-061 artifact fragment in {}: {required_fragment}",
+            path.display()
+        );
+    }
 }
 
 #[test]
@@ -899,11 +954,18 @@ fn rgc_061_lane_script_preserves_step_logs_and_failure_classification() {
     let script = read_to_string(&path);
 
     for required_fragment in [
-        "step_log_path=\"${run_dir}/step_",
+        "trace_ids_path=\"${run_dir}/trace_ids.json\"",
+        "step_logs_dir=\"${run_dir}/step_logs\"",
+        "step_log_path=\"${step_logs_dir}/step_",
         "(timeout-${rch_timeout_seconds}s)",
         "(rch-exit=${status}; remote-exit=${remote_exit_code})",
         "(rch-exit=${status}; missing-remote-exit-marker)",
         "(rch-local-fallback-detected)",
+        "\"trace_ids\": \"${trace_ids_path}\"",
+        "\"step_logs\": \"${step_logs_dir}\"",
+        "\"first_step_log\": \"${step_logs_dir}/step_000.log\"",
+        "cat ${trace_ids_path}",
+        "cat ${step_logs_dir}/step_000.log",
         "rgc-cli-operator-workflow-verification-pack.run-manifest.v1",
     ] {
         assert!(
@@ -931,6 +993,10 @@ fn rgc_061_replay_wrapper_uses_latest_complete_bundle() {
         "replay wrapper should print the latest run manifest"
     );
     assert!(
+        script.contains("latest trace ids: ${latest_run_dir}/trace_ids.json"),
+        "replay wrapper should print the latest trace ids"
+    );
+    assert!(
         script.contains("latest events: ${latest_run_dir}/events.jsonl"),
         "replay wrapper should print the latest event log"
     );
@@ -939,8 +1005,34 @@ fn rgc_061_replay_wrapper_uses_latest_complete_bundle() {
         "replay wrapper should print the recorded command list"
     );
     assert!(
-        script.contains("latest first step log: ${latest_run_dir}/step_000.log"),
+        script.contains("latest first step log: ${latest_run_dir}/step_logs/step_000.log"),
         "replay wrapper should print the first step log for operator triage"
+    );
+}
+
+#[test]
+fn generic_frankenctl_workflow_script_preserves_step_logs_for_triage() {
+    let path = repo_root().join("scripts/e2e/frankenctl_cli_workflow.sh");
+    let script = read_to_string(&path);
+
+    for required_fragment in [
+        "step_logs_dir=\"${run_dir}/step_logs\"",
+        "log_path=\"${step_logs_dir}/step_$(printf '%03d' \"${step_log_index}\").log\"",
+        "\"step_logs\": \"${step_logs_dir}\"",
+        "\"first_step_log\": \"${step_logs_dir}/step_000.log\"",
+        "cat ${step_logs_dir}/step_000.log",
+        "frankenctl workflow first step log: ${step_logs_dir}/step_000.log",
+    ] {
+        assert!(
+            script.contains(required_fragment),
+            "missing generic workflow script fragment in {}: {required_fragment}",
+            path.display()
+        );
+    }
+
+    assert!(
+        !script.contains("log_path=\"$(mktemp)\""),
+        "generic workflow script should not throw away heavy-command logs in temp files"
     );
 }
 
@@ -1171,16 +1263,24 @@ fn rgc_061_contract_operator_verification_entries_are_nonempty() {
     }
 }
 
-// ---------- contract required_artifacts are unique ----------
+// ---------- contract artifact lists are unique ----------
 
 #[test]
-fn rgc_061_contract_required_artifacts_are_unique() {
+fn rgc_061_contract_artifact_lists_are_unique() {
     let contract = parse_contract();
     let mut seen = BTreeSet::new();
-    for artifact in &contract.required_artifacts {
+    for artifact in &contract.required_gate_artifacts {
         assert!(
             seen.insert(artifact.as_str()),
-            "duplicate required artifact: {artifact}"
+            "duplicate required gate artifact: {artifact}"
+        );
+    }
+
+    let mut seen = BTreeSet::new();
+    for artifact in &contract.verified_workflow_artifacts {
+        assert!(
+            seen.insert(artifact.as_str()),
+            "duplicate verified workflow artifact: {artifact}"
         );
     }
 }

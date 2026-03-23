@@ -18,6 +18,7 @@ manifest_path="${run_dir}/run_manifest.json"
 events_path="${run_dir}/events.jsonl"
 commands_path="${run_dir}/commands.txt"
 trace_ids_path="${run_dir}/trace_ids.json"
+step_logs_dir="${run_dir}/step_logs"
 
 trace_id="trace-frankenctl-cli-workflow-${timestamp}"
 decision_id="decision-frankenctl-cli-workflow-${timestamp}"
@@ -26,7 +27,7 @@ component="frankenctl_cli_workflow_gate"
 scenario_id="bd-1lsy.10.1"
 replay_command="./scripts/e2e/frankenctl_cli_workflow.sh ${mode}"
 
-mkdir -p "$run_dir"
+mkdir -p "$run_dir" "$step_logs_dir"
 
 if ! command -v rch >/dev/null 2>&1; then
   echo "rch is required for frankenctl CLI workflow heavy commands" >&2
@@ -73,6 +74,7 @@ rch_reject_local_fallback() {
 declare -a commands_run=()
 failed_command=""
 manifest_written=false
+step_log_index=0
 
 run_step() {
   local command_text="$1"
@@ -81,20 +83,19 @@ run_step() {
 
   commands_run+=("$command_text")
   echo "==> $command_text"
-  log_path="$(mktemp)"
+  log_path="${step_logs_dir}/step_$(printf '%03d' "${step_log_index}").log"
+  step_log_index=$((step_log_index + 1))
 
   if ! run_rch "$@" > >(tee "$log_path") 2>&1; then
     if rch_strip_ansi "$log_path" | rg -q "Remote command finished: exit=0"; then
       echo "==> recovered: remote execution succeeded; artifact retrieval timed out" | tee -a "$log_path"
     else
-      rm -f "$log_path"
       failed_command="$command_text"
       return 1
     fi
   fi
 
   if ! rch_reject_local_fallback "$log_path"; then
-    rm -f "$log_path"
     failed_command="${command_text} (rch-local-fallback-detected)"
     return 1
   fi
@@ -102,17 +103,13 @@ run_step() {
   remote_exit_code="$(rch_remote_exit_code "$log_path" || true)"
   if [[ -z "$remote_exit_code" ]]; then
     echo "rch output missing remote exit marker; failing closed" | tee -a "$log_path"
-    rm -f "$log_path"
     failed_command="${command_text} (missing-remote-exit-marker)"
     return 1
   fi
   if [[ -n "$remote_exit_code" && "$remote_exit_code" != "0" ]]; then
-    rm -f "$log_path"
     failed_command="${command_text} (remote-exit=${remote_exit_code})"
     return 1
   fi
-
-  rm -f "$log_path"
 }
 
 run_mode() {
@@ -238,6 +235,8 @@ write_manifest() {
     echo "    \"trace_ids\": \"${trace_ids_path}\","
     echo "    \"events\": \"${events_path}\","
     echo "    \"commands\": \"${commands_path}\","
+    echo "    \"step_logs\": \"${step_logs_dir}\","
+    echo "    \"first_step_log\": \"${step_logs_dir}/step_000.log\","
     echo '    "frankenctl_bin": "crates/franken-engine/src/bin/frankenctl.rs",'
     echo '    "frankenctl_integration_test": "crates/franken-engine/tests/frankenctl_cli.rs",'
     echo '    "replay_wrapper": "scripts/e2e/frankenctl_cli_workflow.sh"'
@@ -247,6 +246,7 @@ write_manifest() {
     echo "    \"cat ${trace_ids_path}\","
     echo "    \"cat ${events_path}\","
     echo "    \"cat ${commands_path}\","
+    echo "    \"cat ${step_logs_dir}/step_000.log\","
     echo "    \"${replay_command}\""
     echo "  ]"
     echo "}"
@@ -256,6 +256,7 @@ write_manifest() {
   echo "frankenctl workflow trace ids: ${trace_ids_path}"
   echo "frankenctl workflow events: ${events_path}"
   echo "frankenctl workflow commands: ${commands_path}"
+  echo "frankenctl workflow first step log: ${step_logs_dir}/step_000.log"
 }
 
 main_exit=0

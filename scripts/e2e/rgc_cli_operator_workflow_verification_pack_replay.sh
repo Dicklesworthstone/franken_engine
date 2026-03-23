@@ -25,9 +25,10 @@ latest_complete_run_dir() {
 
   find "${artifact_root}" -mindepth 1 -maxdepth 1 -type d | sort | while IFS= read -r candidate; do
     [[ -f "${candidate}/run_manifest.json" ]] || continue
+    [[ -f "${candidate}/trace_ids.json" ]] || continue
     [[ -f "${candidate}/events.jsonl" ]] || continue
     [[ -f "${candidate}/commands.txt" ]] || continue
-    [[ -f "${candidate}/step_000.log" ]] || continue
+    [[ -f "${candidate}/step_logs/step_000.log" ]] || continue
     printf '%s\n' "${candidate}"
   done | tail -n 1
 }
@@ -59,11 +60,13 @@ fi
 
 echo "[rgc-cli-operator-workflow-verification-pack] latest manifest: ${latest_run_dir}/run_manifest.json"
 cat "${latest_run_dir}/run_manifest.json"
+echo "[rgc-cli-operator-workflow-verification-pack] latest trace ids: ${latest_run_dir}/trace_ids.json"
+cat "${latest_run_dir}/trace_ids.json"
 echo "[rgc-cli-operator-workflow-verification-pack] latest events: ${latest_run_dir}/events.jsonl"
 cat "${latest_run_dir}/events.jsonl"
 echo "[rgc-cli-operator-workflow-verification-pack] latest commands: ${latest_run_dir}/commands.txt"
 cat "${latest_run_dir}/commands.txt"
-echo "[rgc-cli-operator-workflow-verification-pack] latest first step log: ${latest_run_dir}/step_000.log"
-cat "${latest_run_dir}/step_000.log"
+echo "[rgc-cli-operator-workflow-verification-pack] latest first step log: ${latest_run_dir}/step_logs/step_000.log"
+cat "${latest_run_dir}/step_logs/step_000.log"
 
 exit "${main_exit}"

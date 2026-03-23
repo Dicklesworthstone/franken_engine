@@ -354,7 +354,7 @@ impl ObservabilityCell {
                 .collect();
             sorted_hashes.sort();
             for h in &sorted_hashes {
-                hasher.update(h);
+                hasher.update(*h);
             }
         }
         let result = hasher.finalize();
@@ -493,7 +493,7 @@ impl SentinelReport {
                 .collect();
             decision_hashes.sort();
             for h in &decision_hashes {
-                hasher.update(h);
+                hasher.update(*h);
             }
         }
         let result = hasher.finalize();

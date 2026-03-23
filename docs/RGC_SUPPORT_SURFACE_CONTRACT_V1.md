@@ -134,12 +134,27 @@ Gate runs emit:
 
 under `artifacts/rgc_support_surface_contract/<UTC_TIMESTAMP>/`.
 
-The replay wrapper resolves the latest complete artifact bundle, warns when a
+By default, the replay wrapper reruns the gate, resolves the latest complete
+artifact bundle, warns when a
 newer run directory is incomplete, and prints the selected manifest, report,
 operator-readable summary, copied contract artifacts, replayable commands,
 trace IDs, and first step log. The summary derives its engine-ready versus
 engine-blocked rule from `readiness_answer_contract` and keeps downstream
-`franken_node` product-ready status explicit as delegated/out-of-scope here.
+`franken_node` product-ready status explicit as delegated/out-of-scope here. If
+the rerun fails, the wrapper now explicitly states whether the printed bundle
+came from the current failed invocation or from an older latest-complete
+fallback directory.
+
+To replay a specific preserved bundle without rerunning the gate, point the
+wrapper at an exact complete run directory:
+
+```bash
+RGC_SUPPORT_SURFACE_CONTRACT_REPLAY_RUN_DIR=artifacts/rgc_support_surface_contract/<timestamp> \
+./scripts/e2e/rgc_support_surface_contract_replay.sh ci
+```
+
+The explicit run directory must already contain a complete bundle or the
+wrapper fails closed instead of printing partial or stale evidence.
 
 ## Operator Verification
 

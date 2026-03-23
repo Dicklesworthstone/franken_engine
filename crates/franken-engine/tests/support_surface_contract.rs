@@ -905,6 +905,34 @@ fn rgc_911b_replay_wrapper_uses_latest_complete_bundle() {
         "replay wrapper should warn when it skips an incomplete newest directory"
     );
     assert!(
+        script.contains("RGC_SUPPORT_SURFACE_CONTRACT_REPLAY_RUN_DIR"),
+        "replay wrapper should support exact-run-dir targeting for preserved bundles"
+    );
+    assert!(
+        script.contains("run_dir_is_complete()"),
+        "replay wrapper should centralize complete-bundle checks"
+    );
+    assert!(
+        script.contains("warn_about_failed_gate_replay_source()"),
+        "replay wrapper should centralize failed-gate replay warnings"
+    );
+    assert!(
+        script.contains("if [[ -z \"${explicit_run_dir}\" ]]; then"),
+        "replay wrapper should skip rerunning the gate when an exact run directory is provided"
+    );
+    assert!(
+        script.contains("explicit run directory is incomplete"),
+        "replay wrapper should fail closed on incomplete exact-run-dir targets"
+    );
+    assert!(
+        script.contains("replay output reflects latest complete run directory"),
+        "replay wrapper should warn when it falls back to an older latest-complete bundle after a failed rerun"
+    );
+    assert!(
+        script.contains("replay output reflects current run directory"),
+        "replay wrapper should distinguish failed reruns that still produced the current complete bundle"
+    );
+    assert!(
         script.contains("latest manifest: ${latest_run_dir}/run_manifest.json"),
         "replay wrapper should print the latest run manifest"
     );

@@ -231,6 +231,18 @@ fn module_interop_gate_script_surfaces_replay_and_trace_artifacts() {
         "operator verification must surface the module resolution trace artifact"
     );
     assert!(
+        script.contains("\"step_logs\": \"${step_logs_dir}\""),
+        "run manifest must publish the step log directory"
+    );
+    assert!(
+        script.contains("\"first_step_log\": \"${step_logs_dir}/step_000.log\""),
+        "run manifest must publish the first heavy-command step log"
+    );
+    assert!(
+        script.contains("cat ${step_logs_dir}/step_000.log"),
+        "operator verification must surface the first heavy-command step log"
+    );
+    assert!(
         script.contains("rgc module interop verification matrix commands: ${commands_path}"),
         "gate script must print the commands artifact path"
     );
@@ -239,6 +251,12 @@ fn module_interop_gate_script_surfaces_replay_and_trace_artifacts() {
             "rgc module interop verification matrix module resolution trace: ${module_resolution_trace_path}"
         ),
         "gate script must print the module resolution trace artifact path"
+    );
+    assert!(
+        script.contains(
+            "rgc module interop verification matrix first step log: ${step_logs_dir}/step_000.log"
+        ),
+        "gate script must print the first heavy-command step log path"
     );
     for marker in [
         "rch_has_recoverable_artifact_timeout",
@@ -267,6 +285,7 @@ fn module_interop_replay_wrapper_requires_complete_bundle() {
         "events.jsonl",
         "commands.txt",
         "module_resolution_trace.jsonl",
+        "step_logs/step_000.log",
     ] {
         assert!(
             script.contains(required),
@@ -309,6 +328,10 @@ fn module_interop_replay_wrapper_requires_complete_bundle() {
         "replay wrapper must print the module resolution trace artifact"
     );
     assert!(
+        script.contains("latest first step log"),
+        "replay wrapper must print the first heavy-command step log"
+    );
+    assert!(
         script.contains("rgc_module_resolution_trace_contract_smoke.sh"),
         "replay wrapper must re-run the trace smoke contract"
     );
@@ -326,6 +349,7 @@ fn default_matrix_declares_required_readme_fragments() {
         "docs/module_compatibility_matrix_v1.json",
         "artifacts/rgc_module_interop_verification_matrix/<timestamp>/trace_ids.json",
         "artifacts/rgc_module_interop_verification_matrix/<timestamp>/module_resolution_trace.jsonl",
+        "artifacts/rgc_module_interop_verification_matrix/<timestamp>/step_logs/step_*.log",
         "The matrix also pins npm-style `pkg.js` / `@scope/pkg.js` extension-probe package entries so nested `./sub` requires stay anchored to the package root.",
     ] {
         assert!(

@@ -17,13 +17,36 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use frankenengine_engine::attested_execution_cell::{
+    SoftwareTrustRoot, TrustLevel, TrustRootBackend,
+};
 use frankenengine_engine::containment_executor::ContainmentState;
 use frankenengine_engine::deterministic_replay::{NondeterminismSource, NondeterminismTrace};
+use frankenengine_engine::engine_object_id::EngineObjectId;
+use frankenengine_engine::hash_tiers::{AuthenticityHash, ContentHash};
+use frankenengine_engine::mmr_proof::MerkleMountainRange;
+use frankenengine_engine::proof_schema::{
+    AttestationValidityWindow, OptReceipt, OptimizationClass, ReceiptAttestationBindings,
+    proof_schema_version_current,
+};
+use frankenengine_engine::receipt_verifier_pipeline::{
+    AttestationLayerInput, ConsistencyProofInput, LogOperatorKey, ReceiptVerifierCliInput,
+    SignatureLayerInput, SignedLogCheckpoint, SignerRevocationCache, TransparencyLayerInput,
+    UnifiedReceiptVerificationRequest,
+};
 use frankenengine_engine::runtime_diagnostics_cli::{
     GcPressureSample, RuntimeDiagnosticsCliInput, RuntimeExtensionState, RuntimeStateInput,
     SchedulerLaneSample,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::signature_preimage::{Signature, SigningKey, sign_preimage};
+use frankenengine_engine::tee_attestation_policy::{
+    AttestationFreshnessWindow, AttestationQuote as PolicyAttestationQuote, DecisionImpact,
+    MeasurementAlgorithm, MeasurementDigest, PlatformTrustRoot, RevocationFallback,
+    RevocationProbeStatus, RevocationSource, RevocationSourceType, TeeAttestationPolicy,
+    TeePlatform, TrustRootPinning, TrustRootSource,
+};
+use std::collections::BTreeMap;
 
 fn temp_path(name: &str, ext: &str) -> PathBuf {
     let mut path = std::env::temp_dir();
@@ -56,6 +79,290 @@ fn write_source(path: &Path, source: &str) {
 
 fn parse_stdout_json(output: &std::process::Output) -> serde_json::Value {
     serde_json::from_slice(&output.stdout).expect("stdout should contain valid json")
+}
+
+fn digest_hex(byte: u8, byte_len: usize) -> String {
+    let mut out = String::with_capacity(byte_len * 2);
+    for _ in 0..byte_len {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
+fn sample_receipt_policy(
+    policy_epoch: SecurityEpoch,
+    intel_digest_hex: String,
+    trust_root_id: &str,
+) -> TeeAttestationPolicy {
+    let mut approved_measurements = BTreeMap::new();
+    approved_measurements.insert(
+        TeePlatform::IntelSgx,
+        vec![MeasurementDigest {
+            algorithm: MeasurementAlgorithm::Sha256,
+            digest_hex: intel_digest_hex,
+        }],
+    );
+    approved_measurements.insert(
+        TeePlatform::ArmTrustZone,
+        vec![MeasurementDigest {
+            algorithm: MeasurementAlgorithm::Sha256,
+            digest_hex: digest_hex(0x22, 32),
+        }],
+    );
+    approved_measurements.insert(
+        TeePlatform::ArmCca,
+        vec![MeasurementDigest {
+            algorithm: MeasurementAlgorithm::Sha256,
+            digest_hex: digest_hex(0x44, 32),
+        }],
+    );
+    approved_measurements.insert(
+        TeePlatform::AmdSev,
+        vec![MeasurementDigest {
+            algorithm: MeasurementAlgorithm::Sha384,
+            digest_hex: digest_hex(0x33, 48),
+        }],
+    );
+
+    TeeAttestationPolicy {
+        schema_version: 1,
+        policy_epoch,
+        approved_measurements,
+        freshness_window: AttestationFreshnessWindow {
+            standard_max_age_secs: 120,
+            high_impact_max_age_secs: 30,
+        },
+        revocation_sources: vec![
+            RevocationSource {
+                source_id: "intel_pcs".to_string(),
+                source_type: RevocationSourceType::IntelPcs,
+                endpoint: "https://intel.example/pcs".to_string(),
+                on_unavailable: RevocationFallback::TryNextSource,
+            },
+            RevocationSource {
+                source_id: "internal_ledger".to_string(),
+                source_type: RevocationSourceType::InternalLedger,
+                endpoint: "sqlite://revocations".to_string(),
+                on_unavailable: RevocationFallback::FailClosed,
+            },
+        ],
+        platform_trust_roots: vec![
+            PlatformTrustRoot {
+                root_id: trust_root_id.to_string(),
+                platform: TeePlatform::IntelSgx,
+                trust_anchor_pem: "-----BEGIN KEY-----intel-----END KEY-----".to_string(),
+                valid_from_epoch: SecurityEpoch::from_raw(1),
+                valid_until_epoch: None,
+                pinning: TrustRootPinning::Pinned,
+                source: TrustRootSource::Policy,
+            },
+            PlatformTrustRoot {
+                root_id: "arm-root".to_string(),
+                platform: TeePlatform::ArmTrustZone,
+                trust_anchor_pem: "-----BEGIN KEY-----arm-----END KEY-----".to_string(),
+                valid_from_epoch: SecurityEpoch::from_raw(1),
+                valid_until_epoch: None,
+                pinning: TrustRootPinning::Pinned,
+                source: TrustRootSource::Policy,
+            },
+            PlatformTrustRoot {
+                root_id: "cca-root".to_string(),
+                platform: TeePlatform::ArmCca,
+                trust_anchor_pem: "-----BEGIN KEY-----cca-----END KEY-----".to_string(),
+                valid_from_epoch: SecurityEpoch::from_raw(1),
+                valid_until_epoch: None,
+                pinning: TrustRootPinning::Pinned,
+                source: TrustRootSource::Policy,
+            },
+            PlatformTrustRoot {
+                root_id: "amd-root".to_string(),
+                platform: TeePlatform::AmdSev,
+                trust_anchor_pem: "-----BEGIN KEY-----amd-----END KEY-----".to_string(),
+                valid_from_epoch: SecurityEpoch::from_raw(1),
+                valid_until_epoch: None,
+                pinning: TrustRootPinning::Pinned,
+                source: TrustRootSource::Policy,
+            },
+        ],
+    }
+}
+
+fn build_valid_receipt_verifier_input() -> (String, ReceiptVerifierCliInput) {
+    let receipt_id = "rcpt-001".to_string();
+    let signer_key_id = EngineObjectId([0x44; 32]);
+    let signer_key_bytes = vec![0x55; 32];
+
+    let software_root = SoftwareTrustRoot::new("root-1", 7);
+    let measurement = software_root.measure(
+        b"code-v1",
+        b"cfg-v1",
+        b"policy-v1",
+        b"schema-v1",
+        "runtime-v1",
+    );
+    let nonce = [7u8; 32];
+    let mut attestation_quote =
+        software_root.attest(&measurement, nonce, 30_000_000_000, 10_000_000_000);
+    attestation_quote.trust_level = TrustLevel::SoftwareOnly;
+
+    let measurement_zone = "measurement-zone-test".to_string();
+    let measurement_id = measurement
+        .derive_id(&measurement_zone)
+        .expect("measurement ID");
+    let quote_digest =
+        ContentHash::compute(&serde_json::to_vec(&attestation_quote).expect("quote json"));
+
+    let mut replay_compatibility = BTreeMap::new();
+    replay_compatibility.insert("arch".to_string(), "x86_64".to_string());
+    replay_compatibility.insert("engine".to_string(), "franken-v1".to_string());
+
+    let bindings = ReceiptAttestationBindings {
+        quote_digest,
+        measurement_id,
+        attested_signer_key_id: signer_key_id.clone(),
+        nonce,
+        validity_window: AttestationValidityWindow {
+            start_timestamp_ticks: 100,
+            end_timestamp_ticks: 2_000,
+        },
+    };
+
+    let unsigned_receipt = OptReceipt {
+        schema_version: proof_schema_version_current(),
+        optimization_id: "opt-01".to_string(),
+        optimization_class: OptimizationClass::Superinstruction,
+        baseline_ir_hash: ContentHash::compute(b"baseline"),
+        candidate_ir_hash: ContentHash::compute(b"candidate"),
+        translation_witness_hash: ContentHash::compute(b"translation"),
+        invariance_digest: ContentHash::compute(b"invariance"),
+        rollback_token_id: "rollback-01".to_string(),
+        replay_compatibility,
+        policy_epoch: SecurityEpoch::from_raw(5),
+        timestamp_ticks: 1_000,
+        signer_key_id: signer_key_id.clone(),
+        correlation_id: "corr-01".to_string(),
+        decision_impact: DecisionImpact::HighImpact,
+        attestation_bindings: Some(bindings),
+        signature: AuthenticityHash::compute_keyed(b"placeholder", b"placeholder"),
+    };
+    let receipt = unsigned_receipt.sign(&signer_key_bytes);
+    let expected_preimage_hash = ContentHash::compute(&receipt.signing_preimage());
+
+    let receipt_leaf_hash = ContentHash::compute(&receipt.signing_preimage());
+    let leaf0 = ContentHash::compute(b"leaf0");
+    let leaf1 = ContentHash::compute(b"leaf1");
+
+    let mut old_mmr = MerkleMountainRange::new(5);
+    old_mmr.append(leaf0);
+    old_mmr.append(leaf1);
+    let old_root = old_mmr.root_hash().expect("old root");
+
+    let mut mmr = MerkleMountainRange::new(5);
+    mmr.append(leaf0);
+    mmr.append(leaf1);
+    mmr.append(receipt_leaf_hash);
+    let inclusion_proof = mmr.inclusion_proof(2).expect("inclusion");
+    let consistency_proof = mmr.consistency_proof(2).expect("consistency");
+
+    let operator_signing_key = SigningKey::from_bytes([9u8; 32]);
+    let operator_verification_key = operator_signing_key.verification_key();
+    let checkpoint_stub = SignedLogCheckpoint {
+        checkpoint_seq: 1,
+        log_length: inclusion_proof.stream_length,
+        root_hash: mmr.root_hash().expect("root"),
+        timestamp_ns: 20_000_000_000,
+        operator_key_id: "operator-1".to_string(),
+        signature: Signature::from_bytes([0u8; 64]),
+    };
+    let mut checkpoint = checkpoint_stub.clone();
+    let mut preimage = Vec::new();
+    preimage.extend_from_slice(b"FrankenEngine.ReceiptTransparencyCheckpoint.v1");
+    preimage.extend_from_slice(&checkpoint_stub.checkpoint_seq.to_be_bytes());
+    preimage.push(0xff);
+    preimage.extend_from_slice(&checkpoint_stub.log_length.to_be_bytes());
+    preimage.push(0xff);
+    preimage.extend_from_slice(checkpoint_stub.root_hash.as_bytes());
+    preimage.push(0xff);
+    preimage.extend_from_slice(&checkpoint_stub.timestamp_ns.to_be_bytes());
+    preimage.push(0xff);
+    preimage.extend_from_slice(checkpoint_stub.operator_key_id.as_bytes());
+    checkpoint.signature = sign_preimage(&operator_signing_key, &preimage).expect("checkpoint sig");
+
+    let measurement_digest_hex = measurement.composite_hash().to_hex();
+    let policy =
+        sample_receipt_policy(SecurityEpoch::from_raw(5), measurement_digest_hex, "root-1");
+    let mut revocation_observations = BTreeMap::new();
+    revocation_observations.insert("intel_pcs".to_string(), RevocationProbeStatus::Good);
+    revocation_observations.insert("internal_ledger".to_string(), RevocationProbeStatus::Good);
+
+    let policy_quote = PolicyAttestationQuote {
+        platform: TeePlatform::IntelSgx,
+        measurement: MeasurementDigest {
+            algorithm: MeasurementAlgorithm::Sha256,
+            digest_hex: measurement.composite_hash().to_hex(),
+        },
+        quote_age_secs: 10,
+        trust_root_id: "root-1".to_string(),
+        revocation_observations,
+    };
+
+    let request = UnifiedReceiptVerificationRequest {
+        trace_id: "trace-verify-01".to_string(),
+        decision_id: "decision-verify-01".to_string(),
+        policy_id: "policy-verify-01".to_string(),
+        verification_timestamp_ns: 20_000_000_000,
+        receipt,
+        signature: SignatureLayerInput {
+            expected_preimage_hash,
+            signing_key_bytes: signer_key_bytes,
+            signer_revocation: SignerRevocationCache {
+                signer_key_id,
+                source: "offline-signer-revocations".to_string(),
+                is_revoked: false,
+                cache_stale: false,
+            },
+        },
+        transparency: TransparencyLayerInput {
+            leaf_hash: receipt_leaf_hash,
+            leaf_index: 2,
+            inclusion_proof,
+            consistency_proofs: vec![ConsistencyProofInput {
+                from_root: old_root,
+                proof: consistency_proof,
+            }],
+            checkpoint,
+            operator_keys: vec![LogOperatorKey {
+                key_id: "operator-1".to_string(),
+                verification_key: operator_verification_key,
+                revoked: false,
+            }],
+            cache_stale: false,
+        },
+        attestation: AttestationLayerInput {
+            attestation_quote,
+            policy_quote,
+            policy,
+            decision_impact: DecisionImpact::HighImpact,
+            runtime_epoch: SecurityEpoch::from_raw(5),
+            verification_time_ns: 20_000_000_000,
+            measurement_zone,
+            trust_roots: vec![software_root],
+            policy_cache_stale: false,
+            revocation_cache_stale: false,
+        },
+    };
+
+    let mut receipts = BTreeMap::new();
+    receipts.insert(receipt_id.clone(), request);
+    (receipt_id, ReceiptVerifierCliInput { receipts })
+}
+
+fn write_receipt_verifier_input(path: &Path, input: &ReceiptVerifierCliInput) {
+    fs::write(
+        path,
+        serde_json::to_vec_pretty(input).expect("receipt verifier input should serialize"),
+    )
+    .expect("receipt verifier input should write");
 }
 
 fn build_doctor_input() -> RuntimeDiagnosticsCliInput {
@@ -485,6 +792,20 @@ fn frankenctl_cli_workflow_script_emits_trace_ids_artifact_contract() {
     assert!(script.contains("\"trace_ids\": \"${trace_ids_path}\""));
     assert!(script.contains("cat ${trace_ids_path}"));
     assert!(script.contains("write_trace_ids"));
+}
+
+#[test]
+fn frankenctl_cli_workflow_script_fails_closed_on_rch_drift() {
+    let script = fs::read_to_string(repo_root().join("scripts/e2e/frankenctl_cli_workflow.sh"))
+        .expect("frankenctl cli workflow script should exist");
+
+    assert!(script.contains("${root_dir}/target_rch_frankenctl_cli_workflow"));
+    assert!(
+        script.contains("rch reported local fallback; refusing local execution for heavy command")
+    );
+    assert!(script.contains("rch output missing remote exit marker; failing closed"));
+    assert!(script.contains("(missing-remote-exit-marker)"));
+    assert!(!script.contains("warning: missing remote exit marker"));
 }
 
 #[test]
@@ -1317,6 +1638,189 @@ fn frankenctl_verify_compile_artifact_nonexistent_file_fails() {
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
     assert!(stderr.contains("[frankenctl"));
+}
+
+#[test]
+fn frankenctl_verify_receipt_missing_receipt_id_fails_with_parse_remediation() {
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args(["verify", "receipt", "--input", "receipts.json"])
+        .output()
+        .expect("verify receipt parse failure should execute");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    assert!(
+        stderr.contains("[frankenctl trace_id=frankenctl-"),
+        "stderr should include trace id, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("command=parse"),
+        "stderr should include parse command label, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("verify receipt requires --receipt-id <id>"),
+        "stderr should preserve parse failure, got: {stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "remediation: Run `frankenctl --help` for full command usage and required arguments."
+        ),
+        "stderr should include parse remediation, got: {stderr}"
+    );
+}
+
+#[test]
+fn frankenctl_verify_receipt_nonexistent_file_fails_with_runtime_remediation() {
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "verify",
+            "receipt",
+            "--input",
+            "/tmp/nonexistent_receipt_verifier_99999.json",
+            "--receipt-id",
+            "rcpt-1",
+        ])
+        .output()
+        .expect("verify receipt nonexistent file should execute");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    assert!(
+        stderr.contains("[frankenctl trace_id=frankenctl-"),
+        "stderr should include trace id, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("command=verify"),
+        "stderr should include verify command label, got: {stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "remediation: Inspect input artifact/receipt payload and rerun `frankenctl verify ...`."
+        ),
+        "stderr should include runtime remediation, got: {stderr}"
+    );
+}
+
+#[test]
+fn frankenctl_verify_receipt_unknown_receipt_id_fails_with_runtime_remediation() {
+    let input_path = temp_path("frankenctl_verify_receipt_missing_id_input", "json");
+    let (_receipt_id, input) = build_valid_receipt_verifier_input();
+    write_receipt_verifier_input(&input_path, &input);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "verify",
+            "receipt",
+            "--input",
+            input_path.to_str().expect("path should be utf8"),
+            "--receipt-id",
+            "rcpt-missing",
+        ])
+        .output()
+        .expect("verify receipt missing id command should execute");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    assert!(
+        stderr.contains("[frankenctl trace_id=frankenctl-"),
+        "stderr should include trace id, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("command=verify"),
+        "stderr should include verify command label, got: {stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "receipt verification failed: receipt 'rcpt-missing' not found in verifier input"
+        ),
+        "stderr should preserve receipt-not-found failure, got: {stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "remediation: Inspect input artifact/receipt payload and rerun `frankenctl verify ...`."
+        ),
+        "stderr should include runtime remediation, got: {stderr}"
+    );
+
+    let _ = fs::remove_file(input_path);
+}
+
+#[test]
+fn frankenctl_verify_receipt_emits_json_verdict_for_valid_input() {
+    let input_path = temp_path("frankenctl_verify_receipt_input", "json");
+    let (receipt_id, input) = build_valid_receipt_verifier_input();
+    write_receipt_verifier_input(&input_path, &input);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "verify",
+            "receipt",
+            "--input",
+            input_path.to_str().expect("path should be utf8"),
+            "--receipt-id",
+            receipt_id.as_str(),
+        ])
+        .output()
+        .expect("verify receipt command should execute");
+
+    assert!(
+        output.status.success(),
+        "verify receipt failed with stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let verdict = parse_stdout_json(&output);
+    assert_eq!(verdict["receipt_id"].as_str(), Some(receipt_id.as_str()));
+    assert_eq!(verdict["trace_id"].as_str(), Some("trace-verify-01"));
+    assert_eq!(verdict["decision_id"].as_str(), Some("decision-verify-01"));
+    assert_eq!(verdict["policy_id"].as_str(), Some("policy-verify-01"));
+    assert_eq!(verdict["passed"].as_bool(), Some(true));
+    assert_eq!(verdict["exit_code"].as_i64(), Some(0));
+    assert!(verdict["failure_class"].is_null());
+    assert_eq!(verdict["signature"]["passed"].as_bool(), Some(true));
+    assert_eq!(verdict["transparency"]["passed"].as_bool(), Some(true));
+    assert_eq!(verdict["attestation"]["passed"].as_bool(), Some(true));
+    assert_eq!(verdict["warnings"].as_array().map(Vec::len), Some(0));
+    assert!(
+        verdict["logs"]
+            .as_array()
+            .is_some_and(|logs| !logs.is_empty())
+    );
+
+    let _ = fs::remove_file(input_path);
+}
+
+#[test]
+fn frankenctl_verify_receipt_summary_renders_human_verdict() {
+    let input_path = temp_path("frankenctl_verify_receipt_summary_input", "json");
+    let (receipt_id, input) = build_valid_receipt_verifier_input();
+    write_receipt_verifier_input(&input_path, &input);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "verify",
+            "receipt",
+            "--input",
+            input_path.to_str().expect("path should be utf8"),
+            "--receipt-id",
+            receipt_id.as_str(),
+            "--summary",
+        ])
+        .output()
+        .expect("verify receipt summary command should execute");
+
+    assert!(
+        output.status.success(),
+        "verify receipt --summary failed with stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf8");
+    assert!(stdout.contains("receipt=rcpt-001"));
+    assert!(stdout.contains("passed=true"));
+    assert!(stdout.contains("exit_code=0"));
+    assert!(stdout.contains("failure_class=none"));
+    assert!(stdout.contains("warnings=0"));
+
+    let _ = fs::remove_file(input_path);
 }
 
 // ── Replay tests ──────────────────────────────────────────────────────

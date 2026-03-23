@@ -403,6 +403,39 @@ fn parse_failure_evidence_is_unsupported_with_source_guidance() {
     }
 }
 
+#[test]
+fn mixed_or_cross_format_execute_success_specimens_are_degraded_until_graph_harness_exists() {
+    let inv = run_esm_cjs_parity_corpus();
+    let degraded: Vec<_> = inv
+        .evidence
+        .iter()
+        .filter(|ev| {
+            ev.expected_outcome == EsmCjsExpectedOutcome::ExecuteSuccess
+                && (ev.topology == ModuleGraphTopology::Mixed
+                    || ev.interop_direction != InteropDirection::None)
+        })
+        .collect();
+    assert!(
+        !degraded.is_empty(),
+        "expected mixed/interop execute-success specimens in the parity corpus"
+    );
+    for ev in degraded {
+        assert_eq!(
+            ev.compatibility_disposition,
+            EsmCjsCompatibilityDisposition::Degraded
+        );
+        assert_eq!(
+            ev.remediation_guidance.guidance_code,
+            "module_graph_oracle_required"
+        );
+        assert!(
+            ev.remediation_guidance
+                .message
+                .contains("single-source orchestrator lane")
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Verdict enum
 // ---------------------------------------------------------------------------

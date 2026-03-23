@@ -658,3 +658,22 @@ fn enrichment_cross_cutting_component_in_inventory() {
     let inv = run_esm_cjs_parity_corpus();
     assert_eq!(inv.component, ESM_CJS_PARITY_COMPONENT);
 }
+
+#[test]
+fn enrichment_cross_cutting_mixed_or_interop_execute_success_is_not_supported() {
+    let inv = run_esm_cjs_parity_corpus();
+    for ev in inv.evidence.iter().filter(|ev| {
+        ev.expected_outcome == EsmCjsExpectedOutcome::ExecuteSuccess
+            && (ev.topology == ModuleGraphTopology::Mixed
+                || ev.interop_direction != InteropDirection::None)
+    }) {
+        assert_eq!(
+            ev.compatibility_disposition,
+            EsmCjsCompatibilityDisposition::Degraded
+        );
+        assert_eq!(
+            ev.remediation_guidance.guidance_code,
+            "module_graph_oracle_required"
+        );
+    }
+}

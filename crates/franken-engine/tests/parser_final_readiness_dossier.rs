@@ -513,6 +513,28 @@ fn parser_final_readiness_doc_has_required_sections() {
 }
 
 #[test]
+fn parser_final_readiness_doc_uses_repo_local_target_dir_example() {
+    let doc = load_doc();
+
+    assert!(
+        doc.contains("target_rch_parser_final_readiness_dossier_<mode>_<pid>"),
+        "doc must describe the repo-local readiness dossier target-dir contract"
+    );
+    assert!(
+        doc.contains("$PWD/target_rch_parser_final_readiness_dossier_verify"),
+        "doc must show the hardened repo-local target-dir verification example"
+    );
+    assert!(
+        !doc.contains("/tmp/rch_target_franken_engine_parser_final_readiness_dossier"),
+        "doc must not reference the stale /tmp readiness dossier target dir"
+    );
+    assert!(
+        doc.contains("step_logs/step_01.log"),
+        "doc must include a concrete retained step-log verification command"
+    );
+}
+
+#[test]
 fn parser_final_readiness_fixture_is_well_formed() {
     let fixture = load_fixture();
 
@@ -964,6 +986,31 @@ fn replay_script_selects_latest_complete_bundle_and_prints_it() {
             "replay script missing expected snippet: {snippet}"
         );
     }
+}
+
+#[test]
+fn parser_final_readiness_script_uses_repo_local_target_dir_and_retained_step_log() {
+    let script = fs::read_to_string(Path::new(
+        "../../scripts/run_parser_final_readiness_dossier.sh",
+    ))
+    .expect("read parser final readiness dossier runner");
+
+    assert!(
+        script.contains("target_namespace=\"${mode}_$$\""),
+        "script should namespace the default repo-local target dir per mode/pid"
+    );
+    assert!(
+        script.contains("${root_dir}/target_rch_parser_final_readiness_dossier_"),
+        "script should use a repo-local readiness dossier target dir"
+    );
+    assert!(
+        !script.contains("/tmp/rch_target_franken_engine_parser_final_readiness_dossier"),
+        "script must not route readiness dossier remote builds through /tmp"
+    );
+    assert!(
+        script.contains("\"cat ${step_logs_dir}/step_01.log\""),
+        "manifest operator verification should surface a retained step log"
+    );
 }
 
 #[test]

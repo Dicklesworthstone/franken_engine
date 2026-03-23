@@ -431,6 +431,57 @@ fn corpus_syntax_count_adds_up() {
     );
 }
 
+#[test]
+fn corpus_inventory_carries_external_package_root_relative_requires_in_all_modes() {
+    let inventory = run_interop_parity_corpus();
+    let exact_specimen_ids = BTreeSet::from([
+        "external_extension_probe_package_root_require_native",
+        "external_extension_probe_package_root_require_node_compat",
+        "external_extension_probe_package_root_require_bun_compat",
+        "scoped_external_extension_probe_package_root_require_native",
+        "scoped_external_extension_probe_package_root_require_node_compat",
+        "scoped_external_extension_probe_package_root_require_bun_compat",
+    ]);
+    let actual: BTreeSet<(String, String)> = inventory
+        .evidence
+        .iter()
+        .filter(|evidence| exact_specimen_ids.contains(evidence.specimen_id.as_str()))
+        .map(|evidence| {
+            (
+                evidence.specimen_id.clone(),
+                evidence.compatibility_mode.as_str().to_string(),
+            )
+        })
+        .collect();
+    let expected = BTreeSet::from([
+        (
+            "external_extension_probe_package_root_require_native".to_string(),
+            "native".to_string(),
+        ),
+        (
+            "external_extension_probe_package_root_require_node_compat".to_string(),
+            "node_compat".to_string(),
+        ),
+        (
+            "external_extension_probe_package_root_require_bun_compat".to_string(),
+            "bun_compat".to_string(),
+        ),
+        (
+            "scoped_external_extension_probe_package_root_require_native".to_string(),
+            "native".to_string(),
+        ),
+        (
+            "scoped_external_extension_probe_package_root_require_node_compat".to_string(),
+            "node_compat".to_string(),
+        ),
+        (
+            "scoped_external_extension_probe_package_root_require_bun_compat".to_string(),
+            "bun_compat".to_string(),
+        ),
+    ]);
+    assert_eq!(actual, expected);
+}
+
 // ── Inventory serde ─────────────────────────────────────────────────────
 
 #[test]

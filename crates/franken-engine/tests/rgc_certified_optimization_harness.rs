@@ -39,6 +39,7 @@ const TRACE_IDS_SCHEMA_VERSION: &str =
     "franken-engine.rgc-certified-optimization-harness.trace-ids.v1";
 const RUN_MANIFEST_SCHEMA_VERSION: &str =
     "franken-engine.rgc-certified-optimization-harness.run-manifest.v1";
+const EGRAPH_REWRITE_PACK_ARTIFACT: &str = "egraph_rewrite_pack.json";
 const BEAD_ID: &str = "bd-1lsy.7.7";
 const COMPONENT: &str = "rgc_certified_optimization_harness";
 const SCENARIO_ID: &str = "rgc-607-certified-optimization-harness";
@@ -503,6 +504,7 @@ fn build_demo_index() -> (RewriteProofIndex, CertifiedOptimizationTraceIds) {
         optimization_entries,
         required_artifacts: vec![
             "rewrite_proof_index.json".to_string(),
+            EGRAPH_REWRITE_PACK_ARTIFACT.to_string(),
             "trace_ids.json".to_string(),
             "run_manifest.json".to_string(),
             "events.jsonl".to_string(),
@@ -542,7 +544,12 @@ fn emit_artifacts_to_dir(run_dir: &Path) {
         .unwrap_or_else(|err| panic!("failed to create {}: {err}", run_dir.display()));
 
     let (proof_index, trace_ids) = build_demo_index();
+    let egraph_rewrite_pack = build_demo_pack(&build_cost_model());
     write_json_file(&run_dir.join("rewrite_proof_index.json"), &proof_index);
+    write_json_file(
+        &run_dir.join(EGRAPH_REWRITE_PACK_ARTIFACT),
+        &egraph_rewrite_pack,
+    );
     write_json_file(&run_dir.join("trace_ids.json"), &trace_ids);
 }
 
@@ -552,11 +559,17 @@ fn rgc_607_harness_artifact_bundle_is_emitted() {
     emit_artifacts_to_dir(&output_dir);
 
     let proof_index_path = output_dir.join("rewrite_proof_index.json");
+    let egraph_rewrite_pack_path = output_dir.join(EGRAPH_REWRITE_PACK_ARTIFACT);
     let trace_ids_path = output_dir.join("trace_ids.json");
     assert!(
         proof_index_path.is_file(),
         "missing proof index {}",
         proof_index_path.display()
+    );
+    assert!(
+        egraph_rewrite_pack_path.is_file(),
+        "missing egraph rewrite pack {}",
+        egraph_rewrite_pack_path.display()
     );
     assert!(
         trace_ids_path.is_file(),
@@ -597,7 +610,28 @@ fn rgc_607_harness_artifact_bundle_is_emitted() {
     assert!(
         proof_index
             .required_artifacts
+            .contains(&EGRAPH_REWRITE_PACK_ARTIFACT.to_string())
+    );
+    assert!(
+        proof_index
+            .required_artifacts
             .contains(&"trace_ids.json".to_string())
+    );
+
+    let egraph_rewrite_pack: RewritePack =
+        serde_json::from_slice(&fs::read(&egraph_rewrite_pack_path).unwrap_or_else(|err| {
+            panic!(
+                "failed to read {}: {err}",
+                egraph_rewrite_pack_path.display()
+            )
+        }))
+        .expect("egraph rewrite pack should parse");
+    assert_eq!(egraph_rewrite_pack.pack_id, "demo-certified-pack");
+    assert_eq!(egraph_rewrite_pack.cost_model_id, proof_index.cost_model_id);
+    assert_eq!(egraph_rewrite_pack.rule_count(), 2);
+    assert_eq!(
+        egraph_rewrite_pack.content_hash,
+        proof_index.rewrite_packs[0].content_hash
     );
 
     let trace_ids: CertifiedOptimizationTraceIds = serde_json::from_slice(
@@ -636,10 +670,12 @@ fn rgc_607_gate_script_is_rch_backed_and_mentions_required_artifacts() {
         "cargo clippy -p frankenengine-engine --test rgc_certified_optimization_harness --test translation_validation_integration --test translation_validation_receipt_integration --test certified_optimization_governance_integration -- -D warnings",
         ARTIFACT_ENV,
         "rewrite_proof_index.json",
+        EGRAPH_REWRITE_PACK_ARTIFACT,
         "trace_ids.json",
         "\"rch_logs\"",
         RUN_MANIFEST_SCHEMA_VERSION,
         "./scripts/e2e/rgc_certified_optimization_harness_replay.sh",
+        "missing-remote-exit-marker",
     ] {
         assert!(
             script.contains(required_fragment),
@@ -659,6 +695,7 @@ fn rgc_607_check_mode_manifest_omits_proof_bundle_and_records_timeouts() {
         "if [[ \"$mode\" == \"test\" || \"$mode\" == \"ci\" ]]; then",
         "failed_command",
         "(outer-timeout=${rch_timeout_seconds}s)",
+        "(missing-remote-exit-marker)",
         "\\\"manifest\\\":",
         "\\\"events\\\":",
         "\\\"commands\\\":",
@@ -695,6 +732,7 @@ fn rgc_607_readme_documents_harness_lane() {
         "./scripts/run_rgc_certified_optimization_harness.sh ci",
         "./scripts/e2e/rgc_certified_optimization_harness_replay.sh ci",
         "rewrite_proof_index.json",
+        "egraph_rewrite_pack.json",
         "trace_ids.json",
         "rch-log.",
         "`check` mode emits only",

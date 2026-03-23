@@ -252,8 +252,12 @@ fn interop_gate_script_emits_trace_ids_artifact_contract() {
         "trace_ids_path=\"${run_dir}/trace_ids.json\"",
         "write_trace_ids()",
         "\"trace_ids\": \"${trace_ids_path}\"",
+        "\"step_logs\": \"${step_logs_dir}\"",
+        "\"first_step_log\": \"${step_logs_dir}/step_000.log\"",
         "cat ${trace_ids_path}",
+        "cat ${step_logs_dir}/step_000.log",
         "rgc module interop verification matrix trace ids: ${trace_ids_path}",
+        "rgc module interop verification matrix first step log: ${step_logs_dir}/step_000.log",
         "write_trace_ids\nwrite_manifest \"$main_exit\"",
     ] {
         assert!(script.contains(needle), "gate script missing {needle}");
@@ -265,7 +269,12 @@ fn interop_replay_wrapper_requires_and_surfaces_trace_ids_artifact() {
     let path = repo_root().join("scripts/e2e/rgc_module_interop_verification_matrix_replay.sh");
     let script = read_to_string(&path);
 
-    for needle in ["trace_ids.json", "latest trace ids"] {
+    for needle in [
+        "trace_ids.json",
+        "latest trace ids",
+        "step_logs/step_000.log",
+        "latest first step log",
+    ] {
         assert!(script.contains(needle), "replay wrapper missing {needle}");
     }
 }

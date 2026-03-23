@@ -966,6 +966,88 @@ fn catalog_register_duplicate_returns_false() {
 }
 
 #[test]
+fn catalog_register_rejects_tampered_pack_without_mutation() {
+    let mut cat = PackCatalog::new("tampered-pack");
+    let hash_before = cat.content_hash.clone();
+    let mut pack = make_pack(
+        "tampered",
+        vec![enabled_rule("r1", RewriteCategory::Custom, true)],
+    );
+    pack.content_hash = ContentHash::compute(b"tampered-pack-hash");
+
+    assert!(!cat.register(pack));
+    assert_eq!(cat.content_hash, hash_before);
+    assert!(cat.packs.is_empty());
+    assert_eq!(cat.total_rule_count, 0);
+}
+
+#[test]
+fn catalog_register_rejects_pack_with_duplicate_rule_ids() {
+    let mut cat = PackCatalog::new("duplicate-rules");
+    let duplicate_rules = vec![
+        enabled_rule("dup", RewriteCategory::Custom, true),
+        enabled_rule("dup", RewriteCategory::DeadCodeElimination, false),
+    ];
+
+    assert!(!cat.register(make_pack("duplicate-pack", duplicate_rules)));
+    assert!(cat.packs.is_empty());
+    assert_eq!(cat.total_rule_count, 0);
+}
+
+#[test]
+fn catalog_register_rejects_pack_with_empty_rule_id() {
+    let mut cat = PackCatalog::new("empty-rule-id");
+
+    assert!(!cat.register(make_pack(
+        "empty-rule-pack",
+        vec![enabled_rule("", RewriteCategory::Custom, true)],
+    )));
+    assert!(cat.packs.is_empty());
+    assert_eq!(cat.total_rule_count, 0);
+}
+
+#[test]
+fn catalog_register_rejects_pack_with_empty_pack_id() {
+    let mut cat = PackCatalog::new("empty-pack-id");
+    let pack = RewritePack::new(
+        "",
+        PackVersion::CURRENT,
+        test_epoch(),
+        "empty pack id",
+        vec![enabled_rule("r1", RewriteCategory::Custom, true)],
+        InterferenceMetadata::build(vec![]),
+        "baseline-cost-model",
+    );
+
+    assert!(!cat.register(pack));
+    assert!(cat.packs.is_empty());
+    assert_eq!(cat.total_rule_count, 0);
+}
+
+#[test]
+fn catalog_register_rejects_pack_with_foreign_interference_rule_ids() {
+    let mut cat = PackCatalog::new("foreign-interference");
+    let pack = RewritePack::new(
+        "foreign-pack",
+        PackVersion::CURRENT,
+        test_epoch(),
+        "foreign interference pack",
+        vec![enabled_rule("r1", RewriteCategory::Custom, true)],
+        InterferenceMetadata::build(vec![make_interference(
+            "r1",
+            "missing",
+            RuleInterferenceKind::PatternConflict,
+            false,
+        )]),
+        "baseline-cost-model",
+    );
+
+    assert!(!cat.register(pack));
+    assert!(cat.packs.is_empty());
+    assert_eq!(cat.total_rule_count, 0);
+}
+
+#[test]
 fn catalog_register_multiple_packs() {
     let mut cat = PackCatalog::new("multi");
     cat.register(make_pack(

@@ -1152,11 +1152,12 @@ Artifacts are written under:
 - `artifacts/rgc_certified_optimization_harness/<timestamp>/commands.txt`
 - `artifacts/rgc_certified_optimization_harness/<timestamp>/trace_ids.json`
 - `artifacts/rgc_certified_optimization_harness/<timestamp>/rewrite_proof_index.json`
+- `artifacts/rgc_certified_optimization_harness/<timestamp>/egraph_rewrite_pack.json`
 - `artifacts/rgc_certified_optimization_harness/<timestamp>/rch-log.*`
 
 `check` mode emits only `run_manifest.json`, `events.jsonl`, `commands.txt`,
 and retained `rch-log.*` artifacts. `test` and `ci` additionally emit
-`trace_ids.json` and `rewrite_proof_index.json`.
+`trace_ids.json`, `rewrite_proof_index.json`, and `egraph_rewrite_pack.json`.
 
 ## FRX Toolchain Lane Charter Gate
 
@@ -1439,6 +1440,7 @@ Artifacts are written under:
 - `artifacts/rgc_module_interop_verification_matrix/<timestamp>/commands.txt`
 - `artifacts/rgc_module_interop_verification_matrix/<timestamp>/trace_ids.json`
 - `artifacts/rgc_module_interop_verification_matrix/<timestamp>/module_resolution_trace.jsonl`
+- `artifacts/rgc_module_interop_verification_matrix/<timestamp>/step_logs/step_*.log`
 
 ## RGC Verification Coverage Matrix Gate
 

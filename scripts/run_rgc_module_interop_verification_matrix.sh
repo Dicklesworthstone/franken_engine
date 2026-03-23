@@ -21,6 +21,7 @@ events_path="${run_dir}/events.jsonl"
 commands_path="${run_dir}/commands.txt"
 module_resolution_trace_path="${run_dir}/module_resolution_trace.jsonl"
 trace_ids_path="${run_dir}/trace_ids.json"
+step_logs_dir="${run_dir}/step_logs"
 
 trace_id="trace-rgc-module-interop-matrix-${timestamp}"
 decision_id="decision-rgc-module-interop-matrix-${timestamp}"
@@ -29,7 +30,7 @@ component="rgc_module_interop_verification_matrix"
 scenario_id="rgc-058"
 replay_command="RGC_MODULE_INTEROP_MATRIX_REPLAY_RUN_DIR=${run_dir} ./scripts/e2e/rgc_module_interop_verification_matrix_replay.sh"
 
-mkdir -p "$run_dir"
+mkdir -p "$run_dir" "$step_logs_dir"
 
 if ! command -v rch >/dev/null 2>&1; then
   echo "rch is required for RGC module interop verification matrix heavy commands" >&2
@@ -98,6 +99,7 @@ rch_reject_artifact_retrieval_failure() {
 declare -a commands_run=()
 failed_command=""
 manifest_written=false
+step_log_index=0
 
 run_step() {
   local command_text="$1"
@@ -106,7 +108,8 @@ run_step() {
 
   commands_run+=("$command_text")
   echo "==> $command_text"
-  log_path="$(mktemp)"
+  log_path="${step_logs_dir}/step_$(printf '%03d' "${step_log_index}").log"
+  step_log_index=$((step_log_index + 1))
 
   if run_rch "$@" > >(tee "$log_path") 2>&1; then
     run_rc=0
@@ -115,13 +118,11 @@ run_step() {
   fi
 
   if ! rch_reject_local_fallback "$log_path"; then
-    rm -f "$log_path"
     failed_command="${command_text} (rch-local-fallback-detected)"
     return 1
   fi
 
   if ! rch_reject_artifact_retrieval_failure "$log_path"; then
-    rm -f "$log_path"
     failed_command="${command_text} (rch-artifact-retrieval-failed)"
     return 1
   fi
@@ -133,15 +134,12 @@ run_step() {
       echo "==> recovered: remote execution succeeded; artifact retrieval timed out" \
         | tee -a "$log_path"
     elif [[ "$run_rc" -eq 124 ]]; then
-      rm -f "$log_path"
       failed_command="${command_text} (timeout-${rch_timeout_seconds}s)"
       return 1
     elif [[ -n "$remote_exit_code" ]]; then
-      rm -f "$log_path"
       failed_command="${command_text} (remote-exit=${remote_exit_code})"
       return 1
     else
-      rm -f "$log_path"
       failed_command="${command_text} (rch-exit=${run_rc})"
       return 1
     fi
@@ -149,17 +147,13 @@ run_step() {
 
   if [[ -z "$remote_exit_code" ]]; then
     echo "rch output missing remote exit marker; failing closed" | tee -a "$log_path"
-    rm -f "$log_path"
     failed_command="${command_text} (missing-remote-exit-marker)"
     return 1
   fi
   if [[ "$remote_exit_code" != "0" ]]; then
-    rm -f "$log_path"
     failed_command="${command_text} (remote-exit=${remote_exit_code})"
     return 1
   fi
-
-  rm -f "$log_path"
 }
 
 run_mode() {
@@ -312,6 +306,8 @@ write_manifest() {
     echo "    \"commands\": \"${commands_path}\"," 
     echo "    \"module_resolution_trace\": \"${module_resolution_trace_path}\"," 
     echo "    \"trace_ids\": \"${trace_ids_path}\","
+    echo "    \"step_logs\": \"${step_logs_dir}\","
+    echo "    \"first_step_log\": \"${step_logs_dir}/step_000.log\","
     echo '    "module_resolution_trace_source": "contract_smoke_sample",'
     echo '    "matrix_doc": "docs/module_compatibility_matrix_v1.json",'
     echo '    "matrix_impl": "crates/franken-engine/src/module_compatibility_matrix.rs",'
@@ -327,6 +323,7 @@ write_manifest() {
     echo "    \"cat ${commands_path}\"," 
     echo "    \"cat ${module_resolution_trace_path}\"," 
     echo "    \"cat ${trace_ids_path}\","
+    echo "    \"cat ${step_logs_dir}/step_000.log\","
     echo "    \"./scripts/e2e/rgc_module_resolution_trace_contract_smoke.sh ${module_resolution_trace_path}\"," 
     echo '    "rg -n '\''compatibility_disposition|remediation_guidance'\'' crates/franken-engine/src/esm_cjs_interop_parity.rs",' 
     echo "    \"${replay_command}\""
@@ -339,6 +336,7 @@ write_manifest() {
   echo "rgc module interop verification matrix commands: ${commands_path}"
   echo "rgc module interop verification matrix module resolution trace: ${module_resolution_trace_path}"
   echo "rgc module interop verification matrix trace ids: ${trace_ids_path}"
+  echo "rgc module interop verification matrix first step log: ${step_logs_dir}/step_000.log"
 }
 
 main_exit=0

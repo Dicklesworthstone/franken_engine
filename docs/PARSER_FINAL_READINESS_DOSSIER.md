@@ -115,6 +115,10 @@ Modes:
 - `clippy`: lint focused readiness dossier target with `-D warnings`
 - `ci`: check + test + clippy
 
+The gate defaults remote builds into a repo-local, namespaced target directory
+(`target_rch_parser_final_readiness_dossier_<mode>_<pid>`) so `rch` workers do
+not depend on fragile `/tmp`-backed incremental state.
+
 The replay wrapper reruns the selected mode, then prints the latest complete
 artifact bundle and warns when the newest directory is incomplete so operators
 do not get stranded on partial failure output:
@@ -145,9 +149,11 @@ Each run must publish:
 ## Operator Verification
 
 ```bash
-./scripts/run_parser_final_readiness_dossier.sh ci
+CARGO_TARGET_DIR=$PWD/target_rch_parser_final_readiness_dossier_verify \
+  ./scripts/run_parser_final_readiness_dossier.sh ci
 cat artifacts/parser_final_readiness_dossier/<timestamp>/run_manifest.json
 cat artifacts/parser_final_readiness_dossier/<timestamp>/events.jsonl
 cat artifacts/parser_final_readiness_dossier/<timestamp>/commands.txt
+cat artifacts/parser_final_readiness_dossier/<timestamp>/step_logs/step_01.log
 ./scripts/e2e/parser_final_readiness_dossier_replay.sh ci
 ```

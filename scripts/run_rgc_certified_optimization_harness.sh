@@ -19,6 +19,7 @@ manifest_path="${run_dir}/run_manifest.json"
 events_path="${run_dir}/events.jsonl"
 commands_path="${run_dir}/commands.txt"
 proof_index_path="${run_dir}/rewrite_proof_index.json"
+egraph_rewrite_pack_path="${run_dir}/egraph_rewrite_pack.json"
 trace_ids_path="${run_dir}/trace_ids.json"
 
 trace_id="trace-rgc-certified-optimization-harness-${timestamp}"
@@ -45,11 +46,16 @@ run_rch() {
     "$@"
 }
 
+rch_strip_ansi() {
+  local input="$1"
+  sed -E 's/\x1B\[[0-9;]*[[:alpha:]]//g' "$input"
+}
+
 rch_remote_exit_code() {
   local log_path="$1"
   local remote_exit_line remote_exit_code
 
-  remote_exit_line="$(rg -o 'Remote command finished: exit=[0-9]+' "$log_path" | tail -n 1 || true)"
+  remote_exit_line="$(rch_strip_ansi "$log_path" | rg -o 'Remote command finished: exit=[0-9]+' | tail -n 1 || true)"
   if [[ -z "$remote_exit_line" ]]; then
     return 1
   fi
@@ -64,7 +70,7 @@ rch_remote_exit_code() {
 
 rch_reject_local_fallback() {
   local log_path="$1"
-  if grep -Eiq 'Remote toolchain failure, falling back to local|falling back to local|fallback to local|local fallback|\[RCH\] local \(' "$log_path"; then
+  if rch_strip_ansi "$log_path" | grep -Eiq 'Remote toolchain failure, falling back to local|falling back to local|fallback to local|local fallback|\[RCH\] local \('; then
     echo "rch reported local fallback; refusing local execution for heavy command" >&2
     return 1
   fi
@@ -89,7 +95,7 @@ run_step() {
     :
   else
     run_rch_status="$?"
-    if rg -q "Remote command finished: exit=0" "$log_path"; then
+    if rch_strip_ansi "$log_path" | rg -q "Remote command finished: exit=0"; then
       echo "==> recovered: remote execution succeeded; artifact retrieval timed out" \
         | tee -a "$log_path"
     else
@@ -108,6 +114,10 @@ run_step() {
   fi
 
   remote_exit_code="$(rch_remote_exit_code "$log_path" || true)"
+  if [[ -z "$remote_exit_code" ]]; then
+    failed_command="${command_text} (missing-remote-exit-marker)"
+    return 1
+  fi
   if [[ -n "$remote_exit_code" && "$remote_exit_code" != "0" ]]; then
     failed_command="${command_text} (remote-exit=${remote_exit_code})"
     return 1
@@ -116,7 +126,7 @@ run_step() {
 
 assert_test_artifacts_present() {
   local missing=0
-  for required_path in "$proof_index_path" "$trace_ids_path"; do
+  for required_path in "$proof_index_path" "$egraph_rewrite_pack_path" "$trace_ids_path"; do
     if [[ ! -f "$required_path" ]]; then
       echo "missing required artifact: ${required_path}" >&2
       missing=1
@@ -237,6 +247,7 @@ write_manifest() {
     echo "    \"commands\": \"${commands_path}\","
     if [[ "$include_bundle_artifacts" == true ]]; then
       echo "    \"rewrite_proof_index\": \"${proof_index_path}\","
+      echo "    \"egraph_rewrite_pack\": \"${egraph_rewrite_pack_path}\","
       echo "    \"trace_ids\": \"${trace_ids_path}\","
     fi
     echo '    "integration_tests": "crates/franken-engine/tests/rgc_certified_optimization_harness.rs",'
@@ -257,6 +268,7 @@ write_manifest() {
     echo "    \"cat ${commands_path}\","
     if [[ "$include_bundle_artifacts" == true ]]; then
       echo "    \"cat ${proof_index_path}\","
+      echo "    \"cat ${egraph_rewrite_pack_path}\","
       echo "    \"cat ${trace_ids_path}\","
     fi
     echo "    \"${replay_command}\""

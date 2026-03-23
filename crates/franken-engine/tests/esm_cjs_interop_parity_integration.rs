@@ -124,6 +124,29 @@ fn corpus_distinguishes_native_node_compat_and_bun_compat_extensionless_relative
 }
 
 #[test]
+fn corpus_covers_external_extension_probe_package_root_relative_requires() {
+    let corpus = interop_parity_corpus();
+
+    for specimen_id in [
+        "external_extension_probe_package_root_require_native",
+        "external_extension_probe_package_root_require_node_compat",
+        "external_extension_probe_package_root_require_bun_compat",
+        "scoped_external_extension_probe_package_root_require_native",
+        "scoped_external_extension_probe_package_root_require_node_compat",
+        "scoped_external_extension_probe_package_root_require_bun_compat",
+    ] {
+        let specimen = corpus
+            .iter()
+            .find(|s| s.specimen_id == specimen_id)
+            .unwrap();
+        assert_eq!(specimen.family, InteropFamily::CjsOnly);
+        assert_eq!(specimen.expected_outcome, InteropExpectedOutcome::Success);
+        assert_eq!(specimen.entry_point, "entry.cjs");
+        assert_eq!(specimen.modules.len(), 3);
+    }
+}
+
+#[test]
 fn corpus_has_non_success_outcomes() {
     let corpus = interop_parity_corpus();
     // Corpus may not have all failure types, but must have at least one non-success.
@@ -454,6 +477,55 @@ fn inventory_distinguishes_native_node_compat_and_bun_compat_extensionless_relat
             .iter()
             .all(|verdict| verdict.pass)
     );
+}
+
+#[test]
+fn inventory_marks_external_extension_probe_package_root_relative_requires_as_supported_in_all_modes()
+ {
+    let inv = run_interop_parity_corpus();
+
+    for (specimen_id, compatibility_mode) in [
+        (
+            "external_extension_probe_package_root_require_native",
+            CompatibilityMode::Native,
+        ),
+        (
+            "external_extension_probe_package_root_require_node_compat",
+            CompatibilityMode::NodeCompat,
+        ),
+        (
+            "external_extension_probe_package_root_require_bun_compat",
+            CompatibilityMode::BunCompat,
+        ),
+        (
+            "scoped_external_extension_probe_package_root_require_native",
+            CompatibilityMode::Native,
+        ),
+        (
+            "scoped_external_extension_probe_package_root_require_node_compat",
+            CompatibilityMode::NodeCompat,
+        ),
+        (
+            "scoped_external_extension_probe_package_root_require_bun_compat",
+            CompatibilityMode::BunCompat,
+        ),
+    ] {
+        let evidence = inv
+            .evidence
+            .iter()
+            .find(|ev| ev.specimen_id == specimen_id)
+            .unwrap();
+        assert_eq!(evidence.compatibility_mode, compatibility_mode);
+        assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
+        assert_eq!(evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(evidence.linked_count, 3);
+        assert_eq!(
+            evidence.compatibility_disposition,
+            InteropCompatibilityDisposition::Supported
+        );
+        assert!(evidence.error_detail.is_none());
+        assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
+    }
 }
 
 #[test]

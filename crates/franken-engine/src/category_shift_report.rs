@@ -175,7 +175,11 @@ impl CategoryShiftClaim {
             self.evidence_summary.clone(),
             self.evidence_bundle_ref.clone(),
             self.evidence_hash.to_string(),
-            self.reproduction_instructions.join("||"),
+            {
+                let mut sorted_repro = self.reproduction_instructions.clone();
+                sorted_repro.sort();
+                sorted_repro.join("||")
+            },
             source_beads.join("|"),
             {
                 let mut sorted_caveats = self.caveats.clone();
@@ -401,8 +405,16 @@ impl CategoryShiftReport {
             ));
         }
 
-        for claim in &self.claims {
-            parts.push(claim.compute_hash().to_string());
+        {
+            let mut sorted_claim_hashes: Vec<_> = self
+                .claims
+                .iter()
+                .map(|c| c.compute_hash().to_string())
+                .collect();
+            sorted_claim_hashes.sort();
+            for h in sorted_claim_hashes {
+                parts.push(h);
+            }
         }
 
         parts.push(self.methodology.summary.clone());
@@ -422,19 +434,45 @@ impl CategoryShiftReport {
             parts.push(lm.join("|"));
         }
 
-        for gate in &self.prerequisite_gates {
-            parts.push(gate.compute_hash().to_string());
+        {
+            let mut sorted_gate_hashes: Vec<_> = self
+                .prerequisite_gates
+                .iter()
+                .map(|g| g.compute_hash().to_string())
+                .collect();
+            sorted_gate_hashes.sort();
+            for h in sorted_gate_hashes {
+                parts.push(h);
+            }
         }
 
-        for artifact in &self.published_artifacts {
-            parts.push(artifact.compute_hash().to_string());
+        {
+            let mut sorted_artifact_hashes: Vec<_> = self
+                .published_artifacts
+                .iter()
+                .map(|a| a.compute_hash().to_string())
+                .collect();
+            sorted_artifact_hashes.sort();
+            for h in sorted_artifact_hashes {
+                parts.push(h);
+            }
         }
 
-        for review in &self.peer_reviews {
-            parts.push(format!(
-                "{}:{}:{}:{}",
-                review.reviewer_id, review.reviewed_at_utc, review.approved, review.notes
-            ));
+        {
+            let mut sorted_reviews: Vec<_> = self
+                .peer_reviews
+                .iter()
+                .map(|review| {
+                    format!(
+                        "{}:{}:{}:{}",
+                        review.reviewer_id, review.reviewed_at_utc, review.approved, review.notes
+                    )
+                })
+                .collect();
+            sorted_reviews.sort();
+            for r in sorted_reviews {
+                parts.push(r);
+            }
         }
 
         ContentHash::compute(parts.join("|").as_bytes())

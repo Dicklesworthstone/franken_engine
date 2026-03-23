@@ -4540,6 +4540,74 @@ mod tests {
     }
 
     #[test]
+    fn parse_verify_receipt_command_requires_input() {
+        let args = vec![
+            "verify".to_string(),
+            "receipt".to_string(),
+            "--receipt-id".to_string(),
+            "rcpt-1".to_string(),
+        ];
+        let error = parse_command(&args).expect_err("missing input should fail");
+        assert_eq!(error, "verify receipt requires --input <path>");
+    }
+
+    #[test]
+    fn parse_verify_receipt_command_requires_receipt_id() {
+        let args = vec![
+            "verify".to_string(),
+            "receipt".to_string(),
+            "--input".to_string(),
+            "receipts.json".to_string(),
+        ];
+        let error = parse_command(&args).expect_err("missing receipt id should fail");
+        assert_eq!(error, "verify receipt requires --receipt-id <id>");
+    }
+
+    #[test]
+    fn parse_verify_receipt_command_rejects_unknown_flag() {
+        let args = vec![
+            "verify".to_string(),
+            "receipt".to_string(),
+            "--input".to_string(),
+            "receipts.json".to_string(),
+            "--receipt-id".to_string(),
+            "rcpt-1".to_string(),
+            "--bogus".to_string(),
+        ];
+        let error = parse_command(&args).expect_err("unknown flag should fail");
+        assert_eq!(error, "unknown verify receipt flag `--bogus`");
+    }
+
+    #[test]
+    fn run_verify_receipt_parse_failure_includes_parse_remediation() {
+        let error = run(vec![
+            "verify".to_string(),
+            "receipt".to_string(),
+            "--input".to_string(),
+            "receipts.json".to_string(),
+        ])
+        .expect_err("missing receipt id should surface parse remediation");
+        assert!(
+            error.contains("[frankenctl trace_id=frankenctl-"),
+            "error should include trace id, got: {error}"
+        );
+        assert!(
+            error.contains("command=parse"),
+            "error should identify parse command, got: {error}"
+        );
+        assert!(
+            error.contains("verify receipt requires --receipt-id <id>"),
+            "error should preserve parse failure, got: {error}"
+        );
+        assert!(
+            error.contains(
+                "remediation: Run `frankenctl --help` for full command usage and required arguments."
+            ),
+            "error should include parse remediation, got: {error}"
+        );
+    }
+
+    #[test]
     fn parse_doctor_command() {
         let args = vec![
             "doctor".to_string(),

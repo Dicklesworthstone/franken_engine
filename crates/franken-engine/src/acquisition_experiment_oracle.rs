@@ -341,8 +341,11 @@ impl ExperimentPlan {
         let mut data = Vec::new();
         data.extend_from_slice(self.plan_id.as_bytes());
         data.extend_from_slice(&self.epoch.as_u64().to_le_bytes());
-        for proposal in &self.proposals {
-            data.extend_from_slice(proposal.content_hash.as_bytes());
+        let mut sorted_proposal_hashes: Vec<_> =
+            self.proposals.iter().map(|p| p.content_hash).collect();
+        sorted_proposal_hashes.sort();
+        for ch in &sorted_proposal_hashes {
+            data.extend_from_slice(ch.as_bytes());
         }
         data.extend_from_slice(&self.budget_remaining_millionths.to_le_bytes());
         data.extend_from_slice(&self.total_expected_gain_millionths.to_le_bytes());

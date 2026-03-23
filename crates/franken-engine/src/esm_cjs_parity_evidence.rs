@@ -615,6 +615,11 @@ fn remediation_guidance(
     }
 }
 
+fn specimen_overclaims_graph_interop(specimen: &EsmCjsParitySpecimen) -> bool {
+    specimen.topology == ModuleGraphTopology::Mixed
+        || specimen.interop_direction != InteropDirection::None
+}
+
 fn classify_compatibility(
     specimen: &EsmCjsParitySpecimen,
     _actual_outcome: EsmCjsActualOutcome,
@@ -627,6 +632,21 @@ fn classify_compatibility(
                 "interop_contract_violation",
                 format!(
                     "specimen '{}' drifted from the shipped ESM/CJS parity contract; rerun the parity evidence bundle and inspect the emitted artifact set before shipping this boundary",
+                    specimen.specimen_id
+                ),
+            ),
+        );
+    }
+
+    if specimen.expected_outcome == EsmCjsExpectedOutcome::ExecuteSuccess
+        && specimen_overclaims_graph_interop(specimen)
+    {
+        return (
+            EsmCjsCompatibilityDisposition::Degraded,
+            remediation_guidance(
+                "module_graph_oracle_required",
+                format!(
+                    "specimen '{}' currently runs through a single-source orchestrator lane, so it cannot claim shipped mixed-graph / cross-format interop support without a dedicated module-graph harness",
                     specimen.specimen_id
                 ),
             ),
@@ -1751,6 +1771,28 @@ mod tests {
         );
         assert_eq!(disposition, EsmCjsCompatibilityDisposition::Supported);
         assert_eq!(guidance.guidance_code, "no_remediation_required");
+    }
+
+    #[test]
+    fn classify_compatibility_interop_execute_success_is_degraded() {
+        let specimen = EsmCjsParitySpecimen {
+            specimen_id: "interop_scope_case".into(),
+            description: "test".into(),
+            source: "1".into(),
+            source_file: Some("interop_scope_case.mjs".into()),
+            expected_syntax: ModuleSyntax::EsModule,
+            topology: ModuleGraphTopology::Mixed,
+            interop_direction: InteropDirection::Bidirectional,
+            expected_outcome: EsmCjsExpectedOutcome::ExecuteSuccess,
+        };
+        let (disposition, guidance) = classify_compatibility(
+            &specimen,
+            EsmCjsActualOutcome::ExecuteSuccess,
+            EsmCjsParityVerdict::Pass,
+        );
+        assert_eq!(disposition, EsmCjsCompatibilityDisposition::Degraded);
+        assert_eq!(guidance.guidance_code, "module_graph_oracle_required");
+        assert!(guidance.message.contains("single-source orchestrator lane"));
     }
 
     #[test]

@@ -403,6 +403,66 @@ pub struct InteropParityBundleArtifacts {
 // Corpus
 // ---------------------------------------------------------------------------
 
+fn external_package_root_require_specimen(
+    specimen_id: &str,
+    description: &str,
+    package_entry_specifier: &str,
+    package_sub_specifier: &str,
+    bare_request: &str,
+    sub_value_source: &str,
+) -> InteropSpecimen {
+    InteropSpecimen {
+        specimen_id: specimen_id.into(),
+        description: description.into(),
+        family: InteropFamily::CjsOnly,
+        modules: vec![
+            SpecimenModule {
+                specifier: package_sub_specifier.into(),
+                syntax: ModuleSyntax::CommonJs,
+                source: format!("module.exports.value = {sub_value_source};"),
+                imports: vec![],
+                exports: vec![ExportEntry::direct("value", "value")],
+                has_default_export: false,
+                has_top_level_await: false,
+            },
+            SpecimenModule {
+                specifier: package_entry_specifier.into(),
+                syntax: ModuleSyntax::CommonJs,
+                source: "const sub = require('./sub'); module.exports.value = sub.value;".into(),
+                imports: vec![ImportEntry::new("./sub", "value", "sub")],
+                exports: vec![ExportEntry::direct("value", "value")],
+                has_default_export: false,
+                has_top_level_await: false,
+            },
+            SpecimenModule {
+                specifier: "entry.cjs".into(),
+                syntax: ModuleSyntax::CommonJs,
+                source: format!("const pkg = require('{bare_request}');"),
+                imports: vec![ImportEntry::new(bare_request, "value", "pkg")],
+                exports: vec![],
+                has_default_export: false,
+                has_top_level_await: false,
+            },
+        ],
+        entry_point: "entry.cjs".into(),
+        expected_outcome: InteropExpectedOutcome::Success,
+        expected_linked_count: Some(3),
+        expected_binding_states: vec![
+            ExpectedBindingState {
+                module_specifier: package_sub_specifier.into(),
+                export_name: "value".into(),
+                expected_state: BindingCellState::Initialized,
+            },
+            ExpectedBindingState {
+                module_specifier: package_entry_specifier.into(),
+                export_name: "value".into(),
+                expected_state: BindingCellState::Initialized,
+            },
+        ],
+        expected_async_phases: vec![],
+    }
+}
+
 /// Returns the curated corpus of interop parity specimens.
 pub fn interop_parity_corpus() -> Vec<InteropSpecimen> {
     vec![
@@ -522,6 +582,54 @@ pub fn interop_parity_corpus() -> Vec<InteropSpecimen> {
             }],
             expected_async_phases: vec![],
         },
+        external_package_root_require_specimen(
+            "external_extension_probe_package_root_require_native",
+            "Native CJS entry bare-requires an external pkg.js entry whose nested ./sub require stays anchored at the package root",
+            "pkg.js",
+            "pkg/sub.cjs",
+            "pkg",
+            "41",
+        ),
+        external_package_root_require_specimen(
+            "external_extension_probe_package_root_require_node_compat",
+            "Node-compatible CJS entry bare-requires an external pkg.js entry whose nested ./sub require stays anchored at the package root",
+            "pkg.js",
+            "pkg/sub.cjs",
+            "pkg",
+            "41",
+        ),
+        external_package_root_require_specimen(
+            "external_extension_probe_package_root_require_bun_compat",
+            "Bun-compatible CJS entry bare-requires an external pkg.js entry whose nested ./sub require stays anchored at the package root",
+            "pkg.js",
+            "pkg/sub.cjs",
+            "pkg",
+            "41",
+        ),
+        external_package_root_require_specimen(
+            "scoped_external_extension_probe_package_root_require_native",
+            "Native CJS entry bare-requires a scoped @scope/pkg.js entry whose nested ./sub require stays anchored at the scoped package root",
+            "@scope/pkg.js",
+            "@scope/pkg/sub.cjs",
+            "@scope/pkg",
+            "7",
+        ),
+        external_package_root_require_specimen(
+            "scoped_external_extension_probe_package_root_require_node_compat",
+            "Node-compatible CJS entry bare-requires a scoped @scope/pkg.js entry whose nested ./sub require stays anchored at the scoped package root",
+            "@scope/pkg.js",
+            "@scope/pkg/sub.cjs",
+            "@scope/pkg",
+            "7",
+        ),
+        external_package_root_require_specimen(
+            "scoped_external_extension_probe_package_root_require_bun_compat",
+            "Bun-compatible CJS entry bare-requires a scoped @scope/pkg.js entry whose nested ./sub require stays anchored at the scoped package root",
+            "@scope/pkg.js",
+            "@scope/pkg/sub.cjs",
+            "@scope/pkg",
+            "7",
+        ),
         // ── ESM imports CJS ──
         InteropSpecimen {
             specimen_id: "esm_imports_cjs_named".into(),
@@ -2205,6 +2313,33 @@ pub fn write_interop_parity_bundle(
 mod tests {
     use super::*;
 
+    const EXTERNAL_PACKAGE_ROOT_REQUIRE_MODE_CASES: [(&str, CompatibilityMode); 6] = [
+        (
+            "external_extension_probe_package_root_require_native",
+            CompatibilityMode::Native,
+        ),
+        (
+            "external_extension_probe_package_root_require_node_compat",
+            CompatibilityMode::NodeCompat,
+        ),
+        (
+            "external_extension_probe_package_root_require_bun_compat",
+            CompatibilityMode::BunCompat,
+        ),
+        (
+            "scoped_external_extension_probe_package_root_require_native",
+            CompatibilityMode::Native,
+        ),
+        (
+            "scoped_external_extension_probe_package_root_require_node_compat",
+            CompatibilityMode::NodeCompat,
+        ),
+        (
+            "scoped_external_extension_probe_package_root_require_bun_compat",
+            CompatibilityMode::BunCompat,
+        ),
+    ];
+
     fn synthetic_passing_evidence(specimen_id: &str) -> InteropSpecimenEvidence {
         let mut evidence = InteropSpecimenEvidence {
             specimen_id: specimen_id.to_string(),
@@ -3356,6 +3491,43 @@ mod tests {
                 .iter()
                 .all(|verdict| verdict.pass)
         );
+    }
+
+    #[test]
+    fn run_single_specimen_external_package_root_relative_requires_match_resolver_contract() {
+        let corpus = interop_parity_corpus();
+
+        for (specimen_id, compatibility_mode) in EXTERNAL_PACKAGE_ROOT_REQUIRE_MODE_CASES {
+            let specimen = corpus
+                .iter()
+                .find(|specimen| specimen.specimen_id == specimen_id)
+                .unwrap();
+            let evidence = run_single_specimen(specimen);
+            assert_eq!(evidence.compatibility_mode, compatibility_mode);
+            assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
+            assert_eq!(evidence.verdict, InteropVerdict::Pass);
+            assert_eq!(
+                evidence.compatibility_disposition,
+                InteropCompatibilityDisposition::Supported
+            );
+            assert_eq!(evidence.linked_count, 3);
+            assert!(evidence.error_detail.is_none());
+            assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
+        }
+    }
+
+    #[test]
+    fn external_package_root_relative_requires_are_explicitly_mode_tagged_in_corpus() {
+        let corpus_ids: BTreeSet<String> = interop_parity_corpus()
+            .into_iter()
+            .map(|specimen| specimen.specimen_id)
+            .collect();
+        for (specimen_id, _) in EXTERNAL_PACKAGE_ROOT_REQUIRE_MODE_CASES {
+            assert!(
+                corpus_ids.contains(specimen_id),
+                "missing explicit package-root require specimen {specimen_id}"
+            );
+        }
     }
 
     #[test]

@@ -571,6 +571,67 @@ impl RewritePack {
         self.rules.iter().filter(|r| r.category == cat).collect()
     }
 
+    fn has_valid_rule_ids(&self) -> bool {
+        if self.rules.iter().any(|rule| rule.rule_id.is_empty()) {
+            return false;
+        }
+        let rule_ids: BTreeSet<&str> = self
+            .rules
+            .iter()
+            .map(|rule| rule.rule_id.as_str())
+            .collect();
+        rule_ids.len() == self.rules.len()
+    }
+
+    fn interference_matches_rules(&self) -> bool {
+        let rule_ids: BTreeSet<&str> = self
+            .rules
+            .iter()
+            .map(|rule| rule.rule_id.as_str())
+            .collect();
+        self.interference.entries.iter().all(|entry| {
+            entry.rule_a != entry.rule_b
+                && rule_ids.contains(entry.rule_a.as_str())
+                && rule_ids.contains(entry.rule_b.as_str())
+        })
+    }
+
+    fn is_canonical(&self) -> bool {
+        if self.schema_version != PACK_SCHEMA_VERSION
+            || self.pack_id.is_empty()
+            || self.rules.len() > MAX_RULES_PER_PACK
+            || self.interference.entries.len() > MAX_INTERFERENCE_ENTRIES
+            || !self.has_valid_rule_ids()
+            || !self.interference.is_canonical()
+            || !self.interference_matches_rules()
+        {
+            return false;
+        }
+
+        let expected_categories: BTreeSet<RewriteCategory> =
+            self.rules.iter().map(|rule| rule.category).collect();
+        if self.categories != expected_categories {
+            return false;
+        }
+
+        let expected_proven_sound_count =
+            self.rules.iter().filter(|rule| rule.proven_sound).count();
+        if self.proven_sound_count != expected_proven_sound_count {
+            return false;
+        }
+
+        self.content_hash
+            == Self::compute_hash(
+                &self.pack_id,
+                self.version,
+                self.epoch,
+                &self.description,
+                &self.rules,
+                &self.interference,
+                &self.cost_model_id,
+            )
+    }
+
     fn compute_hash(
         pack_id: &str,
         version: PackVersion,
@@ -644,12 +705,20 @@ impl PackCatalog {
         catalog
     }
 
-    /// Register a pack. Returns false if a pack with the same ID already exists.
+    /// Register a pack.
+    ///
+    /// Returns `false` and leaves the catalog unchanged if the pack ID already
+    /// exists, the pack is noncanonical, or the aggregate rule count would
+    /// overflow `usize`.
     pub fn register(&mut self, pack: RewritePack) -> bool {
-        if self.packs.contains_key(&pack.pack_id) {
+        if self.packs.contains_key(&pack.pack_id) || !pack.is_canonical() {
             return false;
         }
-        self.total_rule_count += pack.rule_count();
+        let Some(next_total_rule_count) = self.total_rule_count.checked_add(pack.rule_count())
+        else {
+            return false;
+        };
+        self.total_rule_count = next_total_rule_count;
         self.packs.insert(pack.pack_id.clone(), pack);
         self.recompute_hash();
         true
@@ -1192,6 +1261,85 @@ mod tests {
         let p2 = test_pack("same-id", vec![]);
         assert!(catalog.register(p1));
         assert!(!catalog.register(p2));
+    }
+
+    #[test]
+    fn catalog_register_rejects_noncanonical_pack() {
+        let mut catalog = PackCatalog::new("test");
+        let mut pack = test_pack(
+            "tampered",
+            vec![test_rule("r1", RewriteCategory::Custom, true)],
+        );
+        pack.content_hash = ContentHash::compute(b"tampered-pack");
+
+        assert!(!catalog.register(pack));
+        assert!(catalog.packs.is_empty());
+        assert_eq!(catalog.total_rule_count, 0);
+    }
+
+    #[test]
+    fn catalog_register_rejects_duplicate_rule_ids() {
+        let mut catalog = PackCatalog::new("test");
+        let duplicate_rules = vec![
+            test_rule("dup", RewriteCategory::Custom, true),
+            test_rule("dup", RewriteCategory::DeadCodeElimination, false),
+        ];
+
+        assert!(!catalog.register(test_pack("duplicate-rules", duplicate_rules)));
+        assert!(catalog.packs.is_empty());
+        assert_eq!(catalog.total_rule_count, 0);
+    }
+
+    #[test]
+    fn catalog_register_rejects_empty_rule_id() {
+        let mut catalog = PackCatalog::new("test");
+
+        assert!(!catalog.register(test_pack(
+            "empty-rule-id",
+            vec![test_rule("", RewriteCategory::Custom, true)],
+        )));
+        assert!(catalog.packs.is_empty());
+        assert_eq!(catalog.total_rule_count, 0);
+    }
+
+    #[test]
+    fn catalog_register_rejects_empty_pack_id() {
+        let mut catalog = PackCatalog::new("test");
+        let pack = RewritePack::new(
+            "",
+            PackVersion::CURRENT,
+            test_epoch(),
+            "test pack",
+            vec![test_rule("r1", RewriteCategory::Custom, true)],
+            InterferenceMetadata::build(vec![]),
+            "default",
+        );
+
+        assert!(!catalog.register(pack));
+        assert!(catalog.packs.is_empty());
+        assert_eq!(catalog.total_rule_count, 0);
+    }
+
+    #[test]
+    fn catalog_register_rejects_pack_with_foreign_interference_rules() {
+        let mut catalog = PackCatalog::new("test");
+        let pack = RewritePack::new(
+            "foreign-interference",
+            PackVersion::CURRENT,
+            test_epoch(),
+            "test pack",
+            vec![test_rule("r1", RewriteCategory::Custom, true)],
+            InterferenceMetadata::build(vec![test_interference(
+                "r1",
+                "missing",
+                RuleInterferenceKind::PatternConflict,
+            )]),
+            "default",
+        );
+
+        assert!(!catalog.register(pack));
+        assert!(catalog.packs.is_empty());
+        assert_eq!(catalog.total_rule_count, 0);
     }
 
     #[test]

@@ -603,8 +603,10 @@ impl FailureKind {
             }
             Self::InterferenceDetected { conflicting_rules } => {
                 hash_str(hasher, "interference_detected");
-                hash_len(hasher, conflicting_rules.len());
-                for rule_id in conflicting_rules {
+                let mut sorted_rules = conflicting_rules.clone();
+                sorted_rules.sort();
+                hash_len(hasher, sorted_rules.len());
+                for rule_id in &sorted_rules {
                     hash_str(hasher, rule_id);
                 }
             }
@@ -661,8 +663,10 @@ impl FailureReceipt {
         hash_str(&mut hasher, &self.optimization_id);
         hash_str(&mut hasher, &self.pack_id);
         hash_pack_version(&mut hasher, &self.pack_version);
-        hash_len(&mut hasher, self.attempted_rules.len());
-        for rule_id in &self.attempted_rules {
+        let mut sorted_rules = self.attempted_rules.clone();
+        sorted_rules.sort();
+        hash_len(&mut hasher, sorted_rules.len());
+        for rule_id in &sorted_rules {
             hash_str(&mut hasher, rule_id);
         }
         self.failure_kind.update_hash(&mut hasher);

@@ -348,6 +348,12 @@ pub fn build_schedule(
         }
         data.extend_from_slice(&result.total_latency_micros.to_le_bytes());
         data.extend_from_slice(&result.total_memory_bytes.to_le_bytes());
+        data.extend_from_slice(&event_coverage.to_le_bytes());
+        data.extend_from_slice(&result.total_utility_millionths.to_le_bytes());
+        data.extend_from_slice(&budget.max_latency_micros.to_le_bytes());
+        data.extend_from_slice(&budget.max_memory_bytes.to_le_bytes());
+        data.extend_from_slice(&(budget.max_probe_count as u64).to_le_bytes());
+        data.push(if within_budget { 1 } else { 0 });
         ContentHash::compute(&data)
     };
 

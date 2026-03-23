@@ -258,12 +258,16 @@ impl AcceptedLaw {
         data.extend_from_slice(self.candidate_id.as_bytes());
         data.extend_from_slice(self.statement.as_bytes());
         data.extend_from_slice(format!("{:?}", self.strength).as_bytes());
-        for tag in &self.scope_tags {
+        let mut sorted_tags = self.scope_tags.clone();
+        sorted_tags.sort();
+        for tag in &sorted_tags {
             data.extend_from_slice(tag.as_bytes());
         }
         data.extend_from_slice(&self.mining_rank_millionths.to_le_bytes());
         data.extend_from_slice(&self.accepted_epoch.as_u64().to_le_bytes());
-        for eid in &self.evidence_ids {
+        let mut sorted_eids = self.evidence_ids.clone();
+        sorted_eids.sort();
+        for eid in &sorted_eids {
             data.extend_from_slice(eid.as_bytes());
         }
         self.law_hash = ContentHash::compute(&data);
@@ -624,7 +628,9 @@ impl SupportAtlasEntry {
         data.extend_from_slice(self.source_law_id.as_bytes());
         data.extend_from_slice(self.domain.as_bytes());
         data.extend_from_slice(&self.coverage_depth_millionths.to_le_bytes());
-        for tag in &self.scope_tags {
+        let mut sorted_tags = self.scope_tags.clone();
+        sorted_tags.sort();
+        for tag in &sorted_tags {
             data.extend_from_slice(tag.as_bytes());
         }
         data.push(u8::from(self.workload_validated));

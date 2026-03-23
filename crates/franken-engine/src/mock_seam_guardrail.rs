@@ -299,10 +299,17 @@ pub fn register_pattern(
 fn compute_registry_hash(patterns: &BTreeMap<String, Vec<ForbiddenPattern>>) -> ContentHash {
     let mut hasher = Sha256::new();
     hasher.update(b"mock-seam-guardrail-registry-v1");
+    // BTreeMap iteration is deterministic by key.
     for (cat, pats) in patterns {
         hasher.update(cat.as_bytes());
-        for p in pats {
+        // Sort patterns by needle for insertion-order independence within each category.
+        let mut sorted: Vec<_> = pats.iter().collect();
+        sorted.sort_by(|a, b| a.needle.cmp(&b.needle));
+        for p in &sorted {
             hasher.update(p.needle.as_bytes());
+            hasher.update(format!("{:?}", p.category).as_bytes());
+            hasher.update(p.reason.as_bytes());
+            hasher.update(p.definition_hash.as_bytes());
         }
     }
     let digest = hasher.finalize();
@@ -469,9 +476,20 @@ pub fn is_waived(
 fn compute_waiver_hash(waivers: &[Waiver]) -> ContentHash {
     let mut hasher = Sha256::new();
     hasher.update(b"mock-seam-waiver-policy-v1");
-    for w in waivers {
+    // Sort waivers by waiver_id for insertion-order independence.
+    let mut sorted: Vec<_> = waivers.iter().collect();
+    sorted.sort_by(|a, b| a.waiver_id.cmp(&b.waiver_id));
+    for w in &sorted {
         hasher.update(w.waiver_id.as_bytes());
         hasher.update(w.file_pattern.as_bytes());
+        if let Some(pn) = &w.pattern_needle {
+            hasher.update(pn.as_bytes());
+        }
+        hasher.update(w.justification.as_bytes());
+        hasher.update(w.granted_epoch.as_u64().to_le_bytes());
+        if let Some(expiry) = &w.expiry_epoch {
+            hasher.update(expiry.as_u64().to_le_bytes());
+        }
     }
     ContentHash::compute(&hasher.finalize())
 }

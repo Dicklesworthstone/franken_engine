@@ -426,6 +426,18 @@ pub enum ExtractionVerdict {
 }
 
 impl ExtractionVerdict {
+    /// Canonical wire/display label.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Complete => "complete",
+            Self::PartialReduction => "partial_reduction",
+            Self::IncompleteCoverage => "incomplete_coverage",
+            Self::TriageLatencyExceeded => "triage_latency_exceeded",
+            Self::NoInputs => "no_inputs",
+            Self::MultipleIssues => "multiple_issues",
+        }
+    }
+
     /// Whether work remains.
     pub fn needs_attention(self) -> bool {
         self != Self::Complete
@@ -434,15 +446,7 @@ impl ExtractionVerdict {
 
 impl fmt::Display for ExtractionVerdict {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            Self::Complete => "complete",
-            Self::PartialReduction => "partial_reduction",
-            Self::IncompleteCoverage => "incomplete_coverage",
-            Self::TriageLatencyExceeded => "triage_latency_exceeded",
-            Self::NoInputs => "no_inputs",
-            Self::MultipleIssues => "multiple_issues",
-        };
-        write!(f, "{s}")
+        write!(f, "{}", self.as_str())
     }
 }
 
@@ -477,17 +481,17 @@ impl ExtractionReport {
     fn compute_hash(&self) -> ContentHash {
         let mut buf = Vec::with_capacity(256);
         append_str(&mut buf, SCHEMA_VERSION);
-        append_str(&mut buf, &format!("{}", self.verdict));
+        append_str(&mut buf, self.verdict.as_str());
         append_u64(&mut buf, self.epoch.as_u64());
         append_u64(&mut buf, self.inputs.len() as u64);
         let mut sorted_input_hashes: Vec<_> = self.inputs.iter().map(|i| i.input_hash).collect();
-        sorted_input_hashes.sort();
+        sorted_input_hashes.sort_unstable();
         for ch in &sorted_input_hashes {
             buf.extend_from_slice(ch.as_bytes());
         }
         append_u64(&mut buf, self.repros.len() as u64);
         let mut sorted_repro_hashes: Vec<_> = self.repros.iter().map(|r| r.repro_hash).collect();
-        sorted_repro_hashes.sort();
+        sorted_repro_hashes.sort_unstable();
         for ch in &sorted_repro_hashes {
             buf.extend_from_slice(ch.as_bytes());
         }

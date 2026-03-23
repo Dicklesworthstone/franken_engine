@@ -586,17 +586,26 @@ impl CompressionPipeline {
         let mut data = Vec::new();
         data.extend_from_slice(self.schema_version.as_bytes());
         data.extend_from_slice(self.bead_id.as_bytes());
-        for result in &self.results {
-            data.extend_from_slice(result.result_hash.as_bytes());
+        let mut result_hashes: Vec<ContentHash> =
+            self.results.iter().map(|r| r.result_hash).collect();
+        result_hashes.sort();
+        for h in &result_hashes {
+            data.extend_from_slice(h.as_bytes());
         }
-        for receipt in &self.receipts {
-            data.extend_from_slice(receipt.receipt_hash.as_bytes());
+        let mut receipt_hashes: Vec<ContentHash> =
+            self.receipts.iter().map(|r| r.receipt_hash).collect();
+        receipt_hashes.sort();
+        for h in &receipt_hashes {
+            data.extend_from_slice(h.as_bytes());
         }
         for (key, val) in &self.dedup_index {
             data.extend_from_slice(key.as_bytes());
             data.extend_from_slice(val.as_bytes());
         }
-        for (id, reason) in &self.refusals {
+        let mut sorted_refusals: Vec<(&String, &CompressionRefusalReason)> =
+            self.refusals.iter().map(|(id, r)| (id, r)).collect();
+        sorted_refusals.sort_by_key(|(id, _)| (*id).clone());
+        for (id, reason) in &sorted_refusals {
             data.extend_from_slice(id.as_bytes());
             data.extend_from_slice(format!("{reason}").as_bytes());
         }

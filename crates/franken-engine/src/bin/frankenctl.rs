@@ -4747,4 +4747,48 @@ mod tests {
             other => panic!("expected benchmark verify command, got {other:?}"),
         }
     }
+
+    #[test]
+    fn parse_benchmark_verify_command_requires_bundle() {
+        let args = vec!["benchmark".to_string(), "verify".to_string()];
+        let error = parse_command(&args).expect_err("missing bundle should fail");
+        assert_eq!(error, "benchmark verify requires --bundle <dir>");
+    }
+
+    #[test]
+    fn parse_benchmark_verify_command_rejects_unknown_flag() {
+        let args = vec![
+            "benchmark".to_string(),
+            "verify".to_string(),
+            "--bundle".to_string(),
+            "artifacts/bundle".to_string(),
+            "--bogus".to_string(),
+        ];
+        let error = parse_command(&args).expect_err("unknown flag should fail");
+        assert_eq!(error, "unknown benchmark verify flag `--bogus`");
+    }
+
+    #[test]
+    fn run_benchmark_verify_parse_failure_includes_parse_remediation() {
+        let error = run(vec!["benchmark".to_string(), "verify".to_string()])
+            .expect_err("missing bundle should surface parse remediation");
+        assert!(
+            error.contains("[frankenctl trace_id=frankenctl-"),
+            "error should include trace id, got: {error}"
+        );
+        assert!(
+            error.contains("command=parse"),
+            "error should identify parse command, got: {error}"
+        );
+        assert!(
+            error.contains("benchmark verify requires --bundle <dir>"),
+            "error should preserve parse failure, got: {error}"
+        );
+        assert!(
+            error.contains(
+                "remediation: Run `frankenctl --help` for full command usage and required arguments."
+            ),
+            "error should include parse remediation, got: {error}"
+        );
+    }
 }

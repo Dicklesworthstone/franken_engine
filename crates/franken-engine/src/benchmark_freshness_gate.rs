@@ -206,8 +206,11 @@ impl ShiftAlarm {
         let description = description.into();
         let mut hasher = Sha256::new();
         hasher.update(alarm_id.as_bytes());
+        hasher.update(domain.as_str().as_bytes());
+        hasher.update(severity.as_str().as_bytes());
         hasher.update(raised_epoch.as_u64().to_le_bytes());
         hasher.update(drift_magnitude.to_le_bytes());
+        hasher.update(description.as_bytes());
         let evidence_hash = ContentHash::compute(&hasher.finalize());
         Self {
             alarm_id,
@@ -322,9 +325,12 @@ impl AcquisitionEvidence {
             .unwrap_or(FIXED_ONE);
         let mut hasher = Sha256::new();
         hasher.update(b"acquisition_evidence");
+        hasher.update(domain.as_str().as_bytes());
+        hasher.update(format!("{status:?}").as_bytes());
         hasher.update(samples_acquired.to_le_bytes());
         hasher.update(samples_needed.to_le_bytes());
         hasher.update(last_activity_epoch.as_u64().to_le_bytes());
+        hasher.update(acquisition_velocity.to_le_bytes());
         let evidence_hash = ContentHash::compute(&hasher.finalize());
         Self {
             domain,
@@ -698,6 +704,12 @@ impl AlarmLedger {
             hasher.update(alarm.domain.as_str().as_bytes());
             hasher.update(alarm.severity.as_str().as_bytes());
             hasher.update(alarm.drift_magnitude.to_le_bytes());
+        }
+        // Include resolved alarm history.
+        for (id, resolved_epoch) in &self.resolved_alarms {
+            hasher.update(b"resolved:");
+            hasher.update(id.as_bytes());
+            hasher.update(resolved_epoch.to_le_bytes());
         }
         ContentHash::compute(&hasher.finalize())
     }

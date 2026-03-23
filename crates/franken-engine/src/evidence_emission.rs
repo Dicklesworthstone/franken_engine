@@ -356,9 +356,13 @@ impl CanonicalEvidenceEmitter {
             return Err(EvidenceEmissionError::ValidationFailed { errors: error_strs });
         }
 
-        // Compute artifact hash.
-        let payload = serde_json::to_vec(&ledger_entry).unwrap_or_default();
-        let artifact_hash = ContentHash::compute(&payload);
+        // Compute artifact hash covering both ledger entry AND metadata so
+        // neither can be tampered with independently.
+        let mut hash_input = serde_json::to_vec(&ledger_entry).unwrap_or_default();
+        if let Ok(meta_bytes) = serde_json::to_vec(&request.metadata) {
+            hash_input.extend_from_slice(&meta_bytes);
+        }
+        let artifact_hash = ContentHash::compute(&hash_input);
 
         // Compute chain hash.
         let prev_chain = self.entries.last().map(|e| &e.chain_hash);

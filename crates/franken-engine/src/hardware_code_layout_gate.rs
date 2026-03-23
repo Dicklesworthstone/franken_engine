@@ -1890,7 +1890,7 @@ impl LayoutEvaluator {
     pub fn evaluation_hash(&self) -> ContentHash {
         let payload = format!(
             "layout_eval:policy={},receipts={},rollbacks={},parity_checks={},padding={}",
-            self.policy.content_hash().as_bytes()[0],
+            self.policy.content_hash().to_hex(),
             self.receipts.len(),
             self.rollback_gate.rollback_count(),
             self.parity_checker.check_count(),

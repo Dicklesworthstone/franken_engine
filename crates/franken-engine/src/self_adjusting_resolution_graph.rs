@@ -352,11 +352,15 @@ fn compute_graph_hash(
         hasher.update(id.as_bytes());
         hasher.update(node.compute_hash().as_bytes());
     }
-    for edge in edges {
+    let mut sorted_edge_hashes: Vec<ContentHash> = edges.iter().map(|e| e.compute_hash()).collect();
+    sorted_edge_hashes.sort();
+    for h in &sorted_edge_hashes {
         hasher.update(b"edge:");
-        hasher.update(edge.compute_hash().as_bytes());
+        hasher.update(h.as_bytes());
     }
-    for root in roots {
+    let mut sorted_roots: Vec<&String> = roots.iter().collect();
+    sorted_roots.sort();
+    for root in &sorted_roots {
         hasher.update(b"root:");
         hasher.update(root.as_bytes());
     }

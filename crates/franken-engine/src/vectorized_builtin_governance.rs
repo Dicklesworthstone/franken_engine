@@ -601,12 +601,21 @@ impl GovernanceReceipt {
             append_str(&mut buf, &lane.to_string());
         }
         append_u64(&mut buf, self.parity_results.len() as u64);
-        for p in &self.parity_results {
-            buf.extend_from_slice(p.evidence_hash.as_bytes());
+        let mut parity_hashes: Vec<ContentHash> = self
+            .parity_results
+            .iter()
+            .map(|p| p.evidence_hash)
+            .collect();
+        parity_hashes.sort();
+        for h in &parity_hashes {
+            buf.extend_from_slice(h.as_bytes());
         }
         append_u64(&mut buf, self.skew_entries.len() as u64);
-        for s in &self.skew_entries {
-            buf.extend_from_slice(s.entry_hash.as_bytes());
+        let mut skew_hashes: Vec<ContentHash> =
+            self.skew_entries.iter().map(|s| s.entry_hash).collect();
+        skew_hashes.sort();
+        for h in &skew_hashes {
+            buf.extend_from_slice(h.as_bytes());
         }
         append_u64(&mut buf, self.violations.len() as u64);
         compute_digest(&buf)

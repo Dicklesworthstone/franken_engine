@@ -368,7 +368,9 @@ impl ParityEvidence {
         append_u64(&mut buf, self.mismatch_count);
         append_u64(&mut buf, self.total_tested);
         append_u64(&mut buf, self.parity_ratio_millionths);
-        for r in &self.results {
+        let mut sorted_results = self.results.clone();
+        sorted_results.sort_by(|a, b| a.specifier.cmp(&b.specifier));
+        for r in &sorted_results {
             buf.extend_from_slice(r.content_hash().as_bytes());
         }
         self.content_hash = compute_digest(&buf);

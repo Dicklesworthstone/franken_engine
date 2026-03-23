@@ -491,7 +491,9 @@ impl PortabilityEvidence {
         hasher.update(self.source_topology.as_bytes());
         hasher.update(self.target_topology.as_bytes());
         hasher.update(self.transferable_fraction.to_le_bytes());
-        for factor in &self.degradation_factors {
+        let mut sorted_factors = self.degradation_factors.clone();
+        sorted_factors.sort();
+        for factor in &sorted_factors {
             hasher.update(factor.as_bytes());
         }
         hasher.update(self.epoch.as_u64().to_le_bytes());

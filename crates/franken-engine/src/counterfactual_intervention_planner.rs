@@ -223,7 +223,9 @@ impl CounterfactualScenario {
     pub fn seal(&mut self) {
         let mut buf = Vec::new();
         buf.extend_from_slice(self.scenario_id.as_bytes());
-        for (kind, target) in &self.interventions {
+        let mut sorted_interventions = self.interventions.clone();
+        sorted_interventions.sort();
+        for (kind, target) in &sorted_interventions {
             buf.extend_from_slice(kind.as_str().as_bytes());
             buf.extend_from_slice(target.as_bytes());
         }

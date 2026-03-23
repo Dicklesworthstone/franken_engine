@@ -500,16 +500,31 @@ impl GovernanceReceipt {
         append_str(&mut buf, &format!("{}", self.verdict));
         append_u64(&mut buf, self.epoch.as_u64());
         append_u64(&mut buf, self.cache_miss_entries.len() as u64);
-        for c in &self.cache_miss_entries {
-            buf.extend_from_slice(c.entry_hash.as_bytes());
+        let mut cache_hashes: Vec<ContentHash> = self
+            .cache_miss_entries
+            .iter()
+            .map(|c| c.entry_hash)
+            .collect();
+        cache_hashes.sort();
+        for h in &cache_hashes {
+            buf.extend_from_slice(h.as_bytes());
         }
         append_u64(&mut buf, self.numa_entries.len() as u64);
-        for n in &self.numa_entries {
-            buf.extend_from_slice(n.entry_hash.as_bytes());
+        let mut numa_hashes: Vec<ContentHash> =
+            self.numa_entries.iter().map(|n| n.entry_hash).collect();
+        numa_hashes.sort();
+        for h in &numa_hashes {
+            buf.extend_from_slice(h.as_bytes());
         }
         append_u64(&mut buf, self.portability_entries.len() as u64);
-        for p in &self.portability_entries {
-            buf.extend_from_slice(p.entry_hash.as_bytes());
+        let mut port_hashes: Vec<ContentHash> = self
+            .portability_entries
+            .iter()
+            .map(|p| p.entry_hash)
+            .collect();
+        port_hashes.sort();
+        for h in &port_hashes {
+            buf.extend_from_slice(h.as_bytes());
         }
         append_u64(&mut buf, self.violations.len() as u64);
         compute_digest(&buf)

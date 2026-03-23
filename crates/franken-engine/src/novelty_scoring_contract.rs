@@ -308,9 +308,13 @@ impl ScoringConfig {
         let mut hasher = Sha256::new();
         hasher.update(b"scoring_config_v1");
         hasher.update((self.dimension_weights.len() as u64).to_le_bytes());
-        for w in &self.dimension_weights {
-            hasher.update(w.dimension.as_str().as_bytes());
-            hasher.update(w.weight_millionths.to_le_bytes());
+        {
+            let mut sorted_weights: Vec<&DimensionWeight> = self.dimension_weights.iter().collect();
+            sorted_weights.sort_by_key(|w| w.dimension);
+            for w in &sorted_weights {
+                hasher.update(w.dimension.as_str().as_bytes());
+                hasher.update(w.weight_millionths.to_le_bytes());
+            }
         }
         hasher.update(self.mdl_baseline_bits.to_le_bytes());
         hasher.update(self.information_gain_threshold_millionths.to_le_bytes());
@@ -770,22 +774,26 @@ impl NoveltyProfile {
         let mut hasher = Sha256::new();
         hasher.update(candidate_fingerprint.as_bytes());
         hasher.update((entries.len() as u64).to_le_bytes());
-        for entry in &entries {
-            hasher.update(entry.dimension.as_str().as_bytes());
-            match &entry.score {
-                DimensionScore::Scored {
-                    score_millionths,
-                    confidence_millionths,
-                    sample_count,
-                } => {
-                    hasher.update(b"scored");
-                    hasher.update(score_millionths.to_le_bytes());
-                    hasher.update(confidence_millionths.to_le_bytes());
-                    hasher.update((*sample_count as u64).to_le_bytes());
-                }
-                DimensionScore::Abstained { reason } => {
-                    hasher.update(b"abstained");
-                    hasher.update(reason.tag().as_bytes());
+        {
+            let mut sorted_entries: Vec<&NoveltyEntry> = entries.iter().collect();
+            sorted_entries.sort_by_key(|e| e.dimension);
+            for entry in &sorted_entries {
+                hasher.update(entry.dimension.as_str().as_bytes());
+                match &entry.score {
+                    DimensionScore::Scored {
+                        score_millionths,
+                        confidence_millionths,
+                        sample_count,
+                    } => {
+                        hasher.update(b"scored");
+                        hasher.update(score_millionths.to_le_bytes());
+                        hasher.update(confidence_millionths.to_le_bytes());
+                        hasher.update((*sample_count as u64).to_le_bytes());
+                    }
+                    DimensionScore::Abstained { reason } => {
+                        hasher.update(b"abstained");
+                        hasher.update(reason.tag().as_bytes());
+                    }
                 }
             }
         }

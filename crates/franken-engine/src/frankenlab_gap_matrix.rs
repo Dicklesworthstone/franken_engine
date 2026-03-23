@@ -430,14 +430,18 @@ impl GapMatrix {
         let mut buf = Vec::new();
         buf.extend_from_slice(self.schema_version.as_bytes());
         buf.extend_from_slice(&self.assessed_epoch.as_u64().to_le_bytes());
-        for entry in &self.entries {
-            buf.extend_from_slice(format!("{}", entry.local_surface).as_bytes());
-            buf.extend_from_slice(format!("{}", entry.upstream_capability).as_bytes());
-            buf.extend_from_slice(format!("{}", entry.status).as_bytes());
-            buf.extend_from_slice(&entry.coverage_millionths.to_le_bytes());
-            buf.extend_from_slice(format!("{}", entry.migration_decision).as_bytes());
-            buf.extend_from_slice(entry.rationale.as_bytes());
-            buf.extend_from_slice(&entry.confidence_millionths.to_le_bytes());
+        {
+            let mut sorted_entries: Vec<&GapMatrixEntry> = self.entries.iter().collect();
+            sorted_entries.sort_by_key(|e| (e.local_surface, e.upstream_capability));
+            for entry in &sorted_entries {
+                buf.extend_from_slice(format!("{}", entry.local_surface).as_bytes());
+                buf.extend_from_slice(format!("{}", entry.upstream_capability).as_bytes());
+                buf.extend_from_slice(format!("{}", entry.status).as_bytes());
+                buf.extend_from_slice(&entry.coverage_millionths.to_le_bytes());
+                buf.extend_from_slice(format!("{}", entry.migration_decision).as_bytes());
+                buf.extend_from_slice(entry.rationale.as_bytes());
+                buf.extend_from_slice(&entry.confidence_millionths.to_le_bytes());
+            }
         }
         ContentHash::compute(&buf)
     }

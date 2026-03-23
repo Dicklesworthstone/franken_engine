@@ -302,9 +302,13 @@ impl PhaseBoundary {
         let mut hasher = Sha256::new();
         hasher.update(self.boundary_id.as_bytes());
         hasher.update(self.kind.label().as_bytes());
-        for coord in &self.coordinates {
-            hasher.update(coord.dimension_name.as_bytes());
-            hasher.update(coord.value_millionths.to_le_bytes());
+        {
+            let mut sorted_coords: Vec<&ManifoldCoordinate> = self.coordinates.iter().collect();
+            sorted_coords.sort_by(|a, b| a.dimension_name.cmp(&b.dimension_name));
+            for coord in &sorted_coords {
+                hasher.update(coord.dimension_name.as_bytes());
+                hasher.update(coord.value_millionths.to_le_bytes());
+            }
         }
         hasher.update(self.source_region.label().as_bytes());
         hasher.update(self.target_region.label().as_bytes());
@@ -499,12 +503,28 @@ impl BrittlenessReport {
         hasher.update(self.report_id.as_bytes());
         hasher.update(self.epoch.as_u64().to_le_bytes());
         hasher.update((self.boundaries.len() as u64).to_le_bytes());
-        for boundary in &self.boundaries {
-            hasher.update(boundary.content_hash.as_bytes());
+        {
+            let mut sorted: Vec<&[u8; 32]> = self
+                .boundaries
+                .iter()
+                .map(|b| b.content_hash.as_bytes())
+                .collect();
+            sorted.sort();
+            for h in &sorted {
+                hasher.update(h);
+            }
         }
         hasher.update((self.witnesses.len() as u64).to_le_bytes());
-        for witness in &self.witnesses {
-            hasher.update(witness.content_hash.as_bytes());
+        {
+            let mut sorted: Vec<&[u8; 32]> = self
+                .witnesses
+                .iter()
+                .map(|w| w.content_hash.as_bytes())
+                .collect();
+            sorted.sort();
+            for h in &sorted {
+                hasher.update(h);
+            }
         }
         hasher.update(self.brittle_region_count.to_le_bytes());
         hasher.update(self.total_boundary_sharpness_millionths.to_le_bytes());

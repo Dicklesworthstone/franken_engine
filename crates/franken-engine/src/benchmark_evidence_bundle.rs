@@ -559,16 +559,25 @@ impl EvidenceBundle {
         hasher.update(self.bundle_id.as_bytes());
         hasher.update(self.schema_version.as_bytes());
         hasher.update(self.created_epoch.as_u64().to_le_bytes());
-        for p in &self.provenances {
-            hasher.update(p.workload_id.as_bytes());
-            hasher.update(p.content_hash.as_bytes());
+        let mut prov_hashes: Vec<ContentHash> =
+            self.provenances.iter().map(|p| p.content_hash).collect();
+        prov_hashes.sort();
+        for h in &prov_hashes {
+            hasher.update(h.as_bytes());
         }
-        for r in &self.runs {
-            hasher.update(r.run_id.as_bytes());
-            hasher.update(r.duration_us.to_le_bytes());
+        let mut run_ids: Vec<&String> = self.runs.iter().map(|r| &r.run_id).collect();
+        run_ids.sort();
+        for id in &run_ids {
+            hasher.update(id.as_bytes());
         }
-        for v in &self.parity_verdicts {
-            hasher.update(v.evidence_hash.as_bytes());
+        let mut verdict_hashes: Vec<ContentHash> = self
+            .parity_verdicts
+            .iter()
+            .map(|v| v.evidence_hash)
+            .collect();
+        verdict_hashes.sort();
+        for h in &verdict_hashes {
+            hasher.update(h.as_bytes());
         }
         self.bundle_hash = ContentHash::compute(&hasher.finalize());
     }

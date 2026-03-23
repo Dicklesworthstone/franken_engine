@@ -346,9 +346,16 @@ impl ObservabilityCell {
         hasher.update(self.promotion_rule.as_str().as_bytes());
         hasher.update(b":");
         hasher.update(self.overall_state.as_str().as_bytes());
-        for s in &self.sentinels {
-            hasher.update(s.sentinel_id.as_bytes());
-            hasher.update(s.state.as_str().as_bytes());
+        {
+            let mut sorted_hashes: Vec<&[u8; 32]> = self
+                .sentinels
+                .iter()
+                .map(|s| s.content_hash.as_bytes())
+                .collect();
+            sorted_hashes.sort();
+            for h in &sorted_hashes {
+                hasher.update(h);
+            }
         }
         let result = hasher.finalize();
         let mut out = [0u8; 32];
@@ -470,13 +477,24 @@ impl SentinelReport {
         hasher.update(self.green_count.to_le_bytes());
         hasher.update(self.red_count.to_le_bytes());
         hasher.update((self.cells.len() as u64).to_le_bytes());
-        for cell in &self.cells {
-            hasher.update(cell.cell_id.as_bytes());
-            hasher.update(cell.overall_state.as_str().as_bytes());
+        {
+            let mut cell_hashes: Vec<ContentHash> =
+                self.cells.iter().map(|c| c.compute_hash()).collect();
+            cell_hashes.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+            for h in &cell_hashes {
+                hasher.update(h.as_bytes());
+            }
         }
-        for d in &self.decisions {
-            hasher.update(d.decision_id.as_bytes());
-            hasher.update(if d.allowed { b"a" } else { b"b" });
+        {
+            let mut decision_hashes: Vec<&[u8; 32]> = self
+                .decisions
+                .iter()
+                .map(|d| d.content_hash.as_bytes())
+                .collect();
+            decision_hashes.sort();
+            for h in &decision_hashes {
+                hasher.update(h);
+            }
         }
         let result = hasher.finalize();
         let mut out = [0u8; 32];

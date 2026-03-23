@@ -741,20 +741,44 @@ impl GovernanceReceipt {
         append_str(&mut buf, self.verdict.as_str());
         append_u64(&mut buf, self.epoch.as_u64());
         append_u64(&mut buf, self.parity_results.len() as u64);
-        for pr in &self.parity_results {
-            buf.extend_from_slice(pr.evidence_hash.as_bytes());
+        let mut sorted_parity: Vec<_> = self
+            .parity_results
+            .iter()
+            .map(|pr| pr.evidence_hash)
+            .collect();
+        sorted_parity.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+        for h in &sorted_parity {
+            buf.extend_from_slice(h.as_bytes());
         }
         append_u64(&mut buf, self.unicode_coverage.len() as u64);
-        for uc in &self.unicode_coverage {
-            buf.extend_from_slice(uc.content_hash.as_bytes());
+        let mut sorted_unicode: Vec<_> = self
+            .unicode_coverage
+            .iter()
+            .map(|uc| uc.content_hash)
+            .collect();
+        sorted_unicode.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+        for h in &sorted_unicode {
+            buf.extend_from_slice(h.as_bytes());
         }
         append_u64(&mut buf, self.benchmark_entries.len() as u64);
-        for be in &self.benchmark_entries {
-            buf.extend_from_slice(be.content_hash.as_bytes());
+        let mut sorted_bench: Vec<_> = self
+            .benchmark_entries
+            .iter()
+            .map(|be| be.content_hash)
+            .collect();
+        sorted_bench.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+        for h in &sorted_bench {
+            buf.extend_from_slice(h.as_bytes());
         }
         append_u64(&mut buf, self.tail_risk_entries.len() as u64);
-        for tr in &self.tail_risk_entries {
-            buf.extend_from_slice(tr.content_hash.as_bytes());
+        let mut sorted_tail: Vec<_> = self
+            .tail_risk_entries
+            .iter()
+            .map(|tr| tr.content_hash)
+            .collect();
+        sorted_tail.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+        for h in &sorted_tail {
+            buf.extend_from_slice(h.as_bytes());
         }
         append_u64(&mut buf, self.violations.len() as u64);
         for v in &self.violations {

@@ -319,10 +319,18 @@ impl LossMatrix {
     }
 
     /// Content hash of the loss matrix for audit trail.
+    /// Entries sorted by (action, state) for insertion-order independence.
     pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::new();
         buf.extend_from_slice(self.matrix_id.as_bytes());
-        for entry in &self.entries {
+        let mut sorted: Vec<_> = self.entries.iter().collect();
+        sorted.sort_by(|a, b| {
+            a.action
+                .to_string()
+                .cmp(&b.action.to_string())
+                .then_with(|| a.state.to_string().cmp(&b.state.to_string()))
+        });
+        for entry in &sorted {
             buf.extend_from_slice(entry.action.to_string().as_bytes());
             buf.extend_from_slice(entry.state.to_string().as_bytes());
             buf.extend_from_slice(&entry.loss_millionths.to_le_bytes());
@@ -561,7 +569,9 @@ impl ExpectedLossSelector {
                 let p = posterior.probability(*state);
                 let l = self.loss_matrix.loss(*action, *state);
                 // E[Loss] += P(s) * L(a,s) / MILLION
-                expected_loss += p * l / MILLION;
+                // Use i128 to prevent overflow: p and l are millionths,
+                // so p * l can exceed i64::MAX for large loss values.
+                expected_loss += (p as i128 * l as i128 / MILLION as i128) as i64;
             }
             losses.insert(*action, expected_loss);
         }
@@ -597,7 +607,7 @@ impl ExpectedLossSelector {
                 posterior_snapshot: posterior.clone(),
                 loss_matrix_id: self.loss_matrix.matrix_id.clone(),
                 all_expected_losses,
-                margin_millionths: runner_up_loss - best_loss,
+                margin_millionths: saturating_margin_millionths(runner_up_loss, best_loss),
             },
             epoch: self.epoch,
         }
@@ -751,7 +761,7 @@ impl ExpectedLossSelector {
                 event: "borderline_decision".to_string(),
                 outcome: format!(
                     "margin={} ({}→{})",
-                    runner_up.1 - selected.1,
+                    saturating_margin_millionths(runner_up.1, selected.1),
                     selected.0,
                     runner_up.0,
                 ),
@@ -893,11 +903,23 @@ fn state_contributions(
     RiskState::ALL
         .iter()
         .map(|state| {
-            let contribution =
-                posterior.probability(*state) * loss_matrix.loss(action, *state) / MILLION;
+            let contribution = (posterior.probability(*state) as i128
+                * loss_matrix.loss(action, *state) as i128
+                / MILLION as i128) as i64;
             (state.to_string(), contribution)
         })
         .collect()
+}
+
+fn saturating_i128_to_i64(value: i128) -> i64 {
+    value.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+}
+
+fn saturating_margin_millionths(
+    runner_up_loss_millionths: i64,
+    selected_loss_millionths: i64,
+) -> i64 {
+    runner_up_loss_millionths.saturating_sub(selected_loss_millionths)
 }
 
 fn confidence_interval_from_posterior(
@@ -929,7 +951,7 @@ fn build_selection_rationale(
     runner_up_loss_millionths: i64,
     posterior: &Posterior,
 ) -> String {
-    let margin = runner_up_loss_millionths - selected_loss_millionths;
+    let margin = saturating_margin_millionths(runner_up_loss_millionths, selected_loss_millionths);
     format!(
         "{selected_action} selected: EL({selected_action})={selected_loss_millionths}, \
          EL({runner_up_action})={runner_up_loss_millionths}, \
@@ -972,9 +994,9 @@ fn compute_borderline_sensitivity(
     for state in RiskState::ALL {
         let loss_sel = loss_matrix.loss(selected_action, state);
         let loss_run = loss_matrix.loss(runner_up_action, state);
-        let diff = loss_run.abs_diff(loss_sel) as i64;
+        let diff = i128::from(loss_run.abs_diff(loss_sel));
         if diff > 0 {
-            let delta = (margin as i128 * MILLION as i128 / diff as i128) as i64;
+            let delta = saturating_i128_to_i64(i128::from(margin) * i128::from(MILLION) / diff);
             deltas.insert(state.to_string(), delta);
         }
     }
@@ -1183,8 +1205,10 @@ fn classify_alien_risk_alert(
     regime_shift_score_millionths: i64,
 ) -> (AlienRiskAlertLevel, Option<ContainmentAction>) {
     let base_loss = selected_expected_loss_millionths.saturating_abs().max(1);
-    let cvar_ratio_millionths = ((tail_cvar_millionths.saturating_abs() as i128 * MILLION as i128)
-        / base_loss as i128) as i64;
+    let cvar_ratio_millionths = saturating_i128_to_i64(
+        i128::from(tail_cvar_millionths.saturating_abs()) * i128::from(MILLION)
+            / i128::from(base_loss),
+    );
 
     let critical = conformal_p_value_millionths <= ALIEN_CRITICAL_PVALUE_MILLIONTHS
         || regime_shift_score_millionths >= ALIEN_CRITICAL_REGIME_SHIFT_MILLIONTHS
@@ -1511,8 +1535,41 @@ mod tests {
         let decision = selector.select(&uncertain_posterior());
         assert_eq!(
             decision.explanation.margin_millionths,
-            decision.runner_up_loss_millionths - decision.expected_loss_millionths
+            decision
+                .runner_up_loss_millionths
+                .saturating_sub(decision.expected_loss_millionths)
         );
+    }
+
+    #[test]
+    fn explanation_margin_saturates_for_extreme_loss_gaps() {
+        let entries = ContainmentAction::ALL
+            .iter()
+            .flat_map(|action| {
+                RiskState::ALL.iter().map(move |state| LossEntry {
+                    action: *action,
+                    state: *state,
+                    loss_millionths: if *action == ContainmentAction::Allow {
+                        i64::MIN
+                    } else {
+                        i64::MAX
+                    },
+                })
+            })
+            .collect();
+        let matrix = LossMatrix::new("extreme-margin-v1", entries);
+        let mut selector = ExpectedLossSelector::new(matrix);
+        let posterior = Posterior {
+            p_benign: MILLION,
+            p_anomalous: 0,
+            p_malicious: 0,
+            p_unknown: 0,
+        };
+        let decision = selector.select(&posterior);
+        assert_eq!(decision.action, ContainmentAction::Allow);
+        assert_eq!(decision.runner_up_loss_millionths, i64::MAX);
+        assert_eq!(decision.expected_loss_millionths, i64::MIN);
+        assert_eq!(decision.explanation.margin_millionths, i64::MAX);
     }
 
     #[test]
@@ -1847,6 +1904,13 @@ mod tests {
     }
 
     #[test]
+    fn alien_alert_critical_on_extreme_tail_ratio_without_i64_wrap() {
+        let (level, floor_action) = classify_alien_risk_alert(1, i64::MAX, MILLION, 0);
+        assert_eq!(level, AlienRiskAlertLevel::Critical);
+        assert_eq!(floor_action, Some(ContainmentAction::Suspend));
+    }
+
+    #[test]
     fn runtime_scoring_guardrail_veto_changes_selection() {
         let mut selector = ExpectedLossSelector::balanced();
         let mut input = sample_runtime_input(certain_benign());
@@ -1968,6 +2032,52 @@ mod tests {
                 .iter()
                 .any(|e| e.event == "borderline_decision"),
             "borderline decision must emit borderline_decision event"
+        );
+    }
+
+    #[test]
+    fn borderline_sensitivity_handles_extreme_state_loss_differences() {
+        let entries: Vec<LossEntry> = ContainmentAction::ALL
+            .iter()
+            .flat_map(|action| {
+                RiskState::ALL.iter().map(move |state| {
+                    let loss_millionths = match (*action, *state) {
+                        (ContainmentAction::Allow, RiskState::Benign) => 2_000_000_000_000_000,
+                        (ContainmentAction::Challenge, RiskState::Benign) => 2_200_000_000_000_000,
+                        (ContainmentAction::Allow, RiskState::Malicious) => i64::MIN,
+                        (ContainmentAction::Challenge, RiskState::Malicious) => i64::MAX,
+                        _ => 9_000_000_000_000_000,
+                    };
+                    LossEntry {
+                        action: *action,
+                        state: *state,
+                        loss_millionths,
+                    }
+                })
+            })
+            .collect();
+        let matrix = LossMatrix::new("borderline-extreme-diff-v1", entries);
+        let posterior = Posterior {
+            p_benign: MILLION,
+            p_anomalous: 0,
+            p_malicious: 0,
+            p_unknown: 0,
+        };
+
+        let (borderline, deltas) = compute_borderline_sensitivity(
+            ContainmentAction::Allow,
+            2_000_000_000_000_000,
+            ContainmentAction::Challenge,
+            2_200_000_000_000_000,
+            &matrix,
+            &posterior,
+        );
+
+        assert!(borderline);
+        assert_eq!(deltas.get("benign"), Some(&1_000_000));
+        assert!(
+            deltas.get("malicious").is_some_and(|delta| *delta >= 10),
+            "extreme state diff should still yield a computed malicious delta"
         );
     }
 

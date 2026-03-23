@@ -397,7 +397,7 @@ impl DpBudgetSemantics {
                 // k <= (lifetime / epsilon_per_epoch)^2.
                 let ratio =
                     self.lifetime_epsilon_budget_millionths / self.epsilon_per_epoch_millionths;
-                (ratio * ratio) as u64
+                ratio.checked_mul(ratio).unwrap_or(i64::MAX) as u64
             }
         };
 

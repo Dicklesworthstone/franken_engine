@@ -148,7 +148,7 @@ impl Posterior {
 
     /// Verify that the posterior sums to MILLION.
     pub fn is_valid(&self) -> bool {
-        self.sum() == MILLION
+        self.sum() == i128::from(MILLION)
             && self.p_benign >= 0
             && self.p_anomalous >= 0
             && self.p_malicious >= 0
@@ -156,8 +156,11 @@ impl Posterior {
     }
 
     /// Sum of all probabilities.
-    fn sum(&self) -> i64 {
-        self.p_benign + self.p_anomalous + self.p_malicious + self.p_unknown
+    fn sum(&self) -> i128 {
+        i128::from(self.p_benign)
+            + i128::from(self.p_anomalous)
+            + i128::from(self.p_malicious)
+            + i128::from(self.p_unknown)
     }
 
     /// Normalize to ensure sum = MILLION. Applies floor mass and distributes
@@ -180,12 +183,11 @@ impl Posterior {
         }
 
         // Scale each proportionally (use i128 to avoid i64 overflow).
-        let t = total as i128;
-        let m = MILLION as i128;
-        self.p_benign = (self.p_benign as i128 * m / t) as i64;
-        self.p_anomalous = (self.p_anomalous as i128 * m / t) as i64;
-        self.p_malicious = (self.p_malicious as i128 * m / t) as i64;
-        self.p_unknown = (self.p_unknown as i128 * m / t) as i64;
+        let m = i128::from(MILLION);
+        self.p_benign = (i128::from(self.p_benign) * m / total) as i64;
+        self.p_anomalous = (i128::from(self.p_anomalous) * m / total) as i64;
+        self.p_malicious = (i128::from(self.p_malicious) * m / total) as i64;
+        self.p_unknown = (i128::from(self.p_unknown) * m / total) as i64;
 
         // Re-apply floor after scaling to maintain the floor invariant.
         self.p_benign = self.p_benign.max(FLOOR_MASS);
@@ -194,22 +196,25 @@ impl Posterior {
         self.p_unknown = self.p_unknown.max(FLOOR_MASS);
 
         // Distribute remainder to the largest to maintain exact sum.
-        let remainder = MILLION - self.sum();
+        // Remainder can be negative if floor re-application inflated the sum.
+        let scaled_total = self.sum();
+        debug_assert!(scaled_total >= 0);
+        let remainder = MILLION - scaled_total as i64;
         if remainder != 0 {
-            // Find largest and add remainder there.
+            // Find largest and add remainder there, clamping to floor.
             let max_val = self
                 .p_benign
                 .max(self.p_anomalous)
                 .max(self.p_malicious)
                 .max(self.p_unknown);
             if self.p_benign == max_val {
-                self.p_benign += remainder;
+                self.p_benign = (self.p_benign + remainder).max(FLOOR_MASS);
             } else if self.p_anomalous == max_val {
-                self.p_anomalous += remainder;
+                self.p_anomalous = (self.p_anomalous + remainder).max(FLOOR_MASS);
             } else if self.p_malicious == max_val {
-                self.p_malicious += remainder;
+                self.p_malicious = (self.p_malicious + remainder).max(FLOOR_MASS);
             } else {
-                self.p_unknown += remainder;
+                self.p_unknown = (self.p_unknown + remainder).max(FLOOR_MASS);
             }
         }
     }
@@ -425,10 +430,10 @@ impl ChangePointDetector {
             for p in &mut new_probs {
                 *p = *p * MILLION / total;
             }
-            // Fix remainder.
+            // Fix remainder (can be negative due to rounding).
             let remainder = MILLION - new_probs.iter().sum::<i64>();
             if remainder != 0 {
-                new_probs[0] += remainder;
+                new_probs[0] = (new_probs[0] + remainder).max(0);
             }
         } else {
             // Degenerate: reset to change point.
@@ -585,7 +590,7 @@ impl BayesianPosteriorUpdater {
         self.evidence_hashes
             .push(ContentHash::compute(evidence_bytes.as_bytes()));
 
-        self.update_count += 1;
+        self.update_count = self.update_count.saturating_add(1);
 
         UpdateResult {
             posterior: self.posterior.clone(),
@@ -698,7 +703,8 @@ impl UpdaterStore {
                 Posterior::default_prior(),
                 extension_id,
             ));
-            self.updaters.last_mut().unwrap()
+            let len = self.updaters.len();
+            &mut self.updaters[len - 1]
         }
     }
 
@@ -819,7 +825,7 @@ mod tests {
     fn default_prior_sums_to_million() {
         let p = Posterior::default_prior();
         assert!(p.is_valid());
-        assert_eq!(p.sum(), MILLION);
+        assert_eq!(p.sum(), i128::from(MILLION));
     }
 
     #[test]
@@ -833,7 +839,7 @@ mod tests {
     fn from_millionths_normalizes() {
         let p = Posterior::from_millionths(500, 300, 100, 100);
         assert!(p.is_valid());
-        assert_eq!(p.sum(), MILLION);
+        assert_eq!(p.sum(), i128::from(MILLION));
     }
 
     #[test]
@@ -1381,7 +1387,7 @@ mod tests {
         updater.update(&benign_evidence());
         updater.update(&malicious_evidence());
         updater.update(&anomalous_evidence());
-        assert_eq!(updater.posterior().sum(), MILLION);
+        assert_eq!(updater.posterior().sum(), i128::from(MILLION));
     }
 
     #[test]
@@ -1389,7 +1395,7 @@ mod tests {
         // Negative inputs get clamped to floor
         let p = Posterior::from_millionths(-100, -200, -300, -400);
         assert!(p.is_valid());
-        assert_eq!(p.sum(), MILLION);
+        assert_eq!(p.sum(), i128::from(MILLION));
     }
 
     // ── Enrichment: store content_hash determinism ──────────────
@@ -1467,7 +1473,7 @@ mod tests {
         let result = updater.update(&benign_evidence());
         assert_eq!(result.update_count, 1);
         assert!(result.posterior.is_valid());
-        assert_eq!(result.posterior.sum(), MILLION);
+        assert_eq!(result.posterior.sum(), i128::from(MILLION));
     }
 
     // ===================================================================
@@ -1787,7 +1793,7 @@ mod tests {
         // in normalize's multiply-by-MILLION step.
         let p = Posterior::from_millionths(10_000_000, 0, 0, 0);
         assert!(p.is_valid());
-        assert_eq!(p.sum(), MILLION);
+        assert_eq!(p.sum(), i128::from(MILLION));
         // The dominant state should get most of the mass.
         assert!(p.p_benign > 900_000);
     }
@@ -1805,6 +1811,15 @@ mod tests {
         let p = Posterior::default_prior();
         let total: i64 = RiskState::ALL.iter().map(|s| p.probability(*s)).sum();
         assert_eq!(total, MILLION);
+    }
+
+    #[test]
+    fn posterior_from_millionths_i64_max_normalizes_without_sum_overflow() {
+        let p = Posterior::from_millionths(i64::MAX, 0, 0, 0);
+        assert!(p.is_valid());
+        assert_eq!(p.sum(), i128::from(MILLION));
+        assert_eq!(p.map_estimate(), RiskState::Benign);
+        assert!(p.p_benign > 999_000);
     }
 
     #[test]

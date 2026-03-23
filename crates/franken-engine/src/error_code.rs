@@ -643,7 +643,8 @@ impl HasErrorCode for TokenError {
             | TokenError::UnsupportedVersion { .. }
             | TokenError::IdDerivationFailed { .. }
             | TokenError::InvertedTemporalWindow { .. }
-            | TokenError::EmptyCapabilities => FrankenErrorCode::CapabilityTokenValidationError,
+            | TokenError::EmptyCapabilities
+            | TokenError::EmptyAudience => FrankenErrorCode::CapabilityTokenValidationError,
         }
     }
 }
@@ -1541,6 +1542,15 @@ mod tests {
     #[test]
     fn has_error_code_token_error() {
         let err = TokenError::EmptyCapabilities;
+        assert_eq!(
+            err.error_code(),
+            FrankenErrorCode::CapabilityTokenValidationError
+        );
+    }
+
+    #[test]
+    fn has_error_code_token_error_empty_audience() {
+        let err = TokenError::EmptyAudience;
         assert_eq!(
             err.error_code(),
             FrankenErrorCode::CapabilityTokenValidationError

@@ -237,10 +237,22 @@ impl CompatibilityMatrixEntry {
         for shim in &mut self.explicit_shims {
             shim.normalize();
         }
-        self.explicit_shims
-            .sort_by(|lhs, rhs| (lhs.mode, &lhs.shim_id).cmp(&(rhs.mode, &rhs.shim_id)));
-        self.explicit_shims
-            .dedup_by(|lhs, rhs| lhs.mode == rhs.mode && lhs.shim_id == rhs.shim_id);
+        self.explicit_shims.sort_by(|lhs, rhs| {
+            (
+                lhs.mode,
+                &lhs.shim_id,
+                &lhs.description,
+                lhs.removable,
+                &lhs.test_case_ref,
+            )
+                .cmp(&(
+                    rhs.mode,
+                    &rhs.shim_id,
+                    &rhs.description,
+                    rhs.removable,
+                    &rhs.test_case_ref,
+                ))
+        });
 
         normalize_string_vec(&mut self.lockstep_case_refs);
         normalize_string_vec(&mut self.test262_refs);
@@ -347,11 +359,24 @@ impl CompatibilityMatrixEntry {
     fn has_shim_for_mode(&self, mode: CompatibilityMode) -> bool {
         self.explicit_shims.iter().any(|shim| shim.mode == mode)
     }
+
+    fn duplicate_shim_key(&self) -> Option<(CompatibilityMode, String)> {
+        let mut seen = BTreeSet::new();
+        for shim in &self.explicit_shims {
+            let key = (shim.mode, shim.shim_id.clone());
+            if !seen.insert(key.clone()) {
+                return Some(key);
+            }
+        }
+        None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct CompatibilityMatrixDocument {
     schema_version: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    required_readme_fragments: Vec<String>,
     entries: Vec<CompatibilityMatrixEntry>,
 }
 
@@ -505,6 +530,7 @@ pub struct CompatibilityScenarioReport {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModuleCompatibilityMatrix {
     pub schema_version: String,
+    required_readme_fragments: Vec<String>,
     entries: BTreeMap<String, CompatibilityMatrixEntry>,
     events: Vec<CompatibilityEvent>,
     next_event_seq: u64,
@@ -568,11 +594,23 @@ impl ModuleCompatibilityMatrix {
     pub fn from_json_str(raw: &str) -> CompatibilityResult<Self> {
         let document: CompatibilityMatrixDocument =
             serde_json::from_str(raw).map_err(|error| parse_error(error.to_string()))?;
-        Self::from_entries(document.schema_version, document.entries)
+        Self::from_document_parts(
+            document.schema_version,
+            document.required_readme_fragments,
+            document.entries,
+        )
     }
 
     pub fn from_entries(
         schema_version: impl Into<String>,
+        entries: Vec<CompatibilityMatrixEntry>,
+    ) -> CompatibilityResult<Self> {
+        Self::from_document_parts(schema_version, Vec::new(), entries)
+    }
+
+    fn from_document_parts(
+        schema_version: impl Into<String>,
+        mut required_readme_fragments: Vec<String>,
         mut entries: Vec<CompatibilityMatrixEntry>,
     ) -> CompatibilityResult<Self> {
         let schema_version = schema_version.into().trim().to_string();
@@ -583,6 +621,8 @@ impl ModuleCompatibilityMatrix {
             ));
         }
 
+        normalize_string_vec(&mut required_readme_fragments);
+
         let mut catalog = BTreeMap::new();
         for entry in &mut entries {
             entry.normalize();
@@ -590,6 +630,17 @@ impl ModuleCompatibilityMatrix {
                 return Err(simple_error(
                     CompatibilityMatrixErrorCode::InvalidMatrix,
                     "case_id must not be empty",
+                ));
+            }
+            if let Some((mode, shim_id)) = entry.duplicate_shim_key() {
+                return Err(simple_error(
+                    CompatibilityMatrixErrorCode::InvalidMatrix,
+                    format!(
+                        "duplicate explicit shim_id '{}' for mode '{}' in case '{}'",
+                        shim_id,
+                        mode.as_str(),
+                        entry.case_id
+                    ),
                 ));
             }
             if catalog
@@ -605,6 +656,7 @@ impl ModuleCompatibilityMatrix {
 
         Ok(Self {
             schema_version,
+            required_readme_fragments,
             entries: catalog,
             events: Vec::new(),
             next_event_seq: 0,
@@ -627,9 +679,14 @@ impl ModuleCompatibilityMatrix {
             .collect()
     }
 
+    pub fn required_readme_fragments(&self) -> &[String] {
+        &self.required_readme_fragments
+    }
+
     pub fn to_json_pretty(&self) -> Result<String, serde_json::Error> {
         let document = CompatibilityMatrixDocument {
             schema_version: self.schema_version.clone(),
+            required_readme_fragments: self.required_readme_fragments.clone(),
             entries: self.entries.values().cloned().collect(),
         };
         serde_json::to_string_pretty(&document)
@@ -826,6 +883,18 @@ impl ModuleCompatibilityMatrix {
             "schema_version".to_string(),
             CanonicalValue::String(self.schema_version.clone()),
         );
+        if !self.required_readme_fragments.is_empty() {
+            map.insert(
+                "required_readme_fragments".to_string(),
+                CanonicalValue::Array(
+                    self.required_readme_fragments
+                        .iter()
+                        .cloned()
+                        .map(CanonicalValue::String)
+                        .collect(),
+                ),
+            );
+        }
         map.insert(
             "entries".to_string(),
             CanonicalValue::Array(
@@ -885,6 +954,25 @@ impl ModuleCompatibilityMatrix {
                     CompatibilityMode::Native,
                     CompatibilityMatrixErrorCode::InvalidMatrix,
                     "test262_refs must include at least one reference",
+                ),
+            ));
+        }
+
+        if let Some((mode, shim_id)) = entry.duplicate_shim_key() {
+            return Err(self.error(
+                context,
+                CompatibilityMatrixErrorCode::InvalidMatrix,
+                EventDraft::deny(
+                    "compatibility_entry_validation",
+                    entry.case_id.clone(),
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    CompatibilityMatrixErrorCode::InvalidMatrix,
+                    format!(
+                        "duplicate explicit shim_id '{}' for mode '{}'",
+                        shim_id,
+                        mode.as_str()
+                    ),
                 ),
             ));
         }
@@ -1466,6 +1554,73 @@ mod tests {
         let err =
             ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry(), entry()]).unwrap_err();
         assert_eq!(err.code, CompatibilityMatrixErrorCode::DuplicateCaseId);
+    }
+
+    #[test]
+    fn from_entries_duplicate_explicit_shim_id_for_same_mode_fails() {
+        let mut entry = valid_entry("dup-shim");
+        entry.franken_bun_compat_behavior = "bun-different".to_string();
+        entry.explicit_shims = vec![
+            valid_shim(CompatibilityMode::BunCompat),
+            ExplicitShim {
+                description: "second declaration".to_string(),
+                test_case_ref: "test262/ref.js".to_string(),
+                ..valid_shim(CompatibilityMode::BunCompat)
+            },
+        ];
+
+        let err = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap_err();
+        assert_eq!(err.code, CompatibilityMatrixErrorCode::InvalidMatrix);
+        assert!(err.message.contains("duplicate explicit shim_id"));
+        assert!(err.message.contains("bun_compat"));
+    }
+
+    #[test]
+    fn from_entries_same_shim_id_across_modes_is_allowed() {
+        let mut entry = valid_entry("shared-shim-id");
+        entry.franken_node_compat_behavior = "node-different".to_string();
+        entry.franken_bun_compat_behavior = "bun-different".to_string();
+
+        let bun_shim = ExplicitShim {
+            mode: CompatibilityMode::BunCompat,
+            ..valid_shim(CompatibilityMode::NodeCompat)
+        };
+        entry.explicit_shims = vec![valid_shim(CompatibilityMode::NodeCompat), bun_shim];
+
+        ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("same shim_id may be reused across different compatibility modes");
+    }
+
+    #[test]
+    fn validate_entry_duplicate_shim_id_for_same_mode_fails_even_if_matrix_construction_was_bypassed()
+     {
+        let mut entry = valid_entry("dup-shim-validation");
+        entry.franken_bun_compat_behavior = "bun-different".to_string();
+        entry.explicit_shims = vec![
+            valid_shim(CompatibilityMode::BunCompat),
+            ExplicitShim {
+                description: "second declaration".to_string(),
+                test_case_ref: "test262/ref.js".to_string(),
+                ..valid_shim(CompatibilityMode::BunCompat)
+            },
+        ];
+
+        let mut entries = BTreeMap::new();
+        entries.insert(entry.case_id.clone(), entry);
+        let mut matrix = ModuleCompatibilityMatrix {
+            schema_version: "1.0.0".to_string(),
+            required_readme_fragments: Vec::new(),
+            entries,
+            events: Vec::new(),
+            next_event_seq: 0,
+        };
+
+        let err = matrix
+            .validate_with_waivers(&BTreeSet::new(), &context())
+            .expect_err("validation should reject duplicate same-mode shim ids");
+        assert_eq!(err.code, CompatibilityMatrixErrorCode::InvalidMatrix);
+        assert!(err.message.contains("duplicate explicit shim_id"));
+        assert!(err.message.contains("bun_compat"));
     }
 
     // ── from_json_str ──────────────────────────────────────────────

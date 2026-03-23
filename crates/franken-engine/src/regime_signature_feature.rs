@@ -372,7 +372,7 @@ fn default_centroids() -> Vec<RegimeCentroid> {
                 let mut v = vec![400_000; dim];
                 // Recovery: trending upward
                 for (i, c) in v.iter_mut().enumerate() {
-                    *c = 300_000 + (i as i64 * 5000).min(200_000);
+                    *c = 300_000 + (i as i64).saturating_mul(5000).min(200_000);
                 }
                 v
             },
@@ -424,12 +424,17 @@ pub fn extract_signature(trace: &RuntimeTrace, config: &SignatureConfig) -> Trac
     }
 
     let hash_input = format!(
-        "sig:{}:{}:{}",
+        "sig:{}:{}:{}:{}",
         trace.trace_id,
         trace.observations.len(),
         components
             .iter()
             .map(|c| format!("{c}"))
+            .collect::<Vec<_>>()
+            .join(","),
+        bucket_counts
+            .iter()
+            .map(|bc| format!("{bc}"))
             .collect::<Vec<_>>()
             .join(",")
     );
@@ -574,12 +579,20 @@ pub fn build_regime_state_chart(
         });
     }
 
-    let hash_input = format!(
+    let mut hash_input = format!(
         "chart:{}:{}:{}",
         entries.len(),
         transition_count,
         abstention_count
     );
+    // Include label distribution (BTreeMap iterates deterministically).
+    for (label, count) in &label_distribution {
+        hash_input.push_str(&format!("|{label}={count}"));
+    }
+    // Include entry labels for content addressability.
+    for entry in &entries {
+        hash_input.push_str(&format!("|e:{}", entry.label));
+    }
     let chart_hash = hex_encode(ContentHash::compute(hash_input.as_bytes()).as_bytes());
 
     RegimeStateChart {

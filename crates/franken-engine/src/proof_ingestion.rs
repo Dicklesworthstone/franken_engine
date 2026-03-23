@@ -115,6 +115,11 @@ pub enum ProofValidationStatus {
         proof_epoch: SecurityEpoch,
         current_epoch: SecurityEpoch,
     },
+    /// Proof validity window has not started yet.
+    NotYetValid {
+        validity_start_ns: u64,
+        current_ns: u64,
+    },
     /// Proof validity window has expired.
     Expired {
         validity_end_ns: u64,
@@ -142,6 +147,13 @@ impl fmt::Display for ProofValidationStatus {
             } => write!(
                 f,
                 "epoch-stale (proof: {proof_epoch}, current: {current_epoch})"
+            ),
+            Self::NotYetValid {
+                validity_start_ns,
+                current_ns,
+            } => write!(
+                f,
+                "not-yet-valid (start: {validity_start_ns}, current: {current_ns})"
             ),
             Self::Expired {
                 validity_end_ns,
@@ -632,6 +644,22 @@ impl ProofIngestionEngine {
             return ProofValidationStatus::EpochStale {
                 proof_epoch: proof.proof_epoch,
                 current_epoch: self.current_epoch,
+            };
+        }
+
+        if proof.validity_end_ns > 0 && proof.validity_start_ns > proof.validity_end_ns {
+            return ProofValidationStatus::SemanticCheckFailed {
+                reason: format!(
+                    "invalid validity window: start {} exceeds end {}",
+                    proof.validity_start_ns, proof.validity_end_ns
+                ),
+            };
+        }
+
+        if current_ns < proof.validity_start_ns {
+            return ProofValidationStatus::NotYetValid {
+                validity_start_ns: proof.validity_start_ns,
+                current_ns,
             };
         }
 
@@ -1218,6 +1246,30 @@ mod tests {
     }
 
     #[test]
+    fn rejects_not_yet_valid_proof() {
+        let mut engine = test_engine();
+        let proof = create_proof_input(
+            ProofType::PlasCapabilityWitness,
+            test_epoch(),
+            2_000,
+            0,
+            "policy-001",
+            b"test",
+            &test_key(),
+        )
+        .unwrap();
+
+        let err = engine.ingest_proof(proof, 1_000).unwrap_err();
+        assert!(matches!(
+            err,
+            IngestionError::ValidationFailed {
+                status: ProofValidationStatus::NotYetValid { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn rejects_expired_proof() {
         let mut engine = test_engine();
         let proof = create_proof_input(
@@ -1236,6 +1288,30 @@ mod tests {
             err,
             IngestionError::ValidationFailed {
                 status: ProofValidationStatus::Expired { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_inverted_validity_window() {
+        let mut engine = test_engine();
+        let proof = create_proof_input(
+            ProofType::PlasCapabilityWitness,
+            test_epoch(),
+            2_000,
+            1_000,
+            "policy-001",
+            b"test",
+            &test_key(),
+        )
+        .unwrap();
+
+        let err = engine.ingest_proof(proof, 1_500).unwrap_err();
+        assert!(matches!(
+            err,
+            IngestionError::ValidationFailed {
+                status: ProofValidationStatus::SemanticCheckFailed { .. },
                 ..
             }
         ));
@@ -1576,6 +1652,10 @@ mod tests {
                 proof_epoch: SecurityEpoch::from_raw(1),
                 current_epoch: SecurityEpoch::from_raw(2),
             },
+            ProofValidationStatus::NotYetValid {
+                validity_start_ns: 300,
+                current_ns: 200,
+            },
             ProofValidationStatus::Expired {
                 validity_end_ns: 100,
                 current_ns: 200,
@@ -1825,6 +1905,10 @@ mod tests {
             ProofValidationStatus::EpochStale {
                 proof_epoch: SecurityEpoch::from_raw(10),
                 current_epoch: SecurityEpoch::from_raw(20),
+            },
+            ProofValidationStatus::NotYetValid {
+                validity_start_ns: 500,
+                current_ns: 100,
             },
             ProofValidationStatus::Expired {
                 validity_end_ns: 500,

@@ -67,6 +67,9 @@ const CODE_BUNDLE_SCHEMA_MISMATCH: &str = "FE-TPV-BUNDLE-0006";
 const BENCHMARK_BUNDLE_ENV_SCHEMA_VERSION: &str = "franken-engine.env.v1";
 const BENCHMARK_BUNDLE_MANIFEST_SCHEMA_VERSION: &str = "franken-engine.manifest.v1";
 const BENCHMARK_BUNDLE_REPRO_LOCK_SCHEMA_VERSION: &str = "franken-engine.repro-lock.v1";
+const BENCHMARK_INVOCATION_MANIFEST_SCHEMA_VERSION: &str =
+    "franken-engine.benchmark-invocation-manifest.v1";
+const COMMAND_MODE_RECEIPT_SCHEMA_VERSION: &str = "franken-engine.command-mode-receipt.v1";
 const BENCHMARK_BUNDLE_COMPONENT: &str = "frankenctl_benchmark_bundle";
 const BENCHMARK_BUNDLE_CLAIM_ID: &str = "bd-20xc";
 const BENCHMARK_BUNDLE_REPO_URL: &str = "https://github.com/Dicklesworthstone/franken_engine";
@@ -396,6 +399,8 @@ struct BenchmarkScoreCommandOutput {
     output: Option<String>,
     bundle: Option<String>,
     bundle_env_path: Option<String>,
+    benchmark_invocation_manifest_path: Option<String>,
+    command_mode_receipt_path: Option<String>,
     runtime: BenchmarkBundleRuntime,
 }
 
@@ -474,6 +479,50 @@ struct BenchmarkBundlePolicy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkInvocationManifest {
+    schema_version: String,
+    schema_hash: String,
+    invocation_id: String,
+    generated_at_utc: String,
+    command: String,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
+    input_path: String,
+    requested_output_path: String,
+    bundle_root: String,
+    artifacts: BenchmarkInvocationArtifacts,
+    runtime: BenchmarkBundleRuntime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkInvocationArtifacts {
+    canonical_results: String,
+    env: String,
+    bundle_manifest: String,
+    commands_transcript: String,
+    repro_lock: String,
+    command_mode_receipt: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CommandModeReceipt {
+    schema_version: String,
+    schema_hash: String,
+    receipt_id: String,
+    generated_at_utc: String,
+    command: String,
+    command_family: String,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
+    bundle_root: String,
+    env_path: String,
+    manifest_id: String,
+    runtime: BenchmarkBundleRuntime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct BenchmarkBundleManifest {
     schema_version: String,
     schema_hash: String,
@@ -524,6 +573,8 @@ struct BenchmarkBundleArtifactsCatalog {
     lock: BenchmarkBundleArtifactDigest,
     commands: BenchmarkBundleArtifactDigest,
     results: BenchmarkBundleArtifactDigest,
+    benchmark_invocation_manifest: BenchmarkBundleArtifactDigest,
+    command_mode_receipt: BenchmarkBundleArtifactDigest,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1790,6 +1841,14 @@ fn execute_benchmark_score(args: BenchmarkScoreArgs) -> Result<i32, String> {
     let bundle_env_path = bundle_dir
         .as_ref()
         .map(|path| path.join("env.json").display().to_string());
+    let benchmark_invocation_manifest_path = bundle_dir.as_ref().map(|path| {
+        path.join("benchmark_invocation_manifest.json")
+            .display()
+            .to_string()
+    });
+    let command_mode_receipt_path = bundle_dir
+        .as_ref()
+        .map(|path| path.join("command_mode_receipt.json").display().to_string());
     let output = BenchmarkScoreCommandOutput {
         schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
         trace_id: ctx.trace_id,
@@ -1802,6 +1861,8 @@ fn execute_benchmark_score(args: BenchmarkScoreArgs) -> Result<i32, String> {
         output: args.output.as_ref().map(|path| path.display().to_string()),
         bundle,
         bundle_env_path,
+        benchmark_invocation_manifest_path,
+        command_mode_receipt_path,
         runtime,
     };
 
@@ -1874,6 +1935,7 @@ fn materialize_benchmark_score_bundle(
     let rustc_verbose = command_stdout("rustc", &["-Vv"]);
     let rustc_version = command_stdout("rustc", &["-V"]).unwrap_or_else(|| "unknown".to_string());
     let cargo_version = command_stdout("cargo", &["-V"]).unwrap_or_else(|| "unknown".to_string());
+    let runtime = benchmark_bundle_runtime();
     let env_artifact_path = bundle_dir.join("env.json");
     let env_artifact = BenchmarkBundleEnv {
         schema_version: BENCHMARK_BUNDLE_ENV_SCHEMA_VERSION.to_string(),
@@ -1906,7 +1968,7 @@ fn materialize_benchmark_score_bundle(
                 .unwrap_or_else(|| "unknown".to_string()),
             profile: env::var("PROFILE").unwrap_or_else(|_| "dev".to_string()),
         },
-        runtime: benchmark_bundle_runtime(),
+        runtime: runtime.clone(),
         policy: BenchmarkBundlePolicy {
             policy_id: claim_bundle.policy_id.clone(),
             policy_digest_sha256: sha256_prefixed(claim_bundle.policy_id.as_bytes()),
@@ -1919,13 +1981,14 @@ fn materialize_benchmark_score_bundle(
     let env_digest = bundle_artifact_digest("env.json", &env_bytes);
     let env_materialized = bundle_materialized_file("env.json", &env_bytes, "output");
 
+    let score_output_argument: &Path = args.output.as_deref().unwrap_or(results_path);
     let score_command = format!(
         "rch exec -- cargo run -p frankenengine-engine --bin frankenctl -- benchmark score --input {} --trace-id {} --decision-id {} --policy-id {} --output {}",
         args.input.display(),
         claim_bundle.trace_id,
         claim_bundle.decision_id,
         claim_bundle.policy_id,
-        results_path.display()
+        score_output_argument.display()
     );
     let verify_report_path = bundle_dir.join("verify_report.json");
     let verify_command = format!(
@@ -1954,6 +2017,79 @@ fn materialize_benchmark_score_bundle(
         .to_hex()[..16]
     );
     let manifest_id = format!("{BENCHMARK_BUNDLE_COMPONENT}-{bundle_id}");
+    let command_mode_receipt = CommandModeReceipt {
+        schema_version: COMMAND_MODE_RECEIPT_SCHEMA_VERSION.to_string(),
+        schema_hash: schema_hash(COMMAND_MODE_RECEIPT_SCHEMA_VERSION),
+        receipt_id: format!("{manifest_id}-command-mode"),
+        generated_at_utc: generated_at_utc.clone(),
+        command: "frankenctl benchmark score".to_string(),
+        command_family: "benchmark".to_string(),
+        trace_id: claim_bundle.trace_id.clone(),
+        decision_id: claim_bundle.decision_id.clone(),
+        policy_id: claim_bundle.policy_id.clone(),
+        bundle_root: bundle_dir.display().to_string(),
+        env_path: "env.json".to_string(),
+        manifest_id: manifest_id.clone(),
+        runtime: runtime.clone(),
+    };
+    let command_mode_receipt_bytes = encode_json_value(
+        &command_mode_receipt,
+        format!(
+            "benchmark bundle command mode receipt `{}`",
+            bundle_dir.join("command_mode_receipt.json").display()
+        )
+        .as_str(),
+    )?;
+    let command_mode_receipt_digest =
+        bundle_artifact_digest("command_mode_receipt.json", &command_mode_receipt_bytes);
+    let command_mode_receipt_materialized = bundle_materialized_file(
+        "command_mode_receipt.json",
+        &command_mode_receipt_bytes,
+        "output",
+    );
+
+    let benchmark_invocation_manifest = BenchmarkInvocationManifest {
+        schema_version: BENCHMARK_INVOCATION_MANIFEST_SCHEMA_VERSION.to_string(),
+        schema_hash: schema_hash(BENCHMARK_INVOCATION_MANIFEST_SCHEMA_VERSION),
+        invocation_id: format!("{manifest_id}-invocation"),
+        generated_at_utc: generated_at_utc.clone(),
+        command: "frankenctl benchmark score".to_string(),
+        trace_id: claim_bundle.trace_id.clone(),
+        decision_id: claim_bundle.decision_id.clone(),
+        policy_id: claim_bundle.policy_id.clone(),
+        input_path: args.input.display().to_string(),
+        requested_output_path: score_output_argument.display().to_string(),
+        bundle_root: bundle_dir.display().to_string(),
+        artifacts: BenchmarkInvocationArtifacts {
+            canonical_results: "results.json".to_string(),
+            env: "env.json".to_string(),
+            bundle_manifest: "manifest.json".to_string(),
+            commands_transcript: "commands.txt".to_string(),
+            repro_lock: "repro.lock".to_string(),
+            command_mode_receipt: "command_mode_receipt.json".to_string(),
+        },
+        runtime: runtime.clone(),
+    };
+    let benchmark_invocation_manifest_bytes = encode_json_value(
+        &benchmark_invocation_manifest,
+        format!(
+            "benchmark invocation manifest `{}`",
+            bundle_dir
+                .join("benchmark_invocation_manifest.json")
+                .display()
+        )
+        .as_str(),
+    )?;
+    let benchmark_invocation_manifest_digest = bundle_artifact_digest(
+        "benchmark_invocation_manifest.json",
+        &benchmark_invocation_manifest_bytes,
+    );
+    let benchmark_invocation_manifest_materialized = bundle_materialized_file(
+        "benchmark_invocation_manifest.json",
+        &benchmark_invocation_manifest_bytes,
+        "output",
+    );
+
     let repro_artifact = BenchmarkBundleReproLock {
         schema_version: BENCHMARK_BUNDLE_REPRO_LOCK_SCHEMA_VERSION.to_string(),
         schema_hash: schema_hash(BENCHMARK_BUNDLE_REPRO_LOCK_SCHEMA_VERSION),
@@ -1973,6 +2109,8 @@ fn materialize_benchmark_score_bundle(
             env_materialized.clone(),
             commands_materialized.clone(),
             results_materialized.clone(),
+            benchmark_invocation_manifest_materialized.clone(),
+            command_mode_receipt_materialized.clone(),
         ],
         replay: BenchmarkBundleReplay {
             trace_id: claim_bundle.trace_id.clone(),
@@ -2023,13 +2161,15 @@ fn materialize_benchmark_score_bundle(
             policy_id: claim_bundle.policy_id.clone(),
             replay_pointer: format!("file://{}/commands.txt", bundle_dir.display()),
             evidence_pointer: format!("file://{}/results.json", bundle_dir.display()),
-            receipt_ids: Vec::new(),
+            receipt_ids: vec![command_mode_receipt.receipt_id.clone()],
         },
         artifacts: BenchmarkBundleArtifactsCatalog {
             env: env_digest.clone(),
             lock: repro_digest.clone(),
             commands: commands_digest.clone(),
             results: results_artifact.clone(),
+            benchmark_invocation_manifest: benchmark_invocation_manifest_digest.clone(),
+            command_mode_receipt: command_mode_receipt_digest.clone(),
         },
         inputs: vec![input_artifact],
         outputs: vec![results_artifact.clone()],
@@ -2066,6 +2206,14 @@ fn materialize_benchmark_score_bundle(
     write_bytes_file(&bundle_dir.join("commands.txt"), &commands_bytes)?;
     write_bytes_file(&bundle_dir.join("repro.lock"), &repro_bytes)?;
     write_bytes_file(&bundle_dir.join("manifest.json"), &manifest_bytes)?;
+    write_bytes_file(
+        &bundle_dir.join("benchmark_invocation_manifest.json"),
+        &benchmark_invocation_manifest_bytes,
+    )?;
+    write_bytes_file(
+        &bundle_dir.join("command_mode_receipt.json"),
+        &command_mode_receipt_bytes,
+    )?;
     Ok(())
 }
 
@@ -2073,7 +2221,7 @@ fn execute_benchmark_verify(args: BenchmarkVerifyArgs) -> Result<i32, String> {
     let results_path = args.bundle.join("results.json");
     if !results_path.is_file() {
         return Err(format!(
-            "benchmark verify requires --bundle <dir> containing env.json, manifest.json, repro.lock, commands.txt, and results.json (missing `{}`)",
+            "benchmark verify requires --bundle <dir> containing env.json, manifest.json, repro.lock, commands.txt, results.json, benchmark_invocation_manifest.json, and command_mode_receipt.json (missing `{}`)",
             results_path.display()
         ));
     }
@@ -2104,6 +2252,8 @@ fn validate_benchmark_bundle_contract(
         "repro.lock",
         "commands.txt",
         "results.json",
+        "benchmark_invocation_manifest.json",
+        "command_mode_receipt.json",
     ];
 
     let mut bundle_violations = false;
@@ -2299,6 +2449,16 @@ fn validate_benchmark_bundle_contract(
                     ("lock", &manifest.artifacts.lock, "repro.lock"),
                     ("commands", &manifest.artifacts.commands, "commands.txt"),
                     ("results", &manifest.artifacts.results, "results.json"),
+                    (
+                        "benchmark_invocation_manifest",
+                        &manifest.artifacts.benchmark_invocation_manifest,
+                        "benchmark_invocation_manifest.json",
+                    ),
+                    (
+                        "command_mode_receipt",
+                        &manifest.artifacts.command_mode_receipt,
+                        "command_mode_receipt.json",
+                    ),
                 ] {
                     let path_matches = artifact.path == file_name;
                     append_benchmark_bundle_check(
@@ -2533,6 +2693,299 @@ fn validate_benchmark_bundle_contract(
         }
     }
 
+    let command_mode_receipt = if let Some(receipt_bytes) =
+        bundle_bytes.get("command_mode_receipt.json")
+    {
+        match serde_json::from_slice::<CommandModeReceipt>(receipt_bytes) {
+            Ok(receipt) => {
+                let schema_ok = receipt.schema_version == COMMAND_MODE_RECEIPT_SCHEMA_VERSION
+                    && receipt.schema_hash == schema_hash(COMMAND_MODE_RECEIPT_SCHEMA_VERSION);
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_command_mode_receipt_schema_matches".to_string(),
+                    schema_ok,
+                    CODE_BUNDLE_SCHEMA_MISMATCH,
+                    if schema_ok {
+                        format!(
+                            "command_mode_receipt.json schema matches {}",
+                            COMMAND_MODE_RECEIPT_SCHEMA_VERSION
+                        )
+                    } else {
+                        format!(
+                            "command_mode_receipt.json schema mismatch: schema_version={} schema_hash={}",
+                            receipt.schema_version, receipt.schema_hash
+                        )
+                    },
+                );
+                if !schema_ok {
+                    bundle_violations = true;
+                }
+
+                let context_matches = receipt.trace_id == input.trace_id
+                    && receipt.decision_id == input.decision_id
+                    && receipt.policy_id == input.policy_id;
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_command_mode_receipt_context_matches_claim".to_string(),
+                    context_matches,
+                    CODE_BUNDLE_CONTEXT_MISMATCH,
+                    if context_matches {
+                        "command_mode_receipt.json matches trace/decision/policy context"
+                            .to_string()
+                    } else {
+                        format!(
+                            "command_mode_receipt.json context mismatch: receipt=({}, {}, {}), results=({}, {}, {})",
+                            receipt.trace_id,
+                            receipt.decision_id,
+                            receipt.policy_id,
+                            input.trace_id,
+                            input.decision_id,
+                            input.policy_id
+                        )
+                    },
+                );
+                if !context_matches {
+                    bundle_violations = true;
+                }
+
+                let command_ok = receipt.command == "frankenctl benchmark score"
+                    && receipt.command_family == "benchmark"
+                    && receipt.bundle_root == bundle_dir.display().to_string()
+                    && receipt.env_path == "env.json";
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_command_mode_receipt_command_contract_present".to_string(),
+                    command_ok,
+                    CODE_BUNDLE_PARSE_ERROR,
+                    if command_ok {
+                        "command_mode_receipt.json records benchmark score command metadata"
+                            .to_string()
+                    } else {
+                        format!(
+                            "command_mode_receipt.json contract invalid: command={} family={} bundle_root={} env_path={}",
+                            receipt.command,
+                            receipt.command_family,
+                            receipt.bundle_root,
+                            receipt.env_path
+                        )
+                    },
+                );
+                if !command_ok {
+                    bundle_violations = true;
+                }
+
+                let runtime_contract_ok = receipt.runtime.mode == "deterministic-score"
+                    && receipt.runtime.lane == "publication_gate"
+                    && receipt.runtime.safe_mode_enabled
+                    && receipt
+                        .runtime
+                        .feature_flags
+                        .iter()
+                        .any(|flag| flag == "benchmark-score-cli");
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_command_mode_receipt_runtime_contract_matches".to_string(),
+                    runtime_contract_ok,
+                    CODE_BUNDLE_CONTEXT_MISMATCH,
+                    if runtime_contract_ok {
+                        "command_mode_receipt.json pins deterministic-score/publication_gate with benchmark-score-cli enabled".to_string()
+                    } else {
+                        format!(
+                            "command_mode_receipt.json runtime contract mismatch: mode={} lane={} safe_mode_enabled={} feature_flags={:?}",
+                            receipt.runtime.mode,
+                            receipt.runtime.lane,
+                            receipt.runtime.safe_mode_enabled,
+                            receipt.runtime.feature_flags
+                        )
+                    },
+                );
+                if !runtime_contract_ok {
+                    bundle_violations = true;
+                }
+
+                Some(receipt)
+            }
+            Err(error) => {
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_command_mode_receipt_parses".to_string(),
+                    false,
+                    CODE_BUNDLE_PARSE_ERROR,
+                    error.to_string(),
+                );
+                bundle_violations = true;
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    if let Some(invocation_bytes) = bundle_bytes.get("benchmark_invocation_manifest.json") {
+        match serde_json::from_slice::<BenchmarkInvocationManifest>(invocation_bytes) {
+            Ok(invocation_manifest) => {
+                let schema_ok = invocation_manifest.schema_version
+                    == BENCHMARK_INVOCATION_MANIFEST_SCHEMA_VERSION
+                    && invocation_manifest.schema_hash
+                        == schema_hash(BENCHMARK_INVOCATION_MANIFEST_SCHEMA_VERSION);
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_benchmark_invocation_manifest_schema_matches".to_string(),
+                    schema_ok,
+                    CODE_BUNDLE_SCHEMA_MISMATCH,
+                    if schema_ok {
+                        format!(
+                            "benchmark_invocation_manifest.json schema matches {}",
+                            BENCHMARK_INVOCATION_MANIFEST_SCHEMA_VERSION
+                        )
+                    } else {
+                        format!(
+                            "benchmark_invocation_manifest.json schema mismatch: schema_version={} schema_hash={}",
+                            invocation_manifest.schema_version, invocation_manifest.schema_hash
+                        )
+                    },
+                );
+                if !schema_ok {
+                    bundle_violations = true;
+                }
+
+                let context_matches = invocation_manifest.trace_id == input.trace_id
+                    && invocation_manifest.decision_id == input.decision_id
+                    && invocation_manifest.policy_id == input.policy_id;
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_benchmark_invocation_manifest_context_matches_claim".to_string(),
+                    context_matches,
+                    CODE_BUNDLE_CONTEXT_MISMATCH,
+                    if context_matches {
+                        "benchmark_invocation_manifest.json matches trace/decision/policy context"
+                            .to_string()
+                    } else {
+                        format!(
+                            "benchmark_invocation_manifest.json context mismatch: manifest=({}, {}, {}), results=({}, {}, {})",
+                            invocation_manifest.trace_id,
+                            invocation_manifest.decision_id,
+                            invocation_manifest.policy_id,
+                            input.trace_id,
+                            input.decision_id,
+                            input.policy_id
+                        )
+                    },
+                );
+                if !context_matches {
+                    bundle_violations = true;
+                }
+
+                let artifact_contract_ok = invocation_manifest.command
+                    == "frankenctl benchmark score"
+                    && invocation_manifest.bundle_root == bundle_dir.display().to_string()
+                    && invocation_manifest.artifacts.canonical_results == "results.json"
+                    && invocation_manifest.artifacts.env == "env.json"
+                    && invocation_manifest.artifacts.bundle_manifest == "manifest.json"
+                    && invocation_manifest.artifacts.commands_transcript == "commands.txt"
+                    && invocation_manifest.artifacts.repro_lock == "repro.lock"
+                    && invocation_manifest.artifacts.command_mode_receipt
+                        == "command_mode_receipt.json";
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_benchmark_invocation_manifest_artifact_contract_present".to_string(),
+                    artifact_contract_ok,
+                    CODE_BUNDLE_PARSE_ERROR,
+                    if artifact_contract_ok {
+                        "benchmark_invocation_manifest.json records the canonical benchmark bundle artifact layout".to_string()
+                    } else {
+                        format!(
+                            "benchmark_invocation_manifest.json artifact contract invalid: command={} bundle_root={} artifacts={:?}",
+                            invocation_manifest.command,
+                            invocation_manifest.bundle_root,
+                            invocation_manifest.artifacts
+                        )
+                    },
+                );
+                if !artifact_contract_ok {
+                    bundle_violations = true;
+                }
+
+                let runtime_contract_ok = invocation_manifest.runtime.mode == "deterministic-score"
+                    && invocation_manifest.runtime.lane == "publication_gate"
+                    && invocation_manifest.runtime.safe_mode_enabled
+                    && invocation_manifest
+                        .runtime
+                        .feature_flags
+                        .iter()
+                        .any(|flag| flag == "benchmark-score-cli");
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_benchmark_invocation_manifest_runtime_contract_matches".to_string(),
+                    runtime_contract_ok,
+                    CODE_BUNDLE_CONTEXT_MISMATCH,
+                    if runtime_contract_ok {
+                        "benchmark_invocation_manifest.json pins deterministic-score/publication_gate with benchmark-score-cli enabled".to_string()
+                    } else {
+                        format!(
+                            "benchmark_invocation_manifest.json runtime contract mismatch: mode={} lane={} safe_mode_enabled={} feature_flags={:?}",
+                            invocation_manifest.runtime.mode,
+                            invocation_manifest.runtime.lane,
+                            invocation_manifest.runtime.safe_mode_enabled,
+                            invocation_manifest.runtime.feature_flags
+                        )
+                    },
+                );
+                if !runtime_contract_ok {
+                    bundle_violations = true;
+                }
+
+                let path_recording_ok = !invocation_manifest.input_path.trim().is_empty()
+                    && !invocation_manifest.requested_output_path.trim().is_empty();
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_benchmark_invocation_manifest_records_requested_paths".to_string(),
+                    path_recording_ok,
+                    CODE_BUNDLE_PARSE_ERROR,
+                    if path_recording_ok {
+                        "benchmark_invocation_manifest.json records input and requested output paths".to_string()
+                    } else {
+                        "benchmark_invocation_manifest.json must record non-empty input and requested output paths".to_string()
+                    },
+                );
+                if !path_recording_ok {
+                    bundle_violations = true;
+                }
+
+                let receipt_matches = command_mode_receipt.as_ref().is_some_and(|receipt| {
+                    receipt.bundle_root == invocation_manifest.bundle_root
+                        && invocation_manifest.artifacts.command_mode_receipt
+                            == "command_mode_receipt.json"
+                });
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_benchmark_invocation_manifest_references_command_mode_receipt"
+                        .to_string(),
+                    receipt_matches,
+                    CODE_BUNDLE_CONTEXT_MISMATCH,
+                    if receipt_matches {
+                        "benchmark_invocation_manifest.json references the command mode receipt artifact".to_string()
+                    } else {
+                        "benchmark_invocation_manifest.json must reference a valid command mode receipt artifact".to_string()
+                    },
+                );
+                if !receipt_matches {
+                    bundle_violations = true;
+                }
+            }
+            Err(error) => {
+                append_benchmark_bundle_check(
+                    report,
+                    "bundle_benchmark_invocation_manifest_parses".to_string(),
+                    false,
+                    CODE_BUNDLE_PARSE_ERROR,
+                    error.to_string(),
+                );
+                bundle_violations = true;
+            }
+        }
+    }
+
     let command_lines = if let Some(command_bytes) = bundle_bytes.get("commands.txt") {
         match String::from_utf8(command_bytes.clone()) {
             Ok(content) => {
@@ -2758,7 +3211,13 @@ fn validate_benchmark_bundle_contract(
                     bundle_violations = true;
                 }
 
-                for file_name in ["env.json", "commands.txt", "results.json"] {
+                for file_name in [
+                    "env.json",
+                    "commands.txt",
+                    "results.json",
+                    "benchmark_invocation_manifest.json",
+                    "command_mode_receipt.json",
+                ] {
                     let output_ok = repro_lock.expected_outputs.iter().any(|artifact| {
                         artifact.path == file_name
                             && artifact.kind == "output"

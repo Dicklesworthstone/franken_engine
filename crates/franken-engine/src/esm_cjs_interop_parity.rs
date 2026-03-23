@@ -22,12 +22,14 @@ use crate::esm_loader::{
     BindingType, EsmModule, ExportEntry, ImportEntry, ModuleGraph, ModuleStatus,
 };
 use crate::hash_tiers::ContentHash;
-use crate::module_async_evaluation::{AsyncModuleEvaluator, AsyncModulePhase};
+use crate::module_async_evaluation::{
+    AsyncModuleEvaluator, AsyncModulePhase, compute_async_evaluation_order,
+};
 use crate::module_compatibility_matrix::CompatibilityMode;
 use crate::module_live_binding::{BindingCell, BindingCellState, BindingId, LiveBindingMap};
 use crate::module_resolver::{
     AllowAllPolicy, DeterministicModuleResolver, ImportStyle, ModuleDefinition, ModuleDependency,
-    ModuleRequest, ModuleResolver, ModuleSyntax, ResolutionContext,
+    ModuleRequest, ModuleResolver, ModuleSyntax, ResolutionContext, ResolutionResult,
 };
 
 // ---------------------------------------------------------------------------
@@ -654,6 +656,110 @@ pub fn interop_parity_corpus() -> Vec<InteropSpecimen> {
             }],
             expected_async_phases: vec![],
         },
+        InteropSpecimen {
+            specimen_id: "package_type_module_extensionless_relative_native".into(),
+            description:
+                "Native external-package ESM entry imports an extensionless relative path and fails closed".into(),
+            family: InteropFamily::EsmOnly,
+            modules: vec![
+                SpecimenModule {
+                    specifier: "some-pkg/sub.mjs".into(),
+                    syntax: ModuleSyntax::EsModule,
+                    source: "export const value = 'sub';".into(),
+                    imports: vec![],
+                    exports: vec![ExportEntry::direct("value", "value")],
+                    has_default_export: false,
+                    has_top_level_await: false,
+                },
+                SpecimenModule {
+                    specifier: "some-pkg/main.mjs".into(),
+                    syntax: ModuleSyntax::EsModule,
+                    source: "import { value } from './sub'; export const seen = value;".into(),
+                    imports: vec![ImportEntry::new("./sub", "value", "value")],
+                    exports: vec![ExportEntry::direct("seen", "seen")],
+                    has_default_export: false,
+                    has_top_level_await: false,
+                },
+            ],
+            entry_point: "some-pkg/main.mjs".into(),
+            expected_outcome: InteropExpectedOutcome::LinkFailure,
+            expected_linked_count: None,
+            expected_binding_states: vec![],
+            expected_async_phases: vec![],
+        },
+        InteropSpecimen {
+            specimen_id: "package_type_module_extensionless_relative_node_compat".into(),
+            description:
+                "Node-compat external-package ESM entry still requires an explicit relative extension and fails closed".into(),
+            family: InteropFamily::EsmOnly,
+            modules: vec![
+                SpecimenModule {
+                    specifier: "some-pkg/sub.mjs".into(),
+                    syntax: ModuleSyntax::EsModule,
+                    source: "export const value = 'sub';".into(),
+                    imports: vec![],
+                    exports: vec![ExportEntry::direct("value", "value")],
+                    has_default_export: false,
+                    has_top_level_await: false,
+                },
+                SpecimenModule {
+                    specifier: "some-pkg/main.mjs".into(),
+                    syntax: ModuleSyntax::EsModule,
+                    source: "import { value } from './sub'; export const seen = value;".into(),
+                    imports: vec![ImportEntry::new("./sub", "value", "value")],
+                    exports: vec![ExportEntry::direct("seen", "seen")],
+                    has_default_export: false,
+                    has_top_level_await: false,
+                },
+            ],
+            entry_point: "some-pkg/main.mjs".into(),
+            expected_outcome: InteropExpectedOutcome::LinkFailure,
+            expected_linked_count: None,
+            expected_binding_states: vec![],
+            expected_async_phases: vec![],
+        },
+        InteropSpecimen {
+            specimen_id: "package_type_module_extensionless_relative_bun_compat".into(),
+            description:
+                "Bun-compat external-package ESM entry resolves an extensionless relative path to the canonical module".into(),
+            family: InteropFamily::EsmOnly,
+            modules: vec![
+                SpecimenModule {
+                    specifier: "some-pkg/sub.mjs".into(),
+                    syntax: ModuleSyntax::EsModule,
+                    source: "export const value = 'sub';".into(),
+                    imports: vec![],
+                    exports: vec![ExportEntry::direct("value", "value")],
+                    has_default_export: false,
+                    has_top_level_await: false,
+                },
+                SpecimenModule {
+                    specifier: "some-pkg/main.mjs".into(),
+                    syntax: ModuleSyntax::EsModule,
+                    source: "import { value } from './sub'; export const seen = value;".into(),
+                    imports: vec![ImportEntry::new("./sub", "value", "value")],
+                    exports: vec![ExportEntry::direct("seen", "seen")],
+                    has_default_export: false,
+                    has_top_level_await: false,
+                },
+            ],
+            entry_point: "some-pkg/main.mjs".into(),
+            expected_outcome: InteropExpectedOutcome::Success,
+            expected_linked_count: Some(2),
+            expected_binding_states: vec![
+                ExpectedBindingState {
+                    module_specifier: "some-pkg/sub.mjs".into(),
+                    export_name: "value".into(),
+                    expected_state: BindingCellState::Initialized,
+                },
+                ExpectedBindingState {
+                    module_specifier: "some-pkg/main.mjs".into(),
+                    export_name: "seen".into(),
+                    expected_state: BindingCellState::Initialized,
+                },
+            ],
+            expected_async_phases: vec![],
+        },
         // ── Mixed Graph ──
         InteropSpecimen {
             specimen_id: "mixed_three_module_graph".into(),
@@ -1244,6 +1350,77 @@ fn build_module_definition(sm: &SpecimenModule) -> ModuleDefinition {
     definition
 }
 
+fn specimen_module_dependency_specifiers(sm: &SpecimenModule) -> Vec<String> {
+    build_module_definition(sm)
+        .dependencies
+        .into_iter()
+        .map(|dependency| dependency.specifier)
+        .collect()
+}
+
+fn canonical_dependency_targets_for_specimen(
+    specimen: &InteropSpecimen,
+    resolver: &DeterministicModuleResolver,
+    context: &ResolutionContext,
+    compatibility_mode: CompatibilityMode,
+    reachable_module_specifiers: &BTreeSet<String>,
+) -> ResolutionResult<BTreeMap<(String, String), String>> {
+    let mut canonical_targets = BTreeMap::new();
+
+    for module in &specimen.modules {
+        if !reachable_module_specifiers.contains(&module.specifier) {
+            continue;
+        }
+        let mut dependency_styles = BTreeMap::new();
+        for dependency in build_module_definition(module).dependencies {
+            dependency_styles.insert(dependency.specifier, dependency.style);
+        }
+
+        let referrer = format!("external:{}", module.specifier);
+        for (request_specifier, style) in dependency_styles {
+            let outcome = resolver.resolve(
+                &ModuleRequest::new(request_specifier.clone(), style)
+                    .with_referrer(referrer.clone())
+                    .with_compatibility_mode(compatibility_mode),
+                context,
+                &AllowAllPolicy,
+            )?;
+            canonical_targets.insert(
+                (module.specifier.clone(), request_specifier),
+                outcome.module.canonical_specifier,
+            );
+        }
+    }
+
+    Ok(canonical_targets)
+}
+
+fn canonicalize_specimen_module(
+    sm: &SpecimenModule,
+    canonical_dependency_targets: &BTreeMap<(String, String), String>,
+) -> SpecimenModule {
+    let mut module = sm.clone();
+
+    for import in &mut module.imports {
+        if let Some(canonical_specifier) =
+            canonical_dependency_targets.get(&(sm.specifier.clone(), import.module_request.clone()))
+        {
+            import.module_request = canonical_specifier.clone();
+        }
+    }
+
+    for export in &mut module.exports {
+        if let Some(request_specifier) = export.module_request.as_ref()
+            && let Some(canonical_specifier) =
+                canonical_dependency_targets.get(&(sm.specifier.clone(), request_specifier.clone()))
+        {
+            export.module_request = Some(canonical_specifier.clone());
+        }
+    }
+
+    module
+}
+
 fn specimen_declared_compatibility_mode(specimen_id: &str) -> Option<CompatibilityMode> {
     if specimen_id.contains("bun_compat") {
         Some(CompatibilityMode::BunCompat)
@@ -1474,22 +1651,63 @@ fn run_single_specimen(specimen: &InteropSpecimen) -> InteropSpecimenEvidence {
         module_request_style(entry_sm.syntax),
     )
     .with_compatibility_mode(compatibility_mode);
-    if let Err(e) = resolver.resolve_chain(&entry_request, &context, &AllowAllPolicy) {
-        return early_return_evidence(
-            specimen,
-            compatibility_mode,
-            InteropActualOutcome::LinkFailure,
-            specimen.modules.len() as u64,
-            0,
-            0,
-            Some(format!("{e}")),
-        );
-    }
+    let resolution_chain = match resolver.resolve_chain(&entry_request, &context, &AllowAllPolicy) {
+        Ok(outcomes) => outcomes,
+        Err(error) => {
+            return early_return_evidence(
+                specimen,
+                compatibility_mode,
+                InteropActualOutcome::LinkFailure,
+                specimen.modules.len() as u64,
+                0,
+                0,
+                Some(format!("{error}")),
+            );
+        }
+    };
+    let reachable_module_specifiers: BTreeSet<String> = resolution_chain
+        .iter()
+        .map(|outcome| outcome.module.canonical_specifier.clone())
+        .collect();
+
+    let canonical_dependency_targets = match canonical_dependency_targets_for_specimen(
+        specimen,
+        &resolver,
+        &context,
+        compatibility_mode,
+        &reachable_module_specifiers,
+    ) {
+        Ok(targets) => targets,
+        Err(error) => {
+            return early_return_evidence(
+                specimen,
+                compatibility_mode,
+                InteropActualOutcome::GraphConstructionFailure,
+                specimen.modules.len() as u64,
+                0,
+                0,
+                Some(format!(
+                    "failed to normalize specimen dependency targets after resolution: {error}"
+                )),
+            );
+        }
+    };
+
+    let normalized_modules: Vec<SpecimenModule> = specimen
+        .modules
+        .iter()
+        .filter(|module| reachable_module_specifiers.contains(&module.specifier))
+        .map(|module| canonicalize_specimen_module(module, &canonical_dependency_targets))
+        .collect();
+    let normalized_entry_sm = normalized_modules
+        .iter()
+        .find(|module| module.specifier == entry_sm.specifier)
+        .expect("normalized entry module should exist");
 
     // Build the module graph — add entry point first (ModuleGraph sets first-added as entry).
     let mut graph = ModuleGraph::new();
 
-    if let Err(e) = graph.add_module(build_esm_module(entry_sm)) {
+    if let Err(e) = graph.add_module(build_esm_module(normalized_entry_sm)) {
         return early_return_evidence(
             specimen,
             compatibility_mode,
@@ -1500,7 +1718,7 @@ fn run_single_specimen(specimen: &InteropSpecimen) -> InteropSpecimenEvidence {
             Some(format!("{e}")),
         );
     }
-    for sm in &specimen.modules {
+    for sm in &normalized_modules {
         if sm.specifier == specimen.entry_point {
             continue;
         }
@@ -1579,14 +1797,49 @@ fn run_single_specimen(specimen: &InteropSpecimen) -> InteropSpecimenEvidence {
     // Async evaluation phase.
     let mut async_evaluator = AsyncModuleEvaluator::with_defaults();
     let mut has_rejection = false;
+    let async_dependency_map: BTreeMap<String, Vec<String>> = normalized_modules
+        .iter()
+        .map(|sm| {
+            (
+                sm.specifier.clone(),
+                specimen_module_dependency_specifiers(sm),
+            )
+        })
+        .collect();
+    let async_module_specifiers: Vec<String> = normalized_modules
+        .iter()
+        .map(|sm| sm.specifier.clone())
+        .collect();
+    let async_evaluation_order =
+        match compute_async_evaluation_order(&async_module_specifiers, &async_dependency_map) {
+            Ok(order) => order,
+            Err(error) => {
+                return early_return_evidence(
+                    specimen,
+                    compatibility_mode,
+                    InteropActualOutcome::GraphConstructionFailure,
+                    module_count,
+                    linked_count,
+                    cycle_count,
+                    Some(format!("failed to derive async evaluation order: {error}")),
+                );
+            }
+        };
+    let normalized_modules_by_specifier: BTreeMap<&str, &SpecimenModule> = normalized_modules
+        .iter()
+        .map(|module| (module.specifier.as_str(), module))
+        .collect();
 
     // Register all modules with the async evaluator.
-    for sm in &specimen.modules {
-        let deps: Vec<String> = sm
-            .imports
-            .iter()
-            .map(|i| i.module_request.clone())
-            .collect();
+    for specifier in &async_evaluation_order {
+        let sm = normalized_modules_by_specifier
+            .get(specifier.as_str())
+            .copied()
+            .expect("async evaluation order should reference a registered specimen module");
+        let deps = async_dependency_map
+            .get(specifier)
+            .cloned()
+            .unwrap_or_default();
         let promise = if sm.has_top_level_await {
             let pid: u32 = sm.specifier.as_bytes().iter().map(|&b| b as u32).sum();
             Some(crate::promise_model::PromiseHandle(pid))
@@ -1598,15 +1851,30 @@ fn run_single_specimen(specimen: &InteropSpecimen) -> InteropSpecimenEvidence {
 
     // Sync modules are already in Synchronous phase (terminal).
     // Just notify dependents they've settled so async modules can proceed.
-    for sm in &specimen.modules {
+    for specifier in &async_evaluation_order {
+        let sm = normalized_modules_by_specifier
+            .get(specifier.as_str())
+            .copied()
+            .expect("async evaluation order should reference a registered specimen module");
         if !sm.has_top_level_await {
             let _ = async_evaluator.notify_dependency_settled(&sm.specifier);
         }
     }
 
     // Process TLA modules: suspend → settle or reject.
-    for sm in &specimen.modules {
+    for specifier in &async_evaluation_order {
+        let sm = normalized_modules_by_specifier
+            .get(specifier.as_str())
+            .copied()
+            .expect("async evaluation order should reference a registered specimen module");
         if sm.has_top_level_await {
+            if async_evaluator
+                .states()
+                .get(&sm.specifier)
+                .is_some_and(|state| state.phase == AsyncModulePhase::Rejected)
+            {
+                continue;
+            }
             let pid: u32 = sm.specifier.as_bytes().iter().map(|&b| b as u32).sum();
             let promise = crate::promise_model::PromiseHandle(pid);
             let _ = async_evaluator.suspend_at_top_level_await(&sm.specifier, promise);
@@ -3001,6 +3269,223 @@ mod tests {
         let esm = build_esm_module(&sm);
         assert_eq!(esm.syntax, ModuleSyntax::CommonJs);
         assert_eq!(esm.imports.len(), 1);
+    }
+
+    #[test]
+    fn canonicalize_specimen_module_rewrites_relative_dependency_targets() {
+        let sm = SpecimenModule {
+            specifier: "some-pkg/main.mjs".into(),
+            syntax: ModuleSyntax::EsModule,
+            source: "import { value } from './sub'; export { value } from './sub';".into(),
+            imports: vec![ImportEntry::new("./sub", "value", "value")],
+            exports: vec![ExportEntry::re_export("value", "./sub", "value")],
+            has_default_export: false,
+            has_top_level_await: false,
+        };
+        let canonical_targets = BTreeMap::from([(
+            ("some-pkg/main.mjs".to_string(), "./sub".to_string()),
+            "some-pkg/sub.mjs".to_string(),
+        )]);
+
+        let canonicalized = canonicalize_specimen_module(&sm, &canonical_targets);
+        assert_eq!(canonicalized.imports[0].module_request, "some-pkg/sub.mjs");
+        assert_eq!(
+            canonicalized.exports[0].module_request.as_deref(),
+            Some("some-pkg/sub.mjs")
+        );
+    }
+
+    #[test]
+    fn run_single_specimen_extensionless_relative_mode_split_matches_resolver_contract() {
+        let corpus = interop_parity_corpus();
+
+        let native = corpus
+            .iter()
+            .find(|specimen| {
+                specimen.specimen_id == "package_type_module_extensionless_relative_native"
+            })
+            .unwrap();
+        let native_evidence = run_single_specimen(native);
+        assert_eq!(
+            native_evidence.compatibility_mode,
+            CompatibilityMode::Native
+        );
+        assert_eq!(
+            native_evidence.actual_outcome,
+            InteropActualOutcome::LinkFailure
+        );
+        assert_eq!(native_evidence.verdict, InteropVerdict::Pass);
+
+        let node_compat = corpus
+            .iter()
+            .find(|specimen| {
+                specimen.specimen_id == "package_type_module_extensionless_relative_node_compat"
+            })
+            .unwrap();
+        let node_compat_evidence = run_single_specimen(node_compat);
+        assert_eq!(
+            node_compat_evidence.compatibility_mode,
+            CompatibilityMode::NodeCompat
+        );
+        assert_eq!(
+            node_compat_evidence.actual_outcome,
+            InteropActualOutcome::LinkFailure
+        );
+        assert_eq!(node_compat_evidence.verdict, InteropVerdict::Pass);
+
+        let bun_compat = corpus
+            .iter()
+            .find(|specimen| {
+                specimen.specimen_id == "package_type_module_extensionless_relative_bun_compat"
+            })
+            .unwrap();
+        let bun_compat_evidence = run_single_specimen(bun_compat);
+        assert_eq!(
+            bun_compat_evidence.compatibility_mode,
+            CompatibilityMode::BunCompat
+        );
+        assert_eq!(
+            bun_compat_evidence.actual_outcome,
+            InteropActualOutcome::Success
+        );
+        assert_eq!(bun_compat_evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(bun_compat_evidence.linked_count, 2);
+        assert!(
+            bun_compat_evidence
+                .binding_verdicts
+                .iter()
+                .all(|verdict| verdict.pass)
+        );
+    }
+
+    #[test]
+    fn run_single_specimen_ignores_unreachable_broken_modules_when_normalizing_dependencies() {
+        let specimen = InteropSpecimen {
+            specimen_id: "unreachable_module_is_ignored".into(),
+            description: "dead modules should not poison a passing reachable graph".into(),
+            family: InteropFamily::EsmOnly,
+            modules: vec![
+                SpecimenModule {
+                    specifier: "entry.mjs".into(),
+                    syntax: ModuleSyntax::EsModule,
+                    source: "export const ok = true;".into(),
+                    imports: vec![],
+                    exports: vec![ExportEntry::direct("ok", "ok")],
+                    has_default_export: false,
+                    has_top_level_await: false,
+                },
+                SpecimenModule {
+                    specifier: "dead.mjs".into(),
+                    syntax: ModuleSyntax::EsModule,
+                    source: "import { nope } from 'missing.mjs'; export const dead = nope;".into(),
+                    imports: vec![ImportEntry::new("missing.mjs", "nope", "nope")],
+                    exports: vec![ExportEntry::direct("dead", "dead")],
+                    has_default_export: false,
+                    has_top_level_await: false,
+                },
+            ],
+            entry_point: "entry.mjs".into(),
+            expected_outcome: InteropExpectedOutcome::Success,
+            expected_linked_count: Some(1),
+            expected_binding_states: vec![ExpectedBindingState {
+                module_specifier: "entry.mjs".into(),
+                export_name: "ok".into(),
+                expected_state: BindingCellState::Initialized,
+            }],
+            expected_async_phases: vec![],
+        };
+
+        let evidence = run_single_specimen(&specimen);
+        assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
+        assert_eq!(evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(evidence.module_count, 1);
+        assert_eq!(evidence.linked_count, 1);
+        assert!(evidence.error_detail.is_none());
+    }
+
+    #[test]
+    fn run_single_specimen_re_export_only_async_dependency_rejection_is_order_invariant() {
+        let specimen = InteropSpecimen {
+            specimen_id: "async_re_export_dependency_order_invariant".into(),
+            description:
+                "re-export-only async dependencies should reject dependents regardless of module ordering"
+                    .into(),
+            family: InteropFamily::AsyncEvaluation,
+            modules: vec![
+                SpecimenModule {
+                    specifier: "entry.mjs".into(),
+                    syntax: ModuleSyntax::EsModule,
+                    source: "import { value } from './barrel.mjs'; console.log(value);".into(),
+                    imports: vec![ImportEntry::new("barrel.mjs", "value", "value")],
+                    exports: vec![],
+                    has_default_export: false,
+                    has_top_level_await: false,
+                },
+                SpecimenModule {
+                    specifier: "barrel.mjs".into(),
+                    syntax: ModuleSyntax::EsModule,
+                    source: "export { value } from './failing.mjs'; const ready = await Promise.resolve('ready'); export { ready };".into(),
+                    imports: vec![],
+                    exports: vec![
+                        ExportEntry::re_export("value", "failing.mjs", "value"),
+                        ExportEntry::direct("ready", "ready"),
+                    ],
+                    has_default_export: false,
+                    has_top_level_await: true,
+                },
+                SpecimenModule {
+                    specifier: "failing.mjs".into(),
+                    syntax: ModuleSyntax::EsModule,
+                    source: "export const value = await Promise.reject(new Error('boom'));".into(),
+                    imports: vec![],
+                    exports: vec![ExportEntry::direct("value", "value")],
+                    has_default_export: false,
+                    has_top_level_await: true,
+                },
+            ],
+            entry_point: "entry.mjs".into(),
+            expected_outcome: InteropExpectedOutcome::EvalFailure,
+            expected_linked_count: Some(3),
+            expected_binding_states: vec![
+                ExpectedBindingState {
+                    module_specifier: "failing.mjs".into(),
+                    export_name: "value".into(),
+                    expected_state: BindingCellState::Dead,
+                },
+                ExpectedBindingState {
+                    module_specifier: "barrel.mjs".into(),
+                    export_name: "value".into(),
+                    expected_state: BindingCellState::Dead,
+                },
+                ExpectedBindingState {
+                    module_specifier: "barrel.mjs".into(),
+                    export_name: "ready".into(),
+                    expected_state: BindingCellState::Dead,
+                },
+            ],
+            expected_async_phases: vec![
+                ExpectedAsyncPhase {
+                    module_specifier: "failing.mjs".into(),
+                    expected_phase: AsyncModulePhase::Rejected,
+                },
+                ExpectedAsyncPhase {
+                    module_specifier: "barrel.mjs".into(),
+                    expected_phase: AsyncModulePhase::Rejected,
+                },
+            ],
+        };
+
+        let evidence = run_single_specimen(&specimen);
+        assert_eq!(evidence.actual_outcome, InteropActualOutcome::EvalFailure);
+        assert_eq!(evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(evidence.linked_count, 3);
+        assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
+        assert!(
+            evidence
+                .async_phase_verdicts
+                .iter()
+                .all(|verdict| verdict.pass)
+        );
     }
 
     #[test]

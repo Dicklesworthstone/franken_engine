@@ -683,10 +683,16 @@ impl CapabilityWitness {
         buf.push(0xff);
 
         for po in &self.proof_obligations {
-            buf.extend_from_slice(po.capability.as_str().as_bytes());
+            let cap_bytes = po.capability.as_str().as_bytes();
+            buf.extend_from_slice(&(cap_bytes.len() as u32).to_be_bytes());
+            buf.extend_from_slice(cap_bytes);
             buf.push(po.kind as u8);
-            buf.extend_from_slice(po.proof_artifact_id.as_bytes());
-            buf.extend_from_slice(po.justification.as_bytes());
+            let art_id_bytes = po.proof_artifact_id.as_bytes();
+            buf.extend_from_slice(&(art_id_bytes.len() as u32).to_be_bytes());
+            buf.extend_from_slice(art_id_bytes);
+            let just_bytes = po.justification.as_bytes();
+            buf.extend_from_slice(&(just_bytes.len() as u32).to_be_bytes());
+            buf.extend_from_slice(just_bytes);
             buf.extend_from_slice(po.artifact_hash.as_bytes());
         }
         buf.push(0xff);

@@ -477,9 +477,10 @@ impl SnellEnvelope {
         // Backward induction.
         envelope[n - 1] = payoffs_millionths[n - 1];
         for t in (0..n - 1).rev() {
-            // Discounted continuation value: γ · U_{t+1}.
-            let continuation =
-                discount_millionths as i128 * envelope[t + 1] as i128 / MILLION as i128;
+            // Discounted continuation value: γ · U_{t+1} (round toward zero
+            // for conservative fixed-point division).
+            let product = i128::from(discount_millionths) * i128::from(envelope[t + 1]);
+            let continuation = product / i128::from(MILLION);
             envelope[t] = payoffs_millionths[t].max(continuation as i64);
         }
 
@@ -560,7 +561,7 @@ impl SecretarySelector {
             total_items,
             exploration_length,
             observed: 0,
-            exploration_best_millionths: 0,
+            exploration_best_millionths: i64::MIN,
             exploration_complete: false,
             selected: false,
             selected_index: None,

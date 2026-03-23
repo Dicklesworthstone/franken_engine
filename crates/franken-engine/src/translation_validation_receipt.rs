@@ -417,7 +417,7 @@ impl TranslationValidationReceipt {
 
     /// Verify the receipt signature.
     pub fn verify_signature(&self, key: &[u8]) -> bool {
-        if !self.has_valid_content_hash() {
+        if !self.has_valid_content_hash() || !self.has_valid_rule_count() {
             return false;
         }
         let preimage = self.signing_preimage();
@@ -456,6 +456,11 @@ impl TranslationValidationReceipt {
     /// Whether there was a net cost improvement.
     pub fn is_net_improvement(&self) -> bool {
         self.total_cost_delta_millionths < 0
+    }
+
+    /// Whether the receipt respects the public applied-rule boundary.
+    pub fn has_valid_rule_count(&self) -> bool {
+        self.applied_rules.len() <= MAX_RULES_PER_RECEIPT
     }
 
     fn signing_preimage(&self) -> Vec<u8> {
@@ -741,6 +746,13 @@ impl ReceiptChain {
             });
         }
 
+        if !receipt.has_valid_rule_count() {
+            return Err(ReceiptChainError::RuleCountLimitExceeded {
+                limit: MAX_RULES_PER_RECEIPT,
+                actual: receipt.applied_rules.len(),
+            });
+        }
+
         // Verify parent hash linkage
         let expected_parent = self.receipts.last().map(|r| r.content_hash);
         if receipt.parent_hash != expected_parent {
@@ -838,6 +850,14 @@ impl ReceiptChain {
                     sequence: receipt.sequence,
                     expected_hash,
                     actual_hash: receipt.content_hash,
+                });
+            }
+
+            if !receipt.has_valid_rule_count() {
+                issues.push(ChainIntegrityIssue::RuleCountLimitExceeded {
+                    sequence: receipt.sequence,
+                    limit: MAX_RULES_PER_RECEIPT,
+                    actual: receipt.applied_rules.len(),
                 });
             }
 
@@ -964,6 +984,8 @@ pub enum ReceiptChainError {
         expected_hash: ContentHash,
         actual_hash: ContentHash,
     },
+    /// Applied rule count exceeds the public receipt contract.
+    RuleCountLimitExceeded { limit: usize, actual: usize },
     /// Stored failure hash does not match the failure body.
     FailureContentHashMismatch {
         expected_hash: ContentHash,
@@ -982,6 +1004,9 @@ impl fmt::Display for ReceiptChainError {
             }
             Self::ReceiptContentHashMismatch { .. } => {
                 write!(f, "receipt content hash mismatch")
+            }
+            Self::RuleCountLimitExceeded { limit, actual } => {
+                write!(f, "rule count limit exceeded: {actual} > {limit}")
             }
             Self::FailureContentHashMismatch { .. } => {
                 write!(f, "failure content hash mismatch")
@@ -1016,6 +1041,12 @@ pub enum ChainIntegrityIssue {
         sequence: u64,
         expected_hash: ContentHash,
         actual_hash: ContentHash,
+    },
+    /// Receipt exceeds the applied-rule limit.
+    RuleCountLimitExceeded {
+        sequence: u64,
+        limit: usize,
+        actual: usize,
     },
     /// Parent hash doesn't match previous receipt's content hash.
     ParentHashBroken {
@@ -1207,8 +1238,9 @@ impl ValidationReceiptEmitter {
 
     /// Manually quarantine an optimization.
     pub fn quarantine_optimization(&mut self, optimization_id: &str) {
-        self.quarantine.insert(optimization_id.into());
-        self.stats.total_quarantined += 1;
+        if self.quarantine.insert(optimization_id.into()) {
+            self.stats.total_quarantined += 1;
+        }
     }
 
     /// Remove an optimization from quarantine (requires fresh evidence).
@@ -1239,6 +1271,17 @@ impl ValidationReceiptEmitter {
                 reason: format!(
                     "receipt chain integrity invalid ({} issue(s))",
                     chain_integrity.issues.len()
+                ),
+            };
+        }
+
+        if input.applied_rules.len() > MAX_RULES_PER_RECEIPT {
+            return EmitResult::Quarantined {
+                optimization_id: input.optimization_id,
+                reason: format!(
+                    "applied rule count {} exceeds limit {}",
+                    input.applied_rules.len(),
+                    MAX_RULES_PER_RECEIPT
                 ),
             };
         }
@@ -1751,6 +1794,29 @@ mod tests {
     }
 
     #[test]
+    fn test_receipt_verify_signature_rejects_oversized_rule_set() {
+        let key = b"test-signing-key-32-bytes-long!!";
+        let rules = (0..=MAX_RULES_PER_RECEIPT)
+            .map(|idx| test_rule(&format!("rule-{idx}"), -100))
+            .collect();
+        let receipt = TranslationValidationReceipt::new(
+            1,
+            "opt-oversized",
+            None,
+            test_epoch(),
+            1000,
+            test_hash(b"baseline"),
+            test_hash(b"optimized"),
+            rules,
+            proven_verdict(),
+            "cm",
+        )
+        .sign(key);
+
+        assert!(!receipt.verify_signature(key));
+    }
+
+    #[test]
     fn test_receipt_all_rules_proven_sound() {
         let receipt = TranslationValidationReceipt::new(
             1,
@@ -2125,6 +2191,35 @@ mod tests {
     }
 
     #[test]
+    fn test_chain_append_rejects_oversized_rule_set() {
+        let mut chain = ReceiptChain::new("c1", test_epoch());
+        let rules = (0..=MAX_RULES_PER_RECEIPT)
+            .map(|idx| test_rule(&format!("rule-{idx}"), -100))
+            .collect();
+        let receipt = TranslationValidationReceipt::new(
+            1,
+            "opt-oversized",
+            None,
+            test_epoch(),
+            0,
+            test_hash(b"b"),
+            test_hash(b"o"),
+            rules,
+            proven_verdict(),
+            "cm",
+        );
+
+        let error = chain.append(receipt).unwrap_err();
+        assert!(matches!(
+            error,
+            ReceiptChainError::RuleCountLimitExceeded {
+                limit: MAX_RULES_PER_RECEIPT,
+                actual
+            } if actual == MAX_RULES_PER_RECEIPT + 1
+        ));
+    }
+
+    #[test]
     fn test_chain_sequence_gap() {
         let mut chain = ReceiptChain::new("c1", test_epoch());
         let r = TranslationValidationReceipt::new(
@@ -2277,6 +2372,40 @@ mod tests {
         assert!(result.issues.iter().any(|issue| matches!(
             issue,
             ChainIntegrityIssue::ReceiptContentHashMismatch { .. }
+        )));
+    }
+
+    #[test]
+    fn test_chain_integrity_detects_rule_count_limit_exceeded() {
+        let mut chain = ReceiptChain::new("c1", test_epoch());
+        let rules = (0..=MAX_RULES_PER_RECEIPT)
+            .map(|idx| test_rule(&format!("rule-{idx}"), -100))
+            .collect();
+        let receipt = TranslationValidationReceipt::new(
+            1,
+            "opt-oversized",
+            None,
+            test_epoch(),
+            0,
+            test_hash(b"b"),
+            test_hash(b"o"),
+            rules,
+            proven_verdict(),
+            "cm",
+        );
+        chain.receipts.push(receipt);
+        chain.next_sequence = 2;
+        chain.recompute_hash();
+
+        let result = chain.verify_integrity();
+        assert!(!result.valid);
+        assert!(result.issues.iter().any(|issue| matches!(
+            issue,
+            ChainIntegrityIssue::RuleCountLimitExceeded {
+                sequence: 1,
+                limit: MAX_RULES_PER_RECEIPT,
+                actual
+            } if *actual == MAX_RULES_PER_RECEIPT + 1
         )));
     }
 
@@ -2450,6 +2579,17 @@ mod tests {
     }
 
     #[test]
+    fn test_emitter_duplicate_manual_quarantine_does_not_double_count_stats() {
+        let mut em = default_emitter();
+        em.quarantine_optimization("opt-1");
+        em.quarantine_optimization("opt-1");
+
+        assert!(em.is_quarantined("opt-1"));
+        assert_eq!(em.quarantine.len(), 1);
+        assert_eq!(em.stats.total_quarantined, 1);
+    }
+
+    #[test]
     fn test_emitter_verify_receipt() {
         let mut em = default_emitter();
         let result = em.emit(make_input("opt-1", proven_verdict()));
@@ -2482,6 +2622,28 @@ mod tests {
         assert!(matches!(result, EmitResult::Quarantined { .. }));
         assert_eq!(em.chain.receipts.len(), 1);
         assert_eq!(em.stats.total_receipts, 1);
+    }
+
+    #[test]
+    fn test_emitter_emit_fails_closed_when_rule_count_exceeds_limit() {
+        let mut em = default_emitter();
+        let mut input = make_input("opt-oversized", proven_verdict());
+        input.applied_rules = (0..=MAX_RULES_PER_RECEIPT)
+            .map(|idx| test_rule(&format!("rule-{idx}"), -100))
+            .collect();
+
+        let result = em.emit(input);
+        assert!(matches!(
+            result,
+            EmitResult::Quarantined {
+                ref optimization_id,
+                ref reason
+            } if optimization_id == "opt-oversized"
+                && reason.contains("exceeds limit")
+        ));
+        assert!(em.chain.receipts.is_empty());
+        assert_eq!(em.stats.total_receipts, 0);
+        assert_eq!(em.stats.total_rules_applied, 0);
     }
 
     #[test]
@@ -2591,6 +2753,12 @@ mod tests {
             actual: 5,
         };
         assert!(e2.to_string().contains("sequence gap"));
+
+        let e3 = ReceiptChainError::RuleCountLimitExceeded {
+            limit: MAX_RULES_PER_RECEIPT,
+            actual: MAX_RULES_PER_RECEIPT + 1,
+        };
+        assert!(e3.to_string().contains("rule count limit exceeded"));
     }
 
     #[test]

@@ -20,7 +20,7 @@
 //!
 //! Reference: [RGC-607C]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -313,11 +313,29 @@ impl OptimizationCertificate {
         ContentHash::compute(&h.finalize())
     }
 
+    /// Effective certificate status at the given epoch.
+    ///
+    /// A certificate recorded as `Valid` but outside its issuance window is
+    /// reported as `Expired` so operator surfaces reflect current usability
+    /// rather than only the stored status bit.
+    pub fn status_at(&self, epoch: SecurityEpoch) -> CertificateStatus {
+        match self.status {
+            CertificateStatus::Valid => {
+                if epoch.as_u64() < self.issued_epoch.as_u64()
+                    || epoch.as_u64() >= self.expiry_epoch.as_u64()
+                {
+                    CertificateStatus::Expired
+                } else {
+                    CertificateStatus::Valid
+                }
+            }
+            status => status,
+        }
+    }
+
     /// Whether this certificate is valid at the given epoch.
     pub fn is_valid_at(&self, epoch: SecurityEpoch) -> bool {
-        self.status == CertificateStatus::Valid
-            && epoch.as_u64() >= self.issued_epoch.as_u64()
-            && epoch.as_u64() < self.expiry_epoch.as_u64()
+        self.status_at(epoch) == CertificateStatus::Valid
     }
 
     /// Remaining validity in epochs (0 if expired).
@@ -600,6 +618,38 @@ impl fmt::Display for GovernanceVerdict {
 // GovernanceReport
 // ---------------------------------------------------------------------------
 
+/// Operator-visible rollback/forensics summary for one function.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RollbackMatrixRow {
+    /// Function summarized by this row.
+    pub function_id: String,
+    /// Current optimization tier for the function.
+    pub current_tier: OptimizationTier,
+    /// Most recent certificate ID, if any.
+    pub latest_certificate_id: Option<String>,
+    /// Tier covered by the most recent certificate, if any.
+    pub latest_certificate_tier: Option<OptimizationTier>,
+    /// Effective status of the most recent certificate at the report epoch (or
+    /// `Missing`).
+    pub latest_certificate_status: CertificateStatus,
+    /// Count of certificates still valid at the current epoch.
+    pub valid_certificate_count: usize,
+    /// Number of rollback events recorded for this function.
+    pub rollback_count: usize,
+    /// Trigger of the most recent rollback, if any.
+    pub last_rollback_trigger: Option<RollbackTrigger>,
+    /// Source tier of the most recent rollback, if any.
+    pub last_rollback_from_tier: Option<OptimizationTier>,
+    /// Destination tier of the most recent rollback, if any.
+    pub last_rollback_to_tier: Option<OptimizationTier>,
+    /// Epoch of the most recent rollback, if any.
+    pub last_rollback_epoch: Option<SecurityEpoch>,
+    /// Distinct forensic surfaces currently linked to the function.
+    pub forensic_surfaces: Vec<ForensicSurface>,
+    /// Epoch of the most recent forensic entry, if any.
+    pub latest_forensic_epoch: Option<SecurityEpoch>,
+}
+
 /// Report from a governance evaluation cycle.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GovernanceReport {
@@ -617,6 +667,8 @@ pub struct GovernanceReport {
     pub active_speculative: usize,
     /// Number of forensic entries.
     pub forensic_entry_count: usize,
+    /// Per-function rollback and forensic visibility matrix.
+    pub rollback_matrix: Vec<RollbackMatrixRow>,
     /// The governance verdict.
     pub verdict: GovernanceVerdict,
     /// Content hash of the report.
@@ -739,6 +791,101 @@ impl GovernanceState {
             .iter()
             .filter(|e| e.function_id == function_id)
             .collect()
+    }
+
+    /// Produce a deterministic per-function rollback/forensics matrix.
+    pub fn rollback_matrix(&self) -> Vec<RollbackMatrixRow> {
+        let mut function_ids = BTreeSet::new();
+        function_ids.extend(self.active_tiers.keys().cloned());
+        function_ids.extend(
+            self.certificates
+                .iter()
+                .map(|cert| cert.function_id.clone()),
+        );
+        function_ids.extend(
+            self.rollbacks
+                .iter()
+                .map(|record| record.function_id.clone()),
+        );
+        function_ids.extend(
+            self.forensic_entries
+                .iter()
+                .map(|entry| entry.function_id.clone()),
+        );
+
+        let mut rows = Vec::with_capacity(function_ids.len());
+        for function_id in function_ids {
+            let latest_certificate = self
+                .certificates
+                .iter()
+                .filter(|cert| cert.function_id == function_id)
+                .max_by_key(|cert| {
+                    (
+                        cert.issued_epoch.as_u64(),
+                        cert.expiry_epoch.as_u64(),
+                        cert.cert_id.clone(),
+                    )
+                });
+            let valid_certificate_count = self
+                .certificates
+                .iter()
+                .filter(|cert| cert.function_id == function_id && cert.is_valid_at(self.epoch))
+                .count();
+            let rollback_count = self
+                .rollbacks
+                .iter()
+                .filter(|record| record.function_id == function_id)
+                .count();
+            let last_rollback = self
+                .rollbacks
+                .iter()
+                .filter(|record| record.function_id == function_id)
+                .max_by_key(|record| {
+                    (
+                        record.epoch.as_u64(),
+                        record.elapsed_steps,
+                        record.record_id.clone(),
+                    )
+                });
+            let forensic_surfaces = self
+                .forensic_entries
+                .iter()
+                .filter(|entry| entry.function_id == function_id)
+                .map(|entry| entry.surface)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            let latest_forensic_epoch = self
+                .forensic_entries
+                .iter()
+                .filter(|entry| entry.function_id == function_id)
+                .max_by_key(|entry| (entry.epoch.as_u64(), entry.entry_id.clone()))
+                .map(|entry| entry.epoch);
+
+            rows.push(RollbackMatrixRow {
+                function_id: function_id.clone(),
+                current_tier: self
+                    .active_tiers
+                    .get(&function_id)
+                    .copied()
+                    .unwrap_or(OptimizationTier::Baseline),
+                latest_certificate_id: latest_certificate.map(|cert| cert.cert_id.clone()),
+                latest_certificate_tier: latest_certificate.map(|cert| cert.tier),
+                latest_certificate_status: latest_certificate
+                    .map(|cert| cert.status_at(self.epoch))
+                    .unwrap_or(CertificateStatus::Missing),
+                valid_certificate_count,
+                rollback_count,
+                last_rollback_trigger: last_rollback.map(|record| record.trigger),
+                last_rollback_from_tier: last_rollback.map(|record| record.from_tier),
+                last_rollback_to_tier: last_rollback.map(|record| record.to_tier),
+                last_rollback_epoch: last_rollback.map(|record| record.epoch),
+                forensic_surfaces,
+                latest_forensic_epoch,
+            });
+        }
+
+        rows
     }
 
     /// Count functions currently at speculative tier.
@@ -867,6 +1014,7 @@ impl GovernanceState {
         let verdict = self.evaluate(config);
         let valid_certificates = self.active_certificates().len();
         let active_speculative = self.count_active_speculative();
+        let rollback_matrix = self.rollback_matrix();
 
         let mut h = Sha256::new();
         h.update(SCHEMA_VERSION.as_bytes());
@@ -876,6 +1024,60 @@ impl GovernanceState {
         h.update((self.rollbacks.len() as u64).to_le_bytes());
         h.update((active_speculative as u64).to_le_bytes());
         h.update((self.forensic_entries.len() as u64).to_le_bytes());
+        h.update((rollback_matrix.len() as u64).to_le_bytes());
+        for row in &rollback_matrix {
+            h.update(row.function_id.as_bytes());
+            h.update(row.current_tier.as_str().as_bytes());
+            h.update(
+                row.latest_certificate_id
+                    .as_deref()
+                    .unwrap_or("")
+                    .as_bytes(),
+            );
+            h.update(
+                row.latest_certificate_tier
+                    .map(OptimizationTier::as_str)
+                    .unwrap_or("")
+                    .as_bytes(),
+            );
+            h.update(row.latest_certificate_status.as_str().as_bytes());
+            h.update((row.valid_certificate_count as u64).to_le_bytes());
+            h.update((row.rollback_count as u64).to_le_bytes());
+            h.update(
+                row.last_rollback_trigger
+                    .map(RollbackTrigger::as_str)
+                    .unwrap_or("")
+                    .as_bytes(),
+            );
+            h.update(
+                row.last_rollback_from_tier
+                    .map(OptimizationTier::as_str)
+                    .unwrap_or("")
+                    .as_bytes(),
+            );
+            h.update(
+                row.last_rollback_to_tier
+                    .map(OptimizationTier::as_str)
+                    .unwrap_or("")
+                    .as_bytes(),
+            );
+            h.update(
+                row.last_rollback_epoch
+                    .map(SecurityEpoch::as_u64)
+                    .unwrap_or_default()
+                    .to_le_bytes(),
+            );
+            h.update((row.forensic_surfaces.len() as u64).to_le_bytes());
+            for surface in &row.forensic_surfaces {
+                h.update(surface.as_str().as_bytes());
+            }
+            h.update(
+                row.latest_forensic_epoch
+                    .map(SecurityEpoch::as_u64)
+                    .unwrap_or_default()
+                    .to_le_bytes(),
+            );
+        }
         h.update(verdict.tag().as_bytes());
         let report_hash = ContentHash::compute(&h.finalize());
 
@@ -887,6 +1089,7 @@ impl GovernanceState {
             total_rollbacks: self.rollbacks.len(),
             active_speculative,
             forensic_entry_count: self.forensic_entries.len(),
+            rollback_matrix,
             verdict,
             report_hash,
         }
@@ -1116,6 +1319,13 @@ mod tests {
     fn cert_expired_is_not_valid() {
         let cert = make_expired_cert("c-exp", "fn1");
         assert!(!cert.is_valid_at(epoch()));
+    }
+
+    #[test]
+    fn cert_status_at_reflects_effective_expiry() {
+        let cert = make_expired_cert("c-exp", "fn1");
+        assert_eq!(cert.status, CertificateStatus::Valid);
+        assert_eq!(cert.status_at(epoch()), CertificateStatus::Expired);
     }
 
     #[test]
@@ -1394,6 +1604,69 @@ mod tests {
         assert_eq!(state.forensics_for_function("fn3").len(), 0);
     }
 
+    #[test]
+    fn state_rollback_matrix_summarizes_per_function_status() {
+        let mut state = GovernanceState::new(epoch());
+        state.add_certificate(make_cert("c1", "fn1", OptimizationTier::Aggressive));
+        state.add_certificate(make_expired_cert("c2", "fn2"));
+        state
+            .active_tiers
+            .insert("fn1".to_string(), OptimizationTier::Aggressive);
+        state.record_rollback(make_rollback("r1", "fn1", RollbackTrigger::ProofFailure));
+        state.add_forensic_entry(make_forensic("f1", "fn1", ForensicSurface::SourceMapping));
+        state.add_forensic_entry(make_forensic("f2", "fn1", ForensicSurface::RewriteChain));
+
+        let matrix = state.rollback_matrix();
+        assert_eq!(
+            matrix
+                .iter()
+                .map(|row| row.function_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["fn1", "fn2"]
+        );
+
+        let fn1 = &matrix[0];
+        assert_eq!(fn1.current_tier, OptimizationTier::Baseline);
+        assert_eq!(fn1.latest_certificate_id.as_deref(), Some("c1"));
+        assert_eq!(
+            fn1.latest_certificate_tier,
+            Some(OptimizationTier::Aggressive)
+        );
+        assert_eq!(fn1.latest_certificate_status, CertificateStatus::Valid);
+        assert_eq!(fn1.valid_certificate_count, 1);
+        assert_eq!(fn1.rollback_count, 1);
+        assert_eq!(
+            fn1.last_rollback_trigger,
+            Some(RollbackTrigger::ProofFailure)
+        );
+        assert_eq!(
+            fn1.last_rollback_from_tier,
+            Some(OptimizationTier::Speculative)
+        );
+        assert_eq!(fn1.last_rollback_to_tier, Some(OptimizationTier::Baseline));
+        assert_eq!(fn1.last_rollback_epoch, Some(epoch()));
+        assert_eq!(
+            fn1.forensic_surfaces,
+            vec![
+                ForensicSurface::SourceMapping,
+                ForensicSurface::RewriteChain
+            ]
+        );
+        assert_eq!(fn1.latest_forensic_epoch, Some(epoch()));
+
+        let fn2 = &matrix[1];
+        assert_eq!(fn2.current_tier, OptimizationTier::Baseline);
+        assert_eq!(fn2.latest_certificate_id.as_deref(), Some("c2"));
+        assert_eq!(
+            fn2.latest_certificate_tier,
+            Some(OptimizationTier::Aggressive)
+        );
+        assert_eq!(fn2.latest_certificate_status, CertificateStatus::Expired);
+        assert_eq!(fn2.valid_certificate_count, 0);
+        assert_eq!(fn2.rollback_count, 0);
+        assert!(fn2.forensic_surfaces.is_empty());
+    }
+
     // --- GovernanceVerdict tests ---
 
     #[test]
@@ -1595,6 +1868,7 @@ mod tests {
         assert_eq!(report.total_rollbacks, 0);
         assert_eq!(report.active_speculative, 0);
         assert_eq!(report.forensic_entry_count, 0);
+        assert!(report.rollback_matrix.is_empty());
         assert!(report.verdict.is_pass());
     }
 
@@ -1607,11 +1881,29 @@ mod tests {
         state
             .active_tiers
             .insert("fn1".to_string(), OptimizationTier::Aggressive);
+        state.record_rollback(make_rollback("r1", "fn-rb", RollbackTrigger::ProofFailure));
         let config = GovernanceConfig::default_config();
         let report = state.report(&config);
         assert_eq!(report.total_certificates, 2);
         assert_eq!(report.valid_certificates, 1);
+        assert_eq!(report.total_rollbacks, 1);
         assert_eq!(report.forensic_entry_count, 1);
+        assert_eq!(report.rollback_matrix.len(), 3);
+        assert_eq!(report.rollback_matrix[0].function_id, "fn-rb");
+        assert_eq!(
+            report.rollback_matrix[0].last_rollback_trigger,
+            Some(RollbackTrigger::ProofFailure)
+        );
+        assert_eq!(report.rollback_matrix[1].function_id, "fn1");
+        assert_eq!(
+            report.rollback_matrix[1].forensic_surfaces,
+            vec![ForensicSurface::SourceMapping]
+        );
+        assert_eq!(report.rollback_matrix[2].function_id, "fn2");
+        assert_eq!(
+            report.rollback_matrix[2].latest_certificate_status,
+            CertificateStatus::Expired
+        );
         assert!(report.verdict.is_pass());
     }
 

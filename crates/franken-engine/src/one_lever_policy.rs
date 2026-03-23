@@ -471,7 +471,7 @@ fn extract_override_reason(commit_message: &str) -> Option<String> {
     let lowered = commit_message.to_ascii_lowercase();
     let marker = "[multi-lever:";
     let start = lowered.find(marker)? + marker.len();
-    let end = lowered[start..].find(']')? + start;
+    let end = lowered[start..].rfind(']')? + start;
     let reason = commit_message.get(start..end)?.trim();
     if reason.is_empty() {
         None

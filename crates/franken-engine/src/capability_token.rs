@@ -185,6 +185,8 @@ pub enum TokenError {
     InvertedTemporalWindow { not_before: u64, expiry: u64 },
     /// Empty capabilities.
     EmptyCapabilities,
+    /// Empty audience — tokens must bind to at least one audience principal.
+    EmptyAudience,
 }
 
 impl fmt::Display for TokenError {
@@ -241,6 +243,7 @@ impl fmt::Display for TokenError {
                 )
             }
             Self::EmptyCapabilities => write!(f, "empty capabilities"),
+            Self::EmptyAudience => write!(f, "empty audience"),
         }
     }
 }
@@ -483,6 +486,9 @@ impl TokenBuilder {
         // Validate.
         if self.capabilities.is_empty() {
             return Err(TokenError::EmptyCapabilities);
+        }
+        if self.audience.is_empty() {
+            return Err(TokenError::EmptyAudience);
         }
         if self.nbf.0 > self.expiry.0 {
             return Err(TokenError::InvertedTemporalWindow {

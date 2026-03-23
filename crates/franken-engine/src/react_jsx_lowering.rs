@@ -782,9 +782,11 @@ impl<'a> LoweringCtx<'a> {
         // Build source location for dev mode
         let source_location = self.build_source_location(&element.span);
 
-        // Determine static children flag
+        // Determine static children flag: true only when there are multiple
+        // children AND all of them are statically-known (text or element, not
+        // expression). An empty list is not "static children".
         let is_static_children = children.len() > 1
-            || children
+            && children
                 .iter()
                 .all(|c| matches!(c, LoweredChild::Text { .. } | LoweredChild::Element(_)));
 

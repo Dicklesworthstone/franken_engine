@@ -69,6 +69,12 @@ fn hash_content_hash(hasher: &mut Sha256, value: &ContentHash) {
     hash_bytes(hasher, value.as_bytes());
 }
 
+fn rule_target_matches_pack(rule_target: &str, pack_id: &str) -> bool {
+    rule_target
+        .strip_prefix(pack_id)
+        .is_some_and(|suffix| suffix.starts_with(':') && suffix.len() > 1)
+}
+
 // ---------------------------------------------------------------------------
 // PackVersion — semantic versioning for packs
 // ---------------------------------------------------------------------------
@@ -439,6 +445,10 @@ impl InterferenceMetadata {
             .collect()
     }
 
+    fn is_canonical(&self) -> bool {
+        *self == Self::build(self.entries.clone())
+    }
+
     fn compute_hash(entries: &[RuleInterference]) -> ContentHash {
         let mut hasher = Sha256::new();
         hash_str(&mut hasher, INTERFERENCE_SCHEMA_VERSION);
@@ -664,19 +674,37 @@ impl PackCatalog {
     }
 
     /// Record cross-pack interference.
+    ///
+    /// Returns `false` and leaves the catalog unchanged if either pack is
+    /// unknown, the caller tries to register self-interference, or the pair
+    /// already has cross-pack metadata recorded. The metadata must also be
+    /// canonical and must reference only rules from the declared pack pair.
     pub fn add_cross_interference(
         &mut self,
         pack_a: &str,
         pack_b: &str,
         metadata: InterferenceMetadata,
-    ) {
+    ) -> bool {
+        if pack_a == pack_b {
+            return false;
+        }
+        if !self.packs.contains_key(pack_a) || !self.packs.contains_key(pack_b) {
+            return false;
+        }
         let key = if pack_a < pack_b {
             format!("{pack_a}::{pack_b}")
         } else {
             format!("{pack_b}::{pack_a}")
         };
+        if self.cross_interference.contains_key(&key) {
+            return false;
+        }
+        if !metadata.is_canonical() || !Self::metadata_matches_pair(&metadata, pack_a, pack_b) {
+            return false;
+        }
         self.cross_interference.insert(key, metadata);
         self.recompute_hash();
+        true
     }
 
     /// Check whether two packs have blocking cross-interference.
@@ -707,6 +735,17 @@ impl PackCatalog {
             hash_content_hash(&mut hasher, &meta.content_hash);
         }
         self.content_hash = ContentHash::compute(&hasher.finalize());
+    }
+
+    fn metadata_matches_pair(metadata: &InterferenceMetadata, pack_a: &str, pack_b: &str) -> bool {
+        metadata.entries.iter().all(|entry| {
+            let rule_a_in_pack_a = rule_target_matches_pack(&entry.rule_a, pack_a);
+            let rule_a_in_pack_b = rule_target_matches_pack(&entry.rule_a, pack_b);
+            let rule_b_in_pack_a = rule_target_matches_pack(&entry.rule_b, pack_a);
+            let rule_b_in_pack_b = rule_target_matches_pack(&entry.rule_b, pack_b);
+
+            (rule_a_in_pack_a && rule_b_in_pack_b) || (rule_a_in_pack_b && rule_b_in_pack_a)
+        })
     }
 }
 
@@ -1204,10 +1243,89 @@ mod tests {
             "b:r1",
             RuleInterferenceKind::SemanticOverlap,
         )]);
-        catalog.add_cross_interference("a", "b", meta);
+        assert!(catalog.add_cross_interference("a", "b", meta));
         assert!(catalog.has_cross_blocking("a", "b"));
         assert!(catalog.has_cross_blocking("b", "a")); // symmetric
         assert!(!catalog.has_cross_blocking("a", "c"));
+    }
+
+    #[test]
+    fn catalog_cross_interference_rejects_unknown_pairs() {
+        let mut catalog = PackCatalog::new("test");
+        catalog.register(test_pack("a", vec![]));
+
+        assert!(!catalog.add_cross_interference(
+            "a",
+            "missing",
+            InterferenceMetadata::build(vec![]),
+        ));
+        assert!(catalog.cross_interference.is_empty());
+    }
+
+    #[test]
+    fn catalog_cross_interference_rejects_self_pairs() {
+        let mut catalog = PackCatalog::new("test");
+        catalog.register(test_pack("a", vec![]));
+
+        assert!(!catalog.add_cross_interference("a", "a", InterferenceMetadata::build(vec![]),));
+        assert!(catalog.cross_interference.is_empty());
+    }
+
+    #[test]
+    fn catalog_cross_interference_rejects_duplicate_pairs() {
+        let mut catalog = PackCatalog::new("test");
+        catalog.register(test_pack("a", vec![]));
+        catalog.register(test_pack("b", vec![]));
+
+        assert!(catalog.add_cross_interference("a", "b", InterferenceMetadata::build(vec![]),));
+        let hash_before = catalog.content_hash.clone();
+
+        assert!(!catalog.add_cross_interference(
+            "b",
+            "a",
+            InterferenceMetadata::build(vec![test_interference(
+                "a:r1",
+                "b:r1",
+                RuleInterferenceKind::SemanticOverlap,
+            )]),
+        ));
+        assert_eq!(catalog.content_hash, hash_before);
+        assert_eq!(catalog.cross_interference.len(), 1);
+    }
+
+    #[test]
+    fn catalog_cross_interference_rejects_metadata_for_wrong_pair() {
+        let mut catalog = PackCatalog::new("test");
+        catalog.register(test_pack("a", vec![]));
+        catalog.register(test_pack("b", vec![]));
+
+        assert!(!catalog.add_cross_interference(
+            "a",
+            "b",
+            InterferenceMetadata::build(vec![test_interference(
+                "c:r1",
+                "d:r1",
+                RuleInterferenceKind::SemanticOverlap,
+            )]),
+        ));
+        assert!(catalog.cross_interference.is_empty());
+    }
+
+    #[test]
+    fn catalog_cross_interference_rejects_noncanonical_metadata() {
+        let mut catalog = PackCatalog::new("test");
+        catalog.register(test_pack("a", vec![]));
+        catalog.register(test_pack("b", vec![]));
+
+        let mut metadata = InterferenceMetadata::build(vec![test_interference(
+            "a:r1",
+            "b:r1",
+            RuleInterferenceKind::PatternConflict,
+        )]);
+        metadata.content_hash = ContentHash::compute(b"tampered-cross-interference");
+
+        assert!(!catalog.add_cross_interference("a", "b", metadata));
+        assert!(catalog.cross_interference.is_empty());
     }
 
     #[test]

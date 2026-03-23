@@ -931,13 +931,18 @@ pub fn evaluate_matrix(
         CellVerdict::Pass
     };
 
-    // Compute input hash.
+    // Compute input hash including mismatch details for content addressability.
     let mut ih = Sha256::new();
     for cell in cells {
         ih.update(cell.workload_class.as_str().as_bytes());
         ih.update((cell.artifacts_a.len() as u64).to_le_bytes());
         ih.update((cell.artifacts_b.len() as u64).to_le_bytes());
         ih.update((cell.mismatches.len() as u64).to_le_bytes());
+        for m in &cell.mismatches {
+            ih.update(m.class.as_str().as_bytes());
+            ih.update(m.severity.as_str().as_bytes());
+            ih.update(m.surface.to_string().as_bytes());
+        }
         ih.update(cell.verdict.as_str().as_bytes());
     }
     let input_hash = ContentHash::compute(&ih.finalize());

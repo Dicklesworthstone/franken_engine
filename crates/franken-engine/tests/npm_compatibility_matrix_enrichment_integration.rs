@@ -5,7 +5,7 @@
 //! scenarios, cohort summary edge cases, error display for all variants,
 //! content-hash sensitivity, and seed cohort integration.
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, fs, path::PathBuf};
 
 use frankenengine_engine::npm_compatibility_matrix::{
     BEAD_ID, COMPONENT, CohortSummary, CohortTier, IncompatibilityRecord, IncompatibilityRootCause,
@@ -29,6 +29,15 @@ fn pkg(name: &str, tier: CohortTier) -> PackageRecord {
         node_api_deps: BTreeSet::new(),
         types_only: false,
     }
+}
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn read_to_string(path: &PathBuf) -> String {
+    fs::read_to_string(path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
 }
 
 fn test_result(
@@ -87,6 +96,51 @@ fn schema_version_contains_module_name() {
         SCHEMA_VERSION.contains("npm-compatibility-matrix"),
         "schema version should reference module: {SCHEMA_VERSION}"
     );
+}
+
+#[test]
+fn npm_runner_script_emits_exact_replay_and_bundle_contract() {
+    let path = repo_root().join("scripts/run_rgc_npm_compatibility_matrix.sh");
+    let script = read_to_string(&path);
+
+    for needle in [
+        "run_dir=\"${artifact_root}/${run_stamp}\"",
+        "replay_command=\"RGC_NPM_COMPATIBILITY_MATRIX_REPLAY_RUN_DIR=${run_dir} ./scripts/e2e/rgc_npm_compatibility_matrix_replay.sh\"",
+        "run_dir_is_complete()",
+        "npm_compat_matrix_report.json",
+        "trace_ids.json",
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "rgc npm compatibility matrix replay: ${replay_command}",
+        "incomplete bundle",
+    ] {
+        assert!(script.contains(needle), "runner script missing {needle}");
+    }
+}
+
+#[test]
+fn npm_replay_wrapper_requires_complete_bundle_and_exact_run_dir() {
+    let path = repo_root().join("scripts/e2e/rgc_npm_compatibility_matrix_replay.sh");
+    let script = read_to_string(&path);
+
+    for needle in [
+        "RGC_NPM_COMPATIBILITY_MATRIX_REPLAY_RUN_DIR",
+        "latest_complete_run_dir()",
+        "npm_compat_matrix_report.json",
+        "trace_ids.json",
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "explicit run directory is incomplete",
+        "latest report",
+        "latest trace ids",
+        "latest manifest",
+        "latest events",
+        "latest commands",
+    ] {
+        assert!(script.contains(needle), "replay wrapper missing {needle}");
+    }
 }
 
 // ── CohortTier exhaustive ───────────────────────────────────────────────

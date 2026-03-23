@@ -1,5 +1,14 @@
 {
   "schema_version": "1.0.0",
+  "required_readme_fragments": [
+    "## RGC Module Interop Verification Matrix Gate",
+    "./scripts/run_rgc_module_interop_verification_matrix.sh ci",
+    "RGC_MODULE_INTEROP_MATRIX_REPLAY_RUN_DIR=artifacts/...",
+    "docs/module_compatibility_matrix_v1.json",
+    "artifacts/rgc_module_interop_verification_matrix/<timestamp>/trace_ids.json",
+    "artifacts/rgc_module_interop_verification_matrix/<timestamp>/module_resolution_trace.jsonl",
+    "The matrix also pins npm-style `pkg.js` / `@scope/pkg.js` extension-probe package entries so nested `./sub` requires stay anchored to the package root."
+  ],
   "entries": [
     {
       "case_id": "cjs-require-esm",
@@ -104,6 +113,25 @@
       ],
       "test262_refs": [
         "language/module-code/instn-named-iee-cycle.js"
+      ],
+      "divergence": null
+    },
+    {
+      "case_id": "external-extension-probe-package-root-relative-require",
+      "feature": "cjs",
+      "scenario": "A bare external package entry resolved through `pkg.js` or `@scope/pkg.js` keeps nested `./sub` require resolution anchored at the package root rather than a synthetic entry-file directory.",
+      "node_behavior": "resolve_relative_require_from_package_root",
+      "bun_behavior": "resolve_relative_require_from_package_root",
+      "franken_native_behavior": "resolve_relative_require_from_package_root",
+      "franken_node_compat_behavior": "resolve_relative_require_from_package_root",
+      "franken_bun_compat_behavior": "resolve_relative_require_from_package_root",
+      "explicit_shims": [],
+      "lockstep_case_refs": [
+        "lockstep/module/external-extension-probe-package-root-relative-require",
+        "lockstep/module/scoped-external-extension-probe-package-root-relative-require"
+      ],
+      "test262_refs": [
+        "language/module-code/instn-resolve-empty-import.js"
       ],
       "divergence": null
     },

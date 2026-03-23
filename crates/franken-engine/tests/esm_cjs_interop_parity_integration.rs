@@ -90,6 +90,40 @@ fn corpus_distinguishes_native_and_bun_compat_cjs_requires_esm() {
 }
 
 #[test]
+fn corpus_distinguishes_native_node_compat_and_bun_compat_extensionless_relative_imports() {
+    let corpus = interop_parity_corpus();
+    let native = corpus
+        .iter()
+        .find(|s| s.specimen_id == "package_type_module_extensionless_relative_native")
+        .unwrap();
+    assert_eq!(native.family, InteropFamily::EsmOnly);
+    assert_eq!(native.expected_outcome, InteropExpectedOutcome::LinkFailure);
+    assert_eq!(native.entry_point, "some-pkg/main.mjs");
+    assert_eq!(native.modules.len(), 2);
+
+    let node_compat = corpus
+        .iter()
+        .find(|s| s.specimen_id == "package_type_module_extensionless_relative_node_compat")
+        .unwrap();
+    assert_eq!(node_compat.family, InteropFamily::EsmOnly);
+    assert_eq!(
+        node_compat.expected_outcome,
+        InteropExpectedOutcome::LinkFailure
+    );
+    assert_eq!(node_compat.entry_point, "some-pkg/main.mjs");
+    assert_eq!(node_compat.modules.len(), 2);
+
+    let bun_compat = corpus
+        .iter()
+        .find(|s| s.specimen_id == "package_type_module_extensionless_relative_bun_compat")
+        .unwrap();
+    assert_eq!(bun_compat.family, InteropFamily::EsmOnly);
+    assert_eq!(bun_compat.expected_outcome, InteropExpectedOutcome::Success);
+    assert_eq!(bun_compat.entry_point, "some-pkg/main.mjs");
+    assert_eq!(bun_compat.modules.len(), 2);
+}
+
+#[test]
 fn corpus_has_non_success_outcomes() {
     let corpus = interop_parity_corpus();
     // Corpus may not have all failure types, but must have at least one non-success.
@@ -350,6 +384,76 @@ fn inventory_distinguishes_native_and_bun_compat_cjs_requires_esm() {
         InteropCompatibilityDisposition::Supported
     );
     assert!(bun_compat.error_detail.is_none());
+}
+
+#[test]
+fn inventory_distinguishes_native_node_compat_and_bun_compat_extensionless_relative_imports() {
+    let inv = run_interop_parity_corpus();
+
+    let native = inv
+        .evidence
+        .iter()
+        .find(|ev| ev.specimen_id == "package_type_module_extensionless_relative_native")
+        .unwrap();
+    assert_eq!(native.compatibility_mode, CompatibilityMode::Native);
+    assert_eq!(native.actual_outcome, InteropActualOutcome::LinkFailure);
+    assert_eq!(native.verdict, InteropVerdict::Pass);
+    assert_eq!(
+        native.compatibility_disposition,
+        InteropCompatibilityDisposition::Unsupported
+    );
+    assert!(
+        native
+            .error_detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("unable to resolve relative specifier './sub'"))
+    );
+
+    let node_compat = inv
+        .evidence
+        .iter()
+        .find(|ev| ev.specimen_id == "package_type_module_extensionless_relative_node_compat")
+        .unwrap();
+    assert_eq!(
+        node_compat.compatibility_mode,
+        CompatibilityMode::NodeCompat
+    );
+    assert_eq!(
+        node_compat.actual_outcome,
+        InteropActualOutcome::LinkFailure
+    );
+    assert_eq!(node_compat.verdict, InteropVerdict::Pass);
+    assert_eq!(
+        node_compat.compatibility_disposition,
+        InteropCompatibilityDisposition::Unsupported
+    );
+    assert!(
+        node_compat
+            .error_detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("unable to resolve relative specifier './sub'"))
+    );
+
+    let bun_compat = inv
+        .evidence
+        .iter()
+        .find(|ev| ev.specimen_id == "package_type_module_extensionless_relative_bun_compat")
+        .unwrap();
+    assert_eq!(bun_compat.compatibility_mode, CompatibilityMode::BunCompat);
+    assert_eq!(bun_compat.actual_outcome, InteropActualOutcome::Success);
+    assert_eq!(bun_compat.verdict, InteropVerdict::Pass);
+    assert_eq!(bun_compat.linked_count, 2);
+    assert_eq!(
+        bun_compat.compatibility_disposition,
+        InteropCompatibilityDisposition::Supported
+    );
+    assert!(bun_compat.error_detail.is_none());
+    assert!(
+        bun_compat
+            .binding_verdicts
+            .iter()
+            .all(|verdict| verdict.pass)
+    );
 }
 
 #[test]

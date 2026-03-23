@@ -1597,6 +1597,24 @@ fn frankenctl_benchmark_score_and_verify_bundle_round_trip() {
         )
     );
     assert_eq!(
+        score_json["benchmark_invocation_manifest_path"].as_str(),
+        Some(
+            bundle_dir
+                .join("benchmark_invocation_manifest.json")
+                .to_str()
+                .expect("benchmark invocation manifest path should be valid utf8")
+        )
+    );
+    assert_eq!(
+        score_json["command_mode_receipt_path"].as_str(),
+        Some(
+            bundle_dir
+                .join("command_mode_receipt.json")
+                .to_str()
+                .expect("command mode receipt path should be valid utf8")
+        )
+    );
+    assert_eq!(
         score_json["runtime"]["mode"].as_str(),
         Some("deterministic-score")
     );
@@ -1645,6 +1663,12 @@ fn frankenctl_benchmark_score_and_verify_bundle_round_trip() {
     assert!(bundle_dir.join("manifest.json").is_file());
     assert!(bundle_dir.join("repro.lock").is_file());
     assert!(bundle_dir.join("commands.txt").is_file());
+    assert!(
+        bundle_dir
+            .join("benchmark_invocation_manifest.json")
+            .is_file()
+    );
+    assert!(bundle_dir.join("command_mode_receipt.json").is_file());
     let env_json: serde_json::Value = serde_json::from_slice(
         &fs::read(bundle_dir.join("env.json")).expect("env.json should be written"),
     )
@@ -1680,10 +1704,92 @@ fn frankenctl_benchmark_score_and_verify_bundle_round_trip() {
         manifest_json["artifacts"]["results"]["path"].as_str(),
         Some("results.json")
     );
+    assert_eq!(
+        manifest_json["artifacts"]["benchmark_invocation_manifest"]["path"].as_str(),
+        Some("benchmark_invocation_manifest.json")
+    );
+    assert_eq!(
+        manifest_json["artifacts"]["command_mode_receipt"]["path"].as_str(),
+        Some("command_mode_receipt.json")
+    );
+    let benchmark_invocation_manifest_json: serde_json::Value = serde_json::from_slice(
+        &fs::read(bundle_dir.join("benchmark_invocation_manifest.json"))
+            .expect("benchmark invocation manifest should be written"),
+    )
+    .expect("benchmark invocation manifest should parse");
+    assert_eq!(
+        benchmark_invocation_manifest_json["command"].as_str(),
+        Some("frankenctl benchmark score")
+    );
+    assert_eq!(
+        benchmark_invocation_manifest_json["requested_output_path"].as_str(),
+        Some(
+            score_output_path
+                .to_str()
+                .expect("requested output path should be valid utf8")
+        )
+    );
+    assert_eq!(
+        benchmark_invocation_manifest_json["artifacts"]["canonical_results"].as_str(),
+        Some("results.json")
+    );
+    assert_eq!(
+        benchmark_invocation_manifest_json["artifacts"]["command_mode_receipt"].as_str(),
+        Some("command_mode_receipt.json")
+    );
+    assert_eq!(
+        benchmark_invocation_manifest_json["runtime"]["mode"].as_str(),
+        Some("deterministic-score")
+    );
+    let command_mode_receipt_json: serde_json::Value = serde_json::from_slice(
+        &fs::read(bundle_dir.join("command_mode_receipt.json"))
+            .expect("command mode receipt should be written"),
+    )
+    .expect("command mode receipt should parse");
+    assert_eq!(
+        command_mode_receipt_json["command"].as_str(),
+        Some("frankenctl benchmark score")
+    );
+    assert_eq!(
+        command_mode_receipt_json["command_family"].as_str(),
+        Some("benchmark")
+    );
+    assert_eq!(
+        command_mode_receipt_json["runtime"]["mode"].as_str(),
+        Some("deterministic-score")
+    );
+    assert_eq!(
+        command_mode_receipt_json["runtime"]["lane"].as_str(),
+        Some("publication_gate")
+    );
+    assert_eq!(
+        command_mode_receipt_json["runtime"]["safe_mode_enabled"].as_bool(),
+        Some(true)
+    );
     let commands_txt =
         fs::read_to_string(bundle_dir.join("commands.txt")).expect("commands.txt should read");
     assert!(commands_txt.contains("rch exec --"));
+    assert!(
+        commands_txt.contains(
+            score_output_path
+                .to_str()
+                .expect("score output path should be valid utf8")
+        )
+    );
     assert!(commands_txt.contains("frankenctl -- benchmark verify"));
+    let repro_lock_json: serde_json::Value = serde_json::from_slice(
+        &fs::read(bundle_dir.join("repro.lock")).expect("repro.lock should be written"),
+    )
+    .expect("repro.lock should parse");
+    let expected_score_command = format!(
+        "rch exec -- cargo run -p frankenengine-engine --bin frankenctl -- benchmark score --input {} --trace-id trace-bench-score-cli --decision-id decision-bench-score-cli --policy-id policy-bench-score-cli --output {}",
+        score_input_path.display(),
+        score_output_path.display()
+    );
+    assert_eq!(
+        repro_lock_json["commands"][0].as_str(),
+        Some(expected_score_command.as_str())
+    );
 
     let verify_output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([
@@ -1734,6 +1840,10 @@ fn frankenctl_benchmark_score_and_verify_bundle_round_trip() {
         .collect::<Vec<_>>();
     assert!(check_names.contains(&"bundle_env_runtime_contract_matches"));
     assert!(check_names.contains(&"bundle_env_runtime_feature_flag_present"));
+    assert!(check_names.contains(&"bundle_command_mode_receipt_runtime_contract_matches"));
+    assert!(
+        check_names.contains(&"bundle_benchmark_invocation_manifest_artifact_contract_present")
+    );
 
     let _ = fs::remove_file(score_input_path);
     let _ = fs::remove_file(verify_report_path);

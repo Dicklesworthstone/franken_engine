@@ -102,6 +102,11 @@ One-command replay wrapper:
 ./scripts/e2e/parser_performance_promotion_gate_replay.sh
 ```
 
+The replay wrapper reruns the lane, resolves the latest complete run directory,
+warns if the newest artifact directory is incomplete, and then prints the
+latest manifest, latest events, latest commands, and latest first step log so
+operators can triage without manually hunting through artifact timestamps.
+
 ## Deterministic Execution Contract
 
 All heavy Rust checks/tests for this lane run through `rch`.
@@ -167,3 +172,12 @@ cat artifacts/parser_performance_promotion_gate/<timestamp>/commands.txt
 cat artifacts/parser_performance_promotion_gate/<timestamp>/step_logs/step_000.log
 ./scripts/e2e/parser_performance_promotion_gate_replay.sh
 ```
+
+Replay wrapper fail-closed behavior:
+
+- if no complete artifact bundle exists, replay exits non-zero even if the just-run
+  command path returned zero.
+- if the newest artifact directory is incomplete, replay warns and falls back to
+  the latest complete run directory.
+- replay surfaces the latest complete bundle by printing the latest manifest,
+  latest events, latest commands, and latest first step log.

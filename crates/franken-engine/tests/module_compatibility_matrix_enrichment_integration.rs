@@ -2,12 +2,21 @@
 
 //! Enrichment integration tests for `module_compatibility_matrix`.
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, fs, path::PathBuf};
 
 use frankenengine_engine::module_compatibility_matrix::*;
 
 fn context() -> CompatibilityContext {
     CompatibilityContext::new("trace-enrich", "decision-enrich", "policy-enrich")
+}
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn read_to_string(path: &PathBuf) -> String {
+    fs::read_to_string(path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
 }
 
 fn valid_entry(case_id: &str) -> CompatibilityMatrixEntry {
@@ -232,6 +241,33 @@ fn error_display_with_event_includes_trace_ids() {
     assert!(msg.contains("t-abc"));
     assert!(msg.contains("d-xyz"));
     assert!(msg.contains("p-123"));
+}
+
+#[test]
+fn interop_gate_script_emits_trace_ids_artifact_contract() {
+    let path = repo_root().join("scripts/run_rgc_module_interop_verification_matrix.sh");
+    let script = read_to_string(&path);
+
+    for needle in [
+        "trace_ids_path=\"${run_dir}/trace_ids.json\"",
+        "write_trace_ids()",
+        "\"trace_ids\": \"${trace_ids_path}\"",
+        "cat ${trace_ids_path}",
+        "rgc module interop verification matrix trace ids: ${trace_ids_path}",
+        "write_trace_ids\nwrite_manifest \"$main_exit\"",
+    ] {
+        assert!(script.contains(needle), "gate script missing {needle}");
+    }
+}
+
+#[test]
+fn interop_replay_wrapper_requires_and_surfaces_trace_ids_artifact() {
+    let path = repo_root().join("scripts/e2e/rgc_module_interop_verification_matrix_replay.sh");
+    let script = read_to_string(&path);
+
+    for needle in ["trace_ids.json", "latest trace ids"] {
+        assert!(script.contains(needle), "replay wrapper missing {needle}");
+    }
 }
 
 // ---------------------------------------------------------------------------

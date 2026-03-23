@@ -106,6 +106,16 @@ fn load_script() -> String {
     fs::read_to_string(path).expect("read parser performance promotion gate script")
 }
 
+fn load_replay_script() -> String {
+    let path = Path::new("../../scripts/e2e/parser_performance_promotion_gate_replay.sh");
+    fs::read_to_string(path).expect("read parser performance promotion gate replay script")
+}
+
+fn load_readme() -> String {
+    fs::read_to_string(Path::new("../../README.md"))
+        .expect("read repository README for parser performance gate references")
+}
+
 fn pair_key(peer_id: &str, quantile: &str) -> (String, String) {
     (peer_id.to_string(), quantile.to_string())
 }
@@ -469,6 +479,28 @@ fn parser_performance_replay_scenarios_align_with_gate_outcome() {
 }
 
 #[test]
+fn parser_performance_replay_wrapper_surfaces_latest_complete_bundle() {
+    let replay_script = load_replay_script();
+
+    for marker in [
+        "PARSER_PERFORMANCE_PROMOTION_GATE_ARTIFACT_ROOT",
+        "latest_complete_run_dir",
+        "newest directory ${latest_artifact_dir_path} is incomplete",
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "step_*.log",
+        "[parser-performance-promotion-gate] latest first step log:",
+        "missing_bundle_exit_code",
+    ] {
+        assert!(
+            replay_script.contains(marker),
+            "performance replay wrapper missing marker: {marker}"
+        );
+    }
+}
+
+#[test]
 fn parser_performance_evidence_vectors_and_telemetry_paths_are_contract_shaped() {
     let fixture = load_fixture();
 
@@ -578,6 +610,52 @@ fn parser_performance_doc_uses_repo_local_target_dir_example_and_step_logs() {
             && doc.contains("`(remote-exit=<code>)`")
             && doc.contains("`(timeout-<N>s)`"),
         "doc must describe explicit rch failure classification suffixes"
+    );
+    assert!(
+        doc.contains("latest complete run directory")
+            && doc.contains("newest artifact directory is incomplete"),
+        "doc must explain replay-wrapper complete-bundle selection"
+    );
+    assert!(
+        doc.contains("latest manifest")
+            && doc.contains("latest events")
+            && doc.contains("latest commands")
+            && doc.contains("latest first step log"),
+        "doc must explain replay-wrapper artifact surfacing"
+    );
+}
+
+#[test]
+fn readme_references_performance_promotion_gate_and_replay() {
+    let readme = load_readme();
+
+    assert!(
+        readme.contains("## Parser Performance Promotion Gate"),
+        "README missing parser performance promotion gate heading"
+    );
+    assert!(
+        readme.contains("./scripts/run_parser_performance_promotion_gate.sh ci"),
+        "README missing parser performance promotion gate command"
+    );
+    assert!(
+        readme.contains("target_rch_parser_performance_promotion_gate_"),
+        "README missing repo-local parser performance target-dir guidance"
+    );
+    assert!(
+        readme.contains("./scripts/e2e/parser_performance_promotion_gate_replay.sh"),
+        "README missing parser performance replay wrapper command"
+    );
+    assert!(
+        readme.contains("step_logs/step_*.log"),
+        "README missing parser performance step-log artifact guidance"
+    );
+    assert!(
+        readme.contains("latest complete artifact bundle"),
+        "README missing parser performance latest-complete replay guidance"
+    );
+    assert!(
+        readme.contains("skip a newer incomplete run directory"),
+        "README missing parser performance incomplete-directory warning guidance"
     );
 }
 

@@ -34,6 +34,23 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
+fn load_readme() -> String {
+    let path = repo_root().join("README.md");
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
+fn normalize_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn default_matrix_required_readme_fragments() -> Vec<String> {
+    ModuleCompatibilityMatrix::from_default_json()
+        .expect("load default matrix")
+        .required_readme_fragments()
+        .to_vec()
+}
+
 #[test]
 fn default_matrix_is_machine_readable_and_validates_with_declared_waivers() {
     serde_json::from_str::<serde_json::Value>(DEFAULT_MATRIX_JSON)
@@ -295,6 +312,55 @@ fn module_interop_replay_wrapper_requires_complete_bundle() {
         script.contains("rgc_module_resolution_trace_contract_smoke.sh"),
         "replay wrapper must re-run the trace smoke contract"
     );
+}
+
+#[test]
+fn default_matrix_declares_required_readme_fragments() {
+    let fragments = default_matrix_required_readme_fragments();
+    let fragment_set: BTreeSet<_> = fragments.iter().map(String::as_str).collect();
+
+    for expected in [
+        "## RGC Module Interop Verification Matrix Gate",
+        "./scripts/run_rgc_module_interop_verification_matrix.sh ci",
+        "RGC_MODULE_INTEROP_MATRIX_REPLAY_RUN_DIR=artifacts/...",
+        "docs/module_compatibility_matrix_v1.json",
+        "artifacts/rgc_module_interop_verification_matrix/<timestamp>/trace_ids.json",
+        "artifacts/rgc_module_interop_verification_matrix/<timestamp>/module_resolution_trace.jsonl",
+        "The matrix also pins npm-style `pkg.js` / `@scope/pkg.js` extension-probe package entries so nested `./sub` requires stay anchored to the package root.",
+    ] {
+        assert!(
+            fragment_set.contains(expected),
+            "missing required README fragment {expected}"
+        );
+    }
+}
+
+#[test]
+fn default_matrix_round_trip_preserves_required_readme_fragments() {
+    let matrix = ModuleCompatibilityMatrix::from_default_json().expect("load default matrix");
+    let expected_fragments = matrix.required_readme_fragments().to_vec();
+
+    let serialized = matrix.to_json_pretty().expect("serialize default matrix");
+    let reparsed =
+        ModuleCompatibilityMatrix::from_json_str(&serialized).expect("reparse serialized matrix");
+
+    assert_eq!(
+        reparsed.required_readme_fragments(),
+        expected_fragments.as_slice(),
+        "required README fragments must survive matrix roundtrips"
+    );
+}
+
+#[test]
+fn readme_documents_module_interop_matrix_gate_contract() {
+    let readme = normalize_whitespace(&load_readme());
+    for fragment in default_matrix_required_readme_fragments() {
+        let normalized_fragment = normalize_whitespace(&fragment);
+        assert!(
+            readme.contains(&normalized_fragment),
+            "README is missing required module interop fragment: {fragment}"
+        );
+    }
 }
 
 #[test]

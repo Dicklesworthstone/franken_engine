@@ -150,6 +150,10 @@ fn enrichment_proof_validation_status_display_uniqueness() {
             proof_epoch: SecurityEpoch::from_raw(1),
             current_epoch: SecurityEpoch::from_raw(2),
         },
+        ProofValidationStatus::NotYetValid {
+            validity_start_ns: 300,
+            current_ns: 200,
+        },
         ProofValidationStatus::Expired {
             validity_end_ns: 100,
             current_ns: 200,
@@ -326,6 +330,10 @@ fn enrichment_proof_validation_status_serde_roundtrip_all_variants() {
         ProofValidationStatus::EpochStale {
             proof_epoch: SecurityEpoch::from_raw(10),
             current_epoch: SecurityEpoch::from_raw(20),
+        },
+        ProofValidationStatus::NotYetValid {
+            validity_start_ns: 500,
+            current_ns: 100,
         },
         ProofValidationStatus::Expired {
             validity_end_ns: 500,
@@ -968,6 +976,52 @@ fn enrichment_rejects_expired_proof() {
         err,
         IngestionError::ValidationFailed {
             status: ProofValidationStatus::Expired { .. },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn enrichment_rejects_not_yet_valid_proof() {
+    let mut engine = test_engine();
+    let proof = create_proof_input(
+        ProofType::PlasCapabilityWitness,
+        test_epoch(),
+        2_000,
+        0,
+        "policy-001",
+        b"future",
+        &test_key(),
+    )
+    .unwrap();
+    let err = engine.ingest_proof(proof, 1_000).unwrap_err();
+    assert!(matches!(
+        err,
+        IngestionError::ValidationFailed {
+            status: ProofValidationStatus::NotYetValid { .. },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn enrichment_rejects_inverted_validity_window() {
+    let mut engine = test_engine();
+    let proof = create_proof_input(
+        ProofType::PlasCapabilityWitness,
+        test_epoch(),
+        2_000,
+        1_000,
+        "policy-001",
+        b"bad-window",
+        &test_key(),
+    )
+    .unwrap();
+    let err = engine.ingest_proof(proof, 1_500).unwrap_err();
+    assert!(matches!(
+        err,
+        IngestionError::ValidationFailed {
+            status: ProofValidationStatus::SemanticCheckFailed { .. },
             ..
         }
     ));

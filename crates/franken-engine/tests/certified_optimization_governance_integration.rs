@@ -224,6 +224,13 @@ fn cert_pending_not_valid() {
 }
 
 #[test]
+fn cert_status_at_reports_effective_expiry() {
+    let cert = make_expired_cert("c-exp", "fn1");
+    assert_eq!(cert.status, CertificateStatus::Valid);
+    assert_eq!(cert.status_at(epoch()), CertificateStatus::Expired);
+}
+
+#[test]
 fn cert_remaining_epochs_computes_correctly() {
     let cert = make_cert("c1", "fn1", OptimizationTier::Aggressive);
     assert_eq!(cert.remaining_epochs(SecurityEpoch::from_raw(100)), 100);
@@ -537,6 +544,44 @@ fn state_forensics_for_function_filters() {
     assert_eq!(state.forensics_for_function("fn-c").len(), 0);
 }
 
+#[test]
+fn state_rollback_matrix_is_deterministic_and_function_scoped() {
+    let mut state = GovernanceState::new(epoch());
+    state.add_certificate(make_cert("c-z", "fn-z", OptimizationTier::Aggressive));
+    state.add_certificate(make_cert("c-a", "fn-a", OptimizationTier::Speculative));
+    state.record_rollback(make_rollback(
+        "r-a",
+        "fn-a",
+        RollbackTrigger::RegressionDetected,
+    ));
+    state.add_forensic_entry(make_forensic("f-a1", "fn-a", ForensicSurface::OperatorLog));
+    state.add_forensic_entry(make_forensic(
+        "f-a2",
+        "fn-a",
+        ForensicSurface::SourceMapping,
+    ));
+
+    let matrix = state.rollback_matrix();
+    assert_eq!(
+        matrix
+            .iter()
+            .map(|row| row.function_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["fn-a", "fn-z"]
+    );
+    assert_eq!(matrix[0].rollback_count, 1);
+    assert_eq!(
+        matrix[0].last_rollback_trigger,
+        Some(RollbackTrigger::RegressionDetected)
+    );
+    assert_eq!(
+        matrix[0].forensic_surfaces,
+        vec![ForensicSurface::SourceMapping, ForensicSurface::OperatorLog]
+    );
+    assert_eq!(matrix[1].latest_certificate_id.as_deref(), Some("c-z"));
+    assert_eq!(matrix[1].valid_certificate_count, 1);
+}
+
 // ---------------------------------------------------------------------------
 // Governance evaluation
 // ---------------------------------------------------------------------------
@@ -680,6 +725,7 @@ fn report_empty_state() {
     assert_eq!(report.total_rollbacks, 0);
     assert_eq!(report.active_speculative, 0);
     assert_eq!(report.forensic_entry_count, 0);
+    assert!(report.rollback_matrix.is_empty());
     assert!(report.verdict.is_pass());
 }
 
@@ -698,6 +744,27 @@ fn report_with_data() {
     assert_eq!(report.valid_certificates, 1);
     assert_eq!(report.total_rollbacks, 1);
     assert_eq!(report.forensic_entry_count, 1);
+    assert_eq!(
+        report
+            .rollback_matrix
+            .iter()
+            .map(|row| row.function_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["fn-rb", "fn1", "fn2"]
+    );
+    assert_eq!(
+        report.rollback_matrix[0].last_rollback_trigger,
+        Some(RollbackTrigger::ProofFailure)
+    );
+    assert_eq!(
+        report.rollback_matrix[1].forensic_surfaces,
+        vec![ForensicSurface::SourceMapping]
+    );
+    assert_eq!(report.rollback_matrix[2].valid_certificate_count, 0);
+    assert_eq!(
+        report.rollback_matrix[2].latest_certificate_status,
+        CertificateStatus::Expired
+    );
     assert!(report.verdict.is_pass());
 }
 

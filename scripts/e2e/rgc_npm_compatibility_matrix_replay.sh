@@ -2,6 +2,108 @@
 set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-mode="${1:-ci}"
+cd "${root_dir}"
 
-"${root_dir}/scripts/run_rgc_npm_compatibility_matrix.sh" "${mode}"
+artifact_root="${RGC_NPM_COMPATIBILITY_MATRIX_ARTIFACT_ROOT:-${root_dir}/artifacts/rgc_npm_compatibility_matrix}"
+explicit_run_dir="${RGC_NPM_COMPATIBILITY_MATRIX_REPLAY_RUN_DIR:-}"
+mode="${1:-ci}"
+main_exit=0
+
+run_dir_is_complete() {
+  local candidate="${1:-}"
+  [[ -n "${candidate}" ]] || return 1
+  [[ -f "${candidate}/npm_compat_matrix_report.json" ]] || return 1
+  [[ -f "${candidate}/trace_ids.json" ]] || return 1
+  [[ -f "${candidate}/run_manifest.json" ]] || return 1
+  [[ -f "${candidate}/events.jsonl" ]] || return 1
+  [[ -f "${candidate}/commands.txt" ]] || return 1
+}
+
+if [[ -z "${explicit_run_dir}" ]]; then
+  "${root_dir}/scripts/run_rgc_npm_compatibility_matrix.sh" "${mode}" || main_exit=$?
+fi
+
+latest_artifact_dir() {
+  if [[ ! -d "${artifact_root}" ]]; then
+    return 0
+  fi
+
+  find "${artifact_root}" -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1
+}
+
+latest_complete_run_dir() {
+  if [[ ! -d "${artifact_root}" ]]; then
+    return 0
+  fi
+
+  find "${artifact_root}" -mindepth 1 -maxdepth 1 -type d | sort | while IFS= read -r candidate; do
+    run_dir_is_complete "${candidate}" || continue
+    printf '%s\n' "${candidate}"
+  done | tail -n 1
+}
+
+missing_bundle_exit_code() {
+  local prior_exit="${1:-1}"
+  if [[ "${prior_exit}" -eq 0 ]]; then
+    echo 1
+    return
+  fi
+
+  echo "${prior_exit}"
+}
+
+warn_about_failed_gate_replay_source() {
+  local prior_exit="${1:-0}"
+  if [[ "${prior_exit}" -eq 0 ]]; then
+    return
+  fi
+
+  if [[ -n "${latest_artifact_dir_path}" && "${latest_artifact_dir_path}" != "${latest_run_dir}" ]]; then
+    echo "[rgc-npm-compatibility-matrix] gate exited with status ${prior_exit}; replay output reflects latest complete run directory ${latest_run_dir}" >&2
+    return
+  fi
+
+  echo "[rgc-npm-compatibility-matrix] gate exited with status ${prior_exit}; replay output reflects current run directory ${latest_run_dir}" >&2
+}
+
+latest_artifact_dir_path="$(latest_artifact_dir)"
+latest_run_dir="$(latest_complete_run_dir)"
+if [[ -n "${explicit_run_dir}" ]]; then
+  latest_artifact_dir_path="${explicit_run_dir}"
+  latest_run_dir=""
+  if run_dir_is_complete "${explicit_run_dir}"; then
+    latest_run_dir="${explicit_run_dir}"
+  fi
+fi
+
+if [[ -z "${latest_run_dir}" ]]; then
+  if [[ -n "${explicit_run_dir}" ]]; then
+    echo "rgc npm compatibility matrix replay explicit run directory is incomplete: ${explicit_run_dir}" >&2
+    exit 1
+  fi
+  if [[ -n "${latest_artifact_dir_path}" ]]; then
+    echo "rgc npm compatibility matrix replay could not locate a complete run directory under ${artifact_root}; newest directory ${latest_artifact_dir_path} is incomplete" >&2
+  else
+    echo "rgc npm compatibility matrix replay could not locate a complete run directory under ${artifact_root}" >&2
+  fi
+  exit "$(missing_bundle_exit_code "${main_exit:-1}")"
+fi
+
+if [[ -n "${latest_artifact_dir_path}" && "${latest_artifact_dir_path}" != "${latest_run_dir}" ]]; then
+  echo "[rgc-npm-compatibility-matrix] newest directory ${latest_artifact_dir_path} is incomplete; using latest complete run directory ${latest_run_dir}" >&2
+fi
+
+warn_about_failed_gate_replay_source "${main_exit}"
+
+echo "[rgc-npm-compatibility-matrix] latest report: ${latest_run_dir}/npm_compat_matrix_report.json"
+cat "${latest_run_dir}/npm_compat_matrix_report.json"
+echo "[rgc-npm-compatibility-matrix] latest trace ids: ${latest_run_dir}/trace_ids.json"
+cat "${latest_run_dir}/trace_ids.json"
+echo "[rgc-npm-compatibility-matrix] latest manifest: ${latest_run_dir}/run_manifest.json"
+cat "${latest_run_dir}/run_manifest.json"
+echo "[rgc-npm-compatibility-matrix] latest events: ${latest_run_dir}/events.jsonl"
+cat "${latest_run_dir}/events.jsonl"
+echo "[rgc-npm-compatibility-matrix] latest commands: ${latest_run_dir}/commands.txt"
+cat "${latest_run_dir}/commands.txt"
+
+exit "${main_exit}"

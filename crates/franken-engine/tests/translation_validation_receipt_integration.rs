@@ -52,6 +52,12 @@ fn dce_rule(id: &str, cost_delta: i64) -> AppliedRuleRecord {
     }
 }
 
+fn many_rules(count: usize) -> Vec<AppliedRuleRecord> {
+    (0..count)
+        .map(|idx| rule(&format!("r-many-{idx}"), -100))
+        .collect()
+}
+
 fn proven() -> ReceiptVerdict {
     ReceiptVerdict::Proven {
         evidence: ProofEvidence::new(ProofMode::Symbolic, hash(b"proof"), 50, 2000),
@@ -404,6 +410,17 @@ fn test_manual_quarantine_and_lift() {
 }
 
 #[test]
+fn test_duplicate_manual_quarantine_does_not_double_count_stats() {
+    let mut em = emitter();
+    em.quarantine_optimization("opt-manual");
+    em.quarantine_optimization("opt-manual");
+
+    assert!(em.is_quarantined("opt-manual"));
+    assert_eq!(em.quarantine.len(), 1);
+    assert_eq!(em.stats.total_quarantined, 1);
+}
+
+#[test]
 fn test_lift_nonexistent_quarantine() {
     let mut em = emitter();
     assert!(!em.lift_quarantine("never-quarantined"));
@@ -719,6 +736,32 @@ fn test_chain_error_display() {
     assert!(s.contains("5"));
 }
 
+#[test]
+fn test_chain_rejects_oversized_rule_set() {
+    let mut chain = ReceiptChain::new("c", epoch(1));
+    let receipt = TranslationValidationReceipt::new(
+        1,
+        "opt-oversized",
+        None,
+        epoch(1),
+        0,
+        hash(b"b"),
+        hash(b"o"),
+        many_rules(MAX_RULES_PER_RECEIPT + 1),
+        proven(),
+        "cm",
+    );
+
+    let err = chain.append(receipt).unwrap_err();
+    assert!(matches!(
+        err,
+        ReceiptChainError::RuleCountLimitExceeded {
+            limit: MAX_RULES_PER_RECEIPT,
+            actual
+        } if actual == MAX_RULES_PER_RECEIPT + 1
+    ));
+}
+
 // ---------------------------------------------------------------------------
 // Content hash determinism
 // ---------------------------------------------------------------------------
@@ -967,6 +1010,54 @@ fn test_receipt_with_no_rules() {
     assert_eq!(receipt.rule_count(), 0);
     assert_eq!(receipt.total_cost_delta_millionths, 0);
     assert!(!receipt.is_net_improvement());
+}
+
+#[test]
+fn test_receipt_verification_rejects_signed_oversized_rule_set() {
+    let mut em = emitter();
+    let receipt = TranslationValidationReceipt::new(
+        1,
+        "opt-oversized",
+        None,
+        epoch(1),
+        0,
+        hash(b"b"),
+        hash(b"o"),
+        many_rules(MAX_RULES_PER_RECEIPT + 1),
+        proven(),
+        "cm",
+    )
+    .sign(&em.config.signing_key);
+
+    assert!(!em.verify_receipt(&receipt));
+    assert_eq!(em.stats.total_verifications, 1);
+    assert_eq!(em.stats.verification_failures, 1);
+}
+
+#[test]
+fn test_e2e_oversized_rule_set_fails_closed_without_mutation() {
+    let mut em = emitter();
+    let result = em.emit(EmitInput {
+        optimization_id: "opt-too-many".into(),
+        baseline_ir_hash: hash(b"baseline"),
+        optimized_ir_hash: hash(b"optimized"),
+        applied_rules: many_rules(MAX_RULES_PER_RECEIPT + 1),
+        verdict: proven(),
+        cost_model_id: None,
+    });
+
+    assert!(matches!(
+        result,
+        EmitResult::Quarantined {
+            ref optimization_id,
+            ref reason
+        } if optimization_id == "opt-too-many"
+            && reason.contains("exceeds limit")
+    ));
+    assert!(em.chain.receipts.is_empty());
+    assert!(em.chain.failures.is_empty());
+    assert_eq!(em.stats.total_receipts, 0);
+    assert_eq!(em.stats.total_rules_applied, 0);
 }
 
 // ---------------------------------------------------------------------------

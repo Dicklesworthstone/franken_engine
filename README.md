@@ -819,6 +819,10 @@ workers are not forced through `/tmp`-backed incremental state.
 ./scripts/e2e/parser_performance_promotion_gate_replay.sh
 ```
 
+The replay wrapper prints the latest complete artifact bundle and warns when it
+has to skip a newer incomplete run directory, so operators do not accidentally
+triage against partial output.
+
 Contract and vectors:
 
 - [`docs/PARSER_PERFORMANCE_PROMOTION_GATE.md`](./docs/PARSER_PERFORMANCE_PROMOTION_GATE.md)
@@ -1401,6 +1405,40 @@ Artifacts are written under:
 - `artifacts/frx_online_regret_change_point_demotion_controller/<timestamp>/run_manifest.json`
 - `artifacts/frx_online_regret_change_point_demotion_controller/<timestamp>/events.jsonl`
 - `artifacts/frx_online_regret_change_point_demotion_controller/<timestamp>/commands.txt`
+
+## RGC Module Interop Verification Matrix Gate
+
+`bd-1lsy.11.8` ships the verification gate, while `bd-1lsy.5.2` supplies the
+default CommonJS/ESM interop contract that the matrix replays against Node and
+Bun reference behavior plus FrankenEngine `native`, `node_compat`, and
+`bun_compat` modes. The gate makes mode-sensitive divergences explicit,
+including `ERR_REQUIRE_ESM` fail-closed behavior in `native`/`node_compat` and
+the documented `bun_compat` bridge cases. The matrix also pins npm-style
+`pkg.js` / `@scope/pkg.js` extension-probe package entries so nested `./sub`
+requires stay anchored to the package root.
+
+```bash
+# RGC module interop verification matrix gate (rch-backed check + test + clippy)
+./scripts/run_rgc_module_interop_verification_matrix.sh ci
+
+# deterministic replay wrapper for an exact emitted run directory
+RGC_MODULE_INTEROP_MATRIX_REPLAY_RUN_DIR=artifacts/... \
+  ./scripts/e2e/rgc_module_interop_verification_matrix_replay.sh
+```
+
+Contract and vectors:
+
+- `docs/module_compatibility_matrix_v1.json`
+- `crates/franken-engine/tests/module_compatibility_matrix.rs`
+- `crates/franken-engine/tests/module_compatibility_matrix_integration.rs`
+
+Artifacts are written under:
+
+- `artifacts/rgc_module_interop_verification_matrix/<timestamp>/run_manifest.json`
+- `artifacts/rgc_module_interop_verification_matrix/<timestamp>/events.jsonl`
+- `artifacts/rgc_module_interop_verification_matrix/<timestamp>/commands.txt`
+- `artifacts/rgc_module_interop_verification_matrix/<timestamp>/trace_ids.json`
+- `artifacts/rgc_module_interop_verification_matrix/<timestamp>/module_resolution_trace.jsonl`
 
 ## RGC Verification Coverage Matrix Gate
 

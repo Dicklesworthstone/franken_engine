@@ -224,6 +224,10 @@ fn proof_validation_status_serde_all_variants() {
             proof_epoch: SecurityEpoch::from_raw(1),
             current_epoch: SecurityEpoch::from_raw(2),
         },
+        ProofValidationStatus::NotYetValid {
+            validity_start_ns: 300,
+            current_ns: 200,
+        },
         ProofValidationStatus::Expired {
             validity_end_ns: 100,
             current_ns: 200,
@@ -255,6 +259,10 @@ fn proof_validation_status_display_non_empty() {
         ProofValidationStatus::EpochStale {
             proof_epoch: SecurityEpoch::from_raw(1),
             current_epoch: SecurityEpoch::from_raw(2),
+        },
+        ProofValidationStatus::NotYetValid {
+            validity_start_ns: 300,
+            current_ns: 200,
         },
         ProofValidationStatus::Expired {
             validity_end_ns: 100,
@@ -656,6 +664,55 @@ fn reject_expired_proof() {
             assert!(matches!(status, ProofValidationStatus::Expired { .. }));
         }
         other => panic!("expected ValidationFailed with Expired, got {other:?}"),
+    }
+}
+
+#[test]
+fn reject_not_yet_valid_proof() {
+    let mut engine = test_engine();
+    let proof = create_proof_input(
+        ProofType::PlasCapabilityWitness,
+        test_epoch(),
+        2_000,
+        0,
+        "policy-001",
+        b"data",
+        &test_key(),
+    )
+    .unwrap();
+
+    let err = engine.ingest_proof(proof, 1_000).unwrap_err();
+    match err {
+        IngestionError::ValidationFailed { status, .. } => {
+            assert!(matches!(status, ProofValidationStatus::NotYetValid { .. }));
+        }
+        other => panic!("expected ValidationFailed with NotYetValid, got {other:?}"),
+    }
+}
+
+#[test]
+fn reject_inverted_validity_window() {
+    let mut engine = test_engine();
+    let proof = create_proof_input(
+        ProofType::PlasCapabilityWitness,
+        test_epoch(),
+        2_000,
+        1_000,
+        "policy-001",
+        b"data",
+        &test_key(),
+    )
+    .unwrap();
+
+    let err = engine.ingest_proof(proof, 1_500).unwrap_err();
+    match err {
+        IngestionError::ValidationFailed { status, .. } => {
+            assert!(matches!(
+                status,
+                ProofValidationStatus::SemanticCheckFailed { .. }
+            ));
+        }
+        other => panic!("expected ValidationFailed with SemanticCheckFailed, got {other:?}"),
     }
 }
 

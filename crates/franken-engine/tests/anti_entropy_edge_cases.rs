@@ -260,6 +260,31 @@ fn iblt_subtract_hash_mismatch() {
 }
 
 #[test]
+fn iblt_peel_rejects_zero_count_cells_with_residual_xor() {
+    let mut local = Iblt::new(64, 3);
+    let mut remote = Iblt::new(64, 3);
+
+    let mut left = [0u8; 32];
+    let mut right = [0u8; 32];
+    left[..12].copy_from_slice(&[
+        0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xA0, 0xB0, 0xC0,
+    ]);
+    right[..12].copy_from_slice(&left[..12]);
+    left[12] = 0x11;
+    right[12] = 0x77;
+
+    local.insert(&left);
+    remote.insert(&right);
+
+    let diff = local.subtract(&remote).unwrap();
+    let err = diff.peel().unwrap_err();
+    assert!(matches!(
+        err,
+        ReconcileError::PeelFailed { remaining_cells } if remaining_cells > 0
+    ));
+}
+
+#[test]
 fn iblt_peel_empty_iblts() {
     let a = Iblt::new(64, 3);
     let b = Iblt::new(64, 3);

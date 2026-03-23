@@ -19,6 +19,7 @@ run_dir_is_complete() {
   [[ -f "${candidate}/events.jsonl" ]] || return 1
   [[ -f "${candidate}/commands.txt" ]] || return 1
   [[ -f "${candidate}/module_resolution_trace.jsonl" ]] || return 1
+  [[ -f "${candidate}/trace_ids.json" ]] || return 1
 }
 
 if [[ -z "${explicit_run_dir}" ]]; then
@@ -105,6 +106,8 @@ echo "[rgc-module-interop-verification-matrix] latest commands: ${latest_run_dir
 cat "${latest_run_dir}/commands.txt"
 echo "[rgc-module-interop-verification-matrix] latest module resolution trace: ${latest_run_dir}/module_resolution_trace.jsonl"
 cat "${latest_run_dir}/module_resolution_trace.jsonl"
+echo "[rgc-module-interop-verification-matrix] latest trace ids: ${latest_run_dir}/trace_ids.json"
+cat "${latest_run_dir}/trace_ids.json"
 "${root_dir}/scripts/e2e/rgc_module_resolution_trace_contract_smoke.sh" \
   "${latest_run_dir}/module_resolution_trace.jsonl"
 

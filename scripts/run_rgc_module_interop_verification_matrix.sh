@@ -20,6 +20,7 @@ manifest_path="${run_dir}/run_manifest.json"
 events_path="${run_dir}/events.jsonl"
 commands_path="${run_dir}/commands.txt"
 module_resolution_trace_path="${run_dir}/module_resolution_trace.jsonl"
+trace_ids_path="${run_dir}/trace_ids.json"
 
 trace_id="trace-rgc-module-interop-matrix-${timestamp}"
 decision_id="decision-rgc-module-interop-matrix-${timestamp}"
@@ -208,6 +209,34 @@ run_local_step() {
   fi
 }
 
+write_trace_ids() {
+  jq -n \
+    --arg trace_id "$trace_id" \
+    --arg decision_id "$decision_id" \
+    --arg policy_id "$policy_id" \
+    --arg component "$component" \
+    --arg scenario_id "$scenario_id" \
+    --arg manifest_path "$manifest_path" \
+    --arg events_path "$events_path" \
+    --arg commands_path "$commands_path" \
+    --arg module_resolution_trace_path "$module_resolution_trace_path" \
+    '{
+      schema_version: "franken-engine.rgc-module-interop-verification-matrix.trace-ids.v1",
+      bead_id: "bd-1lsy.11.8",
+      component: $component,
+      scenario_id: $scenario_id,
+      trace_ids: [$trace_id],
+      decision_ids: [$decision_id],
+      policy_ids: [$policy_id],
+      artifact_paths: {
+        run_manifest: $manifest_path,
+        events: $events_path,
+        commands: $commands_path,
+        module_resolution_trace: $module_resolution_trace_path
+      }
+    }' >"$trace_ids_path"
+}
+
 write_manifest() {
   local exit_code="${1:-0}"
   local outcome error_code_json git_commit dirty_worktree idx comma
@@ -282,6 +311,7 @@ write_manifest() {
     echo "    \"events\": \"${events_path}\"," 
     echo "    \"commands\": \"${commands_path}\"," 
     echo "    \"module_resolution_trace\": \"${module_resolution_trace_path}\"," 
+    echo "    \"trace_ids\": \"${trace_ids_path}\","
     echo '    "module_resolution_trace_source": "contract_smoke_sample",'
     echo '    "matrix_doc": "docs/module_compatibility_matrix_v1.json",'
     echo '    "matrix_impl": "crates/franken-engine/src/module_compatibility_matrix.rs",'
@@ -296,6 +326,7 @@ write_manifest() {
     echo "    \"cat ${events_path}\"," 
     echo "    \"cat ${commands_path}\"," 
     echo "    \"cat ${module_resolution_trace_path}\"," 
+    echo "    \"cat ${trace_ids_path}\","
     echo "    \"./scripts/e2e/rgc_module_resolution_trace_contract_smoke.sh ${module_resolution_trace_path}\"," 
     echo '    "rg -n '\''compatibility_disposition|remediation_guidance'\'' crates/franken-engine/src/esm_cjs_interop_parity.rs",' 
     echo "    \"${replay_command}\""
@@ -307,6 +338,7 @@ write_manifest() {
   echo "rgc module interop verification matrix events: ${events_path}"
   echo "rgc module interop verification matrix commands: ${commands_path}"
   echo "rgc module interop verification matrix module resolution trace: ${module_resolution_trace_path}"
+  echo "rgc module interop verification matrix trace ids: ${trace_ids_path}"
 }
 
 main_exit=0
@@ -318,5 +350,6 @@ run_local_step \
   "${root_dir}/scripts/e2e/rgc_module_resolution_trace_contract_smoke.sh" \
   "${module_resolution_trace_path}" \
   || main_exit=$?
+write_trace_ids
 write_manifest "$main_exit"
 exit "$main_exit"

@@ -76,6 +76,12 @@ fn dce_rule(id: &str, cost_delta: i64) -> AppliedRuleRecord {
     }
 }
 
+fn many_rules(count: usize) -> Vec<AppliedRuleRecord> {
+    (0..count)
+        .map(|idx| rule(&format!("r-many-{idx}"), -100))
+        .collect()
+}
+
 fn proven() -> ReceiptVerdict {
     ReceiptVerdict::Proven {
         evidence: ProofEvidence::new(ProofMode::Symbolic, hash(b"proof"), 50, 2000),
@@ -314,6 +320,29 @@ fn enrichment_serde_receipt_chain_error_sequence_gap() {
 }
 
 #[test]
+fn enrichment_serde_chain_integrity_issue_rule_count_limit_exceeded() {
+    let issue = ChainIntegrityIssue::RuleCountLimitExceeded {
+        sequence: 8,
+        limit: MAX_RULES_PER_RECEIPT,
+        actual: MAX_RULES_PER_RECEIPT + 1,
+    };
+    let json = serde_json::to_string(&issue).unwrap();
+    let restored: ChainIntegrityIssue = serde_json::from_str(&json).unwrap();
+    assert_eq!(issue, restored);
+}
+
+#[test]
+fn enrichment_serde_receipt_chain_error_rule_count_limit_exceeded() {
+    let err = ReceiptChainError::RuleCountLimitExceeded {
+        limit: MAX_RULES_PER_RECEIPT,
+        actual: MAX_RULES_PER_RECEIPT + 1,
+    };
+    let json = serde_json::to_string(&err).unwrap();
+    let restored: ReceiptChainError = serde_json::from_str(&json).unwrap();
+    assert_eq!(err, restored);
+}
+
+#[test]
 fn enrichment_serde_emit_result_approved_roundtrip() {
     let mut em = emitter();
     let result = em.emit(input("opt-serde-approved", proven()));
@@ -382,6 +411,21 @@ fn enrichment_receipt_chain_error_sequence_gap_display_content() {
     assert!(s.contains("sequence gap"), "must mention 'sequence gap'");
     assert!(s.contains("7"), "must contain expected sequence");
     assert!(s.contains("12"), "must contain actual sequence");
+}
+
+#[test]
+fn enrichment_receipt_chain_error_rule_count_limit_exceeded_display_content() {
+    let err = ReceiptChainError::RuleCountLimitExceeded {
+        limit: MAX_RULES_PER_RECEIPT,
+        actual: MAX_RULES_PER_RECEIPT + 1,
+    };
+    let s = err.to_string();
+    assert!(
+        s.contains("rule count limit exceeded"),
+        "must mention the rule-count boundary"
+    );
+    assert!(s.contains(&MAX_RULES_PER_RECEIPT.to_string()));
+    assert!(s.contains(&(MAX_RULES_PER_RECEIPT + 1).to_string()));
 }
 
 #[test]
@@ -1283,6 +1327,33 @@ fn enrichment_chain_record_failure_rejects_tampered_failure_hash() {
 }
 
 #[test]
+fn enrichment_chain_integrity_reports_oversized_receipt_boundary_violation() {
+    let mut chain = ReceiptChain::new("c", epoch(1));
+    let receipt = make_receipt(
+        1,
+        "opt-oversized",
+        None,
+        epoch(1),
+        0,
+        many_rules(MAX_RULES_PER_RECEIPT + 1),
+        proven(),
+    );
+    chain.receipts.push(receipt);
+    chain.next_sequence = 2;
+
+    let integrity = chain.verify_integrity();
+    assert!(!integrity.valid);
+    assert!(integrity.issues.iter().any(|issue| matches!(
+        issue,
+        ChainIntegrityIssue::RuleCountLimitExceeded {
+            sequence: 1,
+            limit: MAX_RULES_PER_RECEIPT,
+            actual
+        } if *actual == MAX_RULES_PER_RECEIPT + 1
+    )));
+}
+
+#[test]
 fn enrichment_chain_total_cost_improvement_excludes_rejected() {
     let mut chain = ReceiptChain::new("c", epoch(1));
     let r1 = make_receipt(
@@ -1740,6 +1811,20 @@ fn enrichment_multiple_quarantines_tracked_independently() {
 
     let summary = em.summary();
     assert_eq!(summary.quarantine_count, 2);
+}
+
+#[test]
+fn enrichment_duplicate_manual_quarantine_preserves_set_and_stat_counts() {
+    let mut em = emitter();
+    em.quarantine_optimization("opt-dup");
+    em.quarantine_optimization("opt-dup");
+
+    assert!(em.is_quarantined("opt-dup"));
+    assert_eq!(em.quarantine.len(), 1);
+    assert_eq!(em.stats.total_quarantined, 1);
+
+    let summary = em.summary();
+    assert_eq!(summary.quarantine_count, 1);
 }
 
 // ===========================================================================

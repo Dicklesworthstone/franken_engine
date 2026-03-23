@@ -538,6 +538,38 @@ fn validate_shim_not_removable_fails() {
     assert_eq!(err.code, CompatibilityMatrixErrorCode::InvalidMatrix);
 }
 
+#[test]
+fn duplicate_shim_id_for_same_mode_fails_during_construction() {
+    let mut e = base_entry("dup-shim");
+    e.franken_bun_compat_behavior = "different".to_string();
+    e.explicit_shims
+        .push(make_shim("shim-dup", CompatibilityMode::BunCompat));
+
+    let mut duplicate = make_shim("  shim-dup  ", CompatibilityMode::BunCompat);
+    duplicate.description = "second declaration".to_string();
+    duplicate.test_case_ref = "language/module-code/integ.js".to_string();
+    e.explicit_shims.push(duplicate);
+
+    let err = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![e]).unwrap_err();
+    assert_eq!(err.code, CompatibilityMatrixErrorCode::InvalidMatrix);
+    assert!(err.message.contains("duplicate explicit shim_id"));
+    assert!(err.message.contains("bun_compat"));
+}
+
+#[test]
+fn same_shim_id_across_modes_is_still_allowed() {
+    let mut e = base_entry("shared-shim-id");
+    e.franken_node_compat_behavior = "node-different".to_string();
+    e.franken_bun_compat_behavior = "bun-different".to_string();
+    e.explicit_shims
+        .push(make_shim("shim-shared", CompatibilityMode::NodeCompat));
+    e.explicit_shims
+        .push(make_shim("shim-shared", CompatibilityMode::BunCompat));
+
+    let mut m = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![e]).unwrap();
+    m.validate_with_waivers(&BTreeSet::new(), &ctx()).unwrap();
+}
+
 // ===========================================================================
 // Section 8: Hidden shim detection
 // ===========================================================================
@@ -1376,6 +1408,51 @@ fn default_matrix_pins_extensionless_relative_esm_contract() {
             .lockstep_case_refs
             .contains(&"lockstep/module/package-type-module-extensionless-relative".to_string())
     );
+}
+
+#[test]
+fn default_matrix_pins_external_extension_probe_package_root_contract() {
+    let m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let entry = m
+        .entry("external-extension-probe-package-root-relative-require")
+        .expect("default matrix should include external extension-probe package-root case");
+    assert_eq!(entry.feature, ModuleFeature::Cjs);
+    assert_eq!(
+        entry.node_behavior,
+        "resolve_relative_require_from_package_root"
+    );
+    assert_eq!(
+        entry.bun_behavior,
+        "resolve_relative_require_from_package_root"
+    );
+    assert_eq!(
+        entry.franken_native_behavior,
+        "resolve_relative_require_from_package_root"
+    );
+    assert_eq!(
+        entry.franken_node_compat_behavior,
+        "resolve_relative_require_from_package_root"
+    );
+    assert_eq!(
+        entry.franken_bun_compat_behavior,
+        "resolve_relative_require_from_package_root"
+    );
+    assert!(entry.explicit_shims.is_empty());
+    assert!(entry.lockstep_case_refs.contains(
+        &"lockstep/module/external-extension-probe-package-root-relative-require".to_string()
+    ));
+    assert!(
+        entry.lockstep_case_refs.contains(
+            &"lockstep/module/scoped-external-extension-probe-package-root-relative-require"
+                .to_string()
+        )
+    );
+    assert!(
+        entry
+            .scenario
+            .contains("package root rather than a synthetic entry-file directory")
+    );
+    assert!(entry.divergence.is_none());
 }
 
 #[test]

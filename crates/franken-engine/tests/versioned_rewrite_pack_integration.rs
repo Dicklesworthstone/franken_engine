@@ -1054,7 +1054,7 @@ fn catalog_cross_interference_symmetric_lookup() {
         RuleInterferenceKind::SemanticOverlap,
         true,
     )]);
-    cat.add_cross_interference("alpha", "beta", meta);
+    assert!(cat.add_cross_interference("alpha", "beta", meta));
 
     // Both orderings should work
     assert!(cat.has_cross_blocking("alpha", "beta"));
@@ -1073,14 +1073,92 @@ fn catalog_cross_interference_no_blocking() {
         RuleInterferenceKind::BudgetContention,
         false,
     )]);
-    cat.add_cross_interference("a", "b", meta);
+    assert!(cat.add_cross_interference("a", "b", meta));
     assert!(!cat.has_cross_blocking("a", "b"));
 }
 
 #[test]
 fn catalog_cross_interference_unknown_pair() {
-    let cat = PackCatalog::new("unknown");
-    assert!(!cat.has_cross_blocking("x", "y"));
+    let mut cat = PackCatalog::new("unknown");
+    cat.register(make_pack("known", vec![]));
+
+    assert!(!cat.add_cross_interference("known", "missing", empty_interference(),));
+    assert!(!cat.has_cross_blocking("known", "missing"));
+    assert!(cat.cross_interference.is_empty());
+}
+
+#[test]
+fn catalog_cross_interference_rejects_self_pair() {
+    let mut cat = PackCatalog::new("self-pair");
+    cat.register(make_pack("solo", vec![]));
+
+    assert!(!cat.add_cross_interference("solo", "solo", empty_interference()));
+    assert!(cat.cross_interference.is_empty());
+}
+
+#[test]
+fn catalog_cross_interference_rejects_duplicate_pair_without_overwrite() {
+    let mut cat = PackCatalog::new("dup-cross");
+    cat.register(make_pack("alpha", vec![]));
+    cat.register(make_pack("beta", vec![]));
+
+    let first = InterferenceMetadata::build(vec![make_interference(
+        "alpha:r1",
+        "beta:r1",
+        RuleInterferenceKind::PatternConflict,
+        false,
+    )]);
+    assert!(cat.add_cross_interference("alpha", "beta", first.clone()));
+    let hash_before = cat.content_hash.clone();
+
+    let duplicate = InterferenceMetadata::build(vec![make_interference(
+        "alpha:r1",
+        "beta:r1",
+        RuleInterferenceKind::SemanticOverlap,
+        true,
+    )]);
+    assert!(!cat.add_cross_interference("beta", "alpha", duplicate));
+    assert_eq!(cat.content_hash, hash_before);
+    assert_eq!(cat.cross_interference.len(), 1);
+    assert_eq!(cat.cross_interference.get("alpha::beta"), Some(&first));
+}
+
+#[test]
+fn catalog_cross_interference_rejects_metadata_for_foreign_pair() {
+    let mut cat = PackCatalog::new("foreign-pair");
+    cat.register(make_pack("alpha", vec![]));
+    cat.register(make_pack("beta", vec![]));
+
+    let hash_before = cat.content_hash.clone();
+    let foreign = InterferenceMetadata::build(vec![make_interference(
+        "gamma:r1",
+        "delta:r1",
+        RuleInterferenceKind::SemanticOverlap,
+        true,
+    )]);
+    assert!(!cat.add_cross_interference("alpha", "beta", foreign));
+    assert_eq!(cat.content_hash, hash_before);
+    assert!(cat.cross_interference.is_empty());
+}
+
+#[test]
+fn catalog_cross_interference_rejects_tampered_metadata_without_mutation() {
+    let mut cat = PackCatalog::new("tampered-cross");
+    cat.register(make_pack("alpha", vec![]));
+    cat.register(make_pack("beta", vec![]));
+
+    let hash_before = cat.content_hash.clone();
+    let mut metadata = InterferenceMetadata::build(vec![make_interference(
+        "alpha:r1",
+        "beta:r1",
+        RuleInterferenceKind::PatternConflict,
+        false,
+    )]);
+    metadata.blocking_count = 99;
+
+    assert!(!cat.add_cross_interference("alpha", "beta", metadata));
+    assert_eq!(cat.content_hash, hash_before);
+    assert!(cat.cross_interference.is_empty());
 }
 
 #[test]
@@ -1097,7 +1175,7 @@ fn catalog_hash_changes_on_cross_interference() {
     cat.register(make_pack("a", vec![]));
     cat.register(make_pack("b", vec![]));
     let hash_before = cat.content_hash;
-    cat.add_cross_interference("a", "b", empty_interference());
+    assert!(cat.add_cross_interference("a", "b", empty_interference()));
     assert_ne!(cat.content_hash, hash_before);
 }
 
@@ -1142,7 +1220,7 @@ fn catalog_serde_roundtrip_populated() {
             false,
         )],
     ));
-    cat.add_cross_interference(
+    assert!(cat.add_cross_interference(
         "p1",
         "p2",
         InterferenceMetadata::build(vec![make_interference(
@@ -1151,7 +1229,7 @@ fn catalog_serde_roundtrip_populated() {
             RuleInterferenceKind::PatternConflict,
             false,
         )]),
-    );
+    ));
 
     let json = serde_json::to_string(&cat).unwrap();
     let back: PackCatalog = serde_json::from_str(&json).unwrap();

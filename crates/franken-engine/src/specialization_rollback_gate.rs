@@ -408,7 +408,7 @@ impl SpecializationEvidence {
             .iter()
             .map(|r| r.content_hash)
             .collect();
-        sorted_report_hashes.sort();
+        sorted_report_hashes.sort_unstable();
         for ch in &sorted_report_hashes {
             buf.extend_from_slice(ch.as_bytes());
         }

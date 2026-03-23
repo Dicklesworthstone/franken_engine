@@ -343,7 +343,7 @@ impl ExperimentPlan {
         data.extend_from_slice(&self.epoch.as_u64().to_le_bytes());
         let mut sorted_proposal_hashes: Vec<_> =
             self.proposals.iter().map(|p| p.content_hash).collect();
-        sorted_proposal_hashes.sort();
+        sorted_proposal_hashes.sort_unstable();
         for ch in &sorted_proposal_hashes {
             data.extend_from_slice(ch.as_bytes());
         }

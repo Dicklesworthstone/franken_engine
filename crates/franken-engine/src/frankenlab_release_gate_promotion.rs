@@ -608,7 +608,7 @@ impl ReleaseGatePromotionRegistry {
                 .any(|g| g.evaluation_runs > 0 && g.blocks_release());
 
         let mut sorted_gates = self.gates.clone();
-        sorted_gates.sort_by_key(|a| a.gate.to_string());
+        sorted_gates.sort_by_key(|a| a.gate);
         let content_bytes = serde_json::to_vec(&sorted_gates).unwrap_or_default();
         let content_hash = ContentHash::compute(&content_bytes);
 

@@ -775,8 +775,8 @@ pub fn publish_governance_scorecard(
     );
 
     let snapshot = ScorecardSnapshot {
-        ev_millionths: cross_repo_conformance.pass_rate_millionths as i64
-            - privacy_budget_health.epoch_consumption_millionths as i64,
+        ev_millionths: (cross_repo_conformance.pass_rate_millionths as i64)
+            .saturating_sub(privacy_budget_health.epoch_consumption_millionths as i64),
         confidence_millionths,
         risk_of_harm_millionths,
         implementation_friction_millionths: ratio_millionths_floor(

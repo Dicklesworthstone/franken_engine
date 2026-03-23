@@ -728,7 +728,7 @@ impl ClaimEntitlementContract {
                             && morphism.blocked_by_rules.iter().all(|rule_id| {
                                 !active_rule_ids.contains(rule_id.as_str())
                                     || rule_lookup.get(rule_id.as_str()).is_some_and(|rule| {
-                                        rule.verdict == DisqualifierVerdict::Forbid
+                                        rule.verdict != DisqualifierVerdict::Forbid
                                     })
                             })
                     })

@@ -413,6 +413,7 @@ pub struct InterferenceMetadata {
 impl InterferenceMetadata {
     /// Build interference metadata from entries.
     pub fn build(entries: Vec<RuleInterference>) -> Self {
+        let entries = Self::canonicalize_entries(entries);
         let blocking_count = entries.iter().filter(|e| e.is_blocking).count();
         let non_blocking_count = entries.len() - blocking_count;
 
@@ -447,6 +448,21 @@ impl InterferenceMetadata {
 
     fn is_canonical(&self) -> bool {
         *self == Self::build(self.entries.clone())
+    }
+
+    fn canonicalize_entries(entries: Vec<RuleInterference>) -> Vec<RuleInterference> {
+        let mut canonical_entries: Vec<_> =
+            entries.into_iter().map(Self::canonicalize_entry).collect();
+        canonical_entries.sort();
+        canonical_entries.dedup();
+        canonical_entries
+    }
+
+    fn canonicalize_entry(mut entry: RuleInterference) -> RuleInterference {
+        if entry.rule_a > entry.rule_b {
+            std::mem::swap(&mut entry.rule_a, &mut entry.rule_b);
+        }
+        entry
     }
 
     fn compute_hash(entries: &[RuleInterference]) -> ContentHash {
@@ -1127,6 +1143,71 @@ mod tests {
         }]);
 
         assert_ne!(left.content_hash, right.content_hash);
+    }
+
+    #[test]
+    fn interference_metadata_canonicalizes_rule_orientation_and_duplicates() {
+        let meta = InterferenceMetadata::build(vec![
+            RuleInterference {
+                rule_a: "r2".into(),
+                rule_b: "r1".into(),
+                kind: RuleInterferenceKind::PatternConflict,
+                is_blocking: false,
+                detail: "same pair".into(),
+            },
+            RuleInterference {
+                rule_a: "r1".into(),
+                rule_b: "r2".into(),
+                kind: RuleInterferenceKind::PatternConflict,
+                is_blocking: false,
+                detail: "same pair".into(),
+            },
+        ]);
+
+        assert_eq!(meta.entries.len(), 1);
+        assert_eq!(meta.entries[0].rule_a, "r1");
+        assert_eq!(meta.entries[0].rule_b, "r2");
+        assert_eq!(meta.blocking_count, 0);
+        assert_eq!(meta.non_blocking_count, 1);
+    }
+
+    #[test]
+    fn interference_metadata_hash_is_stable_across_entry_order() {
+        let left = InterferenceMetadata::build(vec![
+            RuleInterference {
+                rule_a: "r2".into(),
+                rule_b: "r1".into(),
+                kind: RuleInterferenceKind::PatternConflict,
+                is_blocking: false,
+                detail: "pair-a".into(),
+            },
+            RuleInterference {
+                rule_a: "r4".into(),
+                rule_b: "r3".into(),
+                kind: RuleInterferenceKind::BudgetContention,
+                is_blocking: false,
+                detail: "pair-b".into(),
+            },
+        ]);
+        let right = InterferenceMetadata::build(vec![
+            RuleInterference {
+                rule_a: "r3".into(),
+                rule_b: "r4".into(),
+                kind: RuleInterferenceKind::BudgetContention,
+                is_blocking: false,
+                detail: "pair-b".into(),
+            },
+            RuleInterference {
+                rule_a: "r1".into(),
+                rule_b: "r2".into(),
+                kind: RuleInterferenceKind::PatternConflict,
+                is_blocking: false,
+                detail: "pair-a".into(),
+            },
+        ]);
+
+        assert_eq!(left, right);
+        assert_eq!(left.content_hash, right.content_hash);
     }
 
     // --- RewritePack ---

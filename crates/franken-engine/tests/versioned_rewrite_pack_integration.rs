@@ -608,6 +608,55 @@ fn interference_metadata_different_detail_different_hash() {
 }
 
 #[test]
+fn interference_metadata_canonicalizes_symmetric_duplicates() {
+    let meta = InterferenceMetadata::build(vec![
+        make_interference("r2", "r1", RuleInterferenceKind::PatternConflict, false),
+        make_interference("r1", "r2", RuleInterferenceKind::PatternConflict, false),
+    ]);
+
+    assert_eq!(meta.entries.len(), 1);
+    assert_eq!(meta.entries[0].rule_a, "r1");
+    assert_eq!(meta.entries[0].rule_b, "r2");
+    assert_eq!(meta.blocking_count, 0);
+    assert_eq!(meta.non_blocking_count, 1);
+}
+
+#[test]
+fn interference_metadata_hash_is_order_invariant() {
+    let left = InterferenceMetadata::build(vec![
+        make_interference(
+            "beta",
+            "alpha",
+            RuleInterferenceKind::PatternConflict,
+            false,
+        ),
+        make_interference(
+            "delta",
+            "gamma",
+            RuleInterferenceKind::BudgetContention,
+            false,
+        ),
+    ]);
+    let right = InterferenceMetadata::build(vec![
+        make_interference(
+            "gamma",
+            "delta",
+            RuleInterferenceKind::BudgetContention,
+            false,
+        ),
+        make_interference(
+            "alpha",
+            "beta",
+            RuleInterferenceKind::PatternConflict,
+            false,
+        ),
+    ]);
+
+    assert_eq!(left, right);
+    assert_eq!(left.content_hash, right.content_hash);
+}
+
+#[test]
 fn interference_metadata_serde_roundtrip() {
     let meta = InterferenceMetadata::build(vec![
         make_interference("r1", "r2", RuleInterferenceKind::OrderDependent, true),

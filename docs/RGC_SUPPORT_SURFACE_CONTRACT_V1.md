@@ -142,8 +142,9 @@ trace IDs, and first step log. The summary derives its engine-ready versus
 engine-blocked rule from `readiness_answer_contract` and keeps downstream
 `franken_node` product-ready status explicit as delegated/out-of-scope here. If
 the rerun fails, the wrapper now explicitly states whether the printed bundle
-came from the current failed invocation or from an older latest-complete
-fallback directory.
+came from the current failed invocation, from the previous latest-complete
+bundle because no new bundle was created, or from an older latest-complete
+fallback directory when the newest run directory is incomplete.
 
 To replay a specific preserved bundle without rerunning the gate, point the
 wrapper at an exact complete run directory:

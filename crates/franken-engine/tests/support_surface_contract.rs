@@ -917,6 +917,10 @@ fn rgc_911b_replay_wrapper_uses_latest_complete_bundle() {
         "replay wrapper should centralize failed-gate replay warnings"
     );
     assert!(
+        script.contains("pre_run_latest_artifact_dir_path"),
+        "replay wrapper should remember the pre-run latest artifact directory so failed reruns can distinguish previous bundles from current output"
+    );
+    assert!(
         script.contains("if [[ -z \"${explicit_run_dir}\" ]]; then"),
         "replay wrapper should skip rerunning the gate when an exact run directory is provided"
     );
@@ -927,6 +931,10 @@ fn rgc_911b_replay_wrapper_uses_latest_complete_bundle() {
     assert!(
         script.contains("replay output reflects latest complete run directory"),
         "replay wrapper should warn when it falls back to an older latest-complete bundle after a failed rerun"
+    );
+    assert!(
+        script.contains("replay output reflects previous latest complete run directory"),
+        "replay wrapper should distinguish failed reruns that never produced a new bundle from the current-run case"
     );
     assert!(
         script.contains("replay output reflects current run directory"),

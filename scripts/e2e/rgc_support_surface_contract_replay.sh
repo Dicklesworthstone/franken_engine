@@ -8,6 +8,7 @@ artifact_root="${RGC_SUPPORT_SURFACE_CONTRACT_ARTIFACT_ROOT:-${root_dir}/artifac
 explicit_run_dir="${RGC_SUPPORT_SURFACE_CONTRACT_REPLAY_RUN_DIR:-}"
 mode="${1:-ci}"
 main_exit=0
+pre_run_latest_artifact_dir_path=""
 
 run_dir_is_complete() {
   local candidate="${1:-}"
@@ -22,10 +23,6 @@ run_dir_is_complete() {
   [[ -f "${candidate}/support_surface_mode_matrix.json" ]] || return 1
   [[ -f "${candidate}/step_logs/step_000.log" ]] || return 1
 }
-
-if [[ -z "${explicit_run_dir}" ]]; then
-  "${root_dir}/scripts/run_rgc_support_surface_contract.sh" "${mode}" || main_exit=$?
-fi
 
 latest_artifact_dir() {
   if [[ ! -d "${artifact_root}" ]]; then
@@ -58,6 +55,7 @@ missing_bundle_exit_code() {
 
 warn_about_failed_gate_replay_source() {
   local prior_exit="${1:-0}"
+  local prior_artifact_dir="${2:-}"
   if [[ "${prior_exit}" -eq 0 ]]; then
     return
   fi
@@ -67,8 +65,18 @@ warn_about_failed_gate_replay_source() {
     return
   fi
 
+  if [[ -n "${prior_artifact_dir}" && "${latest_run_dir}" == "${prior_artifact_dir}" ]]; then
+    echo "[rgc-support-surface-contract] gate exited with status ${prior_exit}; replay output reflects previous latest complete run directory ${latest_run_dir}" >&2
+    return
+  fi
+
   echo "[rgc-support-surface-contract] gate exited with status ${prior_exit}; replay output reflects current run directory ${latest_run_dir}" >&2
 }
+
+if [[ -z "${explicit_run_dir}" ]]; then
+  pre_run_latest_artifact_dir_path="$(latest_artifact_dir)"
+  "${root_dir}/scripts/run_rgc_support_surface_contract.sh" "${mode}" || main_exit=$?
+fi
 
 latest_artifact_dir_path="$(latest_artifact_dir)"
 latest_run_dir="$(latest_complete_run_dir)"
@@ -97,7 +105,7 @@ if [[ -n "${latest_artifact_dir_path}" && "${latest_artifact_dir_path}" != "${la
   echo "[rgc-support-surface-contract] newest directory ${latest_artifact_dir_path} is incomplete; using latest complete run directory ${latest_run_dir}" >&2
 fi
 
-warn_about_failed_gate_replay_source "${main_exit}"
+warn_about_failed_gate_replay_source "${main_exit}" "${pre_run_latest_artifact_dir_path}"
 
 echo "[rgc-support-surface-contract] latest manifest: ${latest_run_dir}/run_manifest.json"
 cat "${latest_run_dir}/run_manifest.json"

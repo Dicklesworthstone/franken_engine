@@ -2040,6 +2040,255 @@ fn frankenctl_run_output_has_execution_fields() {
 }
 
 #[test]
+fn frankenctl_benchmark_run_emits_minimal_artifact_bundle() {
+    let output_dir = temp_dir("frankenctl_benchmark_run_bundle");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "benchmark",
+            "run",
+            "--seed",
+            "7",
+            "--run-id",
+            "bench-run-cli",
+            "--run-date",
+            "2026-03-23",
+            "--profile",
+            "small",
+            "--family",
+            "boot-storm",
+            "--out-dir",
+            output_dir
+                .to_str()
+                .expect("benchmark output dir should be valid utf8"),
+        ])
+        .output()
+        .expect("benchmark run command should execute");
+
+    assert!(
+        output.status.success(),
+        "benchmark run failed with stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json = parse_stdout_json(&output);
+    assert_eq!(
+        json["schema_version"].as_str(),
+        Some("franken-engine.frankenctl.v1")
+    );
+    assert_eq!(json["run_id"].as_str(), Some("bench-run-cli"));
+    assert_eq!(json["run_date"].as_str(), Some("2026-03-23"));
+    assert_eq!(json["seed"].as_u64(), Some(7));
+    assert_eq!(json["blocked"].as_bool(), Some(false));
+    assert_eq!(json["invariant_violations"].as_u64(), Some(0));
+    assert!(
+        json["total_operations"]
+            .as_u64()
+            .is_some_and(|value| value > 0),
+        "benchmark run should report positive total_operations: {json}"
+    );
+    assert!(
+        json["total_duration_us"]
+            .as_u64()
+            .is_some_and(|value| value > 0),
+        "benchmark run should report positive total_duration_us: {json}"
+    );
+    assert_eq!(
+        json["profiles"]
+            .as_array()
+            .expect("profiles should be an array")
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<Vec<_>>(),
+        vec!["S"]
+    );
+    assert_eq!(
+        json["families"]
+            .as_array()
+            .expect("families should be an array")
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<Vec<_>>(),
+        vec!["boot-storm"]
+    );
+
+    let run_manifest_path = output_dir.join("run_manifest.json");
+    let evidence_path = output_dir.join("benchmark_evidence.jsonl");
+    let events_path = output_dir.join("events.jsonl");
+    let commands_path = output_dir.join("commands.txt");
+    let env_manifest_path = output_dir.join("benchmark_env_manifest.json");
+    let raw_results_path = output_dir.join("raw_results_archive.json");
+    let summary_path = output_dir.join("benchmark_summary.json");
+
+    assert_eq!(
+        json["artifacts"]["run_manifest"].as_str(),
+        Some(
+            run_manifest_path
+                .to_str()
+                .expect("run manifest path should be valid utf8")
+        )
+    );
+    assert_eq!(
+        json["artifacts"]["evidence_jsonl"].as_str(),
+        Some(
+            evidence_path
+                .to_str()
+                .expect("evidence path should be valid utf8")
+        )
+    );
+    assert_eq!(
+        json["artifacts"]["events_jsonl"].as_str(),
+        Some(
+            events_path
+                .to_str()
+                .expect("events path should be valid utf8")
+        )
+    );
+    assert_eq!(
+        json["artifacts"]["commands_txt"].as_str(),
+        Some(
+            commands_path
+                .to_str()
+                .expect("commands path should be valid utf8")
+        )
+    );
+    assert_eq!(
+        json["artifacts"]["benchmark_env_manifest"].as_str(),
+        Some(
+            env_manifest_path
+                .to_str()
+                .expect("env manifest path should be valid utf8")
+        )
+    );
+    assert_eq!(
+        json["artifacts"]["raw_results_archive"].as_str(),
+        Some(
+            raw_results_path
+                .to_str()
+                .expect("raw results path should be valid utf8")
+        )
+    );
+    assert_eq!(
+        json["artifacts"]["summary"].as_str(),
+        Some(
+            summary_path
+                .to_str()
+                .expect("summary path should be valid utf8")
+        )
+    );
+
+    assert!(run_manifest_path.is_file());
+    assert!(evidence_path.is_file());
+    assert!(events_path.is_file());
+    assert!(commands_path.is_file());
+    assert!(env_manifest_path.is_file());
+    assert!(raw_results_path.is_file());
+    assert!(summary_path.is_file());
+
+    let run_manifest_json: serde_json::Value = serde_json::from_slice(
+        &fs::read(&run_manifest_path).expect("run manifest should be written"),
+    )
+    .expect("run manifest should parse");
+    assert_eq!(run_manifest_json["run_id"].as_str(), Some("bench-run-cli"));
+    assert_eq!(run_manifest_json["run_date"].as_str(), Some("2026-03-23"));
+    assert_eq!(run_manifest_json["seed"].as_u64(), Some(7));
+    assert_eq!(run_manifest_json["blocked"].as_bool(), Some(false));
+
+    let summary_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&summary_path).expect("summary should be written"))
+            .expect("summary should parse");
+    assert_eq!(summary_json["run_id"].as_str(), Some("bench-run-cli"));
+    assert_eq!(summary_json["blocked"].as_bool(), Some(false));
+    assert!(
+        summary_json["measurement_count"]
+            .as_u64()
+            .is_some_and(|value| value > 0),
+        "benchmark summary should report at least one measurement: {summary_json}"
+    );
+
+    let commands = fs::read_to_string(&commands_path).expect("commands should be readable");
+    assert!(commands.contains("cargo test -p frankenengine-engine"));
+    assert!(commands.contains("scripts/run_benchmark_e2e_suite.sh report"));
+
+    let _ = fs::remove_dir_all(output_dir);
+}
+
+#[test]
+fn frankenctl_benchmark_run_missing_out_dir_value_fails_with_parse_remediation() {
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "benchmark",
+            "run",
+            "--profile",
+            "small",
+            "--family",
+            "boot-storm",
+            "--out-dir",
+        ])
+        .output()
+        .expect("benchmark run parse failure should execute");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    assert!(
+        stderr.contains("[frankenctl trace_id=frankenctl-"),
+        "stderr should include trace id, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("command=parse"),
+        "stderr should include parse command label, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("--out-dir requires a value"),
+        "stderr should preserve parse failure, got: {stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "remediation: Run `frankenctl --help` for full command usage and required arguments."
+        ),
+        "stderr should include parse remediation, got: {stderr}"
+    );
+}
+
+#[test]
+fn frankenctl_benchmark_run_unknown_flag_fails_with_parse_remediation() {
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "benchmark",
+            "run",
+            "--profile",
+            "small",
+            "--family",
+            "boot-storm",
+            "--out-dir",
+            "artifacts/bench-run-cli",
+            "--bogus",
+        ])
+        .output()
+        .expect("benchmark run unknown-flag failure should execute");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    assert!(
+        stderr.contains("[frankenctl trace_id=frankenctl-"),
+        "stderr should include trace id, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("command=parse"),
+        "stderr should include parse command label, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("unknown benchmark run flag `--bogus`"),
+        "stderr should preserve parse failure, got: {stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "remediation: Run `frankenctl --help` for full command usage and required arguments."
+        ),
+        "stderr should include parse remediation, got: {stderr}"
+    );
+}
+
+#[test]
 fn frankenctl_benchmark_score_and_verify_bundle_round_trip() {
     let score_input_path = temp_path("frankenctl_benchmark_score_input", "json");
     let verify_report_path = temp_path("frankenctl_benchmark_verify_report", "json");

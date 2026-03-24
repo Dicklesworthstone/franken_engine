@@ -11,6 +11,7 @@ mode="${1:-ci}"
 toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
 target_dir="${CARGO_TARGET_DIR:-${root_dir}/target_rch_frankenctl_cli_workflow}"
 artifact_root="${FRANKENCTL_CLI_ARTIFACT_ROOT:-artifacts/frankenctl_cli_workflow}"
+explicit_replay_run_dir="${FRANKENCTL_CLI_WORKFLOW_REPLAY_RUN_DIR:-}"
 rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 run_dir="${artifact_root}/${timestamp}"
@@ -25,7 +26,41 @@ decision_id="decision-frankenctl-cli-workflow-${timestamp}"
 policy_id="policy-frankenctl-cli-workflow-v1"
 component="frankenctl_cli_workflow_gate"
 scenario_id="bd-1lsy.10.1"
-replay_command="./scripts/e2e/frankenctl_cli_workflow.sh ${mode}"
+replay_command="FRANKENCTL_CLI_WORKFLOW_REPLAY_RUN_DIR=\"${run_dir}\" ./scripts/e2e/frankenctl_cli_workflow.sh ${mode}"
+
+run_dir_is_complete() {
+  local candidate="${1:-}"
+  [[ -n "${candidate}" ]] || return 1
+  [[ -f "${candidate}/run_manifest.json" ]] || return 1
+  [[ -f "${candidate}/trace_ids.json" ]] || return 1
+  [[ -f "${candidate}/events.jsonl" ]] || return 1
+  [[ -f "${candidate}/commands.txt" ]] || return 1
+  [[ -f "${candidate}/step_logs/step_000.log" ]] || return 1
+}
+
+replay_existing_run_dir() {
+  local candidate="${1:-}"
+  if ! run_dir_is_complete "${candidate}"; then
+    echo "frankenctl workflow replay could not use explicit run directory; explicit run directory is incomplete: ${candidate}" >&2
+    exit 1
+  fi
+
+  echo "frankenctl workflow replay manifest: ${candidate}/run_manifest.json"
+  cat "${candidate}/run_manifest.json"
+  echo "frankenctl workflow replay trace ids: ${candidate}/trace_ids.json"
+  cat "${candidate}/trace_ids.json"
+  echo "frankenctl workflow replay events: ${candidate}/events.jsonl"
+  cat "${candidate}/events.jsonl"
+  echo "frankenctl workflow replay commands: ${candidate}/commands.txt"
+  cat "${candidate}/commands.txt"
+  echo "frankenctl workflow replay first step log: ${candidate}/step_logs/step_000.log"
+  cat "${candidate}/step_logs/step_000.log"
+}
+
+if [[ -n "${explicit_replay_run_dir}" ]]; then
+  replay_existing_run_dir "${explicit_replay_run_dir}"
+  exit 0
+fi
 
 mkdir -p "$run_dir" "$step_logs_dir"
 

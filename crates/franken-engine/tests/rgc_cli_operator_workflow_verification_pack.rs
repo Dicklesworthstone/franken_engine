@@ -1036,6 +1036,36 @@ fn generic_frankenctl_workflow_script_preserves_step_logs_for_triage() {
     );
 }
 
+#[test]
+fn generic_frankenctl_workflow_script_uses_exact_run_dir_replay_contract() {
+    let path = repo_root().join("scripts/e2e/frankenctl_cli_workflow.sh");
+    let script = read_to_string(&path);
+
+    for required_fragment in [
+        "explicit_replay_run_dir=\"${FRANKENCTL_CLI_WORKFLOW_REPLAY_RUN_DIR:-}\"",
+        "FRANKENCTL_CLI_WORKFLOW_REPLAY_RUN_DIR=\"${run_dir}\" ./scripts/e2e/frankenctl_cli_workflow.sh ${mode}",
+        "frankenctl workflow replay could not use explicit run directory; explicit run directory is incomplete: ${candidate}",
+        "frankenctl workflow replay manifest: ${candidate}/run_manifest.json",
+        "frankenctl workflow replay trace ids: ${candidate}/trace_ids.json",
+        "frankenctl workflow replay events: ${candidate}/events.jsonl",
+        "frankenctl workflow replay commands: ${candidate}/commands.txt",
+        "frankenctl workflow replay first step log: ${candidate}/step_logs/step_000.log",
+        "if [[ -n \"${explicit_replay_run_dir}\" ]]; then",
+        "replay_existing_run_dir \"${explicit_replay_run_dir}\"",
+    ] {
+        assert!(
+            script.contains(required_fragment),
+            "missing generic workflow replay fragment in {}: {required_fragment}",
+            path.display()
+        );
+    }
+
+    assert!(
+        !script.contains("replay_command=\"./scripts/e2e/frankenctl_cli_workflow.sh ${mode}\""),
+        "generic workflow script should not record the old self-rerun replay command"
+    );
+}
+
 // ---------- contract and doc files exist ----------
 
 #[test]

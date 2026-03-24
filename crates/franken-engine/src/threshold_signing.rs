@@ -77,16 +77,26 @@ impl ThresholdScope {
         ThresholdScope::AuthoritySetChange,
         ThresholdScope::PolicyCheckpoint,
     ];
+
+    /// Stable textual encoding used in IDs, JSON, and signing preimages.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::EmergencyRevocation => "emergency_revocation",
+            Self::KeyRotation => "key_rotation",
+            Self::AuthoritySetChange => "authority_set_change",
+            Self::PolicyCheckpoint => "policy_checkpoint",
+        }
+    }
+
+    /// Stable byte encoding for deterministic canonicalization.
+    pub const fn as_bytes(&self) -> &'static [u8] {
+        self.as_str().as_bytes()
+    }
 }
 
 impl fmt::Display for ThresholdScope {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::EmergencyRevocation => write!(f, "emergency_revocation"),
-            Self::KeyRotation => write!(f, "key_rotation"),
-            Self::AuthoritySetChange => write!(f, "authority_set_change"),
-            Self::PolicyCheckpoint => write!(f, "policy_checkpoint"),
-        }
+        f.write_str(self.as_str())
     }
 }
 
@@ -1463,6 +1473,14 @@ mod tests {
             "emergency_revocation"
         );
         assert_eq!(ThresholdScope::KeyRotation.to_string(), "key_rotation");
+    }
+
+    #[test]
+    fn scope_text_helpers_match_display() {
+        for scope in ThresholdScope::ALL {
+            assert_eq!(scope.as_str(), scope.to_string());
+            assert_eq!(scope.as_bytes(), scope.as_str().as_bytes());
+        }
     }
 
     #[test]

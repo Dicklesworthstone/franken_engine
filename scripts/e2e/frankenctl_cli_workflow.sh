@@ -106,6 +106,12 @@ rch_reject_local_fallback() {
   fi
 }
 
+emit_operator_verification_entry() {
+  local command_text="$1"
+  local suffix="${2:-}"
+  echo "    \"$(parser_frontier_json_escape "${command_text}")\"${suffix}"
+}
+
 declare -a commands_run=()
 failed_command=""
 manifest_written=false
@@ -277,12 +283,12 @@ write_manifest() {
     echo '    "replay_wrapper": "scripts/e2e/frankenctl_cli_workflow.sh"'
     echo "  },"
     echo '  "operator_verification": ['
-    echo "    \"cat ${manifest_path}\","
-    echo "    \"cat ${trace_ids_path}\","
-    echo "    \"cat ${events_path}\","
-    echo "    \"cat ${commands_path}\","
-    echo "    \"cat ${step_logs_dir}/step_000.log\","
-    echo "    \"$(parser_frontier_json_escape "${replay_command}")\""
+    emit_operator_verification_entry "cat \"${manifest_path}\"" ","
+    emit_operator_verification_entry "cat \"${trace_ids_path}\"" ","
+    emit_operator_verification_entry "cat \"${events_path}\"" ","
+    emit_operator_verification_entry "cat \"${commands_path}\"" ","
+    emit_operator_verification_entry "cat \"${step_logs_dir}/step_000.log\"" ","
+    emit_operator_verification_entry "${replay_command}"
     echo "  ]"
     echo "}"
   } >"$manifest_path"

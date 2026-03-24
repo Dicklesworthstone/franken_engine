@@ -1071,6 +1071,12 @@ fn generic_frankenctl_workflow_script_uses_exact_run_dir_replay_contract() {
         "frankenctl workflow replay command: ${replay_command}",
         "if [[ -n \"${explicit_replay_run_dir}\" ]]; then",
         "parser_frontier_json_escape \"${replay_command}\"",
+        "emit_operator_verification_entry() {",
+        "emit_operator_verification_entry \"cat \\\"${manifest_path}\\\"\" \",\"",
+        "emit_operator_verification_entry \"cat \\\"${trace_ids_path}\\\"\" \",\"",
+        "emit_operator_verification_entry \"cat \\\"${events_path}\\\"\" \",\"",
+        "emit_operator_verification_entry \"cat \\\"${commands_path}\\\"\" \",\"",
+        "emit_operator_verification_entry \"cat \\\"${step_logs_dir}/step_000.log\\\"\" \",\"",
         "replay_existing_run_dir \"${explicit_replay_run_dir}\"",
     ] {
         assert!(
@@ -1087,6 +1093,14 @@ fn generic_frankenctl_workflow_script_uses_exact_run_dir_replay_contract() {
     assert!(
         !script.contains("echo \"    \\\"${replay_command}\\\"\""),
         "generic workflow script should not emit the replay command into JSON without escaping embedded quotes"
+    );
+    assert!(
+        !script.contains("echo \"    \\\"cat ${manifest_path}\\\",\""),
+        "generic workflow script should not emit unquoted manifest cat commands into operator_verification"
+    );
+    assert!(
+        !script.contains("echo \"    \\\"cat ${trace_ids_path}\\\",\""),
+        "generic workflow script should not emit unquoted trace-id cat commands into operator_verification"
     );
 
     let replay_branch_index = script

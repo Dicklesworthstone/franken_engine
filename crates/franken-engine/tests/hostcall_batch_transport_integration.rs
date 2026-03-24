@@ -1462,3 +1462,55 @@ fn evidence_bundle_write_succeeds() {
     assert!(dir.join("batch_transport_commands.txt").exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn evidence_bundle_write_creates_missing_directory() {
+    let dir = std::env::temp_dir().join(format!(
+        "batch_transport_evidence_missing_dir_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time should be monotonic")
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let result =
+        frankenengine_engine::hostcall_batch_transport::write_batch_transport_evidence_bundle(&dir);
+
+    assert!(result.is_ok());
+    assert!(dir.join("batch_transport_inventory.json").exists());
+    assert!(dir.join("batch_transport_manifest.json").exists());
+    assert!(dir.join("batch_transport_events.jsonl").exists());
+    assert!(dir.join("batch_transport_commands.txt").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn evidence_bundle_events_use_stable_lowercase_verdict_labels() {
+    let dir = std::env::temp_dir().join(format!(
+        "batch_transport_evidence_event_labels_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time should be monotonic")
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    frankenengine_engine::hostcall_batch_transport::write_batch_transport_evidence_bundle(&dir)
+        .expect("bundle write should succeed");
+
+    let events = std::fs::read_to_string(dir.join("batch_transport_events.jsonl"))
+        .expect("events file should read");
+    assert!(
+        events.contains("\"verdict\":\"pass\"") || events.contains("\"verdict\":\"fail\""),
+        "events should use stable lowercase verdict labels"
+    );
+    assert!(
+        !events.contains("\"verdict\":\"Pass\"") && !events.contains("\"verdict\":\"Fail\""),
+        "events should not use debug-style capitalized verdict labels"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

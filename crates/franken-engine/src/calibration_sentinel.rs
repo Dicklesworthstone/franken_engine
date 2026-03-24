@@ -347,14 +347,14 @@ impl ObservabilityCell {
         hasher.update(b":");
         hasher.update(self.overall_state.as_str().as_bytes());
         {
-            let mut sorted_hashes: Vec<&[u8; 32]> = self
+            let mut sorted_hashes: Vec<[u8; 32]> = self
                 .sentinels
                 .iter()
-                .map(|s| s.content_hash.as_bytes())
+                .map(|s| *s.content_hash.as_bytes())
                 .collect();
             sorted_hashes.sort();
             for h in &sorted_hashes {
-                hasher.update(*h);
+                hasher.update(h);
             }
         }
         let result = hasher.finalize();
@@ -486,14 +486,14 @@ impl SentinelReport {
             }
         }
         {
-            let mut decision_hashes: Vec<&[u8; 32]> = self
+            let mut decision_hashes: Vec<[u8; 32]> = self
                 .decisions
                 .iter()
-                .map(|d| d.content_hash.as_bytes())
+                .map(|d| *d.content_hash.as_bytes())
                 .collect();
             decision_hashes.sort();
             for h in &decision_hashes {
-                hasher.update(*h);
+                hasher.update(h);
             }
         }
         let result = hasher.finalize();

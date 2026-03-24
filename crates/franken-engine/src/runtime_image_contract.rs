@@ -584,7 +584,9 @@ impl ImageRegistry {
     pub fn content_hash(&self) -> ContentHash {
         let mut data = Vec::new();
         data.extend_from_slice(self.schema_version.as_bytes());
-        for img in &self.images {
+        let mut sorted_images: Vec<_> = self.images.iter().collect();
+        sorted_images.sort_by_key(|img| &img.image_id);
+        for img in &sorted_images {
             data.extend_from_slice(img.image_id.as_bytes());
             data.extend_from_slice(img.image_hash.as_bytes());
             data.extend_from_slice(&img.total_size_bytes.to_le_bytes());

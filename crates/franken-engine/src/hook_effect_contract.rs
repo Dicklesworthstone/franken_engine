@@ -17,6 +17,136 @@ fn contract_schema() -> SchemaId {
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+fn append_u8(buf: &mut Vec<u8>, value: u8) {
+    buf.push(value);
+}
+
+fn append_u32(buf: &mut Vec<u8>, value: u32) {
+    buf.extend_from_slice(&value.to_le_bytes());
+}
+
+fn append_u64(buf: &mut Vec<u8>, value: u64) {
+    buf.extend_from_slice(&value.to_le_bytes());
+}
+
+fn append_bool(buf: &mut Vec<u8>, value: bool) {
+    append_u8(buf, u8::from(value));
+}
+
+fn append_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    append_u64(buf, bytes.len() as u64);
+    buf.extend_from_slice(bytes);
+}
+
+fn append_string(buf: &mut Vec<u8>, value: &str) {
+    append_len_prefixed(buf, value.as_bytes());
+}
+
+fn append_hook_kind(buf: &mut Vec<u8>, kind: HookKind) {
+    let tag = match kind {
+        HookKind::State => 0,
+        HookKind::Reducer => 1,
+        HookKind::Effect => 2,
+        HookKind::LayoutEffect => 3,
+        HookKind::Memo => 4,
+        HookKind::Callback => 5,
+        HookKind::Ref => 6,
+        HookKind::Context => 7,
+        HookKind::ImperativeHandle => 8,
+        HookKind::DebugValue => 9,
+        HookKind::DeferredValue => 10,
+        HookKind::Transition => 11,
+        HookKind::Id => 12,
+        HookKind::SyncExternalStore => 13,
+        HookKind::InsertionEffect => 14,
+    };
+    append_u8(buf, tag);
+}
+
+fn append_render_phase(buf: &mut Vec<u8>, phase: RenderPhase) {
+    let tag = match phase {
+        RenderPhase::Rendering => 0,
+        RenderPhase::InsertionEffectsPending => 1,
+        RenderPhase::LayoutEffectsPending => 2,
+        RenderPhase::PaintPending => 3,
+        RenderPhase::PassiveEffectsPending => 4,
+        RenderPhase::Idle => 5,
+        RenderPhase::Unmounting => 6,
+    };
+    append_u8(buf, tag);
+}
+
+fn append_effect_timing(buf: &mut Vec<u8>, timing: EffectTiming) {
+    let tag = match timing {
+        EffectTiming::Insertion => 0,
+        EffectTiming::Layout => 1,
+        EffectTiming::Passive => 2,
+    };
+    append_u8(buf, tag);
+}
+
+fn append_legal_transformation(buf: &mut Vec<u8>, transformation: LegalTransformation) {
+    let tag = match transformation {
+        LegalTransformation::MemoConstantFold => 0,
+        LegalTransformation::CallbackInline => 1,
+        LegalTransformation::StateToReducer => 2,
+        LegalTransformation::RefHoist => 3,
+        LegalTransformation::ContextDedup => 4,
+        LegalTransformation::EffectElision => 5,
+        LegalTransformation::MemoReorder => 6,
+        LegalTransformation::StateBatch => 7,
+    };
+    append_u8(buf, tag);
+}
+
+fn append_unsupported_semantics_trigger(buf: &mut Vec<u8>, trigger: UnsupportedSemanticsTrigger) {
+    let tag = match trigger {
+        UnsupportedSemanticsTrigger::HookTopologyDrift => 0,
+        UnsupportedSemanticsTrigger::DependencyShapeDrift => 1,
+        UnsupportedSemanticsTrigger::OutOfRenderHookExecution => 2,
+        UnsupportedSemanticsTrigger::SchedulerOrderingAmbiguity => 3,
+        UnsupportedSemanticsTrigger::UnsupportedHookPrimitive => 4,
+        UnsupportedSemanticsTrigger::TransformationProofMissing => 5,
+    };
+    append_u8(buf, tag);
+}
+
+fn append_fallback_execution_route(buf: &mut Vec<u8>, route: FallbackExecutionRoute) {
+    let tag = match route {
+        FallbackExecutionRoute::CompatibilityRuntimeLane => 0,
+        FallbackExecutionRoute::BaselineInterpreterLane => 1,
+        FallbackExecutionRoute::DeterministicSafeModeLane => 2,
+    };
+    append_u8(buf, tag);
+}
+
+fn append_hook_manifest_bytes(buf: &mut Vec<u8>, manifest: &HookManifest) {
+    append_string(buf, &manifest.component_name);
+    append_u32(buf, manifest.version);
+    append_u64(buf, manifest.slots.len() as u64);
+    for slot in &manifest.slots {
+        append_u32(buf, slot.index.0);
+        append_hook_kind(buf, slot.kind);
+        match slot.deps.as_ref() {
+            Some(deps) => {
+                append_u8(buf, 1);
+                append_u64(buf, deps.len() as u64);
+                for dep in deps {
+                    append_u64(buf, dep.0);
+                }
+            }
+            None => append_u8(buf, 0),
+        }
+    }
+}
+
+fn append_scheduling_boundary(buf: &mut Vec<u8>, boundary: &SchedulingBoundary) {
+    append_effect_timing(buf, boundary.timing);
+    append_bool(buf, boundary.synchronous);
+    append_bool(buf, boundary.dom_mutations_visible);
+    append_bool(buf, boundary.state_updates_batched);
+}
+
 // ---------------------------------------------------------------------------
 // Hook slot types
 // ---------------------------------------------------------------------------
@@ -205,32 +335,13 @@ impl HookManifest {
     /// Derive a content-addressed ID for this manifest.
     /// Includes all slot kinds and dependency tokens for collision resistance.
     pub fn derive_id(&self) -> EngineObjectId {
-        let mut canonical = format!(
-            "hook_manifest:{}:v{}:slots={}",
-            self.component_name,
-            self.version,
-            self.slots.len()
-        );
-        for slot in &self.slots {
-            canonical.push_str(&format!(
-                "|s{}:{:?}:{}",
-                slot.index.0,
-                slot.kind,
-                slot.deps
-                    .as_ref()
-                    .map(|d| d
-                        .iter()
-                        .map(|t| t.0.to_string())
-                        .collect::<Vec<_>>()
-                        .join(","))
-                    .unwrap_or_default()
-            ));
-        }
+        let mut canonical = Vec::new();
+        append_hook_manifest_bytes(&mut canonical, self);
         derive_id(
             ObjectDomain::EvidenceRecord,
             "hook-effect",
             &contract_schema(),
-            canonical.as_bytes(),
+            &canonical,
         )
         .expect("hook manifest id derivation")
     }
@@ -329,15 +440,17 @@ pub struct PendingEffect {
 
 impl PendingEffect {
     pub fn derive_id(&self) -> EngineObjectId {
-        let canonical = format!(
-            "effect:{}:slot{}:timing{:?}:tree{}:cleanup={}",
-            self.component_name, self.hook_index.0, self.timing, self.tree_order, self.is_cleanup,
-        );
+        let mut canonical = Vec::new();
+        append_string(&mut canonical, &self.component_name);
+        append_u32(&mut canonical, self.hook_index.0);
+        append_effect_timing(&mut canonical, self.timing);
+        append_u64(&mut canonical, self.tree_order);
+        append_bool(&mut canonical, self.is_cleanup);
         derive_id(
             ObjectDomain::EvidenceRecord,
             "hook-effect",
             &contract_schema(),
-            canonical.as_bytes(),
+            &canonical,
         )
         .expect("effect id derivation")
     }
@@ -625,18 +738,20 @@ pub struct TransformationReceipt {
 
 impl TransformationReceipt {
     pub fn derive_id(&self) -> EngineObjectId {
-        let canonical = format!(
-            "tx_receipt:{}:{:?}:slots={:?}:met={}",
-            self.component_name,
-            self.transformation,
-            self.target_slots.iter().map(|s| s.0).collect::<Vec<_>>(),
-            self.precondition_met,
-        );
+        let mut canonical = Vec::new();
+        append_legal_transformation(&mut canonical, self.transformation);
+        append_string(&mut canonical, &self.component_name);
+        append_u64(&mut canonical, self.target_slots.len() as u64);
+        for slot in &self.target_slots {
+            append_u32(&mut canonical, slot.0);
+        }
+        append_bool(&mut canonical, self.precondition_met);
+        append_string(&mut canonical, &self.reason);
         derive_id(
             ObjectDomain::EvidenceRecord,
             "hook-effect",
             &contract_schema(),
-            canonical.as_bytes(),
+            &canonical,
         )
         .expect("transformation receipt id derivation")
     }
@@ -679,15 +794,16 @@ impl PhaseTransition {
     }
 
     pub fn derive_id(&self) -> EngineObjectId {
-        let canonical = format!(
-            "phase_transition:{}:{:?}->{:?}:seq{}",
-            self.component_name, self.from, self.to, self.sequence_number,
-        );
+        let mut canonical = Vec::new();
+        append_string(&mut canonical, &self.component_name);
+        append_render_phase(&mut canonical, self.from);
+        append_render_phase(&mut canonical, self.to);
+        append_u64(&mut canonical, self.sequence_number);
         derive_id(
             ObjectDomain::EvidenceRecord,
             "hook-effect",
             &contract_schema(),
-            canonical.as_bytes(),
+            &canonical,
         )
         .expect("phase transition id derivation")
     }
@@ -861,18 +977,26 @@ impl HookEffectContract {
     }
 
     pub fn derive_id(&self) -> EngineObjectId {
-        let canonical = format!(
-            "hook_effect_contract:v{}:components={}:hooks={}:transforms={}",
-            self.version,
-            self.manifests.len(),
-            self.total_hook_count(),
-            self.approved_transformations.len(),
-        );
+        let mut canonical = Vec::new();
+        append_u32(&mut canonical, self.version);
+        append_u64(&mut canonical, self.manifests.len() as u64);
+        for (component_name, manifest) in &self.manifests {
+            append_string(&mut canonical, component_name);
+            append_hook_manifest_bytes(&mut canonical, manifest);
+        }
+        append_u64(&mut canonical, self.scheduling_boundaries.len() as u64);
+        for boundary in &self.scheduling_boundaries {
+            append_scheduling_boundary(&mut canonical, boundary);
+        }
+        append_u64(&mut canonical, self.approved_transformations.len() as u64);
+        for transformation in &self.approved_transformations {
+            append_legal_transformation(&mut canonical, *transformation);
+        }
         derive_id(
             ObjectDomain::EvidenceRecord,
             "hook-effect",
             &contract_schema(),
-            canonical.as_bytes(),
+            &canonical,
         )
         .expect("contract id derivation")
     }
@@ -997,15 +1121,23 @@ pub struct UnsupportedSemanticsDiagnostic {
 
 impl UnsupportedSemanticsDiagnostic {
     pub fn derive_id(&self) -> EngineObjectId {
-        let canonical = format!(
-            "unsupported_semantics:{}:{:?}:{:?}:{}",
-            self.component_name, self.trigger, self.fallback_route, self.error_code,
-        );
+        let mut canonical = Vec::new();
+        append_string(&mut canonical, &self.schema_version);
+        append_string(&mut canonical, &self.component_name);
+        append_unsupported_semantics_trigger(&mut canonical, self.trigger);
+        append_fallback_execution_route(&mut canonical, self.fallback_route);
+        append_bool(&mut canonical, self.compile_path_rejected);
+        append_string(&mut canonical, &self.reason);
+        append_string(&mut canonical, &self.hardening_guidance);
+        append_string(&mut canonical, &self.error_code);
+        append_string(&mut canonical, &self.trace_id);
+        append_string(&mut canonical, &self.decision_id);
+        append_string(&mut canonical, &self.policy_id);
         derive_id(
             ObjectDomain::EvidenceRecord,
             "hook-effect",
             &contract_schema(),
-            canonical.as_bytes(),
+            &canonical,
         )
         .expect("unsupported semantics diagnostic id derivation")
     }
@@ -1219,6 +1351,13 @@ mod tests {
     fn manifest_derive_id_differs_by_component() {
         let m1 = HookManifest::new("A", vec![make_slot(0, HookKind::State, None)]);
         let m2 = HookManifest::new("B", vec![make_slot(0, HookKind::State, None)]);
+        assert_ne!(m1.derive_id(), m2.derive_id());
+    }
+
+    #[test]
+    fn manifest_derive_id_distinguishes_none_and_empty_deps() {
+        let m1 = HookManifest::new("Deps", vec![make_slot(0, HookKind::Effect, None)]);
+        let m2 = HookManifest::new("Deps", vec![make_slot(0, HookKind::Effect, Some(vec![]))]);
         assert_ne!(m1.derive_id(), m2.derive_id());
     }
 
@@ -1829,6 +1968,23 @@ mod tests {
     }
 
     #[test]
+    fn contract_derive_id_differs_by_manifest_details() {
+        let mut c1 = HookEffectContract::new();
+        c1.register_manifest(HookManifest::new(
+            "App",
+            vec![make_slot(0, HookKind::State, None)],
+        ));
+
+        let mut c2 = HookEffectContract::new();
+        c2.register_manifest(HookManifest::new(
+            "App",
+            vec![make_slot(0, HookKind::Effect, Some(vec![DepToken(1)]))],
+        ));
+
+        assert_ne!(c1.derive_id(), c2.derive_id());
+    }
+
+    #[test]
     fn contract_serde_roundtrip() {
         let mut c = HookEffectContract::new();
         c.register_manifest(HookManifest::new(
@@ -2014,6 +2170,20 @@ mod tests {
         assert_eq!(id, receipt.derive_id());
     }
 
+    #[test]
+    fn transformation_receipt_derive_id_differs_by_reason() {
+        let receipt = TransformationReceipt {
+            transformation: LegalTransformation::StateBatch,
+            component_name: "App".into(),
+            target_slots: vec![HookSlotIndex(0), HookSlotIndex(1)],
+            precondition_met: true,
+            reason: "adjacent useState calls".into(),
+        };
+        let mut changed_reason = receipt.clone();
+        changed_reason.reason = "proof omitted".into();
+        assert_ne!(receipt.derive_id(), changed_reason.derive_id());
+    }
+
     // ---- Unsupported semantics + fallback tests ----
 
     #[test]
@@ -2091,6 +2261,19 @@ mod tests {
         assert!(!diagnostic.reason.is_empty());
         assert!(!diagnostic.hardening_guidance.is_empty());
         assert_eq!(diagnostic.derive_id(), diagnostic.derive_id());
+    }
+
+    #[test]
+    fn unsupported_semantics_diagnostic_derive_id_differs_by_trace_context() {
+        let diagnostic = build_unsupported_semantics_diagnostic(
+            "Counter",
+            UnsupportedSemanticsTrigger::TransformationProofMissing,
+            "trace-1",
+            "decision-1",
+        );
+        let mut changed_context = diagnostic.clone();
+        changed_context.trace_id = "trace-2".into();
+        assert_ne!(diagnostic.derive_id(), changed_context.derive_id());
     }
 
     // -- Enrichment: PearlTower 2026-02-26 --

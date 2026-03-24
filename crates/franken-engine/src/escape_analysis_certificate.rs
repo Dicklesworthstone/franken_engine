@@ -518,8 +518,11 @@ pub fn analyze_escape(
         }
 
         let hash_input = format!(
-            "cert:{}:{}:{}:{:?}",
-            site.site_id, escape_state, alias_class, reasons
+            "cert:{}:{}:{}:{}",
+            site.site_id,
+            escape_state,
+            alias_class,
+            serde_json::to_string(&reasons).unwrap_or_default(),
         );
 
         certificates.push(EscapeCertificate {

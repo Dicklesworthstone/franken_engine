@@ -122,9 +122,9 @@ impl PolicyProfile {
             .map(|k| {
                 let a = self.dimensions.get(*k).copied().unwrap_or(0);
                 let b = other.dimensions.get(*k).copied().unwrap_or(0);
-                (a - b).abs()
+                a.saturating_sub(b).abs()
             })
-            .sum()
+            .fold(0i64, i64::saturating_add)
     }
 
     /// Compute the entropy of the profile (millionths of nats).

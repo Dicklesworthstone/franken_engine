@@ -699,21 +699,27 @@ impl ReleaseGate {
 
     fn compute_result_digest(result: &ReleaseGateResult) -> String {
         // FNV-1a over the canonical fields for content-addressable identity.
-        let material = format!(
-            "seed={};verdict={:?};total={};passed={};exception={};checks={}",
-            result.seed,
-            result.verdict,
-            result.total_checks,
-            result.passed_checks,
-            result.exception_applied,
-            result
-                .checks
-                .iter()
-                .map(|c| format!("{}:{}", c.kind, c.passed))
-                .collect::<Vec<_>>()
-                .join(","),
-        );
-        format!("{:016x}", fnv1a64(material.as_bytes()))
+        // Sort checks by kind for insertion-order independence.
+        let mut sorted_checks: Vec<_> = result.checks.iter().collect();
+        sorted_checks.sort_by_key(|check| check.kind);
+
+        let mut material = Vec::with_capacity(512);
+        append_u64(&mut material, result.seed);
+        append_verdict(&mut material, &result.verdict);
+        append_u64(&mut material, result.total_checks as u64);
+        append_u64(&mut material, result.passed_checks as u64);
+        append_bool(&mut material, result.exception_applied);
+        append_len_prefixed(&mut material, result.exception_justification.as_bytes());
+        append_u64(&mut material, sorted_checks.len() as u64);
+        for check in &sorted_checks {
+            append_gate_check_result(&mut material, check);
+        }
+        append_u64(&mut material, result.gate_events.len() as u64);
+        for event in &result.gate_events {
+            append_gate_event(&mut material, event);
+        }
+
+        format!("{:016x}", fnv1a64(&material))
     }
 }
 
@@ -756,6 +762,78 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
         hash = hash.wrapping_mul(PRIME);
     }
     hash
+}
+
+fn append_u64(buf: &mut Vec<u8>, value: u64) {
+    buf.extend_from_slice(&value.to_le_bytes());
+}
+
+fn append_bool(buf: &mut Vec<u8>, value: bool) {
+    buf.push(u8::from(value));
+}
+
+fn append_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    append_u64(buf, bytes.len() as u64);
+    buf.extend_from_slice(bytes);
+}
+
+fn append_verdict(buf: &mut Vec<u8>, verdict: &Verdict) {
+    match verdict {
+        Verdict::Pass => buf.push(0),
+        Verdict::Fail { reason } => {
+            buf.push(1);
+            append_len_prefixed(buf, reason.as_bytes());
+        }
+    }
+}
+
+fn append_gate_failure_detail(buf: &mut Vec<u8>, detail: &GateFailureDetail) {
+    append_len_prefixed(buf, detail.item_id.as_bytes());
+    append_len_prefixed(buf, detail.failure_type.as_bytes());
+    append_len_prefixed(buf, detail.expected.as_bytes());
+    append_len_prefixed(buf, detail.actual.as_bytes());
+}
+
+fn append_gate_check_result(buf: &mut Vec<u8>, check: &GateCheckResult) {
+    append_len_prefixed(buf, check.kind.to_string().as_bytes());
+    append_bool(buf, check.passed);
+    append_len_prefixed(buf, check.summary.as_bytes());
+    append_u64(buf, check.items_checked as u64);
+    append_u64(buf, check.items_passed as u64);
+
+    let mut sorted_details = check.failure_details.clone();
+    sorted_details.sort_by(|left, right| {
+        left.item_id
+            .cmp(&right.item_id)
+            .then(left.failure_type.cmp(&right.failure_type))
+            .then(left.expected.cmp(&right.expected))
+            .then(left.actual.cmp(&right.actual))
+    });
+    append_u64(buf, sorted_details.len() as u64);
+    for detail in &sorted_details {
+        append_gate_failure_detail(buf, detail);
+    }
+}
+
+fn append_gate_event(buf: &mut Vec<u8>, event: &GateEvent) {
+    append_len_prefixed(buf, event.trace_id.as_bytes());
+    append_len_prefixed(buf, event.decision_id.as_bytes());
+    append_len_prefixed(buf, event.policy_id.as_bytes());
+    append_len_prefixed(buf, event.component.as_bytes());
+    append_len_prefixed(buf, event.event.as_bytes());
+    append_len_prefixed(buf, event.outcome.as_bytes());
+    match &event.error_code {
+        Some(error_code) => {
+            buf.push(1);
+            append_len_prefixed(buf, error_code.as_bytes());
+        }
+        None => buf.push(0),
+    }
+    append_u64(buf, event.metadata.len() as u64);
+    for (key, value) in &event.metadata {
+        append_len_prefixed(buf, key.as_bytes());
+        append_len_prefixed(buf, value.as_bytes());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1071,6 +1149,98 @@ mod tests {
 
         // Both pass but seeds differ, so digests differ.
         assert_ne!(r1.result_digest, r2.result_digest);
+    }
+
+    #[test]
+    fn digest_changes_when_failure_details_change() {
+        let base = GateCheckResult {
+            kind: GateCheckKind::EvidenceReplay,
+            passed: false,
+            summary: "replay failed".to_string(),
+            failure_details: vec![GateFailureDetail {
+                item_id: "scenario-a".to_string(),
+                failure_type: "divergence".to_string(),
+                expected: "match".to_string(),
+                actual: "mismatch".to_string(),
+            }],
+            items_checked: 1,
+            items_passed: 0,
+        };
+        let mut changed = base.clone();
+        changed.failure_details[0].actual = "timeout".to_string();
+
+        let result_a = ReleaseGateResult {
+            seed: 42,
+            checks: vec![base],
+            verdict: Verdict::Fail {
+                reason: "1 of 1 gate checks failed: evidence_replay".to_string(),
+            },
+            total_checks: 1,
+            passed_checks: 0,
+            exception_applied: false,
+            exception_justification: String::new(),
+            gate_events: Vec::new(),
+            result_digest: String::new(),
+        };
+        let result_b = ReleaseGateResult {
+            checks: vec![changed],
+            ..result_a.clone()
+        };
+
+        assert_ne!(
+            ReleaseGate::compute_result_digest(&result_a),
+            ReleaseGate::compute_result_digest(&result_b),
+            "content-addressable digests must change when failure details change"
+        );
+    }
+
+    #[test]
+    fn digest_changes_when_gate_event_content_changes() {
+        let check = GateCheckResult {
+            kind: GateCheckKind::EvidenceCompleteness,
+            passed: true,
+            summary: "all evidence present".to_string(),
+            failure_details: Vec::new(),
+            items_checked: 1,
+            items_passed: 1,
+        };
+        let base_event = GateEvent {
+            trace_id: "trace-1".to_string(),
+            decision_id: "decision-1".to_string(),
+            policy_id: "policy-1".to_string(),
+            component: "release_gate".to_string(),
+            event: "release_gate_evaluated".to_string(),
+            outcome: "pass".to_string(),
+            error_code: None,
+            metadata: BTreeMap::from([("phase".to_string(), "baseline".to_string())]),
+        };
+        let mut changed_event = base_event.clone();
+        changed_event
+            .metadata
+            .insert("phase".to_string(), "replayed".to_string());
+
+        let result_a = ReleaseGateResult {
+            seed: 42,
+            checks: vec![check.clone()],
+            verdict: Verdict::Pass,
+            total_checks: 1,
+            passed_checks: 1,
+            exception_applied: false,
+            exception_justification: String::new(),
+            gate_events: vec![base_event],
+            result_digest: String::new(),
+        };
+        let result_b = ReleaseGateResult {
+            checks: vec![check],
+            gate_events: vec![changed_event],
+            ..result_a.clone()
+        };
+
+        assert_ne!(
+            ReleaseGate::compute_result_digest(&result_a),
+            ReleaseGate::compute_result_digest(&result_b),
+            "content-addressable digests must change when gate-event payloads change"
+        );
     }
 
     // -----------------------------------------------------------------------

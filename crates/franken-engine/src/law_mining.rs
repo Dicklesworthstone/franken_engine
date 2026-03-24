@@ -73,7 +73,11 @@ pub struct LawProvenanceSource {
 impl LawProvenanceSource {
     fn recompute_hash(&mut self) {
         let mut data = Vec::new();
-        data.extend_from_slice(format!("{:?}", self.source_kind).as_bytes());
+        data.extend_from_slice(
+            serde_json::to_string(&self.source_kind)
+                .unwrap_or_default()
+                .as_bytes(),
+        );
         data.extend_from_slice(self.source_id.as_bytes());
         push_strings(&mut data, &self.policy_ids);
         for property in &self.formal_properties {
@@ -150,7 +154,11 @@ impl LawCandidate {
     fn recompute_hash(&mut self) {
         let mut data = Vec::new();
         data.extend_from_slice(self.candidate_id.as_bytes());
-        data.extend_from_slice(format!("{:?}", self.kind).as_bytes());
+        data.extend_from_slice(
+            serde_json::to_string(&self.kind)
+                .unwrap_or_default()
+                .as_bytes(),
+        );
         data.extend_from_slice(self.statement.as_bytes());
         data.extend_from_slice(&self.rank_millionths.to_le_bytes());
         data.extend_from_slice(self.ranking_rationale.as_bytes());

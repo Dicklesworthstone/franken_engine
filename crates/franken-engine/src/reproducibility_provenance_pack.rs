@@ -101,7 +101,9 @@ impl GitFingerprint {
             hasher.update(b.as_bytes());
         }
         hasher.update(if self.dirty { b"dirty" } else { b"clean" });
-        for tag in &self.tags {
+        let mut sorted_tags = self.tags.clone();
+        sorted_tags.sort();
+        for tag in &sorted_tags {
             hasher.update(tag.as_bytes());
         }
         hex::encode(&hasher.finalize()[..16])

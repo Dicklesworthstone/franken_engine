@@ -348,6 +348,7 @@ impl CompileResult {
             h.update(d.content_hash().as_bytes());
         }
         h.update(if self.success { &[1u8] } else { &[0u8] });
+        h.update(self.duration_micros.to_le_bytes());
         ContentHash::compute(&h.finalize())
     }
 }

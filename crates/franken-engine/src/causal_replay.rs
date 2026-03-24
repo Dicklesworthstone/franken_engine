@@ -22,6 +22,48 @@ use crate::security_epoch::SecurityEpoch;
 const TRACE_SCHEMA_DEF: &[u8] = b"causal-replay-trace-v1";
 const BRANCH_SCHEMA_DEF: &[u8] = b"causal-replay-branch-v1";
 
+fn append_u8(buf: &mut Vec<u8>, value: u8) {
+    buf.push(value);
+}
+
+fn append_u64(buf: &mut Vec<u8>, value: u64) {
+    buf.extend_from_slice(&value.to_be_bytes());
+}
+
+fn append_i64(buf: &mut Vec<u8>, value: i64) {
+    buf.extend_from_slice(&value.to_be_bytes());
+}
+
+fn append_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    append_u64(buf, bytes.len() as u64);
+    buf.extend_from_slice(bytes);
+}
+
+fn append_string(buf: &mut Vec<u8>, value: &str) {
+    append_len_prefixed(buf, value.as_bytes());
+}
+
+fn append_optional_string(buf: &mut Vec<u8>, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            append_u8(buf, 1);
+            append_string(buf, value);
+        }
+        None => append_u8(buf, 0),
+    }
+}
+
+fn append_recording_mode(buf: &mut Vec<u8>, mode: &RecordingMode) {
+    match mode {
+        RecordingMode::Full => append_u8(buf, 0),
+        RecordingMode::SecurityCritical => append_u8(buf, 1),
+        RecordingMode::Sampled { rate_millionths } => {
+            append_u8(buf, 2);
+            append_u64(buf, *rate_millionths);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Nondeterminism recording
 // ---------------------------------------------------------------------------
@@ -113,18 +155,13 @@ impl NondeterminismLog {
     /// Content hash over all entries for integrity verification.
     pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::new();
+        append_u64(&mut buf, self.entries.len() as u64);
         for entry in &self.entries {
-            buf.extend_from_slice(&entry.sequence.to_be_bytes());
-            buf.extend_from_slice(&entry.source.tag().to_be_bytes());
-            buf.extend_from_slice(&(entry.value.len() as u32).to_be_bytes());
-            buf.extend_from_slice(&entry.value);
-            buf.extend_from_slice(&entry.tick.to_be_bytes());
-            if let Some(ext_id) = &entry.extension_id {
-                buf.push(1);
-                buf.extend_from_slice(ext_id.as_bytes());
-            } else {
-                buf.push(0);
-            }
+            append_u64(&mut buf, entry.sequence);
+            append_u8(&mut buf, entry.source.tag());
+            append_len_prefixed(&mut buf, &entry.value);
+            append_u64(&mut buf, entry.tick);
+            append_optional_string(&mut buf, entry.extension_id.as_deref());
         }
         ContentHash::compute(&buf)
     }
@@ -192,28 +229,30 @@ impl DecisionSnapshot {
     /// Compute content hash of this snapshot for chain linking.
     pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::new();
-        buf.extend_from_slice(&self.decision_index.to_be_bytes());
-        buf.extend_from_slice(self.trace_id.as_bytes());
-        buf.extend_from_slice(self.decision_id.as_bytes());
-        buf.extend_from_slice(self.policy_id.as_bytes());
-        buf.extend_from_slice(&self.policy_version.to_be_bytes());
-        buf.extend_from_slice(&self.epoch.as_u64().to_be_bytes());
-        buf.extend_from_slice(&self.tick.to_be_bytes());
-        buf.extend_from_slice(&self.threshold_millionths.to_be_bytes());
+        append_u64(&mut buf, self.decision_index);
+        append_string(&mut buf, &self.trace_id);
+        append_string(&mut buf, &self.decision_id);
+        append_string(&mut buf, &self.policy_id);
+        append_u64(&mut buf, self.policy_version);
+        append_u64(&mut buf, self.epoch.as_u64());
+        append_u64(&mut buf, self.tick);
+        append_i64(&mut buf, self.threshold_millionths);
+        append_u64(&mut buf, self.loss_matrix.len() as u64);
         for (action, cost) in &self.loss_matrix {
-            buf.extend_from_slice(action.as_bytes());
-            buf.extend_from_slice(&cost.to_be_bytes());
+            append_string(&mut buf, action);
+            append_i64(&mut buf, *cost);
         }
         let mut sorted_evidence = self.evidence_hashes.clone();
         sorted_evidence.sort();
+        append_u64(&mut buf, sorted_evidence.len() as u64);
         for hash in &sorted_evidence {
-            buf.extend_from_slice(hash.as_bytes());
+            append_len_prefixed(&mut buf, hash.as_bytes());
         }
-        buf.extend_from_slice(self.chosen_action.as_bytes());
-        buf.extend_from_slice(&self.outcome_millionths.to_be_bytes());
-        buf.extend_from_slice(self.extension_id.as_bytes());
-        buf.extend_from_slice(&self.nondeterminism_range.0.to_be_bytes());
-        buf.extend_from_slice(&self.nondeterminism_range.1.to_be_bytes());
+        append_string(&mut buf, &self.chosen_action);
+        append_i64(&mut buf, self.outcome_millionths);
+        append_string(&mut buf, &self.extension_id);
+        append_u64(&mut buf, self.nondeterminism_range.0);
+        append_u64(&mut buf, self.nondeterminism_range.1);
         ContentHash::compute(&buf)
     }
 }
@@ -303,28 +342,29 @@ impl TraceRecord {
     /// extensions, policy versions, incident_id, and metadata.
     pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::new();
-        buf.extend_from_slice(self.trace_id.as_bytes());
-        buf.extend_from_slice(format!("{:?}", self.recording_mode).as_bytes());
-        buf.extend_from_slice(self.nondeterminism_hash.as_bytes());
-        buf.extend_from_slice(self.chain_hash.as_bytes());
-        buf.extend_from_slice(&self.start_epoch.as_u64().to_be_bytes());
-        buf.extend_from_slice(&self.end_epoch.as_u64().to_be_bytes());
-        buf.extend_from_slice(&self.start_tick.to_be_bytes());
-        buf.extend_from_slice(&self.end_tick.to_be_bytes());
+        append_string(&mut buf, &self.trace_id);
+        append_recording_mode(&mut buf, &self.recording_mode);
+        append_len_prefixed(&mut buf, self.nondeterminism_hash.as_bytes());
+        append_len_prefixed(&mut buf, self.chain_hash.as_bytes());
+        append_u64(&mut buf, self.start_epoch.as_u64());
+        append_u64(&mut buf, self.end_epoch.as_u64());
+        append_u64(&mut buf, self.start_tick);
+        append_u64(&mut buf, self.end_tick);
         // BTreeSet/BTreeMap iteration is deterministic.
+        append_u64(&mut buf, self.extensions.len() as u64);
         for ext in &self.extensions {
-            buf.extend_from_slice(ext.as_bytes());
+            append_string(&mut buf, ext);
         }
+        append_u64(&mut buf, self.policy_versions.len() as u64);
         for (k, v) in &self.policy_versions {
-            buf.extend_from_slice(k.as_bytes());
-            buf.extend_from_slice(&v.to_be_bytes());
+            append_string(&mut buf, k);
+            append_u64(&mut buf, *v);
         }
-        if let Some(id) = &self.incident_id {
-            buf.extend_from_slice(id.as_bytes());
-        }
+        append_optional_string(&mut buf, self.incident_id.as_deref());
+        append_u64(&mut buf, self.metadata.len() as u64);
         for (k, v) in &self.metadata {
-            buf.extend_from_slice(k.as_bytes());
-            buf.extend_from_slice(v.as_bytes());
+            append_string(&mut buf, k);
+            append_string(&mut buf, v);
         }
         ContentHash::compute(&buf)
     }
@@ -1415,6 +1455,19 @@ mod tests {
         assert_ne!(s1.content_hash(), s2.content_hash());
     }
 
+    #[test]
+    fn decision_snapshot_content_hash_distinguishes_field_boundaries() {
+        let mut s1 = make_snapshot(0, "sandbox", 200_000);
+        s1.trace_id = "ab".into();
+        s1.decision_id = "c".into();
+
+        let mut s2 = s1.clone();
+        s2.trace_id = "a".into();
+        s2.decision_id = "bc".into();
+
+        assert_ne!(s1.content_hash(), s2.content_hash());
+    }
+
     // -- TraceRecorder and TraceRecord tests --
 
     #[test]
@@ -1444,6 +1497,17 @@ mod tests {
         let t1 = make_trace(&[("sandbox", 200_000)]);
         let t2 = make_trace(&[("sandbox", 200_000)]);
         assert_eq!(t1.content_hash(), t2.content_hash());
+    }
+
+    #[test]
+    fn trace_record_content_hash_distinguishes_extension_boundaries() {
+        let mut t1 = make_trace(&[("sandbox", 200_000)]);
+        t1.extensions = ["ab".to_string(), "c".to_string()].into_iter().collect();
+
+        let mut t2 = t1.clone();
+        t2.extensions = ["a".to_string(), "bc".to_string()].into_iter().collect();
+
+        assert_ne!(t1.content_hash(), t2.content_hash());
     }
 
     #[test]

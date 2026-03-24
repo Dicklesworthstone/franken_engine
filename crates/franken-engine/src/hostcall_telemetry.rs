@@ -172,25 +172,26 @@ impl HostcallTelemetryRecord {
     /// Compute canonical bytes for hashing (all fields except content_hash).
     fn canonical_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(256);
-        buf.extend_from_slice(&self.record_id.to_le_bytes());
-        buf.extend_from_slice(&self.timestamp_ns.to_le_bytes());
-        buf.extend_from_slice(self.extension_id.as_bytes());
-        buf.extend_from_slice(self.hostcall_type.to_string().as_bytes());
-        buf.extend_from_slice(format!("{:?}", self.capability_used).as_bytes());
-        buf.extend_from_slice(self.arguments_hash.as_bytes());
-        buf.extend_from_slice(self.result_status.to_string().as_bytes());
-        buf.extend_from_slice(&self.duration_ns.to_le_bytes());
+        append_u64(&mut buf, self.record_id);
+        append_u64(&mut buf, self.timestamp_ns);
+        append_len_prefixed(&mut buf, self.extension_id.as_bytes());
+        append_len_prefixed(&mut buf, self.hostcall_type.to_string().as_bytes());
+        append_len_prefixed(&mut buf, self.capability_used.to_string().as_bytes());
+        append_len_prefixed(&mut buf, self.arguments_hash.as_bytes());
+        append_result_status(&mut buf, &self.result_status);
+        append_u64(&mut buf, self.duration_ns);
         buf.extend_from_slice(&self.resource_delta.memory_bytes.to_le_bytes());
         buf.extend_from_slice(&self.resource_delta.fd_count.to_le_bytes());
         buf.extend_from_slice(&self.resource_delta.network_bytes.to_le_bytes());
-        buf.extend_from_slice(self.flow_label.to_string().as_bytes());
+        append_len_prefixed(&mut buf, self.flow_label.label_class.as_bytes());
+        append_len_prefixed(&mut buf, self.flow_label.clearance_class.as_bytes());
         if let Some(ref did) = self.decision_id {
             buf.push(1);
-            buf.extend_from_slice(did.as_bytes());
+            append_len_prefixed(&mut buf, did.as_bytes());
         } else {
             buf.push(0);
         }
-        buf.extend_from_slice(&self.epoch.as_u64().to_le_bytes());
+        append_u64(&mut buf, self.epoch.as_u64());
         buf
     }
 
@@ -198,6 +199,30 @@ impl HostcallTelemetryRecord {
     pub fn verify_integrity(&self) -> bool {
         let computed = ContentHash::compute(&self.canonical_bytes());
         self.content_hash == computed
+    }
+}
+
+fn append_u64(buf: &mut Vec<u8>, value: u64) {
+    buf.extend_from_slice(&value.to_le_bytes());
+}
+
+fn append_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    append_u64(buf, bytes.len() as u64);
+    buf.extend_from_slice(bytes);
+}
+
+fn append_result_status(buf: &mut Vec<u8>, status: &HostcallResult) {
+    match status {
+        HostcallResult::Success => buf.push(0),
+        HostcallResult::Denied { reason } => {
+            buf.push(1);
+            append_len_prefixed(buf, reason.as_bytes());
+        }
+        HostcallResult::Error { code } => {
+            buf.push(2);
+            buf.extend_from_slice(&code.to_le_bytes());
+        }
+        HostcallResult::Timeout => buf.push(3),
     }
 }
 
@@ -990,6 +1015,27 @@ mod tests {
             .unwrap();
 
         assert_ne!(r1.records()[0].content_hash, r2.records()[0].content_hash);
+    }
+
+    #[test]
+    fn flow_label_segments_are_hashed_unambiguously() {
+        let mut r1 = test_recorder();
+        let mut r2 = test_recorder();
+
+        let mut input1 = test_input("ext-001", HostcallType::FsRead);
+        input1.flow_label = FlowLabel::new("a:b", "c");
+
+        let mut input2 = test_input("ext-001", HostcallType::FsRead);
+        input2.flow_label = FlowLabel::new("a", "b:c");
+
+        r1.record(1000, input1).unwrap();
+        r2.record(1000, input2).unwrap();
+
+        assert_ne!(
+            r1.records()[0].content_hash,
+            r2.records()[0].content_hash,
+            "flow-label field boundaries must be part of the canonical hash preimage"
+        );
     }
 
     // -----------------------------------------------------------------------

@@ -569,9 +569,11 @@ fn apply_mad_filter(samples: &[u64], policy: &OutlierPolicy) -> FilteredSamples 
     }
 
     if filtered.len() < policy.min_retained_samples {
+        // Revert to unfiltered samples but report how many WOULD have been
+        // removed so callers know the filter was attempted.
         return FilteredSamples {
+            removed: samples.len().saturating_sub(filtered.len()),
             filtered: samples.to_vec(),
-            removed: 0,
         };
     }
 

@@ -764,50 +764,50 @@ impl GateReceipt {
         append_str(&mut buf, self.verdict.as_str());
         append_u64(&mut buf, self.parity_entries.len() as u64);
         {
-            let mut sorted: Vec<&[u8; 32]> = self
+            let mut sorted: Vec<[u8; 32]> = self
                 .parity_entries
                 .iter()
-                .map(|p| p.content_hash.as_bytes())
+                .map(|p| *p.content_hash.as_bytes())
                 .collect();
             sorted.sort();
             for h in &sorted {
-                buf.extend_from_slice(*h);
+                buf.extend_from_slice(h);
             }
         }
         append_u64(&mut buf, self.security_findings.len() as u64);
         {
-            let mut sorted: Vec<&[u8; 32]> = self
+            let mut sorted: Vec<[u8; 32]> = self
                 .security_findings
                 .iter()
-                .map(|f| f.content_hash.as_bytes())
+                .map(|f| *f.content_hash.as_bytes())
                 .collect();
             sorted.sort();
             for h in &sorted {
-                buf.extend_from_slice(*h);
+                buf.extend_from_slice(h);
             }
         }
         append_u64(&mut buf, self.throughput_entries.len() as u64);
         {
-            let mut sorted: Vec<&[u8; 32]> = self
+            let mut sorted: Vec<[u8; 32]> = self
                 .throughput_entries
                 .iter()
-                .map(|t| t.content_hash.as_bytes())
+                .map(|t| *t.content_hash.as_bytes())
                 .collect();
             sorted.sort();
             for h in &sorted {
-                buf.extend_from_slice(*h);
+                buf.extend_from_slice(h);
             }
         }
         append_u64(&mut buf, self.support_surface_entries.len() as u64);
         {
-            let mut sorted: Vec<&[u8; 32]> = self
+            let mut sorted: Vec<[u8; 32]> = self
                 .support_surface_entries
                 .iter()
-                .map(|s| s.content_hash.as_bytes())
+                .map(|s| *s.content_hash.as_bytes())
                 .collect();
             sorted.sort();
             for h in &sorted {
-                buf.extend_from_slice(*h);
+                buf.extend_from_slice(h);
             }
         }
         append_u64(&mut buf, self.violations.len() as u64);

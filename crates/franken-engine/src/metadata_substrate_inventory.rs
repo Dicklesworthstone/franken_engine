@@ -477,7 +477,9 @@ impl SubstrateInventory {
         let mut canonical = String::new();
         canonical.push_str(&self.schema_version);
         canonical.push(':');
-        for assignment in &self.assignments {
+        let mut sorted_assignments: Vec<_> = self.assignments.iter().collect();
+        sorted_assignments.sort_by_key(|a| a.contract.content_hash);
+        for assignment in &sorted_assignments {
             canonical.push_str(&assignment.contract.content_hash.to_hex());
             canonical.push(':');
             canonical.push_str(&assignment.assigned_epoch.as_u64().to_string());

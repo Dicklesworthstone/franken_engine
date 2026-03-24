@@ -390,7 +390,9 @@ impl ReductionStep {
         hasher.update(self.step_number.to_le_bytes());
         hasher.update(format!("{}", self.level).as_bytes());
         hasher.update(format!("{}", self.strategy).as_bytes());
-        for id in &self.removed_fragment_ids {
+        let mut sorted_ids = self.removed_fragment_ids.clone();
+        sorted_ids.sort();
+        for id in &sorted_ids {
             hasher.update(id.as_bytes());
         }
         hasher.update(format!("{}", self.outcome).as_bytes());

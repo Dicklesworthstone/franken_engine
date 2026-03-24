@@ -183,7 +183,9 @@ impl ApiStabilityManifest {
                 );
                 m.insert(
                     "evolution_rule".into(),
-                    CanonicalValue::String(format!("{:?}", e.evolution_rule)),
+                    CanonicalValue::String(
+                        serde_json::to_string(&e.evolution_rule).unwrap_or_default(),
+                    ),
                 );
                 m.insert(
                     "minimum_compatible_version".into(),
@@ -281,7 +283,7 @@ impl CompatibilityReport {
                 m.insert("detail".into(), CanonicalValue::String(r.detail.clone()));
                 m.insert(
                     "verdict".into(),
-                    CanonicalValue::String(format!("{:?}", r.verdict)),
+                    CanonicalValue::String(serde_json::to_string(&r.verdict).unwrap_or_default()),
                 );
                 CanonicalValue::Map(m)
             })
@@ -842,7 +844,7 @@ impl IntegrationLogEntry {
         );
         map.insert(
             "outcome".into(),
-            CanonicalValue::String(format!("{:?}", self.outcome)),
+            CanonicalValue::String(serde_json::to_string(&self.outcome).unwrap_or_default()),
         );
         map.insert(
             "source_label".into(),

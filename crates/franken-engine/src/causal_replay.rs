@@ -382,6 +382,15 @@ impl TraceRecord {
 
     /// Verify the hash-chain integrity of all entries.
     pub fn verify_chain_integrity(&self) -> Result<(), ReplayError> {
+        // Always verify nondeterminism_hash, even for empty traces.
+        let computed_nd_hash = self.nondeterminism_log.content_hash();
+        if computed_nd_hash != self.nondeterminism_hash {
+            return Err(ReplayError::ChainIntegrity {
+                entry_index: 0,
+                detail: "nondeterminism_hash does not match log contents".into(),
+            });
+        }
+
         if self.entries.is_empty() {
             if self.chain_hash != ContentHash::compute(b"empty-trace") {
                 return Err(ReplayError::ChainIntegrity {

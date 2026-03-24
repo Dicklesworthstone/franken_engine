@@ -909,8 +909,11 @@ impl PromiseAllTracker {
         if self.settled {
             return false;
         }
+        // Only increment if this index is newly inserted (not a duplicate).
+        if !self.values.contains_key(&index) {
+            self.resolved_count += 1;
+        }
         self.values.insert(index, value);
-        self.resolved_count += 1;
         self.resolved_count == self.total
     }
 
@@ -952,6 +955,9 @@ pub struct SettledOutcome {
 impl PromiseAllSettledTracker {
     /// Record a fulfillment. Returns `true` if all settled.
     pub fn record_fulfillment(&mut self, index: u32, value: JsValue) -> bool {
+        if !self.outcomes.contains_key(&index) {
+            self.settled_count += 1;
+        }
         self.outcomes.insert(
             index,
             SettledOutcome {
@@ -959,12 +965,14 @@ impl PromiseAllSettledTracker {
                 value,
             },
         );
-        self.settled_count += 1;
         self.settled_count == self.total
     }
 
     /// Record a rejection. Returns `true` if all settled.
     pub fn record_rejection(&mut self, index: u32, reason: JsValue) -> bool {
+        if !self.outcomes.contains_key(&index) {
+            self.settled_count += 1;
+        }
         self.outcomes.insert(
             index,
             SettledOutcome {
@@ -972,7 +980,6 @@ impl PromiseAllSettledTracker {
                 value: reason,
             },
         );
-        self.settled_count += 1;
         self.settled_count == self.total
     }
 }
@@ -1018,8 +1025,10 @@ impl PromiseAnyTracker {
         if self.settled {
             return false;
         }
+        if !self.errors.contains_key(&index) {
+            self.rejected_count += 1;
+        }
         self.errors.insert(index, reason);
-        self.rejected_count += 1;
         self.rejected_count == self.total
     }
 

@@ -361,13 +361,20 @@ impl SourceAuditor {
             let line_num = line_num_0 + 1;
             let trimmed = line.trim();
 
-            // Skip comments.
+            // Skip full-line comments.
             if trimmed.starts_with("//") {
                 continue;
             }
 
+            // Strip inline comments so patterns in comments don't trigger.
+            let code_portion = if let Some(idx) = trimmed.find("//") {
+                &trimmed[..idx]
+            } else {
+                trimmed
+            };
+
             for pattern in &self.config.patterns {
-                if line.contains(&pattern.pattern) {
+                if code_portion.contains(&pattern.pattern) {
                     let exempted =
                         self.exemptions
                             .is_exempted(module_path, &pattern.pattern_id, line_num);

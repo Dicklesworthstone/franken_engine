@@ -632,7 +632,16 @@ pub fn validate_hook_consistency(
                 current_kind: c.kind,
             });
         }
-        if let (Some(pd), Some(cd)) = (&p.deps, &c.deps)
+        // Check that dependency arrays are consistently present or absent
+        // across renders (React rules-of-hooks contract).
+        if p.deps.is_some() != c.deps.is_some() {
+            violations.push(HookRuleViolation::DepsLengthMismatch {
+                component: curr.component_name.clone(),
+                slot: c.index,
+                previous_len: p.deps.as_ref().map_or(0, Vec::len),
+                current_len: c.deps.as_ref().map_or(0, Vec::len),
+            });
+        } else if let (Some(pd), Some(cd)) = (&p.deps, &c.deps)
             && pd.len() != cd.len()
         {
             violations.push(HookRuleViolation::DepsLengthMismatch {

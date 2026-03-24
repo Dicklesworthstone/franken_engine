@@ -682,7 +682,8 @@ pub fn partial_eval_coverage(results: &[ComponentInferenceResult]) -> u64 {
         return 0;
     }
     let eligible = results.iter().filter(|r| r.partial_eval_eligible).count() as u64;
-    (eligible * MILLIONTHS)
+    eligible
+        .saturating_mul(MILLIONTHS)
         .checked_div(results.len() as u64)
         .unwrap_or(0)
 }

@@ -169,11 +169,13 @@ struct DoctorArgs {
 enum VerifyArgs {
     CompileArtifact {
         input: PathBuf,
+        output: Option<PathBuf>,
     },
     Receipt {
         input: PathBuf,
         receipt_id: String,
         summary: bool,
+        output: Option<PathBuf>,
     },
 }
 
@@ -1096,10 +1098,12 @@ fn parse_verify_compile_artifact_command(args: &[String]) -> Result<CommandSpec,
     }
 
     let mut input: Option<PathBuf> = None;
+    let mut output: Option<PathBuf> = None;
     let mut index = 0usize;
     while index < args.len() {
         match args[index].as_str() {
             "--input" => input = Some(PathBuf::from(next_arg(args, &mut index, "--input")?)),
+            "--output" => output = Some(PathBuf::from(next_arg(args, &mut index, "--output")?)),
             flag => return Err(format!("unknown verify compile-artifact flag `{flag}`")),
         }
         index += 1;
@@ -1109,6 +1113,7 @@ fn parse_verify_compile_artifact_command(args: &[String]) -> Result<CommandSpec,
         input: input.ok_or_else(|| {
             "verify compile-artifact requires --input <artifact.json>".to_string()
         })?,
+        output,
     }))
 }
 
@@ -1120,12 +1125,14 @@ fn parse_verify_receipt_command(args: &[String]) -> Result<CommandSpec, String> 
     let mut input: Option<PathBuf> = None;
     let mut receipt_id: Option<String> = None;
     let mut summary = false;
+    let mut output: Option<PathBuf> = None;
     let mut index = 0usize;
     while index < args.len() {
         match args[index].as_str() {
             "--input" => input = Some(PathBuf::from(next_arg(args, &mut index, "--input")?)),
             "--receipt-id" => receipt_id = Some(next_arg(args, &mut index, "--receipt-id")?),
             "--summary" => summary = true,
+            "--output" => output = Some(PathBuf::from(next_arg(args, &mut index, "--output")?)),
             flag => return Err(format!("unknown verify receipt flag `{flag}`")),
         }
         index += 1;
@@ -1136,6 +1143,7 @@ fn parse_verify_receipt_command(args: &[String]) -> Result<CommandSpec, String> 
         receipt_id: receipt_id
             .ok_or_else(|| "verify receipt requires --receipt-id <id>".to_string())?,
         summary,
+        output,
     }))
 }
 
@@ -1721,26 +1729,36 @@ fn execute_doctor(args: DoctorArgs) -> Result<i32, String> {
 
 fn execute_verify(args: VerifyArgs) -> Result<i32, String> {
     match args {
-        VerifyArgs::CompileArtifact { input } => {
+        VerifyArgs::CompileArtifact {
+            input,
+            output: output_path,
+        } => {
             let artifact = load_json_file::<CompileArtifact>(&input)?;
             let errors = validate_compile_artifact(&artifact);
-            let output = CompileArtifactVerificationOutput {
+            let report = CompileArtifactVerificationOutput {
                 schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
                 artifact_path: input.display().to_string(),
                 passed: errors.is_empty(),
                 errors,
             };
-            print_json(&output)?;
-            if output.passed { Ok(0) } else { Ok(25) }
+            if let Some(path) = &output_path {
+                write_json_file(path, &report)?;
+            }
+            print_json(&report)?;
+            if report.passed { Ok(0) } else { Ok(25) }
         }
         VerifyArgs::Receipt {
             input,
             receipt_id,
             summary,
+            output,
         } => {
             let verifier_input = load_json_file::<ReceiptVerifierCliInput>(&input)?;
             let verdict = verify_receipt_by_id(&verifier_input, &receipt_id)
                 .map_err(|error| format!("receipt verification failed: {error}"))?;
+            if let Some(path) = &output {
+                write_json_file(path, &verdict)?;
+            }
             if summary {
                 println!("{}", render_verdict_summary(&verdict));
             } else {
@@ -4097,8 +4115,8 @@ fn usage() -> String {
         "      [--extension-id <id>] [--trace-id <id>] [--start-ns <u64>] [--end-ns <u64>]",
         "      [--severity info|warning|critical] [--decision-type <snake_case_decision_type>]",
         "      [--redact-key <key_fragment>]...",
-        "  frankenctl verify compile-artifact --input <artifact.json>",
-        "  frankenctl verify receipt --input <verifier_input.json> --receipt-id <id> [--summary]",
+        "  frankenctl verify compile-artifact --input <artifact.json> [--output <report.json>]",
+        "  frankenctl verify receipt --input <verifier_input.json> --receipt-id <id> [--summary] [--output <report.json>]",
         "  frankenctl benchmark run [--seed <u64>] [--run-id <id>] [--run-date <YYYY-MM-DD>]",
         "      [--profile small|medium|large]... [--family <name>]... [--out-dir <path>]",
         "  frankenctl benchmark score --input <publication_gate_input.json>",
@@ -4190,8 +4208,8 @@ fn doctor_usage() -> String {
 fn verify_usage() -> String {
     [
         "verify usage:",
-        "  frankenctl verify compile-artifact --input <artifact.json>",
-        "  frankenctl verify receipt --input <verifier_input.json> --receipt-id <id> [--summary]",
+        "  frankenctl verify compile-artifact --input <artifact.json> [--output <report.json>]",
+        "  frankenctl verify receipt --input <verifier_input.json> --receipt-id <id> [--summary] [--output <report.json>]",
     ]
     .join("\n")
 }
@@ -4199,7 +4217,7 @@ fn verify_usage() -> String {
 fn verify_compile_artifact_usage() -> String {
     [
         "verify compile-artifact usage:",
-        "  frankenctl verify compile-artifact --input <artifact.json>",
+        "  frankenctl verify compile-artifact --input <artifact.json> [--output <report.json>]",
     ]
     .join("\n")
 }
@@ -4207,7 +4225,7 @@ fn verify_compile_artifact_usage() -> String {
 fn verify_receipt_usage() -> String {
     [
         "verify receipt usage:",
-        "  frankenctl verify receipt --input <verifier_input.json> --receipt-id <id> [--summary]",
+        "  frankenctl verify receipt --input <verifier_input.json> --receipt-id <id> [--summary] [--output <report.json>]",
     ]
     .join("\n")
 }
@@ -4514,6 +4532,39 @@ mod tests {
     }
 
     #[test]
+    fn parse_verify_compile_artifact_command_with_output() {
+        let args = vec![
+            "verify".to_string(),
+            "compile-artifact".to_string(),
+            "--input".to_string(),
+            "artifact.json".to_string(),
+            "--output".to_string(),
+            "artifacts/verify_report.json".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("verify compile-artifact should parse");
+        match parsed {
+            CommandSpec::Verify(VerifyArgs::CompileArtifact { input, output }) => {
+                assert_eq!(input, PathBuf::from("artifact.json"));
+                assert_eq!(output, Some(PathBuf::from("artifacts/verify_report.json")));
+            }
+            other => panic!("expected verify compile-artifact command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_verify_compile_artifact_command_rejects_unknown_flag() {
+        let args = vec![
+            "verify".to_string(),
+            "compile-artifact".to_string(),
+            "--input".to_string(),
+            "artifact.json".to_string(),
+            "--bogus".to_string(),
+        ];
+        let error = parse_command(&args).expect_err("unknown flag should fail");
+        assert_eq!(error, "unknown verify compile-artifact flag `--bogus`");
+    }
+
+    #[test]
     fn parse_verify_receipt_command() {
         let args = vec![
             "verify".to_string(),
@@ -4523,6 +4574,8 @@ mod tests {
             "--receipt-id".to_string(),
             "rcpt-1".to_string(),
             "--summary".to_string(),
+            "--output".to_string(),
+            "artifacts/receipt_verdict.json".to_string(),
         ];
         let parsed = parse_command(&args).expect("verify receipt should parse");
         match parsed {
@@ -4530,10 +4583,15 @@ mod tests {
                 input,
                 receipt_id,
                 summary,
+                output,
             }) => {
                 assert_eq!(input, PathBuf::from("receipts.json"));
                 assert_eq!(receipt_id, "rcpt-1");
                 assert!(summary);
+                assert_eq!(
+                    output,
+                    Some(PathBuf::from("artifacts/receipt_verdict.json"))
+                );
             }
             other => panic!("expected verify receipt command, got {other:?}"),
         }
@@ -4605,6 +4663,45 @@ mod tests {
             ),
             "error should include parse remediation, got: {error}"
         );
+    }
+
+    #[test]
+    fn execute_verify_compile_artifact_writes_output_file() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("frankenctl-verify-compile-{}", current_unix_ns()));
+        fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+
+        let input_path = temp_dir.join("demo.js");
+        fs::write(&input_path, "const answer = 40 + 2;\n").expect("source fixture should write");
+
+        let artifact_path = temp_dir.join("demo.compile.json");
+        let compile_exit = execute_compile(CompileArgs {
+            input: input_path,
+            out: artifact_path.clone(),
+            parse_goal: ParseGoal::Script,
+            trace_id: "trace-verify-output".to_string(),
+            decision_id: "decision-verify-output".to_string(),
+            policy_id: "policy-verify-output".to_string(),
+        })
+        .expect("compile should succeed");
+        assert_eq!(compile_exit, 0);
+
+        let report_path = temp_dir.join("reports/verify_report.json");
+        let verify_exit = execute_verify(VerifyArgs::CompileArtifact {
+            input: artifact_path.clone(),
+            output: Some(report_path.clone()),
+        })
+        .expect("verify should succeed");
+
+        assert_eq!(verify_exit, 0);
+        let report: serde_json::Value =
+            load_json_file(&report_path).expect("verify report should parse");
+        let expected_artifact_path = artifact_path.display().to_string();
+        assert_eq!(
+            report["artifact_path"].as_str(),
+            Some(expected_artifact_path.as_str())
+        );
+        assert_eq!(report["passed"].as_bool(), Some(true));
     }
 
     #[test]

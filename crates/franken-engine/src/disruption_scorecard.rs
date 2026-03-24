@@ -483,6 +483,8 @@ pub enum ScorecardError {
     EmptyEvidenceBundle,
     /// Schema validation failed.
     SchemaValidationFailed { detail: String },
+    /// Duplicate evidence for the same dimension.
+    DuplicateEvidence { dimension: String },
 }
 
 impl fmt::Display for ScorecardError {
@@ -506,6 +508,9 @@ impl fmt::Display for ScorecardError {
             }
             Self::SchemaValidationFailed { detail } => {
                 write!(f, "schema validation failed: {}", detail)
+            }
+            Self::DuplicateEvidence { dimension } => {
+                write!(f, "duplicate evidence for dimension: {}", dimension)
             }
         }
     }
@@ -532,10 +537,15 @@ pub fn compute_scorecard(
         return Err(ScorecardError::EmptyEvidenceBundle);
     }
 
-    // Build evidence lookup by dimension.
+    // Build evidence lookup by dimension. Reject duplicate dimensions to
+    // prevent silent score manipulation via last-writer-wins overwriting.
     let mut evidence_by_dim: BTreeMap<String, &EvidenceInput> = BTreeMap::new();
     for ev in evidence {
-        evidence_by_dim.insert(ev.dimension.as_str().to_string(), ev);
+        let key = ev.dimension.as_str().to_string();
+        if evidence_by_dim.contains_key(&key) {
+            return Err(ScorecardError::DuplicateEvidence { dimension: key });
+        }
+        evidence_by_dim.insert(key, ev);
     }
 
     // Compute evidence bundle hash from all evidence hashes.

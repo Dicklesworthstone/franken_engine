@@ -882,7 +882,22 @@ preflight runs `cargo test --no-run` for the integration-test target instead of
 
 The replay wrapper prints the latest complete artifact bundle and warns when it
 has to skip a newer incomplete run directory, so fresh operators do not
-accidentally triage against partial output.
+accidentally triage against partial output. It also states whether the printed
+bundle came from the current failed invocation or from an older complete
+fallback directory, so operators do not mistake stale evidence for a failed
+rerun.
+
+To inspect a preserved complete bundle without rerunning the lane, point the
+wrapper at an exact run directory:
+
+```bash
+PARSER_OPERATOR_DEVELOPER_RUNBOOK_REPLAY_RUN_DIR=artifacts/parser_operator_developer_runbook/<timestamp> \
+  ./scripts/e2e/parser_operator_developer_runbook_replay.sh ci
+```
+
+The explicit run directory must already contain `run_manifest.json`,
+`events.jsonl`, `commands.txt`, and `step_logs/step_000.log` or the wrapper
+fails closed.
 
 Contract and vectors:
 

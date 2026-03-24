@@ -338,6 +338,22 @@ fn readme_references_operator_runbook_gate_and_replay() {
         readme.contains("skip a newer incomplete run directory"),
         "README missing parser operator/developer runbook incomplete-directory warning guidance"
     );
+    assert!(
+        readme.contains("PARSER_OPERATOR_DEVELOPER_RUNBOOK_REPLAY_RUN_DIR"),
+        "README missing exact-run-dir replay env var guidance"
+    );
+    assert!(
+        readme.contains("without rerunning the lane"),
+        "README missing no-rerun exact-run-dir guidance"
+    );
+    assert!(
+        readme.contains("current failed invocation"),
+        "README missing failed-run source attribution guidance"
+    );
+    assert!(
+        readme.contains("step_logs/step_000.log"),
+        "README missing exact-run-dir completeness guidance"
+    );
 }
 
 #[test]

@@ -863,6 +863,22 @@ fn rgc_911b_gate_script_manifest_reuses_contract_operator_verification_commands(
         "summary should derive blocked surfaces from the contract readiness-answer rule"
     );
     assert!(
+        script.contains(
+            "[.surface_rows[] as $row | select(($engine_ready | index($row.support_status)) != null)"
+        ),
+        "summary should compare engine-ready statuses against each row support_status"
+    );
+    assert!(
+        script.contains(
+            "[.surface_rows[] as $row | select(($engine_blocked | index($row.support_status)) != null)"
+        ),
+        "summary should compare blocked statuses against each row support_status"
+    );
+    assert!(
+        !script.contains("index(.support_status))"),
+        "summary jq should not try to read support_status from the readiness-status arrays"
+    );
+    assert!(
         script.contains("readiness_rule_summary=\"$(jq -r '.readiness_answer_contract.operator_rule_summary' \"$copied_contract_path\")\""),
         "summary should read the operator readiness rule from the copied contract artifact"
     );
@@ -1249,6 +1265,19 @@ fn rgc_911b_operator_verification_commands_reference_correct_contract() {
             .iter()
             .any(|cmd| cmd.contains("CARGO_INCREMENTAL=0")),
         "operator verification should document the non-incremental remote cargo setting"
+    );
+    assert!(
+        contract
+            .operator_verification
+            .iter()
+            .any(|cmd| cmd.contains("RGC_SUPPORT_SURFACE_CONTRACT_REPLAY_RUN_DIR=")),
+        "operator verification should include the exact-run-dir replay command for preserved bundles"
+    );
+    assert!(
+        contract.operator_verification.iter().any(|cmd| cmd.contains(
+            "RGC_SUPPORT_SURFACE_CONTRACT_REPLAY_RUN_DIR=artifacts/rgc_support_surface_contract/<timestamp>"
+        )),
+        "operator verification should document the canonical exact-run-dir replay example"
     );
     assert!(
         !contract

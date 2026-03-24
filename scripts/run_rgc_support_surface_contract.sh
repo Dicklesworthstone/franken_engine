@@ -367,14 +367,14 @@ write_summary() {
     ' "$copied_contract_path")"
   shipped_surfaces="$(jq -r '
       .readiness_answer_contract.engine_ready_when_support_status_in as $engine_ready
-      | [.surface_rows[] | select(($engine_ready | index(.support_status)) != null)
-        | "- `\(.surface_id)` — \(.entry_surface)"]
+      | [.surface_rows[] as $row | select(($engine_ready | index($row.support_status)) != null)
+        | "- `\($row.surface_id)` — \($row.entry_surface)"]
       | if length == 0 then "- None" else join("\n") end
     ' "$copied_contract_path")"
   blocked_surfaces="$(jq -r '
       .readiness_answer_contract.engine_blocked_when_support_status_in as $engine_blocked
-      | [.surface_rows[] | select(($engine_blocked | index(.support_status)) != null)
-        | "- `\(.surface_id)` — \(.support_status); \(.user_visible_diagnostic.diagnostic_surface // "diagnostic unavailable")"]
+      | [.surface_rows[] as $row | select(($engine_blocked | index($row.support_status)) != null)
+        | "- `\($row.surface_id)` — \($row.support_status); \($row.user_visible_diagnostic.diagnostic_surface // "diagnostic unavailable")"]
       | if length == 0 then "- None" else join("\n") end
     ' "$copied_contract_path")"
   readiness_rule_summary="$(jq -r '.readiness_answer_contract.operator_rule_summary' "$copied_contract_path")"

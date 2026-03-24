@@ -168,4 +168,6 @@ rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=$PWD/target_rch_rgc_su
 
 ./scripts/run_rgc_support_surface_contract.sh ci
 ./scripts/e2e/rgc_support_surface_contract_replay.sh ci
+RGC_SUPPORT_SURFACE_CONTRACT_REPLAY_RUN_DIR=artifacts/rgc_support_surface_contract/<timestamp> \
+  ./scripts/e2e/rgc_support_surface_contract_replay.sh ci
 ```

@@ -5718,7 +5718,7 @@ fn count_lexical_tokens_scalar_reference(input: &str) -> u64 {
             while index < bytes.len() {
                 let current = bytes[index];
                 if current == b'\\' {
-                    index = (index + 2).min(bytes.len());
+                    index = index.saturating_add(2).min(bytes.len());
                     continue;
                 }
                 if brace_depth > 0 {

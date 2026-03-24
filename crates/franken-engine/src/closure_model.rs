@@ -381,7 +381,7 @@ impl ScopeChain {
             ScopeKind::Block | ScopeKind::Catch => EnvironmentKind::Declarative,
         };
         let handle = EnvironmentHandle(self.next_handle);
-        self.next_handle += 1;
+        self.next_handle = self.next_handle.saturating_add(1);
         let env = EnvironmentRecord::new(handle, scope_id, scope_kind, env_kind);
         self.environments.push(env);
         self.chain.push(handle);
@@ -667,7 +667,7 @@ impl ClosureStore {
         captures: Vec<ClosureCapture>,
         creation_env: EnvironmentHandle,
     ) -> ClosureHandle {
-        let handle = ClosureHandle(self.closures.len() as u32);
+        let handle = ClosureHandle(u32::try_from(self.closures.len()).unwrap_or(u32::MAX));
         let max_capture_label = captures
             .iter()
             .map(|c| &c.label)

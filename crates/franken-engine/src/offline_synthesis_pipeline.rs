@@ -604,7 +604,12 @@ impl OfflineSynthesisPipeline {
             let (lo, hi) = match domain {
                 VarDomain::Boolean => (0, 1_000_000),
                 VarDomain::BoundedInt { lo, hi } => (*lo, *hi),
-                VarDomain::Enum { cardinality } => (0, (*cardinality as i64 - 1) * 1_000_000),
+                VarDomain::Enum { cardinality } => (
+                    0,
+                    (*cardinality as i64)
+                        .saturating_sub(1)
+                        .saturating_mul(1_000_000),
+                ),
             };
             variable_bounds.insert(name.clone(), (lo, hi));
         }

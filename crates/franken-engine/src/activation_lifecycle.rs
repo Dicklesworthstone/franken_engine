@@ -601,7 +601,7 @@ impl ActivationLifecycleController {
         }
 
         entry.state = LifecycleState::PendingActivation;
-        self.transition_count += 1;
+        self.transition_count = self.transition_count.saturating_add(1);
         self.push_transition(
             trace_id,
             component_id,
@@ -670,7 +670,7 @@ impl ActivationLifecycleController {
             health_check_passed_at: DeterministicTimestamp(tick),
         });
 
-        self.transition_count += 1;
+        self.transition_count = self.transition_count.saturating_add(1);
         self.push_transition(
             trace_id,
             component_id,
@@ -729,7 +729,7 @@ impl ActivationLifecycleController {
         entry.state = LifecycleState::Updating(RolloutPhase::Shadow);
         entry.checkpoint_seq_at_activation = Some(checkpoint_seq);
 
-        self.transition_count += 1;
+        self.transition_count = self.transition_count.saturating_add(1);
         self.push_update_event(
             trace_id,
             component_id,
@@ -754,7 +754,7 @@ impl ActivationLifecycleController {
             match current_phase.next() {
                 Some(next) => {
                     entry.state = LifecycleState::Updating(next);
-                    self.transition_count += 1;
+                    self.transition_count = self.transition_count.saturating_add(1);
                     self.push_transition(
                         trace_id,
                         component_id,
@@ -775,7 +775,7 @@ impl ActivationLifecycleController {
                         activated_at: DeterministicTimestamp(tick),
                         health_check_passed_at: DeterministicTimestamp(tick),
                     });
-                    self.transition_count += 1;
+                    self.transition_count = self.transition_count.saturating_add(1);
                     self.push_transition(
                         trace_id,
                         component_id,
@@ -855,7 +855,7 @@ impl ActivationLifecycleController {
         let old_state = entry.state;
         entry.state = LifecycleState::Inactive;
         entry.injected_secret_keys.clear();
-        self.transition_count += 1;
+        self.transition_count = self.transition_count.saturating_add(1);
         self.push_transition(
             trace_id,
             component_id,
@@ -948,7 +948,7 @@ impl ActivationLifecycleController {
 
         // Transition to RollingBack then immediately to Active with known-good.
         entry.state = LifecycleState::RollingBack;
-        self.transition_count += 1;
+        self.transition_count = self.transition_count.saturating_add(1);
         self.push_transition(
             trace_id,
             component_id,
@@ -966,7 +966,7 @@ impl ActivationLifecycleController {
         }
         entry.last_rollback_tick = Some(tick);
         entry.crash_detector.reset();
-        self.transition_count += 1;
+        self.transition_count = self.transition_count.saturating_add(1);
         self.push_transition(
             trace_id,
             component_id,

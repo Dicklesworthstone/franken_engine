@@ -267,7 +267,7 @@ impl DomainRegistry {
             },
             other => other,
         })?;
-        self.allocation_sequence += 1;
+        self.allocation_sequence = self.allocation_sequence.saturating_add(1);
         Ok(self.allocation_sequence)
     }
 
@@ -295,14 +295,18 @@ impl DomainRegistry {
         self.domains.iter()
     }
 
-    /// Total bytes used across all domains.
+    /// Total bytes used across all domains (saturating to avoid wrap).
     pub fn total_used(&self) -> u64 {
-        self.domains.values().map(|c| c.budget.used_bytes).sum()
+        self.domains
+            .values()
+            .fold(0u64, |acc, c| acc.saturating_add(c.budget.used_bytes))
     }
 
-    /// Total budget capacity across all domains.
+    /// Total budget capacity across all domains (saturating to avoid wrap).
     pub fn total_capacity(&self) -> u64 {
-        self.domains.values().map(|c| c.budget.max_bytes).sum()
+        self.domains
+            .values()
+            .fold(0u64, |acc, c| acc.saturating_add(c.budget.max_bytes))
     }
 
     /// Number of registered domains.

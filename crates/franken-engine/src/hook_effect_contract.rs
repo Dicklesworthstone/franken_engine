@@ -604,6 +604,13 @@ pub enum HookRuleViolation {
         previous_len: usize,
         current_len: usize,
     },
+    /// Dependency array presence changed between renders.
+    DepsPresenceMismatch {
+        component: String,
+        slot: HookSlotIndex,
+        previous_present: bool,
+        current_present: bool,
+    },
 }
 
 /// Validate that two consecutive renders of the same component have compatible
@@ -635,11 +642,11 @@ pub fn validate_hook_consistency(
         // Check that dependency arrays are consistently present or absent
         // across renders (React rules-of-hooks contract).
         if p.deps.is_some() != c.deps.is_some() {
-            violations.push(HookRuleViolation::DepsLengthMismatch {
+            violations.push(HookRuleViolation::DepsPresenceMismatch {
                 component: curr.component_name.clone(),
                 slot: c.index,
-                previous_len: p.deps.as_ref().map_or(0, Vec::len),
-                current_len: c.deps.as_ref().map_or(0, Vec::len),
+                previous_present: p.deps.is_some(),
+                current_present: c.deps.is_some(),
             });
         } else if let (Some(pd), Some(cd)) = (&p.deps, &c.deps)
             && pd.len() != cd.len()
@@ -1180,7 +1187,8 @@ pub fn classify_unsupported_semantics(
         | HookRuleViolation::ConditionalHookCall { .. } => {
             UnsupportedSemanticsTrigger::HookTopologyDrift
         }
-        HookRuleViolation::DepsLengthMismatch { .. } => {
+        HookRuleViolation::DepsLengthMismatch { .. }
+        | HookRuleViolation::DepsPresenceMismatch { .. } => {
             UnsupportedSemanticsTrigger::DependencyShapeDrift
         }
         HookRuleViolation::HookOutsideRender { .. } => {
@@ -1690,6 +1698,24 @@ mod tests {
             HookRuleViolation::DepsLengthMismatch {
                 previous_len: 1,
                 current_len: 2,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn validate_consistency_deps_presence_mismatch() {
+        let prev = HookManifest::new("App", vec![make_slot(0, HookKind::Effect, None)]);
+        let curr = HookManifest::new(
+            "App",
+            vec![make_slot(0, HookKind::Effect, Some(Vec::new()))],
+        );
+        let violations = validate_hook_consistency(&prev, &curr);
+        assert!(violations.iter().any(|v| matches!(
+            v,
+            HookRuleViolation::DepsPresenceMismatch {
+                previous_present: false,
+                current_present: true,
                 ..
             }
         )));
@@ -2208,6 +2234,12 @@ mod tests {
             previous_len: 2,
             current_len: 1,
         };
+        let deps_presence = HookRuleViolation::DepsPresenceMismatch {
+            component: "App".into(),
+            slot: HookSlotIndex(1),
+            previous_present: false,
+            current_present: true,
+        };
         let outside = HookRuleViolation::HookOutsideRender {
             component: "App".into(),
             slot: HookSlotIndex(1),
@@ -2220,6 +2252,10 @@ mod tests {
         );
         assert_eq!(
             classify_unsupported_semantics(&deps),
+            UnsupportedSemanticsTrigger::DependencyShapeDrift
+        );
+        assert_eq!(
+            classify_unsupported_semantics(&deps_presence),
             UnsupportedSemanticsTrigger::DependencyShapeDrift
         );
         assert_eq!(

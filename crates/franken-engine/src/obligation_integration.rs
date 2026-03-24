@@ -337,7 +337,7 @@ impl ObligationTracker {
         // Register obligation in the cell's region
         cell.register_obligation(&operation_id, &description);
 
-        self.sequence += 1;
+        self.sequence = self.sequence.saturating_add(1);
 
         let op = TwoPhaseOperation {
             operation_id: operation_id.clone(),

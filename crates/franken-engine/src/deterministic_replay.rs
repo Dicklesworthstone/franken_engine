@@ -833,7 +833,8 @@ impl IncidentBundleBuilder {
         if self.include_trace
             && let Some(t) = trace
         {
-            let data = serde_json::to_vec(t).unwrap_or_default();
+            let data = serde_json::to_vec(t)
+                .expect("nondeterminism trace must serialize for incident bundle");
             bundle.add_artifact(IncidentArtifact::new(
                 "nondeterminism_trace",
                 ArtifactKind::NondeterminismTrace,
@@ -844,7 +845,8 @@ impl IncidentBundleBuilder {
         if self.include_failovers
             && let Some(fc) = failover
         {
-            let data = serde_json::to_vec(&fc.records).unwrap_or_default();
+            let data = serde_json::to_vec(&fc.records)
+                .expect("failover records must serialize for incident bundle");
             bundle.add_artifact(IncidentArtifact::new(
                 "failover_log",
                 ArtifactKind::FailoverLog,
@@ -856,7 +858,8 @@ impl IncidentBundleBuilder {
             && let Some(re) = replay
             && !re.divergences.is_empty()
         {
-            let data = serde_json::to_vec(&re.divergences).unwrap_or_default();
+            let data = serde_json::to_vec(&re.divergences)
+                .expect("divergences must serialize for incident bundle");
             bundle.add_artifact(IncidentArtifact::new(
                 "divergence_report",
                 ArtifactKind::DivergenceReport,

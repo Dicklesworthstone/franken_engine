@@ -196,6 +196,11 @@ impl ThresholdSigningPolicy {
         for share in &input.authorized_shares {
             canonical.extend_from_slice(share.as_bytes());
         }
+        // Include scoped_operations (BTreeSet, deterministic iteration).
+        for op in &input.scoped_operations {
+            canonical.extend_from_slice(op.as_bytes());
+        }
+        canonical.extend_from_slice(input.zone.as_bytes());
         canonical.extend_from_slice(&input.epoch.as_u64().to_be_bytes());
 
         let policy_id = engine_object_id::derive_id(

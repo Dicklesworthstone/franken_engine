@@ -565,10 +565,16 @@ impl EvidenceBundle {
         for h in &prov_hashes {
             hasher.update(h.as_bytes());
         }
-        let mut run_ids: Vec<&String> = self.runs.iter().map(|r| &r.run_id).collect();
-        run_ids.sort();
-        for id in &run_ids {
-            hasher.update(id.as_bytes());
+        let mut sorted_runs: Vec<&BenchmarkRun> = self.runs.iter().collect();
+        sorted_runs.sort_by(|a, b| a.run_id.cmp(&b.run_id));
+        for run in &sorted_runs {
+            hasher.update(run.run_id.as_bytes());
+            hasher.update(run.workload_id.as_bytes());
+            hasher.update(run.duration_us.to_le_bytes());
+            hasher.update(run.peak_memory_bytes.to_le_bytes());
+            hasher.update(run.gc_pause_us.to_le_bytes());
+            hasher.update([u8::from(run.is_warmup)]);
+            hasher.update(run.iteration.to_le_bytes());
         }
         let mut verdict_hashes: Vec<ContentHash> = self
             .parity_verdicts
@@ -578,6 +584,17 @@ impl EvidenceBundle {
         verdict_hashes.sort();
         for h in &verdict_hashes {
             hasher.update(h.as_bytes());
+        }
+        hasher.update(
+            serde_json::to_string(&self.status)
+                .unwrap_or_default()
+                .as_bytes(),
+        );
+        if let Some(ref env) = self.reference_environment {
+            hasher.update(env.snapshot_hash.as_bytes());
+        }
+        for drift in &self.environment_drifts {
+            hasher.update(drift.as_bytes());
         }
         self.bundle_hash = ContentHash::compute(&hasher.finalize());
     }

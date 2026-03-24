@@ -243,8 +243,53 @@ fn rgc_408b_runner_script_uses_rch_and_live_bead_snapshot() {
 fn rgc_408b_replay_wrapper_requires_complete_bundle() {
     let script = load_replay_script();
 
+    assert!(
+        script.contains("latest_complete_run_dir()"),
+        "replay wrapper should locate the latest complete artifact directory"
+    );
+    assert!(
+        script.contains("RGC_ENGINE_PRODUCT_BLOCKER_LEDGER_REPLAY_RUN_DIR"),
+        "replay wrapper should support exact-run-dir targeting for preserved bundles"
+    );
+    assert!(
+        script.contains("run_dir_is_complete()"),
+        "replay wrapper should centralize complete-bundle checks"
+    );
+    assert!(
+        script.contains("warn_about_failed_gate_replay_source()"),
+        "replay wrapper should centralize failed-gate replay warnings"
+    );
+    assert!(
+        script.contains("pre_run_latest_artifact_dir_path"),
+        "replay wrapper should remember the pre-run latest artifact directory so failed reruns can distinguish previous bundles from current output"
+    );
+    assert!(
+        script.contains("if [[ -z \"${explicit_run_dir}\" && \"${mode}\" != \"show\" ]]; then"),
+        "replay wrapper should skip rerunning the gate when an exact run directory is provided or show mode is requested"
+    );
+    assert!(
+        script.contains("explicit run directory is incomplete"),
+        "replay wrapper should fail closed on incomplete exact-run-dir targets"
+    );
+    assert!(
+        script.contains("newest directory ${latest_artifact_dir_path} is incomplete"),
+        "replay wrapper should warn when it skips an incomplete newest directory"
+    );
+    assert!(
+        script.contains("replay output reflects latest complete run directory"),
+        "replay wrapper should warn when it falls back to an older latest-complete bundle after a failed rerun"
+    );
+    assert!(
+        script.contains("replay output reflects previous latest complete run directory"),
+        "replay wrapper should distinguish failed reruns that never produced a new bundle from the current-run case"
+    );
+    assert!(
+        script.contains("replay output reflects current run directory"),
+        "replay wrapper should distinguish failed reruns that still produced the current complete bundle"
+    );
     for needle in [
         "run_manifest.json",
+        "trace_ids.json",
         "engine_product_blocker_ledger.json",
         "cohort_readiness_rollup.json",
         "owner_routing_report.json",
@@ -252,6 +297,22 @@ fn rgc_408b_replay_wrapper_requires_complete_bundle() {
         "latest owner routing report",
     ] {
         assert!(script.contains(needle), "replay wrapper missing {needle}");
+    }
+}
+
+#[test]
+fn rgc_408b_doc_describes_replay_modes_and_exact_run_dir() {
+    let path = repo_root().join("docs/RGC_ENGINE_PRODUCT_BLOCKER_LEDGER_V1.md");
+    let doc = read_to_string(&path);
+
+    for needle in [
+        "./scripts/e2e/rgc_engine_product_blocker_ledger_replay.sh show",
+        "./scripts/e2e/rgc_engine_product_blocker_ledger_replay.sh ci",
+        "RGC_ENGINE_PRODUCT_BLOCKER_LEDGER_REPLAY_RUN_DIR=artifacts/rgc_engine_product_blocker_ledger/<timestamp>",
+        "fails closed on incomplete explicit run directories",
+        "previous latest complete bundle",
+    ] {
+        assert!(doc.contains(needle), "replay workflow doc missing {needle}");
     }
 }
 

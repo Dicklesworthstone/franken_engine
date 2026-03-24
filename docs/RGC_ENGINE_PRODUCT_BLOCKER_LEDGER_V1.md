@@ -112,15 +112,34 @@ jq '.verdict, .release_blocker_count, .ready_cohort_count' \
 
 ## Replay Workflow
 
-Use the replay wrapper to rerun the lane and print the latest complete bundle:
+Use the replay wrapper in one of two modes:
 
 ```bash
 ./scripts/e2e/rgc_engine_product_blocker_ledger_replay.sh show
 ```
 
-The replay wrapper refuses incomplete newest directories and falls back to the
-latest complete run directory instead. A complete replayable bundle now
-requires:
+The `show` mode prints the latest complete bundle without rerunning cargo.
+
+To rerun the lane and then print the selected bundle, use:
+
+```bash
+./scripts/e2e/rgc_engine_product_blocker_ledger_replay.sh ci
+```
+
+To inspect an exact preserved bundle without rerunning the gate, use:
+
+```bash
+RGC_ENGINE_PRODUCT_BLOCKER_LEDGER_REPLAY_RUN_DIR=artifacts/rgc_engine_product_blocker_ledger/<timestamp> \
+  ./scripts/e2e/rgc_engine_product_blocker_ledger_replay.sh ci
+```
+
+The replay wrapper fails closed on incomplete explicit run directories. When no
+explicit directory is provided, it refuses incomplete newest directories and
+falls back to the latest complete run directory instead. If a rerun fails, the
+wrapper also warns whether the printed output reflects the current run
+directory, the previous latest complete bundle, or an older latest-complete
+bundle chosen because the newest directory is incomplete. A complete replayable
+bundle now requires:
 
 - `run_manifest.json`
 - `events.jsonl`

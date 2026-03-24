@@ -847,6 +847,15 @@ fn frankenctl_compile_then_verify_compile_artifact_round_trip() {
         compile_json["schema_version"].as_str(),
         Some("franken-engine.frankenctl.v1")
     );
+    assert_eq!(compile_json["trace_id"].as_str(), Some("trace-cli-compile"));
+    assert_eq!(
+        compile_json["decision_id"].as_str(),
+        Some("decision-cli-compile")
+    );
+    assert_eq!(
+        compile_json["policy_id"].as_str(),
+        Some("policy-cli-compile")
+    );
     assert_eq!(compile_json["parse_goal"].as_str(), Some("script"));
     assert_eq!(
         compile_json["artifact_path"].as_str(),
@@ -858,6 +867,18 @@ fn frankenctl_compile_then_verify_compile_artifact_round_trip() {
     );
     assert_eq!(
         compile_json["source_ingestion"]["normalization_applied"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        compile_json["observability_mode"]["mode_id"].as_str(),
+        Some("default_capture")
+    );
+    assert_eq!(
+        compile_json["observability_mode"]["capture_semantics"].as_str(),
+        Some("default_mixed_capture")
+    );
+    assert_eq!(
+        compile_json["observability_mode"]["lossless"].as_bool(),
         Some(false)
     );
 
@@ -899,8 +920,21 @@ fn frankenctl_compile_then_verify_compile_artifact_round_trip() {
         verify_json["schema_version"].as_str(),
         Some("franken-engine.frankenctl.v1")
     );
+    assert_eq!(verify_json["trace_id"].as_str(), Some("trace-cli-compile"));
+    assert_eq!(
+        verify_json["decision_id"].as_str(),
+        Some("decision-cli-compile")
+    );
+    assert_eq!(
+        verify_json["policy_id"].as_str(),
+        Some("policy-cli-compile")
+    );
     assert_eq!(verify_json["passed"].as_bool(), Some(true));
     assert_eq!(verify_json["errors"].as_array().map(Vec::len), Some(0));
+    assert_eq!(
+        verify_json["observability_mode"]["mode_id"].as_str(),
+        Some("default_capture")
+    );
 
     let _ = fs::remove_file(source_path);
     let _ = fs::remove_file(artifact_path);
@@ -1012,6 +1046,7 @@ fn frankenctl_run_writes_execution_report() {
     assert_eq!(stdout_json["extension_id"].as_str(), Some("ext-cli-run"));
     assert!(stdout_json["trace_id"].as_str().is_some());
     assert!(stdout_json["decision_id"].as_str().is_some());
+    assert_eq!(stdout_json["policy_id"].as_str(), Some("default-policy"));
     assert_eq!(
         stdout_json["source_ingestion"]["source_language"].as_str(),
         Some("javascript")
@@ -1029,11 +1064,20 @@ fn frankenctl_run_writes_execution_report() {
         Some("default_deterministic_profile")
     );
     assert!(stdout_json["containment_action"].as_str().is_some());
+    assert_eq!(
+        stdout_json["observability_mode"]["mode_id"].as_str(),
+        Some("default_capture")
+    );
+    assert_eq!(
+        stdout_json["observability_mode"]["lossless"].as_bool(),
+        Some(false)
+    );
 
     let report_bytes = fs::read(&report_path).expect("run report should be written");
     let report_json: serde_json::Value =
         serde_json::from_slice(&report_bytes).expect("report should parse as json");
     assert_eq!(report_json["extension_id"].as_str(), Some("ext-cli-run"));
+    assert_eq!(report_json["policy_id"].as_str(), Some("default-policy"));
     assert_eq!(
         report_json["lane"].as_str(),
         Some("baseline_deterministic_profile")
@@ -1049,6 +1093,10 @@ fn frankenctl_run_writes_execution_report() {
     assert_eq!(
         report_json["source_ingestion"]["normalization_applied"].as_bool(),
         Some(false)
+    );
+    assert_eq!(
+        report_json["observability_mode"]["mode_id"].as_str(),
+        Some("default_capture")
     );
 
     let _ = fs::remove_file(source_path);
@@ -1170,15 +1218,35 @@ fn frankenctl_replay_run_replays_trace_without_divergence() {
         stdout_json["schema_version"].as_str(),
         Some("franken-engine.frankenctl.v1")
     );
+    assert_eq!(
+        stdout_json["trace_id"].as_str(),
+        Some("frankenctl-replay-trace-session-cli-replay")
+    );
+    assert_eq!(
+        stdout_json["decision_id"].as_str(),
+        Some("frankenctl-replay-decision-session-cli-replay")
+    );
+    assert_eq!(
+        stdout_json["policy_id"].as_str(),
+        Some("frankenctl.replay.strict.v1")
+    );
     assert_eq!(stdout_json["mode"].as_str(), Some("strict"));
     assert_eq!(stdout_json["event_count"].as_u64(), Some(2));
     assert_eq!(stdout_json["divergence_count"].as_u64(), Some(0));
     assert_eq!(stdout_json["critical_divergences"].as_u64(), Some(0));
     assert_eq!(stdout_json["complete"].as_bool(), Some(true));
+    assert_eq!(
+        stdout_json["observability_mode"]["mode_id"].as_str(),
+        Some("default_capture")
+    );
 
     let report_bytes = fs::read(&replay_report_path).expect("replay report should be written");
     let report_json: serde_json::Value =
         serde_json::from_slice(&report_bytes).expect("replay report should parse as json");
+    assert_eq!(
+        report_json["trace_id"].as_str(),
+        Some("frankenctl-replay-trace-session-cli-replay")
+    );
     assert_eq!(
         report_json["session_id"].as_str(),
         Some("session-cli-replay")
@@ -1504,6 +1572,12 @@ fn frankenctl_doctor_outputs_json_and_writes_support_bundle() {
         String::from_utf8_lossy(&output.stderr)
     );
     let json = parse_stdout_json(&output);
+    assert_eq!(json["trace_id"].as_str(), Some("trace-frankenctl-doctor"));
+    assert_eq!(
+        json["decision_id"].as_str(),
+        Some("decision-frankenctl-doctor")
+    );
+    assert_eq!(json["policy_id"].as_str(), Some("policy-frankenctl-doctor"));
     assert_eq!(json["preflight_verdict"].as_str(), Some("green"));
     assert_eq!(json["readiness"].as_str(), Some("ready"));
     assert_eq!(json["rollout_recommendation"].as_str(), Some("promote"));
@@ -1514,6 +1588,15 @@ fn frankenctl_doctor_outputs_json_and_writes_support_bundle() {
         Some(0)
     );
     assert_eq!(json["signal_counts"]["platform_signals"].as_u64(), Some(0));
+    assert_eq!(
+        json["observability_mode"]["mode_id"].as_str(),
+        Some("support_bundle_export")
+    );
+    assert_eq!(
+        json["observability_mode"]["capture_semantics"].as_str(),
+        Some("lossless_support_bundle_export")
+    );
+    assert_eq!(json["observability_mode"]["lossless"].as_bool(), Some(true));
     assert!(
         out_dir
             .join("support_bundle/preflight_report.json")
@@ -1573,6 +1656,10 @@ fn frankenctl_doctor_can_inline_compatibility_scenario_report() {
         Some(1)
     );
     assert_eq!(json["blocked"].as_bool(), Some(true));
+    assert_eq!(
+        json["observability_mode"]["mode_id"].as_str(),
+        Some("default_capture")
+    );
     assert!(
         json["rollout_decision"]["merged_signals"]
             .as_array()

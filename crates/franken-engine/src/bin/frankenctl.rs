@@ -338,12 +338,16 @@ struct CompileArtifact {
 #[derive(Debug, Clone, Serialize)]
 struct CompileCommandOutput {
     schema_version: String,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
     artifact_path: String,
     parse_goal: String,
     source_ingestion: SourceIngestionSummary,
     hashes: CompileArtifactHashes,
     lowering_event_count: usize,
     lowering_witness_count: usize,
+    observability_mode: ObservabilityModeOutput,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -352,6 +356,7 @@ struct RunCommandOutput {
     extension_id: String,
     trace_id: String,
     decision_id: String,
+    policy_id: String,
     source_ingestion: SourceIngestionSummary,
     lane: String,
     lane_reason: String,
@@ -363,14 +368,19 @@ struct RunCommandOutput {
     cell_events: usize,
     saga_id: Option<String>,
     finalize_result: Option<FinalizeResult>,
+    observability_mode: ObservabilityModeOutput,
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct CompileArtifactVerificationOutput {
     schema_version: String,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
     artifact_path: String,
     passed: bool,
     errors: Vec<String>,
+    observability_mode: ObservabilityModeOutput,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -463,6 +473,13 @@ struct BenchmarkBundleRuntime {
     lane: String,
     safe_mode_enabled: bool,
     feature_flags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ObservabilityModeOutput {
+    mode_id: String,
+    capture_semantics: String,
+    lossless: bool,
 }
 
 fn benchmark_bundle_runtime() -> BenchmarkBundleRuntime {
@@ -662,6 +679,9 @@ struct BenchmarkBundleRepoState {
 #[derive(Debug, Clone, Serialize)]
 struct ReplayCommandOutput {
     schema_version: String,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
     trace_path: String,
     mode: String,
     session_id: String,
@@ -670,6 +690,7 @@ struct ReplayCommandOutput {
     divergence_count: usize,
     critical_divergences: usize,
     complete: bool,
+    observability_mode: ObservabilityModeOutput,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -682,6 +703,9 @@ struct DoctorSignalCounts {
 #[derive(Debug, Clone, Serialize)]
 struct DoctorCommandOutput {
     schema_version: String,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
     input_path: String,
     workload_id: String,
     package_name: String,
@@ -696,6 +720,7 @@ struct DoctorCommandOutput {
     preflight: PreflightDoctorOutput,
     onboarding_scorecard: OnboardingScorecardOutput,
     rollout_decision: RolloutDecisionArtifactOutput,
+    observability_mode: ObservabilityModeOutput,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1539,12 +1564,16 @@ fn execute_compile(args: CompileArgs) -> Result<i32, String> {
 
     let output = CompileCommandOutput {
         schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
+        trace_id: artifact.trace_id.clone(),
+        decision_id: artifact.decision_id.clone(),
+        policy_id: artifact.policy_id.clone(),
         artifact_path: args.out.display().to_string(),
         parse_goal: artifact.parse_goal,
         source_ingestion: artifact.source_ingestion.clone(),
         hashes,
         lowering_event_count: artifact.lowering.events.len(),
         lowering_witness_count: artifact.lowering.witnesses.len(),
+        observability_mode: default_capture_observability_mode(),
     };
     print_json(&output)?;
     Ok(0)
@@ -1582,6 +1611,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         parse_goal: args.parse_goal,
         ..OrchestratorConfig::default()
     };
+    let policy_id = config.policy_id.clone();
     let mut orchestrator = ExecutionOrchestrator::new(config);
     let result = orchestrator
         .execute(&package)
@@ -1592,6 +1622,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         extension_id: result.extension_id,
         trace_id: result.trace_id,
         decision_id: result.decision_id,
+        policy_id,
         source_ingestion: prepared.source_ingestion,
         lane: result.lane.to_string(),
         lane_reason: result.lane_reason.to_string(),
@@ -1603,6 +1634,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         cell_events: result.cell_events.len(),
         saga_id: result.saga_id,
         finalize_result: result.finalize_result,
+        observability_mode: default_capture_observability_mode(),
     };
 
     if let Some(out) = args.out {
@@ -1678,6 +1710,9 @@ fn execute_doctor(args: DoctorArgs) -> Result<i32, String> {
 
     let output = DoctorCommandOutput {
         schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
+        trace_id: input.trace_id.clone(),
+        decision_id: input.decision_id.clone(),
+        policy_id: input.policy_id.clone(),
         input_path: args.input.display().to_string(),
         workload_id: onboarding_scorecard.workload_id.clone(),
         package_name: onboarding_scorecard.package_name.clone(),
@@ -1696,6 +1731,11 @@ fn execute_doctor(args: DoctorArgs) -> Result<i32, String> {
         preflight,
         onboarding_scorecard,
         rollout_decision,
+        observability_mode: if args.out_dir.is_some() {
+            support_bundle_export_observability_mode()
+        } else {
+            default_capture_observability_mode()
+        },
     };
 
     if let Some(out_dir) = &args.out_dir {
@@ -1737,9 +1777,13 @@ fn execute_verify(args: VerifyArgs) -> Result<i32, String> {
             let errors = validate_compile_artifact(&artifact);
             let report = CompileArtifactVerificationOutput {
                 schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
+                trace_id: artifact.trace_id.clone(),
+                decision_id: artifact.decision_id.clone(),
+                policy_id: artifact.policy_id.clone(),
                 artifact_path: input.display().to_string(),
                 passed: errors.is_empty(),
                 errors,
+                observability_mode: default_capture_observability_mode(),
             };
             if let Some(path) = &output_path {
                 write_json_file(path, &report)?;
@@ -3369,6 +3413,7 @@ fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
     trace
         .validate_for_replay()
         .map_err(|error| format!("replay failed before sequence 0: {error}"))?;
+    let (trace_id, decision_id, policy_id) = cli_replay_ids(&trace.session_id, args.mode);
     let replay_events = trace.events.clone();
     let session_id = trace.session_id.clone();
     let event_count = trace.events.len();
@@ -3382,6 +3427,9 @@ fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
 
     let output = ReplayCommandOutput {
         schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
+        trace_id,
+        decision_id,
+        policy_id,
         trace_path: args.trace.display().to_string(),
         mode: replay_mode_name(args.mode).to_string(),
         session_id,
@@ -3390,6 +3438,7 @@ fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
         divergence_count: engine.divergence_count(),
         critical_divergences: engine.critical_divergences(),
         complete: engine.is_complete(),
+        observability_mode: default_capture_observability_mode(),
     };
 
     if let Some(path) = args.out {
@@ -3843,6 +3892,33 @@ fn cli_source_ingestion_ids(command: &str, source: &str) -> (String, String, Str
         format!("frankenctl-{command}-decision-{trace_suffix}"),
         format!("frankenctl-{command}.ts-ingestion.v1"),
     )
+}
+
+fn cli_replay_ids(session_id: &str, mode: ReplayMode) -> (String, String, String) {
+    (
+        format!("frankenctl-replay-trace-{session_id}"),
+        format!("frankenctl-replay-decision-{session_id}"),
+        format!(
+            "frankenctl.replay.{}.v1",
+            replay_mode_name(mode).replace('-', "_")
+        ),
+    )
+}
+
+fn default_capture_observability_mode() -> ObservabilityModeOutput {
+    ObservabilityModeOutput {
+        mode_id: "default_capture".to_string(),
+        capture_semantics: "default_mixed_capture".to_string(),
+        lossless: false,
+    }
+}
+
+fn support_bundle_export_observability_mode() -> ObservabilityModeOutput {
+    ObservabilityModeOutput {
+        mode_id: "support_bundle_export".to_string(),
+        capture_semantics: "lossless_support_bundle_export".to_string(),
+        lossless: true,
+    }
 }
 
 fn source_ingestion_metadata(

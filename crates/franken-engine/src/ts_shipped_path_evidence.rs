@@ -9,6 +9,7 @@
 //! in the result faithfully records what happened.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -89,6 +90,21 @@ pub enum ShippedPathActualOutcome {
 pub enum ShippedPathVerdict {
     Pass,
     Fail,
+}
+
+impl ShippedPathVerdict {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Fail => "fail",
+        }
+    }
+}
+
+impl fmt::Display for ShippedPathVerdict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -471,7 +487,7 @@ pub fn write_shipped_path_evidence_bundle(
             event: "shipped_path_specimen_evaluated".into(),
             policy_id: TS_SHIPPED_PATH_POLICY_ID.into(),
             specimen_id: Some(ev.specimen_id.clone()),
-            verdict: Some(format!("{:?}", ev.verdict)),
+            verdict: Some(ev.verdict.as_str().to_string()),
             detail: ev.error_detail.clone(),
         });
     }

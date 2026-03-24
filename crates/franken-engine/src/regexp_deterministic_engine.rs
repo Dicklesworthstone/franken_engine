@@ -1380,6 +1380,21 @@ pub enum RegExpVerdict {
     Fail,
 }
 
+impl RegExpVerdict {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Fail => "fail",
+        }
+    }
+}
+
+impl fmt::Display for RegExpVerdict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RegExpSpecimenEvidence {
     pub specimen_id: String,
@@ -1957,7 +1972,7 @@ pub fn write_regexp_evidence_bundle(out_dir: &Path) -> std::io::Result<RegExpBun
             event: "specimen_result".to_string(),
             policy_id: REGEXP_ENGINE_POLICY_ID.to_string(),
             specimen_id: Some(ev.specimen_id.clone()),
-            verdict: Some(format!("{:?}", ev.verdict)),
+            verdict: Some(ev.verdict.as_str().to_string()),
             detail: ev.error_detail.clone(),
         };
         events_content.push_str(

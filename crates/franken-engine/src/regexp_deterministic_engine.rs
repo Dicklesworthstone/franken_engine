@@ -1247,11 +1247,11 @@ pub fn compile_regexp(
     };
 
     let automata_hash_input = format!(
-        "automata:{}:{}:{}:{:?}:{:?}",
+        "automata:{}:{}:{}:{}:{}",
         pattern,
         nfa_state_count,
         tier.as_str(),
-        flags,
+        serde_json::to_string(&flags).unwrap_or_default(),
         epoch.as_u64()
     );
     let automata_hash = hex_encode(ContentHash::compute(automata_hash_input.as_bytes()).as_bytes());
@@ -1874,7 +1874,12 @@ fn run_single_regexp_specimen(specimen: &RegExpSpecimen) -> RegExpSpecimenEviden
         }
     }
 
-    let evidence_hash_input = format!("evidence:{}:{}:{:?}", specimen.specimen_id, actual, verdict);
+    let evidence_hash_input = format!(
+        "evidence:{}:{}:{}",
+        specimen.specimen_id,
+        actual,
+        serde_json::to_string(&verdict).unwrap_or_default(),
+    );
 
     RegExpSpecimenEvidence {
         specimen_id: specimen.specimen_id.clone(),

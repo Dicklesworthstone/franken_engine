@@ -238,7 +238,7 @@ impl ControllerConfig {
     /// Compute a content hash of this config for change detection.
     pub fn content_hash(&self) -> String {
         let canonical = format!(
-            "{}:{}:{}:{}:{}:{}:{}:{:?}:{}",
+            "{}:{}:{}:{}:{}:{}:{}:{}:{}",
             self.schema_version,
             self.actuator,
             self.mode,
@@ -246,7 +246,8 @@ impl ControllerConfig {
             self.ki_millionths,
             self.integrator_clamp_ns,
             self.output_clamp_millionths,
-            self.deadband_override_ns,
+            self.deadband_override_ns
+                .map_or("none".to_string(), |v| v.to_string()),
             self.warmup_epochs,
         );
         hex_encode(ContentHash::compute(canonical.as_bytes()).as_bytes())

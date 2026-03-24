@@ -951,7 +951,13 @@ pub fn summarize(results: &[FalsificationResult]) -> SynthesisReport {
     h.update(survived_claims.to_le_bytes());
     if let Some(ref sc) = strongest_counterexample {
         h.update(sc.workload.program_hash.as_bytes());
+        h.update(sc.workload.workload_id.as_bytes());
+        h.update(sc.workload.size_bytes.to_le_bytes());
         h.update(sc.gap_fraction.to_le_bytes());
+        h.update(sc.severity.to_string().as_bytes());
+        h.update(sc.claim_id.as_bytes());
+        h.update(sc.expected_millionths.to_le_bytes());
+        h.update(sc.observed_millionths.to_le_bytes());
     }
     let receipt_hash = ContentHash::compute(&h.finalize());
 

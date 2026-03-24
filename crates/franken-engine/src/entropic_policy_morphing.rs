@@ -1305,7 +1305,7 @@ fn run_single_morphing_specimen(specimen: &MorphingSpecimen) -> MorphingSpecimen
     }
 
     let hash_input = format!(
-        "{}:{}:{:?}",
+        "{}:{}:{}",
         specimen.specimen_id, verdict as u8, actual_outcome_str,
     );
     MorphingSpecimenEvidence {

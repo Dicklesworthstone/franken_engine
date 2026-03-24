@@ -264,7 +264,7 @@ impl LawMiningCatalog {
             };
             scope.recompute_hash();
 
-            let kind_tag = format!("{:?}", accumulator.kind);
+            let kind_tag = serde_json::to_string(&accumulator.kind).unwrap_or_default();
             let candidate_id = hashed_id("law", &[&kind_tag, &accumulator.statement]);
             let provenance_id = hashed_id("prov", &[&candidate_id]);
             let supporting_source_ids = accumulator

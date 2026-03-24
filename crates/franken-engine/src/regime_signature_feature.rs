@@ -1131,8 +1131,11 @@ fn run_single_specimen(specimen: &SignatureSpecimen) -> SignatureSpecimenEvidenc
     }
 
     let hash_input = format!(
-        "{}:{}:{:?}:{:?}",
-        specimen.specimen_id, verdict as u8, signature_valid, classified_regime,
+        "{}:{}:{}:{}",
+        specimen.specimen_id,
+        verdict as u8,
+        serde_json::to_string(&signature_valid).unwrap_or_default(),
+        serde_json::to_string(&classified_regime).unwrap_or_default(),
     );
 
     SignatureSpecimenEvidence {

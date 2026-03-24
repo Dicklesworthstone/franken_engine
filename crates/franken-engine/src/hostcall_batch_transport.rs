@@ -1221,6 +1221,15 @@ pub enum BatchTransportVerdict {
     Fail,
 }
 
+impl fmt::Display for BatchTransportVerdict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pass => f.write_str("pass"),
+            Self::Fail => f.write_str("fail"),
+        }
+    }
+}
+
 fn specimen_hash(name: &str, verdict: BatchTransportVerdict) -> ContentHash {
     let mut buf = Vec::new();
     buf.extend_from_slice(b"franken::batch_transport_specimen::");
@@ -1603,8 +1612,8 @@ pub fn write_batch_transport_evidence_bundle(dir: &std::path::Path) -> std::io::
             serde_json::json!({
                 "name": s.name,
                 "family": s.family.to_string(),
-                "verdict": format!("{:?}", s.verdict),
-                "content_hash": format!("{:?}", s.content_hash),
+                "verdict": s.verdict.to_string(),
+                "content_hash": s.content_hash.to_hex(),
             })
         })
         .collect();
@@ -1617,7 +1626,7 @@ pub fn write_batch_transport_evidence_bundle(dir: &std::path::Path) -> std::io::
         "families_covered": result.families_covered.iter().map(|f| f.to_string()).collect::<Vec<_>>(),
         "all_pass": result.all_pass,
         "pass_count": result.pass_count,
-        "content_hash": format!("{:?}", result.content_hash),
+        "content_hash": result.content_hash.to_hex(),
     });
     let man_json = serde_json::to_string_pretty(&manifest).map_err(std::io::Error::other)?;
     std::fs::write(dir.join("batch_transport_manifest.json"), man_json)?;

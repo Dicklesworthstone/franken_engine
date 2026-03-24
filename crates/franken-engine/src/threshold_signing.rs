@@ -198,7 +198,7 @@ impl ThresholdSigningPolicy {
         }
         // Include scoped_operations (BTreeSet, deterministic iteration).
         for op in &input.scoped_operations {
-            canonical.extend_from_slice(op.as_bytes());
+            canonical.extend_from_slice(op.to_string().as_bytes());
         }
         canonical.extend_from_slice(input.zone.as_bytes());
         canonical.extend_from_slice(&input.epoch.as_u64().to_be_bytes());

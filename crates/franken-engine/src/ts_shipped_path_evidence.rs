@@ -1,4 +1,3 @@
-#![forbid(unsafe_code)]
 
 //! Evidence harness proving that TypeScript normalization is correctly wired
 //! into the shipped execution paths (orchestrator `execute()` pipeline).
@@ -9,6 +8,7 @@
 //! in the result faithfully records what happened.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};

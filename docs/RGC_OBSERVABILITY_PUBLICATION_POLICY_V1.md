@@ -100,6 +100,15 @@ The replay wrapper is:
 ./scripts/e2e/rgc_observability_publication_policy_replay.sh ci
 ```
 
+The replay wrapper resolves the latest complete artifact bundle, warns when it
+has to skip a newer incomplete run directory, and supports exact preserved-run
+inspection without rerunning the lane:
+
+```bash
+RGC_OBSERVABILITY_PUBLICATION_POLICY_REPLAY_RUN_DIR=artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP> \
+  ./scripts/e2e/rgc_observability_publication_policy_replay.sh ci
+```
+
 ## Operator Verification
 
 ```bash
@@ -109,6 +118,8 @@ jq empty docs/rgc_observability_publication_policy_v1.json
 
 cat artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP>/trace_ids
 ls artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP>/step_logs
+cat artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP>/step_logs/step-01.log
 
-./scripts/e2e/rgc_observability_publication_policy_replay.sh ci
+RGC_OBSERVABILITY_PUBLICATION_POLICY_REPLAY_RUN_DIR=artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP> \
+  ./scripts/e2e/rgc_observability_publication_policy_replay.sh ci
 ```

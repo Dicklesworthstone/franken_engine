@@ -32,7 +32,8 @@ decision_id="decision-rgc-observability-publication-policy-${timestamp}"
 policy_id="policy-rgc-observability-publication-v1"
 component="rgc_observability_publication_policy_gate"
 scenario_id="rgc-066c"
-replay_command="./scripts/e2e/rgc_observability_publication_policy_replay.sh ${mode}"
+replay_command="RGC_OBSERVABILITY_PUBLICATION_POLICY_REPLAY_RUN_DIR=\"${run_dir}\" ./scripts/e2e/rgc_observability_publication_policy_replay.sh ${mode}"
+first_step_log_path="${step_logs_dir}/step-01.log"
 
 mkdir -p "$run_dir" "$step_logs_dir"
 
@@ -63,6 +64,12 @@ rch_reject_local_fallback() {
 declare -a commands_run=()
 failed_command=""
 manifest_written=false
+
+emit_operator_verification_entry() {
+  local command_text="$1"
+  local suffix="${2:-}"
+  echo "    \"$(parser_frontier_json_escape "${command_text}")\"${suffix}"
+}
 
 run_step() {
   local command_text="$1"
@@ -200,6 +207,7 @@ EOF
     echo "    \"commands\": \"${commands_path}\","
     echo "    \"trace_ids\": \"${trace_ids_path}\","
     echo "    \"step_logs\": \"${step_logs_dir}\","
+    echo "    \"first_step_log\": \"${first_step_log_path}\","
     echo "    \"observability_budget_sentinel_report\": \"${budget_report_path}\","
     echo "    \"observability_on_supremacy_matrix\": \"${supremacy_matrix_path}\","
     echo "    \"observability_claim_delta_report\": \"${claim_delta_path}\","
@@ -208,18 +216,19 @@ EOF
     echo "    \"support_bundle_observability_attestation\": \"${attestation_path}\""
     echo '  },'
     echo '  "operator_verification": ['
-    echo "    \"cat ${manifest_path}\","
-    echo "    \"cat ${events_path}\","
-    echo "    \"cat ${commands_path}\","
-    echo "    \"cat ${trace_ids_path}\","
-    echo "    \"ls ${step_logs_dir}\","
-    echo "    \"cat ${budget_report_path}\","
-    echo "    \"cat ${supremacy_matrix_path}\","
-    echo "    \"cat ${claim_delta_path}\","
-    echo "    \"cat ${demotion_receipts_path}\","
-    echo "    \"cat ${publication_policy_path}\","
-    echo "    \"cat ${attestation_path}\","
-    echo "    \"${replay_command}\""
+    emit_operator_verification_entry "cat \"${manifest_path}\"" ","
+    emit_operator_verification_entry "cat \"${events_path}\"" ","
+    emit_operator_verification_entry "cat \"${commands_path}\"" ","
+    emit_operator_verification_entry "cat \"${trace_ids_path}\"" ","
+    emit_operator_verification_entry "ls \"${step_logs_dir}\"" ","
+    emit_operator_verification_entry "cat \"${first_step_log_path}\"" ","
+    emit_operator_verification_entry "cat \"${budget_report_path}\"" ","
+    emit_operator_verification_entry "cat \"${supremacy_matrix_path}\"" ","
+    emit_operator_verification_entry "cat \"${claim_delta_path}\"" ","
+    emit_operator_verification_entry "cat \"${demotion_receipts_path}\"" ","
+    emit_operator_verification_entry "cat \"${publication_policy_path}\"" ","
+    emit_operator_verification_entry "cat \"${attestation_path}\"" ","
+    emit_operator_verification_entry "${replay_command}"
     echo '  ]'
     echo "}"
   } >"$manifest_path"

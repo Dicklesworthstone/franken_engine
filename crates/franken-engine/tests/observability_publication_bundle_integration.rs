@@ -24,6 +24,7 @@ struct ObservabilityPublicationPolicyDocContract {
     observability_modes: Vec<String>,
     required_artifacts: Vec<String>,
     gate_runner: GateRunnerContract,
+    operator_verification: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -926,6 +927,50 @@ fn rgc_066c_source_fragment_checks_match_repo_sources() {
             "source file {} must contain fragment: {}",
             check.path,
             check.fragment
+        );
+    }
+}
+
+#[test]
+fn rgc_066c_contract_operator_verification_mentions_preserved_replay() {
+    let contract = parse_doc_contract();
+
+    assert!(
+        contract
+            .operator_verification
+            .iter()
+            .any(|entry| entry.contains("step_logs/step-01.log")),
+        "operator verification should surface the first step log"
+    );
+    assert!(
+        contract.operator_verification.iter().any(|entry| {
+            entry.contains(
+                "RGC_OBSERVABILITY_PUBLICATION_POLICY_REPLAY_RUN_DIR=artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP>"
+            )
+        }),
+        "operator verification should use preserved exact-run-dir replay"
+    );
+}
+
+#[test]
+fn rgc_066c_replay_wrapper_uses_latest_complete_bundle() {
+    let script = read_repo_text("scripts/e2e/rgc_observability_publication_policy_replay.sh");
+
+    for required_fragment in [
+        "explicit_run_dir=\"${RGC_OBSERVABILITY_PUBLICATION_POLICY_REPLAY_RUN_DIR:-}\"",
+        "latest_complete_run_dir()",
+        "newest directory ${latest_artifact_dir_path} is incomplete",
+        "rgc observability publication policy replay explicit run directory is incomplete: ${explicit_run_dir}",
+        "latest manifest: ${latest_run_dir}/run_manifest.json",
+        "latest trace ids: ${latest_run_dir}/trace_ids",
+        "latest events: ${latest_run_dir}/events.jsonl",
+        "latest commands: ${latest_run_dir}/commands.txt",
+        "latest first step log: ${latest_run_dir}/step_logs/step-01.log",
+        "latest publication policy: ${latest_run_dir}/observability_publication_policy.json",
+    ] {
+        assert!(
+            script.contains(required_fragment),
+            "observability publication replay wrapper missing fragment: {required_fragment}"
         );
     }
 }

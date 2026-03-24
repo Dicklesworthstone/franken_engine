@@ -18,6 +18,8 @@
     "## RGC Observability Publication Policy Gate",
     "./scripts/run_rgc_observability_publication_policy.sh ci",
     "./scripts/e2e/rgc_observability_publication_policy_replay.sh ci",
+    "latest complete artifact bundle",
+    "RGC_OBSERVABILITY_PUBLICATION_POLICY_REPLAY_RUN_DIR",
     "docs/rgc_observability_publication_policy_v1.json",
     "support_bundle_observability_attestation.json"
   ],
@@ -36,6 +38,10 @@
     "`telemetry_demotion_receipts.json`",
     "`observability_publication_policy.json`",
     "`support_bundle_observability_attestation.json`"
+    ,
+    "latest complete artifact bundle",
+    "without rerunning the lane",
+    "RGC_OBSERVABILITY_PUBLICATION_POLICY_REPLAY_RUN_DIR"
   ],
   "source_fragment_checks": [
     {
@@ -60,7 +66,11 @@
     },
     {
       "path": "scripts/run_rgc_observability_publication_policy.sh",
-      "fragment": "replay_command=\"./scripts/e2e/rgc_observability_publication_policy_replay.sh ${mode}\""
+      "fragment": "replay_command=\"RGC_OBSERVABILITY_PUBLICATION_POLICY_REPLAY_RUN_DIR=\\\"${run_dir}\\\" ./scripts/e2e/rgc_observability_publication_policy_replay.sh ${mode}\""
+    },
+    {
+      "path": "scripts/run_rgc_observability_publication_policy.sh",
+      "fragment": "emit_operator_verification_entry \"cat \\\"${step_logs_dir}/step-01.log\\\"\" \",\""
     }
   ],
   "workload_classes": [
@@ -97,6 +107,7 @@
     "./scripts/run_rgc_observability_publication_policy.sh ci",
     "cat artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP>/trace_ids",
     "ls artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP>/step_logs",
-    "./scripts/e2e/rgc_observability_publication_policy_replay.sh ci"
+    "cat artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP>/step_logs/step-01.log",
+    "RGC_OBSERVABILITY_PUBLICATION_POLICY_REPLAY_RUN_DIR=artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP> ./scripts/e2e/rgc_observability_publication_policy_replay.sh ci"
   ]
 }

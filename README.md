@@ -1005,6 +1005,11 @@ one deterministic bundle.
 ./scripts/e2e/rgc_observability_publication_policy_replay.sh ci
 ```
 
+The replay wrapper resolves the latest complete artifact bundle, warns when it
+skips a newer incomplete run directory, and supports exact preserved-run replay
+without rerunning the lane via
+`RGC_OBSERVABILITY_PUBLICATION_POLICY_REPLAY_RUN_DIR=artifacts/rgc_observability_publication_policy/<timestamp>`.
+
 Contract and integration surface:
 
 - [`docs/RGC_OBSERVABILITY_PUBLICATION_POLICY_V1.md`](./docs/RGC_OBSERVABILITY_PUBLICATION_POLICY_V1.md)

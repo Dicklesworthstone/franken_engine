@@ -773,6 +773,11 @@ impl EpochInvalidationEngine {
             let mut buf = Vec::new();
             buf.extend_from_slice(receipt_id.as_bytes());
             buf.extend_from_slice(spec_id.as_bytes());
+            buf.extend_from_slice(format!("{reason:?}").as_bytes());
+            buf.extend_from_slice(&epoch_before_invalidation.as_u64().to_be_bytes());
+            buf.extend_from_slice(&self.current_epoch.as_u64().to_be_bytes());
+            buf.extend_from_slice(rollback_hash.as_bytes());
+            buf.extend_from_slice(baseline_hash.as_bytes());
             buf.extend_from_slice(&current_ns.to_be_bytes());
             buf
         };

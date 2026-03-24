@@ -866,6 +866,18 @@ pub fn compute_cell_verdict(
     }
 }
 
+fn update_optional_content_hash(hasher: &mut Sha256, hash: Option<ContentHash>) {
+    match hash {
+        Some(hash) => {
+            hasher.update([1u8]);
+            hasher.update(hash.as_bytes());
+        }
+        None => {
+            hasher.update([0u8]);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // evaluate_matrix
 // ---------------------------------------------------------------------------
@@ -942,6 +954,11 @@ pub fn evaluate_matrix(
             ih.update(m.class.as_str().as_bytes());
             ih.update(m.severity.as_str().as_bytes());
             ih.update(m.surface.to_string().as_bytes());
+            ih.update(m.artifact_kind.to_string().as_bytes());
+            ih.update(m.workload_class.as_str().as_bytes());
+            ih.update(m.detail.as_bytes());
+            update_optional_content_hash(&mut ih, m.content_hash_a);
+            update_optional_content_hash(&mut ih, m.content_hash_b);
         }
         ih.update(cell.verdict.as_str().as_bytes());
     }
@@ -1777,6 +1794,34 @@ mod tests {
         let report = evaluate_matrix(&cells, &cfg, &epoch(), 42_000).unwrap();
         assert_eq!(report.receipt.timestamp_micros, 42_000);
         assert_eq!(report.receipt.schema_version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn test_evaluate_input_hash_distinguishes_missing_mismatch_hashes() {
+        let cfg = relaxed_config();
+        let some_hash_report =
+            evaluate_matrix(&[failing_cell(WorkloadClass::PureJs)], &cfg, &epoch(), 0).unwrap();
+        let missing_hash_cell = MatrixCell::new(
+            WorkloadClass::PureJs,
+            vec![],
+            vec![],
+            vec![ClassifiedMismatch {
+                class: MismatchClass::ContentDivergence,
+                severity: MismatchSeverity::Critical,
+                surface: Surface::Cli,
+                artifact_kind: ArtifactKind::CompiledOutput,
+                workload_class: WorkloadClass::PureJs,
+                detail: "test failure".to_string(),
+                content_hash_a: None,
+                content_hash_b: None,
+            }],
+            CellVerdict::Fail,
+        );
+        let missing_hash_report = evaluate_matrix(&[missing_hash_cell], &cfg, &epoch(), 0).unwrap();
+        assert_ne!(
+            some_hash_report.receipt.input_hash, missing_hash_report.receipt.input_hash,
+            "matrix input hash should encode whether mismatch content hashes are present"
+        );
     }
 
     // -----------------------------------------------------------------------

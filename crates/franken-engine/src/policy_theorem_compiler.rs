@@ -915,7 +915,10 @@ impl SignaturePreimage for PolicyValidationReceipt {
     fn unsigned_view(&self) -> CanonicalValue {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
-        CanonicalValue::Bytes(serde_json::to_vec(&copy).unwrap_or_default())
+        CanonicalValue::Bytes(
+            serde_json::to_vec(&copy)
+                .expect("policy validation receipt must serialize for signing preimage"),
+        )
     }
 }
 

@@ -503,12 +503,12 @@ pub struct WasmFlushResult {
 impl WasmFlushResult {
     pub fn derive_id(&self) -> EngineObjectId {
         let canonical = format!(
-            "wasm_flush:cycle{}:updates={}:evals={}:ops={}:mode={:?}",
+            "wasm_flush:cycle{}:updates={}:evals={}:ops={}:mode={}",
             self.cycle,
             self.updates_consumed,
             self.signals_evaluated,
             self.dom_ops_emitted,
-            self.mode_after,
+            serde_json::to_string(&self.mode_after).unwrap_or_default(),
         );
         derive_id(
             ObjectDomain::EvidenceRecord,
@@ -704,9 +704,9 @@ impl WasmRuntimeLane {
 
     pub fn derive_id(&self) -> EngineObjectId {
         let canonical = format!(
-            "wasm_lane:signals={}:mode={:?}:flushes={}",
+            "wasm_lane:signals={}:mode={}:flushes={}",
             self.graph.active_count(),
-            self.mode,
+            serde_json::to_string(&self.mode).unwrap_or_default(),
             self.flush_count,
         );
         derive_id(

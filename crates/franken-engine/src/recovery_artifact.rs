@@ -379,18 +379,32 @@ impl ArtifactBuilder {
     pub fn build(self) -> RecoveryArtifact {
         let after_state = self.after_state.unwrap_or(self.before_state);
 
-        // Compute artifact_id as ContentHash over deterministic serialized fields.
-        let id_input = format!(
-            "{}:{}:{}:{}:{}:{}:{}",
-            self.artifact_type,
-            self.trigger,
-            self.before_state,
-            after_state,
-            self.epoch_id,
-            self.timestamp_ticks,
-            self.trace_id,
+        // Compute artifact_id as ContentHash over ALL deterministic fields,
+        // including proof_bundle and operator_actions for tamper-evidence.
+        let mut id_buf = Vec::new();
+        id_buf.extend_from_slice(
+            format!(
+                "{}:{}:{}:{}:{}:{}:{}",
+                self.artifact_type,
+                self.trigger,
+                self.before_state,
+                after_state,
+                self.epoch_id,
+                self.timestamp_ticks,
+                self.trace_id,
+            )
+            .as_bytes(),
         );
-        let artifact_id = ContentHash::compute(id_input.as_bytes());
+        for proof in &self.proof_elements {
+            id_buf.extend_from_slice(format!("{proof}").as_bytes());
+        }
+        for action in &self.operator_actions {
+            id_buf.extend_from_slice(action.operator.as_bytes());
+            id_buf.extend_from_slice(action.action.as_bytes());
+            id_buf.extend_from_slice(action.authorization_hash.as_bytes());
+            id_buf.extend_from_slice(&action.timestamp_ticks.to_le_bytes());
+        }
+        let artifact_id = ContentHash::compute(&id_buf);
 
         // Sign with the epoch authentication key.
         let signature = AuthenticityHash::compute_keyed(&self.signing_key, artifact_id.as_bytes());

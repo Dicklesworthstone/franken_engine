@@ -337,6 +337,7 @@ impl EnforcementPolicy {
         epoch: &SecurityEpoch,
         action_set: &[String],
         safe_default: &str,
+        analysis_subsystem: Subsystem,
     ) -> ContentHash {
         let mut canonical = Vec::new();
         canonical.extend_from_slice(b"enforcement-policy|");
@@ -344,12 +345,15 @@ impl EnforcementPolicy {
         canonical.push(b'|');
         canonical.extend_from_slice(&epoch.as_u64().to_be_bytes());
         canonical.push(b'|');
+        // action_set comes from BTreeSet::iter so is already sorted.
         for a in action_set {
             canonical.extend_from_slice(a.as_bytes());
             canonical.push(b',');
         }
         canonical.push(b'|');
         canonical.extend_from_slice(safe_default.as_bytes());
+        canonical.push(b'|');
+        canonical.extend_from_slice(analysis_subsystem.to_string().as_bytes());
         ContentHash::compute(&canonical)
     }
 }
@@ -810,8 +814,13 @@ impl GovernanceMechanism {
         // hard constraints).
         let blocked_actions = BTreeSet::new(); // All admissible are already filtered.
 
-        let content_hash =
-            EnforcementPolicy::compute_hash(policy_id, &self.epoch, &action_set, &safe_default);
+        let content_hash = EnforcementPolicy::compute_hash(
+            policy_id,
+            &self.epoch,
+            &action_set,
+            &safe_default,
+            subsystem,
+        );
 
         let policy = EnforcementPolicy {
             policy_id: policy_id.to_string(),

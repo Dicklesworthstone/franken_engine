@@ -375,6 +375,26 @@ impl SignaturePreimage for DelegateCellManifest {
             CanonicalValue::Bytes(SIGNATURE_SENTINEL.to_vec()),
         );
         map.insert(
+            "sandbox_filesystem_access_allowed".to_string(),
+            CanonicalValue::Bool(self.sandbox.filesystem_access_allowed),
+        );
+        map.insert(
+            "sandbox_max_execution_ns".to_string(),
+            CanonicalValue::U64(self.sandbox.max_execution_ns),
+        );
+        map.insert(
+            "sandbox_max_heap_bytes".to_string(),
+            CanonicalValue::U64(self.sandbox.max_heap_bytes),
+        );
+        map.insert(
+            "sandbox_max_hostcalls".to_string(),
+            CanonicalValue::U64(self.sandbox.max_hostcalls),
+        );
+        map.insert(
+            "sandbox_network_egress_allowed".to_string(),
+            CanonicalValue::Bool(self.sandbox.network_egress_allowed),
+        );
+        map.insert(
             "slot_id".to_string(),
             CanonicalValue::String(self.slot_id.as_str().to_string()),
         );

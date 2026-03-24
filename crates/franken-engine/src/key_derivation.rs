@@ -262,6 +262,16 @@ pub trait KeyDeriver: fmt::Debug {
 
     /// Maximum output key length supported.
     fn max_output_len(&self) -> usize;
+
+    /// Stable human-readable algorithm label for audit events.
+    ///
+    /// This must not include secrets or other internal deriver state.
+    fn algorithm_label(&self) -> &'static str {
+        std::any::type_name::<Self>()
+            .rsplit("::")
+            .next()
+            .unwrap_or("KeyDeriver")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -443,7 +453,7 @@ impl<D: KeyDeriver> EpochKeyCache<D> {
                 domain,
                 epoch: self.current_epoch,
                 context_hash: ctx_hash_bytes,
-                algorithm: format!("{:?}", self.deriver).chars().take(64).collect(),
+                algorithm: self.deriver.algorithm_label().to_string(),
                 trace_id: trace_id.to_string(),
             });
 
@@ -904,9 +914,56 @@ mod tests {
         let events = cache.events();
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].domain, KeyDomain::Symbol);
+        assert_eq!(events[0].algorithm, "DeterministicTestDeriver");
         assert_eq!(events[0].trace_id, "trace-abc");
         assert_eq!(events[1].domain, KeyDomain::Session);
+        assert_eq!(events[1].algorithm, "DeterministicTestDeriver");
         assert_eq!(events[1].trace_id, "trace-def");
+    }
+
+    #[derive(Debug)]
+    struct SecretDebugDeriver {
+        secret_material: &'static str,
+    }
+
+    impl KeyDeriver for SecretDebugDeriver {
+        fn derive(&self, request: &DerivationRequest) -> Result<DerivedKey, KeyDerivationError> {
+            DeterministicTestDeriver.derive(request)
+        }
+
+        fn max_output_len(&self) -> usize {
+            DeterministicTestDeriver::MAX_OUTPUT
+        }
+    }
+
+    #[test]
+    fn cache_event_algorithm_label_does_not_leak_debug_state() {
+        let deriver = SecretDebugDeriver {
+            secret_material: "do-not-log-me",
+        };
+        assert_eq!(deriver.secret_material, "do-not-log-me");
+        assert!(
+            format!("{deriver:?}").contains("do-not-log-me"),
+            "test deriver debug output should demonstrate the leak-prone shape"
+        );
+
+        let mut cache =
+            EpochKeyCache::new(deriver, test_master_key(), SecurityEpoch::from_raw(1), 32);
+
+        cache
+            .get_or_derive(
+                KeyDomain::Session,
+                &DerivationContext::empty(),
+                "trace-secret",
+            )
+            .expect("derive");
+
+        let event = cache.events().first().expect("event should exist");
+        assert_eq!(event.algorithm, "SecretDebugDeriver");
+        assert!(
+            !event.algorithm.contains("do-not-log-me"),
+            "algorithm label must not leak deriver debug state"
+        );
     }
 
     // -- Integration: old key rejected after epoch advance --

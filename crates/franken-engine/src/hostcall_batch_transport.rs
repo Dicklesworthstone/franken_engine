@@ -1603,6 +1603,8 @@ pub fn run_batch_transport_corpus() -> BatchTransportRunnerResult {
 
 /// Write evidence bundle to directory.
 pub fn write_batch_transport_evidence_bundle(dir: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+
     let corpus = batch_transport_corpus();
     let result = run_batch_transport_corpus();
 
@@ -1637,7 +1639,7 @@ pub fn write_batch_transport_evidence_bundle(dir: &std::path::Path) -> std::io::
             "event": "specimen_evaluated",
             "name": spec.name,
             "family": spec.family.to_string(),
-            "verdict": format!("{:?}", spec.verdict),
+            "verdict": spec.verdict.to_string(),
         });
         events.push_str(&serde_json::to_string(&line).map_err(std::io::Error::other)?);
         events.push('\n');

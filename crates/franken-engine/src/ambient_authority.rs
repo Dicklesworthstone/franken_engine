@@ -367,7 +367,7 @@ impl SourceAuditor {
             }
 
             // Strip inline comments so patterns in comments don't trigger.
-            let code_portion = if let Some(idx) = trimmed.find("//") {
+            let code_portion = if let Some(idx) = inline_comment_start(trimmed) {
                 &trimmed[..idx]
             } else {
                 trimmed
@@ -446,6 +446,86 @@ impl SourceAuditor {
                         .strip_prefix(prefix)
                         .is_some_and(|suffix| suffix.starts_with("::"))
             })
+    }
+}
+
+fn inline_comment_start(line: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let mut index = 0usize;
+    let mut in_string = false;
+    let mut raw_hashes: Option<usize> = None;
+
+    while index < bytes.len() {
+        if let Some(hashes) = raw_hashes {
+            if bytes[index] == b'"'
+                && (0..hashes).all(|offset| {
+                    bytes
+                        .get(index + 1 + offset)
+                        .copied()
+                        .is_some_and(|byte| byte == b'#')
+                })
+            {
+                index += hashes + 1;
+                raw_hashes = None;
+                continue;
+            }
+            index += 1;
+            continue;
+        }
+
+        if in_string {
+            if bytes[index] == b'\\' {
+                index = usize::min(index + 2, bytes.len());
+                continue;
+            }
+            if bytes[index] == b'"' {
+                in_string = false;
+            }
+            index += 1;
+            continue;
+        }
+
+        if bytes[index] == b'/' && bytes.get(index + 1).copied() == Some(b'/') {
+            return Some(index);
+        }
+
+        if let Some((prefix_len, hashes)) = raw_string_start(&bytes[index..]) {
+            raw_hashes = Some(hashes);
+            index += prefix_len;
+            continue;
+        }
+
+        if let Some(prefix_len) = quoted_string_start(&bytes[index..]) {
+            in_string = true;
+            index += prefix_len;
+            continue;
+        }
+
+        index += 1;
+    }
+
+    None
+}
+
+fn raw_string_start(bytes: &[u8]) -> Option<(usize, usize)> {
+    let (prefix_len, mut index) = match bytes {
+        [b'r', ..] => (1usize, 1usize),
+        [b'b', b'r', ..] | [b'c', b'r', ..] => (2usize, 2usize),
+        _ => return None,
+    };
+
+    while bytes.get(index).copied() == Some(b'#') {
+        index += 1;
+    }
+
+    (bytes.get(index).copied() == Some(b'"')).then_some((index + 1, index - prefix_len))
+}
+
+fn quoted_string_start(bytes: &[u8]) -> Option<usize> {
+    match bytes {
+        [b'"', ..] => Some(1),
+        [b'b', b'"', ..] | [b'c', b'"', ..] => Some(2),
+        _ => None,
     }
 }
 
@@ -2122,6 +2202,39 @@ mod tests {
         let auditor = standard_auditor();
         // Lines starting with // (after trim) are skipped
         let source = "    // let _ = std::fs::read(\"x\");";
+        let findings = auditor.audit_source("m", "f.rs", source);
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn audit_source_ignores_patterns_inside_inline_comments_only() {
+        let auditor = standard_auditor();
+        let source = "let clean = 1; // std::fs::read(\"x\")";
+        let findings = auditor.audit_source("m", "f.rs", source);
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn audit_source_preserves_double_slash_inside_string_literals() {
+        let auditor = standard_auditor();
+        let source = "let url = \"https://example.invalid\"; let _ = std::fs::read(\"x\"); // note";
+        let findings = auditor.audit_source("m", "f.rs", source);
+        assert!(findings.iter().any(|f| f.pattern_id == "std_fs"));
+    }
+
+    #[test]
+    fn audit_source_preserves_double_slash_inside_raw_string_literals() {
+        let auditor = standard_auditor();
+        let source =
+            "let url = r#\"https://example.invalid\"#; let _ = std::env::var(\"HOME\"); // note";
+        let findings = auditor.audit_source("m", "f.rs", source);
+        assert!(findings.iter().any(|f| f.pattern_id == "env_var"));
+    }
+
+    #[test]
+    fn audit_source_detects_inline_comment_after_raw_string_delimiter() {
+        let auditor = standard_auditor();
+        let source = "let url = r#\"https://example.invalid\"#// std::fs::read(\"x\")";
         let findings = auditor.audit_source("m", "f.rs", source);
         assert!(findings.is_empty());
     }

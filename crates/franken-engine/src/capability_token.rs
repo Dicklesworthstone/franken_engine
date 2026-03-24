@@ -369,6 +369,12 @@ fn build_unsigned_view(token: &CapabilityToken) -> CanonicalValue {
         CanonicalValue::Bytes(token.issuer.as_bytes().to_vec()),
     );
 
+    // jti (unique token identifier — MUST be in signing preimage)
+    map.insert(
+        "jti".to_string(),
+        CanonicalValue::Bytes(token.jti.as_bytes().to_vec()),
+    );
+
     // nbf
     map.insert("nbf".to_string(), CanonicalValue::U64(token.nbf.0));
 

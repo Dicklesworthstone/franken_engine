@@ -780,7 +780,7 @@ fn write_bundle(
             "policy_id": &context.policy_id,
         }
     }))
-    .expect("env.json must serialize");
+    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
     let mut primary_files = vec![
         FileArtifact::json("persistent_cache_contract.json", &evaluated.contract),
@@ -849,7 +849,7 @@ fn write_bundle(
             "policy_id": &context.policy_id,
         }
     }))
-    .expect("repro.lock must serialize");
+    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     primary_files.push(FileArtifact::text("repro.lock", &repro_lock));
     primary_files.sort_by(|left, right| left.path.cmp(&right.path));
 
@@ -888,7 +888,7 @@ fn write_bundle(
         },
         "artifacts": manifest_artifacts,
     }))
-    .expect("manifest.json must serialize");
+    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     let manifest_artifact = FileArtifact::text("manifest.json", &manifest_json);
 
     let _bundle_lock = acquire_bundle_write_lock(&context.artifact_dir)?;

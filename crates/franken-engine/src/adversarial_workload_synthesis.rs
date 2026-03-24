@@ -675,6 +675,9 @@ impl SynthesisCampaign {
             h.update(cx.counterexample_hash.as_bytes());
         }
         append_u64(&mut h, if self.infra_failure { 1 } else { 0 });
+        if let Some(detail) = &self.infra_failure_detail {
+            append_str(&mut h, detail);
+        }
         compute_digest(h)
     }
 }
@@ -795,6 +798,21 @@ impl SynthesisReport {
             h.update(c.compute_hash().as_bytes());
         }
         append_u64(&mut h, epoch.as_u64());
+        compute_digest(h)
+    }
+
+    /// Compute content hash including domain coverage.
+    pub fn full_content_hash(&self) -> ContentHash {
+        let mut h = Sha256::new();
+        h.update(self.content_hash.as_bytes());
+        // domain_coverage is BTreeMap so iteration is deterministic.
+        for (domain, cov) in &self.domain_coverage {
+            append_str(&mut h, domain);
+            append_u64(&mut h, cov.iterations);
+            append_u64(&mut h, cov.counterexamples_found);
+            append_u64(&mut h, cov.worst_regression_millionths);
+            append_u64(&mut h, cov.seeds_used);
+        }
         compute_digest(h)
     }
 

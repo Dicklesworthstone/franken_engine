@@ -1087,7 +1087,7 @@ impl S3FifoCacheGate {
 
     fn next_sequence(&mut self) -> u64 {
         let seq = self.sequence_counter;
-        self.sequence_counter += 1;
+        self.sequence_counter = self.sequence_counter.saturating_add(1);
         seq
     }
 
@@ -1095,7 +1095,7 @@ impl S3FifoCacheGate {
 
     /// Look up an artifact by canonical key. Returns true on hit.
     pub fn lookup(&mut self, key: &str) -> bool {
-        self.operation_counter += 1;
+        self.operation_counter = self.operation_counter.saturating_add(1);
         self.benchmark.total_lookups += 1;
 
         // Feed reference policies.
@@ -1254,7 +1254,7 @@ impl S3FifoCacheGate {
         }
 
         let seq = self.sequence_counter;
-        self.sequence_counter += 1;
+        self.sequence_counter = self.sequence_counter.saturating_add(1);
 
         if let Some(existing) = self.ghost_entries.get_mut(key) {
             existing.ghost_hits += 1;

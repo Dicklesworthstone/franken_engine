@@ -11,6 +11,7 @@ run_dir_is_complete() {
   local candidate="${1:-}"
   [[ -n "${candidate}" ]] || return 1
   [[ -f "${candidate}/run_manifest.json" ]] || return 1
+  [[ -f "${candidate}/trace_ids.json" ]] || return 1
   [[ -f "${candidate}/events.jsonl" ]] || return 1
   [[ -f "${candidate}/commands.txt" ]] || return 1
   [[ -f "${candidate}/parity_report.json" ]] || return 1
@@ -97,6 +98,8 @@ warn_about_failed_gate_replay_source "${main_exit}"
 
 echo "[franken-shipped-path-parity] latest run dir: ${latest_run_dir}"
 cat "${latest_run_dir}/run_manifest.json"
+echo "[franken-shipped-path-parity] latest trace ids: ${latest_run_dir}/trace_ids.json"
+cat "${latest_run_dir}/trace_ids.json"
 echo "[franken-shipped-path-parity] latest events: ${latest_run_dir}/events.jsonl"
 cat "${latest_run_dir}/events.jsonl"
 echo "[franken-shipped-path-parity] latest commands: ${latest_run_dir}/commands.txt"

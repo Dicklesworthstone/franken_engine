@@ -2289,6 +2289,138 @@ fn frankenctl_benchmark_run_unknown_flag_fails_with_parse_remediation() {
 }
 
 #[test]
+fn frankenctl_benchmark_score_missing_input_flag_fails_with_parse_remediation() {
+    let output_path = temp_path("frankenctl_benchmark_score_missing_input", "json");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "benchmark",
+            "score",
+            "--output",
+            output_path
+                .to_str()
+                .expect("score output path should be valid utf8"),
+        ])
+        .output()
+        .expect("benchmark score missing-input failure should execute");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    assert!(
+        stderr.contains("[frankenctl trace_id=frankenctl-"),
+        "stderr should include trace id, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("command=parse"),
+        "stderr should include parse command label, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("benchmark score requires --input <path>"),
+        "stderr should preserve parse failure, got: {stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "remediation: Run `frankenctl --help` for full command usage and required arguments."
+        ),
+        "stderr should include parse remediation, got: {stderr}"
+    );
+}
+
+#[test]
+fn frankenctl_benchmark_score_unknown_flag_fails_with_parse_remediation() {
+    let score_input_path = temp_path("frankenctl_benchmark_score_unknown_flag_input", "json");
+
+    write_benchmark_score_input(&score_input_path);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "benchmark",
+            "score",
+            "--input",
+            score_input_path
+                .to_str()
+                .expect("score input path should be valid utf8"),
+            "--bogus",
+        ])
+        .output()
+        .expect("benchmark score unknown-flag failure should execute");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    assert!(
+        stderr.contains("[frankenctl trace_id=frankenctl-"),
+        "stderr should include trace id, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("command=parse"),
+        "stderr should include parse command label, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("unknown benchmark score flag `--bogus`"),
+        "stderr should preserve parse failure, got: {stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "remediation: Run `frankenctl --help` for full command usage and required arguments."
+        ),
+        "stderr should include parse remediation, got: {stderr}"
+    );
+
+    let _ = fs::remove_file(score_input_path);
+}
+
+#[test]
+fn frankenctl_benchmark_score_nonexistent_input_fails_with_runtime_remediation() {
+    let score_input_path = temp_path("frankenctl_benchmark_score_missing_input_file", "json");
+    let score_output_path = temp_path("frankenctl_benchmark_score_missing_input_output", "json");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "benchmark",
+            "score",
+            "--input",
+            score_input_path
+                .to_str()
+                .expect("score input path should be valid utf8"),
+            "--output",
+            score_output_path
+                .to_str()
+                .expect("score output path should be valid utf8"),
+        ])
+        .output()
+        .expect("benchmark score missing-file failure should execute");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf8");
+    assert!(
+        stderr.contains("[frankenctl trace_id=frankenctl-"),
+        "stderr should include trace id, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("command=benchmark"),
+        "stderr should include benchmark command label, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("failed to read"),
+        "stderr should preserve read failure, got: {stderr}"
+    );
+    assert!(
+        stderr.contains(
+            score_input_path
+                .to_str()
+                .expect("score input path should be valid utf8")
+        ),
+        "stderr should include the missing input path, got: {stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "remediation: Validate benchmark subcommand args (run|score|verify), then rerun `frankenctl benchmark ...`."
+        ),
+        "stderr should include runtime remediation, got: {stderr}"
+    );
+}
+
+#[test]
 fn frankenctl_benchmark_score_and_verify_bundle_round_trip() {
     let score_input_path = temp_path("frankenctl_benchmark_score_input", "json");
     let verify_report_path = temp_path("frankenctl_benchmark_verify_report", "json");

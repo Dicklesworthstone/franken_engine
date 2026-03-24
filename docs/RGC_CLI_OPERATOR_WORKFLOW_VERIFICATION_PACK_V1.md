@@ -20,7 +20,7 @@ The pack is evidence-first:
 ## Contract Version
 
 - `schema_version`: `franken-engine.rgc-cli-operator-workflow-verification-pack.v1`
-- `contract_version`: `1.1.0`
+- `contract_version`: `1.2.0`
 - `policy_id`: `policy-rgc-cli-operator-workflow-verification-pack-v1`
 
 ## Workflow Stages
@@ -87,6 +87,15 @@ Modes:
 Strict mode is fail-closed and requires remote execution for heavy cargo
 operations (`rch` only, no local fallback).
 
+The generic `frankenctl` workflow surface under test also preserves an exact
+bundle replay command:
+
+- `FRANKENCTL_CLI_WORKFLOW_REPLAY_RUN_DIR=artifacts/frankenctl_cli_workflow/<timestamp> ./scripts/e2e/frankenctl_cli_workflow.sh ci`
+
+That explicit replay mode fails closed on incomplete bundles and short-circuits
+before creating a new run directory or requiring `rch`, so operators can replay
+preserved evidence without accidentally rerunning the heavy workflow.
+
 ## Required Artifacts
 
 Each gate run emits:
@@ -118,6 +127,8 @@ rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_rgc_cli_operator_workflow_verif
 
 ./scripts/run_rgc_cli_operator_workflow_verification_pack.sh ci
 ./scripts/e2e/rgc_cli_operator_workflow_verification_pack_replay.sh ci
+./scripts/e2e/frankenctl_cli_workflow.sh ci
+FRANKENCTL_CLI_WORKFLOW_REPLAY_RUN_DIR=artifacts/frankenctl_cli_workflow/<timestamp> ./scripts/e2e/frankenctl_cli_workflow.sh ci
 cat artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/trace_ids.json
 cat artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/step_logs/step_000.log
 ```

@@ -234,6 +234,8 @@ fn shipped_path_parity_replay_wrapper_uses_latest_complete_bundle_and_prints_new
         "replay output reflects latest complete run directory",
         "replay output reflects current run directory",
         "run_manifest.json",
+        "trace_ids.json",
+        "latest trace ids: ${latest_run_dir}/trace_ids.json",
         "events.jsonl",
         "commands.txt",
         "parity_report.json",

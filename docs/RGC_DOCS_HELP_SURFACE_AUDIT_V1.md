@@ -25,8 +25,8 @@ CLI: `version`, `compile`, `run`, `doctor`, `verify`, `benchmark`, and
 - `frankenctl compile --input <source.js> --out <artifact.json> [--goal script|module]`
 - `frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]`
 - `frankenctl doctor --input <runtime_input.json> [--summary] [--out-dir <path>]`
-- `frankenctl verify compile-artifact --input <artifact.json>`
-- `frankenctl verify receipt --input <verifier_input.json> --receipt-id <id> [--summary]`
+- `frankenctl verify compile-artifact --input <artifact.json> [--output <report.json>]`
+- `frankenctl verify receipt --input <verifier_input.json> --receipt-id <id> [--summary] [--output <report.json>]`
 - `frankenctl benchmark run [--seed <u64>] [--run-id <id>] [--run-date <YYYY-MM-DD>] [--profile <name>]... [--family <name>]... [--out-dir <path>]`
 - `frankenctl benchmark score --input <publication_gate_input.json> [--trace-id <id>] [--decision-id <id>] [--policy-id <id>] [--output <results.json>]`
 - `frankenctl benchmark verify --bundle <dir> [--summary] [--output <report.json>]`

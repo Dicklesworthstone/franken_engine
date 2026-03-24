@@ -282,7 +282,7 @@ write_manifest() {
     echo "    \"cat ${events_path}\","
     echo "    \"cat ${commands_path}\","
     echo "    \"cat ${step_logs_dir}/step_000.log\","
-    echo "    \"${replay_command}\""
+    echo "    \"$(parser_frontier_json_escape "${replay_command}")\""
     echo "  ]"
     echo "}"
   } >"$manifest_path"
@@ -292,6 +292,7 @@ write_manifest() {
   echo "frankenctl workflow events: ${events_path}"
   echo "frankenctl workflow commands: ${commands_path}"
   echo "frankenctl workflow first step log: ${step_logs_dir}/step_000.log"
+  echo "frankenctl workflow replay command: ${replay_command}"
 }
 
 main_exit=0

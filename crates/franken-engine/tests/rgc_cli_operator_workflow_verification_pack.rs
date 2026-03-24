@@ -208,6 +208,9 @@ fn rgc_061_doc_contains_required_sections() {
         "trace_ids.json",
         "step_logs/step_*.log",
         "step_logs/step_000.log",
+        "FRANKENCTL_CLI_WORKFLOW_REPLAY_RUN_DIR=artifacts/frankenctl_cli_workflow/<timestamp> ./scripts/e2e/frankenctl_cli_workflow.sh ci",
+        "fails closed on incomplete bundles",
+        "short-circuits before creating a new run directory or requiring `rch`",
     ] {
         assert!(
             doc.contains(required_fragment),
@@ -221,7 +224,7 @@ fn rgc_061_contract_is_versioned_and_actionable() {
     let contract = parse_contract();
 
     assert_eq!(contract.schema_version, RGC_061_CONTRACT_SCHEMA_VERSION);
-    assert_eq!(contract.contract_version, "1.1.0");
+    assert_eq!(contract.contract_version, "1.2.0");
     assert_eq!(contract.bead_id, "bd-1lsy.11.11");
     assert_eq!(
         contract.policy_id,
@@ -365,6 +368,21 @@ fn rgc_061_contract_is_versioned_and_actionable() {
             .operator_verification
             .iter()
             .any(|entry| entry.contains("rgc_cli_operator_workflow_verification_pack_replay.sh"))
+    );
+    assert!(
+        contract
+            .operator_verification
+            .iter()
+            .any(|entry| entry.contains("./scripts/e2e/frankenctl_cli_workflow.sh ci")),
+        "operator verification should include the generic frankenctl workflow command"
+    );
+    assert!(
+        contract.operator_verification.iter().any(|entry| {
+            entry.contains(
+                "FRANKENCTL_CLI_WORKFLOW_REPLAY_RUN_DIR=artifacts/frankenctl_cli_workflow/<timestamp>"
+            )
+        }),
+        "operator verification should include the exact-run-dir frankenctl replay command"
     );
 }
 
@@ -1050,7 +1068,9 @@ fn generic_frankenctl_workflow_script_uses_exact_run_dir_replay_contract() {
         "frankenctl workflow replay events: ${candidate}/events.jsonl",
         "frankenctl workflow replay commands: ${candidate}/commands.txt",
         "frankenctl workflow replay first step log: ${candidate}/step_logs/step_000.log",
+        "frankenctl workflow replay command: ${replay_command}",
         "if [[ -n \"${explicit_replay_run_dir}\" ]]; then",
+        "parser_frontier_json_escape \"${replay_command}\"",
         "replay_existing_run_dir \"${explicit_replay_run_dir}\"",
     ] {
         assert!(
@@ -1063,6 +1083,29 @@ fn generic_frankenctl_workflow_script_uses_exact_run_dir_replay_contract() {
     assert!(
         !script.contains("replay_command=\"./scripts/e2e/frankenctl_cli_workflow.sh ${mode}\""),
         "generic workflow script should not record the old self-rerun replay command"
+    );
+    assert!(
+        !script.contains("echo \"    \\\"${replay_command}\\\"\""),
+        "generic workflow script should not emit the replay command into JSON without escaping embedded quotes"
+    );
+
+    let replay_branch_index = script
+        .find("if [[ -n \"${explicit_replay_run_dir}\" ]]; then")
+        .expect("generic workflow script should have explicit replay branch");
+    let mkdir_index = script
+        .find("mkdir -p \"$run_dir\" \"$step_logs_dir\"")
+        .expect("generic workflow script should create run dir for new runs");
+    let rch_check_index = script
+        .find("if ! command -v rch >/dev/null 2>&1; then")
+        .expect("generic workflow script should require rch for heavy runs");
+
+    assert!(
+        replay_branch_index < mkdir_index,
+        "explicit replay branch should short-circuit before creating a new run directory"
+    );
+    assert!(
+        replay_branch_index < rch_check_index,
+        "explicit replay branch should short-circuit before the rch presence check"
     );
 }
 

@@ -823,9 +823,17 @@ pub fn evaluate(families: &[FamilyCoverage], config: &GateConfig) -> GateResult 
     h.update(decision.as_str().as_bytes());
     h.update(verdict.as_str().as_bytes());
     h.update(representativeness.as_str().as_bytes());
-    h.update((blocking_reasons.len() as u64).to_le_bytes());
-    for reason in &blocking_reasons {
+    let mut sorted_reasons = blocking_reasons.clone();
+    sorted_reasons.sort();
+    h.update((sorted_reasons.len() as u64).to_le_bytes());
+    for reason in &sorted_reasons {
         h.update(reason.as_bytes());
+    }
+    let mut sorted_recs = recommendations.clone();
+    sorted_recs.sort();
+    h.update((sorted_recs.len() as u64).to_le_bytes());
+    for rec in &sorted_recs {
+        h.update(rec.as_bytes());
     }
     let receipt_hash = ContentHash::compute(&h.finalize());
 
@@ -866,7 +874,9 @@ pub fn build_evidence(
     h.update(profile.entropy.to_le_bytes());
     h.update(profile.max_family_share.to_le_bytes());
     h.update(profile.min_family_share.to_le_bytes());
-    for fc in &profile.family_coverages {
+    let mut sorted_fcs: Vec<_> = profile.family_coverages.iter().collect();
+    sorted_fcs.sort_by(|a, b| a.family.as_str().cmp(b.family.as_str()));
+    for fc in &sorted_fcs {
         h.update(fc.family.as_str().as_bytes());
         h.update(fc.workload_count.to_le_bytes());
         h.update(fc.total_weight.to_le_bytes());

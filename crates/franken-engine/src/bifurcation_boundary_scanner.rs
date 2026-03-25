@@ -551,7 +551,32 @@ impl BifurcationBoundaryScanner {
             buf.extend_from_slice(&self.config.epoch.as_u64().to_le_bytes());
             buf.extend_from_slice(&param_count.to_le_bytes());
             buf.extend_from_slice(&stability_score.to_le_bytes());
-            buf.extend_from_slice(&(bifurcation_points.len() as u64).to_le_bytes());
+            // Include bifurcation point content (sorted by parameter_id).
+            let mut sorted_bps: Vec<_> = bifurcation_points.iter().collect();
+            sorted_bps.sort_by(|a, b| a.parameter_id.cmp(&b.parameter_id));
+            buf.extend_from_slice(&(sorted_bps.len() as u64).to_le_bytes());
+            for bp in &sorted_bps {
+                buf.extend_from_slice(bp.parameter_id.as_bytes());
+                buf.extend_from_slice(&bp.critical_value_millionths.to_le_bytes());
+                buf.extend_from_slice(format!("{:?}", bp.bifurcation_type).as_bytes());
+            }
+            // Include warnings.
+            buf.extend_from_slice(&(warnings.len() as u64).to_le_bytes());
+            for w in &warnings {
+                buf.extend_from_slice(w.parameter_id.as_bytes());
+                buf.extend_from_slice(&w.risk_value_millionths.to_le_bytes());
+            }
+            // Include preemptive actions.
+            buf.extend_from_slice(&(preemptive_actions.len() as u64).to_le_bytes());
+            for pa in &preemptive_actions {
+                buf.extend_from_slice(pa.parameter_id.as_bytes());
+                buf.extend_from_slice(format!("{:?}", pa.lane_action).as_bytes());
+            }
+            // regime_summary is BTreeMap — deterministic iteration.
+            for (regime, count) in &regime_summary {
+                buf.extend_from_slice(regime.as_bytes());
+                buf.extend_from_slice(&count.to_le_bytes());
+            }
             ContentHash::compute(&buf)
         };
 

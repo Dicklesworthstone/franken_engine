@@ -1161,6 +1161,10 @@ impl GovernanceEvaluator {
             buf.extend_from_slice(h.as_bytes());
         }
         append_u64(&mut buf, violations.len() as u64);
+        // Include actual violation content, not just count.
+        for v in &violations {
+            append_str(&mut buf, &format!("{v:?}"));
+        }
         let content_hash = compute_digest(&buf);
 
         GovernanceReceipt {

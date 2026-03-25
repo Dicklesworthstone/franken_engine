@@ -697,14 +697,27 @@ impl RollbackSafemodeSynthesizer {
         let approved_count = bundles.iter().filter(|b| b.is_approved()).count() as u64;
         let rejected_count = bundles.iter().filter(|b| !b.is_approved()).count() as u64;
 
-        // Compute artifact hash.
+        // Compute artifact hash covering all fields.
         let mut hash_buf = Vec::new();
         hash_buf.extend_from_slice(SYNTHESIZER_SCHEMA_VERSION.as_bytes());
         hash_buf.extend_from_slice(&self.config.epoch.as_u64().to_le_bytes());
+        // Sort and include rules_fired/skipped for determinism.
+        let mut sorted_fired = rules_fired.clone();
+        sorted_fired.sort();
+        for r in &sorted_fired {
+            hash_buf.extend_from_slice(r.as_bytes());
+        }
+        let mut sorted_skipped = rules_skipped.clone();
+        sorted_skipped.sort();
+        for r in &sorted_skipped {
+            hash_buf.extend_from_slice(r.as_bytes());
+        }
         hash_buf.extend_from_slice(&(bundles.len() as u64).to_le_bytes());
         for bundle in &bundles {
             hash_buf.extend_from_slice(bundle.artifact_hash.as_bytes());
         }
+        hash_buf.extend_from_slice(&approved_count.to_le_bytes());
+        hash_buf.extend_from_slice(&rejected_count.to_le_bytes());
 
         Ok(SynthesisResult {
             schema_version: SYNTHESIZER_SCHEMA_VERSION.to_string(),
@@ -1030,16 +1043,27 @@ impl RollbackSafemodeSynthesizer {
         // Collect evidence references.
         let evidence_refs = self.collect_evidence_refs(input);
 
-        // Compute bundle artifact hash.
+        // Compute bundle artifact hash covering all fields.
         let bundle_id = format!("bundle-{}-{}-{}", rule_id, kind, self.synthesis_count);
         let mut hash_buf = Vec::new();
         hash_buf.extend_from_slice(bundle_id.as_bytes());
+        hash_buf.extend_from_slice(format!("{kind:?}").as_bytes());
         hash_buf.extend_from_slice(&self.config.epoch.as_u64().to_le_bytes());
         hash_buf.extend_from_slice(&(deltas.len() as u64).to_le_bytes());
         for delta in &deltas {
             hash_buf.extend_from_slice(delta.delta_id.as_bytes());
             hash_buf.extend_from_slice(&delta.expected_improvement_millionths.to_le_bytes());
         }
+        hash_buf.extend_from_slice(&(constraint_checks.len() as u64).to_le_bytes());
+        for cc in &constraint_checks {
+            hash_buf.push(if cc.passed { 1 } else { 0 });
+        }
+        hash_buf.push(if all_hard_passed { 1 } else { 0 });
+        hash_buf.extend_from_slice(&soft_violations.to_le_bytes());
+        hash_buf.extend_from_slice(&total_improvement.to_le_bytes());
+        hash_buf.extend_from_slice(&min_confidence.to_le_bytes());
+        hash_buf.extend_from_slice(&(verification_hooks.len() as u64).to_le_bytes());
+        hash_buf.extend_from_slice(&(evidence_refs.len() as u64).to_le_bytes());
 
         Ok(SynthesizedBundle {
             bundle_id,

@@ -961,9 +961,10 @@ impl CompressionPipeline {
 
             match entry.action {
                 CompressionAction::Compress => {
-                    // Simulate compression: use a deterministic size reduction
-                    // based on the algorithm. Real compression would use actual
-                    // codec, but for the pipeline contract we produce a recipe.
+                    // Deterministic size reduction (not a real codec).
+                    // This verifies the compression *plan* is valid and
+                    // produces a restoration recipe.  Plugging in a real
+                    // codec (e.g. zstd) is tracked as future work.
                     let compressed_size =
                         self.simulate_compression(desc.size_bytes, entry.algorithm);
                     let compressed_hash = {
@@ -971,6 +972,8 @@ impl CompressionPipeline {
                         h.update(b"compressed:");
                         h.update(desc.content_hash.as_bytes());
                         h.update(entry.algorithm.as_str().as_bytes());
+                        h.update(compressed_size.to_le_bytes());
+                        h.update(desc.size_bytes.to_le_bytes());
                         ContentHash::compute(&h.finalize())
                     };
                     let recipe = RestorationRecipe::new(
@@ -1046,8 +1049,14 @@ impl CompressionPipeline {
         }
     }
 
-    /// Simulate compression — deterministic size estimate for a given
-    /// algorithm. In production, this would invoke the actual codec.
+    /// Deterministic size estimate for a given algorithm.
+    ///
+    /// Returns a heuristic compressed size based on the algorithm's
+    /// typical ratio, without invoking a real codec.  This is
+    /// intentional: the pipeline contract verifies *plan correctness*
+    /// (recipe linkage, epoch monotonicity, budget compliance) rather
+    /// than actual byte-level compression.  Real codec integration
+    /// is tracked as future work.
     fn simulate_compression(&self, original_size: u64, algorithm: CompressionAlgorithm) -> u64 {
         // Deterministic ratio estimates for each algorithm (millionths)
         let ratio = match algorithm {

@@ -1957,4 +1957,92 @@ mod tests {
         pipeline.promote_to_rewrite(&law, "p", "r", "g", MILLION);
         assert_ne!(pipeline.pipeline_hash, hash_before);
     }
+
+    /// Verify that no factory method returns the placeholder sentinel hash.
+    /// This guards against the placeholder-then-recompute pattern being
+    /// broken by a missing `recompute_hash()` call.
+    #[test]
+    fn no_factory_returns_placeholder_hash() {
+        let sentinel = ContentHash::compute(b"placeholder");
+        let epoch = test_epoch();
+
+        // AcceptedLaw::new
+        let law = AcceptedLaw::new(
+            "law-ph",
+            "cand-ph",
+            "stmt",
+            LawStrength::Empirical,
+            vec![],
+            500_000,
+            epoch,
+            vec![],
+        );
+        assert_ne!(
+            law.law_hash, sentinel,
+            "AcceptedLaw hash must not be placeholder"
+        );
+
+        // RewriteRule::from_law
+        let rule = RewriteRule::from_law("rule-ph", &law, "pat", "repl", "guard", 500_000);
+        assert_ne!(
+            rule.rule_hash, sentinel,
+            "RewriteRule hash must not be placeholder"
+        );
+
+        // RewritePack::new
+        let pack = RewritePack::new("pack-ph", epoch);
+        assert_ne!(
+            pack.pack_hash, sentinel,
+            "RewritePack hash must not be placeholder"
+        );
+
+        // SynthesisSeed::from_law
+        let seed = SynthesisSeed::from_law("seed-ph", &law, "tmpl", vec![], "pat");
+        assert_ne!(
+            seed.seed_hash, sentinel,
+            "SynthesisSeed hash must not be placeholder"
+        );
+
+        // SynthesisLane::new
+        let lane = SynthesisLane::new("lane-ph", epoch);
+        assert_ne!(
+            lane.lane_hash, sentinel,
+            "SynthesisLane hash must not be placeholder"
+        );
+
+        // SupportAtlasEntry::from_law
+        let atlas_entry = SupportAtlasEntry::from_law("entry-ph", &law, "surface", 500_000);
+        assert_ne!(
+            atlas_entry.entry_hash, sentinel,
+            "SupportAtlasEntry hash must not be placeholder"
+        );
+
+        // SupportAtlas::new
+        let atlas = SupportAtlas::new("atlas-ph", epoch);
+        assert_ne!(
+            atlas.atlas_hash, sentinel,
+            "SupportAtlas hash must not be placeholder"
+        );
+
+        // FrontierEntry::from_law
+        let frontier_entry = FrontierEntry::from_law("entry-ph", &law, "surface", 500_000);
+        assert_ne!(
+            frontier_entry.entry_hash, sentinel,
+            "FrontierEntry hash must not be placeholder"
+        );
+
+        // FrontierLedger::new
+        let ledger = FrontierLedger::new("ledger-ph", epoch);
+        assert_ne!(
+            ledger.ledger_hash, sentinel,
+            "FrontierLedger hash must not be placeholder"
+        );
+
+        // PromotionPipeline::new
+        let pipeline = PromotionPipeline::new("pipe-ph", epoch);
+        assert_ne!(
+            pipeline.pipeline_hash, sentinel,
+            "PromotionPipeline hash must not be placeholder"
+        );
+    }
 }

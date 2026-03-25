@@ -373,7 +373,9 @@ fn compute_receipt_hash(receipt: &InvalidationReceipt) -> ContentHash {
     hasher.update(b"InvalidationReceipt:v1:");
     hasher.update(receipt.receipt_id.as_bytes());
     hasher.update(format!("{}", receipt.scope).as_bytes());
-    for m in &receipt.affected_modules {
+    let mut sorted_modules = receipt.affected_modules.clone();
+    sorted_modules.sort();
+    for m in &sorted_modules {
         hasher.update(b"affected:");
         hasher.update(m.as_bytes());
     }

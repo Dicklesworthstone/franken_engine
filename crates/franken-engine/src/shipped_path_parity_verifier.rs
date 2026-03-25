@@ -430,7 +430,9 @@ impl ParityMatrix {
     /// Compute a deterministic content hash over the matrix.
     pub fn content_hash(&self) -> ContentHash {
         let mut entries = Vec::new();
-        for case in &self.test_cases {
+        let mut sorted_cases: Vec<_> = self.test_cases.iter().collect();
+        sorted_cases.sort_by(|a, b| a.id.cmp(&b.id));
+        for case in &sorted_cases {
             entries.push(CanonicalValue::Map(BTreeMap::from([
                 ("id".to_string(), CanonicalValue::String(case.id.clone())),
                 (

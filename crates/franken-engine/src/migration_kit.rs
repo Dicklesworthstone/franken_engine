@@ -1700,13 +1700,19 @@ pub fn generate_manifest(
     })?;
 
     let manifest_bytes = serde_json::to_vec(&(
+        format!("{:?}", input.source_runtime),
         &input.source_package_name,
         &input.source_version,
         &franken_extension_name,
+        "0.1.0", // franken_extension_version
         &input.capabilities.minimum_capability_set,
+        &input.entry_point,
+        input.compatibility.compatibility_score_millionths,
+        input.behavior.parity_score_millionths,
         readiness,
+        input.epoch.as_u64(),
     ))
-    .unwrap_or_default();
+    .expect("migration manifest must serialize for content hash");
     let manifest_content_hash = ContentHash::compute(&manifest_bytes);
 
     Ok(MigrationManifest {

@@ -363,6 +363,9 @@ impl SyntheticWorkload {
         strategy: SynthesisStrategy,
         seed: &[u8],
         generation: u64,
+        size_bytes: u64,
+        complexity_score: u64,
+        epoch: SecurityEpoch,
     ) -> ContentHash {
         let mut h = Sha256::new();
         h.update(b"adversarial-workload-v1:");
@@ -375,6 +378,12 @@ impl SyntheticWorkload {
         h.update(seed);
         h.update(b":");
         h.update(generation.to_le_bytes());
+        h.update(b":");
+        h.update(size_bytes.to_le_bytes());
+        h.update(b":");
+        h.update(complexity_score.to_le_bytes());
+        h.update(b":");
+        h.update(epoch.as_u64().to_le_bytes());
         ContentHash::compute(&h.finalize())
     }
 }
@@ -655,9 +664,20 @@ impl DecisionReceipt {
         h.update(result.workloads_tested.to_le_bytes());
         h.update(b":");
         h.update(result.coverage_fraction.to_le_bytes());
-        for ce in &result.counterexamples {
+        h.update(b":");
+        h.update(result.search_budget_used.to_le_bytes());
+        h.update(b":");
+        h.update(result.epoch.as_u64().to_le_bytes());
+        // Sort counterexamples by workload_id for determinism.
+        let mut sorted_ces: Vec<_> = result.counterexamples.iter().collect();
+        sorted_ces.sort_by(|a, b| a.workload.workload_id.cmp(&b.workload.workload_id));
+        for ce in &sorted_ces {
             h.update(ce.workload.workload_id.as_bytes());
+            h.update(ce.workload.program_hash.as_bytes());
+            h.update(format!("{:?}", ce.severity).as_bytes());
             h.update(ce.gap_fraction.to_le_bytes());
+            h.update(ce.expected_millionths.to_le_bytes());
+            h.update(ce.observed_millionths.to_le_bytes());
         }
         ContentHash::compute(&h.finalize())
     }
@@ -731,8 +751,16 @@ pub fn generate_workload(
         .saturating_add(generation.saturating_mul(16))
         .saturating_add(seed.len() as u64);
 
-    let program_hash =
-        SyntheticWorkload::compute_hash(&workload_id, archetype, strategy, seed, generation);
+    let program_hash = SyntheticWorkload::compute_hash(
+        &workload_id,
+        archetype,
+        strategy,
+        seed,
+        generation,
+        size_bytes,
+        complexity_score,
+        epoch,
+    );
 
     SyntheticWorkload {
         workload_id,

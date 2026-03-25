@@ -29,6 +29,13 @@ const DEFAULT_GRACE_PERIOD_NS: u64 = 5_000_000_000; // 5 seconds
 /// Default challenge timeout (nanoseconds).
 const DEFAULT_CHALLENGE_TIMEOUT_NS: u64 = 10_000_000_000; // 10 seconds
 
+/// The well-known hash of the byte string `b"placeholder"`.  Used in
+/// debug assertions to verify that two-phase construction always
+/// recomputes the real hash before returning.
+fn placeholder_sentinel() -> ContentHash {
+    ContentHash::compute(b"placeholder")
+}
+
 // ---------------------------------------------------------------------------
 // ContainmentError
 // ---------------------------------------------------------------------------
@@ -472,6 +479,11 @@ impl ContainmentExecutor {
         // Compute content hash (duration_ns deliberately excluded for
         // deterministic replay — see canonical_bytes() doc comment).
         receipt.content_hash = ContentHash::compute(&receipt.canonical_bytes());
+        debug_assert_ne!(
+            receipt.content_hash,
+            placeholder_sentinel(),
+            "containment receipt hash must not be the placeholder sentinel"
+        );
 
         ext.receipts.push(receipt.clone());
         Ok(receipt)
@@ -578,6 +590,11 @@ impl ContainmentExecutor {
             .metadata
             .insert("resume".to_string(), "true".to_string());
         receipt.content_hash = ContentHash::compute(&receipt.canonical_bytes());
+        debug_assert_ne!(
+            receipt.content_hash,
+            placeholder_sentinel(),
+            "resume receipt hash must not be the placeholder sentinel"
+        );
 
         ext.receipts.push(receipt.clone());
         Ok(receipt)

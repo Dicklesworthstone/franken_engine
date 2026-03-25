@@ -526,7 +526,20 @@ impl GovernanceReceipt {
         for h in &port_hashes {
             buf.extend_from_slice(h.as_bytes());
         }
+        // Include violation details, not just count.
         append_u64(&mut buf, self.violations.len() as u64);
+        for v in &self.violations {
+            append_str(&mut buf, &format!("{:?}", v.category));
+            append_str(&mut buf, &v.summary);
+        }
+        // Include portability score and target coverage.
+        append_u64(&mut buf, self.portability_score_millionths as u64);
+        for t in &self.targets_covered {
+            append_str(&mut buf, &format!("{t:?}"));
+        }
+        for t in &self.targets_missing {
+            append_str(&mut buf, &format!("{t:?}"));
+        }
         compute_digest(&buf)
     }
 }

@@ -725,12 +725,10 @@ impl ClaimEntitlementContract {
                                 .all(|constraint_id| {
                                     satisfied_constraints.contains(constraint_id.as_str())
                                 })
-                            && morphism.blocked_by_rules.iter().all(|rule_id| {
-                                !active_rule_ids.contains(rule_id.as_str())
-                                    || rule_lookup.get(rule_id.as_str()).is_some_and(|rule| {
-                                        rule.verdict != DisqualifierVerdict::Forbid
-                                    })
-                            })
+                            && morphism
+                                .blocked_by_rules
+                                .iter()
+                                .all(|rule_id| !active_rule_ids.contains(rule_id.as_str()))
                     })
                     .map(|morphism| morphism.morphism_id.clone())
                     .collect::<Vec<_>>();

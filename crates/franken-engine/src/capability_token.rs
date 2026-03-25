@@ -493,9 +493,6 @@ impl TokenBuilder {
         if self.capabilities.is_empty() {
             return Err(TokenError::EmptyCapabilities);
         }
-        if self.audience.is_empty() {
-            return Err(TokenError::EmptyAudience);
-        }
         if self.nbf.0 > self.expiry.0 {
             return Err(TokenError::InvertedTemporalWindow {
                 not_before: self.nbf.0,

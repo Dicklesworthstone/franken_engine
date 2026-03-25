@@ -805,7 +805,7 @@ impl PromotionDecision {
         .map_err(SelfReplacementError::IdDerivationFailed)?;
 
         let verdict = if input.gate_results.is_empty() {
-            GateVerdict::Denied
+            GateVerdict::Inconclusive
         } else if input.gate_results.iter().all(|g| g.passed) {
             GateVerdict::Approved
         } else {

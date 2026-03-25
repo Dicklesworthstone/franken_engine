@@ -873,7 +873,7 @@ impl ForensicReplayer {
         for (i, ev) in original.iter().enumerate() {
             // Insert any injections that should come at this index (before the
             // original element at position i).
-            while inject_idx < sorted_inject.len() && sorted_inject[inject_idx].0 < i {
+            while inject_idx < sorted_inject.len() && sorted_inject[inject_idx].0 <= i {
                 result.push(sorted_inject[inject_idx].1.clone());
                 inject_idx += 1;
             }

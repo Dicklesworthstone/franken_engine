@@ -297,11 +297,12 @@ impl ArrayLaneDescriptor {
         reason: TransitionReason,
         epoch: SecurityEpoch,
         trigger_offset: u32,
-    ) {
+    ) -> ElementKindTransition {
         let transition =
             ElementKindTransition::new(self.element_kind, new_kind, reason, epoch, trigger_offset);
-        self.transitions.push(transition);
+        self.transitions.push(transition.clone());
         self.element_kind = new_kind;
+        transition
     }
 
     /// Record an element access.
@@ -745,11 +746,10 @@ impl ArrayFastLaneEngine {
             return None;
         }
 
-        lane.transition(new_kind, reason.clone(), self.epoch, trigger_offset);
+        let transition = lane.transition(new_kind, reason.clone(), self.epoch, trigger_offset);
         let survived = lane.fast_lane_active;
 
         if self.policy.emit_transition_receipts {
-            let transition = lane.transitions.last().cloned().unwrap();
             let receipt = TransitionReceipt::new(array_id, transition, survived);
             let result = receipt.clone();
             self.receipts.push(receipt);

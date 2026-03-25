@@ -87,10 +87,11 @@ pub struct TsNormalizationOutput {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
 pub enum SourceLanguage {
     #[default]
+    #[serde(rename = "javascript")]
     JavaScript,
+    #[serde(rename = "typescript")]
     TypeScript,
 }
 

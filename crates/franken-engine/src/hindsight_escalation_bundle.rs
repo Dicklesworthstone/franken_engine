@@ -1452,8 +1452,10 @@ mod tests {
 
     #[test]
     fn pipeline_receipt_preserves_budget_before_for_forced_auto_escalation() {
-        let mut policy = EscalationPolicy::default();
-        policy.cost_budget_millionths = 1;
+        let mut policy = EscalationPolicy {
+            cost_budget_millionths: 1,
+            ..Default::default()
+        };
         policy.always_escalate.clear();
         let mut pipeline = EscalationPipeline::new(policy, test_epoch());
 

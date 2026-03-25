@@ -454,7 +454,14 @@ impl InterferenceMetadata {
         let mut canonical_entries: Vec<_> =
             entries.into_iter().map(Self::canonicalize_entry).collect();
         canonical_entries.sort();
-        canonical_entries.dedup();
+        // Dedup by key fields (rule_a, rule_b, kind, is_blocking), ignoring
+        // detail so symmetric pairs with different descriptions collapse.
+        canonical_entries.dedup_by(|a, b| {
+            a.rule_a == b.rule_a
+                && a.rule_b == b.rule_b
+                && a.kind == b.kind
+                && a.is_blocking == b.is_blocking
+        });
         canonical_entries
     }
 
@@ -1507,7 +1514,7 @@ mod tests {
         catalog.register(test_pack("b", vec![]));
 
         assert!(catalog.add_cross_interference("a", "b", InterferenceMetadata::build(vec![]),));
-        let hash_before = catalog.content_hash.clone();
+        let hash_before = catalog.content_hash;
 
         assert!(!catalog.add_cross_interference(
             "b",

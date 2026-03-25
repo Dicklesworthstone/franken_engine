@@ -553,8 +553,13 @@ impl CellManager {
     ) -> &mut ExecutionCell {
         let cell_id = cell_id.into();
         let cell = ExecutionCell::new(&cell_id, CellKind::Extension, trace_id);
-        self.cells.insert(cell_id.clone(), cell);
-        self.cells.get_mut(&cell_id).expect("just inserted")
+        match self.cells.entry(cell_id) {
+            std::collections::btree_map::Entry::Occupied(mut o) => {
+                o.insert(cell);
+                o.into_mut()
+            }
+            std::collections::btree_map::Entry::Vacant(v) => v.insert(cell),
+        }
     }
 
     /// Create and register a new delegate cell.
@@ -565,8 +570,13 @@ impl CellManager {
     ) -> &mut ExecutionCell {
         let cell_id = cell_id.into();
         let cell = ExecutionCell::new(&cell_id, CellKind::Delegate, trace_id);
-        self.cells.insert(cell_id.clone(), cell);
-        self.cells.get_mut(&cell_id).expect("just inserted")
+        match self.cells.entry(cell_id) {
+            std::collections::btree_map::Entry::Occupied(mut o) => {
+                o.insert(cell);
+                o.into_mut()
+            }
+            std::collections::btree_map::Entry::Vacant(v) => v.insert(cell),
+        }
     }
 
     /// Register a pre-created cell.
@@ -576,8 +586,13 @@ impl CellManager {
         cell: ExecutionCell,
     ) -> &mut ExecutionCell {
         let cell_id = cell_id.into();
-        self.cells.insert(cell_id.clone(), cell);
-        self.cells.get_mut(&cell_id).expect("just inserted")
+        match self.cells.entry(cell_id) {
+            std::collections::btree_map::Entry::Occupied(mut o) => {
+                o.insert(cell);
+                o.into_mut()
+            }
+            std::collections::btree_map::Entry::Vacant(v) => v.insert(cell),
+        }
     }
 
     /// Get a reference to a cell.

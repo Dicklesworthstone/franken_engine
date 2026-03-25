@@ -1115,7 +1115,13 @@ impl ParseEventIr {
             }
         }
 
-        let started = self.events.first().expect("non-empty events");
+        let started = self.events.first().ok_or_else(|| {
+            ParseEventMaterializationError::new(
+                ParseEventMaterializationErrorCode::MissingParseStarted,
+                "event stream is empty".to_string(),
+                None,
+            )
+        })?;
         if started.kind != ParseEventKind::ParseStarted || started.sequence != 0 {
             return Err(ParseEventMaterializationError::new(
                 ParseEventMaterializationErrorCode::MissingParseStarted,
@@ -1123,7 +1129,13 @@ impl ParseEventIr {
                 Some(started.sequence),
             ));
         }
-        let completed = self.events.last().expect("non-empty events");
+        let completed = self.events.last().ok_or_else(|| {
+            ParseEventMaterializationError::new(
+                ParseEventMaterializationErrorCode::MissingParseCompleted,
+                "event stream is empty".to_string(),
+                None,
+            )
+        })?;
         if completed.kind != ParseEventKind::ParseCompleted {
             return Err(ParseEventMaterializationError::new(
                 ParseEventMaterializationErrorCode::MissingParseCompleted,

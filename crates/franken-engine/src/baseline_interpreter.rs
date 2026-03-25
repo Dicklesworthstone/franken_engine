@@ -966,7 +966,10 @@ impl InterpreterCore {
 
                             // Copy arguments into registers for the callee.
                             for (i, val) in arg_vals.into_iter().enumerate() {
-                                self.write_reg(i as u32, val)?;
+                                let reg = i as u32;
+                                if reg < self.config.max_registers {
+                                    self.write_reg(reg, val)?;
+                                }
                             }
 
                             self.ip = func.entry as usize;
@@ -1293,7 +1296,10 @@ impl InterpreterCore {
                             self.write_reg(0, this_val)?;
                             // Arguments start at register 1.
                             for (i, val) in arg_vals.into_iter().enumerate() {
-                                self.write_reg((i + 1) as u32, val)?;
+                                let reg = (i + 1) as u32;
+                                if reg < self.config.max_registers {
+                                    self.write_reg(reg, val)?;
+                                }
                             }
 
                             self.ip = func.entry as usize;
@@ -1457,8 +1463,22 @@ impl InterpreterCore {
         match (&a, &b) {
             (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x.wrapping_add(*y))),
             (Value::Str(x), Value::Str(y)) => Ok(Value::Str(format!("{x}{y}"))),
-            (Value::Str(x), other) => Ok(Value::Str(format!("{x}{other}"))),
-            (other, Value::Str(y)) => Ok(Value::Str(format!("{other}{y}"))),
+            (Value::Str(x), other) => {
+                let other_str = match other {
+                    Value::Object(_) | Value::Iterator(_) => "[object Object]".to_string(),
+                    Value::Function(_) => "function".to_string(),
+                    _ => other.to_string(),
+                };
+                Ok(Value::Str(format!("{x}{other_str}")))
+            }
+            (other, Value::Str(y)) => {
+                let other_str = match other {
+                    Value::Object(_) | Value::Iterator(_) => "[object Object]".to_string(),
+                    Value::Function(_) => "function".to_string(),
+                    _ => other.to_string(),
+                };
+                Ok(Value::Str(format!("{other_str}{y}")))
+            }
             _ => {
                 // JS coercion: non-string primitives coerce to number for +.
                 let x = Self::coerce_to_number(&a).ok_or(InterpreterError::TypeError {
@@ -1957,7 +1977,7 @@ impl InterpreterCore {
 
     /// Allocate a new object with an explicit prototype link.
     fn alloc_object_with_prototype(&mut self, prototype: Option<ObjectId>) -> ObjectId {
-        let id = ObjectId(self.heap.len() as u32);
+        let id = ObjectId(u32::try_from(self.heap.len()).unwrap_or(u32::MAX));
         let mut object = HeapObject::new();
         object.prototype = prototype;
         self.heap.push(object);
@@ -1970,7 +1990,7 @@ impl InterpreterCore {
     }
 
     fn alloc_iterator(&mut self, iterator: RuntimeIteratorState) -> u32 {
-        let handle = self.iterators.len() as u32;
+        let handle = u32::try_from(self.iterators.len()).unwrap_or(u32::MAX);
         self.iterators.push(iterator);
         handle
     }

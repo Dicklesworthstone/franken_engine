@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::hash_tiers::ContentHash;
+use crate::runtime_config::{GovernanceConfig as RuntimeGovernanceConfig, RuntimeConfig};
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -245,19 +246,53 @@ pub struct GovernanceConfig {
     pub critical_surfaces: BTreeSet<String>,
 }
 
+impl GovernanceConfig {
+    fn default_critical_surfaces() -> BTreeSet<String> {
+        ["parser", "runtime"]
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Build governance thresholds from the canonical runtime config.
+    ///
+    /// `RuntimeConfig` currently carries the numeric governance thresholds.
+    /// Critical-surface policy remains local to this module until it is
+    /// promoted into the central config schema.
+    pub fn from_runtime_config(runtime_config: &RuntimeConfig) -> Self {
+        Self::from(&runtime_config.governance)
+    }
+}
+
 impl Default for GovernanceConfig {
     fn default() -> Self {
-        let mut critical = BTreeSet::new();
-        critical.insert("parser".to_string());
-        critical.insert("runtime".to_string());
         Self {
             max_persistent_holes: DEFAULT_MAX_PERSISTENT_HOLES,
             max_structural_holes: DEFAULT_MAX_STRUCTURAL_HOLES,
             min_supremacy_coverage_millionths: DEFAULT_MIN_SUPREMACY_COVERAGE,
             min_parity_coverage_millionths: DEFAULT_MIN_PARITY_COVERAGE,
             ratchet_decay_millionths: DEFAULT_RATCHET_DECAY,
-            critical_surfaces: critical,
+            critical_surfaces: Self::default_critical_surfaces(),
         }
+    }
+}
+
+impl From<&RuntimeGovernanceConfig> for GovernanceConfig {
+    fn from(config: &RuntimeGovernanceConfig) -> Self {
+        Self {
+            max_persistent_holes: config.max_persistent_holes,
+            max_structural_holes: config.max_structural_holes,
+            min_supremacy_coverage_millionths: config.min_supremacy_coverage_millionths,
+            min_parity_coverage_millionths: config.min_parity_coverage_millionths,
+            ratchet_decay_millionths: config.ratchet_decay_millionths,
+            critical_surfaces: Self::default_critical_surfaces(),
+        }
+    }
+}
+
+impl From<&RuntimeConfig> for GovernanceConfig {
+    fn from(config: &RuntimeConfig) -> Self {
+        Self::from_runtime_config(config)
     }
 }
 
@@ -1416,6 +1451,80 @@ mod tests {
         let cfg = GovernanceConfig::default();
         assert!(cfg.critical_surfaces.contains("parser"));
         assert!(cfg.critical_surfaces.contains("runtime"));
+    }
+
+    #[test]
+    fn runtime_config_defaults_match_frontier_defaults() {
+        let cfg = GovernanceConfig::from_runtime_config(&RuntimeConfig::default());
+        assert_eq!(cfg, GovernanceConfig::default());
+    }
+
+    #[test]
+    fn runtime_config_relaxed_thresholds_allow_more_claims() {
+        let mut holes = Vec::new();
+        for i in 0..10 {
+            holes.push(make_hole(&format!("p{i}"), "react", true, false));
+        }
+        for i in 0..40 {
+            holes.push(make_hole(&format!("n{i}"), "react", false, false));
+        }
+
+        let cov = compute_surface_coverage(&holes);
+        assert_eq!(cov.get("react"), Some(&800_000));
+
+        let default_dec = evaluate_claim(
+            ClaimCategory::Supremacy,
+            "react",
+            &holes,
+            &cov,
+            &default_config(),
+        );
+        assert_eq!(default_dec.action, GovernanceAction::SuppressClaim);
+
+        let mut runtime_config = RuntimeConfig::default();
+        runtime_config.governance.max_persistent_holes = 10;
+        runtime_config.governance.min_supremacy_coverage_millionths = 800_000;
+        let relaxed = GovernanceConfig::from_runtime_config(&runtime_config);
+
+        let relaxed_dec = evaluate_claim(ClaimCategory::Supremacy, "react", &holes, &cov, &relaxed);
+        assert_eq!(relaxed_dec.action, GovernanceAction::AllowClaim);
+    }
+
+    #[test]
+    fn runtime_config_zero_decay_blocks_late_regression() {
+        let mut ratchet = RatchetState::new();
+        ratchet.initialized = true;
+        ratchet.surface_levels.insert("parser".to_string(), 900_000);
+        ratchet.last_epoch = SecurityEpoch::from_raw(1);
+        ratchet.seal();
+
+        let mut cov = BTreeMap::new();
+        cov.insert("parser".to_string(), 800_000u64);
+
+        assert!(
+            update_ratchet(
+                &ratchet,
+                &cov,
+                SecurityEpoch::from_raw(10),
+                &default_config()
+            )
+            .is_ok()
+        );
+
+        let mut runtime_config = RuntimeConfig::default();
+        runtime_config.governance.ratchet_decay_millionths = 0;
+        let strict = GovernanceConfig::from_runtime_config(&runtime_config);
+
+        let err = update_ratchet(&ratchet, &cov, SecurityEpoch::from_raw(10), &strict)
+            .expect_err("zero decay should keep the previous ratchet level intact");
+        assert_eq!(
+            err,
+            GovernanceError::RatchetRegression {
+                surface: "parser".into(),
+                previous_millionths: 900_000,
+                current_millionths: 800_000,
+            }
+        );
     }
 
     #[test]

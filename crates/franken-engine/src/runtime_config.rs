@@ -188,6 +188,12 @@ pub struct DecisionThresholdsConfig {
     pub elevated_regime_shift_millionths: i64,
     /// Critical regime-shift sigma (millionths, must be >= elevated).
     pub critical_regime_shift_millionths: i64,
+    /// CVaR-to-baseline ratio threshold for critical alert (millionths).
+    /// Default 20_000_000 = 20x baseline expected loss.
+    pub critical_cvar_ratio_millionths: i64,
+    /// CVaR-to-baseline ratio threshold for elevated alert (millionths).
+    /// Default 8_000_000 = 8x baseline expected loss.
+    pub elevated_cvar_ratio_millionths: i64,
 }
 
 impl Default for DecisionThresholdsConfig {
@@ -198,6 +204,8 @@ impl Default for DecisionThresholdsConfig {
             critical_pvalue_millionths: 50_000,
             elevated_regime_shift_millionths: 2_500_000,
             critical_regime_shift_millionths: 4_000_000,
+            critical_cvar_ratio_millionths: 20_000_000,
+            elevated_cvar_ratio_millionths: 8_000_000,
         }
     }
 }
@@ -347,30 +355,8 @@ impl Default for OptimizationConfig {
 // ExtensionHostConfig
 // ---------------------------------------------------------------------------
 
-/// Extension manifest field limits.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ExtensionHostConfig {
-    /// Maximum extension name length.
-    pub max_name_len: usize,
-    /// Maximum version string length.
-    pub max_version_len: usize,
-    /// Maximum entrypoint path length.
-    pub max_entrypoint_len: usize,
-    /// Maximum trust chain reference length.
-    pub max_trust_chain_ref_len: usize,
-}
-
-impl Default for ExtensionHostConfig {
-    fn default() -> Self {
-        Self {
-            max_name_len: 128,
-            max_version_len: 64,
-            max_entrypoint_len: 1024,
-            max_trust_chain_ref_len: 256,
-        }
-    }
-}
+/// Extension manifest field limits shared with `frankenengine-extension-host`.
+pub use frankenengine_extension_host::ExtensionHostConfig;
 
 // ---------------------------------------------------------------------------
 // RuntimeConfig — top-level configuration
@@ -657,6 +643,27 @@ impl RuntimeConfig {
                 section: ts.to_string(),
                 field: "critical_regime_shift_millionths".to_string(),
                 message: "must be >= elevated_regime_shift_millionths".to_string(),
+            });
+        }
+        if t.critical_cvar_ratio_millionths <= 0 {
+            errors.push(ConfigValidationError {
+                section: ts.to_string(),
+                field: "critical_cvar_ratio_millionths".to_string(),
+                message: "must be > 0".to_string(),
+            });
+        }
+        if t.elevated_cvar_ratio_millionths <= 0 {
+            errors.push(ConfigValidationError {
+                section: ts.to_string(),
+                field: "elevated_cvar_ratio_millionths".to_string(),
+                message: "must be > 0".to_string(),
+            });
+        }
+        if t.critical_cvar_ratio_millionths < t.elevated_cvar_ratio_millionths {
+            errors.push(ConfigValidationError {
+                section: ts.to_string(),
+                field: "critical_cvar_ratio_millionths".to_string(),
+                message: "must be >= elevated_cvar_ratio_millionths".to_string(),
             });
         }
 
@@ -1118,6 +1125,18 @@ grace_period_ns = 1000000000
     }
 
     #[test]
+    fn validation_rejects_zero_extension_host_name_limit() {
+        let mut config = RuntimeConfig::default();
+        config.extension_host.max_name_len = 0;
+        let err = config.validate().unwrap_err();
+        if let ConfigError::ValidationFailed { errors } = &err {
+            assert!(errors.iter().any(|e| e.field == "max_name_len"));
+        } else {
+            panic!("expected ValidationFailed");
+        }
+    }
+
+    #[test]
     fn validation_rejects_excessive_call_depth() {
         let mut config = RuntimeConfig::default();
         config.execution.max_call_depth = 20_000;
@@ -1250,5 +1269,21 @@ floor_mass = 100
         assert_eq!(config.guardplane.priors.benign_millionths, 700_000);
         assert_eq!(config.guardplane.priors.anomalous_millionths, 150_000);
         assert_eq!(config.guardplane.priors.malicious_millionths, 50_000);
+    }
+
+    #[test]
+    fn custom_extension_host_limits_via_toml() {
+        let toml_str = r#"
+[extension_host]
+max_name_len = 256
+max_version_len = 96
+max_entrypoint_len = 2048
+max_trust_chain_ref_len = 512
+"#;
+        let config = RuntimeConfig::from_toml(toml_str).unwrap();
+        assert_eq!(config.extension_host.max_name_len, 256);
+        assert_eq!(config.extension_host.max_version_len, 96);
+        assert_eq!(config.extension_host.max_entrypoint_len, 2048);
+        assert_eq!(config.extension_host.max_trust_chain_ref_len, 512);
     }
 }

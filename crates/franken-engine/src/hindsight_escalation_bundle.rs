@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::hash_tiers::ContentHash;
 use crate::hindsight_boundary_capture::{BoundaryClass, RedactionTreatment};
+use crate::runtime_config::GatesConfig;
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -475,6 +476,15 @@ impl Default for EscalationPolicy {
 }
 
 impl EscalationPolicy {
+    /// Create a policy with the cost budget from a [`GatesConfig`], keeping
+    /// all other fields at their defaults.
+    pub fn with_gates_config(config: &GatesConfig) -> Self {
+        Self {
+            cost_budget_millionths: config.escalation_cost_budget_millionths,
+            ..Self::default()
+        }
+    }
+
     /// Get the content kinds for a given severity level.
     pub fn content_for_severity(&self, severity: TriggerSeverity) -> &[BundleContentKind] {
         match severity {

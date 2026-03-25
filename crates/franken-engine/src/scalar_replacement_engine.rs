@@ -27,6 +27,7 @@ use crate::escape_analysis_certificate::{
     AllocationKind, EscapeCertificate, EscapeState, OptimizationEligibilityEnvelope,
 };
 use crate::hash_tiers::ContentHash;
+use crate::runtime_config::OptimizationConfig;
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -561,6 +562,20 @@ impl Default for ScalarReplacementConfig {
             enable_region_promotion: true,
             enable_allocation_sinking: true,
             min_sinking_span: 5,
+        }
+    }
+}
+
+impl ScalarReplacementConfig {
+    /// Create from an [`OptimizationConfig`], inheriting limits while
+    /// keeping boolean flags and sinking span at their defaults.
+    pub fn from_optimization_config(opt: &OptimizationConfig) -> Self {
+        Self {
+            max_fields: opt.max_scalar_fields,
+            max_decomposition_depth: opt.max_decomposition_depth,
+            max_transforms_per_scope: opt.max_transforms_per_scope as u32,
+            min_confidence_millionths: opt.min_confidence_millionths as i64,
+            ..Self::default()
         }
     }
 }

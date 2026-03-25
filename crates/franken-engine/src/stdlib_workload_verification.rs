@@ -26,6 +26,7 @@ use crate::callback_stdlib_dispatch::{
     CallbackKind, DispatchDecision, DispatchStrategy, DispatchTrace, StdlibMethod,
 };
 use crate::hash_tiers::ContentHash;
+use crate::runtime_config::GatesConfig;
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -507,12 +508,11 @@ pub fn verify_scenario(scenario: &WorkloadScenario, decision: &DispatchDecision)
 /// Check whether a strategy honors the given mutation contract.
 pub fn check_mutation_contract(contract: MutationContract, _strategy: &DispatchStrategy) -> bool {
     // All dispatch strategies honor the mutation contract as long as the
-    // callback classification is correct. The only violation would be if a
-    // read-only contract is paired with an in-place-mutating strategy, but
-    // our dispatch layer ensures this doesn't happen.
+    // callback classification is correct.  The dispatch layer enforces
+    // that read-only contracts are never paired with mutating strategies.
     //
-    // In a real system, this would inspect the strategy's side-effect model.
-    // For the verification harness, we check contract consistency.
+    // This verification checks contract *consistency* (valid enum
+    // combinations) rather than deep side-effect model inspection.
     match contract {
         MutationContract::ReadOnly
         | MutationContract::Accumulator
@@ -527,6 +527,17 @@ pub fn build_verification_report(
     report_id: &str,
     epoch: &SecurityEpoch,
     results: &[ScenarioResult],
+) -> VerificationReport {
+    build_verification_report_with_gates_config(report_id, epoch, results, &GatesConfig::default())
+}
+
+/// Build a verification report using runtime gate thresholds.
+#[allow(clippy::type_complexity)]
+pub fn build_verification_report_with_gates_config(
+    report_id: &str,
+    epoch: &SecurityEpoch,
+    results: &[ScenarioResult],
+    config: &GatesConfig,
 ) -> VerificationReport {
     let total = results.len() as u64;
     let pass_count = results.iter().filter(|r| r.outcome.is_pass()).count() as u64;
@@ -611,7 +622,8 @@ pub fn build_verification_report(
         )
         .collect();
 
-    let is_healthy = pass_rate >= MIN_PASS_RATE_MILLIONTHS && mutation_violations.is_empty();
+    let is_healthy = pass_rate >= config.workload_min_pass_rate_millionths
+        && mutation_violations.len() <= config.max_mutation_violations;
 
     let mut report = VerificationReport {
         report_id: report_id.to_string(),
@@ -635,6 +647,16 @@ pub fn verify_trace_against_suite(
     suite: &WorkloadSuite,
     trace: &DispatchTrace,
     epoch: &SecurityEpoch,
+) -> VerificationReport {
+    verify_trace_against_suite_with_gates_config(suite, trace, epoch, &GatesConfig::default())
+}
+
+/// Verify an entire dispatch trace against a workload suite using runtime gate thresholds.
+pub fn verify_trace_against_suite_with_gates_config(
+    suite: &WorkloadSuite,
+    trace: &DispatchTrace,
+    epoch: &SecurityEpoch,
+    config: &GatesConfig,
 ) -> VerificationReport {
     let mut results = Vec::new();
 
@@ -664,7 +686,7 @@ pub fn verify_trace_against_suite(
         results.push(result);
     }
 
-    build_verification_report(&suite.suite_id, epoch, &results)
+    build_verification_report_with_gates_config(&suite.suite_id, epoch, &results, config)
 }
 
 /// Build the canonical workload suite covering all stdlib methods with pure callbacks.
@@ -1044,6 +1066,91 @@ mod tests {
         assert_eq!(report.fail_count, 1);
         assert_eq!(report.pass_rate_millionths, 500_000);
         assert!(!report.is_healthy);
+    }
+
+    #[test]
+    fn test_report_with_relaxed_workload_threshold_is_healthy() {
+        let results = vec![
+            {
+                let mut r = ScenarioResult {
+                    scenario_id: "s1".to_string(),
+                    outcome: WorkloadOutcome::Pass,
+                    actual_strategy: DispatchStrategy::InlinedCallback,
+                    mutation_honored: true,
+                    observed_cost_millionths: 100_000,
+                    observed_deopt_risk_millionths: 50_000,
+                    details: String::new(),
+                    content_hash: ContentHash::compute(b""),
+                };
+                r.seal();
+                r
+            },
+            {
+                let mut r = ScenarioResult {
+                    scenario_id: "s2".to_string(),
+                    outcome: WorkloadOutcome::Mismatch,
+                    actual_strategy: DispatchStrategy::FallbackSlow,
+                    mutation_honored: true,
+                    observed_cost_millionths: 800_000,
+                    observed_deopt_risk_millionths: 700_000,
+                    details: "expected inlined".to_string(),
+                    content_hash: ContentHash::compute(b""),
+                };
+                r.seal();
+                r
+            },
+        ];
+        let config = GatesConfig {
+            workload_min_pass_rate_millionths: 500_000,
+            ..GatesConfig::default()
+        };
+        let report =
+            build_verification_report_with_gates_config("r1", &test_epoch(), &results, &config);
+        assert_eq!(report.pass_rate_millionths, 500_000);
+        assert!(report.is_healthy);
+    }
+
+    #[test]
+    fn test_report_with_mutation_violation_budget_is_healthy() {
+        let results = vec![
+            {
+                let mut r = ScenarioResult {
+                    scenario_id: "s1".to_string(),
+                    outcome: WorkloadOutcome::Pass,
+                    actual_strategy: DispatchStrategy::InlinedCallback,
+                    mutation_honored: true,
+                    observed_cost_millionths: 100_000,
+                    observed_deopt_risk_millionths: 50_000,
+                    details: String::new(),
+                    content_hash: ContentHash::compute(b""),
+                };
+                r.seal();
+                r
+            },
+            {
+                let mut r = ScenarioResult {
+                    scenario_id: "s2".to_string(),
+                    outcome: WorkloadOutcome::MutationViolation,
+                    actual_strategy: DispatchStrategy::FallbackSlow,
+                    mutation_honored: false,
+                    observed_cost_millionths: 200_000,
+                    observed_deopt_risk_millionths: 150_000,
+                    details: "mutated source collection".to_string(),
+                    content_hash: ContentHash::compute(b""),
+                };
+                r.seal();
+                r
+            },
+        ];
+        let config = GatesConfig {
+            workload_min_pass_rate_millionths: 500_000,
+            max_mutation_violations: 1,
+            ..GatesConfig::default()
+        };
+        let report =
+            build_verification_report_with_gates_config("r1", &test_epoch(), &results, &config);
+        assert_eq!(report.mutation_violations.len(), 1);
+        assert!(report.is_healthy);
     }
 
     #[test]

@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::hash_tiers::ContentHash;
+use crate::runtime_config::OptimizationConfig;
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -620,10 +621,19 @@ impl RewritePack {
     }
 
     fn is_canonical(&self) -> bool {
+        self.is_canonical_with_limits(MAX_RULES_PER_PACK, MAX_INTERFERENCE_ENTRIES)
+    }
+
+    /// Canonicality check with configurable limits from [`OptimizationConfig`].
+    pub fn is_canonical_with_config(&self, config: &OptimizationConfig) -> bool {
+        self.is_canonical_with_limits(config.max_rules_per_pack, config.max_interference_entries)
+    }
+
+    fn is_canonical_with_limits(&self, max_rules: usize, max_interference: usize) -> bool {
         if self.schema_version != PACK_SCHEMA_VERSION
             || self.pack_id.is_empty()
-            || self.rules.len() > MAX_RULES_PER_PACK
-            || self.interference.entries.len() > MAX_INTERFERENCE_ENTRIES
+            || self.rules.len() > max_rules
+            || self.interference.entries.len() > max_interference
             || !self.has_valid_rule_ids()
             || !self.interference.is_canonical()
             || !self.interference_matches_rules()

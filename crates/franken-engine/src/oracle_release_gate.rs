@@ -26,6 +26,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::hash_tiers::ContentHash;
+use crate::runtime_config::GatesConfig;
 use crate::security_epoch::SecurityEpoch;
 use serde::{Deserialize, Serialize};
 
@@ -686,6 +687,11 @@ pub fn build_gate_event(
 
 /// Build the canonical set of release gate conditions.
 pub fn default_gate_conditions() -> Vec<OracleGateCondition> {
+    default_gate_conditions_with_gates_config(&GatesConfig::default())
+}
+
+/// Build the canonical set of release gate conditions using runtime gate thresholds.
+pub fn default_gate_conditions_with_gates_config(config: &GatesConfig) -> Vec<OracleGateCondition> {
     vec![
         OracleGateCondition {
             condition_id: "scenario-pass-rate".to_string(),
@@ -693,7 +699,7 @@ pub fn default_gate_conditions() -> Vec<OracleGateCondition> {
             oracle_kind: OracleKind::Scenario,
             threshold: BlockerThreshold {
                 name: "scenario_pass_rate".to_string(),
-                threshold_value: DEFAULT_MIN_PASS_RATE,
+                threshold_value: config.min_pass_rate_millionths,
                 direction: ThresholdDirection::AtLeast,
                 is_hard_blocker: true,
             },
@@ -719,7 +725,7 @@ pub fn default_gate_conditions() -> Vec<OracleGateCondition> {
             oracle_kind: OracleKind::Contract,
             threshold: BlockerThreshold {
                 name: "contract_pass_rate".to_string(),
-                threshold_value: DEFAULT_MIN_PASS_RATE,
+                threshold_value: config.min_pass_rate_millionths,
                 direction: ThresholdDirection::AtLeast,
                 is_hard_blocker: true,
             },
@@ -732,7 +738,7 @@ pub fn default_gate_conditions() -> Vec<OracleGateCondition> {
             oracle_kind: OracleKind::Metric,
             threshold: BlockerThreshold {
                 name: "max_regression".to_string(),
-                threshold_value: DEFAULT_MAX_REGRESSION,
+                threshold_value: config.max_regression_millionths,
                 direction: ThresholdDirection::AtMost,
                 is_hard_blocker: false,
             },
@@ -758,7 +764,7 @@ pub fn default_gate_conditions() -> Vec<OracleGateCondition> {
             oracle_kind: OracleKind::Obligation,
             threshold: BlockerThreshold {
                 name: "unresolved_obligations".to_string(),
-                threshold_value: DEFAULT_MAX_UNRESOLVED,
+                threshold_value: config.max_unresolved,
                 direction: ThresholdDirection::AtMost,
                 is_hard_blocker: true,
             },
@@ -1535,6 +1541,41 @@ mod tests {
         for c in &default_gate_conditions() {
             assert!(!c.policy_ref.is_empty());
         }
+    }
+
+    #[test]
+    fn default_conditions_with_gates_config_override_thresholds() {
+        let config = GatesConfig {
+            min_pass_rate_millionths: 910_000,
+            max_regression_millionths: 25_000,
+            max_unresolved: 2,
+            ..GatesConfig::default()
+        };
+        let conditions = default_gate_conditions_with_gates_config(&config);
+
+        let scenario = conditions
+            .iter()
+            .find(|condition| condition.condition_id == "scenario-pass-rate")
+            .unwrap();
+        assert_eq!(scenario.threshold.threshold_value, 910_000);
+
+        let contract = conditions
+            .iter()
+            .find(|condition| condition.condition_id == "contract-pass-rate")
+            .unwrap();
+        assert_eq!(contract.threshold.threshold_value, 910_000);
+
+        let metric = conditions
+            .iter()
+            .find(|condition| condition.condition_id == "perf-regression")
+            .unwrap();
+        assert_eq!(metric.threshold.threshold_value, 25_000);
+
+        let obligations = conditions
+            .iter()
+            .find(|condition| condition.condition_id == "obligation-resolution")
+            .unwrap();
+        assert_eq!(obligations.threshold.threshold_value, 2);
     }
 
     #[test]

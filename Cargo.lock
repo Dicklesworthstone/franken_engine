@@ -159,6 +159,7 @@ dependencies = [
  "franken-decision",
  "franken-evidence",
  "franken-kernel",
+ "frankenengine-extension-host",
  "hex",
  "serde",
  "serde_json",

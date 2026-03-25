@@ -1237,7 +1237,7 @@ fn classify_alien_risk_alert_with_thresholds(
 
     let critical = conformal_p_value_millionths <= thresholds.critical_pvalue_millionths
         || regime_shift_score_millionths >= thresholds.critical_regime_shift_millionths
-        || cvar_ratio_millionths >= 20_000_000; // 20x baseline EL
+        || cvar_ratio_millionths >= thresholds.critical_cvar_ratio_millionths;
     if critical {
         return (
             AlienRiskAlertLevel::Critical,
@@ -1247,7 +1247,7 @@ fn classify_alien_risk_alert_with_thresholds(
 
     let elevated = conformal_p_value_millionths <= thresholds.elevated_pvalue_millionths
         || regime_shift_score_millionths >= thresholds.elevated_regime_shift_millionths
-        || cvar_ratio_millionths >= 8_000_000; // 8x baseline EL
+        || cvar_ratio_millionths >= thresholds.elevated_cvar_ratio_millionths;
     if elevated {
         return (
             AlienRiskAlertLevel::Elevated,

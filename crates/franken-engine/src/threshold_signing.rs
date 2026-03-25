@@ -89,7 +89,7 @@ impl ThresholdScope {
     }
 
     /// Stable byte encoding for deterministic canonicalization.
-    pub const fn as_bytes(&self) -> &'static [u8] {
+    pub fn as_bytes(&self) -> &'static [u8] {
         self.as_str().as_bytes()
     }
 }

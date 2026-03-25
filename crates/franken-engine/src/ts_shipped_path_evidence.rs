@@ -1,4 +1,3 @@
-
 //! Evidence harness proving that TypeScript normalization is correctly wired
 //! into the shipped execution paths (orchestrator `execute()` pipeline).
 //!

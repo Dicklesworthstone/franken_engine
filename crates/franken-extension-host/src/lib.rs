@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-pub const CURRENT_ENGINE_VERSION: &str = "0.1.0";
+pub const CURRENT_ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_NAME_LEN: usize = 128;
 pub const MAX_VERSION_LEN: usize = 64;
 pub const MAX_ENTRYPOINT_LEN: usize = 1024;
@@ -18,6 +18,31 @@ pub const MAX_TRUST_CHAIN_REF_LEN: usize = 256;
 const COMPONENT: &str = "extension_manifest_validation";
 const EMPTY_CAPABILITIES: &[Capability] = &[];
 const WRITE_IMPLIES: &[Capability] = &[Capability::FsRead];
+
+/// Extension manifest field limits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExtensionHostConfig {
+    /// Maximum extension name length.
+    pub max_name_len: usize,
+    /// Maximum version string length.
+    pub max_version_len: usize,
+    /// Maximum entrypoint path length.
+    pub max_entrypoint_len: usize,
+    /// Maximum trust chain reference length.
+    pub max_trust_chain_ref_len: usize,
+}
+
+impl Default for ExtensionHostConfig {
+    fn default() -> Self {
+        Self {
+            max_name_len: MAX_NAME_LEN,
+            max_version_len: MAX_VERSION_LEN,
+            max_entrypoint_len: MAX_ENTRYPOINT_LEN,
+            max_trust_chain_ref_len: MAX_TRUST_CHAIN_REF_LEN,
+        }
+    }
+}
 
 /// Extension capability identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -477,6 +502,7 @@ pub fn compute_content_hash(
 ) -> Result<[u8; 32], ManifestValidationError> {
     let mut to_hash = manifest.clone();
     to_hash.content_hash = [0; 32];
+    to_hash.publisher_signature = None;
     let bytes = canonical_manifest_bytes(&to_hash)?;
     let digest = Sha256::digest(bytes);
     let mut output = [0u8; 32];
@@ -530,8 +556,63 @@ pub fn validate_provenance(
     Ok(())
 }
 
+fn validate_manifest_field_lengths(
+    manifest: &ExtensionManifest,
+    config: &ExtensionHostConfig,
+) -> Result<(), ManifestValidationError> {
+    if manifest.name.len() > config.max_name_len {
+        return Err(ManifestValidationError::FieldTooLong {
+            field: "name",
+            max: config.max_name_len,
+            actual: manifest.name.len(),
+        });
+    }
+    if manifest.version.len() > config.max_version_len {
+        return Err(ManifestValidationError::FieldTooLong {
+            field: "version",
+            max: config.max_version_len,
+            actual: manifest.version.len(),
+        });
+    }
+    if manifest.min_engine_version.len() > config.max_version_len {
+        return Err(ManifestValidationError::FieldTooLong {
+            field: "min_engine_version",
+            max: config.max_version_len,
+            actual: manifest.min_engine_version.len(),
+        });
+    }
+    if manifest.entrypoint.len() > config.max_entrypoint_len {
+        return Err(ManifestValidationError::FieldTooLong {
+            field: "entrypoint",
+            max: config.max_entrypoint_len,
+            actual: manifest.entrypoint.len(),
+        });
+    }
+    if manifest
+        .trust_chain_ref
+        .as_deref()
+        .is_some_and(|value| value.len() > config.max_trust_chain_ref_len)
+    {
+        return Err(ManifestValidationError::FieldTooLong {
+            field: "trust_chain_ref",
+            max: config.max_trust_chain_ref_len,
+            actual: manifest.trust_chain_ref.as_deref().map_or(0, str::len),
+        });
+    }
+
+    Ok(())
+}
+
 /// Validate an extension manifest.
 pub fn validate_manifest(manifest: &ExtensionManifest) -> Result<(), ManifestValidationError> {
+    validate_manifest_with_config(manifest, &ExtensionHostConfig::default())
+}
+
+/// Validate an extension manifest against explicit manifest-length limits.
+pub fn validate_manifest_with_config(
+    manifest: &ExtensionManifest,
+    config: &ExtensionHostConfig,
+) -> Result<(), ManifestValidationError> {
     if manifest.name.trim().is_empty() {
         return Err(ManifestValidationError::EmptyName);
     }
@@ -541,45 +622,7 @@ pub fn validate_manifest(manifest: &ExtensionManifest) -> Result<(), ManifestVal
     if manifest.entrypoint.trim().is_empty() {
         return Err(ManifestValidationError::EmptyEntrypoint);
     }
-    if manifest.name.len() > MAX_NAME_LEN {
-        return Err(ManifestValidationError::FieldTooLong {
-            field: "name",
-            max: MAX_NAME_LEN,
-            actual: manifest.name.len(),
-        });
-    }
-    if manifest.version.len() > MAX_VERSION_LEN {
-        return Err(ManifestValidationError::FieldTooLong {
-            field: "version",
-            max: MAX_VERSION_LEN,
-            actual: manifest.version.len(),
-        });
-    }
-    if manifest.min_engine_version.len() > MAX_VERSION_LEN {
-        return Err(ManifestValidationError::FieldTooLong {
-            field: "min_engine_version",
-            max: MAX_VERSION_LEN,
-            actual: manifest.min_engine_version.len(),
-        });
-    }
-    if manifest.entrypoint.len() > MAX_ENTRYPOINT_LEN {
-        return Err(ManifestValidationError::FieldTooLong {
-            field: "entrypoint",
-            max: MAX_ENTRYPOINT_LEN,
-            actual: manifest.entrypoint.len(),
-        });
-    }
-    if manifest
-        .trust_chain_ref
-        .as_deref()
-        .is_some_and(|value| value.len() > MAX_TRUST_CHAIN_REF_LEN)
-    {
-        return Err(ManifestValidationError::FieldTooLong {
-            field: "trust_chain_ref",
-            max: MAX_TRUST_CHAIN_REF_LEN,
-            actual: manifest.trust_chain_ref.as_deref().map_or(0, str::len),
-        });
-    }
+    validate_manifest_field_lengths(manifest, config)?;
 
     validate_engine_version(&manifest.min_engine_version)?;
     validate_capability_lattice(&manifest.capabilities)?;
@@ -592,7 +635,16 @@ pub fn validate_manifest_with_context(
     manifest: &ExtensionManifest,
     context: &ManifestValidationContext<'_>,
 ) -> ManifestValidationReport {
-    match validate_manifest(manifest) {
+    validate_manifest_with_context_and_config(manifest, context, &ExtensionHostConfig::default())
+}
+
+/// Validate with explicit manifest-length limits and emit a structured event envelope.
+pub fn validate_manifest_with_context_and_config(
+    manifest: &ExtensionManifest,
+    context: &ManifestValidationContext<'_>,
+    config: &ExtensionHostConfig,
+) -> ManifestValidationReport {
+    match validate_manifest_with_config(manifest, config) {
         Ok(()) => ManifestValidationReport {
             event: ManifestValidationEvent {
                 trace_id: context.trace_id.to_string(),
@@ -1218,7 +1270,7 @@ impl ExtensionLifecycleManager {
         Ok(())
     }
 
-    fn ensure_monotonic(&self, timestamp_ns: u64) -> Result<(), LifecycleError> {
+    fn ensure_monotonic(&mut self, timestamp_ns: u64) -> Result<(), LifecycleError> {
         if let Some(previous) = self.last_timestamp_ns {
             if timestamp_ns < previous {
                 return Err(LifecycleError::NonMonotonicTimestamp {
@@ -1227,6 +1279,7 @@ impl ExtensionLifecycleManager {
                 });
             }
         }
+        self.last_timestamp_ns = Some(timestamp_ns);
         Ok(())
     }
 
@@ -5915,6 +5968,39 @@ mod tests {
     }
 
     #[test]
+    fn validate_manifest_with_config_accepts_relaxed_name_limit() {
+        let mut manifest = signed_manifest(&[Capability::FsRead]);
+        manifest.name = "x".repeat(MAX_NAME_LEN + 1);
+        manifest.content_hash = compute_content_hash(&manifest).expect("content hash");
+        let config = ExtensionHostConfig {
+            max_name_len: MAX_NAME_LEN + 1,
+            ..ExtensionHostConfig::default()
+        };
+
+        assert_eq!(validate_manifest_with_config(&manifest, &config), Ok(()));
+    }
+
+    #[test]
+    fn validate_manifest_with_config_rejects_stricter_name_limit() {
+        let mut manifest = signed_manifest(&[Capability::FsRead]);
+        let strict_max = 32;
+        manifest.name = "x".repeat(strict_max + 1);
+        let config = ExtensionHostConfig {
+            max_name_len: strict_max,
+            ..ExtensionHostConfig::default()
+        };
+
+        assert_eq!(
+            validate_manifest_with_config(&manifest, &config),
+            Err(ManifestValidationError::FieldTooLong {
+                field: "name",
+                max: strict_max,
+                actual: strict_max + 1,
+            })
+        );
+    }
+
+    #[test]
     fn canonical_serialization_is_deterministic_and_compact() {
         let manifest_a = signed_manifest(&[Capability::FsRead, Capability::FsWrite]);
         let manifest_b = signed_manifest(&[Capability::FsWrite, Capability::FsRead]);
@@ -9673,6 +9759,11 @@ mod enrichment_tests {
     #[test]
     fn validate_engine_version_accepts_current() {
         assert_eq!(validate_engine_version(CURRENT_ENGINE_VERSION), Ok(()));
+    }
+
+    #[test]
+    fn current_engine_version_matches_cargo_pkg_version() {
+        assert_eq!(CURRENT_ENGINE_VERSION, env!("CARGO_PKG_VERSION"));
     }
 
     #[test]

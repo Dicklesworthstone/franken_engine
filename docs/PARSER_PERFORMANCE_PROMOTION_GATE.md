@@ -102,10 +102,26 @@ One-command replay wrapper:
 ./scripts/e2e/parser_performance_promotion_gate_replay.sh
 ```
 
-The replay wrapper reruns the lane, resolves the latest complete run directory,
-warns if the newest artifact directory is incomplete, and then prints the
-latest manifest, latest events, latest commands, and latest first step log so
+Exact preserved-bundle replay without rerunning the lane:
+
+```bash
+PARSER_PERFORMANCE_PROMOTION_GATE_REPLAY_RUN_DIR=artifacts/parser_performance_promotion_gate/<timestamp> \
+  ./scripts/e2e/parser_performance_promotion_gate_replay.sh
+```
+
+When `PARSER_PERFORMANCE_PROMOTION_GATE_REPLAY_RUN_DIR` is unset, the replay
+wrapper reruns the lane, resolves the latest complete run directory, warns if
+the newest artifact directory is incomplete, and then prints the latest
+manifest, latest events, latest commands, and latest first step log so
 operators can triage without manually hunting through artifact timestamps.
+
+When `PARSER_PERFORMANCE_PROMOTION_GATE_REPLAY_RUN_DIR` is set, replay uses
+that exact preserved run directory without rerunning the lane and fails closed
+if the explicit run directory is incomplete.
+
+If the just-run gate invocation exits non-zero, replay also reports whether the
+printed bundle reflects the current run directory or a latest-complete fallback
+directory.
 
 ## Deterministic Execution Contract
 
@@ -171,13 +187,19 @@ cat artifacts/parser_performance_promotion_gate/<timestamp>/events.jsonl
 cat artifacts/parser_performance_promotion_gate/<timestamp>/commands.txt
 cat artifacts/parser_performance_promotion_gate/<timestamp>/step_logs/step_000.log
 ./scripts/e2e/parser_performance_promotion_gate_replay.sh
+PARSER_PERFORMANCE_PROMOTION_GATE_REPLAY_RUN_DIR=artifacts/parser_performance_promotion_gate/<timestamp> \
+  ./scripts/e2e/parser_performance_promotion_gate_replay.sh
 ```
 
 Replay wrapper fail-closed behavior:
 
 - if no complete artifact bundle exists, replay exits non-zero even if the just-run
   command path returned zero.
+- if `PARSER_PERFORMANCE_PROMOTION_GATE_REPLAY_RUN_DIR` points at an incomplete
+  preserved bundle, replay exits non-zero immediately.
 - if the newest artifact directory is incomplete, replay warns and falls back to
   the latest complete run directory.
+- if the just-run gate invocation failed, replay states whether the surfaced
+  bundle came from the current run directory or a latest-complete fallback.
 - replay surfaces the latest complete bundle by printing the latest manifest,
   latest events, latest commands, and latest first step log.

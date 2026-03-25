@@ -484,8 +484,13 @@ fn parser_performance_replay_wrapper_surfaces_latest_complete_bundle() {
 
     for marker in [
         "PARSER_PERFORMANCE_PROMOTION_GATE_ARTIFACT_ROOT",
+        "PARSER_PERFORMANCE_PROMOTION_GATE_REPLAY_RUN_DIR",
+        "run_dir_is_complete",
         "latest_complete_run_dir",
+        "explicit run directory is incomplete",
         "newest directory ${latest_artifact_dir_path} is incomplete",
+        "replay output reflects latest complete run directory",
+        "replay output reflects current run directory",
         "run_manifest.json",
         "events.jsonl",
         "commands.txt",
@@ -612,6 +617,11 @@ fn parser_performance_doc_uses_repo_local_target_dir_example_and_step_logs() {
         "doc must describe explicit rch failure classification suffixes"
     );
     assert!(
+        doc.contains("PARSER_PERFORMANCE_PROMOTION_GATE_REPLAY_RUN_DIR")
+            && doc.contains("without rerunning the lane"),
+        "doc must explain exact preserved-bundle replay"
+    );
+    assert!(
         doc.contains("latest complete run directory")
             && doc.contains("newest artifact directory is incomplete"),
         "doc must explain replay-wrapper complete-bundle selection"
@@ -622,6 +632,11 @@ fn parser_performance_doc_uses_repo_local_target_dir_example_and_step_logs() {
             && doc.contains("latest commands")
             && doc.contains("latest first step log"),
         "doc must explain replay-wrapper artifact surfacing"
+    );
+    assert!(
+        doc.contains("replay output reflects current run directory")
+            && doc.contains("replay output reflects latest complete run directory"),
+        "doc must describe failed-run replay source attribution"
     );
 }
 

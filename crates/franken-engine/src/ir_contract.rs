@@ -4002,6 +4002,122 @@ mod tests {
                 dst: 2,
             },
             Ir3Instruction::Halt,
+            // Arithmetic
+            Ir3Instruction::Mod {
+                dst: 5,
+                lhs: 0,
+                rhs: 1,
+            },
+            Ir3Instruction::Exp {
+                dst: 5,
+                lhs: 0,
+                rhs: 1,
+            },
+            // Comparison
+            Ir3Instruction::Lt {
+                dst: 5,
+                lhs: 0,
+                rhs: 1,
+            },
+            Ir3Instruction::Lte {
+                dst: 5,
+                lhs: 0,
+                rhs: 1,
+            },
+            Ir3Instruction::Gt {
+                dst: 5,
+                lhs: 0,
+                rhs: 1,
+            },
+            Ir3Instruction::Gte {
+                dst: 5,
+                lhs: 0,
+                rhs: 1,
+            },
+            Ir3Instruction::Eq {
+                dst: 5,
+                lhs: 0,
+                rhs: 1,
+            },
+            Ir3Instruction::StrictEq {
+                dst: 5,
+                lhs: 0,
+                rhs: 1,
+            },
+            Ir3Instruction::NotEq {
+                dst: 5,
+                lhs: 0,
+                rhs: 1,
+            },
+            Ir3Instruction::StrictNotEq {
+                dst: 5,
+                lhs: 0,
+                rhs: 1,
+            },
+            // Bitwise
+            Ir3Instruction::BitAnd {
+                dst: 5,
+                lhs: 0,
+                rhs: 1,
+            },
+            Ir3Instruction::BitOr {
+                dst: 5,
+                lhs: 0,
+                rhs: 1,
+            },
+            Ir3Instruction::BitXor {
+                dst: 5,
+                lhs: 0,
+                rhs: 1,
+            },
+            Ir3Instruction::Shl {
+                dst: 5,
+                lhs: 0,
+                rhs: 1,
+            },
+            Ir3Instruction::Shr {
+                dst: 5,
+                lhs: 0,
+                rhs: 1,
+            },
+            Ir3Instruction::Ushr {
+                dst: 5,
+                lhs: 0,
+                rhs: 1,
+            },
+            // Relational
+            Ir3Instruction::InstanceOf {
+                dst: 5,
+                lhs: 0,
+                rhs: 1,
+            },
+            Ir3Instruction::InOp {
+                dst: 5,
+                lhs: 0,
+                rhs: 1,
+            },
+            // Object allocation
+            Ir3Instruction::NewObject { dst: 5 },
+            Ir3Instruction::NewArray { dst: 5 },
+            Ir3Instruction::TemplateLiteral {
+                parts: RegRange { start: 0, count: 3 },
+                dst: 5,
+            },
+            Ir3Instruction::Construct {
+                callee: 0,
+                args: RegRange { start: 1, count: 2 },
+                dst: 5,
+            },
+            // Exception handling
+            Ir3Instruction::BeginTry {
+                catch_target: 10,
+                finally_target: Some(20),
+            },
+            Ir3Instruction::EndTry,
+            Ir3Instruction::Throw { value: 0 },
+            Ir3Instruction::EnterCatch { dst: 5 },
+            Ir3Instruction::EnterFinally,
+            Ir3Instruction::EndFinally,
         ];
         for instr in &instrs {
             let json = serde_json::to_string(instr).unwrap();

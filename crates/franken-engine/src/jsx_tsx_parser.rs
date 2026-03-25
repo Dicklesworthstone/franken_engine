@@ -907,14 +907,15 @@ fn parse_attributes(
             cursor.skip_whitespace();
 
             if cursor.peek() == Some('"') || cursor.peek() == Some('\'') {
-                let quote = cursor.advance().unwrap();
-                let value = read_until_char(cursor, quote);
-                families.push(JsxFeatureFamily::StringAttribute);
-                attrs.push(JsxAttribute::Named {
-                    name: attr_name,
-                    value: JsxAttributeValue::StringLiteral { value },
-                    span: cursor.make_span(start),
-                });
+                if let Some(quote) = cursor.advance() {
+                    let value = read_until_char(cursor, quote);
+                    families.push(JsxFeatureFamily::StringAttribute);
+                    attrs.push(JsxAttribute::Named {
+                        name: attr_name,
+                        value: JsxAttributeValue::StringLiteral { value },
+                        span: cursor.make_span(start),
+                    });
+                }
             } else if cursor.peek() == Some('{') {
                 cursor.advance(); // {
                 let expr = read_until_balanced_brace(cursor);

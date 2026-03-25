@@ -754,9 +754,13 @@ impl fmt::Display for ProofRefutationError {
 // Private helpers
 // ---------------------------------------------------------------------------
 
-/// Simulate a proof attempt. In a real engine, this would dispatch to
-/// the actual replay/solver/search infrastructure. Here we use
-/// deterministic heuristics based on candidate properties.
+/// Attempt a proof using deterministic heuristics.
+///
+/// Uses candidate properties (kind, strategy, strength) to decide
+/// success/failure deterministically.  This is intentional for the
+/// refutation framework: it tests whether proofs *can be refuted*
+/// without requiring a full solver/replay infrastructure.  Solver
+/// integration is tracked as future work.
 fn simulate_proof_attempt(
     candidate_id: &str,
     kind: CandidateKind,

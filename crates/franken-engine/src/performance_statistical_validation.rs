@@ -376,7 +376,7 @@ pub fn evaluate_statistical_validation(
                 });
             }
 
-            let absolute_effect = effect_size_millionths.unsigned_abs() as u32;
+            let absolute_effect = effect_size_millionths.unsigned_abs().min(u32::MAX as u64) as u32;
             if absolute_effect >= policy.thresholds.min_effect_size_millionths
                 && p_value_millionths > policy.thresholds.max_p_value_millionths
             {

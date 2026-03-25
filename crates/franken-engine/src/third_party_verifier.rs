@@ -5,6 +5,7 @@
 //! claims without a running FrankenEngine control plane.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
@@ -64,6 +65,21 @@ impl VerificationVerdict {
             Self::Failed => EXIT_CODE_FAILED,
             Self::Inconclusive => EXIT_CODE_INCONCLUSIVE,
         }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Verified => "verified",
+            Self::PartiallyVerified => "partially_verified",
+            Self::Failed => "failed",
+            Self::Inconclusive => "inconclusive",
+        }
+    }
+}
+
+impl fmt::Display for VerificationVerdict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -867,7 +883,7 @@ pub fn render_attestation_summary(attestation: &VerificationAttestation) -> Stri
 pub fn render_report_summary(report: &ThirdPartyVerificationReport) -> String {
     let failed = report.checks.iter().filter(|check| !check.passed).count();
     format!(
-        "claim_type={} verdict={:?} checks={} failed={} limitations={} exit_code={} confidence=\"{}\"",
+        "claim_type={} verdict={} checks={} failed={} limitations={} exit_code={} confidence=\"{}\"",
         report.claim_type,
         report.verdict,
         report.checks.len(),

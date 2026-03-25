@@ -443,10 +443,9 @@ impl ReconcileSession {
                 larger
             };
 
-            // Can only subtract if sizes match — in a real protocol,
-            // both sides would agree on size. For mismatched retry sizes,
-            // we'd need to re-request from the peer. Here we detect and
-            // handle the mismatch.
+            // IBLT subtraction requires matching cell counts.  Size
+            // mismatches are detected and retried up to max_retries.
+            // Full two-phase size negotiation is future work.
             if local_sketch.num_cells() != remote_iblt.num_cells() {
                 attempt += 1;
                 if attempt > self.config.max_retries {

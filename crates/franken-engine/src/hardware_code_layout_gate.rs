@@ -1383,8 +1383,8 @@ impl ParityChecker {
         let verdict = if reference_hash == candidate_hash {
             ParityVerdict::Equivalent
         } else {
-            // In a real implementation we would compare outputs structurally.
-            // Here, hash mismatch means divergent.
+            // Hash mismatch implies divergence.  Structural comparison
+            // (detecting semantics-preserving transformations) is future work.
             ParityVerdict::Divergent
         };
         let result = ParityCheckResult::new(

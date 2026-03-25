@@ -348,9 +348,9 @@ impl BulkheadRegistry {
             Ok(permit_id)
         } else if bh.queue_depth() < bh.config.max_queue_depth {
             // Queue the waiter and immediately promote (deterministic mode).
-            // In a real async runtime, this would block/await.
-            // For deterministic semantics, we immediately admit the waiter
-            // as an over-limit permit (tracked separately).
+            // The engine is single-threaded per cell, so blocking would
+            // deadlock.  Instead we immediately admit the waiter as an
+            // over-limit permit (tracked separately for accounting).
             bh.waiters.push((permit_id.0, trace_id.to_string()));
 
             let current_count = bh.active_count();

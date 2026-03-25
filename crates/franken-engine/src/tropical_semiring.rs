@@ -810,7 +810,7 @@ impl DeadCodeEliminator {
         }
 
         let elimination_ratio_millionths = if total_nodes > 0 {
-            (dead_indices.len() as i64 * 1_000_000) / total_nodes as i64
+            (dead_indices.len() as i128 * 1_000_000 / total_nodes as i128) as i64
         } else {
             0
         };

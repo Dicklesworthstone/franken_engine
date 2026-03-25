@@ -9927,14 +9927,10 @@ mod tests {
         let options = ParserOptions::default();
         let (result, event_ir) = parser.parse_with_event_ir(source, ParseGoal::Script, &options);
         result.expect("parse should succeed");
-        // Use options with a different mode — but since there's only one mode,
-        // we alter the event_ir instead
+        // ParserMode only has ScalarReference today, so we cannot test a
+        // true mode mismatch.  Instead we trigger a materializer rejection
+        // via statement-count mismatch (removing events from the IR).
         let mut modified_ir = event_ir;
-        // No other mode exists, so test the code path by mutating parser_mode
-        // This would need a second ParserMode variant. Instead test the error
-        // path directly via materialize_from_syntax_tree: change ir.parser_mode
-        // won't work since we only have ScalarReference.
-        // Instead, test statement count mismatch:
         let tree = parser.parse(source, ParseGoal::Script).expect("parse");
         // Remove a statement event to trigger count mismatch
         modified_ir

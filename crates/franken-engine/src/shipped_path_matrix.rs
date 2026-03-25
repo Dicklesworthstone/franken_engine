@@ -754,8 +754,8 @@ pub fn compare_artifacts(
             .map(|(_, a)| *a)
             .collect();
 
-        // Compare pairwise (first-to-first for simplicity; real systems would
-        // align more carefully).
+        // Positional pairwise comparison (first-to-first).  Alignment-based
+        // matching (e.g., LCS or edit-distance) is future work.
         let pairs = arts_a.len().min(arts_b.len());
         for i in 0..pairs {
             let aa = arts_a[i];

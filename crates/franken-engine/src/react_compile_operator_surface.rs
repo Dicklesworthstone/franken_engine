@@ -353,7 +353,10 @@ pub struct ReactDiagnostic {
 // Surface contract
 // ---------------------------------------------------------------------------
 
-/// Feature support status.
+/// Feature support status for a React surface capability.
+///
+/// These states describe the target runtime surface that the contract is
+/// reporting, not the lifecycle of this enum itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FeatureSupport {
@@ -365,7 +368,8 @@ pub enum FeatureSupport {
     NotImplemented,
     /// Explicitly unsupported by design.
     Unsupported,
-    /// Deprecated — will be removed.
+    /// Present only for compatibility with target-runtime features that are
+    /// themselves deprecated and should not be used for new workloads.
     Deprecated,
 }
 
@@ -380,6 +384,11 @@ impl FeatureSupport {
         }
     }
 
+    /// Whether this feature should be surfaced as generally available.
+    ///
+    /// Deprecated features remain serializable in the contract so the operator
+    /// surface can report them explicitly, but they are excluded from the
+    /// "available" view shown to users.
     pub const fn is_available(self) -> bool {
         matches!(self, Self::Supported | Self::Partial)
     }
@@ -775,6 +784,23 @@ mod tests {
         let contract = build_seed_contract();
         let unsupported = contract.unsupported_features();
         assert_eq!(unsupported.len(), 4);
+    }
+
+    #[test]
+    fn deprecated_features_are_reported_as_unavailable() {
+        let mut contract = ReactOperatorContract::new();
+        contract.add_feature(ReactFeatureContract {
+            name: "legacy_context".to_string(),
+            support: FeatureSupport::Deprecated,
+            description: "Deprecated React compatibility surface".to_string(),
+            limitations: vec!["Prefer modern context APIs for new work".to_string()],
+            tracking_bead: None,
+        });
+
+        assert!(contract.available_features().is_empty());
+        let unsupported = contract.unsupported_features();
+        assert_eq!(unsupported.len(), 1);
+        assert_eq!(unsupported[0].support, FeatureSupport::Deprecated);
     }
 
     #[test]

@@ -491,7 +491,7 @@ impl BytecodeVm {
                 })
             }
             Instruction::NewObject { dst } => {
-                let object_id = ObjectId(self.heap.len() as u32);
+                let object_id = ObjectId(u32::try_from(self.heap.len()).unwrap_or(u32::MAX));
                 let object = HeapObject::new(self.shape_algebra.root_shape_id());
                 self.heap.push(object);
                 self.write_register(dst, Value::Object(object_id))?;

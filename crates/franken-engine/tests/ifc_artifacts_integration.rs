@@ -25,9 +25,9 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::ifc_artifacts::{
     ClaimStrength, ClearanceClass, ConfinementClaim, DeclassificationDecision,
-    DeclassificationObligation, DeclassificationReceipt, DeclassificationRoute, FlowCheckResult,
-    FlowEnvelope, FlowPolicy, FlowProof, FlowRule, IfcSchemaVersion, IfcValidationError,
-    Ir2LabelSource, Label, ProofMethod,
+    DeclassificationObligation, DeclassificationReceipt, DeclassificationRoute,
+    FlowAuthorizationAdvisory, FlowCheckResult, FlowEnvelope, FlowPolicy, FlowProof, FlowRule,
+    IfcSchemaVersion, IfcValidationError, Ir2LabelSource, Label, ProofMethod,
 };
 use frankenengine_engine::signature_preimage::{
     SIGNATURE_SENTINEL, Signature, SignatureError, SigningKey,
@@ -1642,14 +1642,69 @@ fn flow_envelope_all_clearance_classes() {
 
     // Public -> OpenSink should be authorized
     assert!(env.is_flow_authorized(&Label::Public, &ClearanceClass::OpenSink));
-    // Secret -> SealedSink: Secret(3) <= SealedSink max(3), authorized
-    assert!(env.is_flow_authorized(&Label::Secret, &ClearanceClass::SealedSink));
+    // Secret -> SealedSink is now fail-closed until the envelope can
+    // materialize a concrete declassification obligation.
+    assert!(!env.is_flow_authorized(&Label::Secret, &ClearanceClass::SealedSink));
     // Public -> NeverSink: NeverSink accepts only Public
     assert!(env.is_flow_authorized(&Label::Public, &ClearanceClass::NeverSink));
     // TopSecret -> NeverSink: NeverSink rejects anything above Public
     assert!(!env.is_flow_authorized(&Label::TopSecret, &ClearanceClass::NeverSink));
     // TopSecret -> SealedSink: TopSecret(4) > SealedSink max(3)
     assert!(!env.is_flow_authorized(&Label::TopSecret, &ClearanceClass::SealedSink));
+}
+
+#[test]
+fn flow_envelope_secret_to_sealed_sink_requires_concrete_obligation() {
+    let env = FlowEnvelope {
+        envelope_id: "env-integ-secret-sealed".to_string(),
+        extension_id: "ext-integ-secret-sealed".to_string(),
+        producible_labels: [Label::Secret].into_iter().collect(),
+        accessible_clearances: [ClearanceClass::SealedSink].into_iter().collect(),
+        authorized_declassifications: vec!["obl-secret-sealed".to_string()],
+        policy_ref: "pol-integ-secret-sealed".to_string(),
+        epoch_id: 17,
+        schema_version: IfcSchemaVersion::CURRENT,
+    };
+
+    let assessment = env.assess_flow_authorization(&Label::Secret, &ClearanceClass::SealedSink);
+    assert!(assessment.envelope_authorized);
+    assert!(!assessment.flow_authorized);
+    assert!(assessment.requires_declassification());
+    assert!(assessment.advisories.is_empty());
+    let obligation = assessment
+        .declassification_obligation
+        .expect("secret sealed sink should require a concrete obligation");
+    assert_eq!(obligation.obligation_id, "obl-secret-sealed");
+    assert_eq!(obligation.source_label, Label::Secret);
+    assert_eq!(obligation.target_clearance, ClearanceClass::SealedSink);
+    assert_eq!(obligation.approval_authority, "pol-integ-secret-sealed");
+    assert_eq!(obligation.expiry_epoch, Some(17));
+}
+
+#[test]
+fn flow_envelope_secret_to_sealed_sink_without_authorization_is_blocked() {
+    let env = FlowEnvelope {
+        envelope_id: "env-integ-secret-sealed-missing".to_string(),
+        extension_id: "ext-integ-secret-sealed-missing".to_string(),
+        producible_labels: [Label::Secret].into_iter().collect(),
+        accessible_clearances: [ClearanceClass::SealedSink].into_iter().collect(),
+        authorized_declassifications: vec![],
+        policy_ref: "pol-integ-secret-sealed-missing".to_string(),
+        epoch_id: 18,
+        schema_version: IfcSchemaVersion::CURRENT,
+    };
+
+    let assessment = env.assess_flow_authorization(&Label::Secret, &ClearanceClass::SealedSink);
+    assert!(assessment.envelope_authorized);
+    assert!(!assessment.flow_authorized);
+    assert!(!assessment.requires_declassification());
+    assert_eq!(
+        assessment.advisories,
+        vec![FlowAuthorizationAdvisory::ExplicitAuthorizationRequired {
+            source_label: Label::Secret,
+            sink_clearance: ClearanceClass::SealedSink,
+        }]
+    );
 }
 
 // ===========================================================================

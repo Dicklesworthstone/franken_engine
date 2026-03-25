@@ -432,12 +432,137 @@ pub struct FlowEnvelope {
     pub schema_version: IfcSchemaVersion,
 }
 
+/// Advisory surfaced when a flow is in scope but still lacks the explicit
+/// authorization material needed to produce a concrete declassification
+/// obligation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FlowAuthorizationAdvisory {
+    /// Secret data can only reach `SealedSink` when the envelope carries an
+    /// explicit authorization reference.
+    ExplicitAuthorizationRequired {
+        source_label: Label,
+        sink_clearance: ClearanceClass,
+    },
+    /// The flow would require a concrete declassification obligation before it
+    /// can be enforced safely.
+    DeclassificationObligationRequired {
+        source_label: Label,
+        sink_clearance: ClearanceClass,
+    },
+}
+
+/// Structured flow review result that exposes both the legacy predicate and
+/// the effective fail-closed authorization outcome.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlowAuthorizationAssessment {
+    /// Result from the legacy envelope-membership and clearance predicate.
+    pub envelope_authorized: bool,
+    /// Whether the flow may proceed immediately without additional
+    /// declassification handling.
+    pub flow_authorized: bool,
+    /// Concrete declassification obligation for flows that are in scope but
+    /// still require explicit authorization before execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declassification_obligation: Option<DeclassificationObligation>,
+    /// Additional review items callers should treat as blocking until the
+    /// richer enforcement path is satisfied.
+    pub advisories: Vec<FlowAuthorizationAdvisory>,
+}
+
+impl FlowAuthorizationAssessment {
+    /// Whether the flow needs follow-up review before it is safe to honor.
+    pub fn has_advisories(&self) -> bool {
+        !self.advisories.is_empty()
+    }
+
+    /// Whether the flow requires an explicit declassification step.
+    pub fn requires_declassification(&self) -> bool {
+        self.declassification_obligation.is_some()
+    }
+}
+
 impl FlowEnvelope {
-    /// Check whether this envelope authorizes a flow from `source` to `sink_clearance`.
+    /// Check whether this envelope authorizes a flow from `source` to
+    /// `sink_clearance`.
+    ///
+    /// This now reflects immediate authorization only. Flows that still
+    /// require declassification return `false`; call
+    /// `assess_flow_authorization` to obtain the concrete obligation.
     pub fn is_flow_authorized(&self, source: &Label, sink_clearance: &ClearanceClass) -> bool {
-        self.producible_labels.contains(source)
-            && self.accessible_clearances.contains(sink_clearance)
-            && sink_clearance.can_receive(source)
+        self.assess_flow_authorization(source, sink_clearance)
+            .flow_authorized
+    }
+
+    fn materialize_declassification_obligation(
+        &self,
+        source: &Label,
+        sink_clearance: &ClearanceClass,
+    ) -> Option<DeclassificationObligation> {
+        let obligation_id = self
+            .authorized_declassifications
+            .iter()
+            .find(|id| !id.trim().is_empty())?
+            .clone();
+
+        Some(DeclassificationObligation {
+            obligation_id,
+            source_label: source.clone(),
+            target_clearance: *sink_clearance,
+            required_conditions: vec![
+                format!("extension_id={}", self.extension_id),
+                format!("source_label={source}"),
+                format!("sink_clearance={sink_clearance}"),
+            ],
+            max_loss_milli: 0,
+            audit_trail_required: true,
+            approval_authority: self.policy_ref.clone(),
+            expiry_epoch: Some(self.epoch_id),
+        })
+    }
+
+    /// Assess a flow against the legacy envelope predicate plus the currently
+    /// enforced SealedSink authorization rules.
+    pub fn assess_flow_authorization(
+        &self,
+        source: &Label,
+        sink_clearance: &ClearanceClass,
+    ) -> FlowAuthorizationAssessment {
+        let flow_in_scope = self.producible_labels.contains(source)
+            && self.accessible_clearances.contains(sink_clearance);
+        let envelope_authorized = flow_in_scope && sink_clearance.can_receive(source);
+        let mut advisories = Vec::new();
+        let mut declassification_obligation = None;
+
+        if flow_in_scope && *sink_clearance == ClearanceClass::SealedSink {
+            if matches!(source, Label::Secret | Label::TopSecret) {
+                declassification_obligation =
+                    self.materialize_declassification_obligation(source, sink_clearance);
+
+                if declassification_obligation.is_none() {
+                    let advisory = match source {
+                        Label::Secret => FlowAuthorizationAdvisory::ExplicitAuthorizationRequired {
+                            source_label: source.clone(),
+                            sink_clearance: *sink_clearance,
+                        },
+                        _ => FlowAuthorizationAdvisory::DeclassificationObligationRequired {
+                            source_label: source.clone(),
+                            sink_clearance: *sink_clearance,
+                        },
+                    };
+                    advisories.push(advisory);
+                }
+            }
+        }
+
+        let flow_authorized =
+            advisories.is_empty() && declassification_obligation.is_none() && envelope_authorized;
+
+        FlowAuthorizationAssessment {
+            envelope_authorized,
+            flow_authorized,
+            declassification_obligation,
+            advisories,
+        }
     }
 
     /// Content-addressable identity.
@@ -2301,6 +2426,88 @@ mod tests {
         assert!(!env.is_flow_authorized(&Label::Secret, &ClearanceClass::RestrictedSink));
     }
 
+    #[test]
+    fn flow_assessment_flags_secret_to_sealed_sink_without_explicit_authorization() {
+        let env = FlowEnvelope {
+            envelope_id: "env-secret-sealed".to_string(),
+            extension_id: "ext-secret-sealed".to_string(),
+            producible_labels: [Label::Secret].into_iter().collect(),
+            accessible_clearances: [ClearanceClass::SealedSink].into_iter().collect(),
+            authorized_declassifications: vec![],
+            policy_ref: "pol-secret-sealed".to_string(),
+            epoch_id: 7,
+            schema_version: IfcSchemaVersion::CURRENT,
+        };
+
+        let assessment = env.assess_flow_authorization(&Label::Secret, &ClearanceClass::SealedSink);
+        assert!(assessment.envelope_authorized);
+        assert!(!assessment.flow_authorized);
+        assert!(!assessment.requires_declassification());
+        assert!(assessment.has_advisories());
+        assert_eq!(
+            assessment.advisories,
+            vec![FlowAuthorizationAdvisory::ExplicitAuthorizationRequired {
+                source_label: Label::Secret,
+                sink_clearance: ClearanceClass::SealedSink,
+            }]
+        );
+    }
+
+    #[test]
+    fn flow_assessment_clears_secret_to_sealed_sink_when_authorization_ref_exists() {
+        let env = FlowEnvelope {
+            envelope_id: "env-secret-sealed-ok".to_string(),
+            extension_id: "ext-secret-sealed-ok".to_string(),
+            producible_labels: [Label::Secret].into_iter().collect(),
+            accessible_clearances: [ClearanceClass::SealedSink].into_iter().collect(),
+            authorized_declassifications: vec!["obl-sealed-secret".to_string()],
+            policy_ref: "pol-secret-sealed-ok".to_string(),
+            epoch_id: 7,
+            schema_version: IfcSchemaVersion::CURRENT,
+        };
+
+        let assessment = env.assess_flow_authorization(&Label::Secret, &ClearanceClass::SealedSink);
+        assert!(assessment.envelope_authorized);
+        assert!(!assessment.flow_authorized);
+        assert!(assessment.requires_declassification());
+        assert!(!assessment.has_advisories());
+        let obligation = assessment
+            .declassification_obligation
+            .expect("secret sealed sink should materialize obligation");
+        assert_eq!(obligation.obligation_id, "obl-sealed-secret");
+        assert_eq!(obligation.source_label, Label::Secret);
+        assert_eq!(obligation.target_clearance, ClearanceClass::SealedSink);
+        assert_eq!(obligation.approval_authority, "pol-secret-sealed-ok");
+        assert_eq!(obligation.expiry_epoch, Some(7));
+    }
+
+    #[test]
+    fn flow_assessment_materializes_top_secret_to_sealed_sink_obligation() {
+        let env = FlowEnvelope {
+            envelope_id: "env-top-secret-sealed".to_string(),
+            extension_id: "ext-top-secret-sealed".to_string(),
+            producible_labels: [Label::TopSecret].into_iter().collect(),
+            accessible_clearances: [ClearanceClass::SealedSink].into_iter().collect(),
+            authorized_declassifications: vec!["obl-sealed-secret".to_string()],
+            policy_ref: "pol-top-secret-sealed".to_string(),
+            epoch_id: 7,
+            schema_version: IfcSchemaVersion::CURRENT,
+        };
+
+        let assessment =
+            env.assess_flow_authorization(&Label::TopSecret, &ClearanceClass::SealedSink);
+        assert!(!assessment.envelope_authorized);
+        assert!(!assessment.flow_authorized);
+        assert!(assessment.requires_declassification());
+        assert!(!assessment.has_advisories());
+        let obligation = assessment
+            .declassification_obligation
+            .expect("top secret sealed sink should materialize obligation");
+        assert_eq!(obligation.obligation_id, "obl-sealed-secret");
+        assert_eq!(obligation.source_label, Label::TopSecret);
+        assert_eq!(obligation.target_clearance, ClearanceClass::SealedSink);
+    }
+
     // -- Exfiltration scenario test --
 
     #[test]
@@ -2319,9 +2526,29 @@ mod tests {
         // NeverSink (raw network egress) cannot receive Secret
         assert!(!ClearanceClass::NeverSink.can_receive(&header_label));
 
-        // Even SealedSink can receive Secret, but the extension would need
-        // explicit authorization
+        // SealedSink can receive Secret at the clearance layer, but the flow
+        // still needs explicit authorization material before it can proceed.
+        let env = FlowEnvelope {
+            envelope_id: "env-exfil-secret".to_string(),
+            extension_id: "ext-exfil-secret".to_string(),
+            producible_labels: [Label::Secret].into_iter().collect(),
+            accessible_clearances: [ClearanceClass::SealedSink].into_iter().collect(),
+            authorized_declassifications: vec![],
+            policy_ref: "pol-exfil-secret".to_string(),
+            epoch_id: 9,
+            schema_version: IfcSchemaVersion::CURRENT,
+        };
+        let assessment = env.assess_flow_authorization(&header_label, &ClearanceClass::SealedSink);
         assert!(ClearanceClass::SealedSink.can_receive(&header_label));
+        assert!(!assessment.flow_authorized);
+        assert!(!assessment.requires_declassification());
+        assert_eq!(
+            assessment.advisories,
+            vec![FlowAuthorizationAdvisory::ExplicitAuthorizationRequired {
+                source_label: Label::Secret,
+                sink_clearance: ClearanceClass::SealedSink,
+            }]
+        );
     }
 
     #[test]
@@ -2337,22 +2564,28 @@ mod tests {
         assert!(!ClearanceClass::SealedSink.can_receive(&key_label));
         assert!(ClearanceClass::OpenSink.can_receive(&key_label));
 
-        // A declassification obligation would be needed for SealedSink
-        let obl = DeclassificationObligation {
-            obligation_id: "obl-key-export".to_string(),
-            source_label: Label::TopSecret,
-            target_clearance: ClearanceClass::SealedSink,
-            required_conditions: vec!["key_export_audit".to_string()],
-            max_loss_milli: 100_000,
-            audit_trail_required: true,
-            approval_authority: "key_management_authority".to_string(),
-            expiry_epoch: Some(50),
+        // TopSecret -> SealedSink now materializes a concrete obligation when
+        // the envelope carries explicit authorization material.
+        let env = FlowEnvelope {
+            envelope_id: "env-exfil-top-secret".to_string(),
+            extension_id: "ext-exfil-top-secret".to_string(),
+            producible_labels: [Label::TopSecret].into_iter().collect(),
+            accessible_clearances: [ClearanceClass::SealedSink].into_iter().collect(),
+            authorized_declassifications: vec!["obl-key-export".to_string()],
+            policy_ref: "pol-exfil-top-secret".to_string(),
+            epoch_id: 50,
+            schema_version: IfcSchemaVersion::CURRENT,
         };
-
-        let mut satisfied = BTreeSet::new();
-        satisfied.insert("key_export_audit".to_string());
-        assert!(obl.conditions_satisfied(&satisfied));
-        assert!(!obl.is_expired(50));
+        let assessment = env.assess_flow_authorization(&key_label, &ClearanceClass::SealedSink);
+        assert!(!assessment.flow_authorized);
+        assert!(assessment.requires_declassification());
+        assert!(assessment.advisories.is_empty());
+        let obligation = assessment
+            .declassification_obligation
+            .expect("top secret exfiltration should require concrete obligation");
+        assert_eq!(obligation.obligation_id, "obl-key-export");
+        assert_eq!(obligation.source_label, Label::TopSecret);
+        assert_eq!(obligation.target_clearance, ClearanceClass::SealedSink);
     }
 
     // -- Cross-type integration --

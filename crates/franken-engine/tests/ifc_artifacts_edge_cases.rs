@@ -18,9 +18,9 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::ifc_artifacts::{
     ClaimStrength, ClearanceClass, ConfinementClaim, DeclassificationDecision,
-    DeclassificationObligation, DeclassificationReceipt, DeclassificationRoute, FlowCheckResult,
-    FlowEnvelope, FlowPolicy, FlowProof, FlowRule, IfcSchemaVersion, IfcValidationError,
-    Ir2LabelSource, Label, ProofMethod,
+    DeclassificationObligation, DeclassificationReceipt, DeclassificationRoute,
+    FlowAuthorizationAdvisory, FlowCheckResult, FlowEnvelope, FlowPolicy, FlowProof, FlowRule,
+    IfcSchemaVersion, IfcValidationError, Ir2LabelSource, Label, ProofMethod,
 };
 use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
 
@@ -1041,6 +1041,32 @@ fn envelope_rejects_flow_when_clearance_cant_receive() {
     };
     // Secret(3) > RestrictedSink max(1) → rejected
     assert!(!env.is_flow_authorized(&Label::Secret, &ClearanceClass::RestrictedSink));
+}
+
+#[test]
+fn sealed_sink_ignores_blank_authorization_refs() {
+    let env = FlowEnvelope {
+        envelope_id: "env-blank-auth".into(),
+        extension_id: "ext-blank-auth".into(),
+        producible_labels: [Label::Secret].into_iter().collect(),
+        accessible_clearances: [ClearanceClass::SealedSink].into_iter().collect(),
+        authorized_declassifications: vec!["   ".into()],
+        policy_ref: "pol-blank-auth".into(),
+        epoch_id: 3,
+        schema_version: IfcSchemaVersion::CURRENT,
+    };
+
+    let assessment = env.assess_flow_authorization(&Label::Secret, &ClearanceClass::SealedSink);
+    assert!(assessment.envelope_authorized);
+    assert!(!assessment.flow_authorized);
+    assert!(!assessment.requires_declassification());
+    assert_eq!(
+        assessment.advisories,
+        vec![FlowAuthorizationAdvisory::ExplicitAuthorizationRequired {
+            source_label: Label::Secret,
+            sink_clearance: ClearanceClass::SealedSink,
+        }]
+    );
 }
 
 #[test]

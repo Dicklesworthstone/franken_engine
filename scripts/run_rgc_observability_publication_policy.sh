@@ -35,6 +35,12 @@ scenario_id="rgc-066c"
 replay_command="RGC_OBSERVABILITY_PUBLICATION_POLICY_REPLAY_RUN_DIR=\"${run_dir}\" ./scripts/e2e/rgc_observability_publication_policy_replay.sh ${mode}"
 first_step_log_path="${step_logs_dir}/step-01.log"
 
+if [[ "$run_dir" = /* ]]; then
+  run_dir_abs="${run_dir}"
+else
+  run_dir_abs="${root_dir}/${run_dir}"
+fi
+
 mkdir -p "$run_dir" "$step_logs_dir"
 
 if ! command -v rch >/dev/null 2>&1; then
@@ -42,15 +48,25 @@ if ! command -v rch >/dev/null 2>&1; then
   exit 2
 fi
 
-run_rch_shell() {
-  local command_text="$1"
-  local remote_command
+join_command() {
+  local rendered=""
+  local arg
 
-  printf -v remote_command \
-    'cd %q && export RUSTUP_TOOLCHAIN=%q CARGO_TARGET_DIR=%q && timeout %q %s' \
-    "$root_dir" "$toolchain" "$target_dir" "$rch_timeout_seconds" "$command_text"
+  for arg in "$@"; do
+    if [[ -n "$rendered" ]]; then
+      rendered+=" "
+    fi
+    printf -v rendered '%s%q' "$rendered" "$arg"
+  done
 
-  timeout "${rch_timeout_seconds}" rch exec -q -- bash -lc "$remote_command"
+  printf '%s' "$rendered"
+}
+
+run_rch_command() {
+  # Keep the cargo command direct so rch classifies and offloads it instead of
+  # treating a shell wrapper as an unclassified local command.
+  timeout "${rch_timeout_seconds}" \
+    rch exec -q -- env RUSTUP_TOOLCHAIN="${toolchain}" CARGO_TARGET_DIR="${target_dir}" "$@"
 }
 
 rch_reject_local_fallback() {
@@ -72,15 +88,16 @@ emit_operator_verification_entry() {
 }
 
 run_step() {
-  local command_text="$1"
-  local log_path step_index
+  local command_text log_path step_index
+
+  command_text="$(join_command "$@")"
 
   commands_run+=("$command_text")
   echo "==> $command_text"
 
   step_index="${#commands_run[@]}"
   log_path="${step_logs_dir}/step-$(printf '%02d' "${step_index}").log"
-  if ! run_rch_shell "$command_text" > >(tee "$log_path") 2>&1; then
+  if ! run_rch_command "$@" > >(tee "$log_path") 2>&1; then
     if rg -q "Remote command finished: exit=0" "$log_path"; then
       echo "==> recovered: remote execution succeeded; artifact retrieval timed out" \
         | tee -a "$log_path"
@@ -97,32 +114,58 @@ run_step() {
 }
 
 run_mode() {
-  local bundle_cmd="cargo run -p frankenengine-engine --bin franken_observability_publication_bundle -- --out-dir ${run_dir}"
-  local check_cmd="cargo check -p frankenengine-engine --bin franken_observability_publication_bundle --test observability_publication_bundle_integration"
-  local test_cmd="cargo test -p frankenengine-engine --test observability_publication_bundle_integration"
-  local clippy_cmd="cargo clippy -p frankenengine-engine --bin franken_observability_publication_bundle --test observability_publication_bundle_integration -- -D warnings"
+  local -a bundle_cmd=(
+    cargo run
+    --manifest-path "${root_dir}/Cargo.toml"
+    -p frankenengine-engine
+    --bin franken_observability_publication_bundle
+    --
+    --out-dir "${run_dir_abs}"
+  )
+  local -a check_cmd=(
+    cargo check
+    --manifest-path "${root_dir}/Cargo.toml"
+    -p frankenengine-engine
+    --bin franken_observability_publication_bundle
+    --test observability_publication_bundle_integration
+  )
+  local -a test_cmd=(
+    cargo test
+    --manifest-path "${root_dir}/Cargo.toml"
+    -p frankenengine-engine
+    --test observability_publication_bundle_integration
+  )
+  local -a clippy_cmd=(
+    cargo clippy
+    --manifest-path "${root_dir}/Cargo.toml"
+    -p frankenengine-engine
+    --bin franken_observability_publication_bundle
+    --test observability_publication_bundle_integration
+    --
+    -D warnings
+  )
 
   case "$mode" in
     bundle)
-      run_step "${bundle_cmd}"
+      run_step "${bundle_cmd[@]}"
       ;;
     check)
-      run_step "${bundle_cmd}"
-      run_step "${check_cmd}"
+      run_step "${bundle_cmd[@]}"
+      run_step "${check_cmd[@]}"
       ;;
     test)
-      run_step "${bundle_cmd}"
-      run_step "${test_cmd}"
+      run_step "${bundle_cmd[@]}"
+      run_step "${test_cmd[@]}"
       ;;
     clippy)
-      run_step "${bundle_cmd}"
-      run_step "${clippy_cmd}"
+      run_step "${bundle_cmd[@]}"
+      run_step "${clippy_cmd[@]}"
       ;;
     ci)
-      run_step "${bundle_cmd}"
-      run_step "${check_cmd}"
-      run_step "${test_cmd}"
-      run_step "${clippy_cmd}"
+      run_step "${bundle_cmd[@]}"
+      run_step "${check_cmd[@]}"
+      run_step "${test_cmd[@]}"
+      run_step "${clippy_cmd[@]}"
       ;;
     *)
       echo "usage: $0 [bundle|check|test|clippy|ci]" >&2

@@ -974,3 +974,19 @@ fn rgc_066c_replay_wrapper_uses_latest_complete_bundle() {
         );
     }
 }
+
+#[test]
+fn rgc_066c_gate_runner_uses_interceptable_rch_exec() {
+    let script = read_repo_text("scripts/run_rgc_observability_publication_policy.sh");
+
+    assert!(
+        script.contains(
+            "rch exec -q -- env RUSTUP_TOOLCHAIN=\"${toolchain}\" CARGO_TARGET_DIR=\"${target_dir}\" \"$@\""
+        ),
+        "gate runner should use direct env-prefixed cargo commands so rch can intercept them"
+    );
+    assert!(
+        !script.contains("rch exec -q -- bash -lc"),
+        "gate runner must avoid shell-wrapped rch exec commands that bypass interception"
+    );
+}

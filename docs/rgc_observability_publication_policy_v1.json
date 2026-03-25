@@ -71,6 +71,10 @@
     {
       "path": "scripts/run_rgc_observability_publication_policy.sh",
       "fragment": "emit_operator_verification_entry \"cat \\\"${step_logs_dir}/step-01.log\\\"\" \",\""
+    },
+    {
+      "path": "scripts/run_rgc_observability_publication_policy.sh",
+      "fragment": "rch exec -q -- env RUSTUP_TOOLCHAIN=\"${toolchain}\" CARGO_TARGET_DIR=\"${target_dir}\" \"$@\""
     }
   ],
   "workload_classes": [

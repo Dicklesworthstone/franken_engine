@@ -461,6 +461,20 @@ impl MigrationCompatibilityChecker {
             }
         }
 
+        // Recompute chain hashes for the migrated sequence since artifact
+        // hashes may have changed during migration.
+        {
+            let mut prev_chain: Option<ContentHash> = None;
+            for entry in &mut migrated_entries {
+                let chain = crate::evidence_emission::compute_chain_hash(
+                    prev_chain.as_ref(),
+                    &entry.artifact_hash,
+                );
+                entry.chain_hash = chain;
+                prev_chain = Some(entry.chain_hash);
+            }
+        }
+
         if !errors.is_empty() {
             self.push_event(
                 &func.from_version,
@@ -1725,6 +1739,12 @@ mod tests {
         migrated
             .metadata
             .insert("migrated_from".to_string(), "evidence-v1".to_string());
+        // Recompute artifact_hash to reflect content changes (metadata added).
+        let mut payload = serde_json::to_vec(&migrated.ledger_entry).unwrap_or_default();
+        if let Ok(meta_bytes) = serde_json::to_vec(&migrated.metadata) {
+            payload.extend_from_slice(&meta_bytes);
+        }
+        migrated.artifact_hash = ContentHash::compute(&payload);
         Ok(migrated)
     }
 

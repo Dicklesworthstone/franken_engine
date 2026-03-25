@@ -189,7 +189,10 @@ pub struct CanonicalEvidenceEntry {
 impl CanonicalEvidenceEntry {
     /// Verify the artifact hash matches the ledger entry content.
     pub fn verify_artifact_integrity(&self) -> bool {
-        let payload = serde_json::to_vec(&self.ledger_entry).unwrap_or_default();
+        let mut payload = serde_json::to_vec(&self.ledger_entry).unwrap_or_default();
+        if let Ok(meta_bytes) = serde_json::to_vec(&self.metadata) {
+            payload.extend_from_slice(&meta_bytes);
+        }
         let computed = ContentHash::compute(&payload);
         self.artifact_hash == computed
     }
@@ -553,7 +556,7 @@ impl CanonicalEvidenceEmitter {
 // Chain hash computation
 // ---------------------------------------------------------------------------
 
-fn compute_chain_hash(prev: Option<&ContentHash>, current: &ContentHash) -> ContentHash {
+pub(crate) fn compute_chain_hash(prev: Option<&ContentHash>, current: &ContentHash) -> ContentHash {
     let mut input = Vec::with_capacity(64);
     match prev {
         Some(p) => input.extend_from_slice(p.as_bytes()),

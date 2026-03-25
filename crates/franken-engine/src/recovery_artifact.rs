@@ -481,18 +481,32 @@ impl RecoveryArtifactStore {
         artifact: &RecoveryArtifact,
         trace_id: &str,
     ) -> Result<RecoveryVerdict, VerificationError> {
-        // Check artifact_id.
-        let id_input = format!(
-            "{}:{}:{}:{}:{}:{}:{}",
-            artifact.artifact_type,
-            artifact.trigger,
-            artifact.before_state,
-            artifact.after_state,
-            artifact.epoch_id,
-            artifact.timestamp_ticks,
-            artifact.trace_id,
+        // Check artifact_id — must match the build() computation exactly,
+        // including proof_bundle and operator_actions for tamper-evidence.
+        let mut id_buf = Vec::new();
+        id_buf.extend_from_slice(
+            format!(
+                "{}:{}:{}:{}:{}:{}:{}",
+                artifact.artifact_type,
+                artifact.trigger,
+                artifact.before_state,
+                artifact.after_state,
+                artifact.epoch_id,
+                artifact.timestamp_ticks,
+                artifact.trace_id,
+            )
+            .as_bytes(),
         );
-        let computed_id = ContentHash::compute(id_input.as_bytes());
+        for proof in &artifact.proof_bundle {
+            id_buf.extend_from_slice(format!("{proof}").as_bytes());
+        }
+        for action in &artifact.operator_actions {
+            id_buf.extend_from_slice(action.operator.as_bytes());
+            id_buf.extend_from_slice(action.action.as_bytes());
+            id_buf.extend_from_slice(action.authorization_hash.as_bytes());
+            id_buf.extend_from_slice(&action.timestamp_ticks.to_le_bytes());
+        }
+        let computed_id = ContentHash::compute(&id_buf);
         if computed_id != artifact.artifact_id {
             return Err(VerificationError::ArtifactIdMismatch {
                 expected: artifact.artifact_id,

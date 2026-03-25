@@ -895,7 +895,9 @@ impl ObjectHeap {
                 }
                 Ok(false)
             }
-            ManagedObject::Proxy(_) => unreachable!(),
+            ManagedObject::Proxy(_) => {
+                Err(ObjectError::TypeError("Proxy set not supported yet".to_string()))
+            }
         }
     }
 

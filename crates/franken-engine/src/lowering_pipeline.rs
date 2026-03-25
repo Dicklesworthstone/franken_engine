@@ -3008,7 +3008,11 @@ fn lower_expression_to_ir1(
                     BinaryOperator::NullishCoalescing => ops.push(Ir1Op::JumpIfNullish {
                         label_id: eval_rhs_label,
                     }),
-                    _ => unreachable!(),
+                    _ => {
+                        return Err(LoweringPipelineError::InvariantViolation {
+                            detail: "unexpected operator in logical assignment",
+                        });
+                    }
                 }
 
                 ops.push(Ir1Op::Jump {
@@ -3165,7 +3169,11 @@ fn lower_expression_to_ir1(
                                     label_id: eval_rhs_label,
                                 });
                             }
-                            _ => unreachable!(),
+                            _ => {
+                                return Err(LoweringPipelineError::InvariantViolation {
+                                    detail: "unexpected operator in logical assignment",
+                                });
+                            }
                         }
                         ops.push(Ir1Op::Jump {
                             label_id: end_label,
@@ -3320,7 +3328,11 @@ fn lower_expression_to_ir1(
                                 label_id: eval_rhs_label,
                             });
                         }
-                        _ => unreachable!(),
+                        _ => {
+                            return Err(LoweringPipelineError::InvariantViolation {
+                                detail: "unexpected operator in member logical assignment",
+                            });
+                        }
                     }
                     ops.push(Ir1Op::LoadBinding {
                         binding_id: current_binding,

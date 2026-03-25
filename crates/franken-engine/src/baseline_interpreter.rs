@@ -36,6 +36,7 @@ use crate::ir_contract::{
     HostcallDecisionRecord, Ir3Instruction, Ir3Module, IteratorCloseReason, WitnessEvent,
     WitnessEventKind,
 };
+use crate::runtime_config::ExecutionConfig;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -396,6 +397,26 @@ impl InterpreterConfig {
             instruction_budget: DEFAULT_V8_BUDGET,
             max_registers: DEFAULT_V8_MAX_REGISTERS,
             max_call_depth: MAX_CALL_DEPTH,
+            granted_capabilities: Vec::new(),
+        }
+    }
+
+    /// Deterministic profile from a [`ExecutionConfig`].
+    pub fn deterministic_from_config(config: &ExecutionConfig) -> Self {
+        Self {
+            instruction_budget: config.deterministic_budget,
+            max_registers: config.deterministic_max_registers,
+            max_call_depth: config.max_call_depth,
+            granted_capabilities: Vec::new(),
+        }
+    }
+
+    /// Throughput profile from a [`ExecutionConfig`].
+    pub fn throughput_from_config(config: &ExecutionConfig) -> Self {
+        Self {
+            instruction_budget: config.throughput_budget,
+            max_registers: config.throughput_max_registers,
+            max_call_depth: config.max_call_depth,
             granted_capabilities: Vec::new(),
         }
     }
@@ -1614,7 +1635,12 @@ impl InterpreterCore {
             "<=" => matches!(ordering, Some(Ordering::Less | Ordering::Equal)),
             ">" => matches!(ordering, Some(Ordering::Greater)),
             ">=" => matches!(ordering, Some(Ordering::Greater | Ordering::Equal)),
-            _ => unreachable!(),
+            _ => {
+                return Err(InterpreterError::TypeError {
+                    expected: "relational operator".to_string(),
+                    got: op.to_string(),
+                });
+            }
         };
         Ok(Value::Bool(result))
     }
@@ -1658,7 +1684,12 @@ impl InterpreterCore {
             "<<" => lhs32.wrapping_shl(shift) as i64,
             ">>" => lhs32.wrapping_shr(shift) as i64,
             ">>>" => (x as u32).wrapping_shr(shift) as i64,
-            _ => unreachable!(),
+            _ => {
+                return Err(InterpreterError::TypeError {
+                    expected: "bitwise operator".to_string(),
+                    got: op.to_string(),
+                });
+            }
         };
         Ok(Value::Int(result))
     }

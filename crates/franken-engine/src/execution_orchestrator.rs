@@ -81,7 +81,12 @@ const STOPPING_CUSUM_THRESHOLD_MILLIONTHS: i64 = 5_000_000;
 /// Default CUSUM reference value (now read from RuntimeConfig).
 #[allow(dead_code)]
 const STOPPING_CUSUM_REFERENCE_MILLIONTHS: i64 = 500_000;
+#[allow(dead_code)]
+const DEFAULT_DRAIN_DEADLINE_TICKS: u64 = 10_000;
+#[allow(dead_code)]
 const ORCHESTRATOR_CELL_CLOSE_BUDGET_MS: u64 = 10_000;
+#[allow(dead_code)]
+const DEFAULT_MAX_CONCURRENT_SAGAS: usize = 4;
 const IFC_RUNTIME_GUARD_CAPABILITY: &str = "ifc.check_flow";
 const SCALE_MILLION: i64 = 1_000_000;
 
@@ -138,12 +143,13 @@ pub struct OrchestratorConfig {
 
 impl Default for OrchestratorConfig {
     fn default() -> Self {
+        let runtime_orchestrator = RuntimeConfig::default().orchestrator;
         Self {
             loss_matrix_preset: LossMatrixPreset::Balanced,
             force_lane: None,
-            drain_deadline_ticks: 10_000,
-            cell_close_budget_ms: ORCHESTRATOR_CELL_CLOSE_BUDGET_MS,
-            max_concurrent_sagas: 4,
+            drain_deadline_ticks: runtime_orchestrator.drain_deadline_ticks,
+            cell_close_budget_ms: runtime_orchestrator.cell_close_budget_ms,
+            max_concurrent_sagas: runtime_orchestrator.max_concurrent_sagas,
             epoch: SecurityEpoch::from_raw(1),
             parse_goal: ParseGoal::Script,
             parser_options: ParserOptions::default(),
@@ -1059,7 +1065,7 @@ impl ExecutionOrchestrator {
         // Record chosen action.
         let stopping_override = effective_action != decision.action;
         builder = builder.chosen(ChosenAction {
-            action_name: format!("{:?}", effective_action),
+            action_name: format!("{}", effective_action),
             expected_loss_millionths: decision.expected_loss_millionths,
             rationale: format!(
                 "risk_state={:?}, posterior_benign={}, stopping_override={stopping_override}",
@@ -1592,7 +1598,11 @@ impl ExecutionOrchestrator {
                 SagaType::Quarantine => quarantine_saga_steps(&package.extension_id),
                 SagaType::Eviction => eviction_saga_steps(&package.extension_id),
                 SagaType::Revocation => revocation_saga_steps(&package.extension_id),
-                SagaType::Publish => unreachable!("action_to_saga_type never returns Publish"),
+                SagaType::Publish => {
+                    return Err(OrchestratorError::Saga(SagaError::InvalidSagaId {
+                        reason: "action_to_saga_type never returns Publish".to_string(),
+                    }));
+                }
             };
             let saga_id_str = format!("{trace_id}:saga");
             let id =
@@ -2151,13 +2161,71 @@ mod tests {
     #[test]
     fn orchestrator_config_default_values() {
         let cfg = OrchestratorConfig::default();
+        let runtime_cfg = RuntimeConfig::default();
         assert_eq!(cfg.loss_matrix_preset, LossMatrixPreset::Balanced);
         assert!(cfg.force_lane.is_none());
-        assert_eq!(cfg.drain_deadline_ticks, 10_000);
-        assert_eq!(cfg.max_concurrent_sagas, 4);
+        assert_eq!(
+            cfg.drain_deadline_ticks,
+            runtime_cfg.orchestrator.drain_deadline_ticks
+        );
+        assert_eq!(
+            cfg.cell_close_budget_ms,
+            runtime_cfg.orchestrator.cell_close_budget_ms
+        );
+        assert_eq!(
+            cfg.max_concurrent_sagas,
+            runtime_cfg.orchestrator.max_concurrent_sagas
+        );
         assert_eq!(cfg.epoch, SecurityEpoch::from_raw(1));
         assert_eq!(cfg.trace_id_prefix, "orch");
         assert_eq!(cfg.policy_id, "default-policy");
+    }
+
+    #[test]
+    fn runtime_config_default_matches_orchestrator_constants() {
+        let orchestrator = RuntimeConfig::default().orchestrator;
+        assert_eq!(
+            orchestrator.adaptive_router_gamma_millionths,
+            ADAPTIVE_ROUTER_GAMMA_MILLIONTHS
+        );
+        assert_eq!(
+            orchestrator.stopping_cusum_threshold_millionths,
+            STOPPING_CUSUM_THRESHOLD_MILLIONTHS
+        );
+        assert_eq!(
+            orchestrator.stopping_cusum_reference_millionths,
+            STOPPING_CUSUM_REFERENCE_MILLIONTHS
+        );
+        assert_eq!(
+            orchestrator.drain_deadline_ticks,
+            DEFAULT_DRAIN_DEADLINE_TICKS
+        );
+        assert_eq!(
+            orchestrator.cell_close_budget_ms,
+            ORCHESTRATOR_CELL_CLOSE_BUDGET_MS
+        );
+        assert_eq!(
+            orchestrator.max_concurrent_sagas,
+            DEFAULT_MAX_CONCURRENT_SAGAS
+        );
+    }
+
+    #[test]
+    fn new_with_runtime_config_uses_custom_router_gamma_and_stopping_thresholds() {
+        let mut runtime_cfg = RuntimeConfig::default();
+        runtime_cfg.orchestrator.adaptive_router_gamma_millionths = 500_000;
+        runtime_cfg.orchestrator.stopping_cusum_threshold_millionths = 1_000_000;
+        runtime_cfg.orchestrator.stopping_cusum_reference_millionths = 200_000;
+
+        let orch = ExecutionOrchestrator::new_with_runtime_config(
+            OrchestratorConfig::default(),
+            runtime_cfg,
+        );
+        assert_eq!(orch.adaptive_router.exp3.gamma_millionths, 500_000);
+
+        let policy = orch.new_stopping_policy();
+        assert_eq!(policy.cusum.threshold_millionths, 1_000_000);
+        assert_eq!(policy.cusum.reference_millionths, 200_000);
     }
 
     // -- OrchestratorError Display --------------------------------------------

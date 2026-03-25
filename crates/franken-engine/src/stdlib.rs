@@ -777,15 +777,13 @@ pub fn exec_math(builtin: BuiltinId, args: &[JsValue]) -> Result<JsValue, Stdlib
         }
         BuiltinId::MathRound => {
             let n = require_int("Math.round", args, 0)?;
-            let remainder = n % FP_SCALE;
-            if remainder.abs() >= FP_SCALE / 2 {
-                if n > 0 {
-                    Ok(JsValue::Int((n / FP_SCALE + 1) * FP_SCALE))
-                } else {
-                    Ok(JsValue::Int((n / FP_SCALE - 1) * FP_SCALE))
-                }
+            let shifted = n.saturating_add(FP_SCALE / 2);
+            if shifted % FP_SCALE == 0 {
+                Ok(JsValue::Int(shifted))
+            } else if shifted > 0 {
+                Ok(JsValue::Int((shifted / FP_SCALE) * FP_SCALE))
             } else {
-                Ok(JsValue::Int((n / FP_SCALE) * FP_SCALE))
+                Ok(JsValue::Int((shifted / FP_SCALE - 1) * FP_SCALE))
             }
         }
         BuiltinId::MathTrunc => {
@@ -1566,11 +1564,15 @@ fn exec_heap_array_method(
                 ) as usize,
                 None => 0,
             };
-            let delete_count = match args.get(1) {
-                Some(arg) => {
-                    (coerce_to_int("Array.prototype.splice", arg)? / FP_SCALE).max(0) as usize
+            let delete_count = if args.is_empty() {
+                0
+            } else {
+                match args.get(1) {
+                    Some(arg) => {
+                        (coerce_to_int("Array.prototype.splice", arg)? / FP_SCALE).max(0) as usize
+                    }
+                    None => after.len().saturating_sub(start),
                 }
-                None => after.len().saturating_sub(start),
             };
             let actual_delete = delete_count.min(after.len().saturating_sub(start));
             let inserts = if args.len() > 2 {
@@ -1695,7 +1697,12 @@ fn exec_heap_map_method(
             after.clear();
             JsValue::Undefined
         }
-        _ => unreachable!("map dispatch is filtered above"),
+        _ => {
+            return Err(StdlibError::TypeError(format!(
+                "internal error: expected map method, got {:?}",
+                builtin
+            )))
+        }
     };
 
     if before != after {
@@ -1750,7 +1757,12 @@ fn exec_heap_set_method(
             after.clear();
             JsValue::Undefined
         }
-        _ => unreachable!("set dispatch is filtered above"),
+        _ => {
+            return Err(StdlibError::TypeError(format!(
+                "internal error: expected set method, got {:?}",
+                builtin
+            )));
+        }
     };
 
     if before != after {
@@ -2714,7 +2726,10 @@ fn opt_int_arg(args: &[JsValue], index: usize) -> Option<i64> {
 }
 
 fn opt_str_arg(args: &[JsValue], index: usize) -> Option<String> {
-    args.get(index).map(coerce_to_string)
+    args.get(index).and_then(|val| match val {
+        JsValue::Undefined => None,
+        _ => Some(coerce_to_string(val)),
+    })
 }
 
 fn coerce_to_int(context: &str, value: &JsValue) -> Result<i64, StdlibError> {

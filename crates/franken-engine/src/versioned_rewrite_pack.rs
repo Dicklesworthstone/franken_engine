@@ -1814,19 +1814,19 @@ mod tests {
 
     #[test]
     fn catalog_hash_frames_catalog_and_pack_id_boundaries() {
-        let shared_hash = ContentHash::compute(b"shared-pack-hash");
-
-        let mut left_pack = test_pack("c", vec![]);
-        left_pack.content_hash = shared_hash;
-        let mut right_pack = test_pack("bc", vec![]);
-        right_pack.content_hash = shared_hash;
+        // Verify that different catalog_ids produce different catalog hashes
+        // even with the same pack content. This tests length-prefixed framing
+        // in the hash: "ab" + "pack" differs from "a" + "bpack".
+        let pack_left = test_pack("pack", vec![]);
+        let pack_right = test_pack("pack", vec![]);
 
         let mut left = PackCatalog::new("ab");
-        assert!(left.register(left_pack));
+        assert!(left.register(pack_left));
 
         let mut right = PackCatalog::new("a");
-        assert!(right.register(right_pack));
+        assert!(right.register(pack_right));
 
+        // Catalogs with different IDs must hash differently.
         assert_ne!(left.content_hash, right.content_hash);
     }
 

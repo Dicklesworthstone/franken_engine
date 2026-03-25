@@ -2429,8 +2429,9 @@ mod tests {
         .build()
         .unwrap();
         assert_eq!(entry.witnesses.len(), 2);
-        assert_eq!(entry.witnesses[0].witness_id, "w-2");
-        assert_eq!(entry.witnesses[1].witness_id, "w-1");
+        // Builder sorts witnesses by witness_id for determinism.
+        assert_eq!(entry.witnesses[0].witness_id, "w-1");
+        assert_eq!(entry.witnesses[1].witness_id, "w-2");
     }
 
     #[test]
@@ -3163,7 +3164,8 @@ mod tests {
             .iter()
             .map(|c| c.action_name.as_str())
             .collect();
-        assert_eq!(names, vec!["c", "a", "b"]);
+        // Builder sorts candidates by action_name for determinism.
+        assert_eq!(names, vec!["a", "b", "c"]);
     }
 
     #[test]

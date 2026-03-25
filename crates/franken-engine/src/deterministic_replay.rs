@@ -1511,7 +1511,7 @@ mod tests {
     #[test]
     fn hash_format() {
         let h = compute_simple_hash(b"test");
-        assert_eq!(h.len(), 16); // 16 hex chars for u64
+        assert_eq!(h.len(), 64); // 64 hex chars for SHA-256
     }
 
     // -- classify_divergence --
@@ -2513,7 +2513,7 @@ mod tests {
     #[test]
     fn hash_empty_data() {
         let h = compute_simple_hash(&[]);
-        assert_eq!(h.len(), 16);
+        assert_eq!(h.len(), 64); // 64 hex chars for SHA-256
         let h2 = compute_simple_hash(&[]);
         assert_eq!(h, h2);
     }

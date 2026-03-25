@@ -58,6 +58,7 @@ use crate::regret_bounded_router::{
     LaneArm as AdaptiveLaneArm, RegretBoundedRouter, RewardSignal as AdaptiveRewardSignal,
     RouterSummary,
 };
+use crate::runtime_config::RuntimeConfig;
 use crate::saga_orchestrator::{
     SagaError, SagaOrchestrator, SagaType, eviction_saga_steps, quarantine_saga_steps,
     revocation_saga_steps,
@@ -71,8 +72,14 @@ use crate::ts_normalization::{
     SourceIngestionSummary, TsNormalizationError, prepare_source_entry_for_public_entrypoints,
 };
 
+/// Default adaptive router exploration rate (now read from RuntimeConfig).
+#[allow(dead_code)]
 const ADAPTIVE_ROUTER_GAMMA_MILLIONTHS: i64 = 100_000;
+/// Default CUSUM anomaly detection threshold (now read from RuntimeConfig).
+#[allow(dead_code)]
 const STOPPING_CUSUM_THRESHOLD_MILLIONTHS: i64 = 5_000_000;
+/// Default CUSUM reference value (now read from RuntimeConfig).
+#[allow(dead_code)]
 const STOPPING_CUSUM_REFERENCE_MILLIONTHS: i64 = 500_000;
 const ORCHESTRATOR_CELL_CLOSE_BUDGET_MS: u64 = 10_000;
 const IFC_RUNTIME_GUARD_CAPABILITY: &str = "ifc.check_flow";
@@ -370,6 +377,8 @@ impl From<TsNormalizationError> for OrchestratorError {
 /// Integration seam that wires together the full FrankenEngine pipeline.
 pub struct ExecutionOrchestrator {
     config: OrchestratorConfig,
+    /// Centralized runtime configuration for all engine subsystems.
+    runtime_config: RuntimeConfig,
     parser: CanonicalEs2020Parser,
     adaptive_router: RegretBoundedRouter,
     stopping_policies: BTreeMap<String, EscalationPolicy>,
@@ -389,8 +398,17 @@ pub struct ExecutionOrchestrator {
 impl ExecutionOrchestrator {
     /// Create a new orchestrator with the given configuration.
     pub fn new(config: OrchestratorConfig) -> Self {
+        Self::new_with_runtime_config(config, RuntimeConfig::default())
+    }
+
+    /// Create a new orchestrator with both orchestrator and runtime configs.
+    pub fn new_with_runtime_config(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+    ) -> Self {
         let loss_matrix = config.loss_matrix_preset.to_loss_matrix();
         let prior = Posterior::default_prior();
+        let gamma = runtime_config.orchestrator.adaptive_router_gamma_millionths;
         let adaptive_router = RegretBoundedRouter::new(
             vec![
                 AdaptiveLaneArm {
@@ -402,7 +420,7 @@ impl ExecutionOrchestrator {
                     description: "Baseline throughput execution profile".to_string(),
                 },
             ],
-            ADAPTIVE_ROUTER_GAMMA_MILLIONTHS,
+            gamma,
         )
         .expect("adaptive router configuration must be valid");
         Self {
@@ -421,6 +439,7 @@ impl ExecutionOrchestrator {
             attempt_counter: 0,
             execution_counter: 0,
             config,
+            runtime_config,
         }
     }
 
@@ -429,10 +448,19 @@ impl ExecutionOrchestrator {
         Self::new(OrchestratorConfig::default())
     }
 
-    fn new_stopping_policy() -> EscalationPolicy {
+    /// Access the runtime configuration.
+    pub fn runtime_config(&self) -> &RuntimeConfig {
+        &self.runtime_config
+    }
+
+    fn new_stopping_policy(&self) -> EscalationPolicy {
         let mut policy = EscalationPolicy::new(
-            STOPPING_CUSUM_THRESHOLD_MILLIONTHS,
-            STOPPING_CUSUM_REFERENCE_MILLIONTHS,
+            self.runtime_config
+                .orchestrator
+                .stopping_cusum_threshold_millionths,
+            self.runtime_config
+                .orchestrator
+                .stopping_cusum_reference_millionths,
             256,
         )
         .expect("stopping policy configuration must be valid");
@@ -1196,10 +1224,16 @@ impl ExecutionOrchestrator {
             timestamp_us: attempt_index,
             source: package.extension_id.clone(),
         };
-        let policy = self
-            .stopping_policies
-            .entry(package.extension_id.clone())
-            .or_insert_with(Self::new_stopping_policy);
+        let policy = if !self.stopping_policies.contains_key(&package.extension_id) {
+            let new_policy = self.new_stopping_policy();
+            self.stopping_policies
+                .entry(package.extension_id.clone())
+                .or_insert(new_policy)
+        } else {
+            self.stopping_policies
+                .get_mut(&package.extension_id)
+                .expect("key just checked")
+        };
         let decision = policy.observe(&observation);
         let cert = Some(Self::build_optimal_stopping_certificate(
             policy,

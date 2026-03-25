@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::expected_loss_selector::ContainmentAction;
 use crate::hash_tiers::ContentHash;
+use crate::runtime_config::ContainmentConfig;
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -208,6 +209,11 @@ pub struct ContainmentReceipt {
 
 impl ContainmentReceipt {
     /// Compute canonical bytes for hashing.
+    ///
+    /// `duration_ns` is deliberately excluded: it is observational metadata
+    /// (wall-clock measurement) that varies between live execution and
+    /// deterministic replay.  Including it would make receipt hashes
+    /// non-reproducible across replay runs.
     fn canonical_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(256);
         buf.extend_from_slice(self.receipt_id.as_bytes());
@@ -221,7 +227,7 @@ impl ContainmentReceipt {
         buf.extend_from_slice(self.new_state.to_string().as_bytes());
         buf.push(0);
         buf.extend_from_slice(&self.timestamp_ns.to_le_bytes());
-        buf.extend_from_slice(&self.duration_ns.to_le_bytes());
+        // NOTE: duration_ns intentionally omitted — see doc comment above.
         buf.push(u8::from(self.success));
         buf.push(u8::from(self.cooperative));
         for r in &self.evidence_refs {
@@ -278,6 +284,17 @@ impl Default for ContainmentContext {
             grace_period_ns: DEFAULT_GRACE_PERIOD_NS,
             challenge_timeout_ns: DEFAULT_CHALLENGE_TIMEOUT_NS,
             sandbox_policy: SandboxPolicy::default(),
+        }
+    }
+}
+
+impl ContainmentContext {
+    /// Create a context with timeouts from a [`ContainmentConfig`].
+    pub fn with_config_timeouts(config: &ContainmentConfig) -> Self {
+        Self {
+            grace_period_ns: config.grace_period_ns,
+            challenge_timeout_ns: config.challenge_timeout_ns,
+            ..Self::default()
         }
     }
 }
@@ -355,6 +372,8 @@ impl ContainmentExecutor {
         extension_id: &str,
         context: &ContainmentContext,
     ) -> Result<ContainmentReceipt, ContainmentError> {
+        let start = std::time::Instant::now();
+
         let ext = self
             .extensions
             .iter_mut()
@@ -437,7 +456,7 @@ impl ContainmentExecutor {
             previous_state,
             new_state,
             timestamp_ns: context.timestamp_ns,
-            duration_ns: 0, // Simulated — real executor would measure.
+            duration_ns: start.elapsed().as_nanos() as u64,
             success: true,
             cooperative,
             evidence_refs: context.evidence_refs.clone(),
@@ -450,7 +469,8 @@ impl ContainmentExecutor {
             .metadata
             .insert("decision_id".to_string(), context.decision_id.clone());
 
-        // Compute content hash.
+        // Compute content hash (duration_ns deliberately excluded for
+        // deterministic replay — see canonical_bytes() doc comment).
         receipt.content_hash = ContentHash::compute(&receipt.canonical_bytes());
 
         ext.receipts.push(receipt.clone());
@@ -506,6 +526,8 @@ impl ContainmentExecutor {
         extension_id: &str,
         context: &ContainmentContext,
     ) -> Result<ContainmentReceipt, ContainmentError> {
+        let start = std::time::Instant::now();
+
         let ext = self
             .extensions
             .iter_mut()
@@ -541,7 +563,7 @@ impl ContainmentExecutor {
             previous_state,
             new_state: resume_target,
             timestamp_ns: context.timestamp_ns,
-            duration_ns: 0,
+            duration_ns: start.elapsed().as_nanos() as u64,
             success: true,
             cooperative: true,
             evidence_refs: context.evidence_refs.clone(),
@@ -967,8 +989,41 @@ mod tests {
         let mut receipt = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
             .unwrap();
-        receipt.duration_ns = 999_999;
+        // Tamper with a field that IS part of canonical_bytes.
+        // (duration_ns is deliberately excluded for replay determinism.)
+        receipt.timestamp_ns = 999_999;
         assert!(!receipt.verify_integrity());
+    }
+
+    #[test]
+    fn receipt_duration_ns_excluded_from_hash() {
+        let mut executor = setup_executor();
+        let ctx = test_context();
+        let mut receipt = executor
+            .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
+            .unwrap();
+        let original_hash = receipt.content_hash;
+        // Changing duration_ns must NOT invalidate the hash (it is
+        // observational metadata excluded for deterministic replay).
+        receipt.duration_ns = 999_999_999;
+        assert!(receipt.verify_integrity());
+        assert_eq!(receipt.content_hash, original_hash);
+    }
+
+    #[test]
+    fn receipt_duration_ns_is_nonzero() {
+        let mut executor = setup_executor();
+        let ctx = test_context();
+        let receipt = executor
+            .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
+            .unwrap();
+        // Duration must be measured, not simulated.
+        // The exact value depends on machine speed, but it must not be zero.
+        // (In-memory state transitions take at minimum a few nanoseconds.)
+        assert!(
+            receipt.duration_ns > 0,
+            "containment receipt must record real execution duration"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1243,6 +1298,28 @@ mod tests {
         assert_eq!(ctx.timestamp_ns, 0);
         assert_eq!(ctx.epoch, SecurityEpoch::GENESIS);
         assert!(ctx.evidence_refs.is_empty());
+        assert_eq!(ctx.grace_period_ns, DEFAULT_GRACE_PERIOD_NS);
+        assert_eq!(ctx.challenge_timeout_ns, DEFAULT_CHALLENGE_TIMEOUT_NS);
+    }
+
+    #[test]
+    fn containment_context_with_config_timeouts() {
+        let config = ContainmentConfig {
+            grace_period_ns: 1_000_000_000,
+            challenge_timeout_ns: 30_000_000_000,
+        };
+        let ctx = ContainmentContext::with_config_timeouts(&config);
+        assert_eq!(ctx.grace_period_ns, 1_000_000_000);
+        assert_eq!(ctx.challenge_timeout_ns, 30_000_000_000);
+        // Other fields should be defaults.
+        assert!(ctx.decision_id.is_empty());
+        assert_eq!(ctx.epoch, SecurityEpoch::GENESIS);
+    }
+
+    #[test]
+    fn containment_context_default_config_matches_constants() {
+        let config = ContainmentConfig::default();
+        let ctx = ContainmentContext::with_config_timeouts(&config);
         assert_eq!(ctx.grace_period_ns, DEFAULT_GRACE_PERIOD_NS);
         assert_eq!(ctx.challenge_timeout_ns, DEFAULT_CHALLENGE_TIMEOUT_NS);
     }

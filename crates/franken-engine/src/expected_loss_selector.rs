@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::bayesian_posterior::{Posterior, RiskState};
 use crate::hash_tiers::ContentHash;
+use crate::runtime_config::DecisionThresholdsConfig;
 use crate::security_epoch::SecurityEpoch;
 use crate::trust_economics::{
     AttackerCostModel, AttackerRoiAssessment, FleetRoiSummary, summarize_fleet_roi,
@@ -30,9 +31,17 @@ use crate::trust_economics::{
 const MILLION: i64 = 1_000_000;
 const RUNTIME_DECISION_SCORING_COMPONENT: &str = "runtime_decision_scoring";
 const ALIEN_TAIL_CONFIDENCE_MILLIONTHS: i64 = 900_000; // 90%
+/// Default elevated p-value threshold (now read from RuntimeConfig in `_with_thresholds` variant).
+#[allow(dead_code)]
 const ALIEN_ELEVATED_PVALUE_MILLIONTHS: i64 = 100_000; // 10%
+/// Default critical p-value threshold (now read from RuntimeConfig in `_with_thresholds` variant).
+#[allow(dead_code)]
 const ALIEN_CRITICAL_PVALUE_MILLIONTHS: i64 = 50_000; // 5%
+/// Default elevated regime-shift sigma (now read from RuntimeConfig in `_with_thresholds` variant).
+#[allow(dead_code)]
 const ALIEN_ELEVATED_REGIME_SHIFT_MILLIONTHS: i64 = 2_500_000; // 2.5 sigma-equivalent
+/// Default critical regime-shift sigma (now read from RuntimeConfig in `_with_thresholds` variant).
+#[allow(dead_code)]
 const ALIEN_CRITICAL_REGIME_SHIFT_MILLIONTHS: i64 = 4_000_000; // 4.0 sigma-equivalent
 
 // ---------------------------------------------------------------------------
@@ -1204,14 +1213,30 @@ fn classify_alien_risk_alert(
     conformal_p_value_millionths: i64,
     regime_shift_score_millionths: i64,
 ) -> (AlienRiskAlertLevel, Option<ContainmentAction>) {
+    classify_alien_risk_alert_with_thresholds(
+        selected_expected_loss_millionths,
+        tail_cvar_millionths,
+        conformal_p_value_millionths,
+        regime_shift_score_millionths,
+        &DecisionThresholdsConfig::default(),
+    )
+}
+
+fn classify_alien_risk_alert_with_thresholds(
+    selected_expected_loss_millionths: i64,
+    tail_cvar_millionths: i64,
+    conformal_p_value_millionths: i64,
+    regime_shift_score_millionths: i64,
+    thresholds: &DecisionThresholdsConfig,
+) -> (AlienRiskAlertLevel, Option<ContainmentAction>) {
     let base_loss = selected_expected_loss_millionths.saturating_abs().max(1);
     let cvar_ratio_millionths = saturating_i128_to_i64(
         i128::from(tail_cvar_millionths.saturating_abs()) * i128::from(MILLION)
             / i128::from(base_loss),
     );
 
-    let critical = conformal_p_value_millionths <= ALIEN_CRITICAL_PVALUE_MILLIONTHS
-        || regime_shift_score_millionths >= ALIEN_CRITICAL_REGIME_SHIFT_MILLIONTHS
+    let critical = conformal_p_value_millionths <= thresholds.critical_pvalue_millionths
+        || regime_shift_score_millionths >= thresholds.critical_regime_shift_millionths
         || cvar_ratio_millionths >= 20_000_000; // 20x baseline EL
     if critical {
         return (
@@ -1220,8 +1245,8 @@ fn classify_alien_risk_alert(
         );
     }
 
-    let elevated = conformal_p_value_millionths <= ALIEN_ELEVATED_PVALUE_MILLIONTHS
-        || regime_shift_score_millionths >= ALIEN_ELEVATED_REGIME_SHIFT_MILLIONTHS
+    let elevated = conformal_p_value_millionths <= thresholds.elevated_pvalue_millionths
+        || regime_shift_score_millionths >= thresholds.elevated_regime_shift_millionths
         || cvar_ratio_millionths >= 8_000_000; // 8x baseline EL
     if elevated {
         return (

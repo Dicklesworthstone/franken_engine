@@ -17,6 +17,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::hash_tiers::ContentHash;
+use crate::runtime_config::BayesianPriorsConfig;
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -97,6 +98,20 @@ impl Posterior {
             p_anomalous: DEFAULT_PRIOR_ANOMALOUS,
             p_malicious: DEFAULT_PRIOR_MALICIOUS,
             p_unknown: DEFAULT_PRIOR_UNKNOWN,
+        }
+    }
+
+    /// Create a posterior from a [`BayesianPriorsConfig`].
+    ///
+    /// This allows runtime-configurable priors via `RuntimeConfig`.
+    /// The config is assumed to be pre-validated (priors sum to MILLION,
+    /// each >= floor_mass).
+    pub fn from_prior_config(config: &BayesianPriorsConfig) -> Self {
+        Self {
+            p_benign: config.benign_millionths,
+            p_anomalous: config.anomalous_millionths,
+            p_malicious: config.malicious_millionths,
+            p_unknown: config.unknown_millionths,
         }
     }
 
@@ -2127,5 +2142,70 @@ mod tests {
             );
             prev_rl = rl;
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Posterior::from_prior_config tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn from_prior_config_default_matches_default_prior() {
+        let config = BayesianPriorsConfig::default();
+        let from_config = Posterior::from_prior_config(&config);
+        let default = Posterior::default_prior();
+        assert_eq!(from_config, default);
+    }
+
+    #[test]
+    fn from_prior_config_custom_priors() {
+        let config = BayesianPriorsConfig {
+            benign_millionths: 700_000,
+            anomalous_millionths: 150_000,
+            malicious_millionths: 50_000,
+            unknown_millionths: 100_000,
+            floor_mass: 100,
+        };
+        let p = Posterior::from_prior_config(&config);
+        assert_eq!(p.p_benign, 700_000);
+        assert_eq!(p.p_anomalous, 150_000);
+        assert_eq!(p.p_malicious, 50_000);
+        assert_eq!(p.p_unknown, 100_000);
+        assert!(p.is_valid());
+    }
+
+    #[test]
+    fn from_prior_config_sum_is_million() {
+        let config = BayesianPriorsConfig::default();
+        let p = Posterior::from_prior_config(&config);
+        assert_eq!(
+            p.p_benign + p.p_anomalous + p.p_malicious + p.p_unknown,
+            MILLION
+        );
+    }
+
+    #[test]
+    fn from_prior_config_update_cycle_works() {
+        let config = BayesianPriorsConfig {
+            benign_millionths: 600_000,
+            anomalous_millionths: 200_000,
+            malicious_millionths: 100_000,
+            unknown_millionths: 100_000,
+            floor_mass: 100,
+        };
+        let prior = Posterior::from_prior_config(&config);
+        let mut updater = BayesianPosteriorUpdater::new(prior, "test-ext");
+        let evidence = Evidence {
+            extension_id: "test-ext".to_string(),
+            hostcall_rate_millionths: 5_000_000,
+            distinct_capabilities: 12,
+            resource_score_millionths: 800_000,
+            timing_anomaly_millionths: 600_000,
+            denial_rate_millionths: 300_000,
+            epoch: SecurityEpoch::GENESIS,
+        };
+        let result = updater.update(&evidence);
+        // With high anomaly evidence, the posterior should shift away from benign.
+        assert!(result.posterior.p_benign < 600_000);
+        assert!(result.posterior.is_valid());
     }
 }

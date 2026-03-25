@@ -11,6 +11,7 @@ artifact_root="${RGC_MODULE_INTEROP_MATRIX_ARTIFACT_ROOT:-${root_dir}/artifacts/
 explicit_run_dir="${RGC_MODULE_INTEROP_MATRIX_REPLAY_RUN_DIR:-}"
 mode="${1:-ci}"
 main_exit=0
+pre_run_latest_artifact_dir_path=""
 
 run_dir_is_complete() {
   local candidate="${1:-}"
@@ -23,10 +24,6 @@ run_dir_is_complete() {
   [[ -f "${candidate}/step_logs/step_000.log" ]] || return 1
 }
 
-if [[ -z "${explicit_run_dir}" ]]; then
-  "${root_dir}/scripts/run_rgc_module_interop_verification_matrix.sh" "${mode}" || main_exit=$?
-fi
-
 latest_artifact_dir() {
   if [[ ! -d "${artifact_root}" ]]; then
     return 0
@@ -34,6 +31,11 @@ latest_artifact_dir() {
 
   find "${artifact_root}" -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1
 }
+
+if [[ -z "${explicit_run_dir}" ]]; then
+  pre_run_latest_artifact_dir_path="$(latest_artifact_dir)"
+  "${root_dir}/scripts/run_rgc_module_interop_verification_matrix.sh" "${mode}" || main_exit=$?
+fi
 
 latest_complete_run_dir() {
   if [[ ! -d "${artifact_root}" ]]; then
@@ -58,12 +60,18 @@ missing_bundle_exit_code() {
 
 warn_about_failed_gate_replay_source() {
   local prior_exit="${1:-0}"
+  local prior_artifact_dir="${2:-}"
   if [[ "${prior_exit}" -eq 0 ]]; then
     return
   fi
 
   if [[ -n "${latest_artifact_dir_path}" && "${latest_artifact_dir_path}" != "${latest_run_dir}" ]]; then
     echo "[rgc-module-interop-verification-matrix] gate exited with status ${prior_exit}; replay output reflects latest complete run directory ${latest_run_dir}" >&2
+    return
+  fi
+
+  if [[ -n "${prior_artifact_dir}" && "${latest_run_dir}" == "${prior_artifact_dir}" ]]; then
+    echo "[rgc-module-interop-verification-matrix] gate exited with status ${prior_exit}; replay output reflects previous latest complete run directory ${latest_run_dir}" >&2
     return
   fi
 
@@ -97,7 +105,7 @@ if [[ -n "${latest_artifact_dir_path}" && "${latest_artifact_dir_path}" != "${la
   echo "[rgc-module-interop-verification-matrix] newest directory ${latest_artifact_dir_path} is incomplete; using latest complete run directory ${latest_run_dir}" >&2
 fi
 
-warn_about_failed_gate_replay_source "${main_exit}"
+warn_about_failed_gate_replay_source "${main_exit}" "${pre_run_latest_artifact_dir_path}"
 
 echo "[rgc-module-interop-verification-matrix] latest manifest: ${latest_run_dir}/run_manifest.json"
 cat "${latest_run_dir}/run_manifest.json"

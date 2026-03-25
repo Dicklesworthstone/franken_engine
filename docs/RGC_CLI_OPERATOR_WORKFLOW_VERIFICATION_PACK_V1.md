@@ -113,6 +113,10 @@ The verified CLI workflow under test emits:
 - `support_bundle/preflight_report.json`
 - `support_bundle/onboarding_scorecard.json`
 
+Operators inspect those workflow artifacts under
+`artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/` after running
+the generic `frankenctl` workflow command in the verification sequence below.
+
 The replay wrapper resolves the latest complete artifact bundle, warns when a
 newer run directory is incomplete, and prints the selected manifest, trace IDs,
 events, commands, and first step log for operator replay and triage.
@@ -128,6 +132,8 @@ rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_rgc_cli_operator_workflow_verif
 ./scripts/run_rgc_cli_operator_workflow_verification_pack.sh ci
 ./scripts/e2e/rgc_cli_operator_workflow_verification_pack_replay.sh ci
 ./scripts/e2e/frankenctl_cli_workflow.sh ci
+cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/preflight_report.json
+cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/onboarding_scorecard.json
 FRANKENCTL_CLI_WORKFLOW_REPLAY_RUN_DIR=artifacts/frankenctl_cli_workflow/<timestamp> ./scripts/e2e/frankenctl_cli_workflow.sh ci
 cat artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/trace_ids.json
 cat artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/step_logs/step_000.log

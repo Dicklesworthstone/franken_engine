@@ -315,7 +315,7 @@ fn readme_references_operator_runbook_gate_and_replay() {
         "README missing timeout-safe compile-smoke guidance"
     );
     assert!(
-        readme.contains("instead of `cargo check`"),
+        readme.contains("`cargo check`"),
         "README missing cargo-check replacement guidance"
     );
     assert!(

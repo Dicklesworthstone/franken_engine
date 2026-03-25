@@ -275,6 +275,9 @@ write_manifest() {
     echo "    \"cat ${commands_path}\"," 
     echo "    \"cat ${step_logs_dir}/step_000.log\","
     echo '    "jq empty docs/rgc_cli_operator_workflow_verification_pack_v1.json",'
+    echo '    "./scripts/e2e/frankenctl_cli_workflow.sh '"${mode}"'",'
+    echo '    "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/preflight_report.json",'
+    echo '    "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/onboarding_scorecard.json",'
     echo "    \"${replay_command}\""
     echo '  ]'
     echo "}"

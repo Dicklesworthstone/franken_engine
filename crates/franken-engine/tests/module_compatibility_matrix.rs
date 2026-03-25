@@ -316,8 +316,16 @@ fn module_interop_replay_wrapper_requires_complete_bundle() {
         "replay wrapper must centralize failed-gate replay warnings in a dedicated helper"
     );
     assert!(
+        script.contains("pre_run_latest_artifact_dir_path"),
+        "replay wrapper must remember the pre-run latest artifact directory so failed reruns can distinguish previous bundles from current output"
+    );
+    assert!(
         script.contains("replay output reflects latest complete run directory"),
         "replay wrapper must warn when it falls back to an older complete run after a failed gate invocation"
+    );
+    assert!(
+        script.contains("replay output reflects previous latest complete run directory"),
+        "replay wrapper must distinguish failed reruns that never produced a new complete bundle from the current-run case"
     );
     assert!(
         script.contains("replay output reflects current run directory"),

@@ -208,6 +208,8 @@ fn rgc_061_doc_contains_required_sections() {
         "trace_ids.json",
         "step_logs/step_*.log",
         "step_logs/step_000.log",
+        "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/preflight_report.json",
+        "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/onboarding_scorecard.json",
         "FRANKENCTL_CLI_WORKFLOW_REPLAY_RUN_DIR=artifacts/frankenctl_cli_workflow/<timestamp> ./scripts/e2e/frankenctl_cli_workflow.sh ci",
         "fails closed on incomplete bundles",
         "short-circuits before creating a new run directory or requiring `rch`",
@@ -376,6 +378,18 @@ fn rgc_061_contract_is_versioned_and_actionable() {
             .any(|entry| entry.contains("./scripts/e2e/frankenctl_cli_workflow.sh ci")),
         "operator verification should include the generic frankenctl workflow command"
     );
+    for artifact in [
+        "support_bundle/preflight_report.json",
+        "support_bundle/onboarding_scorecard.json",
+    ] {
+        assert!(
+            contract
+                .operator_verification
+                .iter()
+                .any(|entry| entry.contains(artifact)),
+            "operator verification should include the support-bundle inspection command for {artifact}"
+        );
+    }
     assert!(
         contract.operator_verification.iter().any(|entry| {
             entry.contains(
@@ -984,6 +998,9 @@ fn rgc_061_lane_script_preserves_step_logs_and_failure_classification() {
         "\"first_step_log\": \"${step_logs_dir}/step_000.log\"",
         "cat ${trace_ids_path}",
         "cat ${step_logs_dir}/step_000.log",
+        "./scripts/e2e/frankenctl_cli_workflow.sh ${mode}",
+        "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/preflight_report.json",
+        "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/onboarding_scorecard.json",
         "rgc-cli-operator-workflow-verification-pack.run-manifest.v1",
     ] {
         assert!(

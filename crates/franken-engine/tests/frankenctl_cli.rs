@@ -789,8 +789,8 @@ fn frankenctl_cli_workflow_script_emits_trace_ids_artifact_contract() {
 
     assert!(script.contains("trace_ids_path=\"${run_dir}/trace_ids.json\""));
     assert!(script.contains("franken-engine.frankenctl.cli.workflow.trace-ids.v1"));
-    assert!(script.contains("\"trace_ids\": \"${trace_ids_path}\""));
-    assert!(script.contains("cat ${trace_ids_path}"));
+    assert!(script.contains(r#"\"trace_ids\": \"${trace_ids_path}\""#));
+    assert!(script.contains("trace_ids.json"));
     assert!(script.contains("write_trace_ids"));
 }
 

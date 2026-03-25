@@ -63,6 +63,8 @@
     "./scripts/run_rgc_cli_operator_workflow_verification_pack.sh ci",
     "./scripts/e2e/rgc_cli_operator_workflow_verification_pack_replay.sh ci",
     "./scripts/e2e/frankenctl_cli_workflow.sh ci",
+    "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/preflight_report.json",
+    "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/onboarding_scorecard.json",
     "FRANKENCTL_CLI_WORKFLOW_REPLAY_RUN_DIR=artifacts/frankenctl_cli_workflow/<timestamp> ./scripts/e2e/frankenctl_cli_workflow.sh ci",
     "cat artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/trace_ids.json",
     "cat artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/step_logs/step_000.log",

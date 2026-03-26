@@ -550,6 +550,27 @@ fn inventory_marks_legacy_cjs_requires_esm_boundary_cases_as_bun_compat() {
     }
 }
 
+#[test]
+fn inventory_reports_mixed_cycle_live_bindings_through_bun_compat_bridge() {
+    let inv = run_interop_parity_corpus();
+    let evidence = inv
+        .evidence
+        .iter()
+        .find(|ev| ev.specimen_id == "cycle_mixed_esm_cjs")
+        .unwrap();
+
+    assert_eq!(evidence.compatibility_mode, CompatibilityMode::BunCompat);
+    assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
+    assert!(evidence.cycle_count > 0);
+    assert_eq!(
+        evidence.compatibility_disposition,
+        InteropCompatibilityDisposition::Supported
+    );
+    assert!(evidence.error_detail.is_none());
+    assert_eq!(evidence.binding_verdicts.len(), 2);
+    assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
+}
+
 // ---------------------------------------------------------------------------
 // Evidence hashes
 // ---------------------------------------------------------------------------

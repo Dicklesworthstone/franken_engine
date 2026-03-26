@@ -20,6 +20,9 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use frankenengine_engine::esm_cjs_interop_parity::{
+    InteropActualOutcome, run_interop_parity_corpus,
+};
 use frankenengine_engine::module_compatibility_matrix::{
     COMPATIBILITY_SCENARIO_REPORT_SCHEMA_VERSION, CompatibilityContext, CompatibilityMatrixEntry,
     CompatibilityMatrixError, CompatibilityMatrixErrorCode, CompatibilityMode,
@@ -1270,6 +1273,50 @@ fn default_matrix_includes_cyclic_import_edge_case() {
 }
 
 #[test]
+fn default_matrix_pins_mixed_cycle_contract_and_bun_shim() {
+    let m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let entry = m
+        .entry("esm-cjs-cycle-live-binding")
+        .expect("default matrix should include mixed cycle case");
+
+    assert_eq!(entry.feature, ModuleFeature::DualMode);
+    assert_eq!(entry.node_behavior, "throw_err_require_esm");
+    assert_eq!(entry.bun_behavior, "preserve_live_bindings_through_cycle");
+    assert_eq!(entry.franken_native_behavior, "throw_err_require_esm");
+    assert_eq!(entry.franken_node_compat_behavior, "throw_err_require_esm");
+    assert_eq!(
+        entry.franken_bun_compat_behavior,
+        "preserve_live_bindings_through_cycle"
+    );
+    assert_eq!(entry.explicit_shims.len(), 1);
+    assert_eq!(
+        entry.explicit_shims[0].shim_id,
+        "shim-bun-esm-cjs-cycle-live-binding-v1"
+    );
+    assert_eq!(entry.explicit_shims[0].mode, CompatibilityMode::BunCompat);
+    assert!(
+        entry
+            .lockstep_case_refs
+            .contains(&"lockstep/module/esm-cjs-cycle-live-binding".to_string())
+    );
+
+    let divergence = entry
+        .divergence
+        .as_ref()
+        .expect("mixed-cycle case must record the Bun divergence explicitly");
+    assert_eq!(divergence.diverges_from, vec![ReferenceRuntime::Bun]);
+    assert_eq!(
+        divergence.waiver_id,
+        "waiver-modcomp-esm-cjs-cycle-live-binding-bun"
+    );
+    assert!(
+        divergence.migration_guidance.contains("bun_compat")
+            && divergence.migration_guidance.contains("dynamic import()"),
+        "mixed-cycle divergence should carry actionable migration guidance"
+    );
+}
+
+#[test]
 fn default_matrix_pins_require_of_esm_contract_and_bun_shim() {
     let m = ModuleCompatibilityMatrix::from_default_json().unwrap();
     let entry = m
@@ -1480,7 +1527,7 @@ fn scenario_report_summarizes_divergence_categories_and_guidance() {
                 CompatibilityObservation::new(
                     "esm-cjs-cycle-live-binding",
                     CompatibilityRuntime::FrankenEngine,
-                    CompatibilityMode::Native,
+                    CompatibilityMode::BunCompat,
                     "preserve_live_bindings_through_cycle",
                 ),
             ],
@@ -1501,11 +1548,40 @@ fn scenario_report_summarizes_divergence_categories_and_guidance() {
             .divergence_category_counts
             .get("intentional_improvement")
             .copied(),
-        Some(1)
+        Some(2)
     );
     assert!(
         report
             .actionable_guidance
             .contains_key("intentional_improvement")
     );
+}
+
+#[test]
+fn mixed_cycle_bun_compat_interop_evidence_matches_matrix_contract() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    let evidence = run_interop_parity_corpus()
+        .evidence
+        .into_iter()
+        .find(|ev| ev.specimen_id == "cycle_mixed_esm_cjs")
+        .expect("mixed cycle specimen should exist");
+    assert_eq!(evidence.compatibility_mode, CompatibilityMode::BunCompat);
+    assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
+    assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
+
+    let outcome = m
+        .evaluate_observation(
+            &CompatibilityObservation::new(
+                "esm-cjs-cycle-live-binding",
+                CompatibilityRuntime::FrankenEngine,
+                CompatibilityMode::BunCompat,
+                "preserve_live_bindings_through_cycle",
+            ),
+            &ctx(),
+        )
+        .expect("mixed-cycle interop evidence should match the matrix contract");
+    assert!(outcome.matched);
 }

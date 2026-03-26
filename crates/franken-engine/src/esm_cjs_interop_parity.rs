@@ -1204,7 +1204,7 @@ pub fn interop_parity_corpus() -> Vec<InteropSpecimen> {
         },
         InteropSpecimen {
             specimen_id: "cycle_mixed_esm_cjs".into(),
-            description: "Cycle crossing ESM↔CJS boundary".into(),
+            description: "Bun-compat mixed ESM↔CJS cycle preserves live binding cells through the sync bridge".into(),
             family: InteropFamily::CyclicInterop,
             modules: vec![
                 SpecimenModule {
@@ -1227,9 +1227,20 @@ pub fn interop_parity_corpus() -> Vec<InteropSpecimen> {
                 },
             ],
             entry_point: "a.mjs".into(),
-            expected_outcome: InteropExpectedOutcome::CycleDetected,
-            expected_linked_count: None,
-            expected_binding_states: vec![],
+            expected_outcome: InteropExpectedOutcome::Success,
+            expected_linked_count: Some(2),
+            expected_binding_states: vec![
+                ExpectedBindingState {
+                    module_specifier: "a.mjs".into(),
+                    export_name: "x".into(),
+                    expected_state: BindingCellState::Initialized,
+                },
+                ExpectedBindingState {
+                    module_specifier: "b.cjs".into(),
+                    export_name: "y".into(),
+                    expected_state: BindingCellState::Initialized,
+                },
+            ],
             expected_async_phases: vec![],
         },
         // ── Default / Namespace ──
@@ -1864,7 +1875,7 @@ fn run_single_specimen(specimen: &InteropSpecimen) -> InteropSpecimenEvidence {
         );
     }
 
-    if cycle_count > 0 {
+    if cycle_count > 0 && specimen.expected_outcome == InteropExpectedOutcome::CycleDetected {
         return early_return_evidence(
             specimen,
             compatibility_mode,
@@ -2570,7 +2581,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_cycle_is_unsupported_with_guidance() {
+    fn mixed_cycle_is_supported_with_no_remediation() {
         let inv = run_interop_parity_corpus();
         let evidence = inv
             .evidence
@@ -2579,11 +2590,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             evidence.compatibility_disposition,
-            InteropCompatibilityDisposition::Unsupported
+            InteropCompatibilityDisposition::Supported
         );
         assert_eq!(
             evidence.remediation_guidance.guidance_code,
-            "break_mixed_module_cycle"
+            "no_remediation_required"
         );
     }
 
@@ -3175,6 +3186,25 @@ mod tests {
         assert_eq!(evidence.verdict, InteropVerdict::Pass);
         assert_eq!(evidence.actual_outcome, InteropActualOutcome::CycleDetected);
         assert!(evidence.cycle_count > 0);
+    }
+
+    #[test]
+    fn run_single_specimen_mixed_cycle_preserves_live_bindings() {
+        let specimen = interop_parity_corpus()
+            .into_iter()
+            .find(|s| s.specimen_id == "cycle_mixed_esm_cjs")
+            .unwrap();
+        let evidence = run_single_specimen(&specimen);
+        assert_eq!(evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
+        assert_eq!(evidence.compatibility_mode, CompatibilityMode::BunCompat);
+        assert!(evidence.cycle_count > 0);
+        assert_eq!(
+            evidence.compatibility_disposition,
+            InteropCompatibilityDisposition::Supported
+        );
+        assert_eq!(evidence.binding_verdicts.len(), 2);
+        assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
     }
 
     #[test]

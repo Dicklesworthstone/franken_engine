@@ -103,19 +103,35 @@
       "case_id": "esm-cjs-cycle-live-binding",
       "feature": "dual_mode",
       "scenario": "An ESM <-> CJS mixed cyclic graph preserves live binding semantics without snapshotting stale exports.",
-      "node_behavior": "preserve_live_bindings_through_cycle",
+      "node_behavior": "throw_err_require_esm",
       "bun_behavior": "preserve_live_bindings_through_cycle",
-      "franken_native_behavior": "preserve_live_bindings_through_cycle",
-      "franken_node_compat_behavior": "preserve_live_bindings_through_cycle",
+      "franken_native_behavior": "throw_err_require_esm",
+      "franken_node_compat_behavior": "throw_err_require_esm",
       "franken_bun_compat_behavior": "preserve_live_bindings_through_cycle",
-      "explicit_shims": [],
+      "explicit_shims": [
+        {
+          "shim_id": "shim-bun-esm-cjs-cycle-live-binding-v1",
+          "mode": "bun_compat",
+          "description": "Explicit Bun-compatible sync bridge keeps mixed ESM/CJS cycle bindings live across the require() boundary.",
+          "removable": true,
+          "test_case_ref": "lockstep/module/esm-cjs-cycle-live-binding"
+        }
+      ],
       "lockstep_case_refs": [
         "lockstep/module/esm-cjs-cycle-live-binding"
       ],
       "test262_refs": [
         "language/module-code/instn-named-iee-cycle.js"
       ],
-      "divergence": null
+      "divergence": {
+        "diverges_from": [
+          "bun"
+        ],
+        "reason": "Native mode preserves strict ERR_REQUIRE_ESM behavior at the CommonJS -> ES module boundary, so mixed cycles only stay live under the explicit bun_compat bridge.",
+        "impact": "Packages that rely on Bun's mixed ESM/CJS cycle bridge must opt into bun_compat or refactor the cycle to a single module system.",
+        "waiver_id": "waiver-modcomp-esm-cjs-cycle-live-binding-bun",
+        "migration_guidance": "Break the mixed cycle or move the boundary to dynamic import() in native/node_compat; use bun_compat only as an explicit transitional bridge."
+      }
     },
     {
       "case_id": "external-extension-probe-package-root-relative-require",

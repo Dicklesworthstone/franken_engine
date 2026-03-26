@@ -3242,12 +3242,29 @@ fn unescape_json_string(s: &str) -> Result<String, StdlibError> {
                             "incomplete unicode escape".into(),
                         ));
                     }
-                    let cp = u32::from_str_radix(&hex, 16).map_err(|_| {
+                    let mut cp = u32::from_str_radix(&hex, 16).map_err(|_| {
                         StdlibError::JsonParseError(format!("invalid unicode escape: \\u{hex}"))
                     })?;
-                    let ch = char::from_u32(cp).ok_or_else(|| {
-                        StdlibError::JsonParseError(format!("invalid code point: {cp}"))
-                    })?;
+
+                    if (0xD800..=0xDBFF).contains(&cp) {
+                        let mut lookahead = chars.clone();
+                        if lookahead.next() == Some('\\') && lookahead.next() == Some('u') {
+                            let low_hex: String = lookahead.take(4).collect();
+                            if low_hex.len() == 4 {
+                                if let Ok(low_cp) = u32::from_str_radix(&low_hex, 16) {
+                                    if (0xDC00..=0xDFFF).contains(&low_cp) {
+                                        cp = ((cp - 0xD800) << 10) + (low_cp - 0xDC00) + 0x10000;
+                                        // Advance the real iterator by 6 chars (\uXXXX)
+                                        for _ in 0..6 {
+                                            chars.next();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    let ch = char::from_u32(cp).unwrap_or(char::REPLACEMENT_CHARACTER);
                     result.push(ch);
                 }
                 Some(other) => {

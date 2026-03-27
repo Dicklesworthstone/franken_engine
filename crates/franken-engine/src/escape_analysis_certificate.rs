@@ -1447,6 +1447,29 @@ mod tests {
     }
 
     #[test]
+    fn certificate_hash_changes_when_liveness_changes() {
+        let sites = vec![make_site("s1", "fn", AllocationKind::ObjectLiteral)];
+        let config = EscapeAnalyzerConfig::default();
+        let clean = analyze_escape("fn", &sites, &[], &config, SecurityEpoch::from_raw(1));
+        let invalidated = analyze_escape(
+            "fn",
+            &sites,
+            &[("s1", InvalidationReason::DynamicEval)],
+            &config,
+            SecurityEpoch::from_raw(1),
+        );
+
+        assert_ne!(
+            clean.certificates[0].liveness,
+            invalidated.certificates[0].liveness
+        );
+        assert_ne!(
+            clean.certificates[0].certificate_hash,
+            invalidated.certificates[0].certificate_hash
+        );
+    }
+
+    #[test]
     fn envelope_serde_roundtrip() {
         let sites = vec![
             make_site("s1", "fn", AllocationKind::ObjectLiteral),

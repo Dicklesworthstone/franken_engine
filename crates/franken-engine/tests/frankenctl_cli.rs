@@ -2197,6 +2197,18 @@ fn frankenctl_benchmark_run_emits_minimal_artifact_bundle() {
             .collect::<Vec<_>>(),
         vec!["boot-storm"]
     );
+    assert_eq!(
+        json["observability_mode"]["mode_id"].as_str(),
+        Some("default_capture")
+    );
+    assert_eq!(
+        json["observability_mode"]["capture_semantics"].as_str(),
+        Some("lossy_default_capture")
+    );
+    assert_eq!(
+        json["observability_mode"]["lossless"].as_bool(),
+        Some(false)
+    );
 
     let run_manifest_path = output_dir.join("run_manifest.json");
     let evidence_path = output_dir.join("benchmark_evidence.jsonl");
@@ -2616,6 +2628,18 @@ fn frankenctl_benchmark_score_and_verify_bundle_round_trip() {
             .is_some_and(|flags| flags
                 .iter()
                 .any(|flag| flag.as_str() == Some("benchmark-score-cli")))
+    );
+    assert_eq!(
+        score_json["observability_mode"]["mode_id"].as_str(),
+        Some("default_capture")
+    );
+    assert_eq!(
+        score_json["observability_mode"]["capture_semantics"].as_str(),
+        Some("lossy_default_capture")
+    );
+    assert_eq!(
+        score_json["observability_mode"]["lossless"].as_bool(),
+        Some(false)
     );
     assert_eq!(
         score_json["bundle"].as_str(),

@@ -333,6 +333,10 @@ fn rgc_912b_doc_contains_required_sections_and_artifacts() {
         "trace_ids.json",
         "bd-1lsy.9.7.3",
         "bd-1lsy.5.7.3",
+        "without rerunning the lane",
+        "RGC_REACT_DOCTOR_PREFLIGHT_REPLAY_RUN_DIR",
+        "current failed invocation",
+        "older complete directory",
     ] {
         assert!(
             doc.contains(required),
@@ -511,6 +515,14 @@ fn rgc_912b_contract_is_versioned_and_dependency_bound() {
             .any(|command| command.contains("./scripts/run_rgc_react_doctor_preflight.sh ci")),
         "operator verification must include the canonical gate runner"
     );
+    assert!(
+        contract.operator_verification.iter().any(|command| {
+            command.contains(
+                "RGC_REACT_DOCTOR_PREFLIGHT_REPLAY_RUN_DIR=artifacts/rgc_react_doctor_preflight/<timestamp>"
+            )
+        }),
+        "operator verification must document exact-run-dir replay"
+    );
 }
 
 #[test]
@@ -676,6 +688,14 @@ fn rgc_912b_replay_wrapper_requires_complete_artifact_bundle() {
     let script = read_replay_script();
 
     for required in [
+        "run_dir_is_complete()",
+        "warn_about_failed_gate_replay_source()",
+        "if [[ -z \"${explicit_run_dir}\" ]]; then",
+        "RGC_REACT_DOCTOR_PREFLIGHT_REPLAY_RUN_DIR",
+        "explicit run directory is incomplete",
+        "newest directory ${latest_artifact_dir_path} is incomplete",
+        "replay output reflects latest complete run directory",
+        "replay output reflects current run directory",
         "scripts/run_rgc_react_doctor_preflight.sh",
         "run_manifest.json",
         "trace_ids.json",

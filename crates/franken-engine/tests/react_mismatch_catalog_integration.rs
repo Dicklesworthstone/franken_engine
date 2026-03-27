@@ -1031,6 +1031,51 @@ fn catalog_hash_changes_on_remediation_update() {
     assert_ne!(cat.catalog_hash, h1);
 }
 
+#[test]
+fn catalog_hash_is_order_independent_across_insertion_orders() {
+    let mut forward = MismatchCatalog::new(epoch(1));
+    forward
+        .add_entry(entry(
+            "e1",
+            MismatchDomain::CompileOutput,
+            MismatchSeverity::Error,
+        ))
+        .unwrap();
+    forward
+        .add_entry(entry(
+            "e2",
+            MismatchDomain::Diagnostics,
+            MismatchSeverity::Warning,
+        ))
+        .unwrap();
+
+    let mut reverse = MismatchCatalog::new(epoch(1));
+    reverse
+        .add_entry(entry(
+            "e2",
+            MismatchDomain::Diagnostics,
+            MismatchSeverity::Warning,
+        ))
+        .unwrap();
+    reverse
+        .add_entry(entry(
+            "e1",
+            MismatchDomain::CompileOutput,
+            MismatchSeverity::Error,
+        ))
+        .unwrap();
+
+    assert_eq!(forward.catalog_hash, reverse.catalog_hash);
+    assert_eq!(
+        filter_entry_ids(&forward, |_| true),
+        vec!["e1".to_string(), "e2".to_string()]
+    );
+    assert_eq!(
+        filter_entry_ids(&forward, |_| true),
+        filter_entry_ids(&reverse, |_| true)
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Serde roundtrips
 // ---------------------------------------------------------------------------

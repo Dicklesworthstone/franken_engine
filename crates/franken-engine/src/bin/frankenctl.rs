@@ -396,6 +396,7 @@ struct BenchmarkCommandOutput {
     profiles: Vec<String>,
     families: Vec<String>,
     artifacts: BenchmarkArtifactPaths,
+    observability_mode: ObservabilityModeOutput,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -414,6 +415,7 @@ struct BenchmarkScoreCommandOutput {
     benchmark_invocation_manifest_path: Option<String>,
     command_mode_receipt_path: Option<String>,
     runtime: BenchmarkBundleRuntime,
+    observability_mode: ObservabilityModeOutput,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1867,6 +1869,7 @@ fn execute_benchmark_run(args: BenchmarkRunArgs) -> Result<i32, String> {
             raw_results_archive: artifacts.raw_results_archive_path.display().to_string(),
             summary: artifacts.summary_path.display().to_string(),
         },
+        observability_mode: default_capture_observability_mode(),
     };
 
     print_json(&output)?;
@@ -1926,6 +1929,7 @@ fn execute_benchmark_score(args: BenchmarkScoreArgs) -> Result<i32, String> {
         benchmark_invocation_manifest_path,
         command_mode_receipt_path,
         runtime,
+        observability_mode: default_capture_observability_mode(),
     };
 
     print_json(&output)?;

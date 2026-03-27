@@ -210,6 +210,8 @@ fn rgc_061_doc_contains_required_sections() {
         "step_logs/step_000.log",
         "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/preflight_report.json",
         "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/onboarding_scorecard.json",
+        "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/rollout_decision_artifact.json",
+        "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/frankenctl_doctor_report.json",
         "FRANKENCTL_CLI_WORKFLOW_REPLAY_RUN_DIR=artifacts/frankenctl_cli_workflow/<timestamp> ./scripts/e2e/frankenctl_cli_workflow.sh ci",
         "fails closed on incomplete bundles",
         "short-circuits before creating a new run directory or requiring `rch`",
@@ -226,7 +228,7 @@ fn rgc_061_contract_is_versioned_and_actionable() {
     let contract = parse_contract();
 
     assert_eq!(contract.schema_version, RGC_061_CONTRACT_SCHEMA_VERSION);
-    assert_eq!(contract.contract_version, "1.2.0");
+    assert_eq!(contract.contract_version, "1.3.0");
     assert_eq!(contract.bead_id, "bd-1lsy.11.11");
     assert_eq!(
         contract.policy_id,
@@ -299,6 +301,8 @@ fn rgc_061_contract_is_versioned_and_actionable() {
     for artifact in [
         "support_bundle/preflight_report.json",
         "support_bundle/onboarding_scorecard.json",
+        "support_bundle/rollout_decision_artifact.json",
+        "support_bundle/frankenctl_doctor_report.json",
     ] {
         assert!(
             verified_workflow_artifacts.contains(artifact),
@@ -381,6 +385,8 @@ fn rgc_061_contract_is_versioned_and_actionable() {
     for artifact in [
         "support_bundle/preflight_report.json",
         "support_bundle/onboarding_scorecard.json",
+        "support_bundle/rollout_decision_artifact.json",
+        "support_bundle/frankenctl_doctor_report.json",
     ] {
         assert!(
             contract
@@ -1001,6 +1007,8 @@ fn rgc_061_lane_script_preserves_step_logs_and_failure_classification() {
         "./scripts/e2e/frankenctl_cli_workflow.sh ${mode}",
         "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/preflight_report.json",
         "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/onboarding_scorecard.json",
+        "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/rollout_decision_artifact.json",
+        "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/frankenctl_doctor_report.json",
         "rgc-cli-operator-workflow-verification-pack.run-manifest.v1",
     ] {
         assert!(

@@ -121,13 +121,18 @@ Every run emits:
 - `artifacts/rgc_ci_quality_gates/<timestamp>/events.jsonl`
 - `artifacts/rgc_ci_quality_gates/<timestamp>/commands.txt`
 - `artifacts/rgc_ci_quality_gates/<timestamp>/failure_summary.json`
+- `artifacts/rgc_ci_quality_gates/<timestamp>/ci_gate_verdict.json`
+- `artifacts/rgc_ci_quality_gates/<timestamp>/failure_routing_matrix.json`
+- `artifacts/rgc_ci_quality_gates/<timestamp>/lane_repro_index.json`
+- `artifacts/rgc_ci_quality_gates/<timestamp>/gate_health_summary.md`
 
-`failure_summary.json` provides machine-readable triage routing:
+Artifact roles:
 
-- failed lane
-- owner hint
-- failing command/detail
-- replay command
+- `failure_summary.json`: concise machine-readable triage routing
+- `ci_gate_verdict.json`: canonical gate verdict with blocking status and artifact bundle pointers
+- `failure_routing_matrix.json`: per-lane owner hints, statuses, commands, and repro entrypoints
+- `lane_repro_index.json`: contract-level lane command/replay index for operators and automation
+- `gate_health_summary.md`: compact human-readable lane-status and artifact summary
 
 For `regression` mode, `commands.txt` must contain the exact operator-facing
 gate command used to replay verdict evaluation, including strict-mode and
@@ -153,6 +158,10 @@ cat artifacts/rgc_ci_quality_gates/<timestamp>/run_manifest.json
 cat artifacts/rgc_ci_quality_gates/<timestamp>/events.jsonl
 cat artifacts/rgc_ci_quality_gates/<timestamp>/commands.txt
 cat artifacts/rgc_ci_quality_gates/<timestamp>/failure_summary.json
+cat artifacts/rgc_ci_quality_gates/<timestamp>/ci_gate_verdict.json
+cat artifacts/rgc_ci_quality_gates/<timestamp>/failure_routing_matrix.json
+cat artifacts/rgc_ci_quality_gates/<timestamp>/lane_repro_index.json
+cat artifacts/rgc_ci_quality_gates/<timestamp>/gate_health_summary.md
 ./scripts/e2e/rgc_ci_quality_gates_replay.sh ci
 ./scripts/e2e/rgc_ci_quality_gates_replay.sh regression
 ```

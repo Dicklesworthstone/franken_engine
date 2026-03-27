@@ -28,6 +28,10 @@ manifest_path="${run_dir}/run_manifest.json"
 events_path="${run_dir}/events.jsonl"
 commands_path="${run_dir}/commands.txt"
 failure_summary_path="${run_dir}/failure_summary.json"
+ci_gate_verdict_path="${run_dir}/ci_gate_verdict.json"
+failure_routing_matrix_path="${run_dir}/failure_routing_matrix.json"
+lane_repro_index_path="${run_dir}/lane_repro_index.json"
+gate_health_summary_path="${run_dir}/gate_health_summary.md"
 step_logs_dir="${run_dir}/step_logs"
 
 trace_id="trace-rgc-ci-quality-gates-${timestamp}"
@@ -132,6 +136,7 @@ rch_missing_remote_exit_error_code() {
 declare -a commands_run=()
 declare -a events_buffer=()
 declare -a failed_lanes=()
+declare -A lane_status_by_name=()
 failed_command=""
 failure_owner=""
 failure_lane=""
@@ -153,6 +158,96 @@ default_owner_for_lane() {
       printf 'runtime-core'
       ;;
   esac
+}
+
+lane_requires_rch() {
+  case "$1" in
+    fmt|check|clippy|unit|integration)
+      printf 'true\n'
+      ;;
+    *)
+      printf 'false\n'
+      ;;
+  esac
+}
+
+contract_lanes() {
+  printf '%s\n' fmt check clippy unit integration e2e replay regression
+}
+
+planned_lanes() {
+  case "$mode" in
+    fmt|check|clippy|unit|integration|e2e|replay|regression)
+      printf '%s\n' "$mode"
+      ;;
+    ci)
+      contract_lanes
+      ;;
+    *)
+      ;;
+  esac
+}
+
+lane_repro_command() {
+  local lane="$1"
+
+  if [[ "$lane" == "regression" ]]; then
+    regression_verdict_command_text
+    return
+  fi
+
+  printf './scripts/run_rgc_ci_quality_gates.sh %s\n' "$lane"
+}
+
+lane_commands_json() {
+  local lane="$1"
+  local regression_command
+
+  case "$lane" in
+    fmt)
+      jq -cn '["cargo fmt --check"]'
+      ;;
+    check)
+      jq -cn '["cargo check --all-targets"]'
+      ;;
+    clippy)
+      jq -cn '["cargo clippy --all-targets -- -D warnings"]'
+      ;;
+    unit)
+      jq -cn '["cargo test -p frankenengine-engine --lib"]'
+      ;;
+    integration)
+      jq -cn '["cargo test -p frankenengine-engine --test rgc_test_harness_integration --test rgc_verification_coverage_matrix --test rgc_execution_waves_integration --test rgc_execution_waves_enrichment_integration"]'
+      ;;
+    e2e)
+      jq -cn '[
+        "./scripts/run_rgc_test_harness_suite.sh ci",
+        "./scripts/run_rgc_verification_coverage_matrix.sh ci"
+      ]'
+      ;;
+    replay)
+      jq -cn '[
+        "./scripts/e2e/rgc_test_harness_replay.sh ci",
+        "./scripts/e2e/rgc_verification_coverage_matrix_replay.sh ci"
+      ]'
+      ;;
+    regression)
+      regression_command="$(regression_verdict_command_text)"
+      jq -cn --arg command "$regression_command" '[$command]'
+      ;;
+    *)
+      jq -cn '[]'
+      ;;
+  esac
+}
+
+json_array_from_lines() {
+  if [[ $# -eq 0 ]]; then
+    jq -cn '[]'
+    return
+  fi
+
+  printf '%s\n' "$@" | jq -R . | jq -s .
 }
 
 shell_join() {
@@ -213,6 +308,7 @@ run_step_rch() {
   shift 2
 
   commands_run+=("$command_text")
+  lane_status_by_name["$lane"]="running"
   echo "==> $command_text"
   step_counter=$((step_counter + 1))
   command_slug="$(printf '%s' "$command_text" | tr '[:space:]/:' '_' | tr -cd '[:alnum:]_.-' | cut -c1-64)"
@@ -241,6 +337,7 @@ run_step_rch() {
       failure_lane="$lane"
       failure_owner="$(default_owner_for_lane "$lane")"
       failed_lanes+=("$lane")
+      lane_status_by_name["$lane"]="fail"
       record_event "lane_failed" "fail" "FE-RGC-CI-QUALITY-GATE-0004" "$lane" "$failed_command"
       return 1
     fi
@@ -265,6 +362,7 @@ run_step_rch() {
         failure_lane="$lane"
         failure_owner="$(default_owner_for_lane "$lane")"
         failed_lanes+=("$lane")
+        lane_status_by_name["$lane"]="fail"
         record_event "lane_failed" "fail" "FE-RGC-CI-QUALITY-GATE-0003" "$lane" "$failed_command"
         return 1
       else
@@ -279,6 +377,7 @@ run_step_rch() {
         failure_lane="$lane"
         failure_owner="$(default_owner_for_lane "$lane")"
         failed_lanes+=("$lane")
+        lane_status_by_name["$lane"]="fail"
         record_event "lane_failed" "fail" "$missing_marker_error_code" "$lane" "$failed_command"
         return 1
       fi
@@ -289,6 +388,7 @@ run_step_rch() {
       failure_lane="$lane"
       failure_owner="$(default_owner_for_lane "$lane")"
       failed_lanes+=("$lane")
+      lane_status_by_name["$lane"]="fail"
       record_event "lane_failed" "fail" "FE-RGC-CI-QUALITY-GATE-0002" "$lane" "$failed_command"
       return 1
     fi
@@ -305,6 +405,7 @@ run_step_rch() {
       failure_lane="$lane"
       failure_owner="$(default_owner_for_lane "$lane")"
       failed_lanes+=("$lane")
+      lane_status_by_name["$lane"]="fail"
       record_event "lane_failed" "fail" "$missing_marker_error_code" "$lane" "$failed_command"
       return 1
     fi
@@ -314,6 +415,7 @@ run_step_rch() {
       failure_lane="$lane"
       failure_owner="$(default_owner_for_lane "$lane")"
       failed_lanes+=("$lane")
+      lane_status_by_name["$lane"]="fail"
       record_event "lane_failed" "fail" "FE-RGC-CI-QUALITY-GATE-0003" "$lane" "$failed_command"
       return 1
     fi
@@ -321,6 +423,7 @@ run_step_rch() {
     break
   done
 
+  lane_status_by_name["$lane"]="pass"
   record_event "lane_completed" "pass" "" "$lane" "$command_text"
 }
 
@@ -330,16 +433,19 @@ run_step_local() {
   shift 2
 
   commands_run+=("$command_text")
+  lane_status_by_name["$lane"]="running"
   echo "==> $command_text"
   if ! "$@"; then
     failed_command="$command_text"
     failure_lane="$lane"
     failure_owner="$(default_owner_for_lane "$lane")"
     failed_lanes+=("$lane")
+    lane_status_by_name["$lane"]="fail"
     record_event "lane_failed" "fail" "FE-RGC-CI-QUALITY-GATE-0004" "$lane" "$command_text"
     return 1
   fi
 
+  lane_status_by_name["$lane"]="pass"
   record_event "lane_completed" "pass" "" "$lane" "$command_text"
 }
 
@@ -360,6 +466,7 @@ evaluate_regression_verdict() {
   local highest_severity is_blocking open_high_count detail
 
   commands_run+=("$(regression_verdict_command_text)")
+  lane_status_by_name["$lane"]="running"
 
   if [[ -z "$regression_verdict_path" ]]; then
     if [[ "$require_regression_verdict" == "true" ]]; then
@@ -367,10 +474,12 @@ evaluate_regression_verdict() {
       failure_lane="$lane"
       failure_owner="$(default_owner_for_lane "$lane")"
       failed_lanes+=("$lane")
+      lane_status_by_name["$lane"]="fail"
       record_event "regression_verdict_missing" "fail" "FE-RGC-CI-QUALITY-GATE-0005" "$lane" "$failed_command"
       return 1
     fi
 
+    lane_status_by_name["$lane"]="skipped"
     record_event "regression_verdict_skipped" "pass" "" "$lane" "no verdict path configured"
     return 0
   fi
@@ -381,10 +490,12 @@ evaluate_regression_verdict() {
       failure_lane="$lane"
       failure_owner="$(default_owner_for_lane "$lane")"
       failed_lanes+=("$lane")
+      lane_status_by_name["$lane"]="fail"
       record_event "regression_verdict_missing" "fail" "FE-RGC-CI-QUALITY-GATE-0006" "$lane" "$failed_command"
       return 1
     fi
 
+    lane_status_by_name["$lane"]="skipped"
     record_event "regression_verdict_skipped" "pass" "" "$lane" "configured verdict file missing; skipping (prework mode)"
     return 0
   fi
@@ -399,10 +510,12 @@ evaluate_regression_verdict() {
     failure_lane="$lane"
     failure_owner="$(default_owner_for_lane "$lane")"
     failed_lanes+=("$lane")
+    lane_status_by_name["$lane"]="fail"
     record_event "regression_verdict_blocked" "fail" "FE-RGC-CI-QUALITY-GATE-0007" "$lane" "$detail"
     return 1
   fi
 
+  lane_status_by_name["$lane"]="pass"
   detail="regression verdict clear: highest_severity=${highest_severity}, blocking=${is_blocking}, open_high_or_critical=${open_high_count}, file=${regression_verdict_path}"
   record_event "regression_verdict_clear" "pass" "" "$lane" "$detail"
 }
@@ -498,6 +611,232 @@ write_failure_summary() {
   } >"$failure_summary_path"
 }
 
+write_ci_gate_verdict() {
+  local outcome="$1"
+  local failed_lanes_json planned_lanes_json
+  local is_blocking_json
+
+  if [[ "$outcome" == "fail" ]]; then
+    is_blocking_json=true
+  else
+    is_blocking_json=false
+  fi
+
+  if (( ${#failed_lanes[@]} == 0 )); then
+    failed_lanes_json='[]'
+  else
+    failed_lanes_json="$(printf '%s\n' "${failed_lanes[@]}" | jq -R . | jq -s .)"
+  fi
+  planned_lanes_json="$(planned_lanes | jq -R . | jq -s .)"
+
+  jq -cn \
+    --arg schema_version 'franken-engine.rgc-ci-quality-gates.verdict.v1' \
+    --arg bead_id 'bd-1lsy.11.5' \
+    --arg trace_id "$trace_id" \
+    --arg decision_id "$decision_id" \
+    --arg policy_id "$policy_id" \
+    --arg component "$component" \
+    --arg scenario_id "$scenario_id" \
+    --arg mode "$mode" \
+    --arg outcome "$outcome" \
+    --arg failure_lane "$failure_lane" \
+    --arg failure_owner "$failure_owner" \
+    --arg failed_command "$failed_command" \
+    --arg failure_summary "$failure_summary_path" \
+    --arg routing_matrix "$failure_routing_matrix_path" \
+    --arg repro_index "$lane_repro_index_path" \
+    --arg health_summary "$gate_health_summary_path" \
+    --argjson is_blocking "$is_blocking_json" \
+    --argjson failed_lanes "$failed_lanes_json" \
+    --argjson planned_lanes "$planned_lanes_json" \
+    '{
+      schema_version: $schema_version,
+      bead_id: $bead_id,
+      trace_id: $trace_id,
+      decision_id: $decision_id,
+      policy_id: $policy_id,
+      component: $component,
+      scenario_id: $scenario_id,
+      mode: $mode,
+      outcome: $outcome,
+      is_blocking: $is_blocking,
+      planned_lanes: $planned_lanes,
+      failed_lanes: $failed_lanes,
+      failure: {
+        lane: (if $failure_lane == "" then null else $failure_lane end),
+        owner_hint: (if $failure_owner == "" then null else $failure_owner end),
+        detail: (if $failed_command == "" then null else $failed_command end)
+      },
+      artifact_bundle: {
+        failure_summary: $failure_summary,
+        failure_routing_matrix: $routing_matrix,
+        lane_repro_index: $repro_index,
+        gate_health_summary: $health_summary
+      }
+    }' >"$ci_gate_verdict_path"
+}
+
+write_failure_routing_matrix() {
+  local outcome="$1"
+  local lanes_json='[]'
+  local lane status detail owner_hint requires_rch_json commands_json repro_command
+
+  while IFS= read -r lane; do
+    [[ -z "$lane" ]] && continue
+    status="${lane_status_by_name[$lane]:-not_run}"
+    owner_hint="$(default_owner_for_lane "$lane")"
+    requires_rch_json="$(lane_requires_rch "$lane")"
+    commands_json="$(lane_commands_json "$lane")"
+    repro_command="$(lane_repro_command "$lane")"
+    detail=""
+    if [[ "$lane" == "$failure_lane" ]]; then
+      detail="$failed_command"
+    fi
+
+    lanes_json="$(jq -cn \
+      --argjson lanes "$lanes_json" \
+      --arg lane "$lane" \
+      --arg status "$status" \
+      --arg owner_hint "$owner_hint" \
+      --arg repro_command "$repro_command" \
+      --arg detail "$detail" \
+      --argjson requires_rch "$requires_rch_json" \
+      --argjson commands "$commands_json" \
+      '$lanes + [{
+        lane: $lane,
+        status: $status,
+        owner_hint: $owner_hint,
+        requires_rch: $requires_rch,
+        repro_command: $repro_command,
+        commands: $commands,
+        detail: (if $detail == "" then null else $detail end)
+      }]')"
+  done < <(planned_lanes)
+
+  jq -cn \
+    --arg schema_version 'franken-engine.rgc-ci-quality-gates.failure-routing-matrix.v1' \
+    --arg trace_id "$trace_id" \
+    --arg decision_id "$decision_id" \
+    --arg policy_id "$policy_id" \
+    --arg component "$component" \
+    --arg mode "$mode" \
+    --arg outcome "$outcome" \
+    --arg failure_summary "$failure_summary_path" \
+    --arg verdict "$ci_gate_verdict_path" \
+    --argjson lanes "$lanes_json" \
+    '{
+      schema_version: $schema_version,
+      trace_id: $trace_id,
+      decision_id: $decision_id,
+      policy_id: $policy_id,
+      component: $component,
+      mode: $mode,
+      outcome: $outcome,
+      lanes: $lanes,
+      supporting_artifacts: {
+        failure_summary: $failure_summary,
+        ci_gate_verdict: $verdict
+      }
+    }' >"$failure_routing_matrix_path"
+}
+
+write_lane_repro_index() {
+  local planned_lanes_json lanes_json='[]'
+  local lane repro_command commands_json requires_rch_json
+
+  planned_lanes_json="$(planned_lanes | jq -R . | jq -s .)"
+
+  while IFS= read -r lane; do
+    [[ -z "$lane" ]] && continue
+    repro_command="$(lane_repro_command "$lane")"
+    commands_json="$(lane_commands_json "$lane")"
+    requires_rch_json="$(lane_requires_rch "$lane")"
+
+    lanes_json="$(jq -cn \
+      --argjson lanes "$lanes_json" \
+      --arg lane "$lane" \
+      --arg gate_entrypoint "./scripts/run_rgc_ci_quality_gates.sh ${lane}" \
+      --arg replay_entrypoint "$repro_command" \
+      --argjson requires_rch "$requires_rch_json" \
+      --argjson commands "$commands_json" \
+      '$lanes + [{
+        lane: $lane,
+        gate_entrypoint: $gate_entrypoint,
+        replay_entrypoint: $replay_entrypoint,
+        requires_rch: $requires_rch,
+        commands: $commands
+      }]')"
+  done < <(contract_lanes)
+
+  jq -cn \
+    --arg schema_version 'franken-engine.rgc-ci-quality-gates.lane-repro-index.v1' \
+    --arg trace_id "$trace_id" \
+    --arg decision_id "$decision_id" \
+    --arg policy_id "$policy_id" \
+    --arg component "$component" \
+    --arg mode "$mode" \
+    --arg gate_ci "./scripts/run_rgc_ci_quality_gates.sh ci" \
+    --arg replay_ci "./scripts/e2e/rgc_ci_quality_gates_replay.sh ci" \
+    --arg replay_regression "./scripts/e2e/rgc_ci_quality_gates_replay.sh regression" \
+    --argjson planned_lanes "$planned_lanes_json" \
+    --argjson lanes "$lanes_json" \
+    '{
+      schema_version: $schema_version,
+      trace_id: $trace_id,
+      decision_id: $decision_id,
+      policy_id: $policy_id,
+      component: $component,
+      mode: $mode,
+      planned_lanes: $planned_lanes,
+      operator_entrypoints: {
+        gate_ci: $gate_ci,
+        replay_ci: $replay_ci,
+        replay_regression: $replay_regression
+      },
+      lanes: $lanes
+    }' >"$lane_repro_index_path"
+}
+
+write_gate_health_summary() {
+  local outcome="$1"
+  local lane status
+
+  {
+    echo "# RGC CI Quality Gates Summary"
+    echo
+    echo "- Outcome: \`${outcome}\`"
+    echo "- Mode: \`${mode}\`"
+    if [[ -n "$failure_lane" ]]; then
+      echo "- Failed lane: \`${failure_lane}\`"
+    else
+      echo '- Failed lane: `none`'
+    fi
+    if [[ -n "$failure_owner" ]]; then
+      echo "- Owner hint: \`${failure_owner}\`"
+    else
+      echo '- Owner hint: `none`'
+    fi
+    echo "- Replay command: \`${replay_command}\`"
+    echo
+    echo "## Lane Status"
+    while IFS= read -r lane; do
+      [[ -z "$lane" ]] && continue
+      status="${lane_status_by_name[$lane]:-not_run}"
+      echo "- \`${lane}\`: \`${status}\`"
+    done < <(planned_lanes)
+    echo
+    echo "## Artifact Bundle"
+    echo "- \`run_manifest.json\`"
+    echo "- \`events.jsonl\`"
+    echo "- \`commands.txt\`"
+    echo "- \`failure_summary.json\`"
+    echo "- \`ci_gate_verdict.json\`"
+    echo "- \`failure_routing_matrix.json\`"
+    echo "- \`lane_repro_index.json\`"
+    echo "- \`gate_health_summary.md\`"
+  } >"$gate_health_summary_path"
+}
+
 write_manifest() {
   local exit_code="${1:-0}"
   local outcome error_code_json git_commit dirty_worktree idx comma
@@ -526,6 +865,10 @@ write_manifest() {
   printf '%s\n' "${events_buffer[@]}" >"$events_path"
 
   write_failure_summary "$outcome"
+  write_ci_gate_verdict "$outcome"
+  write_failure_routing_matrix "$outcome"
+  write_lane_repro_index
+  write_gate_health_summary "$outcome"
 
   {
     echo "{"
@@ -569,21 +912,29 @@ write_manifest() {
     done
     echo '  ],'
     echo '  "artifacts": {'
-    echo "    \"manifest\": \"${manifest_path}\"," 
-    echo "    \"events\": \"${events_path}\"," 
-    echo "    \"commands\": \"${commands_path}\"," 
-    echo "    \"failure_summary\": \"${failure_summary_path}\"," 
-    echo "    \"step_logs_dir\": \"${step_logs_dir}\"," 
+    echo "    \"manifest\": \"${manifest_path}\","
+    echo "    \"events\": \"${events_path}\","
+    echo "    \"commands\": \"${commands_path}\","
+    echo "    \"failure_summary\": \"${failure_summary_path}\","
+    echo "    \"ci_gate_verdict\": \"${ci_gate_verdict_path}\","
+    echo "    \"failure_routing_matrix\": \"${failure_routing_matrix_path}\","
+    echo "    \"lane_repro_index\": \"${lane_repro_index_path}\","
+    echo "    \"gate_health_summary\": \"${gate_health_summary_path}\","
+    echo "    \"step_logs_dir\": \"${step_logs_dir}\","
     echo '    "contract_doc": "docs/RGC_CI_QUALITY_GATES.md",'
     echo '    "gate_fixture": "crates/franken-engine/tests/fixtures/rgc_ci_quality_gates_v1.json",'
     echo '    "gate_tests": "crates/franken-engine/tests/rgc_ci_quality_gates.rs",'
     echo '    "replay_wrapper": "scripts/e2e/rgc_ci_quality_gates_replay.sh"'
     echo '  },'
     echo '  "operator_verification": ['
-    echo "    \"cat ${manifest_path}\"," 
-    echo "    \"cat ${events_path}\"," 
-    echo "    \"cat ${commands_path}\"," 
-    echo "    \"cat ${failure_summary_path}\"," 
+    echo "    \"cat ${manifest_path}\","
+    echo "    \"cat ${events_path}\","
+    echo "    \"cat ${commands_path}\","
+    echo "    \"cat ${failure_summary_path}\","
+    echo "    \"cat ${ci_gate_verdict_path}\","
+    echo "    \"cat ${failure_routing_matrix_path}\","
+    echo "    \"cat ${lane_repro_index_path}\","
+    echo "    \"cat ${gate_health_summary_path}\","
     echo "    \"${replay_command}\""
     echo '  ]'
     echo "}"
@@ -592,6 +943,10 @@ write_manifest() {
   echo "rgc ci quality gates manifest: ${manifest_path}"
   echo "rgc ci quality gates events: ${events_path}"
   echo "rgc ci quality gates failure summary: ${failure_summary_path}"
+  echo "rgc ci quality gates verdict: ${ci_gate_verdict_path}"
+  echo "rgc ci quality gates routing matrix: ${failure_routing_matrix_path}"
+  echo "rgc ci quality gates repro index: ${lane_repro_index_path}"
+  echo "rgc ci quality gates health summary: ${gate_health_summary_path}"
 }
 
 main_exit=0

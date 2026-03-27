@@ -161,6 +161,10 @@ fn rgc_ci_quality_log_and_artifact_contract_is_complete() {
         "events.jsonl",
         "commands.txt",
         "failure_summary.json",
+        "ci_gate_verdict.json",
+        "failure_routing_matrix.json",
+        "lane_repro_index.json",
+        "gate_health_summary.md",
     ] {
         assert!(artifacts.contains(required), "missing artifact {required}");
     }
@@ -236,6 +240,38 @@ fn rgc_ci_quality_script_contract_references_rch_for_heavy_lanes() {
         "script must capture pipeline status after tee before classifying fmt lane output"
     );
     assert!(
+        script.contains("ci_gate_verdict_path="),
+        "script must emit a ci_gate_verdict artifact"
+    );
+    assert!(
+        script.contains("failure_routing_matrix_path="),
+        "script must emit a failure_routing_matrix artifact"
+    );
+    assert!(
+        script.contains("lane_repro_index_path="),
+        "script must emit a lane_repro_index artifact"
+    );
+    assert!(
+        script.contains("gate_health_summary_path="),
+        "script must emit a gate_health_summary artifact"
+    );
+    assert!(
+        script.contains("write_ci_gate_verdict"),
+        "script must write the ci_gate_verdict artifact"
+    );
+    assert!(
+        script.contains("write_failure_routing_matrix"),
+        "script must write the failure_routing_matrix artifact"
+    );
+    assert!(
+        script.contains("write_lane_repro_index"),
+        "script must write the lane_repro_index artifact"
+    );
+    assert!(
+        script.contains("write_gate_health_summary"),
+        "script must write the gate_health_summary artifact"
+    );
+    assert!(
         script.contains("< <(rch_strip_ansi \"$log_path\")"),
         "script must inspect stripped logs via process substitution so grep -q stays correct under pipefail"
     );
@@ -308,6 +344,10 @@ fn rgc_ci_quality_doc_and_replay_wrapper_exist_and_reference_contract() {
     assert!(doc.contains("## Required Artifacts"));
     assert!(doc.contains("./scripts/run_rgc_ci_quality_gates.sh ci"));
     assert!(doc.contains("cargo fmt --check"));
+    assert!(doc.contains("ci_gate_verdict.json"));
+    assert!(doc.contains("failure_routing_matrix.json"));
+    assert!(doc.contains("lane_repro_index.json"));
+    assert!(doc.contains("gate_health_summary.md"));
     assert!(doc.contains("non-compilation command"));
     assert!(doc.contains("daemon may omit the usual remote-exit marker"));
     assert!(doc.contains("authoritative fallback exit code"));
@@ -681,6 +721,22 @@ fn fixture_required_artifacts_include_run_manifest() {
             .required_artifacts
             .contains(&"run_manifest.json".to_string())
     );
+}
+
+#[test]
+fn fixture_required_artifacts_include_verdict_and_routing_bundle() {
+    let fixture = load_fixture();
+    for artifact in [
+        "ci_gate_verdict.json",
+        "failure_routing_matrix.json",
+        "lane_repro_index.json",
+        "gate_health_summary.md",
+    ] {
+        assert!(
+            fixture.required_artifacts.contains(&artifact.to_string()),
+            "fixture missing artifact {artifact}"
+        );
+    }
 }
 
 #[test]

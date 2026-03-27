@@ -158,6 +158,10 @@
     "run_manifest.json",
     "events.jsonl",
     "commands.txt",
-    "failure_summary.json"
+    "failure_summary.json",
+    "ci_gate_verdict.json",
+    "failure_routing_matrix.json",
+    "lane_repro_index.json",
+    "gate_health_summary.md"
   ]
 }

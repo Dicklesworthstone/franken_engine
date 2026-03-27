@@ -3511,7 +3511,7 @@ fn execute_react_compile(args: ReactCompileArgs) -> Result<i32, String> {
         write_json_file(path, &output)?;
     }
     print_json(&output)?;
-    Ok(25)
+    Ok(0)
 }
 
 fn execute_react_build(args: ReactBuildArgs) -> Result<i32, String> {
@@ -3542,7 +3542,7 @@ fn execute_react_build(args: ReactBuildArgs) -> Result<i32, String> {
         write_json_file(path, &output)?;
     }
     print_json(&output)?;
-    Ok(25)
+    Ok(0)
 }
 
 fn execute_react_contract(args: ReactContractArgs) -> Result<i32, String> {

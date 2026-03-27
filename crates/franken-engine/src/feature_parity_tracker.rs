@@ -585,7 +585,7 @@ impl FeatureParityTracker {
         if entry.status != FeatureStatus::Waived {
             if result.total > 0 && result.passing == result.total {
                 entry.status = FeatureStatus::Passing;
-            } else if result.passing > 0 {
+            } else if result.total > 0 {
                 entry.status = FeatureStatus::InProgress;
             }
         }
@@ -863,7 +863,7 @@ impl FeatureParityTracker {
             ctx,
             "release_gate_evaluated",
             if passed { "pass" } else { "fail" },
-            if passed { None } else { Some("FE-FPT-0007") },
+            if passed { None } else { Some("FE-FPT-0008") },
         );
 
         ReleaseGateDecision {
@@ -1090,6 +1090,20 @@ mod tests {
     fn ingest_test262_auto_advances_status() {
         let mut tracker = FeatureParityTracker::new();
         let ctx = test_ctx();
+        let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
+
+        // Zero pass but real evidence → InProgress
+        let zero_pass = Test262Result {
+            area: FeatureArea::BigInt,
+            total: 10,
+            passing: 0,
+            failing_test_ids: (0..10).map(|i| format!("z{i}")).collect(),
+        };
+        tracker.ingest_test262(&zero_pass, &ctx).unwrap();
+        assert_eq!(
+            tracker.feature(&fid).unwrap().status,
+            FeatureStatus::InProgress
+        );
 
         // Partial pass → InProgress
         let partial = Test262Result {
@@ -1099,7 +1113,6 @@ mod tests {
             failing_test_ids: (0..5).map(|i| format!("t{i}")).collect(),
         };
         tracker.ingest_test262(&partial, &ctx).unwrap();
-        let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
         assert_eq!(
             tracker.feature(&fid).unwrap().status,
             FeatureStatus::InProgress

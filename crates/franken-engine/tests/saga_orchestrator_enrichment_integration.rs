@@ -929,18 +929,23 @@ fn enrichment_large_step_count_saga() {
 }
 
 #[test]
-fn enrichment_duplicate_saga_id_overwrites() {
+fn enrichment_duplicate_saga_id_is_rejected_without_overwrite() {
     let mut orch = SagaOrchestrator::new(epoch(1), 10);
     orch.create_saga("dup", SagaType::Publish, simple_steps(), "t1", 0)
         .unwrap();
-    // Creating again with same ID overwrites (insert into BTreeMap).
-    orch.create_saga("dup", SagaType::Quarantine, simple_steps(), "t2", 100)
-        .unwrap();
+    orch.drain_events();
+
+    let err = orch
+        .create_saga("dup", SagaType::Quarantine, simple_steps(), "t2", 100)
+        .unwrap_err();
+    assert!(matches!(err, SagaError::SagaAlreadyExists { .. }));
 
     let saga = orch.get("dup").unwrap();
-    assert_eq!(saga.saga_type, SagaType::Quarantine);
-    assert_eq!(saga.trace_id, "t2");
-    assert_eq!(saga.created_at, 100);
+    assert_eq!(saga.saga_type, SagaType::Publish);
+    assert_eq!(saga.trace_id, "t1");
+    assert_eq!(saga.created_at, 0);
+    assert_eq!(orch.event_counts().get("saga_created"), Some(&1));
+    assert!(orch.drain_events().is_empty());
 }
 
 #[test]

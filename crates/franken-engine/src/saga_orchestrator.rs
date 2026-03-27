@@ -419,6 +419,11 @@ impl SagaOrchestrator {
         if steps.is_empty() {
             return Err(SagaError::EmptySteps);
         }
+        if self.sagas.contains_key(saga_id) {
+            return Err(SagaError::SagaAlreadyExists {
+                saga_id: saga_id.to_string(),
+            });
+        }
         if self.active_count() >= self.max_concurrent {
             return Err(SagaError::ConcurrencyLimitReached {
                 active_count: self.active_count(),
@@ -438,6 +443,8 @@ impl SagaOrchestrator {
             created_at: current_ticks,
         };
 
+        self.sagas.insert(saga_id.to_string(), saga);
+
         self.emit_event(SagaEvent {
             saga_id: saga_id.to_string(),
             saga_type: saga_type.to_string(),
@@ -450,13 +457,6 @@ impl SagaOrchestrator {
             event: "saga_created".to_string(),
         });
         self.record_count("saga_created");
-
-        if self.sagas.contains_key(saga_id) {
-            return Err(SagaError::SagaAlreadyExists {
-                saga_id: saga_id.to_string(),
-            });
-        }
-        self.sagas.insert(saga_id.to_string(), saga);
         Ok(id)
     }
 
@@ -1087,6 +1087,26 @@ mod tests {
             orch.create_saga("s3", SagaType::Eviction, simple_steps(), "t3", 0)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn create_rejects_duplicate_id_without_audit_side_effects() {
+        let mut orch = SagaOrchestrator::new(test_epoch(), 1);
+        orch.create_saga("dup", SagaType::Publish, simple_steps(), "t1", 0)
+            .unwrap();
+        orch.drain_events();
+
+        assert!(matches!(
+            orch.create_saga("dup", SagaType::Quarantine, simple_steps(), "t2", 100),
+            Err(SagaError::SagaAlreadyExists { .. })
+        ));
+
+        let saga = orch.get("dup").unwrap();
+        assert_eq!(saga.saga_type, SagaType::Publish);
+        assert_eq!(saga.trace_id, "t1");
+        assert_eq!(orch.active_count(), 1);
+        assert_eq!(orch.event_counts().get("saga_created"), Some(&1));
+        assert!(orch.drain_events().is_empty());
     }
 
     // -- Forward step execution --

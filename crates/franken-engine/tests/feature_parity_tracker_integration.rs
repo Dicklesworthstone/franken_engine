@@ -788,6 +788,7 @@ fn ingest_test262_0_percent_pass_rate() {
 
     let entry = tracker.feature(&bigint_fid()).unwrap();
     assert_eq!(entry.test262_pass_rate_millionths, 0);
+    assert_eq!(entry.status, FeatureStatus::InProgress);
 }
 
 #[test]
@@ -1433,7 +1434,7 @@ fn gate_fail_event_has_error_code() {
         .find(|e| e.event == "release_gate_evaluated")
         .unwrap();
     assert_eq!(gate_event.outcome, "fail");
-    assert_eq!(gate_event.error_code.as_deref(), Some("FE-FPT-0007"));
+    assert_eq!(gate_event.error_code.as_deref(), Some("FE-FPT-0008"));
 }
 
 // ===========================================================================

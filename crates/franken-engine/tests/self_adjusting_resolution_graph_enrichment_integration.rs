@@ -845,7 +845,49 @@ fn enrichment_graph_depth_multi_level_chain() {
 }
 
 // =========================================================================
-// AG. franken_engine_resolution_manifest produces deterministic canonical graph
+// AG. graph_depth ignores disconnected non-root subgraphs
+// =========================================================================
+
+#[test]
+fn enrichment_graph_depth_ignores_disconnected_non_root_chain() {
+    let graph = build_graph(
+        vec![
+            make_node("a"),
+            make_node("b"),
+            make_node("x"),
+            make_node("y"),
+            make_node("z"),
+        ],
+        vec![
+            make_edge("a", "b", EdgeKind::StaticImport),
+            make_edge("x", "y", EdgeKind::StaticImport),
+            make_edge("y", "z", EdgeKind::StaticImport),
+        ],
+        vec!["a".to_string()],
+    )
+    .unwrap();
+
+    assert_eq!(graph_depth(&graph).unwrap(), 1);
+}
+
+// =========================================================================
+// AH. graph_depth returns zero for rootless non-empty graphs
+// =========================================================================
+
+#[test]
+fn enrichment_graph_depth_rootless_nonempty_graph_is_zero() {
+    let graph = build_graph(
+        vec![make_node("a"), make_node("b")],
+        vec![make_edge("a", "b", EdgeKind::StaticImport)],
+        vec![],
+    )
+    .unwrap();
+
+    assert_eq!(graph_depth(&graph).unwrap(), 0);
+}
+
+// =========================================================================
+// AI. franken_engine_resolution_manifest produces deterministic canonical graph
 // =========================================================================
 
 #[test]
@@ -869,7 +911,7 @@ fn enrichment_franken_engine_resolution_manifest_serde_roundtrip() {
 }
 
 // =========================================================================
-// AH. Clone/Debug derive verification for ResolutionGraph and RollbackCheckpoint
+// AJ. Clone/Debug derive verification for ResolutionGraph and RollbackCheckpoint
 // =========================================================================
 
 #[test]
@@ -900,7 +942,7 @@ fn enrichment_clone_debug_rollback_checkpoint() {
 }
 
 // =========================================================================
-// AI. DependencyEdge compute_hash is order-sensitive for conditions
+// AK. DependencyEdge compute_hash is order-sensitive for conditions
 // =========================================================================
 
 #[test]
@@ -922,7 +964,7 @@ fn enrichment_dependency_edge_hash_condition_order_sensitive() {
 }
 
 // =========================================================================
-// AJ. InvalidationReceipt recomputed + skipped counts are consistent
+// AL. InvalidationReceipt recomputed + skipped counts are consistent
 // =========================================================================
 
 #[test]

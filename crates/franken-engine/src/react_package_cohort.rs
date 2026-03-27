@@ -781,7 +781,9 @@ pub fn build_cohort_matrix_with_edges(
         hasher.update(b"|pkg:");
         hasher.update(manifest.content_hash.as_bytes());
     }
-    for ec in &edge_cases {
+    let mut sorted_ecs: Vec<_> = edge_cases.iter().collect();
+    sorted_ecs.sort_by(|a, b| a.case_id.cmp(&b.case_id));
+    for ec in &sorted_ecs {
         hasher.update(b"|ec:");
         hasher.update(ec.case_id.as_bytes());
         hasher.update(if ec.passed { b":pass" } else { b":fail" });

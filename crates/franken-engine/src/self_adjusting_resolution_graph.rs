@@ -983,12 +983,21 @@ pub fn verify_checkpoint(
 ///
 /// Returns 0 for an empty graph.  Returns an error if a cycle is detected.
 pub fn graph_depth(graph: &ResolutionGraph) -> Result<u64, ResolutionGraphError> {
+    if graph.root_modules.is_empty() {
+        return Ok(0);
+    }
+
     let order = topological_order(graph)?;
     let forward = build_forward_index(&graph.edges);
 
     let mut depths: BTreeMap<String, u64> = BTreeMap::new();
+    for root in &graph.root_modules {
+        depths.insert(root.clone(), 0);
+    }
     for node_id in &order {
-        let current_depth = *depths.get(node_id).unwrap_or(&0);
+        let Some(&current_depth) = depths.get(node_id) else {
+            continue;
+        };
         if let Some(neighbors) = forward.get(node_id) {
             for neighbor in neighbors {
                 let neighbor_depth = depths.entry(neighbor.clone()).or_insert(0);
@@ -1629,6 +1638,38 @@ mod tests {
     fn test_graph_depth_diamond() {
         let graph = diamond_graph();
         assert_eq!(graph_depth(&graph).unwrap(), 2);
+    }
+
+    #[test]
+    fn test_graph_depth_ignores_disconnected_non_root_chain() {
+        let graph = build_graph(
+            vec![
+                make_node("a"),
+                make_node("b"),
+                make_node("x"),
+                make_node("y"),
+                make_node("z"),
+            ],
+            vec![
+                make_edge("a", "b"),
+                make_edge("x", "y"),
+                make_edge("y", "z"),
+            ],
+            vec!["a".to_string()],
+        )
+        .unwrap();
+        assert_eq!(graph_depth(&graph).unwrap(), 1);
+    }
+
+    #[test]
+    fn test_graph_depth_rootless_nonempty_graph_is_zero() {
+        let graph = build_graph(
+            vec![make_node("a"), make_node("b")],
+            vec![make_edge("a", "b")],
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(graph_depth(&graph).unwrap(), 0);
     }
 
     // Serde roundtrips ------------------------------------------------------

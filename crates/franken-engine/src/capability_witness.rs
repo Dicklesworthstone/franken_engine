@@ -670,18 +670,24 @@ impl CapabilityWitness {
         buf.extend_from_slice(self.policy_id.as_bytes());
         buf.push(self.lifecycle_state as u8);
 
+        // Length-prefix each capability to prevent delimiter collisions.
+        buf.extend_from_slice(&(self.required_capabilities.len() as u32).to_be_bytes());
         for cap in &self.required_capabilities {
-            buf.extend_from_slice(cap.as_str().as_bytes());
-            buf.push(0); // separator
+            let cap_bytes = cap.as_str().as_bytes();
+            buf.extend_from_slice(&(cap_bytes.len() as u32).to_be_bytes());
+            buf.extend_from_slice(cap_bytes);
         }
         buf.push(0xff); // section separator
 
+        buf.extend_from_slice(&(self.denied_capabilities.len() as u32).to_be_bytes());
         for cap in &self.denied_capabilities {
-            buf.extend_from_slice(cap.as_str().as_bytes());
-            buf.push(0);
+            let cap_bytes = cap.as_str().as_bytes();
+            buf.extend_from_slice(&(cap_bytes.len() as u32).to_be_bytes());
+            buf.extend_from_slice(cap_bytes);
         }
         buf.push(0xff);
 
+        buf.extend_from_slice(&(self.proof_obligations.len() as u32).to_be_bytes());
         for po in &self.proof_obligations {
             let cap_bytes = po.capability.as_str().as_bytes();
             buf.extend_from_slice(&(cap_bytes.len() as u32).to_be_bytes());
@@ -697,11 +703,14 @@ impl CapabilityWitness {
         }
         buf.push(0xff);
 
+        buf.extend_from_slice(&(self.denial_records.len() as u32).to_be_bytes());
         for dr in &self.denial_records {
-            buf.extend_from_slice(dr.capability.as_str().as_bytes());
-            buf.push(0);
-            buf.extend_from_slice(dr.reason.as_bytes());
-            buf.push(0);
+            let dr_cap = dr.capability.as_str().as_bytes();
+            buf.extend_from_slice(&(dr_cap.len() as u32).to_be_bytes());
+            buf.extend_from_slice(dr_cap);
+            let dr_reason = dr.reason.as_bytes();
+            buf.extend_from_slice(&(dr_reason.len() as u32).to_be_bytes());
+            buf.extend_from_slice(dr_reason);
             if let Some(ref eid) = dr.evidence_id {
                 buf.push(1);
                 buf.extend_from_slice(eid.as_bytes());
@@ -737,11 +746,14 @@ impl CapabilityWitness {
         buf.extend_from_slice(&self.epoch.as_u64().to_be_bytes());
         buf.extend_from_slice(&self.timestamp_ns.to_be_bytes());
 
+        buf.extend_from_slice(&(self.metadata.len() as u32).to_be_bytes());
         for (k, v) in &self.metadata {
-            buf.extend_from_slice(k.as_bytes());
-            buf.push(0);
-            buf.extend_from_slice(v.as_bytes());
-            buf.push(0);
+            let k_bytes = k.as_bytes();
+            buf.extend_from_slice(&(k_bytes.len() as u32).to_be_bytes());
+            buf.extend_from_slice(k_bytes);
+            let v_bytes = v.as_bytes();
+            buf.extend_from_slice(&(v_bytes.len() as u32).to_be_bytes());
+            buf.extend_from_slice(v_bytes);
         }
 
         buf
@@ -3317,11 +3329,51 @@ impl WitnessPublicationPipeline {
         canonical.extend_from_slice(artifact.publication_id.as_bytes());
         canonical.extend_from_slice(artifact.witness.witness_id.as_bytes());
         canonical.extend_from_slice(artifact.witness.content_hash.as_bytes());
+        // Include signature bundle for tamper-evidence.
+        for sig in &artifact.signature_bundle {
+            canonical.extend_from_slice(sig);
+        }
+        // Include full publication proof fields.
         canonical.extend_from_slice(artifact.publication_proof.log_entry.leaf_hash.as_bytes());
         canonical.extend_from_slice(artifact.publication_proof.tree_head.mmr_root.as_bytes());
+        canonical.extend_from_slice(
+            &artifact
+                .publication_proof
+                .tree_head
+                .checkpoint_seq
+                .to_be_bytes(),
+        );
+        canonical.extend_from_slice(
+            &artifact
+                .publication_proof
+                .tree_head
+                .log_length
+                .to_be_bytes(),
+        );
+        canonical.extend_from_slice(
+            &artifact
+                .publication_proof
+                .tree_head
+                .timestamp_ns
+                .to_be_bytes(),
+        );
+        canonical.extend_from_slice(
+            &artifact
+                .publication_proof
+                .tree_head
+                .epoch
+                .as_u64()
+                .to_be_bytes(),
+        );
+        canonical.extend_from_slice(artifact.publication_proof.tree_head.head_hash.as_bytes());
         if let Some(ref revocation) = artifact.revocation_proof {
             canonical.extend_from_slice(revocation.log_entry.leaf_hash.as_bytes());
             canonical.extend_from_slice(revocation.tree_head.mmr_root.as_bytes());
+            canonical.extend_from_slice(&revocation.tree_head.checkpoint_seq.to_be_bytes());
+            canonical.extend_from_slice(&revocation.tree_head.log_length.to_be_bytes());
+            canonical.extend_from_slice(&revocation.tree_head.timestamp_ns.to_be_bytes());
+            canonical.extend_from_slice(&revocation.tree_head.epoch.as_u64().to_be_bytes());
+            canonical.extend_from_slice(revocation.tree_head.head_hash.as_bytes());
         }
         ContentHash::compute(&canonical)
     }

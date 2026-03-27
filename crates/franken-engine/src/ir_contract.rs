@@ -2313,6 +2313,27 @@ pub fn verify_ir4_linkage(witness: &Ir4Module, ir3_hash: &ContentHash) -> Result
             IrLevel::Ir4,
         ));
     }
+    match &witness.header.source_hash {
+        Some(source_hash) if source_hash == ir3_hash => {}
+        Some(source_hash) => {
+            return Err(IrError::new(
+                IrErrorCode::WitnessIntegrityViolation,
+                format!(
+                    "IR4 header source_hash mismatch: expected {}, got {}",
+                    hex::encode(ir3_hash.as_bytes()),
+                    hex::encode(source_hash.as_bytes()),
+                ),
+                IrLevel::Ir4,
+            ));
+        }
+        None => {
+            return Err(IrError::new(
+                IrErrorCode::WitnessIntegrityViolation,
+                "IR4 witness missing header source_hash",
+                IrLevel::Ir4,
+            ));
+        }
+    }
     // Verify event sequence monotonicity.
     for window in witness.events.windows(2) {
         if window[1].seq <= window[0].seq {
@@ -3190,6 +3211,15 @@ mod tests {
         let ir4 = Ir4Module::new(ir3_hash, "test.js");
         let wrong_hash = ContentHash::compute(b"wrong");
         let err = verify_ir4_linkage(&ir4, &wrong_hash).unwrap_err();
+        assert_eq!(err.code, IrErrorCode::WitnessIntegrityViolation);
+    }
+
+    #[test]
+    fn verify_ir4_linkage_fails_header_source_hash_mismatch() {
+        let ir3_hash = ContentHash::compute(b"ir3");
+        let mut ir4 = Ir4Module::new(ir3_hash, "test.js");
+        ir4.header.source_hash = Some(ContentHash::compute(b"tampered"));
+        let err = verify_ir4_linkage(&ir4, &ir3_hash).unwrap_err();
         assert_eq!(err.code, IrErrorCode::WitnessIntegrityViolation);
     }
 

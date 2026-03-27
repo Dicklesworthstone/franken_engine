@@ -558,7 +558,11 @@ impl BifurcationBoundaryScanner {
             for bp in &sorted_bps {
                 buf.extend_from_slice(bp.parameter_id.as_bytes());
                 buf.extend_from_slice(&bp.critical_value_millionths.to_le_bytes());
-                buf.extend_from_slice(format!("{:?}", bp.bifurcation_type).as_bytes());
+                buf.extend_from_slice(
+                    serde_json::to_string(&bp.bifurcation_type)
+                        .unwrap_or_default()
+                        .as_bytes(),
+                );
             }
             // Include warnings.
             buf.extend_from_slice(&(warnings.len() as u64).to_le_bytes());
@@ -570,7 +574,11 @@ impl BifurcationBoundaryScanner {
             buf.extend_from_slice(&(preemptive_actions.len() as u64).to_le_bytes());
             for pa in &preemptive_actions {
                 buf.extend_from_slice(pa.parameter_id.as_bytes());
-                buf.extend_from_slice(format!("{:?}", pa.lane_action).as_bytes());
+                buf.extend_from_slice(
+                    serde_json::to_string(&pa.lane_action)
+                        .unwrap_or_default()
+                        .as_bytes(),
+                );
             }
             // regime_summary is BTreeMap — deterministic iteration.
             for (regime, count) in &regime_summary {

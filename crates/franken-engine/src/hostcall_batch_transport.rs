@@ -76,6 +76,7 @@ impl Default for BatchTransportConfig {
 
 /// Lifecycle state of a shared memory region.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RegionState {
     Allocated,
     Writing,
@@ -290,6 +291,7 @@ pub struct BatchEnvelope {
 
 /// Reason the safety membrane rejected a batch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MembraneRejectionReason {
     PhaseBlocked,
     EpochMismatch,
@@ -907,7 +909,7 @@ impl BatchTransportState {
             });
         }
         let region_id = self.next_region_id;
-        self.next_region_id += 1;
+        self.next_region_id = self.next_region_id.saturating_add(1);
         let region = SharedMemoryRegion {
             region_id,
             session_id: self.session_id.clone(),
@@ -1036,7 +1038,7 @@ impl BatchTransportState {
         }
 
         let batch_id = self.next_batch_id;
-        self.next_batch_id += 1;
+        self.next_batch_id = self.next_batch_id.saturating_add(1);
 
         let batch_mac = compute_batch_mac(session_key, batch_id, &entries, epoch);
         let credits_consumed = entries.len() as u64;
@@ -1162,6 +1164,7 @@ pub struct BatchTransportSpecimen {
 
 /// Specimen family discriminant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BatchTransportSpecimenFamily {
     HappyPath,
     CreditExhaustion,
@@ -1216,6 +1219,7 @@ impl fmt::Display for BatchTransportSpecimenFamily {
 
 /// Verdict for a specimen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BatchTransportVerdict {
     Pass,
     Fail,

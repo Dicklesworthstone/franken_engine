@@ -3,3 +3,5 @@ target_*/
 target-*/
 .cargo-target/
 .cargo-target-*/
+.git/refs/remotes/
+.git/refs/remotes/**

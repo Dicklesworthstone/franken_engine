@@ -790,8 +790,34 @@ fn frankenctl_cli_workflow_script_emits_trace_ids_artifact_contract() {
     assert!(script.contains("trace_ids_path=\"${run_dir}/trace_ids.json\""));
     assert!(script.contains("franken-engine.frankenctl.cli.workflow.trace-ids.v1"));
     assert!(script.contains(r#"\"trace_ids\": \"${trace_ids_path}\""#));
+    assert!(script.contains(r#"\"doctor_input\": \"${doctor_input_path}\""#));
+    assert!(script.contains(r#"\"support_bundle_root\": \"${support_bundle_dir}\""#));
     assert!(script.contains("trace_ids.json"));
     assert!(script.contains("write_trace_ids"));
+}
+
+#[test]
+fn frankenctl_cli_workflow_script_emits_expected_artifacts_and_routes() {
+    let script = fs::read_to_string(repo_root().join("scripts/e2e/frankenctl_cli_workflow.sh"))
+        .expect("frankenctl cli workflow script should exist");
+
+    assert!(script.contains("source \"${root_dir}/scripts/e2e/parser_deterministic_env.sh\""));
+    assert!(script.contains("parser_frontier_bootstrap_env"));
+    assert!(script.contains(
+        "artifact_root=\"${FRANKENCTL_CLI_ARTIFACT_ROOT:-artifacts/frankenctl_cli_workflow}\""
+    ));
+    assert!(script.contains("run_manifest.json"));
+    assert!(script.contains("events.jsonl"));
+    assert!(script.contains("commands.txt"));
+    assert!(script.contains("trace_ids.json"));
+    assert!(script.contains("doctor_input.json"));
+    assert!(script.contains("support_bundle/preflight_report.json"));
+    assert!(script.contains("support_bundle/onboarding_scorecard.json"));
+    assert!(script.contains("support_bundle/rollout_decision_artifact.json"));
+    assert!(script.contains("support_bundle/frankenctl_doctor_report.json"));
+    assert!(script.contains("cargo run -q -p frankenengine-engine --bin frankenctl -- doctor"));
+    assert!(script.contains("rch exec"));
+    assert!(script.contains("usage: $0 [check|test|clippy|ci]"));
 }
 
 #[test]
@@ -804,7 +830,13 @@ fn frankenctl_cli_workflow_script_fails_closed_on_rch_drift() {
         script.contains("rch reported local fallback; refusing local execution for heavy command")
     );
     assert!(script.contains("rch output missing remote exit marker; failing closed"));
-    assert!(script.contains("(missing-remote-exit-marker)"));
+    assert!(script.contains("Failed to query daemon:.*running locally"));
+    assert!(script.contains("Dependency preflight blocked remote execution"));
+    assert!(script.contains("RCH-E326"));
+    assert!(script.contains("(timeout-${rch_timeout_seconds}s)"));
+    assert!(script.contains("(rch-exit=${status}; missing-remote-exit-marker)"));
+    assert!(script.contains("(rch-exit=${status}; remote-exit=${remote_exit_code})"));
+    assert!(script.contains("rch_recovered_success"));
     assert!(!script.contains("warning: missing remote exit marker"));
 }
 

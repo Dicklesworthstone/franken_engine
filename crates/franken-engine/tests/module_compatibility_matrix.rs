@@ -219,6 +219,10 @@ fn module_interop_gate_script_surfaces_replay_and_trace_artifacts() {
         "run manifest must publish the module resolution trace artifact path"
     );
     assert!(
+        script.contains("\"trace_ids\": \"${trace_ids_path}\""),
+        "run manifest must publish the trace-ids artifact path"
+    );
+    assert!(
         script.contains("\"module_resolution_trace_source\": \"contract_smoke_sample\""),
         "run manifest must disclose that the module resolution trace is a contract-smoke sample"
     );
@@ -229,6 +233,10 @@ fn module_interop_gate_script_surfaces_replay_and_trace_artifacts() {
     assert!(
         script.contains("cat ${module_resolution_trace_path}"),
         "operator verification must surface the module resolution trace artifact"
+    );
+    assert!(
+        script.contains("cat ${trace_ids_path}"),
+        "operator verification must surface the trace-ids artifact"
     );
     assert!(
         script.contains("\"step_logs\": \"${step_logs_dir}\""),
@@ -251,6 +259,10 @@ fn module_interop_gate_script_surfaces_replay_and_trace_artifacts() {
             "rgc module interop verification matrix module resolution trace: ${module_resolution_trace_path}"
         ),
         "gate script must print the module resolution trace artifact path"
+    );
+    assert!(
+        script.contains("rgc module interop verification matrix trace ids: ${trace_ids_path}"),
+        "gate script must print the trace-ids artifact path"
     );
     assert!(
         script.contains(
@@ -285,6 +297,7 @@ fn module_interop_replay_wrapper_requires_complete_bundle() {
         "events.jsonl",
         "commands.txt",
         "module_resolution_trace.jsonl",
+        "trace_ids.json",
         "step_logs/step_000.log",
     ] {
         assert!(
@@ -334,6 +347,10 @@ fn module_interop_replay_wrapper_requires_complete_bundle() {
     assert!(
         script.contains("latest module resolution trace"),
         "replay wrapper must print the module resolution trace artifact"
+    );
+    assert!(
+        script.contains("latest trace ids"),
+        "replay wrapper must print the trace-ids artifact"
     );
     assert!(
         script.contains("latest first step log"),
@@ -1831,6 +1848,56 @@ fn validate_empty_waiver_id_fails() {
         .validate_with_waivers(&BTreeSet::new(), &context())
         .unwrap_err();
     assert_eq!(err.code, CompatibilityMatrixErrorCode::MissingWaiver);
+}
+
+// ---------- validate: empty divergence reason ----------
+
+#[test]
+fn validate_empty_divergence_reason_fails() {
+    let mut entry = valid_entry_integ("case-empty-divergence-reason");
+    entry.franken_native_behavior = "native".to_string();
+    entry.franken_node_compat_behavior = "native".to_string();
+    entry.franken_bun_compat_behavior = "native".to_string();
+    entry.node_behavior = "node-diff".to_string();
+    entry.bun_behavior = "native".to_string();
+    entry.divergence = Some(DivergencePolicy {
+        diverges_from: vec![ReferenceRuntime::Node],
+        reason: "".to_string(),
+        impact: "i".to_string(),
+        waiver_id: "w-empty-reason".to_string(),
+        migration_guidance: "g".to_string(),
+    });
+    let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
+    let err = matrix
+        .validate_with_waivers(&BTreeSet::from(["w-empty-reason".to_string()]), &context())
+        .unwrap_err();
+    assert_eq!(err.code, CompatibilityMatrixErrorCode::InvalidMatrix);
+    assert!(err.message.contains("non-empty reason"));
+}
+
+// ---------- validate: empty divergence impact ----------
+
+#[test]
+fn validate_empty_divergence_impact_fails() {
+    let mut entry = valid_entry_integ("case-empty-divergence-impact");
+    entry.franken_native_behavior = "native".to_string();
+    entry.franken_node_compat_behavior = "native".to_string();
+    entry.franken_bun_compat_behavior = "native".to_string();
+    entry.node_behavior = "node-diff".to_string();
+    entry.bun_behavior = "native".to_string();
+    entry.divergence = Some(DivergencePolicy {
+        diverges_from: vec![ReferenceRuntime::Node],
+        reason: "r".to_string(),
+        impact: "".to_string(),
+        waiver_id: "w-empty-impact".to_string(),
+        migration_guidance: "g".to_string(),
+    });
+    let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
+    let err = matrix
+        .validate_with_waivers(&BTreeSet::from(["w-empty-impact".to_string()]), &context())
+        .unwrap_err();
+    assert_eq!(err.code, CompatibilityMatrixErrorCode::InvalidMatrix);
+    assert!(err.message.contains("non-empty impact"));
 }
 
 // ---------- validate: empty migration_guidance ----------

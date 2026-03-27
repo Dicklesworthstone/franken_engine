@@ -220,6 +220,7 @@ fn rgc_408b_runner_script_uses_rch_and_live_bead_snapshot() {
 
     for needle in [
         "br list --all --json",
+        "run_emit_bundle_step()",
         "cargo run -p frankenengine-engine --bin franken_engine_product_blocker_ledger",
         "--emit-local-bundle-json",
         "cargo check -p frankenengine-engine --bin franken_engine_product_blocker_ledger --test engine_product_blocker_ledger",
@@ -237,6 +238,29 @@ fn rgc_408b_runner_script_uses_rch_and_live_bead_snapshot() {
             "runner missing required text: {needle}"
         );
     }
+}
+
+#[test]
+fn rgc_408b_runner_emits_bundle_for_all_successful_modes() {
+    let script = load_runner_script();
+    assert_eq!(
+        script
+            .matches("run_emit_bundle_step || mode_exit=$?")
+            .count(),
+        5,
+        "bundle/check/test/clippy/ci should all emit the blocker-ledger bundle"
+    );
+}
+
+#[test]
+fn rgc_408b_runner_writes_lane_metadata_before_artifact_assertion() {
+    let script = load_runner_script();
+    assert!(
+        script.contains(
+            "if [[ \"${error_code_json}\" == \"null\" ]]; then\n  write_commands\n  write_trace_ids\n  write_events \"pass\" \"pass\" \"null\"\n  write_manifest \"pass\" \"null\"\n  if ! assert_required_artifacts; then"
+        ),
+        "success path must materialize commands/trace ids/events/manifest before checking for required artifacts"
+    );
 }
 
 #[test]
@@ -309,6 +333,7 @@ fn rgc_408b_doc_describes_replay_modes_and_exact_run_dir() {
         "./scripts/e2e/rgc_engine_product_blocker_ledger_replay.sh show",
         "./scripts/e2e/rgc_engine_product_blocker_ledger_replay.sh ci",
         "RGC_ENGINE_PRODUCT_BLOCKER_LEDGER_REPLAY_RUN_DIR=artifacts/rgc_engine_product_blocker_ledger/<timestamp>",
+        "successful `check`, `test`,",
         "fails closed on incomplete explicit run directories",
         "previous latest complete bundle",
     ] {

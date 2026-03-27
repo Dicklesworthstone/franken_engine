@@ -712,13 +712,49 @@ fn rgc_607_check_mode_manifest_omits_proof_bundle_and_records_timeouts() {
 }
 
 #[test]
-fn rgc_607_replay_wrapper_invokes_gate_script() {
+fn rgc_607_replay_wrapper_is_replay_first_and_supports_explicit_run_dir() {
     let path = repo_root().join("scripts/e2e/rgc_certified_optimization_harness_replay.sh");
     let script = fs::read_to_string(&path)
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
 
-    assert!(script.contains("scripts/run_rgc_certified_optimization_harness.sh"));
-    assert!(script.contains("mode=\"${1:-ci}\""));
+    for required_fragment in [
+        "mode=\"${1:-show}\"",
+        "RGC_CERTIFIED_OPTIMIZATION_HARNESS_REPLAY_RUN_DIR",
+        "run_dir_is_complete()",
+        "rewrite_proof_index.json",
+        "egraph_rewrite_pack.json",
+        "trace_ids.json",
+        "rch-log.*",
+        "explicit run directory is incomplete",
+        "latest complete run directory",
+        "scripts/run_rgc_certified_optimization_harness.sh",
+    ] {
+        assert!(
+            script.contains(required_fragment),
+            "replay wrapper missing fragment `{required_fragment}`"
+        );
+    }
+}
+
+#[test]
+fn rgc_607_replay_wrapper_warns_on_incomplete_or_failed_runs() {
+    let path = repo_root().join("scripts/e2e/rgc_certified_optimization_harness_replay.sh");
+    let script = fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+
+    for required_fragment in [
+        "no complete bundle found under ${artifact_root}; newest directory ${latest_artifact_dir_path} is incomplete",
+        "newest directory ${latest_artifact_dir_path} is incomplete; using latest complete run directory ${latest_run_dir}",
+        "gate exited with status ${prior_exit}; replay output reflects latest complete run directory ${latest_run_dir}",
+        "gate exited with status ${prior_exit}; replay output reflects previous latest complete run directory ${latest_run_dir}",
+        "gate exited with status ${prior_exit}; replay output reflects current run directory ${latest_run_dir}",
+        "latest first rch log:",
+    ] {
+        assert!(
+            script.contains(required_fragment),
+            "replay wrapper missing failure-path fragment `{required_fragment}`"
+        );
+    }
 }
 
 #[test]

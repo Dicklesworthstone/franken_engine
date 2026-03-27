@@ -6,6 +6,18 @@ use std::{collections::BTreeSet, fs, path::PathBuf};
 
 use frankenengine_engine::module_compatibility_matrix::*;
 
+const README_INTEROP_OPERATOR_VERIFICATION_FRAGMENTS: [&str; 9] = [
+    "cat artifacts/rgc_module_interop_verification_matrix/<timestamp>/run_manifest.json",
+    "cat artifacts/rgc_module_interop_verification_matrix/<timestamp>/events.jsonl",
+    "cat artifacts/rgc_module_interop_verification_matrix/<timestamp>/commands.txt",
+    "cat artifacts/rgc_module_interop_verification_matrix/<timestamp>/module_resolution_trace.jsonl",
+    "cat artifacts/rgc_module_interop_verification_matrix/<timestamp>/trace_ids.json",
+    "cat artifacts/rgc_module_interop_verification_matrix/<timestamp>/step_logs/step_000.log",
+    "./scripts/e2e/rgc_module_resolution_trace_contract_smoke.sh",
+    "rg -n 'compatibility_disposition|remediation_guidance' \\",
+    "RGC_MODULE_INTEROP_MATRIX_REPLAY_RUN_DIR=artifacts/...",
+];
+
 fn context() -> CompatibilityContext {
     CompatibilityContext::new("trace-enrich", "decision-enrich", "policy-enrich")
 }
@@ -276,6 +288,54 @@ fn interop_replay_wrapper_requires_and_surfaces_trace_ids_artifact() {
         "latest first step log",
     ] {
         assert!(script.contains(needle), "replay wrapper missing {needle}");
+    }
+}
+
+#[test]
+fn default_matrix_requires_readme_operator_verification_fragments() {
+    let matrix = ModuleCompatibilityMatrix::from_default_json().unwrap();
+
+    for fragment in README_INTEROP_OPERATOR_VERIFICATION_FRAGMENTS {
+        assert!(
+            matrix
+                .required_readme_fragments()
+                .contains(&fragment.to_string()),
+            "default matrix should require README fragment {fragment}"
+        );
+    }
+}
+
+#[test]
+fn readme_documents_interop_operator_verification_surface() {
+    let readme = read_to_string(&repo_root().join("README.md"));
+
+    for fragment in README_INTEROP_OPERATOR_VERIFICATION_FRAGMENTS {
+        assert!(
+            readme.contains(fragment),
+            "README should document interop operator verification fragment {fragment}"
+        );
+    }
+}
+
+#[test]
+fn interop_gate_script_emits_operator_verification_commands_documented_in_readme() {
+    let path = repo_root().join("scripts/run_rgc_module_interop_verification_matrix.sh");
+    let script = read_to_string(&path);
+
+    for needle in [
+        "cat ${manifest_path}",
+        "cat ${events_path}",
+        "cat ${commands_path}",
+        "cat ${module_resolution_trace_path}",
+        "cat ${trace_ids_path}",
+        "cat ${step_logs_dir}/step_000.log",
+        "./scripts/e2e/rgc_module_resolution_trace_contract_smoke.sh ${module_resolution_trace_path}",
+        "rg -n 'compatibility_disposition|remediation_guidance' crates/franken-engine/src/esm_cjs_interop_parity.rs",
+    ] {
+        assert!(
+            script.contains(needle),
+            "interop gate script missing operator verification command {needle}"
+        );
     }
 }
 

@@ -21,7 +21,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use frankenengine_engine::esm_cjs_interop_parity::{
-    InteropActualOutcome, run_interop_parity_corpus,
+    InteropActualOutcome, InteropCompatibilityDisposition, run_interop_parity_corpus,
 };
 use frankenengine_engine::module_compatibility_matrix::{
     COMPATIBILITY_SCENARIO_REPORT_SCHEMA_VERSION, CompatibilityContext, CompatibilityMatrixEntry,
@@ -1641,6 +1641,124 @@ fn extensionless_relative_interop_evidence_matches_matrix_contract_across_modes(
         assert!(
             outcome.matched,
             "extensionless-relative evidence should match the matrix contract for {specimen_id}"
+        );
+    }
+}
+
+#[test]
+fn default_and_namespace_cjs_projection_evidence_match_matrix_contract() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    let inventory = run_interop_parity_corpus();
+    for specimen_id in ["esm_imports_cjs_default", "namespace_import_from_cjs"] {
+        let evidence = inventory
+            .evidence
+            .iter()
+            .find(|ev| ev.specimen_id == specimen_id)
+            .unwrap_or_else(|| {
+                panic!("default/namespace projection specimen should exist: {specimen_id}")
+            });
+        assert_eq!(evidence.compatibility_mode, CompatibilityMode::Native);
+        assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
+        assert_eq!(
+            evidence.compatibility_disposition,
+            InteropCompatibilityDisposition::Supported
+        );
+        assert!(evidence.error_detail.is_none());
+        assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
+
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "esm-import-cjs-default",
+                    CompatibilityRuntime::FrankenEngine,
+                    CompatibilityMode::Native,
+                    "namespace_default_projection",
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!(
+                    "default/namespace projection evidence should evaluate against the matrix for {specimen_id}: {err}"
+                )
+            });
+        assert!(
+            outcome.matched,
+            "default/namespace projection evidence should match the matrix contract for {specimen_id}"
+        );
+    }
+}
+
+#[test]
+fn external_package_root_require_evidence_matches_matrix_contract_across_modes() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    let inventory = run_interop_parity_corpus();
+    for (specimen_id, mode) in [
+        (
+            "external_extension_probe_package_root_require_native",
+            CompatibilityMode::Native,
+        ),
+        (
+            "external_extension_probe_package_root_require_node_compat",
+            CompatibilityMode::NodeCompat,
+        ),
+        (
+            "external_extension_probe_package_root_require_bun_compat",
+            CompatibilityMode::BunCompat,
+        ),
+        (
+            "scoped_external_extension_probe_package_root_require_native",
+            CompatibilityMode::Native,
+        ),
+        (
+            "scoped_external_extension_probe_package_root_require_node_compat",
+            CompatibilityMode::NodeCompat,
+        ),
+        (
+            "scoped_external_extension_probe_package_root_require_bun_compat",
+            CompatibilityMode::BunCompat,
+        ),
+    ] {
+        let evidence = inventory
+            .evidence
+            .iter()
+            .find(|ev| ev.specimen_id == specimen_id)
+            .unwrap_or_else(|| {
+                panic!("external package-root require specimen should exist: {specimen_id}")
+            });
+        assert_eq!(evidence.compatibility_mode, mode);
+        assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
+        assert_eq!(
+            evidence.compatibility_disposition,
+            InteropCompatibilityDisposition::Supported
+        );
+        assert_eq!(evidence.linked_count, 3);
+        assert!(evidence.error_detail.is_none());
+        assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
+
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "external-extension-probe-package-root-relative-require",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    "resolve_relative_require_from_package_root",
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!(
+                    "external package-root require evidence should evaluate against the matrix for {specimen_id}: {err}"
+                )
+            });
+        assert!(
+            outcome.matched,
+            "external package-root require evidence should match the matrix contract for {specimen_id}"
         );
     }
 }

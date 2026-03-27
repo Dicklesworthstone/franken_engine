@@ -509,18 +509,46 @@ fn evaluator_register_async_module_phase() {
 fn evaluator_register_with_unsettled_dep_tracks_pending() {
     let mut eval = AsyncModuleEvaluator::with_defaults();
     eval.register_module("dep.js", true, &[], Some(PromiseHandle(1)));
-    eval.register_module(
-        "consumer.js",
-        true,
-        &["dep.js".to_string()],
-        Some(PromiseHandle(2)),
-    );
+    eval.register_module("consumer.js", false, &["dep.js".to_string()], None);
     // dep.js is not settled so consumer should track it as pending
     assert!(
         eval.states()["consumer.js"]
             .pending_dependencies
             .contains("dep.js")
     );
+    assert_eq!(
+        eval.states()["consumer.js"].phase,
+        AsyncModulePhase::AwaitingDependencies
+    );
+    assert!(eval.witness_events().iter().any(|event| {
+        event.module_specifier == "consumer.js"
+            && event.event_type == AsyncEvalEventType::DependencySuspended
+            && event.detail.contains("register_time=true")
+    }));
+}
+
+#[test]
+fn evaluator_register_with_rejected_dep_immediately_rejects_consumer() {
+    let mut eval = AsyncModuleEvaluator::with_defaults();
+    eval.register_module("dep.js", true, &[], Some(PromiseHandle(1)));
+    let mut bindings = empty_bindings();
+    eval.reject_module("dep.js", &js_error("fail"), &mut bindings)
+        .unwrap();
+
+    eval.register_module("consumer.js", false, &["dep.js".to_string()], None);
+
+    let consumer = &eval.states()["consumer.js"];
+    assert_eq!(consumer.phase, AsyncModulePhase::Rejected);
+    assert!(consumer.pending_dependencies.contains("dep.js"));
+    assert_eq!(
+        consumer.rejection_reason_description,
+        eval.states()["dep.js"].rejection_reason_description
+    );
+    assert!(eval.witness_events().iter().any(|event| {
+        event.module_specifier == "consumer.js"
+            && event.event_type == AsyncEvalEventType::DependencyRejected
+            && event.detail.contains("dependency=dep.js")
+    }));
 }
 
 #[test]

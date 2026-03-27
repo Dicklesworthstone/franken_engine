@@ -953,6 +953,53 @@ fn rgc_066c_contract_operator_verification_mentions_preserved_replay() {
 }
 
 #[test]
+fn rgc_066c_contract_operator_verification_lists_artifact_inspection_commands() {
+    let contract = parse_doc_contract();
+
+    for artifact in [
+        "observability_budget_sentinel_report.json",
+        "observability_on_supremacy_matrix.json",
+        "observability_claim_delta_report.json",
+        "telemetry_demotion_receipts.json",
+        "observability_publication_policy.json",
+        "support_bundle_observability_attestation.json",
+    ] {
+        let expected = format!(
+            "cat artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP>/{artifact}"
+        );
+        assert!(
+            contract
+                .operator_verification
+                .iter()
+                .any(|entry| entry == &expected),
+            "operator verification should include artifact inspection command: {expected}"
+        );
+    }
+}
+
+#[test]
+fn rgc_066c_markdown_doc_lists_artifact_inspection_commands() {
+    let doc = read_repo_text("docs/RGC_OBSERVABILITY_PUBLICATION_POLICY_V1.md");
+
+    for artifact in [
+        "observability_budget_sentinel_report.json",
+        "observability_on_supremacy_matrix.json",
+        "observability_claim_delta_report.json",
+        "telemetry_demotion_receipts.json",
+        "observability_publication_policy.json",
+        "support_bundle_observability_attestation.json",
+    ] {
+        let expected = format!(
+            "cat artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP>/{artifact}"
+        );
+        assert!(
+            doc.contains(&expected),
+            "markdown operator verification should include artifact inspection command: {expected}"
+        );
+    }
+}
+
+#[test]
 fn rgc_066c_replay_wrapper_uses_latest_complete_bundle() {
     let script = read_repo_text("scripts/e2e/rgc_observability_publication_policy_replay.sh");
 

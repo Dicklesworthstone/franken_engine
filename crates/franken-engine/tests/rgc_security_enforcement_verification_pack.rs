@@ -21,6 +21,12 @@ use serde::Deserialize;
 const PACK_SCHEMA_VERSION: &str = "franken-engine.rgc-security-enforcement-verification-pack.v1";
 const VECTORS_SCHEMA_VERSION: &str =
     "franken-engine.rgc-security-enforcement-verification-vectors.v1";
+const ARTIFACT_INSPECTION_COMMANDS: [&str; 4] = [
+    "cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/run_manifest.json",
+    "cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/events.jsonl",
+    "cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/commands.txt",
+    "cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/security_verification_report.json",
+];
 const PACK_JSON: &str =
     include_str!("../../../docs/rgc_security_enforcement_verification_pack_v1.json");
 const VECTORS_JSON: &str =
@@ -95,6 +101,12 @@ fn parse_vectors() -> SecurityVerificationVectors {
     serde_json::from_str(VECTORS_JSON).expect("security verification vectors must parse")
 }
 
+fn read_pack_doc() -> String {
+    let path = repo_root().join("docs/RGC_SECURITY_ENFORCEMENT_VERIFICATION_PACK_V1.md");
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
 fn read_gate_script() -> String {
     let path = repo_root().join("scripts/run_rgc_security_enforcement_verification_pack.sh");
     fs::read_to_string(&path)
@@ -104,8 +116,7 @@ fn read_gate_script() -> String {
 #[test]
 fn rgc_059_doc_contains_required_sections() {
     let path = repo_root().join("docs/RGC_SECURITY_ENFORCEMENT_VERIFICATION_PACK_V1.md");
-    let doc = fs::read_to_string(&path)
-        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+    let doc = read_pack_doc();
 
     for section in [
         "# RGC Security Enforcement Verification Pack V1",
@@ -242,6 +253,14 @@ fn rgc_059_contract_is_versioned_and_replay_bound() {
             entry.contains("run_rgc_security_enforcement_verification_pack.sh ci")
         })
     );
+    for command in ARTIFACT_INSPECTION_COMMANDS {
+        assert!(
+            contract
+                .operator_verification
+                .contains(&command.to_string()),
+            "operator verification should include artifact inspection command {command}"
+        );
+    }
     assert!(
         contract.operator_verification.iter().any(|entry| {
             entry.contains("rgc_security_enforcement_verification_pack_replay.sh")
@@ -374,6 +393,36 @@ fn rgc_059_gate_script_uses_repo_local_target_dir() {
         script.contains("rch-artifact-retrieval-failed"),
         "gate script should surface artifact retrieval failures in failed_command"
     );
+    for command in [
+        "cat ${manifest_path}",
+        "cat ${events_path}",
+        "cat ${commands_path}",
+        "cat ${report_path}",
+    ] {
+        assert!(
+            script.contains(command),
+            "gate script should emit artifact inspection command {command}"
+        );
+    }
+}
+
+#[test]
+fn rgc_059_doc_and_contract_include_artifact_inspection_commands() {
+    let doc = read_pack_doc();
+    let contract = parse_contract();
+
+    for command in ARTIFACT_INSPECTION_COMMANDS {
+        assert!(
+            doc.contains(command),
+            "operator verification doc should include artifact inspection command {command}"
+        );
+        assert!(
+            contract
+                .operator_verification
+                .contains(&command.to_string()),
+            "operator verification contract should include artifact inspection command {command}"
+        );
+    }
 }
 
 // ---------- parse_contract ----------

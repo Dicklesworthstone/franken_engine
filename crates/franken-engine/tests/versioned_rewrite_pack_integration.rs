@@ -1176,8 +1176,14 @@ fn catalog_compatible_packs_none_match() {
 #[test]
 fn catalog_cross_interference_symmetric_lookup() {
     let mut cat = PackCatalog::new("cross");
-    cat.register(make_pack("alpha", vec![]));
-    cat.register(make_pack("beta", vec![]));
+    cat.register(make_pack(
+        "alpha",
+        vec![enabled_rule("r1", RewriteCategory::Custom, true)],
+    ));
+    cat.register(make_pack(
+        "beta",
+        vec![enabled_rule("r1", RewriteCategory::Custom, true)],
+    ));
 
     let meta = InterferenceMetadata::build(vec![make_interference(
         "alpha:r1",
@@ -1195,8 +1201,14 @@ fn catalog_cross_interference_symmetric_lookup() {
 #[test]
 fn catalog_cross_interference_no_blocking() {
     let mut cat = PackCatalog::new("no-block");
-    cat.register(make_pack("a", vec![]));
-    cat.register(make_pack("b", vec![]));
+    cat.register(make_pack(
+        "a",
+        vec![enabled_rule("r1", RewriteCategory::Custom, true)],
+    ));
+    cat.register(make_pack(
+        "b",
+        vec![enabled_rule("r1", RewriteCategory::Custom, true)],
+    ));
 
     let meta = InterferenceMetadata::build(vec![make_interference(
         "a:r1",
@@ -1230,8 +1242,14 @@ fn catalog_cross_interference_rejects_self_pair() {
 #[test]
 fn catalog_cross_interference_rejects_duplicate_pair_without_overwrite() {
     let mut cat = PackCatalog::new("dup-cross");
-    cat.register(make_pack("alpha", vec![]));
-    cat.register(make_pack("beta", vec![]));
+    cat.register(make_pack(
+        "alpha",
+        vec![enabled_rule("r1", RewriteCategory::Custom, true)],
+    ));
+    cat.register(make_pack(
+        "beta",
+        vec![enabled_rule("r1", RewriteCategory::Custom, true)],
+    ));
 
     let first = InterferenceMetadata::build(vec![make_interference(
         "alpha:r1",
@@ -1273,10 +1291,41 @@ fn catalog_cross_interference_rejects_metadata_for_foreign_pair() {
 }
 
 #[test]
+fn catalog_cross_interference_rejects_missing_rule_targets_without_mutation() {
+    let mut cat = PackCatalog::new("missing-rule-target");
+    cat.register(make_pack(
+        "alpha",
+        vec![enabled_rule("r1", RewriteCategory::Custom, true)],
+    ));
+    cat.register(make_pack(
+        "beta",
+        vec![enabled_rule("r2", RewriteCategory::Custom, true)],
+    ));
+
+    let hash_before = cat.content_hash.clone();
+    let metadata = InterferenceMetadata::build(vec![make_interference(
+        "alpha:missing",
+        "beta:r2",
+        RuleInterferenceKind::PatternConflict,
+        false,
+    )]);
+
+    assert!(!cat.add_cross_interference("alpha", "beta", metadata));
+    assert_eq!(cat.content_hash, hash_before);
+    assert!(cat.cross_interference.is_empty());
+}
+
+#[test]
 fn catalog_cross_interference_rejects_tampered_metadata_without_mutation() {
     let mut cat = PackCatalog::new("tampered-cross");
-    cat.register(make_pack("alpha", vec![]));
-    cat.register(make_pack("beta", vec![]));
+    cat.register(make_pack(
+        "alpha",
+        vec![enabled_rule("r1", RewriteCategory::Custom, true)],
+    ));
+    cat.register(make_pack(
+        "beta",
+        vec![enabled_rule("r1", RewriteCategory::Custom, true)],
+    ));
 
     let hash_before = cat.content_hash.clone();
     let mut metadata = InterferenceMetadata::build(vec![make_interference(

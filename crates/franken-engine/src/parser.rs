@@ -2493,11 +2493,14 @@ fn parse_statement_inner(
     if statement.starts_with("do ") || statement.starts_with("do{") {
         return self::parse_do_while_statement(statement, goal, span, context);
     }
-    if statement == "return" || statement.starts_with("return ") || statement.starts_with("return;")
+    if statement == "return"
+        || statement.starts_with("return ")
+        || statement.starts_with("return;")
+        || statement.starts_with("return(")
     {
         return self::parse_return_statement(statement, span, context);
     }
-    if statement.starts_with("throw ") {
+    if statement.starts_with("throw ") || statement.starts_with("throw(") {
         return self::parse_throw_statement(statement, span, context);
     }
     if statement.starts_with("try ") || statement.starts_with("try{") {
@@ -3167,7 +3170,11 @@ fn parse_variable_declaration_kind(statement: &str) -> Option<VariableDeclaratio
         let Some(rest) = statement.strip_prefix(kind.as_str()) else {
             continue;
         };
-        if rest.is_empty() || rest.chars().next().is_some_and(char::is_whitespace) {
+        if rest.is_empty() {
+            return Some(kind);
+        }
+        let next_char = rest.chars().next().unwrap();
+        if next_char.is_whitespace() || next_char == '[' || next_char == '{' {
             return Some(kind);
         }
     }
@@ -3461,8 +3468,9 @@ fn parse_primary_expression(
         ));
     }
 
-    if let Some(rest) = expression.strip_prefix("await ") {
-        let nested = parse_expression(rest.trim(), span, context, recursion_depth + 1)?;
+    if expression.starts_with("await ") || expression.starts_with("await(") {
+        let rest = expression.strip_prefix("await").unwrap().trim_start();
+        let nested = parse_expression(rest, span, context, recursion_depth + 1)?;
         return Ok(Expression::Await(Box::new(nested)));
     }
 

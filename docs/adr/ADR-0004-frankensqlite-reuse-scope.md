@@ -144,17 +144,13 @@ Transition timeline:
 
 ## Operator Verification (Storage Adapter Contract)
 
-For `bd-89l2` storage-adapter verification, use:
+For `bd-89l2` storage-adapter verification, follow these steps:
 
-```bash
-scripts/run_storage_adapter_suite.sh ci
-```
-
-This runner is `rch`-backed and emits reproducibility artifacts under
-`artifacts/storage_adapter/<timestamp>/`:
-
-- `run_manifest.json`: toolchain/seed/commands/commit metadata
-- `commands.txt`: exact command list executed
-
-If replay validation is required, rerun with the same `STORAGE_ADAPTER_SEED`
-value and compare the emitted manifest and command log.
+1. Run the storage adapter suite:
+   ```bash
+   scripts/run_storage_adapter_suite.sh ci
+   ```
+2. Verify that this `rch`-backed runner emits reproducibility artifacts under `artifacts/storage_adapter/<timestamp>/`:
+   - `run_manifest.json`: toolchain/seed/commands/commit metadata
+   - `commands.txt`: exact command list executed
+3. If replay validation is required, rerun with the same `STORAGE_ADAPTER_SEED` value and compare the emitted manifest and command log.

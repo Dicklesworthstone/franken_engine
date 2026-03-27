@@ -895,9 +895,9 @@ impl ObjectHeap {
                 }
                 Ok(false)
             }
-            ManagedObject::Proxy(_) => {
-                Err(ObjectError::TypeError("Proxy set not supported yet".to_string()))
-            }
+            ManagedObject::Proxy(_) => Err(ObjectError::TypeError(
+                "Proxy set not supported yet".to_string(),
+            )),
         }
     }
 

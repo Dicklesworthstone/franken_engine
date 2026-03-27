@@ -1701,7 +1701,7 @@ fn exec_heap_map_method(
             return Err(StdlibError::TypeError(format!(
                 "internal error: expected map method, got {:?}",
                 builtin
-            )))
+            )));
         }
     };
 
@@ -3250,15 +3250,14 @@ fn unescape_json_string(s: &str) -> Result<String, StdlibError> {
                         let mut lookahead = chars.clone();
                         if lookahead.next() == Some('\\') && lookahead.next() == Some('u') {
                             let low_hex: String = lookahead.take(4).collect();
-                            if low_hex.len() == 4 {
-                                if let Ok(low_cp) = u32::from_str_radix(&low_hex, 16) {
-                                    if (0xDC00..=0xDFFF).contains(&low_cp) {
-                                        cp = ((cp - 0xD800) << 10) + (low_cp - 0xDC00) + 0x10000;
-                                        // Advance the real iterator by 6 chars (\uXXXX)
-                                        for _ in 0..6 {
-                                            chars.next();
-                                        }
-                                    }
+                            if low_hex.len() == 4
+                                && let Ok(low_cp) = u32::from_str_radix(&low_hex, 16)
+                                && (0xDC00..=0xDFFF).contains(&low_cp)
+                            {
+                                cp = ((cp - 0xD800) << 10) + (low_cp - 0xDC00) + 0x10000;
+                                // Advance the real iterator by 6 chars (\uXXXX)
+                                for _ in 0..6 {
+                                    chars.next();
                                 }
                             }
                         }

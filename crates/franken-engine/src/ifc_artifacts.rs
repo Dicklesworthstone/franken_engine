@@ -533,24 +533,25 @@ impl FlowEnvelope {
         let mut advisories = Vec::new();
         let mut declassification_obligation = None;
 
-        if flow_in_scope && *sink_clearance == ClearanceClass::SealedSink {
-            if matches!(source, Label::Secret | Label::TopSecret) {
-                declassification_obligation =
-                    self.materialize_declassification_obligation(source, sink_clearance);
+        if flow_in_scope
+            && *sink_clearance == ClearanceClass::SealedSink
+            && matches!(source, Label::Secret | Label::TopSecret)
+        {
+            declassification_obligation =
+                self.materialize_declassification_obligation(source, sink_clearance);
 
-                if declassification_obligation.is_none() {
-                    let advisory = match source {
-                        Label::Secret => FlowAuthorizationAdvisory::ExplicitAuthorizationRequired {
-                            source_label: source.clone(),
-                            sink_clearance: *sink_clearance,
-                        },
-                        _ => FlowAuthorizationAdvisory::DeclassificationObligationRequired {
-                            source_label: source.clone(),
-                            sink_clearance: *sink_clearance,
-                        },
-                    };
-                    advisories.push(advisory);
-                }
+            if declassification_obligation.is_none() {
+                let advisory = match source {
+                    Label::Secret => FlowAuthorizationAdvisory::ExplicitAuthorizationRequired {
+                        source_label: source.clone(),
+                        sink_clearance: *sink_clearance,
+                    },
+                    _ => FlowAuthorizationAdvisory::DeclassificationObligationRequired {
+                        source_label: source.clone(),
+                        sink_clearance: *sink_clearance,
+                    },
+                };
+                advisories.push(advisory);
             }
         }
 
@@ -567,7 +568,8 @@ impl FlowEnvelope {
 
     /// Content-addressable identity.
     pub fn content_hash(&self) -> ContentHash {
-        let bytes = serde_json::to_vec(self).unwrap_or_default();
+        let bytes =
+            serde_json::to_vec(self).expect("FlowEnvelope must serialize for content hash");
         ContentHash::compute(&bytes)
     }
 }

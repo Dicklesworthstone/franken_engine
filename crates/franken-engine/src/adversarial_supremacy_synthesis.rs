@@ -355,35 +355,38 @@ pub struct SyntheticWorkload {
     pub epoch: SecurityEpoch,
 }
 
+/// Input fields for computing a deterministic workload content hash.
+struct WorkloadHashInput<'a> {
+    workload_id: &'a str,
+    archetype: WorkloadArchetype,
+    strategy: SynthesisStrategy,
+    seed: &'a [u8],
+    generation: u64,
+    size_bytes: u64,
+    complexity_score: u64,
+    epoch: SecurityEpoch,
+}
+
 impl SyntheticWorkload {
     /// Compute a deterministic content hash from workload metadata.
-    fn compute_hash(
-        workload_id: &str,
-        archetype: WorkloadArchetype,
-        strategy: SynthesisStrategy,
-        seed: &[u8],
-        generation: u64,
-        size_bytes: u64,
-        complexity_score: u64,
-        epoch: SecurityEpoch,
-    ) -> ContentHash {
+    fn compute_hash(input: &WorkloadHashInput<'_>) -> ContentHash {
         let mut h = Sha256::new();
         h.update(b"adversarial-workload-v1:");
-        h.update(workload_id.as_bytes());
+        h.update(input.workload_id.as_bytes());
         h.update(b":");
-        h.update(archetype.as_str().as_bytes());
+        h.update(input.archetype.as_str().as_bytes());
         h.update(b":");
-        h.update(strategy.as_str().as_bytes());
+        h.update(input.strategy.as_str().as_bytes());
         h.update(b":");
-        h.update(seed);
+        h.update(input.seed);
         h.update(b":");
-        h.update(generation.to_le_bytes());
+        h.update(input.generation.to_le_bytes());
         h.update(b":");
-        h.update(size_bytes.to_le_bytes());
+        h.update(input.size_bytes.to_le_bytes());
         h.update(b":");
-        h.update(complexity_score.to_le_bytes());
+        h.update(input.complexity_score.to_le_bytes());
         h.update(b":");
-        h.update(epoch.as_u64().to_le_bytes());
+        h.update(input.epoch.as_u64().to_le_bytes());
         ContentHash::compute(&h.finalize())
     }
 }
@@ -751,8 +754,8 @@ pub fn generate_workload(
         .saturating_add(generation.saturating_mul(16))
         .saturating_add(seed.len() as u64);
 
-    let program_hash = SyntheticWorkload::compute_hash(
-        &workload_id,
+    let program_hash = SyntheticWorkload::compute_hash(&WorkloadHashInput {
+        workload_id: &workload_id,
         archetype,
         strategy,
         seed,
@@ -760,7 +763,7 @@ pub fn generate_workload(
         size_bytes,
         complexity_score,
         epoch,
-    );
+    });
 
     SyntheticWorkload {
         workload_id,

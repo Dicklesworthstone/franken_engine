@@ -1113,12 +1113,10 @@ impl HybridRouter {
             RouteReason::DefaultQuickJsPath => {
                 self.quickjs_lineage.eval_prepared(prepared, route_reason)
             }
-            RouteReason::DirectEngineInvocation => {
-                return Err(EvalError::new(
-                    EvalErrorCode::InvariantViolation,
-                    "router never emits direct route",
-                ))
-            }
+            RouteReason::DirectEngineInvocation => Err(EvalError::new(
+                EvalErrorCode::InvariantViolation,
+                "router never emits direct route",
+            )),
         }
     }
 }

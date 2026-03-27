@@ -533,7 +533,7 @@ impl GovernanceReceipt {
             append_str(&mut buf, &v.summary);
         }
         // Include portability score and target coverage.
-        append_u64(&mut buf, self.portability_score_millionths as u64);
+        append_u64(&mut buf, self.portability_score_millionths);
         for t in &self.targets_covered {
             append_str(&mut buf, &format!("{t:?}"));
         }

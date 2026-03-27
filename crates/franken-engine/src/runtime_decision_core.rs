@@ -678,7 +678,7 @@ impl ConformalCalibrationLayer {
         // If covered: multiply by 1/target ≈ 1.05 for 95% target
         // If not covered: multiply by (1 - 1/target) ≈ 0 for 95% target
         let update_ratio = if covered {
-            // 1 / target_coverage = MILLION / target
+            // 1 / target_coverage in millionths: MILLION² / target
             MILLION.saturating_mul(MILLION) / self.target_coverage_millionths.max(1)
         } else {
             // (1 - 1/(1-target)) ... simplified: use 0 to strongly penalize

@@ -59,6 +59,16 @@ impl TeePlatform {
         Self::ArmCca,
         Self::AmdSev,
     ];
+
+    /// Stable canonical tag for hashing/signing contexts, decoupled from Display.
+    pub fn canonical_tag(&self) -> &'static str {
+        match self {
+            Self::IntelSgx => "intel_sgx",
+            Self::ArmTrustZone => "arm_trustzone",
+            Self::ArmCca => "arm_cca",
+            Self::AmdSev => "amd_sev",
+        }
+    }
 }
 
 impl fmt::Display for TeePlatform {
@@ -399,6 +409,14 @@ impl TeeAttestationPolicy {
 
     /// Validate policy invariants.
     pub fn validate(&self) -> Result<(), TeeAttestationPolicyError> {
+        if self.schema_version != 1 {
+            return Err(TeeAttestationPolicyError::ParseFailed {
+                detail: format!(
+                    "unsupported schema version {}: only version 1 is recognized",
+                    self.schema_version
+                ),
+            });
+        }
         self.freshness_window.validate()?;
 
         for platform in TeePlatform::ALL {
@@ -755,7 +773,9 @@ impl SignedTrustRootOverrideArtifact {
         );
         map.insert(
             "target_platform".to_string(),
-            crate::deterministic_serde::CanonicalValue::String(self.target_platform.to_string()),
+            crate::deterministic_serde::CanonicalValue::String(
+                self.target_platform.canonical_tag().to_string(),
+            ),
         );
         map.insert(
             "target_root_id".to_string(),
@@ -891,7 +911,7 @@ impl TeeAttestationPolicyStore {
     ) -> Result<EngineObjectId, TeeAttestationPolicyError> {
         policy.validate()?;
         if let Some(current) = self.active_policy.as_ref()
-            && policy.policy_epoch.as_u64() < current.policy_epoch.as_u64()
+            && policy.policy_epoch.as_u64() <= current.policy_epoch.as_u64()
         {
             let err = TeeAttestationPolicyError::PolicyEpochRegression {
                 current: current.policy_epoch,

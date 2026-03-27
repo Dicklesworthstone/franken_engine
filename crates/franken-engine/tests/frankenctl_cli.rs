@@ -2829,6 +2829,22 @@ fn frankenctl_benchmark_score_and_verify_bundle_round_trip() {
     )
     .expect("verify report should parse");
     assert_eq!(verify_report["claim_type"].as_str(), Some("benchmark"));
+    assert_eq!(
+        verify_report["trace_id"].as_str(),
+        Some("trace-bench-score-cli")
+    );
+    assert_eq!(
+        verify_report["decision_id"].as_str(),
+        Some("decision-bench-score-cli")
+    );
+    assert_eq!(
+        verify_report["policy_id"].as_str(),
+        Some("policy-bench-score-cli")
+    );
+    assert_eq!(
+        verify_report["component"].as_str(),
+        Some("third_party_verifier")
+    );
     assert_eq!(verify_report["verdict"].as_str(), Some("verified"));
     assert!(
         verify_report["checks"]
@@ -2985,6 +3001,23 @@ fn frankenctl_benchmark_verify_detects_results_digest_tampering() {
 
     assert_eq!(verify_output.status.code(), Some(25));
     let verify_report = parse_stdout_json(&verify_output);
+    assert_eq!(verify_report["claim_type"].as_str(), Some("benchmark"));
+    assert_eq!(
+        verify_report["trace_id"].as_str(),
+        Some("trace-bench-score-tamper")
+    );
+    assert_eq!(
+        verify_report["decision_id"].as_str(),
+        Some("decision-bench-score-tamper")
+    );
+    assert_eq!(
+        verify_report["policy_id"].as_str(),
+        Some("policy-bench-score-tamper")
+    );
+    assert_eq!(
+        verify_report["component"].as_str(),
+        Some("third_party_verifier")
+    );
     assert_eq!(verify_report["verdict"].as_str(), Some("failed"));
     assert!(
         verify_report["checks"]

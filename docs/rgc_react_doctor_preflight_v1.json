@@ -92,6 +92,7 @@
     "bash -n scripts/e2e/rgc_react_doctor_preflight_replay.sh",
     "./scripts/run_rgc_react_doctor_preflight.sh ci",
     "env CARGO_TARGET_DIR=$PWD/target_rch_rgc_react_doctor_preflight_verify rch exec -- cargo test -p frankenengine-engine --test rgc_react_doctor_preflight",
-    "./scripts/e2e/rgc_react_doctor_preflight_replay.sh ci"
+    "./scripts/e2e/rgc_react_doctor_preflight_replay.sh ci",
+    "RGC_REACT_DOCTOR_PREFLIGHT_REPLAY_RUN_DIR=artifacts/rgc_react_doctor_preflight/<timestamp> ./scripts/e2e/rgc_react_doctor_preflight_replay.sh ci"
   ]
 }

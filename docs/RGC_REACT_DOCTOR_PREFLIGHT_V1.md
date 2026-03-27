@@ -98,6 +98,32 @@ The canonical replay wrapper is:
 
 - `./scripts/e2e/rgc_react_doctor_preflight_replay.sh [check|test|clippy|ci]`
 
+By default, the replay wrapper reruns the selected lane and then prints the
+latest complete artifact bundle (`run_manifest.json`, `trace_ids.json`,
+`events.jsonl`, `commands.txt`, `react_doctor_support_contract.json`,
+`react_support_repro_index.json`, `rgc_react_doctor_preflight_v1.json`, and
+`step_logs/step_000.log`). If the newest artifact directory is incomplete, it
+warns and falls back to the latest complete directory; if no complete bundle
+exists, it fails non-zero instead of presenting a partial run as trustworthy.
+If the rerun itself fails, the wrapper explicitly states whether the printed
+bundle came from the current failed invocation or from an older complete
+directory, so operators do not mistake stale evidence for the failed run's
+output.
+
+To replay a specific preserved bundle without rerunning the lane, point the
+wrapper at an exact complete run directory:
+
+```bash
+RGC_REACT_DOCTOR_PREFLIGHT_REPLAY_RUN_DIR=artifacts/rgc_react_doctor_preflight/<timestamp> \
+./scripts/e2e/rgc_react_doctor_preflight_replay.sh ci
+```
+
+The explicit run directory must already contain a complete bundle
+(`run_manifest.json`, `trace_ids.json`, `events.jsonl`, `commands.txt`,
+`react_doctor_support_contract.json`, `react_support_repro_index.json`,
+`rgc_react_doctor_preflight_v1.json`, and `step_logs/step_000.log`) or the
+wrapper fails closed.
+
 ## Structured Logging Contract
 
 The event surface must keep these keys stable:
@@ -121,3 +147,4 @@ The event surface must keep these keys stable:
 4. `./scripts/run_rgc_react_doctor_preflight.sh ci`
 5. `env CARGO_TARGET_DIR=$PWD/target_rch_rgc_react_doctor_preflight_verify rch exec -- cargo test -p frankenengine-engine --test rgc_react_doctor_preflight`
 6. `./scripts/e2e/rgc_react_doctor_preflight_replay.sh ci`
+7. `RGC_REACT_DOCTOR_PREFLIGHT_REPLAY_RUN_DIR=artifacts/rgc_react_doctor_preflight/<timestamp> ./scripts/e2e/rgc_react_doctor_preflight_replay.sh ci`

@@ -20,7 +20,7 @@ The pack is evidence-first:
 ## Contract Version
 
 - `schema_version`: `franken-engine.rgc-cli-operator-workflow-verification-pack.v1`
-- `contract_version`: `1.2.0`
+- `contract_version`: `1.3.0`
 - `policy_id`: `policy-rgc-cli-operator-workflow-verification-pack-v1`
 
 ## Workflow Stages
@@ -48,7 +48,8 @@ Golden path:
 
 - clean input emits `readiness=ready`
 - summary includes reproducible commands
-- output bundle writes both preflight report and onboarding scorecard artifacts
+- output bundle writes preflight report, onboarding scorecard, rollout decision,
+  and doctor report artifacts
 
 Failure paths:
 
@@ -112,6 +113,8 @@ The verified CLI workflow under test emits:
 
 - `support_bundle/preflight_report.json`
 - `support_bundle/onboarding_scorecard.json`
+- `support_bundle/rollout_decision_artifact.json`
+- `support_bundle/frankenctl_doctor_report.json`
 
 Operators inspect those workflow artifacts under
 `artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/` after running
@@ -134,6 +137,8 @@ rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_rgc_cli_operator_workflow_verif
 ./scripts/e2e/frankenctl_cli_workflow.sh ci
 cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/preflight_report.json
 cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/onboarding_scorecard.json
+cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/rollout_decision_artifact.json
+cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/frankenctl_doctor_report.json
 FRANKENCTL_CLI_WORKFLOW_REPLAY_RUN_DIR=artifacts/frankenctl_cli_workflow/<timestamp> ./scripts/e2e/frankenctl_cli_workflow.sh ci
 cat artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/trace_ids.json
 cat artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/step_logs/step_000.log

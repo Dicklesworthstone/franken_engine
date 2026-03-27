@@ -278,6 +278,8 @@ write_manifest() {
     echo '    "./scripts/e2e/frankenctl_cli_workflow.sh '"${mode}"'",'
     echo '    "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/preflight_report.json",'
     echo '    "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/onboarding_scorecard.json",'
+    echo '    "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/rollout_decision_artifact.json",'
+    echo '    "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/frankenctl_doctor_report.json",'
     echo "    \"${replay_command}\""
     echo '  ]'
     echo "}"

@@ -119,13 +119,17 @@ impl FallbackAction {
         description: &str,
     ) -> ContentHash {
         let mut canonical = Vec::new();
-        canonical.extend_from_slice(format!("{kind}").as_bytes());
-        canonical.push(b'|');
+        // Length-prefix all variable-length strings to prevent delimiter
+        // collisions (e.g. component containing ',' fusing with next).
+        let kind_bytes = format!("{kind}");
+        canonical.extend_from_slice(&(kind_bytes.len() as u32).to_le_bytes());
+        canonical.extend_from_slice(kind_bytes.as_bytes());
+        canonical.extend_from_slice(&(target_components.len() as u32).to_le_bytes());
         for comp in target_components {
+            canonical.extend_from_slice(&(comp.len() as u32).to_le_bytes());
             canonical.extend_from_slice(comp.as_bytes());
-            canonical.push(b',');
         }
-        canonical.push(b'|');
+        canonical.extend_from_slice(&(description.len() as u32).to_le_bytes());
         canonical.extend_from_slice(description.as_bytes());
         ContentHash::compute(&canonical)
     }
@@ -157,7 +161,9 @@ pub struct FallbackPlan {
 impl FallbackPlan {
     /// Return the recommended action, if any.
     pub fn recommended_action(&self) -> Option<&FallbackAction> {
-        self.actions.get(self.recommended_action_index)
+        self.actions
+            .get(self.recommended_action_index)
+            .filter(|a| a.feasible)
     }
 
     /// Return only feasible actions.

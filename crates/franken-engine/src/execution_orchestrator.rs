@@ -690,17 +690,16 @@ impl ExecutionOrchestrator {
         Ok(())
     }
 
-    fn package_fingerprint(package: &ExtensionPackage) -> ContentHash {
-        let encoded = serde_json::to_vec(package)
-            .expect("ExtensionPackage serialization must not fail — all fields are plain data");
-        ContentHash::compute(&encoded)
+    fn package_fingerprint(package: &ExtensionPackage) -> Result<ContentHash, OrchestratorError> {
+        let encoded = serde_json::to_vec(package).map_err(|_| OrchestratorError::EmptySource)?;
+        Ok(ContentHash::compute(&encoded))
     }
 
     fn reserve_execution_context(
         &mut self,
         package: &ExtensionPackage,
     ) -> Result<ReservedExecutionContext, OrchestratorError> {
-        let package_fingerprint = Self::package_fingerprint(package);
+        let package_fingerprint = Self::package_fingerprint(package)?;
         if let Some(reserved) = &self.reserved_execution_context {
             if reserved.package_fingerprint == package_fingerprint {
                 return Ok(reserved.clone());
@@ -727,7 +726,7 @@ impl ExecutionOrchestrator {
         &mut self,
         package: &ExtensionPackage,
     ) -> Result<(u64, String, String), OrchestratorError> {
-        let package_fingerprint = Self::package_fingerprint(package);
+        let package_fingerprint = Self::package_fingerprint(package)?;
         if let Some(reserved) = self.reserved_execution_context.take() {
             if reserved.package_fingerprint == package_fingerprint {
                 return Ok((
@@ -1230,16 +1229,11 @@ impl ExecutionOrchestrator {
             timestamp_us: attempt_index,
             source: package.extension_id.clone(),
         };
-        let policy = if !self.stopping_policies.contains_key(&package.extension_id) {
-            let new_policy = self.new_stopping_policy();
-            self.stopping_policies
-                .entry(package.extension_id.clone())
-                .or_insert(new_policy)
-        } else {
-            self.stopping_policies
-                .get_mut(&package.extension_id)
-                .expect("key just checked")
-        };
+        let new_policy = self.new_stopping_policy();
+        let policy = self
+            .stopping_policies
+            .entry(package.extension_id.clone())
+            .or_insert(new_policy);
         let decision = policy.observe(&observation);
         let cert = Some(Self::build_optimal_stopping_certificate(
             policy,

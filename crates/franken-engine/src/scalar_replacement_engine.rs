@@ -1245,7 +1245,7 @@ pub fn execute_transforms(
         denial_histogram: &denial_histogram,
         epoch: &epoch,
     })
-    .expect("transform summary payload should serialize for deterministic hashing");
+    .unwrap_or_else(|_| b"SERIALIZATION_FAILURE".to_vec());
 
     TransformSummary {
         schema_version: SRE_SCHEMA_VERSION.to_string(),

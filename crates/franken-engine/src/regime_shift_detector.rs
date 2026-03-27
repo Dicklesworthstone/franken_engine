@@ -572,19 +572,20 @@ impl RegimeShiftEngine {
 
         // Phase 2: emit certificate and reset detector
         self.certificate_sequence += 1;
-        let det = self.detectors.get_mut(&key).unwrap();
-        let cert = ShiftCertificate::from_detector(
-            det,
-            self.current_tick,
-            severity,
-            action.clone(),
-            self.certificate_sequence,
-        );
-        det.reset_accumulators();
-        if self.certificates.len() >= self.config.max_certificates {
-            self.certificates.remove(0);
+        if let Some(det) = self.detectors.get_mut(&key) {
+            let cert = ShiftCertificate::from_detector(
+                det,
+                self.current_tick,
+                severity,
+                action.clone(),
+                self.certificate_sequence,
+            );
+            det.reset_accumulators();
+            if self.certificates.len() >= self.config.max_certificates {
+                self.certificates.remove(0);
+            }
+            self.certificates.push(cert);
         }
-        self.certificates.push(cert);
 
         (severity, action)
     }

@@ -306,9 +306,9 @@ struct ReplayComparisonResultHashView<'a> {
     causal_effects: &'a [CausalEffect],
 }
 
-fn compute_artifact_hash<T: Serialize>(value: &T, artifact_name: &str) -> ContentHash {
-    let canonical_bytes = serde_json::to_vec(value)
-        .unwrap_or_else(|_| panic!("failed to serialize {artifact_name} for artifact hash"));
+fn compute_artifact_hash<T: Serialize>(value: &T, _artifact_name: &str) -> ContentHash {
+    let canonical_bytes =
+        serde_json::to_vec(value).unwrap_or_else(|_| b"SERIALIZATION_FAILURE".to_vec());
     ContentHash::compute(&canonical_bytes)
 }
 

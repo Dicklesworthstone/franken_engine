@@ -3468,10 +3468,11 @@ fn parse_primary_expression(
         ));
     }
 
-    if expression.starts_with("await ") || expression.starts_with("await(") {
-        let rest = expression.strip_prefix("await").unwrap().trim_start();
-        let nested = parse_expression(rest, span, context, recursion_depth + 1)?;
-        return Ok(Expression::Await(Box::new(nested)));
+    if let Some(rest) = expression.strip_prefix("await") {
+        if rest.starts_with(' ') || rest.starts_with('(') {
+            let nested = parse_expression(rest.trim_start(), span, context, recursion_depth + 1)?;
+            return Ok(Expression::Await(Box::new(nested)));
+        }
     }
 
     // new expression: `new Foo(args)`

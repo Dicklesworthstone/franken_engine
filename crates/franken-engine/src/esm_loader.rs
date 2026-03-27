@@ -446,7 +446,9 @@ impl ModuleGraph {
         *dfs_counter += 1;
 
         {
-            let module = self.modules.get_mut(specifier).unwrap();
+            let Some(module) = self.modules.get_mut(specifier) else {
+                return Err(EsmLoaderError::ModuleNotFound(specifier.to_string()));
+            };
             module.status = ModuleStatus::Linking;
             module.dfs_index = Some(index);
             module.dfs_ancestor_index = Some(index);

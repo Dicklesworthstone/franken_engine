@@ -2799,7 +2799,8 @@ fn compute_support_bundle_id(
     }
     material.push_str("redacted=");
     material.push_str(&total_redacted_fields.to_string());
-    format!("bundle-{}", &compute_sha256_hex(material.as_bytes())[..16])
+    let hex = compute_sha256_hex(material.as_bytes());
+    format!("bundle-{}", hex.get(..16).unwrap_or(&hex))
 }
 
 fn compute_ga_evidence_package_id(
@@ -2840,10 +2841,8 @@ fn compute_ga_evidence_package_id(
         material.push('\n');
     }
 
-    format!(
-        "ga-package-{}",
-        &compute_sha256_hex(material.as_bytes())[..16]
-    )
+    let hex = compute_sha256_hex(material.as_bytes());
+    format!("ga-package-{}", hex.get(..16).unwrap_or(&hex))
 }
 
 fn redact_sensitive_fields(

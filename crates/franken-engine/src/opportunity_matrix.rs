@@ -256,7 +256,8 @@ pub fn benchmark_pressure_from_cases(
     }
 
     let shortfall = TARGET_SUITE_SPEEDUP_MILLIONTHS - observed;
-    let pressure = 1_000_000 + (shortfall * 1_000_000 / TARGET_SUITE_SPEEDUP_MILLIONTHS);
+    let pressure = 1_000_000_i64
+        + (shortfall as i128 * 1_000_000 / TARGET_SUITE_SPEEDUP_MILLIONTHS as i128) as i64;
     pressure.clamp(1_000_000, 2_000_000)
 }
 
@@ -281,8 +282,9 @@ pub fn derive_candidates_from_hotspots(
         .map(|hotspot| {
             let hotpath_weight =
                 ((hotspot.sample_count as i128 * 1_000_000i128) / total_samples as i128) as i64;
-            let estimated_speedup =
-                1_000_000 + ((benchmark_pressure_millionths * hotpath_weight) / 1_000_000);
+            let estimated_speedup = 1_000_000
+                + ((benchmark_pressure_millionths as i128 * hotpath_weight as i128) / 1_000_000)
+                    as i64;
             let opportunity_id = format!(
                 "opp:{}:{}",
                 sanitize_token(&hotspot.module),

@@ -862,14 +862,14 @@ impl CatastrophicTailTournamentGate {
         let cvar = if tail_obs.is_empty() {
             var
         } else {
-            tail_obs.iter().sum::<i64>() / tail_obs.len() as i64
+            tail_obs.iter().fold(0i64, |acc, &x| acc.saturating_add(x)) / tail_obs.len() as i64
         };
 
         // E-value: product-form likelihood ratio alarm.
         // Simplified: e_value = (max_payoff / mean_payoff) if mean > 0.
-        let mean = sorted.iter().sum::<i64>() / n as i64;
+        let mean = sorted.iter().fold(0i64, |acc, &x| acc.saturating_add(x)) / n as i64;
         let e_value = if mean > 0 {
-            (max_payoff * MILLION) / mean
+            max_payoff.saturating_mul(MILLION) / mean
         } else if max_payoff > 0 {
             self.config.e_value_alarm_threshold_millionths + 1
         } else {
@@ -897,8 +897,11 @@ impl CatastrophicTailTournamentGate {
 
         for m in metrics {
             if let Some(tc) = self.threat_classes.get(&m.threat_class_id) {
-                weighted_cvar += (m.cvar_millionths * tc.impact_weight_millionths) / MILLION;
-                total_weight += tc.impact_weight_millionths;
+                weighted_cvar += m
+                    .cvar_millionths
+                    .saturating_mul(tc.impact_weight_millionths)
+                    / MILLION;
+                total_weight = total_weight.saturating_add(tc.impact_weight_millionths);
             }
         }
 
@@ -906,7 +909,7 @@ impl CatastrophicTailTournamentGate {
             return 0;
         }
 
-        (weighted_cvar * MILLION) / total_weight
+        weighted_cvar.saturating_mul(MILLION) / total_weight
     }
 
     fn build_continuation_cliff_atlas(

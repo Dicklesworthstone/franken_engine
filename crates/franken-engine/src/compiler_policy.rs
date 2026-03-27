@@ -581,6 +581,12 @@ impl CompilerPolicyEngine {
             .filter_map(|id| self.proof_store.get(id))
             .map(|p| p.to_proof_input())
             .collect();
+        // Return None when proofs were invalidated (e.g. after epoch change)
+        // rather than Some(vec![]) which misleads callers into thinking
+        // there is valid proof evidence.
+        if inputs.is_empty() {
+            return None;
+        }
         Some(inputs)
     }
 

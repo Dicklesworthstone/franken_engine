@@ -38,7 +38,7 @@ impl VirtualClock {
 
     /// Advance by a given number of ticks.
     pub fn advance(&mut self, ticks: u64) {
-        self.now_ticks += ticks;
+        self.now_ticks = self.now_ticks.saturating_add(ticks);
     }
 
     /// Advance to a specific tick (must be >= current).
@@ -271,7 +271,7 @@ impl LabRuntime {
     /// Register a new task. Returns task ID.
     pub fn spawn_task(&mut self) -> TaskId {
         let id = self.next_task_id;
-        self.next_task_id += 1;
+        self.next_task_id = self.next_task_id.saturating_add(1);
         self.tasks.insert(id, TaskState::Ready);
         id
     }
@@ -418,7 +418,7 @@ impl LabRuntime {
         region_id: Option<String>,
         outcome: &str,
     ) {
-        self.step_index += 1;
+        self.step_index = self.step_index.saturating_add(1);
         self.events.push(LabEvent {
             virtual_time: self.clock.now(),
             step_index: self.step_index,

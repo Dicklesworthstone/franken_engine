@@ -343,7 +343,10 @@ pub fn evaluate_adversarial_survival(
 
     let total = results.len() as u64;
     let passed_count = results.iter().filter(|r| r.passed).count() as u64;
-    let pass_rate_millionths = (passed_count * 1_000_000).checked_div(total).unwrap_or(0);
+    let pass_rate_millionths = passed_count
+        .saturating_mul(1_000_000)
+        .checked_div(total)
+        .unwrap_or(0);
 
     let gate_passed = pass_rate_millionths >= strictness.min_adversarial_pass_rate_millionths;
     let failed_tests: Vec<&str> = results
@@ -542,17 +545,15 @@ pub fn run_promotion_gates(config: &GateRunnerConfig, input: &GateRunnerInput) -
         .unwrap_or_else(|| GateStrictness::standard(GateKind::Equivalence));
     let eq_eval = evaluate_equivalence(&input.equivalence_cases, &eq_strictness);
     total_cases += input.equivalence_cases.len() as u64;
-    if eq_eval.passed {
-        total_passed += input.equivalence_cases.len() as u64;
-    } else {
-        let divergences = input
-            .equivalence_cases
-            .iter()
-            .filter(|tc| !tc.is_equivalent())
-            .count() as u64;
-        total_passed += input.equivalence_cases.len() as u64 - divergences;
-        total_failed += divergences;
-    }
+    // Always count actual divergences regardless of whether the gate passed
+    // (it can pass with nonzero tolerance via max_divergences).
+    let eq_divergences = input
+        .equivalence_cases
+        .iter()
+        .filter(|tc| !tc.is_equivalent())
+        .count() as u64;
+    total_passed += input.equivalence_cases.len() as u64 - eq_divergences;
+    total_failed += eq_divergences;
     artifacts.push(EvidenceArtifact {
         artifact_id: format!("{}/equivalence", config.slot_id),
         gate: GateKind::Equivalence,

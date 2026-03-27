@@ -1529,7 +1529,12 @@ impl InterpreterCore {
         let result = match op {
             "sub" => x.wrapping_sub(y),
             "mul" => x.wrapping_mul(y),
-            _ => unreachable!(),
+            _ => {
+                return Err(InterpreterError::TypeError {
+                    expected: "sub or mul".to_string(),
+                    got: op.to_string(),
+                });
+            }
         };
         Ok(Value::Int(result))
     }

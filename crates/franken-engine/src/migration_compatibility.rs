@@ -155,7 +155,8 @@ impl GoldenLedger {
         entries: Vec<CanonicalEvidenceEntry>,
         frozen_at_ms: u64,
     ) -> Self {
-        let payload = serde_json::to_vec(&entries).unwrap_or_default();
+        let payload = serde_json::to_vec(&entries)
+            .expect("golden ledger entries must serialize for corpus hash");
         let corpus_hash = ContentHash::compute(&payload);
         Self {
             name: name.into(),
@@ -169,7 +170,9 @@ impl GoldenLedger {
 
     /// Verify the corpus hash matches the entries.
     pub fn verify_integrity(&self) -> bool {
-        let payload = serde_json::to_vec(&self.entries).unwrap_or_default();
+        let Ok(payload) = serde_json::to_vec(&self.entries) else {
+            return false;
+        };
         let computed = ContentHash::compute(&payload);
         self.corpus_hash == computed
     }
@@ -579,9 +582,10 @@ impl MigrationCompatibilityChecker {
             entries
                 .iter()
                 .filter_map(|e| {
-                    transform(e)
-                        .ok()
-                        .map(|m| serde_json::to_vec(&m).unwrap_or_default())
+                    transform(e).ok().map(|m| {
+                        serde_json::to_vec(&m)
+                            .expect("migrated entry must serialize for determinism check")
+                    })
                 })
                 .collect()
         };
@@ -1740,7 +1744,8 @@ mod tests {
             .metadata
             .insert("migrated_from".to_string(), "evidence-v1".to_string());
         // Recompute artifact_hash to reflect content changes (metadata added).
-        let mut payload = serde_json::to_vec(&migrated.ledger_entry).unwrap_or_default();
+        let mut payload = serde_json::to_vec(&migrated.ledger_entry)
+            .expect("migrated ledger entry must serialize for artifact hash");
         if let Ok(meta_bytes) = serde_json::to_vec(&migrated.metadata) {
             payload.extend_from_slice(&meta_bytes);
         }

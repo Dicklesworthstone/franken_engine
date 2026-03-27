@@ -853,14 +853,25 @@ impl ReplacementLineageLog {
                     chain_valid = false;
                     issues.push("first entry has wrong genesis hash".to_string());
                 }
-            } else if let Some(pred) = self.entries.get(entry.sequence as usize - 1)
-                && entry.predecessor_hash != pred.entry_hash
-            {
-                chain_valid = false;
-                issues.push(format!(
-                    "entry {} predecessor hash mismatch",
-                    entry.sequence
-                ));
+            } else {
+                match self.entries.get(entry.sequence as usize - 1) {
+                    Some(pred) if entry.predecessor_hash != pred.entry_hash => {
+                        chain_valid = false;
+                        issues.push(format!(
+                            "entry {} predecessor hash mismatch",
+                            entry.sequence
+                        ));
+                    }
+                    None => {
+                        chain_valid = false;
+                        issues.push(format!(
+                            "entry {} predecessor at sequence {} missing from global log",
+                            entry.sequence,
+                            entry.sequence - 1,
+                        ));
+                    }
+                    _ => {}
+                }
             }
         }
 

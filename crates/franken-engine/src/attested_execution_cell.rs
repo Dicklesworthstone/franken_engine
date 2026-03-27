@@ -1051,13 +1051,16 @@ impl CellRegistry {
                         .is_some_and(|q| q.signer_key_id == revoked_key_id)
             };
 
-            if should_suspend {
-                let _ = self.suspend_cell(
-                    &cell_id,
-                    &format!("trust root revoked: {revoked_key_id}"),
-                    timestamp_ns,
-                    epoch,
-                );
+            if should_suspend
+                && self
+                    .suspend_cell(
+                        &cell_id,
+                        &format!("trust root revoked: {revoked_key_id}"),
+                        timestamp_ns,
+                        epoch,
+                    )
+                    .is_ok()
+            {
                 suspended.push(cell_id);
             }
         }

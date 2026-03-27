@@ -459,9 +459,16 @@ impl OptimizedTierCompilationPlan {
                 let record = form_superblock(profile, candidate.ip, policy, formation_epoch);
                 match record.outcome {
                     FormationOutcome::Formed => {
-                        let block = record
-                            .block
-                            .expect("formed superblock records must include a block");
+                        let Some(block) = record.block else {
+                            rejected_candidates.push(OptimizedCompilationReject {
+                                candidate_id,
+                                candidate: candidate.clone(),
+                                reason: CompilationRejectReason::CandidateProfileMismatch,
+                                formation_outcome: Some(record.outcome),
+                                detail: "formed record missing superblock".to_string(),
+                            });
+                            continue;
+                        };
                         if block.deopt_continuations().is_empty() {
                             rejected_candidates.push(OptimizedCompilationReject {
                                 candidate_id,

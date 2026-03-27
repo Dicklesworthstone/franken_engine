@@ -1426,7 +1426,12 @@ impl DecisionContext {
 
         // In safe mode or degraded regime, always fall back to first lane.
         if state.safe_mode_active || state.regime == RegimeLabel::Attack {
-            return self.config.lanes.first().cloned().unwrap();
+            return self
+                .config
+                .lanes
+                .first()
+                .cloned()
+                .unwrap_or_else(|| LaneId("safe-fallback".to_string()));
         }
 
         // For now, select based on regime.  Normal/Elevated → second lane

@@ -574,21 +574,65 @@ impl AsyncModuleEvaluator {
             AsyncModuleState::synchronous(specifier.to_string())
         };
 
+        let mut awaiting_dependencies = Vec::new();
+        let mut rejected_dependency = None;
+
         // Track which dependencies are async (need to wait).
         for dep in dependencies {
-            if let Some(dep_state) = self.states.get(dep)
-                && (!dep_state.phase.is_terminal() || dep_state.phase == AsyncModulePhase::Rejected)
-            {
-                state.add_pending_dependency(dep.clone());
+            if let Some(dep_state) = self.states.get(dep) {
+                if dep_state.phase == AsyncModulePhase::Rejected {
+                    state.add_pending_dependency(dep.clone());
+                    if rejected_dependency.is_none() {
+                        rejected_dependency = Some((
+                            dep.clone(),
+                            dep_state.rejection_reason_hash.clone().unwrap_or_default(),
+                            dep_state.rejection_reason_description.clone(),
+                        ));
+                    }
+                } else if !dep_state.phase.is_terminal() {
+                    state.add_pending_dependency(dep.clone());
+                    awaiting_dependencies.push(dep.clone());
+                }
             }
         }
+
+        if !has_top_level_await && !state.pending_dependencies.is_empty() {
+            state.phase = AsyncModulePhase::AwaitingDependencies;
+        }
+
+        if let Some((_, reason_hash, reason_description)) = &rejected_dependency {
+            state.reject(reason_hash.clone(), reason_description.clone());
+        }
+
+        self.states.insert(specifier.to_string(), state);
 
         self.emit_event(
             specifier,
             AsyncEvalEventType::EvaluationStarted,
             format!("has_tla={has_top_level_await} deps={}", dependencies.len()),
         );
-        self.states.insert(specifier.to_string(), state);
+
+        for dependency in awaiting_dependencies {
+            self.emit_event(
+                specifier,
+                AsyncEvalEventType::DependencySuspended,
+                format!("awaiting={dependency}:register_time=true"),
+            );
+        }
+
+        if let Some((dependency, reason_hash, _)) = rejected_dependency {
+            let prefix = &reason_hash[..8.min(reason_hash.len())];
+            self.emit_event(
+                specifier,
+                AsyncEvalEventType::DependencyRejected,
+                format!("dependency={dependency} reason_hash={prefix}"),
+            );
+            self.emit_event(
+                specifier,
+                AsyncEvalEventType::EvaluationRejected,
+                format!("dependency={dependency}:register_time=true"),
+            );
+        }
     }
 
     /// Record a top-level await suspension for a module.
@@ -2034,6 +2078,31 @@ mod tests {
                 .pending_dependencies
                 .contains("dep.js")
         );
+        assert_eq!(
+            eval.states()["consumer.js"].phase,
+            AsyncModulePhase::Rejected
+        );
+        assert!(eval.witness_events().iter().any(|event| {
+            event.module_specifier == "consumer.js"
+                && event.event_type == AsyncEvalEventType::DependencyRejected
+        }));
+    }
+
+    #[test]
+    fn evaluator_register_sync_consumer_with_unsettled_dependency_is_awaiting_dependencies() {
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        eval.register_module("dep.js", true, &[], Some(PromiseHandle(1)));
+
+        eval.register_module("consumer.js", false, &["dep.js".into()], None);
+
+        let consumer = &eval.states()["consumer.js"];
+        assert_eq!(consumer.phase, AsyncModulePhase::AwaitingDependencies);
+        assert!(consumer.pending_dependencies.contains("dep.js"));
+        assert!(eval.witness_events().iter().any(|event| {
+            event.module_specifier == "consumer.js"
+                && event.event_type == AsyncEvalEventType::DependencySuspended
+                && event.detail.contains("register_time=true")
+        }));
     }
 
     #[test]

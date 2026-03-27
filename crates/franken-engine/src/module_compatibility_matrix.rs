@@ -1167,6 +1167,36 @@ impl ModuleCompatibilityMatrix {
             ));
         }
 
+        if divergence.reason.is_empty() {
+            return Err(self.error(
+                context,
+                CompatibilityMatrixErrorCode::InvalidMatrix,
+                EventDraft::deny(
+                    "compatibility_entry_validation",
+                    entry.case_id.clone(),
+                    CompatibilityRuntime::FrankenEngine,
+                    CompatibilityMode::Native,
+                    CompatibilityMatrixErrorCode::InvalidMatrix,
+                    "documented divergence requires a non-empty reason",
+                ),
+            ));
+        }
+
+        if divergence.impact.is_empty() {
+            return Err(self.error(
+                context,
+                CompatibilityMatrixErrorCode::InvalidMatrix,
+                EventDraft::deny(
+                    "compatibility_entry_validation",
+                    entry.case_id.clone(),
+                    CompatibilityRuntime::FrankenEngine,
+                    CompatibilityMode::Native,
+                    CompatibilityMatrixErrorCode::InvalidMatrix,
+                    "documented divergence requires a non-empty impact",
+                ),
+            ));
+        }
+
         if divergence.migration_guidance.is_empty() {
             return Err(self.error(
                 context,
@@ -1377,6 +1407,48 @@ mod tests {
             .validate_with_waivers(&waivers, &context())
             .expect_err("expected missing waiver error");
         assert_eq!(error.code, CompatibilityMatrixErrorCode::MissingWaiver);
+    }
+
+    #[test]
+    fn validation_requires_non_empty_divergence_reason() {
+        let mut entry = valid_entry("case-empty-divergence-reason");
+        entry.franken_native_behavior = "bridge".to_string();
+        entry.divergence = Some(DivergencePolicy {
+            diverges_from: vec![ReferenceRuntime::Node, ReferenceRuntime::Bun],
+            reason: String::new(),
+            impact: "compatibility drift".to_string(),
+            waiver_id: "w-empty-reason".to_string(),
+            migration_guidance: "use compat mode".to_string(),
+        });
+
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
+        let waivers = BTreeSet::from(["w-empty-reason".to_string()]);
+        let error = matrix
+            .validate_with_waivers(&waivers, &context())
+            .expect_err("expected empty divergence reason to be rejected");
+        assert_eq!(error.code, CompatibilityMatrixErrorCode::HiddenShim);
+        assert!(error.message.contains("non-empty reason"));
+    }
+
+    #[test]
+    fn validation_requires_non_empty_divergence_impact() {
+        let mut entry = valid_entry("case-empty-divergence-impact");
+        entry.franken_native_behavior = "bridge".to_string();
+        entry.divergence = Some(DivergencePolicy {
+            diverges_from: vec![ReferenceRuntime::Node, ReferenceRuntime::Bun],
+            reason: "bun/node differ from native".to_string(),
+            impact: String::new(),
+            waiver_id: "w-empty-impact".to_string(),
+            migration_guidance: "use compat mode".to_string(),
+        });
+
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).unwrap();
+        let waivers = BTreeSet::from(["w-empty-impact".to_string()]);
+        let error = matrix
+            .validate_with_waivers(&waivers, &context())
+            .expect_err("expected empty divergence impact to be rejected");
+        assert_eq!(error.code, CompatibilityMatrixErrorCode::HiddenShim);
+        assert!(error.message.contains("non-empty impact"));
     }
 
     // ── Enum as_str ────────────────────────────────────────────────

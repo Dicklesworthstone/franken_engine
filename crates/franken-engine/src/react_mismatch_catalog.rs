@@ -571,6 +571,8 @@ impl MismatchCatalog {
             });
         }
         self.entries.push(entry);
+        self.entries
+            .sort_by(|left, right| left.entry_id.cmp(&right.entry_id));
         self.recompute_hash();
         Ok(())
     }
@@ -847,7 +849,9 @@ impl MismatchCatalog {
         let mut hasher = Sha256::new();
         hasher.update(MISMATCH_CATALOG_SCHEMA_VERSION.as_bytes());
         hasher.update(self.epoch.as_u64().to_le_bytes());
-        for entry in &self.entries {
+        let mut ordered_entries: Vec<_> = self.entries.iter().collect();
+        ordered_entries.sort_by(|left, right| left.entry_id.cmp(&right.entry_id));
+        for entry in ordered_entries {
             hasher.update(entry.content_hash().as_bytes());
         }
         self.catalog_hash = ContentHash::compute(&hasher.finalize());

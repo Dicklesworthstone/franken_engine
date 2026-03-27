@@ -114,17 +114,20 @@ pub struct ModuleNode {
 
 impl ModuleNode {
     /// Compute a deterministic hash covering all fields.
+    ///
+    /// Uses length-prefixed fields to prevent delimiter-collision attacks
+    /// (e.g. `node_id="a|"` + `specifier="b"` vs `node_id="a"` + `specifier="|b"`).
     pub fn compute_hash(&self) -> ContentHash {
         let mut hasher = Sha256::new();
-        hasher.update(b"ModuleNode:");
+        hasher.update(b"ModuleNode:v2:");
+        hasher.update((self.node_id.len() as u64).to_le_bytes());
         hasher.update(self.node_id.as_bytes());
-        hasher.update(b"|");
+        hasher.update((self.specifier.len() as u64).to_le_bytes());
         hasher.update(self.specifier.as_bytes());
-        hasher.update(b"|");
+        hasher.update((self.resolved_path.len() as u64).to_le_bytes());
         hasher.update(self.resolved_path.as_bytes());
-        hasher.update(b"|");
+        hasher.update((self.version.len() as u64).to_le_bytes());
         hasher.update(self.version.as_bytes());
-        hasher.update(b"|");
         hasher.update(self.content_hash.as_bytes());
         ContentHash::compute(&hasher.finalize())
     }
@@ -149,16 +152,21 @@ pub struct DependencyEdge {
 
 impl DependencyEdge {
     /// Compute a deterministic hash of this edge.
+    ///
+    /// Uses length-prefixed fields to prevent delimiter-collision attacks.
     pub fn compute_hash(&self) -> ContentHash {
         let mut hasher = Sha256::new();
-        hasher.update(b"DependencyEdge:");
+        hasher.update(b"DependencyEdge:v2:");
+        hasher.update((self.source.len() as u64).to_le_bytes());
         hasher.update(self.source.as_bytes());
-        hasher.update(b"->");
+        hasher.update((self.target.len() as u64).to_le_bytes());
         hasher.update(self.target.as_bytes());
-        hasher.update(b"|");
-        hasher.update(format!("{}", self.kind).as_bytes());
+        let kind_str = format!("{}", self.kind);
+        hasher.update((kind_str.len() as u64).to_le_bytes());
+        hasher.update(kind_str.as_bytes());
+        hasher.update((self.conditions.len() as u64).to_le_bytes());
         for cond in &self.conditions {
-            hasher.update(b"|cond:");
+            hasher.update((cond.len() as u64).to_le_bytes());
             hasher.update(cond.as_bytes());
         }
         ContentHash::compute(&hasher.finalize())
@@ -371,7 +379,9 @@ fn compute_graph_hash(
 fn compute_receipt_hash(receipt: &InvalidationReceipt) -> ContentHash {
     let mut hasher = Sha256::new();
     hasher.update(b"InvalidationReceipt:v1:");
+    hasher.update((receipt.receipt_id.len() as u64).to_le_bytes());
     hasher.update(receipt.receipt_id.as_bytes());
+    hasher.update(b"|scope:");
     hasher.update(format!("{}", receipt.scope).as_bytes());
     let mut sorted_modules = receipt.affected_modules.clone();
     sorted_modules.sort();
@@ -392,11 +402,15 @@ fn compute_receipt_hash(receipt: &InvalidationReceipt) -> ContentHash {
 fn compute_checkpoint_hash(checkpoint: &RollbackCheckpoint) -> ContentHash {
     let mut hasher = Sha256::new();
     hasher.update(b"RollbackCheckpoint:v1:");
+    hasher.update((checkpoint.checkpoint_id.len() as u64).to_le_bytes());
     hasher.update(checkpoint.checkpoint_id.as_bytes());
     hasher.update(checkpoint.epoch.as_u64().to_le_bytes());
     hasher.update(checkpoint.graph_snapshot_hash.as_bytes());
-    for rid in &checkpoint.invalidation_receipts {
+    let mut sorted_receipts = checkpoint.invalidation_receipts.clone();
+    sorted_receipts.sort();
+    for rid in &sorted_receipts {
         hasher.update(b"receipt:");
+        hasher.update((rid.len() as u64).to_le_bytes());
         hasher.update(rid.as_bytes());
     }
     ContentHash::compute(&hasher.finalize())
@@ -426,10 +440,17 @@ fn build_forward_index(edges: &[DependencyEdge]) -> BTreeMap<String, BTreeSet<St
     forward
 }
 
-/// Generate a receipt ID from the trigger module and graph hash.
-fn generate_receipt_id(trigger: &str, graph_hash: &ContentHash) -> String {
+/// Generate a receipt ID from the operation kind, trigger module, and graph hash.
+///
+/// Including the operation kind prevents ID collisions between different
+/// operations (e.g. invalidate vs remove) on the same module in the same
+/// graph state.
+fn generate_receipt_id(operation: &str, trigger: &str, graph_hash: &ContentHash) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"receipt-id:");
+    hasher.update((operation.len() as u64).to_le_bytes());
+    hasher.update(operation.as_bytes());
+    hasher.update((trigger.len() as u64).to_le_bytes());
     hasher.update(trigger.as_bytes());
     hasher.update(graph_hash.as_bytes());
     let digest = hasher.finalize();
@@ -623,8 +644,10 @@ pub fn remove_module(
 
     let old_hash = graph.content_hash;
 
-    // Compute the affected set before removal (transitive reverse deps).
+    // Compute the affected set and total count before removal so accounting
+    // is consistent (the removed node is part of the affected set).
     let affected = compute_affected_set(graph, module_id);
+    let total_nodes_before = graph.nodes.len() as u64;
 
     // Remove the node.
     graph.nodes.remove(module_id);
@@ -641,11 +664,10 @@ pub fn remove_module(
     graph.recompute_hash();
     let new_hash = graph.content_hash;
 
-    let total_nodes = graph.nodes.len() as u64;
     let recomputed = affected.len() as u64;
-    let skipped = total_nodes.saturating_sub(recomputed);
+    let skipped = total_nodes_before.saturating_sub(recomputed);
 
-    let receipt_id = generate_receipt_id(module_id, &old_hash);
+    let receipt_id = generate_receipt_id("remove", module_id, &old_hash);
 
     let mut receipt = InvalidationReceipt {
         receipt_id,
@@ -690,7 +712,7 @@ pub fn invalidate_module(
         InvalidationScope::SubtreeFromModule
     };
 
-    let receipt_id = generate_receipt_id(module_id, &old_hash);
+    let receipt_id = generate_receipt_id("invalidate", module_id, &old_hash);
 
     let mut receipt = InvalidationReceipt {
         receipt_id,
@@ -750,7 +772,7 @@ pub fn create_checkpoint(graph: &ResolutionGraph) -> RollbackCheckpoint {
 /// Detect all cycles in the graph.
 ///
 /// Returns a list of cycles, where each cycle is a list of node IDs forming
-/// a closed loop.  Uses iterative DFS with explicit state tracking.
+/// a closed loop.  Uses recursive DFS with explicit on-stack tracking.
 pub fn detect_cycles(graph: &ResolutionGraph) -> Vec<Vec<String>> {
     let forward = build_forward_index(&graph.edges);
     let mut cycles = Vec::new();
@@ -1942,5 +1964,113 @@ mod tests {
         graph.epoch = SecurityEpoch::from_raw(42);
         let checkpoint = create_checkpoint(&graph);
         assert_eq!(checkpoint.epoch, SecurityEpoch::from_raw(42));
+    }
+
+    // ---- Regression tests for audit-discovered bugs (2026-03-26) ----
+
+    #[test]
+    fn node_hash_delimiter_collision_regression() {
+        // Bug: delimiter `|` in field values could cause collisions.
+        // node_id="a|" + specifier="b" should differ from node_id="a" + specifier="|b"
+        let node_a = ModuleNode {
+            node_id: "a|".to_string(),
+            specifier: "b".to_string(),
+            resolved_path: "/x".to_string(),
+            version: "1".to_string(),
+            content_hash: ContentHash::compute(b"same"),
+        };
+        let node_b = ModuleNode {
+            node_id: "a".to_string(),
+            specifier: "|b".to_string(),
+            resolved_path: "/x".to_string(),
+            version: "1".to_string(),
+            content_hash: ContentHash::compute(b"same"),
+        };
+        assert_ne!(node_a.compute_hash(), node_b.compute_hash());
+    }
+
+    #[test]
+    fn edge_hash_delimiter_collision_regression() {
+        // Bug: delimiter characters in source/target could cause collisions.
+        let edge_a = DependencyEdge {
+            source: "a->".to_string(),
+            target: "b".to_string(),
+            kind: EdgeKind::StaticImport,
+            conditions: vec![],
+        };
+        let edge_b = DependencyEdge {
+            source: "a".to_string(),
+            target: "->b".to_string(),
+            kind: EdgeKind::StaticImport,
+            conditions: vec![],
+        };
+        assert_ne!(edge_a.compute_hash(), edge_b.compute_hash());
+    }
+
+    #[test]
+    fn edge_hash_condition_boundary_collision_regression() {
+        // One condition ["ab"] should differ from two conditions ["a", "b"]
+        let edge_a = DependencyEdge {
+            source: "s".to_string(),
+            target: "t".to_string(),
+            kind: EdgeKind::Conditional,
+            conditions: vec!["ab".to_string()],
+        };
+        let edge_b = DependencyEdge {
+            source: "s".to_string(),
+            target: "t".to_string(),
+            kind: EdgeKind::Conditional,
+            conditions: vec!["a".to_string(), "b".to_string()],
+        };
+        assert_ne!(edge_a.compute_hash(), edge_b.compute_hash());
+    }
+
+    #[test]
+    fn receipt_id_differs_by_operation_type() {
+        // Bug: invalidate and remove on same module/state produced same receipt ID.
+        let hash = ContentHash::compute(b"test-graph");
+        let invalidate_id = generate_receipt_id("invalidate", "mod_a", &hash);
+        let remove_id = generate_receipt_id("remove", "mod_a", &hash);
+        assert_ne!(invalidate_id, remove_id);
+    }
+
+    #[test]
+    fn remove_module_skipped_count_consistent() {
+        // Bug: skipped count was computed after removal (total_nodes - 1),
+        // making it off-by-one when recomputed includes the removed node.
+        // For A -> B -> C, removing C affects {C, B, A} = 3 modules
+        // (reverse deps propagate to all importers).
+        // Total before = 3, recomputed = 3, skipped = 0.
+        let mut graph = simple_graph();
+        let receipt = remove_module(&mut graph, "c").unwrap();
+        assert_eq!(receipt.recomputed_count, 3);
+        assert_eq!(receipt.skipped_count, 0);
+        // The key invariant: recomputed + skipped == total_nodes_before_removal
+        assert_eq!(receipt.recomputed_count + receipt.skipped_count, 3);
+
+        // Now test with a leaf node that has no reverse deps beyond itself.
+        // Graph: D -> E, F (isolated). Removing F affects only F.
+        let nodes = vec![make_node("d"), make_node("e"), make_node("f")];
+        let edges = vec![make_edge("d", "e")];
+        let mut graph2 = build_graph(nodes, edges, vec!["d".to_string()]).unwrap();
+        let receipt2 = remove_module(&mut graph2, "f").unwrap();
+        assert_eq!(receipt2.recomputed_count, 1); // only "f"
+        assert_eq!(receipt2.skipped_count, 2); // "d" and "e" unaffected
+        assert_eq!(receipt2.recomputed_count + receipt2.skipped_count, 3);
+    }
+
+    #[test]
+    fn checkpoint_receipt_hash_order_independent() {
+        // Bug: checkpoint hash depended on receipt insertion order.
+        let graph = simple_graph();
+        let mut cp1 = create_checkpoint(&graph);
+        cp1.invalidation_receipts = vec!["rcpt-aaa".into(), "rcpt-bbb".into()];
+        cp1.recompute_hash();
+
+        let mut cp2 = create_checkpoint(&graph);
+        cp2.invalidation_receipts = vec!["rcpt-bbb".into(), "rcpt-aaa".into()];
+        cp2.recompute_hash();
+
+        assert_eq!(cp1.content_hash, cp2.content_hash);
     }
 }

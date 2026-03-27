@@ -780,7 +780,9 @@ impl BoardSaturationVerdict {
         buf.extend_from_slice(&(self.observation_count as u64).to_le_bytes());
         buf.extend_from_slice(&self.epoch.as_u64().to_le_bytes());
         buf.extend_from_slice(&self.verdict_at_epoch_secs.to_le_bytes());
-        for reason in &self.reasons {
+        let mut sorted_reasons = self.reasons.clone();
+        sorted_reasons.sort_by_key(|r| r.to_string());
+        for reason in &sorted_reasons {
             buf.extend_from_slice(reason.to_string().as_bytes());
         }
         ContentHash::compute(&buf)

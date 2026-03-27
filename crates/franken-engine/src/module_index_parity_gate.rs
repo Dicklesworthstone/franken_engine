@@ -268,6 +268,51 @@ impl fmt::Display for BlockingReason {
     }
 }
 
+impl BlockingReason {
+    /// Append a deterministic, structured hash representation to a buffer.
+    ///
+    /// Uses explicit discriminants and structured fields instead of the lossy
+    /// `Display` format, preventing hash collisions across variant changes.
+    fn append_to_hash(&self, buf: &mut Vec<u8>) {
+        match self {
+            Self::ParityMismatch {
+                mismatch_count,
+                total_tested,
+            } => {
+                buf.push(0);
+                append_u64(buf, *mismatch_count);
+                append_u64(buf, *total_tested);
+            }
+            Self::ColdStartRegression {
+                regression_millionths,
+                budget_millionths,
+            } => {
+                buf.push(1);
+                append_u64(buf, *regression_millionths);
+                append_u64(buf, *budget_millionths);
+            }
+            Self::InsufficientCoverage {
+                sampled,
+                minimum_required,
+            } => {
+                buf.push(2);
+                append_u64(buf, *sampled);
+                append_u64(buf, *minimum_required);
+            }
+            Self::RollbackLockout {
+                consecutive_rollbacks,
+            } => {
+                buf.push(3);
+                append_u64(buf, *consecutive_rollbacks as u64);
+            }
+            Self::CooldownActive { remaining_ns } => {
+                buf.push(4);
+                append_u64(buf, *remaining_ns);
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SpecifierResult
 // ---------------------------------------------------------------------------
@@ -291,11 +336,21 @@ impl SpecifierResult {
         let mut buf = Vec::new();
         append_str(&mut buf, &self.specifier);
         buf.push(u8::from(self.matches));
-        if let Some(ref p) = self.baseline_path {
-            append_str(&mut buf, p);
+        // Encode Option discriminant to prevent collision between
+        // baseline_path=None,index_path=Some("x") and baseline_path=Some("x"),index_path=None.
+        match &self.baseline_path {
+            Some(p) => {
+                buf.push(1);
+                append_str(&mut buf, p);
+            }
+            None => buf.push(0),
         }
-        if let Some(ref p) = self.index_path {
-            append_str(&mut buf, p);
+        match &self.index_path {
+            Some(p) => {
+                buf.push(1);
+                append_str(&mut buf, p);
+            }
+            None => buf.push(0),
         }
         compute_digest(&buf)
     }
@@ -369,7 +424,7 @@ impl ParityEvidence {
         append_u64(&mut buf, self.total_tested);
         append_u64(&mut buf, self.parity_ratio_millionths);
         let mut sorted_results = self.results.clone();
-        sorted_results.sort_by(|a, b| a.specifier.cmp(&b.specifier));
+        sorted_results.sort_by_key(|r| r.specifier.clone());
         for r in &sorted_results {
             buf.extend_from_slice(r.content_hash().as_bytes());
         }
@@ -488,7 +543,7 @@ impl RollbackRecord {
         let mut buf = Vec::new();
         append_str(&mut buf, &self.record_id);
         append_u64(&mut buf, self.epoch.as_u64());
-        append_str(&mut buf, &format!("{}", self.reason));
+        self.reason.append_to_hash(&mut buf);
         append_u64(&mut buf, self.timestamp_ns);
         self.content_hash = compute_digest(&buf);
     }
@@ -535,8 +590,9 @@ impl DecisionReceipt {
         append_str(&mut buf, self.decision.as_str());
         append_str(&mut buf, self.parity_verdict.as_str());
         append_str(&mut buf, self.cold_start_verdict.as_str());
+        append_u64(&mut buf, self.blocking_reasons.len() as u64);
         for reason in &self.blocking_reasons {
-            append_str(&mut buf, &format!("{reason}"));
+            reason.append_to_hash(&mut buf);
         }
         buf.extend_from_slice(self.parity_evidence_hash.as_bytes());
         buf.extend_from_slice(self.cold_start_evidence_hash.as_bytes());
@@ -772,10 +828,12 @@ impl ModuleIndexParityGate {
                 });
             }
             ParityVerdict::InsufficientData => {
-                blocking_reasons.push(BlockingReason::InsufficientCoverage {
-                    sampled: parity_evidence.total_tested,
-                    minimum_required: self.config.min_specifier_count,
-                });
+                if self.config.fail_closed {
+                    blocking_reasons.push(BlockingReason::InsufficientCoverage {
+                        sampled: parity_evidence.total_tested,
+                        minimum_required: self.config.min_specifier_count,
+                    });
+                }
             }
         }
 
@@ -1756,5 +1814,86 @@ mod tests {
         let json = serde_json::to_string(&r).unwrap();
         let back: RollbackRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(r.record_id, back.record_id);
+    }
+
+    // ---- Regression tests for audit-discovered bugs (2026-03-26) ----
+
+    #[test]
+    fn specifier_result_hash_disambiguates_none_vs_some() {
+        // Bug: baseline_path=None,index_path=Some("x") collided with
+        // baseline_path=Some("x"),index_path=None.
+        let r1 = SpecifierResult {
+            specifier: "pkg".to_string(),
+            matches: true,
+            baseline_path: None,
+            index_path: Some("/x".to_string()),
+        };
+        let r2 = SpecifierResult {
+            specifier: "pkg".to_string(),
+            matches: true,
+            baseline_path: Some("/x".to_string()),
+            index_path: None,
+        };
+        assert_ne!(r1.content_hash(), r2.content_hash());
+    }
+
+    #[test]
+    fn fail_open_does_not_block_on_insufficient_parity() {
+        // Bug: fail_open mode still blocked on parity InsufficientData.
+        let mut gate = ModuleIndexParityGate::new(GateConfig::default().fail_open(), epoch());
+        // Provide insufficient parity data (5 results < default min_specifier_count)
+        let results: Vec<SpecifierResult> = (0..5)
+            .map(|i| matching_result(&format!("pkg-{i}")))
+            .collect();
+        let parity = ParityEvidence::from_results("ev-parity", "test-cohort", results);
+        let cold = good_cold_start();
+        let decision = gate.evaluate("rcpt-test", &parity, &cold, 0);
+        // In fail_open mode, insufficient data should be Inconclusive, not Denied
+        assert_eq!(decision, GateDecision::Inconclusive);
+    }
+
+    #[test]
+    fn blocking_reason_hash_differs_by_variant() {
+        // Verify that different BlockingReason variants produce different hashes
+        // even with similar numeric fields.
+        let r1 = BlockingReason::ParityMismatch {
+            mismatch_count: 10,
+            total_tested: 100,
+        };
+        let r2 = BlockingReason::InsufficientCoverage {
+            sampled: 10,
+            minimum_required: 100,
+        };
+        let mut buf1 = Vec::new();
+        r1.append_to_hash(&mut buf1);
+        let mut buf2 = Vec::new();
+        r2.append_to_hash(&mut buf2);
+        assert_ne!(buf1, buf2);
+    }
+
+    #[test]
+    fn receipt_seal_includes_blocking_reason_count() {
+        // Verify receipts with different numbers of blocking reasons differ.
+        let mut r1 = DecisionReceipt {
+            receipt_id: "r1".into(),
+            epoch: epoch(),
+            cohort_name: "c".into(),
+            decision: GateDecision::Denied,
+            parity_verdict: ParityVerdict::NoParity,
+            cold_start_verdict: ColdStartVerdict::WithinBudget,
+            blocking_reasons: vec![],
+            parity_evidence_hash: ContentHash::default(),
+            cold_start_evidence_hash: ContentHash::default(),
+            affected_packages: BTreeSet::new(),
+            content_hash: ContentHash::default(),
+        };
+        let mut r2 = r1.clone();
+        r2.blocking_reasons.push(BlockingReason::ParityMismatch {
+            mismatch_count: 0,
+            total_tested: 0,
+        });
+        r1.seal();
+        r2.seal();
+        assert_ne!(r1.content_hash, r2.content_hash);
     }
 }

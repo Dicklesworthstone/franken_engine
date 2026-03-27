@@ -176,6 +176,7 @@ impl Simplex {
     /// unordered sets).
     pub fn content_hash(&self) -> ContentHash {
         let mut buf = Vec::new();
+        buf.extend_from_slice(&(self.simplex_id.len() as u64).to_le_bytes());
         buf.extend_from_slice(self.simplex_id.as_bytes());
         buf.extend_from_slice(&self.dimension.as_u32().to_le_bytes());
         let mut sorted_verts: Vec<_> = self.vertices.iter().collect();
@@ -229,6 +230,7 @@ impl FrontierComplex {
     /// Recompute the content hash from the complex's state.
     pub fn seal(&mut self) {
         let mut buf = Vec::new();
+        buf.extend_from_slice(&(self.complex_id.len() as u64).to_le_bytes());
         buf.extend_from_slice(self.complex_id.as_bytes());
         buf.extend_from_slice(&self.epoch.as_u64().to_le_bytes());
         buf.extend_from_slice(&self.max_dimension.to_le_bytes());
@@ -323,9 +325,14 @@ impl PersistencePair {
         buf.extend_from_slice(&self.birth_filtration_millionths.to_le_bytes());
         buf.extend_from_slice(&self.death_filtration_millionths.to_le_bytes());
         buf.extend_from_slice(&self.dimension.to_le_bytes());
+        buf.extend_from_slice(&(self.generator_simplex.len() as u64).to_le_bytes());
         buf.extend_from_slice(self.generator_simplex.as_bytes());
         if let Some(k) = &self.killer_simplex {
+            buf.push(1);
+            buf.extend_from_slice(&(k.len() as u64).to_le_bytes());
             buf.extend_from_slice(k.as_bytes());
+        } else {
+            buf.push(0);
         }
         buf.extend_from_slice(&self.persistence_millionths.to_le_bytes());
         ContentHash::compute(&buf)
@@ -376,6 +383,7 @@ impl PersistenceDiagram {
     /// Recompute the content hash.
     pub fn seal(&mut self) {
         let mut buf = Vec::new();
+        buf.extend_from_slice(&(self.diagram_id.len() as u64).to_le_bytes());
         buf.extend_from_slice(self.diagram_id.as_bytes());
         buf.extend_from_slice(&self.total_persistence_millionths.to_le_bytes());
         for p in &self.pairs {
@@ -491,6 +499,7 @@ impl FrontierHole {
     /// Recompute content hash.
     pub fn seal(&mut self) {
         let mut buf = Vec::new();
+        buf.extend_from_slice(&(self.hole_id.len() as u64).to_le_bytes());
         buf.extend_from_slice(self.hole_id.as_bytes());
         buf.extend_from_slice(&self.dimension.to_le_bytes());
         buf.extend_from_slice(&(self.significance as u32).to_le_bytes());
@@ -553,6 +562,7 @@ impl HoleLedger {
     /// Recompute content hash.
     pub fn seal(&mut self) {
         let mut buf = Vec::new();
+        buf.extend_from_slice(&(self.ledger_id.len() as u64).to_le_bytes());
         buf.extend_from_slice(self.ledger_id.as_bytes());
         buf.extend_from_slice(&self.epoch.as_u64().to_le_bytes());
         buf.extend_from_slice(&self.persistent_count.to_le_bytes());

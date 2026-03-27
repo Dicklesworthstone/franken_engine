@@ -248,7 +248,7 @@ impl SeamOccurrence {
         }
     }
 
-    /// Compute a deterministic content hash of this occurrence.
+    /// Compute a deterministic content hash of this occurrence covering all fields.
     pub fn content_hash(&self) -> ContentHash {
         let mut hasher = Sha256::new();
         hasher.update(INVENTORY_SCHEMA_VERSION.as_bytes());
@@ -256,6 +256,11 @@ impl SeamOccurrence {
         hasher.update(self.line_number.to_le_bytes());
         hasher.update(format!("{}", self.kind).as_bytes());
         hasher.update(format!("{}", self.classification).as_bytes());
+        hasher.update(format!("{}", self.severity).as_bytes());
+        hasher.update(if self.inside_cfg_test { &[1u8] } else { &[0u8] });
+        hasher.update(self.description.as_bytes());
+        hasher.update(format!("{:?}", self.remediation).as_bytes());
+        hasher.update(self.remediation_bead.as_bytes());
         ContentHash::compute(&hasher.finalize())
     }
 }
@@ -389,7 +394,9 @@ impl MockInventory {
         for occ in &occurrences {
             hasher.update(occ.content_hash().as_bytes());
         }
-        for issue in &architectural_issues {
+        let mut sorted_issues: Vec<_> = architectural_issues.iter().collect();
+        sorted_issues.sort_by(|a, b| a.id.cmp(&b.id));
+        for issue in &sorted_issues {
             hasher.update(issue.id.as_bytes());
         }
         let inventory_hash = ContentHash::compute(&hasher.finalize());

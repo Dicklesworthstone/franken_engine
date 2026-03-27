@@ -205,11 +205,15 @@ impl ShiftAlarm {
         let alarm_id = alarm_id.into();
         let description = description.into();
         let mut hasher = Sha256::new();
+        hasher.update((alarm_id.len() as u64).to_le_bytes());
         hasher.update(alarm_id.as_bytes());
+        hasher.update((domain.as_str().len() as u64).to_le_bytes());
         hasher.update(domain.as_str().as_bytes());
+        hasher.update((severity.as_str().len() as u64).to_le_bytes());
         hasher.update(severity.as_str().as_bytes());
         hasher.update(raised_epoch.as_u64().to_le_bytes());
         hasher.update(drift_magnitude.to_le_bytes());
+        hasher.update((description.len() as u64).to_le_bytes());
         hasher.update(description.as_bytes());
         let evidence_hash = ContentHash::compute(&hasher.finalize());
         Self {

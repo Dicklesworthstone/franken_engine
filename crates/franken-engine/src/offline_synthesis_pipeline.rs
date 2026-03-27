@@ -789,7 +789,23 @@ impl OfflineSynthesisPipeline {
             // Sort for deterministic ordering
             rows.sort_by(|a, b| a.state.cmp(&b.state));
 
-            let table_hash = deterministic_hash(&format!("table_{}_{}", spec.spec_id, obj.id));
+            let table_hash = {
+                let mut h_data = format!("table_{}_{}", spec.spec_id, obj.id);
+                for kv in obj.terms.iter().map(|t| &t.var) {
+                    h_data.push_str(kv);
+                }
+                for row in &rows {
+                    for (name, value) in &row.state.values {
+                        h_data.push_str(name);
+                        h_data.push('=');
+                        h_data.push_str(&value.to_string());
+                        h_data.push(';');
+                    }
+                    h_data.push_str(&row.entry.action);
+                }
+                h_data.push_str(&self.safe_default_action);
+                deterministic_hash(&h_data)
+            };
             decision_tables.push(DecisionTable {
                 table_id: format!("dt_{}_{}", spec.spec_id, obj.id),
                 key_variables: obj.terms.iter().map(|t| t.var.clone()).collect(),
@@ -877,8 +893,25 @@ impl OfflineSynthesisPipeline {
                 });
             }
 
-            let automaton_hash =
-                deterministic_hash(&format!("automaton_{}_{}", spec.spec_id, ss.id));
+            let automaton_hash = {
+                let mut h_data = format!("automaton_{}_{}", spec.spec_id, ss.id);
+                for (state_name, state) in &states {
+                    h_data.push_str(state_name);
+                    h_data.push('|');
+                    h_data.push_str(&state.id);
+                    h_data.push('|');
+                    h_data.push_str(&state.label);
+                    h_data.push('|');
+                    h_data.push_str(if state.accepting { "1" } else { "0" });
+                }
+                for t in &transitions {
+                    h_data.push_str(&t.from);
+                    h_data.push_str(&t.to);
+                    h_data.push_str(&format!("{}", t.priority));
+                }
+                h_data.push_str("normal"); // initial_state
+                deterministic_hash(&h_data)
+            };
             automata.push(TransitionAutomaton {
                 automaton_id: format!("ta_{}_{}", spec.spec_id, ss.id),
                 states,
@@ -1005,7 +1038,16 @@ impl OfflineSynthesisPipeline {
             }
         }
 
-        let bundle_hash = deterministic_hash(&format!("thresholds_{}", spec.spec_id));
+        let bundle_hash = {
+            let mut h_data = format!("thresholds_{}", spec.spec_id);
+            for t in &thresholds {
+                h_data.push_str(&t.threshold_id);
+                h_data.push_str(&t.variable);
+                h_data.push_str(&t.value_millionths.to_string());
+                h_data.push_str(&format!("{:?}", t.calibration_method));
+            }
+            deterministic_hash(&h_data)
+        };
         bundles.push(ThresholdBundle {
             bundle_id: format!("tb_{}", spec.spec_id),
             thresholds,

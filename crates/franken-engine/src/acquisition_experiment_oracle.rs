@@ -41,7 +41,7 @@ pub const SCHEMA_VERSION: &str = "franken-engine.acquisition-experiment-oracle.v
 pub const BEAD_ID: &str = "bd-1lsy.8.6.2";
 
 /// Component name.
-pub const COMPONENT: &str = "acquisition-experiment-oracle";
+pub const COMPONENT: &str = "acquisition_experiment_oracle";
 
 /// Policy identifier.
 pub const POLICY_ID: &str = "RGC-706B";

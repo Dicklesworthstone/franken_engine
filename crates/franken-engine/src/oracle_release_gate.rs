@@ -344,7 +344,7 @@ pub struct OracleReleaseGateReport {
 pub fn build_report(
     epoch: SecurityEpoch,
     release_candidate_id: &str,
-    evaluations: Vec<GateEvaluation>,
+    mut evaluations: Vec<GateEvaluation>,
 ) -> OracleReleaseGateReport {
     let mut pass_count: u64 = 0;
     let mut fail_count: u64 = 0;
@@ -368,6 +368,8 @@ pub fn build_report(
         GateVerdict::Pass
     };
 
+    // Sort evaluations for deterministic hashing.
+    evaluations.sort_by(|a, b| a.condition_id.cmp(&b.condition_id));
     let content_hash = compute_report_hash(
         SCHEMA_VERSION,
         BEAD_ID,

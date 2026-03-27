@@ -355,7 +355,10 @@ impl ExtensionManifest {
         buf.extend_from_slice(&self.version.patch.to_le_bytes());
         buf.extend_from_slice(&self.publisher_id.0);
         buf.extend_from_slice(&self.publisher_key.0);
-        for cap in &self.capabilities {
+        // Sort capabilities by name for insertion-order independence.
+        let mut sorted_caps: Vec<_> = self.capabilities.iter().collect();
+        sorted_caps.sort_by(|a, b| a.name.cmp(&b.name));
+        for cap in &sorted_caps {
             buf.extend_from_slice(cap.name.as_bytes());
             buf.push(0);
             buf.extend_from_slice(cap.justification.as_bytes());
@@ -384,9 +387,12 @@ impl ExtensionManifest {
     }
 
     /// Compute the content hash of all artifact entries (deterministic).
+    /// Artifacts sorted by path for insertion-order independence.
     pub fn compute_artifacts_root(&self) -> ContentHash {
         let mut buf = Vec::new();
-        for art in &self.artifacts {
+        let mut sorted_arts: Vec<_> = self.artifacts.iter().collect();
+        sorted_arts.sort_by(|a, b| a.path.cmp(&b.path));
+        for art in &sorted_arts {
             buf.extend_from_slice(art.path.as_bytes());
             buf.push(0);
             buf.extend_from_slice(art.content_hash.as_bytes());

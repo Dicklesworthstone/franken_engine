@@ -996,19 +996,20 @@ fn build_boundary_node_id(boundary: &BoundaryCaptureRecord) -> String {
 }
 
 fn build_artifact_node_id(entry: &EvidenceEntry, artifact: &ArtifactRecord) -> String {
-    format!(
-        "anode-{}",
-        deterministic_hash(
-            format!(
-                "{}:{}:{}:{}",
-                entry.entry_id,
-                artifact.artifact_id,
-                artifact.artifact_kind,
-                artifact.artifact_hash
-            )
-            .as_str(),
-        )
-    )
+    // Length-prefix each field to prevent delimiter collisions when fields
+    // contain the ':' separator character.
+    let canonical = format!(
+        "{}|{}:{}|{}:{}|{}:{}|{}",
+        entry.entry_id.len(),
+        entry.entry_id,
+        artifact.artifact_id.len(),
+        artifact.artifact_id,
+        artifact.artifact_kind.len(),
+        artifact.artifact_kind,
+        artifact.artifact_hash.len(),
+        artifact.artifact_hash
+    );
+    format!("anode-{}", deterministic_hash(&canonical))
 }
 
 fn build_edge(

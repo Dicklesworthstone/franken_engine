@@ -913,7 +913,10 @@ fn derive_run_id(
     hasher.update(config.locale.as_bytes());
     hasher.update(config.timezone.as_bytes());
 
-    for engine in &config.engines {
+    // Sort engines by engine_id for deterministic run ID.
+    let mut sorted_engines: Vec<_> = config.engines.iter().collect();
+    sorted_engines.sort_by(|a, b| a.engine_id.cmp(&b.engine_id));
+    for engine in &sorted_engines {
         hasher.update(engine.engine_id.as_bytes());
         hasher.update(engine.version_pin.as_bytes());
         hasher.update(

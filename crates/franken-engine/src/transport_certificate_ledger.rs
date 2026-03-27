@@ -311,8 +311,11 @@ impl HardwareCell {
     /// Compute a content hash of this cell's characteristics.
     pub fn content_hash(&self) -> ContentHash {
         let mut hasher = Sha256::new();
+        hasher.update((self.cell_id.len() as u64).to_le_bytes());
         hasher.update(self.cell_id.as_bytes());
+        hasher.update((self.arch_family.len() as u64).to_le_bytes());
         hasher.update(self.arch_family.as_bytes());
+        hasher.update((self.microarch.len() as u64).to_le_bytes());
         hasher.update(self.microarch.as_bytes());
         hasher.update(self.vector_width_bits.to_le_bytes());
         hasher.update(self.cache_line_bytes.to_le_bytes());
@@ -444,28 +447,34 @@ impl TransportCertificate {
         residual_fraction: u64,
     ) -> ContentHash {
         let mut hasher = Sha256::new();
-        hasher.update(SCHEMA_VERSION.as_bytes());
-        hasher.update(certificate_id.as_bytes());
-        hasher.update(artifact_kind.as_str().as_bytes());
-        hasher.update(artifact_hash.as_bytes());
-        hasher.update(source_cell.cell_id.as_bytes());
-        hasher.update(source_cell.arch_family.as_bytes());
-        hasher.update(source_cell.microarch.as_bytes());
+        // Length-prefix all variable-length string fields to prevent
+        // delimiter collisions between adjacent fields.
+        let lp = |h: &mut Sha256, s: &[u8]| {
+            h.update((s.len() as u64).to_le_bytes());
+            h.update(s);
+        };
+        lp(&mut hasher, SCHEMA_VERSION.as_bytes());
+        lp(&mut hasher, certificate_id.as_bytes());
+        lp(&mut hasher, artifact_kind.as_str().as_bytes());
+        hasher.update(artifact_hash.as_bytes()); // fixed 32 bytes
+        lp(&mut hasher, source_cell.cell_id.as_bytes());
+        lp(&mut hasher, source_cell.arch_family.as_bytes());
+        lp(&mut hasher, source_cell.microarch.as_bytes());
         hasher.update(source_cell.vector_width_bits.to_le_bytes());
         hasher.update(source_cell.cache_line_bytes.to_le_bytes());
-        hasher.update(target_cell.cell_id.as_bytes());
-        hasher.update(target_cell.arch_family.as_bytes());
-        hasher.update(target_cell.microarch.as_bytes());
+        lp(&mut hasher, target_cell.cell_id.as_bytes());
+        lp(&mut hasher, target_cell.arch_family.as_bytes());
+        lp(&mut hasher, target_cell.microarch.as_bytes());
         hasher.update(target_cell.vector_width_bits.to_le_bytes());
         hasher.update(target_cell.cache_line_bytes.to_le_bytes());
-        hasher.update(outcome.as_str().as_bytes());
+        lp(&mut hasher, outcome.as_str().as_bytes());
         hasher.update(source_perf.to_le_bytes());
         hasher.update(target_perf.to_le_bytes());
         let mut sorted_reasons = degradation_reasons.to_vec();
         sorted_reasons.sort();
         hasher.update((sorted_reasons.len() as u32).to_le_bytes());
         for reason in &sorted_reasons {
-            hasher.update(reason.as_str().as_bytes());
+            lp(&mut hasher, reason.as_str().as_bytes());
         }
         hasher.update(residual_fraction.to_le_bytes());
         ContentHash::compute(&hasher.finalize())
@@ -611,11 +620,12 @@ impl ResidualLedger {
             .iter()
             .map(|c| c.transported_contribution_millionths)
             .sum();
+        // Source components must sum to the declared total.
+        // Transported components + unexplained remainder must equal the declared
+        // transported total (the remainder accounts for the gap).
         sum_source == self.total_source_millionths
             && sum_transported.saturating_add(self.unexplained_remainder_millionths)
-                == self
-                    .total_transported_millionths
-                    .saturating_add(self.unexplained_remainder_millionths)
+                == self.total_transported_millionths
     }
 
     /// Look up a component by name.
@@ -633,16 +643,21 @@ impl ResidualLedger {
         unexplained: u64,
     ) -> ContentHash {
         let mut hasher = Sha256::new();
-        hasher.update(SCHEMA_VERSION.as_bytes());
-        hasher.update(ledger_id.as_bytes());
-        hasher.update(certificate_id.as_bytes());
+        let lp = |h: &mut Sha256, s: &[u8]| {
+            h.update((s.len() as u64).to_le_bytes());
+            h.update(s);
+        };
+        lp(&mut hasher, SCHEMA_VERSION.as_bytes());
+        lp(&mut hasher, ledger_id.as_bytes());
+        lp(&mut hasher, certificate_id.as_bytes());
         let mut sorted_components: Vec<_> = components.iter().collect();
         sorted_components.sort_by(|a, b| a.component_name.cmp(&b.component_name));
+        hasher.update((sorted_components.len() as u64).to_le_bytes());
         for comp in &sorted_components {
-            hasher.update(comp.component_name.as_bytes());
+            lp(&mut hasher, comp.component_name.as_bytes());
             hasher.update(comp.source_contribution_millionths.to_le_bytes());
             hasher.update(comp.transported_contribution_millionths.to_le_bytes());
-            hasher.update(comp.explanation.as_bytes());
+            lp(&mut hasher, comp.explanation.as_bytes());
         }
         hasher.update(total_source.to_le_bytes());
         hasher.update(total_transported.to_le_bytes());
@@ -1086,9 +1101,13 @@ fn generate_certificate_id(
     target: &HardwareCell,
 ) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(artifact_kind.as_str().as_bytes());
+    let kind_bytes = artifact_kind.as_str().as_bytes();
+    hasher.update((kind_bytes.len() as u64).to_le_bytes());
+    hasher.update(kind_bytes);
     hasher.update(artifact_hash.as_bytes());
+    hasher.update((source.cell_id.len() as u64).to_le_bytes());
     hasher.update(source.cell_id.as_bytes());
+    hasher.update((target.cell_id.len() as u64).to_le_bytes());
     hasher.update(target.cell_id.as_bytes());
     let digest = hasher.finalize();
     let short = &digest[..8];

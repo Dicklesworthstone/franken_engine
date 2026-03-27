@@ -928,6 +928,8 @@ impl PromotionReport {
         for d in &decisions {
             h.update(d.kernel_id().as_bytes());
             h.update(d.tag().as_bytes());
+            // Include decision variant details for complete coverage.
+            h.update(format!("{d:?}").as_bytes());
         }
         let content_hash = ContentHash::compute(&h.finalize());
 

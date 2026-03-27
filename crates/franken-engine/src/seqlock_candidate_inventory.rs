@@ -651,7 +651,7 @@ pub fn emit_default_inventory_bundle(context: &ArtifactContext) -> io::Result<Bu
 
 fn evaluate_default_artifacts(context: &ArtifactContext) -> EvaluatedArtifacts {
     let inventory = default_candidate_inventory(context.generated_at_utc.clone());
-    let retry_rows = inventory
+    let mut retry_rows = inventory
         .candidates
         .iter()
         .map(|candidate| RetrySafetyMatrixRow {
@@ -666,6 +666,7 @@ fn evaluate_default_artifacts(context: &ArtifactContext) -> EvaluatedArtifacts {
             exact_fallback_conditions: candidate.exact_fallback_conditions.clone(),
         })
         .collect::<Vec<_>>();
+    retry_rows.sort_by(|a, b| a.candidate_id.cmp(&b.candidate_id));
     let matrix_hash = digest_json(&serde_json::json!({ "rows": &retry_rows }));
     let retry_safety = RetrySafetyMatrixArtifact {
         schema_version: RETRY_SAFETY_SCHEMA_VERSION.to_string(),
@@ -676,7 +677,7 @@ fn evaluate_default_artifacts(context: &ArtifactContext) -> EvaluatedArtifacts {
         rows: retry_rows,
     };
 
-    let comparator_rows = inventory
+    let mut comparator_rows = inventory
         .candidates
         .iter()
         .map(|candidate| SnapshotBaselineComparatorRow {
@@ -691,6 +692,7 @@ fn evaluate_default_artifacts(context: &ArtifactContext) -> EvaluatedArtifacts {
             exact_fallback_conditions: candidate.exact_fallback_conditions.clone(),
         })
         .collect::<Vec<_>>();
+    comparator_rows.sort_by(|a, b| a.candidate_id.cmp(&b.candidate_id));
     let comparator_hash = digest_json(&serde_json::json!({ "rows": &comparator_rows }));
     let baseline_comparator = SnapshotBaselineComparatorArtifact {
         schema_version: BASELINE_COMPARATOR_SCHEMA_VERSION.to_string(),

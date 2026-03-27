@@ -574,15 +574,39 @@ impl DecisionReceipt {
         parity_hashes: Vec<ContentHash>,
     ) -> Self {
         let mut h = Sha256::new();
-        h.update(COMPONENT.as_bytes());
-        h.update(SCHEMA_VERSION.as_bytes());
+        let lp = |h: &mut Sha256, s: &[u8]| {
+            h.update((s.len() as u64).to_le_bytes());
+            h.update(s);
+        };
+        lp(&mut h, COMPONENT.as_bytes());
+        lp(&mut h, SCHEMA_VERSION.as_bytes());
         h.update(epoch.as_u64().to_le_bytes());
-        h.update(verdict.to_string().as_bytes());
+        // Hash verdict structurally (discriminant + contents) instead of
+        // via Display which loses content of Blocked reasons and Rollback triggers.
+        match &verdict {
+            GovernanceVerdict::Approved => h.update([0u8]),
+            GovernanceVerdict::Blocked { reasons } => {
+                h.update([1u8]);
+                h.update((reasons.len() as u64).to_le_bytes());
+                for reason in reasons {
+                    lp(&mut h, reason.as_bytes());
+                }
+            }
+            GovernanceVerdict::Rollback { triggers } => {
+                h.update([2u8]);
+                h.update((triggers.len() as u64).to_le_bytes());
+                for trigger in triggers {
+                    lp(&mut h, trigger.as_str().as_bytes());
+                }
+            }
+        }
+        h.update((evidence_hashes.len() as u64).to_le_bytes());
         let mut sorted_eh = evidence_hashes.clone();
         sorted_eh.sort();
         for eh in &sorted_eh {
             h.update(eh.as_bytes());
         }
+        h.update((parity_hashes.len() as u64).to_le_bytes());
         let mut sorted_ph = parity_hashes.clone();
         sorted_ph.sort();
         for ph in &sorted_ph {

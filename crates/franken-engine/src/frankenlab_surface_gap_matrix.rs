@@ -144,9 +144,10 @@ pub enum CapabilityId {
 
 impl fmt::Display for CapabilityId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = serde_json::to_string(self).unwrap_or_default();
-        // Strip quotes from JSON string representation.
-        write!(f, "{}", s.trim_matches('"'))
+        match serde_json::to_string(self) {
+            Ok(s) => write!(f, "{}", s.trim_matches('"')),
+            Err(_) => write!(f, "{:?}", self),
+        }
     }
 }
 
@@ -385,7 +386,13 @@ impl GapMatrix {
         for a in &assessments {
             hasher.update(format!("{}", a.surface).as_bytes());
             hasher.update(format!("{}", a.decision).as_bytes());
-            for c in &a.cells {
+            let mut sorted_cells: Vec<_> = a.cells.iter().collect();
+            sorted_cells.sort_by(|x, y| {
+                format!("{}", x.surface)
+                    .cmp(&format!("{}", y.surface))
+                    .then_with(|| format!("{}", x.capability).cmp(&format!("{}", y.capability)))
+            });
+            for c in &sorted_cells {
                 hasher.update(format!("{}", c.surface).as_bytes());
                 hasher.update(format!("{}", c.capability).as_bytes());
                 hasher.update(format!("{}", c.coverage).as_bytes());

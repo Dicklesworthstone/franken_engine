@@ -44,7 +44,7 @@ pub const SCHEMA_VERSION: &str = "franken-engine.counterfactual-intervention-pla
 pub const BEAD_ID: &str = "bd-1lsy.7.15.2";
 
 /// Component name.
-pub const COMPONENT: &str = "counterfactual-intervention-planner";
+pub const COMPONENT: &str = "counterfactual_intervention_planner";
 
 /// Policy identifier.
 pub const POLICY_ID: &str = "RGC-615B";

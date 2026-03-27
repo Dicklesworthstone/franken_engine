@@ -568,8 +568,7 @@ impl FlowEnvelope {
 
     /// Content-addressable identity.
     pub fn content_hash(&self) -> ContentHash {
-        let bytes =
-            serde_json::to_vec(self).expect("FlowEnvelope must serialize for content hash");
+        let bytes = serde_json::to_vec(self).expect("FlowEnvelope must serialize for content hash");
         ContentHash::compute(&bytes)
     }
 }

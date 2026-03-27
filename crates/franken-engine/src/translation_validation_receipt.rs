@@ -92,7 +92,21 @@ fn hash_pack_version(hasher: &mut Sha256, value: &PackVersion) {
 }
 
 fn hash_rewrite_category(hasher: &mut Sha256, value: RewriteCategory) {
-    hash_str(hasher, &value.to_string());
+    // Use a stable numeric discriminant instead of the Display string to
+    // decouple the content-hash commitment from the human-readable format.
+    let disc: u8 = match value {
+        RewriteCategory::AlgebraicSimplification => 0,
+        RewriteCategory::DeadCodeElimination => 1,
+        RewriteCategory::CommonSubexpression => 2,
+        RewriteCategory::PartialEvaluation => 3,
+        RewriteCategory::EffectHoisting => 4,
+        RewriteCategory::ShapeSpecialization => 5,
+        RewriteCategory::ReactRenderOptimization => 6,
+        RewriteCategory::StringFusion => 7,
+        RewriteCategory::ArrayOptimization => 8,
+        RewriteCategory::Custom => 9,
+    };
+    hasher.update([disc]);
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +196,7 @@ impl ProofEvidence {
         hash_content_hash(&mut hasher, &self.artifact_hash);
         hash_u64(&mut hasher, self.verification_steps);
         hash_u64(&mut hasher, self.verification_ticks);
+        hash_len(&mut hasher, self.metadata.len());
         for (k, v) in &self.metadata {
             hash_str(&mut hasher, k);
             hash_str(&mut hasher, v);
@@ -1407,7 +1422,7 @@ impl ValidationReceiptEmitter {
                         limit_ticks: *budget_limit_ticks,
                     },
                     None,
-                    false, // Don't quarantine on inconclusive by default
+                    self.config.quarantine_on_first_failure,
                     self.current_epoch,
                     self.current_ticks,
                 );

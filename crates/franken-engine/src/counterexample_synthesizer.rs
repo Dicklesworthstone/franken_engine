@@ -516,8 +516,8 @@ impl CounterexampleSynthesizer {
         let minimality = self.minimize_scenario(&scenario, cx);
 
         // Compute content hash.
-        let canonical =
-            serde_json::to_vec(&(&cx.property, &cx.policy_id, &scenario)).unwrap_or_default();
+        let canonical = serde_json::to_vec(&(&cx.property, &cx.policy_id, &scenario))
+            .expect("counterexample scenario must serialize for content hash");
         let content_hash = ContentHash::compute(&canonical);
 
         let (expected, actual) = self.describe_outcomes(cx);
@@ -707,7 +707,9 @@ impl CounterexampleSynthesizer {
         let mut canonical = Vec::new();
         canonical.extend_from_slice(cx.policy_id.as_str().as_bytes());
         canonical.extend_from_slice(&(cx.property as u32).to_be_bytes());
-        for node in &cx.violating_nodes {
+        let mut sorted_nodes = cx.violating_nodes.clone();
+        sorted_nodes.sort();
+        for node in &sorted_nodes {
             canonical.extend_from_slice(node.as_bytes());
         }
         canonical.extend_from_slice(&timestamp_ns.to_be_bytes());

@@ -732,8 +732,11 @@ pub fn validate_corpus_manifest(
 }
 
 pub fn corpus_manifest_hash(records: &[SecurityWorkloadLabelRecord]) -> String {
+    // Sort by workload_id for insertion-order independence.
+    let mut sorted: Vec<_> = records.iter().collect();
+    sorted.sort_by(|a, b| a.label.workload_id.cmp(&b.label.workload_id));
     let mut hasher = Sha256::new();
-    for record in records {
+    for record in &sorted {
         hasher.update(record.label.workload_id.as_bytes());
         hasher.update(b"\n");
         hasher.update(record.label_hash.as_bytes());
@@ -2059,7 +2062,7 @@ label_sha256 = "{hash}"
     }
 
     #[test]
-    fn corpus_manifest_hash_order_matters() {
+    fn corpus_manifest_hash_is_order_independent() {
         let r1 = SecurityWorkloadLabelRecord {
             label: valid_benign_label(),
             label_path: PathBuf::from("a"),
@@ -2074,7 +2077,8 @@ label_sha256 = "{hash}"
         };
         let h_ab = corpus_manifest_hash(&[r1.clone(), r2.clone()]);
         let h_ba = corpus_manifest_hash(&[r2, r1]);
-        assert_ne!(h_ab, h_ba);
+        // Hash must be deterministic regardless of input order.
+        assert_eq!(h_ab, h_ba);
     }
 
     // ---- evaluate_security_conformance ----

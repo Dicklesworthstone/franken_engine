@@ -1618,7 +1618,7 @@ impl ExecutionOrchestrator {
 
     fn allocate_attempt_identifiers(&mut self) -> (u64, String, String) {
         let attempt_index = self.attempt_counter;
-        self.attempt_counter = self.attempt_counter.wrapping_add(1);
+        self.attempt_counter = self.attempt_counter.saturating_add(1);
         (
             attempt_index,
             format!("{}:{}", self.config.trace_id_prefix, attempt_index),

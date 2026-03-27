@@ -783,6 +783,9 @@ impl GovernanceReceipt {
         append_u64(&mut buf, self.violations.len() as u64);
         for v in &self.violations {
             append_str(&mut buf, v.kind.as_str());
+            append_str(&mut buf, &v.description);
+            append_u64(&mut buf, v.actual_millionths);
+            append_u64(&mut buf, v.threshold_millionths);
         }
         self.content_hash = compute_digest(&buf);
     }

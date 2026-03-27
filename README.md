@@ -1436,7 +1436,9 @@ Bun reference behavior plus FrankenEngine `native`, `node_compat`, and
 including `ERR_REQUIRE_ESM` fail-closed behavior in `native`/`node_compat` and
 the documented `bun_compat` bridge cases. The matrix also pins npm-style
 `pkg.js` / `@scope/pkg.js` extension-probe package entries so nested `./sub`
-requires stay anchored to the package root.
+requires stay anchored to the package root. `package.json` `type=module`
+extensionless relative imports stay fail-closed in `native`/`node_compat`;
+only the explicit `bun_compat` bridge enables extension probing.
 
 ```bash
 # RGC module interop verification matrix gate (rch-backed check + test + clippy)

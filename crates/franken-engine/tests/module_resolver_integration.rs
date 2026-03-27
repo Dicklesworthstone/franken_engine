@@ -345,6 +345,64 @@ fn observe_external_require_chain_of_esm_behavior(mode: CompatibilityMode) -> St
     }
 }
 
+fn observe_external_extension_probe_package_root_require_behavior(
+    mode: CompatibilityMode,
+    bare_specifier: &str,
+    entry_specifier: &str,
+    sub_specifier: &str,
+) -> String {
+    let mut resolver = DeterministicModuleResolver::default();
+    resolver
+        .register_external_module(
+            entry_specifier,
+            cjs_def("const sub = require('./sub'); module.exports = sub;")
+                .with_dependency(ModuleDependency::new("./sub", ImportStyle::Require)),
+        )
+        .unwrap();
+    resolver
+        .register_external_module(sub_specifier, cjs_def("module.exports = 1;"))
+        .unwrap();
+
+    let outcomes = resolver
+        .resolve_chain(
+            &ModuleRequest::new(bare_specifier, ImportStyle::Require).with_compatibility_mode(mode),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect("external extension-probe package-root require chain should resolve");
+
+    let ids = outcomes
+        .iter()
+        .map(|outcome| outcome.module.record.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ids,
+        vec![
+            format!("external:{entry_specifier}"),
+            format!("external:{sub_specifier}")
+        ]
+    );
+    assert_eq!(outcomes[0].module.canonical_specifier, entry_specifier);
+    assert_eq!(
+        outcomes[0].module.probe_sequence,
+        vec![
+            bare_specifier.to_string(),
+            format!("{bare_specifier}.cjs"),
+            entry_specifier.to_string()
+        ]
+    );
+    assert_eq!(outcomes[1].module.canonical_specifier, sub_specifier);
+    assert_eq!(
+        outcomes[1].module.probe_sequence,
+        vec![
+            sub_specifier.trim_end_matches(".cjs").to_string(),
+            sub_specifier.to_string()
+        ]
+    );
+
+    "resolve_relative_require_from_package_root".to_string()
+}
+
 // =========================================================================
 // A. ModuleSyntax — ordering, Copy, Display, serde
 // =========================================================================
@@ -833,6 +891,79 @@ fn resolver_external_require_chain_behavior_matches_matrix_contract_across_modes
                 &matrix_context(),
             )
             .expect("external require chain behavior should match matrix contract");
+        assert!(outcome.matched);
+    }
+}
+
+#[test]
+fn resolver_external_extension_probe_package_root_behavior_matches_matrix_contract_across_modes() {
+    let mut matrix = load_validated_default_matrix();
+
+    for mode in [
+        CompatibilityMode::Native,
+        CompatibilityMode::NodeCompat,
+        CompatibilityMode::BunCompat,
+    ] {
+        let observed_behavior = observe_external_extension_probe_package_root_require_behavior(
+            mode,
+            "pkg",
+            "pkg.js",
+            "pkg/sub.cjs",
+        );
+        assert_eq!(
+            observed_behavior,
+            "resolve_relative_require_from_package_root"
+        );
+
+        let outcome = matrix
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "external-extension-probe-package-root-relative-require",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    observed_behavior,
+                ),
+                &matrix_context(),
+            )
+            .expect("external extension-probe package-root behavior should match matrix contract");
+        assert!(outcome.matched);
+    }
+}
+
+#[test]
+fn resolver_scoped_external_extension_probe_package_root_behavior_matches_matrix_contract_across_modes()
+ {
+    let mut matrix = load_validated_default_matrix();
+
+    for mode in [
+        CompatibilityMode::Native,
+        CompatibilityMode::NodeCompat,
+        CompatibilityMode::BunCompat,
+    ] {
+        let observed_behavior = observe_external_extension_probe_package_root_require_behavior(
+            mode,
+            "@scope/pkg",
+            "@scope/pkg.js",
+            "@scope/pkg/sub.cjs",
+        );
+        assert_eq!(
+            observed_behavior,
+            "resolve_relative_require_from_package_root"
+        );
+
+        let outcome = matrix
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "external-extension-probe-package-root-relative-require",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    observed_behavior,
+                ),
+                &matrix_context(),
+            )
+            .expect(
+                "scoped external extension-probe package-root behavior should match matrix contract",
+            );
         assert!(outcome.matched);
     }
 }

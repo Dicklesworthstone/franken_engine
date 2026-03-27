@@ -359,6 +359,7 @@ fn default_matrix_declares_required_readme_fragments() {
         "artifacts/rgc_module_interop_verification_matrix/<timestamp>/module_resolution_trace.jsonl",
         "artifacts/rgc_module_interop_verification_matrix/<timestamp>/step_logs/step_*.log",
         "The matrix also pins npm-style `pkg.js` / `@scope/pkg.js` extension-probe package entries so nested `./sub` requires stay anchored to the package root.",
+        "`package.json` `type=module` extensionless relative imports stay fail-closed in `native`/`node_compat`; only the explicit `bun_compat` bridge enables extension probing.",
     ] {
         assert!(
             fragment_set.contains(expected),

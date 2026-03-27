@@ -70,10 +70,13 @@ fn hash_content_hash(hasher: &mut Sha256, value: &ContentHash) {
     hash_bytes(hasher, value.as_bytes());
 }
 
+fn rule_target_rule_id_for_pack<'a>(rule_target: &'a str, pack_id: &str) -> Option<&'a str> {
+    let rule_id = rule_target.strip_prefix(pack_id)?.strip_prefix(':')?;
+    (!rule_id.is_empty()).then_some(rule_id)
+}
+
 fn rule_target_matches_pack(rule_target: &str, pack_id: &str) -> bool {
-    rule_target
-        .strip_prefix(pack_id)
-        .is_some_and(|suffix| suffix.starts_with(':') && suffix.len() > 1)
+    rule_target_rule_id_for_pack(rule_target, pack_id).is_some()
 }
 
 // ---------------------------------------------------------------------------
@@ -801,7 +804,7 @@ impl PackCatalog {
         if self.cross_interference.contains_key(&key) {
             return false;
         }
-        if !metadata.is_canonical() || !Self::metadata_matches_pair(&metadata, pack_a, pack_b) {
+        if !metadata.is_canonical() || !self.metadata_matches_pair(&metadata, pack_a, pack_b) {
             return false;
         }
         self.cross_interference.insert(key, metadata);
@@ -839,12 +842,38 @@ impl PackCatalog {
         self.content_hash = ContentHash::compute(&hasher.finalize());
     }
 
-    fn metadata_matches_pair(metadata: &InterferenceMetadata, pack_a: &str, pack_b: &str) -> bool {
+    fn metadata_matches_pair(
+        &self,
+        metadata: &InterferenceMetadata,
+        pack_a: &str,
+        pack_b: &str,
+    ) -> bool {
+        let Some(pack_a_rules) = self.packs.get(pack_a) else {
+            return false;
+        };
+        let Some(pack_b_rules) = self.packs.get(pack_b) else {
+            return false;
+        };
+        let pack_a_rule_ids: BTreeSet<&str> = pack_a_rules
+            .rules
+            .iter()
+            .map(|rule| rule.rule_id.as_str())
+            .collect();
+        let pack_b_rule_ids: BTreeSet<&str> = pack_b_rules
+            .rules
+            .iter()
+            .map(|rule| rule.rule_id.as_str())
+            .collect();
+
         metadata.entries.iter().all(|entry| {
-            let rule_a_in_pack_a = rule_target_matches_pack(&entry.rule_a, pack_a);
-            let rule_a_in_pack_b = rule_target_matches_pack(&entry.rule_a, pack_b);
-            let rule_b_in_pack_a = rule_target_matches_pack(&entry.rule_b, pack_a);
-            let rule_b_in_pack_b = rule_target_matches_pack(&entry.rule_b, pack_b);
+            let rule_a_in_pack_a = rule_target_rule_id_for_pack(&entry.rule_a, pack_a)
+                .is_some_and(|rule_id| pack_a_rule_ids.contains(rule_id));
+            let rule_a_in_pack_b = rule_target_rule_id_for_pack(&entry.rule_a, pack_b)
+                .is_some_and(|rule_id| pack_b_rule_ids.contains(rule_id));
+            let rule_b_in_pack_a = rule_target_rule_id_for_pack(&entry.rule_b, pack_a)
+                .is_some_and(|rule_id| pack_a_rule_ids.contains(rule_id));
+            let rule_b_in_pack_b = rule_target_rule_id_for_pack(&entry.rule_b, pack_b)
+                .is_some_and(|rule_id| pack_b_rule_ids.contains(rule_id));
 
             (rule_a_in_pack_a && rule_b_in_pack_b) || (rule_a_in_pack_b && rule_b_in_pack_a)
         })
@@ -1481,8 +1510,14 @@ mod tests {
     #[test]
     fn catalog_cross_interference() {
         let mut catalog = PackCatalog::new("test");
-        catalog.register(test_pack("a", vec![]));
-        catalog.register(test_pack("b", vec![]));
+        catalog.register(test_pack(
+            "a",
+            vec![test_rule("r1", RewriteCategory::Custom, true)],
+        ));
+        catalog.register(test_pack(
+            "b",
+            vec![test_rule("r1", RewriteCategory::Custom, true)],
+        ));
 
         let meta = InterferenceMetadata::build(vec![test_interference(
             "a:r1",
@@ -1520,8 +1555,14 @@ mod tests {
     #[test]
     fn catalog_cross_interference_rejects_duplicate_pairs() {
         let mut catalog = PackCatalog::new("test");
-        catalog.register(test_pack("a", vec![]));
-        catalog.register(test_pack("b", vec![]));
+        catalog.register(test_pack(
+            "a",
+            vec![test_rule("r1", RewriteCategory::Custom, true)],
+        ));
+        catalog.register(test_pack(
+            "b",
+            vec![test_rule("r1", RewriteCategory::Custom, true)],
+        ));
 
         assert!(catalog.add_cross_interference("a", "b", InterferenceMetadata::build(vec![]),));
         let hash_before = catalog.content_hash;
@@ -1558,10 +1599,42 @@ mod tests {
     }
 
     #[test]
+    fn catalog_cross_interference_rejects_missing_rule_targets() {
+        let mut catalog = PackCatalog::new("test");
+        catalog.register(test_pack(
+            "a",
+            vec![test_rule("r1", RewriteCategory::Custom, true)],
+        ));
+        catalog.register(test_pack(
+            "b",
+            vec![test_rule("r2", RewriteCategory::Custom, true)],
+        ));
+        let hash_before = catalog.content_hash;
+
+        assert!(!catalog.add_cross_interference(
+            "a",
+            "b",
+            InterferenceMetadata::build(vec![test_interference(
+                "a:missing",
+                "b:r2",
+                RuleInterferenceKind::PatternConflict,
+            )]),
+        ));
+        assert_eq!(catalog.content_hash, hash_before);
+        assert!(catalog.cross_interference.is_empty());
+    }
+
+    #[test]
     fn catalog_cross_interference_rejects_noncanonical_metadata() {
         let mut catalog = PackCatalog::new("test");
-        catalog.register(test_pack("a", vec![]));
-        catalog.register(test_pack("b", vec![]));
+        catalog.register(test_pack(
+            "a",
+            vec![test_rule("r1", RewriteCategory::Custom, true)],
+        ));
+        catalog.register(test_pack(
+            "b",
+            vec![test_rule("r1", RewriteCategory::Custom, true)],
+        ));
 
         let mut metadata = InterferenceMetadata::build(vec![test_interference(
             "a:r1",

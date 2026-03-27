@@ -1258,7 +1258,7 @@ impl DecisionContext {
     /// This is the core decision function.  It checks all guardrails
     /// in priority order and either routes to a lane or triggers fallback.
     pub fn decide(&mut self, state: &DecisionState) -> DecisionOutcome {
-        self.sequence += 1;
+        self.sequence = self.sequence.saturating_add(1);
 
         // 1. Check budget exhaustion (highest priority).
         if self.budget.is_fallback_active() {

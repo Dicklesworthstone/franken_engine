@@ -1224,7 +1224,7 @@ impl RuntimeDecisionCore {
         self.state.confidence_millionths = input.confidence_millionths;
         self.state.regime = input.regime;
         self.state.risk_posteriors = input.risk_posteriors.clone();
-        self.state.decision_count += 1;
+        self.state.decision_count = self.state.decision_count.saturating_add(1);
 
         // 3. Record latency and update CVaR.
         self.cvar_constraint.observe(input.observed_latency_us);
@@ -1255,7 +1255,7 @@ impl RuntimeDecisionCore {
             epoch: input.epoch,
             timestamp_ns: input.timestamp_ns,
         };
-        self.calibration_seq += 1;
+        self.calibration_seq = self.calibration_seq.saturating_add(1);
         self.calibration_ledger.push(cal_entry);
         // Trim ledger.
         if self.calibration_ledger.len() > MAX_TRACE_ENTRIES {
@@ -1342,7 +1342,7 @@ impl RuntimeDecisionCore {
                 epoch: input.epoch,
                 timestamp_ns: input.timestamp_ns,
             };
-            self.fallback_seq += 1;
+            self.fallback_seq = self.fallback_seq.saturating_add(1);
             self.fallback_events.push(event);
             if self.fallback_events.len() > MAX_TRACE_ENTRIES {
                 self.fallback_events.remove(0);
@@ -1399,7 +1399,7 @@ impl RuntimeDecisionCore {
             epoch: input.epoch,
             timestamp_ns: input.timestamp_ns,
         };
-        self.decision_seq += 1;
+        self.decision_seq = self.decision_seq.saturating_add(1);
         self.trace.push(trace_entry);
         if self.trace.len() > MAX_TRACE_ENTRIES {
             self.trace.remove(0);

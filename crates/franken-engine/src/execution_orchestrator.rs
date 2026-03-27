@@ -646,7 +646,7 @@ impl ExecutionOrchestrator {
         // Step 12: Drain cell events and assemble result.
         let cell_events = cell.drain_events();
 
-        self.execution_counter += 1;
+        self.execution_counter = self.execution_counter.saturating_add(1);
 
         Ok(OrchestratorResult {
             extension_id: package.extension_id.clone(),

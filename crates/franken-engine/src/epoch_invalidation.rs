@@ -882,7 +882,7 @@ impl EpochInvalidationEngine {
             event_type,
             epoch: self.current_epoch,
         };
-        self.event_seq += 1;
+        self.event_seq = self.event_seq.saturating_add(1);
         self.events.push(event);
     }
 }

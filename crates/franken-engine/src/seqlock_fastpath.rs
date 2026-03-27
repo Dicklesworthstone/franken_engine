@@ -137,14 +137,16 @@ impl<T> SnapshotFastPath<T> {
             .lock()
             .expect("seqlock writer gate must not poison");
         let start = self.sequence.load(Ordering::Acquire);
-        self.sequence.store(start + 1, Ordering::Release);
+        self.sequence
+            .store(start.wrapping_add(1), Ordering::Release);
         on_odd_sequence();
         *self
             .snapshot
             .write()
             .expect("seqlock snapshot write must not poison") = Some(next);
         self.initialized.store(true, Ordering::Release);
-        self.sequence.store(start + 2, Ordering::Release);
+        self.sequence
+            .store(start.wrapping_add(2), Ordering::Release);
         self.writes.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -625,6 +627,20 @@ mod tests {
         assert_eq!(telemetry.writes, 20);
         assert_eq!(telemetry.total_reads, 20);
         assert_eq!(telemetry.fast_path_reads, 20);
+    }
+
+    #[test]
+    fn publish_wraps_sequence_without_panicking_at_u64_edge() {
+        let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(4, 2));
+        fast_path.seed_if_uninitialized(7_u64);
+        fast_path.sequence.store(u64::MAX - 1, Ordering::Release);
+
+        fast_path.publish(11_u64);
+
+        let result = fast_path.read_clone_or_else(|| 0);
+        assert_eq!(result.value, 11);
+        assert_eq!(result.source, FastPathReadSource::FastPath);
+        assert_eq!(fast_path.sequence.load(Ordering::Acquire), 0);
     }
 
     // ── seed + publish interaction ──────────────────────────────────

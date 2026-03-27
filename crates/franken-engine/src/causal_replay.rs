@@ -132,7 +132,7 @@ impl NondeterminismLog {
             tick,
             extension_id,
         });
-        self.next_sequence += 1;
+        self.next_sequence = self.next_sequence.saturating_add(1);
         seq
     }
 

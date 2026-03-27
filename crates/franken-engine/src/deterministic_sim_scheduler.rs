@@ -418,7 +418,7 @@ impl SimScheduler {
         seed: u64,
     ) -> u64 {
         let id = self.next_event_id;
-        self.next_event_id += 1;
+        self.next_event_id = self.next_event_id.saturating_add(1);
 
         let scheduled_tick = self.current_tick.saturating_add(delay_ticks);
 

@@ -790,7 +790,7 @@ impl ReceiptChain {
         }
 
         self.receipts.push(receipt);
-        self.next_sequence += 1;
+        self.next_sequence = self.next_sequence.saturating_add(1);
 
         // Prune if over capacity
         if self.receipts.len() > self.max_length {

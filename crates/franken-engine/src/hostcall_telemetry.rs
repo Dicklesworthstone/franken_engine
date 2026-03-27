@@ -385,7 +385,7 @@ impl TelemetryRecorder {
         }
 
         let record_id = self.next_record_id;
-        self.next_record_id += 1;
+        self.next_record_id = self.next_record_id.saturating_add(1);
         self.last_timestamp_ns = timestamp_ns;
 
         // Build the record.

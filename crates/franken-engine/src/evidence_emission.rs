@@ -373,7 +373,7 @@ impl CanonicalEvidenceEmitter {
 
         // Build the canonical entry.
         let sequence = self.next_sequence;
-        self.next_sequence += 1;
+        self.next_sequence = self.next_sequence.saturating_add(1);
 
         let entry_id = EvidenceEntryId::new(format!(
             "ev-{}-{}-{}",

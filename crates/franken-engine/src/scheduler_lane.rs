@@ -366,7 +366,7 @@ impl LaneScheduler {
         }
 
         let task_id = TaskId(self.next_task_id);
-        self.next_task_id += 1;
+        self.next_task_id = self.next_task_id.saturating_add(1);
 
         let task = ScheduledTask {
             task_id,

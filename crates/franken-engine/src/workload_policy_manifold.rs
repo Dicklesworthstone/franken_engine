@@ -358,7 +358,7 @@ impl ManifoldPlacer {
         };
 
         let seq = self.next_sequence;
-        self.next_sequence += 1;
+        self.next_sequence = self.next_sequence.saturating_add(1);
 
         ManifoldCoordinate {
             schema_version: COORDINATE_SCHEMA_VERSION.into(),

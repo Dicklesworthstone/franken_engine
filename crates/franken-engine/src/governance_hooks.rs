@@ -3950,4 +3950,27 @@ mod tests {
         assert_eq!(result_parquet.entry_count, 5);
         assert_eq!(result_pdf.entry_count, 5);
     }
+
+    // ---- Regression tests for audit-discovered bugs (2026-03-27) ----
+
+    #[test]
+    fn compute_bundle_hash_includes_entry_count() {
+        // Bug: empty entries and certain hash-all-zeros entries could collide
+        // because entry count was not included in the hash preimage.
+        let empty_hash = compute_bundle_hash(&[]);
+        let one_entry = compute_bundle_hash(&[make_entry("test", 1)]);
+        assert_ne!(empty_hash, one_entry);
+    }
+
+    #[test]
+    fn policy_source_display_does_not_panic_on_short_commit_sha() {
+        // Bug: &commit_sha[..8] panicked if sha was shorter than 8 chars.
+        let source = PolicySource::GitRepo {
+            repo_url: "https://example.com/repo.git".to_string(),
+            commit_sha: "abc".to_string(),
+            file_path: "policy.toml".to_string(),
+        };
+        let display = format!("{source}");
+        assert!(display.contains("abc"));
+    }
 }

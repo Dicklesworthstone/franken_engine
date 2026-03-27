@@ -72,13 +72,16 @@ impl AttestationChallenge {
     }
 
     /// Canonical bytes for signing/verification.
+    /// Includes challenge_id to prevent replay across different challenges.
     pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::new();
+        buf.extend_from_slice(self.challenge_id.as_bytes());
         buf.extend_from_slice(&self.nonce);
         buf.extend_from_slice(&self.policy_version.to_be_bytes());
         buf.extend_from_slice(&self.challenge_timestamp_ns.to_be_bytes());
         buf.extend_from_slice(&self.epoch.as_u64().to_be_bytes());
         buf.extend_from_slice(&self.response_deadline_ns.to_be_bytes());
+        // approved_measurements is BTreeSet — deterministic iteration.
         for m in &self.approved_measurements {
             buf.extend_from_slice(m.as_bytes());
         }
@@ -180,14 +183,17 @@ impl CellAuthorization {
     }
 
     /// Canonical bytes for verification.
+    /// Includes authorization_id for collision resistance.
     pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::new();
+        buf.extend_from_slice(self.authorization_id.as_bytes());
         buf.extend_from_slice(self.cell_id.as_bytes());
         buf.extend_from_slice(&self.issued_at_ns.to_be_bytes());
         buf.extend_from_slice(&self.validity_window_ns.to_be_bytes());
         buf.extend_from_slice(&self.epoch.as_u64().to_be_bytes());
         buf.extend_from_slice(&self.policy_version.to_be_bytes());
         buf.extend_from_slice(self.verified_measurement.as_bytes());
+        // authorized_operations is BTreeSet — deterministic iteration.
         for op in &self.authorized_operations {
             buf.extend_from_slice(op.as_bytes());
         }

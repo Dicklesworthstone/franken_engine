@@ -2203,7 +2203,7 @@ fn frankenctl_benchmark_run_emits_minimal_artifact_bundle() {
     );
     assert_eq!(
         json["observability_mode"]["capture_semantics"].as_str(),
-        Some("lossy_default_capture")
+        Some("default_mixed_capture")
     );
     assert_eq!(
         json["observability_mode"]["lossless"].as_bool(),
@@ -2635,7 +2635,7 @@ fn frankenctl_benchmark_score_and_verify_bundle_round_trip() {
     );
     assert_eq!(
         score_json["observability_mode"]["capture_semantics"].as_str(),
-        Some("lossy_default_capture")
+        Some("default_mixed_capture")
     );
     assert_eq!(
         score_json["observability_mode"]["lossless"].as_bool(),
@@ -2845,6 +2845,18 @@ fn frankenctl_benchmark_score_and_verify_bundle_round_trip() {
         verify_report["component"].as_str(),
         Some("third_party_verifier")
     );
+    assert_eq!(
+        verify_report["observability_mode"]["mode_id"].as_str(),
+        Some("default_capture")
+    );
+    assert_eq!(
+        verify_report["observability_mode"]["capture_semantics"].as_str(),
+        Some("default_mixed_capture")
+    );
+    assert_eq!(
+        verify_report["observability_mode"]["lossless"].as_bool(),
+        Some(false)
+    );
     assert_eq!(verify_report["verdict"].as_str(), Some("verified"));
     assert!(
         verify_report["checks"]
@@ -3017,6 +3029,18 @@ fn frankenctl_benchmark_verify_detects_results_digest_tampering() {
     assert_eq!(
         verify_report["component"].as_str(),
         Some("third_party_verifier")
+    );
+    assert_eq!(
+        verify_report["observability_mode"]["mode_id"].as_str(),
+        Some("default_capture")
+    );
+    assert_eq!(
+        verify_report["observability_mode"]["capture_semantics"].as_str(),
+        Some("default_mixed_capture")
+    );
+    assert_eq!(
+        verify_report["observability_mode"]["lossless"].as_bool(),
+        Some(false)
     );
     assert_eq!(verify_report["verdict"].as_str(), Some("failed"));
     assert!(

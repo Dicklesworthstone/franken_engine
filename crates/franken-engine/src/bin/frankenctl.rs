@@ -28,7 +28,8 @@ use frankenengine_engine::lowering_pipeline::{
 use frankenengine_engine::module_compatibility_matrix::CompatibilityScenarioReport;
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParseEventIr, ParserOptions};
 use frankenengine_engine::receipt_verifier_pipeline::{
-    ReceiptVerifierCliInput, render_verdict_summary, verify_receipt_by_id,
+    ReceiptVerifierCliInput, UnifiedReceiptVerificationVerdict, render_verdict_summary,
+    verify_receipt_by_id,
 };
 use frankenengine_engine::region_lifecycle::FinalizeResult;
 use frankenengine_engine::runtime_diagnostics_cli::{
@@ -384,6 +385,13 @@ struct CompileArtifactVerificationOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
+struct ReceiptVerificationCommandOutput {
+    #[serde(flatten)]
+    verdict: UnifiedReceiptVerificationVerdict,
+    observability_mode: ObservabilityModeOutput,
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct BenchmarkCommandOutput {
     schema_version: String,
     run_id: String,
@@ -415,6 +423,13 @@ struct BenchmarkScoreCommandOutput {
     benchmark_invocation_manifest_path: Option<String>,
     command_mode_receipt_path: Option<String>,
     runtime: BenchmarkBundleRuntime,
+    observability_mode: ObservabilityModeOutput,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BenchmarkVerificationCommandOutput {
+    #[serde(flatten)]
+    report: ThirdPartyVerificationReport,
     observability_mode: ObservabilityModeOutput,
 }
 
@@ -1802,15 +1817,19 @@ fn execute_verify(args: VerifyArgs) -> Result<i32, String> {
             let verifier_input = load_json_file::<ReceiptVerifierCliInput>(&input)?;
             let verdict = verify_receipt_by_id(&verifier_input, &receipt_id)
                 .map_err(|error| format!("receipt verification failed: {error}"))?;
+            let output_payload = ReceiptVerificationCommandOutput {
+                verdict,
+                observability_mode: default_capture_observability_mode(),
+            };
             if let Some(path) = &output {
-                write_json_file(path, &verdict)?;
+                write_json_file(path, &output_payload)?;
             }
             if summary {
-                println!("{}", render_verdict_summary(&verdict));
+                println!("{}", render_verdict_summary(&output_payload.verdict));
             } else {
-                print_json(&verdict)?;
+                print_json(&output_payload)?;
             }
-            Ok(verdict.exit_code)
+            Ok(output_payload.verdict.exit_code)
         }
     }
 }
@@ -2295,16 +2314,20 @@ fn execute_benchmark_verify(args: BenchmarkVerifyArgs) -> Result<i32, String> {
     let input = load_json_file::<BenchmarkClaimBundle>(&results_path)?;
     let mut report = verify_benchmark_claim(&input);
     validate_benchmark_bundle_contract(&args.bundle, &input, &mut report);
+    let output_payload = BenchmarkVerificationCommandOutput {
+        report,
+        observability_mode: default_capture_observability_mode(),
+    };
 
     if let Some(path) = &args.output {
-        write_json_file(path, &report)?;
+        write_json_file(path, &output_payload)?;
     }
     if args.summary {
-        println!("{}", render_report_summary(&report));
+        println!("{}", render_report_summary(&output_payload.report));
     } else {
-        print_json(&report)?;
+        print_json(&output_payload)?;
     }
-    Ok(report.exit_code())
+    Ok(output_payload.report.exit_code())
 }
 
 fn validate_benchmark_bundle_contract(
@@ -4425,6 +4448,7 @@ fn react_contract_usage() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use frankenengine_engine::receipt_verifier_pipeline::VerifierLogEvent;
 
     #[test]
     fn parse_version_command() {
@@ -4782,6 +4806,115 @@ mod tests {
             Some(expected_artifact_path.as_str())
         );
         assert_eq!(report["passed"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn receipt_verification_command_output_flattens_verdict_and_observability_mode() {
+        let output = ReceiptVerificationCommandOutput {
+            verdict: UnifiedReceiptVerificationVerdict {
+                receipt_id: "rcpt-1".to_string(),
+                trace_id: "trace-verify-01".to_string(),
+                decision_id: "decision-verify-01".to_string(),
+                policy_id: "policy-verify-01".to_string(),
+                verification_timestamp_ns: 7,
+                passed: true,
+                failure_class: None,
+                exit_code: 0,
+                signature: frankenengine_engine::receipt_verifier_pipeline::LayerResult {
+                    passed: true,
+                    error_code: None,
+                    checks: Vec::new(),
+                },
+                transparency: frankenengine_engine::receipt_verifier_pipeline::LayerResult {
+                    passed: true,
+                    error_code: None,
+                    checks: Vec::new(),
+                },
+                attestation: frankenengine_engine::receipt_verifier_pipeline::LayerResult {
+                    passed: true,
+                    error_code: None,
+                    checks: Vec::new(),
+                },
+                warnings: Vec::new(),
+                logs: vec![VerifierLogEvent {
+                    trace_id: "trace-verify-01".to_string(),
+                    decision_id: "decision-verify-01".to_string(),
+                    policy_id: "policy-verify-01".to_string(),
+                    component: "receipt_verifier_pipeline".to_string(),
+                    event: "verification_complete".to_string(),
+                    outcome: "pass".to_string(),
+                    error_code: None,
+                }],
+            },
+            observability_mode: default_capture_observability_mode(),
+        };
+
+        let json = serde_json::to_value(&output).expect("receipt output should serialize");
+        assert_eq!(json["receipt_id"].as_str(), Some("rcpt-1"));
+        assert_eq!(json["trace_id"].as_str(), Some("trace-verify-01"));
+        assert_eq!(
+            json["observability_mode"]["mode_id"].as_str(),
+            Some("default_capture")
+        );
+        assert_eq!(
+            json["observability_mode"]["capture_semantics"].as_str(),
+            Some("default_mixed_capture")
+        );
+        assert_eq!(
+            json["observability_mode"]["lossless"].as_bool(),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn benchmark_verification_command_output_flattens_report_and_observability_mode() {
+        let output = BenchmarkVerificationCommandOutput {
+            report: ThirdPartyVerificationReport {
+                claim_type: "benchmark".to_string(),
+                trace_id: "trace-bench-verify-01".to_string(),
+                decision_id: "decision-bench-verify-01".to_string(),
+                policy_id: "policy-bench-verify-01".to_string(),
+                component: THIRD_PARTY_VERIFIER_COMPONENT.to_string(),
+                verdict: VerificationVerdict::Verified,
+                confidence_statement: "bundle is reproducible".to_string(),
+                scope_limitations: Vec::new(),
+                checks: vec![VerificationCheckResult {
+                    name: "bundle_present".to_string(),
+                    passed: true,
+                    error_code: None,
+                    detail: "bundle exists".to_string(),
+                }],
+                events: vec![VerifierEvent {
+                    trace_id: "trace-bench-verify-01".to_string(),
+                    decision_id: "decision-bench-verify-01".to_string(),
+                    policy_id: "policy-bench-verify-01".to_string(),
+                    component: THIRD_PARTY_VERIFIER_COMPONENT.to_string(),
+                    event: "benchmark_verification_complete".to_string(),
+                    outcome: "pass".to_string(),
+                    error_code: None,
+                }],
+            },
+            observability_mode: default_capture_observability_mode(),
+        };
+
+        let json = serde_json::to_value(&output).expect("benchmark output should serialize");
+        assert_eq!(json["claim_type"].as_str(), Some("benchmark"));
+        assert_eq!(
+            json["component"].as_str(),
+            Some(THIRD_PARTY_VERIFIER_COMPONENT)
+        );
+        assert_eq!(
+            json["observability_mode"]["mode_id"].as_str(),
+            Some("default_capture")
+        );
+        assert_eq!(
+            json["observability_mode"]["capture_semantics"].as_str(),
+            Some("default_mixed_capture")
+        );
+        assert_eq!(
+            json["observability_mode"]["lossless"].as_bool(),
+            Some(false)
+        );
     }
 
     #[test]

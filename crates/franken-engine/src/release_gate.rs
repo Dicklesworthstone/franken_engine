@@ -365,6 +365,9 @@ impl ReleaseGate {
         if justification.is_empty() {
             return Err("justification required for exception".to_string());
         }
+        if result.verdict == Verdict::Pass {
+            return Ok(()); // Already passing — no exception needed.
+        }
 
         result.exception_applied = true;
         result.exception_justification = justification.to_string();
@@ -795,7 +798,15 @@ fn append_gate_failure_detail(buf: &mut Vec<u8>, detail: &GateFailureDetail) {
 }
 
 fn append_gate_check_result(buf: &mut Vec<u8>, check: &GateCheckResult) {
-    append_len_prefixed(buf, check.kind.to_string().as_bytes());
+    // Use stable discriminant instead of Display string to decouple
+    // content hash from human-readable format changes.
+    let kind_disc: u8 = match check.kind {
+        GateCheckKind::FrankenlabScenario => 0,
+        GateCheckKind::EvidenceReplay => 1,
+        GateCheckKind::ObligationTracking => 2,
+        GateCheckKind::EvidenceCompleteness => 3,
+    };
+    buf.push(kind_disc);
     append_bool(buf, check.passed);
     append_len_prefixed(buf, check.summary.as_bytes());
     append_u64(buf, check.items_checked as u64);
@@ -2069,8 +2080,9 @@ mod tests {
         };
         gate.apply_exception(&mut result, "not needed", None)
             .unwrap();
-        // Exception is still applied even on Pass — the flag is set
-        assert!(result.exception_applied);
+        // Exception on a passing result is a true noop — no state mutated.
+        assert!(!result.exception_applied);
+        assert_eq!(result.result_digest, "orig");
     }
 
     #[test]
@@ -2410,5 +2422,63 @@ mod tests {
             second_digest: "same".to_string(),
         };
         assert!(!v.is_hermetic());
+    }
+
+    // ---- Regression tests for audit-discovered bugs (2026-03-26) ----
+
+    #[test]
+    fn gate_check_kind_hash_stable_discriminant() {
+        // Bug: GateCheckKind was hashed via Display format (to_string()).
+        // Verify each kind produces a unique digest contribution.
+        let kinds = [
+            GateCheckKind::FrankenlabScenario,
+            GateCheckKind::EvidenceReplay,
+            GateCheckKind::ObligationTracking,
+            GateCheckKind::EvidenceCompleteness,
+        ];
+        let mut digests: Vec<Vec<u8>> = Vec::new();
+        for kind in kinds {
+            let check = GateCheckResult {
+                kind,
+                passed: true,
+                summary: String::new(),
+                items_checked: 0,
+                items_passed: 0,
+                failure_details: Vec::new(),
+            };
+            let mut buf = Vec::new();
+            append_gate_check_result(&mut buf, &check);
+            assert!(!digests.contains(&buf), "duplicate digest for kind");
+            digests.push(buf);
+        }
+        assert_eq!(digests.len(), 4);
+    }
+
+    #[test]
+    fn apply_exception_noop_on_passing_result_preserves_digest() {
+        // Bug: applying exception on Pass mutated exception_applied and
+        // recomputed digest, creating two distinct digests for same state.
+        let policy = ExceptionPolicy {
+            allow_exceptions: true,
+            requires_adr_reference: false,
+            requires_security_review: false,
+            max_exception_hours: 0,
+        };
+        let gate = ReleaseGate::with_exception_policy(1, policy);
+        let mut result = ReleaseGateResult {
+            seed: 1,
+            checks: Vec::new(),
+            verdict: Verdict::Pass,
+            total_checks: 0,
+            passed_checks: 0,
+            exception_applied: false,
+            exception_justification: String::new(),
+            gate_events: Vec::new(),
+            result_digest: "original-digest".to_string(),
+        };
+        let original_digest = result.result_digest.clone();
+        gate.apply_exception(&mut result, "test", None).unwrap();
+        assert_eq!(result.result_digest, original_digest);
+        assert!(!result.exception_applied);
     }
 }

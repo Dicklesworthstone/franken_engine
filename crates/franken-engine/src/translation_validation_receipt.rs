@@ -2881,4 +2881,62 @@ mod tests {
         assert_eq!(chain.failures_for_pack("pack-beta").len(), 1);
         assert_eq!(chain.failures_for_pack("pack-gamma").len(), 0);
     }
+
+    // ---- Regression tests for audit-discovered bugs (2026-03-26) ----
+
+    #[test]
+    fn rewrite_category_hash_stable_across_display_changes() {
+        // Bug: hash_rewrite_category used Display format (to_string()).
+        // Now uses stable numeric discriminants. Verify different categories
+        // produce different hashes.
+        let mut h1 = Sha256::new();
+        hash_rewrite_category(&mut h1, RewriteCategory::AlgebraicSimplification);
+        let d1 = h1.finalize();
+
+        let mut h2 = Sha256::new();
+        hash_rewrite_category(&mut h2, RewriteCategory::DeadCodeElimination);
+        let d2 = h2.finalize();
+
+        assert_ne!(d1, d2);
+
+        // Verify all 10 variants produce unique hashes.
+        let categories = [
+            RewriteCategory::AlgebraicSimplification,
+            RewriteCategory::DeadCodeElimination,
+            RewriteCategory::CommonSubexpression,
+            RewriteCategory::PartialEvaluation,
+            RewriteCategory::EffectHoisting,
+            RewriteCategory::ShapeSpecialization,
+            RewriteCategory::ReactRenderOptimization,
+            RewriteCategory::StringFusion,
+            RewriteCategory::ArrayOptimization,
+            RewriteCategory::Custom,
+        ];
+        let mut hashes = BTreeSet::new();
+        for cat in categories {
+            let mut h = Sha256::new();
+            hash_rewrite_category(&mut h, cat);
+            let digest = h.finalize();
+            let hex = format!("{digest:02x}");
+            assert!(hashes.insert(hex), "duplicate hash for {cat}");
+        }
+        assert_eq!(hashes.len(), 10);
+    }
+
+    #[test]
+    fn proof_evidence_metadata_length_prefixed() {
+        // Bug: metadata map lacked a length prefix. Two evidences with
+        // different metadata lengths should produce different hashes.
+        let mut ev1 = ProofEvidence {
+            mode: ProofMode::Symbolic,
+            artifact_hash: ContentHash::compute(b"a"),
+            verification_steps: 1,
+            verification_ticks: 100,
+            metadata: BTreeMap::new(),
+        };
+        let mut ev2 = ev1.clone();
+        ev2.metadata.insert(String::new(), String::new());
+
+        assert_ne!(ev1.content_hash(), ev2.content_hash());
+    }
 }

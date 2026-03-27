@@ -631,6 +631,9 @@ impl ReceiptBuilder {
             .performance_delta
             .ok_or(ReceiptError::ZeroBenchmarkSamples)?;
         pd.validate()?;
+        if self.fallback_path.is_empty() {
+            return Err(ReceiptError::EmptyFallbackPath);
+        }
 
         // Build with a placeholder receipt_id, then derive real ID.
         let placeholder_id = EngineObjectId([0u8; 32]);
@@ -2821,5 +2824,23 @@ mod tests {
             format!("{:?}", r1.signature_schema()),
             format!("{:?}", r2.signature_schema())
         );
+    }
+
+    // ---- Regression test for audit-discovered bug (2026-03-26) ----
+
+    #[test]
+    fn builder_rejects_empty_fallback_path() {
+        // Bug: builder did not validate fallback_path, unlike validate() which
+        // checks it. This meant a builder-constructed receipt could fail
+        // validate() later.
+        let result = ReceiptBuilder::new(OptimizationClass::IfcCheckElision, epoch())
+            .add_proof_input(test_proof_input(ProofType::FlowProof, epoch()))
+            .transformation_witness(test_transformation_witness())
+            .equivalence_evidence(test_equivalence_evidence())
+            .rollback_token(test_rollback_token())
+            .performance_delta(test_performance_delta())
+            // Note: no .fallback_path() call — defaults to empty string
+            .build();
+        assert_eq!(result.unwrap_err(), ReceiptError::EmptyFallbackPath);
     }
 }

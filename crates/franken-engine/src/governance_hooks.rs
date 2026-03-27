@@ -117,7 +117,7 @@ impl fmt::Display for PolicySource {
                 f,
                 "git_repo:{}@{}:{}",
                 repo_url,
-                &commit_sha[..8],
+                commit_sha.get(..8).unwrap_or(commit_sha),
                 file_path
             ),
             Self::FileSystem { absolute_path } => write!(f, "filesystem:{absolute_path}"),
@@ -1067,10 +1067,12 @@ pub fn export_audit_evidence(
     // entry count so that even an empty export has a non-empty canonical.
     let schema_id = SchemaId::from_definition(AUDIT_EXPORT_RESULT_SCHEMA_DEF);
     let id_canonical: Vec<u8> = {
-        let mut buf = Vec::with_capacity(40);
+        let mut buf = Vec::with_capacity(48);
         buf.extend_from_slice(payload_hash.as_bytes());
         buf.extend_from_slice(&entry_count.to_be_bytes());
-        buf.extend_from_slice(request.format.as_str().as_bytes());
+        let fmt_bytes = request.format.as_str().as_bytes();
+        buf.extend_from_slice(&(fmt_bytes.len() as u64).to_be_bytes());
+        buf.extend_from_slice(fmt_bytes);
         buf
     };
     let export_id = engine_object_id::derive_id(
@@ -1133,7 +1135,9 @@ pub fn generate_compliance_bundle(
     let bundle_schema = SchemaId::from_definition(COMPLIANCE_EVIDENCE_SCHEMA_DEF);
     let bundle_canonical: Vec<u8> = {
         let mut buf = Vec::new();
-        buf.extend_from_slice(framework.as_str().as_bytes());
+        let fw_bytes = framework.as_str().as_bytes();
+        buf.extend_from_slice(&(fw_bytes.len() as u64).to_be_bytes());
+        buf.extend_from_slice(fw_bytes);
         buf.extend_from_slice(&window_start.0.to_be_bytes());
         buf.extend_from_slice(&window_end.0.to_be_bytes());
         buf.extend_from_slice(bundle_hash.as_bytes());
@@ -1394,7 +1398,8 @@ fn csv_escape(s: &str) -> String {
 
 /// Compute a chained hash over all evidence entry hashes.
 fn compute_bundle_hash(entries: &[EvidenceEntry]) -> ContentHash {
-    let mut buf = Vec::with_capacity(entries.len() * 32);
+    let mut buf = Vec::with_capacity(8 + entries.len() * 32);
+    buf.extend_from_slice(&(entries.len() as u64).to_be_bytes());
     for entry in entries {
         buf.extend_from_slice(entry.evidence_hash.as_bytes());
     }
@@ -1712,7 +1717,10 @@ fn execute_hook(
                 let rate = if total == 0 {
                     1_000_000u64
                 } else {
-                    satisfied as u64 * 1_000_000 / total as u64
+                    (satisfied as u64)
+                        .saturating_mul(1_000_000)
+                        .checked_div(total as u64)
+                        .unwrap_or(1_000_000)
                 };
                 framework_results.insert(
                     framework.as_str().to_string(),

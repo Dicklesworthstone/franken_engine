@@ -980,8 +980,15 @@ impl ObjectHeap {
         if let Some(p) = proto {
             let mut current = Some(p);
             let mut visited = BTreeSet::new();
+            let mut depth: u32 = 0;
             visited.insert(handle);
             while let Some(h) = current {
+                if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
+                    return Err(ObjectError::PrototypeChainTooDeep {
+                        depth,
+                        max: MAX_PROTOTYPE_CHAIN_DEPTH,
+                    });
+                }
                 if !visited.insert(h) {
                     return Err(ObjectError::PrototypeCycleDetected);
                 }
@@ -990,6 +997,7 @@ impl ObjectHeap {
                     ManagedObject::Ordinary(o) => current = o.prototype,
                     ManagedObject::Proxy(_) => break,
                 }
+                depth += 1;
             }
         }
 

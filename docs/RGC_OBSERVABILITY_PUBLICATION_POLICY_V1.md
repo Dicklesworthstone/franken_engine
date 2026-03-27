@@ -119,6 +119,12 @@ jq empty docs/rgc_observability_publication_policy_v1.json
 cat artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP>/trace_ids
 ls artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP>/step_logs
 cat artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP>/step_logs/step-01.log
+cat artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP>/observability_budget_sentinel_report.json
+cat artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP>/observability_on_supremacy_matrix.json
+cat artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP>/observability_claim_delta_report.json
+cat artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP>/telemetry_demotion_receipts.json
+cat artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP>/observability_publication_policy.json
+cat artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP>/support_bundle_observability_attestation.json
 
 RGC_OBSERVABILITY_PUBLICATION_POLICY_REPLAY_RUN_DIR=artifacts/rgc_observability_publication_policy/<UTC_TIMESTAMP> \
   ./scripts/e2e/rgc_observability_publication_policy_replay.sh ci

@@ -75,7 +75,9 @@ Supported modes:
 - `ci`
 
 Every CPU-intensive cargo step in this lane is executed through `rch`,
-including the `cargo run` emission step.
+including the `cargo run` emission step. A successful `check`, `test`,
+`clippy`, or `ci` invocation must still emit the full blocker-ledger bundle so
+operators can replay and inspect the exact run that satisfied that mode.
 
 ## Failure Semantics
 

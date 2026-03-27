@@ -1464,6 +1464,26 @@ Artifacts are written under:
 - `artifacts/rgc_module_interop_verification_matrix/<timestamp>/module_resolution_trace.jsonl`
 - `artifacts/rgc_module_interop_verification_matrix/<timestamp>/step_logs/step_*.log`
 
+Operator verification:
+
+```bash
+cat artifacts/rgc_module_interop_verification_matrix/<timestamp>/run_manifest.json
+cat artifacts/rgc_module_interop_verification_matrix/<timestamp>/events.jsonl
+cat artifacts/rgc_module_interop_verification_matrix/<timestamp>/commands.txt
+cat artifacts/rgc_module_interop_verification_matrix/<timestamp>/module_resolution_trace.jsonl
+cat artifacts/rgc_module_interop_verification_matrix/<timestamp>/trace_ids.json
+cat artifacts/rgc_module_interop_verification_matrix/<timestamp>/step_logs/step_000.log
+
+./scripts/e2e/rgc_module_resolution_trace_contract_smoke.sh \
+  artifacts/rgc_module_interop_verification_matrix/<timestamp>/module_resolution_trace.jsonl
+
+rg -n 'compatibility_disposition|remediation_guidance' \
+  crates/franken-engine/src/esm_cjs_interop_parity.rs
+
+RGC_MODULE_INTEROP_MATRIX_REPLAY_RUN_DIR=artifacts/... \
+  ./scripts/e2e/rgc_module_interop_verification_matrix_replay.sh
+```
+
 ## RGC Verification Coverage Matrix Gate
 
 `bd-1lsy.11.1` ships a deterministic gate for the RGC verification coverage

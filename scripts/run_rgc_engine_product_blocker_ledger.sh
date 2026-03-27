@@ -222,6 +222,21 @@ run_step() {
   rch_reject_local_fallback "$log_path"
 }
 
+run_emit_bundle_step() {
+  run_step "cargo run -p frankenengine-engine --bin franken_engine_product_blocker_ledger -- --artifact-dir ${run_dir} --beads-json ${beads_snapshot_path} --support-contract-json ${support_contract_json}" \
+    cargo run -p frankenengine-engine --bin franken_engine_product_blocker_ledger -- \
+      --artifact-dir "${run_dir}" \
+      --beads-json "${beads_snapshot_path}" \
+      --support-contract-json "${support_contract_json}" \
+      --trace-id "${trace_id}" \
+      --decision-id "${decision_id}" \
+      --policy-id "${policy_id}" \
+      --generated-at-utc "${generated_at_utc}" \
+      --emit-local-bundle-json || return $?
+
+  hydrate_local_generated_artifacts "${last_step_log_path}" || return $?
+}
+
 hydrate_local_generated_artifacts() {
   local log_path="$1"
   local payload_path="${run_dir}/local_bundle_payload.json"
@@ -449,31 +464,28 @@ run_mode() {
 
   case "${mode}" in
   bundle)
-    run_step "cargo run -p frankenengine-engine --bin franken_engine_product_blocker_ledger -- --artifact-dir ${run_dir} --beads-json ${beads_snapshot_path} --support-contract-json ${support_contract_json}" \
-      cargo run -p frankenengine-engine --bin franken_engine_product_blocker_ledger -- \
-        --artifact-dir "${run_dir}" \
-        --beads-json "${beads_snapshot_path}" \
-        --support-contract-json "${support_contract_json}" \
-        --trace-id "${trace_id}" \
-        --decision-id "${decision_id}" \
-        --policy-id "${policy_id}" \
-        --generated-at-utc "${generated_at_utc}" \
-        --emit-local-bundle-json || mode_exit=$?
-    if [[ "${mode_exit}" -eq 0 ]]; then
-      hydrate_local_generated_artifacts "${last_step_log_path}" || mode_exit=$?
-    fi
+    run_emit_bundle_step || mode_exit=$?
     ;;
   check)
     run_step "cargo check -p frankenengine-engine --bin franken_engine_product_blocker_ledger --test engine_product_blocker_ledger" \
       cargo check -p frankenengine-engine --bin franken_engine_product_blocker_ledger --test engine_product_blocker_ledger || mode_exit=$?
+    if [[ "${mode_exit}" -eq 0 ]]; then
+      run_emit_bundle_step || mode_exit=$?
+    fi
     ;;
   test)
     run_step "cargo test -p frankenengine-engine --test engine_product_blocker_ledger" \
       cargo test -p frankenengine-engine --test engine_product_blocker_ledger || mode_exit=$?
+    if [[ "${mode_exit}" -eq 0 ]]; then
+      run_emit_bundle_step || mode_exit=$?
+    fi
     ;;
   clippy)
     run_step "cargo clippy -p frankenengine-engine --bin franken_engine_product_blocker_ledger --test engine_product_blocker_ledger -- -D warnings" \
       cargo clippy -p frankenengine-engine --bin franken_engine_product_blocker_ledger --test engine_product_blocker_ledger -- -D warnings || mode_exit=$?
+    if [[ "${mode_exit}" -eq 0 ]]; then
+      run_emit_bundle_step || mode_exit=$?
+    fi
     ;;
   ci)
     run_step "cargo check -p frankenengine-engine --bin franken_engine_product_blocker_ledger --test engine_product_blocker_ledger" \
@@ -487,19 +499,7 @@ run_mode() {
         cargo clippy -p frankenengine-engine --bin franken_engine_product_blocker_ledger --test engine_product_blocker_ledger -- -D warnings || mode_exit=$?
     fi
     if [[ "${mode_exit}" -eq 0 ]]; then
-      run_step "cargo run -p frankenengine-engine --bin franken_engine_product_blocker_ledger -- --artifact-dir ${run_dir} --beads-json ${beads_snapshot_path} --support-contract-json ${support_contract_json}" \
-        cargo run -p frankenengine-engine --bin franken_engine_product_blocker_ledger -- \
-          --artifact-dir "${run_dir}" \
-          --beads-json "${beads_snapshot_path}" \
-          --support-contract-json "${support_contract_json}" \
-          --trace-id "${trace_id}" \
-          --decision-id "${decision_id}" \
-          --policy-id "${policy_id}" \
-          --generated-at-utc "${generated_at_utc}" \
-          --emit-local-bundle-json || mode_exit=$?
-      if [[ "${mode_exit}" -eq 0 ]]; then
-        hydrate_local_generated_artifacts "${last_step_log_path}" || mode_exit=$?
-      fi
+      run_emit_bundle_step || mode_exit=$?
     fi
     ;;
   *)
@@ -525,15 +525,17 @@ if ! run_mode; then
   error_code_json='"FE-RGC-408B-GATE-0002"'
 fi
 
-if [[ "${error_code_json}" == "null" ]] && ! assert_required_artifacts; then
-  error_code_json='"FE-RGC-408B-GATE-0003"'
+if [[ "${error_code_json}" == "null" ]]; then
+  write_commands
+  write_trace_ids
+  write_events "pass" "pass" "null"
+  write_manifest "pass" "null"
+  if ! assert_required_artifacts; then
+    error_code_json='"FE-RGC-408B-GATE-0003"'
+  fi
 fi
 
 if [[ "${error_code_json}" == "null" ]]; then
-  write_events "pass" "pass" "null"
-  write_commands
-  write_trace_ids
-  write_manifest "pass" "null"
   echo "[rgc-engine-product-blocker-ledger] bundle ready at ${run_dir}"
   exit 0
 fi

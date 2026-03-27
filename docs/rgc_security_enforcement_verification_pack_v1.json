@@ -63,8 +63,12 @@
   "operator_verification": [
     "jq empty docs/rgc_security_enforcement_verification_pack_v1.json",
     "jq empty docs/rgc_security_enforcement_verification_vectors_v1.json",
-    "rch exec -- env CARGO_TARGET_DIR=\"$PWD/target_rch_rgc_security_enforcement_verification_pack_verify\" cargo test -p frankenengine-engine --test rgc_security_enforcement_verification_pack",
     "./scripts/run_rgc_security_enforcement_verification_pack.sh ci",
+    "cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/run_manifest.json",
+    "cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/events.jsonl",
+    "cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/commands.txt",
+    "cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/security_verification_report.json",
+    "rch exec -- env CARGO_TARGET_DIR=\"$PWD/target_rch_rgc_security_enforcement_verification_pack_verify\" cargo test -p frankenengine-engine --test rgc_security_enforcement_verification_pack",
     "./scripts/e2e/rgc_security_enforcement_verification_pack_replay.sh ci"
   ]
 }

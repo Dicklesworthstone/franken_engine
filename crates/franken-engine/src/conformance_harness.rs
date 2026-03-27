@@ -298,40 +298,20 @@ impl ConformanceAssetRecord {
             });
         }
 
-        match category {
-            "benign" => {
-                if expected_outcome != "allow" || expected_evidence_type != "none" {
-                    return Err(ConformanceManifestError::InvalidIfcExpectation {
-                        asset_id: self.asset_id.clone(),
-                        category: category.to_string(),
-                        expected_outcome: expected_outcome.to_string(),
-                        expected_evidence_type: expected_evidence_type.to_string(),
-                    });
-                }
-            }
-            "exfil" => {
-                if expected_outcome != "block" || expected_evidence_type != "flow_violation" {
-                    return Err(ConformanceManifestError::InvalidIfcExpectation {
-                        asset_id: self.asset_id.clone(),
-                        category: category.to_string(),
-                        expected_outcome: expected_outcome.to_string(),
-                        expected_evidence_type: expected_evidence_type.to_string(),
-                    });
-                }
-            }
-            "declassify" => {
-                if expected_outcome != "declassify"
-                    || expected_evidence_type != "declassification_receipt"
-                {
-                    return Err(ConformanceManifestError::InvalidIfcExpectation {
-                        asset_id: self.asset_id.clone(),
-                        category: category.to_string(),
-                        expected_outcome: expected_outcome.to_string(),
-                        expected_evidence_type: expected_evidence_type.to_string(),
-                    });
-                }
-            }
-            _ => {}
+        let invalid_ifc_expectation = match (category, expected_outcome, expected_evidence_type) {
+            ("benign", "allow", "none")
+            | ("exfil", "block", "flow_violation")
+            | ("declassify", "declassify", "declassification_receipt") => false,
+            ("benign", ..) | ("exfil", ..) | ("declassify", ..) => true,
+            _ => false,
+        };
+        if invalid_ifc_expectation {
+            return Err(ConformanceManifestError::InvalidIfcExpectation {
+                asset_id: self.asset_id.clone(),
+                category: category.to_string(),
+                expected_outcome: expected_outcome.to_string(),
+                expected_evidence_type: expected_evidence_type.to_string(),
+            });
         }
 
         Ok(())

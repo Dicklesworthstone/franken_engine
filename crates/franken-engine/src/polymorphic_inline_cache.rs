@@ -256,7 +256,7 @@ impl IcSiteProfile {
         }
         let misses = (self.transition_count as u64).saturating_add(self.guard_failure_count as u64);
         let hits = self.total_accesses.saturating_sub(misses);
-        (hits as i64).checked_mul(MILLION).unwrap_or(0) / (self.total_accesses as i64)
+        (hits as i128 * MILLION as i128 / self.total_accesses as i128) as i64
     }
 
     /// Whether the site is considered "warm" (enough accesses for analysis).
@@ -749,7 +749,7 @@ impl IcScopeProfile {
         }
         let mono = self.monomorphic_count() as i64;
         let total = self.sites.len() as i64;
-        mono.checked_mul(MILLION).unwrap_or(0) / total
+        (mono as i128 * MILLION as i128 / total as i128) as i64
     }
 
     /// Evaluate all warm sites and produce bailout decisions.

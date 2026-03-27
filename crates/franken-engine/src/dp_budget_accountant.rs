@@ -64,8 +64,8 @@ impl EpochBudget {
     /// Check if this epoch budget would be exhausted by the given
     /// consumption.
     pub fn would_exhaust(&self, epsilon: i64, delta: i64) -> bool {
-        self.epsilon_spent_millionths + epsilon > self.epsilon_budget_millionths
-            || self.delta_spent_millionths + delta > self.delta_budget_millionths
+        self.epsilon_spent_millionths.saturating_add(epsilon) > self.epsilon_budget_millionths
+            || self.delta_spent_millionths.saturating_add(delta) > self.delta_budget_millionths
     }
 }
 

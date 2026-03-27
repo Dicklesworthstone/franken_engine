@@ -468,7 +468,7 @@ impl SymbolicPotential {
         }
         let non_neg = self.point_potentials.values().filter(|&&v| v >= 0).count() as i64;
         let total = self.point_potentials.len() as i64;
-        non_neg.checked_mul(MILLION).unwrap_or(0) / total
+        (non_neg as i128 * MILLION as i128 / total as i128) as i64
     }
 
     fn compute_hash(

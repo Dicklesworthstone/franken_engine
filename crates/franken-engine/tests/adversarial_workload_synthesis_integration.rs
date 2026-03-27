@@ -1611,7 +1611,7 @@ fn e2e_engine_with_all_domains_and_strategies() {
         .unwrap();
     // 12 domains x 6 strategies x 1 seed each = 72 iterations
     assert_eq!(campaign.iterations_completed, 72);
-    assert_eq!(campaign.verdict(), SynthesisVerdict::Incomplete);
+    assert_eq!(campaign.verdict(), SynthesisVerdict::Fortified);
 }
 
 #[test]

@@ -1120,6 +1120,55 @@ fn external_package_extensionless_relative_node_compat_requires_explicit_extensi
 }
 
 #[test]
+fn scoped_external_package_extensionless_relative_requires_explicit_extension_outside_bun_compat() {
+    let mut resolver = DeterministicModuleResolver::default();
+    resolver
+        .register_external_module("@scope/pkg.js", esm_def("export { default } from './sub';"))
+        .unwrap();
+    resolver
+        .register_external_module("@scope/pkg/sub.mjs", esm_def("export default 'sub';"))
+        .unwrap();
+
+    let native_error = resolver
+        .resolve(
+            &ModuleRequest::new("./sub", ImportStyle::Import)
+                .with_referrer("external:@scope/pkg.js"),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect_err("native mode should reject extensionless scoped external ESM relatives");
+    assert_eq!(native_error.code, ResolutionErrorCode::ModuleNotFound);
+    assert_eq!(native_error.probe_sequence, vec!["@scope/pkg/sub"]);
+
+    let node_error = resolver
+        .resolve(
+            &ModuleRequest::new("./sub", ImportStyle::Import)
+                .with_referrer("external:@scope/pkg.js")
+                .with_compatibility_mode(CompatibilityMode::NodeCompat),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect_err("node_compat should reject extensionless scoped external ESM relatives");
+    assert_eq!(node_error.code, ResolutionErrorCode::ModuleNotFound);
+    assert_eq!(node_error.probe_sequence, vec!["@scope/pkg/sub"]);
+
+    let bun_outcome = resolver
+        .resolve(
+            &ModuleRequest::new("./sub", ImportStyle::Import)
+                .with_referrer("external:@scope/pkg.js")
+                .with_compatibility_mode(CompatibilityMode::BunCompat),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect("bun_compat should resolve extensionless scoped external ESM relatives");
+    assert_eq!(bun_outcome.module.canonical_specifier, "@scope/pkg/sub.mjs");
+    assert_eq!(
+        bun_outcome.module.probe_sequence,
+        vec!["@scope/pkg/sub", "@scope/pkg/sub.mjs"]
+    );
+}
+
+#[test]
 fn external_package_explicit_relative_extension_resolves_outside_bun_compat() {
     let mut resolver = DeterministicModuleResolver::default();
     resolver
@@ -1169,6 +1218,36 @@ fn external_package_relative_traversal_cannot_escape_package_root() {
         error
             .message
             .contains("escapes external package root 'some-pkg'")
+    );
+    assert!(error.probe_sequence.is_empty());
+}
+
+#[test]
+fn scoped_external_package_relative_traversal_cannot_escape_package_root() {
+    let mut resolver = DeterministicModuleResolver::default();
+    resolver
+        .register_external_module(
+            "@scope/pkg.js",
+            cjs_def("module.exports = require('../other-pkg/private.mjs');"),
+        )
+        .unwrap();
+    resolver
+        .register_external_module("other-pkg/private.mjs", esm_def("export default 'secret';"))
+        .unwrap();
+
+    let error = resolver
+        .resolve(
+            &ModuleRequest::new("../other-pkg/private.mjs", ImportStyle::Import)
+                .with_referrer("external:@scope/pkg.js"),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect_err("scoped external package relatives must not escape the package root");
+    assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
+    assert!(
+        error
+            .message
+            .contains("escapes external package root '@scope/pkg'")
     );
     assert!(error.probe_sequence.is_empty());
 }

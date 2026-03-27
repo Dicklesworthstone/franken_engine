@@ -410,6 +410,29 @@ fn inventory_distinguishes_native_and_bun_compat_cjs_requires_esm() {
 }
 
 #[test]
+fn inventory_reports_native_default_and_namespace_cjs_projections_as_supported() {
+    let inv = run_interop_parity_corpus();
+
+    for specimen_id in ["esm_imports_cjs_default", "namespace_import_from_cjs"] {
+        let evidence = inv
+            .evidence
+            .iter()
+            .find(|ev| ev.specimen_id == specimen_id)
+            .unwrap();
+        assert_eq!(evidence.compatibility_mode, CompatibilityMode::Native);
+        assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
+        assert_eq!(evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(evidence.linked_count, 2);
+        assert_eq!(
+            evidence.compatibility_disposition,
+            InteropCompatibilityDisposition::Supported
+        );
+        assert!(evidence.error_detail.is_none());
+        assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
+    }
+}
+
+#[test]
 fn inventory_distinguishes_native_node_compat_and_bun_compat_extensionless_relative_imports() {
     let inv = run_interop_parity_corpus();
 

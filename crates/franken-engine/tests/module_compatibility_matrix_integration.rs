@@ -1585,3 +1585,62 @@ fn mixed_cycle_bun_compat_interop_evidence_matches_matrix_contract() {
         .expect("mixed-cycle interop evidence should match the matrix contract");
     assert!(outcome.matched);
 }
+
+#[test]
+fn extensionless_relative_interop_evidence_matches_matrix_contract_across_modes() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    let inventory = run_interop_parity_corpus();
+    for (specimen_id, mode, expected_outcome, expected_behavior) in [
+        (
+            "package_type_module_extensionless_relative_native",
+            CompatibilityMode::Native,
+            InteropActualOutcome::LinkFailure,
+            "reject_extensionless_relative",
+        ),
+        (
+            "package_type_module_extensionless_relative_node_compat",
+            CompatibilityMode::NodeCompat,
+            InteropActualOutcome::LinkFailure,
+            "reject_extensionless_relative",
+        ),
+        (
+            "package_type_module_extensionless_relative_bun_compat",
+            CompatibilityMode::BunCompat,
+            InteropActualOutcome::Success,
+            "resolve_extensionless_relative",
+        ),
+    ] {
+        let evidence = inventory
+            .evidence
+            .iter()
+            .find(|ev| ev.specimen_id == specimen_id)
+            .unwrap_or_else(|| {
+                panic!("extensionless-relative specimen should exist: {specimen_id}")
+            });
+        assert_eq!(evidence.compatibility_mode, mode);
+        assert_eq!(evidence.actual_outcome, expected_outcome);
+
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "package-type-module-extensionless-relative",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    expected_behavior,
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!(
+                    "extensionless-relative evidence should evaluate against the matrix for {specimen_id}: {err}"
+                )
+            });
+        assert!(
+            outcome.matched,
+            "extensionless-relative evidence should match the matrix contract for {specimen_id}"
+        );
+    }
+}

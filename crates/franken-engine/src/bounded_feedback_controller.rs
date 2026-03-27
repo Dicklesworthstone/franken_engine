@@ -404,7 +404,7 @@ impl PiController {
         // Check emergency.
         let emergency = observation.observed_ns > self.target.emergency_ns;
         if emergency && !self.state.emergency_active {
-            self.state.emergency_count += 1;
+            self.state.emergency_count = self.state.emergency_count.saturating_add(1);
         }
         self.state.emergency_active = emergency;
 
@@ -754,11 +754,9 @@ impl FeedbackCoordinator {
             .values()
             .filter(|c| c.state.emergency_active)
             .count() as u64;
-        let total_emergencies = self
-            .controllers
-            .values()
-            .map(|c| c.state.emergency_count)
-            .sum();
+        let total_emergencies = self.controllers.values().fold(0u64, |acc, controller| {
+            acc.saturating_add(controller.state.emergency_count)
+        });
         let warmup_remaining = self
             .controllers
             .values()
@@ -863,16 +861,18 @@ impl FeedbackEvidenceManifest {
         let emergency_count: u64 = coordinator
             .controllers
             .values()
-            .map(|c| c.state.emergency_count)
-            .sum();
+            .fold(0u64, |acc, controller| {
+                acc.saturating_add(controller.state.emergency_count)
+            });
         let policy_hash = coordinator.policy.content_hash();
         let hash_input = format!(
-            "{}:{}:{}:{}:{}",
+            "{}:{}:{}:{}:{}:{}",
             FEEDBACK_SCHEMA_VERSION,
             FEEDBACK_BEAD_ID,
             coordinator.controllers.len(),
             coordinator.decision_log.len(),
             emergency_count,
+            policy_hash,
         );
         let manifest_hash = hex_encode(ContentHash::compute(hash_input.as_bytes()).as_bytes());
         Self {
@@ -894,9 +894,10 @@ impl FeedbackEvidenceManifest {
 /// Multiply a value by a millionths gain, returning millionths.
 fn mul_millionths(value_ns: i64, gain_millionths: i64) -> i64 {
     // (value * gain) / MILLIONTHS
-    // Use i128 to prevent overflow.
+    // Use i128 to prevent overflow. Clamp result to i64 range.
     let product = (value_ns as i128) * (gain_millionths as i128);
-    (product / MILLIONTHS as i128) as i64
+    let result = product / MILLIONTHS as i128;
+    result.clamp(i64::MIN as i128, i64::MAX as i128) as i64
 }
 
 /// Clamp a value between min and max.
@@ -1475,6 +1476,73 @@ mod tests {
         assert_eq!(manifest.decision_count, 1);
         assert_eq!(manifest.emergency_count, 1);
         assert!(!manifest.manifest_hash.is_empty());
+    }
+
+    #[test]
+    fn evidence_manifest_hash_changes_with_policy_hash() {
+        let mut policy_a = FeedbackPolicy::default();
+        policy_a.controllers.insert(
+            "test".into(),
+            ControllerConfig {
+                warmup_epochs: 0,
+                ..Default::default()
+            },
+        );
+        policy_a.targets.push(test_target());
+
+        let mut policy_b = policy_a.clone();
+        policy_b.controllers.get_mut("test").unwrap().kp_millionths = 900_000;
+
+        let coordinator_a = FeedbackCoordinator::new(policy_a, test_epoch());
+        let coordinator_b = FeedbackCoordinator::new(policy_b, test_epoch());
+        let manifest_a = FeedbackEvidenceManifest::from_coordinator(&coordinator_a);
+        let manifest_b = FeedbackEvidenceManifest::from_coordinator(&coordinator_b);
+
+        assert_eq!(manifest_a.controller_count, manifest_b.controller_count);
+        assert_eq!(manifest_a.decision_count, manifest_b.decision_count);
+        assert_eq!(manifest_a.emergency_count, manifest_b.emergency_count);
+        assert_ne!(manifest_a.policy_hash, manifest_b.policy_hash);
+        assert_ne!(manifest_a.manifest_hash, manifest_b.manifest_hash);
+    }
+
+    #[test]
+    fn emergency_aggregates_saturate_without_overflow() {
+        let mut policy = FeedbackPolicy::default();
+        policy.controllers.insert(
+            "a".into(),
+            ControllerConfig {
+                warmup_epochs: 0,
+                ..Default::default()
+            },
+        );
+        policy.controllers.insert(
+            "b".into(),
+            ControllerConfig {
+                warmup_epochs: 0,
+                ..Default::default()
+            },
+        );
+        policy.targets.push(test_target());
+
+        let mut coordinator = FeedbackCoordinator::new(policy, test_epoch());
+        coordinator
+            .controllers
+            .get_mut("a")
+            .unwrap()
+            .state
+            .emergency_count = u64::MAX;
+        coordinator
+            .controllers
+            .get_mut("b")
+            .unwrap()
+            .state
+            .emergency_count = 1;
+
+        let health = coordinator.health_summary();
+        let manifest = FeedbackEvidenceManifest::from_coordinator(&coordinator);
+
+        assert_eq!(health.total_emergency_activations, u64::MAX);
+        assert_eq!(manifest.emergency_count, u64::MAX);
     }
 
     #[test]

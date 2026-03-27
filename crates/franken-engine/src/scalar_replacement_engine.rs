@@ -1217,10 +1217,35 @@ pub fn execute_transforms(
         outcomes.push(outcome);
     }
 
-    let summary_hash_input = format!(
-        "summary:{}:{}:{}:{}:{}",
-        envelope.scope_id, scalar_count, region_count, sinking_count, total_bytes_saved
-    );
+    #[derive(Serialize)]
+    struct TransformSummaryHashPayload<'a> {
+        schema_version: &'a str,
+        scope_id: &'a str,
+        total_sites: u64,
+        scalar_replacement_count: u64,
+        region_promotion_count: u64,
+        allocation_sinking_count: u64,
+        no_transform_count: u64,
+        total_bytes_saved: u64,
+        outcomes: &'a [TransformOutcome],
+        denial_histogram: &'a BTreeMap<String, u64>,
+        epoch: &'a SecurityEpoch,
+    }
+
+    let summary_hash_input = serde_json::to_vec(&TransformSummaryHashPayload {
+        schema_version: SRE_SCHEMA_VERSION,
+        scope_id: &envelope.scope_id,
+        total_sites: envelope.certificates.len() as u64,
+        scalar_replacement_count: scalar_count,
+        region_promotion_count: region_count,
+        allocation_sinking_count: sinking_count,
+        no_transform_count,
+        total_bytes_saved,
+        outcomes: &outcomes,
+        denial_histogram: &denial_histogram,
+        epoch: &epoch,
+    })
+    .expect("transform summary payload should serialize for deterministic hashing");
 
     TransformSummary {
         schema_version: SRE_SCHEMA_VERSION.to_string(),
@@ -1234,7 +1259,7 @@ pub fn execute_transforms(
         outcomes,
         denial_histogram,
         epoch,
-        summary_hash: hex_encode(ContentHash::compute(summary_hash_input.as_bytes()).as_bytes()),
+        summary_hash: hex_encode(ContentHash::compute(&summary_hash_input).as_bytes()),
     }
 }
 
@@ -2183,6 +2208,76 @@ mod tests {
         assert_eq!(summary.scalar_replacement_count, 5);
         assert_eq!(summary.no_transform_count, 0);
         assert_eq!(summary.transform_rate_millionths(), MILLION);
+    }
+
+    #[test]
+    fn execute_transforms_summary_hash_changes_with_outcome_details() {
+        let env_a = OptimizationEligibilityEnvelope {
+            schema_version: "v1".to_string(),
+            scope_id: "hash_scope".to_string(),
+            total_sites: 1,
+            scalar_replacement_count: 1,
+            stack_allocation_count: 1,
+            abstention_count: 0,
+            alias_class_count: 1,
+            certificates: vec![make_cert(
+                "hash_site_a",
+                AllocationKind::ObjectLiteral,
+                EscapeState::NoEscape,
+                true,
+                true,
+            )],
+            overall_confidence_millionths: 800_000,
+            envelope_hash: "env_hash".to_string(),
+            epoch: test_epoch(),
+        };
+        let env_b = OptimizationEligibilityEnvelope {
+            schema_version: "v1".to_string(),
+            scope_id: "hash_scope".to_string(),
+            total_sites: 1,
+            scalar_replacement_count: 1,
+            stack_allocation_count: 1,
+            abstention_count: 0,
+            alias_class_count: 1,
+            certificates: vec![make_cert(
+                "hash_site_b",
+                AllocationKind::ObjectLiteral,
+                EscapeState::NoEscape,
+                true,
+                true,
+            )],
+            overall_confidence_millionths: 800_000,
+            envelope_hash: "env_hash".to_string(),
+            epoch: test_epoch(),
+        };
+
+        let mut layouts_a = BTreeMap::new();
+        layouts_a.insert("hash_site_a".to_string(), make_layout("hash_site_a", 2));
+        let mut layouts_b = BTreeMap::new();
+        layouts_b.insert("hash_site_b".to_string(), make_layout("hash_site_b", 2));
+
+        let summary_a = execute_transforms(
+            &env_a,
+            &layouts_a,
+            &BTreeMap::new(),
+            &default_config(),
+            test_epoch(),
+        );
+        let summary_b = execute_transforms(
+            &env_b,
+            &layouts_b,
+            &BTreeMap::new(),
+            &default_config(),
+            test_epoch(),
+        );
+
+        assert_eq!(
+            summary_a.scalar_replacement_count,
+            summary_b.scalar_replacement_count
+        );
+        assert_eq!(summary_a.total_bytes_saved, summary_b.total_bytes_saved);
+        assert_ne!(summary_a.outcomes, summary_b.outcomes);
+        assert_ne!(summary_a.summary_hash, summary_b.summary_hash);
     }
 
     // --- Transform summary ---

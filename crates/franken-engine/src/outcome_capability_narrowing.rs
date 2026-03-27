@@ -566,13 +566,25 @@ impl CapabilityNarrowingValidator {
             }
         }
 
-        let content = format!(
-            "transitions={},violations={},narrowed={},widened={}",
-            self.transitions.len(),
-            self.violations.len(),
-            direction_counts.get("narrowed").copied().unwrap_or(0),
-            direction_counts.get("widened").copied().unwrap_or(0),
-        );
+        let content = {
+            let mut s = format!(
+                "transitions={},violations={},epoch={}",
+                self.transitions.len(),
+                self.violations.len(),
+                self.epoch.as_u64(),
+            );
+            // direction_counts and outcome_counts are BTreeMap — deterministic.
+            for (dir, count) in &direction_counts {
+                s.push_str(&format!("|dir:{dir}={count}"));
+            }
+            for (outcome, count) in &outcome_counts {
+                s.push_str(&format!("|out:{outcome}={count}"));
+            }
+            for v in &self.violations {
+                s.push_str(&format!("|v:{v}"));
+            }
+            s
+        };
         let content_hash = ContentHash::compute(content.as_bytes());
 
         NarrowingReport {

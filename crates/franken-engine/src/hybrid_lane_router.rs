@@ -593,7 +593,9 @@ pub fn compute_reward(obs: &LaneObservation, latency_baseline_us: u64) -> i64 {
     let ratio = if latency_baseline_us == 0 {
         0i64
     } else {
-        ((obs.latency_us as i64) * MILLION) / (latency_baseline_us as i64)
+        let latency_safe = i64::try_from(obs.latency_us).unwrap_or(i64::MAX);
+        let baseline_safe = i64::try_from(latency_baseline_us).unwrap_or(i64::MAX);
+        latency_safe.saturating_mul(MILLION) / baseline_safe.max(1)
     };
     let latency_reward = (MILLION - ratio / 2).clamp(0, MILLION);
 

@@ -2927,7 +2927,7 @@ mod tests {
     fn proof_evidence_metadata_length_prefixed() {
         // Bug: metadata map lacked a length prefix. Two evidences with
         // different metadata lengths should produce different hashes.
-        let mut ev1 = ProofEvidence {
+        let ev1 = ProofEvidence {
             mode: ProofMode::Symbolic,
             artifact_hash: ContentHash::compute(b"a"),
             verification_steps: 1,

@@ -1216,9 +1216,9 @@ impl ExecutionOrchestrator {
             .get(&package.extension_id)
             .copied()
             .unwrap_or(0);
-        let llr_increment = update
-            .cumulative_llr_millionths
-            .saturating_sub(previous_llr);
+        let llr_increment = (i128::from(update.cumulative_llr_millionths)
+            - i128::from(previous_llr))
+        .clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64;
         self.last_cumulative_llr_by_extension.insert(
             package.extension_id.clone(),
             update.cumulative_llr_millionths,
@@ -2078,6 +2078,42 @@ mod tests {
         assert_eq!(cert_a.expect("certificate").algorithm, "none");
         assert_eq!(decision_b, StoppingDecision::Continue);
         assert_eq!(cert_b.expect("certificate").algorithm, "none");
+    }
+
+    #[test]
+    fn optimal_stopping_same_extension_preserves_negative_cumulative_delta() {
+        let mut orch = ExecutionOrchestrator::with_defaults();
+        let pkg = package_with_id("ext-negative-delta");
+        let update_a = UpdateResult {
+            posterior: Posterior::default_prior(),
+            likelihoods: [500_000, 500_000, 500_000, 500_000],
+            cumulative_llr_millionths: 4_800_000,
+            update_count: 1,
+        };
+        let update_b = UpdateResult {
+            posterior: Posterior::default_prior(),
+            likelihoods: [500_000, 500_000, 500_000, 500_000],
+            cumulative_llr_millionths: 3_800_000,
+            update_count: 2,
+        };
+
+        let (decision_a, cert_a) = orch.observe_optimal_stopping(&update_a, &pkg, 0);
+        let (decision_b, cert_b) = orch.observe_optimal_stopping(&update_b, &pkg, 1);
+
+        assert_eq!(decision_a, StoppingDecision::Continue);
+        assert_eq!(cert_a.expect("certificate").algorithm, "none");
+        assert_eq!(decision_b, StoppingDecision::Continue);
+        assert_eq!(cert_b.expect("certificate").algorithm, "none");
+
+        let policy = orch
+            .stopping_policies
+            .get(&pkg.extension_id)
+            .expect("policy should exist for extension");
+        assert_eq!(policy.cusum.statistic_millionths, 2_800_000);
+        assert_eq!(
+            orch.last_cumulative_llr_by_extension.get(&pkg.extension_id),
+            Some(&3_800_000)
+        );
     }
 
     #[test]

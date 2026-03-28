@@ -1,6 +1,6 @@
 use std::hint;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, RwLock};
+use std::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use serde::{Deserialize, Serialize};
 
@@ -74,6 +74,17 @@ pub struct SnapshotFastPath<T> {
     writes: AtomicU64,
 }
 
+struct SequencePublishGuard<'a> {
+    sequence: &'a AtomicU64,
+    final_sequence: u64,
+}
+
+impl Drop for SequencePublishGuard<'_> {
+    fn drop(&mut self) {
+        self.sequence.store(self.final_sequence, Ordering::Release);
+    }
+}
+
 impl<T> SnapshotFastPath<T> {
     pub const fn policy(&self) -> RetryBudgetPolicy {
         self.policy
@@ -102,24 +113,36 @@ impl<T> SnapshotFastPath<T> {
         }
     }
 
+    fn lock_writer_gate(&self) -> MutexGuard<'_, ()> {
+        self.writer_gate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn snapshot_read(&self) -> RwLockReadGuard<'_, Option<T>> {
+        self.snapshot
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn snapshot_write(&self) -> RwLockWriteGuard<'_, Option<T>> {
+        self.snapshot
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     /// Seed a known baseline snapshot without counting it as a runtime write.
     pub fn seed_if_uninitialized(&self, initial: T) -> bool {
         if self.is_initialized() {
             return false;
         }
 
-        let _writer_guard = self
-            .writer_gate
-            .lock()
-            .expect("seqlock writer gate must not poison");
+        let _writer_guard = self.lock_writer_gate();
         if self.is_initialized() {
             return false;
         }
 
-        *self
-            .snapshot
-            .write()
-            .expect("seqlock snapshot write must not poison") = Some(initial);
+        *self.snapshot_write() = Some(initial);
         self.initialized.store(true, Ordering::Release);
         true
     }
@@ -132,21 +155,21 @@ impl<T> SnapshotFastPath<T> {
     where
         F: FnOnce(),
     {
-        let _writer_guard = self
-            .writer_gate
-            .lock()
-            .expect("seqlock writer gate must not poison");
+        let _writer_guard = self.lock_writer_gate();
         let start = self.sequence.load(Ordering::Acquire);
+        // Treat any observed odd value as a stale in-progress marker and restart
+        // this publish cycle from the last stable even epoch.
+        let stable_start = start & !1;
+        let final_sequence = stable_start.wrapping_add(2);
         self.sequence
-            .store(start.wrapping_add(1), Ordering::Release);
+            .store(stable_start.wrapping_add(1), Ordering::Release);
+        let _sequence_guard = SequencePublishGuard {
+            sequence: &self.sequence,
+            final_sequence,
+        };
         on_odd_sequence();
-        *self
-            .snapshot
-            .write()
-            .expect("seqlock snapshot write must not poison") = Some(next);
+        *self.snapshot_write() = Some(next);
         self.initialized.store(true, Ordering::Release);
-        self.sequence
-            .store(start.wrapping_add(2), Ordering::Release);
         self.writes.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -209,11 +232,7 @@ impl<T: Clone> SnapshotFastPath<T> {
                 continue;
             }
 
-            let cloned = self
-                .snapshot
-                .read()
-                .expect("seqlock snapshot read must not poison")
-                .clone();
+            let cloned = self.snapshot_read().clone();
             let end = self.sequence.load(Ordering::Acquire);
             if start == end && end.is_multiple_of(2) {
                 if let Some(value) = cloned {
@@ -273,6 +292,8 @@ impl<T> Eq for SnapshotFastPath<T> {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::{Arc, Barrier};
     use std::thread;
     use std::time::Duration;
@@ -641,6 +662,58 @@ mod tests {
         assert_eq!(result.value, 11);
         assert_eq!(result.source, FastPathReadSource::FastPath);
         assert_eq!(fast_path.sequence.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn panicking_publish_hook_does_not_brick_future_publishes() {
+        let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(4, 2));
+        fast_path.seed_if_uninitialized(7_u64);
+
+        let panic_result = catch_unwind(AssertUnwindSafe(|| {
+            fast_path.publish_with_hook(11_u64, || panic!("boom"));
+        }));
+        assert!(panic_result.is_err());
+
+        assert_eq!(fast_path.sequence.load(Ordering::Acquire), 2);
+
+        let after_panic = fast_path.read_clone_or_else(|| 0);
+        assert_eq!(after_panic.value, 7);
+        assert_eq!(after_panic.source, FastPathReadSource::FastPath);
+
+        fast_path.publish(13_u64);
+
+        let after_recovery = fast_path.read_clone_or_else(|| 0);
+        assert_eq!(after_recovery.value, 13);
+        assert_eq!(after_recovery.source, FastPathReadSource::FastPath);
+        assert_eq!(fast_path.telemetry().writes, 1);
+    }
+
+    #[test]
+    fn odd_start_publish_normalizes_to_writer_pressure_then_even_commit() {
+        let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(4, 0));
+        fast_path.seed_if_uninitialized(7_u64);
+        fast_path.sequence.store(1, Ordering::Release);
+
+        let during_write = RefCell::new(None);
+        fast_path.publish_with_hook(11_u64, || {
+            assert_eq!(fast_path.sequence.load(Ordering::Acquire), 1);
+            *during_write.borrow_mut() = Some(fast_path.read_clone_or_else(|| 99_u64));
+        });
+
+        let during_write = during_write
+            .into_inner()
+            .expect("during-write probe should observe the publish state");
+        assert_eq!(during_write.value, 99);
+        assert_eq!(during_write.source, FastPathReadSource::Fallback);
+        assert_eq!(
+            during_write.fallback_reason,
+            Some(FastPathFallbackReason::WriterPressure)
+        );
+        assert_eq!(fast_path.sequence.load(Ordering::Acquire), 2);
+
+        let after_publish = fast_path.read_clone_or_else(|| 0_u64);
+        assert_eq!(after_publish.value, 11);
+        assert_eq!(after_publish.source, FastPathReadSource::FastPath);
     }
 
     // ── seed + publish interaction ──────────────────────────────────

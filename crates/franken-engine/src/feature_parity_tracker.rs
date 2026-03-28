@@ -229,6 +229,22 @@ impl Test262Result {
                 ),
             });
         }
+        if self.failing_test_ids.len() != self.total.saturating_sub(self.passing) {
+            return Err(ParityTrackerError::InvalidMetrics {
+                detail: format!(
+                    "failing_test_ids count ({}) inconsistent with total-passing ({}) for {:?}",
+                    self.failing_test_ids.len(),
+                    self.total.saturating_sub(self.passing),
+                    self.area
+                ),
+            });
+        }
+        let unique_ids: BTreeSet<&str> = self.failing_test_ids.iter().map(String::as_str).collect();
+        if unique_ids.len() != self.failing_test_ids.len() {
+            return Err(ParityTrackerError::InvalidMetrics {
+                detail: format!("duplicate failing test IDs detected for {:?}", self.area),
+            });
+        }
         Ok(())
     }
 }
@@ -276,6 +292,16 @@ impl LockstepResult {
                 ),
             });
         }
+        let unique_ids: BTreeSet<&str> =
+            self.mismatches.iter().map(|m| m.test_id.as_str()).collect();
+        if unique_ids.len() != self.mismatches.len() {
+            return Err(ParityTrackerError::InvalidMetrics {
+                detail: format!(
+                    "duplicate mismatch test IDs detected for {:?}/{:?}",
+                    self.area, self.runtime
+                ),
+            });
+        }
         Ok(())
     }
 }
@@ -295,8 +321,10 @@ pub struct WaiverRecord {
     pub approved_at_ns: u64,
     pub valid_until_ns: Option<u64>,
     /// Specific test262 test IDs exempted by this waiver.
+    /// Leave empty only for a feature-wide waiver.
     pub test262_exemptions: Vec<String>,
     /// Specific lockstep test IDs exempted by this waiver.
+    /// Leave empty only for a feature-wide waiver.
     pub lockstep_exemptions: Vec<String>,
     /// Once sealed, the waiver cannot be modified.
     pub sealed: bool,
@@ -487,6 +515,12 @@ pub struct FeatureParityTracker {
     waived_test262_ids: BTreeSet<String>,
     /// Waived lockstep test IDs (derived from waivers).
     waived_lockstep_ids: BTreeSet<String>,
+    /// Exact failing test262 test IDs from the most recent ingestion per feature.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    latest_test262_failures_by_feature: BTreeMap<String, BTreeSet<String>>,
+    /// Exact lockstep mismatch test IDs from the most recent ingestion per feature/runtime.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    latest_lockstep_mismatches_by_feature: BTreeMap<String, BTreeMap<String, BTreeSet<String>>>,
 }
 
 impl FeatureParityTracker {
@@ -504,6 +538,8 @@ impl FeatureParityTracker {
             gate_criteria: ReleaseGateCriteria::default(),
             waived_test262_ids: BTreeSet::new(),
             waived_lockstep_ids: BTreeSet::new(),
+            latest_test262_failures_by_feature: BTreeMap::new(),
+            latest_lockstep_mismatches_by_feature: BTreeMap::new(),
         }
     }
 
@@ -516,6 +552,8 @@ impl FeatureParityTracker {
             gate_criteria: ReleaseGateCriteria::default(),
             waived_test262_ids: BTreeSet::new(),
             waived_lockstep_ids: BTreeSet::new(),
+            latest_test262_failures_by_feature: BTreeMap::new(),
+            latest_lockstep_mismatches_by_feature: BTreeMap::new(),
         }
     }
 
@@ -571,24 +609,29 @@ impl FeatureParityTracker {
     ) -> Result<(), ParityTrackerError> {
         result.validate()?;
         let feature_id = format!("{}-{}", EsVersion::Es2020, result.area);
-        let entry = self.features.get_mut(&feature_id).ok_or_else(|| {
-            ParityTrackerError::FeatureNotFound {
-                feature_id: feature_id.clone(),
-            }
-        })?;
+        self.sync_feature_wide_waived_status(&feature_id);
+        let feature_is_fully_waived = self.feature_is_fully_waived(&feature_id);
+        {
+            let entry = self.features.get_mut(&feature_id).ok_or_else(|| {
+                ParityTrackerError::FeatureNotFound {
+                    feature_id: feature_id.clone(),
+                }
+            })?;
 
-        entry.test262_total = result.total;
-        entry.test262_passing = result.passing;
-        entry.recompute_rates();
+            entry.test262_total = result.total;
+            entry.test262_passing = result.passing;
+            entry.recompute_rates();
 
-        // Auto-update status based on test262 results
-        if entry.status != FeatureStatus::Waived {
-            if result.total > 0 && result.passing == result.total {
-                entry.status = FeatureStatus::Passing;
-            } else if result.total > 0 {
-                entry.status = FeatureStatus::InProgress;
+            // Auto-update status based on test262 results
+            if !feature_is_fully_waived {
+                if result.total > 0 && result.passing == result.total {
+                    entry.status = FeatureStatus::Passing;
+                } else if result.total > 0 {
+                    entry.status = FeatureStatus::InProgress;
+                }
             }
         }
+        self.record_test262_failures(&feature_id, &result.failing_test_ids);
 
         self.emit_event(
             ctx,
@@ -607,20 +650,22 @@ impl FeatureParityTracker {
     ) -> Result<(), ParityTrackerError> {
         result.validate()?;
         let feature_id = format!("{}-{}", EsVersion::Es2020, result.area);
-        let entry = self.features.get_mut(&feature_id).ok_or_else(|| {
-            ParityTrackerError::FeatureNotFound {
-                feature_id: feature_id.clone(),
-            }
-        })?;
-
         let rt_key = result.runtime.to_string();
-        entry
-            .lockstep_total_comparisons
-            .insert(rt_key.clone(), result.total_comparisons);
-        entry
-            .lockstep_matches
-            .insert(rt_key.clone(), result.matches);
-        entry.recompute_rates();
+        {
+            let entry = self.features.get_mut(&feature_id).ok_or_else(|| {
+                ParityTrackerError::FeatureNotFound {
+                    feature_id: feature_id.clone(),
+                }
+            })?;
+            entry
+                .lockstep_total_comparisons
+                .insert(rt_key.clone(), result.total_comparisons);
+            entry
+                .lockstep_matches
+                .insert(rt_key.clone(), result.matches);
+            entry.recompute_rates();
+        }
+        self.record_lockstep_mismatches(&feature_id, &rt_key, &result.mismatches);
 
         self.emit_event(
             ctx,
@@ -645,6 +690,8 @@ impl FeatureParityTracker {
         ctx: &TrackerContext,
     ) -> Result<(), ParityTrackerError> {
         waiver.validate()?;
+        let feature_wide_waiver =
+            waiver.test262_exemptions.is_empty() && waiver.lockstep_exemptions.is_empty();
 
         if self.waivers.contains_key(&waiver.waiver_id) {
             return Err(ParityTrackerError::WaiverAlreadyExists {
@@ -667,10 +714,9 @@ impl FeatureParityTracker {
             self.waived_lockstep_ids.insert(id.clone());
         }
 
-        // Mark feature as waived if not already passing
-        if let Some(entry) = self.features.get_mut(&waiver.feature_id)
-            && entry.status != FeatureStatus::Passing
-        {
+        // Feature-wide waivers are explicit; granular exemptions should not
+        // silently convert the whole feature into a fully waived state.
+        if feature_wide_waiver && let Some(entry) = self.features.get_mut(&waiver.feature_id) {
             entry.status = FeatureStatus::Waived;
         }
 
@@ -733,8 +779,13 @@ impl FeatureParityTracker {
         let mut status_counts = BTreeMap::new();
 
         for entry in self.features.values() {
+            let effective_status = if self.has_feature_wide_waiver(&entry.feature_id) {
+                FeatureStatus::Waived
+            } else {
+                entry.status
+            };
             *status_counts
-                .entry(format!("{}", entry.status))
+                .entry(format!("{effective_status}"))
                 .or_insert(0usize) += 1;
 
             total_test262 += entry.test262_total;
@@ -745,7 +796,7 @@ impl FeatureParityTracker {
                 FeatureAreaSnapshot {
                     feature_id: entry.feature_id.clone(),
                     area: entry.area,
-                    status: entry.status,
+                    status: effective_status,
                     test262_pass_rate_millionths: entry.test262_pass_rate_millionths,
                     lockstep_match_rates_millionths: entry.lockstep_match_rates_millionths.clone(),
                 },
@@ -795,13 +846,14 @@ impl FeatureParityTracker {
 
     /// Evaluate the release gate against current state.
     pub fn evaluate_gate(&mut self, ctx: &TrackerContext) -> ReleaseGateDecision {
+        self.sync_feature_wide_waived_statuses();
         let mut failing_features = Vec::new();
         let mut unwaived_failures = Vec::new();
         let dashboard = self.dashboard();
 
         for entry in self.features.values() {
             // Skip waived features — they're covered by governance
-            if entry.status == FeatureStatus::Waived {
+            if self.has_feature_wide_waiver(&entry.feature_id) {
                 continue;
             }
 
@@ -826,23 +878,99 @@ impl FeatureParityTracker {
         // Check waiver coverage if required
         if self.gate_criteria.require_waiver_coverage {
             for entry in self.features.values() {
-                if entry.status == FeatureStatus::Waived {
+                if self.has_feature_wide_waiver(&entry.feature_id) {
                     continue;
                 }
-                let failing_count = entry.test262_total.saturating_sub(entry.test262_passing);
-                if failing_count > 0 {
-                    // Check how many of the failures are waived
-                    // Since we don't track individual failing test IDs in the entry,
-                    // we rely on the waiver coverage by feature
-                    let has_waivers = self
-                        .waivers
-                        .values()
-                        .any(|w| w.feature_id == entry.feature_id);
-                    if !has_waivers {
+                let expected_test262_failures =
+                    entry.test262_total.saturating_sub(entry.test262_passing);
+                let mut saw_precise_test262_evidence = false;
+                if let Some(test_ids) = self
+                    .latest_test262_failures_by_feature
+                    .get(&entry.feature_id)
+                {
+                    saw_precise_test262_evidence = true;
+                    for test_id in test_ids {
+                        if !self.is_test262_waived_for_feature(&entry.feature_id, test_id) {
+                            unwaived_failures.push(UnwaivedFailure {
+                                feature_id: entry.feature_id.clone(),
+                                failure_type: "test262".to_string(),
+                                test_id: test_id.clone(),
+                            });
+                        }
+                    }
+                    if test_ids.len() != expected_test262_failures {
                         unwaived_failures.push(UnwaivedFailure {
                             feature_id: entry.feature_id.clone(),
                             failure_type: "test262".to_string(),
-                            test_id: format!("{}-unwaived", entry.feature_id),
+                            test_id: format!(
+                                "{}::test262::coverage-evidence-missing",
+                                entry.feature_id
+                            ),
+                        });
+                    }
+                }
+                if expected_test262_failures > 0 && !saw_precise_test262_evidence {
+                    unwaived_failures.push(UnwaivedFailure {
+                        feature_id: entry.feature_id.clone(),
+                        failure_type: "test262".to_string(),
+                        test_id: format!(
+                            "{}::test262::coverage-evidence-missing",
+                            entry.feature_id
+                        ),
+                    });
+                }
+                if let Some(runtime_mismatches) = self
+                    .latest_lockstep_mismatches_by_feature
+                    .get(&entry.feature_id)
+                {
+                    for (runtime, test_ids) in runtime_mismatches {
+                        for test_id in test_ids {
+                            if !self.is_lockstep_waived_for_feature(&entry.feature_id, test_id) {
+                                unwaived_failures.push(UnwaivedFailure {
+                                    feature_id: entry.feature_id.clone(),
+                                    failure_type: "lockstep".to_string(),
+                                    test_id: test_id.clone(),
+                                });
+                            }
+                        }
+                        let expected_runtime_failures = entry
+                            .lockstep_total_comparisons
+                            .get(runtime)
+                            .copied()
+                            .unwrap_or(0)
+                            .saturating_sub(
+                                entry.lockstep_matches.get(runtime).copied().unwrap_or(0),
+                            );
+                        if test_ids.len() != expected_runtime_failures {
+                            unwaived_failures.push(UnwaivedFailure {
+                                feature_id: entry.feature_id.clone(),
+                                failure_type: "lockstep".to_string(),
+                                test_id: format!(
+                                    "{}::{runtime}::lockstep-coverage-evidence-missing",
+                                    entry.feature_id
+                                ),
+                            });
+                        }
+                    }
+                }
+                for (runtime, total) in &entry.lockstep_total_comparisons {
+                    let expected_runtime_failures = total
+                        .saturating_sub(entry.lockstep_matches.get(runtime).copied().unwrap_or(0));
+                    if expected_runtime_failures == 0 {
+                        continue;
+                    }
+                    let recorded_runtime_failures = self
+                        .latest_lockstep_mismatches_by_feature
+                        .get(&entry.feature_id)
+                        .and_then(|runtime_map| runtime_map.get(runtime));
+                    if recorded_runtime_failures.is_none() {
+                        unwaived_failures.push(UnwaivedFailure {
+                            feature_id: entry.feature_id.clone(),
+                            failure_type: "lockstep".to_string(),
+                            test_id: format!(
+                                "{}::{runtime}::lockstep-coverage-evidence-missing",
+                                entry.feature_id
+                            ),
                         });
                     }
                 }
@@ -872,6 +1000,95 @@ impl FeatureParityTracker {
             unwaived_failures,
             overall_test262_pass_rate_millionths: dashboard.overall_test262_pass_rate_millionths,
             overall_lockstep_match_rate_millionths: overall_lockstep,
+        }
+    }
+
+    fn is_test262_waived_for_feature(&self, feature_id: &str, test_id: &str) -> bool {
+        self.waivers
+            .values()
+            .filter(|waiver| waiver.feature_id == feature_id)
+            .any(|waiver| waiver.test262_exemptions.iter().any(|id| id == test_id))
+    }
+
+    fn is_lockstep_waived_for_feature(&self, feature_id: &str, test_id: &str) -> bool {
+        self.waivers
+            .values()
+            .filter(|waiver| waiver.feature_id == feature_id)
+            .any(|waiver| waiver.lockstep_exemptions.iter().any(|id| id == test_id))
+    }
+
+    fn has_feature_wide_waiver(&self, feature_id: &str) -> bool {
+        self.waivers.values().any(|waiver| {
+            waiver.feature_id == feature_id
+                && waiver.test262_exemptions.is_empty()
+                && waiver.lockstep_exemptions.is_empty()
+        })
+    }
+
+    fn sync_feature_wide_waived_status(&mut self, feature_id: &str) {
+        if self.has_feature_wide_waiver(feature_id)
+            && let Some(entry) = self.features.get_mut(feature_id)
+        {
+            entry.status = FeatureStatus::Waived;
+        }
+    }
+
+    fn sync_feature_wide_waived_statuses(&mut self) {
+        let feature_ids: Vec<String> = self
+            .waivers
+            .values()
+            .filter(|waiver| {
+                waiver.test262_exemptions.is_empty() && waiver.lockstep_exemptions.is_empty()
+            })
+            .map(|waiver| waiver.feature_id.clone())
+            .collect();
+        for feature_id in feature_ids {
+            self.sync_feature_wide_waived_status(&feature_id);
+        }
+    }
+
+    fn feature_is_fully_waived(&self, feature_id: &str) -> bool {
+        self.has_feature_wide_waiver(feature_id)
+    }
+
+    fn record_test262_failures(&mut self, feature_id: &str, failing_test_ids: &[String]) {
+        let failures: BTreeSet<String> = failing_test_ids.iter().cloned().collect();
+        if failures.is_empty() {
+            self.latest_test262_failures_by_feature.remove(feature_id);
+        } else {
+            self.latest_test262_failures_by_feature
+                .insert(feature_id.to_string(), failures);
+        }
+    }
+
+    fn record_lockstep_mismatches(
+        &mut self,
+        feature_id: &str,
+        runtime: &str,
+        mismatches: &[LockstepMismatch],
+    ) {
+        let mismatch_ids: BTreeSet<String> = mismatches
+            .iter()
+            .map(|mismatch| mismatch.test_id.clone())
+            .collect();
+        if mismatch_ids.is_empty() {
+            let mut remove_feature = false;
+            if let Some(runtime_map) = self
+                .latest_lockstep_mismatches_by_feature
+                .get_mut(feature_id)
+            {
+                runtime_map.remove(runtime);
+                remove_feature = runtime_map.is_empty();
+            }
+            if remove_feature {
+                self.latest_lockstep_mismatches_by_feature
+                    .remove(feature_id);
+            }
+        } else {
+            self.latest_lockstep_mismatches_by_feature
+                .entry(feature_id.to_string())
+                .or_default()
+                .insert(runtime.to_string(), mismatch_ids);
         }
     }
 
@@ -978,6 +1195,13 @@ mod tests {
             lockstep_exemptions: vec!["lockstep-fail-1".to_string()],
             sealed: false,
         }
+    }
+
+    fn make_feature_wide_waiver(feature_id: &str, waiver_id: &str) -> WaiverRecord {
+        let mut waiver = make_waiver(feature_id, waiver_id);
+        waiver.test262_exemptions.clear();
+        waiver.lockstep_exemptions.clear();
+        waiver
     }
 
     // -------------------------------------------------------------------
@@ -1397,9 +1621,9 @@ mod tests {
         };
         tracker.ingest_test262(&result, &ctx).unwrap();
 
-        // Waive it
+        // Apply an explicit feature-wide waiver.
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
-        let waiver = make_waiver(&fid, "w-bigint");
+        let waiver = make_feature_wide_waiver(&fid, "w-bigint");
         tracker.register_waiver(waiver, &ctx).unwrap();
 
         // Make all other features pass
@@ -1657,7 +1881,7 @@ mod tests {
     // -------------------------------------------------------------------
 
     #[test]
-    fn waiver_sets_feature_status_to_waived() {
+    fn feature_wide_waiver_sets_feature_status_to_waived() {
         let mut tracker = FeatureParityTracker::new();
         let ctx = test_ctx();
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::ImportMeta);
@@ -1667,7 +1891,7 @@ mod tests {
             FeatureStatus::NotStarted
         );
 
-        let waiver = make_waiver(&fid, "w-import-meta");
+        let waiver = make_feature_wide_waiver(&fid, "w-import-meta");
         tracker.register_waiver(waiver, &ctx).unwrap();
 
         assert_eq!(tracker.feature(&fid).unwrap().status, FeatureStatus::Waived);
@@ -1692,6 +1916,22 @@ mod tests {
             tracker.feature(&fid).unwrap().status,
             FeatureStatus::Passing
         );
+    }
+
+    #[test]
+    fn feature_wide_waiver_marks_passing_feature_as_waived() {
+        let mut tracker = FeatureParityTracker::new();
+        let ctx = test_ctx();
+        let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
+
+        tracker
+            .set_status(&fid, FeatureStatus::Passing, &ctx)
+            .unwrap();
+
+        let waiver = make_feature_wide_waiver(&fid, "w-bigint-feature-wide");
+        tracker.register_waiver(waiver, &ctx).unwrap();
+
+        assert_eq!(tracker.feature(&fid).unwrap().status, FeatureStatus::Waived);
     }
 
     // -----------------------------------------------------------------------
@@ -2423,6 +2663,28 @@ mod tests {
     }
 
     #[test]
+    fn test262_result_validate_rejects_failure_count_mismatch() {
+        let bad = Test262Result {
+            area: FeatureArea::BigInt,
+            total: 10,
+            passing: 8,
+            failing_test_ids: vec!["f1".to_string()],
+        };
+        assert_eq!(bad.validate().unwrap_err().code(), "FE-FPT-0006");
+    }
+
+    #[test]
+    fn test262_result_validate_rejects_duplicate_failure_ids() {
+        let bad = Test262Result {
+            area: FeatureArea::BigInt,
+            total: 10,
+            passing: 8,
+            failing_test_ids: vec!["f1".to_string(), "f1".to_string()],
+        };
+        assert_eq!(bad.validate().unwrap_err().code(), "FE-FPT-0006");
+    }
+
+    #[test]
     fn lockstep_result_validate_mismatch_count_inconsistent() {
         let bad = LockstepResult {
             area: FeatureArea::BigInt,
@@ -2430,6 +2692,29 @@ mod tests {
             total_comparisons: 10,
             matches: 8,
             mismatches: vec![],
+        };
+        assert_eq!(bad.validate().unwrap_err().code(), "FE-FPT-0006");
+    }
+
+    #[test]
+    fn lockstep_result_validate_rejects_duplicate_mismatch_ids() {
+        let bad = LockstepResult {
+            area: FeatureArea::BigInt,
+            runtime: LockstepRuntime::Node,
+            total_comparisons: 2,
+            matches: 0,
+            mismatches: vec![
+                LockstepMismatch {
+                    test_id: "m1".to_string(),
+                    expected: "a".to_string(),
+                    actual: "b".to_string(),
+                },
+                LockstepMismatch {
+                    test_id: "m1".to_string(),
+                    expected: "c".to_string(),
+                    actual: "d".to_string(),
+                },
+            ],
         };
         assert_eq!(bad.validate().unwrap_err().code(), "FE-FPT-0006");
     }
@@ -2452,6 +2737,108 @@ mod tests {
         tracker.ingest_test262(&result, &ctx).unwrap();
         let decision = tracker.evaluate_gate(&ctx);
         assert!(decision.passed);
+    }
+
+    #[test]
+    fn partial_test262_waiver_does_not_mask_unwaived_failures() {
+        let mut tracker = FeatureParityTracker::new();
+        let ctx = test_ctx();
+        let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
+        tracker
+            .ingest_test262(
+                &Test262Result {
+                    area: FeatureArea::BigInt,
+                    total: 10,
+                    passing: 8,
+                    failing_test_ids: vec!["f1".to_string(), "f2".to_string()],
+                },
+                &ctx,
+            )
+            .unwrap();
+        let mut waiver = make_waiver(&fid, "w-partial");
+        waiver.test262_exemptions = vec!["f1".to_string()];
+        waiver.lockstep_exemptions.clear();
+        tracker.register_waiver(waiver, &ctx).unwrap();
+
+        let decision = tracker.evaluate_gate(&ctx);
+        assert!(!decision.passed);
+        assert!(decision.unwaived_failures.iter().any(|failure| {
+            failure.feature_id == fid
+                && failure.failure_type == "test262"
+                && failure.test_id == "f2"
+        }));
+        assert!(!decision.unwaived_failures.iter().any(|failure| {
+            failure.feature_id == fid
+                && failure.failure_type == "test262"
+                && failure.test_id == "f1"
+        }));
+    }
+
+    #[test]
+    fn lockstep_failures_require_precise_waiver_coverage() {
+        let mut tracker = FeatureParityTracker::new();
+        let ctx = test_ctx();
+        let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
+        tracker
+            .ingest_lockstep(
+                &LockstepResult {
+                    area: FeatureArea::BigInt,
+                    runtime: LockstepRuntime::Node,
+                    total_comparisons: 20,
+                    matches: 19,
+                    mismatches: vec![LockstepMismatch {
+                        test_id: "ls-1".to_string(),
+                        expected: "a".to_string(),
+                        actual: "b".to_string(),
+                    }],
+                },
+                &ctx,
+            )
+            .unwrap();
+        let mut waiver = make_waiver(&fid, "w-unrelated");
+        waiver.lockstep_exemptions = vec!["other-lockstep".to_string()];
+        tracker.register_waiver(waiver, &ctx).unwrap();
+
+        let decision = tracker.evaluate_gate(&ctx);
+        assert!(!decision.passed);
+        assert!(decision.unwaived_failures.iter().any(|failure| {
+            failure.feature_id == fid
+                && failure.failure_type == "lockstep"
+                && failure.test_id == "ls-1"
+        }));
+    }
+
+    #[test]
+    fn feature_wide_waiver_semantics_do_not_depend_on_stored_status_bit() {
+        let mut tracker = FeatureParityTracker::new();
+        let ctx = test_ctx();
+        let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
+
+        tracker
+            .ingest_test262(
+                &Test262Result {
+                    area: FeatureArea::BigInt,
+                    total: 10,
+                    passing: 8,
+                    failing_test_ids: vec!["f1".to_string(), "f2".to_string()],
+                },
+                &ctx,
+            )
+            .unwrap();
+        tracker
+            .register_waiver(
+                make_feature_wide_waiver(&fid, "w-bigint-feature-wide"),
+                &ctx,
+            )
+            .unwrap();
+        tracker
+            .set_status(&fid, FeatureStatus::Passing, &ctx)
+            .unwrap();
+
+        let decision = tracker.evaluate_gate(&ctx);
+        assert!(decision.passed);
+        assert_eq!(tracker.feature(&fid).unwrap().status, FeatureStatus::Waived);
+        assert!(!decision.failing_features.contains(&fid));
     }
 
     #[test]

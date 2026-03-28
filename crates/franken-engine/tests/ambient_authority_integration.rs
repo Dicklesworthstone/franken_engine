@@ -1781,6 +1781,54 @@ fn inline_comment_at_end_of_code_is_not_a_comment_line() {
     assert!(!findings.is_empty());
 }
 
+#[test]
+fn block_comments_with_forbidden_examples_are_not_flagged() {
+    let auditor = standard_auditor();
+    let source = r#"let clean = 1; /* std::fs::read("x") and Command::new("ls") */"#;
+    let findings = auditor.audit_source("m", "f.rs", source);
+    assert!(findings.is_empty());
+}
+
+#[test]
+fn multiline_and_nested_block_comments_with_forbidden_examples_are_not_flagged() {
+    let auditor = standard_auditor();
+    let source = "/* outer /* std::fs::read(\"x\") */ still comment\nTcpStream::connect(\"x\")\n*/\nfn ok() {}";
+    let findings = auditor.audit_source("m", "f.rs", source);
+    assert!(findings.is_empty());
+}
+
+#[test]
+fn string_literals_with_forbidden_examples_are_not_flagged() {
+    let auditor = standard_auditor();
+    let source = r#"let doc = "std::fs::read(\"x\") and Command::new(\"ls\")";"#;
+    let findings = auditor.audit_source("m", "f.rs", source);
+    assert!(findings.is_empty());
+}
+
+#[test]
+fn raw_and_byte_string_literals_with_forbidden_examples_are_not_flagged() {
+    let auditor = standard_auditor();
+    let source = r##"let raw = r#"TcpStream::connect("x")"#; let bytes = b"SystemTime::now";"##;
+    let findings = auditor.audit_source("m", "f.rs", source);
+    assert!(findings.is_empty());
+}
+
+#[test]
+fn real_call_beside_documentation_string_still_flags() {
+    let auditor = standard_auditor();
+    let source = r#"let doc = "std::fs::read(\"x\")"; let _ = std::fs::read("x");"#;
+    let findings = auditor.audit_source("m", "f.rs", source);
+    assert!(findings.iter().any(|f| f.pattern_id == "std_fs"));
+}
+
+#[test]
+fn real_call_after_block_comment_still_flags() {
+    let auditor = standard_auditor();
+    let source = r#"/* std::fs::read("x") */ let _ = std::fs::read("x");"#;
+    let findings = auditor.audit_source("m", "f.rs", source);
+    assert!(findings.iter().any(|f| f.pattern_id == "std_fs"));
+}
+
 // ---------------------------------------------------------------------------
 // Enrichment: Duplicate exemptions
 // ---------------------------------------------------------------------------

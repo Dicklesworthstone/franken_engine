@@ -334,6 +334,13 @@ pub struct SourceAuditor {
     exemptions: ExemptionRegistry,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct LineScanState {
+    in_string: bool,
+    raw_hashes: Option<usize>,
+    block_comment_depth: usize,
+}
+
 impl SourceAuditor {
     /// Create a new auditor.
     pub fn new(config: AuditConfig, exemptions: ExemptionRegistry) -> Self {
@@ -356,22 +363,16 @@ impl SourceAuditor {
         }
 
         let mut findings = Vec::new();
+        let mut scan_state = LineScanState::default();
 
         for (line_num_0, line) in source.lines().enumerate() {
             let line_num = line_num_0 + 1;
             let trimmed = line.trim();
 
-            // Skip full-line comments.
-            if trimmed.starts_with("//") {
+            let code_portion = sanitized_code_portion(trimmed, &mut scan_state);
+            if code_portion.is_empty() {
                 continue;
             }
-
-            // Strip inline comments so patterns in comments don't trigger.
-            let code_portion = if let Some(idx) = inline_comment_start(trimmed) {
-                &trimmed[..idx]
-            } else {
-                trimmed
-            };
 
             for pattern in &self.config.patterns {
                 if code_portion.contains(&pattern.pattern) {
@@ -449,14 +450,28 @@ impl SourceAuditor {
     }
 }
 
-fn inline_comment_start(line: &str) -> Option<usize> {
+fn sanitized_code_portion(line: &str, state: &mut LineScanState) -> String {
     let bytes = line.as_bytes();
     let mut index = 0usize;
-    let mut in_string = false;
-    let mut raw_hashes: Option<usize> = None;
+    let mut code_portion = String::new();
 
     while index < bytes.len() {
-        if let Some(hashes) = raw_hashes {
+        if state.block_comment_depth > 0 {
+            if bytes[index] == b'/' && bytes.get(index + 1).copied() == Some(b'*') {
+                state.block_comment_depth += 1;
+                index += 2;
+                continue;
+            }
+            if bytes[index] == b'*' && bytes.get(index + 1).copied() == Some(b'/') {
+                state.block_comment_depth -= 1;
+                index += 2;
+                continue;
+            }
+            index += 1;
+            continue;
+        }
+
+        if let Some(hashes) = state.raw_hashes {
             if bytes[index] == b'"'
                 && (0..hashes).all(|offset| {
                     bytes
@@ -466,45 +481,52 @@ fn inline_comment_start(line: &str) -> Option<usize> {
                 })
             {
                 index += hashes + 1;
-                raw_hashes = None;
+                state.raw_hashes = None;
                 continue;
             }
             index += 1;
             continue;
         }
 
-        if in_string {
+        if state.in_string {
             if bytes[index] == b'\\' {
                 index = usize::min(index + 2, bytes.len());
                 continue;
             }
             if bytes[index] == b'"' {
-                in_string = false;
+                state.in_string = false;
             }
             index += 1;
             continue;
         }
 
         if bytes[index] == b'/' && bytes.get(index + 1).copied() == Some(b'/') {
-            return Some(index);
+            break;
+        }
+
+        if bytes[index] == b'/' && bytes.get(index + 1).copied() == Some(b'*') {
+            state.block_comment_depth += 1;
+            index += 2;
+            continue;
         }
 
         if let Some((prefix_len, hashes)) = raw_string_start(&bytes[index..]) {
-            raw_hashes = Some(hashes);
+            state.raw_hashes = Some(hashes);
             index += prefix_len;
             continue;
         }
 
         if let Some(prefix_len) = quoted_string_start(&bytes[index..]) {
-            in_string = true;
+            state.in_string = true;
             index += prefix_len;
             continue;
         }
 
+        code_portion.push(char::from(bytes[index]));
         index += 1;
     }
 
-    None
+    code_portion
 }
 
 fn raw_string_start(bytes: &[u8]) -> Option<(usize, usize)> {
@@ -2215,9 +2237,66 @@ mod tests {
     }
 
     #[test]
+    fn audit_source_ignores_patterns_inside_block_comments() {
+        let auditor = standard_auditor();
+        let source = "let clean = 1; /* std::fs::read(\"x\") and Command::new(\"ls\") */";
+        let findings = auditor.audit_source("m", "f.rs", source);
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn audit_source_ignores_patterns_inside_multiline_block_comments() {
+        let auditor = standard_auditor();
+        let source = "/* std::fs::read(\"x\")\nTcpStream::connect(\"x\")\n*/\nfn ok() {}";
+        let findings = auditor.audit_source("m", "f.rs", source);
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn audit_source_ignores_patterns_inside_nested_block_comments() {
+        let auditor = standard_auditor();
+        let source = "/* outer /* std::fs::read(\"x\") */ still comment */\nfn ok() {}";
+        let findings = auditor.audit_source("m", "f.rs", source);
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn audit_source_ignores_patterns_inside_string_literals() {
+        let auditor = standard_auditor();
+        let source = "let doc = \"std::fs::read(\\\"x\\\") and Command::new(\\\"ls\\\")\";";
+        let findings = auditor.audit_source("m", "f.rs", source);
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn audit_source_ignores_patterns_inside_raw_and_byte_strings() {
+        let auditor = standard_auditor();
+        let source =
+            "let raw = r#\"TcpStream::connect(\\\"x\\\")\"#; let bytes = b\"SystemTime::now\";";
+        let findings = auditor.audit_source("m", "f.rs", source);
+        assert!(findings.is_empty());
+    }
+
+    #[test]
     fn audit_source_preserves_double_slash_inside_string_literals() {
         let auditor = standard_auditor();
         let source = "let url = \"https://example.invalid\"; let _ = std::fs::read(\"x\"); // note";
+        let findings = auditor.audit_source("m", "f.rs", source);
+        assert!(findings.iter().any(|f| f.pattern_id == "std_fs"));
+    }
+
+    #[test]
+    fn audit_source_detects_real_pattern_beside_documentation_string() {
+        let auditor = standard_auditor();
+        let source = "let doc = \"std::fs::read(\\\"x\\\")\"; let _ = std::fs::read(\"x\");";
+        let findings = auditor.audit_source("m", "f.rs", source);
+        assert!(findings.iter().any(|f| f.pattern_id == "std_fs"));
+    }
+
+    #[test]
+    fn audit_source_detects_real_pattern_after_block_comment() {
+        let auditor = standard_auditor();
+        let source = "/* std::fs::read(\"x\") */ let _ = std::fs::read(\"x\");";
         let findings = auditor.audit_source("m", "f.rs", source);
         assert!(findings.iter().any(|f| f.pattern_id == "std_fs"));
     }

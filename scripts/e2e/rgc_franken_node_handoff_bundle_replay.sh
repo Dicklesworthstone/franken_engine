@@ -33,7 +33,9 @@ latest_complete_run_dir() {
     [[ -f "${candidate}/support_surface_summary.md" ]] || continue
     [[ -f "${candidate}/franken_node_handoff_bundle_contract.json" ]] || continue
     [[ -f "${candidate}/support_surface_contract.json" ]] || continue
+    [[ -f "${candidate}/engine_product_blocker_ledger.json" ]] || continue
     [[ -f "${candidate}/repo_split_contract.md" ]] || continue
+    [[ -f "${candidate}/step_logs/step_000.log" ]] || continue
     printf '%s\n' "${candidate}"
   done | tail -n 1
 }
@@ -81,20 +83,19 @@ echo "[rgc-franken-node-handoff] latest contract: ${latest_run_dir}/franken_node
 cat "${latest_run_dir}/franken_node_handoff_bundle_contract.json"
 echo "[rgc-franken-node-handoff] latest support contract: ${latest_run_dir}/support_surface_contract.json"
 cat "${latest_run_dir}/support_surface_contract.json"
-latest_blocker_ledger_path="$(jq -r '.artifacts.engine_product_blocker_ledger // empty' "${latest_run_dir}/run_manifest.json")"
-if [[ -n "${latest_blocker_ledger_path}" && -f "${root_dir}/${latest_blocker_ledger_path}" ]]; then
-  echo "[rgc-franken-node-handoff] latest blocker ledger: ${root_dir}/${latest_blocker_ledger_path}"
-  cat "${root_dir}/${latest_blocker_ledger_path}"
-else
-  echo "[rgc-franken-node-handoff] latest blocker ledger unavailable"
+if [[ ! -f "${latest_run_dir}/engine_product_blocker_ledger.json" ]]; then
+  echo "rgc franken_node handoff replay selected supposedly complete run ${latest_run_dir} but engine_product_blocker_ledger.json is missing" >&2
+  exit "$(missing_bundle_exit_code "${main_exit:-1}")"
 fi
+echo "[rgc-franken-node-handoff] latest blocker ledger: ${latest_run_dir}/engine_product_blocker_ledger.json"
+cat "${latest_run_dir}/engine_product_blocker_ledger.json"
 echo "[rgc-franken-node-handoff] latest repo split contract: ${latest_run_dir}/repo_split_contract.md"
 cat "${latest_run_dir}/repo_split_contract.md"
-if [[ -f "${latest_run_dir}/step_logs/step_000.log" ]]; then
-  echo "[rgc-franken-node-handoff] latest first step log: ${latest_run_dir}/step_logs/step_000.log"
-  cat "${latest_run_dir}/step_logs/step_000.log"
-else
-  echo "[rgc-franken-node-handoff] latest first step log unavailable"
+if [[ ! -f "${latest_run_dir}/step_logs/step_000.log" ]]; then
+  echo "rgc franken_node handoff replay selected supposedly complete run ${latest_run_dir} but step_logs/step_000.log is missing" >&2
+  exit "$(missing_bundle_exit_code "${main_exit:-1}")"
 fi
+echo "[rgc-franken-node-handoff] latest first step log: ${latest_run_dir}/step_logs/step_000.log"
+cat "${latest_run_dir}/step_logs/step_000.log"
 
 exit "${main_exit}"

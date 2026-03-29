@@ -14,7 +14,7 @@
     "support_surface_contract_path": "docs/support_surface_contract.json",
     "support_surface_contract_artifact_glob": "artifacts/rgc_support_surface_contract/*/support_surface_contract.json",
     "blocker_ledger_env_var": "RGC_HANDOFF_BLOCKER_LEDGER_PATH",
-    "blocker_ledger_artifact_glob": "artifacts/**/engine_product_blocker_ledger.json",
+    "blocker_ledger_artifact_glob": "artifacts/rgc_engine_product_blocker_ledger/*/engine_product_blocker_ledger.json",
     "repo_split_contract_doc": "docs/REPO_SPLIT_CONTRACT.md",
     "sibling_repo_path": "/dp/franken_node",
     "stale_after_hours": 720

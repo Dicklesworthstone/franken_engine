@@ -27,8 +27,9 @@ Input resolution rules:
   `artifacts/rgc_support_surface_contract/*/support_surface_contract.json`;
   otherwise fall back to `docs/support_surface_contract.json`
 - blocker ledger: use `RGC_HANDOFF_BLOCKER_LEDGER_PATH` when set; otherwise
-  auto-discover the latest `engine_product_blocker_ledger.json` under
-  `artifacts/`; if none exists, fail closed
+  prefer the latest complete
+  `artifacts/rgc_engine_product_blocker_ledger/*/engine_product_blocker_ledger.json`
+  bundle; otherwise fail closed
 - sibling repo: use `RGC_HANDOFF_SIBLING_REPO_PATH` when set; otherwise default
   to `/dp/franken_node`
 

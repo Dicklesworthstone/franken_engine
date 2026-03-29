@@ -100,6 +100,21 @@ support_surface_artifact_dir_is_complete() {
   [[ -f "${candidate}/step_logs/step_000.log" ]] || return 1
 }
 
+blocker_ledger_artifact_dir_is_complete() {
+  local candidate="${1:-}"
+  [[ -n "${candidate}" ]] || return 1
+  [[ -f "${candidate}/run_manifest.json" ]] || return 1
+  [[ -f "${candidate}/trace_ids.json" ]] || return 1
+  [[ -f "${candidate}/events.jsonl" ]] || return 1
+  [[ -f "${candidate}/commands.txt" ]] || return 1
+  [[ -f "${candidate}/engine_product_blocker_ledger.json" ]] || return 1
+  [[ -f "${candidate}/cohort_readiness_rollup.json" ]] || return 1
+  [[ -f "${candidate}/owner_routing_report.json" ]] || return 1
+  [[ -f "${candidate}/gate_report.json" ]] || return 1
+  [[ -f "${candidate}/support_surface_contract.json" ]] || return 1
+  [[ -f "${candidate}/step_logs/step_000.log" ]] || return 1
+}
+
 latest_complete_support_contract_artifact() {
   if [[ ! -d "${root_dir}/artifacts/rgc_support_surface_contract" ]]; then
     return 0
@@ -112,13 +127,16 @@ latest_complete_support_contract_artifact() {
   done | tail -n 1
 }
 
-latest_blocker_ledger_artifact() {
-  if [[ ! -d "${root_dir}/artifacts" ]]; then
+latest_complete_blocker_ledger_artifact() {
+  if [[ ! -d "${root_dir}/artifacts/rgc_engine_product_blocker_ledger" ]]; then
     return 0
   fi
 
-  find "${root_dir}/artifacts" -type f -name 'engine_product_blocker_ledger.json' \
-    | sort | tail -n 1
+  find "${root_dir}/artifacts/rgc_engine_product_blocker_ledger" \
+    -mindepth 1 -maxdepth 1 -type d | sort | while IFS= read -r candidate; do
+    blocker_ledger_artifact_dir_is_complete "${candidate}" || continue
+    printf '%s\n' "${candidate}/engine_product_blocker_ledger.json"
+  done | tail -n 1
 }
 
 resolve_support_contract_path() {
@@ -143,7 +161,7 @@ resolve_blocker_ledger_path() {
     return
   fi
 
-  latest_blocker_ledger_artifact || true
+  latest_complete_blocker_ledger_artifact || true
 }
 
 run_rch() {

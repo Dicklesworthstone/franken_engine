@@ -180,7 +180,8 @@
         }
       ],
       "lockstep_case_refs": [
-        "lockstep/module/package-type-module-extensionless-relative"
+        "lockstep/module/package-type-module-extensionless-relative",
+        "lockstep/module/scoped-package-type-module-extensionless-relative"
       ],
       "test262_refs": [
         "language/module-code/instn-resolve-empty-import.js"

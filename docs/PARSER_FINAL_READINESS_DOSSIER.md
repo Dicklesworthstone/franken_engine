@@ -16,8 +16,15 @@ Each dossier must include immutable artifact references for every required gate:
 - correctness (`PSRP-08.2`)
 - performance (`PSRP-08.3`)
 - cross-architecture reproducibility (`PSRP-07.4`)
+- CI quality gates + evidence retention (`PSRP-09.4`)
+- evidence indexer + cross-run correlation (`PSRP-09.5.2`)
 - operator/developer runbook (`PSRP-10.4`)
+- user-impact regression alarms + SLO guardrails (`PSRP-10.5.2`)
 - supremacy criteria contract (`PSRP-08.1`)
+
+The dossier's `blocked_dependency_ids` inventory must stay aligned with the bead
+graph for `bd-2mds.1.8.4`, even when some dependencies are already closed and
+therefore represented as `pass` evidence rather than `in_progress` blockers.
 
 Every evidence entry must include:
 

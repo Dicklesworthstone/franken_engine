@@ -54,6 +54,8 @@ Migration behavior:
 
 1. Validate family compatibility (`from.family == to.family`).
 2. Resolve migration path from current schema to target schema using declared steps.
+   The currently traversed `from_schema` must resolve to exactly one declared next step; ambiguous duplicate source edges on the active path are rejected fail-closed.
+   Every traversed migration step must also remain within that same schema family; cross-family intermediate hops are rejected fail-closed.
 3. Apply steps in-order, emitting per-step receipts with affected record counts.
 4. Recompute schema boundary diagnostics after upgrade.
 

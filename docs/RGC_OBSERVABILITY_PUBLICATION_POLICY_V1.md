@@ -57,6 +57,9 @@ The bundle emits these JSON artifacts:
 
 The bundle hashes all emitted artifacts, produces a deterministic `bundle_hash`,
 and carries the policy id `policy-rgc-observability-publication-v1`.
+Suppressed-claim rows and derived operator-summary suppression lines are sorted
+by workload id and capture mode so semantically equivalent cell orderings do
+not perturb emitted artifact hashes.
 
 ## Fail-Closed Publication Rules
 

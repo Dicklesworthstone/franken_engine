@@ -868,6 +868,110 @@ pub fn interop_parity_corpus() -> Vec<InteropSpecimen> {
             ],
             expected_async_phases: vec![],
         },
+        InteropSpecimen {
+            specimen_id: "scoped_package_type_module_extensionless_relative_native".into(),
+            description:
+                "Native scoped external-package type=module entry imports an extensionless relative path and fails closed".into(),
+            family: InteropFamily::EsmOnly,
+            modules: vec![
+                SpecimenModule {
+                    specifier: "@scope/pkg/sub.mjs".into(),
+                    syntax: ModuleSyntax::EsModule,
+                    source: "export const value = 'sub';".into(),
+                    imports: vec![],
+                    exports: vec![ExportEntry::direct("value", "value")],
+                    has_default_export: false,
+                    has_top_level_await: false,
+                },
+                SpecimenModule {
+                    specifier: "@scope/pkg.js".into(),
+                    syntax: ModuleSyntax::EsModule,
+                    source: "import { value } from './sub'; export const seen = value;".into(),
+                    imports: vec![ImportEntry::new("./sub", "value", "value")],
+                    exports: vec![ExportEntry::direct("seen", "seen")],
+                    has_default_export: false,
+                    has_top_level_await: false,
+                },
+            ],
+            entry_point: "@scope/pkg.js".into(),
+            expected_outcome: InteropExpectedOutcome::LinkFailure,
+            expected_linked_count: None,
+            expected_binding_states: vec![],
+            expected_async_phases: vec![],
+        },
+        InteropSpecimen {
+            specimen_id: "scoped_package_type_module_extensionless_relative_node_compat".into(),
+            description:
+                "Node-compat scoped external-package type=module entry still requires an explicit relative extension and fails closed".into(),
+            family: InteropFamily::EsmOnly,
+            modules: vec![
+                SpecimenModule {
+                    specifier: "@scope/pkg/sub.mjs".into(),
+                    syntax: ModuleSyntax::EsModule,
+                    source: "export const value = 'sub';".into(),
+                    imports: vec![],
+                    exports: vec![ExportEntry::direct("value", "value")],
+                    has_default_export: false,
+                    has_top_level_await: false,
+                },
+                SpecimenModule {
+                    specifier: "@scope/pkg.js".into(),
+                    syntax: ModuleSyntax::EsModule,
+                    source: "import { value } from './sub'; export const seen = value;".into(),
+                    imports: vec![ImportEntry::new("./sub", "value", "value")],
+                    exports: vec![ExportEntry::direct("seen", "seen")],
+                    has_default_export: false,
+                    has_top_level_await: false,
+                },
+            ],
+            entry_point: "@scope/pkg.js".into(),
+            expected_outcome: InteropExpectedOutcome::LinkFailure,
+            expected_linked_count: None,
+            expected_binding_states: vec![],
+            expected_async_phases: vec![],
+        },
+        InteropSpecimen {
+            specimen_id: "scoped_package_type_module_extensionless_relative_bun_compat".into(),
+            description:
+                "Bun-compat scoped external-package type=module entry resolves an extensionless relative path to the canonical module".into(),
+            family: InteropFamily::EsmOnly,
+            modules: vec![
+                SpecimenModule {
+                    specifier: "@scope/pkg/sub.mjs".into(),
+                    syntax: ModuleSyntax::EsModule,
+                    source: "export const value = 'sub';".into(),
+                    imports: vec![],
+                    exports: vec![ExportEntry::direct("value", "value")],
+                    has_default_export: false,
+                    has_top_level_await: false,
+                },
+                SpecimenModule {
+                    specifier: "@scope/pkg.js".into(),
+                    syntax: ModuleSyntax::EsModule,
+                    source: "import { value } from './sub'; export const seen = value;".into(),
+                    imports: vec![ImportEntry::new("./sub", "value", "value")],
+                    exports: vec![ExportEntry::direct("seen", "seen")],
+                    has_default_export: false,
+                    has_top_level_await: false,
+                },
+            ],
+            entry_point: "@scope/pkg.js".into(),
+            expected_outcome: InteropExpectedOutcome::Success,
+            expected_linked_count: Some(2),
+            expected_binding_states: vec![
+                ExpectedBindingState {
+                    module_specifier: "@scope/pkg/sub.mjs".into(),
+                    export_name: "value".into(),
+                    expected_state: BindingCellState::Initialized,
+                },
+                ExpectedBindingState {
+                    module_specifier: "@scope/pkg.js".into(),
+                    export_name: "seen".into(),
+                    expected_state: BindingCellState::Initialized,
+                },
+            ],
+            expected_async_phases: vec![],
+        },
         // ── Mixed Graph ──
         InteropSpecimen {
             specimen_id: "mixed_three_module_graph".into(),
@@ -3470,6 +3574,33 @@ mod tests {
     }
 
     #[test]
+    fn canonicalize_scoped_package_specimen_rewrites_relative_dependency_targets() {
+        let sm = SpecimenModule {
+            specifier: "@scope/pkg.js".into(),
+            syntax: ModuleSyntax::EsModule,
+            source: "import { value } from './sub'; export { value } from './sub';".into(),
+            imports: vec![ImportEntry::new("./sub", "value", "value")],
+            exports: vec![ExportEntry::re_export("value", "./sub", "value")],
+            has_default_export: false,
+            has_top_level_await: false,
+        };
+        let canonical_targets = BTreeMap::from([(
+            ("@scope/pkg.js".to_string(), "./sub".to_string()),
+            "@scope/pkg/sub.mjs".to_string(),
+        )]);
+
+        let canonicalized = canonicalize_specimen_module(&sm, &canonical_targets);
+        assert_eq!(
+            canonicalized.imports[0].module_request,
+            "@scope/pkg/sub.mjs"
+        );
+        assert_eq!(
+            canonicalized.exports[0].module_request.as_deref(),
+            Some("@scope/pkg/sub.mjs")
+        );
+    }
+
+    #[test]
     fn run_single_specimen_extensionless_relative_mode_split_matches_resolver_contract() {
         let corpus = interop_parity_corpus();
 
@@ -3511,6 +3642,71 @@ mod tests {
             .iter()
             .find(|specimen| {
                 specimen.specimen_id == "package_type_module_extensionless_relative_bun_compat"
+            })
+            .unwrap();
+        let bun_compat_evidence = run_single_specimen(bun_compat);
+        assert_eq!(
+            bun_compat_evidence.compatibility_mode,
+            CompatibilityMode::BunCompat
+        );
+        assert_eq!(
+            bun_compat_evidence.actual_outcome,
+            InteropActualOutcome::Success
+        );
+        assert_eq!(bun_compat_evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(bun_compat_evidence.linked_count, 2);
+        assert!(
+            bun_compat_evidence
+                .binding_verdicts
+                .iter()
+                .all(|verdict| verdict.pass)
+        );
+    }
+
+    #[test]
+    fn run_single_specimen_scoped_extensionless_relative_mode_split_matches_resolver_contract() {
+        let corpus = interop_parity_corpus();
+
+        let native = corpus
+            .iter()
+            .find(|specimen| {
+                specimen.specimen_id == "scoped_package_type_module_extensionless_relative_native"
+            })
+            .unwrap();
+        let native_evidence = run_single_specimen(native);
+        assert_eq!(
+            native_evidence.compatibility_mode,
+            CompatibilityMode::Native
+        );
+        assert_eq!(
+            native_evidence.actual_outcome,
+            InteropActualOutcome::LinkFailure
+        );
+        assert_eq!(native_evidence.verdict, InteropVerdict::Pass);
+
+        let node_compat = corpus
+            .iter()
+            .find(|specimen| {
+                specimen.specimen_id
+                    == "scoped_package_type_module_extensionless_relative_node_compat"
+            })
+            .unwrap();
+        let node_compat_evidence = run_single_specimen(node_compat);
+        assert_eq!(
+            node_compat_evidence.compatibility_mode,
+            CompatibilityMode::NodeCompat
+        );
+        assert_eq!(
+            node_compat_evidence.actual_outcome,
+            InteropActualOutcome::LinkFailure
+        );
+        assert_eq!(node_compat_evidence.verdict, InteropVerdict::Pass);
+
+        let bun_compat = corpus
+            .iter()
+            .find(|specimen| {
+                specimen.specimen_id
+                    == "scoped_package_type_module_extensionless_relative_bun_compat"
             })
             .unwrap();
         let bun_compat_evidence = run_single_specimen(bun_compat);

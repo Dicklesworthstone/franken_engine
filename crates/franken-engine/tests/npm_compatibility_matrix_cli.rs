@@ -91,6 +91,8 @@ fn npm_compatibility_matrix_binary_emits_artifacts_and_owner_routing() {
             .iter()
             .any(|failure| {
                 failure["package_name"].as_str() == Some("prisma")
+                    && failure["native_addon_mode"].as_str() == Some("required")
+                    && failure["capability_safe_membrane_fallback"].as_bool() == Some(true)
                     && failure["related_beads"]
                         .as_array()
                         .expect("related beads should be an array")
@@ -98,6 +100,30 @@ fn npm_compatibility_matrix_binary_emits_artifacts_and_owner_routing() {
                         .any(|bead| bead.as_str() == Some("bd-1lsy.5.9.1"))
             }),
         "report should route native-addon failures to the native-addon bead"
+    );
+    assert!(
+        report_json["packages"]
+            .as_array()
+            .expect("packages should be an array")
+            .iter()
+            .any(|package| {
+                package["name"].as_str() == Some("prisma")
+                    && package["native_addon_mode"].as_str() == Some("required")
+                    && package["capability_safe_membrane_fallback"].as_bool() == Some(true)
+            }),
+        "report should expose prisma's required native-addon posture"
+    );
+    assert!(
+        report_json["packages"]
+            .as_array()
+            .expect("packages should be an array")
+            .iter()
+            .any(|package| {
+                package["name"].as_str() == Some("ws")
+                    && package["native_addon_mode"].as_str() == Some("optional")
+                    && package["capability_safe_membrane_fallback"].as_bool() == Some(false)
+            }),
+        "report should expose ws's optional native-addon posture"
     );
 
     let trace_ids_json: Value =
@@ -120,6 +146,8 @@ fn npm_compatibility_matrix_binary_emits_artifacts_and_owner_routing() {
     assert!(events.contains("npm_compatibility_matrix_started"));
     assert!(events.contains("package_outcome_recorded"));
     assert!(events.contains("owner_routing_recorded"));
+    assert!(events.contains("native_addon_mode=required"));
+    assert!(events.contains("capability_safe_membrane_fallback=true"));
     assert!(events.contains("npm_compatibility_matrix_completed"));
 
     let commands = fs::read_to_string(&commands_path).expect("commands should be readable");

@@ -130,6 +130,8 @@ struct PackageOutcomeRecord {
     tier: String,
     category: String,
     module_system: String,
+    native_addon_mode: String,
+    capability_safe_membrane_fallback: bool,
     weekly_downloads: u64,
     outcome: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -143,6 +145,8 @@ struct UnresolvedFailureRouting {
     package_name: String,
     root_cause: String,
     severity: String,
+    native_addon_mode: String,
+    capability_safe_membrane_fallback: bool,
     summary: String,
     owner: String,
     related_beads: Vec<String>,
@@ -563,6 +567,8 @@ fn build_report(matrix: &NpmCompatibilityMatrix, matrix_hash: &str) -> NpmCompat
                 tier: package.tier.as_str().to_string(),
                 category: package.category.as_str().to_string(),
                 module_system: package.module_system.as_str().to_string(),
+                native_addon_mode: package.native_addon_mode.as_str().to_string(),
+                capability_safe_membrane_fallback: package.capability_safe_membrane_fallback,
                 weekly_downloads: package.weekly_downloads,
                 outcome,
                 pass_rate_millionths,
@@ -574,18 +580,30 @@ fn build_report(matrix: &NpmCompatibilityMatrix, matrix_hash: &str) -> NpmCompat
     let unresolved_failures = matrix
         .open_incompatibilities()
         .into_iter()
-        .map(|record| UnresolvedFailureRouting {
-            incompatibility_id: record.incompatibility_id.clone(),
-            package_name: record.package_name.clone(),
-            root_cause: record.root_cause.as_str().to_string(),
-            severity: record.severity.as_str().to_string(),
-            summary: record.summary.clone(),
-            owner: record.owner.clone(),
-            related_beads: record.related_beads.iter().cloned().collect(),
-            remediation_state: record.remediation_state.as_str().to_string(),
-            minimized_repro: record.minimized_repro.clone(),
-            expected_behavior: record.expected_behavior.clone(),
-            actual_behavior: record.actual_behavior.clone(),
+        .map(|record| {
+            let package = matrix
+                .packages
+                .iter()
+                .find(|package| package.name == record.package_name);
+            UnresolvedFailureRouting {
+                incompatibility_id: record.incompatibility_id.clone(),
+                package_name: record.package_name.clone(),
+                root_cause: record.root_cause.as_str().to_string(),
+                severity: record.severity.as_str().to_string(),
+                native_addon_mode: package
+                    .map(|package| package.native_addon_mode.as_str().to_string())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                capability_safe_membrane_fallback: package
+                    .map(|package| package.capability_safe_membrane_fallback)
+                    .unwrap_or(false),
+                summary: record.summary.clone(),
+                owner: record.owner.clone(),
+                related_beads: record.related_beads.iter().cloned().collect(),
+                remediation_state: record.remediation_state.as_str().to_string(),
+                minimized_repro: record.minimized_repro.clone(),
+                expected_behavior: record.expected_behavior.clone(),
+                actual_behavior: record.actual_behavior.clone(),
+            }
         })
         .collect();
 
@@ -670,6 +688,10 @@ fn build_events(
     }
 
     for record in matrix.open_incompatibilities() {
+        let package = matrix
+            .packages
+            .iter()
+            .find(|package| package.name == record.package_name);
         events.push(MatrixEvent {
             schema_version: EVENT_SCHEMA_VERSION.to_string(),
             trace_id: trace_id.to_string(),
@@ -681,8 +703,14 @@ fn build_events(
             outcome: Some(record.severity.as_str().to_string()),
             error_code: Some("FE-RGC-404-ROUTED-INCOMPATIBILITY".to_string()),
             detail: Some(format!(
-                "root_cause={} owner={} related_beads={}",
+                "root_cause={} native_addon_mode={} capability_safe_membrane_fallback={} owner={} related_beads={}",
                 record.root_cause.as_str(),
+                package
+                    .map(|package| package.native_addon_mode.as_str())
+                    .unwrap_or("unknown"),
+                package
+                    .map(|package| package.capability_safe_membrane_fallback)
+                    .unwrap_or(false),
                 record.owner,
                 record
                     .related_beads

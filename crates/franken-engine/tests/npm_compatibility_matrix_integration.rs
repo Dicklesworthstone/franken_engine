@@ -22,7 +22,7 @@ use std::collections::BTreeSet;
 use frankenengine_engine::npm_compatibility_matrix::{
     BEAD_ID, COMPONENT, CohortTier, IncompatibilityRecord, IncompatibilityRootCause,
     IncompatibilitySeverity, MAX_INCOMPATIBILITIES_PER_PACKAGE, MatrixVerdict, ModuleSystemReq,
-    NpmCompatibilityError, NpmCompatibilityMatrix, PackageCategory, PackageRecord,
+    NativeAddonMode, NpmCompatibilityError, NpmCompatibilityMatrix, PackageCategory, PackageRecord,
     PackageTestOutcome, PackageTestResult, RemediationState, SCHEMA_VERSION,
     seed_tier1_critical_packages, seed_tier2_popular_packages,
 };
@@ -41,6 +41,8 @@ fn make_package(name: &str, tier: CohortTier) -> PackageRecord {
         weekly_downloads: 1_000_000,
         dependency_fanout: 5,
         node_api_deps: BTreeSet::new(),
+        native_addon_mode: NativeAddonMode::None,
+        capability_safe_membrane_fallback: false,
         types_only: false,
     }
 }

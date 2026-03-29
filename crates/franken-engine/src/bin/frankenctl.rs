@@ -379,6 +379,8 @@ struct CompileArtifactVerificationOutput {
     decision_id: String,
     policy_id: String,
     artifact_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    report_path: Option<String>,
     passed: bool,
     errors: Vec<String>,
     observability_mode: ObservabilityModeOutput,
@@ -388,6 +390,8 @@ struct CompileArtifactVerificationOutput {
 struct ReceiptVerificationCommandOutput {
     #[serde(flatten)]
     verdict: UnifiedReceiptVerificationVerdict,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    report_path: Option<String>,
     observability_mode: ObservabilityModeOutput,
 }
 
@@ -430,6 +434,8 @@ struct BenchmarkScoreCommandOutput {
 struct BenchmarkVerificationCommandOutput {
     #[serde(flatten)]
     report: ThirdPartyVerificationReport,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    report_path: Option<String>,
     observability_mode: ObservabilityModeOutput,
 }
 
@@ -1798,6 +1804,7 @@ fn execute_verify(args: VerifyArgs) -> Result<i32, String> {
                 decision_id: artifact.decision_id.clone(),
                 policy_id: artifact.policy_id.clone(),
                 artifact_path: input.display().to_string(),
+                report_path: output_path.as_ref().map(|path| path.display().to_string()),
                 passed: errors.is_empty(),
                 errors,
                 observability_mode: default_capture_observability_mode(),
@@ -1819,6 +1826,7 @@ fn execute_verify(args: VerifyArgs) -> Result<i32, String> {
                 .map_err(|error| format!("receipt verification failed: {error}"))?;
             let output_payload = ReceiptVerificationCommandOutput {
                 verdict,
+                report_path: output.as_ref().map(|path| path.display().to_string()),
                 observability_mode: default_capture_observability_mode(),
             };
             if let Some(path) = &output {
@@ -2316,6 +2324,7 @@ fn execute_benchmark_verify(args: BenchmarkVerifyArgs) -> Result<i32, String> {
     validate_benchmark_bundle_contract(&args.bundle, &input, &mut report);
     let output_payload = BenchmarkVerificationCommandOutput {
         report,
+        report_path: args.output.as_ref().map(|path| path.display().to_string()),
         observability_mode: default_capture_observability_mode(),
     };
 
@@ -4805,6 +4814,10 @@ mod tests {
             report["artifact_path"].as_str(),
             Some(expected_artifact_path.as_str())
         );
+        assert_eq!(
+            report["report_path"].as_str(),
+            Some(report_path.display().to_string().as_str())
+        );
         assert_eq!(report["passed"].as_bool(), Some(true));
     }
 
@@ -4846,12 +4859,17 @@ mod tests {
                     error_code: None,
                 }],
             },
+            report_path: Some("artifacts/verify_report.json".to_string()),
             observability_mode: default_capture_observability_mode(),
         };
 
         let json = serde_json::to_value(&output).expect("receipt output should serialize");
         assert_eq!(json["receipt_id"].as_str(), Some("rcpt-1"));
         assert_eq!(json["trace_id"].as_str(), Some("trace-verify-01"));
+        assert_eq!(
+            json["report_path"].as_str(),
+            Some("artifacts/verify_report.json")
+        );
         assert_eq!(
             json["observability_mode"]["mode_id"].as_str(),
             Some("default_capture")
@@ -4894,11 +4912,16 @@ mod tests {
                     error_code: None,
                 }],
             },
+            report_path: Some("artifacts/benchmark_verify_report.json".to_string()),
             observability_mode: default_capture_observability_mode(),
         };
 
         let json = serde_json::to_value(&output).expect("benchmark output should serialize");
         assert_eq!(json["claim_type"].as_str(), Some("benchmark"));
+        assert_eq!(
+            json["report_path"].as_str(),
+            Some("artifacts/benchmark_verify_report.json")
+        );
         assert_eq!(
             json["component"].as_str(),
             Some(THIRD_PARTY_VERIFIER_COMPONENT)

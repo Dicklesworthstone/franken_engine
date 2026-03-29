@@ -1056,6 +1056,18 @@ fn catalog_register_rejects_pack_with_empty_rule_id() {
 }
 
 #[test]
+fn catalog_register_rejects_pack_with_blank_rule_id() {
+    let mut cat = PackCatalog::new("blank-rule-id");
+
+    assert!(!cat.register(make_pack(
+        "blank-rule-pack",
+        vec![enabled_rule("   ", RewriteCategory::Custom, true)],
+    )));
+    assert!(cat.packs.is_empty());
+    assert_eq!(cat.total_rule_count, 0);
+}
+
+#[test]
 fn catalog_register_rejects_pack_with_empty_pack_id() {
     let mut cat = PackCatalog::new("empty-pack-id");
     let pack = RewritePack::new(
@@ -1066,6 +1078,60 @@ fn catalog_register_rejects_pack_with_empty_pack_id() {
         vec![enabled_rule("r1", RewriteCategory::Custom, true)],
         InterferenceMetadata::build(vec![]),
         "baseline-cost-model",
+    );
+
+    assert!(!cat.register(pack));
+    assert!(cat.packs.is_empty());
+    assert_eq!(cat.total_rule_count, 0);
+}
+
+#[test]
+fn catalog_register_rejects_pack_with_blank_pack_id() {
+    let mut cat = PackCatalog::new("blank-pack-id");
+    let pack = RewritePack::new(
+        "   ",
+        PackVersion::CURRENT,
+        test_epoch(),
+        "blank pack id",
+        vec![enabled_rule("r1", RewriteCategory::Custom, true)],
+        InterferenceMetadata::build(vec![]),
+        "baseline-cost-model",
+    );
+
+    assert!(!cat.register(pack));
+    assert!(cat.packs.is_empty());
+    assert_eq!(cat.total_rule_count, 0);
+}
+
+#[test]
+fn catalog_register_rejects_pack_with_empty_cost_model_id() {
+    let mut cat = PackCatalog::new("empty-cost-model-id");
+    let pack = RewritePack::new(
+        "empty-cost-model-pack",
+        PackVersion::CURRENT,
+        test_epoch(),
+        "empty cost-model id",
+        vec![enabled_rule("r1", RewriteCategory::Custom, true)],
+        InterferenceMetadata::build(vec![]),
+        "",
+    );
+
+    assert!(!cat.register(pack));
+    assert!(cat.packs.is_empty());
+    assert_eq!(cat.total_rule_count, 0);
+}
+
+#[test]
+fn catalog_register_rejects_pack_with_blank_cost_model_id() {
+    let mut cat = PackCatalog::new("blank-cost-model-id");
+    let pack = RewritePack::new(
+        "blank-cost-model-pack",
+        PackVersion::CURRENT,
+        test_epoch(),
+        "blank cost-model id",
+        vec![enabled_rule("r1", RewriteCategory::Custom, true)],
+        InterferenceMetadata::build(vec![]),
+        "   ",
     );
 
     assert!(!cat.register(pack));

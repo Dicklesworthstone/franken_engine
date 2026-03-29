@@ -10,9 +10,9 @@ use std::{collections::BTreeSet, fs, path::PathBuf};
 use frankenengine_engine::npm_compatibility_matrix::{
     BEAD_ID, COMPONENT, CohortSummary, CohortTier, IncompatibilityRecord, IncompatibilityRootCause,
     IncompatibilitySeverity, MAX_INCOMPATIBILITIES_PER_PACKAGE, MAX_PACKAGES_PER_COHORT,
-    MatrixVerdict, ModuleSystemReq, NpmCompatibilityError, NpmCompatibilityMatrix, PackageCategory,
-    PackageRecord, PackageTestOutcome, PackageTestResult, RemediationState, SCHEMA_VERSION,
-    seed_tier1_critical_packages, seed_tier2_popular_packages,
+    MatrixVerdict, ModuleSystemReq, NativeAddonMode, NpmCompatibilityError, NpmCompatibilityMatrix,
+    PackageCategory, PackageRecord, PackageTestOutcome, PackageTestResult, RemediationState,
+    SCHEMA_VERSION, seed_tier1_critical_packages, seed_tier2_popular_packages,
 };
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -27,6 +27,8 @@ fn pkg(name: &str, tier: CohortTier) -> PackageRecord {
         weekly_downloads: 1_000_000,
         dependency_fanout: 5,
         node_api_deps: BTreeSet::new(),
+        native_addon_mode: NativeAddonMode::None,
+        capability_safe_membrane_fallback: false,
         types_only: false,
     }
 }
@@ -242,6 +244,25 @@ fn module_system_req_all_variants_serde_roundtrip() {
         assert!(displays.insert(s.to_string()), "duplicate: {s}");
     }
     assert_eq!(displays.len(), 4);
+}
+
+#[test]
+fn native_addon_mode_all_variants_serde_roundtrip() {
+    let all = [
+        NativeAddonMode::None,
+        NativeAddonMode::Optional,
+        NativeAddonMode::Required,
+    ];
+    let mut displays = BTreeSet::new();
+    for mode in all {
+        let json = serde_json::to_string(&mode).unwrap();
+        let back: NativeAddonMode = serde_json::from_str(&json).unwrap();
+        assert_eq!(mode, back);
+        let s = mode.as_str();
+        assert!(!s.is_empty());
+        assert!(displays.insert(s.to_string()), "duplicate: {s}");
+    }
+    assert_eq!(displays.len(), 3);
 }
 
 // ── IncompatibilityRootCause exhaustive ─────────────────────────────────
@@ -483,6 +504,8 @@ fn package_record_serde_roundtrip() {
     p.module_system = ModuleSystemReq::CjsOnly;
     p.node_api_deps.insert("http".to_string());
     p.node_api_deps.insert("fs".to_string());
+    p.native_addon_mode = NativeAddonMode::Optional;
+    p.capability_safe_membrane_fallback = true;
     p.types_only = false;
     let json = serde_json::to_string(&p).unwrap();
     let back: PackageRecord = serde_json::from_str(&json).unwrap();
@@ -973,6 +996,21 @@ fn seed_tier2_packages_integrate_into_matrix() {
     for p in m.packages_in_tier(CohortTier::Tier2Popular) {
         assert_eq!(p.tier, CohortTier::Tier2Popular);
     }
+}
+
+#[test]
+fn seed_tier2_native_addon_posture_is_explicit() {
+    let tier2 = seed_tier2_popular_packages();
+    let prisma = tier2
+        .iter()
+        .find(|package| package.name == "prisma")
+        .unwrap();
+    assert_eq!(prisma.native_addon_mode, NativeAddonMode::Required);
+    assert!(prisma.capability_safe_membrane_fallback);
+
+    let ws = tier2.iter().find(|package| package.name == "ws").unwrap();
+    assert_eq!(ws.native_addon_mode, NativeAddonMode::Optional);
+    assert!(!ws.capability_safe_membrane_fallback);
 }
 
 #[test]

@@ -173,6 +173,38 @@ impl ModuleSystemReq {
 }
 
 // ---------------------------------------------------------------------------
+// Native addon posture
+// ---------------------------------------------------------------------------
+
+/// Native-addon posture for a package cohort.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeAddonMode {
+    /// Pure JS / TS package with no native-addon dependency.
+    None,
+    /// Package can use a native addon for acceleration but still has a JS path.
+    Optional,
+    /// Package requires a native addon to be meaningfully usable.
+    Required,
+}
+
+impl NativeAddonMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Optional => "optional",
+            Self::Required => "required",
+        }
+    }
+}
+
+impl fmt::Display for NativeAddonMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Package record
 // ---------------------------------------------------------------------------
 
@@ -195,6 +227,10 @@ pub struct PackageRecord {
     pub dependency_fanout: u32,
     /// Node API surfaces this package depends on.
     pub node_api_deps: BTreeSet<String>,
+    /// Native-addon posture for this package.
+    pub native_addon_mode: NativeAddonMode,
+    /// Whether this package can fall back to the capability-safe addon membrane.
+    pub capability_safe_membrane_fallback: bool,
     /// Whether this package is a type-only package.
     pub types_only: bool,
 }
@@ -251,6 +287,14 @@ impl PackageRecord {
                     .map(|d| CanonicalValue::String(d.clone()))
                     .collect(),
             ),
+        );
+        map.insert(
+            "native_addon_mode".to_string(),
+            CanonicalValue::String(self.native_addon_mode.as_str().to_string()),
+        );
+        map.insert(
+            "capability_safe_membrane_fallback".to_string(),
+            CanonicalValue::Bool(self.capability_safe_membrane_fallback),
         );
         map.insert(
             "types_only".to_string(),
@@ -1250,6 +1294,8 @@ pub fn seed_tier1_critical_packages() -> Vec<PackageRecord> {
             ModuleSystemReq::CjsOnly,
             30_000_000,
             30,
+            NativeAddonMode::None,
+            false,
             &["http", "path", "fs", "stream", "events"][..],
         ),
         (
@@ -1259,6 +1305,8 @@ pub fn seed_tier1_critical_packages() -> Vec<PackageRecord> {
             ModuleSystemReq::CjsOnly,
             50_000_000,
             0,
+            NativeAddonMode::None,
+            false,
             &["fs", "path", "os"][..],
         ),
         (
@@ -1268,6 +1316,8 @@ pub fn seed_tier1_critical_packages() -> Vec<PackageRecord> {
             ModuleSystemReq::CjsOnly,
             50_000_000,
             0,
+            NativeAddonMode::None,
+            false,
             &[][..],
         ),
         (
@@ -1277,6 +1327,8 @@ pub fn seed_tier1_critical_packages() -> Vec<PackageRecord> {
             ModuleSystemReq::DualEsmCjs,
             45_000_000,
             8,
+            NativeAddonMode::None,
+            false,
             &["http", "https", "stream", "url", "zlib"][..],
         ),
         (
@@ -1286,6 +1338,8 @@ pub fn seed_tier1_critical_packages() -> Vec<PackageRecord> {
             ModuleSystemReq::EsmOnly,
             25_000_000,
             0,
+            NativeAddonMode::None,
+            false,
             &[][..],
         ),
         (
@@ -1295,6 +1349,8 @@ pub fn seed_tier1_critical_packages() -> Vec<PackageRecord> {
             ModuleSystemReq::DualEsmCjs,
             20_000_000,
             0,
+            NativeAddonMode::None,
+            false,
             &["crypto"][..],
         ),
         (
@@ -1304,6 +1360,8 @@ pub fn seed_tier1_critical_packages() -> Vec<PackageRecord> {
             ModuleSystemReq::DualEsmCjs,
             15_000_000,
             2,
+            NativeAddonMode::None,
+            false,
             &["process", "events"][..],
         ),
         (
@@ -1313,6 +1371,8 @@ pub fn seed_tier1_critical_packages() -> Vec<PackageRecord> {
             ModuleSystemReq::CjsOnly,
             25_000_000,
             0,
+            NativeAddonMode::None,
+            false,
             &["fs", "path", "os", "crypto"][..],
         ),
         (
@@ -1322,6 +1382,8 @@ pub fn seed_tier1_critical_packages() -> Vec<PackageRecord> {
             ModuleSystemReq::DualEsmCjs,
             12_000_000,
             0,
+            NativeAddonMode::None,
+            false,
             &[][..],
         ),
         (
@@ -1331,6 +1393,8 @@ pub fn seed_tier1_critical_packages() -> Vec<PackageRecord> {
             ModuleSystemReq::EsmOnly,
             15_000_000,
             0,
+            NativeAddonMode::None,
+            false,
             &[][..],
         ),
     ];
@@ -1338,7 +1402,17 @@ pub fn seed_tier1_critical_packages() -> Vec<PackageRecord> {
     packages
         .into_iter()
         .map(
-            |(name, version, category, module_system, downloads, fanout, apis)| PackageRecord {
+            |(
+                name,
+                version,
+                category,
+                module_system,
+                downloads,
+                fanout,
+                native_addon_mode,
+                capability_safe_membrane_fallback,
+                apis,
+            )| PackageRecord {
                 name: name.to_string(),
                 version: version.to_string(),
                 tier: CohortTier::Tier1Critical,
@@ -1347,6 +1421,8 @@ pub fn seed_tier1_critical_packages() -> Vec<PackageRecord> {
                 weekly_downloads: downloads,
                 dependency_fanout: fanout,
                 node_api_deps: apis.iter().map(|s| (*s).to_string()).collect(),
+                native_addon_mode,
+                capability_safe_membrane_fallback,
                 types_only: false,
             },
         )
@@ -1363,6 +1439,8 @@ pub fn seed_tier2_popular_packages() -> Vec<PackageRecord> {
             ModuleSystemReq::DualEsmCjs,
             2_500_000,
             45,
+            NativeAddonMode::None,
+            false,
             &["http", "https", "stream", "events"][..],
         ),
         (
@@ -1372,6 +1450,8 @@ pub fn seed_tier2_popular_packages() -> Vec<PackageRecord> {
             ModuleSystemReq::EsmOnly,
             5_000_000,
             60,
+            NativeAddonMode::None,
+            false,
             &["fs", "path", "process", "worker_threads"][..],
         ),
         (
@@ -1381,6 +1461,8 @@ pub fn seed_tier2_popular_packages() -> Vec<PackageRecord> {
             ModuleSystemReq::CjsOnly,
             3_000_000,
             15,
+            NativeAddonMode::Required,
+            true,
             &["fs", "path", "child_process", "crypto"][..],
         ),
         (
@@ -1390,6 +1472,8 @@ pub fn seed_tier2_popular_packages() -> Vec<PackageRecord> {
             ModuleSystemReq::DualEsmCjs,
             8_000_000,
             3,
+            NativeAddonMode::None,
+            false,
             &["fs", "path"][..],
         ),
         (
@@ -1399,6 +1483,8 @@ pub fn seed_tier2_popular_packages() -> Vec<PackageRecord> {
             ModuleSystemReq::EsmOnly,
             4_000_000,
             5,
+            NativeAddonMode::None,
+            false,
             &["process"][..],
         ),
         (
@@ -1408,6 +1494,8 @@ pub fn seed_tier2_popular_packages() -> Vec<PackageRecord> {
             ModuleSystemReq::CjsOnly,
             10_000_000,
             4,
+            NativeAddonMode::None,
+            false,
             &["crypto", "buffer"][..],
         ),
         (
@@ -1417,6 +1505,8 @@ pub fn seed_tier2_popular_packages() -> Vec<PackageRecord> {
             ModuleSystemReq::CjsOnly,
             12_000_000,
             0,
+            NativeAddonMode::Optional,
+            false,
             &["http", "https", "net", "tls", "stream", "events", "crypto"][..],
         ),
         (
@@ -1426,6 +1516,8 @@ pub fn seed_tier2_popular_packages() -> Vec<PackageRecord> {
             ModuleSystemReq::CjsOnly,
             8_000_000,
             10,
+            NativeAddonMode::None,
+            false,
             &["path", "process"][..],
         ),
         (
@@ -1435,6 +1527,8 @@ pub fn seed_tier2_popular_packages() -> Vec<PackageRecord> {
             ModuleSystemReq::EsmOnly,
             6_000_000,
             2,
+            NativeAddonMode::None,
+            false,
             &["fs", "path", "events"][..],
         ),
         (
@@ -1444,6 +1538,8 @@ pub fn seed_tier2_popular_packages() -> Vec<PackageRecord> {
             ModuleSystemReq::DualEsmCjs,
             4_000_000,
             8,
+            NativeAddonMode::None,
+            false,
             &["os", "stream", "worker_threads"][..],
         ),
     ];
@@ -1451,7 +1547,17 @@ pub fn seed_tier2_popular_packages() -> Vec<PackageRecord> {
     packages
         .into_iter()
         .map(
-            |(name, version, category, module_system, downloads, fanout, apis)| PackageRecord {
+            |(
+                name,
+                version,
+                category,
+                module_system,
+                downloads,
+                fanout,
+                native_addon_mode,
+                capability_safe_membrane_fallback,
+                apis,
+            )| PackageRecord {
                 name: name.to_string(),
                 version: version.to_string(),
                 tier: CohortTier::Tier2Popular,
@@ -1460,6 +1566,8 @@ pub fn seed_tier2_popular_packages() -> Vec<PackageRecord> {
                 weekly_downloads: downloads,
                 dependency_fanout: fanout,
                 node_api_deps: apis.iter().map(|s| (*s).to_string()).collect(),
+                native_addon_mode,
+                capability_safe_membrane_fallback,
                 types_only: false,
             },
         )
@@ -1484,6 +1592,8 @@ mod tests {
             weekly_downloads: 1_000_000,
             dependency_fanout: 5,
             node_api_deps: BTreeSet::new(),
+            native_addon_mode: NativeAddonMode::None,
+            capability_safe_membrane_fallback: false,
             types_only: false,
         }
     }
@@ -2222,6 +2332,21 @@ mod tests {
     }
 
     #[test]
+    fn all_native_addon_modes_serde() {
+        let variants = [
+            NativeAddonMode::None,
+            NativeAddonMode::Optional,
+            NativeAddonMode::Required,
+        ];
+        for mode in variants {
+            let json = serde_json::to_string(&mode).unwrap();
+            let back: NativeAddonMode = serde_json::from_str(&json).unwrap();
+            assert_eq!(mode, back);
+            assert!(!mode.as_str().is_empty());
+        }
+    }
+
+    #[test]
     fn all_remediation_states_serde() {
         let states = [
             RemediationState::Discovered,
@@ -2575,8 +2700,10 @@ mod tests {
             assert!(map.contains_key("weekly_downloads"));
             assert!(map.contains_key("dependency_fanout"));
             assert!(map.contains_key("node_api_deps"));
+            assert!(map.contains_key("native_addon_mode"));
+            assert!(map.contains_key("capability_safe_membrane_fallback"));
             assert!(map.contains_key("types_only"));
-            assert_eq!(map.len(), 9);
+            assert_eq!(map.len(), 11);
         } else {
             panic!("expected Map canonical value");
         }
@@ -3425,6 +3552,12 @@ mod tests {
         assert!(names.contains("vitest"));
         assert!(names.contains("prisma"));
         assert!(names.contains("ws"));
+        let prisma = packages.iter().find(|p| p.name == "prisma").unwrap();
+        assert_eq!(prisma.native_addon_mode, NativeAddonMode::Required);
+        assert!(prisma.capability_safe_membrane_fallback);
+        let ws = packages.iter().find(|p| p.name == "ws").unwrap();
+        assert_eq!(ws.native_addon_mode, NativeAddonMode::Optional);
+        assert!(!ws.capability_safe_membrane_fallback);
         assert_eq!(packages.len(), 10);
     }
 

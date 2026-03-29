@@ -149,14 +149,14 @@ fn monomorphic_single_shape_stays_mono() {
     assert_eq!(profile.current_state, IcSiteState::Uninitialised);
     assert_eq!(profile.total_accesses, 0);
 
-    let changed = profile.record_access(42);
+    let changed = profile.record_access(42, &IcPolicyConfig::default());
     assert!(changed, "uninitialised → mono should be a transition");
     assert_eq!(profile.current_state, IcSiteState::Monomorphic);
     assert_eq!(profile.observed_shapes, vec![42]);
 
     // Same shape repeated: state should not change.
     for _ in 0..200 {
-        let c = profile.record_access(42);
+        let c = profile.record_access(42, &IcPolicyConfig::default());
         assert!(!c);
     }
     assert_eq!(profile.current_state, IcSiteState::Monomorphic);
@@ -169,9 +169,9 @@ fn monomorphic_single_shape_stays_mono() {
 #[test]
 fn monomorphic_hit_rate_near_perfect() {
     let mut profile = IcSiteProfile::new(10, IcSiteKind::CallSite, "fn_foo");
-    profile.record_access(1);
+    profile.record_access(1, &IcPolicyConfig::default());
     for _ in 0..199 {
-        profile.record_access(1);
+        profile.record_access(1, &IcPolicyConfig::default());
     }
     let rate = profile.hit_rate_millionths();
     // 1 transition (uninit→mono) out of 200 accesses → 199/200 = 995_000
@@ -182,8 +182,8 @@ fn monomorphic_hit_rate_near_perfect() {
 fn monomorphic_hash_is_stable() {
     let mut p1 = IcSiteProfile::new(5, IcSiteKind::PropertyStore, "scope_a");
     let mut p2 = IcSiteProfile::new(5, IcSiteKind::PropertyStore, "scope_a");
-    p1.record_access(100);
-    p2.record_access(100);
+    p1.record_access(100, &IcPolicyConfig::default());
+    p2.record_access(100, &IcPolicyConfig::default());
     assert_eq!(p1.content_hash, p2.content_hash);
 }
 
@@ -191,8 +191,8 @@ fn monomorphic_hash_is_stable() {
 fn monomorphic_different_offsets_different_hashes() {
     let mut p1 = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "s");
     let mut p2 = IcSiteProfile::new(1, IcSiteKind::PropertyLoad, "s");
-    p1.record_access(1);
-    p2.record_access(1);
+    p1.record_access(1, &IcPolicyConfig::default());
+    p2.record_access(1, &IcPolicyConfig::default());
     assert_ne!(p1.content_hash, p2.content_hash);
 }
 
@@ -203,10 +203,10 @@ fn monomorphic_different_offsets_different_hashes() {
 #[test]
 fn polymorphic_two_shapes() {
     let mut profile = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_poly");
-    profile.record_access(1);
+    profile.record_access(1, &IcPolicyConfig::default());
     assert_eq!(profile.current_state, IcSiteState::Monomorphic);
 
-    let changed = profile.record_access(2);
+    let changed = profile.record_access(2, &IcPolicyConfig::default());
     assert!(changed, "mono → poly should be a transition");
     assert_eq!(profile.current_state, IcSiteState::Polymorphic);
     assert_eq!(profile.observed_shapes.len(), 2);
@@ -217,7 +217,7 @@ fn polymorphic_two_shapes() {
 fn polymorphic_max_shapes_still_poly() {
     let mut profile = IcSiteProfile::new(0, IcSiteKind::ComputedLoad, "fn_max_poly");
     for shape_id in 1..=(DEFAULT_MAX_POLY_ENTRIES as u64) {
-        profile.record_access(shape_id);
+        profile.record_access(shape_id, &IcPolicyConfig::default());
     }
     assert_eq!(profile.current_state, IcSiteState::Polymorphic);
     assert_eq!(profile.observed_shapes.len(), DEFAULT_MAX_POLY_ENTRIES);
@@ -226,9 +226,9 @@ fn polymorphic_max_shapes_still_poly() {
 #[test]
 fn polymorphic_shapes_are_sorted() {
     let mut profile = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_sort");
-    profile.record_access(99);
-    profile.record_access(3);
-    profile.record_access(50);
+    profile.record_access(99, &IcPolicyConfig::default());
+    profile.record_access(3, &IcPolicyConfig::default());
+    profile.record_access(50, &IcPolicyConfig::default());
     let shapes = &profile.observed_shapes;
     assert_eq!(shapes, &[3, 50, 99]);
 }
@@ -236,10 +236,10 @@ fn polymorphic_shapes_are_sorted() {
 #[test]
 fn polymorphic_duplicate_shape_no_transition() {
     let mut profile = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_dup");
-    profile.record_access(1);
-    profile.record_access(2);
+    profile.record_access(1, &IcPolicyConfig::default());
+    profile.record_access(2, &IcPolicyConfig::default());
     let tc = profile.transition_count;
-    let changed = profile.record_access(2); // duplicate
+    let changed = profile.record_access(2, &IcPolicyConfig::default()); // duplicate
     assert!(!changed);
     assert_eq!(profile.transition_count, tc);
 }
@@ -252,7 +252,7 @@ fn polymorphic_duplicate_shape_no_transition() {
 fn megamorphic_transition_at_threshold() {
     let mut profile = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_mega");
     for shape_id in 1..=(DEFAULT_MAX_POLY_ENTRIES as u64 + 1) {
-        profile.record_access(shape_id);
+        profile.record_access(shape_id, &IcPolicyConfig::default());
     }
     assert_eq!(profile.current_state, IcSiteState::Megamorphic);
     assert!(profile.is_megamorphic());
@@ -264,13 +264,13 @@ fn megamorphic_sticky_prevents_demotion() {
     let mut profile = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_sticky");
     // Drive to megamorphic
     for shape_id in 1..=(DEFAULT_MAX_POLY_ENTRIES as u64 + 1) {
-        profile.record_access(shape_id);
+        profile.record_access(shape_id, &IcPolicyConfig::default());
     }
     assert_eq!(profile.current_state, IcSiteState::Megamorphic);
 
     // Even after many accesses of the same shape, should stay mega
     for _ in 0..100 {
-        let changed = profile.record_access(1);
+        let changed = profile.record_access(1, &IcPolicyConfig::default());
         assert!(!changed);
     }
     assert_eq!(profile.current_state, IcSiteState::Megamorphic);
@@ -280,7 +280,7 @@ fn megamorphic_sticky_prevents_demotion() {
 fn megamorphic_many_shapes_count_preserved() {
     let mut profile = IcSiteProfile::new(0, IcSiteKind::ComputedStore, "fn_many");
     for shape_id in 1..=20u64 {
-        profile.record_access(shape_id);
+        profile.record_access(shape_id, &IcPolicyConfig::default());
     }
     assert_eq!(profile.observed_shapes.len(), 20);
     assert!(profile.is_megamorphic());
@@ -293,7 +293,7 @@ fn megamorphic_many_shapes_count_preserved() {
 #[test]
 fn guard_failure_increments() {
     let mut profile = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_gf");
-    profile.record_access(1);
+    profile.record_access(1, &IcPolicyConfig::default());
     assert_eq!(profile.guard_failure_count, 0);
 
     profile.record_guard_failure();
@@ -305,9 +305,9 @@ fn guard_failure_increments() {
 #[test]
 fn guard_failure_affects_hit_rate() {
     let mut profile = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_gf_rate");
-    profile.record_access(1);
+    profile.record_access(1, &IcPolicyConfig::default());
     for _ in 0..99 {
-        profile.record_access(1);
+        profile.record_access(1, &IcPolicyConfig::default());
     }
     let rate_before = profile.hit_rate_millionths();
 
@@ -327,7 +327,7 @@ fn guard_failure_affects_hit_rate() {
 #[test]
 fn guard_failure_rehashes() {
     let mut profile = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_gf_hash");
-    profile.record_access(1);
+    profile.record_access(1, &IcPolicyConfig::default());
     let hash_before = profile.content_hash;
     // record_guard_failure doesn't change total_accesses/state so hash stays same
     // (hash depends on offset, kind, scope_id, state, accesses only)
@@ -348,11 +348,11 @@ fn cold_entry_pruning_via_low_hit_rate() {
     // Create many transitions (shape changes) relative to total accesses
     // to produce a low hit rate.
     for shape_id in 1..=3u64 {
-        profile.record_access(shape_id);
+        profile.record_access(shape_id, &IcPolicyConfig::default());
     }
     // Now do a few more accesses to get past min_access_count
     for _ in 0..98 {
-        profile.record_access(1);
+        profile.record_access(1, &IcPolicyConfig::default());
     }
     // 3 transitions out of 101 accesses → hit_rate ≈ 970_000
     // That's above default threshold. We need a config with high threshold.
@@ -451,10 +451,10 @@ fn bailout_insufficient_accesses_continues() {
 #[test]
 fn bailout_excessive_guard_failures_deoptimises() {
     let mut profile = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_gf_deopt");
-    profile.record_access(1);
+    profile.record_access(1, &IcPolicyConfig::default());
     // Fill up enough accesses
     for _ in 0..200 {
-        profile.record_access(1);
+        profile.record_access(1, &IcPolicyConfig::default());
     }
     // Add guard failures exceeding max
     let config = IcPolicyConfig {
@@ -475,11 +475,11 @@ fn bailout_megamorphic_sticky_continues() {
     let mut profile = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_mega_sticky");
     // Drive to megamorphic
     for shape_id in 1..=(DEFAULT_MAX_POLY_ENTRIES as u64 + 1) {
-        profile.record_access(shape_id);
+        profile.record_access(shape_id, &IcPolicyConfig::default());
     }
     // Fill enough accesses
     for _ in 0..200 {
-        profile.record_access(1);
+        profile.record_access(1, &IcPolicyConfig::default());
     }
     let config = IcPolicyConfig::default();
     let epoch = SecurityEpoch::from_raw(1);
@@ -502,11 +502,11 @@ fn bailout_shapes_exceed_megamorphic_threshold_promotes() {
     };
     // Add shapes beyond mega threshold
     for shape_id in 1..=6u64 {
-        profile.record_access(shape_id);
+        profile.record_access(shape_id, &IcPolicyConfig::default());
     }
     // Ensure enough accesses
     for _ in 0..10 {
-        profile.record_access(1);
+        profile.record_access(1, &IcPolicyConfig::default());
     }
     let epoch = SecurityEpoch::from_raw(1);
     let decision = decide_bailout(&profile, &config, epoch);
@@ -524,10 +524,10 @@ fn bailout_shapes_exceed_max_poly_promotes() {
         ..IcPolicyConfig::default()
     };
     for shape_id in 1..=3u64 {
-        profile.record_access(shape_id);
+        profile.record_access(shape_id, &IcPolicyConfig::default());
     }
     for _ in 0..10 {
-        profile.record_access(1);
+        profile.record_access(1, &IcPolicyConfig::default());
     }
     let epoch = SecurityEpoch::from_raw(1);
     let decision = decide_bailout(&profile, &config, epoch);
@@ -542,7 +542,7 @@ fn bailout_transition_count_capped_at_three_from_state_machine() {
     // achieved via external profile mutation. Here we verify the cap.
     let mut profile = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_tc_cap");
     for shape_id in 1..=10u64 {
-        profile.record_access(shape_id);
+        profile.record_access(shape_id, &IcPolicyConfig::default());
     }
     // uninit→mono(1), mono→poly(2), poly→mega(3), then sticky prevents more
     assert_eq!(profile.transition_count, 3);
@@ -552,11 +552,11 @@ fn bailout_transition_count_capped_at_three_from_state_machine() {
 fn bailout_low_hit_rate_few_transitions_prunes() {
     let mut profile = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_prune");
     // 2 shapes → transition_count = 2 (≤3 → PruneColdEntries path)
-    profile.record_access(1);
-    profile.record_access(2);
+    profile.record_access(1, &IcPolicyConfig::default());
+    profile.record_access(2, &IcPolicyConfig::default());
     // Now fill to min_access_count with many guard failures to lower hit rate
     for _ in 0..10 {
-        profile.record_access(1);
+        profile.record_access(1, &IcPolicyConfig::default());
     }
     // total_accesses=12, transition_count=2, guard_failures=0
     // hit_rate = (12 - 2)/12 = 10/12 = 833_333
@@ -577,9 +577,9 @@ fn bailout_low_hit_rate_few_transitions_prunes() {
 #[test]
 fn bailout_stable_site_continues() {
     let mut profile = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_stable");
-    profile.record_access(1);
+    profile.record_access(1, &IcPolicyConfig::default());
     for _ in 0..200 {
-        profile.record_access(1);
+        profile.record_access(1, &IcPolicyConfig::default());
     }
     let config = IcPolicyConfig::default();
     let epoch = SecurityEpoch::from_raw(1);
@@ -591,9 +591,9 @@ fn bailout_stable_site_continues() {
 #[test]
 fn bailout_decision_has_correct_fields() {
     let mut profile = IcSiteProfile::new(42, IcSiteKind::CallSite, "fn_fields");
-    profile.record_access(1);
+    profile.record_access(1, &IcPolicyConfig::default());
     for _ in 0..200 {
-        profile.record_access(1);
+        profile.record_access(1, &IcPolicyConfig::default());
     }
     let config = IcPolicyConfig::default();
     let epoch = SecurityEpoch::from_raw(7);
@@ -613,8 +613,8 @@ fn bailout_decision_hash_deterministic() {
     let mut p1 = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_det");
     let mut p2 = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_det");
     for _ in 0..150 {
-        p1.record_access(1);
-        p2.record_access(1);
+        p1.record_access(1, &IcPolicyConfig::default());
+        p2.record_access(1, &IcPolicyConfig::default());
     }
     let config = IcPolicyConfig::default();
     let epoch = SecurityEpoch::from_raw(1);
@@ -628,7 +628,7 @@ fn bailout_decision_hash_deterministic() {
 fn bailout_decision_different_epoch_different_hash() {
     let mut profile = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_epoch");
     for _ in 0..150 {
-        profile.record_access(1);
+        profile.record_access(1, &IcPolicyConfig::default());
     }
     let config = IcPolicyConfig::default();
     let d1 = decide_bailout(&profile, &config, SecurityEpoch::from_raw(1));
@@ -640,7 +640,7 @@ fn bailout_decision_different_epoch_different_hash() {
 fn bailout_decision_serde_round_trip() {
     let mut profile = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_serde");
     for _ in 0..150 {
-        profile.record_access(1);
+        profile.record_access(1, &IcPolicyConfig::default());
     }
     let config = IcPolicyConfig::default();
     let epoch = SecurityEpoch::from_raw(1);
@@ -793,7 +793,7 @@ fn scope_profile_register_and_access() {
     scope.register_site(4, IcSiteKind::CallSite);
     assert_eq!(scope.site_count(), 2);
 
-    let changed = scope.record_access(0, 42);
+    let changed = scope.record_access(0, 42, &IcPolicyConfig::default());
     assert!(changed, "first access should transition uninit→mono");
     assert_eq!(scope.total_accesses, 1);
     assert_eq!(scope.monomorphic_count(), 1);
@@ -802,7 +802,7 @@ fn scope_profile_register_and_access() {
 #[test]
 fn scope_profile_access_to_unregistered_site_noop() {
     let mut scope = IcScopeProfile::new("fn_unreg");
-    let changed = scope.record_access(99, 1);
+    let changed = scope.record_access(99, 1, &IcPolicyConfig::default());
     assert!(!changed);
     assert_eq!(scope.total_accesses, 1); // total still incremented
 }
@@ -826,10 +826,10 @@ fn scope_profile_monomorphic_rate() {
     scope.register_site(0, IcSiteKind::PropertyLoad);
     scope.register_site(4, IcSiteKind::PropertyStore);
     // Site 0: monomorphic (1 shape)
-    scope.record_access(0, 1);
+    scope.record_access(0, 1, &IcPolicyConfig::default());
     // Site 4: polymorphic (2 shapes)
-    scope.record_access(4, 1);
-    scope.record_access(4, 2);
+    scope.record_access(4, 1, &IcPolicyConfig::default());
+    scope.record_access(4, 2, &IcPolicyConfig::default());
 
     assert_eq!(scope.monomorphic_count(), 1);
     let rate = scope.monomorphic_rate_millionths();
@@ -842,7 +842,7 @@ fn scope_profile_megamorphic_count() {
     let mut scope = IcScopeProfile::new("fn_mega_cnt");
     scope.register_site(0, IcSiteKind::PropertyLoad);
     for shape_id in 1..=(DEFAULT_MAX_POLY_ENTRIES as u64 + 1) {
-        scope.record_access(0, shape_id);
+        scope.record_access(0, shape_id, &IcPolicyConfig::default());
     }
     assert_eq!(scope.megamorphic_count(), 1);
 }
@@ -851,8 +851,8 @@ fn scope_profile_megamorphic_count() {
 fn scope_profile_replay_log_records_transitions() {
     let mut scope = IcScopeProfile::new("fn_replay");
     scope.register_site(0, IcSiteKind::PropertyLoad);
-    scope.record_access(0, 1); // uninit → mono
-    scope.record_access(0, 2); // mono → poly
+    scope.record_access(0, 1, &IcPolicyConfig::default()); // uninit → mono
+    scope.record_access(0, 2, &IcPolicyConfig::default()); // mono → poly
     assert_eq!(scope.replay_log.len(), 2);
     assert_eq!(
         scope.replay_log.events[0].from_state,
@@ -880,10 +880,10 @@ fn scope_profile_evaluate_all_returns_only_warm_sites() {
 
     // Site 0: warm (>=100 accesses)
     for _ in 0..150 {
-        scope.record_access(0, 1);
+        scope.record_access(0, 1, &IcPolicyConfig::default());
     }
     // Site 4: cold (1 access)
-    scope.record_access(4, 1);
+    scope.record_access(4, 1, &IcPolicyConfig::default());
 
     let config = IcPolicyConfig::default();
     let epoch = SecurityEpoch::from_raw(1);
@@ -900,8 +900,8 @@ fn scope_profile_evaluate_all_deterministic() {
         scope.register_site(0, IcSiteKind::PropertyLoad);
         scope.register_site(4, IcSiteKind::CallSite);
         for _ in 0..200 {
-            scope.record_access(0, 1);
-            scope.record_access(4, 1);
+            scope.record_access(0, 1, &IcPolicyConfig::default());
+            scope.record_access(4, 1, &IcPolicyConfig::default());
         }
     }
     let config = IcPolicyConfig::default();
@@ -918,8 +918,8 @@ fn scope_profile_evaluate_all_deterministic() {
 fn scope_profile_serde_round_trip() {
     let mut scope = IcScopeProfile::new("fn_serde_scope");
     scope.register_site(0, IcSiteKind::PropertyLoad);
-    scope.record_access(0, 1);
-    scope.record_access(0, 2);
+    scope.record_access(0, 1, &IcPolicyConfig::default());
+    scope.record_access(0, 2, &IcPolicyConfig::default());
     let json = serde_json::to_string(&scope).unwrap();
     let back: IcScopeProfile = serde_json::from_str(&json).unwrap();
     assert_eq!(scope, back);
@@ -935,15 +935,15 @@ fn end_to_end_mono_to_mega_full_lifecycle() {
     scope.register_site(0, IcSiteKind::PropertyLoad);
 
     // Phase 1: Monomorphic warmup
-    scope.record_access(0, 1);
+    scope.record_access(0, 1, &IcPolicyConfig::default());
     assert_eq!(
         scope.sites.get(&0).unwrap().current_state,
         IcSiteState::Monomorphic
     );
 
     // Phase 2: Polymorphic expansion
-    scope.record_access(0, 2);
-    scope.record_access(0, 3);
+    scope.record_access(0, 2, &IcPolicyConfig::default());
+    scope.record_access(0, 3, &IcPolicyConfig::default());
     assert_eq!(
         scope.sites.get(&0).unwrap().current_state,
         IcSiteState::Polymorphic
@@ -951,7 +951,7 @@ fn end_to_end_mono_to_mega_full_lifecycle() {
 
     // Phase 3: Megamorphic blowout
     for shape_id in 4..=10u64 {
-        scope.record_access(0, shape_id);
+        scope.record_access(0, shape_id, &IcPolicyConfig::default());
     }
     assert_eq!(
         scope.sites.get(&0).unwrap().current_state,
@@ -964,7 +964,7 @@ fn end_to_end_mono_to_mega_full_lifecycle() {
 
     // Phase 5: Warm up for evaluation
     for _ in 0..200 {
-        scope.record_access(0, 1);
+        scope.record_access(0, 1, &IcPolicyConfig::default());
     }
     let config = IcPolicyConfig::default();
     let decisions = scope.evaluate_all(&config, SecurityEpoch::from_raw(1));
@@ -982,9 +982,9 @@ fn end_to_end_multi_site_deopt_cascade() {
 
     // Warm up all sites
     for _ in 0..200 {
-        scope.record_access(0, 1);
-        scope.record_access(8, 1);
-        scope.record_access(16, 1);
+        scope.record_access(0, 1, &IcPolicyConfig::default());
+        scope.record_access(8, 1, &IcPolicyConfig::default());
+        scope.record_access(16, 1, &IcPolicyConfig::default());
     }
 
     // Add excessive guard failures to site 16
@@ -1017,7 +1017,7 @@ fn end_to_end_replay_determinism_across_runs() {
     for scope in [&mut scope1, &mut scope2] {
         scope.register_site(0, IcSiteKind::PropertyLoad);
         for &shape in &shapes {
-            scope.record_access(0, shape);
+            scope.record_access(0, shape, &IcPolicyConfig::default());
         }
     }
     assert_eq!(scope1.replay_log, scope2.replay_log);
@@ -1200,10 +1200,10 @@ fn profile_zero_accesses_hit_rate_is_zero() {
 fn profile_is_warm_boundary() {
     let mut profile = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_warm");
     for _ in 0..(DEFAULT_MIN_ACCESS_COUNT - 1) {
-        profile.record_access(1);
+        profile.record_access(1, &IcPolicyConfig::default());
     }
     assert!(!profile.is_warm());
-    profile.record_access(1);
+    profile.record_access(1, &IcPolicyConfig::default());
     assert!(profile.is_warm());
 }
 
@@ -1216,8 +1216,8 @@ fn profile_schema_version_set_on_creation() {
 #[test]
 fn profile_serde_round_trip() {
     let mut profile = IcSiteProfile::new(10, IcSiteKind::ComputedStore, "fn_serde_prof");
-    profile.record_access(1);
-    profile.record_access(2);
+    profile.record_access(1, &IcPolicyConfig::default());
+    profile.record_access(2, &IcPolicyConfig::default());
     profile.record_guard_failure();
     let json = serde_json::to_string(&profile).unwrap();
     let back: IcSiteProfile = serde_json::from_str(&json).unwrap();
@@ -1238,7 +1238,7 @@ fn stress_many_sites_in_scope() {
 
     // Access each site with its offset as shape
     for offset in 0..50u32 {
-        scope.record_access(offset * 4, offset as u64);
+        scope.record_access(offset * 4, offset as u64, &IcPolicyConfig::default());
     }
     assert_eq!(scope.monomorphic_count(), 50);
     assert_eq!(scope.monomorphic_rate_millionths(), 1_000_000);
@@ -1248,7 +1248,7 @@ fn stress_many_sites_in_scope() {
 fn stress_many_shapes_at_single_site() {
     let mut profile = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_many_shapes");
     for shape_id in 1..=100u64 {
-        profile.record_access(shape_id);
+        profile.record_access(shape_id, &IcPolicyConfig::default());
     }
     assert_eq!(profile.observed_shapes.len(), 100);
     assert!(profile.is_megamorphic());
@@ -1258,7 +1258,7 @@ fn stress_many_shapes_at_single_site() {
 fn stress_high_access_count() {
     let mut profile = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_high_access");
     for _ in 0..10_000u64 {
-        profile.record_access(1);
+        profile.record_access(1, &IcPolicyConfig::default());
     }
     assert_eq!(profile.total_accesses, 10_000);
     let rate = profile.hit_rate_millionths();

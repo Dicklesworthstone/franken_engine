@@ -844,6 +844,7 @@ fn frankenctl_cli_workflow_script_fails_closed_on_rch_drift() {
 fn frankenctl_compile_then_verify_compile_artifact_round_trip() {
     let source_path = temp_path("frankenctl_compile_source", "js");
     let artifact_path = temp_path("frankenctl_compile_artifact", "json");
+    let verify_report_path = temp_path("frankenctl_compile_verify_report", "json");
     write_source(&source_path, "const answer = 40 + 2;\n");
 
     let compile_output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
@@ -938,6 +939,10 @@ fn frankenctl_compile_then_verify_compile_artifact_round_trip() {
             artifact_path
                 .to_str()
                 .expect("artifact path should be valid utf8"),
+            "--output",
+            verify_report_path
+                .to_str()
+                .expect("verify report path should be valid utf8"),
         ])
         .output()
         .expect("verify command should execute");
@@ -964,12 +969,22 @@ fn frankenctl_compile_then_verify_compile_artifact_round_trip() {
     assert_eq!(verify_json["passed"].as_bool(), Some(true));
     assert_eq!(verify_json["errors"].as_array().map(Vec::len), Some(0));
     assert_eq!(
+        verify_json["report_path"].as_str(),
+        verify_report_path.to_str()
+    );
+    assert_eq!(
         verify_json["observability_mode"]["mode_id"].as_str(),
         Some("default_capture")
     );
+    let verify_report_json: serde_json::Value = serde_json::from_slice(
+        &fs::read(&verify_report_path).expect("verify report should be written"),
+    )
+    .expect("verify report should parse");
+    assert_eq!(verify_report_json, verify_json);
 
     let _ = fs::remove_file(source_path);
     let _ = fs::remove_file(artifact_path);
+    let _ = fs::remove_file(verify_report_path);
 }
 
 #[test]
@@ -1879,6 +1894,7 @@ fn frankenctl_verify_receipt_unknown_receipt_id_fails_with_runtime_remediation()
 #[test]
 fn frankenctl_verify_receipt_emits_json_verdict_for_valid_input() {
     let input_path = temp_path("frankenctl_verify_receipt_input", "json");
+    let report_path = temp_path("frankenctl_verify_receipt_report", "json");
     let (receipt_id, input) = build_valid_receipt_verifier_input();
     write_receipt_verifier_input(&input_path, &input);
 
@@ -1890,6 +1906,8 @@ fn frankenctl_verify_receipt_emits_json_verdict_for_valid_input() {
             input_path.to_str().expect("path should be utf8"),
             "--receipt-id",
             receipt_id.as_str(),
+            "--output",
+            report_path.to_str().expect("path should be utf8"),
         ])
         .output()
         .expect("verify receipt command should execute");
@@ -1906,6 +1924,7 @@ fn frankenctl_verify_receipt_emits_json_verdict_for_valid_input() {
     assert_eq!(verdict["policy_id"].as_str(), Some("policy-verify-01"));
     assert_eq!(verdict["passed"].as_bool(), Some(true));
     assert_eq!(verdict["exit_code"].as_i64(), Some(0));
+    assert_eq!(verdict["report_path"].as_str(), report_path.to_str());
     assert!(verdict["failure_class"].is_null());
     assert_eq!(verdict["signature"]["passed"].as_bool(), Some(true));
     assert_eq!(verdict["transparency"]["passed"].as_bool(), Some(true));
@@ -1916,8 +1935,13 @@ fn frankenctl_verify_receipt_emits_json_verdict_for_valid_input() {
             .as_array()
             .is_some_and(|logs| !logs.is_empty())
     );
+    let report_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&report_path).expect("report should be written"))
+            .expect("report should parse");
+    assert_eq!(report_json, verdict);
 
     let _ = fs::remove_file(input_path);
+    let _ = fs::remove_file(report_path);
 }
 
 #[test]
@@ -2876,6 +2900,10 @@ fn frankenctl_benchmark_score_and_verify_bundle_round_trip() {
     assert_eq!(
         verify_report["component"].as_str(),
         Some("third_party_verifier")
+    );
+    assert_eq!(
+        verify_report["report_path"].as_str(),
+        verify_report_path.to_str()
     );
     assert_eq!(
         verify_report["observability_mode"]["mode_id"].as_str(),

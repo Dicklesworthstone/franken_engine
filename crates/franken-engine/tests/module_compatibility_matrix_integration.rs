@@ -1612,6 +1612,24 @@ fn extensionless_relative_interop_evidence_matches_matrix_contract_across_modes(
             InteropActualOutcome::Success,
             "resolve_extensionless_relative",
         ),
+        (
+            "scoped_package_type_module_extensionless_relative_native",
+            CompatibilityMode::Native,
+            InteropActualOutcome::LinkFailure,
+            "reject_extensionless_relative",
+        ),
+        (
+            "scoped_package_type_module_extensionless_relative_node_compat",
+            CompatibilityMode::NodeCompat,
+            InteropActualOutcome::LinkFailure,
+            "reject_extensionless_relative",
+        ),
+        (
+            "scoped_package_type_module_extensionless_relative_bun_compat",
+            CompatibilityMode::BunCompat,
+            InteropActualOutcome::Success,
+            "resolve_extensionless_relative",
+        ),
     ] {
         let evidence = inventory
             .evidence

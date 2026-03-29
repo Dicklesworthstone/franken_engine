@@ -33,7 +33,7 @@ fn epoch() -> SecurityEpoch {
 fn warm_mono_profile(offset: u32, scope: &str, shape: u64) -> IcSiteProfile {
     let mut p = IcSiteProfile::new(offset, IcSiteKind::PropertyLoad, scope);
     for _ in 0..DEFAULT_MIN_ACCESS_COUNT {
-        p.record_access(shape);
+        p.record_access(shape, &IcPolicyConfig::default());
     }
     p
 }
@@ -47,13 +47,13 @@ fn transition_at_exact_poly_boundary() {
     let mut p = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_boundary");
     // Add exactly DEFAULT_MAX_POLY_ENTRIES shapes → should be polymorphic
     for i in 1..=DEFAULT_MAX_POLY_ENTRIES as u64 {
-        p.record_access(i);
+        p.record_access(i, &IcPolicyConfig::default());
     }
     assert_eq!(p.current_state, IcSiteState::Polymorphic);
     assert_eq!(p.observed_shapes.len(), DEFAULT_MAX_POLY_ENTRIES);
 
     // One more shape → megamorphic
-    let changed = p.record_access(DEFAULT_MAX_POLY_ENTRIES as u64 + 1);
+    let changed = p.record_access(DEFAULT_MAX_POLY_ENTRIES as u64 + 1, &IcPolicyConfig::default());
     assert!(changed);
     assert_eq!(p.current_state, IcSiteState::Megamorphic);
 }
@@ -61,7 +61,7 @@ fn transition_at_exact_poly_boundary() {
 #[test]
 fn profile_with_zero_shape_id() {
     let mut p = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_zero");
-    let changed = p.record_access(0);
+    let changed = p.record_access(0, &IcPolicyConfig::default());
     assert!(changed);
     assert_eq!(p.current_state, IcSiteState::Monomorphic);
     assert_eq!(p.observed_shapes, vec![0]);
@@ -70,12 +70,12 @@ fn profile_with_zero_shape_id() {
 #[test]
 fn profile_with_u64_max_shape_id() {
     let mut p = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_max");
-    p.record_access(u64::MAX);
+    p.record_access(u64::MAX, &IcPolicyConfig::default());
     assert_eq!(p.current_state, IcSiteState::Monomorphic);
     assert_eq!(p.observed_shapes, vec![u64::MAX]);
 
     // Add another shape to ensure sorting works with extreme values
-    p.record_access(0);
+    p.record_access(0, &IcPolicyConfig::default());
     assert_eq!(p.current_state, IcSiteState::Polymorphic);
     assert_eq!(p.observed_shapes, vec![0, u64::MAX]);
 }
@@ -83,10 +83,10 @@ fn profile_with_u64_max_shape_id() {
 #[test]
 fn profile_shapes_stay_sorted_after_interleaved_access() {
     let mut p = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_sort");
-    p.record_access(100);
-    p.record_access(5);
-    p.record_access(50);
-    p.record_access(1);
+    p.record_access(100, &IcPolicyConfig::default());
+    p.record_access(5, &IcPolicyConfig::default());
+    p.record_access(50, &IcPolicyConfig::default());
+    p.record_access(1, &IcPolicyConfig::default());
     assert_eq!(p.observed_shapes, vec![1, 5, 50, 100]);
 }
 
@@ -112,10 +112,10 @@ fn profile_large_scope_id() {
 fn profile_access_count_saturates() {
     let mut p = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_sat");
     p.total_accesses = u64::MAX - 1;
-    p.record_access(1);
+    p.record_access(1, &IcPolicyConfig::default());
     assert_eq!(p.total_accesses, u64::MAX);
     // One more should saturate, not wrap
-    p.record_access(1);
+    p.record_access(1, &IcPolicyConfig::default());
     assert_eq!(p.total_accesses, u64::MAX);
 }
 
@@ -135,7 +135,7 @@ fn profile_transition_count_saturates() {
     p.transition_count = u32::MAX;
     // Adding a new shape would normally increment transition_count
     // Since it's already at MAX, it should saturate
-    p.record_access(1); // uninit → mono
+    p.record_access(1, &IcPolicyConfig::default()); // uninit → mono
     assert_eq!(p.transition_count, u32::MAX);
 }
 
@@ -147,7 +147,7 @@ fn profile_transition_count_saturates() {
 fn hit_rate_with_single_access_is_zero() {
     // First access causes a transition (uninit → mono), so 0 hits / 1 access = 0
     let mut p = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_single");
-    p.record_access(1);
+    p.record_access(1, &IcPolicyConfig::default());
     assert_eq!(p.hit_rate_millionths(), 0);
 }
 
@@ -155,7 +155,7 @@ fn hit_rate_with_single_access_is_zero() {
 fn hit_rate_with_many_guard_failures() {
     let mut p = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_failures");
     for _ in 0..100 {
-        p.record_access(1);
+        p.record_access(1, &IcPolicyConfig::default());
     }
     for _ in 0..50 {
         p.record_guard_failure();
@@ -170,7 +170,7 @@ fn hit_rate_with_many_guard_failures() {
 fn hit_rate_misses_exceed_accesses_returns_zero() {
     // Guard failures don't increment total_accesses, so misses can exceed accesses
     let mut p = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_underflow");
-    p.record_access(1); // 1 access, 1 transition
+    p.record_access(1, &IcPolicyConfig::default()); // 1 access, 1 transition
     p.record_guard_failure();
     p.record_guard_failure();
     // total_accesses = 1, transition_count = 1, guard_failures = 2
@@ -191,7 +191,7 @@ fn config_zero_max_poly_entries_immediate_mega() {
     };
     let mut p = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_zero_poly");
     for _ in 0..DEFAULT_MIN_ACCESS_COUNT {
-        p.record_access(1);
+        p.record_access(1, &IcPolicyConfig::default());
     }
     let decision = decide_bailout(&p, &config, epoch());
     // With threshold 0, any shape count > 0 should promote to mega
@@ -246,13 +246,13 @@ fn config_non_sticky_megamorphic() {
     };
     let mut p = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_non_sticky");
     for i in 0..=DEFAULT_MAX_POLY_ENTRIES as u64 {
-        p.record_access(i + 1);
+        p.record_access(i + 1, &IcPolicyConfig::default());
     }
     assert!(p.is_megamorphic());
     // megamorphic_sticky on profile is set to true by record_access,
     // but policy check uses config.megamorphic_sticky
     for _ in 0..DEFAULT_MIN_ACCESS_COUNT {
-        p.record_access(1);
+        p.record_access(1, &IcPolicyConfig::default());
     }
     let decision = decide_bailout(&p, &config, epoch());
     // With non-sticky config, 5 observed shapes > 4 max_poly_entries → PromoteToMegamorphic
@@ -318,7 +318,7 @@ fn bailout_low_hit_rate_with_many_transitions_recompiles() {
     // That's only 2 transitions. Need > 3 transitions for Recompile.
     // Add shapes across poly boundary and into megamorphic then add guard failures:
     for i in 0..6 {
-        p.record_access(i); // shapes 0-5
+        p.record_access(i, &IcPolicyConfig::default()); // shapes 0-5
     }
     // Now add guard failures to drive transition_count higher
     p.record_guard_failure();
@@ -327,7 +327,7 @@ fn bailout_low_hit_rate_with_many_transitions_recompiles() {
     p.record_guard_failure();
     // Make it warm
     for _ in 0..DEFAULT_MIN_ACCESS_COUNT {
-        p.record_access(0);
+        p.record_access(0, &IcPolicyConfig::default());
     }
     let config = IcPolicyConfig {
         min_hit_rate_millionths: 999_000, // Very high threshold
@@ -479,7 +479,7 @@ fn scope_many_sites_aggregation() {
 
     // Make all sites monomorphic
     for i in 0u32..100 {
-        scope.record_access(i, 42);
+        scope.record_access(i, 42, &IcPolicyConfig::default());
     }
     assert_eq!(scope.monomorphic_count(), 100);
     assert_eq!(scope.monomorphic_rate_millionths(), 1_000_000);
@@ -493,15 +493,15 @@ fn scope_mixed_state_sites() {
     scope.register_site(20, IcSiteKind::CallSite);
 
     // Site 0: monomorphic
-    scope.record_access(0, 1);
+    scope.record_access(0, 1, &IcPolicyConfig::default());
 
     // Site 10: polymorphic
-    scope.record_access(10, 1);
-    scope.record_access(10, 2);
+    scope.record_access(10, 1, &IcPolicyConfig::default());
+    scope.record_access(10, 2, &IcPolicyConfig::default());
 
     // Site 20: megamorphic
     for i in 0..=DEFAULT_MAX_POLY_ENTRIES as u64 {
-        scope.record_access(20, i + 100);
+        scope.record_access(20, i + 100, &IcPolicyConfig::default());
     }
 
     assert_eq!(scope.monomorphic_count(), 1);
@@ -514,7 +514,7 @@ fn scope_mixed_state_sites() {
 fn scope_access_to_unregistered_site_is_noop() {
     let mut scope = IcScopeProfile::new("fn_unreg");
     scope.register_site(10, IcSiteKind::PropertyLoad);
-    let changed = scope.record_access(99, 42); // site 99 not registered
+    let changed = scope.record_access(99, 42, &IcPolicyConfig::default()); // site 99 not registered
     assert!(!changed);
     assert_eq!(scope.total_accesses, 1); // still increments scope counter
 }
@@ -530,7 +530,7 @@ fn scope_guard_failure_to_unregistered_site_still_increments_scope() {
 fn scope_duplicate_register_is_idempotent() {
     let mut scope = IcScopeProfile::new("fn_dup");
     scope.register_site(10, IcSiteKind::PropertyLoad);
-    scope.record_access(10, 42);
+    scope.record_access(10, 42, &IcPolicyConfig::default());
 
     // Re-registering same offset should not reset the profile
     scope.register_site(10, IcSiteKind::PropertyStore);
@@ -551,7 +551,7 @@ fn scope_evaluate_all_excludes_cold_sites() {
 
     // Make site 0 warm
     for _ in 0..DEFAULT_MIN_ACCESS_COUNT {
-        scope.record_access(0, 42);
+        scope.record_access(0, 42, &IcPolicyConfig::default());
     }
     // Site 10 stays cold (0 accesses)
 
@@ -569,11 +569,11 @@ fn scope_replay_log_tracks_all_transitions() {
     scope.register_site(10, IcSiteKind::PropertyStore);
 
     // Transitions at site 0: uninit→mono, mono→poly
-    scope.record_access(0, 1);
-    scope.record_access(0, 2);
+    scope.record_access(0, 1, &IcPolicyConfig::default());
+    scope.record_access(0, 2, &IcPolicyConfig::default());
 
     // Transitions at site 10: uninit→mono
-    scope.record_access(10, 99);
+    scope.record_access(10, 99, &IcPolicyConfig::default());
 
     assert_eq!(scope.replay_log.len(), 3);
     assert_eq!(scope.replay_log.events[0].instruction_offset, 0);
@@ -650,7 +650,7 @@ fn full_pipeline_monomorphic_stable() {
 
     // Warm up with single shape
     for _ in 0..DEFAULT_MIN_ACCESS_COUNT + 50 {
-        scope.record_access(0, 42);
+        scope.record_access(0, 42, &IcPolicyConfig::default());
     }
 
     let config = IcPolicyConfig::default();
@@ -670,13 +670,13 @@ fn full_pipeline_polymorphic_stable() {
     scope.register_site(0, IcSiteKind::PropertyLoad);
 
     // Add 3 shapes (within poly threshold of 4)
-    scope.record_access(0, 1);
-    scope.record_access(0, 2);
-    scope.record_access(0, 3);
+    scope.record_access(0, 1, &IcPolicyConfig::default());
+    scope.record_access(0, 2, &IcPolicyConfig::default());
+    scope.record_access(0, 3, &IcPolicyConfig::default());
 
     // Warm up
     for _ in 0..DEFAULT_MIN_ACCESS_COUNT {
-        scope.record_access(0, 1);
+        scope.record_access(0, 1, &IcPolicyConfig::default());
     }
 
     let config = IcPolicyConfig::default();
@@ -694,12 +694,12 @@ fn full_pipeline_megamorphic_deopt() {
 
     // Exceed poly threshold → megamorphic
     for i in 0..=DEFAULT_MAX_POLY_ENTRIES as u64 {
-        scope.record_access(0, i + 1);
+        scope.record_access(0, i + 1, &IcPolicyConfig::default());
     }
 
     // Warm up
     for _ in 0..DEFAULT_MIN_ACCESS_COUNT {
-        scope.record_access(0, 1);
+        scope.record_access(0, 1, &IcPolicyConfig::default());
     }
 
     let config = IcPolicyConfig::default();
@@ -720,7 +720,7 @@ fn full_pipeline_guard_failure_deopt() {
 
     // Warm up
     for _ in 0..DEFAULT_MIN_ACCESS_COUNT {
-        scope.record_access(0, 1);
+        scope.record_access(0, 1, &IcPolicyConfig::default());
     }
 
     // Trigger enough guard failures
@@ -747,11 +747,11 @@ fn determinism_scope_profile_identical_runs() {
         scope.register_site(20, IcSiteKind::CallSite);
 
         for _ in 0..50 {
-            scope.record_access(0, 1);
-            scope.record_access(10, 2);
-            scope.record_access(20, 3);
+            scope.record_access(0, 1, &IcPolicyConfig::default());
+            scope.record_access(10, 2, &IcPolicyConfig::default());
+            scope.record_access(20, 3, &IcPolicyConfig::default());
         }
-        scope.record_access(0, 99); // poly transition at site 0
+        scope.record_access(0, 99, &IcPolicyConfig::default()); // poly transition at site 0
         scope.record_guard_failure(10);
 
         scope
@@ -807,7 +807,7 @@ fn all_site_kinds_can_reach_megamorphic() {
     for kind in IcSiteKind::ALL {
         let mut p = IcSiteProfile::new(0, *kind, "fn_mega_all");
         for i in 0..=DEFAULT_MAX_POLY_ENTRIES as u64 {
-            p.record_access(i + 1);
+            p.record_access(i + 1, &IcPolicyConfig::default());
         }
         assert!(
             p.is_megamorphic(),
@@ -895,9 +895,9 @@ fn expected_outcome_serde_roundtrip() {
 #[test]
 fn profile_serde_roundtrip_polymorphic() {
     let mut p = IcSiteProfile::new(5, IcSiteKind::ComputedLoad, "fn_poly_serde");
-    p.record_access(1);
-    p.record_access(2);
-    p.record_access(3);
+    p.record_access(1, &IcPolicyConfig::default());
+    p.record_access(2, &IcPolicyConfig::default());
+    p.record_access(3, &IcPolicyConfig::default());
     assert_eq!(p.current_state, IcSiteState::Polymorphic);
     let json = serde_json::to_string(&p).unwrap();
     let back: IcSiteProfile = serde_json::from_str(&json).unwrap();
@@ -908,7 +908,7 @@ fn profile_serde_roundtrip_polymorphic() {
 fn profile_serde_roundtrip_megamorphic() {
     let mut p = IcSiteProfile::new(5, IcSiteKind::InstanceOf, "fn_mega_serde");
     for i in 0..=DEFAULT_MAX_POLY_ENTRIES as u64 {
-        p.record_access(i + 1);
+        p.record_access(i + 1, &IcPolicyConfig::default());
     }
     assert!(p.is_megamorphic());
     let json = serde_json::to_string(&p).unwrap();
@@ -919,7 +919,7 @@ fn profile_serde_roundtrip_megamorphic() {
 #[test]
 fn profile_serde_roundtrip_with_guard_failures() {
     let mut p = IcSiteProfile::new(0, IcSiteKind::PropertyLoad, "fn_gf_serde");
-    p.record_access(1);
+    p.record_access(1, &IcPolicyConfig::default());
     p.record_guard_failure();
     p.record_guard_failure();
     p.record_guard_failure();
@@ -938,8 +938,8 @@ fn scope_profile_serde_roundtrip() {
     let mut scope = IcScopeProfile::new("fn_scope_serde");
     scope.register_site(0, IcSiteKind::PropertyLoad);
     scope.register_site(10, IcSiteKind::CallSite);
-    scope.record_access(0, 42);
-    scope.record_access(10, 99);
+    scope.record_access(0, 42, &IcPolicyConfig::default());
+    scope.record_access(10, 99, &IcPolicyConfig::default());
     scope.record_guard_failure(0);
 
     let json = serde_json::to_string(&scope).unwrap();

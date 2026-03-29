@@ -10,6 +10,7 @@ parser_frontier_bootstrap_env
 mode="${1:-ci}"
 toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
 artifact_root="${FRANKENCTL_REACT_CLI_ARTIFACT_ROOT:-artifacts/frankenctl_react_cli_workflow}"
+explicit_replay_run_dir="${FRANKENCTL_REACT_CLI_WORKFLOW_REPLAY_RUN_DIR:-}"
 rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 target_namespace="${mode}_$$"
@@ -27,6 +28,11 @@ doctor_report_path="${run_dir}/doctor_report.json"
 help_output_path="${run_dir}/react_help.txt"
 step_logs_dir="${run_dir}/step_logs"
 fixtures_dir="${run_dir}/fixtures"
+support_bundle_dir="${run_dir}/support_bundle"
+support_preflight_path="${support_bundle_dir}/preflight_report.json"
+support_scorecard_path="${support_bundle_dir}/onboarding_scorecard.json"
+support_rollout_path="${support_bundle_dir}/rollout_decision_artifact.json"
+support_doctor_report_path="${support_bundle_dir}/frankenctl_doctor_report.json"
 compile_source_path="${fixtures_dir}/workflow_app.tsx"
 build_entry_path="${fixtures_dir}/workflow_entry.jsx"
 
@@ -47,9 +53,73 @@ doctor_decision_id="decision-frankenctl-react-doctor-${timestamp}"
 doctor_policy_id="policy-frankenctl-react-doctor-v1"
 component="frankenctl_react_cli_workflow_gate"
 scenario_id="bd-1lsy.10.12.1"
-replay_command="./scripts/e2e/frankenctl_react_cli_workflow.sh ${mode}"
+replay_command="FRANKENCTL_REACT_CLI_WORKFLOW_REPLAY_RUN_DIR=\"${run_dir}\" ./scripts/e2e/frankenctl_react_cli_workflow.sh ${mode}"
 
-mkdir -p "$run_dir" "$step_logs_dir" "$fixtures_dir"
+run_dir_is_complete() {
+  local candidate="${1:-}"
+  [[ -n "${candidate}" ]] || return 1
+  [[ -f "${candidate}/run_manifest.json" ]] || return 1
+  [[ -f "${candidate}/trace_ids.json" ]] || return 1
+  [[ -f "${candidate}/events.jsonl" ]] || return 1
+  [[ -f "${candidate}/commands.txt" ]] || return 1
+  [[ -f "${candidate}/react_cli_contract.json" ]] || return 1
+  [[ -f "${candidate}/react_compile_report.json" ]] || return 1
+  [[ -f "${candidate}/react_build_report.json" ]] || return 1
+  [[ -f "${candidate}/doctor_input.json" ]] || return 1
+  [[ -f "${candidate}/doctor_report.json" ]] || return 1
+  [[ -f "${candidate}/react_help.txt" ]] || return 1
+  [[ -f "${candidate}/step_logs/step_000.log" ]] || return 1
+  [[ -f "${candidate}/support_bundle/preflight_report.json" ]] || return 1
+  [[ -f "${candidate}/support_bundle/onboarding_scorecard.json" ]] || return 1
+  [[ -f "${candidate}/support_bundle/rollout_decision_artifact.json" ]] || return 1
+  [[ -f "${candidate}/support_bundle/frankenctl_doctor_report.json" ]] || return 1
+}
+
+replay_existing_run_dir() {
+  local candidate="${1:-}"
+  if ! run_dir_is_complete "${candidate}"; then
+    echo "frankenctl React CLI workflow replay could not use explicit run directory; explicit run directory is incomplete: ${candidate}" >&2
+    exit 1
+  fi
+
+  echo "frankenctl React CLI workflow replay manifest: ${candidate}/run_manifest.json"
+  cat "${candidate}/run_manifest.json"
+  echo "frankenctl React CLI workflow replay trace ids: ${candidate}/trace_ids.json"
+  cat "${candidate}/trace_ids.json"
+  echo "frankenctl React CLI workflow replay events: ${candidate}/events.jsonl"
+  cat "${candidate}/events.jsonl"
+  echo "frankenctl React CLI workflow replay commands: ${candidate}/commands.txt"
+  cat "${candidate}/commands.txt"
+  echo "frankenctl React CLI workflow replay contract: ${candidate}/react_cli_contract.json"
+  cat "${candidate}/react_cli_contract.json"
+  echo "frankenctl React CLI workflow replay compile report: ${candidate}/react_compile_report.json"
+  cat "${candidate}/react_compile_report.json"
+  echo "frankenctl React CLI workflow replay build report: ${candidate}/react_build_report.json"
+  cat "${candidate}/react_build_report.json"
+  echo "frankenctl React CLI workflow replay doctor input: ${candidate}/doctor_input.json"
+  cat "${candidate}/doctor_input.json"
+  echo "frankenctl React CLI workflow replay doctor report: ${candidate}/doctor_report.json"
+  cat "${candidate}/doctor_report.json"
+  echo "frankenctl React CLI workflow replay help output: ${candidate}/react_help.txt"
+  cat "${candidate}/react_help.txt"
+  echo "frankenctl React CLI workflow replay first step log: ${candidate}/step_logs/step_000.log"
+  cat "${candidate}/step_logs/step_000.log"
+  echo "frankenctl React CLI workflow replay support bundle preflight: ${candidate}/support_bundle/preflight_report.json"
+  cat "${candidate}/support_bundle/preflight_report.json"
+  echo "frankenctl React CLI workflow replay support bundle onboarding scorecard: ${candidate}/support_bundle/onboarding_scorecard.json"
+  cat "${candidate}/support_bundle/onboarding_scorecard.json"
+  echo "frankenctl React CLI workflow replay support bundle rollout decision: ${candidate}/support_bundle/rollout_decision_artifact.json"
+  cat "${candidate}/support_bundle/rollout_decision_artifact.json"
+  echo "frankenctl React CLI workflow replay support bundle doctor report: ${candidate}/support_bundle/frankenctl_doctor_report.json"
+  cat "${candidate}/support_bundle/frankenctl_doctor_report.json"
+}
+
+if [[ -n "${explicit_replay_run_dir}" ]]; then
+  replay_existing_run_dir "${explicit_replay_run_dir}"
+  exit 0
+fi
+
+mkdir -p "$run_dir" "$step_logs_dir" "$fixtures_dir" "$support_bundle_dir"
 
 cat >"$compile_source_path" <<'EOF'
 export const WorkflowApp = () => <section data-workflow="react-cli">React CLI workflow</section>;
@@ -405,10 +475,11 @@ run_artifact_flow() {
     "${doctor_report_path}" \
     "${trace_ids_path}" \
     "${help_output_path}" \
-    "${run_dir}/support_bundle/preflight_report.json" \
-    "${run_dir}/support_bundle/onboarding_scorecard.json" \
-    "${run_dir}/support_bundle/rollout_decision_artifact.json" \
-    "${run_dir}/support_bundle/frankenctl_doctor_report.json"; do
+    "${step_logs_dir}/step_000.log" \
+    "${support_preflight_path}" \
+    "${support_scorecard_path}" \
+    "${support_rollout_path}" \
+    "${support_doctor_report_path}"; do
     if [[ ! -f "${required_path}" ]]; then
       echo "required artifact missing: ${required_path}" >&2
       failed_command="artifact_presence_check (${required_path})"

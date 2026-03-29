@@ -9,6 +9,8 @@
     "docs/RGC_SUPPORT_SURFACE_CONTRACT_V1.md",
     "docs/rgc_docs_help_surface_audit_v1.json",
     "docs/rgc_react_capability_contract_v1.json",
+    "docs/RGC_REACT_DOCTOR_PREFLIGHT_V1.md",
+    "docs/rgc_react_doctor_preflight_v1.json",
     "docs/TS_NORMALIZATION_CONTRACT.md",
     "docs/rgc_module_resolution_index_v1.json",
     "docs/rgc_cross_platform_matrix_v1.json",
@@ -282,8 +284,7 @@
         "tsx-classic-runtime-compile",
         "fragment-lowering-contract",
         "jsx-automatic-runtime-compile",
-        "tsx-automatic-runtime-compile",
-        "react-diagnostics-source-maps"
+        "tsx-automatic-runtime-compile"
       ],
       "linked_policy_ids": [
         "policy-rgc-react-capability-contract-v1"
@@ -298,6 +299,91 @@
       },
       "fallback_policy": {
         "fallback_mode": "reject_with_guidance",
+        "waiver_required": true,
+        "max_waiver_age_hours": 168,
+        "user_visible_diagnostics_required": true,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": "M5"
+      }
+    },
+    {
+      "surface_id": "runtime.react_dev_runtime_diagnostics",
+      "area": "runtime",
+      "entry_surface": "frankenctl react doctor/preflight dev-runtime diagnostics",
+      "support_status": "unsupported",
+      "claim_language_state": "target_only",
+      "current_behavior": "JSX/TSX dev-runtime diagnostic contracts are not shipped; React doctor/preflight guidance must reject them with deterministic unsupported-surface messaging instead of implying executable dev-runtime support.",
+      "evidence_sources": [
+        "docs/RGC_REACT_DOCTOR_PREFLIGHT_V1.md",
+        "docs/rgc_react_doctor_preflight_v1.json",
+        "docs/RGC_REACT_CAPABILITY_CONTRACT_V1.md",
+        "docs/rgc_react_capability_contract_v1.json",
+        "crates/franken-engine/src/react_doctor_preflight.rs"
+      ],
+      "ownership": {
+        "owner_repo": "franken_engine",
+        "owner_bead_id": "bd-1lsy.5.10.1",
+        "guidance_owner_bead_id": "bd-1lsy.10.11.2"
+      },
+      "linked_capability_ids": [
+        "jsx-dev-runtime-diagnostics",
+        "tsx-dev-runtime-diagnostics"
+      ],
+      "linked_policy_ids": [
+        "policy-rgc-react-capability-contract-v1"
+      ],
+      "mode_matrix_row_id": null,
+      "user_visible_diagnostic": {
+        "error_code": null,
+        "diagnostic_surface": "frankenctl react doctor/preflight",
+        "message_template": "React JSX/TSX dev-runtime diagnostics are not yet shipped; reject the request with deterministic unsupported-surface guidance instead of implying executable dev-runtime support.",
+        "remediation": "Treat JSX/TSX dev-runtime diagnostics as unsupported on the shipped surface; use the React capability contract and the React doctor/preflight artifact lane for target-only guidance until the owning implementation and parity beads close.",
+        "remediation_bead": "bd-1lsy.10.11.2"
+      },
+      "fallback_policy": {
+        "fallback_mode": "diagnostic_only_reject",
+        "waiver_required": true,
+        "max_waiver_age_hours": 168,
+        "user_visible_diagnostics_required": true,
+        "remediation_bead": "bd-1lsy.10.11.2",
+        "target_milestone": "M5"
+      }
+    },
+    {
+      "surface_id": "runtime.react_diagnostics_source_maps",
+      "area": "runtime",
+      "entry_surface": "frankenctl react doctor/preflight source-map fidelity guidance",
+      "support_status": "deferred",
+      "claim_language_state": "target_only",
+      "current_behavior": "React-specific diagnostics and source-map fidelity remain target-only; current doctor/preflight flows must reject requests that imply shipped source-map guarantees.",
+      "evidence_sources": [
+        "docs/RGC_REACT_DOCTOR_PREFLIGHT_V1.md",
+        "docs/rgc_react_doctor_preflight_v1.json",
+        "docs/RGC_REACT_CAPABILITY_CONTRACT_V1.md",
+        "docs/rgc_react_capability_contract_v1.json",
+        "crates/franken-engine/src/react_doctor_preflight.rs"
+      ],
+      "ownership": {
+        "owner_repo": "franken_engine",
+        "owner_bead_id": "bd-1lsy.5.10.1",
+        "guidance_owner_bead_id": "bd-1lsy.10.11.2"
+      },
+      "linked_capability_ids": [
+        "react-diagnostics-source-maps"
+      ],
+      "linked_policy_ids": [
+        "policy-rgc-react-capability-contract-v1"
+      ],
+      "mode_matrix_row_id": null,
+      "user_visible_diagnostic": {
+        "error_code": "FE-RGC-016A-CAP-0010",
+        "diagnostic_surface": "frankenctl react doctor/preflight",
+        "message_template": "React-specific diagnostics and source-map fidelity are not yet shipped as a user-supportable contract; reject the request with explicit remediation guidance.",
+        "remediation": "Keep source-map fidelity wording target-only, use the React capability contract for the declared state, and wait for the owning implementation and parity beads before claiming shipped support.",
+        "remediation_bead": "bd-1lsy.10.11.2"
+      },
+      "fallback_policy": {
+        "fallback_mode": "diagnostic_only_reject",
         "waiver_required": true,
         "max_waiver_age_hours": 168,
         "user_visible_diagnostics_required": true,

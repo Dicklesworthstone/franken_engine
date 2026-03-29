@@ -1484,6 +1484,57 @@ RGC_MODULE_INTEROP_MATRIX_REPLAY_RUN_DIR=artifacts/... \
   ./scripts/e2e/rgc_module_interop_verification_matrix_replay.sh
 ```
 
+## RGC NPM Compatibility Matrix Gate
+
+`bd-1lsy.5.4` turns npm ecosystem truth into a deterministic, replayable
+artifact lane. The shipped matrix records Tier 1 critical, Tier 2 popular, and
+Tier 3 long-tail cohorts; per-package compatibility outcomes; minimized repros;
+and unresolved failure owner routing instead of anonymous ecosystem claims.
+
+```bash
+# RGC npm compatibility matrix gate (rch-backed check + test + clippy + run)
+./scripts/run_rgc_npm_compatibility_matrix.sh ci
+
+# deterministic replay wrapper for an exact emitted run directory
+RGC_NPM_COMPATIBILITY_MATRIX_REPLAY_RUN_DIR=artifacts/... \
+  ./scripts/e2e/rgc_npm_compatibility_matrix_replay.sh ci
+```
+
+The replay wrapper resolves the latest complete run directory, warns when it
+has to skip a newer incomplete directory, and fails closed on incomplete
+explicit run directories.
+
+Contract and vectors:
+
+- [`docs/RGC_NPM_COMPATIBILITY_MATRIX_V1.md`](./docs/RGC_NPM_COMPATIBILITY_MATRIX_V1.md)
+- `docs/rgc_npm_compatibility_matrix_v1.json`
+- `crates/franken-engine/src/npm_compatibility_matrix.rs`
+- `crates/franken-engine/src/bin/franken_npm_compatibility_matrix.rs`
+- `crates/franken-engine/tests/npm_compatibility_matrix_cli.rs`
+- `crates/franken-engine/tests/npm_compatibility_matrix_enrichment_integration.rs`
+
+Artifacts are written under:
+
+- `artifacts/rgc_npm_compatibility_matrix/<timestamp>/npm_compat_matrix_report.json`
+- `artifacts/rgc_npm_compatibility_matrix/<timestamp>/trace_ids.json`
+- `artifacts/rgc_npm_compatibility_matrix/<timestamp>/run_manifest.json`
+- `artifacts/rgc_npm_compatibility_matrix/<timestamp>/events.jsonl`
+- `artifacts/rgc_npm_compatibility_matrix/<timestamp>/commands.txt`
+
+Operator verification:
+
+```bash
+cat artifacts/rgc_npm_compatibility_matrix/<timestamp>/npm_compat_matrix_report.json
+cat artifacts/rgc_npm_compatibility_matrix/<timestamp>/trace_ids.json
+cat artifacts/rgc_npm_compatibility_matrix/<timestamp>/run_manifest.json
+cat artifacts/rgc_npm_compatibility_matrix/<timestamp>/events.jsonl
+cat artifacts/rgc_npm_compatibility_matrix/<timestamp>/commands.txt
+jq '.unresolved_failures' artifacts/rgc_npm_compatibility_matrix/<timestamp>/npm_compat_matrix_report.json
+
+RGC_NPM_COMPATIBILITY_MATRIX_REPLAY_RUN_DIR=artifacts/... \
+  ./scripts/e2e/rgc_npm_compatibility_matrix_replay.sh ci
+```
+
 ## RGC Verification Coverage Matrix Gate
 
 `bd-1lsy.11.1` ships a deterministic gate for the RGC verification coverage
@@ -1512,6 +1563,59 @@ Artifacts are written under:
 - `artifacts/rgc_verification_coverage_matrix/<timestamp>/run_manifest.json`
 - `artifacts/rgc_verification_coverage_matrix/<timestamp>/events.jsonl`
 - `artifacts/rgc_verification_coverage_matrix/<timestamp>/commands.txt`
+
+## Scientific Contribution Targets Gate
+
+`bd-2501` turns the Section 16 research-output obligations into a
+deterministic, fail-closed status bundle. The lane stays red until milestone
+beads `bd-2501.1`, `bd-2501.2`, and `bd-2501.3` close and the upstream
+evidence dependencies remain closed.
+
+```bash
+# status bundle (expected to fail closed while milestone beads remain open)
+./scripts/run_scientific_contribution_targets.sh bundle
+
+# full gate (bundle + rch-backed cargo check/test/clippy)
+./scripts/run_scientific_contribution_targets.sh ci
+
+# replay the latest complete status bundle
+./scripts/e2e/scientific_contribution_targets_replay.sh show
+```
+
+Contract and vectors:
+
+- [`docs/SCIENTIFIC_CONTRIBUTION_TARGETS_V1.md`](./docs/SCIENTIFIC_CONTRIBUTION_TARGETS_V1.md)
+- `docs/scientific_contribution_targets_v1.json`
+- `scripts/run_scientific_contribution_targets.sh`
+- `scripts/e2e/scientific_contribution_targets_replay.sh`
+- `crates/franken-engine/tests/scientific_contribution_targets.rs`
+
+Artifacts are written under:
+
+- `artifacts/scientific_contribution_targets/<timestamp>/run_manifest.json`
+- `artifacts/scientific_contribution_targets/<timestamp>/events.jsonl`
+- `artifacts/scientific_contribution_targets/<timestamp>/commands.txt`
+- `artifacts/scientific_contribution_targets/<timestamp>/trace_ids.json`
+- `artifacts/scientific_contribution_targets/<timestamp>/contribution_status_report.json`
+- `artifacts/scientific_contribution_targets/<timestamp>/output_contract_status_report.json`
+- `artifacts/scientific_contribution_targets/<timestamp>/dependency_status_report.json`
+- `artifacts/scientific_contribution_targets/<timestamp>/scientific_contribution_summary.md`
+- `artifacts/scientific_contribution_targets/<timestamp>/scientific_contribution_targets_v1.json`
+- `artifacts/scientific_contribution_targets/<timestamp>/scientific_contribution_targets_v1.md`
+- `artifacts/scientific_contribution_targets/<timestamp>/step_logs/step_*.log`
+
+Operator verification:
+
+```bash
+jq empty docs/scientific_contribution_targets_v1.json
+./scripts/run_scientific_contribution_targets.sh bundle
+./scripts/e2e/scientific_contribution_targets_replay.sh show
+
+rch exec -- env RUSTUP_TOOLCHAIN=nightly \
+  CARGO_TARGET_DIR=$PWD/target_rch_scientific_contribution_targets_verify \
+  CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 \
+  cargo test -p frankenengine-engine --test scientific_contribution_targets
+```
 
 ## Phase-A Exit Gate
 

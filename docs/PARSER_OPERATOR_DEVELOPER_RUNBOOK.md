@@ -108,6 +108,11 @@ One-command replay wrapper:
 ./scripts/e2e/parser_operator_developer_runbook_replay.sh drill
 ```
 
+In `drill` mode, the local replay helper commands also write their stdout/stderr
+into later step logs (`step_logs/step_001.log`, `step_logs/step_002.log`, ...)
+so operators can inspect the exact replay-helper output without rerunning the
+same shell drills.
+
 By default, the replay wrapper reruns the selected lane and then prints the latest complete
 artifact bundle (`run_manifest.json`, `events.jsonl`, `commands.txt`, and
 `step_logs/step_000.log`). If the newest artifact directory is incomplete, it

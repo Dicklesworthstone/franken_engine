@@ -44,7 +44,12 @@ run_dir_is_complete() {
   [[ -f "${candidate}/trace_ids.json" ]] || return 1
   [[ -f "${candidate}/events.jsonl" ]] || return 1
   [[ -f "${candidate}/commands.txt" ]] || return 1
+  [[ -f "${candidate}/doctor_input.json" ]] || return 1
   [[ -f "${candidate}/step_logs/step_000.log" ]] || return 1
+  [[ -f "${candidate}/support_bundle/preflight_report.json" ]] || return 1
+  [[ -f "${candidate}/support_bundle/onboarding_scorecard.json" ]] || return 1
+  [[ -f "${candidate}/support_bundle/rollout_decision_artifact.json" ]] || return 1
+  [[ -f "${candidate}/support_bundle/frankenctl_doctor_report.json" ]] || return 1
 }
 
 replay_existing_run_dir() {
@@ -62,8 +67,18 @@ replay_existing_run_dir() {
   cat "${candidate}/events.jsonl"
   echo "frankenctl workflow replay commands: ${candidate}/commands.txt"
   cat "${candidate}/commands.txt"
+  echo "frankenctl workflow replay doctor input: ${candidate}/doctor_input.json"
+  cat "${candidate}/doctor_input.json"
   echo "frankenctl workflow replay first step log: ${candidate}/step_logs/step_000.log"
   cat "${candidate}/step_logs/step_000.log"
+  echo "frankenctl workflow replay support bundle preflight: ${candidate}/support_bundle/preflight_report.json"
+  cat "${candidate}/support_bundle/preflight_report.json"
+  echo "frankenctl workflow replay support bundle onboarding scorecard: ${candidate}/support_bundle/onboarding_scorecard.json"
+  cat "${candidate}/support_bundle/onboarding_scorecard.json"
+  echo "frankenctl workflow replay support bundle rollout decision: ${candidate}/support_bundle/rollout_decision_artifact.json"
+  cat "${candidate}/support_bundle/rollout_decision_artifact.json"
+  echo "frankenctl workflow replay support bundle doctor report: ${candidate}/support_bundle/frankenctl_doctor_report.json"
+  cat "${candidate}/support_bundle/frankenctl_doctor_report.json"
 }
 
 if [[ -n "${explicit_replay_run_dir}" ]]; then
@@ -258,6 +273,9 @@ run_artifact_flow() {
 
 run_mode() {
   case "$mode" in
+    artifacts)
+      run_artifact_flow
+      ;;
     check)
       run_step "cargo check -p frankenengine-engine --bin frankenctl --test frankenctl_cli" \
         cargo check -p frankenengine-engine --bin frankenctl --test frankenctl_cli
@@ -283,7 +301,7 @@ run_mode() {
       run_artifact_flow
       ;;
     *)
-      echo "usage: $0 [check|test|clippy|ci]" >&2
+      echo "usage: $0 [artifacts|check|test|clippy|ci]" >&2
       exit 2
       ;;
   esac

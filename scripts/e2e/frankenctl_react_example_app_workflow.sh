@@ -10,6 +10,7 @@ parser_frontier_bootstrap_env
 mode="${1:-ci}"
 toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
 artifact_root="${FRANKENCTL_REACT_EXAMPLE_APP_ARTIFACT_ROOT:-artifacts/frankenctl_react_example_app_workflow}"
+explicit_replay_run_dir="${FRANKENCTL_REACT_EXAMPLE_APP_WORKFLOW_REPLAY_RUN_DIR:-}"
 rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 target_namespace="${mode}_$$"
@@ -61,7 +62,80 @@ doctor_decision_id="decision-frankenctl-react-example-doctor-${timestamp}"
 doctor_policy_id="policy-frankenctl-react-example-doctor-v1"
 component="frankenctl_react_example_app_workflow_gate"
 scenario_id="bd-1lsy.10.12.3"
-replay_command="./scripts/e2e/frankenctl_react_example_app_workflow.sh ${mode}"
+replay_command="FRANKENCTL_REACT_EXAMPLE_APP_WORKFLOW_REPLAY_RUN_DIR=\"${run_dir}\" ./scripts/e2e/frankenctl_react_example_app_workflow.sh ${mode}"
+
+run_dir_is_complete() {
+  local candidate="${1:-}"
+  [[ -n "${candidate}" ]] || return 1
+  [[ -f "${candidate}/run_manifest.json" ]] || return 1
+  [[ -f "${candidate}/trace_ids.json" ]] || return 1
+  [[ -f "${candidate}/events.jsonl" ]] || return 1
+  [[ -f "${candidate}/commands.txt" ]] || return 1
+  [[ -f "${candidate}/react_cli_contract.json" ]] || return 1
+  [[ -f "${candidate}/react_compile_report.json" ]] || return 1
+  [[ -f "${candidate}/react_build_ssr_report.json" ]] || return 1
+  [[ -f "${candidate}/react_build_client_report.json" ]] || return 1
+  [[ -f "${candidate}/react_build_hydration_report.json" ]] || return 1
+  [[ -f "${candidate}/doctor_input.json" ]] || return 1
+  [[ -f "${candidate}/doctor_report.json" ]] || return 1
+  [[ -f "${candidate}/react_example_app_e2e_report.json" ]] || return 1
+  [[ -f "${candidate}/react_help.txt" ]] || return 1
+  [[ -f "${candidate}/step_logs/step_000.log" ]] || return 1
+  [[ -f "${candidate}/support_bundle/preflight_report.json" ]] || return 1
+  [[ -f "${candidate}/support_bundle/onboarding_scorecard.json" ]] || return 1
+  [[ -f "${candidate}/support_bundle/rollout_decision_artifact.json" ]] || return 1
+  [[ -f "${candidate}/support_bundle/frankenctl_doctor_report.json" ]] || return 1
+}
+
+replay_existing_run_dir() {
+  local candidate="${1:-}"
+  if ! run_dir_is_complete "${candidate}"; then
+    echo "frankenctl React example-app workflow replay could not use explicit run directory; explicit run directory is incomplete: ${candidate}" >&2
+    exit 1
+  fi
+
+  echo "frankenctl React example-app workflow replay manifest: ${candidate}/run_manifest.json"
+  cat "${candidate}/run_manifest.json"
+  echo "frankenctl React example-app workflow replay trace ids: ${candidate}/trace_ids.json"
+  cat "${candidate}/trace_ids.json"
+  echo "frankenctl React example-app workflow replay events: ${candidate}/events.jsonl"
+  cat "${candidate}/events.jsonl"
+  echo "frankenctl React example-app workflow replay commands: ${candidate}/commands.txt"
+  cat "${candidate}/commands.txt"
+  echo "frankenctl React example-app workflow replay contract: ${candidate}/react_cli_contract.json"
+  cat "${candidate}/react_cli_contract.json"
+  echo "frankenctl React example-app workflow replay compile report: ${candidate}/react_compile_report.json"
+  cat "${candidate}/react_compile_report.json"
+  echo "frankenctl React example-app workflow replay SSR build report: ${candidate}/react_build_ssr_report.json"
+  cat "${candidate}/react_build_ssr_report.json"
+  echo "frankenctl React example-app workflow replay client build report: ${candidate}/react_build_client_report.json"
+  cat "${candidate}/react_build_client_report.json"
+  echo "frankenctl React example-app workflow replay hydration build report: ${candidate}/react_build_hydration_report.json"
+  cat "${candidate}/react_build_hydration_report.json"
+  echo "frankenctl React example-app workflow replay doctor input: ${candidate}/doctor_input.json"
+  cat "${candidate}/doctor_input.json"
+  echo "frankenctl React example-app workflow replay doctor report: ${candidate}/doctor_report.json"
+  cat "${candidate}/doctor_report.json"
+  echo "frankenctl React example-app workflow replay example report: ${candidate}/react_example_app_e2e_report.json"
+  cat "${candidate}/react_example_app_e2e_report.json"
+  echo "frankenctl React example-app workflow replay help output: ${candidate}/react_help.txt"
+  cat "${candidate}/react_help.txt"
+  echo "frankenctl React example-app workflow replay first step log: ${candidate}/step_logs/step_000.log"
+  cat "${candidate}/step_logs/step_000.log"
+  echo "frankenctl React example-app workflow replay support bundle preflight: ${candidate}/support_bundle/preflight_report.json"
+  cat "${candidate}/support_bundle/preflight_report.json"
+  echo "frankenctl React example-app workflow replay support bundle onboarding scorecard: ${candidate}/support_bundle/onboarding_scorecard.json"
+  cat "${candidate}/support_bundle/onboarding_scorecard.json"
+  echo "frankenctl React example-app workflow replay support bundle rollout decision: ${candidate}/support_bundle/rollout_decision_artifact.json"
+  cat "${candidate}/support_bundle/rollout_decision_artifact.json"
+  echo "frankenctl React example-app workflow replay support bundle doctor report: ${candidate}/support_bundle/frankenctl_doctor_report.json"
+  cat "${candidate}/support_bundle/frankenctl_doctor_report.json"
+}
+
+if [[ -n "${explicit_replay_run_dir}" ]]; then
+  replay_existing_run_dir "${explicit_replay_run_dir}"
+  exit 0
+fi
 
 mkdir -p "$run_dir" "$step_logs_dir" "$fixtures_dir" "$support_bundle_dir"
 
@@ -620,6 +694,7 @@ run_artifact_flow() {
     "${example_report_path}" \
     "${trace_ids_path}" \
     "${help_output_path}" \
+    "${step_logs_dir}/step_000.log" \
     "${support_preflight_path}" \
     "${support_scorecard_path}" \
     "${support_rollout_path}" \

@@ -89,6 +89,13 @@ failed_command=""
 manifest_written=false
 step_log_index=0
 
+next_step_log_path() {
+  local log_path
+  log_path="${step_logs_dir}/step_$(printf '%03d' "${step_log_index}").log"
+  step_log_index=$((step_log_index + 1))
+  printf '%s\n' "$log_path"
+}
+
 run_step() {
   local command_text="$1"
   local log_path remote_exit_code
@@ -96,8 +103,7 @@ run_step() {
 
   commands_run+=("$command_text")
   echo "==> $command_text"
-  log_path="${step_logs_dir}/step_$(printf '%03d' "${step_log_index}").log"
-  step_log_index=$((step_log_index + 1))
+  log_path="$(next_step_log_path)"
 
   if ! run_rch "$@" > >(tee "$log_path") 2>&1; then
     remote_exit_code="$(rch_remote_exit_code "$log_path" || true)"
@@ -130,10 +136,14 @@ run_step() {
 
 run_local_step() {
   local command_text="$1"
+  local log_path
   shift
   commands_run+=("$command_text")
-  echo "==> $command_text"
-  if ! "$@"; then
+  log_path="$(next_step_log_path)"
+  if ! {
+    echo "==> $command_text"
+    "$@"
+  } > >(tee "$log_path") 2>&1; then
     failed_command="$command_text"
     return 1
   fi

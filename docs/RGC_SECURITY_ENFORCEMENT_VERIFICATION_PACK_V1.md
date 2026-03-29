@@ -74,6 +74,29 @@ Runner execution is additionally fail-closed when:
 - artifact retrieval fails after remote execution,
 - the remote exit marker is missing from the captured step log.
 
+By default, the replay wrapper reruns the lane and then prints the latest
+complete artifact bundle (`run_manifest.json`, `events.jsonl`, `commands.txt`,
+`step_logs/step_000.log`, and `security_verification_report.json`). If the
+newest artifact directory is incomplete, it warns and falls back to the latest
+complete directory; if no complete bundle exists, it fails non-zero instead of
+presenting a partial run as trustworthy. If the rerun itself fails, the wrapper
+states whether the printed bundle came from the current failed invocation or
+from an older complete directory, so operators do not mistake stale evidence
+for the failed run's output.
+
+To replay a specific preserved bundle without rerunning the lane, point the
+wrapper at an exact complete run directory:
+
+```bash
+RGC_SECURITY_ENFORCEMENT_VERIFICATION_PACK_REPLAY_RUN_DIR=artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP> \
+./scripts/e2e/rgc_security_enforcement_verification_pack_replay.sh ci
+```
+
+The explicit run directory must already contain a complete bundle
+(`run_manifest.json`, `events.jsonl`, `commands.txt`,
+`step_logs/step_000.log`, and `security_verification_report.json`) or the
+wrapper fails closed.
+
 ## Required Artifacts
 
 Each run emits:
@@ -97,10 +120,14 @@ jq empty docs/rgc_security_enforcement_verification_vectors_v1.json
 cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/run_manifest.json
 cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/events.jsonl
 cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/commands.txt
+cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/step_logs/step_000.log
 cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/security_verification_report.json
 
 rch exec -- env CARGO_TARGET_DIR="$PWD/target_rch_rgc_security_enforcement_verification_pack_verify" \
   cargo test -p frankenengine-engine --test rgc_security_enforcement_verification_pack
 
+./scripts/e2e/rgc_security_enforcement_verification_pack_replay.sh ci
+
+RGC_SECURITY_ENFORCEMENT_VERIFICATION_PACK_REPLAY_RUN_DIR=artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP> \
 ./scripts/e2e/rgc_security_enforcement_verification_pack_replay.sh ci
 ```

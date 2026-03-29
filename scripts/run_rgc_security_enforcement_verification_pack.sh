@@ -28,7 +28,7 @@ decision_id="decision-rgc-security-enforcement-verification-pack-${timestamp}"
 policy_id="policy-rgc-security-enforcement-verification-pack-v1"
 component="rgc_security_enforcement_verification_pack_gate"
 scenario_id="rgc-059"
-replay_command="./scripts/e2e/rgc_security_enforcement_verification_pack_replay.sh ${mode}"
+replay_command="RGC_SECURITY_ENFORCEMENT_VERIFICATION_PACK_REPLAY_RUN_DIR=\"${run_dir}\" ./scripts/e2e/rgc_security_enforcement_verification_pack_replay.sh ${mode}"
 
 mkdir -p "$run_dir" "$step_logs_dir"
 
@@ -377,6 +377,7 @@ write_manifest() {
     echo "    \"cat ${manifest_path}\"," 
     echo "    \"cat ${events_path}\"," 
     echo "    \"cat ${commands_path}\"," 
+    echo "    \"cat ${step_logs_dir}/step_000.log\","
     echo "    \"cat ${report_path}\"," 
     echo '    "jq empty docs/rgc_security_enforcement_verification_pack_v1.json",'
     echo '    "jq empty docs/rgc_security_enforcement_verification_vectors_v1.json",'

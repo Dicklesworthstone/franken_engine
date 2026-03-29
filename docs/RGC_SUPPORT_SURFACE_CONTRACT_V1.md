@@ -18,6 +18,7 @@ already governs:
 - shipped `frankenctl` help and README surfaces
 - callback-heavy stdlib collection/runtime gaps on the shipped execution path
 - React capability rows and fail-closed diagnostics
+- React doctor/preflight diagnostic contract surfaces
 - TypeScript normalization subset limits
 - module-resolution fallback semantics
 - cross-platform verification tiers
@@ -75,6 +76,8 @@ Current notable rows:
 - `runtime.doctor_support_bundle_export`: shipped, but lossless-mode bound
 - `runtime.callback_stdlib_collection_callbacks`: unsupported and fail-closed
 - `runtime.react_compile_contract`: deferred and fail-closed
+- `runtime.react_dev_runtime_diagnostics`: unsupported and diagnostic-only
+- `runtime.react_diagnostics_source_maps`: deferred and diagnostic-only
 - `runtime.react_execution_entrypoints`: unsupported and fail-closed
 - `typescript.normalization_subset`: shipped only for the documented subset
 - `typescript.namespace_export_extended_forms`: unsupported

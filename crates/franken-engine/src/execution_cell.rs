@@ -86,6 +86,8 @@ pub enum CellError {
         cell_id: String,
         obligation_id: String,
     },
+    /// Cell already exists.
+    CellAlreadyExists { cell_id: String },
 }
 
 impl fmt::Display for CellError {
@@ -118,6 +120,7 @@ impl fmt::Display for CellError {
                 cell_id,
                 obligation_id,
             } => write!(f, "obligation {obligation_id} not found in cell {cell_id}"),
+            Self::CellAlreadyExists { cell_id } => write!(f, "cell already exists: {cell_id}"),
         }
     }
 }
@@ -134,6 +137,7 @@ impl CellError {
             Self::CellNotFound { .. } => "cell_not_found",
             Self::SessionRejected { .. } => "cell_session_rejected",
             Self::ObligationNotFound { .. } => "cell_obligation_not_found",
+            Self::CellAlreadyExists { .. } => "cell_already_exists",
         }
     }
 }
@@ -550,16 +554,13 @@ impl CellManager {
         &mut self,
         cell_id: impl Into<String>,
         trace_id: impl Into<String>,
-    ) -> &mut ExecutionCell {
+    ) -> Result<&mut ExecutionCell, CellError> {
         let cell_id = cell_id.into();
-        let cell = ExecutionCell::new(&cell_id, CellKind::Extension, trace_id);
-        match self.cells.entry(cell_id) {
-            std::collections::btree_map::Entry::Occupied(mut o) => {
-                o.insert(cell);
-                o.into_mut()
-            }
-            std::collections::btree_map::Entry::Vacant(v) => v.insert(cell),
+        if self.cells.contains_key(&cell_id) {
+            return Err(CellError::CellAlreadyExists { cell_id });
         }
+        let cell = ExecutionCell::new(&cell_id, CellKind::Extension, trace_id);
+        Ok(self.cells.entry(cell_id).or_insert(cell))
     }
 
     /// Create and register a new delegate cell.
@@ -567,16 +568,13 @@ impl CellManager {
         &mut self,
         cell_id: impl Into<String>,
         trace_id: impl Into<String>,
-    ) -> &mut ExecutionCell {
+    ) -> Result<&mut ExecutionCell, CellError> {
         let cell_id = cell_id.into();
-        let cell = ExecutionCell::new(&cell_id, CellKind::Delegate, trace_id);
-        match self.cells.entry(cell_id) {
-            std::collections::btree_map::Entry::Occupied(mut o) => {
-                o.insert(cell);
-                o.into_mut()
-            }
-            std::collections::btree_map::Entry::Vacant(v) => v.insert(cell),
+        if self.cells.contains_key(&cell_id) {
+            return Err(CellError::CellAlreadyExists { cell_id });
         }
+        let cell = ExecutionCell::new(&cell_id, CellKind::Delegate, trace_id);
+        Ok(self.cells.entry(cell_id).or_insert(cell))
     }
 
     /// Register a pre-created cell.
@@ -584,15 +582,12 @@ impl CellManager {
         &mut self,
         cell_id: impl Into<String>,
         cell: ExecutionCell,
-    ) -> &mut ExecutionCell {
+    ) -> Result<&mut ExecutionCell, CellError> {
         let cell_id = cell_id.into();
-        match self.cells.entry(cell_id) {
-            std::collections::btree_map::Entry::Occupied(mut o) => {
-                o.insert(cell);
-                o.into_mut()
-            }
-            std::collections::btree_map::Entry::Vacant(v) => v.insert(cell),
+        if self.cells.contains_key(&cell_id) {
+            return Err(CellError::CellAlreadyExists { cell_id });
         }
+        Ok(self.cells.entry(cell_id).or_insert(cell))
     }
 
     /// Get a reference to a cell.
@@ -793,7 +788,7 @@ impl ExtensionHostBinding {
             &decision_id,
             &policy_id,
         );
-        self.manager.cells.insert(ext_id.clone(), cell);
+        let _ = self.manager.insert_cell(&ext_id, cell)?;
 
         self.emit_evidence(
             &trace_id,
@@ -838,7 +833,7 @@ impl ExtensionHostBinding {
             (decision_id, policy_id, session_cell)
         };
 
-        self.manager.insert_cell(&session_id, session_cell);
+        let _ = self.manager.insert_cell(&session_id, session_cell)?;
 
         self.emit_evidence(
             &trace_id,
@@ -1397,9 +1392,9 @@ mod tests {
     #[test]
     fn manager_create_and_retrieve_cells() {
         let mut mgr = CellManager::new();
-        mgr.create_extension_cell("ext-1", "t1");
-        mgr.create_extension_cell("ext-2", "t2");
-        mgr.create_delegate_cell("del-1", "t3");
+        let _ = mgr.create_extension_cell("ext-1", "t1");
+        let _ = mgr.create_extension_cell("ext-2", "t2");
+        let _ = mgr.create_delegate_cell("del-1", "trace-del").unwrap();
 
         assert_eq!(mgr.active_count(), 3);
         assert_eq!(mgr.closed_count(), 0);
@@ -1414,7 +1409,7 @@ mod tests {
     #[test]
     fn manager_get_cell() {
         let mut mgr = CellManager::new();
-        mgr.create_extension_cell("ext-1", "t1");
+        let _ = mgr.create_extension_cell("ext-1", "t1");
 
         let cell = mgr.get("ext-1").expect("cell exists");
         assert_eq!(cell.kind(), CellKind::Extension);
@@ -1423,7 +1418,7 @@ mod tests {
     #[test]
     fn manager_close_cell() {
         let mut mgr = CellManager::new();
-        mgr.create_extension_cell("ext-1", "t1");
+        let _ = mgr.create_extension_cell("ext-1", "t1");
         let mut cx = mock_cx(100);
 
         let result = mgr
@@ -1459,8 +1454,8 @@ mod tests {
     #[test]
     fn manager_close_all() {
         let mut mgr = CellManager::new();
-        mgr.create_extension_cell("ext-1", "t1");
-        mgr.create_extension_cell("ext-2", "t2");
+        let _ = mgr.create_extension_cell("ext-1", "t1");
+        let _ = mgr.create_extension_cell("ext-2", "t2");
         let mut cx = mock_cx(200);
 
         let results = mgr.close_all(
@@ -1484,8 +1479,8 @@ mod tests {
     #[test]
     fn cells_are_isolated() {
         let mut mgr = CellManager::new();
-        mgr.create_extension_cell("ext-1", "t1");
-        mgr.create_extension_cell("ext-2", "t2");
+        let _ = mgr.create_extension_cell("ext-1", "t1");
+        let _ = mgr.create_extension_cell("ext-2", "t2");
 
         let mut cx = mock_cx(100);
 
@@ -1655,7 +1650,7 @@ mod tests {
     #[test]
     fn manager_closed_results_accessible() {
         let mut mgr = CellManager::new();
-        mgr.create_extension_cell("ext-1", "t1");
+        let _ = mgr.create_extension_cell("ext-1", "t1");
         let mut cx = mock_cx(100);
 
         mgr.close_cell(
@@ -1830,8 +1825,8 @@ mod tests {
     #[test]
     fn manager_close_all_with_mixed_obligations() {
         let mut mgr = CellManager::new();
-        mgr.create_extension_cell("ext-1", "t1");
-        mgr.create_extension_cell("ext-2", "t2");
+        let _ = mgr.create_extension_cell("ext-1", "t1");
+        let _ = mgr.create_extension_cell("ext-2", "t2");
 
         // ext-1: has committed obligation
         mgr.get_mut("ext-1")
@@ -2486,7 +2481,7 @@ mod tests {
     #[test]
     fn manager_archive_cell_moves_to_closed() {
         let mut mgr = CellManager::new();
-        mgr.create_extension_cell("ext-1", "t1");
+        let _ = mgr.create_extension_cell("ext-1", "t1");
         assert_eq!(mgr.active_count(), 1);
 
         let result = FinalizeResult {
@@ -2508,7 +2503,7 @@ mod tests {
     fn manager_insert_cell_registers_pre_created() {
         let mut mgr = CellManager::new();
         let cell = ExecutionCell::with_context("custom-1", CellKind::Delegate, "t", "d", "p");
-        mgr.insert_cell("custom-1", cell);
+        let _ = mgr.insert_cell("custom-1", cell);
 
         assert_eq!(mgr.active_count(), 1);
         let retrieved = mgr.get("custom-1").unwrap();
@@ -2521,7 +2516,7 @@ mod tests {
     #[test]
     fn manager_delegate_cell_has_delegate_kind() {
         let mut mgr = CellManager::new();
-        mgr.create_delegate_cell("del-1", "t1");
+        let _ = mgr.create_delegate_cell("del-1", "trace-del").unwrap();
         let cell = mgr.get("del-1").unwrap();
         assert_eq!(cell.kind(), CellKind::Delegate);
         assert_eq!(cell.state(), RegionState::Running);
@@ -2532,9 +2527,9 @@ mod tests {
     #[test]
     fn manager_active_cell_ids_sorted() {
         let mut mgr = CellManager::new();
-        mgr.create_extension_cell("zz-last", "t1");
-        mgr.create_extension_cell("aa-first", "t2");
-        mgr.create_extension_cell("mm-middle", "t3");
+        let _ = mgr.create_extension_cell("zz-last", "t1");
+        let _ = mgr.create_extension_cell("aa-first", "t2");
+        let _ = mgr.create_extension_cell("mm-middle", "t3");
 
         let ids = mgr.active_cell_ids();
         assert_eq!(ids, vec!["aa-first", "mm-middle", "zz-last"]);
@@ -2724,7 +2719,7 @@ mod tests {
     #[test]
     fn delegate_cell_trace_id_propagated() {
         let mut mgr = CellManager::new();
-        let cell = mgr.create_delegate_cell("del-1", "trace-del");
+        let cell = mgr.create_delegate_cell("del-1", "trace-del").unwrap();
         assert_eq!(cell.trace_id(), "trace-del");
         assert_eq!(cell.kind(), CellKind::Delegate);
         assert_eq!(cell.cell_id(), "del-1");
@@ -2733,7 +2728,7 @@ mod tests {
     #[test]
     fn closed_results_contain_finalize_result_details() {
         let mut mgr = CellManager::new();
-        mgr.create_extension_cell("ext-close", "t-close");
+        let _ = mgr.create_extension_cell("ext-close", "t-close");
         let mut cx = mock_cx(200);
         let result = mgr
             .close_cell(

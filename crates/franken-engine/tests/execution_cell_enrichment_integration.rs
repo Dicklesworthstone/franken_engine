@@ -474,7 +474,7 @@ fn cell_manager_default_matches_new() {
 #[test]
 fn cell_manager_create_extension_cell() {
     let mut manager = CellManager::new();
-    let cell = manager.create_extension_cell("ext-1", "trace-1");
+    let cell = manager.create_extension_cell("ext-1", "trace-1").unwrap();
     assert_eq!(cell.kind(), CellKind::Extension);
     assert_eq!(cell.cell_id(), "ext-1");
     assert_eq!(manager.active_count(), 1);
@@ -483,7 +483,7 @@ fn cell_manager_create_extension_cell() {
 #[test]
 fn cell_manager_create_delegate_cell() {
     let mut manager = CellManager::new();
-    let cell = manager.create_delegate_cell("del-1", "trace-1");
+    let cell = manager.create_delegate_cell("del-1", "trace-1").unwrap();
     assert_eq!(cell.kind(), CellKind::Delegate);
     assert_eq!(manager.active_count(), 1);
 }
@@ -491,7 +491,7 @@ fn cell_manager_create_delegate_cell() {
 #[test]
 fn cell_manager_get_returns_cell() {
     let mut manager = CellManager::new();
-    manager.create_extension_cell("ext-1", "trace-1");
+    manager.create_extension_cell("ext-1", "trace-1").unwrap();
     assert!(manager.get("ext-1").is_some());
     assert!(manager.get("nonexistent").is_none());
 }
@@ -643,9 +643,9 @@ fn cell_kind_display_non_empty() {
 #[test]
 fn cell_manager_multiple_cells() {
     let mut manager = CellManager::new();
-    manager.create_extension_cell("ext-1", "trace-1");
-    manager.create_extension_cell("ext-2", "trace-2");
-    manager.create_delegate_cell("del-1", "trace-3");
+    manager.create_extension_cell("ext-1", "trace-1").unwrap();
+    manager.create_extension_cell("ext-2", "trace-2").unwrap();
+    manager.create_delegate_cell("del-1", "trace-3").unwrap();
     assert_eq!(manager.active_count(), 3);
     let ids = manager.active_cell_ids();
     assert_eq!(ids.len(), 3);
@@ -654,7 +654,7 @@ fn cell_manager_multiple_cells() {
 #[test]
 fn cell_manager_get_mut_modifies() {
     let mut manager = CellManager::new();
-    manager.create_extension_cell("ext-1", "trace-1");
+    manager.create_extension_cell("ext-1", "trace-1").unwrap();
     let cell = manager.get_mut("ext-1").unwrap();
     cell.register_obligation("obl-1", "test obligation");
     assert_eq!(manager.get("ext-1").unwrap().pending_obligations(), 1);
@@ -664,7 +664,7 @@ fn cell_manager_get_mut_modifies() {
 fn cell_manager_insert_prebuilt_cell() {
     let mut manager = CellManager::new();
     let cell = ExecutionCell::with_context("custom", CellKind::Session, "t", "d", "p");
-    manager.insert_cell("custom", cell);
+    manager.insert_cell("custom", cell).unwrap();
     assert_eq!(manager.active_count(), 1);
     let c = manager.get("custom").unwrap();
     assert_eq!(c.kind(), CellKind::Session);

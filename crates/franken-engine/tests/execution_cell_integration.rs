@@ -610,7 +610,7 @@ fn manager_new_is_empty() {
 #[test]
 fn create_extension_cell() {
     let mut mgr = CellManager::new();
-    let cell = mgr.create_extension_cell("ext-1", "trace-1");
+    let cell = mgr.create_extension_cell("ext-1", "trace-1").unwrap();
     assert_eq!(cell.kind(), CellKind::Extension);
     assert_eq!(cell.cell_id(), "ext-1");
     assert_eq!(mgr.active_count(), 1);
@@ -619,7 +619,7 @@ fn create_extension_cell() {
 #[test]
 fn create_delegate_cell() {
     let mut mgr = CellManager::new();
-    let cell = mgr.create_delegate_cell("del-1", "trace-1");
+    let cell = mgr.create_delegate_cell("del-1", "trace-1").unwrap();
     assert_eq!(cell.kind(), CellKind::Delegate);
     assert_eq!(mgr.active_count(), 1);
 }
@@ -627,7 +627,7 @@ fn create_delegate_cell() {
 #[test]
 fn manager_get_and_get_mut() {
     let mut mgr = CellManager::new();
-    mgr.create_extension_cell("ext-1", "trace-1");
+    mgr.create_extension_cell("ext-1", "trace-1").unwrap();
 
     assert!(mgr.get("ext-1").is_some());
     assert!(mgr.get("nonexistent").is_none());
@@ -641,7 +641,7 @@ fn manager_get_and_get_mut() {
 fn manager_insert_cell() {
     let mut mgr = CellManager::new();
     let cell = ExecutionCell::with_context("custom-1", CellKind::Extension, "t", "d", "p");
-    mgr.insert_cell("custom-1", cell);
+    mgr.insert_cell("custom-1", cell).unwrap();
     assert_eq!(mgr.active_count(), 1);
     assert_eq!(mgr.get("custom-1").unwrap().decision_id(), "d");
 }
@@ -649,8 +649,8 @@ fn manager_insert_cell() {
 #[test]
 fn manager_active_cell_ids() {
     let mut mgr = CellManager::new();
-    mgr.create_extension_cell("ext-b", "t1");
-    mgr.create_extension_cell("ext-a", "t2");
+    mgr.create_extension_cell("ext-b", "t1").unwrap();
+    mgr.create_extension_cell("ext-a", "t2").unwrap();
 
     let ids = mgr.active_cell_ids();
     assert_eq!(ids.len(), 2);
@@ -666,7 +666,7 @@ fn manager_active_cell_ids() {
 #[test]
 fn close_cell_moves_to_closed() {
     let mut mgr = CellManager::new();
-    mgr.create_extension_cell("ext-1", "trace-1");
+    mgr.create_extension_cell("ext-1", "trace-1").unwrap();
     let mut cx = make_cx(1000);
 
     let result = mgr
@@ -703,9 +703,9 @@ fn close_nonexistent_cell_fails() {
 #[test]
 fn close_all_cells() {
     let mut mgr = CellManager::new();
-    mgr.create_extension_cell("ext-1", "t1");
-    mgr.create_extension_cell("ext-2", "t2");
-    mgr.create_delegate_cell("del-1", "t3");
+    mgr.create_extension_cell("ext-1", "t1").unwrap();
+    mgr.create_extension_cell("ext-2", "t2").unwrap();
+    mgr.create_delegate_cell("del-1", "t3").unwrap();
     let mut cx = make_cx(10_000);
 
     let results = mgr.close_all(
@@ -724,7 +724,7 @@ fn close_all_cells() {
 #[test]
 fn closed_results_preserved() {
     let mut mgr = CellManager::new();
-    mgr.create_extension_cell("ext-1", "t1");
+    mgr.create_extension_cell("ext-1", "t1").unwrap();
     let mut cx = make_cx(1000);
 
     mgr.close_cell(
@@ -748,7 +748,7 @@ fn closed_results_preserved() {
 #[test]
 fn archive_cell_removes_from_active() {
     let mut mgr = CellManager::new();
-    mgr.create_extension_cell("ext-1", "t1");
+    mgr.create_extension_cell("ext-1", "t1").unwrap();
     let mut cx = make_cx(1000);
 
     // Manually close the cell and archive
@@ -776,7 +776,7 @@ fn full_lifecycle_extension_with_sessions() {
     let mut cx = make_cx(10_000);
 
     // Create extension cell
-    let ext_cell = mgr.create_extension_cell("ext-app", "trace-main");
+    let ext_cell = mgr.create_extension_cell("ext-app", "trace-main").unwrap();
     ext_cell.register_obligation("load-manifest", "load extension manifest");
 
     // Execute some effects

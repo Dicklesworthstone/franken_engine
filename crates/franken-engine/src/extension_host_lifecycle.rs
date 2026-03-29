@@ -233,7 +233,10 @@ impl ExtensionHostLifecycleManager {
 
         let trace_id = cx.trace_id().to_string();
         self.cell_manager
-            .create_extension_cell(extension_id, &trace_id);
+            .create_extension_cell(extension_id, &trace_id)
+            .map_err(|_| HostLifecycleError::ExtensionAlreadyLoaded {
+                extension_id: extension_id.to_string(),
+            })?;
 
         self.extensions.insert(
             extension_id.to_string(),
@@ -400,7 +403,7 @@ impl ExtensionHostLifecycleManager {
 
         // Also register the session in the CellManager for independent access.
         self.session_counter += 1;
-        self.cell_manager.insert_cell(&session_cell_id, child);
+        let _ = self.cell_manager.insert_cell(&session_cell_id, child);
 
         // Track session in the extension record.
         if let Some(record) = self.extensions.get_mut(extension_id) {

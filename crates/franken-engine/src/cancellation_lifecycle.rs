@@ -224,6 +224,7 @@ impl From<CellError> for CancellationError {
             CellError::CellNotFound { cell_id } => cell_id.clone(),
             CellError::SessionRejected { parent_cell_id, .. } => parent_cell_id.clone(),
             CellError::ObligationNotFound { cell_id, .. } => cell_id.clone(),
+            CellError::CellAlreadyExists { cell_id } => cell_id.clone(),
         };
         Self::CellError {
             cell_id,
@@ -978,7 +979,7 @@ mod tests {
     #[test]
     fn cancel_managed_cell_success() {
         let mut cell_mgr = CellManager::new();
-        cell_mgr.create_extension_cell("ext-1", "t1");
+        let _ = cell_mgr.create_extension_cell("ext-1", "t1");
         let mut cx = mock_cx(200);
         let mut cancel_mgr = CancellationManager::new();
 
@@ -1011,9 +1012,9 @@ mod tests {
     #[test]
     fn cancel_all_cells() {
         let mut cell_mgr = CellManager::new();
-        cell_mgr.create_extension_cell("ext-1", "t1");
-        cell_mgr.create_extension_cell("ext-2", "t2");
-        cell_mgr.create_delegate_cell("del-1", "t3");
+        let _ = cell_mgr.create_extension_cell("ext-1", "t1");
+        let _ = cell_mgr.create_extension_cell("ext-2", "t2");
+        let _ = cell_mgr.create_delegate_cell("del-1", "t3");
         let mut cx = mock_cx(500);
         let mut cancel_mgr = CancellationManager::new();
 
@@ -1034,8 +1035,8 @@ mod tests {
     #[test]
     fn cancel_one_cell_does_not_affect_another() {
         let mut cell_mgr = CellManager::new();
-        cell_mgr.create_extension_cell("ext-1", "t1");
-        cell_mgr.create_extension_cell("ext-2", "t2");
+        let _ = cell_mgr.create_extension_cell("ext-1", "t1");
+        let _ = cell_mgr.create_extension_cell("ext-2", "t2");
         let mut cx = mock_cx(200);
         let mut cancel_mgr = CancellationManager::new();
 
@@ -1764,8 +1765,8 @@ mod tests {
     #[test]
     fn cancel_managed_cell_archives_from_active() {
         let mut cell_mgr = CellManager::new();
-        cell_mgr.create_extension_cell("ext-1", "t1");
-        cell_mgr.create_extension_cell("ext-2", "t2");
+        let _ = cell_mgr.create_extension_cell("ext-1", "t1");
+        let _ = cell_mgr.create_extension_cell("ext-2", "t2");
         let mut cx = mock_cx(200);
         let mut cancel_mgr = CancellationManager::new();
 
@@ -1980,9 +1981,9 @@ mod tests {
     #[test]
     fn cancel_all_preserves_order() {
         let mut cell_mgr = CellManager::new();
-        cell_mgr.create_extension_cell("a-ext", "t1");
-        cell_mgr.create_extension_cell("b-ext", "t2");
-        cell_mgr.create_delegate_cell("c-del", "t3");
+        let _ = cell_mgr.create_extension_cell("a-ext", "t1");
+        let _ = cell_mgr.create_extension_cell("b-ext", "t2");
+        let _ = cell_mgr.create_delegate_cell("c-del", "t3");
         let mut cx = mock_cx(500);
         let mut cancel_mgr = CancellationManager::new();
 

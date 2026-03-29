@@ -455,7 +455,7 @@ fn cell_manager_new_is_empty() {
 #[test]
 fn cell_manager_create_extension_cell() {
     let mut mgr = CellManager::new();
-    let cell = mgr.create_extension_cell("ext-1", "trace-1");
+    let cell = mgr.create_extension_cell("ext-1", "trace-1").unwrap();
     assert_eq!(cell.cell_id(), "ext-1");
     assert_eq!(cell.kind(), CellKind::Extension);
     assert_eq!(cell.state(), RegionState::Running);
@@ -465,7 +465,7 @@ fn cell_manager_create_extension_cell() {
 #[test]
 fn cell_manager_create_delegate_cell() {
     let mut mgr = CellManager::new();
-    let cell = mgr.create_delegate_cell("del-1", "trace-1");
+    let cell = mgr.create_delegate_cell("del-1", "trace-1").unwrap();
     assert_eq!(cell.cell_id(), "del-1");
     assert_eq!(cell.kind(), CellKind::Delegate);
     assert_eq!(mgr.active_count(), 1);
@@ -486,7 +486,7 @@ fn cell_manager_get_mut_returns_none_for_missing() {
 #[test]
 fn cell_manager_get_after_create() {
     let mut mgr = CellManager::new();
-    mgr.create_extension_cell("ext-1", "t");
+    mgr.create_extension_cell("ext-1", "t").unwrap();
     let cell = mgr.get("ext-1").unwrap();
     assert_eq!(cell.kind(), CellKind::Extension);
     assert_eq!(cell.trace_id(), "t");
@@ -495,9 +495,9 @@ fn cell_manager_get_after_create() {
 #[test]
 fn cell_manager_multiple_cells() {
     let mut mgr = CellManager::new();
-    mgr.create_extension_cell("ext-1", "t1");
-    mgr.create_extension_cell("ext-2", "t2");
-    mgr.create_delegate_cell("del-1", "t3");
+    mgr.create_extension_cell("ext-1", "t1").unwrap();
+    mgr.create_extension_cell("ext-2", "t2").unwrap();
+    mgr.create_delegate_cell("del-1", "t3").unwrap();
 
     assert_eq!(mgr.active_count(), 3);
     let ids = mgr.active_cell_ids();
@@ -513,8 +513,8 @@ fn cell_manager_multiple_cells() {
 #[test]
 fn cell_manager_cells_have_independent_state() {
     let mut mgr = CellManager::new();
-    mgr.create_extension_cell("ext-1", "t1");
-    mgr.create_extension_cell("ext-2", "t2");
+    mgr.create_extension_cell("ext-1", "t1").unwrap();
+    mgr.create_extension_cell("ext-2", "t2").unwrap();
 
     // Register obligation in ext-1 only.
     mgr.get_mut("ext-1")
@@ -532,7 +532,7 @@ fn cell_manager_cells_have_independent_state() {
 #[test]
 fn execution_cell_starts_with_zero_budget() {
     let mut mgr = CellManager::new();
-    mgr.create_extension_cell("ext-1", "t");
+    mgr.create_extension_cell("ext-1", "t").unwrap();
     let cell = mgr.get("ext-1").unwrap();
     assert_eq!(cell.total_budget_consumed_ms(), 0);
 }
@@ -540,7 +540,7 @@ fn execution_cell_starts_with_zero_budget() {
 #[test]
 fn execution_cell_starts_with_zero_sessions() {
     let mut mgr = CellManager::new();
-    mgr.create_extension_cell("ext-1", "t");
+    mgr.create_extension_cell("ext-1", "t").unwrap();
     let cell = mgr.get("ext-1").unwrap();
     assert_eq!(cell.session_count(), 0);
 }
@@ -548,7 +548,7 @@ fn execution_cell_starts_with_zero_sessions() {
 #[test]
 fn execution_cell_events_start_empty() {
     let mut mgr = CellManager::new();
-    mgr.create_extension_cell("ext-1", "t");
+    mgr.create_extension_cell("ext-1", "t").unwrap();
     let cell = mgr.get("ext-1").unwrap();
     assert!(cell.events().is_empty());
     assert!(cell.effect_log().is_empty());
@@ -561,7 +561,7 @@ fn execution_cell_events_start_empty() {
 #[test]
 fn obligation_register_and_commit() {
     let mut mgr = CellManager::new();
-    mgr.create_extension_cell("ext-1", "t");
+    mgr.create_extension_cell("ext-1", "t").unwrap();
     let cell = mgr.get_mut("ext-1").unwrap();
 
     cell.register_obligation("ob-1", "flush evidence");
@@ -574,7 +574,7 @@ fn obligation_register_and_commit() {
 #[test]
 fn obligation_register_and_abort() {
     let mut mgr = CellManager::new();
-    mgr.create_extension_cell("ext-1", "t");
+    mgr.create_extension_cell("ext-1", "t").unwrap();
     let cell = mgr.get_mut("ext-1").unwrap();
 
     cell.register_obligation("ob-1", "release locks");
@@ -585,7 +585,7 @@ fn obligation_register_and_abort() {
 #[test]
 fn obligation_commit_nonexistent_returns_error() {
     let mut mgr = CellManager::new();
-    mgr.create_extension_cell("ext-1", "t");
+    mgr.create_extension_cell("ext-1", "t").unwrap();
     let cell = mgr.get_mut("ext-1").unwrap();
 
     let err = cell.commit_obligation("nonexistent").unwrap_err();
@@ -595,7 +595,7 @@ fn obligation_commit_nonexistent_returns_error() {
 #[test]
 fn obligation_abort_nonexistent_returns_error() {
     let mut mgr = CellManager::new();
-    mgr.create_extension_cell("ext-1", "t");
+    mgr.create_extension_cell("ext-1", "t").unwrap();
     let cell = mgr.get_mut("ext-1").unwrap();
 
     let err = cell.abort_obligation("nonexistent").unwrap_err();
@@ -605,7 +605,7 @@ fn obligation_abort_nonexistent_returns_error() {
 #[test]
 fn multiple_obligations_independent() {
     let mut mgr = CellManager::new();
-    mgr.create_extension_cell("ext-1", "t");
+    mgr.create_extension_cell("ext-1", "t").unwrap();
     let cell = mgr.get_mut("ext-1").unwrap();
 
     cell.register_obligation("ob-1", "flush");
@@ -630,7 +630,7 @@ fn multiple_obligations_independent() {
 #[test]
 fn create_session_in_running_cell() {
     let mut mgr = CellManager::new();
-    mgr.create_extension_cell("ext-1", "t");
+    mgr.create_extension_cell("ext-1", "t").unwrap();
     let cell = mgr.get_mut("ext-1").unwrap();
 
     let session = cell.create_session("sess-1", "t-sess").unwrap();
@@ -643,7 +643,7 @@ fn create_session_in_running_cell() {
 #[test]
 fn create_multiple_sessions() {
     let mut mgr = CellManager::new();
-    mgr.create_extension_cell("ext-1", "t");
+    mgr.create_extension_cell("ext-1", "t").unwrap();
     let cell = mgr.get_mut("ext-1").unwrap();
 
     for i in 0..5 {
@@ -662,7 +662,7 @@ fn with_context_sets_structured_fields() {
     let mut mgr = CellManager::new();
     // We can't use with_context through CellManager, but we can test
     // that cells from CellManager have expected defaults.
-    mgr.create_extension_cell("ext-1", "trace-42");
+    mgr.create_extension_cell("ext-1", "trace-42").unwrap();
     let cell = mgr.get("ext-1").unwrap();
     assert_eq!(cell.cell_id(), "ext-1");
     assert_eq!(cell.trace_id(), "trace-42");
@@ -677,7 +677,7 @@ fn with_context_sets_structured_fields() {
 #[test]
 fn drain_events_clears_events() {
     let mut mgr = CellManager::new();
-    mgr.create_extension_cell("ext-1", "t");
+    mgr.create_extension_cell("ext-1", "t").unwrap();
     let cell = mgr.get_mut("ext-1").unwrap();
 
     // Register and commit obligation (no events emitted by obligations alone)
@@ -701,9 +701,9 @@ fn drain_events_clears_events() {
 fn cell_manager_active_cell_ids_are_sorted() {
     let mut mgr = CellManager::new();
     // Insert in reverse order.
-    mgr.create_extension_cell("ext-3", "t");
-    mgr.create_extension_cell("ext-1", "t");
-    mgr.create_delegate_cell("del-2", "t");
+    mgr.create_extension_cell("ext-3", "t").unwrap();
+    mgr.create_extension_cell("ext-1", "t").unwrap();
+    mgr.create_delegate_cell("del-2", "t").unwrap();
 
     let ids = mgr.active_cell_ids();
     // BTreeMap iteration is sorted.

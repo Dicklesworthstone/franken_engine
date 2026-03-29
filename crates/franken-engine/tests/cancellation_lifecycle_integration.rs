@@ -867,7 +867,7 @@ fn cancel_budget_exhaustion_preserves_cell_id_in_error() {
 #[test]
 fn cancel_managed_cell_success() {
     let mut cell_mgr = CellManager::new();
-    cell_mgr.create_extension_cell("ext-1", "t1");
+    cell_mgr.create_extension_cell("ext-1", "t1").unwrap();
     let mut cx = mock_cx(200);
     let mut cancel_mgr = CancellationManager::new();
 
@@ -905,7 +905,7 @@ fn cancel_managed_cell_not_found_returns_error() {
 #[test]
 fn cancel_managed_delegate_cell() {
     let mut cell_mgr = CellManager::new();
-    cell_mgr.create_delegate_cell("del-1", "t1");
+    cell_mgr.create_delegate_cell("del-1", "t1").unwrap();
     let mut cx = mock_cx(200);
     let mut cancel_mgr = CancellationManager::new();
 
@@ -924,9 +924,9 @@ fn cancel_managed_delegate_cell() {
 #[test]
 fn cancel_all_cells_succeeds() {
     let mut cell_mgr = CellManager::new();
-    cell_mgr.create_extension_cell("ext-1", "t1");
-    cell_mgr.create_extension_cell("ext-2", "t2");
-    cell_mgr.create_delegate_cell("del-1", "t3");
+    cell_mgr.create_extension_cell("ext-1", "t1").unwrap();
+    cell_mgr.create_extension_cell("ext-2", "t2").unwrap();
+    cell_mgr.create_delegate_cell("del-1", "t3").unwrap();
     let mut cx = mock_cx(500);
     let mut cancel_mgr = CancellationManager::new();
 
@@ -954,7 +954,7 @@ fn cancel_all_on_empty_manager_returns_empty() {
 #[test]
 fn cancel_all_with_single_cell() {
     let mut cell_mgr = CellManager::new();
-    cell_mgr.create_extension_cell("ext-solo", "t1");
+    cell_mgr.create_extension_cell("ext-solo", "t1").unwrap();
     let mut cx = mock_cx(200);
     let mut cancel_mgr = CancellationManager::new();
 
@@ -971,8 +971,8 @@ fn cancel_all_with_single_cell() {
 #[test]
 fn cancel_one_cell_does_not_affect_another() {
     let mut cell_mgr = CellManager::new();
-    cell_mgr.create_extension_cell("ext-1", "t1");
-    cell_mgr.create_extension_cell("ext-2", "t2");
+    cell_mgr.create_extension_cell("ext-1", "t1").unwrap();
+    cell_mgr.create_extension_cell("ext-2", "t2").unwrap();
     let mut cx = mock_cx(200);
     let mut cancel_mgr = CancellationManager::new();
 
@@ -988,8 +988,8 @@ fn cancel_one_cell_does_not_affect_another() {
 #[test]
 fn is_cancelled_tracks_only_cancelled_cells() {
     let mut cell_mgr = CellManager::new();
-    cell_mgr.create_extension_cell("ext-1", "t1");
-    cell_mgr.create_extension_cell("ext-2", "t2");
+    cell_mgr.create_extension_cell("ext-1", "t1").unwrap();
+    cell_mgr.create_extension_cell("ext-2", "t2").unwrap();
     let mut cx = mock_cx(200);
     let mut cancel_mgr = CancellationManager::new();
 
@@ -1407,8 +1407,8 @@ fn sequential_cancellation_of_all_events_on_separate_cells() {
 #[test]
 fn cancel_all_with_obligations_mixed() {
     let mut cell_mgr = CellManager::new();
-    cell_mgr.create_extension_cell("ext-clean", "t1");
-    cell_mgr.create_extension_cell("ext-pending", "t2");
+    cell_mgr.create_extension_cell("ext-clean", "t1").unwrap();
+    cell_mgr.create_extension_cell("ext-pending", "t2").unwrap();
 
     // Add pending obligation to one cell
     {
@@ -1621,8 +1621,8 @@ fn drain_events_twice_second_is_empty() {
 #[test]
 fn cancel_all_idempotent_on_already_cancelled_cells() {
     let mut cell_mgr = CellManager::new();
-    cell_mgr.create_extension_cell("ext-1", "t1");
-    cell_mgr.create_extension_cell("ext-2", "t2");
+    cell_mgr.create_extension_cell("ext-1", "t1").unwrap();
+    cell_mgr.create_extension_cell("ext-2", "t2").unwrap();
     let mut cx = mock_cx(500);
     let mut cancel_mgr = CancellationManager::new();
 

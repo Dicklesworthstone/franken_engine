@@ -472,6 +472,65 @@ fn cost_model_serde_roundtrip() {
 }
 
 #[test]
+fn cost_model_baseline_is_canonical() {
+    let model = DeterministicCostModel::default_baseline("canonical-baseline");
+    assert!(model.is_canonical());
+}
+
+#[test]
+fn cost_model_blank_model_id_is_noncanonical() {
+    let model = DeterministicCostModel::default_baseline("   ");
+    assert!(!model.is_canonical());
+}
+
+#[test]
+fn cost_model_blank_rule_gain_key_is_noncanonical() {
+    let mut gains = BTreeMap::new();
+    gains.insert("   ".into(), MILLION);
+
+    let model =
+        DeterministicCostModel::new("blank-gain-key", BTreeMap::new(), gains, BTreeMap::new());
+    assert!(!model.is_canonical());
+}
+
+#[test]
+fn cost_model_blank_rule_application_cost_key_is_noncanonical() {
+    let mut app_costs = BTreeMap::new();
+    app_costs.insert("   ".into(), MILLION);
+
+    let model = DeterministicCostModel::new(
+        "blank-cost-key",
+        BTreeMap::new(),
+        BTreeMap::new(),
+        app_costs,
+    );
+    assert!(!model.is_canonical());
+}
+
+#[test]
+fn cost_model_tampered_hash_is_noncanonical() {
+    let mut model = DeterministicCostModel::default_baseline("tampered-hash");
+    model.content_hash = ContentHash::compute(b"tampered-cost-model");
+    assert!(!model.is_canonical());
+}
+
+#[test]
+fn cost_model_queries_fail_closed_when_noncanonical() {
+    let mut model = DeterministicCostModel::new(
+        "tampered-read-surface",
+        BTreeMap::from([(InstructionCostClass::Hostcall, 50 * MILLION)]),
+        BTreeMap::from([("fold_const".into(), 5 * MILLION)]),
+        BTreeMap::from([("fold_const".into(), MILLION)]),
+    );
+    model.content_hash = ContentHash::compute(b"tampered-cost-model");
+
+    assert!(!model.is_canonical());
+    assert_eq!(model.instruction_cost(InstructionCostClass::Hostcall), 0);
+    assert_eq!(model.rule_gain("fold_const"), 0);
+    assert_eq!(model.net_gain("fold_const"), 0);
+}
+
+#[test]
 fn cost_model_custom_instruction_costs() {
     let mut costs = BTreeMap::new();
     costs.insert(InstructionCostClass::Arithmetic, 42 * MILLION);
@@ -992,6 +1051,12 @@ fn catalog_new_empty() {
 }
 
 #[test]
+fn catalog_empty_baseline_is_canonical() {
+    let cat = PackCatalog::new("canonical-empty");
+    assert!(cat.is_canonical());
+}
+
+#[test]
 fn catalog_register_single_pack() {
     let mut cat = PackCatalog::new("reg");
     let pack = make_pack(
@@ -1004,6 +1069,19 @@ fn catalog_register_single_pack() {
     assert!(cat.register(pack));
     assert_eq!(cat.pack_count(), 1);
     assert_eq!(cat.total_rule_count, 2);
+    assert!(cat.is_canonical());
+}
+
+#[test]
+fn catalog_register_rejects_blank_catalog_id_without_mutation() {
+    let mut cat = PackCatalog::new("   ");
+    let hash_before = cat.content_hash;
+
+    assert!(!cat.register(make_pack("p1", vec![])));
+    assert_eq!(cat.content_hash, hash_before);
+    assert!(cat.packs.is_empty());
+    assert_eq!(cat.total_rule_count, 0);
+    assert!(!cat.is_canonical());
 }
 
 #[test]
@@ -1408,6 +1486,36 @@ fn catalog_cross_interference_rejects_tampered_metadata_without_mutation() {
 }
 
 #[test]
+fn catalog_cross_interference_rejects_noncanonical_catalog_without_mutation() {
+    let mut cat = PackCatalog::new("noncanonical-cross");
+    cat.register(make_pack(
+        "alpha",
+        vec![enabled_rule("r1", RewriteCategory::Custom, true)],
+    ));
+    cat.register(make_pack(
+        "beta",
+        vec![enabled_rule("r1", RewriteCategory::Custom, true)],
+    ));
+
+    let hash_before = cat.content_hash;
+    cat.total_rule_count += 1;
+
+    assert!(!cat.add_cross_interference(
+        "alpha",
+        "beta",
+        InterferenceMetadata::build(vec![make_interference(
+            "alpha:r1",
+            "beta:r1",
+            RuleInterferenceKind::PatternConflict,
+            false,
+        )]),
+    ));
+    assert_eq!(cat.content_hash, hash_before);
+    assert!(cat.cross_interference.is_empty());
+    assert!(!cat.is_canonical());
+}
+
+#[test]
 fn catalog_hash_changes_on_register() {
     let mut cat = PackCatalog::new("hash-change");
     let hash_before = cat.content_hash;
@@ -1493,6 +1601,74 @@ fn catalog_deterministic_hash() {
     let c1 = build();
     let c2 = build();
     assert_eq!(c1.content_hash, c2.content_hash);
+}
+
+#[test]
+fn catalog_tampered_total_rule_count_is_noncanonical() {
+    let mut cat = PackCatalog::new("tampered-total");
+    assert!(cat.register(make_pack(
+        "pack",
+        vec![enabled_rule("r1", RewriteCategory::Custom, true)],
+    )));
+
+    cat.total_rule_count += 1;
+    assert!(!cat.is_canonical());
+}
+
+#[test]
+fn catalog_tampered_cross_interference_key_is_noncanonical() {
+    let mut cat = PackCatalog::new("tampered-cross-key");
+    assert!(cat.register(make_pack(
+        "alpha",
+        vec![enabled_rule("r1", RewriteCategory::Custom, true)],
+    )));
+    assert!(cat.register(make_pack(
+        "beta",
+        vec![enabled_rule("r1", RewriteCategory::Custom, true)],
+    )));
+    assert!(cat.add_cross_interference(
+        "alpha",
+        "beta",
+        InterferenceMetadata::build(vec![make_interference(
+            "alpha:r1",
+            "beta:r1",
+            RuleInterferenceKind::PatternConflict,
+            false,
+        )]),
+    ));
+
+    let metadata = cat.cross_interference.remove("alpha::beta").unwrap();
+    cat.cross_interference
+        .insert("beta::alpha".into(), metadata);
+
+    assert!(!cat.is_canonical());
+}
+
+#[test]
+fn catalog_tampered_hash_is_noncanonical() {
+    let mut cat = PackCatalog::new("tampered-hash");
+    cat.content_hash = ContentHash::compute(b"tampered-catalog");
+    assert!(!cat.is_canonical());
+}
+
+#[test]
+fn catalog_queries_fail_closed_when_noncanonical() {
+    let mut cat = PackCatalog::new("tampered-reads");
+    assert!(cat.register(make_pack(
+        "alpha",
+        vec![enabled_rule("r1", RewriteCategory::Custom, true)],
+    )));
+    assert!(cat.register(make_pack(
+        "beta",
+        vec![enabled_rule("r1", RewriteCategory::Custom, true)],
+    )));
+
+    cat.total_rule_count += 1;
+
+    assert_eq!(cat.pack_count(), 0);
+    assert!(cat.get("alpha").is_none());
+    assert!(cat.compatible_packs(&PackVersion::CURRENT).is_empty());
+    assert!(cat.has_cross_blocking("alpha", "beta"));
 }
 
 // ---------------------------------------------------------------------------

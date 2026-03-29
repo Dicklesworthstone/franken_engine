@@ -79,6 +79,14 @@ fn rule_target_rule_id_for_pack<'a>(rule_target: &'a str, pack_id: &str) -> Opti
     (!is_blank_identifier(rule_id)).then_some(rule_id)
 }
 
+fn canonical_pack_pair_key(pack_a: &str, pack_b: &str) -> String {
+    if pack_a < pack_b {
+        format!("{pack_a}::{pack_b}")
+    } else {
+        format!("{pack_b}::{pack_a}")
+    }
+}
+
 // ---------------------------------------------------------------------------
 // PackVersion — semantic versioning for packs
 // ---------------------------------------------------------------------------
@@ -219,16 +227,25 @@ impl DeterministicCostModel {
 
     /// Get the cost for an instruction class. Returns 0 if not specified.
     pub fn instruction_cost(&self, class: InstructionCostClass) -> i64 {
+        if !self.is_canonical() {
+            return 0;
+        }
         self.instruction_costs.get(&class).copied().unwrap_or(0)
     }
 
     /// Get the expected gain for a rule. Returns 0 if not specified.
     pub fn rule_gain(&self, rule_id: &str) -> i64 {
+        if !self.is_canonical() {
+            return 0;
+        }
         self.rule_gains.get(rule_id).copied().unwrap_or(0)
     }
 
     /// Net gain for applying a rule: gain minus application cost (millionths).
     pub fn net_gain(&self, rule_id: &str) -> i64 {
+        if !self.is_canonical() {
+            return 0;
+        }
         let gain = self.rule_gains.get(rule_id).copied().unwrap_or(0);
         let cost = self
             .rule_application_costs
@@ -252,6 +269,27 @@ impl DeterministicCostModel {
         costs.insert(InstructionCostClass::ModuleOps, 20 * MILLION);
         costs.insert(InstructionCostClass::ExceptionOps, 15 * MILLION);
         Self::new(model_id, costs, BTreeMap::new(), BTreeMap::new())
+    }
+
+    fn has_valid_rule_cost_keys(rule_costs: &BTreeMap<String, i64>) -> bool {
+        !rule_costs
+            .keys()
+            .any(|rule_id| is_blank_identifier(rule_id))
+    }
+
+    /// Return whether this cost model is canonical and fail-closed safe to ship.
+    pub fn is_canonical(&self) -> bool {
+        self.schema_version == COST_MODEL_SCHEMA_VERSION
+            && !is_blank_identifier(&self.model_id)
+            && Self::has_valid_rule_cost_keys(&self.rule_gains)
+            && Self::has_valid_rule_cost_keys(&self.rule_application_costs)
+            && self.content_hash
+                == Self::compute_hash(
+                    &self.model_id,
+                    &self.instruction_costs,
+                    &self.rule_gains,
+                    &self.rule_application_costs,
+                )
     }
 
     fn compute_hash(
@@ -749,34 +787,58 @@ impl PackCatalog {
     /// Register a pack.
     ///
     /// Returns `false` and leaves the catalog unchanged if the pack ID already
-    /// exists, the pack is noncanonical, or the aggregate rule count would
-    /// overflow `usize`.
+    /// exists, the pack is noncanonical, the catalog itself is noncanonical,
+    /// or the aggregate rule count would overflow `usize`.
     pub fn register(&mut self, pack: RewritePack) -> bool {
-        if self.packs.contains_key(&pack.pack_id) || !pack.is_canonical() {
+        if !self.is_canonical() || self.packs.contains_key(&pack.pack_id) || !pack.is_canonical() {
             return false;
         }
+        let pack_id = pack.pack_id.clone();
+        let pack_rule_count = pack.rule_count();
         let Some(next_total_rule_count) = self.total_rule_count.checked_add(pack.rule_count())
         else {
             return false;
         };
         self.total_rule_count = next_total_rule_count;
-        self.packs.insert(pack.pack_id.clone(), pack);
+        self.packs.insert(pack_id.clone(), pack);
         self.recompute_hash();
-        true
+        if self.is_canonical() {
+            true
+        } else {
+            self.packs.remove(&pack_id);
+            self.total_rule_count -= pack_rule_count;
+            self.recompute_hash();
+            false
+        }
     }
 
     /// Get a pack by ID.
+    ///
+    /// Returns `None` if the catalog is noncanonical.
     pub fn get(&self, pack_id: &str) -> Option<&RewritePack> {
+        if !self.is_canonical() {
+            return None;
+        }
         self.packs.get(pack_id)
     }
 
     /// Number of registered packs.
+    ///
+    /// Returns `0` if the catalog is noncanonical.
     pub fn pack_count(&self) -> usize {
+        if !self.is_canonical() {
+            return 0;
+        }
         self.packs.len()
     }
 
     /// Find all packs compatible with a given version.
+    ///
+    /// Returns an empty set if the catalog is noncanonical.
     pub fn compatible_packs(&self, host_version: &PackVersion) -> Vec<&RewritePack> {
+        if !self.is_canonical() {
+            return Vec::new();
+        }
         self.packs
             .values()
             .filter(|p| host_version.is_compatible_with(&p.version))
@@ -788,63 +850,83 @@ impl PackCatalog {
     /// Returns `false` and leaves the catalog unchanged if either pack is
     /// unknown, the caller tries to register self-interference, or the pair
     /// already has cross-pack metadata recorded. The metadata must also be
-    /// canonical and must reference only rules from the declared pack pair.
+    /// canonical, must reference only rules from the declared pack pair, and
+    /// must not push the catalog into a noncanonical state.
     pub fn add_cross_interference(
         &mut self,
         pack_a: &str,
         pack_b: &str,
         metadata: InterferenceMetadata,
     ) -> bool {
-        if pack_a == pack_b {
+        if !self.is_canonical() || pack_a == pack_b {
             return false;
         }
         if !self.packs.contains_key(pack_a) || !self.packs.contains_key(pack_b) {
             return false;
         }
-        let key = if pack_a < pack_b {
-            format!("{pack_a}::{pack_b}")
-        } else {
-            format!("{pack_b}::{pack_a}")
-        };
+        let key = canonical_pack_pair_key(pack_a, pack_b);
         if self.cross_interference.contains_key(&key) {
             return false;
         }
         if !metadata.is_canonical() || !self.metadata_matches_pair(&metadata, pack_a, pack_b) {
             return false;
         }
-        self.cross_interference.insert(key, metadata);
+        self.cross_interference.insert(key.clone(), metadata);
         self.recompute_hash();
-        true
+        if self.is_canonical() {
+            true
+        } else {
+            self.cross_interference.remove(&key);
+            self.recompute_hash();
+            false
+        }
     }
 
     /// Check whether two packs have blocking cross-interference.
+    ///
+    /// Returns `true` conservatively if the catalog is noncanonical.
     pub fn has_cross_blocking(&self, pack_a: &str, pack_b: &str) -> bool {
-        let key = if pack_a < pack_b {
-            format!("{pack_a}::{pack_b}")
-        } else {
-            format!("{pack_b}::{pack_a}")
-        };
+        if !self.is_canonical() {
+            return true;
+        }
+        let key = canonical_pack_pair_key(pack_a, pack_b);
         self.cross_interference
             .get(&key)
             .is_some_and(|m| m.has_blocking())
     }
 
+    /// Return whether the catalog is canonical and fail-closed safe to use.
+    pub fn is_canonical(&self) -> bool {
+        if self.schema_version != CATALOG_SCHEMA_VERSION || is_blank_identifier(&self.catalog_id) {
+            return false;
+        }
+
+        let Some(expected_total_rule_count) = self.expected_total_rule_count() else {
+            return false;
+        };
+        if self.total_rule_count != expected_total_rule_count {
+            return false;
+        }
+        if !self.cross_interference_is_canonical() {
+            return false;
+        }
+
+        self.content_hash
+            == Self::compute_hash(
+                &self.catalog_id,
+                self.total_rule_count,
+                &self.packs,
+                &self.cross_interference,
+            )
+    }
+
     fn recompute_hash(&mut self) {
-        let mut hasher = Sha256::new();
-        hash_str(&mut hasher, CATALOG_SCHEMA_VERSION);
-        hash_str(&mut hasher, &self.catalog_id);
-        hasher.update((self.total_rule_count as u64).to_le_bytes());
-        hash_len(&mut hasher, self.packs.len());
-        for (id, pack) in &self.packs {
-            hash_str(&mut hasher, id);
-            hash_content_hash(&mut hasher, &pack.content_hash);
-        }
-        hash_len(&mut hasher, self.cross_interference.len());
-        for (key, meta) in &self.cross_interference {
-            hash_str(&mut hasher, key);
-            hash_content_hash(&mut hasher, &meta.content_hash);
-        }
-        self.content_hash = ContentHash::compute(&hasher.finalize());
+        self.content_hash = Self::compute_hash(
+            &self.catalog_id,
+            self.total_rule_count,
+            &self.packs,
+            &self.cross_interference,
+        );
     }
 
     fn metadata_matches_pair(
@@ -882,6 +964,67 @@ impl PackCatalog {
 
             (rule_a_in_pack_a && rule_b_in_pack_b) || (rule_a_in_pack_b && rule_b_in_pack_a)
         })
+    }
+
+    fn expected_total_rule_count(&self) -> Option<usize> {
+        self.packs
+            .iter()
+            .try_fold(0usize, |total, (pack_id, pack)| {
+                if is_blank_identifier(pack_id) || &pack.pack_id != pack_id || !pack.is_canonical()
+                {
+                    return None;
+                }
+                total.checked_add(pack.rule_count())
+            })
+    }
+
+    fn cross_interference_is_canonical(&self) -> bool {
+        let pack_ids: Vec<&str> = self.packs.keys().map(String::as_str).collect();
+        self.cross_interference.iter().all(|(key, metadata)| {
+            if !metadata.is_canonical() {
+                return false;
+            }
+
+            let mut matching_pairs = 0usize;
+            for (index, pack_a) in pack_ids.iter().enumerate() {
+                for pack_b in pack_ids.iter().skip(index + 1) {
+                    if canonical_pack_pair_key(pack_a, pack_b) != *key {
+                        continue;
+                    }
+                    if self.metadata_matches_pair(metadata, pack_a, pack_b) {
+                        matching_pairs += 1;
+                        if matching_pairs > 1 {
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            matching_pairs == 1
+        })
+    }
+
+    fn compute_hash(
+        catalog_id: &str,
+        total_rule_count: usize,
+        packs: &BTreeMap<String, RewritePack>,
+        cross_interference: &BTreeMap<String, InterferenceMetadata>,
+    ) -> ContentHash {
+        let mut hasher = Sha256::new();
+        hash_str(&mut hasher, CATALOG_SCHEMA_VERSION);
+        hash_str(&mut hasher, catalog_id);
+        hasher.update((total_rule_count as u64).to_le_bytes());
+        hash_len(&mut hasher, packs.len());
+        for (id, pack) in packs {
+            hash_str(&mut hasher, id);
+            hash_content_hash(&mut hasher, &pack.content_hash);
+        }
+        hash_len(&mut hasher, cross_interference.len());
+        for (key, meta) in cross_interference {
+            hash_str(&mut hasher, key);
+            hash_content_hash(&mut hasher, &meta.content_hash);
+        }
+        ContentHash::compute(&hasher.finalize())
     }
 }
 
@@ -1041,6 +1184,65 @@ mod tests {
         let model =
             DeterministicCostModel::new("empty", BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
         assert_eq!(model.instruction_cost(InstructionCostClass::Hostcall), 0);
+    }
+
+    #[test]
+    fn cost_model_default_baseline_is_canonical() {
+        let model = DeterministicCostModel::default_baseline("canonical-model");
+        assert!(model.is_canonical());
+    }
+
+    #[test]
+    fn cost_model_rejects_blank_model_id() {
+        let model = DeterministicCostModel::default_baseline("   ");
+        assert!(!model.is_canonical());
+    }
+
+    #[test]
+    fn cost_model_rejects_blank_rule_gain_key() {
+        let mut gains = BTreeMap::new();
+        gains.insert("   ".into(), MILLION);
+
+        let model =
+            DeterministicCostModel::new("blank-gain-key", BTreeMap::new(), gains, BTreeMap::new());
+        assert!(!model.is_canonical());
+    }
+
+    #[test]
+    fn cost_model_rejects_blank_rule_application_cost_key() {
+        let mut app_costs = BTreeMap::new();
+        app_costs.insert("   ".into(), MILLION);
+
+        let model = DeterministicCostModel::new(
+            "blank-cost-key",
+            BTreeMap::new(),
+            BTreeMap::new(),
+            app_costs,
+        );
+        assert!(!model.is_canonical());
+    }
+
+    #[test]
+    fn cost_model_rejects_tampered_hash() {
+        let mut model = DeterministicCostModel::default_baseline("tampered-hash");
+        model.content_hash = ContentHash::compute(b"tampered-cost-model");
+        assert!(!model.is_canonical());
+    }
+
+    #[test]
+    fn cost_model_queries_fail_closed_when_noncanonical() {
+        let mut model = DeterministicCostModel::new(
+            "tampered-read-surface",
+            BTreeMap::from([(InstructionCostClass::Hostcall, 50 * MILLION)]),
+            BTreeMap::from([("fold_const".into(), 5 * MILLION)]),
+            BTreeMap::from([("fold_const".into(), MILLION)]),
+        );
+        model.content_hash = ContentHash::compute(b"tampered-cost-model");
+
+        assert!(!model.is_canonical());
+        assert_eq!(model.instruction_cost(InstructionCostClass::Hostcall), 0);
+        assert_eq!(model.rule_gain("fold_const"), 0);
+        assert_eq!(model.net_gain("fold_const"), 0);
     }
 
     // --- RewriteCategory ---
@@ -1378,12 +1580,31 @@ mod tests {
     }
 
     #[test]
+    fn catalog_empty_is_canonical() {
+        let catalog = PackCatalog::new("canonical-empty");
+        assert!(catalog.is_canonical());
+    }
+
+    #[test]
     fn catalog_register() {
         let mut catalog = PackCatalog::new("test");
         let pack = test_pack("p1", vec![test_rule("r1", RewriteCategory::Custom, true)]);
         assert!(catalog.register(pack));
         assert_eq!(catalog.pack_count(), 1);
         assert_eq!(catalog.total_rule_count, 1);
+        assert!(catalog.is_canonical());
+    }
+
+    #[test]
+    fn catalog_register_rejects_blank_catalog_id() {
+        let mut catalog = PackCatalog::new("   ");
+        let hash_before = catalog.content_hash;
+
+        assert!(!catalog.register(test_pack("p1", vec![])));
+        assert_eq!(catalog.content_hash, hash_before);
+        assert!(catalog.packs.is_empty());
+        assert_eq!(catalog.total_rule_count, 0);
+        assert!(!catalog.is_canonical());
     }
 
     #[test]
@@ -1719,11 +1940,105 @@ mod tests {
     }
 
     #[test]
+    fn catalog_cross_interference_rejects_noncanonical_catalog() {
+        let mut catalog = PackCatalog::new("test");
+        catalog.register(test_pack(
+            "a",
+            vec![test_rule("r1", RewriteCategory::Custom, true)],
+        ));
+        catalog.register(test_pack(
+            "b",
+            vec![test_rule("r1", RewriteCategory::Custom, true)],
+        ));
+        let hash_before = catalog.content_hash;
+        catalog.total_rule_count += 1;
+
+        assert!(!catalog.add_cross_interference(
+            "a",
+            "b",
+            InterferenceMetadata::build(vec![test_interference(
+                "a:r1",
+                "b:r1",
+                RuleInterferenceKind::PatternConflict,
+            )]),
+        ));
+        assert_eq!(catalog.content_hash, hash_before);
+        assert!(catalog.cross_interference.is_empty());
+        assert!(!catalog.is_canonical());
+    }
+
+    #[test]
     fn catalog_serde_roundtrip() {
         let catalog = PackCatalog::new("serde");
         let json = serde_json::to_string(&catalog).unwrap();
         let back: PackCatalog = serde_json::from_str(&json).unwrap();
         assert_eq!(catalog, back);
+    }
+
+    #[test]
+    fn catalog_rejects_tampered_total_rule_count() {
+        let mut catalog = PackCatalog::new("tampered-total");
+        assert!(catalog.register(test_pack(
+            "pack",
+            vec![test_rule("r1", RewriteCategory::Custom, true)],
+        )));
+
+        catalog.total_rule_count += 1;
+        assert!(!catalog.is_canonical());
+    }
+
+    #[test]
+    fn catalog_rejects_tampered_cross_interference_key() {
+        let mut catalog = PackCatalog::new("tampered-cross-key");
+        assert!(catalog.register(test_pack(
+            "a",
+            vec![test_rule("r1", RewriteCategory::Custom, true)],
+        )));
+        assert!(catalog.register(test_pack(
+            "b",
+            vec![test_rule("r1", RewriteCategory::Custom, true)],
+        )));
+        assert!(catalog.add_cross_interference(
+            "a",
+            "b",
+            InterferenceMetadata::build(vec![test_interference(
+                "a:r1",
+                "b:r1",
+                RuleInterferenceKind::PatternConflict,
+            )]),
+        ));
+
+        let metadata = catalog.cross_interference.remove("a::b").unwrap();
+        catalog.cross_interference.insert("b::a".into(), metadata);
+
+        assert!(!catalog.is_canonical());
+    }
+
+    #[test]
+    fn catalog_rejects_tampered_hash() {
+        let mut catalog = PackCatalog::new("tampered-hash");
+        catalog.content_hash = ContentHash::compute(b"tampered-catalog");
+        assert!(!catalog.is_canonical());
+    }
+
+    #[test]
+    fn catalog_queries_fail_closed_when_noncanonical() {
+        let mut catalog = PackCatalog::new("tampered-reads");
+        assert!(catalog.register(test_pack(
+            "a",
+            vec![test_rule("r1", RewriteCategory::Custom, true)],
+        )));
+        assert!(catalog.register(test_pack(
+            "b",
+            vec![test_rule("r1", RewriteCategory::Custom, true)],
+        )));
+
+        catalog.total_rule_count += 1;
+
+        assert_eq!(catalog.pack_count(), 0);
+        assert!(catalog.get("a").is_none());
+        assert!(catalog.compatible_packs(&PackVersion::CURRENT).is_empty());
+        assert!(catalog.has_cross_blocking("a", "b"));
     }
 
     // --- RewriteRuleEntry serde ---

@@ -145,6 +145,7 @@ impl BudgetEnforcementPolicy {
         hasher.update(self.max_receipts.to_le_bytes());
         hasher.update([u8::from(self.fail_closed_on_missing)]);
         hasher.update([u8::from(self.fail_closed_on_abstention)]);
+        hasher.update([u8::from(self.emit_violation_details)]);
         for dim in &self.enforced_dimensions {
             hasher.update(dim.to_string().as_bytes());
         }
@@ -453,6 +454,30 @@ pub struct EnforcementReceiptInput {
     pub policy_hash: String,
 }
 
+#[derive(Serialize)]
+struct EnforcementReceiptHashPreimage<'a> {
+    extension_id: &'a str,
+    scope: &'a EnforcementScope,
+    decision: &'a EnforcementDecision,
+    certificate_id: &'a Option<String>,
+    budget_snapshot: &'a [DimensionBudgetSnapshot],
+    decision_epoch: u64,
+    decision_sequence: u64,
+    policy_hash: &'a str,
+}
+
+fn compute_serialized_content_hash<T: Serialize>(domain_tag: &[u8], value: &T) -> ContentHash {
+    let payload = serde_json::to_vec(value).expect("resource certificate hash preimage is valid");
+    let mut hasher = Sha256::new();
+    hasher.update(domain_tag);
+    hasher.update((payload.len() as u64).to_le_bytes());
+    hasher.update(payload);
+    let digest = hasher.finalize();
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(&digest);
+    ContentHash::compute(&bytes)
+}
+
 impl EnforcementReceipt {
     /// Create a new receipt from input.
     fn from_input(input: EnforcementReceiptInput) -> Self {
@@ -460,8 +485,11 @@ impl EnforcementReceipt {
             &input.extension_id,
             &input.scope,
             &input.decision,
+            &input.certificate_id,
+            &input.budget_snapshot,
             &input.epoch,
             input.seq,
+            &input.policy_hash,
         );
         let receipt_id = format!("erc-{}", &content_hash.to_hex()[..16]);
         Self {
@@ -478,24 +506,28 @@ impl EnforcementReceipt {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn compute_hash(
         extension_id: &str,
         scope: &EnforcementScope,
         decision: &EnforcementDecision,
+        certificate_id: &Option<String>,
+        budget_snapshot: &[DimensionBudgetSnapshot],
         epoch: &SecurityEpoch,
         seq: u64,
+        policy_hash: &str,
     ) -> ContentHash {
-        let mut hasher = Sha256::new();
-        hasher.update(b"EnforcementReceipt.v1");
-        hasher.update(extension_id.as_bytes());
-        hasher.update(scope.to_string().as_bytes());
-        hasher.update(decision.to_string().as_bytes());
-        hasher.update(epoch.as_u64().to_le_bytes());
-        hasher.update(seq.to_le_bytes());
-        let digest = hasher.finalize();
-        let mut bytes = [0u8; 32];
-        bytes.copy_from_slice(&digest);
-        ContentHash::compute(&bytes)
+        let preimage = EnforcementReceiptHashPreimage {
+            extension_id,
+            scope,
+            decision,
+            certificate_id,
+            budget_snapshot,
+            decision_epoch: epoch.as_u64(),
+            decision_sequence: seq,
+            policy_hash,
+        };
+        compute_serialized_content_hash(b"EnforcementReceipt.v2", &preimage)
     }
 }
 
@@ -696,21 +728,17 @@ pub struct BudgetEnforcer {
     pub receipts: Vec<EnforcementReceipt>,
     /// Monotonic decision sequence.
     decision_sequence: u64,
-    /// Cached policy hash.
-    policy_hash: String,
 }
 
 impl BudgetEnforcer {
     /// Create a new budget enforcer.
     pub fn new(policy: BudgetEnforcementPolicy, epoch: SecurityEpoch) -> Self {
-        let policy_hash = policy.policy_hash();
         Self {
             policy,
             current_epoch: epoch,
             extensions: BTreeMap::new(),
             receipts: Vec::new(),
             decision_sequence: 0,
-            policy_hash,
         }
     }
 
@@ -778,6 +806,7 @@ impl BudgetEnforcer {
         scope: EnforcementScope,
         usage_deltas: &[(EnforcedDimension, i64)],
     ) -> EnforcementReceipt {
+        let policy_hash = self.policy.policy_hash();
         let decision = self.compute_decision(extension_id, usage_deltas);
 
         // Update counts.
@@ -816,7 +845,7 @@ impl BudgetEnforcer {
             budget_snapshot: snapshots,
             epoch: self.current_epoch,
             seq: self.decision_sequence,
-            policy_hash: self.policy_hash.clone(),
+            policy_hash,
         });
 
         // Retain bounded receipts.
@@ -1036,21 +1065,37 @@ pub struct ResourceConsumerManifest {
     pub content_hash: ContentHash,
 }
 
+#[derive(Serialize)]
+struct ResourceConsumerManifestHashPreimage<'a> {
+    schema_version: &'a str,
+    component: &'a str,
+    policy_hash: &'a str,
+    manifest_epoch: u64,
+    extension_states: &'a [ExtensionBudgetState],
+    receipts: &'a [EnforcementReceipt],
+    summary: &'a EnforcementSummary,
+}
+
 impl ResourceConsumerManifest {
     /// Create a manifest from an enforcer.
     pub fn from_enforcer(enforcer: &BudgetEnforcer) -> Self {
         let extension_states: Vec<ExtensionBudgetState> =
             enforcer.extensions.values().cloned().collect();
         let summary = enforcer.enforcement_summary();
+        let policy_hash = enforcer.policy.policy_hash();
         let content_hash = Self::compute_hash(
-            &enforcer.policy_hash,
+            ENFORCEMENT_SCHEMA_VERSION,
+            COMPONENT,
+            &policy_hash,
             &enforcer.current_epoch,
             &extension_states,
+            &enforcer.receipts,
+            &summary,
         );
         Self {
             schema_version: ENFORCEMENT_SCHEMA_VERSION.to_string(),
             component: COMPONENT.to_string(),
-            policy_hash: enforcer.policy_hash.clone(),
+            policy_hash,
             manifest_epoch: enforcer.current_epoch,
             extension_states,
             receipts: enforcer.receipts.clone(),
@@ -1060,22 +1105,24 @@ impl ResourceConsumerManifest {
     }
 
     fn compute_hash(
+        schema_version: &str,
+        component: &str,
         policy_hash: &str,
         epoch: &SecurityEpoch,
         states: &[ExtensionBudgetState],
+        receipts: &[EnforcementReceipt],
+        summary: &EnforcementSummary,
     ) -> ContentHash {
-        let mut hasher = Sha256::new();
-        hasher.update(b"ResourceConsumerManifest.v1");
-        hasher.update(policy_hash.as_bytes());
-        hasher.update(epoch.as_u64().to_le_bytes());
-        hasher.update(states.len().to_le_bytes());
-        for s in states {
-            hasher.update(s.extension_id.as_bytes());
-        }
-        let digest = hasher.finalize();
-        let mut bytes = [0u8; 32];
-        bytes.copy_from_slice(&digest);
-        ContentHash::compute(&bytes)
+        let preimage = ResourceConsumerManifestHashPreimage {
+            schema_version,
+            component,
+            policy_hash,
+            manifest_epoch: epoch.as_u64(),
+            extension_states: states,
+            receipts,
+            summary,
+        };
+        compute_serialized_content_hash(b"ResourceConsumerManifest.v2", &preimage)
     }
 }
 
@@ -1150,6 +1197,16 @@ mod tests {
         let p1 = BudgetEnforcementPolicy::default();
         let p2 = BudgetEnforcementPolicy {
             throttle_threshold_millionths: 800_000,
+            ..BudgetEnforcementPolicy::default()
+        };
+        assert_ne!(p1.policy_hash(), p2.policy_hash());
+    }
+
+    #[test]
+    fn test_policy_hash_varies_with_emit_violation_details() {
+        let p1 = BudgetEnforcementPolicy::default();
+        let p2 = BudgetEnforcementPolicy {
+            emit_violation_details: false,
             ..BudgetEnforcementPolicy::default()
         };
         assert_ne!(p1.policy_hash(), p2.policy_hash());
@@ -1814,6 +1871,100 @@ mod tests {
         assert_eq!(manifest.component, COMPONENT);
         assert_eq!(manifest.extension_states.len(), 1);
         assert_eq!(manifest.receipts.len(), 1);
+    }
+
+    #[test]
+    fn test_manifest_uses_live_policy_hash_after_policy_mutation() {
+        let mut enforcer = make_enforcer();
+        enforcer.policy.emit_violation_details = false;
+
+        let manifest = ResourceConsumerManifest::from_enforcer(&enforcer);
+
+        assert_eq!(manifest.policy_hash, enforcer.policy.policy_hash());
+    }
+
+    #[test]
+    fn test_receipt_uses_live_policy_hash_after_policy_mutation() {
+        let mut enforcer = make_enforcer();
+        let digest = make_digest("cert-1", CertificateVerdict::Certified);
+        enforcer.install_certificate("ext-1", digest).unwrap();
+        enforcer.policy.emit_violation_details = false;
+
+        let receipt = enforcer.enforce(
+            "ext-1",
+            EnforcementScope::General {
+                description: "mutated-policy".to_string(),
+            },
+            &[(EnforcedDimension::Time, 1_000)],
+        );
+
+        assert_eq!(receipt.policy_hash, enforcer.policy.policy_hash());
+    }
+
+    #[test]
+    fn test_receipt_content_hash_varies_with_policy_hash() {
+        let build_receipt = |emit_violation_details| {
+            let mut enforcer = make_enforcer();
+            let digest = make_digest("cert-1", CertificateVerdict::Certified);
+            enforcer.install_certificate("ext-1", digest).unwrap();
+            enforcer.policy.emit_violation_details = emit_violation_details;
+            enforcer.enforce(
+                "ext-1",
+                EnforcementScope::General {
+                    description: "mutated-policy".to_string(),
+                },
+                &[(EnforcedDimension::Time, 1_000)],
+            )
+        };
+
+        let detailed = build_receipt(true);
+        let redacted = build_receipt(false);
+
+        assert_ne!(detailed.policy_hash, redacted.policy_hash);
+        assert_ne!(detailed.content_hash, redacted.content_hash);
+        assert_ne!(detailed.receipt_id, redacted.receipt_id);
+    }
+
+    #[test]
+    fn test_manifest_content_hash_varies_with_receipts_and_summary() {
+        let mut baseline = make_enforcer();
+        baseline
+            .install_certificate(
+                "ext-1",
+                make_digest("cert-1", CertificateVerdict::Certified),
+            )
+            .unwrap();
+        let baseline_manifest = ResourceConsumerManifest::from_enforcer(&baseline);
+
+        let mut with_receipt = make_enforcer();
+        with_receipt
+            .install_certificate(
+                "ext-1",
+                make_digest("cert-1", CertificateVerdict::Certified),
+            )
+            .unwrap();
+        with_receipt.enforce(
+            "ext-1",
+            EnforcementScope::General {
+                description: "mutated-manifest".to_string(),
+            },
+            &[(EnforcedDimension::Time, 1_000)],
+        );
+        let mutated_manifest = ResourceConsumerManifest::from_enforcer(&with_receipt);
+
+        assert_eq!(
+            baseline_manifest.extension_states[0].extension_id,
+            mutated_manifest.extension_states[0].extension_id
+        );
+        assert_ne!(baseline_manifest.summary, mutated_manifest.summary);
+        assert_ne!(
+            baseline_manifest.receipts.len(),
+            mutated_manifest.receipts.len()
+        );
+        assert_ne!(
+            baseline_manifest.content_hash,
+            mutated_manifest.content_hash
+        );
     }
 
     // --- Display tests ---

@@ -1177,7 +1177,7 @@ pub fn evaluate_membrane(
         MembraneVerdict::Shutdown
     } else if escaped > 0 || state.crash_count >= CRASH_BREACHED_THRESHOLD {
         MembraneVerdict::Breached
-    } else if state.active_handles > policy.max_active_handles || !state.violations.is_empty() {
+    } else if state.active_handles > policy.max_active_handles || !violations.is_empty() {
         MembraneVerdict::Degraded
     } else {
         MembraneVerdict::Healthy

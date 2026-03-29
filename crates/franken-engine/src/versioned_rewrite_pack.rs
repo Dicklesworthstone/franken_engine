@@ -70,13 +70,13 @@ fn hash_content_hash(hasher: &mut Sha256, value: &ContentHash) {
     hash_bytes(hasher, value.as_bytes());
 }
 
-fn rule_target_rule_id_for_pack<'a>(rule_target: &'a str, pack_id: &str) -> Option<&'a str> {
-    let rule_id = rule_target.strip_prefix(pack_id)?.strip_prefix(':')?;
-    (!rule_id.is_empty()).then_some(rule_id)
+fn is_blank_identifier(value: &str) -> bool {
+    value.trim().is_empty()
 }
 
-fn rule_target_matches_pack(rule_target: &str, pack_id: &str) -> bool {
-    rule_target_rule_id_for_pack(rule_target, pack_id).is_some()
+fn rule_target_rule_id_for_pack<'a>(rule_target: &'a str, pack_id: &str) -> Option<&'a str> {
+    let rule_id = rule_target.strip_prefix(pack_id)?.strip_prefix(':')?;
+    (!is_blank_identifier(rule_id)).then_some(rule_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -599,7 +599,11 @@ impl RewritePack {
     }
 
     fn has_valid_rule_ids(&self) -> bool {
-        if self.rules.iter().any(|rule| rule.rule_id.is_empty()) {
+        if self
+            .rules
+            .iter()
+            .any(|rule| is_blank_identifier(&rule.rule_id))
+        {
             return false;
         }
         let rule_ids: BTreeSet<&str> = self
@@ -634,7 +638,8 @@ impl RewritePack {
 
     fn is_canonical_with_limits(&self, max_rules: usize, max_interference: usize) -> bool {
         if self.schema_version != PACK_SCHEMA_VERSION
-            || self.pack_id.is_empty()
+            || is_blank_identifier(&self.pack_id)
+            || is_blank_identifier(&self.cost_model_id)
             || self.rules.len() > max_rules
             || self.interference.entries.len() > max_interference
             || !self.has_valid_rule_ids()
@@ -1430,6 +1435,18 @@ mod tests {
     }
 
     #[test]
+    fn catalog_register_rejects_blank_rule_id() {
+        let mut catalog = PackCatalog::new("test");
+
+        assert!(!catalog.register(test_pack(
+            "blank-rule-id",
+            vec![test_rule("   ", RewriteCategory::Custom, true)],
+        )));
+        assert!(catalog.packs.is_empty());
+        assert_eq!(catalog.total_rule_count, 0);
+    }
+
+    #[test]
     fn catalog_register_rejects_empty_pack_id() {
         let mut catalog = PackCatalog::new("test");
         let pack = RewritePack::new(
@@ -1440,6 +1457,60 @@ mod tests {
             vec![test_rule("r1", RewriteCategory::Custom, true)],
             InterferenceMetadata::build(vec![]),
             "default",
+        );
+
+        assert!(!catalog.register(pack));
+        assert!(catalog.packs.is_empty());
+        assert_eq!(catalog.total_rule_count, 0);
+    }
+
+    #[test]
+    fn catalog_register_rejects_blank_pack_id() {
+        let mut catalog = PackCatalog::new("test");
+        let pack = RewritePack::new(
+            "   ",
+            PackVersion::CURRENT,
+            test_epoch(),
+            "test pack",
+            vec![test_rule("r1", RewriteCategory::Custom, true)],
+            InterferenceMetadata::build(vec![]),
+            "default",
+        );
+
+        assert!(!catalog.register(pack));
+        assert!(catalog.packs.is_empty());
+        assert_eq!(catalog.total_rule_count, 0);
+    }
+
+    #[test]
+    fn catalog_register_rejects_empty_cost_model_id() {
+        let mut catalog = PackCatalog::new("test");
+        let pack = RewritePack::new(
+            "empty-cost-model",
+            PackVersion::CURRENT,
+            test_epoch(),
+            "test pack",
+            vec![test_rule("r1", RewriteCategory::Custom, true)],
+            InterferenceMetadata::build(vec![]),
+            "",
+        );
+
+        assert!(!catalog.register(pack));
+        assert!(catalog.packs.is_empty());
+        assert_eq!(catalog.total_rule_count, 0);
+    }
+
+    #[test]
+    fn catalog_register_rejects_blank_cost_model_id() {
+        let mut catalog = PackCatalog::new("test");
+        let pack = RewritePack::new(
+            "blank-cost-model",
+            PackVersion::CURRENT,
+            test_epoch(),
+            "test pack",
+            vec![test_rule("r1", RewriteCategory::Custom, true)],
+            InterferenceMetadata::build(vec![]),
+            "   ",
         );
 
         assert!(!catalog.register(pack));

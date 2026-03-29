@@ -912,12 +912,16 @@ impl ProofIngestionEngine {
             })?
             .clone();
 
-        let receipt_id = self.derive_receipt_id(&hypothesis, current_ns)?;
-
-        let mut sig_input = Vec::new();
-        sig_input.extend_from_slice(receipt_id.as_bytes());
-        sig_input.extend_from_slice(&current_ns.to_be_bytes());
-        let signature = self.compute_signature(&sig_input);
+        let receipt_preimage = self.specialization_receipt_preimage(
+            &hypothesis,
+            &transformation_witness_hash,
+            &equivalence_evidence_hash,
+            &rollback_token_hash,
+            stage,
+            current_ns,
+        );
+        let receipt_id = self.derive_receipt_id(&receipt_preimage)?;
+        let signature = self.compute_signature(&receipt_preimage);
 
         let receipt = SpecializationReceipt {
             receipt_id: receipt_id.clone(),
@@ -946,19 +950,13 @@ impl ProofIngestionEngine {
     }
 
     /// Derive a deterministic receipt ID.
-    fn derive_receipt_id(
-        &self,
-        hypothesis: &OptimizerHypothesis,
-        current_ns: u64,
-    ) -> Result<EngineObjectId, IngestionError> {
+    fn derive_receipt_id(&self, receipt_preimage: &[u8]) -> Result<EngineObjectId, IngestionError> {
         let schema_id = SchemaId::from_definition(SPECIALIZATION_RECEIPT_SCHEMA_DEF);
-        let mut canonical = hypothesis.hypothesis_id.as_bytes().to_vec();
-        canonical.extend_from_slice(&current_ns.to_be_bytes());
         engine_object_id::derive_id(
             ObjectDomain::PolicyObject,
             PROOF_INGESTION_ZONE,
             &schema_id,
-            &canonical,
+            receipt_preimage,
         )
         .map_err(|e| IngestionError::IdDerivation(e.to_string()))
     }
@@ -973,6 +971,28 @@ impl ProofIngestionEngine {
         input.extend_from_slice(&self.config.signing_key);
         input.extend_from_slice(data);
         ContentHash::compute(&input).as_bytes().to_vec()
+    }
+
+    fn specialization_receipt_preimage(
+        &self,
+        hypothesis: &OptimizerHypothesis,
+        transformation_witness_hash: &ContentHash,
+        equivalence_evidence_hash: &ContentHash,
+        rollback_token_hash: &ContentHash,
+        stage: ActivationStageLocal,
+        current_ns: u64,
+    ) -> Vec<u8> {
+        let optimization_class = hypothesis.optimization_class.to_string();
+        let mut preimage = hypothesis.canonical_bytes();
+        preimage.extend_from_slice(&(optimization_class.len() as u64).to_be_bytes());
+        preimage.extend_from_slice(optimization_class.as_bytes());
+        preimage.extend_from_slice(transformation_witness_hash.as_bytes());
+        preimage.extend_from_slice(equivalence_evidence_hash.as_bytes());
+        preimage.extend_from_slice(rollback_token_hash.as_bytes());
+        preimage.push(stage as u8);
+        preimage.extend_from_slice(&self.current_epoch.as_u64().to_be_bytes());
+        preimage.extend_from_slice(&current_ns.to_be_bytes());
+        preimage
     }
 
     /// Emit an audit event.
@@ -1027,6 +1047,8 @@ pub fn create_proof_input(
     let mut id_bytes = Vec::new();
     id_bytes.push(proof_type as u8);
     id_bytes.extend_from_slice(&proof_epoch.as_u64().to_be_bytes());
+    id_bytes.extend_from_slice(&validity_start_ns.to_be_bytes());
+    id_bytes.extend_from_slice(&validity_end_ns.to_be_bytes());
     id_bytes.extend_from_slice(canonical_hash.as_bytes());
     id_bytes.extend_from_slice(linked_policy_id.as_bytes());
 

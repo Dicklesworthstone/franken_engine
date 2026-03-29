@@ -1193,6 +1193,76 @@ fn external_package_explicit_relative_extension_resolves_outside_bun_compat() {
 }
 
 #[test]
+fn normalized_external_file_referrer_resolves_relative_imports() {
+    let mut resolver = DeterministicModuleResolver::default();
+    resolver
+        .register_external_module(
+            "pkg/entry.cjs",
+            cjs_def("module.exports = require('./sub');"),
+        )
+        .unwrap();
+    resolver
+        .register_external_module("pkg/sub.js", cjs_def("module.exports = 1;"))
+        .unwrap();
+
+    let outcome = resolver
+        .resolve(
+            &ModuleRequest::new("./sub", ImportStyle::Import)
+                .with_referrer("external:pkg/./entry.cjs"),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect("normalized-equivalent external referrer should resolve");
+
+    assert_eq!(outcome.module.canonical_specifier, "pkg/sub.js");
+    assert_eq!(outcome.module.record.id, "external:pkg/sub.js");
+    assert_eq!(
+        outcome.module.probe_sequence,
+        vec!["pkg/sub", "pkg/sub.mjs", "pkg/sub.js"]
+    );
+}
+
+#[test]
+fn canonical_external_referrer_resolves_against_noncanonical_registration_spelling() {
+    let mut resolver = DeterministicModuleResolver::default();
+    resolver
+        .register_external_module(
+            "pkg/./entry.cjs",
+            cjs_def("module.exports = require('./sub');"),
+        )
+        .unwrap();
+    resolver
+        .register_external_module("pkg/sub.js", cjs_def("module.exports = 1;"))
+        .unwrap();
+
+    let entry = resolver
+        .resolve(
+            &ModuleRequest::new("pkg/entry.cjs", ImportStyle::Import),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect("canonical lookup should resolve normalized registration");
+    assert_eq!(entry.module.canonical_specifier, "pkg/entry.cjs");
+    assert_eq!(entry.module.record.id, "external:pkg/entry.cjs");
+
+    let outcome = resolver
+        .resolve(
+            &ModuleRequest::new("./sub", ImportStyle::Import)
+                .with_referrer("external:pkg/entry.cjs"),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect("canonical referrer should resolve against normalized registration");
+
+    assert_eq!(outcome.module.canonical_specifier, "pkg/sub.js");
+    assert_eq!(outcome.module.record.id, "external:pkg/sub.js");
+    assert_eq!(
+        outcome.module.probe_sequence,
+        vec!["pkg/sub", "pkg/sub.mjs", "pkg/sub.js"]
+    );
+}
+
+#[test]
 fn external_package_relative_traversal_cannot_escape_package_root() {
     let mut resolver = DeterministicModuleResolver::default();
     resolver

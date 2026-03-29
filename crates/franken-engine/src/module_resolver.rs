@@ -1146,8 +1146,12 @@ impl DeterministicModuleResolver {
         specifier: impl Into<String>,
         definition: ModuleDefinition,
     ) -> RegistryResult<()> {
-        let specifier = specifier.into();
-        if specifier.trim().is_empty() {
+        let raw_specifier = specifier.into();
+        if raw_specifier.trim().is_empty() {
+            return Err(RegistryError::empty_key());
+        }
+        let specifier = normalize_external_specifier_path(&raw_specifier);
+        if specifier.is_empty() {
             return Err(RegistryError::empty_key());
         }
 
@@ -1210,8 +1214,29 @@ impl DeterministicModuleResolver {
             };
             let allow_probes = self.allow_relative_import_probes(request, referrer);
             if let Some(external_referrer) = referrer.strip_prefix("external:") {
-                let package_root = external_package_root(external_referrer);
-                let base_dir = external_referrer_directory(external_referrer);
+                let normalized_external_referrer =
+                    normalize_external_specifier_path(external_referrer);
+                if external_referrer_must_be_registered(&normalized_external_referrer)
+                    && !self
+                        .external_modules
+                        .contains_key(&normalized_external_referrer)
+                {
+                    return Err(Box::new(
+                        ResolutionError::new(
+                            ResolutionErrorCode::InvalidReferrer,
+                            format!("external referrer '{}' is not registered", referrer),
+                            context,
+                        )
+                        .with_resolution_attempt(
+                            request.specifier.clone(),
+                            None,
+                            None,
+                            probe_sequence.clone(),
+                        ),
+                    ));
+                }
+                let package_root = external_package_root(&normalized_external_referrer);
+                let base_dir = external_referrer_directory(&normalized_external_referrer);
                 let resolved_base =
                     normalize_external_specifier_path(&join_paths(&base_dir, specifier));
                 if !is_within_external_package_root(&package_root, &resolved_base) {
@@ -1429,6 +1454,13 @@ impl DeterministicModuleResolver {
                 context,
             )));
         }
+        if !self.workspace_modules.contains_key(&normalized) {
+            return Err(Box::new(ResolutionError::new(
+                ResolutionErrorCode::InvalidReferrer,
+                format!("workspace referrer '{}' is not registered", referrer),
+                context,
+            )));
+        }
         Ok(parent_directory(&normalized))
     }
 
@@ -1476,9 +1508,10 @@ impl DeterministicModuleResolver {
 
     fn referrer_module_syntax(&self, referrer: &str) -> Option<ModuleSyntax> {
         if let Some(external_referrer) = referrer.strip_prefix("external:") {
+            let normalized_external_referrer = normalize_external_specifier_path(external_referrer);
             return self
                 .external_modules
-                .get(external_referrer)
+                .get(&normalized_external_referrer)
                 .map(|record| record.syntax);
         }
         if let Some(builtin_referrer) = referrer.strip_prefix("builtin:") {
@@ -1745,6 +1778,11 @@ fn is_within_external_package_root(package_root: &str, path: &str) -> bool {
         || path
             .strip_prefix(package_root)
             .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+fn external_referrer_must_be_registered(referrer: &str) -> bool {
+    let normalized = normalize_external_specifier_path(referrer);
+    normalized != external_package_root(&normalized)
 }
 
 fn external_referrer_directory(referrer: &str) -> String {
@@ -2233,6 +2271,24 @@ mod tests {
         assert_eq!(err.code, RegistryErrorCode::EmptyKey);
     }
 
+    #[test]
+    fn register_external_module_normalizes_specifier_and_record_id() {
+        let mut resolver = DeterministicModuleResolver::new("/app");
+        resolver
+            .register_external_module(
+                "pkg/./entry.cjs",
+                ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 1;"),
+            )
+            .expect("noncanonical external specifier should register canonically");
+
+        assert!(!resolver.external_modules.contains_key("pkg/./entry.cjs"));
+        let record = resolver
+            .external_modules
+            .get("pkg/entry.cjs")
+            .expect("normalized external key should be stored");
+        assert_eq!(record.id, "external:pkg/entry.cjs");
+    }
+
     // -----------------------------------------------------------------------
     // Module not found
     // -----------------------------------------------------------------------
@@ -2388,6 +2444,78 @@ mod tests {
             .expect_err("relative from builtin referrer should fail");
         assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
         assert_eq!(error.code.stable_code(), "FE-MODRES-0003");
+    }
+
+    #[test]
+    fn relative_from_unregistered_workspace_referrer_returns_invalid_referrer() {
+        let mut resolver = DeterministicModuleResolver::new("/app");
+        resolver
+            .register_workspace_module(
+                "/app/sub.mjs",
+                ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
+            )
+            .unwrap();
+
+        let request =
+            ModuleRequest::new("./sub.mjs", ImportStyle::Import).with_referrer("/app/missing.mjs");
+        let error = resolver
+            .resolve(&request, &context(), &AllowAllPolicy)
+            .expect_err("relative resolution from missing workspace referrer should fail");
+        assert_eq!(error.code, ResolutionErrorCode::InvalidReferrer);
+        assert!(error.message.contains("not registered"));
+        assert!(error.probe_sequence.is_empty());
+    }
+
+    #[test]
+    fn relative_from_unregistered_external_file_referrer_returns_invalid_referrer() {
+        let mut resolver = DeterministicModuleResolver::new("/repo");
+        resolver
+            .register_external_module(
+                "pkg/sub.mjs",
+                ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
+            )
+            .unwrap();
+
+        let request = ModuleRequest::new("./sub.mjs", ImportStyle::Import)
+            .with_referrer("external:pkg/missing.mjs");
+        let error = resolver
+            .resolve(&request, &context(), &AllowAllPolicy)
+            .expect_err("relative resolution from missing external file referrer should fail");
+        assert_eq!(error.code, ResolutionErrorCode::InvalidReferrer);
+        assert!(error.message.contains("not registered"));
+        assert!(error.probe_sequence.is_empty());
+    }
+
+    #[test]
+    fn normalized_external_file_referrer_resolves_relative_imports() {
+        let mut resolver = DeterministicModuleResolver::new("/repo");
+        resolver
+            .register_external_module(
+                "pkg/entry.cjs",
+                ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = require('./sub');"),
+            )
+            .unwrap();
+        resolver
+            .register_external_module(
+                "pkg/sub.js",
+                ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 1;"),
+            )
+            .unwrap();
+
+        let outcome = resolver
+            .resolve(
+                &ModuleRequest::new("./sub", ImportStyle::Import)
+                    .with_referrer("external:pkg/./entry.cjs"),
+                &context(),
+                &AllowAllPolicy,
+            )
+            .expect("normalized-equivalent external referrer should resolve");
+
+        assert_eq!(outcome.module.canonical_specifier, "pkg/sub.js");
+        assert_eq!(
+            outcome.module.probe_sequence,
+            vec!["pkg/sub", "pkg/sub.mjs", "pkg/sub.js"]
+        );
     }
 
     // -----------------------------------------------------------------------

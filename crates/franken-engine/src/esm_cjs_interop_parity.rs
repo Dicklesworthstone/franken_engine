@@ -333,15 +333,62 @@ pub struct InteropParityInventory {
 impl InteropParityInventory {
     /// Contract is satisfied when all specimens pass and the evidence hashes verify.
     pub fn contract_satisfied(&self) -> bool {
-        self.specimen_count > 0
+        if self.specimen_count == 0 || self.evidence.len() as u64 != self.specimen_count {
+            return false;
+        }
+
+        let Some(summary) = self.computed_summary() else {
+            return false;
+        };
+
+        self.pass_count == summary.pass_count
+            && self.fail_count == summary.fail_count
+            && self.supported_count == summary.supported_count
+            && self.degraded_count == summary.degraded_count
+            && self.unsupported_count == summary.unsupported_count
+            && self.family_coverage == summary.family_coverage
             && self.fail_count == 0
             && self.pass_count == self.specimen_count
-            && self.evidence.len() as u64 == self.specimen_count
-            && self
-                .evidence
-                .iter()
-                .all(|evidence| evidence.verdict == InteropVerdict::Pass && evidence.verify_hash())
+            && self.supported_count + self.degraded_count + self.unsupported_count
+                == self.specimen_count
+            && self.esm_only_count + self.cjs_only_count + self.mixed_count == self.specimen_count
     }
+
+    fn computed_summary(&self) -> Option<InteropInventorySummary> {
+        let mut summary = InteropInventorySummary::default();
+
+        for evidence in &self.evidence {
+            if !evidence.verify_hash() {
+                return None;
+            }
+
+            match evidence.verdict {
+                InteropVerdict::Pass => summary.pass_count += 1,
+                InteropVerdict::Fail => summary.fail_count += 1,
+            }
+            match evidence.compatibility_disposition {
+                InteropCompatibilityDisposition::Supported => summary.supported_count += 1,
+                InteropCompatibilityDisposition::Degraded => summary.degraded_count += 1,
+                InteropCompatibilityDisposition::Unsupported => summary.unsupported_count += 1,
+            }
+            *summary
+                .family_coverage
+                .entry(evidence.family.as_str().to_string())
+                .or_insert(0) += 1;
+        }
+
+        Some(summary)
+    }
+}
+
+#[derive(Debug, Default)]
+struct InteropInventorySummary {
+    pass_count: u64,
+    fail_count: u64,
+    supported_count: u64,
+    degraded_count: u64,
+    unsupported_count: u64,
+    family_coverage: BTreeMap<String, u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1803,6 +1850,12 @@ fn early_return_evidence(
     } else {
         InteropVerdict::Fail
     };
+    let cycle_contract_pass = cycle_count == 0 || specimen.family == InteropFamily::CyclicInterop;
+    let verdict = if verdict == InteropVerdict::Pass && cycle_contract_pass {
+        InteropVerdict::Pass
+    } else {
+        InteropVerdict::Fail
+    };
     let (compatibility_disposition, remediation_guidance) =
         classify_compatibility(specimen, actual_outcome, verdict);
     let mut evidence = InteropSpecimenEvidence {
@@ -2190,8 +2243,14 @@ fn run_single_specimen(specimen: &InteropSpecimen) -> InteropSpecimenEvidence {
     let linked_count_pass = specimen
         .expected_linked_count
         .is_none_or(|expected| expected == linked_count);
+    let cycle_contract_pass = cycle_count == 0 || specimen.family == InteropFamily::CyclicInterop;
 
-    let verdict = if outcome_matches && bindings_pass && async_pass && linked_count_pass {
+    let verdict = if outcome_matches
+        && bindings_pass
+        && async_pass
+        && linked_count_pass
+        && cycle_contract_pass
+    {
         InteropVerdict::Pass
     } else {
         InteropVerdict::Fail
@@ -2487,6 +2546,55 @@ mod tests {
         };
         evidence.evidence_hash = Some(evidence.compute_hash());
         evidence
+    }
+
+    fn synthetic_single_evidence_inventory(
+        evidence: InteropSpecimenEvidence,
+    ) -> InteropParityInventory {
+        let mut family_coverage = BTreeMap::new();
+        family_coverage.insert(evidence.family.as_str().to_string(), 1);
+
+        InteropParityInventory {
+            schema_version: INTEROP_PARITY_SCHEMA_VERSION.to_string(),
+            component: INTEROP_PARITY_COMPONENT.to_string(),
+            specimen_count: 1,
+            pass_count: if evidence.verdict == InteropVerdict::Pass {
+                1
+            } else {
+                0
+            },
+            fail_count: if evidence.verdict == InteropVerdict::Fail {
+                1
+            } else {
+                0
+            },
+            supported_count: if evidence.compatibility_disposition
+                == InteropCompatibilityDisposition::Supported
+            {
+                1
+            } else {
+                0
+            },
+            degraded_count: if evidence.compatibility_disposition
+                == InteropCompatibilityDisposition::Degraded
+            {
+                1
+            } else {
+                0
+            },
+            unsupported_count: if evidence.compatibility_disposition
+                == InteropCompatibilityDisposition::Unsupported
+            {
+                1
+            } else {
+                0
+            },
+            family_coverage,
+            esm_only_count: 0,
+            cjs_only_count: 0,
+            mixed_count: 1,
+            evidence: vec![evidence],
+        }
     }
 
     #[test]
@@ -3302,6 +3410,29 @@ mod tests {
     }
 
     #[test]
+    fn run_single_specimen_unexpected_cycle_detected_fails_outside_cyclic_family() {
+        let mut specimen = interop_parity_corpus()
+            .into_iter()
+            .find(|s| s.specimen_id == "cycle_esm_esm")
+            .unwrap();
+        specimen.specimen_id = "unexpected_cycle_detected_outside_cyclic_family".into();
+        specimen.family = InteropFamily::MixedGraph;
+
+        let evidence = run_single_specimen(&specimen);
+        assert_eq!(evidence.actual_outcome, InteropActualOutcome::CycleDetected);
+        assert!(evidence.cycle_count > 0);
+        assert_eq!(evidence.verdict, InteropVerdict::Fail);
+        assert_eq!(
+            evidence.compatibility_disposition,
+            InteropCompatibilityDisposition::Unsupported
+        );
+        assert_eq!(
+            evidence.remediation_guidance.guidance_code,
+            "interop_contract_violation"
+        );
+    }
+
+    #[test]
     fn run_single_specimen_mixed_cycle_preserves_live_bindings() {
         let specimen = interop_parity_corpus()
             .into_iter()
@@ -3318,6 +3449,30 @@ mod tests {
         );
         assert_eq!(evidence.binding_verdicts.len(), 2);
         assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
+    }
+
+    #[test]
+    fn run_single_specimen_unexpected_success_cycle_fails_outside_cyclic_family() {
+        let mut specimen = interop_parity_corpus()
+            .into_iter()
+            .find(|s| s.specimen_id == "cycle_mixed_esm_cjs")
+            .unwrap();
+        specimen.specimen_id = "unexpected_success_cycle_outside_cyclic_family".into();
+        specimen.family = InteropFamily::MixedGraph;
+
+        let evidence = run_single_specimen(&specimen);
+        assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
+        assert!(evidence.cycle_count > 0);
+        assert_eq!(evidence.compatibility_mode, CompatibilityMode::BunCompat);
+        assert_eq!(evidence.verdict, InteropVerdict::Fail);
+        assert_eq!(
+            evidence.compatibility_disposition,
+            InteropCompatibilityDisposition::Unsupported
+        );
+        assert_eq!(
+            evidence.remediation_guidance.guidance_code,
+            "interop_contract_violation"
+        );
     }
 
     #[test]
@@ -4113,21 +4268,9 @@ mod tests {
 
     #[test]
     fn contract_satisfied_with_all_pass_and_nonzero() {
-        let inv = InteropParityInventory {
-            schema_version: INTEROP_PARITY_SCHEMA_VERSION.to_string(),
-            component: INTEROP_PARITY_COMPONENT.to_string(),
-            specimen_count: 1,
-            pass_count: 1,
-            fail_count: 0,
-            supported_count: 1,
-            degraded_count: 0,
-            unsupported_count: 0,
-            family_coverage: BTreeMap::new(),
-            esm_only_count: 0,
-            cjs_only_count: 0,
-            mixed_count: 1,
-            evidence: vec![synthetic_passing_evidence("contract_satisfied_case")],
-        };
+        let inv = synthetic_single_evidence_inventory(synthetic_passing_evidence(
+            "contract_satisfied_case",
+        ));
         assert!(inv.contract_satisfied());
     }
 
@@ -4135,21 +4278,7 @@ mod tests {
     fn contract_not_satisfied_when_evidence_hash_missing() {
         let mut evidence = synthetic_passing_evidence("missing_hash_case");
         evidence.evidence_hash = None;
-        let inv = InteropParityInventory {
-            schema_version: INTEROP_PARITY_SCHEMA_VERSION.to_string(),
-            component: INTEROP_PARITY_COMPONENT.to_string(),
-            specimen_count: 1,
-            pass_count: 1,
-            fail_count: 0,
-            supported_count: 1,
-            degraded_count: 0,
-            unsupported_count: 0,
-            family_coverage: BTreeMap::new(),
-            esm_only_count: 0,
-            cjs_only_count: 0,
-            mixed_count: 1,
-            evidence: vec![evidence],
-        };
+        let inv = synthetic_single_evidence_inventory(evidence);
         assert!(!inv.contract_satisfied());
     }
 
@@ -4157,21 +4286,32 @@ mod tests {
     fn contract_not_satisfied_when_evidence_hash_mismatches() {
         let mut evidence = synthetic_passing_evidence("tampered_hash_case");
         evidence.evidence_hash = Some("0".repeat(64));
-        let inv = InteropParityInventory {
-            schema_version: INTEROP_PARITY_SCHEMA_VERSION.to_string(),
-            component: INTEROP_PARITY_COMPONENT.to_string(),
-            specimen_count: 1,
-            pass_count: 1,
-            fail_count: 0,
-            supported_count: 1,
-            degraded_count: 0,
-            unsupported_count: 0,
-            family_coverage: BTreeMap::new(),
-            esm_only_count: 0,
-            cjs_only_count: 0,
-            mixed_count: 1,
-            evidence: vec![evidence],
-        };
+        let inv = synthetic_single_evidence_inventory(evidence);
+        assert!(!inv.contract_satisfied());
+    }
+
+    #[test]
+    fn contract_not_satisfied_when_disposition_counts_drift_from_evidence() {
+        let evidence = synthetic_passing_evidence("disposition_drift_case");
+        let mut inv = synthetic_single_evidence_inventory(evidence);
+        inv.supported_count = 0;
+        inv.unsupported_count = 1;
+        assert!(!inv.contract_satisfied());
+    }
+
+    #[test]
+    fn contract_not_satisfied_when_family_coverage_drifts_from_evidence() {
+        let evidence = synthetic_passing_evidence("family_coverage_drift_case");
+        let mut inv = synthetic_single_evidence_inventory(evidence);
+        inv.family_coverage = BTreeMap::from([("esm_only".to_string(), 1)]);
+        assert!(!inv.contract_satisfied());
+    }
+
+    #[test]
+    fn contract_not_satisfied_when_syntax_partition_counts_do_not_sum_to_specimens() {
+        let evidence = synthetic_passing_evidence("syntax_partition_drift_case");
+        let mut inv = synthetic_single_evidence_inventory(evidence);
+        inv.mixed_count = 0;
         assert!(!inv.contract_satisfied());
     }
 

@@ -482,6 +482,50 @@ fn corpus_inventory_carries_external_package_root_relative_requires_in_all_modes
     assert_eq!(actual, expected);
 }
 
+#[test]
+fn corpus_inventory_carries_scoped_extensionless_relative_imports_in_all_modes() {
+    let inventory = run_interop_parity_corpus();
+    let exact_specimen_ids = BTreeSet::from([
+        "scoped_package_type_module_extensionless_relative_native",
+        "scoped_package_type_module_extensionless_relative_node_compat",
+        "scoped_package_type_module_extensionless_relative_bun_compat",
+    ]);
+    let actual: BTreeSet<(String, String, String, String)> = inventory
+        .evidence
+        .iter()
+        .filter(|evidence| exact_specimen_ids.contains(evidence.specimen_id.as_str()))
+        .map(|evidence| {
+            (
+                evidence.specimen_id.clone(),
+                evidence.compatibility_mode.as_str().to_string(),
+                format!("{:?}", evidence.actual_outcome),
+                evidence.compatibility_disposition.as_str().to_string(),
+            )
+        })
+        .collect();
+    let expected = BTreeSet::from([
+        (
+            "scoped_package_type_module_extensionless_relative_native".to_string(),
+            "native".to_string(),
+            "LinkFailure".to_string(),
+            "unsupported".to_string(),
+        ),
+        (
+            "scoped_package_type_module_extensionless_relative_node_compat".to_string(),
+            "node_compat".to_string(),
+            "LinkFailure".to_string(),
+            "unsupported".to_string(),
+        ),
+        (
+            "scoped_package_type_module_extensionless_relative_bun_compat".to_string(),
+            "bun_compat".to_string(),
+            "Success".to_string(),
+            "supported".to_string(),
+        ),
+    ]);
+    assert_eq!(actual, expected);
+}
+
 // ── Inventory serde ─────────────────────────────────────────────────────
 
 #[test]

@@ -19,6 +19,29 @@ use frankenengine_engine::module_live_binding::BindingCellState;
 use frankenengine_engine::module_resolver::ModuleSyntax;
 use std::collections::BTreeSet;
 
+fn assert_remediation_guidance(
+    evidence: &InteropSpecimenEvidence,
+    expected_guidance_code: &str,
+    expected_message_fragment: &str,
+) {
+    assert_eq!(
+        evidence.remediation_guidance.guidance_code,
+        expected_guidance_code
+    );
+    assert!(
+        evidence
+            .remediation_guidance
+            .message
+            .contains(evidence.specimen_id.as_str())
+    );
+    assert!(
+        evidence
+            .remediation_guidance
+            .message
+            .contains(expected_message_fragment)
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Corpus invariants
 // ---------------------------------------------------------------------------
@@ -488,6 +511,11 @@ fn inventory_distinguishes_native_node_compat_and_bun_compat_extensionless_relat
             .as_deref()
             .is_some_and(|detail| detail.contains("unable to resolve relative specifier './sub'"))
     );
+    assert_remediation_guidance(
+        native,
+        "repair_link_boundary",
+        "align exports/imports or replace the boundary with an explicit shim before retrying",
+    );
 
     let node_compat = inv
         .evidence
@@ -513,6 +541,11 @@ fn inventory_distinguishes_native_node_compat_and_bun_compat_extensionless_relat
             .as_deref()
             .is_some_and(|detail| detail.contains("unable to resolve relative specifier './sub'"))
     );
+    assert_remediation_guidance(
+        node_compat,
+        "repair_link_boundary",
+        "align exports/imports or replace the boundary with an explicit shim before retrying",
+    );
 
     let bun_compat = inv
         .evidence
@@ -533,6 +566,11 @@ fn inventory_distinguishes_native_node_compat_and_bun_compat_extensionless_relat
             .binding_verdicts
             .iter()
             .all(|verdict| verdict.pass)
+    );
+    assert_remediation_guidance(
+        bun_compat,
+        "no_remediation_required",
+        "no mitigation is required",
     );
 }
 
@@ -558,6 +596,11 @@ fn inventory_distinguishes_scoped_native_node_compat_and_bun_compat_extensionles
             .error_detail
             .as_deref()
             .is_some_and(|detail| detail.contains("unable to resolve relative specifier './sub'"))
+    );
+    assert_remediation_guidance(
+        native,
+        "repair_link_boundary",
+        "align exports/imports or replace the boundary with an explicit shim before retrying",
     );
 
     let node_compat = inv
@@ -586,6 +629,11 @@ fn inventory_distinguishes_scoped_native_node_compat_and_bun_compat_extensionles
             .as_deref()
             .is_some_and(|detail| detail.contains("unable to resolve relative specifier './sub'"))
     );
+    assert_remediation_guidance(
+        node_compat,
+        "repair_link_boundary",
+        "align exports/imports or replace the boundary with an explicit shim before retrying",
+    );
 
     let bun_compat = inv
         .evidence
@@ -606,6 +654,11 @@ fn inventory_distinguishes_scoped_native_node_compat_and_bun_compat_extensionles
             .binding_verdicts
             .iter()
             .all(|verdict| verdict.pass)
+    );
+    assert_remediation_guidance(
+        bun_compat,
+        "no_remediation_required",
+        "no mitigation is required",
     );
 }
 
@@ -655,6 +708,11 @@ fn inventory_marks_external_extension_probe_package_root_relative_requires_as_su
         );
         assert!(evidence.error_detail.is_none());
         assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
+        assert_remediation_guidance(
+            evidence,
+            "no_remediation_required",
+            "no mitigation is required",
+        );
     }
 }
 

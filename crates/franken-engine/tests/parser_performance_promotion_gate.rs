@@ -588,6 +588,10 @@ fn parser_performance_gate_script_uses_repo_local_target_dir_and_step_logs() {
         script.contains("cat ${step_logs_dir}/step_000.log"),
         "operator verification should include a retained step log"
     );
+    assert!(
+        script.contains("PARSER_PERFORMANCE_PROMOTION_GATE_REPLAY_RUN_DIR=\"${run_dir}\""),
+        "gate script should emit an exact preserved-bundle replay command"
+    );
 }
 
 #[test]

@@ -1,0 +1,151 @@
+{
+  "schema_version": "franken-engine.rgc-npm-compatibility-matrix-contract.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-1lsy.5.4",
+  "track_id": "RGC-404",
+  "policy_id": "policy-rgc-404-npm-compatibility-v1",
+  "scenario_id": "rgc-404-npm-compatibility-matrix",
+  "generated_at_utc": "2026-03-28T05:30:00Z",
+  "audited_inputs": [
+    "README.md",
+    "docs/RGC_NPM_COMPATIBILITY_MATRIX_V1.md",
+    "docs/rgc_npm_compatibility_matrix_v1.json",
+    "crates/franken-engine/src/npm_compatibility_matrix.rs",
+    "crates/franken-engine/src/bin/franken_npm_compatibility_matrix.rs",
+    "crates/franken-engine/tests/npm_compatibility_matrix_cli.rs",
+    "crates/franken-engine/tests/npm_compatibility_matrix_enrichment_integration.rs",
+    "scripts/run_rgc_npm_compatibility_matrix.sh",
+    "scripts/e2e/rgc_npm_compatibility_matrix_replay.sh"
+  ],
+  "required_readme_fragments": [
+    "## RGC NPM Compatibility Matrix Gate",
+    "./scripts/run_rgc_npm_compatibility_matrix.sh ci",
+    "RGC_NPM_COMPATIBILITY_MATRIX_REPLAY_RUN_DIR=artifacts/...",
+    "latest complete run directory",
+    "docs/rgc_npm_compatibility_matrix_v1.json",
+    "artifacts/rgc_npm_compatibility_matrix/<timestamp>/npm_compat_matrix_report.json",
+    "artifacts/rgc_npm_compatibility_matrix/<timestamp>/trace_ids.json",
+    "artifacts/rgc_npm_compatibility_matrix/<timestamp>/run_manifest.json",
+    "artifacts/rgc_npm_compatibility_matrix/<timestamp>/events.jsonl",
+    "artifacts/rgc_npm_compatibility_matrix/<timestamp>/commands.txt",
+    "jq '.unresolved_failures' artifacts/rgc_npm_compatibility_matrix/<timestamp>/npm_compat_matrix_report.json"
+  ],
+  "required_doc_fragments": [
+    "# RGC NPM Compatibility Matrix V1",
+    "`tier_1_critical`",
+    "`tier_2_popular`",
+    "`tier_3_long_tail`",
+    "`compatible`",
+    "`partially_compatible`",
+    "`incompatible`",
+    "`skipped`",
+    "`untested`",
+    "`all_cohorts_unblocked`",
+    "`partially_unblocked`",
+    "`blocked`",
+    "`insufficient_data`",
+    "franken_npm_compatibility_matrix --out-dir <DIR>",
+    "./scripts/run_rgc_npm_compatibility_matrix.sh ci",
+    "./scripts/e2e/rgc_npm_compatibility_matrix_replay.sh ci",
+    "latest complete run directory",
+    "fails closed on incomplete explicit run directories",
+    "`npm_compat_matrix_report.json`",
+    "`trace_ids.json`",
+    "`run_manifest.json`",
+    "`events.jsonl`",
+    "`commands.txt`",
+    "`cohort_summaries`",
+    "`root_cause_distribution`",
+    "`top_blockers`",
+    "`packages`",
+    "`unresolved_failures`"
+  ],
+  "source_fragment_checks": [
+    {
+      "path": "crates/franken-engine/src/npm_compatibility_matrix.rs",
+      "fragment": "pub const SCHEMA_VERSION: &str = \"franken-engine.npm-compatibility-matrix.v1\";"
+    },
+    {
+      "path": "crates/franken-engine/src/npm_compatibility_matrix.rs",
+      "fragment": "pub const BEAD_ID: &str = \"bd-1lsy.5.4\";"
+    },
+    {
+      "path": "crates/franken-engine/src/npm_compatibility_matrix.rs",
+      "fragment": "pub enum MatrixVerdict {"
+    },
+    {
+      "path": "crates/franken-engine/src/npm_compatibility_matrix.rs",
+      "fragment": "Self::AllCohortsUnblocked => \"all_cohorts_unblocked\""
+    },
+    {
+      "path": "crates/franken-engine/src/bin/franken_npm_compatibility_matrix.rs",
+      "fragment": "const POLICY_ID: &str = \"policy-rgc-404-npm-compatibility-v1\";"
+    },
+    {
+      "path": "crates/franken-engine/src/bin/franken_npm_compatibility_matrix.rs",
+      "fragment": "const SCENARIO_ID: &str = \"rgc-404-npm-compatibility-matrix\";"
+    },
+    {
+      "path": "crates/franken-engine/src/bin/franken_npm_compatibility_matrix.rs",
+      "fragment": "Usage: franken_npm_compatibility_matrix --out-dir <DIR>"
+    },
+    {
+      "path": "scripts/run_rgc_npm_compatibility_matrix.sh",
+      "fragment": "replay_command=\"RGC_NPM_COMPATIBILITY_MATRIX_REPLAY_RUN_DIR=${run_dir} ./scripts/e2e/rgc_npm_compatibility_matrix_replay.sh\""
+    },
+    {
+      "path": "scripts/run_rgc_npm_compatibility_matrix.sh",
+      "fragment": "run_dir_is_complete()"
+    },
+    {
+      "path": "scripts/e2e/rgc_npm_compatibility_matrix_replay.sh",
+      "fragment": "latest_complete_run_dir()"
+    },
+    {
+      "path": "scripts/e2e/rgc_npm_compatibility_matrix_replay.sh",
+      "fragment": "explicit run directory is incomplete"
+    }
+  ],
+  "cohort_tiers": [
+    "tier_1_critical",
+    "tier_2_popular",
+    "tier_3_long_tail"
+  ],
+  "package_outcomes": [
+    "compatible",
+    "partially_compatible",
+    "incompatible",
+    "skipped",
+    "untested"
+  ],
+  "verdicts": [
+    "all_cohorts_unblocked",
+    "partially_unblocked",
+    "blocked",
+    "insufficient_data"
+  ],
+  "required_artifacts": [
+    "npm_compat_matrix_report.json",
+    "trace_ids.json",
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt"
+  ],
+  "gate_runner": {
+    "script": "scripts/run_rgc_npm_compatibility_matrix.sh",
+    "replay_wrapper": "scripts/e2e/rgc_npm_compatibility_matrix_replay.sh",
+    "strict_mode": "ci",
+    "manifest_schema_version": "franken-engine.npm_compatibility_matrix.run_manifest.v1"
+  },
+  "operator_verification": [
+    "jq empty docs/rgc_npm_compatibility_matrix_v1.json",
+    "./scripts/run_rgc_npm_compatibility_matrix.sh ci",
+    "cat artifacts/rgc_npm_compatibility_matrix/<UTC_TIMESTAMP>/npm_compat_matrix_report.json",
+    "cat artifacts/rgc_npm_compatibility_matrix/<UTC_TIMESTAMP>/trace_ids.json",
+    "cat artifacts/rgc_npm_compatibility_matrix/<UTC_TIMESTAMP>/run_manifest.json",
+    "cat artifacts/rgc_npm_compatibility_matrix/<UTC_TIMESTAMP>/events.jsonl",
+    "cat artifacts/rgc_npm_compatibility_matrix/<UTC_TIMESTAMP>/commands.txt",
+    "jq '.unresolved_failures' artifacts/rgc_npm_compatibility_matrix/<UTC_TIMESTAMP>/npm_compat_matrix_report.json",
+    "RGC_NPM_COMPATIBILITY_MATRIX_REPLAY_RUN_DIR=artifacts/rgc_npm_compatibility_matrix/<UTC_TIMESTAMP> ./scripts/e2e/rgc_npm_compatibility_matrix_replay.sh ci"
+  ]
+}

@@ -26,7 +26,7 @@ trace_id="trace-parser-performance-promotion-gate-${timestamp}"
 decision_id="decision-parser-performance-promotion-gate-${timestamp}"
 policy_id="policy-parser-performance-promotion-gate-v1"
 component="parser_performance_promotion_gate"
-replay_command="./scripts/e2e/parser_performance_promotion_gate_replay.sh ${mode}"
+replay_command="PARSER_PERFORMANCE_PROMOTION_GATE_REPLAY_RUN_DIR=\"${run_dir}\" ./scripts/e2e/parser_performance_promotion_gate_replay.sh ${mode}"
 
 mkdir -p "$run_dir" "$step_logs_dir"
 

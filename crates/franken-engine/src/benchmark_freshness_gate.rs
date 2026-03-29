@@ -835,6 +835,12 @@ impl SilenceTracker {
 
     /// Record a signal (alarm or acquisition evidence).
     pub fn record_signal(&mut self, epoch: SecurityEpoch) {
+        if self
+            .last_signal_epoch
+            .is_some_and(|last| epoch.as_u64() < last.as_u64())
+        {
+            return;
+        }
         self.last_signal_epoch = Some(epoch);
         self.silence_exceeded = false;
         self.silent_epochs = 0;
@@ -989,6 +995,8 @@ impl FreshnessGate {
         self.current_epoch = epoch;
         self.alarm_ledger
             .prune_stale(epoch, self.config.max_alarm_age_epochs);
+        self.silence_tracker
+            .check_silence(epoch, self.config.silence_timeout_epochs);
     }
 
     /// Record a new shift alarm.
@@ -1101,6 +1109,8 @@ impl FreshnessGate {
     /// Evaluate a single claim.
     pub fn evaluate_claim(&mut self, claim: &BenchmarkClaim) -> FreshnessVerdict {
         self.total_evaluations += 1;
+        self.silence_tracker
+            .check_silence(self.current_epoch, self.config.silence_timeout_epochs);
 
         let freshness = self.determine_freshness(&claim.dependent_domains);
         let multiplier = freshness.confidence_multiplier();
@@ -1856,6 +1866,19 @@ mod tests {
     }
 
     #[test]
+    fn test_silence_tracker_ignores_regressive_signal_epochs() {
+        let mut tracker = SilenceTracker::new();
+        tracker.record_signal(epoch(10));
+        assert!(tracker.check_silence(epoch(100), 50));
+
+        tracker.record_signal(epoch(9));
+
+        assert_eq!(tracker.last_signal_epoch, Some(epoch(10)));
+        assert!(tracker.silence_exceeded);
+        assert_eq!(tracker.silent_epochs, 90);
+    }
+
+    #[test]
     fn test_silence_tracker_no_signal_timeout() {
         let mut tracker = SilenceTracker::new();
         assert!(tracker.check_silence(epoch(100), 50));
@@ -2003,6 +2026,17 @@ mod tests {
         ));
         gate.advance_epoch(epoch(200));
         assert_eq!(gate.alarm_ledger.active_count(), 0);
+    }
+
+    #[test]
+    fn test_gate_advance_epoch_refreshes_silence_state() {
+        let mut gate = FreshnessGate::new(epoch(10));
+        gate.silence_tracker.record_signal(epoch(10));
+
+        gate.advance_epoch(epoch(61));
+
+        assert!(gate.silence_tracker.silence_exceeded);
+        assert_eq!(gate.silence_tracker.silent_epochs, 51);
     }
 
     #[test]

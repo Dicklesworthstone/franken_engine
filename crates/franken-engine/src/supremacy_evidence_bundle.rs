@@ -761,13 +761,20 @@ fn compute_bundle_hash(
     h.update(bundle_id.as_bytes());
     h.update(creation_epoch.as_u64().to_le_bytes());
     h.update((cells.len() as u64).to_le_bytes());
-    for cell in cells {
+    let mut sorted_cells: Vec<_> = cells.iter().collect();
+    sorted_cells.sort_by(|a, b| a.cell_id.cmp(&b.cell_id));
+    for cell in &sorted_cells {
         h.update(cell.cell_id.as_bytes());
         h.update(cell.status.as_str().as_bytes());
         h.update(cell.verdict_hash.as_bytes());
     }
     h.update(verdict.tag().as_bytes());
     h.update(coverage_stats.coverage_fraction_millionths.to_le_bytes());
+    h.update((coverage_stats.total_cells as u64).to_le_bytes());
+    h.update((coverage_stats.green_count as u64).to_le_bytes());
+    h.update((coverage_stats.red_count as u64).to_le_bytes());
+    h.update((coverage_stats.yellow_count as u64).to_le_bytes());
+    h.update((coverage_stats.missing_count as u64).to_le_bytes());
     ContentHash::compute(&h.finalize())
 }
 

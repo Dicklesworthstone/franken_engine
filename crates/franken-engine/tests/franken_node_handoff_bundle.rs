@@ -352,6 +352,34 @@ fn rgc_408c_runner_script_requires_rch_repo_local_targets_and_handoff_outputs() 
 }
 
 #[test]
+fn rgc_408c_runner_prefers_latest_complete_support_surface_artifact_bundle() {
+    let script = load_runner_script();
+
+    for snippet in [
+        "support_surface_artifact_dir_is_complete()",
+        "[[ -f \"${candidate}/run_manifest.json\" ]] || return 1",
+        "[[ -f \"${candidate}/trace_ids.json\" ]] || return 1",
+        "[[ -f \"${candidate}/events.jsonl\" ]] || return 1",
+        "[[ -f \"${candidate}/commands.txt\" ]] || return 1",
+        "[[ -f \"${candidate}/support_surface_schema_report.json\" ]] || return 1",
+        "[[ -f \"${candidate}/summary.md\" ]] || return 1",
+        "[[ -f \"${candidate}/support_surface_contract.json\" ]] || return 1",
+        "[[ -f \"${candidate}/support_surface_mode_matrix.json\" ]] || return 1",
+        "[[ -f \"${candidate}/step_logs/step_000.log\" ]] || return 1",
+        "latest_complete_support_contract_artifact()",
+        "support_surface_artifact_dir_is_complete \"${candidate}\" || continue",
+        "printf '%s\\n' \"${candidate}/support_surface_contract.json\"",
+        "latest=\"$(latest_complete_support_contract_artifact || true)\"",
+        "printf '%s\\n' \"${root_dir}/docs/support_surface_contract.json\"",
+    ] {
+        assert!(
+            script.contains(snippet),
+            "runner script missing complete support-artifact selection snippet: {snippet}"
+        );
+    }
+}
+
+#[test]
 fn rgc_408c_runner_script_enforces_split_contract_and_support_delegation_checks() {
     let script = load_runner_script();
 

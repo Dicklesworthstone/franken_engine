@@ -86,14 +86,30 @@ if ! command -v rch >/dev/null 2>&1; then
   exit 2
 fi
 
-latest_support_contract_artifact() {
+support_surface_artifact_dir_is_complete() {
+  local candidate="${1:-}"
+  [[ -n "${candidate}" ]] || return 1
+  [[ -f "${candidate}/run_manifest.json" ]] || return 1
+  [[ -f "${candidate}/trace_ids.json" ]] || return 1
+  [[ -f "${candidate}/events.jsonl" ]] || return 1
+  [[ -f "${candidate}/commands.txt" ]] || return 1
+  [[ -f "${candidate}/support_surface_schema_report.json" ]] || return 1
+  [[ -f "${candidate}/summary.md" ]] || return 1
+  [[ -f "${candidate}/support_surface_contract.json" ]] || return 1
+  [[ -f "${candidate}/support_surface_mode_matrix.json" ]] || return 1
+  [[ -f "${candidate}/step_logs/step_000.log" ]] || return 1
+}
+
+latest_complete_support_contract_artifact() {
   if [[ ! -d "${root_dir}/artifacts/rgc_support_surface_contract" ]]; then
     return 0
   fi
 
   find "${root_dir}/artifacts/rgc_support_surface_contract" \
-    -mindepth 2 -maxdepth 2 -type f -name 'support_surface_contract.json' \
-    | sort | tail -n 1
+    -mindepth 1 -maxdepth 1 -type d | sort | while IFS= read -r candidate; do
+    support_surface_artifact_dir_is_complete "${candidate}" || continue
+    printf '%s\n' "${candidate}/support_surface_contract.json"
+  done | tail -n 1
 }
 
 latest_blocker_ledger_artifact() {
@@ -112,7 +128,7 @@ resolve_support_contract_path() {
   fi
 
   local latest
-  latest="$(latest_support_contract_artifact || true)"
+  latest="$(latest_complete_support_contract_artifact || true)"
   if [[ -n "$latest" ]]; then
     printf '%s\n' "$latest"
     return

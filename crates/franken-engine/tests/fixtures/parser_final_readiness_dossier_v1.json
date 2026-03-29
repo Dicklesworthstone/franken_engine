@@ -17,10 +17,13 @@
     "replay_command"
   ],
   "blocked_dependency_ids": [
+    "bd-2mds.1.7.4",
     "bd-2mds.1.8.2",
     "bd-2mds.1.8.3",
-    "bd-2mds.1.7.4",
-    "bd-2mds.1.10.4"
+    "bd-2mds.1.9.4",
+    "bd-2mds.1.9.5.2",
+    "bd-2mds.1.10.4",
+    "bd-2mds.1.10.5.2"
   ],
   "gating_policy": {
     "minimum_passed_verifiers": 2,
@@ -53,11 +56,32 @@
       "replay_command": "./scripts/run_parser_cross_arch_repro_matrix.sh ci"
     },
     {
+      "evidence_id": "ci_quality_gates_psrp_09_4",
+      "status": "pass",
+      "required": true,
+      "manifest_path": "artifacts/parser_ci_quality_gates/20260226T002616Z/run_manifest.json",
+      "replay_command": "./scripts/run_parser_ci_quality_gates.sh ci"
+    },
+    {
+      "evidence_id": "evidence_indexer_psrp_09_5_2",
+      "status": "pass",
+      "required": true,
+      "manifest_path": "artifacts/parser_evidence_indexer/20260225T103346Z/run_manifest.json",
+      "replay_command": "./scripts/run_parser_evidence_indexer.sh ci"
+    },
+    {
       "evidence_id": "operator_runbook_psrp_10_4",
       "status": "in_progress",
       "required": true,
       "manifest_path": "artifacts/parser_operator_developer_runbook/pending/run_manifest.json",
       "replay_command": "./scripts/run_parser_operator_developer_runbook.sh ci"
+    },
+    {
+      "evidence_id": "user_impact_guardrails_psrp_10_5_2",
+      "status": "pass",
+      "required": true,
+      "manifest_path": "artifacts/parser_user_impact_regression_alarms/20260226T031744Z/run_manifest.json",
+      "replay_command": "./scripts/run_parser_user_impact_regression_alarms.sh ci"
     },
     {
       "evidence_id": "supremacy_contract_psrp_08_1",

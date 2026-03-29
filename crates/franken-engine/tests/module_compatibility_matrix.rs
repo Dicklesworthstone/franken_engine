@@ -402,6 +402,27 @@ fn default_matrix_round_trip_preserves_required_readme_fragments() {
 }
 
 #[test]
+fn default_matrix_extensionless_relative_case_mentions_scoped_lockstep_ref() {
+    let matrix = ModuleCompatibilityMatrix::from_default_json().expect("load default matrix");
+    let entry = matrix
+        .entry("package-type-module-extensionless-relative")
+        .expect("default matrix should include extensionless-relative case");
+
+    assert!(
+        entry
+            .lockstep_case_refs
+            .contains(&"lockstep/module/package-type-module-extensionless-relative".to_string()),
+        "default matrix must retain the unscoped extensionless-relative lockstep ref"
+    );
+    assert!(
+        entry.lockstep_case_refs.contains(
+            &"lockstep/module/scoped-package-type-module-extensionless-relative".to_string()
+        ),
+        "default matrix must pin the scoped extensionless-relative lockstep ref"
+    );
+}
+
+#[test]
 fn readme_documents_module_interop_matrix_gate_contract() {
     let readme = normalize_whitespace(&load_readme());
     for fragment in default_matrix_required_readme_fragments() {

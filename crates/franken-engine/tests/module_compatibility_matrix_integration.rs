@@ -21,7 +21,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use frankenengine_engine::esm_cjs_interop_parity::{
-    InteropActualOutcome, InteropCompatibilityDisposition, run_interop_parity_corpus,
+    InteropActualOutcome, InteropCompatibilityDisposition, InteropVerdict,
+    run_interop_parity_corpus,
 };
 use frankenengine_engine::module_compatibility_matrix::{
     COMPATIBILITY_SCENARIO_REPORT_SCHEMA_VERSION, CompatibilityContext, CompatibilityMatrixEntry,
@@ -50,6 +51,18 @@ fn read_to_string(path: &Path) -> String {
 fn read_interop_gate_script() -> String {
     let path = repo_root().join("scripts/run_rgc_module_interop_verification_matrix.sh");
     read_to_string(&path)
+}
+
+fn assert_remediation_guidance(
+    specimen_id: &str,
+    guidance_code: &str,
+    expected_guidance_code: &str,
+    guidance_message: &str,
+    expected_message_fragment: &str,
+) {
+    assert_eq!(guidance_code, expected_guidance_code);
+    assert!(guidance_message.contains(specimen_id));
+    assert!(guidance_message.contains(expected_message_fragment));
 }
 
 fn base_entry(case_id: &str) -> CompatibilityMatrixEntry {
@@ -1455,6 +1468,9 @@ fn default_matrix_pins_extensionless_relative_esm_contract() {
             .lockstep_case_refs
             .contains(&"lockstep/module/package-type-module-extensionless-relative".to_string())
     );
+    assert!(entry.lockstep_case_refs.contains(
+        &"lockstep/module/scoped-package-type-module-extensionless-relative".to_string()
+    ));
 }
 
 #[test]
@@ -1593,42 +1609,68 @@ fn extensionless_relative_interop_evidence_matches_matrix_contract_across_modes(
     m.validate_with_waivers(&required, &ctx()).unwrap();
 
     let inventory = run_interop_parity_corpus();
-    for (specimen_id, mode, expected_outcome, expected_behavior) in [
+    for (
+        specimen_id,
+        mode,
+        expected_outcome,
+        expected_behavior,
+        expected_disposition,
+        expected_guidance_code,
+        expected_message_fragment,
+    ) in [
         (
             "package_type_module_extensionless_relative_native",
             CompatibilityMode::Native,
             InteropActualOutcome::LinkFailure,
             "reject_extensionless_relative",
+            InteropCompatibilityDisposition::Unsupported,
+            "repair_link_boundary",
+            "align exports/imports or replace the boundary with an explicit shim before retrying",
         ),
         (
             "package_type_module_extensionless_relative_node_compat",
             CompatibilityMode::NodeCompat,
             InteropActualOutcome::LinkFailure,
             "reject_extensionless_relative",
+            InteropCompatibilityDisposition::Unsupported,
+            "repair_link_boundary",
+            "align exports/imports or replace the boundary with an explicit shim before retrying",
         ),
         (
             "package_type_module_extensionless_relative_bun_compat",
             CompatibilityMode::BunCompat,
             InteropActualOutcome::Success,
             "resolve_extensionless_relative",
+            InteropCompatibilityDisposition::Supported,
+            "no_remediation_required",
+            "no mitigation is required",
         ),
         (
             "scoped_package_type_module_extensionless_relative_native",
             CompatibilityMode::Native,
             InteropActualOutcome::LinkFailure,
             "reject_extensionless_relative",
+            InteropCompatibilityDisposition::Unsupported,
+            "repair_link_boundary",
+            "align exports/imports or replace the boundary with an explicit shim before retrying",
         ),
         (
             "scoped_package_type_module_extensionless_relative_node_compat",
             CompatibilityMode::NodeCompat,
             InteropActualOutcome::LinkFailure,
             "reject_extensionless_relative",
+            InteropCompatibilityDisposition::Unsupported,
+            "repair_link_boundary",
+            "align exports/imports or replace the boundary with an explicit shim before retrying",
         ),
         (
             "scoped_package_type_module_extensionless_relative_bun_compat",
             CompatibilityMode::BunCompat,
             InteropActualOutcome::Success,
             "resolve_extensionless_relative",
+            InteropCompatibilityDisposition::Supported,
+            "no_remediation_required",
+            "no mitigation is required",
         ),
     ] {
         let evidence = inventory
@@ -1640,6 +1682,15 @@ fn extensionless_relative_interop_evidence_matches_matrix_contract_across_modes(
             });
         assert_eq!(evidence.compatibility_mode, mode);
         assert_eq!(evidence.actual_outcome, expected_outcome);
+        assert_eq!(evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(evidence.compatibility_disposition, expected_disposition);
+        assert_remediation_guidance(
+            specimen_id,
+            evidence.remediation_guidance.guidance_code.as_str(),
+            expected_guidance_code,
+            evidence.remediation_guidance.message.as_str(),
+            expected_message_fragment,
+        );
 
         let outcome = m
             .evaluate_observation(
@@ -1680,12 +1731,21 @@ fn default_and_namespace_cjs_projection_evidence_match_matrix_contract() {
             });
         assert_eq!(evidence.compatibility_mode, CompatibilityMode::Native);
         assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
+        assert_eq!(evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(evidence.linked_count, 2);
         assert_eq!(
             evidence.compatibility_disposition,
             InteropCompatibilityDisposition::Supported
         );
         assert!(evidence.error_detail.is_none());
         assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
+        assert_remediation_guidance(
+            specimen_id,
+            evidence.remediation_guidance.guidance_code.as_str(),
+            "no_remediation_required",
+            evidence.remediation_guidance.message.as_str(),
+            "no mitigation is required",
+        );
 
         let outcome = m
             .evaluate_observation(
@@ -1716,30 +1776,42 @@ fn external_package_root_require_evidence_matches_matrix_contract_across_modes()
     m.validate_with_waivers(&required, &ctx()).unwrap();
 
     let inventory = run_interop_parity_corpus();
-    for (specimen_id, mode) in [
+    for (specimen_id, mode, expected_guidance_code, expected_message_fragment) in [
         (
             "external_extension_probe_package_root_require_native",
             CompatibilityMode::Native,
+            "no_remediation_required",
+            "no mitigation is required",
         ),
         (
             "external_extension_probe_package_root_require_node_compat",
             CompatibilityMode::NodeCompat,
+            "no_remediation_required",
+            "no mitigation is required",
         ),
         (
             "external_extension_probe_package_root_require_bun_compat",
             CompatibilityMode::BunCompat,
+            "no_remediation_required",
+            "no mitigation is required",
         ),
         (
             "scoped_external_extension_probe_package_root_require_native",
             CompatibilityMode::Native,
+            "no_remediation_required",
+            "no mitigation is required",
         ),
         (
             "scoped_external_extension_probe_package_root_require_node_compat",
             CompatibilityMode::NodeCompat,
+            "no_remediation_required",
+            "no mitigation is required",
         ),
         (
             "scoped_external_extension_probe_package_root_require_bun_compat",
             CompatibilityMode::BunCompat,
+            "no_remediation_required",
+            "no mitigation is required",
         ),
     ] {
         let evidence = inventory
@@ -1751,6 +1823,7 @@ fn external_package_root_require_evidence_matches_matrix_contract_across_modes()
             });
         assert_eq!(evidence.compatibility_mode, mode);
         assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
+        assert_eq!(evidence.verdict, InteropVerdict::Pass);
         assert_eq!(
             evidence.compatibility_disposition,
             InteropCompatibilityDisposition::Supported
@@ -1758,6 +1831,13 @@ fn external_package_root_require_evidence_matches_matrix_contract_across_modes()
         assert_eq!(evidence.linked_count, 3);
         assert!(evidence.error_detail.is_none());
         assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
+        assert_remediation_guidance(
+            specimen_id,
+            evidence.remediation_guidance.guidance_code.as_str(),
+            expected_guidance_code,
+            evidence.remediation_guidance.message.as_str(),
+            expected_message_fragment,
+        );
 
         let outcome = m
             .evaluate_observation(

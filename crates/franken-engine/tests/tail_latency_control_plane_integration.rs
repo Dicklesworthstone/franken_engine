@@ -31,6 +31,16 @@ fn unique_dir(label: &str) -> PathBuf {
     ))
 }
 
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn load_runner_script() -> String {
+    let path = repo_root().join("scripts/run_rgc_tail_latency_control_plane.sh");
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
 fn extract_streamed_artifact(stdout: &str, artifact_name: &str) -> String {
     let begin = format!("__RGC_TAIL_LATENCY_CONTROL_PLANE_ARTIFACT__:BEGIN:{artifact_name}\n");
     let end = format!("\n__RGC_TAIL_LATENCY_CONTROL_PLANE_ARTIFACT__:END:{artifact_name}");
@@ -169,6 +179,28 @@ fn balanced_binary_emits_streamed_artifacts_without_fallback() {
     assert!(step_log.contains(&format!("guardrail_state={}", report.guardrails.state)));
     assert!(out_dir.join("run_manifest.json").exists());
     assert!(out_dir.join("latency_control_plane_report.json").exists());
+}
+
+#[test]
+fn runner_script_namespaces_run_dir_per_invocation() {
+    let script = load_runner_script();
+
+    for snippet in [
+        "timestamp=\"$(date -u +%Y%m%dT%H%M%SZ)\"",
+        "target_namespace=\"${mode}_$$\"",
+        "run_dir=\"${artifact_root}/${timestamp}_${target_namespace}\"",
+        "script_logs_dir=\"${run_dir}/script_logs\"",
+    ] {
+        assert!(
+            script.contains(snippet),
+            "runner script missing collision-safe run-dir snippet: {snippet}"
+        );
+    }
+
+    assert!(
+        !script.contains("run_dir=\"${artifact_root}/${timestamp}\""),
+        "runner script must not key run_dir by second-resolution timestamp alone"
+    );
 }
 
 // =========================================================================

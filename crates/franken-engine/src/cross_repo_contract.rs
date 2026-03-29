@@ -2,9 +2,9 @@
 //! integration boundaries between FrankenEngine and sibling repos.
 //!
 //! Every declared integration boundary (`frankentui`, `frankensqlite`,
-//! `fastapi_rust`/service endpoints) must have at least one contract test
-//! proving that serialized representations are stable, error codes are
-//! machine-readable, and API envelopes satisfy schema invariants.
+//! `sqlmodel_rust`, `fastapi_rust`/service endpoints) must have at least one
+//! contract test proving that serialized representations are stable, error
+//! codes are machine-readable, and API envelopes satisfy schema invariants.
 //!
 //! Plan reference: Section 10.14 item 12 (`bd-rr94`).
 //! Cross-refs: 10.15 (advanced cross-repo conformance lab),
@@ -437,6 +437,11 @@ pub fn version_compatibility_registry() -> Vec<VersionCompatibilityEntry> {
             minimum_compatible_version: 1,
         },
         VersionCompatibilityEntry {
+            boundary: "sqlmodel_rust".to_string(),
+            current_version: 1,
+            minimum_compatible_version: 1,
+        },
+        VersionCompatibilityEntry {
             boundary: "fastapi_rust".to_string(),
             current_version: 1,
             minimum_compatible_version: 1,
@@ -474,9 +479,19 @@ pub fn integration_point_inventory() -> BTreeMap<String, Vec<String>> {
             "StoreRecord".to_string(),
             "StoreQuery".to_string(),
             "BatchPutEntry".to_string(),
+            "StoreKind".to_string(),
             "MigrationReceipt".to_string(),
             "StorageEvent".to_string(),
             "FrankensqliteBackend".to_string(),
+        ],
+    );
+
+    inventory.insert(
+        "sqlmodel_rust".to_string(),
+        vec![
+            "StoreQuery".to_string(),
+            "BatchPutEntry".to_string(),
+            "StoreKind".to_string(),
         ],
     );
 
@@ -1434,6 +1449,7 @@ mod tests {
             .collect();
         assert!(boundaries.contains("frankentui"));
         assert!(boundaries.contains("frankensqlite"));
+        assert!(boundaries.contains("sqlmodel_rust"));
         assert!(boundaries.contains("fastapi_rust"));
 
         for entry in &registry {
@@ -1452,12 +1468,25 @@ mod tests {
         let inventory = integration_point_inventory();
         assert!(inventory.contains_key("frankentui"));
         assert!(inventory.contains_key("frankensqlite"));
+        assert!(inventory.contains_key("sqlmodel_rust"));
         assert!(inventory.contains_key("fastapi_rust"));
 
         for (boundary, types) in &inventory {
             assert!(
                 !types.is_empty(),
                 "boundary {boundary} must have at least one type"
+            );
+        }
+    }
+
+    #[test]
+    fn sqlmodel_inventory_covers_typed_query_surface() {
+        let inventory = integration_point_inventory();
+        let sqlmodel = inventory.get("sqlmodel_rust").expect("sqlmodel boundary");
+        for type_name in ["StoreQuery", "BatchPutEntry", "StoreKind"] {
+            assert!(
+                sqlmodel.iter().any(|entry| entry == type_name),
+                "missing sqlmodel type `{type_name}`"
             );
         }
     }

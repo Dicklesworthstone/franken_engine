@@ -817,7 +817,7 @@ fn frankenctl_cli_workflow_script_emits_expected_artifacts_and_routes() {
     assert!(script.contains("support_bundle/frankenctl_doctor_report.json"));
     assert!(script.contains("cargo run -q -p frankenengine-engine --bin frankenctl -- doctor"));
     assert!(script.contains("rch exec"));
-    assert!(script.contains("usage: $0 [check|test|clippy|ci]"));
+    assert!(script.contains("usage: $0 [artifacts|check|test|clippy|ci]"));
 }
 
 #[test]

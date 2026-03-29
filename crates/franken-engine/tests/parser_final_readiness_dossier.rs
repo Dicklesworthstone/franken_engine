@@ -498,6 +498,10 @@ fn parser_final_readiness_doc_has_required_sections() {
         "## Rollback Posture Contract",
         "## Independent Verification Contract",
         "## Structured Log Contract",
+        "CI quality gates + evidence retention (`PSRP-09.4`)",
+        "evidence indexer + cross-run correlation (`PSRP-09.5.2`)",
+        "user-impact regression alarms + SLO guardrails (`PSRP-10.5.2`)",
+        "blocked_dependency_ids` inventory must stay aligned with the bead\ngraph",
         "risk_register_hash is computed deterministically as `sha256`",
         "step_logs/step_*.log",
         "./scripts/run_parser_final_readiness_dossier.sh ci",
@@ -549,17 +553,24 @@ fn parser_final_readiness_fixture_is_well_formed() {
     );
     assert_eq!(fixture.bead_id, "bd-2mds.1.8.4");
 
-    for dep in [
-        "bd-2mds.1.8.2",
-        "bd-2mds.1.8.3",
-        "bd-2mds.1.7.4",
-        "bd-2mds.1.10.4",
-    ] {
-        assert!(
-            fixture.blocked_dependency_ids.iter().any(|id| id == dep),
-            "missing blocked dependency id: {dep}"
-        );
-    }
+    let blocked_dependencies = fixture
+        .blocked_dependency_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        blocked_dependencies,
+        BTreeSet::from([
+            "bd-2mds.1.7.4",
+            "bd-2mds.1.8.2",
+            "bd-2mds.1.8.3",
+            "bd-2mds.1.9.4",
+            "bd-2mds.1.9.5.2",
+            "bd-2mds.1.10.4",
+            "bd-2mds.1.10.5.2",
+        ]),
+        "fixture blocked dependency inventory must match the readiness bead graph"
+    );
 
     for key in [
         "trace_id",
@@ -595,6 +606,26 @@ fn parser_final_readiness_fixture_is_well_formed() {
         assert!(!evidence.manifest_path.trim().is_empty());
         assert!(!evidence.replay_command.trim().is_empty());
     }
+    let required_evidence_ids = fixture
+        .evidence_artifacts
+        .iter()
+        .filter(|artifact| artifact.required)
+        .map(|artifact| artifact.evidence_id.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        required_evidence_ids,
+        BTreeSet::from([
+            "correctness_gate_psrp_08_2",
+            "performance_gate_psrp_08_3",
+            "cross_arch_validation_psrp_07_4",
+            "ci_quality_gates_psrp_09_4",
+            "evidence_indexer_psrp_09_5_2",
+            "operator_runbook_psrp_10_4",
+            "user_impact_guardrails_psrp_10_5_2",
+            "supremacy_contract_psrp_08_1",
+        ]),
+        "required evidence inventory must cover the full readiness dossier contract"
+    );
 
     assert!(!fixture.residual_risks.is_empty());
     for risk in &fixture.residual_risks {

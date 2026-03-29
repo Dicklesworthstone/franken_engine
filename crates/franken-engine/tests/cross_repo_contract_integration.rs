@@ -694,9 +694,9 @@ fn version_compatibility_entry_serde_round_trip() {
 }
 
 #[test]
-fn version_compatibility_registry_has_three_entries() {
+fn version_compatibility_registry_has_four_entries() {
     let registry = version_compatibility_registry();
-    assert_eq!(registry.len(), 3);
+    assert_eq!(registry.len(), 4);
 }
 
 #[test]
@@ -727,13 +727,14 @@ fn version_compatibility_registry_minimum_at_least_one() {
 }
 
 #[test]
-fn version_compatibility_registry_covers_all_three_boundaries() {
+fn version_compatibility_registry_covers_all_four_boundaries() {
     let boundaries: BTreeSet<String> = version_compatibility_registry()
         .iter()
         .map(|e| e.boundary.clone())
         .collect();
     assert!(boundaries.contains("frankentui"));
     assert!(boundaries.contains("frankensqlite"));
+    assert!(boundaries.contains("sqlmodel_rust"));
     assert!(boundaries.contains("fastapi_rust"));
 }
 
@@ -762,11 +763,12 @@ fn version_compatibility_registry_frankensqlite_version_matches_const() {
 // ============================================================================
 
 #[test]
-fn inventory_has_three_boundaries() {
+fn inventory_has_four_boundaries() {
     let inv = integration_point_inventory();
-    assert_eq!(inv.len(), 3);
+    assert_eq!(inv.len(), 4);
     assert!(inv.contains_key("frankentui"));
     assert!(inv.contains_key("frankensqlite"));
+    assert!(inv.contains_key("sqlmodel_rust"));
     assert!(inv.contains_key("fastapi_rust"));
 }
 
@@ -815,6 +817,15 @@ fn inventory_contains_all_contract_type_names() {
             contract.type_name
         );
     }
+}
+
+#[test]
+fn inventory_sqlmodel_rust_includes_typed_query_contract() {
+    let inventory = integration_point_inventory();
+    let sqlmodel = &inventory["sqlmodel_rust"];
+    assert!(sqlmodel.contains(&"StoreQuery".to_string()));
+    assert!(sqlmodel.contains(&"BatchPutEntry".to_string()));
+    assert!(sqlmodel.contains(&"StoreKind".to_string()));
 }
 
 // ============================================================================

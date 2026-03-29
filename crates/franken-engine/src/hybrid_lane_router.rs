@@ -425,7 +425,7 @@ impl RiskAccumulator {
         let mut sorted = self.latencies_us.clone();
         sorted.sort_unstable();
         let idx = ((sorted.len() - 1) * 99) / 100;
-        sorted[idx.min(sorted.len() - 1)]
+        sorted[idx]
     }
 
     /// Check all risk budgets and return first violation.

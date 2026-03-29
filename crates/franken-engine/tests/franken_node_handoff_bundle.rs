@@ -175,6 +175,10 @@ fn rgc_408c_contract_is_versioned_and_references_required_inputs_and_outputs() {
         "docs/REPO_SPLIT_CONTRACT.md"
     );
     assert_eq!(
+        contract.input_resolution.blocker_ledger_artifact_glob,
+        "artifacts/rgc_engine_product_blocker_ledger/*/engine_product_blocker_ledger.json"
+    );
+    assert_eq!(
         contract.input_resolution.sibling_repo_path,
         "/dp/franken_node"
     );
@@ -380,6 +384,35 @@ fn rgc_408c_runner_prefers_latest_complete_support_surface_artifact_bundle() {
 }
 
 #[test]
+fn rgc_408c_runner_prefers_latest_complete_blocker_ledger_artifact_bundle() {
+    let script = load_runner_script();
+
+    for snippet in [
+        "blocker_ledger_artifact_dir_is_complete()",
+        "[[ -f \"${candidate}/run_manifest.json\" ]] || return 1",
+        "[[ -f \"${candidate}/trace_ids.json\" ]] || return 1",
+        "[[ -f \"${candidate}/events.jsonl\" ]] || return 1",
+        "[[ -f \"${candidate}/commands.txt\" ]] || return 1",
+        "[[ -f \"${candidate}/engine_product_blocker_ledger.json\" ]] || return 1",
+        "[[ -f \"${candidate}/cohort_readiness_rollup.json\" ]] || return 1",
+        "[[ -f \"${candidate}/owner_routing_report.json\" ]] || return 1",
+        "[[ -f \"${candidate}/gate_report.json\" ]] || return 1",
+        "[[ -f \"${candidate}/support_surface_contract.json\" ]] || return 1",
+        "[[ -f \"${candidate}/step_logs/step_000.log\" ]] || return 1",
+        "latest_complete_blocker_ledger_artifact()",
+        "find \"${root_dir}/artifacts/rgc_engine_product_blocker_ledger\"",
+        "blocker_ledger_artifact_dir_is_complete \"${candidate}\" || continue",
+        "printf '%s\\n' \"${candidate}/engine_product_blocker_ledger.json\"",
+        "latest_complete_blocker_ledger_artifact || true",
+    ] {
+        assert!(
+            script.contains(snippet),
+            "runner script missing complete blocker-ledger selection snippet: {snippet}"
+        );
+    }
+}
+
+#[test]
 fn rgc_408c_runner_script_enforces_split_contract_and_support_delegation_checks() {
     let script = load_runner_script();
 
@@ -406,16 +439,21 @@ fn rgc_408c_replay_script_requires_complete_bundle_and_prints_key_artifacts() {
     let script = load_replay_script();
 
     for snippet in [
+        "[[ -f \"${candidate}/engine_product_blocker_ledger.json\" ]] || continue",
+        "[[ -f \"${candidate}/step_logs/step_000.log\" ]] || continue",
         "franken_node_handoff_manifest.json",
         "sibling_smoke_verification.json",
         "support_surface_summary.md",
         "franken_node_handoff_bundle_contract.json",
+        "support_surface_contract.json",
+        "engine_product_blocker_ledger.json",
         "repo_split_contract.md",
-        "latest blocker ledger unavailable",
-        "latest first step log unavailable",
+        "selected supposedly complete run ${latest_run_dir} but engine_product_blocker_ledger.json is missing",
+        "selected supposedly complete run ${latest_run_dir} but step_logs/step_000.log is missing",
         "latest handoff manifest",
         "latest smoke verification",
         "latest summary",
+        "latest blocker ledger",
         "latest first step log",
     ] {
         assert!(

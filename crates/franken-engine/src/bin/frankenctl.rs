@@ -4151,6 +4151,11 @@ fn sort_and_dedup_signals(signals: &mut Vec<OnboardingScorecardSignal>) {
             .cmp(&left.severity)
             .then(left.signal_id.cmp(&right.signal_id))
             .then(left.source.cmp(&right.source))
+            .then(left.summary.cmp(&right.summary))
+            .then(left.remediation.cmp(&right.remediation))
+            .then(left.reproducible_command.cmp(&right.reproducible_command))
+            .then(left.evidence_links.cmp(&right.evidence_links))
+            .then(left.owner_hint.cmp(&right.owner_hint))
     });
     signals.dedup();
 }
@@ -4977,6 +4982,35 @@ mod tests {
             }
             other => panic!("expected doctor command, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn sort_and_dedup_signals_removes_exact_duplicates_with_same_key_variants_present() {
+        let duplicate = OnboardingScorecardSignal {
+            signal_id: "dup-signal".to_string(),
+            source: "compatibility".to_string(),
+            severity: EvidenceSeverity::Warning,
+            summary: "duplicate summary".to_string(),
+            remediation: "rerun duplicate remediation".to_string(),
+            reproducible_command: "frankenctl doctor --input dup.json".to_string(),
+            evidence_links: vec!["support_bundle/index.json".to_string()],
+            owner_hint: Some("ops".to_string()),
+        };
+        let variant = OnboardingScorecardSignal {
+            signal_id: "dup-signal".to_string(),
+            source: "compatibility".to_string(),
+            severity: EvidenceSeverity::Warning,
+            summary: "variant summary".to_string(),
+            remediation: "rerun variant remediation".to_string(),
+            reproducible_command: "frankenctl doctor --input variant.json".to_string(),
+            evidence_links: vec!["support_bundle/runtime_diagnostics.json".to_string()],
+            owner_hint: None,
+        };
+
+        let mut signals = vec![duplicate.clone(), variant.clone(), duplicate.clone()];
+        sort_and_dedup_signals(&mut signals);
+
+        assert_eq!(signals, vec![duplicate, variant]);
     }
 
     #[test]

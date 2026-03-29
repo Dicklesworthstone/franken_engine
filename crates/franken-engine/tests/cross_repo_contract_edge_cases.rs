@@ -803,9 +803,9 @@ fn version_compatibility_entry_fields() {
 // ── version_compatibility_registry ──────────────────────────────────────────
 
 #[test]
-fn version_compatibility_registry_has_three_entries() {
+fn version_compatibility_registry_has_four_entries() {
     let registry = version_compatibility_registry();
-    assert_eq!(registry.len(), 3);
+    assert_eq!(registry.len(), 4);
 }
 
 #[test]
@@ -850,11 +850,12 @@ fn version_compatibility_registry_serde() {
 // ── integration_point_inventory ─────────────────────────────────────────────
 
 #[test]
-fn integration_point_inventory_has_three_boundaries() {
+fn integration_point_inventory_has_four_boundaries() {
     let inventory = integration_point_inventory();
-    assert_eq!(inventory.len(), 3);
+    assert_eq!(inventory.len(), 4);
     assert!(inventory.contains_key("frankentui"));
     assert!(inventory.contains_key("frankensqlite"));
+    assert!(inventory.contains_key("sqlmodel_rust"));
     assert!(inventory.contains_key("fastapi_rust"));
 }
 
@@ -894,8 +895,18 @@ fn integration_point_inventory_frankensqlite_includes_store_record() {
     let inventory = integration_point_inventory();
     let sqlite = &inventory["frankensqlite"];
     assert!(sqlite.contains(&"StoreRecord".to_string()));
+    assert!(sqlite.contains(&"StoreKind".to_string()));
     assert!(sqlite.contains(&"MigrationReceipt".to_string()));
     assert!(sqlite.contains(&"StorageEvent".to_string()));
+}
+
+#[test]
+fn integration_point_inventory_sqlmodel_rust_includes_typed_query_contract() {
+    let inventory = integration_point_inventory();
+    let sqlmodel = &inventory["sqlmodel_rust"];
+    assert!(sqlmodel.contains(&"StoreQuery".to_string()));
+    assert!(sqlmodel.contains(&"BatchPutEntry".to_string()));
+    assert!(sqlmodel.contains(&"StoreKind".to_string()));
 }
 
 #[test]

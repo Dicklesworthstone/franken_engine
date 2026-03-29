@@ -4,6 +4,9 @@
 
 use std::{collections::BTreeSet, fs, path::PathBuf};
 
+use frankenengine_engine::esm_cjs_interop_parity::{
+    InteropActualOutcome, run_interop_parity_corpus,
+};
 use frankenengine_engine::module_compatibility_matrix::*;
 
 const README_INTEROP_OPERATOR_VERIFICATION_FRAGMENTS: [&str; 9] = [
@@ -398,6 +401,67 @@ fn default_matrix_events_empty_initially() {
 fn default_matrix_has_required_waivers() {
     let matrix = ModuleCompatibilityMatrix::from_default_json().unwrap();
     assert!(!matrix.required_waiver_ids().is_empty());
+}
+
+#[test]
+fn default_matrix_extensionless_relative_case_matches_scoped_inventory_across_modes() {
+    let mut matrix = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = matrix.required_waiver_ids();
+    matrix
+        .validate_with_waivers(&required, &context())
+        .expect("default matrix should validate");
+
+    let inventory = run_interop_parity_corpus();
+    for (specimen_id, mode, expected_outcome, expected_behavior) in [
+        (
+            "scoped_package_type_module_extensionless_relative_native",
+            CompatibilityMode::Native,
+            InteropActualOutcome::LinkFailure,
+            "reject_extensionless_relative",
+        ),
+        (
+            "scoped_package_type_module_extensionless_relative_node_compat",
+            CompatibilityMode::NodeCompat,
+            InteropActualOutcome::LinkFailure,
+            "reject_extensionless_relative",
+        ),
+        (
+            "scoped_package_type_module_extensionless_relative_bun_compat",
+            CompatibilityMode::BunCompat,
+            InteropActualOutcome::Success,
+            "resolve_extensionless_relative",
+        ),
+    ] {
+        let evidence = inventory
+            .evidence
+            .iter()
+            .find(|ev| ev.specimen_id == specimen_id)
+            .unwrap_or_else(|| {
+                panic!("scoped extensionless-relative specimen should exist: {specimen_id}")
+            });
+        assert_eq!(evidence.compatibility_mode, mode);
+        assert_eq!(evidence.actual_outcome, expected_outcome);
+
+        let outcome = matrix
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "package-type-module-extensionless-relative",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    expected_behavior,
+                ),
+                &context(),
+            )
+            .unwrap_or_else(|err| {
+                panic!(
+                    "scoped extensionless-relative evidence should evaluate against the matrix for {specimen_id}: {err}"
+                )
+            });
+        assert!(
+            outcome.matched,
+            "scoped extensionless-relative evidence should match the matrix contract for {specimen_id}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

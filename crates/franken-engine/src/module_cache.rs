@@ -380,11 +380,12 @@ impl ModuleCache {
             .unwrap_or_else(|| {
                 ModuleVersionFingerprint::new(ContentHash::compute(b"unknown-source"), 0, 0)
             });
-        latest.policy_version = new_policy_version;
+        latest.policy_version = latest.policy_version.max(new_policy_version);
+        let effective_policy_version = latest.policy_version;
         self.latest_versions.insert(module_id.to_string(), latest);
 
         let removed = self.remove_module_entries_where(module_id, |entry| {
-            entry.key.version.policy_version != new_policy_version
+            entry.key.version.policy_version != effective_policy_version
         });
 
         self.publish_snapshot_fastpath();
@@ -3528,6 +3529,47 @@ mod tests {
             )
             .unwrap();
         assert!(cache.get("mod:p", &v2).is_some());
+    }
+
+    #[test]
+    fn policy_change_is_monotonic_on_version() {
+        let mut cache = ModuleCache::new();
+        let ctx = context();
+        let latest = ModuleVersionFingerprint::new(source_hash("stable"), 5, 1);
+
+        cache
+            .insert(
+                CacheInsertRequest::new(
+                    "mod:p-monotonic",
+                    latest.clone(),
+                    ContentHash::compute(b"artifact-p5"),
+                    "/app/p.js",
+                ),
+                &ctx,
+            )
+            .unwrap();
+
+        cache.invalidate_policy_change("mod:p-monotonic", 3, &ctx);
+
+        let snap = cache.snapshot();
+        assert_eq!(
+            snap.latest_versions["mod:p-monotonic"].policy_version,
+            latest.policy_version
+        );
+        assert!(cache.get("mod:p-monotonic", &latest).is_some());
+
+        let err = cache
+            .insert(
+                CacheInsertRequest::new(
+                    "mod:p-monotonic",
+                    ModuleVersionFingerprint::new(source_hash("older"), 4, 1),
+                    ContentHash::compute(b"artifact-p4"),
+                    "/app/p.js",
+                ),
+                &ctx,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, CacheErrorCode::VersionRegression);
     }
 
     #[test]

@@ -625,11 +625,16 @@ impl AlarmLedger {
 
     /// Record a new alarm.
     pub fn record_alarm(&mut self, alarm: ShiftAlarm) {
-        self.cumulative_severity = self
-            .cumulative_severity
-            .saturating_add(alarm.weighted_severity());
+        let alarm_id = alarm.alarm_id.clone();
+        let weighted_severity = alarm.weighted_severity();
+        self.resolved_alarms.remove(&alarm_id);
+        if let Some(previous) = self.active_alarms.insert(alarm_id, alarm) {
+            self.cumulative_severity = self
+                .cumulative_severity
+                .saturating_sub(previous.weighted_severity());
+        }
+        self.cumulative_severity = self.cumulative_severity.saturating_add(weighted_severity);
         self.total_alarms_recorded += 1;
-        self.active_alarms.insert(alarm.alarm_id.clone(), alarm);
     }
 
     /// Resolve an alarm.
@@ -978,6 +983,9 @@ impl FreshnessGate {
 
     /// Advance the gate to a new epoch.
     pub fn advance_epoch(&mut self, epoch: SecurityEpoch) {
+        if epoch.as_u64() < self.current_epoch.as_u64() {
+            return;
+        }
         self.current_epoch = epoch;
         self.alarm_ledger
             .prune_stale(epoch, self.config.max_alarm_age_epochs);
@@ -1580,6 +1588,60 @@ mod tests {
     }
 
     #[test]
+    fn test_ledger_record_alarm_replaces_existing_severity() {
+        let mut ledger = AlarmLedger::new();
+        ledger.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::General,
+            ShiftSeverity::Info,
+            1,
+        ));
+        let initial_severity = ledger.cumulative_severity;
+
+        ledger.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::General,
+            ShiftSeverity::Warning,
+            2,
+        ));
+
+        assert_eq!(ledger.active_count(), 1);
+        assert_eq!(ledger.total_alarms_recorded, 2);
+        assert!(ledger.cumulative_severity > initial_severity);
+        assert_eq!(
+            ledger.cumulative_severity,
+            make_alarm("a1", ShiftDomain::General, ShiftSeverity::Warning, 2).weighted_severity()
+        );
+    }
+
+    #[test]
+    fn test_ledger_reactivating_alarm_clears_resolved_state() {
+        let mut ledger = AlarmLedger::new();
+        ledger.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::General,
+            ShiftSeverity::Info,
+            1,
+        ));
+        assert!(ledger.resolve_alarm("a1", 5));
+        assert_eq!(ledger.resolved_alarms.get("a1"), Some(&5));
+
+        ledger.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::General,
+            ShiftSeverity::Warning,
+            6,
+        ));
+
+        assert_eq!(ledger.active_count(), 1);
+        assert!(!ledger.resolved_alarms.contains_key("a1"));
+        assert_eq!(
+            ledger.cumulative_severity,
+            make_alarm("a1", ShiftDomain::General, ShiftSeverity::Warning, 6).weighted_severity()
+        );
+    }
+
+    #[test]
     fn test_ledger_resolve_alarm() {
         let mut ledger = AlarmLedger::new();
         ledger.record_alarm(make_alarm(
@@ -1941,6 +2003,13 @@ mod tests {
         ));
         gate.advance_epoch(epoch(200));
         assert_eq!(gate.alarm_ledger.active_count(), 0);
+    }
+
+    #[test]
+    fn test_gate_advance_epoch_ignores_regression() {
+        let mut gate = FreshnessGate::new(epoch(10));
+        gate.advance_epoch(epoch(5));
+        assert_eq!(gate.current_epoch, epoch(10));
     }
 
     #[test]

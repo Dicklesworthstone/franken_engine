@@ -759,6 +759,10 @@ impl SagaOrchestrator {
 
     /// Advance to a new epoch. Sagas from old epochs are failed.
     pub fn advance_epoch(&mut self, new_epoch: SecurityEpoch, trace_id: &str) -> Vec<String> {
+        if new_epoch.as_u64() < self.current_epoch.as_u64() {
+            return Vec::new();
+        }
+
         let mut invalidated = Vec::new();
         let mut pending_events = Vec::new();
 
@@ -2943,6 +2947,21 @@ mod tests {
         assert_eq!(orch.epoch(), SecurityEpoch::from_raw(1));
         orch.advance_epoch(SecurityEpoch::from_raw(5), "t-adv");
         assert_eq!(orch.epoch(), SecurityEpoch::from_raw(5));
+    }
+
+    #[test]
+    fn advance_epoch_ignores_regressive_epoch_without_invalidating_active_sagas() {
+        let mut orch = SagaOrchestrator::new(SecurityEpoch::from_raw(5), 10);
+        orch.create_saga("s1", SagaType::Publish, simple_steps(), "t1", 0)
+            .unwrap();
+        orch.begin_step("s1").unwrap();
+        orch.drain_events();
+
+        let invalidated = orch.advance_epoch(SecurityEpoch::from_raw(4), "t-regress");
+        assert!(invalidated.is_empty());
+        assert_eq!(orch.epoch(), SecurityEpoch::from_raw(5));
+        assert!(!orch.get("s1").unwrap().is_terminal());
+        assert!(orch.drain_events().is_empty());
     }
 
     // -- Enrichment: concurrency limit display --

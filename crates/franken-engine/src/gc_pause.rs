@@ -298,12 +298,12 @@ fn build_pause_histogram(sorted: &[u64]) -> Vec<PauseDistributionBucket> {
         .len()
         .clamp(1, 10)
         .min(max_representable_buckets.max(1));
-    let width = ((max.saturating_sub(min) + 1) / bucket_count as u64).max(1);
+    let width = (max.saturating_sub(min).saturating_add(1) / bucket_count as u64).max(1);
 
     let mut buckets = Vec::with_capacity(bucket_count);
     let mut idx = 0usize;
     for bucket_index in 0..bucket_count {
-        let lower = min + width * bucket_index as u64;
+        let lower = min.saturating_add(width.saturating_mul(bucket_index as u64));
         let upper = if bucket_index + 1 == bucket_count {
             max
         } else {

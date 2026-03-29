@@ -520,18 +520,21 @@ fn resolve_migration_path(
             to_schema: target_schema.to_string(),
         });
     }
-
-    let mut by_from: BTreeMap<&str, &SchemaMigrationStep> = BTreeMap::new();
-    for step in steps {
-        by_from.insert(step.from_schema.as_str(), step);
-    }
+    let expected_family = from_tag.family.clone();
 
     let mut current = from_schema.to_string();
     let mut path = Vec::new();
+    let mut visited = BTreeSet::new();
     let max_hops = 32_u32;
     let mut hops = 0_u32;
 
     while current != target_schema {
+        if !visited.insert(current.clone()) {
+            return Err(EvidenceIndexerError::NoMigrationPath {
+                from_schema: from_schema.to_string(),
+                to_schema: target_schema.to_string(),
+            });
+        }
         if hops >= max_hops {
             return Err(EvidenceIndexerError::NoMigrationPath {
                 from_schema: from_schema.to_string(),
@@ -539,12 +542,33 @@ fn resolve_migration_path(
             });
         }
 
-        let Some(step) = by_from.get(current.as_str()) else {
+        let mut next_step: Option<&SchemaMigrationStep> = None;
+        for step in steps.iter().filter(|step| step.from_schema == current) {
+            // Reject ambiguity only on the branch we are actually traversing.
+            // Unrelated duplicate declarations elsewhere in the step set should
+            // not poison a valid migration path.
+            if next_step.replace(step).is_some() {
+                return Err(EvidenceIndexerError::NoMigrationPath {
+                    from_schema: from_schema.to_string(),
+                    to_schema: target_schema.to_string(),
+                });
+            }
+        }
+
+        let Some(step) = next_step else {
             return Err(EvidenceIndexerError::NoMigrationPath {
                 from_schema: from_schema.to_string(),
                 to_schema: target_schema.to_string(),
             });
         };
+        let step_from_tag = SchemaVersionTag::parse(&step.from_schema)?;
+        let step_to_tag = SchemaVersionTag::parse(&step.to_schema)?;
+        if step_from_tag.family != expected_family || step_to_tag.family != expected_family {
+            return Err(EvidenceIndexerError::IncompatibleSchemaFamily {
+                from_schema: step.from_schema.clone(),
+                to_schema: step.to_schema.clone(),
+            });
+        }
         let step_clone = (*step).clone();
         current = step_clone.to_schema.clone();
         path.push(step_clone);
@@ -1288,6 +1312,106 @@ mod tests {
         assert_eq!(index.schema_migrations.len(), 1);
         assert_eq!(index.schema_migrations[0].from_schema, "fam.event.v1");
         assert_eq!(index.schema_migrations[0].to_schema, "fam.event.v2");
+    }
+
+    #[test]
+    fn duplicate_migration_sources_fail_closed() {
+        let err = resolve_migration_path(
+            "fam.event.v1",
+            "fam.event.v2",
+            &[
+                SchemaMigrationStep {
+                    migration_id: "mig-1-2".to_string(),
+                    from_schema: "fam.event.v1".to_string(),
+                    to_schema: "fam.event.v2".to_string(),
+                },
+                SchemaMigrationStep {
+                    migration_id: "mig-1-9".to_string(),
+                    from_schema: "fam.event.v1".to_string(),
+                    to_schema: "fam.event.v9".to_string(),
+                },
+            ],
+        )
+        .unwrap_err();
+        assert!(matches!(err, EvidenceIndexerError::NoMigrationPath { .. }));
+    }
+
+    #[test]
+    fn duplicate_migration_sources_off_path_do_not_block_valid_path() {
+        let path = resolve_migration_path(
+            "fam.event.v1",
+            "fam.event.v2",
+            &[
+                SchemaMigrationStep {
+                    migration_id: "mig-1-2".to_string(),
+                    from_schema: "fam.event.v1".to_string(),
+                    to_schema: "fam.event.v2".to_string(),
+                },
+                SchemaMigrationStep {
+                    migration_id: "mig-8-9".to_string(),
+                    from_schema: "fam.event.v8".to_string(),
+                    to_schema: "fam.event.v9".to_string(),
+                },
+                SchemaMigrationStep {
+                    migration_id: "mig-8-10".to_string(),
+                    from_schema: "fam.event.v8".to_string(),
+                    to_schema: "fam.event.v10".to_string(),
+                },
+            ],
+        )
+        .expect("off-path ambiguity should not block valid migration");
+
+        assert_eq!(path.len(), 1);
+        assert_eq!(path[0].migration_id, "mig-1-2");
+    }
+
+    #[test]
+    fn cyclic_migration_path_fails_without_waiting_for_hop_cap() {
+        let err = resolve_migration_path(
+            "fam.event.v1",
+            "fam.event.v3",
+            &[
+                SchemaMigrationStep {
+                    migration_id: "mig-1-2".to_string(),
+                    from_schema: "fam.event.v1".to_string(),
+                    to_schema: "fam.event.v2".to_string(),
+                },
+                SchemaMigrationStep {
+                    migration_id: "mig-2-1".to_string(),
+                    from_schema: "fam.event.v2".to_string(),
+                    to_schema: "fam.event.v1".to_string(),
+                },
+            ],
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, EvidenceIndexerError::NoMigrationPath { .. }));
+    }
+
+    #[test]
+    fn cross_family_intermediate_step_fails_closed() {
+        let err = resolve_migration_path(
+            "fam.event.v1",
+            "fam.event.v3",
+            &[
+                SchemaMigrationStep {
+                    migration_id: "mig-1-other".to_string(),
+                    from_schema: "fam.event.v1".to_string(),
+                    to_schema: "other.event.v2".to_string(),
+                },
+                SchemaMigrationStep {
+                    migration_id: "mig-other-3".to_string(),
+                    from_schema: "other.event.v2".to_string(),
+                    to_schema: "fam.event.v3".to_string(),
+                },
+            ],
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            EvidenceIndexerError::IncompatibleSchemaFamily { .. }
+        ));
     }
 
     #[test]

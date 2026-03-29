@@ -968,6 +968,173 @@ fn migrate_no_path_returns_error() {
 }
 
 #[test]
+fn migrate_duplicate_source_steps_fail_closed_regardless_of_order() {
+    let mut builder = ParserEvidenceIndexBuilder::new();
+    add_run(&mut builder, "run-a", "ns.run.v1");
+    builder
+        .add_events_jsonl("run-a", &event_jsonl("ns.event.v1", "t1", "c", "e", "pass"))
+        .unwrap();
+
+    let mut index_left = builder.build();
+    let err_left = index_left
+        .migrate_event_schemas(
+            "ns.event.v2",
+            &[
+                SchemaMigrationStep {
+                    migration_id: "mig-v1-v2".into(),
+                    from_schema: "ns.event.v1".into(),
+                    to_schema: "ns.event.v2".into(),
+                },
+                SchemaMigrationStep {
+                    migration_id: "mig-v1-v9".into(),
+                    from_schema: "ns.event.v1".into(),
+                    to_schema: "ns.event.v9".into(),
+                },
+            ],
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err_left,
+        EvidenceIndexerError::NoMigrationPath { .. }
+    ));
+
+    let mut builder = ParserEvidenceIndexBuilder::new();
+    add_run(&mut builder, "run-a", "ns.run.v1");
+    builder
+        .add_events_jsonl("run-a", &event_jsonl("ns.event.v1", "t1", "c", "e", "pass"))
+        .unwrap();
+
+    let mut index_right = builder.build();
+    let err_right = index_right
+        .migrate_event_schemas(
+            "ns.event.v2",
+            &[
+                SchemaMigrationStep {
+                    migration_id: "mig-v1-v9".into(),
+                    from_schema: "ns.event.v1".into(),
+                    to_schema: "ns.event.v9".into(),
+                },
+                SchemaMigrationStep {
+                    migration_id: "mig-v1-v2".into(),
+                    from_schema: "ns.event.v1".into(),
+                    to_schema: "ns.event.v2".into(),
+                },
+            ],
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err_right,
+        EvidenceIndexerError::NoMigrationPath { .. }
+    ));
+}
+
+#[test]
+fn migrate_ignores_unrelated_ambiguous_source_steps() {
+    let mut builder = ParserEvidenceIndexBuilder::new();
+    add_run(&mut builder, "run-a", "ns.run.v1");
+    builder
+        .add_events_jsonl("run-a", &event_jsonl("ns.event.v1", "t1", "c", "e", "pass"))
+        .unwrap();
+
+    let mut index = builder.build();
+    let receipts = index
+        .migrate_event_schemas(
+            "ns.event.v2",
+            &[
+                SchemaMigrationStep {
+                    migration_id: "mig-v1-v2".into(),
+                    from_schema: "ns.event.v1".into(),
+                    to_schema: "ns.event.v2".into(),
+                },
+                SchemaMigrationStep {
+                    migration_id: "mig-v8-v9".into(),
+                    from_schema: "ns.event.v8".into(),
+                    to_schema: "ns.event.v9".into(),
+                },
+                SchemaMigrationStep {
+                    migration_id: "mig-v8-v10".into(),
+                    from_schema: "ns.event.v8".into(),
+                    to_schema: "ns.event.v10".into(),
+                },
+            ],
+        )
+        .expect("off-path ambiguity should not block valid migration");
+
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].migration_id, "mig-v1-v2");
+    assert_eq!(receipts[0].affected_records, 1);
+    assert!(
+        index
+            .events
+            .iter()
+            .all(|event| event.schema_version == "ns.event.v2")
+    );
+}
+
+#[test]
+fn migrate_cyclic_steps_fail_without_waiting_for_hop_cap() {
+    let mut builder = ParserEvidenceIndexBuilder::new();
+    add_run(&mut builder, "run-a", "ns.run.v1");
+    builder
+        .add_events_jsonl("run-a", &event_jsonl("ns.event.v1", "t1", "c", "e", "pass"))
+        .unwrap();
+
+    let mut index = builder.build();
+    let err = index
+        .migrate_event_schemas(
+            "ns.event.v3",
+            &[
+                SchemaMigrationStep {
+                    migration_id: "mig-v1-v2".into(),
+                    from_schema: "ns.event.v1".into(),
+                    to_schema: "ns.event.v2".into(),
+                },
+                SchemaMigrationStep {
+                    migration_id: "mig-v2-v1".into(),
+                    from_schema: "ns.event.v2".into(),
+                    to_schema: "ns.event.v1".into(),
+                },
+            ],
+        )
+        .unwrap_err();
+
+    assert!(matches!(err, EvidenceIndexerError::NoMigrationPath { .. }));
+}
+
+#[test]
+fn migrate_cross_family_intermediate_steps_fail_closed() {
+    let mut builder = ParserEvidenceIndexBuilder::new();
+    add_run(&mut builder, "run-a", "ns.run.v1");
+    builder
+        .add_events_jsonl("run-a", &event_jsonl("ns.event.v1", "t1", "c", "e", "pass"))
+        .unwrap();
+
+    let mut index = builder.build();
+    let err = index
+        .migrate_event_schemas(
+            "ns.event.v3",
+            &[
+                SchemaMigrationStep {
+                    migration_id: "mig-v1-other".into(),
+                    from_schema: "ns.event.v1".into(),
+                    to_schema: "other.event.v2".into(),
+                },
+                SchemaMigrationStep {
+                    migration_id: "mig-other-v3".into(),
+                    from_schema: "other.event.v2".into(),
+                    to_schema: "ns.event.v3".into(),
+                },
+            ],
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        EvidenceIndexerError::IncompatibleSchemaFamily { .. }
+    ));
+}
+
+#[test]
 fn migrate_incompatible_family_returns_error() {
     let mut builder = ParserEvidenceIndexBuilder::new();
     add_run(&mut builder, "run-a", "ns.run.v1");

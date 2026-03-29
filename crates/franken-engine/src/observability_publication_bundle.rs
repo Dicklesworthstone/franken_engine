@@ -1111,7 +1111,7 @@ fn build_publication_policy(
             reasons: cell.decision.suppression_reasons.clone(),
         })
         .collect::<Vec<_>>();
-    suppressed_claims.sort_by(|a, b| a.workload_id.cmp(&b.workload_id));
+    suppressed_claims.sort_by(|a, b| a.workload_id.cmp(&b.workload_id).then(a.mode.cmp(&b.mode)));
 
     let mut fail_closed_conditions = vec![
         "observability_off cells are never publishable claim surfaces".to_string(),
@@ -1319,6 +1319,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ContentHash;
 
     // -----------------------------------------------------------------------
     // ObservabilityWorkloadClass tests
@@ -1865,5 +1866,99 @@ mod tests {
         let a = canonical_json_bytes(&surface, Path::new("/tmp/a.json")).unwrap();
         let b = canonical_json_bytes(&surface, Path::new("/tmp/b.json")).unwrap();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn publication_policy_sorts_suppressed_claims_by_workload_then_mode() {
+        let quality_bundle = build_quality_bundle(SecurityEpoch::from_raw(SAMPLE_EPOCH));
+        let hot_path_summary = HotPathPublicationSummary {
+            manifest_id: "test-manifest".to_string(),
+            manifest_hash: "abc123".to_string(),
+            overall_mode: "budgeted".to_string(),
+            publishable: true,
+            calibration_pass_count: 3,
+            calibration_total: 3,
+            thinning_retention_millionths: Some(500_000),
+            rejection_reasons: Vec::new(),
+        };
+
+        let scrambled = [
+            (
+                ObservabilityWorkloadClass::StartupSensitive,
+                ObservabilityMode::Budgeted,
+            ),
+            (
+                ObservabilityWorkloadClass::DispatchSensitive,
+                ObservabilityMode::Off,
+            ),
+            (
+                ObservabilityWorkloadClass::StartupSensitive,
+                ObservabilityMode::Off,
+            ),
+            (
+                ObservabilityWorkloadClass::DispatchSensitive,
+                ObservabilityMode::Budgeted,
+            ),
+        ];
+        let cells = scrambled
+            .into_iter()
+            .map(|(workload, mode)| {
+                let descriptor = build_supremacy_descriptor(
+                    workload,
+                    mode,
+                    0,
+                    MILLION,
+                    MILLION,
+                    0,
+                    PromotionRule::SuppressClaim,
+                );
+                let mut decision = PromotionDecision {
+                    decision_id: format!("decision-{}-{}", workload.workload_id(), mode.as_str()),
+                    cell_id: descriptor.cell.cell_id.clone(),
+                    rule: PromotionRule::SuppressClaim,
+                    allowed: false,
+                    suppression_reasons: vec![format!("suppressed {}", mode.as_str())],
+                    content_hash: ContentHash::default(),
+                };
+                decision.content_hash = decision.compute_hash();
+
+                ObservabilitySupremacyCellSnapshot {
+                    workload_id: workload.workload_id().to_string(),
+                    workload_class: workload,
+                    mode,
+                    cell: descriptor.cell,
+                    decision,
+                }
+            })
+            .collect::<Vec<_>>();
+        let supremacy_matrix = ObservabilityOnSupremacyMatrixArtifact {
+            schema_version: SUPREMACY_MATRIX_SCHEMA_VERSION.to_string(),
+            component: COMPONENT.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            report_id: "report-test".to_string(),
+            report_hash: ContentHash::from_bytes([7; 32]).to_hex(),
+            green_fraction_millionths: 0,
+            allowed_fraction_millionths: 0,
+            blocked_cell_count: cells.len() as u64,
+            cells,
+        };
+
+        let policy =
+            build_publication_policy(&quality_bundle, &supremacy_matrix, &hot_path_summary);
+        let observed = policy
+            .suppressed_claims
+            .iter()
+            .map(|claim| format!("{}::{}", claim.workload_id, claim.mode.as_str()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            observed,
+            vec![
+                "dispatch_sensitive::off".to_string(),
+                "dispatch_sensitive::budgeted".to_string(),
+                "startup_sensitive::off".to_string(),
+                "startup_sensitive::budgeted".to_string(),
+            ]
+        );
     }
 }

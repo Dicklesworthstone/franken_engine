@@ -671,6 +671,33 @@ fn publication_policy_schema_version_matches() {
     assert_eq!(policy.schema_version, PUBLICATION_POLICY_SCHEMA_VERSION);
 }
 
+#[test]
+fn publication_policy_suppressed_claims_are_sorted_by_workload_then_mode() {
+    let out_dir = unique_dir("policy_suppressed_order");
+    let artifacts =
+        write_observability_publication_bundle(&out_dir).expect("write publication bundle");
+    let policy: ObservabilityPublicationPolicyArtifact = serde_json::from_slice(
+        &fs::read(&artifacts.observability_publication_policy_path).expect("read policy"),
+    )
+    .expect("parse policy");
+
+    let mut previous: Option<(&str, u8)> = None;
+    for claim in &policy.suppressed_claims {
+        let mode_rank = match claim.mode {
+            ObservabilityMode::Off => 0,
+            ObservabilityMode::Budgeted => 1,
+            ObservabilityMode::ExactShadow => 2,
+        };
+        if let Some((prev_workload, prev_mode_rank)) = previous {
+            assert!(
+                (prev_workload, prev_mode_rank) <= (claim.workload_id.as_str(), mode_rank),
+                "suppressed claims must be ordered by workload then mode"
+            );
+        }
+        previous = Some((claim.workload_id.as_str(), mode_rank));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Support bundle attestation artifact
 // ---------------------------------------------------------------------------

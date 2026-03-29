@@ -240,6 +240,15 @@ impl ShiftAlarm {
         base.saturating_mul(self.drift_magnitude) / FIXED_ONE
     }
 
+    /// Whether this alarm meets the configured immediate-downgrade threshold.
+    ///
+    /// This intentionally keys off the declared severity tier rather than
+    /// weighted severity so operators can tune the "which severities trip the
+    /// fail-closed path" contract independently from drift-magnitude math.
+    pub fn meets_immediate_downgrade_threshold(&self, threshold: u64) -> bool {
+        self.severity.weight() >= threshold
+    }
+
     /// Whether this alarm is stale (older than max age from current epoch).
     pub fn is_stale(&self, current_epoch: SecurityEpoch, max_age: u64) -> bool {
         current_epoch
@@ -351,6 +360,16 @@ impl AcquisitionEvidence {
     /// Whether burndown meets the minimum threshold.
     pub fn meets_burndown_threshold(&self, min_ratio: u64) -> bool {
         self.burndown_ratio >= min_ratio
+    }
+
+    /// Whether this evidence meets the configured sample floor.
+    pub fn meets_sample_floor(&self, min_samples: u64) -> bool {
+        self.samples_acquired >= min_samples
+    }
+
+    /// Whether this evidence is healthy enough to count toward freshness.
+    pub fn supports_freshness(&self, min_samples: u64) -> bool {
+        self.status.is_healthy() && self.meets_sample_floor(min_samples)
     }
 
     /// Estimated epochs to completion at current velocity.
@@ -695,6 +714,13 @@ impl AlarmLedger {
             .any(|a| a.severity.is_immediate_downgrade())
     }
 
+    /// Whether any active alarm meets the configured immediate-downgrade threshold.
+    pub fn has_alarm_at_or_above_threshold(&self, threshold: u64) -> bool {
+        self.active_alarms
+            .values()
+            .any(|alarm| alarm.meets_immediate_downgrade_threshold(threshold))
+    }
+
     /// Active alarm count.
     pub fn active_count(&self) -> usize {
         self.active_alarms.len()
@@ -793,6 +819,20 @@ impl AcquisitionLedger {
             self.evidence
                 .iter()
                 .any(|e| e.domain == *d && e.status.is_healthy())
+        })
+    }
+
+    /// Whether all required domains are covered by healthy evidence that also
+    /// meets the configured minimum sample floor.
+    pub fn all_domains_healthy_with_min_samples(
+        &self,
+        required: &BTreeSet<ShiftDomain>,
+        min_samples: u64,
+    ) -> bool {
+        required.iter().all(|d| {
+            self.evidence
+                .iter()
+                .any(|e| e.domain == *d && e.supports_freshness(min_samples))
         })
     }
 
@@ -1026,18 +1066,25 @@ impl FreshnessGate {
         }
 
         // Check for immediate downgrade alarms.
-        if self.alarm_ledger.has_immediate_downgrade_alarm() {
+        if self
+            .alarm_ledger
+            .has_alarm_at_or_above_threshold(self.config.critical_severity_threshold)
+        {
             // Check if acquisition is addressing it.
             let all_addressed = self
                 .alarm_ledger
                 .active_alarms
                 .values()
-                .filter(|a| a.severity.is_immediate_downgrade())
+                .filter(|alarm| {
+                    alarm.meets_immediate_downgrade_threshold(
+                        self.config.critical_severity_threshold,
+                    )
+                })
                 .all(|a| {
                     self.acquisition_ledger
                         .get_domain_evidence(a.domain)
                         .is_some_and(|e| {
-                            e.status.is_healthy()
+                            e.supports_freshness(self.config.min_acquisition_samples)
                                 && e.burndown_ratio >= self.config.min_burndown_ratio
                         })
                 });
@@ -1063,7 +1110,10 @@ impl FreshnessGate {
         // Check required active domains.
         if !self
             .acquisition_ledger
-            .all_domains_healthy(&self.config.required_active_domains)
+            .all_domains_healthy_with_min_samples(
+                &self.config.required_active_domains,
+                self.config.min_acquisition_samples,
+            )
             && worst < FreshnessLevel::Aging
         {
             worst = FreshnessLevel::Aging;
@@ -1089,7 +1139,7 @@ impl FreshnessGate {
                 // Critical requires active acquisition with good burndown.
                 match acquisition {
                     Some(ev)
-                        if ev.status.is_healthy()
+                        if ev.supports_freshness(self.config.min_acquisition_samples)
                             && ev.burndown_ratio >= self.config.min_burndown_ratio =>
                     {
                         FreshnessLevel::Aging
@@ -1098,7 +1148,9 @@ impl FreshnessGate {
                 }
             }
             Some(ShiftSeverity::Warning) => match acquisition {
-                Some(ev) if ev.status.is_healthy() => FreshnessLevel::Aging,
+                Some(ev) if ev.supports_freshness(self.config.min_acquisition_samples) => {
+                    FreshnessLevel::Aging
+                }
                 _ => FreshnessLevel::Stale,
             },
             Some(ShiftSeverity::Info) => FreshnessLevel::Aging,
@@ -1262,6 +1314,12 @@ impl FreshnessGate {
         let cumulative_severity = self.alarm_ledger.cumulative_severity;
         let overall_burndown = self.acquisition_ledger.overall_burndown_ratio;
         let stalled_domains = self.acquisition_ledger.stalled_domains.len();
+        let required_domains_healthy = self
+            .acquisition_ledger
+            .all_domains_healthy_with_min_samples(
+                &self.config.required_active_domains,
+                self.config.min_acquisition_samples,
+            );
 
         GateSummary {
             current_epoch: self.current_epoch,
@@ -1269,6 +1327,7 @@ impl FreshnessGate {
             cumulative_severity,
             overall_burndown,
             stalled_domains,
+            required_domains_healthy,
             silence_ok,
             total_evaluations: self.total_evaluations,
         }
@@ -1292,16 +1351,26 @@ pub struct GateSummary {
     pub overall_burndown: u64,
     /// Number of stalled domains.
     pub stalled_domains: usize,
+    /// Whether all required acquisition domains satisfy the configured sample floor.
+    #[serde(default = "gate_summary_required_domains_healthy_default")]
+    pub required_domains_healthy: bool,
     /// Whether silence is within bounds.
     pub silence_ok: bool,
     /// Total evaluations performed.
     pub total_evaluations: u64,
 }
 
+const fn gate_summary_required_domains_healthy_default() -> bool {
+    true
+}
+
 impl GateSummary {
     /// Whether the gate is in a healthy state.
     pub fn is_healthy(&self) -> bool {
-        self.silence_ok && self.active_alarms == 0 && self.stalled_domains == 0
+        self.silence_ok
+            && self.active_alarms == 0
+            && self.stalled_domains == 0
+            && self.required_domains_healthy
     }
 }
 
@@ -1339,18 +1408,28 @@ impl DecisionReceipt {
     pub fn from_verdict(verdict: &FreshnessVerdict, config: &GateConfig) -> Self {
         let rollout_trust =
             RolloutTrustLevel::from_freshness(verdict.freshness, config.permit_rollout_when_aging);
+        let alarm_count = verdict.contributing_alarms.len();
 
         let mut hasher = Sha256::new();
         hasher.update(b"decision_receipt");
+        hasher.update(SCHEMA_VERSION.as_bytes());
+        hasher.update(COMPONENT.as_bytes());
+        hasher.update(POLICY_ID.as_bytes());
         hasher.update(verdict.claim_id.as_bytes());
         hasher.update(verdict.evaluation_epoch.as_u64().to_le_bytes());
+        hasher.update(verdict.freshness.as_str().as_bytes());
+        hasher.update(verdict.adjusted_confidence.to_le_bytes());
+        hasher.update(rollout_trust.as_str().as_bytes());
+        hasher.update((alarm_count as u64).to_le_bytes());
+        hasher.update(verdict.verdict_hash.as_bytes());
         let receipt_hash = ContentHash::compute(&hasher.finalize());
 
         Self {
             receipt_id: format!(
-                "receipt-{}-{}",
+                "receipt-{}-{}-{}",
                 verdict.claim_id,
-                verdict.evaluation_epoch.as_u64()
+                verdict.evaluation_epoch.as_u64(),
+                receipt_hash.to_hex()
             ),
             claim_id: verdict.claim_id.clone(),
             component: COMPONENT.to_string(),
@@ -1358,7 +1437,7 @@ impl DecisionReceipt {
             freshness: verdict.freshness,
             adjusted_confidence: verdict.adjusted_confidence,
             rollout_trust,
-            alarm_count: verdict.contributing_alarms.len(),
+            alarm_count,
             epoch: verdict.evaluation_epoch,
             receipt_hash,
         }
@@ -1752,6 +1831,19 @@ mod tests {
     }
 
     #[test]
+    fn test_ledger_threshold_aware_immediate_downgrade() {
+        let mut ledger = AlarmLedger::new();
+        ledger.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::General,
+            ShiftSeverity::Warning,
+            1,
+        ));
+        assert!(!ledger.has_alarm_at_or_above_threshold(500_000));
+        assert!(ledger.has_alarm_at_or_above_threshold(400_000));
+    }
+
+    #[test]
     fn test_ledger_content_hash_deterministic() {
         let mut l1 = AlarmLedger::new();
         let mut l2 = AlarmLedger::new();
@@ -1838,6 +1930,28 @@ mod tests {
             AcquisitionStatus::Active,
         ));
         assert!(ledger.all_domains_healthy(&required));
+    }
+
+    #[test]
+    fn test_acq_ledger_all_domains_healthy_with_min_samples() {
+        let mut ledger = AcquisitionLedger::new();
+        let mut required = BTreeSet::new();
+        required.insert(ShiftDomain::General);
+        ledger.record_evidence(make_acquisition(
+            ShiftDomain::General,
+            4,
+            100,
+            AcquisitionStatus::Active,
+        ));
+        assert!(!ledger.all_domains_healthy_with_min_samples(&required, 5));
+
+        ledger.record_evidence(make_acquisition(
+            ShiftDomain::General,
+            5,
+            100,
+            AcquisitionStatus::Active,
+        ));
+        assert!(ledger.all_domains_healthy_with_min_samples(&required, 5));
     }
 
     // --- SilenceTracker ---
@@ -2314,6 +2428,28 @@ mod tests {
         assert_eq!(receipt, back);
     }
 
+    #[test]
+    fn test_receipt_hash_changes_with_verdict_content() {
+        let mut gate = FreshnessGate::new(epoch(10));
+        gate.silence_tracker.record_signal(epoch(10));
+        let claim = make_claim("c1", ClaimSurface::Performance, &[ShiftDomain::General]);
+
+        let fresh_receipt =
+            DecisionReceipt::from_verdict(&gate.evaluate_claim(&claim), &gate.config);
+
+        gate.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::General,
+            ShiftSeverity::Warning,
+            9,
+        ));
+        let stale_receipt =
+            DecisionReceipt::from_verdict(&gate.evaluate_claim(&claim), &gate.config);
+
+        assert_ne!(fresh_receipt.receipt_id, stale_receipt.receipt_id);
+        assert_ne!(fresh_receipt.receipt_hash, stale_receipt.receipt_hash);
+    }
+
     // --- Edge Cases ---
 
     #[test]
@@ -2345,6 +2481,29 @@ mod tests {
     }
 
     #[test]
+    fn test_summary_required_active_domains_affect_health() {
+        let mut config = GateConfig::default();
+        config.required_active_domains.insert(ShiftDomain::ApiUsage);
+        let mut gate = FreshnessGate::with_config(config, epoch(10));
+        gate.silence_tracker.record_signal(epoch(10));
+
+        let missing = gate.summary();
+        assert!(!missing.required_domains_healthy);
+        assert!(!missing.is_healthy());
+
+        gate.record_acquisition(make_acquisition(
+            ShiftDomain::ApiUsage,
+            10,
+            100,
+            AcquisitionStatus::Active,
+        ));
+
+        let satisfied = gate.summary();
+        assert!(satisfied.required_domains_healthy);
+        assert!(satisfied.is_healthy());
+    }
+
+    #[test]
     fn test_total_evaluations_counter() {
         let mut gate = FreshnessGate::new(epoch(1));
         gate.silence_tracker.record_signal(epoch(1));
@@ -2371,6 +2530,48 @@ mod tests {
         let gate = FreshnessGate::with_config(config.clone(), epoch(1));
         assert_eq!(gate.config.max_alarm_age_epochs, 10);
         assert!(!gate.config.permit_rollout_when_aging);
+    }
+
+    #[test]
+    fn test_gate_custom_critical_threshold_is_honored() {
+        let mut config = GateConfig::default();
+        config.critical_severity_threshold = 900_000;
+        let mut gate = FreshnessGate::with_config(config, epoch(10));
+        gate.silence_tracker.record_signal(epoch(10));
+        gate.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::General,
+            ShiftSeverity::Critical,
+            9,
+        ));
+
+        let claim = make_claim("c1", ClaimSurface::Performance, &[ShiftDomain::General]);
+        let verdict = gate.evaluate_claim(&claim);
+        assert_eq!(verdict.freshness, FreshnessLevel::Stale);
+    }
+
+    #[test]
+    fn test_gate_min_acquisition_samples_are_required_for_freshness_relief() {
+        let mut config = GateConfig::default();
+        config.min_acquisition_samples = 5;
+        let mut gate = FreshnessGate::with_config(config, epoch(10));
+        gate.silence_tracker.record_signal(epoch(10));
+        gate.record_alarm(make_alarm(
+            "a1",
+            ShiftDomain::ApiUsage,
+            ShiftSeverity::Warning,
+            9,
+        ));
+        gate.record_acquisition(make_acquisition(
+            ShiftDomain::ApiUsage,
+            4,
+            100,
+            AcquisitionStatus::Active,
+        ));
+
+        let claim = make_claim("c1", ClaimSurface::Performance, &[ShiftDomain::ApiUsage]);
+        let verdict = gate.evaluate_claim(&claim);
+        assert_eq!(verdict.freshness, FreshnessLevel::Stale);
     }
 
     #[test]

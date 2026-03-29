@@ -599,6 +599,19 @@ fn enrichment_silence_tracker_signal_resets() {
     assert!(!tracker.check_silence(epoch(110), 50));
 }
 
+#[test]
+fn enrichment_silence_tracker_ignores_regressive_signal_epochs() {
+    let mut tracker = SilenceTracker::new();
+    tracker.record_signal(epoch(50));
+    assert!(tracker.check_silence(epoch(101), 50));
+
+    tracker.record_signal(epoch(49));
+
+    assert_eq!(tracker.last_signal_epoch, Some(epoch(50)));
+    assert!(tracker.silence_exceeded);
+    assert_eq!(tracker.silent_epochs, 51);
+}
+
 // ===========================================================================
 // BenchmarkClaim builder tests
 // ===========================================================================
@@ -653,6 +666,25 @@ fn enrichment_gate_summary_healthy_no_alarms() {
     let summary = gate.summary();
     assert!(summary.is_healthy());
     assert_eq!(summary.active_alarms, 0);
+}
+
+#[test]
+fn enrichment_gate_advance_epoch_refreshes_silence_automatically() {
+    let mut gate = FreshnessGate::new(epoch(1));
+    gate.silence_tracker.record_signal(epoch(1));
+    gate.advance_epoch(epoch(52));
+
+    let claim =
+        make_claim("c1", ClaimSurface::Performance, 900_000).with_domain(ShiftDomain::General);
+    let verdict = gate.evaluate_claim(&claim);
+
+    assert_eq!(verdict.freshness, FreshnessLevel::Stale);
+    assert!(
+        verdict
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("Silence exceeded"))
+    );
 }
 
 #[test]
@@ -730,6 +762,27 @@ fn enrichment_decision_receipt_serde_roundtrip() {
     assert_eq!(receipt.freshness, back.freshness);
 }
 
+#[test]
+fn enrichment_decision_receipt_hash_tracks_verdict_content() {
+    let mut gate = FreshnessGate::new(epoch(1));
+    gate.silence_tracker.record_signal(epoch(1));
+    let claim =
+        make_claim("c1", ClaimSurface::Performance, 900_000).with_domain(ShiftDomain::General);
+
+    let fresh_receipt = DecisionReceipt::from_verdict(&gate.evaluate_claim(&claim), &gate.config);
+
+    gate.record_alarm(make_alarm(
+        "a1",
+        ShiftDomain::General,
+        ShiftSeverity::Warning,
+        1,
+    ));
+    let stale_receipt = DecisionReceipt::from_verdict(&gate.evaluate_claim(&claim), &gate.config);
+
+    assert_ne!(fresh_receipt.receipt_id, stale_receipt.receipt_id);
+    assert_ne!(fresh_receipt.receipt_hash, stale_receipt.receipt_hash);
+}
+
 // ===========================================================================
 // GateConfig defaults
 // ===========================================================================
@@ -762,6 +815,10 @@ fn enrichment_gate_summary_serde_roundtrip() {
     let json = serde_json::to_string(&summary).unwrap();
     let back: GateSummary = serde_json::from_str(&json).unwrap();
     assert_eq!(summary.active_alarms, back.active_alarms);
+    assert_eq!(
+        summary.required_domains_healthy,
+        back.required_domains_healthy
+    );
 }
 
 // ===========================================================================

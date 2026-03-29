@@ -564,6 +564,19 @@ fn test_silence_reset_by_alarm_and_acquisition() {
     assert!(!gate.silence_tracker.silence_exceeded);
 }
 
+#[test]
+fn test_regressive_signal_epoch_does_not_clear_silence() {
+    let mut tracker = SilenceTracker::new();
+    tracker.record_signal(epoch(100));
+    assert!(tracker.check_silence(epoch(151), 50));
+
+    tracker.record_signal(epoch(90));
+
+    assert_eq!(tracker.last_signal_epoch, Some(epoch(100)));
+    assert!(tracker.silence_exceeded);
+    assert_eq!(tracker.silent_epochs, 51);
+}
+
 // ---------------------------------------------------------------------------
 // 11. Alarm lifecycle — resolve and epoch advance
 // ---------------------------------------------------------------------------
@@ -597,6 +610,24 @@ fn test_advance_epoch_prunes_stale_alarms() {
     gate.advance_epoch(epoch(200));
     assert_eq!(gate.current_epoch, epoch(200));
     assert_eq!(gate.alarm_ledger.active_count(), 0);
+}
+
+#[test]
+fn test_advance_epoch_auto_refreshes_silence_for_evaluation() {
+    let mut gate = FreshnessGate::new(epoch(10));
+    gate.silence_tracker.record_signal(epoch(10));
+    gate.advance_epoch(epoch(61));
+
+    let claim = make_claim("c1", ClaimSurface::Performance, &[ShiftDomain::General]);
+    let verdict = gate.evaluate_claim(&claim);
+
+    assert_eq!(verdict.freshness, FreshnessLevel::Stale);
+    assert!(
+        verdict
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("Silence exceeded"))
+    );
 }
 
 #[test]
@@ -758,6 +789,25 @@ fn test_decision_receipt_downgraded_verdict() {
     assert_eq!(receipt.alarm_count, 1);
 }
 
+#[test]
+fn test_decision_receipt_hash_changes_when_verdict_changes() {
+    let mut gate = make_gate_with_signal(10);
+    let claim = make_claim("c1", ClaimSurface::Performance, &[ShiftDomain::General]);
+
+    let fresh_receipt = DecisionReceipt::from_verdict(&gate.evaluate_claim(&claim), &gate.config);
+
+    gate.record_alarm(make_alarm(
+        "a1",
+        ShiftDomain::General,
+        ShiftSeverity::Warning,
+        9,
+    ));
+    let stale_receipt = DecisionReceipt::from_verdict(&gate.evaluate_claim(&claim), &gate.config);
+
+    assert_ne!(fresh_receipt.receipt_id, stale_receipt.receipt_id);
+    assert_ne!(fresh_receipt.receipt_hash, stale_receipt.receipt_hash);
+}
+
 // ---------------------------------------------------------------------------
 // 15. GateSummary
 // ---------------------------------------------------------------------------
@@ -768,6 +818,7 @@ fn test_gate_summary_healthy_and_unhealthy() {
     let healthy = gate.summary();
     assert!(healthy.is_healthy());
     assert_eq!(healthy.active_alarms, 0);
+    assert!(healthy.required_domains_healthy);
 
     gate.record_alarm(make_alarm(
         "a1",
@@ -782,6 +833,7 @@ fn test_gate_summary_healthy_and_unhealthy() {
     assert!(!unhealthy.is_healthy());
     assert_eq!(unhealthy.active_alarms, 1);
     assert!(unhealthy.cumulative_severity > 0);
+    assert!(unhealthy.required_domains_healthy);
     assert_eq!(unhealthy.total_evaluations, 1);
 }
 
@@ -800,6 +852,8 @@ fn test_required_active_domains_degrade_and_satisfy() {
 
     // Required domain not covered => at least Aging
     assert!(gate.evaluate_claim(&claim).freshness >= FreshnessLevel::Aging);
+    assert!(!gate.summary().required_domains_healthy);
+    assert!(!gate.summary().is_healthy());
 
     // Satisfy the requirement
     gate.record_acquisition(make_acquisition(
@@ -809,6 +863,8 @@ fn test_required_active_domains_degrade_and_satisfy() {
         AcquisitionStatus::Active,
     ));
     assert_eq!(gate.evaluate_claim(&claim).freshness, FreshnessLevel::Fresh);
+    assert!(gate.summary().required_domains_healthy);
+    assert!(gate.summary().is_healthy());
 }
 
 // ---------------------------------------------------------------------------
@@ -841,6 +897,57 @@ fn test_permit_rollout_when_aging_flag() {
         9,
     ));
     assert!(!gate2.evaluate_claim(&claim).rollout_permitted);
+}
+
+#[test]
+fn test_custom_critical_severity_threshold_controls_immediate_invalidation() {
+    let mut config = GateConfig::default();
+    config.critical_severity_threshold = 900_000;
+    let mut gate = FreshnessGate::with_config(config, epoch(10));
+    gate.silence_tracker.record_signal(epoch(10));
+    gate.record_alarm(make_alarm(
+        "a1",
+        ShiftDomain::General,
+        ShiftSeverity::Critical,
+        9,
+    ));
+
+    let claim = make_claim("c1", ClaimSurface::Performance, &[ShiftDomain::General]);
+    let verdict = gate.evaluate_claim(&claim);
+    assert_eq!(verdict.freshness, FreshnessLevel::Stale);
+    assert_eq!(verdict.adjusted_confidence, 360_000);
+}
+
+#[test]
+fn test_min_acquisition_samples_gate_warning_recovery() {
+    let mut config = GateConfig::default();
+    config.min_acquisition_samples = 5;
+    let mut gate = FreshnessGate::with_config(config, epoch(10));
+    gate.silence_tracker.record_signal(epoch(10));
+    gate.record_alarm(make_alarm(
+        "a1",
+        ShiftDomain::General,
+        ShiftSeverity::Warning,
+        9,
+    ));
+    gate.record_acquisition(make_acquisition(
+        ShiftDomain::General,
+        4,
+        100,
+        AcquisitionStatus::Active,
+    ));
+
+    let claim = make_claim("c1", ClaimSurface::Performance, &[ShiftDomain::General]);
+    let verdict = gate.evaluate_claim(&claim);
+    assert_eq!(verdict.freshness, FreshnessLevel::Stale);
+
+    gate.record_acquisition(make_acquisition(
+        ShiftDomain::General,
+        5,
+        100,
+        AcquisitionStatus::Active,
+    ));
+    assert_eq!(gate.evaluate_claim(&claim).freshness, FreshnessLevel::Aging);
 }
 
 // ---------------------------------------------------------------------------

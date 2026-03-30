@@ -715,12 +715,13 @@ impl Ir1Op {
                     "catch_label".to_string(),
                     CanonicalValue::U64(u64::from(*catch_label)),
                 );
-                if let Some(fl) = finally_label {
-                    map.insert(
-                        "finally_label".to_string(),
-                        CanonicalValue::U64(u64::from(*fl)),
-                    );
-                }
+                map.insert(
+                    "finally_label".to_string(),
+                    match finally_label {
+                        Some(fl) => CanonicalValue::U64(u64::from(*fl)),
+                        None => CanonicalValue::Null,
+                    },
+                );
             }
             Self::EndTry => {
                 map.insert(
@@ -1540,12 +1541,13 @@ impl Ir3Instruction {
                     "catch_target".to_string(),
                     CanonicalValue::U64(u64::from(*catch_target)),
                 );
-                if let Some(ft) = finally_target {
-                    map.insert(
-                        "finally_target".to_string(),
-                        CanonicalValue::U64(u64::from(*ft)),
-                    );
-                }
+                map.insert(
+                    "finally_target".to_string(),
+                    match finally_target {
+                        Some(ft) => CanonicalValue::U64(u64::from(*ft)),
+                        None => CanonicalValue::Null,
+                    },
+                );
             }
             Self::EndTry => {
                 map.insert(

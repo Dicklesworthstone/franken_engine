@@ -697,12 +697,33 @@ impl DecisionReceipt {
     /// Compute and set the content hash for this receipt.
     pub fn seal(&mut self) {
         let mut buf = Vec::new();
+        // Length-prefix variable-length strings to prevent delimiter collisions.
+        buf.extend_from_slice(&(self.schema_version.len() as u32).to_be_bytes());
         buf.extend_from_slice(self.schema_version.as_bytes());
+        buf.extend_from_slice(&(self.receipt_id.len() as u32).to_be_bytes());
         buf.extend_from_slice(self.receipt_id.as_bytes());
         buf.extend_from_slice(&(self.decision_kind as u8).to_be_bytes());
         buf.extend_from_slice(&self.epoch.as_u64().to_be_bytes());
         buf.extend_from_slice(&self.small_ratio_millionths.to_be_bytes());
         buf.extend_from_slice(self.benchmark_evidence.trace_hash.as_bytes());
+        // Include previously-omitted fields so the seal covers all receipt state.
+        buf.extend_from_slice(&(self.admission_policy_label.len() as u32).to_be_bytes());
+        buf.extend_from_slice(self.admission_policy_label.as_bytes());
+        match &self.parity_result {
+            Some(pr) => {
+                buf.push(1);
+                buf.push(pr.verdict.clone() as u8);
+                buf.extend_from_slice(&pr.hit_rate_delta_millionths.to_be_bytes());
+            }
+            None => buf.push(0),
+        }
+        match &self.rollback_record {
+            Some(rr) => {
+                buf.push(1);
+                buf.extend_from_slice(rr.evidence_hash.as_bytes());
+            }
+            None => buf.push(0),
+        }
         self.content_hash = compute_content_hash(&buf);
     }
 }

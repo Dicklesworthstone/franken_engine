@@ -526,7 +526,9 @@ impl OrdinaryObject {
         for key in self.properties.keys() {
             match key {
                 PropertyKey::String(s) => {
-                    if let Ok(n) = s.parse::<u32>() {
+                    if let Ok(n) = s.parse::<u32>()
+                        && n < u32::MAX
+                    {
                         int_keys.push((u64::from(n), key.clone()));
                     } else {
                         str_keys.push(key.clone());

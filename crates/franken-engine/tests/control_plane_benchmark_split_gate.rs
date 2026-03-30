@@ -51,6 +51,12 @@ fn load_control_plane_benchmark_script() -> String {
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
 }
 
+fn load_control_plane_benchmark_replay_script() -> String {
+    let path = repo_root().join("scripts/e2e/control_plane_benchmark_split_gate_replay.sh");
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -323,6 +329,18 @@ fn control_plane_benchmark_doc_uses_rch_only_repo_local_target_dir_and_replay_wr
         "doc must reference the replay wrapper"
     );
     assert!(
+        doc.contains("CONTROL_PLANE_BENCHMARK_SPLIT_GATE_REPLAY_RUN_DIR"),
+        "doc must describe exact preserved-run replay"
+    );
+    assert!(
+        doc.contains("latest complete bundle automatically"),
+        "doc must explain latest-complete replay selection"
+    );
+    assert!(
+        doc.contains("newest directory is"),
+        "doc must describe incomplete newest-directory fallback behavior"
+    );
+    assert!(
         doc.contains("$PWD/target_rch_control_plane_benchmark_split_gate_verify"),
         "doc must show the repo-local target dir example"
     );
@@ -421,6 +439,64 @@ fn control_plane_benchmark_script_uses_repo_local_target_dir_and_hardened_artifa
     assert!(
         !script.contains("warning: rch not found; running locally for this environment"),
         "suite script must not allow local fallback"
+    );
+}
+
+#[test]
+fn control_plane_benchmark_replay_script_prefers_complete_bundles_and_supports_explicit_run_dirs() {
+    let script = load_control_plane_benchmark_replay_script();
+
+    assert!(
+        script.contains("CONTROL_PLANE_BENCHMARK_SPLIT_GATE_REPLAY_RUN_DIR"),
+        "replay script must support explicit preserved-run replay"
+    );
+    assert!(
+        script.contains("run_dir_is_complete()"),
+        "replay script must validate bundle completeness"
+    );
+    for artifact in [
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "control_plane_real_context_overhead_report.json",
+        "benchmark_split_delta_report.json",
+        "summary.md",
+        "env.json",
+        "repro.lock",
+        "trace_ids",
+        "step_logs/step_000.log",
+    ] {
+        assert!(
+            script.contains(artifact),
+            "replay script must require artifact: {artifact}"
+        );
+    }
+    assert!(
+        script.contains("newest directory ${latest_artifact_dir_path} is incomplete; using latest complete run directory ${latest_run_dir}"),
+        "replay script must warn when the newest bundle is incomplete"
+    );
+    assert!(
+        script.contains(
+            "[control-plane-benchmark-split] latest complete run directory: ${latest_run_dir}"
+        ),
+        "replay script must print the selected run directory"
+    );
+    assert!(
+        script
+            .contains("cat \"${latest_run_dir}/control_plane_real_context_overhead_report.json\""),
+        "replay script must print the real-context overhead report"
+    );
+    assert!(
+        script.contains("cat \"${latest_run_dir}/benchmark_split_delta_report.json\""),
+        "replay script must print the split delta report"
+    );
+    assert!(
+        script.contains("cat \"${latest_run_dir}/step_logs/step_000.log\""),
+        "replay script must print the retained step log"
+    );
+    assert!(
+        script.contains("\"${root_dir}/scripts/run_control_plane_benchmark_split_gate_suite.sh\""),
+        "replay script must still rerun the suite when no explicit run directory is supplied"
     );
 }
 

@@ -389,18 +389,30 @@ impl RiskAccumulator {
         self.compatibility_errors += obs.compatibility_errors as u64;
 
         let lane_reward = self.cumulative_rewards.entry(obs.lane).or_insert(0);
-        *lane_reward += reward_millionths;
+        *lane_reward = lane_reward.saturating_add(reward_millionths);
 
         let pulls = self.lane_pulls.entry(obs.lane).or_insert(0);
-        *pulls += 1;
+        *pulls = pulls.saturating_add(1);
 
-        // Estimate best mean reward across all pulled lanes
-        let best_empirical_mean = self
+        let our_total: i128 = self
+            .cumulative_rewards
+            .values()
+            .copied()
+            .map(i128::from)
+            .sum();
+        let n: i128 = self.lane_pulls.values().copied().map(i128::from).sum();
+
+        // Estimate best scaled total (best_mean * n) across all pulled lanes
+        let best_scaled_total = self
             .cumulative_rewards
             .iter()
             .filter_map(|(lane, &total)| {
                 let p = *self.lane_pulls.get(lane).unwrap_or(&0);
-                if p > 0 { Some(total / p as i64) } else { None }
+                if p > 0 {
+                    Some((i128::from(total) * n) / i128::from(p))
+                } else {
+                    None
+                }
             })
             .max()
             .unwrap_or(0);
@@ -409,11 +421,9 @@ impl RiskAccumulator {
         self.best_lane_reward_millionths =
             self.cumulative_rewards.values().copied().max().unwrap_or(0);
 
-        // Regret = best_mean * n - our_total
-        let our_total: i64 = self.cumulative_rewards.values().sum();
-        let n: i64 = self.lane_pulls.values().copied().sum::<u64>() as i64;
         if n > 0 {
-            self.cumulative_regret_millionths = best_empirical_mean * n - our_total;
+            let regret = (best_scaled_total - our_total).max(0);
+            self.cumulative_regret_millionths = saturating_i128_to_i64(regret);
         }
     }
 
@@ -451,6 +461,10 @@ impl RiskAccumulator {
         }
         None
     }
+}
+
+fn saturating_i128_to_i64(value: i128) -> i64 {
+    value.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
 }
 
 // ---------------------------------------------------------------------------
@@ -1261,6 +1275,46 @@ mod tests {
         assert!(matches!(
             violation,
             Some(DemotionReason::CompatibilityBudgetExhausted { .. })
+        ));
+    }
+
+    #[test]
+    fn risk_accumulator_regret_saturates_fail_closed_instead_of_wrapping() {
+        let mut ra = RiskAccumulator {
+            latencies_us: Vec::new(),
+            compatibility_errors: 0,
+            cumulative_regret_millionths: 0,
+            cumulative_rewards: BTreeMap::from([
+                (LaneChoice::Js, 1_000_000),
+                (LaneChoice::Wasm, 0),
+            ]),
+            lane_pulls: BTreeMap::from([
+                (LaneChoice::Js, 1),
+                (LaneChoice::Wasm, 10_000_000_000_000),
+            ]),
+            best_lane_reward_millionths: 0,
+        };
+        let budget = RiskBudget {
+            tail_latency_budget_us: u64::MAX,
+            compatibility_error_budget: u64::MAX,
+            regret_budget_millionths: 500_000,
+        };
+        let obs = LaneObservation {
+            lane: LaneChoice::Wasm,
+            latency_us: 10,
+            success: true,
+            dom_ops: 0,
+            signals_evaluated: 0,
+            safe_mode_entered: false,
+            compatibility_errors: 0,
+        };
+
+        ra.record(&obs, 0);
+
+        assert_eq!(ra.cumulative_regret_millionths, i64::MAX);
+        assert!(matches!(
+            ra.check_budgets(&budget),
+            Some(DemotionReason::RegretExceeded { .. })
         ));
     }
 

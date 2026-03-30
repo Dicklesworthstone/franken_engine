@@ -53,7 +53,10 @@ fn transition_at_exact_poly_boundary() {
     assert_eq!(p.observed_shapes.len(), DEFAULT_MAX_POLY_ENTRIES);
 
     // One more shape → megamorphic
-    let changed = p.record_access(DEFAULT_MAX_POLY_ENTRIES as u64 + 1, &IcPolicyConfig::default());
+    let changed = p.record_access(
+        DEFAULT_MAX_POLY_ENTRIES as u64 + 1,
+        &IcPolicyConfig::default(),
+    );
     assert!(changed);
     assert_eq!(p.current_state, IcSiteState::Megamorphic);
 }

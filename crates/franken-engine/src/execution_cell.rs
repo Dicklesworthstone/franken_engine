@@ -973,7 +973,7 @@ impl ExtensionHostBinding {
         budget_consumed_ms: u64,
     ) {
         let seq = self.event_sequence;
-        self.event_sequence += 1;
+        self.event_sequence = self.event_sequence.saturating_add(1);
         self.evidence_log.push(LifecycleEvidenceEntry {
             sequence: seq,
             trace_id: trace_id.to_string(),

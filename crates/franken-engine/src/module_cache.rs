@@ -2772,7 +2772,7 @@ pub fn simulate_s3fifo_adaptive(
         if let Some(entry) = find_value_entry_mut(&mut queues.small, &label) {
             counters.base.hit_count += 1;
             entry.hot = true;
-            record_epoch_access(&mut split_state, false);
+            record_epoch_access(&mut split_state, false, false);
             maybe_adapt_split(&mut split_state, config);
             continue;
         }
@@ -2781,7 +2781,7 @@ pub fn simulate_s3fifo_adaptive(
         if let Some(entry) = find_value_entry_mut(&mut queues.main, &label) {
             counters.base.hit_count += 1;
             entry.hot = true;
-            record_epoch_access(&mut split_state, false);
+            record_epoch_access(&mut split_state, false, false);
             maybe_adapt_split(&mut split_state, config);
             continue;
         }
@@ -2804,7 +2804,7 @@ pub fn simulate_s3fifo_adaptive(
         if !admitted {
             value_state.denied_count += 1;
             counters.value_denied_count += 1;
-            record_epoch_access(&mut split_state, false);
+            record_epoch_access(&mut split_state, false, true);
             maybe_adapt_split(&mut split_state, config);
             continue;
         }
@@ -2821,7 +2821,7 @@ pub fn simulate_s3fifo_adaptive(
         if remove_label(&mut queues.ghost, &label) {
             // Ghost hit: promote directly to main queue
             counters.base.ghost_hit_count += 1;
-            record_epoch_access(&mut split_state, true);
+            record_epoch_access(&mut split_state, true, true);
             adaptive_insert_main(
                 new_entry,
                 &mut queues,
@@ -2832,7 +2832,7 @@ pub fn simulate_s3fifo_adaptive(
             );
         } else {
             // First miss: insert into small queue
-            record_epoch_access(&mut split_state, false);
+            record_epoch_access(&mut split_state, false, true);
             adaptive_insert_small(
                 new_entry,
                 &mut queues,
@@ -2888,12 +2888,14 @@ pub fn simulate_s3fifo_adaptive(
     }
 }
 
-fn record_epoch_access(state: &mut AdaptiveSplitState, is_ghost_hit: bool) {
+fn record_epoch_access(state: &mut AdaptiveSplitState, is_ghost_hit: bool, is_miss: bool) {
     state.epoch_accesses += 1;
     if is_ghost_hit {
         state.epoch_ghost_hits += 1;
     }
-    state.epoch_misses += u64::from(!is_ghost_hit && state.epoch_accesses > 0);
+    if is_miss {
+        state.epoch_misses += 1;
+    }
 }
 
 fn maybe_adapt_split(state: &mut AdaptiveSplitState, config: &S3FifoAdaptiveConfig) {
@@ -2996,7 +2998,13 @@ fn adaptive_insert_main(
 ) {
     let main_capacity = config.current_main_capacity(current_small_capacity);
     while queues.main.len() >= main_capacity {
-        adaptive_make_room_in_main(queues, config.ghost_queue_entries, counters, value_state);
+        adaptive_make_room_in_main(
+            queues,
+            config.ghost_queue_entries,
+            counters,
+            value_state,
+            config,
+        );
     }
     queues.main.push_back(entry);
 }
@@ -3006,6 +3014,7 @@ fn adaptive_make_room_in_main(
     ghost_capacity: usize,
     counters: &mut CachePolicyCounters,
     value_state: &mut ValueAdmissionState,
+    config: &S3FifoAdaptiveConfig,
 ) {
     let mut attempts = queues.main.len();
     while attempts > 0 {
@@ -3022,11 +3031,7 @@ fn adaptive_make_room_in_main(
         }
 
         counters.eviction_count += 1;
-        update_value_threshold(
-            value_state,
-            candidate.value_millionths,
-            &S3FifoAdaptiveConfig::default(),
-        );
+        update_value_threshold(value_state, candidate.value_millionths, config);
         push_ghost(&candidate.label, &mut queues.ghost, ghost_capacity);
         return;
     }
@@ -3034,11 +3039,7 @@ fn adaptive_make_room_in_main(
     // All entries are hot; force-evict the oldest.
     if let Some(candidate) = queues.main.pop_front() {
         counters.eviction_count += 1;
-        update_value_threshold(
-            value_state,
-            candidate.value_millionths,
-            &S3FifoAdaptiveConfig::default(),
-        );
+        update_value_threshold(value_state, candidate.value_millionths, config);
         push_ghost(&candidate.label, &mut queues.ghost, ghost_capacity);
     }
 }

@@ -211,7 +211,7 @@ impl<T: Clone> SnapshotFastPath<T> {
         let mut writer_pressure_observations = 0;
         loop {
             let start = self.sequence.load(Ordering::Acquire);
-            if start % 2 == 1 {
+            if !start.is_multiple_of(2) {
                 writer_pressure_observations += 1;
                 self.total_retries.fetch_add(1, Ordering::Relaxed);
                 self.writer_pressure_observations

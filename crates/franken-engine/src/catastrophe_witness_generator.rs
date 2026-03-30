@@ -1046,7 +1046,7 @@ fn integer_sqrt_i128(n: i128) -> i128 {
     }
     let mut x = n;
     #[allow(clippy::manual_div_ceil)]
-    let mut y = (x + 1) / 2;
+    let mut y = (x / 2) + (x % 2);
     while y < x {
         x = y;
         y = (x + n / x) / 2;

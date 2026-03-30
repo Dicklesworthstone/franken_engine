@@ -473,15 +473,15 @@ impl ObligationReport {
         let mut pending_count = 0u64;
         let mut waived_count = 0u64;
         let mut insufficient_count = 0u64;
-        let mut has_fatal_violation = false;
+        let mut has_blocking_violation = false;
 
         for eval in &evaluations {
             match eval.status {
                 ObligationStatus::Satisfied => satisfied_count += 1,
                 ObligationStatus::Violated => {
                     violated_count += 1;
-                    if eval.severity == ObligationSeverity::Fatal {
-                        has_fatal_violation = true;
+                    if eval.severity >= ObligationSeverity::Error {
+                        has_blocking_violation = true;
                     }
                 }
                 ObligationStatus::Pending | ObligationStatus::InProgress => pending_count += 1,
@@ -498,7 +498,7 @@ impl ObligationReport {
             pending_count,
             waived_count,
             insufficient_count,
-            gate_pass: !has_fatal_violation && violated_count == 0 && pending_count == 0,
+            gate_pass: !has_blocking_violation && pending_count == 0,
         }
     }
 }

@@ -578,7 +578,7 @@ impl InvariantRegistry {
 
     /// Record a verification result.
     pub fn record_result(&mut self, result: VerificationResult) {
-        if let Some(VerificationStatus::Violated) = Some(result.status) {
+        if result.status == VerificationStatus::Violated {
             // Auto-generate fixture from counterexample
             if let Some(cx) = &result.counterexample {
                 let fixture_id = format!("auto-{}", result.property_id);

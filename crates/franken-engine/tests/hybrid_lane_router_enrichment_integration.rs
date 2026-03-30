@@ -4,6 +4,8 @@
 //! risk budget checks, conformal validity, CUSUM change-point,
 //! EXP3 adaptive weights, reward computation, and full router lifecycle.
 
+use std::collections::BTreeMap;
+
 use frankenengine_engine::hybrid_lane_router::*;
 
 // ---------------------------------------------------------------------------
@@ -357,6 +359,40 @@ fn risk_budget_compatibility_error_violation() {
     assert!(matches!(
         violation.unwrap(),
         DemotionReason::CompatibilityBudgetExhausted { .. }
+    ));
+}
+
+#[test]
+fn risk_budget_regret_overflow_stays_fail_closed() {
+    let mut acc = RiskAccumulator {
+        latencies_us: Vec::new(),
+        compatibility_errors: 0,
+        cumulative_regret_millionths: 0,
+        cumulative_rewards: BTreeMap::from([(LaneChoice::Js, 1_000_000), (LaneChoice::Wasm, 0)]),
+        lane_pulls: BTreeMap::from([(LaneChoice::Js, 1), (LaneChoice::Wasm, 10_000_000_000_000)]),
+        best_lane_reward_millionths: 0,
+    };
+    let budget = RiskBudget {
+        tail_latency_budget_us: u64::MAX,
+        compatibility_error_budget: u64::MAX,
+        regret_budget_millionths: 500_000,
+    };
+    let obs = LaneObservation {
+        lane: LaneChoice::Wasm,
+        latency_us: 100,
+        success: true,
+        dom_ops: 0,
+        signals_evaluated: 0,
+        safe_mode_entered: false,
+        compatibility_errors: 0,
+    };
+
+    acc.record(&obs, 0);
+
+    assert_eq!(acc.cumulative_regret_millionths, i64::MAX);
+    assert!(matches!(
+        acc.check_budgets(&budget),
+        Some(DemotionReason::RegretExceeded { .. })
     ));
 }
 

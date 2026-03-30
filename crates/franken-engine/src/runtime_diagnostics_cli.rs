@@ -2471,15 +2471,55 @@ fn normalize_or_default(value: &str, fallback: &str) -> String {
     }
 }
 
+fn normalize_onboarding_reproducible_command(command: &str) -> String {
+    const DEFAULT_COMMAND: &str = "runtime_diagnostics doctor --input <path> --summary";
+    const UNSUPPORTED_FRANKENCTL_FALLBACK: &str =
+        "runtime_diagnostics onboarding-scorecard --input <path> --signals <path> --summary";
+
+    let normalized = normalize_or_default(command, DEFAULT_COMMAND);
+    if normalized.starts_with("frankenctl ")
+        && !is_supported_frankenctl_reproducible_command(normalized.as_str())
+    {
+        UNSUPPORTED_FRANKENCTL_FALLBACK.to_string()
+    } else {
+        normalized
+    }
+}
+
+fn is_supported_frankenctl_reproducible_command(command: &str) -> bool {
+    const SUPPORTED_PREFIXES: [&str; 12] = [
+        "frankenctl compile",
+        "frankenctl run",
+        "frankenctl doctor",
+        "frankenctl verify compile-artifact",
+        "frankenctl verify receipt",
+        "frankenctl benchmark run",
+        "frankenctl benchmark score",
+        "frankenctl benchmark verify",
+        "frankenctl replay run",
+        "frankenctl react compile",
+        "frankenctl react build",
+        "frankenctl react contract",
+    ];
+
+    let trimmed = command.trim();
+    SUPPORTED_PREFIXES
+        .iter()
+        .any(|prefix| {
+            trimmed == *prefix
+                || trimmed
+                    .strip_prefix(prefix)
+                    .is_some_and(|suffix| suffix.starts_with(' '))
+        })
+}
+
 fn normalize_onboarding_signal(signal: &mut OnboardingScorecardSignal) {
     signal.signal_id = normalize_or_default(&signal.signal_id, "signal");
     signal.source = normalize_or_default(&signal.source, "external");
     signal.summary = normalize_or_default(&signal.summary, "unspecified signal");
     signal.remediation = normalize_or_default(&signal.remediation, "investigate signal");
-    signal.reproducible_command = normalize_or_default(
-        &signal.reproducible_command,
-        "runtime_diagnostics doctor --input <path> --summary",
-    );
+    signal.reproducible_command =
+        normalize_onboarding_reproducible_command(&signal.reproducible_command);
     signal.evidence_links.sort();
     signal.evidence_links.dedup();
     signal.owner_hint = signal
@@ -4865,6 +4905,62 @@ mod tests {
         assert!(rendered.contains("readiness: blocked"));
         assert!(rendered.contains("reproducible_commands:"));
         assert!(rendered.contains("runtime_diagnostics doctor --input <path> --summary"));
+    }
+
+    #[test]
+    fn onboarding_scorecard_normalizes_unsupported_frankenctl_repro_commands() {
+        let preflight = run_preflight_doctor(
+            &sample_input(),
+            EvidenceExportFilter::default(),
+            SupportBundleRedactionPolicy::default(),
+        );
+        let unsupported = "frankenctl verify --security";
+        let fallback =
+            "runtime_diagnostics onboarding-scorecard --input <path> --signals <path> --summary";
+        let scorecard = build_onboarding_scorecard(&OnboardingScorecardInput {
+            workload_id: "pkg/example".to_string(),
+            package_name: "example".to_string(),
+            target_platforms: vec!["linux-x64".to_string()],
+            preflight,
+            external_signals: vec![OnboardingScorecardSignal {
+                signal_id: "security:unsupported-command".to_string(),
+                source: "external".to_string(),
+                severity: EvidenceSeverity::Critical,
+                summary: "security drift requires investigation".to_string(),
+                remediation: "rerun the onboarding scorecard with updated signal inputs"
+                    .to_string(),
+                reproducible_command: unsupported.to_string(),
+                evidence_links: vec!["artifacts/security/latest/report.json".to_string()],
+                owner_hint: Some("security-lane".to_string()),
+            }],
+        });
+
+        assert!(
+            scorecard
+                .reproducible_commands
+                .iter()
+                .any(|command| command == fallback)
+        );
+        assert!(
+            !scorecard
+                .reproducible_commands
+                .iter()
+                .any(|command| command == unsupported)
+        );
+        assert!(
+            scorecard
+                .unresolved_signals
+                .iter()
+                .any(|signal| signal.signal_id == "security:unsupported-command"
+                    && signal.reproducible_command == fallback)
+        );
+        assert!(
+            scorecard
+                .next_steps
+                .iter()
+                .any(|step| step.step_id == "security:unsupported-command"
+                    && step.reproducible_command == fallback)
+        );
     }
 
     #[test]

@@ -1694,6 +1694,39 @@ Artifacts are written under:
 - `artifacts/rgc_fault_injection_chaos_verification_pack/<timestamp>/chaos_verification_report.json`
 - `artifacts/rgc_fault_injection_chaos_verification_pack/<timestamp>/step_logs/step_*.log`
 
+## RGC Security Enforcement Verification Pack
+
+`bd-1lsy.11.9` adds deterministic adversarial verification for capability
+denials, IFC/declassification controls, containment escalation behavior, and
+replay-first operator triage.
+
+```bash
+# RGC security-enforcement verification pack gate (rch-backed check + test + clippy)
+./scripts/run_rgc_security_enforcement_verification_pack.sh ci
+
+# deterministic replay wrapper
+./scripts/e2e/rgc_security_enforcement_verification_pack_replay.sh ci
+
+# exact preserved-bundle replay without rerunning the lane
+RGC_SECURITY_ENFORCEMENT_VERIFICATION_PACK_REPLAY_RUN_DIR=artifacts/rgc_security_enforcement_verification_pack/<timestamp> \
+  ./scripts/e2e/rgc_security_enforcement_verification_pack_replay.sh ci
+```
+
+Contract and vectors:
+
+- [`docs/RGC_SECURITY_ENFORCEMENT_VERIFICATION_PACK_V1.md`](./docs/RGC_SECURITY_ENFORCEMENT_VERIFICATION_PACK_V1.md)
+- `docs/rgc_security_enforcement_verification_pack_v1.json`
+- `docs/rgc_security_enforcement_verification_vectors_v1.json`
+- `crates/franken-engine/tests/rgc_security_enforcement_verification_pack.rs`
+
+Artifacts are written under:
+
+- `artifacts/rgc_security_enforcement_verification_pack/<timestamp>/run_manifest.json`
+- `artifacts/rgc_security_enforcement_verification_pack/<timestamp>/events.jsonl`
+- `artifacts/rgc_security_enforcement_verification_pack/<timestamp>/commands.txt`
+- `artifacts/rgc_security_enforcement_verification_pack/<timestamp>/step_logs/step_*.log`
+- `artifacts/rgc_security_enforcement_verification_pack/<timestamp>/security_verification_report.json`
+
 ## RGC Runtime Semantics Verification Pack
 
 `bd-1lsy.11.7` adds deterministic runtime-semantics verification coverage for

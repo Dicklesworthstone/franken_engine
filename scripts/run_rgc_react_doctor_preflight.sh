@@ -283,7 +283,7 @@ write_support_repro_index_artifact() {
       "triage_severity": "error",
       "repro_input_id": "react-hydration-repro",
       "repro_hash": "repro-react-hydration-repro",
-      "repro_command": "frankenctl react doctor --input fixtures/react_hydration_mismatch.json --json",
+      "repro_command": "./scripts/e2e/rgc_react_doctor_preflight_replay.sh ci",
       "recommended_action": "Route to the React integration lane and preserve the minimized fixture",
       "source_reproduction": "fixtures/ssr-config-error.json"
     }

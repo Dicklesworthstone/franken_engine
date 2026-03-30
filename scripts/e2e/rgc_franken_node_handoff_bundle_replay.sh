@@ -10,20 +10,24 @@ main_exit=0
 
 "${root_dir}/scripts/run_rgc_franken_node_handoff_bundle.sh" "${mode}" || main_exit=$?
 
-latest_artifact_dir() {
-  if [[ ! -d "${artifact_root}" ]]; then
-    return 0
-  fi
+artifact_dirs_by_mtime_desc() {
+  local search_root="${1:-}"
+  [[ -d "${search_root}" ]] || return 0
 
-  find "${artifact_root}" -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1
+  find "${search_root}" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | cut -d' ' -f2-
+}
+
+latest_artifact_dir() {
+  local candidate
+  while IFS= read -r candidate; do
+    printf '%s\n' "${candidate}"
+    return 0
+  done < <(artifact_dirs_by_mtime_desc "${artifact_root}")
 }
 
 latest_complete_run_dir() {
-  if [[ ! -d "${artifact_root}" ]]; then
-    return 0
-  fi
-
-  find "${artifact_root}" -mindepth 1 -maxdepth 1 -type d | sort | while IFS= read -r candidate; do
+  local candidate
+  while IFS= read -r candidate; do
     [[ -f "${candidate}/run_manifest.json" ]] || continue
     [[ -f "${candidate}/trace_ids.json" ]] || continue
     [[ -f "${candidate}/events.jsonl" ]] || continue
@@ -37,7 +41,8 @@ latest_complete_run_dir() {
     [[ -f "${candidate}/repo_split_contract.md" ]] || continue
     [[ -f "${candidate}/step_logs/step_000.log" ]] || continue
     printf '%s\n' "${candidate}"
-  done | tail -n 1
+    return 0
+  done < <(artifact_dirs_by_mtime_desc "${artifact_root}")
 }
 
 missing_bundle_exit_code() {

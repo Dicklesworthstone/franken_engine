@@ -39,6 +39,8 @@
     "`observability_publication_policy.json`",
     "`support_bundle_observability_attestation.json`"
     ,
+    "effective shipped capture mode",
+    "When the publication gate fails closed",
     "latest complete artifact bundle",
     "without rerunning the lane",
     "RGC_OBSERVABILITY_PUBLICATION_POLICY_REPLAY_RUN_DIR"
@@ -51,6 +53,14 @@
     {
       "path": "crates/franken-engine/src/observability_publication_bundle.rs",
       "fragment": "default_shipped_mode: ObservabilityMode::Budgeted,"
+    },
+    {
+      "path": "crates/franken-engine/src/observability_publication_bundle.rs",
+      "fragment": "fn effective_shipped_capture_mode("
+    },
+    {
+      "path": "crates/franken-engine/src/observability_publication_bundle.rs",
+      "fragment": "\"effective shipped capture mode: {}\""
     },
     {
       "path": "crates/franken-engine/src/observability_publication_bundle.rs",
@@ -70,7 +80,7 @@
     },
     {
       "path": "scripts/run_rgc_observability_publication_policy.sh",
-      "fragment": "emit_operator_verification_entry \"cat \\\"${step_logs_dir}/step-01.log\\\"\" \",\""
+      "fragment": "emit_operator_verification_entry \"cat \\\"${first_step_log_path}\\\"\" \",\""
     },
     {
       "path": "scripts/run_rgc_observability_publication_policy.sh",

@@ -31,12 +31,14 @@ The shipped bundle covers three workload classes:
 Each workload is evaluated in three capture modes:
 
 - `off`: never a publishable claim surface
-- `budgeted`: default shipped mode and the baseline operator-facing claim mode
+- `budgeted`: policy default shipped mode and the baseline operator-facing claim mode
 - `exact_shadow`: deterministic fallback/attestation mode when budgeted
   evidence is degraded or suppressed
 
-`budgeted` is the default shipped capture mode for the publication policy and
-support-bundle attestation surfaces.
+`budgeted` remains the publication policy's configured default shipped capture
+mode, while the support-bundle attestation reports the effective shipped capture
+mode. When the publication gate fails closed, that effective mode must flip to
+`exact_shadow`.
 
 ## Publication Bundle Contract
 
@@ -73,8 +75,8 @@ The publication policy must suppress claims when any of these conditions hold:
 - one or more workload cells remain suppressed
 
 Support-bundle export must carry explicit observability attestation so the
-shipped capture mode and suppression state are visible without reconstructing
-raw logs by hand.
+effective shipped capture mode and suppression state are visible without
+reconstructing raw logs by hand.
 
 ## Structured Logging And Artifact Contract
 

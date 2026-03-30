@@ -303,7 +303,7 @@
       ],
       "user_visible_diagnostic": {
         "error_code": "FE-RGC-016A-CAP-0007",
-        "diagnostic_surface": "frankenctl react build/run",
+        "diagnostic_surface": "frankenctl react build",
         "message_template": "React SSR entrypoints are not yet a shipped surface; reject the request and direct the operator to deterministic unsupported-surface guidance.",
         "remediation_bead": "bd-1lsy.10.11.2"
       },
@@ -336,7 +336,7 @@
       ],
       "user_visible_diagnostic": {
         "error_code": "FE-RGC-016A-CAP-0008",
-        "diagnostic_surface": "frankenctl react build/run",
+        "diagnostic_surface": "frankenctl react build",
         "message_template": "React client-entry preparation is not yet a shipped surface; reject the request and direct the operator to deterministic unsupported-surface guidance.",
         "remediation_bead": "bd-1lsy.10.11.2"
       },
@@ -369,7 +369,7 @@
       ],
       "user_visible_diagnostic": {
         "error_code": "FE-RGC-016A-CAP-0009",
-        "diagnostic_surface": "frankenctl react build/run",
+        "diagnostic_surface": "frankenctl react build",
         "message_template": "React hydration handoff artifacts are not yet shipped; reject the request and direct the operator to deterministic unsupported-surface guidance.",
         "remediation_bead": "bd-1lsy.10.11.2"
       },

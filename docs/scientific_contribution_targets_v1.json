@@ -139,6 +139,17 @@
     "scientific_contribution_targets_v1.md",
     "step_logs/step_*.log"
   ],
+  "required_readme_fragments": [
+    "## Scientific Contribution Targets Gate",
+    "./scripts/run_scientific_contribution_targets.sh bundle",
+    "./scripts/run_scientific_contribution_targets.sh ci",
+    "./scripts/e2e/scientific_contribution_targets_replay.sh show",
+    "bd-2501.1",
+    "bd-2501.2",
+    "bd-2501.3",
+    "artifacts/scientific_contribution_targets/<timestamp>/trace_ids.json",
+    "target_rch_scientific_contribution_targets_verify"
+  ],
   "gate_runner": {
     "script": "scripts/run_scientific_contribution_targets.sh",
     "replay_wrapper": "scripts/e2e/scientific_contribution_targets_replay.sh",

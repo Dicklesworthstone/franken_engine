@@ -144,6 +144,23 @@ Required artifacts:
 - `scientific_contribution_targets_v1.md`
 - `step_logs/step_*.log`
 
+## README Surface Contract
+
+The machine-readable contract in
+`docs/scientific_contribution_targets_v1.json` also pins the operator-facing
+README surface through `required_readme_fragments`.
+
+Those fragments are intentionally narrow and must continue to cover:
+
+- the `Scientific Contribution Targets Gate` heading,
+- the bundle, `ci`, and replay commands,
+- the emitted artifact path surface, and
+- the `rch`-backed operator verification target directory.
+
+If the README stops surfacing those fragments, the Rust contract test must fail
+closed so Section 16 operator guidance cannot silently drift away from the
+machine-readable gate contract.
+
 ## Operator Verification
 
 This bundle currently fails closed because the output-contract milestone beads

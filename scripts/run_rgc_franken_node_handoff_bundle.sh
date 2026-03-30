@@ -17,7 +17,7 @@ stale_after_hours="${RGC_HANDOFF_MAX_EVIDENCE_AGE_HOURS:-720}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 target_namespace="${mode}_$$"
 target_dir="${CARGO_TARGET_DIR:-${root_dir}/target_rch_rgc_franken_node_handoff_bundle_${target_namespace}}"
-run_dir="${artifact_root}/${timestamp}"
+run_dir="${artifact_root}/${timestamp}_${target_namespace}"
 manifest_path="${run_dir}/run_manifest.json"
 events_path="${run_dir}/events.jsonl"
 commands_path="${run_dir}/commands.txt"
@@ -115,28 +115,29 @@ blocker_ledger_artifact_dir_is_complete() {
   [[ -f "${candidate}/step_logs/step_000.log" ]] || return 1
 }
 
-latest_complete_support_contract_artifact() {
-  if [[ ! -d "${root_dir}/artifacts/rgc_support_surface_contract" ]]; then
-    return 0
-  fi
+artifact_dirs_by_mtime_desc() {
+  local search_root="${1:-}"
+  [[ -d "${search_root}" ]] || return 0
 
-  find "${root_dir}/artifacts/rgc_support_surface_contract" \
-    -mindepth 1 -maxdepth 1 -type d | sort | while IFS= read -r candidate; do
+  find "${search_root}" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | cut -d' ' -f2-
+}
+
+latest_complete_support_contract_artifact() {
+  local candidate
+  while IFS= read -r candidate; do
     support_surface_artifact_dir_is_complete "${candidate}" || continue
     printf '%s\n' "${candidate}/support_surface_contract.json"
-  done | tail -n 1
+    return 0
+  done < <(artifact_dirs_by_mtime_desc "${root_dir}/artifacts/rgc_support_surface_contract")
 }
 
 latest_complete_blocker_ledger_artifact() {
-  if [[ ! -d "${root_dir}/artifacts/rgc_engine_product_blocker_ledger" ]]; then
-    return 0
-  fi
-
-  find "${root_dir}/artifacts/rgc_engine_product_blocker_ledger" \
-    -mindepth 1 -maxdepth 1 -type d | sort | while IFS= read -r candidate; do
+  local candidate
+  while IFS= read -r candidate; do
     blocker_ledger_artifact_dir_is_complete "${candidate}" || continue
     printf '%s\n' "${candidate}/engine_product_blocker_ledger.json"
-  done | tail -n 1
+    return 0
+  done < <(artifact_dirs_by_mtime_desc "${root_dir}/artifacts/rgc_engine_product_blocker_ledger")
 }
 
 resolve_support_contract_path() {

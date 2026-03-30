@@ -148,3 +148,28 @@ The replay wrapper prefers the suite entrypoint directly:
 ./scripts/e2e/control_plane_benchmark_split_gate_replay.sh test
 cat artifacts/control_plane_benchmark_split_gate/<timestamp>/step_logs/step_000.log
 ```
+
+When rerunning against preserved artifacts, the replay wrapper now resolves the
+latest complete bundle automatically, warns when the newest directory is
+incomplete, and prints the manifest, trace ids, events, commands, summary,
+environment lockfiles, both benchmark reports, and the first retained step log.
+
+To inspect an exact preserved run directory without rerunning the suite, set:
+
+```bash
+CONTROL_PLANE_BENCHMARK_SPLIT_GATE_REPLAY_RUN_DIR=artifacts/control_plane_benchmark_split_gate/<timestamp> \
+  ./scripts/e2e/control_plane_benchmark_split_gate_replay.sh test
+```
+
+The explicit run directory must already contain:
+
+- `run_manifest.json`
+- `events.jsonl`
+- `commands.txt`
+- `control_plane_real_context_overhead_report.json`
+- `benchmark_split_delta_report.json`
+- `summary.md`
+- `env.json`
+- `repro.lock`
+- `trace_ids`
+- `step_logs/step_000.log`

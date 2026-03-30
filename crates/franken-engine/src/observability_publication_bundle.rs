@@ -1164,6 +1164,24 @@ fn build_publication_policy(
     }
 }
 
+fn effective_shipped_capture_mode(
+    publication_policy: &ObservabilityPublicationPolicyArtifact,
+) -> ObservabilityMode {
+    if publication_policy.publication_gate_pass {
+        publication_policy.default_shipped_mode
+    } else {
+        ObservabilityMode::ExactShadow
+    }
+}
+
+fn support_bundle_attested(
+    publication_policy: &ObservabilityPublicationPolicyArtifact,
+    shipped_capture_mode: ObservabilityMode,
+) -> bool {
+    publication_policy.publication_gate_pass
+        || shipped_capture_mode == ObservabilityMode::ExactShadow
+}
+
 fn build_support_bundle_attestation(
     quality_bundle: &QualityBundle,
     supremacy_matrix: &ObservabilityOnSupremacyMatrixArtifact,
@@ -1172,10 +1190,16 @@ fn build_support_bundle_attestation(
     artifact_hashes: &BTreeMap<String, String>,
 ) -> SupportBundleObservabilityAttestationArtifact {
     let suppressed_claim_count = publication_policy.suppressed_claims.len() as u64;
+    let shipped_capture_mode = effective_shipped_capture_mode(publication_policy);
+    let attested = support_bundle_attested(publication_policy, shipped_capture_mode);
     let mut operator_summary = vec![
         format!(
-            "default shipped capture mode: {}",
-            ObservabilityMode::Budgeted.as_str()
+            "policy default shipped capture mode: {}",
+            publication_policy.default_shipped_mode.as_str()
+        ),
+        format!(
+            "effective shipped capture mode: {}",
+            shipped_capture_mode.as_str()
         ),
         format!(
             "quality sentinel regime: {}",
@@ -1212,8 +1236,8 @@ fn build_support_bundle_attestation(
         schema_version: SUPPORT_BUNDLE_ATTESTATION_SCHEMA_VERSION.to_string(),
         component: COMPONENT.to_string(),
         bead_id: BEAD_ID.to_string(),
-        attested: publication_policy.publication_gate_pass,
-        shipped_capture_mode: ObservabilityMode::Budgeted,
+        attested,
+        shipped_capture_mode,
         quality_report_hash: artifact_hashes
             .get(OBSERVABILITY_BUDGET_SENTINEL_REPORT_FILE)
             .cloned()
@@ -1960,5 +1984,139 @@ mod tests {
                 "startup_sensitive::budgeted".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn effective_shipped_capture_mode_uses_policy_default_when_gate_passes() {
+        let policy = ObservabilityPublicationPolicyArtifact {
+            schema_version: PUBLICATION_POLICY_SCHEMA_VERSION.to_string(),
+            component: COMPONENT.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            default_shipped_mode: ObservabilityMode::Budgeted,
+            quality_gate_pass: true,
+            hot_path_summary: HotPathPublicationSummary {
+                manifest_id: "manifest-pass".to_string(),
+                manifest_hash: "hash-pass".to_string(),
+                overall_mode: "budgeted".to_string(),
+                publishable: true,
+                calibration_pass_count: 3,
+                calibration_total: 3,
+                thinning_retention_millionths: Some(500_000),
+                rejection_reasons: Vec::new(),
+            },
+            allowed_cells: vec!["dispatch_sensitive::budgeted".to_string()],
+            suppressed_claims: Vec::new(),
+            required_artifacts: Vec::new(),
+            fail_closed_conditions: Vec::new(),
+            publication_gate_pass: true,
+        };
+
+        assert_eq!(
+            effective_shipped_capture_mode(&policy),
+            ObservabilityMode::Budgeted
+        );
+    }
+
+    #[test]
+    fn effective_shipped_capture_mode_falls_back_to_exact_shadow_when_gate_fails_closed() {
+        let policy = ObservabilityPublicationPolicyArtifact {
+            schema_version: PUBLICATION_POLICY_SCHEMA_VERSION.to_string(),
+            component: COMPONENT.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            default_shipped_mode: ObservabilityMode::Budgeted,
+            quality_gate_pass: false,
+            hot_path_summary: HotPathPublicationSummary {
+                manifest_id: "manifest-fail".to_string(),
+                manifest_hash: "hash-fail".to_string(),
+                overall_mode: "budgeted".to_string(),
+                publishable: false,
+                calibration_pass_count: 2,
+                calibration_total: 3,
+                thinning_retention_millionths: Some(500_000),
+                rejection_reasons: vec!["calibration gap".to_string()],
+            },
+            allowed_cells: vec!["dispatch_sensitive::exact_shadow".to_string()],
+            suppressed_claims: vec![SuppressedClaim {
+                workload_id: "dispatch_sensitive".to_string(),
+                workload_class: ObservabilityWorkloadClass::DispatchSensitive,
+                mode: ObservabilityMode::Budgeted,
+                reasons: vec!["suppressed budgeted".to_string()],
+            }],
+            required_artifacts: Vec::new(),
+            fail_closed_conditions: vec!["quality degraded".to_string()],
+            publication_gate_pass: false,
+        };
+
+        assert_eq!(
+            effective_shipped_capture_mode(&policy),
+            ObservabilityMode::ExactShadow
+        );
+    }
+
+    #[test]
+    fn support_bundle_attested_when_publication_gate_passes() {
+        let policy = ObservabilityPublicationPolicyArtifact {
+            schema_version: PUBLICATION_POLICY_SCHEMA_VERSION.to_string(),
+            component: COMPONENT.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            default_shipped_mode: ObservabilityMode::Budgeted,
+            quality_gate_pass: true,
+            hot_path_summary: HotPathPublicationSummary {
+                manifest_id: "manifest-pass".to_string(),
+                manifest_hash: "hash-pass".to_string(),
+                overall_mode: "budgeted".to_string(),
+                publishable: true,
+                calibration_pass_count: 3,
+                calibration_total: 3,
+                thinning_retention_millionths: Some(500_000),
+                rejection_reasons: Vec::new(),
+            },
+            allowed_cells: vec!["dispatch_sensitive::budgeted".to_string()],
+            suppressed_claims: Vec::new(),
+            required_artifacts: Vec::new(),
+            fail_closed_conditions: Vec::new(),
+            publication_gate_pass: true,
+        };
+
+        assert!(support_bundle_attested(
+            &policy,
+            effective_shipped_capture_mode(&policy)
+        ));
+    }
+
+    #[test]
+    fn support_bundle_attested_in_exact_shadow_fallback() {
+        let policy = ObservabilityPublicationPolicyArtifact {
+            schema_version: PUBLICATION_POLICY_SCHEMA_VERSION.to_string(),
+            component: COMPONENT.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            default_shipped_mode: ObservabilityMode::Budgeted,
+            quality_gate_pass: false,
+            hot_path_summary: HotPathPublicationSummary {
+                manifest_id: "manifest-fail".to_string(),
+                manifest_hash: "hash-fail".to_string(),
+                overall_mode: "budgeted".to_string(),
+                publishable: false,
+                calibration_pass_count: 2,
+                calibration_total: 3,
+                thinning_retention_millionths: Some(500_000),
+                rejection_reasons: vec!["calibration gap".to_string()],
+            },
+            allowed_cells: vec!["dispatch_sensitive::exact_shadow".to_string()],
+            suppressed_claims: vec![SuppressedClaim {
+                workload_id: "dispatch_sensitive".to_string(),
+                workload_class: ObservabilityWorkloadClass::DispatchSensitive,
+                mode: ObservabilityMode::Budgeted,
+                reasons: vec!["suppressed budgeted".to_string()],
+            }],
+            required_artifacts: Vec::new(),
+            fail_closed_conditions: vec!["quality degraded".to_string()],
+            publication_gate_pass: false,
+        };
+
+        assert!(support_bundle_attested(
+            &policy,
+            effective_shipped_capture_mode(&policy)
+        ));
     }
 }

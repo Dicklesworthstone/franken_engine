@@ -113,7 +113,7 @@ fn write_observability_publication_bundle_emits_expected_artifacts() {
     .expect("parse attestation");
     assert_eq!(
         attestation.shipped_capture_mode,
-        ObservabilityMode::Budgeted
+        ObservabilityMode::ExactShadow
     );
     assert!(
         !attestation.operator_summary.is_empty(),
@@ -778,6 +778,61 @@ fn attestation_quality_and_hot_path_fields_non_empty() {
     .expect("parse attestation");
     assert!(!attestation.quality_overall_regime.is_empty());
     assert!(!attestation.hot_path_overall_mode.is_empty());
+}
+
+#[test]
+fn attestation_uses_exact_shadow_when_publication_gate_fails_closed() {
+    let out_dir = unique_dir("attestation_effective_mode");
+    let artifacts =
+        write_observability_publication_bundle(&out_dir).expect("write publication bundle");
+    let policy: ObservabilityPublicationPolicyArtifact = serde_json::from_slice(
+        &fs::read(&artifacts.observability_publication_policy_path).expect("read policy"),
+    )
+    .expect("parse policy");
+    let attestation: SupportBundleObservabilityAttestationArtifact = serde_json::from_slice(
+        &fs::read(&artifacts.support_bundle_observability_attestation_path)
+            .expect("read attestation"),
+    )
+    .expect("parse attestation");
+
+    assert!(
+        !policy.publication_gate_pass,
+        "fixture should stay fail-closed because suppressed claims remain"
+    );
+    assert_eq!(policy.default_shipped_mode, ObservabilityMode::Budgeted);
+    assert!(
+        attestation.attested,
+        "exact-shadow fallback is still an attested support-bundle mode"
+    );
+    assert_eq!(
+        attestation.shipped_capture_mode,
+        ObservabilityMode::ExactShadow
+    );
+}
+
+#[test]
+fn attestation_operator_summary_reports_policy_default_and_effective_mode() {
+    let out_dir = unique_dir("attestation_operator_summary_modes");
+    let artifacts =
+        write_observability_publication_bundle(&out_dir).expect("write publication bundle");
+    let attestation: SupportBundleObservabilityAttestationArtifact = serde_json::from_slice(
+        &fs::read(&artifacts.support_bundle_observability_attestation_path)
+            .expect("read attestation"),
+    )
+    .expect("parse attestation");
+
+    assert!(
+        attestation
+            .operator_summary
+            .iter()
+            .any(|line| line == "policy default shipped capture mode: budgeted")
+    );
+    assert!(
+        attestation
+            .operator_summary
+            .iter()
+            .any(|line| line == "effective shipped capture mode: exact_shadow")
+    );
 }
 
 // ---------------------------------------------------------------------------

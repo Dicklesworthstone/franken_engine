@@ -775,6 +775,8 @@ fn compute_bundle_hash(
     h.update((coverage_stats.red_count as u64).to_le_bytes());
     h.update((coverage_stats.yellow_count as u64).to_le_bytes());
     h.update((coverage_stats.missing_count as u64).to_le_bytes());
+    h.update((coverage_stats.unsupported_count as u64).to_le_bytes());
+    h.update((coverage_stats.mode_ambiguous_count as u64).to_le_bytes());
     ContentHash::compute(&h.finalize())
 }
 

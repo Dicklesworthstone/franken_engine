@@ -517,17 +517,17 @@ impl RevocationEnforcer {
 
     fn record_denial(&mut self, point: EnforcementPoint, transitive: bool) {
         let stats = self.stats.entry(point).or_default();
-        stats.checks += 1;
-        stats.denied += 1;
+        stats.checks = stats.checks.saturating_add(1);
+        stats.denied = stats.denied.saturating_add(1);
         if transitive {
-            stats.transitive_denials += 1;
+            stats.transitive_denials = stats.transitive_denials.saturating_add(1);
         }
     }
 
     fn record_cleared(&mut self, point: EnforcementPoint, checks: u32) {
         let stats = self.stats.entry(point).or_default();
-        stats.checks += 1;
-        stats.cleared += 1;
+        stats.checks = stats.checks.saturating_add(1);
+        stats.cleared = stats.cleared.saturating_add(1);
         // checks is the number of sub-checks within this enforcement call
         let _ = checks;
     }

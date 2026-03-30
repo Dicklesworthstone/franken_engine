@@ -25,8 +25,25 @@ use crate::security_epoch::SecurityEpoch;
 /// Slot IDs are short kebab-case strings chosen from a fixed vocabulary
 /// (see [`SlotKind`]).  They must be stable across releases so that
 /// promotion lineage and rollback references remain valid.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(into = "String")]
 pub struct SlotId(String);
+
+impl From<SlotId> for String {
+    fn from(id: SlotId) -> Self {
+        id.0
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SlotId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        SlotId::new(s).map_err(serde::de::Error::custom)
+    }
+}
 
 impl SlotId {
     /// Create a new `SlotId`.  Returns `Err` if the id is empty or
@@ -207,7 +224,13 @@ impl PromotionStatus {
     }
 
     pub fn is_delegate(&self) -> bool {
-        matches!(self, Self::Delegate | Self::Demoted { .. })
+        // PromotionCandidate is still delegate-backed (the delegate runs until
+        // promotion completes), so include it here to ensure
+        // native_count + delegate_count == total_slots.
+        matches!(
+            self,
+            Self::Delegate | Self::Demoted { .. } | Self::PromotionCandidate { .. }
+        )
     }
 }
 
@@ -1115,7 +1138,10 @@ impl SlotRegistry {
             .get_mut(id)
             .ok_or_else(|| SlotRegistryError::SlotNotFound { id: id.to_string() })?;
 
-        if !entry.status.is_delegate() {
+        if !matches!(
+            entry.status,
+            PromotionStatus::Delegate | PromotionStatus::Demoted { .. }
+        ) {
             return Err(SlotRegistryError::InvalidTransition {
                 id: id.to_string(),
                 from: entry.status.to_string(),
@@ -2712,7 +2738,7 @@ mod tests {
             candidate_digest: "d".to_string(),
         };
         assert!(!pc.is_native());
-        assert!(!pc.is_delegate());
+        assert!(pc.is_delegate());
 
         let promoted = PromotionStatus::Promoted {
             native_digest: "d".to_string(),
@@ -4018,6 +4044,19 @@ mod tests {
         assert!(reg.get(&id).unwrap().status.is_native());
         let err = reg
             .begin_candidacy(&id, "sha256:c2".into(), "t3".into())
+            .unwrap_err();
+        assert!(matches!(err, SlotRegistryError::InvalidTransition { .. }));
+    }
+
+    #[test]
+    fn begin_candidacy_from_candidate_is_invalid_transition() {
+        let mut reg = SlotRegistry::new();
+        let id = register_slot(&mut reg, "parser", SlotKind::Parser, "sha256:d1");
+        reg.begin_candidacy(&id, "sha256:c1".into(), "t1".into())
+            .unwrap();
+
+        let err = reg
+            .begin_candidacy(&id, "sha256:c2".into(), "t2".into())
             .unwrap_err();
         assert!(matches!(err, SlotRegistryError::InvalidTransition { .. }));
     }

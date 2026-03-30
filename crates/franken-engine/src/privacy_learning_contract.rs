@@ -1326,6 +1326,7 @@ impl PrivacyLearningContract {
     ) -> Result<EngineObjectId, engine_object_id::IdError> {
         let mut canonical = Vec::new();
         canonical.extend_from_slice(&epoch.as_u64().to_be_bytes());
+        canonical.extend_from_slice(&(zone.len() as u32).to_be_bytes());
         canonical.extend_from_slice(zone.as_bytes());
         canonical.extend_from_slice(&schema_version.to_be_bytes());
         engine_object_id::derive_id(

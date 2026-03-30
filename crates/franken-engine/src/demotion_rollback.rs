@@ -294,14 +294,16 @@ impl DemotionReceipt {
     ) -> Result<crate::engine_object_id::EngineObjectId, crate::engine_object_id::IdError> {
         let mut canonical = Vec::new();
         canonical.extend_from_slice(b"demotion|");
-        canonical.extend_from_slice(slot_id.as_str().as_bytes());
-        canonical.push(b'|');
-        canonical.extend_from_slice(zone.as_bytes());
-        canonical.push(b'|');
-        canonical.extend_from_slice(demoted_digest.as_bytes());
-        canonical.push(b'|');
-        canonical.extend_from_slice(restored_digest.as_bytes());
-        canonical.push(b'|');
+        // Length-prefix all variable-length strings to prevent delimiter
+        // collisions when field values contain '|'.
+        let lp = |buf: &mut Vec<u8>, s: &[u8]| {
+            buf.extend_from_slice(&(s.len() as u32).to_be_bytes());
+            buf.extend_from_slice(s);
+        };
+        lp(&mut canonical, slot_id.as_str().as_bytes());
+        lp(&mut canonical, zone.as_bytes());
+        lp(&mut canonical, demoted_digest.as_bytes());
+        lp(&mut canonical, restored_digest.as_bytes());
         canonical.extend_from_slice(&timestamp_ns.to_be_bytes());
         let schema_id = crate::engine_object_id::SchemaId::from_definition(
             demotion_receipt_schema_hash().0.as_slice(),

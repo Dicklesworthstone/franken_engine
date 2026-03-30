@@ -577,9 +577,11 @@ impl TransitionReceipt {
         let mut data = Vec::new();
         data.extend_from_slice(array_id.as_bytes());
         data.push(b'|');
-        data.extend_from_slice(&(transition.from.rank()).to_le_bytes());
-        data.extend_from_slice(&(transition.to.rank()).to_le_bytes());
+        data.extend_from_slice(serde_json::to_string(&transition.from).unwrap().as_bytes());
+        data.extend_from_slice(serde_json::to_string(&transition.to).unwrap().as_bytes());
+        data.extend_from_slice(serde_json::to_string(&transition.reason).unwrap().as_bytes());
         data.extend_from_slice(&transition.trigger_offset.to_le_bytes());
+        data.extend_from_slice(&transition.epoch.as_u64().to_le_bytes());
         let receipt_hash = ContentHash::compute(&data);
         let receipt_id = format!("tr-{}", &receipt_hash.to_hex()[..16]);
         Self {

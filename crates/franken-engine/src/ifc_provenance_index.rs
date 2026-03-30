@@ -690,16 +690,19 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         let proofs = self.flow_proofs_by_extension(extension_id, ctx)?;
         let claims = self.confinement_claims_by_extension(extension_id, ctx)?;
 
-        // Collect unique flows from events.
+        // Collect unique flows using serde_json for deterministic, lossless label
+        // serialization instead of Display (which loses Custom label structure).
+        let label_key =
+            |l: &Label| -> String { serde_json::to_string(l).unwrap_or_else(|_| format!("{l:?}")) };
         let event_flows: BTreeSet<(String, String)> = events
             .iter()
-            .map(|e| (e.source_label.to_string(), e.sink_clearance.to_string()))
+            .map(|e| (label_key(&e.source_label), label_key(&e.sink_clearance)))
             .collect();
 
         // Collect unique flows from proofs.
         let proof_flows: BTreeSet<(String, String)> = proofs
             .iter()
-            .map(|p| (p.source_label.to_string(), p.sink_clearance.to_string()))
+            .map(|p| (label_key(&p.source_label), label_key(&p.sink_clearance)))
             .collect();
 
         let proven = event_flows.intersection(&proof_flows).count();
@@ -861,7 +864,8 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
                     .map_err(|e| ProvenanceError::SerializationError(e.to_string()))?;
                 Ok(Some(parsed))
             }
-            Ok(None) | Err(_) => Ok(None),
+            Ok(None) => Ok(None),
+            Err(e) => Err(ProvenanceError::StorageError(e.to_string())),
         }
     }
 

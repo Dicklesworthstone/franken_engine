@@ -330,7 +330,7 @@ fn promotion_status_candidate_display() {
         candidate_digest: "sha256:cand".into(),
     };
     assert_eq!(status.to_string(), "promotion-candidate(sha256:cand)");
-    assert!(!status.is_delegate());
+    assert!(status.is_delegate());
     assert!(!status.is_native());
 }
 
@@ -360,6 +360,37 @@ fn promotion_status_demoted_display() {
     );
     assert!(status.is_delegate());
     assert!(!status.is_native());
+}
+
+#[test]
+fn promotion_candidate_remains_delegate_backed_for_accounting() {
+    let mut registry = SlotRegistry::new();
+    let id = register_slot(
+        &mut registry,
+        "parser",
+        SlotKind::Parser,
+        "sha256:delegate-v1",
+    );
+
+    registry
+        .begin_candidacy(&id, "sha256:candidate-v1".into(), "t0".into())
+        .unwrap();
+
+    let entry = registry
+        .get(&id)
+        .expect("candidate slot remains registered");
+    assert!(matches!(
+        entry.status,
+        PromotionStatus::PromotionCandidate { .. }
+    ));
+    assert!(entry.status.is_delegate());
+    assert!(!entry.status.is_native());
+    assert_eq!(registry.native_count(), 0);
+    assert_eq!(registry.delegate_count(), 1);
+    assert_eq!(
+        registry.native_count() + registry.delegate_count(),
+        registry.len()
+    );
 }
 
 // ---------------------------------------------------------------------------

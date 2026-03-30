@@ -736,11 +736,14 @@ pub fn corpus_manifest_hash(records: &[SecurityWorkloadLabelRecord]) -> String {
     let mut sorted: Vec<_> = records.iter().collect();
     sorted.sort_by(|a, b| a.label.workload_id.cmp(&b.label.workload_id));
     let mut hasher = Sha256::new();
+    hasher.update((sorted.len() as u64).to_le_bytes());
     for record in &sorted {
+        // Length-prefix workload_id to prevent delimiter collisions
+        // when the ID contains newlines or other special characters.
+        hasher.update((record.label.workload_id.len() as u32).to_le_bytes());
         hasher.update(record.label.workload_id.as_bytes());
-        hasher.update(b"\n");
+        hasher.update((record.label_hash.len() as u32).to_le_bytes());
         hasher.update(record.label_hash.as_bytes());
-        hasher.update(b"\n");
     }
     hex::encode(hasher.finalize())
 }
@@ -1033,7 +1036,7 @@ fn ratio_to_millionths(numerator: u64, denominator: u64) -> u32 {
     if denominator == 0 {
         return 0;
     }
-    ((numerator.saturating_mul(1_000_000)) / denominator) as u32
+    ((numerator.saturating_mul(1_000_000)) / denominator).min(1_000_000) as u32
 }
 
 fn f64_to_millionths(value: f64) -> u32 {

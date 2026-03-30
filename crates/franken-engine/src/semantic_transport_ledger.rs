@@ -855,12 +855,12 @@ impl SemanticTransportAnalyzer {
             return TransportVerdict::Unchanged;
         }
 
-        // Compute total severity.
+        // Compute total severity (saturating to prevent overflow-induced
+        // false negatives in the incompatibility check).
         let total_severity: i64 = spec
             .behavioral_deltas
             .iter()
-            .map(|d| d.severity_millionths)
-            .sum();
+            .fold(0i64, |acc, d| acc.saturating_add(d.severity_millionths));
 
         // If total severity exceeds threshold, check if adapters can bridge.
         if total_severity >= self.config.incompatibility_threshold_millionths {
@@ -1082,6 +1082,9 @@ impl SemanticTransportAnalyzer {
         let mut canonical = Vec::new();
         canonical.extend_from_slice(TRANSPORT_LEDGER_SCHEMA_VERSION.as_bytes());
         canonical.extend_from_slice(b"|entry|");
+        // Length-prefix the name to prevent delimiter collisions when
+        // the name contains '|'.
+        canonical.extend_from_slice(&(name.len() as u32).to_le_bytes());
         canonical.extend_from_slice(name.as_bytes());
         canonical.push(b'|');
         canonical.extend_from_slice(format!("{domain}").as_bytes());

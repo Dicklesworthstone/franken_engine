@@ -31,6 +31,8 @@ const RGC_061_CONTRACT_SCHEMA_VERSION: &str =
     "franken-engine.rgc-cli-operator-workflow-verification-pack.v1";
 const RGC_061_CONTRACT_JSON: &str =
     include_str!("../../../docs/rgc_cli_operator_workflow_verification_pack_v1.json");
+const RGC_061_ONBOARDING_SCORECARD_COMMAND: &str =
+    "runtime_diagnostics onboarding-scorecard --input <path> --signals <path> --summary";
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct Rgc061Contract {
@@ -481,6 +483,7 @@ fn rgc_061_onboarding_scorecard_golden_path_is_ready_and_writes_artifacts() {
 #[test]
 fn rgc_061_onboarding_scorecard_failure_path_surfaces_blocked_with_actionable_steps() {
     let input_path = write_runtime_input(&build_clean_input());
+    let unsupported_command = "frankenctl verify --workflow onboarding";
     let signals_path = write_json_value(&serde_json::json!([
         {
             "signal_id": "compat:missing-node-fs-watch",
@@ -488,7 +491,7 @@ fn rgc_061_onboarding_scorecard_failure_path_surfaces_blocked_with_actionable_st
             "severity": "critical",
             "summary": "missing fs.watch compatibility shim",
             "remediation": "enable fallback watcher shim and rerun compatibility probe",
-            "reproducible_command": "frankenctl verify --workflow onboarding",
+            "reproducible_command": unsupported_command,
             "evidence_links": ["artifacts/compatibility/latest/report.json"],
             "owner_hint": "compatibility-lane"
         }
@@ -519,7 +522,14 @@ fn rgc_061_onboarding_scorecard_failure_path_surfaces_blocked_with_actionable_st
             .as_array()
             .is_some_and(|commands| commands
                 .iter()
-                .any(|command| command == "frankenctl verify --workflow onboarding"))
+                .any(|command| command == RGC_061_ONBOARDING_SCORECARD_COMMAND))
+    );
+    assert!(
+        !output_json["reproducible_commands"]
+            .as_array()
+            .is_some_and(|commands| commands
+                .iter()
+                .any(|command| command == unsupported_command))
     );
 
     cleanup_path(&input_path);
@@ -813,7 +823,7 @@ fn rgc_061_onboarding_scorecard_warning_signal_produces_conditional() {
             "severity": "warning",
             "summary": "deprecated API usage",
             "remediation": "migrate to new API",
-            "reproducible_command": "frankenctl verify --api-compat",
+            "reproducible_command": RGC_061_ONBOARDING_SCORECARD_COMMAND,
             "evidence_links": [],
             "owner_hint": "api-team"
         }
@@ -854,7 +864,7 @@ fn rgc_061_onboarding_scorecard_multiple_critical_signals_produces_blocked() {
             "severity": "critical",
             "summary": "critical vulnerability",
             "remediation": "patch immediately",
-            "reproducible_command": "frankenctl verify --security",
+            "reproducible_command": RGC_061_ONBOARDING_SCORECARD_COMMAND,
             "evidence_links": []
         },
         {
@@ -863,7 +873,7 @@ fn rgc_061_onboarding_scorecard_multiple_critical_signals_produces_blocked() {
             "severity": "critical",
             "summary": "another critical vulnerability",
             "remediation": "patch immediately",
-            "reproducible_command": "frankenctl verify --security",
+            "reproducible_command": RGC_061_ONBOARDING_SCORECARD_COMMAND,
             "evidence_links": []
         }
     ]));

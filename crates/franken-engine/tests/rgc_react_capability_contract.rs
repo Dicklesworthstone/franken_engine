@@ -228,6 +228,32 @@ fn rgc_016a_dev_runtime_diagnostics_are_split_by_source_form() {
 }
 
 #[test]
+fn rgc_016a_build_target_rows_bind_to_react_build_surface() {
+    let contract = parse_contract();
+    let rows = capability_index(&contract);
+
+    for (capability_id, entry_surface) in [
+        ("react-ssr-entrypoint", "ssr_entry"),
+        ("react-client-entry-preparation", "client_entry_preparation"),
+        ("react-hydration-handoff-artifacts", "hydration_artifacts"),
+    ] {
+        let row = rows
+            .get(capability_id)
+            .unwrap_or_else(|| panic!("missing build-target capability row: {capability_id}"));
+        assert_eq!(
+            row.entry_surface, entry_surface,
+            "capability {} drifted to an unexpected entry surface",
+            row.capability_id
+        );
+        assert_eq!(
+            row.user_visible_diagnostic.diagnostic_surface, "frankenctl react build",
+            "build-target capability {} must point at the shipped react build surface",
+            row.capability_id
+        );
+    }
+}
+
+#[test]
 fn rgc_016a_rows_bind_to_implementation_parity_and_product_surfaces() {
     let contract = parse_contract();
     let allowed_statuses: BTreeSet<&str> = ["unsupported", "deferred", "gated_preview", "shipped"]

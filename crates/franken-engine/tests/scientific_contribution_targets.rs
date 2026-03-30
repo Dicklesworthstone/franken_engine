@@ -22,6 +22,7 @@ struct ScientificContributionTargetsContract {
     upstream_dependencies: Vec<UpstreamDependency>,
     required_log_keys: Vec<String>,
     required_artifacts: Vec<String>,
+    required_readme_fragments: Vec<String>,
     gate_runner: GateRunner,
     operator_verification: Vec<String>,
 }
@@ -329,6 +330,34 @@ fn strategy_runner_and_replay_scripts_are_replayable() {
         assert!(
             replay_script.contains(snippet),
             "replay script missing required snippet: {snippet}"
+        );
+    }
+}
+
+#[test]
+fn readme_surface_is_pinned_by_machine_contract() {
+    let contract = parse_contract();
+    let readme = read_to_string("README.md");
+
+    assert_eq!(
+        contract.required_readme_fragments,
+        vec![
+            "## Scientific Contribution Targets Gate",
+            "./scripts/run_scientific_contribution_targets.sh bundle",
+            "./scripts/run_scientific_contribution_targets.sh ci",
+            "./scripts/e2e/scientific_contribution_targets_replay.sh show",
+            "bd-2501.1",
+            "bd-2501.2",
+            "bd-2501.3",
+            "artifacts/scientific_contribution_targets/<timestamp>/trace_ids.json",
+            "target_rch_scientific_contribution_targets_verify",
+        ]
+    );
+
+    for fragment in &contract.required_readme_fragments {
+        assert!(
+            readme.contains(fragment),
+            "README scientific contribution surface missing required fragment: {fragment}"
         );
     }
 }

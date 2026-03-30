@@ -356,10 +356,26 @@ fn rgc_408c_runner_script_requires_rch_repo_local_targets_and_handoff_outputs() 
 }
 
 #[test]
+fn rgc_408c_runner_namespaces_artifact_run_dir_per_invocation() {
+    let script = load_runner_script();
+
+    assert!(
+        script.contains("run_dir=\"${artifact_root}/${timestamp}_${target_namespace}\""),
+        "runner script must namespace artifact run_dir by target_namespace to avoid same-second collisions"
+    );
+    assert!(
+        !script.contains("run_dir=\"${artifact_root}/${timestamp}\""),
+        "runner script must not use a timestamp-only artifact run_dir"
+    );
+}
+
+#[test]
 fn rgc_408c_runner_prefers_latest_complete_support_surface_artifact_bundle() {
     let script = load_runner_script();
 
     for snippet in [
+        "artifact_dirs_by_mtime_desc()",
+        "find \"${search_root}\" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\\n' | sort -nr | cut -d' ' -f2-",
         "support_surface_artifact_dir_is_complete()",
         "[[ -f \"${candidate}/run_manifest.json\" ]] || return 1",
         "[[ -f \"${candidate}/trace_ids.json\" ]] || return 1",
@@ -371,6 +387,7 @@ fn rgc_408c_runner_prefers_latest_complete_support_surface_artifact_bundle() {
         "[[ -f \"${candidate}/support_surface_mode_matrix.json\" ]] || return 1",
         "[[ -f \"${candidate}/step_logs/step_000.log\" ]] || return 1",
         "latest_complete_support_contract_artifact()",
+        "done < <(artifact_dirs_by_mtime_desc \"${root_dir}/artifacts/rgc_support_surface_contract\")",
         "support_surface_artifact_dir_is_complete \"${candidate}\" || continue",
         "printf '%s\\n' \"${candidate}/support_surface_contract.json\"",
         "latest=\"$(latest_complete_support_contract_artifact || true)\"",
@@ -388,6 +405,8 @@ fn rgc_408c_runner_prefers_latest_complete_blocker_ledger_artifact_bundle() {
     let script = load_runner_script();
 
     for snippet in [
+        "artifact_dirs_by_mtime_desc()",
+        "find \"${search_root}\" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\\n' | sort -nr | cut -d' ' -f2-",
         "blocker_ledger_artifact_dir_is_complete()",
         "[[ -f \"${candidate}/run_manifest.json\" ]] || return 1",
         "[[ -f \"${candidate}/trace_ids.json\" ]] || return 1",
@@ -400,7 +419,7 @@ fn rgc_408c_runner_prefers_latest_complete_blocker_ledger_artifact_bundle() {
         "[[ -f \"${candidate}/support_surface_contract.json\" ]] || return 1",
         "[[ -f \"${candidate}/step_logs/step_000.log\" ]] || return 1",
         "latest_complete_blocker_ledger_artifact()",
-        "find \"${root_dir}/artifacts/rgc_engine_product_blocker_ledger\"",
+        "done < <(artifact_dirs_by_mtime_desc \"${root_dir}/artifacts/rgc_engine_product_blocker_ledger\")",
         "blocker_ledger_artifact_dir_is_complete \"${candidate}\" || continue",
         "printf '%s\\n' \"${candidate}/engine_product_blocker_ledger.json\"",
         "latest_complete_blocker_ledger_artifact || true",
@@ -439,6 +458,9 @@ fn rgc_408c_replay_script_requires_complete_bundle_and_prints_key_artifacts() {
     let script = load_replay_script();
 
     for snippet in [
+        "artifact_dirs_by_mtime_desc()",
+        "find \"${search_root}\" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\\n' | sort -nr | cut -d' ' -f2-",
+        "done < <(artifact_dirs_by_mtime_desc \"${artifact_root}\")",
         "[[ -f \"${candidate}/engine_product_blocker_ledger.json\" ]] || continue",
         "[[ -f \"${candidate}/step_logs/step_000.log\" ]] || continue",
         "franken_node_handoff_manifest.json",

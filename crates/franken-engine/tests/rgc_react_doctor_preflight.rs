@@ -237,7 +237,7 @@ fn build_support_repro_index_artifact() -> Value {
                 "triage_severity": triage_severity_str(finding.severity),
                 "repro_input_id": repro_input.input_id,
                 "repro_hash": repro.repro_hash,
-                "repro_command": "frankenctl react doctor --input fixtures/react_hydration_mismatch.json --json",
+                "repro_command": "./scripts/e2e/rgc_react_doctor_preflight_replay.sh ci",
                 "recommended_action": finding.recommended_action,
                 "source_reproduction": mismatch_entries[1].reproduction.clone()
             }
@@ -641,8 +641,8 @@ fn rgc_912b_support_repro_index_routes_to_upstream_triage_lane() {
         entry["repro_command"]
             .as_str()
             .expect("repro command must be a string")
-            .contains("frankenctl react doctor"),
-        "repro index command should route back through the React doctor surface"
+            .contains("./scripts/e2e/rgc_react_doctor_preflight_replay.sh ci"),
+        "repro index command should route back through the React doctor/preflight replay surface"
     );
 }
 

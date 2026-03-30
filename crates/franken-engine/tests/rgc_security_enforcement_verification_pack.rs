@@ -113,6 +113,18 @@ fn read_gate_script() -> String {
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
 }
 
+fn read_replay_script() -> String {
+    let path = repo_root().join("scripts/e2e/rgc_security_enforcement_verification_pack_replay.sh");
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
+fn read_readme() -> String {
+    let path = repo_root().join("README.md");
+    fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+}
+
 #[test]
 fn rgc_059_doc_contains_required_sections() {
     let path = repo_root().join("docs/RGC_SECURITY_ENFORCEMENT_VERIFICATION_PACK_V1.md");
@@ -407,6 +419,45 @@ fn rgc_059_gate_script_uses_repo_local_target_dir() {
 }
 
 #[test]
+fn rgc_059_replay_wrapper_requires_complete_bundle_and_first_step_log() {
+    let script = read_replay_script();
+
+    for needle in [
+        "run_dir_is_complete()",
+        "[[ -f \"${candidate}/run_manifest.json\" ]] || return 1",
+        "[[ -f \"${candidate}/events.jsonl\" ]] || return 1",
+        "[[ -f \"${candidate}/commands.txt\" ]] || return 1",
+        "[[ -f \"${candidate}/security_verification_report.json\" ]] || return 1",
+        "[[ -f \"${candidate}/step_logs/step_000.log\" ]] || return 1",
+        "cat \"${latest_run_dir}/step_logs/step_000.log\"",
+        "cat \"${latest_run_dir}/security_verification_report.json\"",
+    ] {
+        assert!(
+            script.contains(needle),
+            "replay wrapper should contain required complete-bundle check or artifact output: {needle}"
+        );
+    }
+}
+
+#[test]
+fn rgc_059_replay_wrapper_warns_on_incomplete_newest_and_reports_bundle_source() {
+    let script = read_replay_script();
+
+    for needle in [
+        "newest directory ${latest_artifact_dir_path} is incomplete; using latest complete run directory ${latest_run_dir}",
+        "gate exited with status ${prior_exit}; replay output reflects latest complete run directory ${latest_run_dir}",
+        "gate exited with status ${prior_exit}; replay output reflects current run directory ${latest_run_dir}",
+        "rgc security enforcement verification pack replay explicit run directory is incomplete: ${explicit_run_dir}",
+        "latest first step log: ${latest_run_dir}/step_logs/step_000.log",
+    ] {
+        assert!(
+            script.contains(needle),
+            "replay wrapper should pin fail-closed fallback/source-reporting text: {needle}"
+        );
+    }
+}
+
+#[test]
 fn rgc_059_doc_and_contract_include_artifact_inspection_commands() {
     let doc = read_pack_doc();
     let contract = parse_contract();
@@ -421,6 +472,46 @@ fn rgc_059_doc_and_contract_include_artifact_inspection_commands() {
                 .operator_verification
                 .contains(&command.to_string()),
             "operator verification contract should include artifact inspection command {command}"
+        );
+    }
+}
+
+#[test]
+fn rgc_059_doc_describes_latest_complete_replay_and_explicit_bundle_requirements() {
+    let doc = read_pack_doc();
+
+    for fragment in [
+        "latest complete artifact bundle",
+        "newest artifact directory is incomplete, it warns and falls back to the latest complete directory",
+        "printed bundle came from the current failed invocation or from an older complete directory",
+        "RGC_SECURITY_ENFORCEMENT_VERIFICATION_PACK_REPLAY_RUN_DIR=artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>",
+        "`step_logs/step_000.log`, and `security_verification_report.json`) or the",
+    ] {
+        assert!(
+            doc.contains(fragment),
+            "pack doc should describe replay-wrapper fallback and explicit bundle completeness: {fragment}"
+        );
+    }
+}
+
+#[test]
+fn rgc_059_readme_references_gate_replay_and_artifacts() {
+    let readme = read_readme();
+
+    for fragment in [
+        "## RGC Security Enforcement Verification Pack",
+        "./scripts/run_rgc_security_enforcement_verification_pack.sh ci",
+        "./scripts/e2e/rgc_security_enforcement_verification_pack_replay.sh ci",
+        "RGC_SECURITY_ENFORCEMENT_VERIFICATION_PACK_REPLAY_RUN_DIR=artifacts/rgc_security_enforcement_verification_pack/<timestamp>",
+        "docs/rgc_security_enforcement_verification_pack_v1.json",
+        "docs/rgc_security_enforcement_verification_vectors_v1.json",
+        "crates/franken-engine/tests/rgc_security_enforcement_verification_pack.rs",
+        "artifacts/rgc_security_enforcement_verification_pack/<timestamp>/step_logs/step_*.log",
+        "artifacts/rgc_security_enforcement_verification_pack/<timestamp>/security_verification_report.json",
+    ] {
+        assert!(
+            readme.contains(fragment),
+            "README.md must contain required fragment: {fragment}"
         );
     }
 }

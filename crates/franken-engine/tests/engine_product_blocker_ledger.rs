@@ -241,6 +241,20 @@ fn rgc_408b_runner_script_uses_rch_and_live_bead_snapshot() {
 }
 
 #[test]
+fn rgc_408b_runner_namespaces_artifact_run_dir_per_invocation() {
+    let script = load_runner_script();
+
+    assert!(
+        script.contains("run_dir=\"${artifact_root}/${timestamp}_${target_namespace}\""),
+        "runner script must namespace artifact run_dir by target_namespace to avoid same-second collisions"
+    );
+    assert!(
+        !script.contains("run_dir=\"${artifact_root}/${timestamp}\""),
+        "runner script must not use a timestamp-only artifact run_dir"
+    );
+}
+
+#[test]
 fn rgc_408b_runner_emits_bundle_for_all_successful_modes() {
     let script = load_runner_script();
     assert_eq!(
@@ -267,6 +281,14 @@ fn rgc_408b_runner_writes_lane_metadata_before_artifact_assertion() {
 fn rgc_408b_replay_wrapper_requires_complete_bundle() {
     let script = load_replay_script();
 
+    assert!(
+        script.contains("artifact_dirs_by_mtime_desc()"),
+        "replay wrapper should centralize newest-first directory enumeration"
+    );
+    assert!(
+        script.contains("find \"${search_root}\" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\\n' | sort -nr | cut -d' ' -f2-"),
+        "replay wrapper should select newest artifact directories by mtime rather than lexical path order"
+    );
     assert!(
         script.contains("latest_complete_run_dir()"),
         "replay wrapper should locate the latest complete artifact directory"
@@ -298,6 +320,10 @@ fn rgc_408b_replay_wrapper_requires_complete_bundle() {
     assert!(
         script.contains("newest directory ${latest_artifact_dir_path} is incomplete"),
         "replay wrapper should warn when it skips an incomplete newest directory"
+    );
+    assert!(
+        script.contains("done < <(artifact_dirs_by_mtime_desc \"${artifact_root}\")"),
+        "replay wrapper should report the newest artifact directory using newest-first mtime ordering"
     );
     assert!(
         script.contains("replay output reflects latest complete run directory"),

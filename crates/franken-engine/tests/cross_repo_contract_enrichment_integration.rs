@@ -282,11 +282,14 @@ fn verify_structured_log_non_object() {
 #[test]
 fn verify_error_code_format_matching_prefix() {
     assert!(verify_error_code_format("FE-IFC-001", "FE-IFC"));
+    assert!(verify_error_code_format("FE-IFC-BLOCK", "FE-IFC"));
 }
 
 #[test]
 fn verify_error_code_format_non_matching() {
     assert!(!verify_error_code_format("FE-IFC-001", "FE-RGC"));
+    assert!(!verify_error_code_format("FE-IFCX-001", "FE-IFC"));
+    assert!(!verify_error_code_format("FE-IFC", "FE-IFC"));
 }
 
 // ---------------------------------------------------------------------------

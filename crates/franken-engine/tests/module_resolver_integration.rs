@@ -1023,6 +1023,45 @@ fn external_extension_probe_entry_resolves_from_bare_require_specifier() {
 }
 
 #[test]
+fn bun_compat_require_resolves_bare_package_index_mjs_entrypoint() {
+    let mut resolver = DeterministicModuleResolver::new("/repo");
+    resolver
+        .register_workspace_module("pkg/index.mjs", esm_def("export default 'esm';"))
+        .unwrap();
+
+    let outcome = resolver
+        .resolve(
+            &ModuleRequest::new("pkg", ImportStyle::Require)
+                .with_compatibility_mode(CompatibilityMode::BunCompat),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect("bun_compat require() should probe package index.mjs entrypoints");
+
+    assert_eq!(outcome.module.canonical_specifier, "/repo/pkg/index.mjs");
+    assert_eq!(outcome.module.record.syntax, ModuleSyntax::EsModule);
+    assert_eq!(
+        outcome.module.probe_sequence,
+        vec![
+            "pkg",
+            "pkg.cjs",
+            "pkg.js",
+            "pkg/index.cjs",
+            "pkg/index.js",
+            "pkg.mjs",
+            "pkg/index.mjs",
+            "/repo/pkg",
+            "/repo/pkg.cjs",
+            "/repo/pkg.js",
+            "/repo/pkg/index.cjs",
+            "/repo/pkg/index.js",
+            "/repo/pkg.mjs",
+            "/repo/pkg/index.mjs",
+        ]
+    );
+}
+
+#[test]
 fn scoped_external_extension_probe_entry_resolves_from_bare_require_specifier() {
     let mut resolver = DeterministicModuleResolver::default();
     resolver

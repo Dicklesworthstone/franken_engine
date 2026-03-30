@@ -5,7 +5,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use chrono::Utc;
+use chrono::{NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -263,9 +263,9 @@ impl Test262WaiverSet {
                     waiver.test_id
                 )));
             }
-            if !looks_like_yyyy_mm_dd(waiver.expiry_date.as_str()) {
+            if !is_valid_yyyy_mm_dd(waiver.expiry_date.as_str()) {
                 return Err(Test262GateError::InvalidConfig(format!(
-                    "waiver `{}` expiry_date must be YYYY-MM-DD",
+                    "waiver `{}` expiry_date must be a real YYYY-MM-DD date",
                     waiver.test_id
                 )));
             }
@@ -353,9 +353,9 @@ impl Test262RunnerConfig {
                 "policy_id is required".to_string(),
             ));
         }
-        if self.run_date.trim().is_empty() || !looks_like_yyyy_mm_dd(self.run_date.as_str()) {
+        if self.run_date.trim().is_empty() || !is_valid_yyyy_mm_dd(self.run_date.as_str()) {
             return Err(Test262GateError::InvalidConfig(
-                "run_date must be YYYY-MM-DD".to_string(),
+                "run_date must be a real YYYY-MM-DD date".to_string(),
             ));
         }
         if self.worker_count == 0 {
@@ -1278,7 +1278,7 @@ fn wildcard_match(pattern: &str, text: &str) -> bool {
     dp[p.len()][t.len()]
 }
 
-fn looks_like_yyyy_mm_dd(value: &str) -> bool {
+fn is_valid_yyyy_mm_dd(value: &str) -> bool {
     let bytes = value.as_bytes();
     if bytes.len() != 10 {
         return false;
@@ -1288,6 +1288,7 @@ fn looks_like_yyyy_mm_dd(value: &str) -> bool {
         && bytes[5..7].iter().all(|b| b.is_ascii_digit())
         && bytes[7] == b'-'
         && bytes[8..10].iter().all(|b| b.is_ascii_digit())
+        && NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok()
 }
 
 fn is_hex_hash(value: &str, expected_len: usize) -> bool {
@@ -1618,6 +1619,20 @@ mod tests {
         assert!(ws.validate().is_err());
     }
 
+    #[test]
+    fn waiver_set_validate_impossible_expiry_date() {
+        let mut ws = valid_waiver_set();
+        ws.waivers.push(Test262Waiver {
+            test_id: "test-001".to_string(),
+            reason_code: Test262WaiverReason::HarnessGap,
+            es2020_clause: "§15".to_string(),
+            tracking_bead: "bd-1".to_string(),
+            expiry_date: "2026-02-30".to_string(),
+            reviewer: "admin".to_string(),
+        });
+        assert!(ws.validate().is_err());
+    }
+
     // ── Test262WaiverSet::find_active ──────────────────────────────────
 
     #[test]
@@ -1697,6 +1712,13 @@ mod tests {
     fn runner_config_validate_bad_run_date() {
         let mut cfg = valid_runner_config();
         cfg.run_date = "2025/01/01".to_string();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn runner_config_validate_impossible_run_date() {
+        let mut cfg = valid_runner_config();
+        cfg.run_date = "2026-02-30".to_string();
         assert!(cfg.validate().is_err());
     }
 
@@ -1922,20 +1944,26 @@ mod tests {
         assert!(wildcard_match("", ""));
     }
 
-    // ── looks_like_yyyy_mm_dd ──────────────────────────────────────────
+    // ── is_valid_yyyy_mm_dd ────────────────────────────────────────────
 
     #[test]
     fn date_valid() {
-        assert!(looks_like_yyyy_mm_dd("2025-01-15"));
-        assert!(looks_like_yyyy_mm_dd("1970-01-01"));
+        assert!(is_valid_yyyy_mm_dd("2025-01-15"));
+        assert!(is_valid_yyyy_mm_dd("1970-01-01"));
     }
 
     #[test]
     fn date_invalid_format() {
-        assert!(!looks_like_yyyy_mm_dd("2025/01/15"));
-        assert!(!looks_like_yyyy_mm_dd("25-01-15"));
-        assert!(!looks_like_yyyy_mm_dd("not-a-date"));
-        assert!(!looks_like_yyyy_mm_dd(""));
+        assert!(!is_valid_yyyy_mm_dd("2025/01/15"));
+        assert!(!is_valid_yyyy_mm_dd("25-01-15"));
+        assert!(!is_valid_yyyy_mm_dd("not-a-date"));
+        assert!(!is_valid_yyyy_mm_dd(""));
+    }
+
+    #[test]
+    fn date_invalid_semantic() {
+        assert!(!is_valid_yyyy_mm_dd("2026-02-30"));
+        assert!(!is_valid_yyyy_mm_dd("2025-13-01"));
     }
 
     // ── is_hex_hash ────────────────────────────────────────────────────

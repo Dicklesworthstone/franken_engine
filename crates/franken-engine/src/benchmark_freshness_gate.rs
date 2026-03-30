@@ -2534,8 +2534,10 @@ mod tests {
 
     #[test]
     fn test_gate_custom_critical_threshold_is_honored() {
-        let mut config = GateConfig::default();
-        config.critical_severity_threshold = 900_000;
+        let config = GateConfig {
+            critical_severity_threshold: 900_000,
+            ..Default::default()
+        };
         let mut gate = FreshnessGate::with_config(config, epoch(10));
         gate.silence_tracker.record_signal(epoch(10));
         gate.record_alarm(make_alarm(
@@ -2552,8 +2554,10 @@ mod tests {
 
     #[test]
     fn test_gate_min_acquisition_samples_are_required_for_freshness_relief() {
-        let mut config = GateConfig::default();
-        config.min_acquisition_samples = 5;
+        let config = GateConfig {
+            min_acquisition_samples: 5,
+            ..Default::default()
+        };
         let mut gate = FreshnessGate::with_config(config, epoch(10));
         gate.silence_tracker.record_signal(epoch(10));
         gate.record_alarm(make_alarm(

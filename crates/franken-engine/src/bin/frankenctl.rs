@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use chrono::{SecondsFormat, Utc};
+use chrono::{NaiveDate, SecondsFormat, Utc};
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::benchmark_denominator::{
     PublicationContext, PublicationGateInput, evaluate_publication_gate,
@@ -1226,7 +1226,10 @@ fn parse_benchmark_run_command(args: &[String]) -> Result<CommandSpec, String> {
     while index < args.len() {
         match args[index].as_str() {
             "--run-id" => run_id = next_arg(args, &mut index, "--run-id")?,
-            "--run-date" => run_date = next_arg(args, &mut index, "--run-date")?,
+            "--run-date" => {
+                let value = next_arg(args, &mut index, "--run-date")?;
+                run_date = parse_real_yyyy_mm_dd(value.as_str(), "--run-date")?;
+            }
             "--seed" => seed = parse_u64(&next_arg(args, &mut index, "--seed")?, "--seed")?,
             "--out-dir" => out_dir = Some(PathBuf::from(next_arg(args, &mut index, "--out-dir")?)),
             "--profile" => profiles.push(parse_profile(&next_arg(args, &mut index, "--profile")?)?),
@@ -3909,6 +3912,12 @@ fn parse_u64(value: &str, flag: &str) -> Result<u64, String> {
         .map_err(|error| format!("invalid {flag} value `{value}`: {error}"))
 }
 
+fn parse_real_yyyy_mm_dd(value: &str, flag: &str) -> Result<String, String> {
+    NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .map(|_| value.to_string())
+        .map_err(|_| format!("invalid {flag} `{value}` (expected a real YYYY-MM-DD date)"))
+}
+
 fn next_arg(args: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
     *index += 1;
     args.get(*index)
@@ -4463,6 +4472,7 @@ fn react_contract_usage() -> String {
 mod tests {
     use super::*;
     use frankenengine_engine::receipt_verifier_pipeline::VerifierLogEvent;
+    use frankenengine_engine::runtime_diagnostics_cli::EvidenceSeverity;
 
     #[test]
     fn parse_version_command() {
@@ -5018,6 +5028,8 @@ mod tests {
         let args = vec![
             "benchmark".to_string(),
             "run".to_string(),
+            "--run-date".to_string(),
+            "2026-03-29".to_string(),
             "--seed".to_string(),
             "123".to_string(),
             "--profile".to_string(),
@@ -5036,6 +5048,7 @@ mod tests {
             CommandSpec::Benchmark(BenchmarkArgs {
                 mode: BenchmarkMode::Run(spec),
             }) => {
+                assert_eq!(spec.run_date, "2026-03-29");
                 assert_eq!(spec.seed, 123);
                 assert_eq!(
                     spec.profiles,
@@ -5052,6 +5065,21 @@ mod tests {
             }
             other => panic!("expected benchmark command, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_benchmark_run_command_rejects_invalid_run_date() {
+        let args = vec![
+            "benchmark".to_string(),
+            "run".to_string(),
+            "--run-date".to_string(),
+            "2026-02-30".to_string(),
+        ];
+        let error = parse_command(&args).expect_err("invalid benchmark run date should fail");
+        assert_eq!(
+            error,
+            "invalid --run-date `2026-02-30` (expected a real YYYY-MM-DD date)"
+        );
     }
 
     #[test]

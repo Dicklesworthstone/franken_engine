@@ -1054,7 +1054,7 @@ fn enrichment_catalog_cross_interference_no_blocking() {
 #[test]
 fn enrichment_catalog_cross_interference_unknown_pair() {
     let cat = PackCatalog::new("unknown-pair");
-    assert!(!cat.has_cross_blocking("nonexistent-a", "nonexistent-b"));
+    assert!(cat.has_cross_blocking("nonexistent-a", "nonexistent-b"));
 }
 
 #[test]

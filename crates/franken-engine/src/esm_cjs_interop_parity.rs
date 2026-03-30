@@ -331,13 +331,20 @@ pub struct InteropParityInventory {
 }
 
 impl InteropParityInventory {
-    /// Contract is satisfied when all specimens pass and the evidence hashes verify.
+    /// Contract is satisfied when the inventory matches the declared corpus,
+    /// all specimens pass, and the evidence hashes verify.
     pub fn contract_satisfied(&self) -> bool {
-        if self.specimen_count == 0 || self.evidence.len() as u64 != self.specimen_count {
+        let canonical_corpus = interop_parity_corpus();
+        if self.schema_version != INTEROP_PARITY_SCHEMA_VERSION
+            || self.component != INTEROP_PARITY_COMPONENT
+            || self.specimen_count == 0
+            || self.specimen_count != canonical_corpus.len() as u64
+            || self.evidence.len() as u64 != self.specimen_count
+        {
             return false;
         }
 
-        let Some(summary) = self.computed_summary() else {
+        let Some(summary) = self.computed_summary(&canonical_corpus) else {
             return false;
         };
 
@@ -347,6 +354,9 @@ impl InteropParityInventory {
             && self.degraded_count == summary.degraded_count
             && self.unsupported_count == summary.unsupported_count
             && self.family_coverage == summary.family_coverage
+            && self.esm_only_count == summary.esm_only_count
+            && self.cjs_only_count == summary.cjs_only_count
+            && self.mixed_count == summary.mixed_count
             && self.fail_count == 0
             && self.pass_count == self.specimen_count
             && self.supported_count + self.degraded_count + self.unsupported_count
@@ -354,11 +364,27 @@ impl InteropParityInventory {
             && self.esm_only_count + self.cjs_only_count + self.mixed_count == self.specimen_count
     }
 
-    fn computed_summary(&self) -> Option<InteropInventorySummary> {
+    fn computed_summary(
+        &self,
+        canonical_corpus: &[InteropSpecimen],
+    ) -> Option<InteropInventorySummary> {
         let mut summary = InteropInventorySummary::default();
+        let mut remaining_canonical_specimens: BTreeMap<&str, &InteropSpecimen> = canonical_corpus
+            .iter()
+            .map(|specimen| (specimen.specimen_id.as_str(), specimen))
+            .collect();
 
         for evidence in &self.evidence {
             if !evidence.verify_hash() {
+                return None;
+            }
+
+            let specimen = remaining_canonical_specimens.remove(evidence.specimen_id.as_str())?;
+            if evidence.family != specimen.family
+                || evidence.expected_outcome != specimen.expected_outcome
+                || evidence.compatibility_mode != specimen_compatibility_mode(specimen)
+                || !evidence_matches_canonical_specimen_contract(specimen, evidence)
+            {
                 return None;
             }
 
@@ -375,6 +401,16 @@ impl InteropParityInventory {
                 .family_coverage
                 .entry(evidence.family.as_str().to_string())
                 .or_insert(0) += 1;
+
+            match classify_specimen_syntax_partition(specimen) {
+                InteropSyntaxPartition::EsmOnly => summary.esm_only_count += 1,
+                InteropSyntaxPartition::CjsOnly => summary.cjs_only_count += 1,
+                InteropSyntaxPartition::Mixed => summary.mixed_count += 1,
+            }
+        }
+
+        if !remaining_canonical_specimens.is_empty() {
+            return None;
         }
 
         Some(summary)
@@ -389,6 +425,135 @@ struct InteropInventorySummary {
     degraded_count: u64,
     unsupported_count: u64,
     family_coverage: BTreeMap<String, u64>,
+    esm_only_count: u64,
+    cjs_only_count: u64,
+    mixed_count: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InteropSyntaxPartition {
+    EsmOnly,
+    CjsOnly,
+    Mixed,
+}
+
+fn classify_specimen_syntax_partition(specimen: &InteropSpecimen) -> InteropSyntaxPartition {
+    let syntaxes: BTreeSet<ModuleSyntax> = specimen.modules.iter().map(|m| m.syntax).collect();
+    if syntaxes.len() == 1 && syntaxes.contains(&ModuleSyntax::EsModule) {
+        InteropSyntaxPartition::EsmOnly
+    } else if syntaxes.len() == 1 && syntaxes.contains(&ModuleSyntax::CommonJs) {
+        InteropSyntaxPartition::CjsOnly
+    } else {
+        InteropSyntaxPartition::Mixed
+    }
+}
+
+fn actual_outcome_matches_expected(
+    expected_outcome: InteropExpectedOutcome,
+    actual_outcome: InteropActualOutcome,
+) -> bool {
+    matches!(
+        (expected_outcome, actual_outcome),
+        (
+            InteropExpectedOutcome::Success,
+            InteropActualOutcome::Success
+        ) | (
+            InteropExpectedOutcome::LinkFailure,
+            InteropActualOutcome::LinkFailure
+        ) | (
+            InteropExpectedOutcome::EvalFailure,
+            InteropActualOutcome::EvalFailure
+        ) | (
+            InteropExpectedOutcome::CycleDetected,
+            InteropActualOutcome::CycleDetected
+        )
+    )
+}
+
+fn evidence_matches_canonical_specimen_contract(
+    specimen: &InteropSpecimen,
+    evidence: &InteropSpecimenEvidence,
+) -> bool {
+    if !actual_outcome_matches_expected(specimen.expected_outcome, evidence.actual_outcome) {
+        return false;
+    }
+
+    let (expected_disposition, expected_guidance) =
+        classify_compatibility(specimen, evidence.actual_outcome, evidence.verdict);
+    evidence.module_count == specimen.modules.len() as u64
+        && specimen
+            .expected_linked_count
+            .is_none_or(|expected| expected == evidence.linked_count)
+        && evidence_matches_expected_cycle_contract(specimen, evidence)
+        && evidence_matches_expected_binding_contract(specimen, evidence)
+        && evidence_matches_expected_async_contract(specimen, evidence)
+        && evidence_matches_expected_error_detail_contract(evidence)
+        && evidence.compatibility_disposition == expected_disposition
+        && evidence.remediation_guidance == expected_guidance
+}
+
+fn evidence_matches_expected_cycle_contract(
+    specimen: &InteropSpecimen,
+    evidence: &InteropSpecimenEvidence,
+) -> bool {
+    if specimen.family == InteropFamily::CyclicInterop {
+        evidence.cycle_count > 0
+    } else {
+        evidence.cycle_count == 0
+    }
+}
+
+fn evidence_matches_expected_binding_contract(
+    specimen: &InteropSpecimen,
+    evidence: &InteropSpecimenEvidence,
+) -> bool {
+    evidence.binding_verdicts.len() == specimen.expected_binding_states.len()
+        && specimen.expected_binding_states.iter().all(|expected| {
+            evidence
+                .binding_verdicts
+                .iter()
+                .find(|verdict| {
+                    verdict.module_specifier == expected.module_specifier
+                        && verdict.export_name == expected.export_name
+                })
+                .is_some_and(|verdict| {
+                    verdict.expected_state == expected.expected_state
+                        && verdict.actual_state == expected.expected_state
+                        && verdict.pass
+                })
+        })
+}
+
+fn evidence_matches_expected_async_contract(
+    specimen: &InteropSpecimen,
+    evidence: &InteropSpecimenEvidence,
+) -> bool {
+    evidence.async_phase_verdicts.len() == specimen.expected_async_phases.len()
+        && specimen.expected_async_phases.iter().all(|expected| {
+            evidence
+                .async_phase_verdicts
+                .iter()
+                .find(|verdict| verdict.module_specifier == expected.module_specifier)
+                .is_some_and(|verdict| {
+                    verdict.expected_phase == expected.expected_phase
+                        && verdict.actual_phase == expected.expected_phase
+                        && verdict.pass
+                })
+        })
+}
+
+fn evidence_matches_expected_error_detail_contract(evidence: &InteropSpecimenEvidence) -> bool {
+    match evidence.actual_outcome {
+        InteropActualOutcome::Success
+        | InteropActualOutcome::EvalFailure
+        | InteropActualOutcome::CycleDetected => evidence.error_detail.is_none(),
+        InteropActualOutcome::LinkFailure | InteropActualOutcome::GraphConstructionFailure => {
+            evidence
+                .error_detail
+                .as_ref()
+                .is_some_and(|detail| !detail.trim().is_empty())
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1829,22 +1994,8 @@ fn early_return_evidence(
     cycle_count: u64,
     error_detail: Option<String>,
 ) -> InteropSpecimenEvidence {
-    let outcome_matches = matches!(
-        (specimen.expected_outcome, actual_outcome),
-        (
-            InteropExpectedOutcome::Success,
-            InteropActualOutcome::Success
-        ) | (
-            InteropExpectedOutcome::LinkFailure,
-            InteropActualOutcome::LinkFailure
-        ) | (
-            InteropExpectedOutcome::EvalFailure,
-            InteropActualOutcome::EvalFailure
-        ) | (
-            InteropExpectedOutcome::CycleDetected,
-            InteropActualOutcome::CycleDetected
-        )
-    );
+    let outcome_matches =
+        actual_outcome_matches_expected(specimen.expected_outcome, actual_outcome);
     let verdict = if outcome_matches {
         InteropVerdict::Pass
     } else {
@@ -2222,22 +2373,8 @@ fn run_single_specimen(specimen: &InteropSpecimen) -> InteropSpecimenEvidence {
     }
 
     // Compute overall verdict.
-    let outcome_matches = matches!(
-        (specimen.expected_outcome, actual_outcome),
-        (
-            InteropExpectedOutcome::Success,
-            InteropActualOutcome::Success
-        ) | (
-            InteropExpectedOutcome::LinkFailure,
-            InteropActualOutcome::LinkFailure
-        ) | (
-            InteropExpectedOutcome::EvalFailure,
-            InteropActualOutcome::EvalFailure
-        ) | (
-            InteropExpectedOutcome::CycleDetected,
-            InteropActualOutcome::CycleDetected
-        )
-    );
+    let outcome_matches =
+        actual_outcome_matches_expected(specimen.expected_outcome, actual_outcome);
     let bindings_pass = binding_verdicts.iter().all(|v| v.pass);
     let async_pass = async_phase_verdicts.iter().all(|v| v.pass);
     let linked_count_pass = specimen
@@ -2310,14 +2447,10 @@ pub fn run_interop_parity_corpus() -> InteropParityInventory {
             .entry(specimen.family.as_str().to_string())
             .or_insert(0) += 1;
 
-        // Classify by module syntax mix.
-        let syntaxes: BTreeSet<ModuleSyntax> = specimen.modules.iter().map(|m| m.syntax).collect();
-        if syntaxes.len() == 1 && syntaxes.contains(&ModuleSyntax::EsModule) {
-            esm_only_count += 1;
-        } else if syntaxes.len() == 1 && syntaxes.contains(&ModuleSyntax::CommonJs) {
-            cjs_only_count += 1;
-        } else {
-            mixed_count += 1;
+        match classify_specimen_syntax_partition(specimen) {
+            InteropSyntaxPartition::EsmOnly => esm_only_count += 1,
+            InteropSyntaxPartition::CjsOnly => cjs_only_count += 1,
+            InteropSyntaxPartition::Mixed => mixed_count += 1,
         }
 
         evidence.push(ev);
@@ -4268,9 +4401,7 @@ mod tests {
 
     #[test]
     fn contract_satisfied_with_all_pass_and_nonzero() {
-        let inv = synthetic_single_evidence_inventory(synthetic_passing_evidence(
-            "contract_satisfied_case",
-        ));
+        let inv = run_interop_parity_corpus();
         assert!(inv.contract_satisfied());
     }
 
@@ -4311,6 +4442,120 @@ mod tests {
     fn contract_not_satisfied_when_syntax_partition_counts_do_not_sum_to_specimens() {
         let evidence = synthetic_passing_evidence("syntax_partition_drift_case");
         let mut inv = synthetic_single_evidence_inventory(evidence);
+        inv.mixed_count = 0;
+        assert!(!inv.contract_satisfied());
+    }
+
+    #[test]
+    fn contract_not_satisfied_when_specimen_id_drifts_from_canonical_corpus() {
+        let mut inv = run_interop_parity_corpus();
+        let evidence = inv
+            .evidence
+            .first_mut()
+            .expect("corpus inventory should have at least one specimen");
+        evidence.specimen_id = "noncanonical_specimen_id".to_string();
+        evidence.evidence_hash = Some(evidence.compute_hash());
+        assert!(!inv.contract_satisfied());
+    }
+
+    #[test]
+    fn contract_not_satisfied_when_actual_outcome_drifts_from_canonical_corpus() {
+        let mut inv = run_interop_parity_corpus();
+        let evidence = inv
+            .evidence
+            .iter_mut()
+            .find(|evidence| evidence.expected_outcome != InteropExpectedOutcome::Success)
+            .expect("corpus inventory should contain a non-success specimen");
+        evidence.actual_outcome = InteropActualOutcome::Success;
+        evidence.evidence_hash = Some(evidence.compute_hash());
+        assert!(!inv.contract_satisfied());
+    }
+
+    #[test]
+    fn contract_not_satisfied_when_guidance_drifts_from_canonical_corpus() {
+        let mut inv = run_interop_parity_corpus();
+        let evidence = inv
+            .evidence
+            .first_mut()
+            .expect("corpus inventory should have at least one specimen");
+        evidence.remediation_guidance = InteropRemediationGuidance {
+            guidance_code: "tampered_guidance".to_string(),
+            message: "tampered guidance payload".to_string(),
+        };
+        evidence.evidence_hash = Some(evidence.compute_hash());
+        assert!(!inv.contract_satisfied());
+    }
+
+    #[test]
+    fn contract_not_satisfied_when_supported_specimen_gains_error_detail() {
+        let mut inv = run_interop_parity_corpus();
+        let evidence = inv
+            .evidence
+            .iter_mut()
+            .find(|evidence| evidence.actual_outcome == InteropActualOutcome::Success)
+            .expect("corpus inventory should contain a successful specimen");
+        evidence.error_detail = Some("unexpected synthetic error".to_string());
+        evidence.evidence_hash = Some(evidence.compute_hash());
+        assert!(!inv.contract_satisfied());
+    }
+
+    #[test]
+    fn contract_not_satisfied_when_link_failure_detail_is_removed() {
+        let mut inv = run_interop_parity_corpus();
+        let evidence = inv
+            .evidence
+            .iter_mut()
+            .find(|evidence| evidence.actual_outcome == InteropActualOutcome::LinkFailure)
+            .expect("corpus inventory should contain a link-failure specimen");
+        evidence.error_detail = None;
+        evidence.evidence_hash = Some(evidence.compute_hash());
+        assert!(!inv.contract_satisfied());
+    }
+
+    #[test]
+    fn contract_not_satisfied_when_binding_verdicts_drift_from_canonical_corpus() {
+        let mut inv = run_interop_parity_corpus();
+        let evidence = inv
+            .evidence
+            .iter_mut()
+            .find(|evidence| !evidence.binding_verdicts.is_empty())
+            .expect("corpus inventory should contain binding verdicts");
+        evidence.binding_verdicts[0].actual_state = BindingCellState::Uninitialized;
+        evidence.binding_verdicts[0].pass = false;
+        evidence.evidence_hash = Some(evidence.compute_hash());
+        assert!(!inv.contract_satisfied());
+    }
+
+    #[test]
+    fn contract_not_satisfied_when_cyclic_specimen_cycle_count_is_zeroed() {
+        let mut inv = run_interop_parity_corpus();
+        let evidence = inv
+            .evidence
+            .iter_mut()
+            .find(|evidence| evidence.family == InteropFamily::CyclicInterop)
+            .expect("corpus inventory should contain a cyclic specimen");
+        evidence.cycle_count = 0;
+        evidence.evidence_hash = Some(evidence.compute_hash());
+        assert!(!inv.contract_satisfied());
+    }
+
+    #[test]
+    fn contract_not_satisfied_when_duplicate_canonical_specimen_replaces_another() {
+        let mut inv = run_interop_parity_corpus();
+        let duplicate_evidence = inv
+            .evidence
+            .first()
+            .cloned()
+            .expect("corpus inventory should have at least one specimen");
+        inv.evidence[1] = duplicate_evidence;
+        assert!(!inv.contract_satisfied());
+    }
+
+    #[test]
+    fn contract_not_satisfied_when_syntax_partition_counts_drift_from_canonical_corpus() {
+        let mut inv = run_interop_parity_corpus();
+        inv.esm_only_count = inv.specimen_count;
+        inv.cjs_only_count = 0;
         inv.mixed_count = 0;
         assert!(!inv.contract_satisfied());
     }

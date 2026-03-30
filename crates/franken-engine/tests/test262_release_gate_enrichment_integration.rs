@@ -290,6 +290,23 @@ fn enrichment_runner_bad_run_date_format_fails() {
     assert!(err.to_string().contains("run_date"));
 }
 
+#[test]
+fn enrichment_runner_impossible_run_date_fails() {
+    let mut config = valid_config();
+    config.run_date = "2026-02-30".into();
+    let runner = Test262GateRunner { config };
+    let err = runner
+        .run(
+            &valid_pin_set(),
+            &valid_profile(),
+            &valid_waiver_set(),
+            &[],
+            None,
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("run_date"));
+}
+
 // =========================================================================
 // D. Worker assignment queue_index correctness
 // =========================================================================

@@ -623,6 +623,21 @@ fn interference_metadata_for_rule_filters_correctly() {
 }
 
 #[test]
+fn interference_metadata_queries_fail_closed_when_noncanonical() {
+    let mut meta = InterferenceMetadata::build(vec![make_interference(
+        "r1",
+        "r2",
+        RuleInterferenceKind::PatternConflict,
+        false,
+    )]);
+    meta.content_hash = ContentHash::compute(b"tampered-cross-interference");
+
+    assert!(meta.has_blocking());
+    assert!(!meta.is_clean());
+    assert!(meta.for_rule("r1").is_empty());
+}
+
+#[test]
 fn interference_metadata_deterministic_hash() {
     let build = || {
         InterferenceMetadata::build(vec![
@@ -1037,6 +1052,29 @@ fn pack_epoch_preserved() {
     assert_eq!(pack.epoch, test_epoch());
 }
 
+#[test]
+fn pack_queries_fail_closed_when_noncanonical() {
+    let mut pack = make_pack(
+        "tampered-reads",
+        vec![
+            enabled_rule("r1", RewriteCategory::Custom, true),
+            enabled_rule("r2", RewriteCategory::DeadCodeElimination, false),
+        ],
+    );
+    pack.content_hash = ContentHash::compute(b"tampered-pack");
+
+    assert!(!pack.is_canonical_with_config(&Default::default()));
+    assert_eq!(pack.rule_count(), 0);
+    assert_eq!(pack.enabled_count(), 0);
+    assert_eq!(pack.soundness_rate_millionths(), 0);
+    assert!(pack.has_internal_blocking());
+    assert!(pack.rule_by_id("r1").is_none());
+    assert!(
+        pack.rules_in_category(RewriteCategory::DeadCodeElimination)
+            .is_empty()
+    );
+}
+
 // ---------------------------------------------------------------------------
 // PackCatalog
 // ---------------------------------------------------------------------------
@@ -1370,7 +1408,7 @@ fn catalog_cross_interference_unknown_pair() {
     cat.register(make_pack("known", vec![]));
 
     assert!(!cat.add_cross_interference("known", "missing", empty_interference(),));
-    assert!(!cat.has_cross_blocking("known", "missing"));
+    assert!(cat.has_cross_blocking("known", "missing"));
     assert!(cat.cross_interference.is_empty());
 }
 

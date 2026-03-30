@@ -1007,6 +1007,102 @@ fn contract_not_satisfied_with_empty() {
     assert!(!inv.contract_satisfied());
 }
 
+#[test]
+fn contract_not_satisfied_when_duplicate_specimen_replaces_other_corpus_entry() {
+    let mut inv = run_interop_parity_corpus();
+    let duplicate = inv
+        .evidence
+        .first()
+        .cloned()
+        .expect("corpus inventory should have evidence");
+    inv.evidence[1] = duplicate;
+    assert!(!inv.contract_satisfied());
+}
+
+#[test]
+fn contract_not_satisfied_when_rehashed_evidence_mode_drifts_from_corpus() {
+    let mut inv = run_interop_parity_corpus();
+    let evidence = inv
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.compatibility_mode != CompatibilityMode::BunCompat)
+        .expect("corpus inventory should contain a non-bun specimen");
+    evidence.compatibility_mode = CompatibilityMode::BunCompat;
+    evidence.evidence_hash = Some(evidence.compute_hash());
+    assert!(!inv.contract_satisfied());
+}
+
+#[test]
+fn contract_not_satisfied_when_rehashed_disposition_drifts_but_counts_still_balance() {
+    let mut inv = run_interop_parity_corpus();
+    let evidence = inv
+        .evidence
+        .iter_mut()
+        .find(|evidence| {
+            evidence.compatibility_disposition != InteropCompatibilityDisposition::Supported
+        })
+        .expect("corpus inventory should contain a non-supported specimen");
+    match evidence.compatibility_disposition {
+        InteropCompatibilityDisposition::Supported => {
+            unreachable!("selected specimen is non-supported")
+        }
+        InteropCompatibilityDisposition::Degraded => inv.degraded_count -= 1,
+        InteropCompatibilityDisposition::Unsupported => inv.unsupported_count -= 1,
+    }
+    inv.supported_count += 1;
+    evidence.compatibility_disposition = InteropCompatibilityDisposition::Supported;
+    evidence.evidence_hash = Some(evidence.compute_hash());
+    assert!(!inv.contract_satisfied());
+}
+
+#[test]
+fn contract_not_satisfied_when_supported_specimen_gains_error_detail() {
+    let mut inv = run_interop_parity_corpus();
+    let evidence = inv
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.actual_outcome == InteropActualOutcome::Success)
+        .expect("corpus inventory should contain a successful specimen");
+    evidence.error_detail = Some("unexpected synthetic error".to_string());
+    evidence.evidence_hash = Some(evidence.compute_hash());
+    assert!(!inv.contract_satisfied());
+}
+
+#[test]
+fn contract_not_satisfied_when_link_failure_detail_is_removed() {
+    let mut inv = run_interop_parity_corpus();
+    let evidence = inv
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.actual_outcome == InteropActualOutcome::LinkFailure)
+        .expect("corpus inventory should contain a link-failure specimen");
+    evidence.error_detail = None;
+    evidence.evidence_hash = Some(evidence.compute_hash());
+    assert!(!inv.contract_satisfied());
+}
+
+#[test]
+fn contract_not_satisfied_when_cyclic_specimen_cycle_count_is_zeroed() {
+    let mut inv = run_interop_parity_corpus();
+    let evidence = inv
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.family == InteropFamily::CyclicInterop)
+        .expect("corpus inventory should contain a cyclic specimen");
+    evidence.cycle_count = 0;
+    evidence.evidence_hash = Some(evidence.compute_hash());
+    assert!(!inv.contract_satisfied());
+}
+
+#[test]
+fn contract_not_satisfied_when_syntax_partition_counts_are_swapped_but_still_sum() {
+    let mut inv = run_interop_parity_corpus();
+    inv.esm_only_count = inv.specimen_count;
+    inv.cjs_only_count = 0;
+    inv.mixed_count = 0;
+    assert!(!inv.contract_satisfied());
+}
+
 // ---------------------------------------------------------------------------
 // Family enum
 // ---------------------------------------------------------------------------

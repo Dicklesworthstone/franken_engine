@@ -472,16 +472,25 @@ impl InterferenceMetadata {
 
     /// Whether there are any blocking interferences.
     pub fn has_blocking(&self) -> bool {
+        if !self.is_canonical() {
+            return true;
+        }
         self.blocking_count > 0
     }
 
     /// Whether the pack is interference-free.
     pub fn is_clean(&self) -> bool {
+        if !self.is_canonical() {
+            return false;
+        }
         self.entries.is_empty()
     }
 
     /// Get all interferences involving a specific rule.
     pub fn for_rule(&self, rule_id: &str) -> Vec<&RuleInterference> {
+        if !self.is_canonical() {
+            return Vec::new();
+        }
         self.entries
             .iter()
             .filter(|e| e.rule_a == rule_id || e.rule_b == rule_id)
@@ -601,16 +610,25 @@ impl RewritePack {
 
     /// Total number of rules.
     pub fn rule_count(&self) -> usize {
+        if !self.is_canonical() {
+            return 0;
+        }
         self.rules.len()
     }
 
     /// Number of enabled rules.
     pub fn enabled_count(&self) -> usize {
+        if !self.is_canonical() {
+            return 0;
+        }
         self.rules.iter().filter(|r| r.enabled).count()
     }
 
     /// Fraction of rules that are proven sound (millionths).
     pub fn soundness_rate_millionths(&self) -> i64 {
+        if !self.is_canonical() {
+            return 0;
+        }
         if self.rules.is_empty() {
             return 0;
         }
@@ -623,16 +641,25 @@ impl RewritePack {
 
     /// Whether this pack has any blocking internal interferences.
     pub fn has_internal_blocking(&self) -> bool {
+        if !self.is_canonical() {
+            return true;
+        }
         self.interference.has_blocking()
     }
 
     /// Get a rule by ID.
     pub fn rule_by_id(&self, rule_id: &str) -> Option<&RewriteRuleEntry> {
+        if !self.is_canonical() {
+            return None;
+        }
         self.rules.iter().find(|r| r.rule_id == rule_id)
     }
 
     /// Get all rules in a category.
     pub fn rules_in_category(&self, cat: RewriteCategory) -> Vec<&RewriteRuleEntry> {
+        if !self.is_canonical() {
+            return Vec::new();
+        }
         self.rules.iter().filter(|r| r.category == cat).collect()
     }
 
@@ -884,9 +911,13 @@ impl PackCatalog {
 
     /// Check whether two packs have blocking cross-interference.
     ///
-    /// Returns `true` conservatively if the catalog is noncanonical.
+    /// Returns `true` conservatively if the catalog is noncanonical or either
+    /// pack ID is unknown.
     pub fn has_cross_blocking(&self, pack_a: &str, pack_b: &str) -> bool {
         if !self.is_canonical() {
+            return true;
+        }
+        if !self.packs.contains_key(pack_a) || !self.packs.contains_key(pack_b) {
             return true;
         }
         let key = canonical_pack_pair_key(pack_a, pack_b);
@@ -1339,6 +1370,21 @@ mod tests {
     }
 
     #[test]
+    fn interference_metadata_queries_fail_closed_when_noncanonical() {
+        let mut meta = InterferenceMetadata::build(vec![test_interference(
+            "r1",
+            "r2",
+            RuleInterferenceKind::PatternConflict,
+        )]);
+        meta.content_hash = ContentHash::compute(b"tampered-cross-interference");
+
+        assert!(!meta.is_canonical());
+        assert!(meta.has_blocking());
+        assert!(!meta.is_clean());
+        assert!(meta.for_rule("r1").is_empty());
+    }
+
+    #[test]
     fn interference_metadata_serde_roundtrip() {
         let meta = InterferenceMetadata::build(vec![test_interference(
             "a",
@@ -1568,6 +1614,26 @@ mod tests {
             "default",
         );
         assert!(pack.has_internal_blocking());
+    }
+
+    #[test]
+    fn pack_queries_fail_closed_when_noncanonical() {
+        let mut pack = test_pack(
+            "tampered-reads",
+            vec![
+                test_rule("r1", RewriteCategory::Custom, true),
+                test_rule("r2", RewriteCategory::DeadCodeElimination, false),
+            ],
+        );
+        pack.content_hash = ContentHash::compute(b"tampered-pack");
+
+        assert!(!pack.is_canonical());
+        assert_eq!(pack.rule_count(), 0);
+        assert_eq!(pack.enabled_count(), 0);
+        assert_eq!(pack.soundness_rate_millionths(), 0);
+        assert!(pack.has_internal_blocking());
+        assert!(pack.rule_by_id("r1").is_none());
+        assert!(pack.rules_in_category(RewriteCategory::Custom).is_empty());
     }
 
     // --- PackCatalog ---
@@ -1819,7 +1885,7 @@ mod tests {
         assert!(catalog.add_cross_interference("a", "b", meta));
         assert!(catalog.has_cross_blocking("a", "b"));
         assert!(catalog.has_cross_blocking("b", "a")); // symmetric
-        assert!(!catalog.has_cross_blocking("a", "c"));
+        assert!(catalog.has_cross_blocking("a", "c"));
     }
 
     #[test]

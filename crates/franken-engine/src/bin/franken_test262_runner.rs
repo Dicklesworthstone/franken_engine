@@ -5,7 +5,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use chrono::Utc;
+use chrono::{NaiveDate, Utc};
 use frankenengine_engine::test262_release_gate::{
     Test262EvidenceCollector, Test262GateRunner, Test262HighWaterMark, Test262ObservedResult,
     Test262PinSet, Test262Profile, Test262RunnerConfig, Test262WaiverSet, next_high_water_mark,
@@ -147,7 +147,7 @@ where
                 let value = args
                     .next()
                     .ok_or_else(|| "--run-date requires a value".to_string())?;
-                run_date = value;
+                run_date = parse_run_date(value.as_str())?;
             }
             "--worker-count" => {
                 let value = args
@@ -217,6 +217,25 @@ where
         policy_id,
         acknowledge_pass_regression,
     })
+}
+
+fn parse_run_date(value: &str) -> Result<String, String> {
+    let bytes = value.as_bytes();
+    let has_canonical_shape = bytes.len() == 10
+        && bytes[0..4].iter().all(|byte| byte.is_ascii_digit())
+        && bytes[4] == b'-'
+        && bytes[5..7].iter().all(|byte| byte.is_ascii_digit())
+        && bytes[7] == b'-'
+        && bytes[8..10].iter().all(|byte| byte.is_ascii_digit());
+    if !has_canonical_shape {
+        return Err(format!(
+            "--run-date must be a real YYYY-MM-DD date, got `{value}`"
+        ));
+    }
+
+    NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .map(|_| value.to_string())
+        .map_err(|_| format!("--run-date must be a real YYYY-MM-DD date, got `{value}`"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -859,6 +878,28 @@ mod tests {
         let err = parse_cli_args(&["--single-test-id", "   "])
             .expect_err("empty single-test-id must fail");
         assert!(err.contains("--single-test-id must not be empty"));
+    }
+
+    #[test]
+    fn parse_args_rejects_impossible_run_date() {
+        let err = parse_cli_args(&["--run-date", "2026-02-30"])
+            .expect_err("impossible run date must fail");
+        assert_eq!(
+            err,
+            "--run-date must be a real YYYY-MM-DD date, got `2026-02-30`"
+        );
+    }
+
+    #[test]
+    fn parse_args_rejects_non_canonical_run_date_shape() {
+        for value in ["2026-2-03", "2026-02-3", "2026-2-3"] {
+            let err = parse_cli_args(&["--run-date", value])
+                .expect_err("non-canonical run date must fail");
+            assert_eq!(
+                err,
+                format!("--run-date must be a real YYYY-MM-DD date, got `{value}`")
+            );
+        }
     }
 
     #[test]

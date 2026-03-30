@@ -476,19 +476,18 @@ fn verify_structured_log_empty_object() {
 
 #[test]
 fn verify_error_code_format_empty_prefix() {
-    // Empty prefix matches everything
-    assert!(verify_error_code_format("anything", ""));
-    assert!(verify_error_code_format("", ""));
+    assert!(!verify_error_code_format("anything", ""));
+    assert!(!verify_error_code_format("", ""));
 }
 
 #[test]
 fn verify_error_code_format_exact_match() {
-    assert!(verify_error_code_format("FE-STOR-", "FE-STOR-"));
+    assert!(!verify_error_code_format("FE-STOR-", "FE-STOR-"));
 }
 
 #[test]
 fn verify_error_code_format_longer_code() {
-    assert!(verify_error_code_format("FE-STOR-0001-extra", "FE-STOR-"));
+    assert!(!verify_error_code_format("FE-STOR-0001-extra", "FE-STOR-"));
 }
 
 #[test]
@@ -504,6 +503,12 @@ fn verify_error_code_format_code_shorter_than_prefix() {
 #[test]
 fn verify_error_code_format_case_sensitive() {
     assert!(!verify_error_code_format("fe-stor-0001", "FE-STOR-"));
+}
+
+#[test]
+fn verify_error_code_format_requires_segment_boundary_after_prefix() {
+    assert!(!verify_error_code_format("FE-IFCX-001", "FE-IFC"));
+    assert!(verify_error_code_format("FE-IFC-BLOCK", "FE-IFC"));
 }
 
 // ── verify_deterministic_serde ──────────────────────────────────────────────

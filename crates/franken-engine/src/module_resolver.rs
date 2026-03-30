@@ -1257,8 +1257,12 @@ impl DeterministicModuleResolver {
                         ),
                     ));
                 }
-                let (relative_probes, candidate) =
-                    self.lookup_external_candidate(&resolved_base, request.style, allow_probes);
+                let (relative_probes, candidate) = self.lookup_external_candidate(
+                    &resolved_base,
+                    request.style,
+                    request.compatibility_mode,
+                    allow_probes,
+                );
                 probe_sequence.extend(relative_probes);
                 return match candidate {
                     Some((resolved, record)) => Ok((resolved, record, probe_sequence)),
@@ -1310,8 +1314,12 @@ impl DeterministicModuleResolver {
                     ),
                 ));
             }
-            let (relative_probes, candidate) =
-                self.lookup_workspace_candidate(&resolved_base, request.style, allow_probes);
+            let (relative_probes, candidate) = self.lookup_workspace_candidate(
+                &resolved_base,
+                request.style,
+                request.compatibility_mode,
+                allow_probes,
+            );
             probe_sequence.extend(relative_probes);
             return match candidate {
                 Some((resolved, record)) => Ok((resolved, record, probe_sequence)),
@@ -1354,8 +1362,12 @@ impl DeterministicModuleResolver {
                     ),
                 ));
             }
-            let (absolute_probes, candidate) =
-                self.lookup_workspace_candidate(&resolved_base, request.style, true);
+            let (absolute_probes, candidate) = self.lookup_workspace_candidate(
+                &resolved_base,
+                request.style,
+                request.compatibility_mode,
+                true,
+            );
             probe_sequence.extend(absolute_probes);
             return match candidate {
                 Some((resolved, record)) => Ok((resolved, record, probe_sequence)),
@@ -1375,8 +1387,12 @@ impl DeterministicModuleResolver {
             };
         }
 
-        let (external_probes, external_candidate) =
-            self.lookup_external_candidate(specifier, request.style, true);
+        let (external_probes, external_candidate) = self.lookup_external_candidate(
+            specifier,
+            request.style,
+            request.compatibility_mode,
+            true,
+        );
         probe_sequence.extend(external_probes);
         if let Some((resolved, record)) = external_candidate {
             return Ok((resolved, record, probe_sequence));
@@ -1401,8 +1417,12 @@ impl DeterministicModuleResolver {
                 ),
             ));
         }
-        let (workspace_probes, workspace_candidate) =
-            self.lookup_workspace_candidate(&workspace_base, request.style, true);
+        let (workspace_probes, workspace_candidate) = self.lookup_workspace_candidate(
+            &workspace_base,
+            request.style,
+            request.compatibility_mode,
+            true,
+        );
         probe_sequence.extend(workspace_probes);
         if let Some((resolved, record)) = workspace_candidate {
             return Ok((resolved, record, probe_sequence));
@@ -1468,11 +1488,12 @@ impl DeterministicModuleResolver {
         &'a self,
         resolved_base: &str,
         style: ImportStyle,
+        compatibility_mode: CompatibilityMode,
         allow_probes: bool,
     ) -> (Vec<String>, Option<(String, &'a ModuleRecord)>) {
         let mut probes = Vec::new();
         let candidates = if allow_probes {
-            candidate_paths(resolved_base, style)
+            candidate_paths(resolved_base, style, compatibility_mode)
         } else {
             vec![resolved_base.to_string()]
         };
@@ -1489,11 +1510,12 @@ impl DeterministicModuleResolver {
         &'a self,
         specifier: &str,
         style: ImportStyle,
+        compatibility_mode: CompatibilityMode,
         allow_probes: bool,
     ) -> (Vec<String>, Option<(String, &'a ModuleRecord)>) {
         let mut probes = Vec::new();
         let candidates = if allow_probes {
-            candidate_paths(specifier, style)
+            candidate_paths(specifier, style, compatibility_mode)
         } else {
             vec![specifier.to_string()]
         };
@@ -1672,7 +1694,11 @@ fn is_relative_specifier(specifier: &str) -> bool {
         || specifier.starts_with("../")
 }
 
-fn candidate_paths(base: &str, style: ImportStyle) -> Vec<String> {
+fn candidate_paths(
+    base: &str,
+    style: ImportStyle,
+    compatibility_mode: CompatibilityMode,
+) -> Vec<String> {
     let mut candidates = Vec::new();
     let mut seen = BTreeSet::new();
 
@@ -1684,9 +1710,15 @@ fn candidate_paths(base: &str, style: ImportStyle) -> Vec<String> {
 
     push(base.to_string());
 
-    let suffixes: &[&str] = match style {
-        ImportStyle::Import => &[".mjs", ".js", "/index.mjs", "/index.js"],
-        ImportStyle::Require => &[".cjs", ".js", "/index.cjs", "/index.js"],
+    let suffixes: Vec<&str> = match style {
+        ImportStyle::Import => vec![".mjs", ".js", "/index.mjs", "/index.js"],
+        ImportStyle::Require => {
+            let mut suffixes = vec![".cjs", ".js", "/index.cjs", "/index.js"];
+            if compatibility_mode == CompatibilityMode::BunCompat {
+                suffixes.extend([".mjs", "/index.mjs"]);
+            }
+            suffixes
+        }
     };
 
     for suffix in suffixes {
@@ -3927,7 +3959,8 @@ mod tests {
 
     #[test]
     fn candidate_paths_import_includes_mjs_suffixes() {
-        let candidates = candidate_paths("/app/lib", ImportStyle::Import);
+        let candidates =
+            candidate_paths("/app/lib", ImportStyle::Import, CompatibilityMode::Native);
         assert!(candidates.contains(&"/app/lib".to_string()));
         assert!(candidates.contains(&"/app/lib.mjs".to_string()));
         assert!(candidates.contains(&"/app/lib.js".to_string()));
@@ -3938,13 +3971,30 @@ mod tests {
 
     #[test]
     fn candidate_paths_require_includes_cjs_suffixes() {
-        let candidates = candidate_paths("/app/lib", ImportStyle::Require);
+        let candidates =
+            candidate_paths("/app/lib", ImportStyle::Require, CompatibilityMode::Native);
         assert!(candidates.contains(&"/app/lib".to_string()));
         assert!(candidates.contains(&"/app/lib.cjs".to_string()));
         assert!(candidates.contains(&"/app/lib.js".to_string()));
         assert!(candidates.contains(&"/app/lib/index.cjs".to_string()));
         assert!(candidates.contains(&"/app/lib/index.js".to_string()));
         assert!(!candidates.contains(&"/app/lib.mjs".to_string()));
+    }
+
+    #[test]
+    fn candidate_paths_require_includes_mjs_suffixes_in_bun_compat_mode() {
+        let candidates = candidate_paths(
+            "/app/lib",
+            ImportStyle::Require,
+            CompatibilityMode::BunCompat,
+        );
+        assert!(candidates.contains(&"/app/lib".to_string()));
+        assert!(candidates.contains(&"/app/lib.cjs".to_string()));
+        assert!(candidates.contains(&"/app/lib.js".to_string()));
+        assert!(candidates.contains(&"/app/lib/index.cjs".to_string()));
+        assert!(candidates.contains(&"/app/lib/index.js".to_string()));
+        assert!(candidates.contains(&"/app/lib.mjs".to_string()));
+        assert!(candidates.contains(&"/app/lib/index.mjs".to_string()));
     }
 
     // ── Enrichment: join_paths edge cases ────────────────────────

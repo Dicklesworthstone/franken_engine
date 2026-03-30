@@ -222,7 +222,25 @@ pub fn verify_structured_log(json: &Value, boundary: &str) -> Vec<ContractViolat
 
 /// Verify an error code matches the stable prefix format.
 pub fn verify_error_code_format(code: &str, expected_prefix: &str) -> bool {
-    code.starts_with(expected_prefix)
+    if code.is_empty() || expected_prefix.is_empty() || !code.starts_with(expected_prefix) {
+        return false;
+    }
+
+    if code.len() == expected_prefix.len() {
+        return false;
+    }
+
+    if !expected_prefix.ends_with('-') && code.as_bytes().get(expected_prefix.len()) != Some(&b'-')
+    {
+        return false;
+    }
+
+    code.split('-').all(|segment| {
+        !segment.is_empty()
+            && segment
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1236,7 +1254,7 @@ mod tests {
         for err in &errors {
             assert!(
                 verify_error_code_format(err.code(), "FE-STOR-"),
-                "error code `{}` does not start with FE-STOR-",
+                "error code `{}` does not satisfy the stable FE-STOR- format",
                 err.code()
             );
         }
@@ -1604,7 +1622,11 @@ mod tests {
     fn error_code_format_verification() {
         assert!(verify_error_code_format("FE-STOR-0001", "FE-STOR-"));
         assert!(verify_error_code_format("FE-STOR-0009", "FE-STOR-"));
+        assert!(verify_error_code_format("FE-IFC-BLOCK", "FE-IFC"));
         assert!(!verify_error_code_format("UNKNOWN-001", "FE-STOR-"));
+        assert!(!verify_error_code_format("FE-STOR-", "FE-STOR-"));
+        assert!(!verify_error_code_format("FE-IFCX-001", "FE-IFC"));
+        assert!(!verify_error_code_format("FE-STOR-0001-extra", "FE-STOR-"));
     }
 
     // ── deterministic cross-boundary data exchange ─────────────────────
@@ -1795,7 +1817,10 @@ mod tests {
     #[test]
     fn verify_error_code_format_checks_prefix() {
         assert!(verify_error_code_format("FE-IFC-001", "FE-IFC"));
+        assert!(verify_error_code_format("FE-IFC-BLOCK", "FE-IFC"));
         assert!(!verify_error_code_format("FE-IFC-001", "FE-SAFE"));
+        assert!(!verify_error_code_format("FE-IFCX-001", "FE-IFC"));
+        assert!(!verify_error_code_format("FE-IFC", "FE-IFC"));
         assert!(!verify_error_code_format("", "FE-"));
     }
 

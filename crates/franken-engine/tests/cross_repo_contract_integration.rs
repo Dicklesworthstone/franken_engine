@@ -432,6 +432,7 @@ fn verify_structured_log_boundary_name_propagated() {
 fn error_code_format_matches_prefix() {
     assert!(verify_error_code_format("FE-STOR-0001", "FE-STOR-"));
     assert!(verify_error_code_format("FE-IFC-001", "FE-IFC"));
+    assert!(verify_error_code_format("FE-IFC-BLOCK", "FE-IFC"));
 }
 
 #[test]
@@ -441,9 +442,9 @@ fn error_code_format_rejects_wrong_prefix() {
 }
 
 #[test]
-fn error_code_format_empty_prefix_matches_anything() {
-    assert!(verify_error_code_format("anything", ""));
-    assert!(verify_error_code_format("", ""));
+fn error_code_format_empty_prefix_rejects() {
+    assert!(!verify_error_code_format("anything", ""));
+    assert!(!verify_error_code_format("", ""));
 }
 
 #[test]
@@ -453,7 +454,17 @@ fn error_code_format_code_shorter_than_prefix_rejects() {
 
 #[test]
 fn error_code_format_exact_match() {
-    assert!(verify_error_code_format("FE-STOR-", "FE-STOR-"));
+    assert!(!verify_error_code_format("FE-STOR-", "FE-STOR-"));
+}
+
+#[test]
+fn error_code_format_rejects_non_boundary_prefix_match() {
+    assert!(!verify_error_code_format("FE-IFCX-001", "FE-IFC"));
+}
+
+#[test]
+fn error_code_format_rejects_lowercase_suffix_segments() {
+    assert!(!verify_error_code_format("FE-STOR-0001-extra", "FE-STOR-"));
 }
 
 // ============================================================================

@@ -516,6 +516,16 @@ fn sanitized_code_portion(line: &str, state: &mut LineScanState) -> String {
             continue;
         }
 
+        if bytes[index..].starts_with(b"'\"'") {
+            index += 3;
+            continue;
+        }
+        
+        if bytes[index..].starts_with(b"b'\"'") {
+            index += 4;
+            continue;
+        }
+
         if let Some(prefix_len) = quoted_string_start(&bytes[index..]) {
             state.in_string = true;
             index += prefix_len;

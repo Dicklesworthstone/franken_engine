@@ -403,6 +403,57 @@ fn observe_external_extension_probe_package_root_require_behavior(
     "resolve_relative_require_from_package_root".to_string()
 }
 
+fn observe_scoped_bare_require_index_mjs_behavior(mode: CompatibilityMode) -> String {
+    let mut resolver = DeterministicModuleResolver::default();
+    resolver
+        .register_external_module("@scope/pkg/index.mjs", esm_def("export default 'esm';"))
+        .unwrap();
+
+    match resolver.resolve(
+        &ModuleRequest::new("@scope/pkg", ImportStyle::Require).with_compatibility_mode(mode),
+        &test_context(),
+        &allow_all(),
+    ) {
+        Ok(outcome) => {
+            assert_eq!(mode, CompatibilityMode::BunCompat);
+            assert_eq!(outcome.module.canonical_specifier, "@scope/pkg/index.mjs");
+            assert_eq!(outcome.module.record.id, "external:@scope/pkg/index.mjs");
+            assert_eq!(outcome.module.record.syntax, ModuleSyntax::EsModule);
+            assert_eq!(
+                outcome.module.probe_sequence,
+                vec![
+                    "@scope/pkg",
+                    "@scope/pkg.cjs",
+                    "@scope/pkg.js",
+                    "@scope/pkg/index.cjs",
+                    "@scope/pkg/index.js",
+                    "@scope/pkg.mjs",
+                    "@scope/pkg/index.mjs",
+                ]
+            );
+            "allow_via_sync_bridge_after_mjs_probe".to_string()
+        }
+        Err(error) => {
+            assert!(matches!(
+                mode,
+                CompatibilityMode::Native | CompatibilityMode::NodeCompat
+            ));
+            assert_eq!(error.code, ResolutionErrorCode::ModuleNotFound);
+            assert_eq!(
+                error.probe_sequence,
+                vec![
+                    "@scope/pkg",
+                    "@scope/pkg.cjs",
+                    "@scope/pkg.js",
+                    "@scope/pkg/index.cjs",
+                    "@scope/pkg/index.js",
+                ]
+            );
+            "reject_mjs_package_entry_probe".to_string()
+        }
+    }
+}
+
 // =========================================================================
 // A. ModuleSyntax — ordering, Copy, Display, serde
 // =========================================================================
@@ -964,6 +1015,39 @@ fn resolver_scoped_external_extension_probe_package_root_behavior_matches_matrix
             .expect(
                 "scoped external extension-probe package-root behavior should match matrix contract",
             );
+        assert!(outcome.matched);
+    }
+}
+
+#[test]
+fn resolver_scoped_bare_require_package_index_mjs_behavior_matches_matrix_contract_across_modes() {
+    let mut matrix = load_validated_default_matrix();
+
+    for (mode, expected_behavior) in [
+        (CompatibilityMode::Native, "reject_mjs_package_entry_probe"),
+        (
+            CompatibilityMode::NodeCompat,
+            "reject_mjs_package_entry_probe",
+        ),
+        (
+            CompatibilityMode::BunCompat,
+            "allow_via_sync_bridge_after_mjs_probe",
+        ),
+    ] {
+        let observed_behavior = observe_scoped_bare_require_index_mjs_behavior(mode);
+        assert_eq!(observed_behavior, expected_behavior);
+
+        let outcome = matrix
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "scoped-bare-require-package-index-mjs",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    observed_behavior,
+                ),
+                &matrix_context(),
+            )
+            .expect("scoped bare require() index.mjs behavior should match the matrix contract");
         assert!(outcome.matched);
     }
 }

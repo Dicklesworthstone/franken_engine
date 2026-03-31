@@ -94,6 +94,59 @@ fn default_matrix_covers_required_feature_categories() {
 }
 
 #[test]
+fn default_matrix_pins_scoped_bare_require_index_mjs_contract() {
+    let matrix = ModuleCompatibilityMatrix::from_default_json().expect("load default matrix");
+    let entry = matrix
+        .entry("scoped-bare-require-package-index-mjs")
+        .expect("default matrix should include scoped bare require() index.mjs probe case");
+
+    assert_eq!(entry.feature, ModuleFeature::Cjs);
+    assert_eq!(entry.node_behavior, "reject_mjs_package_entry_probe");
+    assert_eq!(entry.bun_behavior, "allow_via_sync_bridge_after_mjs_probe");
+    assert_eq!(
+        entry.franken_native_behavior,
+        "reject_mjs_package_entry_probe"
+    );
+    assert_eq!(
+        entry.franken_node_compat_behavior,
+        "reject_mjs_package_entry_probe"
+    );
+    assert_eq!(
+        entry.franken_bun_compat_behavior,
+        "allow_via_sync_bridge_after_mjs_probe"
+    );
+    assert_eq!(entry.explicit_shims.len(), 1);
+    assert_eq!(
+        entry.explicit_shims[0].shim_id,
+        "shim-bun-scoped-bare-require-index-mjs-v1"
+    );
+    assert_eq!(entry.explicit_shims[0].mode, CompatibilityMode::BunCompat);
+    assert!(
+        entry
+            .lockstep_case_refs
+            .contains(&"lockstep/module/scoped-bare-require-package-index-mjs".to_string())
+    );
+
+    let divergence = entry
+        .divergence
+        .as_ref()
+        .expect("scoped bare require() index.mjs case must record the Bun divergence explicitly");
+    assert_eq!(
+        divergence.diverges_from,
+        vec![frankenengine_engine::module_compatibility_matrix::ReferenceRuntime::Bun]
+    );
+    assert_eq!(
+        divergence.waiver_id,
+        "waiver-modcomp-scoped-bare-require-index-mjs-bun"
+    );
+    assert!(
+        divergence.migration_guidance.contains("bun_compat")
+            && divergence.migration_guidance.contains(".cjs"),
+        "scoped bare require() index.mjs divergence should carry actionable migration guidance"
+    );
+}
+
+#[test]
 fn missing_waiver_fails_validation_with_stable_error_code() {
     let mut matrix = ModuleCompatibilityMatrix::from_default_json().expect("load default matrix");
     let error = matrix

@@ -1722,6 +1722,101 @@ fn mixed_cycle_bun_compat_interop_evidence_matches_matrix_contract() {
 }
 
 #[test]
+fn cjs_requires_esm_interop_evidence_matches_matrix_contract_across_modes() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    let inventory = run_interop_parity_corpus();
+    for (
+        specimen_id,
+        mode,
+        expected_outcome,
+        expected_behavior,
+        expected_disposition,
+        expected_guidance_code,
+        expected_message_fragment,
+    ) in [
+        (
+            "cjs_requires_esm_named_native",
+            CompatibilityMode::Native,
+            InteropActualOutcome::LinkFailure,
+            "throw_err_require_esm",
+            InteropCompatibilityDisposition::Unsupported,
+            "repair_link_boundary",
+            "align exports/imports or replace the boundary with an explicit shim before retrying",
+        ),
+        (
+            "cjs_requires_esm_named_node_compat",
+            CompatibilityMode::NodeCompat,
+            InteropActualOutcome::LinkFailure,
+            "throw_err_require_esm",
+            InteropCompatibilityDisposition::Unsupported,
+            "repair_link_boundary",
+            "align exports/imports or replace the boundary with an explicit shim before retrying",
+        ),
+        (
+            "cjs_requires_esm_named_bun_compat",
+            CompatibilityMode::BunCompat,
+            InteropActualOutcome::Success,
+            "allow_via_sync_bridge",
+            InteropCompatibilityDisposition::Supported,
+            "no_remediation_required",
+            "no mitigation is required",
+        ),
+    ] {
+        let evidence = inventory
+            .evidence
+            .iter()
+            .find(|ev| ev.specimen_id == specimen_id)
+            .unwrap_or_else(|| panic!("cjs-requires-esm specimen should exist: {specimen_id}"));
+        assert_eq!(evidence.compatibility_mode, mode);
+        assert_eq!(evidence.actual_outcome, expected_outcome);
+        assert_eq!(evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(evidence.compatibility_disposition, expected_disposition);
+        if expected_outcome == InteropActualOutcome::LinkFailure {
+            assert!(
+                evidence
+                    .error_detail
+                    .as_deref()
+                    .is_some_and(|detail| detail.contains("ERR_REQUIRE_ESM"))
+            );
+        } else {
+            assert!(evidence.error_detail.is_none());
+            assert_eq!(evidence.linked_count, 2);
+            assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
+        }
+        assert_remediation_guidance(
+            specimen_id,
+            evidence.remediation_guidance.guidance_code.as_str(),
+            expected_guidance_code,
+            evidence.remediation_guidance.message.as_str(),
+            expected_message_fragment,
+        );
+
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "cjs-require-esm",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    expected_behavior,
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!(
+                    "cjs-requires-esm evidence should evaluate against the matrix for {specimen_id}: {err}"
+                )
+            });
+        assert!(
+            outcome.matched,
+            "cjs-requires-esm evidence should match the matrix contract for {specimen_id}"
+        );
+    }
+}
+
+#[test]
 fn extensionless_relative_interop_evidence_matches_matrix_contract_across_modes() {
     let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
     let required = m.required_waiver_ids();

@@ -95,7 +95,7 @@ fn corpus_has_failure_specimens() {
 }
 
 #[test]
-fn corpus_distinguishes_native_and_bun_compat_cjs_requires_esm() {
+fn corpus_distinguishes_native_node_compat_and_bun_compat_cjs_requires_esm() {
     let corpus = interop_parity_corpus();
     let native = corpus
         .iter()
@@ -103,6 +103,16 @@ fn corpus_distinguishes_native_and_bun_compat_cjs_requires_esm() {
         .unwrap();
     assert_eq!(native.family, InteropFamily::CjsRequiresEsm);
     assert_eq!(native.expected_outcome, InteropExpectedOutcome::LinkFailure);
+
+    let node_compat = corpus
+        .iter()
+        .find(|s| s.specimen_id == "cjs_requires_esm_named_node_compat")
+        .unwrap();
+    assert_eq!(node_compat.family, InteropFamily::CjsRequiresEsm);
+    assert_eq!(
+        node_compat.expected_outcome,
+        InteropExpectedOutcome::LinkFailure
+    );
 
     let bun_compat = corpus
         .iter()
@@ -429,7 +439,7 @@ fn inventory_evidence_ids_match_corpus() {
 }
 
 #[test]
-fn inventory_distinguishes_native_and_bun_compat_cjs_requires_esm() {
+fn inventory_distinguishes_native_node_compat_and_bun_compat_cjs_requires_esm() {
     let inv = run_interop_parity_corpus();
 
     let native = inv
@@ -450,6 +460,41 @@ fn inventory_distinguishes_native_and_bun_compat_cjs_requires_esm() {
             .as_deref()
             .is_some_and(|detail| detail.contains("ERR_REQUIRE_ESM"))
     );
+    assert_remediation_guidance(
+        native,
+        "repair_link_boundary",
+        "align exports/imports or replace the boundary with an explicit shim before retrying",
+    );
+
+    let node_compat = inv
+        .evidence
+        .iter()
+        .find(|ev| ev.specimen_id == "cjs_requires_esm_named_node_compat")
+        .unwrap();
+    assert_eq!(
+        node_compat.compatibility_mode,
+        CompatibilityMode::NodeCompat
+    );
+    assert_eq!(
+        node_compat.actual_outcome,
+        InteropActualOutcome::LinkFailure
+    );
+    assert_eq!(node_compat.verdict, InteropVerdict::Pass);
+    assert_eq!(
+        node_compat.compatibility_disposition,
+        InteropCompatibilityDisposition::Unsupported
+    );
+    assert!(
+        node_compat
+            .error_detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("ERR_REQUIRE_ESM"))
+    );
+    assert_remediation_guidance(
+        node_compat,
+        "repair_link_boundary",
+        "align exports/imports or replace the boundary with an explicit shim before retrying",
+    );
 
     let bun_compat = inv
         .evidence
@@ -464,6 +509,11 @@ fn inventory_distinguishes_native_and_bun_compat_cjs_requires_esm() {
         InteropCompatibilityDisposition::Supported
     );
     assert!(bun_compat.error_detail.is_none());
+    assert_remediation_guidance(
+        bun_compat,
+        "no_remediation_required",
+        "no mitigation is required",
+    );
 }
 
 #[test]

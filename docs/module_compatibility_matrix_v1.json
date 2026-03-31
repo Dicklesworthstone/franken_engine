@@ -89,6 +89,40 @@
       }
     },
     {
+      "case_id": "scoped-bare-require-package-index-mjs",
+      "feature": "cjs",
+      "scenario": "A bare CommonJS require targets a scoped package whose only entry point is `index.mjs`.",
+      "node_behavior": "reject_mjs_package_entry_probe",
+      "bun_behavior": "allow_via_sync_bridge_after_mjs_probe",
+      "franken_native_behavior": "reject_mjs_package_entry_probe",
+      "franken_node_compat_behavior": "reject_mjs_package_entry_probe",
+      "franken_bun_compat_behavior": "allow_via_sync_bridge_after_mjs_probe",
+      "explicit_shims": [
+        {
+          "shim_id": "shim-bun-scoped-bare-require-index-mjs-v1",
+          "mode": "bun_compat",
+          "description": "Explicit Bun-compatible `.mjs` package-entry probe plus sync bridge for bare require() of scoped ESM package roots.",
+          "removable": true,
+          "test_case_ref": "lockstep/module/scoped-bare-require-package-index-mjs"
+        }
+      ],
+      "lockstep_case_refs": [
+        "lockstep/module/scoped-bare-require-package-index-mjs"
+      ],
+      "test262_refs": [
+        "language/module-code/instn-star-props-circular.js"
+      ],
+      "divergence": {
+        "diverges_from": [
+          "bun"
+        ],
+        "reason": "Native and node-compatible loaders fail closed on bare require() package entry probing and do not search scoped `.mjs` entry points.",
+        "impact": "Scoped packages whose bare CommonJS entry only exists as `index.mjs` remain unresolved outside the explicit bun_compat bridge.",
+        "waiver_id": "waiver-modcomp-scoped-bare-require-index-mjs-bun",
+        "migration_guidance": "Prefer explicit `.cjs` or `.js` require targets, or an exports map that exposes a CommonJS branch for the scoped package; use bun_compat only when Bun-style bare `.mjs` entry probing is an intentional compatibility requirement."
+      }
+    },
+    {
       "case_id": "conditional-exports-condition-order",
       "feature": "conditional_exports",
       "scenario": "Package exports map has import/require/default branches and resolver must choose deterministic precedence.",

@@ -943,6 +943,36 @@ pub fn interop_parity_corpus() -> Vec<InteropSpecimen> {
             expected_async_phases: vec![],
         },
         InteropSpecimen {
+            specimen_id: "cjs_requires_esm_named_node_compat".into(),
+            description: "Node-compatible CJS entry requires a named export from ESM module and still fails with ERR_REQUIRE_ESM".into(),
+            family: InteropFamily::CjsRequiresEsm,
+            modules: vec![
+                SpecimenModule {
+                    specifier: "math.mjs".into(),
+                    syntax: ModuleSyntax::EsModule,
+                    source: "export function add(a, b) { return a + b; }".into(),
+                    imports: vec![],
+                    exports: vec![ExportEntry::direct("add", "add")],
+                    has_default_export: false,
+                    has_top_level_await: false,
+                },
+                SpecimenModule {
+                    specifier: "entry.cjs".into(),
+                    syntax: ModuleSyntax::CommonJs,
+                    source: "const { add } = require('./math.mjs');".into(),
+                    imports: vec![ImportEntry::new("math.mjs", "add", "add")],
+                    exports: vec![],
+                    has_default_export: false,
+                    has_top_level_await: false,
+                },
+            ],
+            entry_point: "entry.cjs".into(),
+            expected_outcome: InteropExpectedOutcome::LinkFailure,
+            expected_linked_count: None,
+            expected_binding_states: vec![],
+            expected_async_phases: vec![],
+        },
+        InteropSpecimen {
             specimen_id: "cjs_requires_esm_named_bun_compat".into(),
             description: "Bun-compat CJS entry requires a named export from ESM module via sync bridge semantics".into(),
             family: InteropFamily::CjsRequiresEsm,
@@ -3943,6 +3973,76 @@ mod tests {
         );
         assert_eq!(bun_compat_evidence.verdict, InteropVerdict::Pass);
         assert_eq!(bun_compat_evidence.linked_count, 2);
+        assert!(
+            bun_compat_evidence
+                .binding_verdicts
+                .iter()
+                .all(|verdict| verdict.pass)
+        );
+    }
+
+    #[test]
+    fn run_single_specimen_cjs_requires_esm_mode_split_matches_resolver_contract() {
+        let corpus = interop_parity_corpus();
+
+        let native = corpus
+            .iter()
+            .find(|specimen| specimen.specimen_id == "cjs_requires_esm_named_native")
+            .unwrap();
+        let native_evidence = run_single_specimen(native);
+        assert_eq!(
+            native_evidence.compatibility_mode,
+            CompatibilityMode::Native
+        );
+        assert_eq!(
+            native_evidence.actual_outcome,
+            InteropActualOutcome::LinkFailure
+        );
+        assert_eq!(native_evidence.verdict, InteropVerdict::Pass);
+        assert!(
+            native_evidence
+                .error_detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("ERR_REQUIRE_ESM"))
+        );
+
+        let node_compat = corpus
+            .iter()
+            .find(|specimen| specimen.specimen_id == "cjs_requires_esm_named_node_compat")
+            .unwrap();
+        let node_compat_evidence = run_single_specimen(node_compat);
+        assert_eq!(
+            node_compat_evidence.compatibility_mode,
+            CompatibilityMode::NodeCompat
+        );
+        assert_eq!(
+            node_compat_evidence.actual_outcome,
+            InteropActualOutcome::LinkFailure
+        );
+        assert_eq!(node_compat_evidence.verdict, InteropVerdict::Pass);
+        assert!(
+            node_compat_evidence
+                .error_detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("ERR_REQUIRE_ESM"))
+        );
+
+        let bun_compat = corpus
+            .iter()
+            .find(|specimen| specimen.specimen_id == "cjs_requires_esm_named_bun_compat")
+            .unwrap();
+        let bun_compat_evidence = run_single_specimen(bun_compat);
+        assert_eq!(
+            bun_compat_evidence.compatibility_mode,
+            CompatibilityMode::BunCompat
+        );
+        assert_eq!(
+            bun_compat_evidence.actual_outcome,
+            InteropActualOutcome::Success
+        );
+        assert_eq!(bun_compat_evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(bun_compat_evidence.linked_count, 2);
+        assert!(bun_compat_evidence.error_detail.is_none());
         assert!(
             bun_compat_evidence
                 .binding_verdicts

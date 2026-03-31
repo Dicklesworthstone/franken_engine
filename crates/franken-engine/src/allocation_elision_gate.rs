@@ -792,9 +792,11 @@ impl ElisionDecisionReceipt {
         append_length_prefixed_str(&mut buf, self.site_id.as_str());
         append_length_prefixed_str(&mut buf, self.lane_id.as_str());
         append_length_prefixed_str(&mut buf, self.verdict.as_str());
+        buf.extend_from_slice(&(self.denial_reasons.len() as u64).to_be_bytes());
         for reason in &self.denial_reasons {
             append_length_prefixed_str(&mut buf, reason.as_str());
         }
+        buf.extend_from_slice(&(self.required_assumptions.len() as u64).to_be_bytes());
         for assumption in &self.required_assumptions {
             append_length_prefixed_str(&mut buf, assumption);
         }

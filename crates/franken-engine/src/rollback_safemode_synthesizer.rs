@@ -1014,7 +1014,7 @@ impl RollbackSafemodeSynthesizer {
         let total_improvement: i64 = deltas
             .iter()
             .map(|d| d.expected_improvement_millionths)
-            .sum();
+            .fold(0i64, |acc, v| acc.saturating_add(v));
         let min_confidence = deltas
             .iter()
             .map(|d| d.confidence_millionths)
@@ -1029,9 +1029,14 @@ impl RollbackSafemodeSynthesizer {
                     .iter()
                     .find(|r| r.constraint_id == c.constraint_id)
                     .map(|r| r.passed)
-                    .unwrap_or(true)
+                    .unwrap_or(false) // fail-closed: missing check = failed
         });
-        let soft_violations = constraint_checks.iter().filter(|c| !c.passed).count() as u64;
+        // Count only soft-constraint violations, not all violations.
+        let soft_violations = constraint_checks
+            .iter()
+            .zip(self.constraints.iter())
+            .filter(|(check, constraint)| !check.passed && !constraint.hard)
+            .count() as u64;
 
         // Generate verification hooks.
         let verification_hooks = if self.config.generate_verification_hooks {

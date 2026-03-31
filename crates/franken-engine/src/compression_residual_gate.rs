@@ -792,7 +792,9 @@ impl ResidualLedger {
 
     /// Total restoration overhead across all entries (microseconds).
     pub fn total_restoration_overhead_us(&self) -> u64 {
-        self.entries.iter().map(|e| e.restoration_overhead_us).sum()
+        self.entries
+            .iter()
+            .fold(0u64, |acc, e| acc.saturating_add(e.restoration_overhead_us))
     }
 }
 
@@ -1252,8 +1254,7 @@ impl CompressionResidualGate {
             net_memory_change_bytes: input
                 .hidden_expansions
                 .iter()
-                .map(|h| h.net_change_bytes)
-                .sum(),
+                .fold(0i64, |acc, h| acc.saturating_add(h.net_change_bytes)),
             aggregate_support_overhead_millionths: agg_support_overhead,
             reversibility_pass_count: rev_pass,
             reversibility_fail_count: rev_fail,
@@ -1598,11 +1599,21 @@ pub fn build_pass_result(
     epoch: SecurityEpoch,
     timestamp_ns: u64,
 ) -> CompressionPassResult {
-    let total_original: u64 = artifacts.iter().map(|a| a.original_size_bytes).sum();
-    let total_compressed: u64 = artifacts.iter().map(|a| a.compressed_size_bytes).sum();
-    let total_restoration: u64 = artifacts.iter().map(|a| a.restoration_overhead_us).sum();
-    let total_dup_removed: u64 = artifacts.iter().map(|a| a.duplicates_removed).sum();
-    let total_dup_remaining: u64 = artifacts.iter().map(|a| a.duplicates_remaining).sum();
+    let total_original: u64 = artifacts
+        .iter()
+        .fold(0u64, |acc, a| acc.saturating_add(a.original_size_bytes));
+    let total_compressed: u64 = artifacts
+        .iter()
+        .fold(0u64, |acc, a| acc.saturating_add(a.compressed_size_bytes));
+    let total_restoration: u64 = artifacts
+        .iter()
+        .fold(0u64, |acc, a| acc.saturating_add(a.restoration_overhead_us));
+    let total_dup_removed: u64 = artifacts
+        .iter()
+        .fold(0u64, |acc, a| acc.saturating_add(a.duplicates_removed));
+    let total_dup_remaining: u64 = artifacts
+        .iter()
+        .fold(0u64, |acc, a| acc.saturating_add(a.duplicates_remaining));
     let reversible_count = artifacts.iter().filter(|a| a.reversible).count();
     let irreversible_count = artifacts.len() - reversible_count;
 

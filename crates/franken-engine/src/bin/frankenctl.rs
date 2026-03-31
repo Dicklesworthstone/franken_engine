@@ -3523,7 +3523,7 @@ fn execute_react_compile(args: ReactCompileArgs) -> Result<i32, String> {
         write_json_file(path, &output)?;
     }
     print_json(&output)?;
-    Ok(0)
+    if output.blocked { Ok(25) } else { Ok(0) }
 }
 
 fn execute_react_build(args: ReactBuildArgs) -> Result<i32, String> {
@@ -3554,7 +3554,7 @@ fn execute_react_build(args: ReactBuildArgs) -> Result<i32, String> {
         write_json_file(path, &output)?;
     }
     print_json(&output)?;
-    Ok(0)
+    if output.blocked { Ok(25) } else { Ok(0) }
 }
 
 fn execute_react_contract(args: ReactContractArgs) -> Result<i32, String> {
@@ -4657,6 +4657,74 @@ mod tests {
             output["capability_contract_policy_id"].as_str(),
             Some(REACT_CAPABILITY_CONTRACT_POLICY_ID)
         );
+    }
+
+    #[test]
+    fn execute_react_compile_returns_blocked_exit_code_for_unshipped_capability() {
+        let input = std::env::temp_dir().join(format!(
+            "frankenctl-react-compile-{}.tsx",
+            current_unix_ns()
+        ));
+        let out = std::env::temp_dir().join(format!(
+            "frankenctl-react-compile-report-{}.json",
+            current_unix_ns()
+        ));
+        fs::write(&input, "export const App = () => <div>Hello</div>;\n")
+            .expect("react compile fixture should write");
+
+        let exit_code = execute_react_compile(ReactCompileArgs {
+            input: input.clone(),
+            source_form: ReactSourceForm::Tsx,
+            runtime_mode: Some(ReactRuntimeMode::Automatic),
+            out: Some(out.clone()),
+            trace_id: "trace-react-compile".to_string(),
+            decision_id: "decision-react-compile".to_string(),
+            policy_id: "policy-react-compile".to_string(),
+        })
+        .expect("react compile execution should succeed");
+
+        assert_eq!(exit_code, 25);
+        let output: serde_json::Value =
+            load_json_file(&out).expect("react compile output should parse");
+        assert_eq!(output["support_status"].as_str(), Some("deferred"));
+        assert_eq!(output["blocked"].as_bool(), Some(true));
+
+        let _ = fs::remove_file(input);
+        let _ = fs::remove_file(out);
+    }
+
+    #[test]
+    fn execute_react_build_returns_blocked_exit_code_for_unshipped_target() {
+        let entry =
+            std::env::temp_dir().join(format!("frankenctl-react-build-{}.jsx", current_unix_ns()));
+        let out = std::env::temp_dir().join(format!(
+            "frankenctl-react-build-report-{}.json",
+            current_unix_ns()
+        ));
+        fs::write(
+            &entry,
+            "export default function App() { return <main />; }\n",
+        )
+        .expect("react build fixture should write");
+
+        let exit_code = execute_react_build(ReactBuildArgs {
+            entry: entry.clone(),
+            target: ReactBuildTarget::Ssr,
+            out: Some(out.clone()),
+            trace_id: "trace-react-build".to_string(),
+            decision_id: "decision-react-build".to_string(),
+            policy_id: "policy-react-build".to_string(),
+        })
+        .expect("react build execution should succeed");
+
+        assert_eq!(exit_code, 25);
+        let output: serde_json::Value =
+            load_json_file(&out).expect("react build output should parse");
+        assert_eq!(output["support_status"].as_str(), Some("unsupported"));
+        assert_eq!(output["blocked"].as_bool(), Some(true));
+
+        let _ = fs::remove_file(entry);
+        let _ = fs::remove_file(out);
     }
 
     #[test]

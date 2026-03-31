@@ -821,6 +821,63 @@ fn frankenctl_cli_workflow_script_emits_expected_artifacts_and_routes() {
 }
 
 #[test]
+fn frankenctl_cli_workflow_script_pins_replay_contract() {
+    let script = fs::read_to_string(repo_root().join("scripts/e2e/frankenctl_cli_workflow.sh"))
+        .expect("frankenctl cli workflow script should exist");
+
+    assert!(
+        script.contains("explicit_replay_run_dir=\"${FRANKENCTL_CLI_WORKFLOW_REPLAY_RUN_DIR:-}\"")
+    );
+    assert!(script.contains("run_dir_is_complete()"));
+    assert!(script.contains("replay_existing_run_dir()"));
+    assert!(script.contains(
+        "replay_command=\"FRANKENCTL_CLI_WORKFLOW_REPLAY_RUN_DIR=\\\"${run_dir}\\\" ./scripts/e2e/frankenctl_cli_workflow.sh ${mode}\""
+    ));
+    assert!(script.contains("if [[ -n \"${explicit_replay_run_dir}\" ]]; then"));
+    assert!(script.contains("replay_existing_run_dir \"${explicit_replay_run_dir}\""));
+    assert!(script.contains("exit 0"));
+    assert!(script.contains(
+        "frankenctl workflow replay could not use explicit run directory; explicit run directory is incomplete: ${candidate}"
+    ));
+
+    for required_path in [
+        "${candidate}/run_manifest.json",
+        "${candidate}/trace_ids.json",
+        "${candidate}/events.jsonl",
+        "${candidate}/commands.txt",
+        "${candidate}/doctor_input.json",
+        "${candidate}/step_logs/step_000.log",
+        "${candidate}/support_bundle/preflight_report.json",
+        "${candidate}/support_bundle/onboarding_scorecard.json",
+        "${candidate}/support_bundle/rollout_decision_artifact.json",
+        "${candidate}/support_bundle/frankenctl_doctor_report.json",
+    ] {
+        assert!(
+            script.contains(required_path),
+            "expected replay completeness check for {required_path}"
+        );
+    }
+
+    for replay_output in [
+        "frankenctl workflow replay manifest: ${candidate}/run_manifest.json",
+        "frankenctl workflow replay trace ids: ${candidate}/trace_ids.json",
+        "frankenctl workflow replay events: ${candidate}/events.jsonl",
+        "frankenctl workflow replay commands: ${candidate}/commands.txt",
+        "frankenctl workflow replay doctor input: ${candidate}/doctor_input.json",
+        "frankenctl workflow replay first step log: ${candidate}/step_logs/step_000.log",
+        "frankenctl workflow replay support bundle preflight: ${candidate}/support_bundle/preflight_report.json",
+        "frankenctl workflow replay support bundle onboarding scorecard: ${candidate}/support_bundle/onboarding_scorecard.json",
+        "frankenctl workflow replay support bundle rollout decision: ${candidate}/support_bundle/rollout_decision_artifact.json",
+        "frankenctl workflow replay support bundle doctor report: ${candidate}/support_bundle/frankenctl_doctor_report.json",
+    ] {
+        assert!(
+            script.contains(replay_output),
+            "expected replay output contract for {replay_output}"
+        );
+    }
+}
+
+#[test]
 fn frankenctl_cli_workflow_script_fails_closed_on_rch_drift() {
     let script = fs::read_to_string(repo_root().join("scripts/e2e/frankenctl_cli_workflow.sh"))
         .expect("frankenctl cli workflow script should exist");

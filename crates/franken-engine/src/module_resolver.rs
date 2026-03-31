@@ -124,6 +124,42 @@ impl ModuleDefinition {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ExternalPackageExportTarget {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub condition_targets: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_target: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalPackageDefinition {
+    pub package_name: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub exports: BTreeMap<String, ExternalPackageExportTarget>,
+}
+
+impl ExternalPackageDefinition {
+    pub fn new(package_name: impl Into<String>) -> Self {
+        let package_name = package_name.into();
+        Self {
+            package_name: normalize_registered_package_name(&package_name),
+            exports: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_export(
+        mut self,
+        export_key: impl Into<String>,
+        export_target: ExternalPackageExportTarget,
+    ) -> Self {
+        let export_key = export_key.into();
+        self.exports
+            .insert(normalize_package_export_key(&export_key), export_target);
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModuleRecord {
     pub id: String,
@@ -1076,6 +1112,16 @@ pub struct DeterministicModuleResolver {
     builtins: BTreeMap<String, ModuleRecord>,
     workspace_modules: BTreeMap<String, ModuleRecord>,
     external_modules: BTreeMap<String, ModuleRecord>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    external_packages: BTreeMap<String, ExternalPackageDefinition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExternalPackageResolutionError {
+    code: ResolutionErrorCode,
+    message: String,
+    resolved_candidate: Option<String>,
+    probe_sequence: Vec<String>,
 }
 
 impl Default for DeterministicModuleResolver {
@@ -1091,6 +1137,7 @@ impl DeterministicModuleResolver {
             builtins: BTreeMap::new(),
             workspace_modules: BTreeMap::new(),
             external_modules: BTreeMap::new(),
+            external_packages: BTreeMap::new(),
         }
     }
 
@@ -1159,6 +1206,31 @@ impl DeterministicModuleResolver {
         let record =
             ModuleRecord::from_definition(id, ModuleSourceKind::ExternalRegistry, definition);
         self.external_modules.insert(specifier, record);
+        Ok(())
+    }
+
+    pub fn register_external_package(
+        &mut self,
+        mut package: ExternalPackageDefinition,
+    ) -> RegistryResult<()> {
+        if package.package_name.trim().is_empty() {
+            return Err(RegistryError::empty_key());
+        }
+
+        package.package_name = normalize_registered_package_name(&package.package_name);
+        if package.package_name.is_empty() {
+            return Err(RegistryError::empty_key());
+        }
+        package.exports = package
+            .exports
+            .into_iter()
+            .map(|(export_key, export_target)| {
+                (normalize_package_export_key(&export_key), export_target)
+            })
+            .collect();
+
+        self.external_packages
+            .insert(package.package_name.clone(), package);
         Ok(())
     }
 
@@ -1387,6 +1459,29 @@ impl DeterministicModuleResolver {
             };
         }
 
+        if let Some(package_candidate) =
+            self.resolve_external_package_candidate(specifier, request.style)
+        {
+            return match package_candidate {
+                Ok((resolved, record, package_probes)) => {
+                    probe_sequence.extend(package_probes);
+                    Ok((resolved, record, probe_sequence))
+                }
+                Err(error) => {
+                    probe_sequence.extend(error.probe_sequence);
+                    Err(Box::new(
+                        ResolutionError::new(error.code, error.message, context)
+                            .with_resolution_attempt(
+                                request.specifier.clone(),
+                                error.resolved_candidate,
+                                Some(ModuleSourceKind::ExternalRegistry),
+                                probe_sequence,
+                            ),
+                    ))
+                }
+            };
+        }
+
         let (external_probes, external_candidate) = self.lookup_external_candidate(
             specifier,
             request.style,
@@ -1526,6 +1621,64 @@ impl DeterministicModuleResolver {
             }
         }
         (probes, None)
+    }
+
+    fn resolve_external_package_candidate<'a>(
+        &'a self,
+        specifier: &str,
+        style: ImportStyle,
+    ) -> Option<Result<(String, &'a ModuleRecord, Vec<String>), ExternalPackageResolutionError>>
+    {
+        let (package_name, export_key) = parse_package_specifier(specifier)?;
+        let package = self.external_packages.get(&package_name)?;
+        if package.exports.is_empty() {
+            return None;
+        }
+
+        let mut probe_sequence = vec![specifier.to_string()];
+        let Some((export_target, capture)) =
+            resolve_package_export_target(&package.exports, &export_key)
+        else {
+            return Some(Err(ExternalPackageResolutionError {
+                code: ResolutionErrorCode::UnsupportedSpecifier,
+                message: format!("package '{package_name}' has no export entry for '{export_key}'"),
+                resolved_candidate: None,
+                probe_sequence,
+            }));
+        };
+
+        let Some((path_template, selected_condition)) =
+            resolve_package_export_path(export_target, style)
+        else {
+            return Some(Err(ExternalPackageResolutionError {
+                code: ResolutionErrorCode::UnsupportedSpecifier,
+                message: format!(
+                    "package '{package_name}' export '{export_key}' has no matching '{}' or default condition target",
+                    style.as_str()
+                ),
+                resolved_candidate: None,
+                probe_sequence,
+            }));
+        };
+
+        let rendered = apply_wildcard_capture(path_template, &capture);
+        let candidate =
+            normalize_external_specifier_path(&join_paths(&package.package_name, &rendered));
+        if probe_sequence.last() != Some(&candidate) {
+            probe_sequence.push(candidate.clone());
+        }
+
+        match self.external_modules.get(&candidate) {
+            Some(record) => Some(Ok((candidate, record, probe_sequence))),
+            None => Some(Err(ExternalPackageResolutionError {
+                code: ResolutionErrorCode::ModuleNotFound,
+                message: format!(
+                    "package '{package_name}' export '{export_key}' resolved via condition '{selected_condition}' to '{candidate}', but no module was registered at that target"
+                ),
+                resolved_candidate: Some(candidate),
+                probe_sequence,
+            })),
+        }
     }
 
     fn referrer_module_syntax(&self, referrer: &str) -> Option<ModuleSyntax> {
@@ -1726,6 +1879,143 @@ fn candidate_paths(
     }
 
     candidates
+}
+
+fn package_condition_order(style: ImportStyle) -> &'static [&'static str] {
+    match style {
+        ImportStyle::Import => &["import", "default"],
+        ImportStyle::Require => &["require", "default"],
+    }
+}
+
+fn normalize_registered_package_name(package_name: &str) -> String {
+    let normalized = normalize_external_specifier_path(package_name.trim());
+    external_package_root(&normalized)
+}
+
+fn normalize_package_export_key(export_key: &str) -> String {
+    let trimmed = export_key.trim();
+    if trimmed.is_empty() || trimmed == "." {
+        return ".".to_string();
+    }
+
+    let stripped = trimmed
+        .strip_prefix("./")
+        .or_else(|| trimmed.strip_prefix('/'))
+        .unwrap_or(trimmed);
+    let normalized = normalize_external_specifier_path(stripped);
+    if normalized.is_empty() {
+        ".".to_string()
+    } else {
+        format!("./{normalized}")
+    }
+}
+
+fn parse_package_specifier(specifier: &str) -> Option<(String, String)> {
+    if specifier.starts_with('.') || specifier.starts_with('/') {
+        return None;
+    }
+
+    let mut segments = specifier.split('/');
+    let first = segments.next()?;
+    if first.is_empty() {
+        return None;
+    }
+
+    let (package_name, tail) = if first.starts_with('@') {
+        let second = segments.next()?;
+        (
+            format!("{first}/{second}"),
+            segments.collect::<Vec<_>>().join("/"),
+        )
+    } else {
+        (first.to_string(), segments.collect::<Vec<_>>().join("/"))
+    };
+
+    let export_key = if tail.is_empty() {
+        ".".to_string()
+    } else {
+        format!("./{tail}")
+    };
+
+    Some((package_name, export_key))
+}
+
+fn resolve_package_export_target<'a>(
+    exports: &'a BTreeMap<String, ExternalPackageExportTarget>,
+    export_key: &str,
+) -> Option<(&'a ExternalPackageExportTarget, String)> {
+    if let Some(exact) = exports.get(export_key) {
+        return Some((exact, String::new()));
+    }
+
+    let mut wildcard_matches = Vec::new();
+    for (pattern, target) in exports {
+        let Some(capture) = capture_single_wildcard(pattern, export_key) else {
+            continue;
+        };
+        wildcard_matches.push((pattern_specificity(pattern), pattern, target, capture));
+    }
+
+    wildcard_matches.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(right.1)));
+    wildcard_matches
+        .into_iter()
+        .next()
+        .map(|(_, _, target, capture)| (target, capture))
+}
+
+fn resolve_package_export_path<'a>(
+    export_target: &'a ExternalPackageExportTarget,
+    style: ImportStyle,
+) -> Option<(&'a str, String)> {
+    for condition in package_condition_order(style) {
+        if let Some(path_template) = export_target.condition_targets.get(*condition) {
+            return Some((path_template.as_str(), (*condition).to_string()));
+        }
+    }
+
+    export_target
+        .fallback_target
+        .as_deref()
+        .map(|path| (path, "fallback".to_string()))
+}
+
+fn capture_single_wildcard(pattern: &str, value: &str) -> Option<String> {
+    let wildcard_index = pattern.find('*')?;
+    if pattern[wildcard_index + 1..].contains('*') {
+        return None;
+    }
+
+    let prefix = &pattern[..wildcard_index];
+    let suffix = &pattern[wildcard_index + 1..];
+    if !value.starts_with(prefix) || !value.ends_with(suffix) {
+        return None;
+    }
+
+    let capture_start = prefix.len();
+    let capture_end = value.len().checked_sub(suffix.len())?;
+    if capture_start > capture_end {
+        return None;
+    }
+
+    Some(value[capture_start..capture_end].to_string())
+}
+
+fn apply_wildcard_capture(template: &str, capture: &str) -> String {
+    match template.find('*') {
+        Some(index) => {
+            let mut output = String::new();
+            output.push_str(&template[..index]);
+            output.push_str(capture);
+            output.push_str(&template[index + 1..]);
+            output
+        }
+        None => template.to_string(),
+    }
+}
+
+fn pattern_specificity(pattern: &str) -> usize {
+    pattern.chars().filter(|ch| *ch != '*').count()
 }
 
 fn normalize_absolute_path(path: &str) -> String {

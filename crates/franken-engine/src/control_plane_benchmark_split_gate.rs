@@ -112,6 +112,18 @@ pub struct SplitBenchmarkMetrics {
 }
 
 impl SplitBenchmarkMetrics {
+    pub fn zero() -> Self {
+        Self {
+            throughput_ops_per_sec: 0,
+            latency_ns: LatencyStatsNs {
+                p50_ns: 0,
+                p95_ns: 0,
+                p99_ns: 0,
+            },
+            peak_rss_delta_bytes: 0,
+        }
+    }
+
     fn canonical_value(&self) -> CanonicalValue {
         let mut map = BTreeMap::new();
         map.insert(
@@ -1634,9 +1646,9 @@ fn build_delta_summary(
     candidate_split: BenchmarkSplit,
     input: &BenchmarkSplitGateInput,
 ) -> BenchmarkSplitDeltaSummary {
+    let zero = SplitBenchmarkMetrics::zero();
     let (reference_metrics, candidate_metrics) = match reference_kind {
         BenchmarkDeltaReferenceKind::PreviousSnapshot => {
-            let zero = BenchmarkSplitMetrics::zero();
             let r = input
                 .previous_snapshot
                 .split_metrics
@@ -1651,7 +1663,6 @@ fn build_delta_summary(
         }
         BenchmarkDeltaReferenceKind::PreviousStage
         | BenchmarkDeltaReferenceKind::ShortcutBaseline => {
-            let zero = BenchmarkSplitMetrics::zero();
             let r = input
                 .candidate_snapshot
                 .split_metrics

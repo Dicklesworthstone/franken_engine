@@ -1635,31 +1635,35 @@ fn build_delta_summary(
     input: &BenchmarkSplitGateInput,
 ) -> BenchmarkSplitDeltaSummary {
     let (reference_metrics, candidate_metrics) = match reference_kind {
-        BenchmarkDeltaReferenceKind::PreviousSnapshot => (
-            input
+        BenchmarkDeltaReferenceKind::PreviousSnapshot => {
+            let zero = BenchmarkSplitMetrics::zero();
+            let r = input
                 .previous_snapshot
                 .split_metrics
                 .get(&reference_split)
-                .expect("previous snapshot split metrics"),
-            input
+                .unwrap_or(&zero);
+            let c = input
                 .candidate_snapshot
                 .split_metrics
                 .get(&candidate_split)
-                .expect("candidate snapshot split metrics"),
-        ),
+                .unwrap_or(&zero);
+            (r, c)
+        }
         BenchmarkDeltaReferenceKind::PreviousStage
-        | BenchmarkDeltaReferenceKind::ShortcutBaseline => (
-            input
+        | BenchmarkDeltaReferenceKind::ShortcutBaseline => {
+            let zero = BenchmarkSplitMetrics::zero();
+            let r = input
                 .candidate_snapshot
                 .split_metrics
                 .get(&reference_split)
-                .expect("candidate reference split metrics"),
-            input
+                .unwrap_or(&zero);
+            let c = input
                 .candidate_snapshot
                 .split_metrics
                 .get(&candidate_split)
-                .expect("candidate split metrics"),
-        ),
+                .unwrap_or(&zero);
+            (r, c)
+        }
     };
 
     BenchmarkSplitDeltaSummary {

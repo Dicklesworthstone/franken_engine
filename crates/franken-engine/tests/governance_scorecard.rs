@@ -803,6 +803,48 @@ fn publish_scorecard_deterministic_for_same_request() {
 }
 
 #[test]
+fn derived_scorecard_id_distinguishes_variable_length_correlation_id_boundaries() {
+    let mut request_a = baseline_request();
+    request_a.trace_id = "ab".to_string();
+    request_a.decision_id = "c".to_string();
+    request_a.policy_id = "def".to_string();
+
+    let mut request_b = baseline_request();
+    request_b.trace_id = "a".to_string();
+    request_b.decision_id = "bc".to_string();
+    request_b.policy_id = "def".to_string();
+
+    let key = signing_key();
+
+    let mut ledger_a = ledger();
+    let publication_a = publish_governance_scorecard(
+        &request_a,
+        &key,
+        &mut ledger_a,
+        GovernanceActor::System("test".to_string()),
+    )
+    .expect("publication A");
+
+    let mut ledger_b = ledger();
+    let publication_b = publish_governance_scorecard(
+        &request_b,
+        &key,
+        &mut ledger_b,
+        GovernanceActor::System("test".to_string()),
+    )
+    .expect("publication B");
+
+    assert!(publication_a.scorecard_id.starts_with("gov-scorecard-"));
+    assert!(publication_b.scorecard_id.starts_with("gov-scorecard-"));
+    // Without explicit field boundaries both tuples collapse to the same
+    // concatenated "abcdef" preimage segment and would hash identically.
+    assert_ne!(
+        publication_a.scorecard_id, publication_b.scorecard_id,
+        "derived scorecard IDs must encode correlation field boundaries"
+    );
+}
+
+#[test]
 fn scorecard_with_zero_attested_receipts_is_rejected() {
     let mut request = baseline_request();
     request.attested_receipts.clear();

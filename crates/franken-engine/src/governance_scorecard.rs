@@ -1128,8 +1128,12 @@ fn derive_scorecard_id(
     }
 
     let mut hasher = Sha256::new();
+    // Length-prefix variable-length strings to prevent delimiter collisions.
+    hasher.update((request.trace_id.len() as u64).to_le_bytes());
     hasher.update(request.trace_id.as_bytes());
+    hasher.update((request.decision_id.len() as u64).to_le_bytes());
     hasher.update(request.decision_id.as_bytes());
+    hasher.update((request.policy_id.len() as u64).to_le_bytes());
     hasher.update(request.policy_id.as_bytes());
     hasher.update(request.generated_at_ns.to_le_bytes());
     hasher.update(attested.coverage_millionths.to_le_bytes());

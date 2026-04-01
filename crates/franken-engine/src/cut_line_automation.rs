@@ -802,14 +802,14 @@ impl CutLineEvaluator {
         matching: &[&GateInput],
     ) -> Option<String> {
         match category {
-            GateCategory::CompilerCorrectness => {
+            GateCategory::CompilerCorrectness
                 if matching.iter().any(|input| {
                     !Self::metadata_key_present(input, C1_FRX20_1_UNIT_TAXONOMY_REF_KEY)
-                }) {
-                    return Some(format!(
-                        "missing metadata key `{C1_FRX20_1_UNIT_TAXONOMY_REF_KEY}`"
-                    ));
-                }
+                }) =>
+            {
+                return Some(format!(
+                    "missing metadata key `{C1_FRX20_1_UNIT_TAXONOMY_REF_KEY}`"
+                ));
             }
             GateCategory::RuntimeParity => {
                 if matching.iter().any(|input| {
@@ -841,15 +841,14 @@ impl CutLineEvaluator {
                     ));
                 }
             }
-            GateCategory::DeterministicReplay => {
-                if matching
-                    .iter()
-                    .any(|input| !Self::metadata_key_present(input, C1_REPLAY_MANIFEST_REF_KEY))
-                {
-                    return Some(format!(
-                        "missing metadata key `{C1_REPLAY_MANIFEST_REF_KEY}`"
-                    ));
-                }
+            GateCategory::DeterministicReplay
+                if matching.iter().any(|input| {
+                    !Self::metadata_key_present(input, C1_REPLAY_MANIFEST_REF_KEY)
+                }) =>
+            {
+                return Some(format!(
+                    "missing metadata key `{C1_REPLAY_MANIFEST_REF_KEY}`"
+                ));
             }
             GateCategory::ObservabilityIntegrity => {
                 if matching
@@ -878,14 +877,14 @@ impl CutLineEvaluator {
         matching: &[&GateInput],
     ) -> Option<String> {
         match category {
-            GateCategory::HandoffReadiness => {
+            GateCategory::HandoffReadiness
                 if matching.iter().any(|input| {
                     !Self::metadata_key_present(input, C2_ROUTE_ADOPTION_CONTROL_REF_KEY)
-                }) {
-                    return Some(format!(
-                        "missing metadata key `{C2_ROUTE_ADOPTION_CONTROL_REF_KEY}`"
-                    ));
-                }
+                }) =>
+            {
+                return Some(format!(
+                    "missing metadata key `{C2_ROUTE_ADOPTION_CONTROL_REF_KEY}`"
+                ));
             }
             GateCategory::RuntimeParity => {
                 if matching.iter().any(|input| {
@@ -935,14 +934,14 @@ impl CutLineEvaluator {
                     ));
                 }
             }
-            GateCategory::FlakeBurden => {
+            GateCategory::FlakeBurden
                 if matching.iter().any(|input| {
                     !Self::metadata_key_present(input, C2_FRX20_5_FLAKE_REPORT_REF_KEY)
-                }) {
-                    return Some(format!(
-                        "missing metadata key `{C2_FRX20_5_FLAKE_REPORT_REF_KEY}`"
-                    ));
-                }
+                }) =>
+            {
+                return Some(format!(
+                    "missing metadata key `{C2_FRX20_5_FLAKE_REPORT_REF_KEY}`"
+                ));
             }
             _ => {}
         }
@@ -1017,23 +1016,23 @@ impl CutLineEvaluator {
                     ));
                 }
             }
-            GateCategory::FlakeBurden => {
+            GateCategory::FlakeBurden
                 if matching.iter().any(|input| {
                     !Self::metadata_key_present(input, C2_FRX20_5_FLAKE_REPORT_REF_KEY)
-                }) {
-                    return Some(format!(
-                        "missing metadata key `{C2_FRX20_5_FLAKE_REPORT_REF_KEY}`"
-                    ));
-                }
+                }) =>
+            {
+                return Some(format!(
+                    "missing metadata key `{C2_FRX20_5_FLAKE_REPORT_REF_KEY}`"
+                ));
             }
-            GateCategory::GovernanceCompliance => {
+            GateCategory::GovernanceCompliance
                 if matching.iter().any(|input| {
                     !Self::metadata_key_present(input, C3_FRX20_6_INTEGRATOR_MANIFEST_REF_KEY)
-                }) {
-                    return Some(format!(
-                        "missing metadata key `{C3_FRX20_6_INTEGRATOR_MANIFEST_REF_KEY}`"
-                    ));
-                }
+                }) =>
+            {
+                return Some(format!(
+                    "missing metadata key `{C3_FRX20_6_INTEGRATOR_MANIFEST_REF_KEY}`"
+                ));
             }
             _ => {}
         }
@@ -1062,14 +1061,14 @@ impl CutLineEvaluator {
                     ));
                 }
             }
-            GateCategory::PerformanceBenchmark => {
+            GateCategory::PerformanceBenchmark
                 if matching.iter().any(|input| {
                     !Self::metadata_key_present(input, C4_LATENCY_MEMORY_BUDGET_REPORT_REF_KEY)
-                }) {
-                    return Some(format!(
-                        "missing metadata key `{C4_LATENCY_MEMORY_BUDGET_REPORT_REF_KEY}`"
-                    ));
-                }
+                }) =>
+            {
+                return Some(format!(
+                    "missing metadata key `{C4_LATENCY_MEMORY_BUDGET_REPORT_REF_KEY}`"
+                ));
             }
             GateCategory::SecuritySurvival => {
                 if matching.iter().any(|input| {
@@ -1090,23 +1089,23 @@ impl CutLineEvaluator {
                     ));
                 }
             }
-            GateCategory::DeterministicReplay => {
+            GateCategory::DeterministicReplay
                 if matching.iter().any(|input| {
                     !Self::metadata_key_present(input, C4_SEMANTIC_TWIN_ROLLBACK_MANIFEST_REF_KEY)
-                }) {
-                    return Some(format!(
-                        "missing metadata key `{C4_SEMANTIC_TWIN_ROLLBACK_MANIFEST_REF_KEY}`"
-                    ));
-                }
+                }) =>
+            {
+                return Some(format!(
+                    "missing metadata key `{C4_SEMANTIC_TWIN_ROLLBACK_MANIFEST_REF_KEY}`"
+                ));
             }
-            GateCategory::ObservabilityIntegrity => {
+            GateCategory::ObservabilityIntegrity
                 if matching.iter().any(|input| {
                     !Self::metadata_key_present(input, C4_OBSERVABILITY_SENTINEL_REPORT_REF_KEY)
-                }) {
-                    return Some(format!(
-                        "missing metadata key `{C4_OBSERVABILITY_SENTINEL_REPORT_REF_KEY}`"
-                    ));
-                }
+                }) =>
+            {
+                return Some(format!(
+                    "missing metadata key `{C4_OBSERVABILITY_SENTINEL_REPORT_REF_KEY}`"
+                ));
             }
             GateCategory::GovernanceCompliance => {
                 if matching.iter().any(|input| {
@@ -1196,23 +1195,23 @@ impl CutLineEvaluator {
                     ));
                 }
             }
-            GateCategory::DeterministicReplay => {
+            GateCategory::DeterministicReplay
                 if matching.iter().any(|input| {
                     !Self::metadata_key_present(input, C5_BROWSER_RUNTIME_REPLAY_MANIFEST_REF_KEY)
-                }) {
-                    return Some(format!(
-                        "missing metadata key `{C5_BROWSER_RUNTIME_REPLAY_MANIFEST_REF_KEY}`"
-                    ));
-                }
+                }) =>
+            {
+                return Some(format!(
+                    "missing metadata key `{C5_BROWSER_RUNTIME_REPLAY_MANIFEST_REF_KEY}`"
+                ));
             }
-            GateCategory::ObservabilityIntegrity => {
+            GateCategory::ObservabilityIntegrity
                 if matching.iter().any(|input| {
                     !Self::metadata_key_present(input, C5_FRX20_4_LOGGING_CORRELATION_REF_KEY)
-                }) {
-                    return Some(format!(
-                        "missing metadata key `{C5_FRX20_4_LOGGING_CORRELATION_REF_KEY}`"
-                    ));
-                }
+                }) =>
+            {
+                return Some(format!(
+                    "missing metadata key `{C5_FRX20_4_LOGGING_CORRELATION_REF_KEY}`"
+                ));
             }
             GateCategory::GovernanceCompliance => {
                 if matching.iter().any(|input| {

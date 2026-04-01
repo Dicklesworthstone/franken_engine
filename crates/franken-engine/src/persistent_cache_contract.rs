@@ -990,11 +990,7 @@ impl FileArtifact {
     fn jsonl(path: &str, rows: &[impl Serialize]) -> Self {
         let mut contents = Vec::new();
         for row in rows {
-            contents.extend(
-                serde_json::to_vec(row)
-                    .expect("jsonl row must serialize")
-                    .into_iter(),
-            );
+            contents.extend(serde_json::to_vec(row).expect("jsonl row must serialize"));
             contents.push(b'\n');
         }
         Self {

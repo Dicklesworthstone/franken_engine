@@ -479,8 +479,7 @@ impl SafetyMembrane {
 
         // 5. Sequence contiguity check
         if !batch.entries.is_empty() {
-            let mut expected = batch.sequence_start;
-            for entry in &batch.entries {
+            for (expected, entry) in (batch.sequence_start..).zip(batch.entries.iter()) {
                 if entry.sequence != expected {
                     return self.record_rejection(
                         batch,
@@ -489,7 +488,6 @@ impl SafetyMembrane {
                         tick,
                     );
                 }
-                expected += 1;
             }
         }
 

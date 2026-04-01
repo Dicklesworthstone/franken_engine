@@ -1579,19 +1579,17 @@ impl ProxyInvariantChecker {
             match td {
                 PropertyDescriptor::Data {
                     value, writable, ..
-                } if !writable => {
-                    if !trap_result.same_value(value) {
-                        return Err(ObjectError::TypeError(format!(
-                            "proxy get: non-configurable non-writable property '{key}' must return same value"
-                        )));
-                    }
+                } if !writable && !trap_result.same_value(value) => {
+                    return Err(ObjectError::TypeError(format!(
+                        "proxy get: non-configurable non-writable property '{key}' must return same value"
+                    )));
                 }
-                PropertyDescriptor::Accessor { get: None, .. } => {
-                    if *trap_result != JsValue::Undefined {
-                        return Err(ObjectError::TypeError(format!(
-                            "proxy get: non-configurable accessor property '{key}' with undefined getter must return undefined"
-                        )));
-                    }
+                PropertyDescriptor::Accessor { get: None, .. }
+                    if *trap_result != JsValue::Undefined =>
+                {
+                    return Err(ObjectError::TypeError(format!(
+                        "proxy get: non-configurable accessor property '{key}' with undefined getter must return undefined"
+                    )));
                 }
                 _ => {}
             }
@@ -1615,12 +1613,10 @@ impl ProxyInvariantChecker {
                     value: current_val,
                     writable,
                     ..
-                } if !writable => {
-                    if !value.same_value(current_val) {
-                        return Err(ObjectError::TypeError(format!(
-                            "proxy set: cannot set non-configurable non-writable property '{key}' to different value"
-                        )));
-                    }
+                } if !writable && !value.same_value(current_val) => {
+                    return Err(ObjectError::TypeError(format!(
+                        "proxy set: cannot set non-configurable non-writable property '{key}' to different value"
+                    )));
                 }
                 PropertyDescriptor::Accessor { set: None, .. } => {
                     return Err(ObjectError::TypeError(format!(

@@ -1075,12 +1075,10 @@ impl RandomnessTranscript {
     }
 
     pub fn verify_chain(&self, verification_key: &VerificationKey) -> Result<(), ContractError> {
-        let mut expected_sequence = 1u64;
         let mut previous_hash: Option<[u8; 32]> = None;
-        for commitment in &self.commitments {
+        for (expected_sequence, commitment) in (1u64..).zip(self.commitments.iter()) {
             commitment.verify_integrity(expected_sequence, previous_hash, verification_key)?;
             previous_hash = Some(commitment.commitment_hash);
-            expected_sequence += 1;
         }
         Ok(())
     }

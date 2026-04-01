@@ -171,32 +171,7 @@ fn run() -> Result<(), String> {
     let fallback_receipts = build_fallback_receipts(&report, &manifest);
     let override_receipts = build_override_receipts(&report)?;
 
-    let commands = vec![
-        format!(
-            "franken_metadata_substrate_evidence --out-dir {}",
-            out_dir.display()
-        ),
-        format!(
-            "cat {}/runtime_metadata_substrate_report.json",
-            out_dir.display()
-        ),
-        format!(
-            "cat {}/runtime_metadata_substrate_evidence_manifest.json",
-            out_dir.display()
-        ),
-        format!("cat {}/cache_miss_profile.json", out_dir.display()),
-        format!("cat {}/metadata_fallback_receipts.json", out_dir.display()),
-        format!("cat {}/substrate_override_receipts.json", out_dir.display()),
-        format!(
-            "jq '.[] | select(.fallback_active == true)' {}/metadata_fallback_receipts.json",
-            out_dir.display()
-        ),
-        format!(
-            "jq '.[] | .scenario_id' {}/substrate_override_receipts.json",
-            out_dir.display()
-        ),
-        "./scripts/e2e/metadata_substrate_evidence_replay.sh ci".to_string(),
-    ];
+    let commands = bundle_command_lines(&args, &out_dir);
     let artifact_paths = ArtifactPaths {
         runtime_metadata_substrate_report: "runtime_metadata_substrate_report.json".to_string(),
         runtime_metadata_substrate_evidence_manifest:
@@ -333,6 +308,115 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
 
 fn help_text() -> String {
     "Usage: franken_metadata_substrate_evidence --out-dir <DIR>".to_string()
+}
+
+fn bundle_command_lines(args: &[String], out_dir: &Path) -> Vec<String> {
+    vec![
+        render_command_transcript(args),
+        replay_command_for_bundle(),
+        format!(
+            "cat {}",
+            shell_escape_arg(
+                &out_dir
+                    .join("runtime_metadata_substrate_report.json")
+                    .display()
+                    .to_string()
+            )
+        ),
+        format!(
+            "cat {}",
+            shell_escape_arg(
+                &out_dir
+                    .join("runtime_metadata_substrate_evidence_manifest.json")
+                    .display()
+                    .to_string()
+            )
+        ),
+        format!(
+            "cat {}",
+            shell_escape_arg(
+                &out_dir
+                    .join("cache_miss_profile.json")
+                    .display()
+                    .to_string()
+            )
+        ),
+        format!(
+            "cat {}",
+            shell_escape_arg(
+                &out_dir
+                    .join("metadata_fallback_receipts.json")
+                    .display()
+                    .to_string()
+            )
+        ),
+        format!(
+            "cat {}",
+            shell_escape_arg(
+                &out_dir
+                    .join("substrate_override_receipts.json")
+                    .display()
+                    .to_string()
+            )
+        ),
+        format!(
+            "jq '.[] | select(.fallback_active == true)' {}",
+            shell_escape_arg(
+                &out_dir
+                    .join("metadata_fallback_receipts.json")
+                    .display()
+                    .to_string()
+            )
+        ),
+        format!(
+            "jq '.[] | .scenario_id' {}",
+            shell_escape_arg(
+                &out_dir
+                    .join("substrate_override_receipts.json")
+                    .display()
+                    .to_string()
+            )
+        ),
+        "./scripts/e2e/metadata_substrate_evidence_replay.sh ci".to_string(),
+    ]
+}
+
+fn render_command_transcript(args: &[String]) -> String {
+    args.iter()
+        .map(|arg| shell_escape_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn shell_escape_arg(arg: &str) -> String {
+    if arg.is_empty() {
+        return "''".to_string();
+    }
+
+    if arg.bytes().all(|byte| {
+        matches!(
+            byte,
+            b'A'..=b'Z'
+                | b'a'..=b'z'
+                | b'0'..=b'9'
+                | b'/'
+                | b'.'
+                | b'_'
+                | b':'
+                | b'-'
+                | b'='
+                | b'+'
+        )
+    }) {
+        return arg.to_string();
+    }
+
+    format!("'{}'", arg.replace('\'', "'\"'\"'"))
+}
+
+fn replay_command_for_bundle() -> String {
+    "rch exec -- cargo run -p frankenengine-engine --bin franken_metadata_substrate_evidence -- --out-dir <DIR>"
+        .to_string()
 }
 
 fn build_cache_miss_profile(report: &SubstrateInventoryReport) -> Vec<CacheMissProfileEntry> {

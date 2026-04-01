@@ -1763,6 +1763,28 @@ fn control_plane_mock_inventory_binary_emits_expected_artifacts() {
     );
     assert_eq!(manifest.must_fix_count, inventory.summary.must_fix_count);
 
+    let commands = fs::read_to_string(out_dir.join("commands.txt")).expect("read commands.txt");
+    let command_lines: Vec<&str> = commands.lines().collect();
+    let expected_commands = render_bundle_command_lines(
+        &vec![
+            env!("CARGO_BIN_EXE_franken_control_plane_mock_inventory").to_string(),
+            "--out-dir".to_string(),
+            out_dir.display().to_string(),
+            "--workspace-root".to_string(),
+            workspace_root.display().to_string(),
+        ],
+        "franken_control_plane_mock_inventory",
+        &workspace_root,
+    );
+    let expected_lines: Vec<&str> = expected_commands.iter().map(String::as_str).collect();
+    assert_eq!(command_lines, expected_lines);
+    assert!(
+        command_lines
+            .iter()
+            .any(|line| line.contains("rch exec --")),
+        "commands.txt must include an rch replay line"
+    );
+
     let _ = fs::remove_dir_all(workspace_root);
     let _ = fs::remove_dir_all(out_dir);
 }

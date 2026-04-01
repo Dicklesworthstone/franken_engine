@@ -4,7 +4,7 @@ use std::env;
 use std::path::PathBuf;
 
 use frankenengine_engine::control_plane_mock_inventory::{
-    ControlPlaneMockInventoryOutcome, write_control_plane_mock_inventory_bundle,
+    ControlPlaneMockInventoryOutcome, render_bundle_command_lines,
     write_control_plane_mock_inventory_bundle_in_root,
 };
 use serde::Serialize;
@@ -61,14 +61,20 @@ fn run() -> Result<(), String> {
             workspace_root,
         } => (out_dir, workspace_root),
     };
+    let workspace_root =
+        workspace_root.unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    let command_lines = render_bundle_command_lines(
+        &args,
+        "franken_control_plane_mock_inventory",
+        &workspace_root,
+    );
 
-    let artifacts = if let Some(workspace_root) = workspace_root {
-        write_control_plane_mock_inventory_bundle_in_root(&workspace_root, &out_dir, &args)
-            .map_err(|error| error.to_string())?
-    } else {
-        write_control_plane_mock_inventory_bundle(&out_dir, &args)
-            .map_err(|error| error.to_string())?
-    };
+    let artifacts = write_control_plane_mock_inventory_bundle_in_root(
+        &workspace_root,
+        &out_dir,
+        &command_lines,
+    )
+    .map_err(|error| error.to_string())?;
 
     let output = CommandOutput {
         schema_version: OUTPUT_SCHEMA_VERSION.to_string(),

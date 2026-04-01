@@ -4,7 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use frankenengine_engine::control_plane_mock_inventory::AmbientMockGuardReport;
+use frankenengine_engine::control_plane_mock_inventory::{
+    AmbientMockGuardReport, render_bundle_command_lines,
+};
 
 fn unique_temp_dir(label: &str) -> PathBuf {
     let nanos = std::time::SystemTime::now()
@@ -31,10 +33,10 @@ fn read_report(out_dir: &Path) -> AmbientMockGuardReport {
     .expect("deserialize report")
 }
 
-fn run_guard_binary(scan_root: &Path, out_dir: &Path) -> std::process::Output {
+fn run_guard_binary(workspace_root: &Path, out_dir: &Path) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_franken_ambient_mock_guard"))
         .args(["--out-dir", out_dir.to_str().unwrap()])
-        .args(["--scan-root", scan_root.to_str().unwrap()])
+        .args(["--workspace-root", workspace_root.to_str().unwrap()])
         .output()
         .expect("run ambient mock guard")
 }
@@ -72,6 +74,28 @@ mod tests {
     assert!(out_dir.join("summary.md").exists());
     assert!(out_dir.join("env.json").exists());
     assert!(out_dir.join("repro.lock").exists());
+    let commands = fs::read_to_string(out_dir.join("commands.txt")).expect("read commands");
+    let command_lines: Vec<&str> = commands.lines().collect();
+    let expected_commands = render_bundle_command_lines(
+        &vec![
+            env!("CARGO_BIN_EXE_franken_ambient_mock_guard").to_string(),
+            "--out-dir".to_string(),
+            out_dir.display().to_string(),
+            "--workspace-root".to_string(),
+            fixture_root.display().to_string(),
+        ],
+        "franken_ambient_mock_guard",
+        &fixture_root,
+    );
+    let expected_lines: Vec<&str> = expected_commands.iter().map(String::as_str).collect();
+    assert_eq!(command_lines, expected_lines);
+
+    assert!(
+        command_lines
+            .iter()
+            .any(|line| line.contains("rch exec --")),
+        "commands.txt must include an rch replay line"
+    );
 
     let _ = fs::remove_dir_all(fixture_root);
     let _ = fs::remove_dir_all(out_dir);

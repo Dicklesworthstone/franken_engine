@@ -9,7 +9,8 @@ use frankenengine_engine::tail_latency_control_plane::{
     GuardrailState, StressProfile, TAIL_LATENCY_CONTROL_PLANE_BEAD_ID,
     TAIL_LATENCY_CONTROL_PLANE_COMPONENT, TailLatencyControlPlaneReport,
     TailLatencyControlPlaneRunManifest, TailLatencyControlPlaneTraceIds,
-    build_tail_latency_control_plane_report, write_tail_latency_control_plane_bundle,
+    build_tail_latency_control_plane_report, tail_latency_control_plane_replay_command,
+    write_tail_latency_control_plane_bundle,
 };
 
 use frankenengine_engine::tail_latency_control_plane::{
@@ -81,7 +82,7 @@ fn write_bundle_emits_expected_artifacts() {
         StressProfile::SyntheticContention,
         42,
         &[String::from(
-            "cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- --out-dir <dir>",
+            "rch exec -- cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- --out-dir <dir>",
         )],
     )
     .unwrap();
@@ -105,7 +106,7 @@ fn manifest_and_trace_ids_reference_latency_control_plane_bundle() {
         StressProfile::SyntheticContention,
         42,
         &[String::from(
-            "cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- --out-dir <dir> --profile synthetic-contention --epoch 42",
+            "rch exec -- cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- --out-dir <dir> --profile synthetic-contention --epoch 42",
         )],
     )
     .unwrap();
@@ -169,12 +170,22 @@ fn balanced_binary_emits_streamed_artifacts_without_fallback() {
     assert_eq!(manifest.guardrail_state, report.guardrails.state);
     assert_ne!(report.guardrails.state, GuardrailState::FallbackEngaged);
     assert!(!report.guardrails.fallback_activated);
-    assert!(commands.contains("--emit-artifact-stream"));
+    let command_lines: Vec<&str> = commands.lines().collect();
+    assert_eq!(
+        command_lines.len(),
+        2,
+        "commands.txt should record the literal invocation and an rch replay line"
+    );
+    assert!(command_lines[0].contains("--emit-artifact-stream"));
+    assert_eq!(
+        command_lines[1],
+        tail_latency_control_plane_replay_command(StressProfile::Balanced, 77)
+    );
     assert_eq!(repro_lock["profile"], "balanced");
     assert_eq!(repro_lock["epoch"], 77);
     assert_eq!(
         repro_lock["replay_command"],
-        "cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- --out-dir <DIR> --profile balanced --epoch 77"
+        tail_latency_control_plane_replay_command(StressProfile::Balanced, 77)
     );
     assert!(step_log.contains(&format!("guardrail_state={}", report.guardrails.state)));
     assert!(out_dir.join("run_manifest.json").exists());
@@ -581,6 +592,7 @@ fn repro_lock_contains_replay_command_and_epoch() {
     assert_eq!(repro["profile"], "balanced");
     assert_eq!(repro["epoch"], 77);
     let replay_cmd = repro["replay_command"].as_str().unwrap();
+    assert!(replay_cmd.starts_with("rch exec -- cargo run"));
     assert!(replay_cmd.contains("franken_tail_latency_control_plane"));
     assert!(replay_cmd.contains("--profile balanced"));
     assert!(replay_cmd.contains("--epoch 77"));

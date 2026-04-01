@@ -2,7 +2,7 @@
 
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use frankenengine_engine::bytecode_vm::{BytecodeVm, Instruction, Program, Register, Value};
 use frankenengine_engine::shape_transition_algebra::{
@@ -61,24 +61,7 @@ fn run() -> Result<(), String> {
         .map_err(|error| format!("failed to create output directory: {error}"))?;
 
     let report = run_scenario()?;
-    let replay_run_dir = out_dir.display().to_string();
-    let commands = vec![
-        format!(
-            "franken_shape_lattice_bundle --out-dir {}",
-            out_dir.display()
-        ),
-        format!("cat {}/shape_lattice_manifest.json", out_dir.display()),
-        format!("cat {}/run_manifest.json", out_dir.display()),
-        format!("cat {}/trace_ids.json", out_dir.display()),
-        format!(
-            "jq '.transitions[].transition_kind' {}/shape_lattice_manifest.json",
-            out_dir.display()
-        ),
-        format!(
-            "RGC_SHAPE_TRANSITION_LATTICE_REPLAY_RUN_DIR={} ./scripts/e2e/rgc_shape_transition_lattice_replay.sh",
-            replay_run_dir
-        ),
-    ];
+    let commands = bundle_command_lines(&args, &out_dir);
     let bundle = ShapeLatticeBundle {
         manifest: report.shape_lattice.clone(),
         trace_events: report.shape_trace.clone(),
@@ -147,6 +130,81 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
 
 fn help_text() -> String {
     "Usage: franken_shape_lattice_bundle --out-dir <DIR>".to_string()
+}
+
+fn bundle_command_lines(args: &[String], out_dir: &Path) -> Vec<String> {
+    let replay_run_dir = shell_escape_arg(&out_dir.display().to_string());
+    vec![
+        render_command_transcript(args),
+        replay_command_for_bundle(),
+        format!(
+            "cat {}",
+            shell_escape_arg(
+                &out_dir
+                    .join("shape_lattice_manifest.json")
+                    .display()
+                    .to_string()
+            )
+        ),
+        format!(
+            "cat {}",
+            shell_escape_arg(&out_dir.join("run_manifest.json").display().to_string())
+        ),
+        format!(
+            "cat {}",
+            shell_escape_arg(&out_dir.join("trace_ids.json").display().to_string())
+        ),
+        format!(
+            "jq '.transitions[].transition_kind' {}",
+            shell_escape_arg(
+                &out_dir
+                    .join("shape_lattice_manifest.json")
+                    .display()
+                    .to_string()
+            )
+        ),
+        format!(
+            "RGC_SHAPE_TRANSITION_LATTICE_REPLAY_RUN_DIR={replay_run_dir} ./scripts/e2e/rgc_shape_transition_lattice_replay.sh"
+        ),
+    ]
+}
+
+fn render_command_transcript(args: &[String]) -> String {
+    args.iter()
+        .map(|arg| shell_escape_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn shell_escape_arg(arg: &str) -> String {
+    if arg.is_empty() {
+        return "''".to_string();
+    }
+
+    if arg.bytes().all(|byte| {
+        matches!(
+            byte,
+            b'A'..=b'Z'
+                | b'a'..=b'z'
+                | b'0'..=b'9'
+                | b'/'
+                | b'.'
+                | b'_'
+                | b':'
+                | b'-'
+                | b'='
+                | b'+'
+        )
+    }) {
+        return arg.to_string();
+    }
+
+    format!("'{}'", arg.replace('\'', "'\"'\"'"))
+}
+
+fn replay_command_for_bundle() -> String {
+    "rch exec -- cargo run -p frankenengine-engine --bin franken_shape_lattice_bundle -- --out-dir <DIR>"
+        .to_string()
 }
 
 fn run_scenario() -> Result<frankenengine_engine::bytecode_vm::ExecutionReport, String> {

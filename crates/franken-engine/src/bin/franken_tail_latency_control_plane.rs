@@ -6,7 +6,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use frankenengine_engine::tail_latency_control_plane::{
-    StressProfile, write_tail_latency_control_plane_bundle,
+    StressProfile, tail_latency_control_plane_replay_command,
+    write_tail_latency_control_plane_bundle,
 };
 use serde::Serialize;
 
@@ -47,7 +48,8 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn Error>> {
-    match parse_args(env::args().skip(1))? {
+    let args: Vec<String> = env::args().collect();
+    match parse_args(args[1..].iter().cloned())? {
         CliAction::Help => {
             print_help();
             Ok(())
@@ -58,17 +60,9 @@ fn run() -> Result<(), Box<dyn Error>> {
             epoch,
             emit_artifact_stream: should_emit_artifacts,
         } => {
-            let mut command = format!(
-                "cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- --out-dir {} --profile {} --epoch {}",
-                out_dir.display(),
-                profile,
-                epoch
-            );
-            if should_emit_artifacts {
-                command.push_str(" --emit-artifact-stream");
-            }
+            let command_lines = bundle_command_lines(&args, profile, epoch);
             let artifacts =
-                write_tail_latency_control_plane_bundle(&out_dir, profile, epoch, &[command])?;
+                write_tail_latency_control_plane_bundle(&out_dir, profile, epoch, &command_lines)?;
             let output = CommandOutput {
                 out_dir: out_dir.display().to_string(),
                 profile,
@@ -186,7 +180,7 @@ fn print_help() {
 franken_tail_latency_control_plane
 
 Usage:
-  cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- \\
+  rch exec -- cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- \\
     --out-dir <dir> [--profile balanced|synthetic-contention] [--epoch <n>] \\
     [--emit-artifact-stream]
 
@@ -195,4 +189,35 @@ Description:
   into a deterministic RGC-611 artifact bundle.
 "
     );
+}
+
+fn bundle_command_lines(args: &[String], profile: StressProfile, epoch: u64) -> Vec<String> {
+    vec![
+        render_command_transcript(args),
+        tail_latency_control_plane_replay_command(profile, epoch),
+    ]
+}
+
+fn render_command_transcript(args: &[String]) -> String {
+    args.iter()
+        .map(|arg| shell_escape_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn shell_escape_arg(arg: &str) -> String {
+    if arg.is_empty() {
+        return "''".to_string();
+    }
+
+    if arg.bytes().all(|byte| {
+        matches!(
+            byte,
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'.' | b'_' | b':' | b'-'
+        )
+    }) {
+        return arg.to_string();
+    }
+
+    format!("'{}'", arg.replace('\'', "'\"'\"'"))
 }

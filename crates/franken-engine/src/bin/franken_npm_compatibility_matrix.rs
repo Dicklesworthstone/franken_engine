@@ -207,19 +207,7 @@ fn run() -> Result<(), String> {
         policy_id: POLICY_ID.to_string(),
         scenario_id: SCENARIO_ID.to_string(),
     };
-    let commands = [
-        format!(
-            "franken_npm_compatibility_matrix --out-dir {}",
-            out_dir.display()
-        ),
-        format!("cat {}/npm_compat_matrix_report.json", out_dir.display()),
-        format!("cat {}/run_manifest.json", out_dir.display()),
-        format!(
-            "jq '.unresolved_failures' {}/npm_compat_matrix_report.json",
-            out_dir.display()
-        ),
-        "./scripts/e2e/rgc_npm_compatibility_matrix_replay.sh ci".to_string(),
-    ];
+    let commands = bundle_command_lines(&args, &out_dir);
     let events = build_events(&matrix, &trace_id, &decision_id, &matrix_hash);
     let manifest = RunManifest {
         schema_version: RUN_MANIFEST_SCHEMA_VERSION.to_string(),
@@ -306,6 +294,74 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
 
 fn help_text() -> String {
     "Usage: franken_npm_compatibility_matrix --out-dir <DIR>".to_string()
+}
+
+fn bundle_command_lines(args: &[String], out_dir: &Path) -> Vec<String> {
+    vec![
+        render_command_transcript(args),
+        replay_command_for_bundle(),
+        format!(
+            "cat {}",
+            shell_escape_arg(
+                &out_dir
+                    .join("npm_compat_matrix_report.json")
+                    .display()
+                    .to_string()
+            )
+        ),
+        format!(
+            "cat {}",
+            shell_escape_arg(&out_dir.join("run_manifest.json").display().to_string())
+        ),
+        format!(
+            "jq '.unresolved_failures' {}",
+            shell_escape_arg(
+                &out_dir
+                    .join("npm_compat_matrix_report.json")
+                    .display()
+                    .to_string()
+            )
+        ),
+        "./scripts/e2e/rgc_npm_compatibility_matrix_replay.sh ci".to_string(),
+    ]
+}
+
+fn render_command_transcript(args: &[String]) -> String {
+    args.iter()
+        .map(|arg| shell_escape_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn shell_escape_arg(arg: &str) -> String {
+    if arg.is_empty() {
+        return "''".to_string();
+    }
+
+    if arg.bytes().all(|byte| {
+        matches!(
+            byte,
+            b'A'..=b'Z'
+                | b'a'..=b'z'
+                | b'0'..=b'9'
+                | b'/'
+                | b'.'
+                | b'_'
+                | b':'
+                | b'-'
+                | b'='
+                | b'+'
+        )
+    }) {
+        return arg.to_string();
+    }
+
+    format!("'{}'", arg.replace('\'', "'\"'\"'"))
+}
+
+fn replay_command_for_bundle() -> String {
+    "rch exec -- cargo run -p frankenengine-engine --bin franken_npm_compatibility_matrix -- --out-dir <DIR>"
+        .to_string()
 }
 
 fn build_seed_matrix() -> Result<NpmCompatibilityMatrix, String> {

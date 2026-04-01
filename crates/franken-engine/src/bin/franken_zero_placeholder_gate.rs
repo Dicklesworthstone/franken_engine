@@ -627,7 +627,8 @@ fn write_zero_placeholder_gate_bundle(
     write_json(&trace_ids_path, &trace_ids)?;
     write_json(&run_manifest_path, &run_manifest)?;
     write_jsonl(&events_path, &events)?;
-    fs::write(&commands_path, format!("{}\n", args.join(" ")))
+    let command_lines = bundle_command_lines(args, waivers_path, epoch);
+    fs::write(&commands_path, format!("{}\n", command_lines.join("\n")))
         .map_err(|error| format!("failed to write `{}`: {error}", commands_path.display()))?;
 
     Ok(GateArtifacts {
@@ -645,6 +646,61 @@ fn write_zero_placeholder_gate_bundle(
         warned_count: report.warned_count(),
         waived_count: report.waived_count(),
     })
+}
+
+fn bundle_command_lines(
+    args: &[String],
+    waivers_path: Option<&Path>,
+    epoch: SecurityEpoch,
+) -> Vec<String> {
+    vec![
+        render_command_transcript(args),
+        replay_command_for_bundle(waivers_path, epoch),
+    ]
+}
+
+fn render_command_transcript(args: &[String]) -> String {
+    args.iter()
+        .map(|arg| shell_escape_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn shell_escape_arg(arg: &str) -> String {
+    if arg.is_empty() {
+        return "''".to_string();
+    }
+
+    if arg.bytes().all(|byte| {
+        matches!(
+            byte,
+            b'A'..=b'Z'
+                | b'a'..=b'z'
+                | b'0'..=b'9'
+                | b'/'
+                | b'.'
+                | b'_'
+                | b':'
+                | b'-'
+                | b'='
+                | b'+'
+        )
+    }) {
+        return arg.to_string();
+    }
+
+    format!("'{}'", arg.replace('\'', "'\"'\"'"))
+}
+
+fn replay_command_for_bundle(waivers_path: Option<&Path>, epoch: SecurityEpoch) -> String {
+    let mut command = format!(
+        "rch exec -- cargo run -p frankenengine-engine --bin franken_zero_placeholder_gate -- --out-dir <DIR> --epoch {}",
+        epoch.as_u64()
+    );
+    if waivers_path.is_some() {
+        command.push_str(" --waivers <FILE>");
+    }
+    command
 }
 
 #[cfg(test)]

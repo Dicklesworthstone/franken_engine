@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use frankenengine_engine::control_plane_mock_inventory::{
-    AmbientMockGuardReport, ambient_mock_guard_exit_code, write_ambient_mock_guard_bundle,
+    AmbientMockGuardReport, ambient_mock_guard_exit_code, render_bundle_command_lines,
     write_ambient_mock_guard_bundle_in_root,
 };
 use serde::Serialize;
@@ -16,7 +16,7 @@ enum CliAction {
     Help,
     Run {
         out_dir: PathBuf,
-        scan_root: Option<PathBuf>,
+        workspace_root: Option<PathBuf>,
     },
 }
 
@@ -54,20 +54,24 @@ fn main() {
 
 fn run() -> Result<i32, String> {
     let args: Vec<String> = env::args().collect();
-    let (out_dir, scan_root) = match parse_args(&args[1..])? {
+    let (out_dir, workspace_root) = match parse_args(&args[1..])? {
         CliAction::Help => {
             println!("{}", help_text());
             return Ok(0);
         }
-        CliAction::Run { out_dir, scan_root } => (out_dir, scan_root),
+        CliAction::Run {
+            out_dir,
+            workspace_root,
+        } => (out_dir, workspace_root),
     };
+    let workspace_root =
+        workspace_root.unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    let command_lines =
+        render_bundle_command_lines(&args, "franken_ambient_mock_guard", &workspace_root);
 
-    let artifacts = if let Some(scan_root) = scan_root {
-        write_ambient_mock_guard_bundle_in_root(&scan_root, &out_dir, &args)
-            .map_err(|error| error.to_string())?
-    } else {
-        write_ambient_mock_guard_bundle(&out_dir, &args).map_err(|error| error.to_string())?
-    };
+    let artifacts =
+        write_ambient_mock_guard_bundle_in_root(&workspace_root, &out_dir, &command_lines)
+            .map_err(|error| error.to_string())?;
 
     let report: AmbientMockGuardReport = serde_json::from_slice(
         &fs::read(&artifacts.report_path).map_err(|error| error.to_string())?,
@@ -101,7 +105,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
     }
 
     let mut out_dir: Option<PathBuf> = None;
-    let mut scan_root: Option<PathBuf> = None;
+    let mut workspace_root: Option<PathBuf> = None;
     let mut index = 0usize;
     while index < args.len() {
         match args[index].as_str() {
@@ -113,11 +117,11 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 out_dir = Some(PathBuf::from(value));
                 index += 2;
             }
-            "--scan-root" => {
+            "--workspace-root" | "--scan-root" => {
                 let Some(value) = args.get(index + 1) else {
-                    return Err("--scan-root requires a path".to_string());
+                    return Err("--workspace-root requires a path".to_string());
                 };
-                scan_root = Some(PathBuf::from(value));
+                workspace_root = Some(PathBuf::from(value));
                 index += 2;
             }
             other => {
@@ -130,10 +134,61 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
     }
 
     out_dir
-        .map(|out_dir| CliAction::Run { out_dir, scan_root })
+        .map(|out_dir| CliAction::Run {
+            out_dir,
+            workspace_root,
+        })
         .ok_or_else(|| format!("missing required --out-dir\n\n{}", help_text()))
 }
 
 fn help_text() -> String {
-    "Usage: franken_ambient_mock_guard --out-dir <DIR> [--scan-root <WORKSPACE_ROOT>]".to_string()
+    "Usage: franken_ambient_mock_guard --out-dir <DIR> [--workspace-root <WORKSPACE_ROOT>]"
+        .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_args_accepts_workspace_root_flag() {
+        let args = vec![
+            "--out-dir".to_string(),
+            "/tmp/out".to_string(),
+            "--workspace-root".to_string(),
+            "/tmp/workspace".to_string(),
+        ];
+
+        match parse_args(&args).expect("args should parse") {
+            CliAction::Run {
+                out_dir,
+                workspace_root,
+            } => {
+                assert_eq!(out_dir, PathBuf::from("/tmp/out"));
+                assert_eq!(workspace_root, Some(PathBuf::from("/tmp/workspace")));
+            }
+            CliAction::Help => panic!("expected run action"),
+        }
+    }
+
+    #[test]
+    fn parse_args_accepts_scan_root_legacy_alias() {
+        let args = vec![
+            "--out-dir".to_string(),
+            "/tmp/out".to_string(),
+            "--scan-root".to_string(),
+            "/tmp/workspace".to_string(),
+        ];
+
+        match parse_args(&args).expect("args should parse") {
+            CliAction::Run {
+                out_dir,
+                workspace_root,
+            } => {
+                assert_eq!(out_dir, PathBuf::from("/tmp/out"));
+                assert_eq!(workspace_root, Some(PathBuf::from("/tmp/workspace")));
+            }
+            CliAction::Help => panic!("expected run action"),
+        }
+    }
 }

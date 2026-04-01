@@ -151,7 +151,27 @@ fn npm_compatibility_matrix_binary_emits_artifacts_and_owner_routing() {
     assert!(events.contains("npm_compatibility_matrix_completed"));
 
     let commands = fs::read_to_string(&commands_path).expect("commands should be readable");
-    assert!(commands.contains("franken_npm_compatibility_matrix"));
+    let command_lines = commands.lines().collect::<Vec<_>>();
+    assert!(
+        command_lines.len() >= 3,
+        "commands.txt should record the invocation, an rch replay line, and operator follow-ups"
+    );
+    assert!(
+        command_lines[0].contains("franken_npm_compatibility_matrix"),
+        "commands.txt should include the binary invocation: {}",
+        command_lines[0]
+    );
+    assert!(
+        command_lines[0].contains("--out-dir"),
+        "commands.txt should preserve the out-dir flag: {}",
+        command_lines[0]
+    );
+    assert_eq!(
+        command_lines[1],
+        "rch exec -- cargo run -p frankenengine-engine --bin franken_npm_compatibility_matrix -- --out-dir <DIR>",
+        "commands.txt should include an rch replay line: {}",
+        command_lines[1]
+    );
     assert!(commands.contains("npm_compat_matrix_report.json"));
     assert!(commands.contains("rgc_npm_compatibility_matrix_replay.sh"));
 }

@@ -1393,6 +1393,30 @@ fn zero_placeholder_gate_cli_writes_artifact_bundle() {
     .expect("parse waiver manifest");
     assert_eq!(waiver_manifest["evaluation_epoch_raw"], 100);
     assert_eq!(report["report"]["receipt"]["epoch"], 100);
+
+    let commands = fs::read_to_string(out_dir.join("commands.txt")).expect("read commands");
+    let command_lines = commands.lines().collect::<Vec<_>>();
+    assert_eq!(
+        command_lines.len(),
+        2,
+        "commands.txt should record the literal invocation and an rch replay line"
+    );
+    assert!(
+        command_lines[0].contains("franken_zero_placeholder_gate"),
+        "commands.txt should include the binary invocation: {}",
+        command_lines[0]
+    );
+    assert!(
+        command_lines[0].contains("--out-dir"),
+        "commands.txt should preserve the out-dir flag: {}",
+        command_lines[0]
+    );
+    assert_eq!(
+        command_lines[1],
+        "rch exec -- cargo run -p frankenengine-engine --bin franken_zero_placeholder_gate -- --out-dir <DIR> --epoch 100",
+        "commands.txt should include an rch replay line with the effective epoch: {}",
+        command_lines[1]
+    );
 }
 
 #[test]

@@ -1009,14 +1009,13 @@ fn write_bundle_releases_lock_after_success() {
 #[test]
 fn franken_react_package_cohort_cli_writes_bundle() {
     let out_dir = unique_temp_dir("cli");
-    let output = Command::new(
-        std::env::var("CARGO_BIN_EXE_franken_react_package_cohort")
-            .unwrap_or_else(|_| "franken_react_package_cohort".into()),
-    )
-    .arg("--out-dir")
-    .arg(&out_dir)
-    .output()
-    .expect("run franken_react_package_cohort");
+    let binary = std::env::var("CARGO_BIN_EXE_franken_react_package_cohort")
+        .unwrap_or_else(|_| "franken_react_package_cohort".into());
+    let output = Command::new(&binary)
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .output()
+        .expect("run franken_react_package_cohort");
     assert!(
         output.status.success(),
         "stdout:\n{}\n\nstderr:\n{}",
@@ -1055,6 +1054,23 @@ fn franken_react_package_cohort_cli_writes_bundle() {
     assert_eq!(
         manifest.schema_version,
         REACT_COHORT_RUN_MANIFEST_SCHEMA_VERSION
+    );
+
+    let commands = fs::read_to_string(out_dir.join("commands.txt")).expect("read commands");
+    let command_lines: Vec<&str> = commands.lines().collect();
+    assert_eq!(
+        command_lines.len(),
+        2,
+        "commands.txt should record the literal invocation and an rch replay line"
+    );
+    assert!(command_lines[0].contains(&binary));
+    assert!(command_lines[0].contains("--out-dir"));
+    assert!(
+        command_lines[1].starts_with(
+            "rch exec -- cargo run -p frankenengine-engine --bin franken_react_package_cohort -- --out-dir <DIR>"
+        ),
+        "commands.txt should include an rch replay line: {}",
+        command_lines[1]
     );
 }
 

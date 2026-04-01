@@ -69,8 +69,28 @@ fn lowering_gap_inventory_cli_writes_artifact_bundle() {
     assert_eq!(events.lines().count(), LoweringGapSiteId::ALL.len() + 2);
 
     let commands = fs::read_to_string(out_dir.join("commands.txt")).expect("read commands");
-    assert!(commands.contains("franken_lowering_gap_inventory"));
-    assert!(commands.contains("--out-dir"));
+    let command_lines = commands.lines().collect::<Vec<_>>();
+    assert_eq!(
+        command_lines.len(),
+        2,
+        "commands.txt should record the literal invocation and an rch replay line"
+    );
+    assert!(
+        command_lines[0].contains("franken_lowering_gap_inventory"),
+        "commands.txt should include the binary invocation: {}",
+        command_lines[0]
+    );
+    assert!(
+        command_lines[0].contains("--out-dir"),
+        "commands.txt should preserve the out-dir flag: {}",
+        command_lines[0]
+    );
+    assert_eq!(
+        command_lines[1],
+        "rch exec -- cargo run -p frankenengine-engine --bin franken_lowering_gap_inventory -- --out-dir <DIR>",
+        "commands.txt should include an rch replay line: {}",
+        command_lines[1]
+    );
 
     let cli_json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("stdout json summary");

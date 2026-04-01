@@ -548,9 +548,7 @@ pub fn write_tail_latency_control_plane_bundle(
             "profile": profile,
             "epoch": epoch,
             "report_hash": report_hash,
-            "replay_command": format!(
-                "cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- --out-dir <DIR> --profile {profile} --epoch {epoch}"
-            ),
+            "replay_command": tail_latency_control_plane_replay_command(profile, epoch),
         }),
         &repro_lock_path,
     )?;
@@ -586,6 +584,12 @@ pub fn write_tail_latency_control_plane_bundle(
         guardrail_state: report.guardrails.state,
         fallback_activated: report.guardrails.fallback_activated,
     })
+}
+
+pub fn tail_latency_control_plane_replay_command(profile: StressProfile, epoch: u64) -> String {
+    format!(
+        "rch exec -- cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- --out-dir <DIR> --profile {profile} --epoch {epoch}"
+    )
 }
 
 fn workload_scenario(profile: StressProfile, epoch: u64) -> WorkloadScenario {
@@ -1005,35 +1009,35 @@ fn compose_end_to_end_bounds(
     let budget_p50_ns = envelopes
         .iter()
         .map(|envelope| envelope.p50_budget_ns)
-        .sum();
+        .fold(0u64, u64::saturating_add);
     let budget_p95_ns = envelopes
         .iter()
         .map(|envelope| envelope.p95_budget_ns)
-        .sum();
+        .fold(0u64, u64::saturating_add);
     let budget_p99_ns = envelopes
         .iter()
         .map(|envelope| envelope.p99_budget_ns)
-        .sum();
+        .fold(0u64, u64::saturating_add);
     let budget_p999_ns = envelopes
         .iter()
         .map(|envelope| envelope.p999_budget_ns)
-        .sum();
+        .fold(0u64, u64::saturating_add);
     let observed_p50_ns = observations
         .iter()
         .map(|observation| observation.p50_ns)
-        .sum();
+        .fold(0u64, u64::saturating_add);
     let observed_p95_ns = observations
         .iter()
         .map(|observation| observation.p95_ns)
-        .sum();
+        .fold(0u64, u64::saturating_add);
     let observed_p99_ns = observations
         .iter()
         .map(|observation| observation.p99_ns)
-        .sum();
+        .fold(0u64, u64::saturating_add);
     let observed_p999_ns = observations
         .iter()
         .map(|observation| observation.p999_ns)
-        .sum();
+        .fold(0u64, u64::saturating_add);
 
     EndToEndLatencyBounds {
         composition_model: "serial_min_plus_sum".to_string(),

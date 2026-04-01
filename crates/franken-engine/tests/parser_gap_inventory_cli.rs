@@ -63,8 +63,21 @@ fn parser_gap_inventory_cli_writes_artifact_bundle() {
     assert_eq!(events.lines().count(), ParserGapSiteId::ALL.len() + 2);
 
     let commands = fs::read_to_string(out_dir.join("commands.txt")).expect("read commands");
-    assert!(commands.contains("franken_parser_gap_inventory"));
-    assert!(commands.contains("--out-dir"));
+    let command_lines: Vec<&str> = commands.lines().collect();
+    assert_eq!(
+        command_lines.len(),
+        2,
+        "commands.txt should record the literal invocation and an rch replay line"
+    );
+    assert!(command_lines[0].contains("franken_parser_gap_inventory"));
+    assert!(command_lines[0].contains("--out-dir"));
+    assert!(
+        command_lines[1].starts_with(
+            "rch exec -- cargo run -p frankenengine-engine --bin franken_parser_gap_inventory -- --out-dir <DIR>"
+        ),
+        "commands.txt should include an rch replay line: {}",
+        command_lines[1]
+    );
 
     let cli_json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("stdout json summary");

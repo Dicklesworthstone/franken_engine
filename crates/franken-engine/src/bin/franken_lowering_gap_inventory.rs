@@ -30,8 +30,9 @@ fn main() {
 fn run() -> Result<(), String> {
     let args: Vec<String> = env::args().collect();
     let out_dir = parse_out_dir(&args[1..])?;
-    let artifacts =
-        write_lowering_gap_inventory_bundle(&out_dir, &args).map_err(|error| error.to_string())?;
+    let command_lines = bundle_command_lines(&args);
+    let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &command_lines)
+        .map_err(|error| error.to_string())?;
     let output = CommandOutput {
         schema_version: OUTPUT_SCHEMA_VERSION.to_string(),
         out_dir: artifacts.out_dir.display().to_string(),
@@ -78,4 +79,46 @@ fn parse_out_dir(args: &[String]) -> Result<PathBuf, String> {
 
 fn help_text() -> String {
     "Usage: franken_lowering_gap_inventory --out-dir <DIR>".to_string()
+}
+
+fn bundle_command_lines(args: &[String]) -> Vec<String> {
+    vec![render_command_transcript(args), replay_command_for_bundle()]
+}
+
+fn render_command_transcript(args: &[String]) -> String {
+    args.iter()
+        .map(|arg| shell_escape_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn shell_escape_arg(arg: &str) -> String {
+    if arg.is_empty() {
+        return "''".to_string();
+    }
+
+    if arg.bytes().all(|byte| {
+        matches!(
+            byte,
+            b'A'..=b'Z'
+                | b'a'..=b'z'
+                | b'0'..=b'9'
+                | b'/'
+                | b'.'
+                | b'_'
+                | b':'
+                | b'-'
+                | b'='
+                | b'+'
+        )
+    }) {
+        return arg.to_string();
+    }
+
+    format!("'{}'", arg.replace('\'', "'\"'\"'"))
+}
+
+fn replay_command_for_bundle() -> String {
+    "rch exec -- cargo run -p frankenengine-engine --bin franken_lowering_gap_inventory -- --out-dir <DIR>"
+        .to_string()
 }

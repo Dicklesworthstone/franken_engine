@@ -1367,3 +1367,26 @@ fn summary_snapshot_hash_deterministic() {
     let s2 = build();
     assert_eq!(s1.snapshot_hash, s2.snapshot_hash);
 }
+
+#[test]
+fn summary_snapshot_hash_changes_when_graph_structure_changes() {
+    let build = |include_edge: bool| {
+        let mut g = StaticAnalysisGraph::new();
+        g.add_node(component_node("A")).unwrap();
+        g.add_node(component_node("B")).unwrap();
+        g.register_component(simple_descriptor("A", &["B"]))
+            .unwrap();
+        g.register_component(simple_descriptor("B", &[])).unwrap();
+        if include_edge {
+            g.add_edge(edge("e1", "A", "B", EdgeKind::RendersChild))
+                .unwrap();
+        }
+        g.summary()
+    };
+
+    let without_edge = build(false);
+    let with_edge = build(true);
+
+    assert_ne!(without_edge.edge_count, with_edge.edge_count);
+    assert_ne!(without_edge.snapshot_hash, with_edge.snapshot_hash);
+}

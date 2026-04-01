@@ -1042,6 +1042,74 @@ fn parser_final_readiness_script_uses_repo_local_target_dir_and_retained_step_lo
         script.contains("cat ${step_logs_dir}/step_01.log"),
         "manifest operator verification should surface a retained step log"
     );
+    assert!(
+        script.contains("parser final readiness dossier fixture missing: ${fixture_path}"),
+        "script should fail closed with an explicit fixture-missing diagnostic"
+    );
+    assert!(
+        script.contains("failed_command=\"missing-required-fixture:${fixture_path}\""),
+        "script should preserve the missing fixture as the failed command for manifest emission"
+    );
+    assert!(
+        script.contains("parser final readiness dossier fixture unreadable: ${fixture_path}"),
+        "script should fail closed when the fixture exists but cannot be read"
+    );
+    assert!(
+        script.contains("failed_command=\"unreadable-required-fixture:${fixture_path}\""),
+        "script should preserve unreadable fixture failures in the manifest"
+    );
+    assert!(
+        script.contains("parser final readiness dossier fixture invalid: ${fixture_path}"),
+        "script should fail closed when the fixture is not a valid readiness dossier object"
+    );
+    assert!(
+        script.contains("failed_command=\"invalid-required-fixture:${fixture_path}\""),
+        "script should preserve invalid fixture failures in the manifest"
+    );
+    assert!(
+        script.contains("type == \"object\""),
+        "script should validate the fixture JSON contract before heavy work"
+    );
+    assert!(
+        script.contains(".blocked_dependency_ids | type == \"array\""),
+        "script should validate blocked dependency typing before manifest generation"
+    );
+    assert!(
+        script.contains(".expected_gate.expected_hold_reasons | type == \"array\""),
+        "script should validate expected hold reasons typing before manifest generation"
+    );
+    assert!(
+        script.contains(".residual_risks | type == \"array\""),
+        "script should validate residual risk collection typing before manifest generation"
+    );
+    assert!(
+        script.contains(".risk_id | type == \"string\""),
+        "script should validate residual risk entry typing before manifest generation"
+    );
+    assert!(
+        script.contains("fixture_status=\"unchecked\""),
+        "script should track fixture usability explicitly for manifest fallbacks"
+    );
+    assert!(
+        script.contains("[[ \"$fixture_status\" == \"usable\" ]]"),
+        "script manifest helpers should only jq-read a usable fixture"
+    );
+    assert!(
+        script.contains("sha256:fixture-unreadable"),
+        "script should emit a stable risk-register marker for unreadable fixtures"
+    );
+    assert!(
+        script.contains("sha256:fixture-invalid"),
+        "script should emit a stable risk-register marker for invalid fixtures"
+    );
+    assert!(
+        script.contains("no step logs were captured before the readiness dossier run failed"),
+        "script should not advertise a nonexistent first step log after early failures"
+    );
+    assert!(
+        script.contains("if require_fixture && run_mode; then"),
+        "script should gate heavy rch steps on fixture presence"
+    );
 }
 
 #[test]

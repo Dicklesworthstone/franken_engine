@@ -203,3 +203,68 @@ fn binary_honors_custom_epoch() {
             .expect("deserialize trace ids");
     assert_eq!(trace_ids["epoch_raw"].as_u64(), Some(42));
 }
+
+#[test]
+fn binary_records_shell_command_and_rch_replay_contract() {
+    let out_dir = unique_temp_dir("commands");
+
+    let output = Command::new(env!(
+        "CARGO_BIN_EXE_franken_control_plane_policy_diagnostics"
+    ))
+    .args(["--out-dir", out_dir.to_str().unwrap()])
+    .args(["--epoch", "7"])
+    .output()
+    .expect("run control plane policy diagnostics binary with explicit epoch");
+
+    assert!(
+        output.status.success(),
+        "binary failed: stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let commands = fs::read_to_string(out_dir.join("commands.txt")).expect("read commands.txt");
+    let command_lines: Vec<&str> = commands.lines().collect();
+    assert_eq!(
+        command_lines.len(),
+        2,
+        "commands.txt should record the literal invocation and an rch replay command"
+    );
+    let command = command_lines[0];
+    assert!(
+        command.contains("franken_control_plane_policy_diagnostics"),
+        "commands.txt should include the binary invocation: {command}"
+    );
+    assert!(
+        command.contains("--out-dir"),
+        "commands.txt should preserve the out-dir flag: {command}"
+    );
+    assert!(
+        command.contains("--epoch 7"),
+        "commands.txt should preserve additional flags in command order: {command}"
+    );
+    assert!(
+        command_lines[1].starts_with(
+            "rch exec -- cargo run -p frankenengine-engine --bin franken_control_plane_policy_diagnostics -- --out-dir <DIR>"
+        ),
+        "commands.txt should include an rch replay line: {}",
+        command_lines[1]
+    );
+
+    let repro_lock: serde_json::Value =
+        serde_json::from_slice(&fs::read(out_dir.join("repro.lock")).expect("read repro.lock"))
+            .expect("deserialize repro lock");
+    let replay_command = repro_lock["replay_command"]
+        .as_str()
+        .expect("repro.lock replay_command must be a string");
+    assert!(
+        replay_command.starts_with(
+            "rch exec -- cargo run -p frankenengine-engine --bin franken_control_plane_policy_diagnostics -- --out-dir <DIR>"
+        ),
+        "repro.lock should emit an rch-wrapped replay command: {replay_command}"
+    );
+    assert!(
+        !replay_command.starts_with("cargo run"),
+        "repro.lock must not emit bare cargo run replays: {replay_command}"
+    );
+}

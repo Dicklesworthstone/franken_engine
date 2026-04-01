@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use frankenengine_engine::control_plane_mock_inventory::{
     OrchestratorContextRefactorReport, orchestrator_context_refactor_exit_code,
-    write_orchestrator_context_refactor_bundle, write_orchestrator_context_refactor_bundle_in_root,
+    render_bundle_command_lines, write_orchestrator_context_refactor_bundle_in_root,
 };
 use serde::Serialize;
 
@@ -66,14 +66,20 @@ fn run() -> Result<i32, String> {
             workspace_root,
         } => (out_dir, workspace_root),
     };
+    let workspace_root =
+        workspace_root.unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    let command_lines = render_bundle_command_lines(
+        &args,
+        "franken_orchestrator_context_refactor",
+        &workspace_root,
+    );
 
-    let artifacts = if let Some(workspace_root) = workspace_root {
-        write_orchestrator_context_refactor_bundle_in_root(&workspace_root, &out_dir, &args)
-            .map_err(|error| error.to_string())?
-    } else {
-        write_orchestrator_context_refactor_bundle(&out_dir, &args)
-            .map_err(|error| error.to_string())?
-    };
+    let artifacts = write_orchestrator_context_refactor_bundle_in_root(
+        &workspace_root,
+        &out_dir,
+        &command_lines,
+    )
+    .map_err(|error| error.to_string())?;
 
     let report: OrchestratorContextRefactorReport = serde_json::from_slice(
         &fs::read(&artifacts.report_path).map_err(|error| error.to_string())?,

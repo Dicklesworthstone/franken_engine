@@ -210,7 +210,27 @@ fn metadata_substrate_evidence_binary_emits_required_bundle() {
     assert!(events.contains("\"event\":\"override_evaluated\""));
 
     let commands = fs::read_to_string(&commands_path).expect("commands should be readable");
-    assert!(commands.contains("franken_metadata_substrate_evidence"));
+    let command_lines = commands.lines().collect::<Vec<_>>();
+    assert!(
+        command_lines.len() >= 3,
+        "commands.txt should record the invocation, an rch replay line, and operator follow-ups"
+    );
+    assert!(
+        command_lines[0].contains("franken_metadata_substrate_evidence"),
+        "commands.txt should include the binary invocation: {}",
+        command_lines[0]
+    );
+    assert!(
+        command_lines[0].contains("--out-dir"),
+        "commands.txt should preserve the out-dir flag: {}",
+        command_lines[0]
+    );
+    assert_eq!(
+        command_lines[1],
+        "rch exec -- cargo run -p frankenengine-engine --bin franken_metadata_substrate_evidence -- --out-dir <DIR>",
+        "commands.txt should include an rch replay line: {}",
+        command_lines[1]
+    );
     assert!(commands.contains("runtime_metadata_substrate_report.json"));
     assert!(commands.contains("metadata_substrate_evidence_replay.sh"));
 }

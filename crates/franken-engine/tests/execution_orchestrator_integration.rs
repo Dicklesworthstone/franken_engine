@@ -796,7 +796,7 @@ fn orchestrator_context_refactor_bundle_emits_expected_artifacts() {
         .expect("canonicalize workspace root");
     let out_dir = unique_temp_dir("orchestrator-context-refactor");
     let commands = vec![
-        "cargo run -p frankenengine-engine --bin franken_orchestrator_context_refactor -- --out-dir /tmp/out"
+        "rch exec -- cargo run -p frankenengine-engine --bin franken_orchestrator_context_refactor -- --out-dir /tmp/out"
             .to_string(),
     ];
 

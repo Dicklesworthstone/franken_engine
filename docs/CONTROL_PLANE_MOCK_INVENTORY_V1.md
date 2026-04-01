@@ -16,13 +16,13 @@ This surface turns the canonical control-plane mock seam inventory into a replay
 Direct binary:
 
 ```bash
-cargo run -p frankenengine-engine --bin franken_control_plane_mock_inventory -- --out-dir artifacts/control_plane_mock_inventory/manual
+rch exec -- cargo run -p frankenengine-engine --bin franken_control_plane_mock_inventory -- --out-dir artifacts/control_plane_mock_inventory/manual
 ```
 
 Workspace-root override:
 
 ```bash
-cargo run -p frankenengine-engine --bin franken_control_plane_mock_inventory -- --out-dir artifacts/control_plane_mock_inventory/manual --workspace-root /data/projects/franken_engine
+rch exec -- cargo run -p frankenengine-engine --bin franken_control_plane_mock_inventory -- --out-dir artifacts/control_plane_mock_inventory/manual --workspace-root /data/projects/franken_engine
 ```
 
 `rch`-backed suite:

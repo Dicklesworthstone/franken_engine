@@ -114,8 +114,21 @@ fn zero_placeholder_scan_cli_writes_artifact_bundle() {
     );
 
     let commands = fs::read_to_string(out_dir.join("commands.txt")).expect("read commands");
-    assert!(commands.contains("franken_zero_placeholder_scan"));
-    assert!(commands.contains("--out-dir"));
+    let command_lines: Vec<&str> = commands.lines().collect();
+    assert_eq!(
+        command_lines.len(),
+        2,
+        "commands.txt should record the literal invocation and an rch replay line"
+    );
+    assert!(command_lines[0].contains("franken_zero_placeholder_scan"));
+    assert!(command_lines[0].contains("--out-dir"));
+    assert!(
+        command_lines[1].starts_with(
+            "rch exec -- cargo run -p frankenengine-engine --bin franken_zero_placeholder_scan -- --out-dir <DIR>"
+        ),
+        "commands.txt should include an rch replay line: {}",
+        command_lines[1]
+    );
 
     let cli_json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("stdout json summary");

@@ -32,6 +32,19 @@ const SPECIALIZATION_RECEIPT_SCHEMA_DEF: &[u8] = b"ProofSpecializationReceipt.v1
 /// Zone for all proof-ingestion objects.
 const PROOF_INGESTION_ZONE: &str = "proof-ingestion";
 
+fn append_u64(buf: &mut Vec<u8>, value: u64) {
+    buf.extend_from_slice(&value.to_be_bytes());
+}
+
+fn append_len_prefixed_bytes(buf: &mut Vec<u8>, bytes: &[u8]) {
+    append_u64(buf, bytes.len() as u64);
+    buf.extend_from_slice(bytes);
+}
+
+fn append_len_prefixed_str(buf: &mut Vec<u8>, value: &str) {
+    append_len_prefixed_bytes(buf, value.as_bytes());
+}
+
 // ---------------------------------------------------------------------------
 // ProofType — category of security proof input
 // ---------------------------------------------------------------------------
@@ -88,15 +101,15 @@ impl ProofInput {
     /// Canonical bytes for deterministic hashing/signing.
     pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::new();
-        buf.extend_from_slice(self.proof_id.as_bytes());
-        buf.extend_from_slice(self.proof_type.to_string().as_bytes());
-        buf.extend_from_slice(&self.proof_epoch.as_u64().to_be_bytes());
-        buf.extend_from_slice(&self.validity_start_ns.to_be_bytes());
-        buf.extend_from_slice(&self.validity_end_ns.to_be_bytes());
-        buf.extend_from_slice(&self.issuer_signature);
-        buf.extend_from_slice(self.canonical_hash.as_bytes());
-        buf.extend_from_slice(self.linked_policy_id.as_bytes());
-        buf.extend_from_slice(&self.payload);
+        append_len_prefixed_bytes(&mut buf, self.proof_id.as_bytes());
+        append_len_prefixed_str(&mut buf, &self.proof_type.to_string());
+        append_u64(&mut buf, self.proof_epoch.as_u64());
+        append_u64(&mut buf, self.validity_start_ns);
+        append_u64(&mut buf, self.validity_end_ns);
+        append_len_prefixed_bytes(&mut buf, &self.issuer_signature);
+        append_len_prefixed_bytes(&mut buf, self.canonical_hash.as_bytes());
+        append_len_prefixed_str(&mut buf, &self.linked_policy_id);
+        append_len_prefixed_bytes(&mut buf, &self.payload);
         buf
     }
 }
@@ -260,17 +273,18 @@ impl OptimizerHypothesis {
     /// Canonical bytes for signing/hashing.
     pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::new();
-        buf.extend_from_slice(self.hypothesis_id.as_bytes());
+        append_len_prefixed_bytes(&mut buf, self.hypothesis_id.as_bytes());
         // source_proof_ids is BTreeSet — deterministic iteration.
+        append_u64(&mut buf, self.source_proof_ids.len() as u64);
         for pid in &self.source_proof_ids {
-            buf.extend_from_slice(pid.as_bytes());
+            append_len_prefixed_bytes(&mut buf, pid.as_bytes());
         }
-        buf.extend_from_slice(self.kind.to_string().as_bytes());
-        buf.extend_from_slice(format!("{:?}", self.optimization_class).as_bytes());
-        buf.extend_from_slice(&self.expected_speedup_millionths.to_be_bytes());
-        buf.extend_from_slice(self.risk.to_string().as_bytes());
-        buf.extend_from_slice(&self.validity_epoch.as_u64().to_be_bytes());
-        buf.extend_from_slice(self.derivation_hash.as_bytes());
+        append_len_prefixed_str(&mut buf, &self.kind.to_string());
+        append_len_prefixed_str(&mut buf, &self.optimization_class.to_string());
+        append_u64(&mut buf, self.expected_speedup_millionths);
+        append_len_prefixed_str(&mut buf, &self.risk.to_string());
+        append_u64(&mut buf, self.validity_epoch.as_u64());
+        append_len_prefixed_bytes(&mut buf, self.derivation_hash.as_bytes());
         buf
     }
 }
@@ -776,7 +790,7 @@ impl ProofIngestionEngine {
     ) -> Result<EngineObjectId, IngestionError> {
         let schema_id = SchemaId::from_definition(HYPOTHESIS_SCHEMA_DEF);
         let mut canonical = proof.canonical_bytes();
-        canonical.extend_from_slice(suffix.as_bytes());
+        append_len_prefixed_str(&mut canonical, suffix);
         engine_object_id::derive_id(
             ObjectDomain::PolicyObject,
             PROOF_INGESTION_ZONE,
@@ -986,16 +1000,14 @@ impl ProofIngestionEngine {
         stage: ActivationStageLocal,
         current_ns: u64,
     ) -> Vec<u8> {
-        let optimization_class = hypothesis.optimization_class.to_string();
         let mut preimage = hypothesis.canonical_bytes();
-        preimage.extend_from_slice(&(optimization_class.len() as u64).to_be_bytes());
-        preimage.extend_from_slice(optimization_class.as_bytes());
-        preimage.extend_from_slice(transformation_witness_hash.as_bytes());
-        preimage.extend_from_slice(equivalence_evidence_hash.as_bytes());
-        preimage.extend_from_slice(rollback_token_hash.as_bytes());
-        preimage.push(stage as u8);
-        preimage.extend_from_slice(&self.current_epoch.as_u64().to_be_bytes());
-        preimage.extend_from_slice(&current_ns.to_be_bytes());
+        append_len_prefixed_str(&mut preimage, &hypothesis.optimization_class.to_string());
+        append_len_prefixed_bytes(&mut preimage, transformation_witness_hash.as_bytes());
+        append_len_prefixed_bytes(&mut preimage, equivalence_evidence_hash.as_bytes());
+        append_len_prefixed_bytes(&mut preimage, rollback_token_hash.as_bytes());
+        append_len_prefixed_str(&mut preimage, &stage.to_string());
+        append_u64(&mut preimage, self.current_epoch.as_u64());
+        append_u64(&mut preimage, current_ns);
         preimage
     }
 
@@ -1049,12 +1061,12 @@ pub fn create_proof_input(
     let schema_id = SchemaId::from_definition(PROOF_INPUT_SCHEMA_DEF);
     let canonical_hash = ContentHash::compute(payload);
     let mut id_bytes = Vec::new();
-    id_bytes.push(proof_type as u8);
-    id_bytes.extend_from_slice(&proof_epoch.as_u64().to_be_bytes());
-    id_bytes.extend_from_slice(&validity_start_ns.to_be_bytes());
-    id_bytes.extend_from_slice(&validity_end_ns.to_be_bytes());
-    id_bytes.extend_from_slice(canonical_hash.as_bytes());
-    id_bytes.extend_from_slice(linked_policy_id.as_bytes());
+    append_len_prefixed_str(&mut id_bytes, &proof_type.to_string());
+    append_u64(&mut id_bytes, proof_epoch.as_u64());
+    append_u64(&mut id_bytes, validity_start_ns);
+    append_u64(&mut id_bytes, validity_end_ns);
+    append_len_prefixed_bytes(&mut id_bytes, canonical_hash.as_bytes());
+    append_len_prefixed_str(&mut id_bytes, linked_policy_id);
 
     let proof_id = engine_object_id::derive_id(
         ObjectDomain::PolicyObject,
@@ -2105,20 +2117,70 @@ mod tests {
     fn proof_input_canonical_bytes_includes_all_fields() {
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
         let bytes = proof.canonical_bytes();
+        let mut expected = Vec::new();
+        append_len_prefixed_bytes(&mut expected, proof.proof_id.as_bytes());
+        append_len_prefixed_str(&mut expected, &proof.proof_type.to_string());
+        append_u64(&mut expected, proof.proof_epoch.as_u64());
+        append_u64(&mut expected, proof.validity_start_ns);
+        append_u64(&mut expected, proof.validity_end_ns);
+        append_len_prefixed_bytes(&mut expected, &proof.issuer_signature);
+        append_len_prefixed_bytes(&mut expected, proof.canonical_hash.as_bytes());
+        append_len_prefixed_str(&mut expected, &proof.linked_policy_id);
+        append_len_prefixed_bytes(&mut expected, &proof.payload);
+        assert_eq!(bytes, expected);
+    }
 
-        // Must contain proof_id bytes, proof_type byte, epoch, start_ns, end_ns,
-        // canonical_hash, and linked_policy_id.
-        assert!(bytes.len() > proof.proof_id.as_bytes().len());
-        // Starts with proof_id bytes.
+    fn old_proof_input_canonical_bytes(proof: &ProofInput) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(proof.proof_id.as_bytes());
+        buf.extend_from_slice(proof.proof_type.to_string().as_bytes());
+        buf.extend_from_slice(&proof.proof_epoch.as_u64().to_be_bytes());
+        buf.extend_from_slice(&proof.validity_start_ns.to_be_bytes());
+        buf.extend_from_slice(&proof.validity_end_ns.to_be_bytes());
+        buf.extend_from_slice(&proof.issuer_signature);
+        buf.extend_from_slice(proof.canonical_hash.as_bytes());
+        buf.extend_from_slice(proof.linked_policy_id.as_bytes());
+        buf.extend_from_slice(&proof.payload);
+        buf
+    }
+
+    #[test]
+    fn proof_input_canonical_bytes_prevent_tail_boundary_collision() {
+        let fixed_id = EngineObjectId([0x11; 32]);
+        let fixed_hash_a = ContentHash::from_bytes([0x22; 32]);
+        let mut shifted_hash = [0x22; 32];
+        shifted_hash[31] = b'P';
+        let fixed_hash_b = ContentHash::from_bytes(shifted_hash);
+
+        let proof_a = ProofInput {
+            proof_id: fixed_id.clone(),
+            proof_type: ProofType::IfcFlowProof,
+            proof_epoch: SecurityEpoch::from_raw(7),
+            validity_start_ns: 10,
+            validity_end_ns: 20,
+            issuer_signature: vec![0xAA],
+            canonical_hash: fixed_hash_a,
+            linked_policy_id: "P".to_string(),
+            payload: b"QR".to_vec(),
+        };
+        let proof_b = ProofInput {
+            proof_id: fixed_id,
+            proof_type: ProofType::IfcFlowProof,
+            proof_epoch: SecurityEpoch::from_raw(7),
+            validity_start_ns: 10,
+            validity_end_ns: 20,
+            issuer_signature: vec![0xAA, 0x22],
+            canonical_hash: fixed_hash_b,
+            linked_policy_id: String::new(),
+            payload: b"QR".to_vec(),
+        };
+
         assert_eq!(
-            &bytes[..proof.proof_id.as_bytes().len()],
-            proof.proof_id.as_bytes()
+            old_proof_input_canonical_bytes(&proof_a),
+            old_proof_input_canonical_bytes(&proof_b),
+            "pre-patch canonical encoding should collide across un-delimited tail fields"
         );
-        // Ends with linked_policy_id bytes.
-        assert_eq!(
-            &bytes[bytes.len() - proof.linked_policy_id.len()..],
-            proof.linked_policy_id.as_bytes()
-        );
+        assert_ne!(proof_a.canonical_bytes(), proof_b.canonical_bytes());
     }
 
     #[test]
@@ -2132,6 +2194,29 @@ mod tests {
         let hid_len = hypotheses[0].hypothesis_id.as_bytes().len();
         let pid_len = proof.proof_id.as_bytes().len();
         assert!(bytes.len() >= hid_len + pid_len);
+    }
+
+    #[test]
+    fn hypothesis_canonical_bytes_use_stable_optimization_class_display() {
+        let mut engine = test_engine();
+        let proof = make_default_proof(ProofType::PlasCapabilityWitness);
+        let hypotheses = engine.ingest_proof(proof, 1000).unwrap();
+        let hypothesis = &hypotheses[0];
+
+        let mut expected = Vec::new();
+        append_len_prefixed_bytes(&mut expected, hypothesis.hypothesis_id.as_bytes());
+        append_u64(&mut expected, hypothesis.source_proof_ids.len() as u64);
+        for proof_id in &hypothesis.source_proof_ids {
+            append_len_prefixed_bytes(&mut expected, proof_id.as_bytes());
+        }
+        append_len_prefixed_str(&mut expected, &hypothesis.kind.to_string());
+        append_len_prefixed_str(&mut expected, &hypothesis.optimization_class.to_string());
+        append_u64(&mut expected, hypothesis.expected_speedup_millionths);
+        append_len_prefixed_str(&mut expected, &hypothesis.risk.to_string());
+        append_u64(&mut expected, hypothesis.validity_epoch.as_u64());
+        append_len_prefixed_bytes(&mut expected, hypothesis.derivation_hash.as_bytes());
+
+        assert_eq!(hypothesis.canonical_bytes(), expected);
     }
 
     // -----------------------------------------------------------------------

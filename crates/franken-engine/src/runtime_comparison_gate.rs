@@ -444,7 +444,7 @@ pub struct PerformanceSummary {
 // ---------------------------------------------------------------------------
 
 /// Result of a reproducibility audit for one benchmark.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ReproducibilityResult {
     pub benchmark_id: String,
     pub runtime: RuntimeId,
@@ -548,6 +548,21 @@ pub struct GateInput<'a> {
     pub benchmark_sniffing_detail: &'a str,
 }
 
+#[derive(Serialize)]
+struct EvidenceHashInput<'a> {
+    schema_version: &'a str,
+    run_id: &'a str,
+    epoch: SecurityEpoch,
+    outcome: GateOutcome,
+    blockers: &'a [GateBlocker],
+    performance_summary: &'a PerformanceSummary,
+    methodology_audit: &'a MethodologyAudit,
+    artifact_audit: &'a ArtifactBundleAudit,
+    reproducibility_results: &'a [ReproducibilityResult],
+    environment: &'a EnvironmentFingerprint,
+    total_benchmarks: u64,
+}
+
 // ---------------------------------------------------------------------------
 // Core gate evaluation
 // ---------------------------------------------------------------------------
@@ -646,8 +661,11 @@ pub fn evaluate_gate(input: &GateInput<'_>) -> Result<GateEvidenceBundle, GateEr
         });
     }
 
+    let mut reproducibility_results = input.reproducibility.to_vec();
+    reproducibility_results.sort();
+
     // Check reproducibility results.
-    for repro in input.reproducibility {
+    for repro in &reproducibility_results {
         if !repro.within_tolerance {
             blockers.push(GateBlocker::ReproducibilityFailed {
                 benchmark_id: repro.benchmark_id.clone(),
@@ -657,6 +675,8 @@ pub fn evaluate_gate(input: &GateInput<'_>) -> Result<GateEvidenceBundle, GateEr
             });
         }
     }
+
+    blockers.sort();
 
     // Compute performance summaries.
     let category_summaries = compute_category_summaries(input.results);
@@ -677,18 +697,21 @@ pub fn evaluate_gate(input: &GateInput<'_>) -> Result<GateEvidenceBundle, GateEr
         GateOutcome::Fail
     };
 
-    let hash_input = format!(
-        "{}|{}|{}|{}|{}|{}|blockers={}|repro={}",
-        input.run_id,
-        input.epoch.as_u64(),
+    let hash_input = serde_json::to_vec(&EvidenceHashInput {
+        schema_version: GATE_SCHEMA_VERSION,
+        run_id: input.run_id,
+        epoch: input.epoch,
         outcome,
+        blockers: &blockers,
+        performance_summary: &performance_summary,
+        methodology_audit: input.methodology,
+        artifact_audit: input.artifacts,
+        reproducibility_results: &reproducibility_results,
+        environment: input.environment,
         total_benchmarks,
-        overall_vs_node,
-        overall_vs_bun,
-        blockers.len(),
-        input.reproducibility.len(),
-    );
-    let evidence_hash = ContentHash::compute(hash_input.as_bytes());
+    })
+    .expect("gate evidence hash input should serialize");
+    let evidence_hash = ContentHash::compute(&hash_input);
 
     Ok(GateEvidenceBundle {
         schema_version: GATE_SCHEMA_VERSION.to_string(),
@@ -699,7 +722,7 @@ pub fn evaluate_gate(input: &GateInput<'_>) -> Result<GateEvidenceBundle, GateEr
         performance_summary,
         methodology_audit: input.methodology.clone(),
         artifact_audit: input.artifacts.clone(),
-        reproducibility_results: input.reproducibility.to_vec(),
+        reproducibility_results,
         environment: input.environment.clone(),
         evidence_hash,
         total_benchmarks,
@@ -1149,6 +1172,124 @@ mod tests {
         let b1 = evaluate_gate(&i1).unwrap();
         let b2 = evaluate_gate(&i2).unwrap();
         assert_ne!(b1.evidence_hash, b2.evidence_hash);
+    }
+
+    #[test]
+    fn gate_hash_changes_when_blocker_details_change() {
+        let mut results_low_runs = passing_results();
+        results_low_runs[0].run_count = 5;
+        let mut results_higher_runs = passing_results();
+        results_higher_runs[0].run_count = 6;
+        let methodology = passing_methodology();
+        let artifacts = passing_artifacts();
+        let env = test_environment();
+
+        let low_runs_input =
+            make_passing_input(&results_low_runs, &methodology, &artifacts, &[], &env);
+        let higher_runs_input =
+            make_passing_input(&results_higher_runs, &methodology, &artifacts, &[], &env);
+
+        let low_runs_bundle = evaluate_gate(&low_runs_input).unwrap();
+        let higher_runs_bundle = evaluate_gate(&higher_runs_input).unwrap();
+
+        assert_ne!(low_runs_bundle.blockers, higher_runs_bundle.blockers);
+        assert_ne!(
+            low_runs_bundle.evidence_hash,
+            higher_runs_bundle.evidence_hash
+        );
+    }
+
+    #[test]
+    fn gate_hash_changes_when_reproducibility_results_change() {
+        let results = passing_results();
+        let methodology = passing_methodology();
+        let artifacts = passing_artifacts();
+        let env = test_environment();
+        let input_without_repro = make_passing_input(&results, &methodology, &artifacts, &[], &env);
+        let repro = vec![ReproducibilityResult {
+            benchmark_id: "bench_micro".to_string(),
+            runtime: RuntimeId::FrankenEngine,
+            original_ns: 1000,
+            replay_ns: 1005,
+            deviation_millionths: 5_000,
+            within_tolerance: true,
+        }];
+        let input_with_repro = make_passing_input(&results, &methodology, &artifacts, &repro, &env);
+
+        let bundle_without_repro = evaluate_gate(&input_without_repro).unwrap();
+        let bundle_with_repro = evaluate_gate(&input_with_repro).unwrap();
+
+        assert_ne!(
+            bundle_without_repro.reproducibility_results,
+            bundle_with_repro.reproducibility_results
+        );
+        assert_ne!(
+            bundle_without_repro.evidence_hash,
+            bundle_with_repro.evidence_hash
+        );
+    }
+
+    #[test]
+    fn gate_hash_stable_across_blocker_input_order() {
+        let mut results = passing_results();
+        for result in &mut results {
+            result.run_count = 5;
+        }
+        let reversed_results = results.iter().cloned().rev().collect::<Vec<_>>();
+        let methodology = passing_methodology();
+        let artifacts = passing_artifacts();
+        let env = test_environment();
+
+        let forward_input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
+        let reversed_input =
+            make_passing_input(&reversed_results, &methodology, &artifacts, &[], &env);
+
+        let forward_bundle = evaluate_gate(&forward_input).unwrap();
+        let reversed_bundle = evaluate_gate(&reversed_input).unwrap();
+
+        assert_eq!(forward_bundle.blockers, reversed_bundle.blockers);
+        assert_eq!(forward_bundle.evidence_hash, reversed_bundle.evidence_hash);
+    }
+
+    #[test]
+    fn gate_hash_stable_across_reproducibility_input_order() {
+        let results = passing_results();
+        let methodology = passing_methodology();
+        let artifacts = passing_artifacts();
+        let env = test_environment();
+        let repro_forward = vec![
+            ReproducibilityResult {
+                benchmark_id: "bench_macro".to_string(),
+                runtime: RuntimeId::BunStable,
+                original_ns: 2000,
+                replay_ns: 1998,
+                deviation_millionths: 1_000,
+                within_tolerance: true,
+            },
+            ReproducibilityResult {
+                benchmark_id: "bench_micro".to_string(),
+                runtime: RuntimeId::FrankenEngine,
+                original_ns: 1000,
+                replay_ns: 1005,
+                deviation_millionths: 5_000,
+                within_tolerance: true,
+            },
+        ];
+        let repro_reversed = repro_forward.iter().cloned().rev().collect::<Vec<_>>();
+
+        let forward_input =
+            make_passing_input(&results, &methodology, &artifacts, &repro_forward, &env);
+        let reversed_input =
+            make_passing_input(&results, &methodology, &artifacts, &repro_reversed, &env);
+
+        let forward_bundle = evaluate_gate(&forward_input).unwrap();
+        let reversed_bundle = evaluate_gate(&reversed_input).unwrap();
+
+        assert_eq!(
+            forward_bundle.reproducibility_results,
+            reversed_bundle.reproducibility_results
+        );
+        assert_eq!(forward_bundle.evidence_hash, reversed_bundle.evidence_hash);
     }
 
     // -----------------------------------------------------------------------

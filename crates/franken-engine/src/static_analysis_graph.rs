@@ -1082,12 +1082,7 @@ impl StaticAnalysisGraph {
             (pure_component_count as i64) * MILLION / (component_count as i64)
         };
 
-        // Compute snapshot hash from all content hashes
-        let mut hash_input = Vec::new();
-        for node in self.nodes.values() {
-            hash_input.extend_from_slice(node.content_hash.as_bytes());
-        }
-        let snapshot_hash = ContentHash::compute(&hash_input);
+        let snapshot_hash = self.compute_snapshot_hash();
 
         AnalysisSummary {
             component_count,
@@ -1102,6 +1097,27 @@ impl StaticAnalysisGraph {
             purity_ratio_millionths,
             snapshot_hash,
         }
+    }
+
+    fn compute_snapshot_hash(&self) -> ContentHash {
+        #[derive(Serialize)]
+        struct SnapshotEnvelope<'a> {
+            schema_version: &'a str,
+            nodes: &'a BTreeMap<String, AnalysisNode>,
+            edges: &'a BTreeMap<String, AnalysisEdge>,
+            components: &'a BTreeMap<String, ComponentDescriptor>,
+            cycles: &'a [CycleReport],
+        }
+
+        let canonical = serde_json::to_vec(&SnapshotEnvelope {
+            schema_version: &self.schema_version,
+            nodes: &self.nodes,
+            edges: &self.edges,
+            components: &self.components,
+            cycles: &self.cycles,
+        })
+        .expect("static analysis snapshot envelope should serialize");
+        ContentHash::compute(&canonical)
     }
 
     fn compute_max_depth(&self) -> u64 {

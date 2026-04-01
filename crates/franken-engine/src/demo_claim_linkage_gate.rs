@@ -448,6 +448,20 @@ pub struct DemoClaimLinkageGate {
     evaluation_count: u64,
 }
 
+#[derive(Serialize)]
+struct LinkageArtifactHashInput<'a> {
+    schema_version: &'static str,
+    milestone_id: &'a str,
+    epoch: u64,
+    verdict: &'a LinkageVerdict,
+    total_claims: u64,
+    linked_claims: u64,
+    unlinked_claims: u64,
+    aggregate_completeness_millionths: i64,
+    config: &'a LinkageGateConfig,
+    claim_results: Vec<&'a ClaimLinkageResult>,
+}
+
 impl DemoClaimLinkageGate {
     /// Create a new linkage gate.
     pub fn new(config: LinkageGateConfig) -> Result<Self, LinkageGateError> {
@@ -556,9 +570,12 @@ impl DemoClaimLinkageGate {
         }
 
         let total_claims = claims.len() as u64;
+        let unlinked_claims = total_claims - linked_count;
         let aggregate_completeness = total_completeness / total_claims as i64;
 
-        let verdict = if linked_count == total_claims {
+        let verdict = if linked_count == total_claims
+            && aggregate_completeness >= self.config.min_completeness_millionths
+        {
             LinkageVerdict::Pass
         } else {
             LinkageVerdict::Fail
@@ -585,17 +602,22 @@ impl DemoClaimLinkageGate {
             LinkageVerdict::Empty => "no claims to evaluate".to_string(),
         };
 
-        // Compute artifact hash.
-        let mut hash_buf = Vec::new();
-        hash_buf.extend_from_slice(LINKAGE_GATE_SCHEMA_VERSION.as_bytes());
-        hash_buf.extend_from_slice(milestone_id.as_bytes());
-        hash_buf.extend_from_slice(&self.config.epoch.as_u64().to_le_bytes());
-        hash_buf.extend_from_slice(&total_claims.to_le_bytes());
-        hash_buf.extend_from_slice(&linked_count.to_le_bytes());
-        for r in &claim_results {
-            hash_buf.extend_from_slice(r.claim_id.as_bytes());
-            hash_buf.extend_from_slice(&r.completeness_millionths.to_le_bytes());
-        }
+        let mut canonical_claim_results: Vec<_> = claim_results.iter().collect();
+        canonical_claim_results.sort_by(|left, right| left.claim_id.cmp(&right.claim_id));
+
+        let hash_buf = serde_json::to_vec(&LinkageArtifactHashInput {
+            schema_version: LINKAGE_GATE_SCHEMA_VERSION,
+            milestone_id,
+            epoch: self.config.epoch.as_u64(),
+            verdict: &verdict,
+            total_claims,
+            linked_claims: linked_count,
+            unlinked_claims,
+            aggregate_completeness_millionths: aggregate_completeness,
+            config: &self.config,
+            claim_results: canonical_claim_results,
+        })
+        .expect("linkage artifact hash input should serialize");
 
         let decision_id = format!(
             "linkage-{}-{}-{}",
@@ -612,7 +634,7 @@ impl DemoClaimLinkageGate {
             claim_results,
             total_claims,
             linked_claims: linked_count,
-            unlinked_claims: total_claims - linked_count,
+            unlinked_claims,
             aggregate_completeness_millionths: aggregate_completeness,
             rationale,
             artifact_hash: ContentHash::compute(&hash_buf),
@@ -1270,6 +1292,72 @@ mod tests {
         let d2 = g2.evaluate("m1", &claims, &demos).unwrap();
 
         assert_eq!(d1.artifact_hash, d2.artifact_hash);
+    }
+
+    #[test]
+    fn artifact_hash_changes_when_missing_details_change_with_same_completeness() {
+        let config = LinkageGateConfig {
+            require_expected_outputs: false,
+            require_verification_commands: false,
+            ..Default::default()
+        };
+        let demos = vec![make_demo("d1", true)];
+        let claims_missing_evidence = vec![make_claim(
+            "c1",
+            ClaimCategory::Performance,
+            vec!["d1"],
+            vec![],
+        )];
+        let claims_missing_demo = vec![make_claim(
+            "c1",
+            ClaimCategory::Performance,
+            vec![],
+            vec!["e1"],
+        )];
+
+        let mut gate_missing_evidence = DemoClaimLinkageGate::new(config.clone()).unwrap();
+        let decision_missing_evidence = gate_missing_evidence
+            .evaluate("m1", &claims_missing_evidence, &demos)
+            .unwrap();
+
+        let mut gate_missing_demo = DemoClaimLinkageGate::new(config).unwrap();
+        let decision_missing_demo = gate_missing_demo
+            .evaluate("m1", &claims_missing_demo, &demos)
+            .unwrap();
+
+        assert_eq!(
+            decision_missing_evidence.claim_results[0].completeness_millionths,
+            decision_missing_demo.claim_results[0].completeness_millionths
+        );
+        assert_ne!(
+            decision_missing_evidence.claim_results[0].missing,
+            decision_missing_demo.claim_results[0].missing
+        );
+        assert_ne!(
+            decision_missing_evidence.artifact_hash,
+            decision_missing_demo.artifact_hash
+        );
+    }
+
+    #[test]
+    fn artifact_hash_is_stable_across_claim_order() {
+        let demos = vec![make_demo("d1", true), make_demo("d2", true)];
+        let claims_a = vec![
+            make_claim("c1", ClaimCategory::Performance, vec!["d1"], vec!["e1"]),
+            make_claim("c2", ClaimCategory::Security, vec!["d2"], vec!["e2"]),
+        ];
+        let claims_b = vec![
+            make_claim("c2", ClaimCategory::Security, vec!["d2"], vec!["e2"]),
+            make_claim("c1", ClaimCategory::Performance, vec!["d1"], vec!["e1"]),
+        ];
+
+        let mut gate_a = default_gate();
+        let decision_a = gate_a.evaluate("m1", &claims_a, &demos).unwrap();
+
+        let mut gate_b = default_gate();
+        let decision_b = gate_b.evaluate("m1", &claims_b, &demos).unwrap();
+
+        assert_eq!(decision_a.artifact_hash, decision_b.artifact_hash);
     }
 
     // ── Edge Cases ──────────────────────────────────────────────────

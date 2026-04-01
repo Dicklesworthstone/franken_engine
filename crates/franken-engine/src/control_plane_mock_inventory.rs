@@ -52,6 +52,63 @@ pub const AMBIENT_MOCK_GUARD_SCAN_ROOT: &str = "crates/franken-engine/src";
 
 static NEXT_AMBIENT_MOCK_GUARD_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(0);
 
+fn append_hash_u64(buf: &mut Vec<u8>, value: u64) {
+    buf.extend_from_slice(&value.to_be_bytes());
+}
+
+fn append_hash_u32(buf: &mut Vec<u8>, value: u32) {
+    buf.extend_from_slice(&value.to_be_bytes());
+}
+
+fn append_hash_bytes(buf: &mut Vec<u8>, bytes: &[u8]) {
+    append_hash_u64(buf, bytes.len() as u64);
+    buf.extend_from_slice(bytes);
+}
+
+fn append_hash_str(buf: &mut Vec<u8>, value: &str) {
+    append_hash_bytes(buf, value.as_bytes());
+}
+
+fn append_hash_bool(buf: &mut Vec<u8>, value: bool) {
+    buf.push(u8::from(value));
+}
+
+fn architectural_issue_content_hash(issue: &ArchitecturalIssue) -> ContentHash {
+    let mut hasher = Sha256::new();
+    let mut canonical = Vec::new();
+    append_hash_str(&mut canonical, INVENTORY_SCHEMA_VERSION);
+    append_hash_str(&mut canonical, &issue.id);
+    append_hash_str(&mut canonical, &issue.description);
+    append_hash_str(&mut canonical, &issue.file_path);
+    append_hash_str(&mut canonical, &issue.severity.to_string());
+    append_hash_str(&mut canonical, &issue.remediation.to_string());
+    append_hash_str(&mut canonical, &issue.remediation_bead);
+    hasher.update(&canonical);
+    ContentHash::compute(&hasher.finalize())
+}
+
+fn inventory_hash_preimage(
+    occurrences: &[SeamOccurrence],
+    architectural_issues: &[ArchitecturalIssue],
+) -> Vec<u8> {
+    let mut canonical = Vec::new();
+    append_hash_str(&mut canonical, INVENTORY_SCHEMA_VERSION);
+    append_hash_str(&mut canonical, "occurrences");
+    append_hash_u64(&mut canonical, occurrences.len() as u64);
+    for occ in occurrences {
+        append_hash_bytes(&mut canonical, occ.content_hash().as_bytes());
+    }
+    append_hash_str(&mut canonical, "architectural_issues");
+    append_hash_u64(&mut canonical, architectural_issues.len() as u64);
+    for issue in architectural_issues {
+        append_hash_bytes(
+            &mut canonical,
+            architectural_issue_content_hash(issue).as_bytes(),
+        );
+    }
+    canonical
+}
+
 // ---------------------------------------------------------------------------
 // SeamClassification
 // ---------------------------------------------------------------------------
@@ -251,16 +308,18 @@ impl SeamOccurrence {
     /// Compute a deterministic content hash of this occurrence covering all fields.
     pub fn content_hash(&self) -> ContentHash {
         let mut hasher = Sha256::new();
-        hasher.update(INVENTORY_SCHEMA_VERSION.as_bytes());
-        hasher.update(self.file_path.as_bytes());
-        hasher.update(self.line_number.to_le_bytes());
-        hasher.update(format!("{}", self.kind).as_bytes());
-        hasher.update(format!("{}", self.classification).as_bytes());
-        hasher.update(format!("{}", self.severity).as_bytes());
-        hasher.update(if self.inside_cfg_test { &[1u8] } else { &[0u8] });
-        hasher.update(self.description.as_bytes());
-        hasher.update(format!("{:?}", self.remediation).as_bytes());
-        hasher.update(self.remediation_bead.as_bytes());
+        let mut canonical = Vec::new();
+        append_hash_str(&mut canonical, INVENTORY_SCHEMA_VERSION);
+        append_hash_str(&mut canonical, &self.file_path);
+        append_hash_u32(&mut canonical, self.line_number);
+        append_hash_str(&mut canonical, &self.kind.to_string());
+        append_hash_str(&mut canonical, &self.classification.to_string());
+        append_hash_str(&mut canonical, &self.severity.to_string());
+        append_hash_bool(&mut canonical, self.inside_cfg_test);
+        append_hash_str(&mut canonical, &self.description);
+        append_hash_str(&mut canonical, &self.remediation.to_string());
+        append_hash_str(&mut canonical, &self.remediation_bead);
+        hasher.update(&canonical);
         ContentHash::compute(&hasher.finalize())
     }
 }
@@ -346,10 +405,11 @@ impl MockInventory {
     /// Build the canonical inventory from scanned occurrences and issues.
     pub fn build(
         mut occurrences: Vec<SeamOccurrence>,
-        architectural_issues: Vec<ArchitecturalIssue>,
+        mut architectural_issues: Vec<ArchitecturalIssue>,
     ) -> Self {
         // Sort deterministically by (file_path, line_number).
         occurrences.sort();
+        architectural_issues.sort();
 
         let total = occurrences.len() as u32;
         let must_fix = occurrences
@@ -390,15 +450,7 @@ impl MockInventory {
 
         // Compute inventory-wide content hash.
         let mut hasher = Sha256::new();
-        hasher.update(INVENTORY_SCHEMA_VERSION.as_bytes());
-        for occ in &occurrences {
-            hasher.update(occ.content_hash().as_bytes());
-        }
-        let mut sorted_issues: Vec<_> = architectural_issues.iter().collect();
-        sorted_issues.sort_by(|a, b| a.id.cmp(&b.id));
-        for issue in &sorted_issues {
-            hasher.update(issue.id.as_bytes());
-        }
+        hasher.update(inventory_hash_preimage(&occurrences, &architectural_issues));
         let inventory_hash = ContentHash::compute(&hasher.finalize());
 
         Self {
@@ -1057,7 +1109,6 @@ fn write_ambient_mock_guard_atomic(path: &Path, bytes: &[u8]) -> Result<(), Ambi
     Ok(())
 }
 
-
 pub fn write_control_plane_mock_inventory_bundle(
     out_dir: impl AsRef<Path>,
     command_lines: &[String],
@@ -1160,7 +1211,7 @@ pub fn write_control_plane_mock_inventory_bundle_in_root(
         "policy_id": CONTROL_PLANE_MOCK_INVENTORY_POLICY_ID,
         "inventory_hash": canonical_inventory_hash.clone(),
         "production_mock_seam_matrix_hash": production_mock_seam_matrix_hash.clone(),
-        "replay_command": "cargo run -p frankenengine-engine --bin franken_control_plane_mock_inventory -- --out-dir <DIR>",
+        "replay_command": replay_command_for_bundle("franken_control_plane_mock_inventory", workspace_root),
     }))
     .map_err(|source| ControlPlaneMockInventoryBundleError::Json {
         path: repro_lock_path.display().to_string(),
@@ -1849,7 +1900,7 @@ pub fn write_ambient_mock_guard_bundle_in_root(
         "scan_root_contract": AMBIENT_MOCK_GUARD_SCAN_ROOT,
         "canonical_inventory_hash": report.canonical_inventory_hash,
         "report_hash": report_hash,
-        "replay_command": "cargo run -p frankenengine-engine --bin franken_ambient_mock_guard -- --out-dir <DIR>",
+        "replay_command": replay_command_for_bundle("franken_ambient_mock_guard", workspace_root),
     }))
     .map_err(|source| AmbientMockGuardError::Json {
         path: repro_lock_path.display().to_string(),
@@ -2125,7 +2176,7 @@ pub fn write_orchestrator_context_refactor_bundle_in_root(
         "canonical_inventory_hash": report.canonical_inventory_hash,
         "contract_hash": contract_hash,
         "report_hash": report_hash,
-        "replay_command": "cargo run -p frankenengine-engine --bin franken_orchestrator_context_refactor -- --out-dir <DIR>",
+        "replay_command": replay_command_for_bundle("franken_orchestrator_context_refactor", workspace_root),
     }))
     .map_err(|source| OrchestratorContextRefactorError::Json {
         path: repro_lock_path.display().to_string(),
@@ -2593,6 +2644,13 @@ fn scan_rust_file_for_ambient_mock_violations(
             }
         }
 
+        if pending_test_scope && pending_scope_consumed_without_block(trimmed, open_braces) {
+            pending_test_scope = false;
+        }
+        if pending_mock_module_scope && pending_scope_consumed_without_block(trimmed, open_braces) {
+            pending_mock_module_scope = false;
+        }
+
         let close_braces = trimmed.chars().filter(|ch| *ch == '}').count();
         brace_depth += open_braces;
         brace_depth = brace_depth.saturating_sub(close_braces);
@@ -2802,6 +2860,10 @@ fn contains_ident(line: &str, ident: &str) -> bool {
 
 fn is_ident_byte(byte: Option<u8>) -> bool {
     matches!(byte, Some(b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_'))
+}
+
+fn pending_scope_consumed_without_block(line: &str, open_braces: usize) -> bool {
+    open_braces == 0 && !line.is_empty() && line.ends_with(';')
 }
 
 fn strip_non_code_segments(line: &str, in_block_comment: &mut bool) -> String {
@@ -3068,6 +3130,61 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
+fn shell_quote_argument(arg: &str) -> String {
+    if arg.is_empty() {
+        return "''".to_string();
+    }
+    if arg.bytes().all(|byte| {
+        matches!(
+            byte,
+            b'a'..=b'z'
+                | b'A'..=b'Z'
+                | b'0'..=b'9'
+                | b'/'
+                | b'.'
+                | b'_'
+                | b'-'
+                | b':'
+                | b'='
+                | b'+'
+        )
+    }) {
+        return arg.to_string();
+    }
+    format!("'{}'", arg.replace('\'', "'\"'\"'"))
+}
+
+pub fn render_command_transcript(args: &[String]) -> String {
+    args.iter()
+        .map(|arg| shell_quote_argument(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+pub fn render_bundle_command_lines(
+    args: &[String],
+    bin_name: &str,
+    workspace_root: &Path,
+) -> Vec<String> {
+    vec![
+        render_command_transcript(args),
+        replay_command_for_bundle(bin_name, workspace_root),
+    ]
+}
+
+fn replay_command_for_bundle(bin_name: &str, workspace_root: &Path) -> String {
+    let repo_root = repo_root();
+    if workspace_root == repo_root {
+        return format!(
+            "rch exec -- cargo run -p frankenengine-engine --bin {bin_name} -- --out-dir <DIR>"
+        );
+    }
+    format!(
+        "rch exec -- cargo run -p frankenengine-engine --bin {bin_name} -- --out-dir <DIR> --workspace-root {}",
+        shell_quote_argument(&workspace_root.display().to_string())
+    )
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
@@ -3121,6 +3238,54 @@ mod tests {
             remediation: RemediationStrategy::NoAction,
             remediation_bead: "",
         })
+    }
+
+    fn sample_architectural_issue(
+        id: &str,
+        description: &str,
+        file_path: &str,
+    ) -> ArchitecturalIssue {
+        ArchitecturalIssue {
+            id: id.to_string(),
+            description: description.to_string(),
+            file_path: file_path.to_string(),
+            severity: SeamSeverity::High,
+            remediation: RemediationStrategy::AddCfgTestGuard,
+            remediation_bead: format!("bd-{id}"),
+        }
+    }
+
+    fn old_inventory_hash_preimage(
+        occurrence_hashes: &[ContentHash],
+        architectural_issue_hashes: &[ContentHash],
+    ) -> Vec<u8> {
+        let mut bytes = INVENTORY_SCHEMA_VERSION.as_bytes().to_vec();
+        for hash in occurrence_hashes {
+            bytes.extend_from_slice(hash.as_bytes());
+        }
+        for hash in architectural_issue_hashes {
+            bytes.extend_from_slice(hash.as_bytes());
+        }
+        bytes
+    }
+
+    fn new_inventory_hash_preimage(
+        occurrence_hashes: &[ContentHash],
+        architectural_issue_hashes: &[ContentHash],
+    ) -> Vec<u8> {
+        let mut canonical = Vec::new();
+        append_hash_str(&mut canonical, INVENTORY_SCHEMA_VERSION);
+        append_hash_str(&mut canonical, "occurrences");
+        append_hash_u64(&mut canonical, occurrence_hashes.len() as u64);
+        for hash in occurrence_hashes {
+            append_hash_bytes(&mut canonical, hash.as_bytes());
+        }
+        append_hash_str(&mut canonical, "architectural_issues");
+        append_hash_u64(&mut canonical, architectural_issue_hashes.len() as u64);
+        for hash in architectural_issue_hashes {
+            append_hash_bytes(&mut canonical, hash.as_bytes());
+        }
+        canonical
     }
 
     #[test]
@@ -3408,6 +3573,116 @@ mod tests {
     }
 
     #[test]
+    fn inventory_sorts_architectural_issues_deterministically() {
+        let issues = vec![
+            sample_architectural_issue("ARCH-002", "second issue", "z.rs"),
+            sample_architectural_issue("ARCH-001", "first issue", "a.rs"),
+        ];
+        let inv1 = MockInventory::build(vec![], issues.clone());
+        let inv2 = MockInventory::build(vec![], issues.into_iter().rev().collect());
+
+        assert_eq!(inv1.architectural_issues, inv2.architectural_issues);
+        assert_eq!(inv1.inventory_hash, inv2.inventory_hash);
+        assert_eq!(
+            inv1.architectural_issues
+                .iter()
+                .map(|issue| issue.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ARCH-001", "ARCH-002"]
+        );
+    }
+
+    #[test]
+    fn inventory_hash_changes_when_architectural_issue_payload_changes_with_same_id() {
+        let baseline = sample_architectural_issue("ARCH-001", "baseline description", "a.rs");
+        let mut changed = baseline.clone();
+        changed.description = "updated description".to_string();
+
+        let inv1 = MockInventory::build(vec![], vec![baseline]);
+        let inv2 = MockInventory::build(vec![], vec![changed]);
+
+        assert_ne!(inv1.inventory_hash, inv2.inventory_hash);
+    }
+
+    #[test]
+    fn inventory_hash_preimage_separates_occurrence_and_issue_sections() {
+        let hash_a = ContentHash::from_bytes([0x11; 32]);
+        let hash_b = ContentHash::from_bytes([0x22; 32]);
+        let hash_c = ContentHash::from_bytes([0x33; 32]);
+
+        assert_eq!(
+            old_inventory_hash_preimage(&[hash_a], &[hash_b, hash_c]),
+            old_inventory_hash_preimage(&[hash_a, hash_b], &[hash_c]),
+            "pre-patch inventory hash preimage collapses different occurrence/issue partitions"
+        );
+        assert_ne!(
+            new_inventory_hash_preimage(&[hash_a], &[hash_b, hash_c]),
+            new_inventory_hash_preimage(&[hash_a, hash_b], &[hash_c])
+        );
+    }
+
+    #[test]
+    fn replay_command_omits_workspace_override_for_repo_root() {
+        let command =
+            replay_command_for_bundle("franken_control_plane_mock_inventory", &repo_root());
+
+        assert_eq!(
+            command,
+            "rch exec -- cargo run -p frankenengine-engine --bin franken_control_plane_mock_inventory -- --out-dir <DIR>"
+        );
+    }
+
+    #[test]
+    fn replay_command_includes_workspace_override_for_custom_root() {
+        let custom_root = Path::new("/tmp/custom root");
+        let command = replay_command_for_bundle("franken_ambient_mock_guard", custom_root);
+
+        assert_eq!(
+            command,
+            "rch exec -- cargo run -p frankenengine-engine --bin franken_ambient_mock_guard -- --out-dir <DIR> --workspace-root '/tmp/custom root'"
+        );
+    }
+
+    #[test]
+    fn render_command_transcript_quotes_arguments_shell_safely() {
+        let command = render_command_transcript(&[
+            "franken_control_plane_mock_inventory".to_string(),
+            "--out-dir".to_string(),
+            "/tmp/out dir".to_string(),
+            "--workspace-root".to_string(),
+            "/tmp/engine's root".to_string(),
+        ]);
+
+        assert_eq!(
+            command,
+            "franken_control_plane_mock_inventory --out-dir '/tmp/out dir' --workspace-root '/tmp/engine'\"'\"'s root'"
+        );
+    }
+
+    #[test]
+    fn render_bundle_command_lines_include_literal_and_rch_replay_commands() {
+        let bundle_commands = render_bundle_command_lines(
+            &[
+                "franken_control_plane_mock_inventory".to_string(),
+                "--out-dir".to_string(),
+                "/tmp/out".to_string(),
+            ],
+            "franken_control_plane_mock_inventory",
+            &repo_root(),
+        );
+
+        assert_eq!(bundle_commands.len(), 2);
+        assert_eq!(
+            bundle_commands[0],
+            "franken_control_plane_mock_inventory --out-dir /tmp/out"
+        );
+        assert_eq!(
+            bundle_commands[1],
+            "rch exec -- cargo run -p frankenengine-engine --bin franken_control_plane_mock_inventory -- --out-dir <DIR>"
+        );
+    }
+
+    #[test]
     fn inventory_display() {
         let inv = MockInventory::build(
             vec![sample_occurrence(
@@ -3547,7 +3822,7 @@ mod tests {
         let root = unique_temp_dir("control-plane-mock-inventory-bundle-root");
         let out_dir = unique_temp_dir("control-plane-mock-inventory-bundle-out");
         let commands = vec![
-            "cargo run -p frankenengine-engine --bin franken_control_plane_mock_inventory -- --out-dir /tmp/out"
+            "rch exec -- cargo run -p frankenengine-engine --bin franken_control_plane_mock_inventory -- --out-dir /tmp/out"
                 .to_string(),
         ];
 
@@ -3599,6 +3874,15 @@ mod tests {
             serde_json::from_slice(&fs::read(&artifacts.trace_ids_path).expect("read trace ids"))
                 .expect("trace ids should deserialize");
         assert_eq!(trace_ids.inventory_hash, manifest.inventory_hash);
+
+        let repro_lock: serde_json::Value =
+            serde_json::from_slice(&fs::read(&artifacts.repro_lock_path).expect("read repro lock"))
+                .expect("repro lock should deserialize");
+        let replay_command = repro_lock["replay_command"]
+            .as_str()
+            .expect("replay command should be a string");
+        assert!(replay_command.contains("--workspace-root"));
+        assert!(replay_command.contains(root.to_str().expect("utf-8 workspace root")));
 
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(out_dir);
@@ -3786,6 +4070,76 @@ pub mod mocks {
     }
 
     #[test]
+    fn ambient_mock_guard_does_not_leak_cfg_test_scope_past_semicolon_items() {
+        let root = unique_temp_dir("ambient-mock-guard-cfg-test-scope-leak");
+        write_fixture_file(
+            &root,
+            "crates/franken-engine/src/lib.rs",
+            r#"
+#[cfg(test)]
+mod tests;
+
+use crate::control_plane::mocks::{MockBudget, MockCx};
+
+fn build() {
+    let _cx = MockCx::new(trace_id_from_seed(1), MockBudget::new(10));
+}
+"#,
+        );
+
+        let report =
+            evaluate_ambient_mock_guard_in_root(&root).expect("guard should evaluate fixture");
+
+        assert_eq!(report.outcome, AmbientMockGuardOutcome::FailClosed);
+        assert!(report.violations.iter().any(
+            |violation| violation.rule == AmbientMockGuardRule::NoProductionMockModuleReference
+        ));
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|violation| violation.rule
+                    == AmbientMockGuardRule::NoProductionFakeContextSymbol)
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ambient_mock_guard_does_not_leak_mock_module_scope_past_semicolon_module_decl() {
+        let root = unique_temp_dir("ambient-mock-guard-mock-module-scope-leak");
+        write_fixture_file(
+            &root,
+            "crates/franken-engine/src/lib.rs",
+            r#"
+pub mod mocks;
+
+fn build() {
+    use crate::control_plane::mocks::{MockBudget, MockCx};
+    let _cx = MockCx::new(trace_id_from_seed(1), MockBudget::new(10));
+}
+"#,
+        );
+
+        let report =
+            evaluate_ambient_mock_guard_in_root(&root).expect("guard should evaluate fixture");
+
+        assert_eq!(report.outcome, AmbientMockGuardOutcome::FailClosed);
+        assert!(report.violations.iter().any(
+            |violation| violation.rule == AmbientMockGuardRule::NoProductionMockModuleReference
+        ));
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|violation| violation.rule
+                    == AmbientMockGuardRule::NoProductionFakeContextSymbol)
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn write_ambient_mock_guard_bundle_emits_expected_artifacts() {
         let root = unique_temp_dir("ambient-mock-guard-bundle-root");
         let out_dir = unique_temp_dir("ambient-mock-guard-bundle-out");
@@ -3801,7 +4155,7 @@ mod tests {
         );
 
         let commands = vec![
-            "cargo run -p frankenengine-engine --bin franken_ambient_mock_guard -- --out-dir /tmp/out"
+            "rch exec -- cargo run -p frankenengine-engine --bin franken_ambient_mock_guard -- --out-dir /tmp/out"
                 .to_string(),
         ];
         let artifacts = write_ambient_mock_guard_bundle_in_root(&root, &out_dir, &commands)
@@ -3825,6 +4179,15 @@ mod tests {
             manifest.artifact_paths.ambient_mock_guard_report,
             "ambient_mock_guard_report.json"
         );
+
+        let repro_lock: serde_json::Value =
+            serde_json::from_slice(&fs::read(&artifacts.repro_lock_path).expect("read repro lock"))
+                .expect("repro lock should deserialize");
+        let replay_command = repro_lock["replay_command"]
+            .as_str()
+            .expect("replay command should be a string");
+        assert!(replay_command.contains("--workspace-root"));
+        assert!(replay_command.contains(root.to_str().expect("utf-8 workspace root")));
 
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(out_dir);
@@ -3921,7 +4284,7 @@ fn build_cell_close_context(trace_id: &str, budget_ms: u64) -> KernelContext<'st
         );
 
         let commands = vec![
-            "cargo run -p frankenengine-engine --bin franken_orchestrator_context_refactor -- --out-dir /tmp/out"
+            "rch exec -- cargo run -p frankenengine-engine --bin franken_orchestrator_context_refactor -- --out-dir /tmp/out"
                 .to_string(),
         ];
         let artifacts =
@@ -3948,6 +4311,15 @@ fn build_cell_close_context(trace_id: &str, budget_ms: u64) -> KernelContext<'st
             manifest.artifact_paths.production_context_path_contract,
             "production_context_path_contract.json"
         );
+
+        let repro_lock: serde_json::Value =
+            serde_json::from_slice(&fs::read(&artifacts.repro_lock_path).expect("read repro lock"))
+                .expect("repro lock should deserialize");
+        let replay_command = repro_lock["replay_command"]
+            .as_str()
+            .expect("replay command should be a string");
+        assert!(replay_command.contains("--workspace-root"));
+        assert!(replay_command.contains(root.to_str().expect("utf-8 workspace root")));
 
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(out_dir);

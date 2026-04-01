@@ -27,6 +27,40 @@ use crate::security_epoch::SecurityEpoch;
 /// Schema version for reproducibility pack artifacts.
 pub const SCHEMA_VERSION: &str = "franken-engine.reproducibility-provenance.v1";
 
+fn update_length_prefixed_bytes(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
+fn update_length_prefixed_str(hasher: &mut Sha256, value: &str) {
+    update_length_prefixed_bytes(hasher, value.as_bytes());
+}
+
+fn update_optional_length_prefixed_str(hasher: &mut Sha256, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            hasher.update([1]);
+            update_length_prefixed_str(hasher, value);
+        }
+        None => hasher.update([0]),
+    }
+}
+
+fn update_string_sequence(hasher: &mut Sha256, values: &[String]) {
+    hasher.update((values.len() as u64).to_le_bytes());
+    for value in values {
+        update_length_prefixed_str(hasher, value);
+    }
+}
+
+fn update_string_map(hasher: &mut Sha256, values: &BTreeMap<String, String>) {
+    hasher.update((values.len() as u64).to_le_bytes());
+    for (key, value) in values {
+        update_length_prefixed_str(hasher, key);
+        update_length_prefixed_str(hasher, value);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ToolchainFingerprint — compiler and toolchain identity
 // ---------------------------------------------------------------------------
@@ -56,18 +90,14 @@ impl ToolchainFingerprint {
     /// Compute a content hash of this fingerprint.
     pub fn content_hash(&self) -> String {
         let mut hasher = Sha256::new();
-        hasher.update(self.rustc_version.as_bytes());
-        hasher.update(self.cargo_version.as_bytes());
-        if let Some(ref llvm) = self.llvm_version {
-            hasher.update(llvm.as_bytes());
-        }
-        hasher.update(self.linker.as_bytes());
-        hasher.update(self.target_triple.as_bytes());
-        hasher.update(self.edition.as_bytes());
-        hasher.update(self.profile.as_bytes());
-        for flag in &self.rustflags {
-            hasher.update(flag.as_bytes());
-        }
+        update_length_prefixed_str(&mut hasher, &self.rustc_version);
+        update_length_prefixed_str(&mut hasher, &self.cargo_version);
+        update_optional_length_prefixed_str(&mut hasher, self.llvm_version.as_deref());
+        update_length_prefixed_str(&mut hasher, &self.linker);
+        update_length_prefixed_str(&mut hasher, &self.target_triple);
+        update_length_prefixed_str(&mut hasher, &self.edition);
+        update_length_prefixed_str(&mut hasher, &self.profile);
+        update_string_sequence(&mut hasher, &self.rustflags);
         hex::encode(&hasher.finalize()[..16])
     }
 }
@@ -95,17 +125,13 @@ impl GitFingerprint {
     /// Compute a content hash of this fingerprint.
     pub fn content_hash(&self) -> String {
         let mut hasher = Sha256::new();
-        hasher.update(self.commit_sha.as_bytes());
-        hasher.update(self.tree_hash.as_bytes());
-        if let Some(ref b) = self.branch {
-            hasher.update(b.as_bytes());
-        }
-        hasher.update(if self.dirty { b"dirty" } else { b"clean" });
+        update_length_prefixed_str(&mut hasher, &self.commit_sha);
+        update_length_prefixed_str(&mut hasher, &self.tree_hash);
+        update_optional_length_prefixed_str(&mut hasher, self.branch.as_deref());
+        hasher.update([u8::from(self.dirty)]);
         let mut sorted_tags = self.tags.clone();
         sorted_tags.sort();
-        for tag in &sorted_tags {
-            hasher.update(tag.as_bytes());
-        }
+        update_string_sequence(&mut hasher, &sorted_tags);
         hex::encode(&hasher.finalize()[..16])
     }
 }
@@ -145,17 +171,17 @@ impl BuildEnvironment {
     /// Compute a content hash of the entire environment.
     pub fn content_hash(&self) -> String {
         let mut hasher = Sha256::new();
-        hasher.update(self.os_name.as_bytes());
-        hasher.update(self.os_version.as_bytes());
-        hasher.update(self.arch.as_bytes());
+        update_length_prefixed_str(&mut hasher, &self.os_name);
+        update_length_prefixed_str(&mut hasher, &self.os_version);
+        update_length_prefixed_str(&mut hasher, &self.arch);
         hasher.update(self.cpu_count.to_le_bytes());
         hasher.update(self.memory_mb.to_le_bytes());
-        hasher.update(self.toolchain.content_hash().as_bytes());
-        hasher.update(self.git.content_hash().as_bytes());
-        for (k, v) in &self.extra {
-            hasher.update(k.as_bytes());
-            hasher.update(v.as_bytes());
-        }
+        update_optional_length_prefixed_str(&mut hasher, self.container_digest.as_deref());
+        update_optional_length_prefixed_str(&mut hasher, self.ci_system.as_deref());
+        update_optional_length_prefixed_str(&mut hasher, self.ci_run_id.as_deref());
+        update_length_prefixed_str(&mut hasher, &self.toolchain.content_hash());
+        update_length_prefixed_str(&mut hasher, &self.git.content_hash());
+        update_string_map(&mut hasher, &self.extra);
         hex::encode(&hasher.finalize()[..16])
     }
 }
@@ -229,8 +255,22 @@ pub struct ArtifactManifest {
     pub total_count: usize,
     /// Total size in bytes.
     pub total_size_bytes: u64,
-    /// Manifest hash (hash of all artifact hashes in order).
+    /// Manifest hash over the pack id and ordered artifact metadata.
     pub manifest_hash: String,
+}
+
+fn compute_manifest_hash(pack_id: &str, artifacts: &[ArtifactEntry]) -> String {
+    let mut hasher = Sha256::new();
+    update_length_prefixed_str(&mut hasher, pack_id);
+    hasher.update((artifacts.len() as u64).to_le_bytes());
+    for artifact in artifacts {
+        update_length_prefixed_str(&mut hasher, &artifact.path);
+        update_length_prefixed_str(&mut hasher, &artifact.kind.to_string());
+        update_length_prefixed_str(&mut hasher, &artifact.content_hash);
+        hasher.update(artifact.size_bytes.to_le_bytes());
+        hasher.update([u8::from(artifact.redacted)]);
+    }
+    hex::encode(&hasher.finalize()[..16])
 }
 
 impl ArtifactManifest {
@@ -239,13 +279,7 @@ impl ArtifactManifest {
         artifacts.sort_by(|a, b| a.path.cmp(&b.path));
         let total_count = artifacts.len();
         let total_size_bytes: u64 = artifacts.iter().map(|a| a.size_bytes).sum();
-
-        let mut hasher = Sha256::new();
-        hasher.update(pack_id.as_bytes());
-        for a in &artifacts {
-            hasher.update(a.content_hash.as_bytes());
-        }
-        let manifest_hash = hex::encode(&hasher.finalize()[..16]);
+        let manifest_hash = compute_manifest_hash(&pack_id, &artifacts);
 
         Self {
             schema_version: SCHEMA_VERSION.to_string(),
@@ -288,22 +322,24 @@ pub struct DependencySnapshot {
     pub snapshot_hash: String,
 }
 
+fn compute_dependency_snapshot_hash(entries: &[DependencyEntry]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update((entries.len() as u64).to_le_bytes());
+    for entry in entries {
+        update_length_prefixed_str(&mut hasher, &entry.name);
+        update_length_prefixed_str(&mut hasher, &entry.version);
+        update_length_prefixed_str(&mut hasher, &entry.source);
+        update_optional_length_prefixed_str(&mut hasher, entry.checksum.as_deref());
+    }
+    hex::encode(&hasher.finalize()[..16])
+}
+
 impl DependencySnapshot {
     /// Build a snapshot from dependency entries.
     pub fn from_entries(mut entries: Vec<DependencyEntry>) -> Self {
         entries.sort_by(|a, b| a.name.cmp(&b.name));
         let total_count = entries.len();
-
-        let mut hasher = Sha256::new();
-        for e in &entries {
-            hasher.update(e.name.as_bytes());
-            hasher.update(e.version.as_bytes());
-            hasher.update(e.source.as_bytes());
-            if let Some(ref ck) = e.checksum {
-                hasher.update(ck.as_bytes());
-            }
-        }
-        let snapshot_hash = hex::encode(&hasher.finalize()[..16]);
+        let snapshot_hash = compute_dependency_snapshot_hash(&entries);
 
         Self {
             schema_version: SCHEMA_VERSION.to_string(),
@@ -444,6 +480,14 @@ pub struct ReproducibilityPack {
 }
 
 impl ReproducibilityPack {
+    fn compute_pack_id(claim_id: &str, epoch: &SecurityEpoch, env_hash: &str) -> String {
+        let mut id_hasher = Sha256::new();
+        id_hasher.update(claim_id.as_bytes());
+        id_hasher.update(epoch.as_u64().to_le_bytes());
+        id_hasher.update(env_hash.as_bytes());
+        format!("pack-{}", hex::encode(&id_hasher.finalize()[..12]))
+    }
+
     /// Compute the pack-level content hash.
     fn compute_pack_hash(
         env_hash: &str,
@@ -464,10 +508,21 @@ impl ReproducibilityPack {
 
     /// Verify that the pack hash matches recomputed values.
     pub fn verify_integrity(&self) -> PackIntegrityResult {
+        let expected_pack_id = Self::compute_pack_id(
+            &self.claim_id,
+            &self.epoch,
+            &self.environment.content_hash(),
+        );
+        let expected_manifest_hash =
+            compute_manifest_hash(&self.manifest.pack_id, &self.manifest.artifacts);
+        let manifest_hash_valid = self.manifest.manifest_hash == expected_manifest_hash;
+        let expected_dependency_hash =
+            compute_dependency_snapshot_hash(&self.dependencies.dependencies);
+        let dependency_hash_valid = self.dependencies.snapshot_hash == expected_dependency_hash;
         let expected_pack_hash = Self::compute_pack_hash(
             &self.environment.content_hash(),
-            &self.manifest.manifest_hash,
-            &self.dependencies.snapshot_hash,
+            &expected_manifest_hash,
+            &expected_dependency_hash,
             &self.claim_id,
             &self.epoch,
         );
@@ -494,6 +549,14 @@ impl ReproducibilityPack {
             .dependencies
             .windows(2)
             .all(|w| w[0].name <= w[1].name);
+        let dependency_count_valid =
+            self.dependencies.total_count == self.dependencies.dependencies.len();
+
+        let top_level_schema_valid = self.schema_version == SCHEMA_VERSION;
+        let manifest_schema_valid = self.manifest.schema_version == SCHEMA_VERSION;
+        let dependency_schema_valid = self.dependencies.schema_version == SCHEMA_VERSION;
+        let pack_id_valid = self.pack_id == expected_pack_id;
+        let manifest_pack_id_valid = self.manifest.pack_id == self.pack_id;
 
         PackIntegrityResult {
             pack_hash_valid,
@@ -501,7 +564,19 @@ impl ReproducibilityPack {
             manifest_size_valid: size_valid,
             artifacts_sorted: sorted,
             dependencies_sorted: deps_sorted,
-            all_valid: pack_hash_valid && count_valid && size_valid && sorted && deps_sorted,
+            all_valid: pack_hash_valid
+                && manifest_hash_valid
+                && dependency_hash_valid
+                && top_level_schema_valid
+                && manifest_schema_valid
+                && dependency_schema_valid
+                && pack_id_valid
+                && manifest_pack_id_valid
+                && count_valid
+                && size_valid
+                && sorted
+                && dependency_count_valid
+                && deps_sorted,
         }
     }
 
@@ -598,13 +673,7 @@ impl PackBuilder {
         let environment = self.environment?;
 
         let env_hash = environment.content_hash();
-
-        // Build pack_id from claim + epoch + env hash.
-        let mut id_hasher = Sha256::new();
-        id_hasher.update(self.claim_id.as_bytes());
-        id_hasher.update(self.epoch.as_u64().to_le_bytes());
-        id_hasher.update(env_hash.as_bytes());
-        let pack_id = format!("pack-{}", hex::encode(&id_hasher.finalize()[..12]));
+        let pack_id = ReproducibilityPack::compute_pack_id(&self.claim_id, &self.epoch, &env_hash);
 
         let manifest = ArtifactManifest::from_artifacts(pack_id.clone(), self.artifacts);
         let dependencies = DependencySnapshot::from_entries(self.dependencies);
@@ -921,6 +990,36 @@ mod tests {
         assert_eq!(manifest, back);
     }
 
+    #[test]
+    fn manifest_hash_differs_on_metadata_even_with_same_content_hash() {
+        let artifact_a = ArtifactEntry {
+            path: "a.rs".to_string(),
+            kind: ArtifactKind::Source,
+            content_hash: "same-content".to_string(),
+            size_bytes: 1024,
+            redacted: false,
+        };
+        let artifact_b = ArtifactEntry {
+            path: "b.rs".to_string(),
+            ..artifact_a.clone()
+        };
+        let m1 = ArtifactManifest::from_artifacts("pack-meta".to_string(), vec![artifact_a]);
+        let m2 = ArtifactManifest::from_artifacts("pack-meta".to_string(), vec![artifact_b]);
+        assert_ne!(m1.manifest_hash, m2.manifest_hash);
+    }
+
+    #[test]
+    fn manifest_hash_avoids_pack_id_boundary_collisions() {
+        let mut artifact_a = test_artifact("a.rs", ArtifactKind::Source);
+        artifact_a.content_hash = "bc".to_string();
+        let mut artifact_b = artifact_a.clone();
+        artifact_b.content_hash = "c".to_string();
+
+        let m1 = ArtifactManifest::from_artifacts("a".to_string(), vec![artifact_a]);
+        let m2 = ArtifactManifest::from_artifacts("ab".to_string(), vec![artifact_b]);
+        assert_ne!(m1.manifest_hash, m2.manifest_hash);
+    }
+
     // -- DependencySnapshot tests --
 
     #[test]
@@ -951,6 +1050,21 @@ mod tests {
         let json = serde_json::to_string(&snap).unwrap();
         let back: DependencySnapshot = serde_json::from_str(&json).unwrap();
         assert_eq!(snap, back);
+    }
+
+    #[test]
+    fn dep_snapshot_hash_avoids_field_boundary_collisions() {
+        let mut dep1 = test_dep("serde", "1.0.200");
+        dep1.name = "a".to_string();
+        dep1.version = "bc".to_string();
+
+        let mut dep2 = dep1.clone();
+        dep2.name = "ab".to_string();
+        dep2.version = "c".to_string();
+
+        let s1 = DependencySnapshot::from_entries(vec![dep1]);
+        let s2 = DependencySnapshot::from_entries(vec![dep2]);
+        assert_ne!(s1.snapshot_hash, s2.snapshot_hash);
     }
 
     // -- LicenseRisk tests --
@@ -1591,6 +1705,17 @@ mod tests {
     }
 
     #[test]
+    fn toolchain_hash_avoids_field_boundary_collisions() {
+        let mut tc1 = test_toolchain();
+        tc1.rustc_version = "a".to_string();
+        tc1.cargo_version = "bc".to_string();
+        let mut tc2 = test_toolchain();
+        tc2.rustc_version = "ab".to_string();
+        tc2.cargo_version = "c".to_string();
+        assert_ne!(tc1.content_hash(), tc2.content_hash());
+    }
+
+    #[test]
     fn git_hash_differs_on_branch_none_vs_some() {
         let mut g1 = test_git();
         g1.branch = None;
@@ -1611,6 +1736,15 @@ mod tests {
         let mut g1 = test_git();
         g1.commit_sha = "0000000000000000000000000000000000000000".to_string();
         let g2 = test_git();
+        assert_ne!(g1.content_hash(), g2.content_hash());
+    }
+
+    #[test]
+    fn git_hash_avoids_tag_boundary_collisions() {
+        let mut g1 = test_git();
+        g1.tags = vec!["ab".to_string(), "c".to_string()];
+        let mut g2 = test_git();
+        g2.tags = vec!["a".to_string(), "bc".to_string()];
         assert_ne!(g1.content_hash(), g2.content_hash());
     }
 
@@ -1639,6 +1773,50 @@ mod tests {
         env1.cpu_count = 8;
         let mut env2 = test_env();
         env2.cpu_count = 32;
+        assert_ne!(env1.content_hash(), env2.content_hash());
+    }
+
+    #[test]
+    fn env_hash_differs_on_container_digest() {
+        let mut env1 = test_env();
+        env1.container_digest = None;
+        let mut env2 = test_env();
+        env2.container_digest = Some("sha256:container-a".to_string());
+        assert_ne!(env1.content_hash(), env2.content_hash());
+    }
+
+    #[test]
+    fn env_hash_differs_on_ci_metadata() {
+        let mut env1 = test_env();
+        env1.ci_system = Some("github-actions".to_string());
+        env1.ci_run_id = Some("run-1".to_string());
+        let mut env2 = test_env();
+        env2.ci_system = Some("buildkite".to_string());
+        env2.ci_run_id = Some("run-2".to_string());
+        assert_ne!(env1.content_hash(), env2.content_hash());
+    }
+
+    #[test]
+    fn env_hash_avoids_required_field_boundary_collisions() {
+        let mut env1 = test_env();
+        env1.os_name = "a".to_string();
+        env1.os_version = "bc".to_string();
+        let mut env2 = test_env();
+        env2.os_name = "ab".to_string();
+        env2.os_version = "c".to_string();
+        assert_ne!(env1.content_hash(), env2.content_hash());
+    }
+
+    #[test]
+    fn env_hash_avoids_optional_field_boundary_collisions() {
+        let mut env1 = test_env();
+        env1.container_digest = Some("a".to_string());
+        env1.ci_system = Some("\u{1}b".to_string());
+
+        let mut env2 = test_env();
+        env2.container_digest = Some("a\u{1}".to_string());
+        env2.ci_system = Some("b".to_string());
+
         assert_ne!(env1.content_hash(), env2.content_hash());
     }
 
@@ -1797,6 +1975,68 @@ mod tests {
         pack.manifest.total_size_bytes = 0;
         let result = pack.verify_integrity();
         assert!(!result.manifest_size_valid);
+        assert!(!result.all_valid);
+    }
+
+    #[test]
+    fn pack_integrity_fails_on_tampered_artifact_content_hash() {
+        let mut pack = PackBuilder::new("FRX-artifact-tamper".to_string(), test_epoch())
+            .environment(test_env())
+            .artifact(test_artifact("a.rs", ArtifactKind::Source))
+            .build()
+            .unwrap();
+        pack.manifest.artifacts[0].content_hash = "tampered-artifact".to_string();
+        let result = pack.verify_integrity();
+        assert!(!result.pack_hash_valid);
+        assert!(!result.all_valid);
+    }
+
+    #[test]
+    fn pack_integrity_fails_on_tampered_dependency_entry() {
+        let mut pack = PackBuilder::new("FRX-dep-tamper".to_string(), test_epoch())
+            .environment(test_env())
+            .dependency(test_dep("serde", "1.0.200"))
+            .build()
+            .unwrap();
+        pack.dependencies.dependencies[0].version = "9.9.9".to_string();
+        let result = pack.verify_integrity();
+        assert!(!result.pack_hash_valid);
+        assert!(!result.all_valid);
+    }
+
+    #[test]
+    fn pack_integrity_fails_on_tampered_dependency_count() {
+        let mut pack = PackBuilder::new("FRX-dep-count".to_string(), test_epoch())
+            .environment(test_env())
+            .dependency(test_dep("serde", "1.0.200"))
+            .build()
+            .unwrap();
+        pack.dependencies.total_count = 99;
+        let result = pack.verify_integrity();
+        assert!(!result.all_valid);
+    }
+
+    #[test]
+    fn pack_integrity_fails_on_self_consistent_tampered_pack_id() {
+        let mut pack = PackBuilder::new("FRX-pack-id".to_string(), test_epoch())
+            .environment(test_env())
+            .artifact(test_artifact("a.rs", ArtifactKind::Source))
+            .build()
+            .unwrap();
+        pack.pack_id = "pack-tampered".to_string();
+        pack.manifest.pack_id = pack.pack_id.clone();
+        pack.manifest.manifest_hash =
+            compute_manifest_hash(&pack.manifest.pack_id, &pack.manifest.artifacts);
+        pack.pack_hash = ReproducibilityPack::compute_pack_hash(
+            &pack.environment.content_hash(),
+            &pack.manifest.manifest_hash,
+            &pack.dependencies.snapshot_hash,
+            &pack.claim_id,
+            &pack.epoch,
+        );
+
+        let result = pack.verify_integrity();
+        assert!(result.pack_hash_valid);
         assert!(!result.all_valid);
     }
 

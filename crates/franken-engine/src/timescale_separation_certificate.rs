@@ -443,7 +443,15 @@ pub fn compute_timescale_ratio(
     };
 
     // Determine fast/slow ordering (fast has shorter observation interval)
-    let (fast, slow) = if obs_a <= obs_b {
+    let (fast, slow) = if obs_a < obs_b {
+        (&profile_a.controller_id, &profile_b.controller_id)
+    } else if obs_a > obs_b {
+        (&profile_b.controller_id, &profile_a.controller_id)
+    } else if write_a < write_b {
+        (&profile_a.controller_id, &profile_b.controller_id)
+    } else if write_a > write_b {
+        (&profile_b.controller_id, &profile_a.controller_id)
+    } else if profile_a.controller_id <= profile_b.controller_id {
         (&profile_a.controller_id, &profile_b.controller_id)
     } else {
         (&profile_b.controller_id, &profile_a.controller_id)

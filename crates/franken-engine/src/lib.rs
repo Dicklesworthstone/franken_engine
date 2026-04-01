@@ -336,6 +336,7 @@ pub mod rgc_execution_waves;
 pub mod rgc_planning_track;
 pub mod rgc_test_harness;
 pub mod rollback_safemode_synthesizer;
+pub mod rough_path_regime_geometry;
 pub mod runtime_comparison_gate;
 pub mod runtime_config;
 pub mod runtime_decision_core;

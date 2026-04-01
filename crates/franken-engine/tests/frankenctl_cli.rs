@@ -882,7 +882,13 @@ fn frankenctl_cli_workflow_script_fails_closed_on_rch_drift() {
     let script = fs::read_to_string(repo_root().join("scripts/e2e/frankenctl_cli_workflow.sh"))
         .expect("frankenctl cli workflow script should exist");
 
-    assert!(script.contains("${root_dir}/target_rch_frankenctl_cli_workflow"));
+    assert!(script.contains("target_namespace=\"${mode}_$$\""));
+    assert!(script.contains(
+        "target_dir=\"${CARGO_TARGET_DIR:-${root_dir}/target_rch_frankenctl_cli_workflow_${target_namespace}}\""
+    ));
+    assert!(!script.contains(
+        "target_dir=\"${CARGO_TARGET_DIR:-${root_dir}/target_rch_frankenctl_cli_workflow}\""
+    ));
     assert!(
         script.contains("rch reported local fallback; refusing local execution for heavy command")
     );

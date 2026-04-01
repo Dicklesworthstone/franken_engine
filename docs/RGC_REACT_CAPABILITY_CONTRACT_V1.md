@@ -132,7 +132,7 @@ with:
 jq empty docs/rgc_react_capability_contract_v1.json
 
 rch exec -- env \
-  CARGO_TARGET_DIR=/data/projects/franken_engine/target_rch_rgc_react_capability_contract \
+  CARGO_TARGET_DIR="$PWD/target_rch_rgc_react_capability_contract_verify" \
   cargo test -p frankenengine-engine --test rgc_react_capability_contract \
   --test rgc_executable_compatibility_target_matrix
 

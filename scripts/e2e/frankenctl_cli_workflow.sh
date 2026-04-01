@@ -9,7 +9,8 @@ parser_frontier_bootstrap_env
 
 mode="${1:-ci}"
 toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
-target_dir="${CARGO_TARGET_DIR:-${root_dir}/target_rch_frankenctl_cli_workflow}"
+target_namespace="${mode}_$$"
+target_dir="${CARGO_TARGET_DIR:-${root_dir}/target_rch_frankenctl_cli_workflow_${target_namespace}}"
 artifact_root="${FRANKENCTL_CLI_ARTIFACT_ROOT:-artifacts/frankenctl_cli_workflow}"
 explicit_replay_run_dir="${FRANKENCTL_CLI_WORKFLOW_REPLAY_RUN_DIR:-}"
 rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"

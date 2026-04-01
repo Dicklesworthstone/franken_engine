@@ -416,9 +416,10 @@ fn rgc_016a_operator_verification_commands_are_present() {
         "operator verification must include the gate script"
     );
     assert!(
-        contract.operator_verification.iter().any(|cmd| cmd.contains(
-            "CARGO_TARGET_DIR=/data/projects/franken_engine/target_rch_rgc_react_capability_contract"
-        )),
+        contract
+            .operator_verification
+            .iter()
+            .any(|cmd| cmd.contains("$PWD/target_rch_rgc_react_capability_contract_verify")),
         "operator verification must include a repo-local rch target dir for direct test validation"
     );
     assert!(
@@ -540,6 +541,27 @@ fn rgc_016a_operator_verification_avoids_tmp_rch_targets() {
             .iter()
             .all(|cmd| !cmd.contains("/tmp/rch_target")),
         "operator verification must not rely on /tmp rch target dirs"
+    );
+    assert!(
+        contract.operator_verification.iter().all(|cmd| !cmd
+            .contains("/data/projects/franken_engine/target_rch_rgc_react_capability_contract")),
+        "operator verification must not hardcode this checkout's absolute target dir"
+    );
+}
+
+#[test]
+fn rgc_016a_gate_script_uses_repo_local_target_dir_default() {
+    let path = repo_root().join("scripts/run_rgc_react_capability_contract.sh");
+    let script = fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+
+    assert!(
+        script.contains("${root_dir}/target_rch_rgc_react_capability_contract"),
+        "gate script should use a repo-local target dir rooted at the workspace"
+    );
+    assert!(
+        !script.contains("/data/projects/franken_engine/target_rch_rgc_react_capability_contract"),
+        "gate script must not hardcode this checkout's absolute target dir"
     );
 }
 

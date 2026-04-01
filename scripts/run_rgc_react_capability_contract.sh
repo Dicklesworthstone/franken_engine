@@ -9,7 +9,7 @@ parser_frontier_bootstrap_env
 
 mode="${1:-ci}"
 toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
-target_dir="${CARGO_TARGET_DIR:-/data/projects/franken_engine/target_rch_rgc_react_capability_contract}"
+target_dir="${CARGO_TARGET_DIR:-${root_dir}/target_rch_rgc_react_capability_contract}"
 artifact_root="${RGC_REACT_CAPABILITY_CONTRACT_ARTIFACT_ROOT:-artifacts/rgc_react_capability_contract}"
 rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"

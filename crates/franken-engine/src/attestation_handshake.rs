@@ -119,11 +119,18 @@ impl AttestationResponse {
     /// Canonical bytes for verification.
     pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::new();
+        // Length-prefix all variable-length fields to prevent delimiter
+        // collisions in the signed canonical preimage.
+        buf.extend_from_slice(&(self.cell_id.len() as u64).to_be_bytes());
         buf.extend_from_slice(self.cell_id.as_bytes());
         append_attestation_quote_canonical_bytes(&mut buf, &self.attestation_quote);
+        buf.extend_from_slice(&(self.signer_public_key.len() as u64).to_be_bytes());
         buf.extend_from_slice(&self.signer_public_key);
+        buf.extend_from_slice(&(self.key_binding_proof.len() as u64).to_be_bytes());
         buf.extend_from_slice(&self.key_binding_proof);
+        buf.extend_from_slice(&(self.claimed_capabilities.len() as u64).to_be_bytes());
         for cap in &self.claimed_capabilities {
+            buf.extend_from_slice(&(cap.len() as u64).to_be_bytes());
             buf.extend_from_slice(cap.as_bytes());
         }
         buf.extend_from_slice(&self.response_timestamp_ns.to_be_bytes());
@@ -398,6 +405,8 @@ pub struct PolicyPlaneVerifier {
     /// Currently active authorizations.
     active_authorizations: BTreeMap<String, CellAuthorization>,
     /// Secret key bytes for signing challenges/authorizations.
+    /// SECURITY: excluded from serialization to prevent key leakage.
+    #[serde(skip, default)]
     signing_key: [u8; 32],
     /// Audit events.
     events: Vec<HandshakeEvent>,

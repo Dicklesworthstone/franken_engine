@@ -897,7 +897,9 @@ PARSER_OPERATOR_DEVELOPER_RUNBOOK_REPLAY_RUN_DIR=artifacts/parser_operator_devel
 
 The explicit run directory must already contain `run_manifest.json`,
 `events.jsonl`, `commands.txt`, and `step_logs/step_000.log` or the wrapper
-fails closed.
+fails closed. The emitted `run_manifest.json` includes that exact preserved-run
+replay command in `operator_verification`, so operators can verify both the
+rerun path and the no-rerun preserved-bundle path from one manifest.
 
 Contract and vectors:
 
@@ -1266,6 +1268,30 @@ Artifacts are written under:
 - `artifacts/frx_local_semantic_atlas/<timestamp>/run_manifest.json`
 - `artifacts/frx_local_semantic_atlas/<timestamp>/events.jsonl`
 - `artifacts/frx_local_semantic_atlas/<timestamp>/commands.txt`
+
+## Cross-Repo Integration Suite
+
+`bd-1mgd` aggregates the existing cross-repo contract lanes for
+`/dp/asupersync`, `/dp/frankentui`, `/dp/frankensqlite`, `/dp/fastapi_rust`,
+and the `sqlmodel_rust` boundary inventory.
+
+```bash
+# Cross-repo integration suite (rch-backed check + test + clippy)
+./scripts/run_cross_repo_integration_suite.sh ci
+```
+
+Deterministic replay wrapper:
+
+```bash
+./scripts/e2e/cross_repo_integration_suite_replay.sh
+```
+
+Artifacts are written under:
+
+- `artifacts/cross_repo_integration_suite/<timestamp>/run_manifest.json`
+- `artifacts/cross_repo_integration_suite/<timestamp>/events.jsonl`
+- `artifacts/cross_repo_integration_suite/<timestamp>/commands.txt`
+- `artifacts/cross_repo_integration_suite/<timestamp>/asupersync_contract_matrix/`
 
 ## FRX Track D WASM Lane + Hybrid Router Sprint Gate
 
@@ -1960,6 +1986,15 @@ Artifacts are written under:
 - `artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/events.jsonl`
 - `artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/commands.txt`
 - `artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/step_logs/step_*.log`
+
+The verified generic `frankenctl` workflow bundle inspected by this pack also
+includes:
+
+- `artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/index.json`
+- `artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/preflight_report.json`
+- `artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/onboarding_scorecard.json`
+- `artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/rollout_decision_artifact.json`
+- `artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/frankenctl_doctor_report.json`
 
 ## RGC Cross-Platform Matrix Gate
 

@@ -1095,7 +1095,7 @@ impl SpecializationConformanceEngine {
         }
 
         let total_divergences = self.total_divergences();
-        let total_fallback_failures = verdicts.iter().map(|v| v.fallback_failures).sum::<usize>();
+        let total_fallback_failures = verdicts.iter().map(|v| v.fallback_failures).fold(0usize, |acc, x| acc.saturating_add(x));
         let total_receipt_failures = verdicts
             .iter()
             .filter(|v| !v.receipt_validation.valid)

@@ -791,7 +791,7 @@ fn compute_category_summaries(results: &[BenchmarkResult]) -> Vec<CategorySummar
             if v.is_empty() {
                 0
             } else {
-                v.iter().sum::<i64>() / v.len() as i64
+                v.iter().fold(0i64, |acc, x| acc.saturating_add(*x)) / v.len() as i64
             }
         };
 
@@ -846,7 +846,7 @@ fn compute_overall_deltas(results: &[BenchmarkResult]) -> (i64, i64) {
         if v.is_empty() {
             0
         } else {
-            v.iter().sum::<i64>() / v.len() as i64
+            v.iter().fold(0i64, |acc, x| acc.saturating_add(*x)) / v.len() as i64
         }
     };
 

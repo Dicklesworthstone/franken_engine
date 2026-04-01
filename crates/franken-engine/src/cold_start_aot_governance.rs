@@ -743,7 +743,7 @@ pub fn evaluate_cold_start(
     }
 
     // Aggregate sample count.
-    let total_samples: u64 = evidence.iter().map(|e| e.sample_count).sum();
+    let total_samples: u64 = evidence.iter().map(|e| e.sample_count).fold(0u64, u64::saturating_add);
     if total_samples < config.min_benchmark_samples {
         return Err(GovernanceError::InsufficientSamples {
             have: total_samples,
@@ -844,7 +844,7 @@ pub fn aggregate_speedup(evidence: &[ColdStartEvidence]) -> i64 {
     if evidence.is_empty() {
         return 0;
     }
-    let total_samples: u64 = evidence.iter().map(|e| e.sample_count).sum();
+    let total_samples: u64 = evidence.iter().map(|e| e.sample_count).fold(0u64, u64::saturating_add);
     if total_samples == 0 {
         return 0;
     }
@@ -861,7 +861,7 @@ pub fn aggregate_verdict(
     evidence: &[ColdStartEvidence],
     config: &GovernanceConfig,
 ) -> BenchmarkVerdict {
-    let total_samples: u64 = evidence.iter().map(|e| e.sample_count).sum();
+    let total_samples: u64 = evidence.iter().map(|e| e.sample_count).fold(0u64, u64::saturating_add);
     if total_samples < config.min_benchmark_samples {
         return BenchmarkVerdict::Inconclusive;
     }

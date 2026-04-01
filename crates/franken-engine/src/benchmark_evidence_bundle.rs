@@ -666,7 +666,7 @@ impl TimingStats {
                     let diff = d.abs_diff(mean_us);
                     diff.saturating_mul(diff)
                 })
-                .sum::<u64>()
+                .fold(0u64, |acc, x| acc.saturating_add(x))
                 / (count as u64 - 1)
         } else {
             0

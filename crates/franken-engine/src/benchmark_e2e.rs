@@ -1318,7 +1318,7 @@ pub fn write_evidence_artifacts(
             "family": family.as_str(),
             "avg_throughput_ops_per_sec": avg_throughput,
             "profiles_run": family_measurements.len(),
-            "total_invariant_violations": family_measurements.iter().map(|m| m.invariant_violations).sum::<u64>(),
+            "total_invariant_violations": family_measurements.iter().map(|m| m.invariant_violations).fold(0u64, |acc, x| acc.saturating_add(x)),
         }));
     }
     let summary = serde_json::json!({

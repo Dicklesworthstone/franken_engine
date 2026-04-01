@@ -498,7 +498,7 @@ impl TrustCardGenerator {
         let risk_score = risk_drivers
             .iter()
             .map(|d| d.contribution)
-            .sum::<u32>()
+            .fold(0u32, |acc, x| acc.saturating_add(x))
             .min(100);
 
         let risk_trend = self.compute_risk_trend(graph, extension_id, now_ns);

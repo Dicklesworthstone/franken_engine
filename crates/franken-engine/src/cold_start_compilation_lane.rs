@@ -481,7 +481,7 @@ fn build_runtime_image_manifest(
         .reports
         .iter()
         .map(|report| report.total_modules)
-        .sum::<u64>();
+        .fold(0u64, |acc, x| acc.saturating_add(x));
 
     registry
         .register(ImageManifest {

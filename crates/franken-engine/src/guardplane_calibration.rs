@@ -708,7 +708,7 @@ fn compute_trend(history: &[u64]) -> EffectivenessTrend {
     let recent = history.len().min(5);
     let recent_avg: u64 = history[history.len() - recent..]
         .iter()
-        .sum::<u64>()
+        .fold(0u64, |acc, x| acc.saturating_add(*x))
         .checked_div(recent as u64)
         .unwrap_or(0);
 
@@ -723,7 +723,7 @@ fn compute_trend(history: &[u64]) -> EffectivenessTrend {
     }
     let older_avg: u64 = older_slice
         .iter()
-        .sum::<u64>()
+        .fold(0u64, |acc, x| acc.saturating_add(*x))
         .checked_div(older_slice.len() as u64)
         .unwrap_or(0);
 

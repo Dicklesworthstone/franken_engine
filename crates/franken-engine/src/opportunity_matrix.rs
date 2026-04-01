@@ -250,7 +250,7 @@ pub fn benchmark_pressure_from_cases(
         return 1_000_000;
     }
 
-    let observed = speeds.iter().sum::<i64>() / speeds.len() as i64;
+    let observed = speeds.iter().fold(0i64, |acc, x| acc.saturating_add(*x)) / speeds.len() as i64;
     if observed >= TARGET_SUITE_SPEEDUP_MILLIONTHS {
         return 1_000_000;
     }
@@ -274,7 +274,7 @@ pub fn derive_candidates_from_hotspots(
     let total_samples = hotspots
         .iter()
         .map(|entry| entry.sample_count)
-        .sum::<u64>()
+        .fold(0u64, |acc, x| acc.saturating_add(x))
         .max(1);
     hotspots
         .iter()
@@ -556,7 +556,7 @@ fn hotspot_weight_map(hotspots: &[HotspotProfileEntry]) -> BTreeMap<String, i64>
     let total_samples = hotspots
         .iter()
         .map(|entry| entry.sample_count)
-        .sum::<u64>()
+        .fold(0u64, |acc, x| acc.saturating_add(x))
         .max(1);
     let mut map = BTreeMap::new();
     for hotspot in hotspots {

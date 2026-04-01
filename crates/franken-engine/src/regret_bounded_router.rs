@@ -891,7 +891,7 @@ fn softmax_from_logits_millionths(logits_millionths: &[i64]) -> Vec<i64> {
         .iter()
         .map(|&x| integer_exp_millionths(x.saturating_sub(max_logit)))
         .collect();
-    let total_weight: i128 = weights.iter().map(|&w| w as i128).sum::<i128>().max(1);
+    let total_weight: i128 = weights.iter().map(|&w| w as i128).fold(0i128, |acc, x| acc.saturating_add(x)).max(1);
 
     let mut probs: Vec<i64> = weights
         .iter()

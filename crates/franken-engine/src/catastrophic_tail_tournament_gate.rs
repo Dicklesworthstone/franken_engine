@@ -1163,7 +1163,7 @@ mod tests {
             threat_class_id: threat_id.to_string(),
             tournament_result: make_tournament_result(
                 rounds,
-                payoffs.iter().sum::<i64>() / rounds.max(1) as i64,
+                payoffs.iter().fold(0i64, |acc, x| acc.saturating_add(*x)) / rounds.max(1) as i64,
             ),
             attacker_payoffs: payoffs,
         }

@@ -871,7 +871,7 @@ impl LifecyclePipeline {
         } else {
             priorities
                 .iter()
-                .sum::<u64>()
+                .fold(0u64, |acc, x| acc.saturating_add(*x))
                 .checked_div(priorities.len() as u64)
                 .unwrap_or(0)
         };

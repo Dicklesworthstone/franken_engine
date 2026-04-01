@@ -667,7 +667,7 @@ fn deflate_uniform(v: &mut [i64], n: usize) {
     if n == 0 {
         return;
     }
-    let mean: i64 = v.iter().sum::<i64>() / n as i64;
+    let mean: i64 = v.iter().fold(0i64, |acc, x| acc.saturating_add(*x)) / n as i64;
     for x in v.iter_mut() {
         *x -= mean;
     }

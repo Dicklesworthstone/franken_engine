@@ -952,7 +952,7 @@ fn derive_tail_latency_decomposition(
     let queue_p99_ns = stage_calibrations
         .iter()
         .map(|calibration| calibration.sizing.estimated_p99_wait_ns)
-        .sum::<u64>();
+        .fold(0u64, |acc, x| acc.saturating_add(x));
     let queue_p999_ns = stage_calibrations
         .iter()
         .map(|calibration| {
@@ -963,7 +963,7 @@ fn derive_tail_latency_decomposition(
                 .checked_div(2)
                 .unwrap_or(calibration.sizing.estimated_p99_wait_ns)
         })
-        .sum::<u64>();
+        .fold(0u64, |acc, x| acc.saturating_add(x));
 
     let mut service_p99_ns = 0u64;
     let mut service_p999_ns = 0u64;

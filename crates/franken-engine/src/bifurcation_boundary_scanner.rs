@@ -799,12 +799,12 @@ impl BifurcationBoundaryScanner {
         let first_half_avg = param_obs[..mid]
             .iter()
             .map(|o| o.value_millionths)
-            .sum::<i64>()
+            .fold(0i64, |acc, x| acc.saturating_add(x))
             / mid as i64;
         let second_half_avg = param_obs[mid..]
             .iter()
             .map(|o| o.value_millionths)
-            .sum::<i64>()
+            .fold(0i64, |acc, x| acc.saturating_add(x))
             / (param_obs.len() - mid) as i64;
 
         (second_half_avg - first_half_avg, count)

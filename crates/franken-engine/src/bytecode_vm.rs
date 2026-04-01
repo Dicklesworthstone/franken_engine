@@ -744,12 +744,12 @@ impl BytecodeVm {
             .inline_cache
             .values()
             .map(|entry| entry.hits)
-            .sum::<u64>();
+            .fold(0u64, |acc, x| acc.saturating_add(x));
         let misses = self
             .inline_cache
             .values()
             .map(|entry| entry.misses)
-            .sum::<u64>();
+            .fold(0u64, |acc, x| acc.saturating_add(x));
 
         InlineCacheStats {
             entries: self.inline_cache.len(),

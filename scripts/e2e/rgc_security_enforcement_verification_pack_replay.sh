@@ -16,6 +16,7 @@ run_dir_is_complete() {
   local candidate="${1:-}"
   [[ -n "${candidate}" ]] || return 1
   [[ -f "${candidate}/run_manifest.json" ]] || return 1
+  [[ -f "${candidate}/trace_ids.json" ]] || return 1
   [[ -f "${candidate}/events.jsonl" ]] || return 1
   [[ -f "${candidate}/commands.txt" ]] || return 1
   [[ -f "${candidate}/security_verification_report.json" ]] || return 1
@@ -100,6 +101,8 @@ warn_about_failed_gate_replay_source "${main_exit}"
 
 echo "[rgc-security-enforcement-verification-pack] latest manifest: ${latest_run_dir}/run_manifest.json"
 cat "${latest_run_dir}/run_manifest.json"
+echo "[rgc-security-enforcement-verification-pack] latest trace ids: ${latest_run_dir}/trace_ids.json"
+cat "${latest_run_dir}/trace_ids.json"
 echo "[rgc-security-enforcement-verification-pack] latest events: ${latest_run_dir}/events.jsonl"
 cat "${latest_run_dir}/events.jsonl"
 echo "[rgc-security-enforcement-verification-pack] latest commands: ${latest_run_dir}/commands.txt"

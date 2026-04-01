@@ -21,8 +21,9 @@ use serde::Deserialize;
 const PACK_SCHEMA_VERSION: &str = "franken-engine.rgc-security-enforcement-verification-pack.v1";
 const VECTORS_SCHEMA_VERSION: &str =
     "franken-engine.rgc-security-enforcement-verification-vectors.v1";
-const ARTIFACT_INSPECTION_COMMANDS: [&str; 4] = [
+const ARTIFACT_INSPECTION_COMMANDS: [&str; 5] = [
     "cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/run_manifest.json",
+    "cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/trace_ids.json",
     "cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/events.jsonl",
     "cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/commands.txt",
     "cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/security_verification_report.json",
@@ -153,7 +154,7 @@ fn rgc_059_contract_is_versioned_and_replay_bound() {
     let contract = parse_contract();
 
     assert_eq!(contract.schema_version, PACK_SCHEMA_VERSION);
-    assert_eq!(contract.contract_version, "1.0.0");
+    assert_eq!(contract.contract_version, "1.1.0");
     assert_eq!(contract.bead_id, "bd-1lsy.11.9");
     assert_eq!(
         contract.policy_id,
@@ -203,6 +204,7 @@ fn rgc_059_contract_is_versioned_and_replay_bound() {
         .collect();
     for artifact in [
         "run_manifest.json",
+        "trace_ids.json",
         "events.jsonl",
         "commands.txt",
         "step_logs/step_*.log",
@@ -277,6 +279,16 @@ fn rgc_059_contract_is_versioned_and_replay_bound() {
         contract.operator_verification.iter().any(|entry| {
             entry.contains("rgc_security_enforcement_verification_pack_replay.sh")
         })
+    );
+}
+
+#[test]
+fn rgc_059_doc_mentions_trace_ids_artifact() {
+    let doc = read_pack_doc();
+
+    assert!(
+        doc.contains("trace_ids.json"),
+        "security verification pack doc must mention trace_ids.json"
     );
 }
 
@@ -419,16 +431,40 @@ fn rgc_059_gate_script_uses_repo_local_target_dir() {
 }
 
 #[test]
+fn rgc_059_gate_script_emits_trace_ids_and_manifest_references_it() {
+    let script = read_gate_script();
+
+    assert!(
+        script.contains("trace_ids_path=\"${run_dir}/trace_ids.json\""),
+        "gate script must define a trace_ids artifact path"
+    );
+    assert!(
+        script.contains("write_trace_ids()"),
+        "gate script must emit a trace_ids artifact"
+    );
+    assert!(
+        script.contains("\"trace_ids\": \"${trace_ids_path}\""),
+        "run manifest must publish the trace_ids artifact path"
+    );
+    assert!(
+        script.contains("cat ${trace_ids_path}"),
+        "operator verification must surface the trace_ids artifact"
+    );
+}
+
+#[test]
 fn rgc_059_replay_wrapper_requires_complete_bundle_and_first_step_log() {
     let script = read_replay_script();
 
     for needle in [
         "run_dir_is_complete()",
         "[[ -f \"${candidate}/run_manifest.json\" ]] || return 1",
+        "[[ -f \"${candidate}/trace_ids.json\" ]] || return 1",
         "[[ -f \"${candidate}/events.jsonl\" ]] || return 1",
         "[[ -f \"${candidate}/commands.txt\" ]] || return 1",
         "[[ -f \"${candidate}/security_verification_report.json\" ]] || return 1",
         "[[ -f \"${candidate}/step_logs/step_000.log\" ]] || return 1",
+        "cat \"${latest_run_dir}/trace_ids.json\"",
         "cat \"${latest_run_dir}/step_logs/step_000.log\"",
         "cat \"${latest_run_dir}/security_verification_report.json\"",
     ] {
@@ -448,6 +484,7 @@ fn rgc_059_replay_wrapper_warns_on_incomplete_newest_and_reports_bundle_source()
         "gate exited with status ${prior_exit}; replay output reflects latest complete run directory ${latest_run_dir}",
         "gate exited with status ${prior_exit}; replay output reflects current run directory ${latest_run_dir}",
         "rgc security enforcement verification pack replay explicit run directory is incomplete: ${explicit_run_dir}",
+        "latest trace ids: ${latest_run_dir}/trace_ids.json",
         "latest first step log: ${latest_run_dir}/step_logs/step_000.log",
     ] {
         assert!(
@@ -485,7 +522,7 @@ fn rgc_059_doc_describes_latest_complete_replay_and_explicit_bundle_requirements
         "newest artifact directory is incomplete, it warns and falls back to the latest complete directory",
         "printed bundle came from the current failed invocation or from an older complete directory",
         "RGC_SECURITY_ENFORCEMENT_VERIFICATION_PACK_REPLAY_RUN_DIR=artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>",
-        "`step_logs/step_000.log`, and `security_verification_report.json`) or the",
+        "`trace_ids.json`, `events.jsonl`, `commands.txt`, `step_logs/step_000.log`, and",
     ] {
         assert!(
             doc.contains(fragment),
@@ -507,6 +544,7 @@ fn rgc_059_readme_references_gate_replay_and_artifacts() {
         "docs/rgc_security_enforcement_verification_vectors_v1.json",
         "crates/franken-engine/tests/rgc_security_enforcement_verification_pack.rs",
         "artifacts/rgc_security_enforcement_verification_pack/<timestamp>/step_logs/step_*.log",
+        "artifacts/rgc_security_enforcement_verification_pack/<timestamp>/trace_ids.json",
         "artifacts/rgc_security_enforcement_verification_pack/<timestamp>/security_verification_report.json",
     ] {
         assert!(

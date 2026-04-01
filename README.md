@@ -1748,6 +1748,7 @@ Contract and vectors:
 Artifacts are written under:
 
 - `artifacts/rgc_security_enforcement_verification_pack/<timestamp>/run_manifest.json`
+- `artifacts/rgc_security_enforcement_verification_pack/<timestamp>/trace_ids.json`
 - `artifacts/rgc_security_enforcement_verification_pack/<timestamp>/events.jsonl`
 - `artifacts/rgc_security_enforcement_verification_pack/<timestamp>/commands.txt`
 - `artifacts/rgc_security_enforcement_verification_pack/<timestamp>/step_logs/step_*.log`

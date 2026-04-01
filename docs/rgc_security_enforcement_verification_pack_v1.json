@@ -1,6 +1,6 @@
 {
   "schema_version": "franken-engine.rgc-security-enforcement-verification-pack.v1",
-  "contract_version": "1.0.0",
+  "contract_version": "1.1.0",
   "bead_id": "bd-1lsy.11.9",
   "policy_id": "policy-rgc-security-enforcement-verification-pack-v1",
   "required_attack_classes": [
@@ -22,6 +22,7 @@
   ],
   "required_artifacts": [
     "run_manifest.json",
+    "trace_ids.json",
     "events.jsonl",
     "commands.txt",
     "step_logs/step_*.log",
@@ -65,6 +66,7 @@
     "jq empty docs/rgc_security_enforcement_verification_vectors_v1.json",
     "./scripts/run_rgc_security_enforcement_verification_pack.sh ci",
     "cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/run_manifest.json",
+    "cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/trace_ids.json",
     "cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/events.jsonl",
     "cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/commands.txt",
     "cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/step_logs/step_000.log",

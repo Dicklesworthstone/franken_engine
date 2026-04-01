@@ -15,6 +15,7 @@ rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/run_manifest.json"
+trace_ids_path="${run_dir}/trace_ids.json"
 events_path="${run_dir}/events.jsonl"
 commands_path="${run_dir}/commands.txt"
 step_logs_dir="${run_dir}/step_logs"
@@ -288,6 +289,19 @@ write_report() {
     }' >"$report_path"
 }
 
+write_trace_ids() {
+  cat >"${trace_ids_path}" <<EOF_TRACE
+{
+  "schema_version": "franken-engine.rgc-security-enforcement-verification-pack.trace-ids.v1",
+  "bead_id": "bd-1lsy.11.9",
+  "component": "${component}",
+  "policy_id": "${policy_id}",
+  "trace_ids": ["${trace_id}"],
+  "decision_ids": ["${decision_id}"]
+}
+EOF_TRACE
+}
+
 write_manifest() {
   local exit_code="${1:-0}"
   local outcome error_code_json git_commit dirty_worktree idx comma
@@ -305,6 +319,7 @@ write_manifest() {
     error_code_json='"FE-RGC-059-GATE-0001"'
   fi
 
+  write_trace_ids
   write_report "$outcome"
 
   git_commit="$(git rev-parse HEAD 2>/dev/null || echo "unknown")"
@@ -364,6 +379,7 @@ write_manifest() {
     echo '  ],'
     echo '  "artifacts": {'
     echo "    \"manifest\": \"${manifest_path}\","
+    echo "    \"trace_ids\": \"${trace_ids_path}\","
     echo "    \"events\": \"${events_path}\","
     echo "    \"commands\": \"${commands_path}\","
     echo "    \"step_logs_dir\": \"${step_logs_dir}\","
@@ -375,6 +391,7 @@ write_manifest() {
     echo '  },'
     echo '  "operator_verification": ['
     echo "    \"cat ${manifest_path}\"," 
+    echo "    \"cat ${trace_ids_path}\","
     echo "    \"cat ${events_path}\"," 
     echo "    \"cat ${commands_path}\"," 
     echo "    \"cat ${step_logs_dir}/step_000.log\","
@@ -388,6 +405,7 @@ write_manifest() {
   } >"$manifest_path"
 
   echo "rgc security enforcement verification pack manifest: ${manifest_path}"
+  echo "rgc security enforcement verification pack trace ids: ${trace_ids_path}"
   echo "rgc security enforcement verification pack events: ${events_path}"
 }
 

@@ -19,7 +19,7 @@ It is a dependency-safe prework slice for `bd-1lsy.11.9` that establishes:
 ## Contract Version
 
 - `schema_version`: `franken-engine.rgc-security-enforcement-verification-pack.v1`
-- `contract_version`: `1.0.0`
+- `contract_version`: `1.1.0`
 - `policy_id`: `policy-rgc-security-enforcement-verification-pack-v1`
 
 ## Required Attack Classes
@@ -75,14 +75,15 @@ Runner execution is additionally fail-closed when:
 - the remote exit marker is missing from the captured step log.
 
 By default, the replay wrapper reruns the lane and then prints the latest
-complete artifact bundle (`run_manifest.json`, `events.jsonl`, `commands.txt`,
-`step_logs/step_000.log`, and `security_verification_report.json`). If the
-newest artifact directory is incomplete, it warns and falls back to the latest
-complete directory; if no complete bundle exists, it fails non-zero instead of
-presenting a partial run as trustworthy. If the rerun itself fails, the wrapper
-states whether the printed bundle came from the current failed invocation or
-from an older complete directory, so operators do not mistake stale evidence
-for the failed run's output.
+complete artifact bundle (`run_manifest.json`, `trace_ids.json`,
+`events.jsonl`, `commands.txt`, `step_logs/step_000.log`, and
+`security_verification_report.json`). If the newest artifact directory is
+incomplete, it warns and falls back to the latest complete directory; if no
+complete bundle exists, it fails non-zero instead of presenting a partial run
+as trustworthy. If the rerun itself fails, the wrapper states whether the
+printed bundle came from the current failed invocation or from an older
+complete directory, so operators do not mistake stale evidence for the failed
+run's output.
 
 To replay a specific preserved bundle without rerunning the lane, point the
 wrapper at an exact complete run directory:
@@ -93,7 +94,7 @@ RGC_SECURITY_ENFORCEMENT_VERIFICATION_PACK_REPLAY_RUN_DIR=artifacts/rgc_security
 ```
 
 The explicit run directory must already contain a complete bundle
-(`run_manifest.json`, `events.jsonl`, `commands.txt`,
+(`run_manifest.json`, `trace_ids.json`, `events.jsonl`, `commands.txt`,
 `step_logs/step_000.log`, and `security_verification_report.json`) or the
 wrapper fails closed.
 
@@ -102,6 +103,7 @@ wrapper fails closed.
 Each run emits:
 
 - `run_manifest.json`
+- `trace_ids.json`
 - `events.jsonl`
 - `commands.txt`
 - `step_logs/step_*.log`
@@ -118,6 +120,7 @@ jq empty docs/rgc_security_enforcement_verification_vectors_v1.json
 ./scripts/run_rgc_security_enforcement_verification_pack.sh ci
 
 cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/run_manifest.json
+cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/trace_ids.json
 cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/events.jsonl
 cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/commands.txt
 cat artifacts/rgc_security_enforcement_verification_pack/<UTC_TIMESTAMP>/step_logs/step_000.log

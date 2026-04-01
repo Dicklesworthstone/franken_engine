@@ -2137,7 +2137,34 @@ fn default_and_namespace_cjs_projection_evidence_match_matrix_contract() {
     m.validate_with_waivers(&required, &ctx()).unwrap();
 
     let inventory = run_interop_parity_corpus();
-    for specimen_id in ["esm_imports_cjs_default", "namespace_import_from_cjs"] {
+    for (specimen_id, mode, expected_binding_count) in [
+        ("esm_imports_cjs_default", CompatibilityMode::Native, 1usize),
+        (
+            "esm_imports_cjs_default_node_compat",
+            CompatibilityMode::NodeCompat,
+            1usize,
+        ),
+        (
+            "esm_imports_cjs_default_bun_compat",
+            CompatibilityMode::BunCompat,
+            1usize,
+        ),
+        (
+            "namespace_import_from_cjs",
+            CompatibilityMode::Native,
+            2usize,
+        ),
+        (
+            "namespace_import_from_cjs_node_compat",
+            CompatibilityMode::NodeCompat,
+            2usize,
+        ),
+        (
+            "namespace_import_from_cjs_bun_compat",
+            CompatibilityMode::BunCompat,
+            2usize,
+        ),
+    ] {
         let evidence = inventory
             .evidence
             .iter()
@@ -2145,7 +2172,7 @@ fn default_and_namespace_cjs_projection_evidence_match_matrix_contract() {
             .unwrap_or_else(|| {
                 panic!("default/namespace projection specimen should exist: {specimen_id}")
             });
-        assert_eq!(evidence.compatibility_mode, CompatibilityMode::Native);
+        assert_eq!(evidence.compatibility_mode, mode);
         assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
         assert_eq!(evidence.verdict, InteropVerdict::Pass);
         assert_eq!(evidence.linked_count, 2);
@@ -2154,6 +2181,7 @@ fn default_and_namespace_cjs_projection_evidence_match_matrix_contract() {
             InteropCompatibilityDisposition::Supported
         );
         assert!(evidence.error_detail.is_none());
+        assert_eq!(evidence.binding_verdicts.len(), expected_binding_count);
         assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
         assert_remediation_guidance(
             specimen_id,
@@ -2168,7 +2196,7 @@ fn default_and_namespace_cjs_projection_evidence_match_matrix_contract() {
                 &CompatibilityObservation::new(
                     "esm-import-cjs-default",
                     CompatibilityRuntime::FrankenEngine,
-                    CompatibilityMode::Native,
+                    mode,
                     "namespace_default_projection",
                 ),
                 &ctx(),

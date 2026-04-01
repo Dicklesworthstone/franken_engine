@@ -675,6 +675,87 @@ fn external_package_root_require_specimen(
     }
 }
 
+fn esm_imports_cjs_default_specimen(specimen_id: &str, description: &str) -> InteropSpecimen {
+    InteropSpecimen {
+        specimen_id: specimen_id.into(),
+        description: description.into(),
+        family: InteropFamily::EsmImportsCjs,
+        modules: vec![
+            SpecimenModule {
+                specifier: "config.cjs".into(),
+                syntax: ModuleSyntax::CommonJs,
+                source: "module.exports = { port: 3000 };".into(),
+                imports: vec![],
+                exports: vec![ExportEntry::direct("default", "default")],
+                has_default_export: true,
+                has_top_level_await: false,
+            },
+            SpecimenModule {
+                specifier: "entry.mjs".into(),
+                syntax: ModuleSyntax::EsModule,
+                source: "import config from './config.cjs';".into(),
+                imports: vec![ImportEntry::new("config.cjs", "default", "config")],
+                exports: vec![],
+                has_default_export: false,
+                has_top_level_await: false,
+            },
+        ],
+        entry_point: "entry.mjs".into(),
+        expected_outcome: InteropExpectedOutcome::Success,
+        expected_linked_count: Some(2),
+        expected_binding_states: vec![ExpectedBindingState {
+            module_specifier: "config.cjs".into(),
+            export_name: "default".into(),
+            expected_state: BindingCellState::Initialized,
+        }],
+        expected_async_phases: vec![],
+    }
+}
+
+fn namespace_import_from_cjs_specimen(specimen_id: &str, description: &str) -> InteropSpecimen {
+    InteropSpecimen {
+        specimen_id: specimen_id.into(),
+        description: description.into(),
+        family: InteropFamily::DefaultNamespace,
+        modules: vec![
+            SpecimenModule {
+                specifier: "lib.cjs".into(),
+                syntax: ModuleSyntax::CommonJs,
+                source: "module.exports = { a: 1, b: 2 };".into(),
+                imports: vec![],
+                exports: vec![ExportEntry::direct("a", "a"), ExportEntry::direct("b", "b")],
+                has_default_export: true,
+                has_top_level_await: false,
+            },
+            SpecimenModule {
+                specifier: "entry.mjs".into(),
+                syntax: ModuleSyntax::EsModule,
+                source: "import * as ns from './lib.cjs';".into(),
+                imports: vec![ImportEntry::namespace("lib.cjs", "ns")],
+                exports: vec![],
+                has_default_export: false,
+                has_top_level_await: false,
+            },
+        ],
+        entry_point: "entry.mjs".into(),
+        expected_outcome: InteropExpectedOutcome::Success,
+        expected_linked_count: Some(2),
+        expected_binding_states: vec![
+            ExpectedBindingState {
+                module_specifier: "lib.cjs".into(),
+                export_name: "a".into(),
+                expected_state: BindingCellState::Initialized,
+            },
+            ExpectedBindingState {
+                module_specifier: "lib.cjs".into(),
+                export_name: "b".into(),
+                expected_state: BindingCellState::Initialized,
+            },
+        ],
+        expected_async_phases: vec![],
+    }
+}
+
 /// Returns the curated corpus of interop parity specimens.
 pub fn interop_parity_corpus() -> Vec<InteropSpecimen> {
     vec![
@@ -877,40 +958,18 @@ pub fn interop_parity_corpus() -> Vec<InteropSpecimen> {
             }],
             expected_async_phases: vec![],
         },
-        InteropSpecimen {
-            specimen_id: "esm_imports_cjs_default".into(),
-            description: "ESM entry imports default from CJS (module.exports = value)".into(),
-            family: InteropFamily::EsmImportsCjs,
-            modules: vec![
-                SpecimenModule {
-                    specifier: "config.cjs".into(),
-                    syntax: ModuleSyntax::CommonJs,
-                    source: "module.exports = { port: 3000 };".into(),
-                    imports: vec![],
-                    exports: vec![ExportEntry::direct("default", "default")],
-                    has_default_export: true,
-                    has_top_level_await: false,
-                },
-                SpecimenModule {
-                    specifier: "entry.mjs".into(),
-                    syntax: ModuleSyntax::EsModule,
-                    source: "import config from './config.cjs';".into(),
-                    imports: vec![ImportEntry::new("config.cjs", "default", "config")],
-                    exports: vec![],
-                    has_default_export: false,
-                    has_top_level_await: false,
-                },
-            ],
-            entry_point: "entry.mjs".into(),
-            expected_outcome: InteropExpectedOutcome::Success,
-            expected_linked_count: Some(2),
-            expected_binding_states: vec![ExpectedBindingState {
-                module_specifier: "config.cjs".into(),
-                export_name: "default".into(),
-                expected_state: BindingCellState::Initialized,
-            }],
-            expected_async_phases: vec![],
-        },
+        esm_imports_cjs_default_specimen(
+            "esm_imports_cjs_default",
+            "ESM entry imports default from CJS (module.exports = value)",
+        ),
+        esm_imports_cjs_default_specimen(
+            "esm_imports_cjs_default_node_compat",
+            "Node-compatible ESM entry imports default from CJS (module.exports = value)",
+        ),
+        esm_imports_cjs_default_specimen(
+            "esm_imports_cjs_default_bun_compat",
+            "Bun-compatible ESM entry imports default from CJS (module.exports = value)",
+        ),
         // ── CJS requires ESM ──
         InteropSpecimen {
             specimen_id: "cjs_requires_esm_named_native".into(),
@@ -1590,50 +1649,18 @@ pub fn interop_parity_corpus() -> Vec<InteropSpecimen> {
             expected_async_phases: vec![],
         },
         // ── Default / Namespace ──
-        InteropSpecimen {
-            specimen_id: "namespace_import_from_cjs".into(),
-            description: "ESM namespace import (import * as ns) from CJS module".into(),
-            family: InteropFamily::DefaultNamespace,
-            modules: vec![
-                SpecimenModule {
-                    specifier: "lib.cjs".into(),
-                    syntax: ModuleSyntax::CommonJs,
-                    source: "module.exports = { a: 1, b: 2 };".into(),
-                    imports: vec![],
-                    exports: vec![
-                        ExportEntry::direct("a", "a"),
-                        ExportEntry::direct("b", "b"),
-                    ],
-                    has_default_export: true,
-                    has_top_level_await: false,
-                },
-                SpecimenModule {
-                    specifier: "entry.mjs".into(),
-                    syntax: ModuleSyntax::EsModule,
-                    source: "import * as ns from './lib.cjs';".into(),
-                    imports: vec![ImportEntry::namespace("lib.cjs", "ns")],
-                    exports: vec![],
-                    has_default_export: false,
-                    has_top_level_await: false,
-                },
-            ],
-            entry_point: "entry.mjs".into(),
-            expected_outcome: InteropExpectedOutcome::Success,
-            expected_linked_count: Some(2),
-            expected_binding_states: vec![
-                ExpectedBindingState {
-                    module_specifier: "lib.cjs".into(),
-                    export_name: "a".into(),
-                    expected_state: BindingCellState::Initialized,
-                },
-                ExpectedBindingState {
-                    module_specifier: "lib.cjs".into(),
-                    export_name: "b".into(),
-                    expected_state: BindingCellState::Initialized,
-                },
-            ],
-            expected_async_phases: vec![],
-        },
+        namespace_import_from_cjs_specimen(
+            "namespace_import_from_cjs",
+            "ESM namespace import (import * as ns) from CJS module",
+        ),
+        namespace_import_from_cjs_specimen(
+            "namespace_import_from_cjs_node_compat",
+            "Node-compatible ESM namespace import (import * as ns) from CJS module",
+        ),
+        namespace_import_from_cjs_specimen(
+            "namespace_import_from_cjs_bun_compat",
+            "Bun-compatible ESM namespace import (import * as ns) from CJS module",
+        ),
         InteropSpecimen {
             specimen_id: "default_export_esm_to_cjs".into(),
             description: "ESM default export consumed by CJS require".into(),
@@ -4049,6 +4076,57 @@ mod tests {
                 .iter()
                 .all(|verdict| verdict.pass)
         );
+    }
+
+    #[test]
+    fn run_single_specimen_default_namespace_mode_split_stays_supported() {
+        let corpus = interop_parity_corpus();
+
+        for (specimen_id, mode, expected_binding_count) in [
+            ("esm_imports_cjs_default", CompatibilityMode::Native, 1usize),
+            (
+                "esm_imports_cjs_default_node_compat",
+                CompatibilityMode::NodeCompat,
+                1usize,
+            ),
+            (
+                "esm_imports_cjs_default_bun_compat",
+                CompatibilityMode::BunCompat,
+                1usize,
+            ),
+            (
+                "namespace_import_from_cjs",
+                CompatibilityMode::Native,
+                2usize,
+            ),
+            (
+                "namespace_import_from_cjs_node_compat",
+                CompatibilityMode::NodeCompat,
+                2usize,
+            ),
+            (
+                "namespace_import_from_cjs_bun_compat",
+                CompatibilityMode::BunCompat,
+                2usize,
+            ),
+        ] {
+            let specimen = corpus
+                .iter()
+                .find(|specimen| specimen.specimen_id == specimen_id)
+                .unwrap_or_else(|| panic!("default/namespace specimen missing: {specimen_id}"));
+            let evidence = run_single_specimen(specimen);
+            assert_eq!(evidence.compatibility_mode, mode);
+            assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
+            assert_eq!(evidence.verdict, InteropVerdict::Pass);
+            assert_eq!(
+                evidence.compatibility_disposition,
+                InteropCompatibilityDisposition::Supported
+            );
+            assert_eq!(evidence.linked_count, 2);
+            assert_eq!(evidence.binding_verdicts.len(), expected_binding_count);
+            assert!(evidence.error_detail.is_none());
+            assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
+        }
     }
 
     #[test]

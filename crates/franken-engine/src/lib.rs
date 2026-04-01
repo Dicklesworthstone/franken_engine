@@ -1,5 +1,4 @@
 #![forbid(unsafe_code)]
-#![feature(int_roundings)]
 
 extern crate self as frankenengine_engine;
 

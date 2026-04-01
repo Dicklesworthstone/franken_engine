@@ -437,11 +437,10 @@ fn evaluate_emits_trace_events() {
     g.link().unwrap();
     g.evaluate().unwrap();
 
-    assert!(
-        g.trace_events()
-            .iter()
-            .any(|e| e.phase == TracePhase::Evaluate)
-    );
+    assert!(g
+        .trace_events()
+        .iter()
+        .any(|e| e.phase == TracePhase::Evaluate));
 }
 
 #[test]
@@ -487,6 +486,7 @@ fn resolve_re_export() {
     let binding = g.resolve_export("./a.js", "foo").unwrap();
     assert_eq!(binding.module_specifier, "./b.js");
     assert_eq!(binding.local_name, "bar");
+    assert_eq!(binding.binding_type, BindingType::ReExport);
 }
 
 #[test]
@@ -505,6 +505,58 @@ fn resolve_star_re_export() {
     let binding = g.resolve_export("./a.js", "x").unwrap();
     assert_eq!(binding.module_specifier, "./b.js");
     assert_eq!(binding.local_name, "x");
+    assert_eq!(binding.binding_type, BindingType::StarReExport);
+}
+
+#[test]
+fn resolve_star_re_export_does_not_expose_default() {
+    let mut g = ModuleGraph::new();
+
+    let mut a = esm("./a.js", "");
+    a.add_export(ExportEntry::star_re_export("./b.js"));
+
+    let mut b = esm("./b.js", "");
+    b.add_export(ExportEntry::direct("impl_default", "default"));
+
+    g.add_module(a).unwrap();
+    g.add_module(b).unwrap();
+
+    let err = g.resolve_export("./a.js", "default").unwrap_err();
+    assert_eq!(
+        err,
+        EsmLoaderError::ExportNotFound {
+            specifier: "./a.js".into(),
+            export_name: "default".into(),
+        }
+    );
+}
+
+#[test]
+fn resolve_identical_star_re_exports_are_not_ambiguous() {
+    let mut g = ModuleGraph::new();
+
+    let mut a = esm("./a.js", "");
+    a.add_export(ExportEntry::star_re_export("./b.js"));
+    a.add_export(ExportEntry::star_re_export("./c.js"));
+
+    let mut b = esm("./b.js", "");
+    b.add_export(ExportEntry::star_re_export("./leaf.js"));
+
+    let mut c = esm("./c.js", "");
+    c.add_export(ExportEntry::star_re_export("./leaf.js"));
+
+    let mut leaf = esm("./leaf.js", "");
+    leaf.add_export(ExportEntry::direct("x", "x"));
+
+    g.add_module(a).unwrap();
+    g.add_module(b).unwrap();
+    g.add_module(c).unwrap();
+    g.add_module(leaf).unwrap();
+
+    let binding = g.resolve_export("./a.js", "x").unwrap();
+    assert_eq!(binding.module_specifier, "./leaf.js");
+    assert_eq!(binding.local_name, "x");
+    assert_eq!(binding.binding_type, BindingType::StarReExport);
 }
 
 #[test]
@@ -609,6 +661,18 @@ fn find_cycles_three_node_cycle() {
     let cycles = g.find_cycles();
     assert_eq!(cycles.len(), 1);
     assert_eq!(cycles[0].len(), 3);
+}
+
+#[test]
+fn find_cycles_self_loop() {
+    let mut g = ModuleGraph::new();
+
+    let mut a = esm("./a.js", "");
+    a.add_import(ImportEntry::new("./a.js", "x", "x"));
+    g.add_module(a).unwrap();
+
+    let cycles = g.find_cycles();
+    assert_eq!(cycles, vec![vec!["./a.js".to_string()]]);
 }
 
 // ---------------------------------------------------------------------------
@@ -945,6 +1009,10 @@ fn esm_loader_error_serde_serialize() {
             dependency: "./b.js".into(),
         },
         EsmLoaderError::ExportNotFound {
+            specifier: "./a.js".into(),
+            export_name: "x".into(),
+        },
+        EsmLoaderError::DuplicateExport {
             specifier: "./a.js".into(),
             export_name: "x".into(),
         },

@@ -633,58 +633,131 @@ impl ModuleGraph {
         visited: &mut BTreeSet<(String, String)>,
     ) -> Result<ResolvedBinding, EsmLoaderError> {
         let key = (specifier.to_string(), export_name.to_string());
-        if visited.contains(&key) {
-            // Circular re-export — return ambiguous.
-            return Err(EsmLoaderError::AmbiguousExport {
+        if !visited.insert(key.clone()) {
+            // Circular re-export paths do not themselves establish a binding.
+            // Treat them as an unresolved branch so sibling star paths can
+            // still contribute a real export.
+            return Err(EsmLoaderError::ExportNotFound {
                 specifier: specifier.to_string(),
                 export_name: export_name.to_string(),
             });
         }
-        visited.insert(key);
 
-        let module = self
-            .modules
-            .get(specifier)
-            .ok_or_else(|| EsmLoaderError::ModuleNotFound(specifier.to_string()))?;
+        let result = (|| {
+            let module = self
+                .modules
+                .get(specifier)
+                .ok_or_else(|| EsmLoaderError::ModuleNotFound(specifier.to_string()))?;
 
-        // Check direct exports first.
-        for entry in &module.exports {
-            if entry.export_name == export_name {
-                if let Some(local) = &entry.local_name {
-                    return Ok(ResolvedBinding {
-                        module_specifier: specifier.to_string(),
-                        local_name: local.clone(),
-                        binding_type: BindingType::Direct,
-                    });
-                }
-                // Re-export.
-                if let (Some(req), Some(imp)) = (&entry.module_request, &entry.import_name) {
-                    return self.resolve_export_inner(req, imp, visited);
+            let explicit_export_matches = module
+                .exports
+                .iter()
+                .filter(|entry| entry.export_name == export_name)
+                .count();
+            if explicit_export_matches > 1 {
+                return Err(EsmLoaderError::DuplicateExport {
+                    specifier: specifier.to_string(),
+                    export_name: export_name.to_string(),
+                });
+            }
+
+            // Check direct exports first.
+            for entry in &module.exports {
+                if entry.export_name == export_name {
+                    if let Some(local) = &entry.local_name {
+                        return Ok(ResolvedBinding {
+                            module_specifier: specifier.to_string(),
+                            local_name: local.clone(),
+                            binding_type: BindingType::Direct,
+                        });
+                    }
+
+                    if let (Some(req), Some(imp)) = (&entry.module_request, &entry.import_name) {
+                        match self.resolve_export_inner(req, imp, visited) {
+                            Ok(mut binding) => {
+                                binding.binding_type = BindingType::ReExport;
+                                return Ok(binding);
+                            }
+                            Err(EsmLoaderError::ExportNotFound { .. }) => {
+                                return Err(EsmLoaderError::ExportNotFound {
+                                    specifier: specifier.to_string(),
+                                    export_name: export_name.to_string(),
+                                });
+                            }
+                            Err(EsmLoaderError::AmbiguousExport { .. }) => {
+                                return Err(EsmLoaderError::AmbiguousExport {
+                                    specifier: specifier.to_string(),
+                                    export_name: export_name.to_string(),
+                                });
+                            }
+                            Err(EsmLoaderError::DuplicateExport { .. }) => {
+                                return Err(EsmLoaderError::DuplicateExport {
+                                    specifier: specifier.to_string(),
+                                    export_name: export_name.to_string(),
+                                });
+                            }
+                            Err(err) => return Err(err),
+                        }
+                    }
                 }
             }
-        }
 
-        // Check star re-exports.
-        let mut found: Option<ResolvedBinding> = None;
-        for entry in &module.exports {
-            if entry.export_name == "*"
-                && let Some(req) = &entry.module_request
-                && let Ok(binding) = self.resolve_export_inner(req, export_name, visited)
-            {
-                if found.is_some() {
-                    return Err(EsmLoaderError::AmbiguousExport {
-                        specifier: specifier.to_string(),
-                        export_name: export_name.to_string(),
-                    });
-                }
-                found = Some(binding);
+            // `export *` never re-exports `default`.
+            if export_name == "default" {
+                return Err(EsmLoaderError::ExportNotFound {
+                    specifier: specifier.to_string(),
+                    export_name: export_name.to_string(),
+                });
             }
-        }
 
-        found.ok_or_else(|| EsmLoaderError::ExportNotFound {
-            specifier: specifier.to_string(),
-            export_name: export_name.to_string(),
-        })
+            let mut found: Option<ResolvedBinding> = None;
+            for entry in &module.exports {
+                if entry.export_name != "*" {
+                    continue;
+                }
+                let Some(req) = &entry.module_request else {
+                    continue;
+                };
+
+                match self.resolve_export_inner(req, export_name, visited) {
+                    Ok(mut binding) => {
+                        binding.binding_type = BindingType::StarReExport;
+                        if let Some(existing) = &found {
+                            if existing != &binding {
+                                return Err(EsmLoaderError::AmbiguousExport {
+                                    specifier: specifier.to_string(),
+                                    export_name: export_name.to_string(),
+                                });
+                            }
+                        } else {
+                            found = Some(binding);
+                        }
+                    }
+                    Err(EsmLoaderError::ExportNotFound { .. }) => {}
+                    Err(EsmLoaderError::AmbiguousExport { .. }) => {
+                        return Err(EsmLoaderError::AmbiguousExport {
+                            specifier: specifier.to_string(),
+                            export_name: export_name.to_string(),
+                        });
+                    }
+                    Err(EsmLoaderError::DuplicateExport { .. }) => {
+                        return Err(EsmLoaderError::DuplicateExport {
+                            specifier: specifier.to_string(),
+                            export_name: export_name.to_string(),
+                        });
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
+
+            found.ok_or_else(|| EsmLoaderError::ExportNotFound {
+                specifier: specifier.to_string(),
+                export_name: export_name.to_string(),
+            })
+        })();
+
+        visited.remove(&key);
+        result
     }
 
     // -----------------------------------------------------------------------
@@ -716,8 +789,16 @@ impl ModuleGraph {
             }
         }
 
-        // Only return SCCs with more than one node (actual cycles).
-        sccs.into_iter().filter(|scc| scc.len() > 1).collect()
+        sccs.into_iter()
+            .filter(|scc| {
+                scc.len() > 1
+                    || scc.first().is_some_and(|specifier| {
+                        self.modules
+                            .get(specifier)
+                            .is_some_and(|module| module.dependencies.contains(specifier))
+                    })
+            })
+            .collect()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -924,6 +1005,10 @@ pub enum EsmLoaderError {
         specifier: String,
         export_name: String,
     },
+    DuplicateExport {
+        specifier: String,
+        export_name: String,
+    },
     AmbiguousExport {
         specifier: String,
         export_name: String,
@@ -963,6 +1048,10 @@ impl fmt::Display for EsmLoaderError {
                 specifier,
                 export_name,
             } => write!(f, "export '{export_name}' not found in {specifier}"),
+            Self::DuplicateExport {
+                specifier,
+                export_name,
+            } => write!(f, "duplicate export '{export_name}' in {specifier}"),
             Self::AmbiguousExport {
                 specifier,
                 export_name,
@@ -1234,6 +1323,7 @@ mod tests {
         let binding = graph.resolve_export("index.js", "bar").unwrap();
         assert_eq!(binding.module_specifier, "lib.js");
         assert_eq!(binding.local_name, "bar");
+        assert_eq!(binding.binding_type, BindingType::ReExport);
     }
 
     #[test]
@@ -1249,6 +1339,212 @@ mod tests {
 
         let binding = graph.resolve_export("index.js", "baz").unwrap();
         assert_eq!(binding.module_specifier, "lib.js");
+        assert_eq!(binding.binding_type, BindingType::StarReExport);
+    }
+
+    #[test]
+    fn test_resolve_star_reexport_default_is_not_visible() {
+        let mut graph = ModuleGraph::new();
+        let mut lib = make_module("lib.js", "");
+        lib.add_export(ExportEntry::direct("default_impl", "default"));
+        let mut index = make_module("index.js", "");
+        index.add_export(ExportEntry::star_re_export("lib.js"));
+
+        graph.add_module(index).unwrap();
+        graph.add_module(lib).unwrap();
+
+        let err = graph.resolve_export("index.js", "default").unwrap_err();
+        assert_eq!(
+            err,
+            EsmLoaderError::ExportNotFound {
+                specifier: "index.js".into(),
+                export_name: "default".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_resolve_identical_star_reexports_are_not_ambiguous() {
+        let mut graph = ModuleGraph::new();
+        let mut leaf = make_module("leaf.js", "");
+        leaf.add_export(ExportEntry::direct("shared", "shared"));
+        let mut left = make_module("left.js", "");
+        left.add_export(ExportEntry::star_re_export("leaf.js"));
+        let mut right = make_module("right.js", "");
+        right.add_export(ExportEntry::star_re_export("leaf.js"));
+        let mut index = make_module("index.js", "");
+        index.add_export(ExportEntry::star_re_export("left.js"));
+        index.add_export(ExportEntry::star_re_export("right.js"));
+
+        graph.add_module(index).unwrap();
+        graph.add_module(left).unwrap();
+        graph.add_module(right).unwrap();
+        graph.add_module(leaf).unwrap();
+
+        let binding = graph.resolve_export("index.js", "shared").unwrap();
+        assert_eq!(binding.module_specifier, "leaf.js");
+        assert_eq!(binding.local_name, "shared");
+        assert_eq!(binding.binding_type, BindingType::StarReExport);
+    }
+
+    #[test]
+    fn test_resolve_star_reexport_ignores_cyclic_branch_without_binding() {
+        let mut graph = ModuleGraph::new();
+
+        let mut left = make_module("left.js", "");
+        left.add_export(ExportEntry::star_re_export("mid.js"));
+
+        let mut mid = make_module("mid.js", "");
+        mid.add_export(ExportEntry::star_re_export("left.js"));
+
+        let mut right = make_module("right.js", "");
+        right.add_export(ExportEntry::direct("shared", "shared"));
+
+        let mut index = make_module("index.js", "");
+        index.add_export(ExportEntry::star_re_export("left.js"));
+        index.add_export(ExportEntry::star_re_export("right.js"));
+
+        graph.add_module(index).unwrap();
+        graph.add_module(left).unwrap();
+        graph.add_module(mid).unwrap();
+        graph.add_module(right).unwrap();
+
+        let binding = graph.resolve_export("index.js", "shared").unwrap();
+        assert_eq!(binding.module_specifier, "right.js");
+        assert_eq!(binding.local_name, "shared");
+        assert_eq!(binding.binding_type, BindingType::StarReExport);
+    }
+
+    #[test]
+    fn test_resolve_cyclic_star_reexport_without_binding_is_not_found() {
+        let mut graph = ModuleGraph::new();
+
+        let mut a = make_module("a.js", "");
+        a.add_export(ExportEntry::star_re_export("b.js"));
+
+        let mut b = make_module("b.js", "");
+        b.add_export(ExportEntry::star_re_export("a.js"));
+
+        graph.add_module(a).unwrap();
+        graph.add_module(b).unwrap();
+
+        let err = graph.resolve_export("a.js", "missing").unwrap_err();
+        assert_eq!(
+            err,
+            EsmLoaderError::ExportNotFound {
+                specifier: "a.js".into(),
+                export_name: "missing".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_resolve_named_reexport_missing_reports_surface_module() {
+        let mut graph = ModuleGraph::new();
+
+        let mut index = make_module("index.js", "");
+        index.add_export(ExportEntry::re_export("shared", "lib.js", "shared"));
+
+        let lib = make_module("lib.js", "");
+
+        graph.add_module(index).unwrap();
+        graph.add_module(lib).unwrap();
+
+        let err = graph.resolve_export("index.js", "shared").unwrap_err();
+        assert_eq!(
+            err,
+            EsmLoaderError::ExportNotFound {
+                specifier: "index.js".into(),
+                export_name: "shared".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_resolve_named_reexport_ambiguity_reports_surface_module() {
+        let mut graph = ModuleGraph::new();
+
+        let mut leaf = make_module("leaf.js", "");
+        leaf.add_export(ExportEntry::direct("shared", "shared"));
+
+        let mut left = make_module("left.js", "");
+        left.add_export(ExportEntry::star_re_export("leaf.js"));
+
+        let mut right = make_module("right.js", "");
+        right.add_export(ExportEntry::direct("shared", "shared"));
+
+        let mut lib = make_module("lib.js", "");
+        lib.add_export(ExportEntry::star_re_export("left.js"));
+        lib.add_export(ExportEntry::star_re_export("right.js"));
+
+        let mut index = make_module("index.js", "");
+        index.add_export(ExportEntry::re_export("shared", "lib.js", "shared"));
+
+        graph.add_module(index).unwrap();
+        graph.add_module(lib).unwrap();
+        graph.add_module(left).unwrap();
+        graph.add_module(right).unwrap();
+        graph.add_module(leaf).unwrap();
+
+        let err = graph.resolve_export("index.js", "shared").unwrap_err();
+        assert_eq!(
+            err,
+            EsmLoaderError::AmbiguousExport {
+                specifier: "index.js".into(),
+                export_name: "shared".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_resolve_duplicate_explicit_exports_fail_closed() {
+        let mut graph = ModuleGraph::new();
+        let mut index = make_module("index.js", "");
+        index.add_export(ExportEntry::direct("foo_local", "foo"));
+        index.add_export(ExportEntry::re_export("foo", "lib.js", "foo"));
+        graph.add_module(index).unwrap();
+        graph.add_module(make_module("lib.js", "")).unwrap();
+
+        let err = graph.resolve_export("index.js", "foo").unwrap_err();
+        assert_eq!(
+            err,
+            EsmLoaderError::DuplicateExport {
+                specifier: "index.js".into(),
+                export_name: "foo".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_resolve_star_reexport_ambiguity_reports_surface_module() {
+        let mut graph = ModuleGraph::new();
+
+        let mut left = make_module("left.js", "");
+        left.add_export(ExportEntry::direct("shared", "shared"));
+
+        let mut right = make_module("right.js", "");
+        right.add_export(ExportEntry::direct("shared", "shared"));
+
+        let mut lib = make_module("lib.js", "");
+        lib.add_export(ExportEntry::star_re_export("left.js"));
+        lib.add_export(ExportEntry::star_re_export("right.js"));
+
+        let mut index = make_module("index.js", "");
+        index.add_export(ExportEntry::star_re_export("lib.js"));
+
+        graph.add_module(index).unwrap();
+        graph.add_module(lib).unwrap();
+        graph.add_module(left).unwrap();
+        graph.add_module(right).unwrap();
+
+        let err = graph.resolve_export("index.js", "shared").unwrap_err();
+        assert_eq!(
+            err,
+            EsmLoaderError::AmbiguousExport {
+                specifier: "index.js".into(),
+                export_name: "shared".into(),
+            }
+        );
     }
 
     #[test]
@@ -1327,6 +1623,17 @@ mod tests {
         let cycles = graph.find_cycles();
         assert_eq!(cycles.len(), 1);
         assert_eq!(cycles[0].len(), 3);
+    }
+
+    #[test]
+    fn test_find_cycles_self_loop() {
+        let mut graph = ModuleGraph::new();
+        let mut a = make_module("a.js", "");
+        a.add_import(ImportEntry::new("a.js", "x", "x"));
+        graph.add_module(a).unwrap();
+
+        let cycles = graph.find_cycles();
+        assert_eq!(cycles, vec![vec!["a.js".to_string()]]);
     }
 
     // -- Topological order tests ---------------------------------------------
@@ -1834,6 +2141,17 @@ mod tests {
     }
 
     #[test]
+    fn error_display_duplicate_export() {
+        let err = EsmLoaderError::DuplicateExport {
+            specifier: "index.js".into(),
+            export_name: "dup".into(),
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("index.js"));
+        assert!(msg.contains("dup"));
+    }
+
+    #[test]
     fn error_display_ambiguous_export() {
         let err = EsmLoaderError::AmbiguousExport {
             specifier: "index.js".into(),
@@ -1962,7 +2280,7 @@ mod tests {
 
     #[test]
     fn resolved_binding_through_star_re_export() {
-        // Star re-exports resolve recursively to the final Direct binding.
+        // Star re-exports preserve the surface binding type of the exporting module.
         let mut graph = ModuleGraph::new();
         let mut lib = make_module("lib.js", "");
         lib.add_export(ExportEntry::direct("item", "item"));
@@ -1973,12 +2291,12 @@ mod tests {
 
         let binding = graph.resolve_export("index.js", "item").unwrap();
         assert_eq!(binding.module_specifier, "lib.js");
-        assert_eq!(binding.binding_type, BindingType::Direct);
+        assert_eq!(binding.binding_type, BindingType::StarReExport);
     }
 
     #[test]
     fn resolved_binding_through_re_export() {
-        // Named re-exports resolve recursively to the final Direct binding.
+        // Named re-exports preserve the surface binding type of the exporting module.
         let mut graph = ModuleGraph::new();
         let mut lib = make_module("lib.js", "");
         lib.add_export(ExportEntry::direct("x", "x"));
@@ -1989,7 +2307,7 @@ mod tests {
 
         let binding = graph.resolve_export("index.js", "x").unwrap();
         assert_eq!(binding.module_specifier, "lib.js");
-        assert_eq!(binding.binding_type, BindingType::Direct);
+        assert_eq!(binding.binding_type, BindingType::ReExport);
     }
 
     // -- Complex cycle patterns ---------------------------------------------

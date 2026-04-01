@@ -615,6 +615,10 @@ fn enrichment_esm_loader_error_display_all_unique() {
             specifier: "s".to_string(),
             export_name: "e".to_string(),
         },
+        EsmLoaderError::DuplicateExport {
+            specifier: "s".to_string(),
+            export_name: "e".to_string(),
+        },
         EsmLoaderError::AmbiguousExport {
             specifier: "s".to_string(),
             export_name: "e".to_string(),
@@ -656,6 +660,10 @@ fn enrichment_esm_loader_error_debug_all_unique() {
             specifier: "s".to_string(),
             export_name: "e".to_string(),
         },
+        EsmLoaderError::DuplicateExport {
+            specifier: "s".to_string(),
+            export_name: "e".to_string(),
+        },
         EsmLoaderError::AmbiguousExport {
             specifier: "s".to_string(),
             export_name: "e".to_string(),
@@ -687,6 +695,10 @@ fn enrichment_esm_loader_error_serde_serializes() {
             dependency: "d".to_string(),
         },
         EsmLoaderError::ExportNotFound {
+            specifier: "s".to_string(),
+            export_name: "e".to_string(),
+        },
+        EsmLoaderError::DuplicateExport {
             specifier: "s".to_string(),
             export_name: "e".to_string(),
         },

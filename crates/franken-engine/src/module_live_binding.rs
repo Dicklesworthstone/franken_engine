@@ -3,7 +3,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::esm_loader::{BindingType, ModuleGraph, ModuleStatus};
+use crate::esm_loader::{BindingType, EsmLoaderError, ModuleGraph, ModuleStatus};
 use crate::hash_tiers::ContentHash;
 
 /// Serde helper: serialize `BTreeMap<BindingId, BindingCell>` as a Vec of entries
@@ -421,6 +421,12 @@ impl LiveBindingMap {
         self.cells.get(&resolved)
     }
 
+    /// Get the exact surface cell stored for an export without resolving alias
+    /// indirections.
+    pub fn get_surface_cell(&self, id: &BindingId) -> Option<&BindingCell> {
+        self.cells.get(id)
+    }
+
     /// Get a mutable binding cell by ID.
     pub fn get_cell_mut(&mut self, id: &BindingId) -> Option<&mut BindingCell> {
         let resolved = self.resolve_binding_id(id);
@@ -613,10 +619,69 @@ impl Default for LiveBindingMap {
 // Build live bindings from a module graph
 // ---------------------------------------------------------------------------
 
+fn collect_module_export_names(
+    graph: &ModuleGraph,
+    module_specifier: &str,
+    include_default: bool,
+    visiting: &mut BTreeSet<String>,
+    export_names: &mut BTreeSet<String>,
+) -> Result<(), LiveBindingError> {
+    if !visiting.insert(module_specifier.to_string()) {
+        return Ok(());
+    }
+
+    let module =
+        graph
+            .get_module(module_specifier)
+            .ok_or_else(|| LiveBindingError::NamespaceNotFound {
+                module: module_specifier.to_string(),
+            })?;
+
+    for export in &module.exports {
+        if export.export_name == "*" {
+            if let Some(target_module) = export.module_request.as_deref() {
+                collect_module_export_names(graph, target_module, false, visiting, export_names)?;
+            }
+            continue;
+        }
+
+        if export.export_name == "default" && !include_default {
+            continue;
+        }
+
+        export_names.insert(export.export_name.clone());
+    }
+
+    visiting.remove(module_specifier);
+    Ok(())
+}
+
+fn module_export_names(
+    graph: &ModuleGraph,
+    module_specifier: &str,
+) -> Result<BTreeSet<String>, LiveBindingError> {
+    let mut visiting = BTreeSet::new();
+    let mut export_names = BTreeSet::new();
+    collect_module_export_names(
+        graph,
+        module_specifier,
+        true,
+        &mut visiting,
+        &mut export_names,
+    )?;
+    Ok(export_names)
+}
+
+fn remove_star_re_export_surface(map: &mut LiveBindingMap, binding_id: &BindingId) {
+    map.cells.remove(binding_id);
+    map.aliases.retain(|entry| entry.alias != *binding_id);
+}
+
 /// Build a complete live-binding map from a linked module graph.
 ///
-/// This walks every module in the graph, creates binding cells for all
-/// exports, constructs namespace objects, and wires import bindings.
+/// This walks every module in the graph, creates binding cells for direct
+/// exports and re-export surfaces, constructs namespace objects, and wires
+/// import bindings.
 pub fn build_live_bindings(graph: &ModuleGraph) -> Result<LiveBindingMap, LiveBindingError> {
     let mut map = LiveBindingMap::new();
 
@@ -629,7 +694,14 @@ pub fn build_live_bindings(graph: &ModuleGraph) -> Result<LiveBindingMap, LiveBi
             });
         }
 
+        let mut seen_export_names = BTreeSet::new();
         for export in &module.exports {
+            if export.export_name != "*" && !seen_export_names.insert(export.export_name.clone()) {
+                return Err(LiveBindingError::DuplicateExport {
+                    module: module.specifier.clone(),
+                    export_name: export.export_name.clone(),
+                });
+            }
             if export.module_request.is_some() {
                 // Re-export — will be resolved in phase 2
                 continue;
@@ -645,31 +717,167 @@ pub fn build_live_bindings(graph: &ModuleGraph) -> Result<LiveBindingMap, LiveBi
         }
     }
 
-    // Phase 2: Resolve re-exports and create additional cells
-    for module in graph.modules() {
-        for export in &module.exports {
-            if export.module_request.is_none() {
-                continue; // Already handled in phase 1
-            }
-            let target_module = export.module_request.as_deref().unwrap();
-            let import_name = export.import_name.as_deref().unwrap_or(&export.export_name);
+    // Phase 2: Resolve re-export surfaces and create additional cells.
+    // Iterate until alias chains stabilize so order in the deterministic
+    // `BTreeMap` does not drop later-created source aliases.
+    let module_specifiers: Vec<String> = graph.modules().map(|m| m.specifier.clone()).collect();
+    let max_passes = module_specifiers
+        .len()
+        .saturating_mul(module_specifiers.len().max(1));
+    for _ in 0..max_passes {
+        let mut progressed = false;
 
-            // The re-export binding points to the source module's cell
-            let source_id = BindingId::new(target_module, import_name);
-            if map.cells.contains_key(&source_id) {
-                // Create an alias cell for the re-export
-                let re_export_id = BindingId::new(&module.specifier, &export.export_name);
+        for module_specifier in &module_specifiers {
+            let module = graph.get_module(module_specifier).ok_or_else(|| {
+                LiveBindingError::NamespaceNotFound {
+                    module: module_specifier.clone(),
+                }
+            })?;
+
+            for export in &module.exports {
+                let Some(target_module) = export.module_request.as_deref() else {
+                    continue;
+                };
+
+                if export.export_name == "*" {
+                    let star_export_names = module_export_names(graph, target_module)?;
+                    for export_name in star_export_names {
+                        let alias_id = BindingId::new(module_specifier, &export_name);
+                        if map
+                            .cells
+                            .get(&alias_id)
+                            .is_some_and(|cell| cell.binding_type != BindingType::StarReExport)
+                        {
+                            // Explicit exports shadow star re-exports.
+                            continue;
+                        }
+
+                        let resolved_source_id = match graph
+                            .resolve_export(module_specifier, &export_name)
+                        {
+                            Ok(binding) => BindingId::new(&binding.module_specifier, &export_name),
+                            Err(
+                                EsmLoaderError::AmbiguousExport { .. }
+                                | EsmLoaderError::ExportNotFound { .. },
+                            ) => {
+                                if map.cells.get(&alias_id).is_some_and(|cell| {
+                                    cell.binding_type == BindingType::StarReExport
+                                }) {
+                                    remove_star_re_export_surface(&mut map, &alias_id);
+                                    progressed = true;
+                                }
+                                continue;
+                            }
+                            Err(EsmLoaderError::ModuleNotFound(_)) => {
+                                return Err(LiveBindingError::NamespaceNotFound {
+                                    module: target_module.to_string(),
+                                });
+                            }
+                            Err(EsmLoaderError::DuplicateExport { .. }) => {
+                                return Err(LiveBindingError::DuplicateExport {
+                                    module: module_specifier.clone(),
+                                    export_name: export_name.clone(),
+                                });
+                            }
+                            Err(_) => {
+                                return Err(LiveBindingError::NamespaceNotFound {
+                                    module: module_specifier.clone(),
+                                });
+                            }
+                        };
+
+                        if !map.cells.contains_key(&resolved_source_id) {
+                            continue;
+                        }
+
+                        if !map.cells.contains_key(&alias_id) {
+                            let cell = BindingCell::new(
+                                module_specifier,
+                                &export_name,
+                                &export_name,
+                                BindingType::StarReExport,
+                            );
+                            map.register_cell(cell);
+                            progressed = true;
+                        }
+
+                        let previous_source = map
+                            .aliases
+                            .iter()
+                            .find(|entry| entry.alias == alias_id)
+                            .map(|entry| entry.source.clone());
+                        if previous_source.as_ref() != Some(&resolved_source_id) {
+                            map.register_alias(alias_id, resolved_source_id);
+                            progressed = true;
+                        }
+                    }
+                    continue;
+                }
+
+                let import_name = export.import_name.as_deref().unwrap_or(&export.export_name);
+                match graph.resolve_export(module_specifier, &export.export_name) {
+                    Ok(_) => {}
+                    Err(EsmLoaderError::ExportNotFound { .. }) => {
+                        return Err(LiveBindingError::BindingNotFound {
+                            module: module_specifier.clone(),
+                            export_name: export.export_name.clone(),
+                        });
+                    }
+                    Err(EsmLoaderError::AmbiguousExport { .. }) => {
+                        return Err(LiveBindingError::AmbiguousExport {
+                            module: module_specifier.clone(),
+                            export_name: export.export_name.clone(),
+                        });
+                    }
+                    Err(EsmLoaderError::ModuleNotFound(_)) => {
+                        return Err(LiveBindingError::NamespaceNotFound {
+                            module: target_module.to_string(),
+                        });
+                    }
+                    Err(EsmLoaderError::DuplicateExport { .. }) => {
+                        return Err(LiveBindingError::DuplicateExport {
+                            module: module_specifier.clone(),
+                            export_name: export.export_name.clone(),
+                        });
+                    }
+                    Err(_) => {
+                        return Err(LiveBindingError::NamespaceNotFound {
+                            module: module_specifier.clone(),
+                        });
+                    }
+                }
+
+                let source_id = BindingId::new(target_module, import_name);
+                if !map.cells.contains_key(&source_id) {
+                    continue;
+                }
+
+                let re_export_id = BindingId::new(module_specifier, &export.export_name);
                 if !map.cells.contains_key(&re_export_id) {
                     let cell = BindingCell::new(
-                        &module.specifier,
+                        module_specifier,
                         &export.export_name,
                         import_name,
                         BindingType::ReExport,
                     );
                     map.register_cell(cell);
+                    progressed = true;
                 }
-                map.register_alias(re_export_id, source_id);
+
+                let previous_source = map
+                    .aliases
+                    .iter()
+                    .find(|entry| entry.alias == re_export_id)
+                    .map(|entry| entry.source.clone());
+                if previous_source.as_ref() != Some(&source_id) {
+                    map.register_alias(re_export_id, source_id);
+                    progressed = true;
+                }
             }
+        }
+
+        if !progressed {
+            break;
         }
     }
 
@@ -678,16 +886,13 @@ pub fn build_live_bindings(graph: &ModuleGraph) -> Result<LiveBindingMap, LiveBi
         let mut export_names = Vec::new();
         let mut bindings = BTreeMap::new();
 
-        for export in &module.exports {
-            let binding_id = if export.module_request.is_some() {
-                let target = export.module_request.as_deref().unwrap();
-                let import = export.import_name.as_deref().unwrap_or(&export.export_name);
-                BindingId::new(target, import)
-            } else {
-                BindingId::new(&module.specifier, &export.export_name)
-            };
-            export_names.push(export.export_name.clone());
-            bindings.insert(export.export_name.clone(), binding_id);
+        for binding_id in map
+            .cells
+            .keys()
+            .filter(|id| id.module_specifier == module.specifier)
+        {
+            export_names.push(binding_id.export_name.clone());
+            bindings.insert(binding_id.export_name.clone(), binding_id.clone());
         }
 
         // ES2020 §10.4.6.11: export names are sorted
@@ -774,6 +979,14 @@ pub enum LiveBindingError {
     NamespaceNotFound {
         module: String,
     },
+    DuplicateExport {
+        module: String,
+        export_name: String,
+    },
+    AmbiguousExport {
+        module: String,
+        export_name: String,
+    },
 }
 
 impl fmt::Display for LiveBindingError {
@@ -805,6 +1018,18 @@ impl fmt::Display for LiveBindingError {
             }
             Self::NamespaceNotFound { module } => {
                 write!(f, "namespace for module {module} not found")
+            }
+            Self::DuplicateExport {
+                module,
+                export_name,
+            } => {
+                write!(f, "duplicate export {module}::{export_name}")
+            }
+            Self::AmbiguousExport {
+                module,
+                export_name,
+            } => {
+                write!(f, "export {module}::{export_name} is ambiguous")
             }
         }
     }
@@ -1061,6 +1286,33 @@ mod tests {
         assert_eq!(
             map.get_cell(&source_id).unwrap().value_millionths,
             Some(200)
+        );
+    }
+
+    #[test]
+    fn get_surface_cell_preserves_alias_metadata() {
+        let mut map = LiveBindingMap::new();
+
+        let source_id = map.register_cell(make_cell("mod_a", "foo"));
+        let alias_id = map.register_cell(BindingCell::new(
+            "mod_b",
+            "foo",
+            "foo",
+            BindingType::StarReExport,
+        ));
+        map.register_alias(alias_id.clone(), source_id);
+
+        assert_eq!(
+            map.get_cell(&alias_id).unwrap().binding_type,
+            BindingType::Direct
+        );
+        assert_eq!(
+            map.get_surface_cell(&alias_id).unwrap().binding_type,
+            BindingType::StarReExport
+        );
+        assert_eq!(
+            map.get_surface_cell(&alias_id).unwrap().source_module,
+            "mod_b"
         );
     }
 
@@ -1328,6 +1580,14 @@ mod tests {
             },
             LiveBindingError::NamespaceNotFound {
                 module: "mod_c".into(),
+            },
+            LiveBindingError::DuplicateExport {
+                module: "mod_d".into(),
+                export_name: "x".into(),
+            },
+            LiveBindingError::AmbiguousExport {
+                module: "mod_e".into(),
+                export_name: "x".into(),
             },
         ];
         for err in &errors {

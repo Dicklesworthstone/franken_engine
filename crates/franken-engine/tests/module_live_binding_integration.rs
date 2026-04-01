@@ -798,6 +798,18 @@ fn live_binding_error_display_namespace_not_found() {
 }
 
 #[test]
+fn duplicate_export_error_display() {
+    let err = LiveBindingError::DuplicateExport {
+        module: "mod_a".to_string(),
+        export_name: "foo".to_string(),
+    };
+    let s = err.to_string();
+    assert!(s.contains("duplicate"));
+    assert!(s.contains("mod_a"));
+    assert!(s.contains("foo"));
+}
+
+#[test]
 fn live_binding_error_serde_roundtrip() {
     let errors = vec![
         LiveBindingError::ModuleNotLinked {
@@ -818,6 +830,14 @@ fn live_binding_error_serde_roundtrip() {
         },
         LiveBindingError::NamespaceNotFound {
             module: "m".to_string(),
+        },
+        LiveBindingError::DuplicateExport {
+            module: "m".to_string(),
+            export_name: "x".to_string(),
+        },
+        LiveBindingError::AmbiguousExport {
+            module: "m".to_string(),
+            export_name: "x".to_string(),
         },
     ];
     for err in &errors {
@@ -955,6 +975,280 @@ fn build_live_bindings_preserves_live_re_export_chain() {
     assert_eq!(
         map.get_cell(&re_export_id).unwrap().value_millionths,
         Some(2)
+    );
+}
+
+#[test]
+fn build_live_bindings_preserves_live_star_re_export_chain() {
+    let mut graph = ModuleGraph::new();
+
+    let mut mod_a = EsmModule::new("mod_a", "export const foo = 1;", ModuleSyntax::EsModule);
+    mod_a.add_export(ExportEntry::direct("foo", "foo"));
+    mod_a.status = ModuleStatus::Linked;
+
+    let mut mod_b = EsmModule::new("mod_b", "export * from 'mod_a';", ModuleSyntax::EsModule);
+    mod_b.add_export(ExportEntry::star_re_export("mod_a"));
+    mod_b.status = ModuleStatus::Linked;
+
+    let mut mod_c = EsmModule::new(
+        "mod_c",
+        "import { foo } from 'mod_b';",
+        ModuleSyntax::EsModule,
+    );
+    mod_c.add_import(ImportEntry::new("mod_b", "foo", "foo"));
+    mod_c.status = ModuleStatus::Linked;
+
+    graph.add_module(mod_a).unwrap();
+    graph.add_module(mod_b).unwrap();
+    graph.add_module(mod_c).unwrap();
+
+    let mut map = build_live_bindings(&graph).unwrap();
+    let source_id = BindingId::new("mod_a", "foo");
+    let star_re_export_id = BindingId::new("mod_b", "foo");
+
+    map.initialize_millionths(&source_id, 1).unwrap();
+    map.mutate_millionths(&source_id, 2).unwrap();
+
+    let imported = map.read_through_import("mod_c", "foo").unwrap();
+    assert_eq!(imported.source_module, "mod_a");
+    assert_eq!(imported.value_millionths, Some(2));
+    assert_eq!(
+        map.get_surface_cell(&star_re_export_id)
+            .unwrap()
+            .binding_type,
+        BindingType::StarReExport
+    );
+    let mod_b_ns = map.get_namespace("mod_b").unwrap();
+    assert!(mod_b_ns.has_export("foo"));
+    assert_eq!(
+        mod_b_ns.get_binding("foo").unwrap(),
+        &BindingId::new("mod_b", "foo")
+    );
+}
+
+#[test]
+fn build_live_bindings_prefers_explicit_export_over_star_re_export() {
+    let mut graph = ModuleGraph::new();
+
+    let mut source = EsmModule::new("source", "export const foo = 1;", ModuleSyntax::EsModule);
+    source.add_export(ExportEntry::direct("foo", "foo"));
+    source.status = ModuleStatus::Linked;
+
+    let mut aggregator = EsmModule::new(
+        "aggregator",
+        "export * from 'source'; export const foo = 2;",
+        ModuleSyntax::EsModule,
+    );
+    aggregator.add_export(ExportEntry::star_re_export("source"));
+    aggregator.add_export(ExportEntry::direct("foo_local", "foo"));
+    aggregator.status = ModuleStatus::Linked;
+
+    let mut consumer = EsmModule::new(
+        "consumer",
+        "import { foo } from 'aggregator';",
+        ModuleSyntax::EsModule,
+    );
+    consumer.add_import(ImportEntry::new("aggregator", "foo", "foo"));
+    consumer.status = ModuleStatus::Linked;
+
+    graph.add_module(source).unwrap();
+    graph.add_module(aggregator).unwrap();
+    graph.add_module(consumer).unwrap();
+
+    let mut map = build_live_bindings(&graph).unwrap();
+    let aggregator_foo = BindingId::new("aggregator", "foo");
+    let source_foo = BindingId::new("source", "foo");
+
+    map.initialize_millionths(&aggregator_foo, 2).unwrap();
+    map.initialize_millionths(&source_foo, 1).unwrap();
+
+    let imported = map.read_through_import("consumer", "foo").unwrap();
+    assert_eq!(imported.source_module, "aggregator");
+    assert_eq!(imported.local_name, "foo_local");
+    assert_eq!(imported.value_millionths, Some(2));
+    assert_eq!(
+        map.get_namespace("aggregator")
+            .unwrap()
+            .get_binding("foo")
+            .unwrap(),
+        &aggregator_foo
+    );
+}
+
+#[test]
+fn build_live_bindings_omits_ambiguous_star_re_exports() {
+    let mut graph = ModuleGraph::new();
+
+    let mut left = EsmModule::new("left", "export const foo = 1;", ModuleSyntax::EsModule);
+    left.add_export(ExportEntry::direct("foo", "foo"));
+    left.status = ModuleStatus::Linked;
+
+    let mut right = EsmModule::new("right", "export const foo = 2;", ModuleSyntax::EsModule);
+    right.add_export(ExportEntry::direct("foo", "foo"));
+    right.status = ModuleStatus::Linked;
+
+    let mut aggregator = EsmModule::new(
+        "aggregator",
+        "export * from 'left'; export * from 'right';",
+        ModuleSyntax::EsModule,
+    );
+    aggregator.add_export(ExportEntry::star_re_export("left"));
+    aggregator.add_export(ExportEntry::star_re_export("right"));
+    aggregator.status = ModuleStatus::Linked;
+
+    graph.add_module(left).unwrap();
+    graph.add_module(right).unwrap();
+    graph.add_module(aggregator).unwrap();
+
+    let map = build_live_bindings(&graph).unwrap();
+    let aggregator_foo = BindingId::new("aggregator", "foo");
+
+    assert!(map.get_cell(&aggregator_foo).is_none());
+    assert!(!map.get_namespace("aggregator").unwrap().has_export("foo"));
+}
+
+#[test]
+fn build_live_bindings_resolves_re_export_chains_independent_of_module_order() {
+    let mut graph = ModuleGraph::new();
+
+    let mut mod_z = EsmModule::new("mod_z", "export const foo = 1;", ModuleSyntax::EsModule);
+    mod_z.add_export(ExportEntry::direct("foo", "foo"));
+    mod_z.status = ModuleStatus::Linked;
+
+    let mut mod_m = EsmModule::new(
+        "mod_m",
+        "export { foo } from 'mod_z';",
+        ModuleSyntax::EsModule,
+    );
+    mod_m.add_export(ExportEntry::re_export("foo", "mod_z", "foo"));
+    mod_m.status = ModuleStatus::Linked;
+
+    let mut mod_a = EsmModule::new(
+        "mod_a",
+        "export { foo } from 'mod_m'; import { foo } from 'mod_a';",
+        ModuleSyntax::EsModule,
+    );
+    mod_a.add_export(ExportEntry::re_export("foo", "mod_m", "foo"));
+    mod_a.add_import(ImportEntry::new("mod_a", "foo", "foo"));
+    mod_a.status = ModuleStatus::Linked;
+
+    // BTreeMap iteration will visit mod_a before mod_m before mod_z.
+    graph.add_module(mod_z).unwrap();
+    graph.add_module(mod_m).unwrap();
+    graph.add_module(mod_a).unwrap();
+
+    let mut map = build_live_bindings(&graph).unwrap();
+    let source_id = BindingId::new("mod_z", "foo");
+    let top_alias_id = BindingId::new("mod_a", "foo");
+
+    map.initialize_millionths(&source_id, 7).unwrap();
+
+    let imported = map.read_through_import("mod_a", "foo").unwrap();
+    assert_eq!(imported.source_module, "mod_z");
+    assert_eq!(imported.value_millionths, Some(7));
+    assert_eq!(map.get_cell(&top_alias_id).unwrap().source_module, "mod_z");
+}
+
+#[test]
+fn build_live_bindings_missing_named_re_export_fails_closed() {
+    let mut graph = ModuleGraph::new();
+
+    let mut lib = EsmModule::new("lib", "export const present = 1;", ModuleSyntax::EsModule);
+    lib.add_export(ExportEntry::direct("present", "present"));
+    lib.status = ModuleStatus::Linked;
+
+    let mut index = EsmModule::new(
+        "index",
+        "export { missing as foo } from 'lib';",
+        ModuleSyntax::EsModule,
+    );
+    index.add_export(ExportEntry::re_export("foo", "lib", "missing"));
+    index.status = ModuleStatus::Linked;
+
+    graph.add_module(lib).unwrap();
+    graph.add_module(index).unwrap();
+
+    let err = build_live_bindings(&graph).unwrap_err();
+    assert_eq!(
+        err,
+        LiveBindingError::BindingNotFound {
+            module: "index".to_string(),
+            export_name: "foo".to_string(),
+        }
+    );
+}
+
+#[test]
+fn build_live_bindings_ambiguous_named_re_export_fails_closed() {
+    let mut graph = ModuleGraph::new();
+
+    let mut left = EsmModule::new("left", "export const foo = 1;", ModuleSyntax::EsModule);
+    left.add_export(ExportEntry::direct("foo", "foo"));
+    left.status = ModuleStatus::Linked;
+
+    let mut right = EsmModule::new("right", "export const foo = 2;", ModuleSyntax::EsModule);
+    right.add_export(ExportEntry::direct("foo", "foo"));
+    right.status = ModuleStatus::Linked;
+
+    let mut lib = EsmModule::new(
+        "lib",
+        "export * from 'left'; export * from 'right';",
+        ModuleSyntax::EsModule,
+    );
+    lib.add_export(ExportEntry::star_re_export("left"));
+    lib.add_export(ExportEntry::star_re_export("right"));
+    lib.status = ModuleStatus::Linked;
+
+    let mut index = EsmModule::new(
+        "index",
+        "export { foo } from 'lib';",
+        ModuleSyntax::EsModule,
+    );
+    index.add_export(ExportEntry::re_export("foo", "lib", "foo"));
+    index.status = ModuleStatus::Linked;
+
+    graph.add_module(left).unwrap();
+    graph.add_module(right).unwrap();
+    graph.add_module(lib).unwrap();
+    graph.add_module(index).unwrap();
+
+    let err = build_live_bindings(&graph).unwrap_err();
+    assert_eq!(
+        err,
+        LiveBindingError::AmbiguousExport {
+            module: "index".to_string(),
+            export_name: "foo".to_string(),
+        }
+    );
+}
+
+#[test]
+fn build_live_bindings_duplicate_export_names_fail_closed() {
+    let mut graph = ModuleGraph::new();
+
+    let mut lib = EsmModule::new("lib", "export const foo = 1;", ModuleSyntax::EsModule);
+    lib.add_export(ExportEntry::direct("foo", "foo"));
+    lib.status = ModuleStatus::Linked;
+
+    let mut index = EsmModule::new(
+        "index",
+        "export const foo = 1; export { foo } from 'lib';",
+        ModuleSyntax::EsModule,
+    );
+    index.add_export(ExportEntry::direct("foo_local", "foo"));
+    index.add_export(ExportEntry::re_export("foo", "lib", "foo"));
+    index.status = ModuleStatus::Linked;
+
+    graph.add_module(lib).unwrap();
+    graph.add_module(index).unwrap();
+
+    let err = build_live_bindings(&graph).unwrap_err();
+    assert_eq!(
+        err,
+        LiveBindingError::DuplicateExport {
+            module: "index".to_string(),
+            export_name: "foo".to_string(),
+        }
     );
 }
 

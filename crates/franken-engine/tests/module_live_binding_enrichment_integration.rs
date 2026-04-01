@@ -489,11 +489,10 @@ fn event_trace_has_died_event() {
     let cell = BindingCell::new("mod_a", "x", "x", BindingType::Direct);
     map.register_cell(cell);
     map.mark_dead(&id).unwrap();
-    assert!(
-        map.events
-            .iter()
-            .any(|e| matches!(e, BindingEvent::CellDied { .. }))
-    );
+    assert!(map
+        .events
+        .iter()
+        .any(|e| matches!(e, BindingEvent::CellDied { .. })));
 }
 
 // ---------------------------------------------------------------------------
@@ -660,6 +659,14 @@ fn live_binding_error_all_variants_display() {
         LiveBindingError::NamespaceNotFound {
             module: "mod_c".into(),
         },
+        LiveBindingError::DuplicateExport {
+            module: "mod_d".into(),
+            export_name: "x".into(),
+        },
+        LiveBindingError::AmbiguousExport {
+            module: "mod_e".into(),
+            export_name: "x".into(),
+        },
     ];
     for err in &errors {
         assert!(!err.to_string().is_empty());
@@ -712,9 +719,7 @@ fn validate_bindings_namespace_missing() {
     });
     let errors = validate_bindings(&map);
     assert!(!errors.is_empty());
-    assert!(
-        errors
-            .iter()
-            .any(|e| matches!(e, LiveBindingError::NamespaceNotFound { .. }))
-    );
+    assert!(errors
+        .iter()
+        .any(|e| matches!(e, LiveBindingError::NamespaceNotFound { .. })));
 }

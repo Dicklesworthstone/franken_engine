@@ -444,6 +444,21 @@ impl MockInventory {
         let key = format!("{}", kind);
         self.summary.by_kind.get(&key).copied().unwrap_or(0)
     }
+
+    pub fn production_mock_seam_matrix(&self) -> ProductionMockSeamMatrix {
+        ProductionMockSeamMatrix {
+            schema_version: PRODUCTION_MOCK_SEAM_MATRIX_SCHEMA_VERSION.to_string(),
+            component: COMPONENT.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            policy_id: CONTROL_PLANE_MOCK_INVENTORY_POLICY_ID.to_string(),
+            inventory_hash: self.inventory_hash.to_string(),
+            must_fix_count: self.summary.must_fix_count,
+            must_fix_files: self.summary.must_fix_files,
+            architectural_issue_count: self.summary.architectural_issue_count,
+            must_fix_occurrences: self.must_fix_items().into_iter().cloned().collect(),
+            architectural_issues: self.architectural_issues.clone(),
+        }
+    }
 }
 
 impl fmt::Display for MockInventory {
@@ -460,6 +475,162 @@ impl fmt::Display for MockInventory {
             self.summary.architectural_issue_count
         )?;
         write!(f, "  Inventory hash: {}", self.inventory_hash)
+    }
+}
+
+pub const CONTROL_PLANE_MOCK_INVENTORY_POLICY_ID: &str =
+    "frankenengine.control-plane-mock-inventory.v1";
+pub const PRODUCTION_MOCK_SEAM_MATRIX_SCHEMA_VERSION: &str =
+    "frankenengine.production-mock-seam-matrix.v1";
+pub const CONTROL_PLANE_MOCK_INVENTORY_TRACE_IDS_SCHEMA_VERSION: &str =
+    "frankenengine.control-plane-mock-inventory.trace-ids.v1";
+pub const CONTROL_PLANE_MOCK_INVENTORY_RUN_MANIFEST_SCHEMA_VERSION: &str =
+    "frankenengine.control-plane-mock-inventory.run-manifest.v1";
+pub const CONTROL_PLANE_MOCK_INVENTORY_EVENT_SCHEMA_VERSION: &str =
+    "frankenengine.control-plane-mock-inventory.event.v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlPlaneMockInventoryOutcome {
+    InventoryComplete,
+}
+
+impl ControlPlaneMockInventoryOutcome {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::InventoryComplete => "inventory_complete",
+        }
+    }
+}
+
+impl fmt::Display for ControlPlaneMockInventoryOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductionMockSeamMatrix {
+    pub schema_version: String,
+    pub component: String,
+    pub bead_id: String,
+    pub policy_id: String,
+    pub inventory_hash: String,
+    pub must_fix_count: u32,
+    pub must_fix_files: u32,
+    pub architectural_issue_count: u32,
+    pub must_fix_occurrences: Vec<SeamOccurrence>,
+    pub architectural_issues: Vec<ArchitecturalIssue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlPlaneMockInventoryArtifactPaths {
+    pub asupersync_residual_mock_inventory: String,
+    pub production_mock_seam_matrix: String,
+    pub trace_ids: String,
+    pub run_manifest: String,
+    pub events_jsonl: String,
+    pub commands_txt: String,
+    pub step_logs_dir: String,
+    pub summary_md: String,
+    pub env_json: String,
+    pub repro_lock: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlPlaneMockInventoryTraceIds {
+    pub schema_version: String,
+    pub component: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub inventory_hash: String,
+    pub production_mock_seam_matrix_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlPlaneMockInventoryRunManifest {
+    pub schema_version: String,
+    pub component: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub inventory_hash: String,
+    pub production_mock_seam_matrix_hash: String,
+    pub outcome: ControlPlaneMockInventoryOutcome,
+    pub must_fix_count: u32,
+    pub architectural_issue_count: u32,
+    pub artifact_paths: ControlPlaneMockInventoryArtifactPaths,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlPlaneMockInventoryEvent {
+    pub schema_version: String,
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub component: String,
+    pub event: String,
+    pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    pub seed: String,
+    pub scenario_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostic_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_number: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlPlaneMockInventoryArtifacts {
+    pub out_dir: PathBuf,
+    pub inventory_path: PathBuf,
+    pub production_mock_seam_matrix_path: PathBuf,
+    pub trace_ids_path: PathBuf,
+    pub run_manifest_path: PathBuf,
+    pub events_path: PathBuf,
+    pub commands_path: PathBuf,
+    pub step_logs_dir: PathBuf,
+    pub summary_path: PathBuf,
+    pub env_path: PathBuf,
+    pub repro_lock_path: PathBuf,
+    pub outcome: ControlPlaneMockInventoryOutcome,
+    pub inventory_hash: String,
+    pub production_mock_seam_matrix_hash: String,
+    pub must_fix_count: usize,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ControlPlaneMockInventoryBundleError {
+    #[error("I/O error at {path}: {source}")]
+    Io {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("JSON serialization error at {path}: {source}")]
+    Json {
+        path: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("bundle directory is already being written: {path}")]
+    Busy { path: String },
+}
+
+#[derive(Debug)]
+struct ControlPlaneMockInventoryBundleLock {
+    path: PathBuf,
+}
+
+impl Drop for ControlPlaneMockInventoryBundleLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
     }
 }
 
@@ -637,6 +808,187 @@ pub fn build_canonical_inventory() -> MockInventory {
     ];
 
     MockInventory::build(occurrences, architectural_issues)
+}
+
+pub fn write_control_plane_mock_inventory_bundle(
+    out_dir: impl AsRef<Path>,
+    command_lines: &[String],
+) -> Result<ControlPlaneMockInventoryArtifacts, ControlPlaneMockInventoryBundleError> {
+    write_control_plane_mock_inventory_bundle_in_root(repo_root(), out_dir, command_lines)
+}
+
+pub fn write_control_plane_mock_inventory_bundle_in_root(
+    workspace_root: impl AsRef<Path>,
+    out_dir: impl AsRef<Path>,
+    command_lines: &[String],
+) -> Result<ControlPlaneMockInventoryArtifacts, ControlPlaneMockInventoryBundleError> {
+    let workspace_root = workspace_root.as_ref();
+    let out_dir = out_dir.as_ref().to_path_buf();
+    fs::create_dir_all(&out_dir).map_err(|source| ControlPlaneMockInventoryBundleError::Io {
+        path: out_dir.display().to_string(),
+        source,
+    })?;
+
+    let inventory = build_canonical_inventory();
+    let production_mock_seam_matrix = inventory.production_mock_seam_matrix();
+
+    let inventory_path = out_dir.join("asupersync_residual_mock_inventory.json");
+    let production_mock_seam_matrix_path = out_dir.join("production_mock_seam_matrix.json");
+    let trace_ids_path = out_dir.join("trace_ids.json");
+    let run_manifest_path = out_dir.join("run_manifest.json");
+    let events_path = out_dir.join("events.jsonl");
+    let commands_path = out_dir.join("commands.txt");
+    let step_logs_dir = out_dir.join("step_logs");
+    let summary_path = out_dir.join("summary.md");
+    let env_path = out_dir.join("env.json");
+    let repro_lock_path = out_dir.join("repro.lock");
+
+    let inventory_bytes = control_plane_mock_inventory_json_bytes(&inventory, &inventory_path)?;
+    let canonical_inventory_hash = inventory.inventory_hash.to_string();
+    let production_mock_seam_matrix_bytes = control_plane_mock_inventory_json_bytes(
+        &production_mock_seam_matrix,
+        &production_mock_seam_matrix_path,
+    )?;
+    let production_mock_seam_matrix_hash = sha256_hex(&production_mock_seam_matrix_bytes);
+    let short_hash = canonical_inventory_hash
+        .chars()
+        .take(16)
+        .collect::<String>();
+    let trace_id = format!("trace-control-plane-mock-inventory-{short_hash}");
+    let decision_id = format!("decision-control-plane-mock-inventory-{short_hash}");
+
+    let trace_ids = ControlPlaneMockInventoryTraceIds {
+        schema_version: CONTROL_PLANE_MOCK_INVENTORY_TRACE_IDS_SCHEMA_VERSION.to_string(),
+        component: COMPONENT.to_string(),
+        trace_id: trace_id.clone(),
+        decision_id: decision_id.clone(),
+        policy_id: CONTROL_PLANE_MOCK_INVENTORY_POLICY_ID.to_string(),
+        inventory_hash: canonical_inventory_hash.clone(),
+        production_mock_seam_matrix_hash: production_mock_seam_matrix_hash.clone(),
+    };
+    let trace_ids_bytes = control_plane_mock_inventory_json_bytes(&trace_ids, &trace_ids_path)?;
+
+    let events = build_control_plane_mock_inventory_events(&inventory, &trace_id, &decision_id);
+    let mut events_jsonl = String::new();
+    for event in &events {
+        let line = serde_json::to_string(event).map_err(|source| {
+            ControlPlaneMockInventoryBundleError::Json {
+                path: events_path.display().to_string(),
+                source,
+            }
+        })?;
+        events_jsonl.push_str(&line);
+        events_jsonl.push('\n');
+    }
+
+    let mut commands_buf = String::new();
+    for command in command_lines {
+        commands_buf.push_str(command);
+        commands_buf.push('\n');
+    }
+
+    let summary_md =
+        render_control_plane_mock_inventory_summary(&inventory, &trace_id, &decision_id);
+    let env_json = serde_json::to_vec_pretty(&serde_json::json!({
+        "schema_version": "frankenengine.control-plane-mock-inventory.env.v1",
+        "component": COMPONENT,
+        "bead_id": BEAD_ID,
+        "policy_id": CONTROL_PLANE_MOCK_INVENTORY_POLICY_ID,
+        "workspace_root": workspace_root.display().to_string(),
+        "inventory_schema_version": inventory.schema_version,
+        "production_matrix_schema_version": PRODUCTION_MOCK_SEAM_MATRIX_SCHEMA_VERSION,
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "toolchain": std::env::var("RUSTUP_TOOLCHAIN").unwrap_or_else(|_| "unknown".to_string()),
+    }))
+    .map_err(|source| ControlPlaneMockInventoryBundleError::Json {
+        path: env_path.display().to_string(),
+        source,
+    })?;
+    let repro_lock = serde_json::to_vec_pretty(&serde_json::json!({
+        "schema_version": "franken-engine.repro-lock.v1",
+        "component": COMPONENT,
+        "bead_id": BEAD_ID,
+        "policy_id": CONTROL_PLANE_MOCK_INVENTORY_POLICY_ID,
+        "inventory_hash": canonical_inventory_hash.clone(),
+        "production_mock_seam_matrix_hash": production_mock_seam_matrix_hash.clone(),
+        "replay_command": "cargo run -p frankenengine-engine --bin franken_control_plane_mock_inventory -- --out-dir <DIR>",
+    }))
+    .map_err(|source| ControlPlaneMockInventoryBundleError::Json {
+        path: repro_lock_path.display().to_string(),
+        source,
+    })?;
+
+    let manifest = ControlPlaneMockInventoryRunManifest {
+        schema_version: CONTROL_PLANE_MOCK_INVENTORY_RUN_MANIFEST_SCHEMA_VERSION.to_string(),
+        component: COMPONENT.to_string(),
+        trace_id: trace_id.clone(),
+        decision_id: decision_id.clone(),
+        policy_id: CONTROL_PLANE_MOCK_INVENTORY_POLICY_ID.to_string(),
+        inventory_hash: canonical_inventory_hash.clone(),
+        production_mock_seam_matrix_hash: production_mock_seam_matrix_hash.clone(),
+        outcome: ControlPlaneMockInventoryOutcome::InventoryComplete,
+        must_fix_count: inventory.summary.must_fix_count,
+        architectural_issue_count: inventory.summary.architectural_issue_count,
+        artifact_paths: ControlPlaneMockInventoryArtifactPaths {
+            asupersync_residual_mock_inventory: "asupersync_residual_mock_inventory.json"
+                .to_string(),
+            production_mock_seam_matrix: "production_mock_seam_matrix.json".to_string(),
+            trace_ids: "trace_ids.json".to_string(),
+            run_manifest: "run_manifest.json".to_string(),
+            events_jsonl: "events.jsonl".to_string(),
+            commands_txt: "commands.txt".to_string(),
+            step_logs_dir: "step_logs".to_string(),
+            summary_md: "summary.md".to_string(),
+            env_json: "env.json".to_string(),
+            repro_lock: "repro.lock".to_string(),
+        },
+    };
+    let manifest_bytes = control_plane_mock_inventory_json_bytes(&manifest, &run_manifest_path)?;
+
+    let _bundle_lock = acquire_control_plane_mock_inventory_bundle_lock(&out_dir)?;
+    write_control_plane_mock_inventory_atomic(&inventory_path, &inventory_bytes)?;
+    write_control_plane_mock_inventory_atomic(
+        &production_mock_seam_matrix_path,
+        &production_mock_seam_matrix_bytes,
+    )?;
+    write_control_plane_mock_inventory_atomic(&trace_ids_path, &trace_ids_bytes)?;
+    write_control_plane_mock_inventory_atomic(&events_path, events_jsonl.as_bytes())?;
+    write_control_plane_mock_inventory_atomic(&commands_path, commands_buf.as_bytes())?;
+    fs::create_dir_all(&step_logs_dir).map_err(|source| {
+        ControlPlaneMockInventoryBundleError::Io {
+            path: step_logs_dir.display().to_string(),
+            source,
+        }
+    })?;
+    let step_log =
+        render_control_plane_mock_inventory_step_log(&inventory, &trace_id, &decision_id);
+    write_control_plane_mock_inventory_atomic(
+        &step_logs_dir.join("step_001_inventory.log"),
+        step_log.as_bytes(),
+    )?;
+    write_control_plane_mock_inventory_atomic(&summary_path, summary_md.as_bytes())?;
+    write_control_plane_mock_inventory_atomic(&env_path, &env_json)?;
+    write_control_plane_mock_inventory_atomic(&repro_lock_path, &repro_lock)?;
+    write_control_plane_mock_inventory_atomic(&run_manifest_path, &manifest_bytes)?;
+
+    Ok(ControlPlaneMockInventoryArtifacts {
+        out_dir,
+        inventory_path,
+        production_mock_seam_matrix_path,
+        trace_ids_path,
+        run_manifest_path,
+        events_path,
+        commands_path,
+        step_logs_dir,
+        summary_path,
+        env_path,
+        repro_lock_path,
+        outcome: ControlPlaneMockInventoryOutcome::InventoryComplete,
+        inventory_hash: canonical_inventory_hash,
+        production_mock_seam_matrix_hash,
+        must_fix_count: inventory.must_fix_items().len(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -2254,6 +2606,254 @@ fn strip_non_code_segments(line: &str, in_block_comment: &mut bool) -> String {
     output
 }
 
+fn build_control_plane_mock_inventory_events(
+    inventory: &MockInventory,
+    trace_id: &str,
+    decision_id: &str,
+) -> Vec<ControlPlaneMockInventoryEvent> {
+    let mut events = vec![ControlPlaneMockInventoryEvent {
+        schema_version: CONTROL_PLANE_MOCK_INVENTORY_EVENT_SCHEMA_VERSION.to_string(),
+        trace_id: trace_id.to_string(),
+        decision_id: decision_id.to_string(),
+        policy_id: CONTROL_PLANE_MOCK_INVENTORY_POLICY_ID.to_string(),
+        component: COMPONENT.to_string(),
+        event: "inventory_started".to_string(),
+        outcome: "started".to_string(),
+        error_code: None,
+        seed: "control-plane-mock-inventory-v1".to_string(),
+        scenario_id: "canonical_inventory".to_string(),
+        diagnostic_id: None,
+        file_path: None,
+        line_number: None,
+        detail: Some("building canonical control-plane mock inventory".to_string()),
+    }];
+
+    for occurrence in inventory.must_fix_items() {
+        events.push(ControlPlaneMockInventoryEvent {
+            schema_version: CONTROL_PLANE_MOCK_INVENTORY_EVENT_SCHEMA_VERSION.to_string(),
+            trace_id: trace_id.to_string(),
+            decision_id: decision_id.to_string(),
+            policy_id: CONTROL_PLANE_MOCK_INVENTORY_POLICY_ID.to_string(),
+            component: COMPONENT.to_string(),
+            event: "production_seam_classified".to_string(),
+            outcome: occurrence.classification.to_string(),
+            error_code: Some("CPMI-MUST-FIX".to_string()),
+            seed: "control-plane-mock-inventory-v1".to_string(),
+            scenario_id: "canonical_inventory".to_string(),
+            diagnostic_id: Some(occurrence.content_hash().to_string()),
+            file_path: Some(occurrence.file_path.clone()),
+            line_number: Some(occurrence.line_number),
+            detail: Some(occurrence.description.clone()),
+        });
+    }
+
+    for issue in &inventory.architectural_issues {
+        events.push(ControlPlaneMockInventoryEvent {
+            schema_version: CONTROL_PLANE_MOCK_INVENTORY_EVENT_SCHEMA_VERSION.to_string(),
+            trace_id: trace_id.to_string(),
+            decision_id: decision_id.to_string(),
+            policy_id: CONTROL_PLANE_MOCK_INVENTORY_POLICY_ID.to_string(),
+            component: COMPONENT.to_string(),
+            event: "architectural_issue_classified".to_string(),
+            outcome: issue.severity.to_string(),
+            error_code: Some("CPMI-ARCH-ISSUE".to_string()),
+            seed: "control-plane-mock-inventory-v1".to_string(),
+            scenario_id: "canonical_inventory".to_string(),
+            diagnostic_id: Some(issue.id.clone()),
+            file_path: Some(issue.file_path.clone()),
+            line_number: None,
+            detail: Some(issue.description.clone()),
+        });
+    }
+
+    events.push(ControlPlaneMockInventoryEvent {
+        schema_version: CONTROL_PLANE_MOCK_INVENTORY_EVENT_SCHEMA_VERSION.to_string(),
+        trace_id: trace_id.to_string(),
+        decision_id: decision_id.to_string(),
+        policy_id: CONTROL_PLANE_MOCK_INVENTORY_POLICY_ID.to_string(),
+        component: COMPONENT.to_string(),
+        event: "inventory_completed".to_string(),
+        outcome: ControlPlaneMockInventoryOutcome::InventoryComplete
+            .as_str()
+            .to_string(),
+        error_code: None,
+        seed: "control-plane-mock-inventory-v1".to_string(),
+        scenario_id: "canonical_inventory".to_string(),
+        diagnostic_id: None,
+        file_path: None,
+        line_number: None,
+        detail: Some(format!(
+            "{} occurrences, {} must-fix production seam(s), {} architectural issue(s)",
+            inventory.summary.total_occurrences,
+            inventory.summary.must_fix_count,
+            inventory.summary.architectural_issue_count
+        )),
+    });
+
+    events
+}
+
+fn render_control_plane_mock_inventory_summary(
+    inventory: &MockInventory,
+    trace_id: &str,
+    decision_id: &str,
+) -> String {
+    let mut lines = vec![
+        "# Control-Plane Mock Inventory Summary".to_string(),
+        String::new(),
+        format!(
+            "Outcome: `{}`",
+            ControlPlaneMockInventoryOutcome::InventoryComplete
+        ),
+        format!("Policy: `{}`", CONTROL_PLANE_MOCK_INVENTORY_POLICY_ID),
+        format!("Bead: `{}`", BEAD_ID),
+        format!("Trace: `{trace_id}`"),
+        format!("Decision: `{decision_id}`"),
+        format!("Inventory hash: `{}`", inventory.inventory_hash),
+        format!("Total occurrences: {}", inventory.summary.total_occurrences),
+        format!(
+            "Must-fix production seams: {}",
+            inventory.summary.must_fix_count
+        ),
+        format!(
+            "Acceptable test-only seams: {}",
+            inventory.summary.test_only_count
+        ),
+        format!(
+            "False positives: {}",
+            inventory.summary.false_positive_count
+        ),
+        format!(
+            "Architectural issues: {}",
+            inventory.summary.architectural_issue_count
+        ),
+        String::new(),
+        "## Must-Fix Production Seams".to_string(),
+        String::new(),
+    ];
+
+    for occurrence in inventory.must_fix_items() {
+        lines.push(format!(
+            "- `{}` {}:{} {} -> `{}`",
+            occurrence.kind,
+            occurrence.file_path,
+            occurrence.line_number,
+            occurrence.description,
+            occurrence.remediation_bead
+        ));
+    }
+
+    lines.push(String::new());
+    lines.push("## Architectural Issues".to_string());
+    lines.push(String::new());
+    for issue in &inventory.architectural_issues {
+        lines.push(format!(
+            "- `{}` {} {} -> `{}`",
+            issue.id, issue.file_path, issue.description, issue.remediation_bead
+        ));
+    }
+
+    lines.join("\n")
+}
+
+fn render_control_plane_mock_inventory_step_log(
+    inventory: &MockInventory,
+    trace_id: &str,
+    decision_id: &str,
+) -> String {
+    let mut output = String::new();
+    output.push_str(&format!("trace_id={trace_id}\n"));
+    output.push_str(&format!("decision_id={decision_id}\n"));
+    output.push_str(&format!(
+        "policy_id={}\n",
+        CONTROL_PLANE_MOCK_INVENTORY_POLICY_ID
+    ));
+    output.push_str(&format!("inventory_hash={}\n", inventory.inventory_hash));
+    output.push_str(&format!(
+        "total_occurrences={}\n",
+        inventory.summary.total_occurrences
+    ));
+    output.push_str(&format!(
+        "must_fix_count={}\n",
+        inventory.summary.must_fix_count
+    ));
+    output.push_str(&format!(
+        "architectural_issue_count={}\n",
+        inventory.summary.architectural_issue_count
+    ));
+    for occurrence in inventory.must_fix_items() {
+        output.push_str(&format!(
+            "must_fix={} {}:{} {}\n",
+            occurrence.kind, occurrence.file_path, occurrence.line_number, occurrence.description
+        ));
+    }
+    for issue in &inventory.architectural_issues {
+        output.push_str(&format!(
+            "architectural_issue={} {} {}\n",
+            issue.id, issue.file_path, issue.description
+        ));
+    }
+    output
+}
+
+fn control_plane_mock_inventory_json_bytes<T: Serialize>(
+    value: &T,
+    path: &Path,
+) -> Result<Vec<u8>, ControlPlaneMockInventoryBundleError> {
+    serde_json::to_vec(value).map_err(|source| ControlPlaneMockInventoryBundleError::Json {
+        path: path.display().to_string(),
+        source,
+    })
+}
+
+fn acquire_control_plane_mock_inventory_bundle_lock(
+    out_dir: &Path,
+) -> Result<ControlPlaneMockInventoryBundleLock, ControlPlaneMockInventoryBundleError> {
+    let lock_path = out_dir.join(".control_plane_mock_inventory.lock");
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_path)
+    {
+        Ok(_) => Ok(ControlPlaneMockInventoryBundleLock { path: lock_path }),
+        Err(source) if source.kind() == ErrorKind::AlreadyExists => {
+            Err(ControlPlaneMockInventoryBundleError::Busy {
+                path: lock_path.display().to_string(),
+            })
+        }
+        Err(source) => Err(ControlPlaneMockInventoryBundleError::Io {
+            path: lock_path.display().to_string(),
+            source,
+        }),
+    }
+}
+
+fn write_control_plane_mock_inventory_atomic(
+    path: &Path,
+    bytes: &[u8],
+) -> Result<(), ControlPlaneMockInventoryBundleError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| ControlPlaneMockInventoryBundleError::Io {
+            path: parent.display().to_string(),
+            source,
+        })?;
+    }
+
+    let temp_path = ambient_mock_guard_temp_path(path);
+    fs::write(&temp_path, bytes).map_err(|source| ControlPlaneMockInventoryBundleError::Io {
+        path: temp_path.display().to_string(),
+        source,
+    })?;
+    if let Err(source) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(ControlPlaneMockInventoryBundleError::Io {
+            path: path.display().to_string(),
+            source,
+        });
+    }
+    Ok(())
+}
+
 fn build_ambient_mock_guard_events(
     report: &AmbientMockGuardReport,
     trace_id: &str,
@@ -2908,6 +3508,98 @@ mod tests {
         let json = serde_json::to_string(&inv).unwrap();
         let inv2: MockInventory = serde_json::from_str(&json).unwrap();
         assert_eq!(inv, inv2);
+    }
+
+    #[test]
+    fn production_mock_seam_matrix_matches_inventory() {
+        let inventory = build_canonical_inventory();
+        let matrix = inventory.production_mock_seam_matrix();
+
+        assert_eq!(
+            matrix.schema_version,
+            PRODUCTION_MOCK_SEAM_MATRIX_SCHEMA_VERSION
+        );
+        assert_eq!(matrix.component, COMPONENT);
+        assert_eq!(matrix.bead_id, BEAD_ID);
+        assert_eq!(matrix.policy_id, CONTROL_PLANE_MOCK_INVENTORY_POLICY_ID);
+        assert_eq!(matrix.inventory_hash, inventory.inventory_hash.to_string());
+        assert_eq!(matrix.must_fix_count, inventory.summary.must_fix_count);
+        assert_eq!(matrix.must_fix_files, inventory.summary.must_fix_files);
+        assert_eq!(
+            matrix.architectural_issue_count,
+            inventory.summary.architectural_issue_count
+        );
+        assert_eq!(
+            matrix.must_fix_occurrences,
+            inventory
+                .must_fix_items()
+                .into_iter()
+                .cloned()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(matrix.architectural_issues, inventory.architectural_issues);
+    }
+
+    #[test]
+    fn write_control_plane_mock_inventory_bundle_emits_expected_artifacts() {
+        let root = unique_temp_dir("control-plane-mock-inventory-bundle-root");
+        let out_dir = unique_temp_dir("control-plane-mock-inventory-bundle-out");
+        let commands = vec![
+            "cargo run -p frankenengine-engine --bin franken_control_plane_mock_inventory -- --out-dir /tmp/out"
+                .to_string(),
+        ];
+
+        let artifacts =
+            write_control_plane_mock_inventory_bundle_in_root(&root, &out_dir, &commands)
+                .expect("bundle should be written");
+
+        assert_eq!(
+            artifacts.outcome,
+            ControlPlaneMockInventoryOutcome::InventoryComplete
+        );
+        assert!(artifacts.inventory_path.exists());
+        assert!(artifacts.production_mock_seam_matrix_path.exists());
+        assert!(artifacts.trace_ids_path.exists());
+        assert!(artifacts.run_manifest_path.exists());
+        assert!(artifacts.events_path.exists());
+        assert!(artifacts.commands_path.exists());
+        assert!(
+            artifacts
+                .step_logs_dir
+                .join("step_001_inventory.log")
+                .exists()
+        );
+        assert!(artifacts.summary_path.exists());
+        assert!(artifacts.env_path.exists());
+        assert!(artifacts.repro_lock_path.exists());
+        assert_eq!(
+            artifacts.inventory_hash,
+            build_canonical_inventory().inventory_hash.to_string()
+        );
+
+        let manifest: ControlPlaneMockInventoryRunManifest =
+            serde_json::from_slice(&fs::read(&artifacts.run_manifest_path).expect("read manifest"))
+                .expect("manifest should deserialize");
+        assert_eq!(
+            manifest.outcome,
+            ControlPlaneMockInventoryOutcome::InventoryComplete
+        );
+        assert_eq!(
+            manifest.artifact_paths.asupersync_residual_mock_inventory,
+            "asupersync_residual_mock_inventory.json"
+        );
+        assert_eq!(
+            manifest.artifact_paths.production_mock_seam_matrix,
+            "production_mock_seam_matrix.json"
+        );
+
+        let trace_ids: ControlPlaneMockInventoryTraceIds =
+            serde_json::from_slice(&fs::read(&artifacts.trace_ids_path).expect("read trace ids"))
+                .expect("trace ids should deserialize");
+        assert_eq!(trace_ids.inventory_hash, manifest.inventory_hash);
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(out_dir);
     }
 
     #[test]

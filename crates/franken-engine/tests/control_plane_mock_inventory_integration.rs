@@ -14,6 +14,9 @@
 )]
 
 use frankenengine_engine::control_plane_mock_inventory::*;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -50,6 +53,31 @@ fn occurrence_with_kind(
         remediation: RemediationStrategy::MoveToTestOnly,
         remediation_bead: "bd-test",
     })
+}
+
+fn unique_temp_dir(label: &str) -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock before epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "frankenengine-control-plane-mock-inventory-it-{label}-{}-{nanos}",
+        std::process::id()
+    ))
+}
+
+fn run_inventory_binary(workspace_root: Option<&Path>, out_dir: &Path) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_franken_control_plane_mock_inventory"));
+    command.args(["--out-dir", out_dir.to_str().expect("utf-8 out dir")]);
+    if let Some(workspace_root) = workspace_root {
+        command.args([
+            "--workspace-root",
+            workspace_root.to_str().expect("utf-8 workspace root"),
+        ]);
+    }
+    command
+        .output()
+        .expect("run control-plane mock inventory binary")
 }
 
 // ---------------------------------------------------------------------------
@@ -1549,6 +1577,194 @@ fn orchestrator_context_refactor_constants_nonempty() {
     assert!(!ORCHESTRATOR_CONTEXT_REFACTOR_EVENT_SCHEMA_VERSION.is_empty());
     assert!(!ORCHESTRATOR_CONTEXT_REFACTOR_SOURCE_FILE.is_empty());
     assert!(!ORCHESTRATOR_CONTEXT_PATH_ID.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Control-plane mock inventory bundle surfaces
+// ---------------------------------------------------------------------------
+
+#[test]
+fn control_plane_mock_inventory_constants_nonempty() {
+    assert!(!CONTROL_PLANE_MOCK_INVENTORY_POLICY_ID.is_empty());
+    assert!(!PRODUCTION_MOCK_SEAM_MATRIX_SCHEMA_VERSION.is_empty());
+    assert!(!CONTROL_PLANE_MOCK_INVENTORY_TRACE_IDS_SCHEMA_VERSION.is_empty());
+    assert!(!CONTROL_PLANE_MOCK_INVENTORY_RUN_MANIFEST_SCHEMA_VERSION.is_empty());
+    assert!(!CONTROL_PLANE_MOCK_INVENTORY_EVENT_SCHEMA_VERSION.is_empty());
+}
+
+#[test]
+fn control_plane_mock_inventory_outcome_serde_roundtrip() {
+    let outcome = ControlPlaneMockInventoryOutcome::InventoryComplete;
+    let json = serde_json::to_string(&outcome).unwrap();
+    let back: ControlPlaneMockInventoryOutcome = serde_json::from_str(&json).unwrap();
+    assert_eq!(outcome, back);
+    assert_eq!(back.as_str(), "inventory_complete");
+}
+
+#[test]
+fn production_mock_seam_matrix_serde_roundtrip() {
+    let inventory = build_canonical_inventory();
+    let matrix = inventory.production_mock_seam_matrix();
+    let json = serde_json::to_string(&matrix).unwrap();
+    let back: ProductionMockSeamMatrix = serde_json::from_str(&json).unwrap();
+    assert_eq!(matrix, back);
+}
+
+#[test]
+fn control_plane_mock_inventory_artifact_paths_serde_roundtrip() {
+    let artifact_paths = ControlPlaneMockInventoryArtifactPaths {
+        asupersync_residual_mock_inventory: "inventory.json".to_string(),
+        production_mock_seam_matrix: "matrix.json".to_string(),
+        trace_ids: "trace_ids.json".to_string(),
+        run_manifest: "run_manifest.json".to_string(),
+        events_jsonl: "events.jsonl".to_string(),
+        commands_txt: "commands.txt".to_string(),
+        step_logs_dir: "step_logs".to_string(),
+        summary_md: "summary.md".to_string(),
+        env_json: "env.json".to_string(),
+        repro_lock: "repro.lock".to_string(),
+    };
+    let json = serde_json::to_string(&artifact_paths).unwrap();
+    let back: ControlPlaneMockInventoryArtifactPaths = serde_json::from_str(&json).unwrap();
+    assert_eq!(artifact_paths, back);
+}
+
+#[test]
+fn control_plane_mock_inventory_trace_ids_serde_roundtrip() {
+    let trace_ids = ControlPlaneMockInventoryTraceIds {
+        schema_version: CONTROL_PLANE_MOCK_INVENTORY_TRACE_IDS_SCHEMA_VERSION.to_string(),
+        component: COMPONENT.to_string(),
+        trace_id: "trace-1".to_string(),
+        decision_id: "decision-1".to_string(),
+        policy_id: CONTROL_PLANE_MOCK_INVENTORY_POLICY_ID.to_string(),
+        inventory_hash: "inventory-hash".to_string(),
+        production_mock_seam_matrix_hash: "matrix-hash".to_string(),
+    };
+    let json = serde_json::to_string(&trace_ids).unwrap();
+    let back: ControlPlaneMockInventoryTraceIds = serde_json::from_str(&json).unwrap();
+    assert_eq!(trace_ids, back);
+}
+
+#[test]
+fn control_plane_mock_inventory_run_manifest_serde_roundtrip() {
+    let manifest = ControlPlaneMockInventoryRunManifest {
+        schema_version: CONTROL_PLANE_MOCK_INVENTORY_RUN_MANIFEST_SCHEMA_VERSION.to_string(),
+        component: COMPONENT.to_string(),
+        trace_id: "trace-1".to_string(),
+        decision_id: "decision-1".to_string(),
+        policy_id: CONTROL_PLANE_MOCK_INVENTORY_POLICY_ID.to_string(),
+        inventory_hash: "inventory-hash".to_string(),
+        production_mock_seam_matrix_hash: "matrix-hash".to_string(),
+        outcome: ControlPlaneMockInventoryOutcome::InventoryComplete,
+        must_fix_count: 5,
+        architectural_issue_count: 2,
+        artifact_paths: ControlPlaneMockInventoryArtifactPaths {
+            asupersync_residual_mock_inventory: "inventory.json".to_string(),
+            production_mock_seam_matrix: "matrix.json".to_string(),
+            trace_ids: "trace_ids.json".to_string(),
+            run_manifest: "run_manifest.json".to_string(),
+            events_jsonl: "events.jsonl".to_string(),
+            commands_txt: "commands.txt".to_string(),
+            step_logs_dir: "step_logs".to_string(),
+            summary_md: "summary.md".to_string(),
+            env_json: "env.json".to_string(),
+            repro_lock: "repro.lock".to_string(),
+        },
+    };
+    let json = serde_json::to_string(&manifest).unwrap();
+    let back: ControlPlaneMockInventoryRunManifest = serde_json::from_str(&json).unwrap();
+    assert_eq!(manifest, back);
+}
+
+#[test]
+fn control_plane_mock_inventory_event_serde_with_all_fields() {
+    let event = ControlPlaneMockInventoryEvent {
+        schema_version: CONTROL_PLANE_MOCK_INVENTORY_EVENT_SCHEMA_VERSION.to_string(),
+        trace_id: "trace-1".to_string(),
+        decision_id: "decision-1".to_string(),
+        policy_id: CONTROL_PLANE_MOCK_INVENTORY_POLICY_ID.to_string(),
+        component: COMPONENT.to_string(),
+        event: "production_seam_classified".to_string(),
+        outcome: "must_fix_production".to_string(),
+        error_code: Some("CPMI-MUST-FIX".to_string()),
+        seed: "control-plane-mock-inventory-v1".to_string(),
+        scenario_id: "canonical_inventory".to_string(),
+        diagnostic_id: Some("diag-1".to_string()),
+        file_path: Some("src/lib.rs".to_string()),
+        line_number: Some(42),
+        detail: Some("detail".to_string()),
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let back: ControlPlaneMockInventoryEvent = serde_json::from_str(&json).unwrap();
+    assert_eq!(event, back);
+}
+
+#[test]
+fn control_plane_mock_inventory_binary_emits_expected_artifacts() {
+    let workspace_root = unique_temp_dir("binary-root");
+    let out_dir = unique_temp_dir("binary-out");
+    let inventory = build_canonical_inventory();
+
+    let output = run_inventory_binary(Some(&workspace_root), &out_dir);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout should be json");
+    assert_eq!(
+        stdout["schema_version"],
+        "franken-engine.franken_control_plane_mock_inventory.v1"
+    );
+    assert_eq!(stdout["outcome"], "inventory_complete");
+    assert_eq!(
+        stdout["must_fix_count"],
+        serde_json::Value::from(inventory.summary.must_fix_count as u64)
+    );
+
+    for key in [
+        "asupersync_residual_mock_inventory",
+        "production_mock_seam_matrix",
+        "trace_ids",
+        "run_manifest",
+        "events_jsonl",
+        "commands_txt",
+        "step_logs_dir",
+        "summary_md",
+        "env_json",
+        "repro_lock",
+    ] {
+        let path = PathBuf::from(
+            stdout[key]
+                .as_str()
+                .unwrap_or_else(|| panic!("{key} should be a string path")),
+        );
+        assert!(
+            path.exists(),
+            "stdout-reported artifact path must exist for {key}: {}",
+            path.display()
+        );
+        assert!(
+            path.starts_with(&out_dir),
+            "stdout-reported artifact path must stay within out_dir for {key}: {}",
+            path.display()
+        );
+    }
+
+    let manifest: ControlPlaneMockInventoryRunManifest = serde_json::from_slice(
+        &fs::read(out_dir.join("run_manifest.json")).expect("read run manifest"),
+    )
+    .expect("deserialize run manifest");
+    assert_eq!(
+        manifest.outcome,
+        ControlPlaneMockInventoryOutcome::InventoryComplete
+    );
+    assert_eq!(manifest.must_fix_count, inventory.summary.must_fix_count);
+
+    let _ = fs::remove_dir_all(workspace_root);
+    let _ = fs::remove_dir_all(out_dir);
 }
 
 // ---------------------------------------------------------------------------

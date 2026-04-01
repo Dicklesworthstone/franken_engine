@@ -926,13 +926,18 @@ fn parse_package_specifier(specifier: &str) -> Option<(String, String)> {
         let second = segments.next()?;
         (
             format!("{first}/{second}"),
-            segments.collect::<Vec<_>>().join("/"),
+            specifier[first.len() + 1 + second.len()..]
+                .strip_prefix('/')
+                .unwrap_or(""),
         )
     } else {
-        (first.to_string(), segments.collect::<Vec<_>>().join("/"))
+        (
+            first.to_string(),
+            specifier[first.len()..].strip_prefix('/').unwrap_or(""),
+        )
     };
 
-    let export_key = if tail.is_empty() {
+    let export_key = if tail.is_empty() && !specifier.ends_with('/') {
         ".".to_string()
     } else {
         format!("./{tail}")

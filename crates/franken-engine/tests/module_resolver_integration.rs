@@ -1376,6 +1376,34 @@ fn external_package_exports_fail_closed_without_legacy_fallback() {
 }
 
 #[test]
+fn external_package_exports_reject_targets_that_escape_package_root() {
+    let mut resolver = DeterministicModuleResolver::new("/repo");
+    resolver
+        .register_external_package(ExternalPackageDefinition::new("locked-pkg").with_export(
+            ".",
+            export_target(&[("default", "../other-pkg/private.js")], None),
+        ))
+        .unwrap();
+    resolver
+        .register_external_module("other-pkg/private.js", esm_def("export default 'secret';"))
+        .unwrap();
+
+    let error = resolver
+        .resolve(
+            &ModuleRequest::new("locked-pkg", ImportStyle::Import),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect_err("exports map must reject targets that escape the package root");
+    assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
+    assert_eq!(
+        error.probe_sequence,
+        vec!["locked-pkg", "other-pkg/private.js"]
+    );
+    assert!(error.message.contains("escapes the package root"));
+}
+
+#[test]
 fn external_extension_probe_entry_resolves_from_bare_require_specifier() {
     let mut resolver = DeterministicModuleResolver::default();
     resolver

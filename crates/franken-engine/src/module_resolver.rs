@@ -1665,6 +1665,16 @@ impl DeterministicModuleResolver {
         if probe_sequence.last() != Some(&candidate) {
             probe_sequence.push(candidate.clone());
         }
+        if !is_within_external_package_root(&package.package_name, &candidate) {
+            return Some(Err(ExternalPackageResolutionError {
+                code: ResolutionErrorCode::UnsupportedSpecifier,
+                message: format!(
+                    "package '{package_name}' export '{export_key}' resolved via condition '{selected_condition}' to '{candidate}', which escapes the package root"
+                ),
+                resolved_candidate: Some(candidate),
+                probe_sequence,
+            }));
+        }
 
         match self.external_modules.get(&candidate) {
             Some(record) => Some(Ok((candidate, record, probe_sequence))),
@@ -2612,6 +2622,43 @@ mod tests {
             .get("pkg/entry.cjs")
             .expect("normalized external key should be stored");
         assert_eq!(record.id, "external:pkg/entry.cjs");
+    }
+
+    #[test]
+    fn package_exports_reject_targets_that_escape_package_root() {
+        let mut resolver = DeterministicModuleResolver::new("/repo");
+        resolver
+            .register_external_package(ExternalPackageDefinition::new("locked-pkg").with_export(
+                ".",
+                ExternalPackageExportTarget {
+                    condition_targets: BTreeMap::from([(
+                        "default".to_string(),
+                        "../other-pkg/private.js".to_string(),
+                    )]),
+                    fallback_target: None,
+                },
+            ))
+            .unwrap();
+        resolver
+            .register_external_module(
+                "other-pkg/private.js",
+                ModuleDefinition::new(ModuleSyntax::EsModule, "export default 'secret';"),
+            )
+            .unwrap();
+
+        let error = resolver
+            .resolve(
+                &ModuleRequest::new("locked-pkg", ImportStyle::Import),
+                &context(),
+                &AllowAllPolicy,
+            )
+            .expect_err("exports target must not escape the declaring package root");
+        assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
+        assert!(error.message.contains("escapes the package root"));
+        assert_eq!(
+            error.probe_sequence,
+            vec!["locked-pkg", "other-pkg/private.js"]
+        );
     }
 
     // -----------------------------------------------------------------------

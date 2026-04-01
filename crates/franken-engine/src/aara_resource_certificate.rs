@@ -228,7 +228,7 @@ impl EffectSummary {
 
     /// Total effect count across all kinds (millionths).
     pub fn total_effect_count(&self) -> i64 {
-        self.kind_totals.values().sum()
+        self.kind_totals.values().fold(0i64, |acc, x| acc.saturating_add(*x))
     }
 
     /// Whether the region has any dynamic code generation effects.

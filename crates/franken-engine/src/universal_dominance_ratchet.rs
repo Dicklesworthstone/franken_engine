@@ -251,7 +251,7 @@ impl RatchetBoard {
         }
         let proven = self.proven_count() as u64;
         let total = self.cells.len() as u64;
-        proven * 1_000_000 / total
+        (proven * 1_000_000).checked_div(total).unwrap_or(0)
     }
 }
 

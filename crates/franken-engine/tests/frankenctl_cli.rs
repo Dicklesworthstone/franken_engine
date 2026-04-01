@@ -791,7 +791,8 @@ fn frankenctl_cli_workflow_script_emits_trace_ids_artifact_contract() {
     assert!(script.contains("franken-engine.frankenctl.cli.workflow.trace-ids.v1"));
     assert!(script.contains(r#"\"trace_ids\": \"${trace_ids_path}\""#));
     assert!(script.contains(r#"\"doctor_input\": \"${doctor_input_path}\""#));
-    assert!(script.contains(r#"\"support_bundle_root\": \"${support_bundle_dir}\""#));
+    assert!(script.contains("support_bundle_index: $support_index_path"));
+    assert!(script.contains("support_bundle_root: $support_bundle_dir"));
     assert!(script.contains("trace_ids.json"));
     assert!(script.contains("write_trace_ids"));
 }
@@ -811,6 +812,7 @@ fn frankenctl_cli_workflow_script_emits_expected_artifacts_and_routes() {
     assert!(script.contains("commands.txt"));
     assert!(script.contains("trace_ids.json"));
     assert!(script.contains("doctor_input.json"));
+    assert!(script.contains("support_bundle/index.json"));
     assert!(script.contains("support_bundle/preflight_report.json"));
     assert!(script.contains("support_bundle/onboarding_scorecard.json"));
     assert!(script.contains("support_bundle/rollout_decision_artifact.json"));
@@ -847,6 +849,7 @@ fn frankenctl_cli_workflow_script_pins_replay_contract() {
         "${candidate}/commands.txt",
         "${candidate}/doctor_input.json",
         "${candidate}/step_logs/step_000.log",
+        "${candidate}/support_bundle/index.json",
         "${candidate}/support_bundle/preflight_report.json",
         "${candidate}/support_bundle/onboarding_scorecard.json",
         "${candidate}/support_bundle/rollout_decision_artifact.json",
@@ -865,6 +868,7 @@ fn frankenctl_cli_workflow_script_pins_replay_contract() {
         "frankenctl workflow replay commands: ${candidate}/commands.txt",
         "frankenctl workflow replay doctor input: ${candidate}/doctor_input.json",
         "frankenctl workflow replay first step log: ${candidate}/step_logs/step_000.log",
+        "frankenctl workflow replay support bundle index: ${candidate}/support_bundle/index.json",
         "frankenctl workflow replay support bundle preflight: ${candidate}/support_bundle/preflight_report.json",
         "frankenctl workflow replay support bundle onboarding scorecard: ${candidate}/support_bundle/onboarding_scorecard.json",
         "frankenctl workflow replay support bundle rollout decision: ${candidate}/support_bundle/rollout_decision_artifact.json",
@@ -1707,6 +1711,12 @@ fn frankenctl_doctor_outputs_json_and_writes_support_bundle() {
         Some("lossless_support_bundle_export")
     );
     assert_eq!(json["observability_mode"]["lossless"].as_bool(), Some(true));
+    assert!(
+        out_dir
+            .join("support_bundle/index.json")
+            .is_file(),
+        "expected support bundle index to be written"
+    );
     assert!(
         out_dir
             .join("support_bundle/preflight_report.json")

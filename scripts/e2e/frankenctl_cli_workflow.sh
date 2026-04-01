@@ -22,6 +22,7 @@ commands_path="${run_dir}/commands.txt"
 trace_ids_path="${run_dir}/trace_ids.json"
 doctor_input_path="${run_dir}/doctor_input.json"
 support_bundle_dir="${run_dir}/support_bundle"
+support_index_path="${support_bundle_dir}/index.json"
 support_preflight_path="${support_bundle_dir}/preflight_report.json"
 support_scorecard_path="${support_bundle_dir}/onboarding_scorecard.json"
 support_rollout_path="${support_bundle_dir}/rollout_decision_artifact.json"
@@ -47,6 +48,7 @@ run_dir_is_complete() {
   [[ -f "${candidate}/commands.txt" ]] || return 1
   [[ -f "${candidate}/doctor_input.json" ]] || return 1
   [[ -f "${candidate}/step_logs/step_000.log" ]] || return 1
+  [[ -f "${candidate}/support_bundle/index.json" ]] || return 1
   [[ -f "${candidate}/support_bundle/preflight_report.json" ]] || return 1
   [[ -f "${candidate}/support_bundle/onboarding_scorecard.json" ]] || return 1
   [[ -f "${candidate}/support_bundle/rollout_decision_artifact.json" ]] || return 1
@@ -72,6 +74,8 @@ replay_existing_run_dir() {
   cat "${candidate}/doctor_input.json"
   echo "frankenctl workflow replay first step log: ${candidate}/step_logs/step_000.log"
   cat "${candidate}/step_logs/step_000.log"
+  echo "frankenctl workflow replay support bundle index: ${candidate}/support_bundle/index.json"
+  cat "${candidate}/support_bundle/index.json"
   echo "frankenctl workflow replay support bundle preflight: ${candidate}/support_bundle/preflight_report.json"
   cat "${candidate}/support_bundle/preflight_report.json"
   echo "frankenctl workflow replay support bundle onboarding scorecard: ${candidate}/support_bundle/onboarding_scorecard.json"
@@ -323,6 +327,7 @@ write_trace_ids() {
     --arg commands_path "$commands_path" \
     --arg doctor_input_path "$doctor_input_path" \
     --arg support_bundle_dir "$support_bundle_dir" \
+    --arg support_index_path "$support_index_path" \
     '{
       schema_version: "franken-engine.frankenctl.cli.workflow.trace-ids.v1",
       bead_id: "bd-1lsy.10.1",
@@ -336,6 +341,7 @@ write_trace_ids() {
         events: $events_path,
         commands: $commands_path,
         doctor_input: $doctor_input_path,
+        support_bundle_index: $support_index_path,
         support_bundle_root: $support_bundle_dir
       }
     }' >"$trace_ids_path"
@@ -413,6 +419,7 @@ write_manifest() {
     echo "    \"first_step_log\": \"${step_logs_dir}/step_000.log\","
     echo "    \"doctor_input\": \"${doctor_input_path}\","
     echo '    "support_bundle": ['
+    echo '      "support_bundle/index.json",'
     echo '      "support_bundle/preflight_report.json",'
     echo '      "support_bundle/onboarding_scorecard.json",'
     echo '      "support_bundle/rollout_decision_artifact.json",'
@@ -429,6 +436,7 @@ write_manifest() {
     emit_operator_verification_entry "cat \"${commands_path}\"" ","
     emit_operator_verification_entry "cat \"${step_logs_dir}/step_000.log\"" ","
     emit_operator_verification_entry "cargo run -q -p frankenengine-engine --bin frankenctl -- doctor --input ${doctor_input_path} --out-dir ${run_dir}" ","
+    emit_operator_verification_entry "cat \"${support_index_path}\"" ","
     emit_operator_verification_entry "cat \"${support_preflight_path}\"" ","
     emit_operator_verification_entry "cat \"${support_scorecard_path}\"" ","
     emit_operator_verification_entry "cat \"${support_rollout_path}\"" ","

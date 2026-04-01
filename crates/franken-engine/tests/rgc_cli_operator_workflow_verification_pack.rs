@@ -210,6 +210,7 @@ fn rgc_061_doc_contains_required_sections() {
         "trace_ids.json",
         "step_logs/step_*.log",
         "step_logs/step_000.log",
+        "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/index.json",
         "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/preflight_report.json",
         "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/onboarding_scorecard.json",
         "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/rollout_decision_artifact.json",
@@ -230,7 +231,7 @@ fn rgc_061_contract_is_versioned_and_actionable() {
     let contract = parse_contract();
 
     assert_eq!(contract.schema_version, RGC_061_CONTRACT_SCHEMA_VERSION);
-    assert_eq!(contract.contract_version, "1.3.0");
+    assert_eq!(contract.contract_version, "1.4.0");
     assert_eq!(contract.bead_id, "bd-1lsy.11.11");
     assert_eq!(
         contract.policy_id,
@@ -301,6 +302,7 @@ fn rgc_061_contract_is_versioned_and_actionable() {
         .map(String::as_str)
         .collect();
     for artifact in [
+        "support_bundle/index.json",
         "support_bundle/preflight_report.json",
         "support_bundle/onboarding_scorecard.json",
         "support_bundle/rollout_decision_artifact.json",
@@ -385,6 +387,7 @@ fn rgc_061_contract_is_versioned_and_actionable() {
         "operator verification should include the generic frankenctl workflow command"
     );
     for artifact in [
+        "support_bundle/index.json",
         "support_bundle/preflight_report.json",
         "support_bundle/onboarding_scorecard.json",
         "support_bundle/rollout_decision_artifact.json",
@@ -416,6 +419,7 @@ fn readme_documents_rgc_061_trace_ids_and_step_logs_artifacts() {
     for required_fragment in [
         "artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/trace_ids.json",
         "artifacts/rgc_cli_operator_workflow_verification_pack/<timestamp>/step_logs/step_*.log",
+        "artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/index.json",
     ] {
         assert!(
             readme.contains(required_fragment),
@@ -463,7 +467,9 @@ fn rgc_061_onboarding_scorecard_golden_path_is_ready_and_writes_artifacts() {
     assert!(summary.contains("reproducible_commands:"));
 
     let scorecard_path = out_dir.join("support_bundle/onboarding_scorecard.json");
+    let index_path = out_dir.join("support_bundle/index.json");
     let preflight_path = out_dir.join("support_bundle/preflight_report.json");
+    assert!(index_path.exists(), "support bundle index should exist");
     assert!(scorecard_path.exists(), "scorecard artifact should exist");
     assert!(preflight_path.exists(), "preflight artifact should exist");
 
@@ -1015,6 +1021,7 @@ fn rgc_061_lane_script_preserves_step_logs_and_failure_classification() {
         "cat ${trace_ids_path}",
         "cat ${step_logs_dir}/step_000.log",
         "./scripts/e2e/frankenctl_cli_workflow.sh ${mode}",
+        "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/index.json",
         "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/preflight_report.json",
         "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/onboarding_scorecard.json",
         "cat artifacts/frankenctl_cli_workflow/<timestamp>/support_bundle/rollout_decision_artifact.json",
@@ -1103,6 +1110,7 @@ fn generic_frankenctl_workflow_script_uses_exact_run_dir_replay_contract() {
         "frankenctl workflow replay events: ${candidate}/events.jsonl",
         "frankenctl workflow replay commands: ${candidate}/commands.txt",
         "frankenctl workflow replay first step log: ${candidate}/step_logs/step_000.log",
+        "frankenctl workflow replay support bundle index: ${candidate}/support_bundle/index.json",
         "frankenctl workflow replay command: ${replay_command}",
         "if [[ -n \"${explicit_replay_run_dir}\" ]]; then",
         "parser_frontier_json_escape \"${replay_command}\"",
@@ -1112,6 +1120,7 @@ fn generic_frankenctl_workflow_script_uses_exact_run_dir_replay_contract() {
         "emit_operator_verification_entry \"cat \\\"${events_path}\\\"\" \",\"",
         "emit_operator_verification_entry \"cat \\\"${commands_path}\\\"\" \",\"",
         "emit_operator_verification_entry \"cat \\\"${step_logs_dir}/step_000.log\\\"\" \",\"",
+        "emit_operator_verification_entry \"cat \\\"${support_index_path}\\\"\" \",\"",
         "replay_existing_run_dir \"${explicit_replay_run_dir}\"",
     ] {
         assert!(

@@ -43,6 +43,56 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 2
 fi
 
+require_fixture() {
+  if [[ ! -f "$fixture_path" ]]; then
+    fixture_status="missing"
+    echo "parser final readiness dossier fixture missing: ${fixture_path}" >&2
+    failed_command="missing-required-fixture:${fixture_path}"
+    return 4
+  fi
+
+  if [[ ! -r "$fixture_path" ]]; then
+    fixture_status="unreadable"
+    echo "parser final readiness dossier fixture unreadable: ${fixture_path}" >&2
+    failed_command="unreadable-required-fixture:${fixture_path}"
+    return 4
+  fi
+
+  if ! jq -e '
+    type == "object"
+    and (.dossier_version | type == "string")
+    and (.dossier_id | type == "string")
+    and (.bead_id | type == "string")
+    and (.blocked_dependency_ids | type == "array")
+    and all(.blocked_dependency_ids[]; type == "string")
+    and (.expected_gate | type == "object")
+    and (.expected_gate.expected_outcome | type == "string")
+    and (.expected_gate.expected_hold_reasons | type == "array")
+    and all(.expected_gate.expected_hold_reasons[]; type == "string")
+    and (.residual_risks | type == "array")
+    and all(
+      .residual_risks[];
+      type == "object"
+      and (.risk_id | type == "string")
+      and (.severity | type == "string")
+      and (.likelihood_millionths | type == "number")
+      and (.impact_millionths | type == "number")
+      and (.owner | type == "string")
+      and (.status | type == "string")
+      and (.rollback_trigger_id | type == "string")
+      and (.trigger_threshold | type == "string")
+    )
+  ' "$fixture_path" >/dev/null; then
+    fixture_status="invalid"
+    echo "parser final readiness dossier fixture invalid: ${fixture_path}" >&2
+    failed_command="invalid-required-fixture:${fixture_path}"
+    return 4
+  fi
+
+  fixture_status="usable"
+  return 0
+}
+
 run_rch() {
   RCH_BUILD_TIMEOUT_SEC="${rch_build_timeout_sec}" \
     RCH_BUILD_TIMEOUT_SECONDS="${rch_build_timeout_sec}" \
@@ -116,6 +166,7 @@ declare -a step_logs=()
 failed_command=""
 manifest_written=false
 step_index=0
+fixture_status="unchecked"
 
 run_step() {
   local command_text="$1"
@@ -215,7 +266,7 @@ run_mode() {
 
 json_array_or_empty() {
   local jq_expr="$1"
-  if [[ -f "$fixture_path" ]]; then
+  if [[ "$fixture_status" == "usable" ]]; then
     jq -c "$jq_expr" "$fixture_path"
   else
     echo "[]"
@@ -225,7 +276,7 @@ json_array_or_empty() {
 json_string_or_default() {
   local jq_expr="$1"
   local default_value="$2"
-  if [[ -f "$fixture_path" ]]; then
+  if [[ "$fixture_status" == "usable" ]]; then
     jq -r "$jq_expr // \"${default_value}\"" "$fixture_path"
   else
     echo "$default_value"
@@ -235,10 +286,26 @@ json_string_or_default() {
 compute_risk_register_hash() {
   local canonical_rows hash
 
-  if [[ ! -f "$fixture_path" ]]; then
-    echo "sha256:fixture-missing"
-    return
-  fi
+  case "$fixture_status" in
+    missing)
+      echo "sha256:fixture-missing"
+      return
+      ;;
+    unreadable)
+      echo "sha256:fixture-unreadable"
+      return
+      ;;
+    invalid)
+      echo "sha256:fixture-invalid"
+      return
+      ;;
+    usable)
+      ;;
+    *)
+      echo "sha256:fixture-unavailable"
+      return
+      ;;
+  esac
 
   canonical_rows="$(
     jq -c '[
@@ -259,11 +326,24 @@ compute_risk_register_hash() {
   echo "sha256:${hash}"
 }
 
+operator_verification_step_log_command() {
+  local first_step_log_name
+
+  if (( ${#step_logs[@]} > 0 )); then
+    first_step_log_name="${step_logs[0]##*/}"
+    printf 'cat %s/%s\n' "${step_logs_dir}" "${first_step_log_name}"
+    return
+  fi
+
+  printf "printf '%%s\\n' '%s'\n" \
+    "no step logs were captured before the readiness dossier run failed"
+}
+
 write_manifest() {
   local exit_code="${1:-0}"
   local outcome error_code_json git_commit dirty_worktree idx comma
   local blocked_dependencies risk_ids hold_reasons expected_outcome dossier_version dossier_id bead_id
-  local risk_register_hash
+  local risk_register_hash operator_step_log_command
 
   if [[ "$manifest_written" == true ]]; then
     return
@@ -293,6 +373,7 @@ write_manifest() {
   dossier_id="$(json_string_or_default '.dossier_id' 'unknown')"
   bead_id="$(json_string_or_default '.bead_id' 'bd-2mds.1.8.4')"
   risk_register_hash="$(compute_risk_register_hash)"
+  operator_step_log_command="$(operator_verification_step_log_command)"
 
   printf '%s\n' "${commands_run[@]}" >"$commands_path"
 
@@ -363,7 +444,7 @@ write_manifest() {
     echo "    \"cat ${manifest_path}\","
     echo "    \"cat ${events_path}\","
     echo "    \"cat ${commands_path}\","
-    echo "    \"cat ${step_logs_dir}/step_01.log\","
+    echo "    \"$(parser_frontier_json_escape "${operator_step_log_command}")\","
     echo "    \"${replay_command}\""
     echo "  ]"
     echo "}"
@@ -374,7 +455,7 @@ write_manifest() {
 }
 
 main_exit=0
-if run_mode; then
+if require_fixture && run_mode; then
   main_exit=0
 else
   main_exit=$?

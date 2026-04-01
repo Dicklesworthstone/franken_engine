@@ -1076,6 +1076,43 @@ fn build_live_bindings_prefers_explicit_export_over_star_re_export() {
 }
 
 #[test]
+fn build_live_bindings_replaces_star_surface_metadata_with_shadowing_re_export() {
+    let mut graph = ModuleGraph::new();
+
+    let mut left = EsmModule::new("left", "export const foo = 1;", ModuleSyntax::EsModule);
+    left.add_export(ExportEntry::direct("foo", "foo"));
+    left.status = ModuleStatus::Linked;
+
+    let mut right = EsmModule::new("right", "export const foo = 2;", ModuleSyntax::EsModule);
+    right.add_export(ExportEntry::direct("foo_local", "foo"));
+    right.status = ModuleStatus::Linked;
+
+    let mut index = EsmModule::new(
+        "index",
+        "export * from 'left'; export { foo } from 'right';",
+        ModuleSyntax::EsModule,
+    );
+    index.add_export(ExportEntry::star_re_export("left"));
+    index.add_export(ExportEntry::re_export("foo", "right", "foo"));
+    index.status = ModuleStatus::Linked;
+
+    graph.add_module(left).unwrap();
+    graph.add_module(right).unwrap();
+    graph.add_module(index).unwrap();
+
+    let map = build_live_bindings(&graph).unwrap();
+    let binding_id = BindingId::new("index", "foo");
+    let surface = map
+        .get_surface_cell(&binding_id)
+        .expect("shadowing explicit re-export should preserve a surface cell");
+
+    assert_eq!(surface.binding_type, BindingType::ReExport);
+    assert_eq!(surface.local_name, "foo");
+    assert_eq!(map.get_cell(&binding_id).unwrap().source_module, "right");
+    assert_eq!(map.get_cell(&binding_id).unwrap().local_name, "foo_local");
+}
+
+#[test]
 fn build_live_bindings_omits_ambiguous_star_re_exports() {
     let mut graph = ModuleGraph::new();
 

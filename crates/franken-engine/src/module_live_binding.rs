@@ -677,6 +677,44 @@ fn remove_star_re_export_surface(map: &mut LiveBindingMap, binding_id: &BindingI
     map.aliases.retain(|entry| entry.alias != *binding_id);
 }
 
+fn ensure_re_export_surface(
+    map: &mut LiveBindingMap,
+    module_specifier: &str,
+    export_name: &str,
+    import_name: &str,
+) -> bool {
+    let re_export_id = BindingId::new(module_specifier, export_name);
+    match map.cells.get(&re_export_id) {
+        Some(cell)
+            if cell.binding_type == BindingType::ReExport && cell.local_name == import_name =>
+        {
+            false
+        }
+        Some(cell) if cell.binding_type == BindingType::StarReExport => {
+            map.cells.insert(
+                re_export_id,
+                BindingCell::new(
+                    module_specifier,
+                    export_name,
+                    import_name,
+                    BindingType::ReExport,
+                ),
+            );
+            true
+        }
+        Some(_) => false,
+        None => {
+            map.register_cell(BindingCell::new(
+                module_specifier,
+                export_name,
+                import_name,
+                BindingType::ReExport,
+            ));
+            true
+        }
+    }
+}
+
 /// Build a complete live-binding map from a linked module graph.
 ///
 /// This walks every module in the graph, creates binding cells for direct
@@ -853,14 +891,12 @@ pub fn build_live_bindings(graph: &ModuleGraph) -> Result<LiveBindingMap, LiveBi
                 }
 
                 let re_export_id = BindingId::new(module_specifier, &export.export_name);
-                if !map.cells.contains_key(&re_export_id) {
-                    let cell = BindingCell::new(
-                        module_specifier,
-                        &export.export_name,
-                        import_name,
-                        BindingType::ReExport,
-                    );
-                    map.register_cell(cell);
+                if ensure_re_export_surface(
+                    &mut map,
+                    module_specifier,
+                    &export.export_name,
+                    import_name,
+                ) {
                     progressed = true;
                 }
 

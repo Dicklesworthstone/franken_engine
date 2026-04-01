@@ -585,8 +585,64 @@ fn parser_performance_gate_script_uses_repo_local_target_dir_and_step_logs() {
         "run manifest should publish the step log bundle path"
     );
     assert!(
-        script.contains("cat ${step_logs_dir}/step_000.log"),
-        "operator verification should include a retained step log"
+        script.contains("parser performance promotion gate fixture missing: ${fixture_path}"),
+        "gate script should fail closed with an explicit fixture-missing diagnostic"
+    );
+    assert!(
+        script.contains("failed_command=\"missing-required-fixture:${fixture_path}\""),
+        "gate script should preserve the missing fixture as the failed command"
+    );
+    assert!(
+        script.contains("parser performance promotion gate fixture unreadable: ${fixture_path}"),
+        "gate script should fail closed when the fixture cannot be read"
+    );
+    assert!(
+        script.contains("failed_command=\"unreadable-required-fixture:${fixture_path}\""),
+        "gate script should preserve unreadable fixture failures in the manifest"
+    );
+    assert!(
+        script.contains("parser performance promotion gate fixture invalid: ${fixture_path}"),
+        "gate script should fail closed when the fixture contract is invalid"
+    );
+    assert!(
+        script.contains("failed_command=\"invalid-required-fixture:${fixture_path}\""),
+        "gate script should preserve invalid fixture failures in the manifest"
+    );
+    assert!(
+        script.contains(".expected_gate.expected_blocked_pairs | type == \"array\""),
+        "gate script should validate expected blocked pair typing before manifest generation"
+    );
+    assert!(
+        script.contains(".benchmark_rows | type == \"array\""),
+        "gate script should validate benchmark row collection typing before manifest generation"
+    );
+    assert!(
+        script.contains(".corpus_id | type == \"string\""),
+        "gate script should validate benchmark row entry typing before manifest generation"
+    );
+    assert!(
+        script.contains("fixture_status=\"unchecked\""),
+        "gate script should track fixture usability explicitly for manifest fallbacks"
+    );
+    assert!(
+        script.contains("[[ \"$fixture_status\" == \"usable\" ]]"),
+        "manifest helpers should only jq-read a usable fixture"
+    );
+    assert!(
+        script.contains("no step logs were captured before the performance promotion gate failed"),
+        "operator verification should not point at a nonexistent step log after early failures"
+    );
+    assert!(
+        script.contains("if require_fixture && run_mode; then"),
+        "heavy remote steps should be gated on fixture usability"
+    );
+    assert!(
+        script.contains("step_000.log"),
+        "operator verification should still surface the first retained step log on normal runs"
+    );
+    assert!(
+        script.contains("operator_verification_step_log_command"),
+        "operator verification should compute the step-log command dynamically"
     );
     assert!(
         script.contains("PARSER_PERFORMANCE_PROMOTION_GATE_REPLAY_RUN_DIR=\"${run_dir}\""),
@@ -609,6 +665,11 @@ fn parser_performance_doc_uses_repo_local_target_dir_example_and_step_logs() {
     assert!(
         doc.contains("step_logs/step_*.log"),
         "doc must advertise the step log artifact bundle"
+    );
+    assert!(
+        doc.contains("fixture preflight is mandatory")
+            && doc.contains("missing, unreadable, or structurally invalid"),
+        "doc must explain the fail-closed fixture preflight"
     );
     assert!(
         doc.contains("missing remote-exit markers are hard failures"),
@@ -636,6 +697,11 @@ fn parser_performance_doc_uses_repo_local_target_dir_example_and_step_logs() {
             && doc.contains("latest commands")
             && doc.contains("latest first step log"),
         "doc must explain replay-wrapper artifact surfacing"
+    );
+    assert!(
+        doc.contains("no step logs were captured")
+            && doc.contains("rather than pointing at a nonexistent `step_000.log`"),
+        "doc must describe the early-failure operator-verification step-log diagnostic"
     );
     assert!(
         doc.contains("replay output reflects current run directory")

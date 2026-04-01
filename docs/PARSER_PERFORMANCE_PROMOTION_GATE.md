@@ -133,6 +133,8 @@ do not depend on fragile `/tmp`-backed incremental state.
 
 Fail-closed `rch` policy:
 
+- fixture preflight is mandatory: missing, unreadable, or structurally invalid
+  gate fixtures fail before any heavy `rch` step runs.
 - local fallback signatures (`running locally`, `falling back to local`,
   `RCH-E326`, dependency-preflight fallback) are hard failures.
 - artifact retrieval failures (`Artifact retrieval failed`, rsync code-23
@@ -172,6 +174,10 @@ Each run emits:
 - `artifacts/parser_performance_promotion_gate/<timestamp>/events.jsonl`
 - `artifacts/parser_performance_promotion_gate/<timestamp>/commands.txt`
 - `artifacts/parser_performance_promotion_gate/<timestamp>/step_logs/step_*.log`
+
+If the gate fails before any remote step starts, the manifest still emits a
+fail-closed operator verification command that explains no step logs were
+captured, rather than pointing at a nonexistent `step_000.log`.
 
 Manifest includes gate mode, deterministic replay command, benchmark protocol
 hash, blocked pair inventory, deterministic environment fingerprint fields,

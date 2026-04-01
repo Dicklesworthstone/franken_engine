@@ -437,10 +437,11 @@ fn evaluate_emits_trace_events() {
     g.link().unwrap();
     g.evaluate().unwrap();
 
-    assert!(g
-        .trace_events()
-        .iter()
-        .any(|e| e.phase == TracePhase::Evaluate));
+    assert!(
+        g.trace_events()
+            .iter()
+            .any(|e| e.phase == TracePhase::Evaluate)
+    );
 }
 
 #[test]

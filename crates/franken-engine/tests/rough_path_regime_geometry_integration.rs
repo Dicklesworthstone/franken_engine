@@ -5,15 +5,17 @@
 
 use std::collections::BTreeMap;
 
-use frankenengine_engine::entropic_policy_morphing::{MorphingConfig, MorphingOutcome, PolicyProfile, TransitionBudget};
+use frankenengine_engine::entropic_policy_morphing::{
+    MorphingConfig, MorphingOutcome, PolicyProfile, TransitionBudget,
+};
 use frankenengine_engine::regime_detector::Regime;
 use frankenengine_engine::regime_signature_feature::{
     RegimeLabel, RuntimeTrace, SignatureConfig, TraceObservation,
 };
 use frankenengine_engine::rough_path_regime_geometry::{
-    GeometrySpecimenFamily, GeometryVerdict, PipelineStepResult, PipelineSummary,
-    RegimeCorridor, RegimeGeometryConfig, RegimeGeometryError, RegimeGeometryOrchestrator,
-    RegimeTopology, geometry_corpus, run_geometry_corpus,
+    GeometrySpecimenFamily, GeometryVerdict, PipelineStepResult, PipelineSummary, RegimeCorridor,
+    RegimeGeometryConfig, RegimeGeometryError, RegimeGeometryOrchestrator, RegimeTopology,
+    geometry_corpus, run_geometry_corpus,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::signature_drift_gate::{DriftGateConfig, GateVerdict};
@@ -326,8 +328,10 @@ fn test_gate_counter_tracked_in_summary() {
     let _ = orch.process_trace(&stable_trace("t1")).unwrap();
     let _ = orch.process_trace(&stable_trace("t2")).unwrap();
     let summary = orch.summary();
-    let gate_total =
-        summary.gate_passed + summary.gate_blocked + summary.gate_downgraded + summary.gate_abstained;
+    let gate_total = summary.gate_passed
+        + summary.gate_blocked
+        + summary.gate_downgraded
+        + summary.gate_abstained;
     // First trace has no gate verdict, second does.
     assert!(gate_total >= 1);
 }
@@ -377,7 +381,9 @@ fn test_is_gated_true_on_block() {
 #[test]
 fn test_batch_all_succeed() {
     let mut orch = setup_orchestrator();
-    let traces: Vec<RuntimeTrace> = (0..5).map(|i| stable_trace(&format!("batch-{i}"))).collect();
+    let traces: Vec<RuntimeTrace> = (0..5)
+        .map(|i| stable_trace(&format!("batch-{i}")))
+        .collect();
     let results = orch.process_batch(&traces);
     assert_eq!(results.len(), 5);
     assert!(results.iter().all(|r| r.is_ok()));
@@ -510,13 +516,14 @@ fn test_topology_corridors_accumulate() {
 #[test]
 fn test_corridor_lookup_missing() {
     let orch = setup_orchestrator();
-    assert!(orch
-        .topology()
-        .find_corridor(
-            RegimeLabel::Classified(Regime::Normal),
-            RegimeLabel::Classified(Regime::Attack)
-        )
-        .is_none());
+    assert!(
+        orch.topology()
+            .find_corridor(
+                RegimeLabel::Classified(Regime::Normal),
+                RegimeLabel::Classified(Regime::Attack)
+            )
+            .is_none()
+    );
 }
 
 #[test]
@@ -622,7 +629,10 @@ fn test_error_display_config_error() {
 
 #[test]
 fn test_error_equality() {
-    assert_eq!(RegimeGeometryError::EmptyTrace, RegimeGeometryError::EmptyTrace);
+    assert_eq!(
+        RegimeGeometryError::EmptyTrace,
+        RegimeGeometryError::EmptyTrace
+    );
     assert_ne!(
         RegimeGeometryError::EmptyTrace,
         RegimeGeometryError::MorpherNotConfigured

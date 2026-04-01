@@ -2124,4 +2124,3 @@ mod tests {
         assert_eq!(reg.count(), 0);
     }
 }
-

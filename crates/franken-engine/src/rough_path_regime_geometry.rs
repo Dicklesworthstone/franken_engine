@@ -264,15 +264,12 @@ pub struct RegimeTopology {
 impl RegimeTopology {
     /// Look up a corridor between two regimes.
     pub fn find_corridor(&self, from: RegimeLabel, to: RegimeLabel) -> Option<&RegimeCorridor> {
-        self.corridors
-            .iter()
-            .find(|c| c.from == from && c.to == to)
+        self.corridors.iter().find(|c| c.from == from && c.to == to)
     }
 
     /// True if a corridor exists and has been validated.
     pub fn is_validated_corridor(&self, from: RegimeLabel, to: RegimeLabel) -> bool {
-        self.find_corridor(from, to)
-            .is_some_and(|c| c.validated)
+        self.find_corridor(from, to).is_some_and(|c| c.validated)
     }
 
     /// Number of distinct corridors observed.
@@ -411,8 +408,7 @@ impl RegimeGeometryOrchestrator {
         }
 
         // Step 2: Classify regime.
-        let (regime_label, confidence) =
-            classify_regime(&signature, &self.config.signature_config);
+        let (regime_label, confidence) = classify_regime(&signature, &self.config.signature_config);
 
         // Detect transition.
         self.previous_regime = self.current_regime;
@@ -1008,7 +1004,10 @@ pub fn run_geometry_corpus() -> GeometryEvidenceInventory {
             .or_insert(0) += 1;
     }
 
-    let passed = evidences.iter().filter(|e| e.verdict == GeometryVerdict::Pass).count();
+    let passed = evidences
+        .iter()
+        .filter(|e| e.verdict == GeometryVerdict::Pass)
+        .count();
     let failed = evidences.len() - passed;
 
     let inventory_hash = {
@@ -1042,7 +1041,10 @@ fn run_specimen(specimen: &GeometrySpecimen, epoch: SecurityEpoch) -> (GeometryV
             let trace = make_rich_trace(
                 "trace-1",
                 &[
-                    ("instruction_count", &[100 * MILLION, 200 * MILLION, 150 * MILLION, 180 * MILLION]),
+                    (
+                        "instruction_count",
+                        &[100 * MILLION, 200 * MILLION, 150 * MILLION, 180 * MILLION],
+                    ),
                     ("cache_hit_rate", &[800_000, 850_000, 820_000, 810_000]),
                 ],
                 epoch,
@@ -1050,9 +1052,15 @@ fn run_specimen(specimen: &GeometrySpecimen, epoch: SecurityEpoch) -> (GeometryV
             match orch.process_trace(&trace) {
                 Ok(result) => {
                     if result.seq == 1 {
-                        (GeometryVerdict::Pass, "single trace processed successfully".to_string())
+                        (
+                            GeometryVerdict::Pass,
+                            "single trace processed successfully".to_string(),
+                        )
                     } else {
-                        (GeometryVerdict::Fail, format!("unexpected seq: {}", result.seq))
+                        (
+                            GeometryVerdict::Fail,
+                            format!("unexpected seq: {}", result.seq),
+                        )
                     }
                 }
                 Err(e) => (GeometryVerdict::Fail, format!("unexpected error: {e}")),
@@ -1068,9 +1076,10 @@ fn run_specimen(specimen: &GeometrySpecimen, epoch: SecurityEpoch) -> (GeometryV
                 epoch,
             };
             match orch.process_trace(&trace) {
-                Err(RegimeGeometryError::EmptyTrace) => {
-                    (GeometryVerdict::Pass, "correctly rejected empty trace".to_string())
-                }
+                Err(RegimeGeometryError::EmptyTrace) => (
+                    GeometryVerdict::Pass,
+                    "correctly rejected empty trace".to_string(),
+                ),
                 other => (
                     GeometryVerdict::Fail,
                     format!("expected EmptyTrace error, got: {other:?}"),
@@ -1085,7 +1094,10 @@ fn run_specimen(specimen: &GeometrySpecimen, epoch: SecurityEpoch) -> (GeometryV
             let trace = make_rich_trace(
                 "stable-1",
                 &[
-                    ("instruction_count", &[100 * MILLION, 100 * MILLION, 100 * MILLION, 100 * MILLION]),
+                    (
+                        "instruction_count",
+                        &[100 * MILLION, 100 * MILLION, 100 * MILLION, 100 * MILLION],
+                    ),
                     ("cache_hit_rate", &[800_000, 800_000, 800_000, 800_000]),
                 ],
                 epoch,
@@ -1094,7 +1106,10 @@ fn run_specimen(specimen: &GeometrySpecimen, epoch: SecurityEpoch) -> (GeometryV
             let trace2 = make_rich_trace(
                 "stable-2",
                 &[
-                    ("instruction_count", &[100 * MILLION, 100 * MILLION, 100 * MILLION, 100 * MILLION]),
+                    (
+                        "instruction_count",
+                        &[100 * MILLION, 100 * MILLION, 100 * MILLION, 100 * MILLION],
+                    ),
                     ("cache_hit_rate", &[800_000, 800_000, 800_000, 800_000]),
                 ],
                 epoch,
@@ -1102,9 +1117,15 @@ fn run_specimen(specimen: &GeometrySpecimen, epoch: SecurityEpoch) -> (GeometryV
             match orch.process_trace(&trace2) {
                 Ok(result) => {
                     if !result.regime_changed {
-                        (GeometryVerdict::Pass, "no regime change on stable traces".to_string())
+                        (
+                            GeometryVerdict::Pass,
+                            "no regime change on stable traces".to_string(),
+                        )
                     } else {
-                        (GeometryVerdict::Fail, "unexpected regime change".to_string())
+                        (
+                            GeometryVerdict::Fail,
+                            "unexpected regime change".to_string(),
+                        )
                     }
                 }
                 Err(e) => (GeometryVerdict::Fail, format!("error: {e}")),
@@ -1118,7 +1139,10 @@ fn run_specimen(specimen: &GeometrySpecimen, epoch: SecurityEpoch) -> (GeometryV
             let t1 = make_rich_trace(
                 "normal-1",
                 &[
-                    ("instruction_count", &[100 * MILLION, 100 * MILLION, 100 * MILLION, 100 * MILLION]),
+                    (
+                        "instruction_count",
+                        &[100 * MILLION, 100 * MILLION, 100 * MILLION, 100 * MILLION],
+                    ),
                     ("cache_hit_rate", &[800_000, 800_000, 800_000, 800_000]),
                 ],
                 epoch,
@@ -1128,8 +1152,14 @@ fn run_specimen(specimen: &GeometrySpecimen, epoch: SecurityEpoch) -> (GeometryV
             let t2 = make_rich_trace(
                 "shifted-1",
                 &[
-                    ("instruction_count", &[900 * MILLION, 950 * MILLION, 920 * MILLION, 880 * MILLION]),
-                    ("gc_pause_ns", &[5 * MILLION, 6 * MILLION, 7 * MILLION, 8 * MILLION]),
+                    (
+                        "instruction_count",
+                        &[900 * MILLION, 950 * MILLION, 920 * MILLION, 880 * MILLION],
+                    ),
+                    (
+                        "gc_pause_ns",
+                        &[5 * MILLION, 6 * MILLION, 7 * MILLION, 8 * MILLION],
+                    ),
                 ],
                 epoch,
             );
@@ -1137,10 +1167,13 @@ fn run_specimen(specimen: &GeometrySpecimen, epoch: SecurityEpoch) -> (GeometryV
                 Ok(result) => {
                     // Regime change detection depends on classifier output, but the
                     // pipeline should process successfully regardless.
-                    (GeometryVerdict::Pass, format!(
-                        "transition detected={}, regime={:?}",
-                        result.regime_changed, result.regime_label
-                    ))
+                    (
+                        GeometryVerdict::Pass,
+                        format!(
+                            "transition detected={}, regime={:?}",
+                            result.regime_changed, result.regime_label
+                        ),
+                    )
                 }
                 Err(e) => (GeometryVerdict::Fail, format!("error: {e}")),
             }
@@ -1151,24 +1184,36 @@ fn run_specimen(specimen: &GeometrySpecimen, epoch: SecurityEpoch) -> (GeometryV
                 RegimeGeometryOrchestrator::with_defaults(default_anchor_profile(), epoch);
             let trace = make_rich_trace(
                 "stable-morph-1",
-                &[("instruction_count", &[100 * MILLION, 100 * MILLION, 100 * MILLION, 100 * MILLION])],
+                &[(
+                    "instruction_count",
+                    &[100 * MILLION, 100 * MILLION, 100 * MILLION, 100 * MILLION],
+                )],
                 epoch,
             );
             let _ = orch.process_trace(&trace);
             let trace2 = make_rich_trace(
                 "stable-morph-2",
-                &[("instruction_count", &[100 * MILLION, 100 * MILLION, 100 * MILLION, 100 * MILLION])],
+                &[(
+                    "instruction_count",
+                    &[100 * MILLION, 100 * MILLION, 100 * MILLION, 100 * MILLION],
+                )],
                 epoch,
             );
             match orch.process_trace(&trace2) {
                 Ok(result) => {
                     if result.morphing_outcome == MorphingOutcome::NoOp {
-                        (GeometryVerdict::Pass, "morphing noop on same regime".to_string())
+                        (
+                            GeometryVerdict::Pass,
+                            "morphing noop on same regime".to_string(),
+                        )
                     } else {
-                        (GeometryVerdict::Pass, format!(
-                            "morphing outcome: {:?} (acceptable in context)",
-                            result.morphing_outcome
-                        ))
+                        (
+                            GeometryVerdict::Pass,
+                            format!(
+                                "morphing outcome: {:?} (acceptable in context)",
+                                result.morphing_outcome
+                            ),
+                        )
                     }
                 }
                 Err(e) => (GeometryVerdict::Fail, format!("error: {e}")),
@@ -1178,30 +1223,48 @@ fn run_specimen(specimen: &GeometrySpecimen, epoch: SecurityEpoch) -> (GeometryV
         "morphing_applied_on_transition" => {
             let mut orch =
                 RegimeGeometryOrchestrator::with_defaults(default_anchor_profile(), epoch);
-            for regime in [Regime::Normal, Regime::Elevated, Regime::Attack, Regime::Degraded, Regime::Recovery] {
+            for regime in [
+                Regime::Normal,
+                Regime::Elevated,
+                Regime::Attack,
+                Regime::Degraded,
+                Regime::Recovery,
+            ] {
                 orch.register_regime_profile(regime, regime_profile(regime));
             }
             let t1 = make_rich_trace(
                 "morph-base",
-                &[("instruction_count", &[100 * MILLION, 100 * MILLION, 100 * MILLION, 100 * MILLION])],
+                &[(
+                    "instruction_count",
+                    &[100 * MILLION, 100 * MILLION, 100 * MILLION, 100 * MILLION],
+                )],
                 epoch,
             );
             let _ = orch.process_trace(&t1);
             let t2 = make_rich_trace(
                 "morph-shift",
                 &[
-                    ("instruction_count", &[900 * MILLION, 950 * MILLION, 920 * MILLION, 880 * MILLION]),
-                    ("gc_pause_ns", &[5 * MILLION, 6 * MILLION, 7 * MILLION, 8 * MILLION]),
+                    (
+                        "instruction_count",
+                        &[900 * MILLION, 950 * MILLION, 920 * MILLION, 880 * MILLION],
+                    ),
+                    (
+                        "gc_pause_ns",
+                        &[5 * MILLION, 6 * MILLION, 7 * MILLION, 8 * MILLION],
+                    ),
                 ],
                 epoch,
             );
             match orch.process_trace(&t2) {
                 Ok(result) => {
                     let summary = orch.summary();
-                    (GeometryVerdict::Pass, format!(
-                        "morphing outcome: {:?}, total_steps: {}",
-                        result.morphing_outcome, summary.total_steps
-                    ))
+                    (
+                        GeometryVerdict::Pass,
+                        format!(
+                            "morphing outcome: {:?}, total_steps: {}",
+                            result.morphing_outcome, summary.total_steps
+                        ),
+                    )
                 }
                 Err(e) => (GeometryVerdict::Fail, format!("error: {e}")),
             }
@@ -1213,13 +1276,19 @@ fn run_specimen(specimen: &GeometrySpecimen, epoch: SecurityEpoch) -> (GeometryV
             // Process two similar traces — second should have gate verdict.
             let t1 = make_rich_trace(
                 "gate-base",
-                &[("instruction_count", &[100 * MILLION, 100 * MILLION, 100 * MILLION, 100 * MILLION])],
+                &[(
+                    "instruction_count",
+                    &[100 * MILLION, 100 * MILLION, 100 * MILLION, 100 * MILLION],
+                )],
                 epoch,
             );
             let _ = orch.process_trace(&t1);
             let t2 = make_rich_trace(
                 "gate-stable",
-                &[("instruction_count", &[100 * MILLION, 100 * MILLION, 100 * MILLION, 100 * MILLION])],
+                &[(
+                    "instruction_count",
+                    &[100 * MILLION, 100 * MILLION, 100 * MILLION, 100 * MILLION],
+                )],
                 epoch,
             );
             match orch.process_trace(&t2) {
@@ -1227,12 +1296,18 @@ fn run_specimen(specimen: &GeometrySpecimen, epoch: SecurityEpoch) -> (GeometryV
                     if result.gate_verdict == Some(GateVerdict::Pass)
                         || result.gate_verdict.is_none()
                     {
-                        (GeometryVerdict::Pass, format!("gate verdict: {:?}", result.gate_verdict))
+                        (
+                            GeometryVerdict::Pass,
+                            format!("gate verdict: {:?}", result.gate_verdict),
+                        )
                     } else {
-                        (GeometryVerdict::Pass, format!(
-                            "gate verdict: {:?} (acceptable for stable trace)",
-                            result.gate_verdict
-                        ))
+                        (
+                            GeometryVerdict::Pass,
+                            format!(
+                                "gate verdict: {:?} (acceptable for stable trace)",
+                                result.gate_verdict
+                            ),
+                        )
                     }
                 }
                 Err(e) => (GeometryVerdict::Fail, format!("error: {e}")),
@@ -1244,18 +1319,24 @@ fn run_specimen(specimen: &GeometrySpecimen, epoch: SecurityEpoch) -> (GeometryV
                 RegimeGeometryOrchestrator::with_defaults(default_anchor_profile(), epoch);
             let trace = make_rich_trace(
                 "first-gate",
-                &[("instruction_count", &[100 * MILLION, 100 * MILLION, 100 * MILLION, 100 * MILLION])],
+                &[(
+                    "instruction_count",
+                    &[100 * MILLION, 100 * MILLION, 100 * MILLION, 100 * MILLION],
+                )],
                 epoch,
             );
             match orch.process_trace(&trace) {
                 Ok(result) => {
                     if result.gate_verdict.is_none() {
-                        (GeometryVerdict::Pass, "no gate verdict on first trace (no baseline)".to_string())
+                        (
+                            GeometryVerdict::Pass,
+                            "no gate verdict on first trace (no baseline)".to_string(),
+                        )
                     } else {
-                        (GeometryVerdict::Fail, format!(
-                            "expected no gate verdict, got: {:?}",
-                            result.gate_verdict
-                        ))
+                        (
+                            GeometryVerdict::Fail,
+                            format!("expected no gate verdict, got: {:?}", result.gate_verdict),
+                        )
                     }
                 }
                 Err(e) => (GeometryVerdict::Fail, format!("error: {e}")),
@@ -1269,12 +1350,15 @@ fn run_specimen(specimen: &GeometrySpecimen, epoch: SecurityEpoch) -> (GeometryV
                 .map(|i| {
                     make_rich_trace(
                         &format!("batch-{i}"),
-                        &[("instruction_count", &[
-                            (100 + i * 10) as i64 * MILLION,
-                            (100 + i * 10) as i64 * MILLION,
-                            (100 + i * 10) as i64 * MILLION,
-                            (100 + i * 10) as i64 * MILLION,
-                        ])],
+                        &[(
+                            "instruction_count",
+                            &[
+                                (100 + i * 10) as i64 * MILLION,
+                                (100 + i * 10) as i64 * MILLION,
+                                (100 + i * 10) as i64 * MILLION,
+                                (100 + i * 10) as i64 * MILLION,
+                            ],
+                        )],
                         epoch,
                     )
                 })
@@ -1282,9 +1366,15 @@ fn run_specimen(specimen: &GeometrySpecimen, epoch: SecurityEpoch) -> (GeometryV
             let results = orch.process_batch(&traces);
             let ok_count = results.iter().filter(|r| r.is_ok()).count();
             if ok_count == 5 {
-                (GeometryVerdict::Pass, format!("batch processed {ok_count}/5 traces"))
+                (
+                    GeometryVerdict::Pass,
+                    format!("batch processed {ok_count}/5 traces"),
+                )
             } else {
-                (GeometryVerdict::Fail, format!("only {ok_count}/5 succeeded"))
+                (
+                    GeometryVerdict::Fail,
+                    format!("only {ok_count}/5 succeeded"),
+                )
             }
         }
 
@@ -1293,15 +1383,24 @@ fn run_specimen(specimen: &GeometrySpecimen, epoch: SecurityEpoch) -> (GeometryV
                 RegimeGeometryOrchestrator::with_defaults(default_anchor_profile(), epoch);
             let t1 = make_rich_trace(
                 "topo-1",
-                &[("instruction_count", &[100 * MILLION, 100 * MILLION, 100 * MILLION, 100 * MILLION])],
+                &[(
+                    "instruction_count",
+                    &[100 * MILLION, 100 * MILLION, 100 * MILLION, 100 * MILLION],
+                )],
                 epoch,
             );
             let _ = orch.process_trace(&t1);
             let t2 = make_rich_trace(
                 "topo-2",
                 &[
-                    ("instruction_count", &[900 * MILLION, 950 * MILLION, 920 * MILLION, 880 * MILLION]),
-                    ("gc_pause_ns", &[5 * MILLION, 6 * MILLION, 7 * MILLION, 8 * MILLION]),
+                    (
+                        "instruction_count",
+                        &[900 * MILLION, 950 * MILLION, 920 * MILLION, 880 * MILLION],
+                    ),
+                    (
+                        "gc_pause_ns",
+                        &[5 * MILLION, 6 * MILLION, 7 * MILLION, 8 * MILLION],
+                    ),
                 ],
                 epoch,
             );
@@ -1318,7 +1417,10 @@ fn run_specimen(specimen: &GeometrySpecimen, epoch: SecurityEpoch) -> (GeometryV
                 RegimeGeometryOrchestrator::with_defaults(default_anchor_profile(), epoch);
             let trace = make_rich_trace(
                 "pre-reset",
-                &[("instruction_count", &[100 * MILLION, 100 * MILLION, 100 * MILLION, 100 * MILLION])],
+                &[(
+                    "instruction_count",
+                    &[100 * MILLION, 100 * MILLION, 100 * MILLION, 100 * MILLION],
+                )],
                 epoch,
             );
             let _ = orch.process_trace(&trace);
@@ -1328,10 +1430,13 @@ fn run_specimen(specimen: &GeometrySpecimen, epoch: SecurityEpoch) -> (GeometryV
             if summary.total_steps == 0 && summary.current_regime == RegimeLabel::Abstention {
                 (GeometryVerdict::Pass, "reset cleared all state".to_string())
             } else {
-                (GeometryVerdict::Fail, format!(
-                    "state not fully cleared: steps={}, regime={:?}",
-                    summary.total_steps, summary.current_regime
-                ))
+                (
+                    GeometryVerdict::Fail,
+                    format!(
+                        "state not fully cleared: steps={}, regime={:?}",
+                        summary.total_steps, summary.current_regime
+                    ),
+                )
             }
         }
 
@@ -1358,7 +1463,9 @@ pub fn write_geometry_evidence_bundle(
 
     let run_id = format!(
         "run-regime-geometry-{}",
-        hex_encode(inventory.inventory_hash.as_bytes()).get(..12).unwrap_or("unknown"),
+        hex_encode(inventory.inventory_hash.as_bytes())
+            .get(..12)
+            .unwrap_or("unknown"),
     );
 
     let manifest = GeometryRunManifest {
@@ -1454,10 +1561,7 @@ mod tests {
                     "instruction_count",
                     &[100 * MILLION, 100 * MILLION, 100 * MILLION, 100 * MILLION],
                 ),
-                (
-                    "cache_hit_rate",
-                    &[800_000, 800_000, 800_000, 800_000],
-                ),
+                ("cache_hit_rate", &[800_000, 800_000, 800_000, 800_000]),
             ],
             test_epoch(),
         )
@@ -1469,12 +1573,7 @@ mod tests {
             &[
                 (
                     "instruction_count",
-                    &[
-                        900 * MILLION,
-                        950 * MILLION,
-                        920 * MILLION,
-                        880 * MILLION,
-                    ],
+                    &[900 * MILLION, 950 * MILLION, 920 * MILLION, 880 * MILLION],
                 ),
                 (
                     "gc_pause_ns",
@@ -1625,7 +1724,9 @@ mod tests {
     #[test]
     fn test_batch_processing_all_succeed() {
         let mut orch = make_default_orchestrator();
-        let traces: Vec<RuntimeTrace> = (0..5).map(|i| simple_trace(&format!("batch-{i}"))).collect();
+        let traces: Vec<RuntimeTrace> = (0..5)
+            .map(|i| simple_trace(&format!("batch-{i}")))
+            .collect();
         let results = orch.process_batch(&traces);
         assert_eq!(results.len(), 5);
         assert!(results.iter().all(|r| r.is_ok()));
@@ -1730,10 +1831,14 @@ mod tests {
     #[test]
     fn test_corridor_lookup_missing() {
         let orch = make_default_orchestrator();
-        assert!(orch
-            .topology()
-            .find_corridor(RegimeLabel::Abstention, RegimeLabel::Classified(Regime::Normal))
-            .is_none());
+        assert!(
+            orch.topology()
+                .find_corridor(
+                    RegimeLabel::Abstention,
+                    RegimeLabel::Classified(Regime::Normal)
+                )
+                .is_none()
+        );
     }
 
     #[test]

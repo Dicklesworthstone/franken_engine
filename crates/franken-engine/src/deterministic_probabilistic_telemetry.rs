@@ -1334,7 +1334,11 @@ impl TelemetryPlane {
     pub fn domain_event_count(&self, domain: &str) -> u64 {
         self.windows
             .get(domain)
-            .map(|ws| ws.iter().map(|w| w.event_count()).fold(0u64, u64::saturating_add))
+            .map(|ws| {
+                ws.iter()
+                    .map(|w| w.event_count())
+                    .fold(0u64, u64::saturating_add)
+            })
             .unwrap_or(0)
     }
 

@@ -365,7 +365,11 @@ impl GapMatrix {
         let overall_coverage_millionths = if total_pairs == 0 {
             0
         } else {
-            let sum: u64 = self.entries.iter().map(|e| e.coverage_millionths).fold(0u64, u64::saturating_add);
+            let sum: u64 = self
+                .entries
+                .iter()
+                .map(|e| e.coverage_millionths)
+                .fold(0u64, u64::saturating_add);
             sum / total_pairs as u64
         };
 

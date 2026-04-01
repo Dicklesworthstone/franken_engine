@@ -918,7 +918,11 @@ impl GovernanceMechanism {
 /// False report loss: max loss to an attacker who reports falsely (positive = rewarded).
 /// Truthful gain: max gain to a defender who reports truthfully (positive = rewarded).
 fn compute_ic_payoffs(tensor: &LossTensor) -> (i64, i64) {
-    let total: i64 = tensor.entries.iter().map(|e| e.loss_millionths).fold(0i64, |acc, x| acc.saturating_add(x));
+    let total: i64 = tensor
+        .entries
+        .iter()
+        .map(|e| e.loss_millionths)
+        .fold(0i64, |acc, x| acc.saturating_add(x));
     if total == 0 {
         return (0, 0);
     }

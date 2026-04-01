@@ -397,7 +397,10 @@ impl EnforcementPolicy {
 
     /// Total maximum penalty across all rules.
     pub fn max_total_penalty(&self) -> i64 {
-        self.rules.iter().map(|r| r.penalty_millionths).fold(0i64, |acc, x| acc.saturating_add(x))
+        self.rules
+            .iter()
+            .map(|r| r.penalty_millionths)
+            .fold(0i64, |acc, x| acc.saturating_add(x))
     }
 }
 

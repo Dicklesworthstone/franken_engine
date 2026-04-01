@@ -888,8 +888,14 @@ pub fn build_eligibility_report(
     let total_functions = profiles.len();
 
     // Aggregate deopt rate: total deopts / total invocations.
-    let total_deopts: u64 = profiles.iter().map(|p| p.deopt_count).fold(0u64, u64::saturating_add);
-    let total_invocations: u64 = profiles.iter().map(|p| p.invocation_count).fold(0u64, u64::saturating_add);
+    let total_deopts: u64 = profiles
+        .iter()
+        .map(|p| p.deopt_count)
+        .fold(0u64, u64::saturating_add);
+    let total_invocations: u64 = profiles
+        .iter()
+        .map(|p| p.invocation_count)
+        .fold(0u64, u64::saturating_add);
     let deopt_rate_millionths = if total_invocations == 0 {
         0
     } else {

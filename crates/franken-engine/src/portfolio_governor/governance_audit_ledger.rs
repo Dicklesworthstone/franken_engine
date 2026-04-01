@@ -685,7 +685,10 @@ impl GovernanceAuditLedger {
         let mean_time_to_decision_ns = if decision_latencies.is_empty() {
             None
         } else {
-            let sum: u128 = decision_latencies.iter().map(|v| *v as u128).fold(0u128, u128::saturating_add);
+            let sum: u128 = decision_latencies
+                .iter()
+                .map(|v| *v as u128)
+                .fold(0u128, u128::saturating_add);
             Some((sum / decision_latencies.len() as u128) as u64)
         };
 

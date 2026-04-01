@@ -675,7 +675,10 @@ impl ManifoldTrajectory {
         if self.step_velocities.is_empty() {
             return 0;
         }
-        let sum: i64 = self.step_velocities.iter().fold(0i64, |acc, x| acc.saturating_add(*x));
+        let sum: i64 = self
+            .step_velocities
+            .iter()
+            .fold(0i64, |acc, x| acc.saturating_add(*x));
         sum.checked_mul(MILLION)
             .map(|s| s / self.step_velocities.len() as i64)
             .unwrap_or(0)

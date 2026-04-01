@@ -554,7 +554,10 @@ pub fn compute_regression(
         return None;
     }
 
-    let total_count: u64 = samples.iter().map(|s| s.sample_count).fold(0u64, u64::saturating_add);
+    let total_count: u64 = samples
+        .iter()
+        .map(|s| s.sample_count)
+        .fold(0u64, u64::saturating_add);
     if total_count == 0 || total_count < config.min_sample_count {
         return None;
     }

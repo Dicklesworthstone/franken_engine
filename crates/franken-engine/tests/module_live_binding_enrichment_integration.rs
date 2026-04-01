@@ -489,10 +489,11 @@ fn event_trace_has_died_event() {
     let cell = BindingCell::new("mod_a", "x", "x", BindingType::Direct);
     map.register_cell(cell);
     map.mark_dead(&id).unwrap();
-    assert!(map
-        .events
-        .iter()
-        .any(|e| matches!(e, BindingEvent::CellDied { .. })));
+    assert!(
+        map.events
+            .iter()
+            .any(|e| matches!(e, BindingEvent::CellDied { .. }))
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -719,7 +720,9 @@ fn validate_bindings_namespace_missing() {
     });
     let errors = validate_bindings(&map);
     assert!(!errors.is_empty());
-    assert!(errors
-        .iter()
-        .any(|e| matches!(e, LiveBindingError::NamespaceNotFound { .. })));
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, LiveBindingError::NamespaceNotFound { .. }))
+    );
 }

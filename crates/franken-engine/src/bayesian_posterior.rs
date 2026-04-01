@@ -582,7 +582,9 @@ impl BayesianPosteriorUpdater {
         self.cumulative_llr_millionths = self.cumulative_llr_millionths.saturating_add(llr_step);
 
         // BOCPD update: evaluate how well current posterior predicts data vs the prior.
-        let predictive_continuation = unnormalized.iter().fold(0i64, |acc, x| acc.saturating_add(*x));
+        let predictive_continuation = unnormalized
+            .iter()
+            .fold(0i64, |acc, x| acc.saturating_add(*x));
 
         let prior = Posterior::default_prior();
         let predictive_new = (prior.p_benign * likelihoods[0] / MILLION)

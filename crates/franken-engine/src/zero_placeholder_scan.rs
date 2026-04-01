@@ -946,7 +946,10 @@ mod tests {
         let summaries = inventory.subsystem_summaries();
         assert_eq!(summaries.len(), ZeroPlaceholderSubsystem::ALL.len());
 
-        let total_from_summaries: u64 = summaries.iter().map(|s| s.finding_count).fold(0u64, |acc, x| acc.saturating_add(x));
+        let total_from_summaries: u64 = summaries
+            .iter()
+            .map(|s| s.finding_count)
+            .fold(0u64, |acc, x| acc.saturating_add(x));
         assert_eq!(total_from_summaries as usize, inventory.findings.len());
 
         for summary in &summaries {

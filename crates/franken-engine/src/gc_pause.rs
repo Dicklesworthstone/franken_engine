@@ -526,7 +526,10 @@ impl PauseTracker {
 
     /// Total objects collected across all recorded pauses.
     pub fn total_objects_collected(&self) -> u64 {
-        self.records.iter().map(|r| r.objects_collected).fold(0u64, u64::saturating_add)
+        self.records
+            .iter()
+            .map(|r| r.objects_collected)
+            .fold(0u64, u64::saturating_add)
     }
 
     /// Extensions with recorded pauses (deterministic order).

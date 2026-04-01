@@ -2966,7 +2966,10 @@ mod tests {
         assert_eq!(receipts.len(), 2);
         // After first region spends 63 bytes, only 37 remain.
         // Second region also needs 63 bytes -> exceeds_budget fires.
-        let total_padding: u64 = receipts.iter().map(|r| u64::from(r.padding_bytes)).fold(0u64, |acc, x| acc.saturating_add(x));
+        let total_padding: u64 = receipts
+            .iter()
+            .map(|r| u64::from(r.padding_bytes))
+            .fold(0u64, |acc, x| acc.saturating_add(x));
         assert!(total_padding > 0);
     }
 

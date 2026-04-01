@@ -3460,7 +3460,11 @@ fn summarize_region_lifecycle(rows: &[RegionLifecycleRowView]) -> RegionLifecycl
     let average_quiescent_close_time_ms = if close_times.is_empty() {
         0
     } else {
-        close_times.iter().copied().fold(0u64, |acc, x| acc.saturating_add(x)) / close_times.len() as u64
+        close_times
+            .iter()
+            .copied()
+            .fold(0u64, |acc, x| acc.saturating_add(x))
+            / close_times.len() as u64
     };
     RegionLifecyclePanelView {
         active_region_count,

@@ -601,7 +601,9 @@ pub fn overall_coverage(surface_cov: &BTreeMap<String, u64>) -> u64 {
     if surface_cov.is_empty() {
         return MILLION;
     }
-    let sum: u64 = surface_cov.values().fold(0u64, |acc, x| acc.saturating_add(*x));
+    let sum: u64 = surface_cov
+        .values()
+        .fold(0u64, |acc, x| acc.saturating_add(*x));
     sum.checked_div(surface_cov.len() as u64).unwrap_or(0)
 }
 

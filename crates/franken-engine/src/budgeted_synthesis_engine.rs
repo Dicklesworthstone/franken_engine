@@ -452,7 +452,10 @@ impl SynthesisReport {
             .iter()
             .map(|c| c.proof.proof_time_millionths)
             .fold(0u64, u64::saturating_add);
-        let total_counterexamples: usize = candidates.iter().map(|c| c.counterexamples.len()).fold(0usize, usize::saturating_add);
+        let total_counterexamples: usize = candidates
+            .iter()
+            .map(|c| c.counterexamples.len())
+            .fold(0usize, usize::saturating_add);
 
         // Best admissible: highest speedup among verified candidates
         let best_candidate_id = candidates

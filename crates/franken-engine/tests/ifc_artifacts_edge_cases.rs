@@ -1065,7 +1065,33 @@ fn sealed_sink_ignores_blank_authorization_refs() {
         vec![FlowAuthorizationAdvisory::ExplicitAuthorizationRequired {
             source_label: Label::Secret,
             sink_clearance: ClearanceClass::SealedSink,
-        }]
+        }],
+    );
+}
+
+#[test]
+fn sealed_sink_ignores_non_matching_flow_authorization_refs() {
+    let env = FlowEnvelope {
+        envelope_id: "env-mismatched-auth".into(),
+        extension_id: "ext-mismatched-auth".into(),
+        producible_labels: [Label::Secret].into_iter().collect(),
+        accessible_clearances: [ClearanceClass::SealedSink].into_iter().collect(),
+        authorized_declassifications: vec!["sealed_sink:top_secret:obl-top-secret".into()],
+        policy_ref: "pol-mismatched-auth".into(),
+        epoch_id: 3,
+        schema_version: IfcSchemaVersion::CURRENT,
+    };
+
+    let assessment = env.assess_flow_authorization(&Label::Secret, &ClearanceClass::SealedSink);
+    assert!(assessment.envelope_authorized);
+    assert!(!assessment.flow_authorized);
+    assert!(!assessment.requires_declassification());
+    assert_eq!(
+        assessment.advisories,
+        vec![FlowAuthorizationAdvisory::ExplicitAuthorizationRequired {
+            source_label: Label::Secret,
+            sink_clearance: ClearanceClass::SealedSink,
+        }],
     );
 }
 

@@ -1660,7 +1660,7 @@ fn flow_envelope_secret_to_sealed_sink_requires_concrete_obligation() {
         extension_id: "ext-integ-secret-sealed".to_string(),
         producible_labels: [Label::Secret].into_iter().collect(),
         accessible_clearances: [ClearanceClass::SealedSink].into_iter().collect(),
-        authorized_declassifications: vec!["obl-secret-sealed".to_string()],
+        authorized_declassifications: vec!["sealed_sink:secret:obl-secret-sealed".to_string()],
         policy_ref: "pol-integ-secret-sealed".to_string(),
         epoch_id: 17,
         schema_version: IfcSchemaVersion::CURRENT,
@@ -1703,7 +1703,35 @@ fn flow_envelope_secret_to_sealed_sink_without_authorization_is_blocked() {
         vec![FlowAuthorizationAdvisory::ExplicitAuthorizationRequired {
             source_label: Label::Secret,
             sink_clearance: ClearanceClass::SealedSink,
-        }]
+        }],
+    );
+}
+
+#[test]
+fn flow_envelope_top_secret_to_sealed_sink_ignores_secret_only_authorization_refs() {
+    let env = FlowEnvelope {
+        envelope_id: "env-integ-top-secret-secret-only".to_string(),
+        extension_id: "ext-integ-top-secret-secret-only".to_string(),
+        producible_labels: [Label::TopSecret].into_iter().collect(),
+        accessible_clearances: [ClearanceClass::SealedSink].into_iter().collect(),
+        authorized_declassifications: vec!["sealed_sink:secret:obl-secret-only".to_string()],
+        policy_ref: "pol-integ-top-secret-secret-only".to_string(),
+        epoch_id: 18,
+        schema_version: IfcSchemaVersion::CURRENT,
+    };
+
+    let assessment = env.assess_flow_authorization(&Label::TopSecret, &ClearanceClass::SealedSink);
+    assert!(!assessment.envelope_authorized);
+    assert!(!assessment.flow_authorized);
+    assert!(!assessment.requires_declassification());
+    assert_eq!(
+        assessment.advisories,
+        vec![
+            FlowAuthorizationAdvisory::DeclassificationObligationRequired {
+                source_label: Label::TopSecret,
+                sink_clearance: ClearanceClass::SealedSink,
+            }
+        ],
     );
 }
 

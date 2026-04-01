@@ -485,6 +485,7 @@ impl SupportSurfaceEntry {
         append_str(&mut buf, cohort.as_str());
         append_u64(&mut buf, supported_apis);
         append_u64(&mut buf, total_apis);
+        append_u64(&mut buf, coverage_millionths);
         let content_hash = compute_digest(&buf);
         Self {
             cohort,
@@ -813,6 +814,9 @@ impl GateReceipt {
         append_u64(&mut buf, self.violations.len() as u64);
         for v in &self.violations {
             append_str(&mut buf, v.axis.as_str());
+            if let Some(ref cohort) = v.cohort {
+                append_str(&mut buf, cohort.as_str());
+            }
             append_str(&mut buf, &v.description);
         }
         self.content_hash = compute_digest(&buf);

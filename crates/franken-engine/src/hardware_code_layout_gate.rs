@@ -871,7 +871,9 @@ impl LayoutPolicy {
 
     /// Total code bytes across all regions.
     pub fn total_code_bytes(&self) -> u64 {
-        self.regions.iter().map(|r| r.size_bytes).sum()
+        self.regions
+            .iter()
+            .fold(0u64, |acc, r| acc.saturating_add(r.size_bytes))
     }
 
     /// Content hash of the policy for deterministic auditing.

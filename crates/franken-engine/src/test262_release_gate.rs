@@ -1240,7 +1240,16 @@ fn parse_quoted(line_no: usize, raw_value: &str) -> io::Result<String> {
 
 fn strip_comment(raw: &str) -> &str {
     let mut in_quotes = false;
+    let mut escaped = false;
     for (i, c) in raw.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if c == '\\' && in_quotes {
+            escaped = true;
+            continue;
+        }
         if c == '"' {
             in_quotes = !in_quotes;
         } else if c == '#' && !in_quotes {

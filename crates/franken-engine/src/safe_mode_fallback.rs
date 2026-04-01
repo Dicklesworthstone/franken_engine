@@ -1148,7 +1148,9 @@ impl AttestationFallbackManager {
         self.health = health;
 
         if health.is_healthy() {
-            if self.state == AttestationFallbackState::Degraded || self.state == AttestationFallbackState::Restoring {
+            if self.state == AttestationFallbackState::Degraded
+                || self.state == AttestationFallbackState::Restoring
+            {
                 self.transition_state(
                     request,
                     AttestationFallbackState::Restoring,

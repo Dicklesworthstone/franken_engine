@@ -579,7 +579,11 @@ impl TransitionReceipt {
         data.push(b'|');
         data.extend_from_slice(serde_json::to_string(&transition.from).unwrap().as_bytes());
         data.extend_from_slice(serde_json::to_string(&transition.to).unwrap().as_bytes());
-        data.extend_from_slice(serde_json::to_string(&transition.reason).unwrap().as_bytes());
+        data.extend_from_slice(
+            serde_json::to_string(&transition.reason)
+                .unwrap()
+                .as_bytes(),
+        );
         data.extend_from_slice(&transition.trigger_offset.to_le_bytes());
         data.extend_from_slice(&transition.epoch.as_u64().to_le_bytes());
         let receipt_hash = ContentHash::compute(&data);

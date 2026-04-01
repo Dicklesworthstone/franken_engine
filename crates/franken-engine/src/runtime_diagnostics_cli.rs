@@ -2503,14 +2503,12 @@ fn is_supported_frankenctl_reproducible_command(command: &str) -> bool {
     ];
 
     let trimmed = command.trim();
-    SUPPORTED_PREFIXES
-        .iter()
-        .any(|prefix| {
-            trimmed == *prefix
-                || trimmed
-                    .strip_prefix(prefix)
-                    .is_some_and(|suffix| suffix.starts_with(' '))
-        })
+    SUPPORTED_PREFIXES.iter().any(|prefix| {
+        trimmed == *prefix
+            || trimmed
+                .strip_prefix(prefix)
+                .is_some_and(|suffix| suffix.starts_with(' '))
+    })
 }
 
 fn normalize_onboarding_signal(signal: &mut OnboardingScorecardSignal) {

@@ -520,7 +520,7 @@ fn sanitized_code_portion(line: &str, state: &mut LineScanState) -> String {
             index += 3;
             continue;
         }
-        
+
         if bytes[index..].starts_with(b"b'\"'") {
             index += 4;
             continue;

@@ -275,19 +275,27 @@ fn cross_repo_integration_suite_operator_verification_commands_are_present() {
         .filter_map(|command| command.as_str())
         .collect::<Vec<_>>();
 
-    assert!(operator_verification
-        .iter()
-        .any(|command| command.contains("./scripts/run_cross_repo_integration_suite.sh ci")));
+    assert!(
+        operator_verification
+            .iter()
+            .any(|command| command.contains("./scripts/run_cross_repo_integration_suite.sh ci"))
+    );
     assert!(operator_verification
         .iter()
         .any(|command| command.contains("./scripts/e2e/cross_repo_integration_suite_replay.sh")));
-    assert!(operator_verification
-        .iter()
-        .any(|command| command.contains("run_manifest.json")));
-    assert!(operator_verification
-        .iter()
-        .any(|command| command.contains("events.jsonl")));
-    assert!(operator_verification
-        .iter()
-        .any(|command| command.contains("commands.txt")));
+    assert!(
+        operator_verification
+            .iter()
+            .any(|command| command.contains("run_manifest.json"))
+    );
+    assert!(
+        operator_verification
+            .iter()
+            .any(|command| command.contains("events.jsonl"))
+    );
+    assert!(
+        operator_verification
+            .iter()
+            .any(|command| command.contains("commands.txt"))
+    );
 }

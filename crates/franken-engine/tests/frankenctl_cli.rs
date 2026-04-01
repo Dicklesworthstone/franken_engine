@@ -1712,9 +1712,7 @@ fn frankenctl_doctor_outputs_json_and_writes_support_bundle() {
     );
     assert_eq!(json["observability_mode"]["lossless"].as_bool(), Some(true));
     assert!(
-        out_dir
-            .join("support_bundle/index.json")
-            .is_file(),
+        out_dir.join("support_bundle/index.json").is_file(),
         "expected support bundle index to be written"
     );
     assert!(

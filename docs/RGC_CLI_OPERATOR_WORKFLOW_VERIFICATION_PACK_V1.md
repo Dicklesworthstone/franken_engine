@@ -93,9 +93,7 @@ bundle replay command:
 
 - `FRANKENCTL_CLI_WORKFLOW_REPLAY_RUN_DIR=artifacts/frankenctl_cli_workflow/<timestamp> ./scripts/e2e/frankenctl_cli_workflow.sh ci`
 
-That explicit replay mode fails closed on incomplete bundles and short-circuits
-before creating a new run directory or requiring `rch`, so operators can replay
-preserved evidence without accidentally rerunning the heavy workflow.
+That explicit replay mode fails closed on incomplete bundles and short-circuits before creating a new run directory or requiring `rch`, so operators can replay preserved evidence without accidentally rerunning the heavy workflow.
 
 ## Required Artifacts
 

@@ -9,6 +9,24 @@ toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
 target_dir="${CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_cross_repo_integration}"
 artifact_root="${CROSS_REPO_INTEGRATION_ARTIFACT_ROOT:-artifacts/cross_repo_integration_suite}"
 asupersync_root="${ASUPERSYNC_ROOT:-/dp/asupersync}"
+
+print_usage() {
+  echo "usage: $0 [check|test|clippy|ci]"
+}
+
+case "$mode" in
+  -h|--help)
+    print_usage
+    exit 0
+    ;;
+  check|test|clippy|ci)
+    ;;
+  *)
+    print_usage >&2
+    exit 2
+    ;;
+esac
+
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/run_manifest.json"
@@ -194,10 +212,6 @@ run_mode() {
       run_check_mode
       run_test_mode
       run_clippy_mode
-      ;;
-    *)
-      echo "usage: $0 [check|test|clippy|ci]" >&2
-      exit 2
       ;;
   esac
 

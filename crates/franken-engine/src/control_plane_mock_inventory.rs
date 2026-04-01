@@ -624,6 +624,7 @@ pub enum ControlPlaneMockInventoryBundleError {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct ControlPlaneMockInventoryBundleLock {
     path: PathBuf,
 }
@@ -809,6 +810,253 @@ pub fn build_canonical_inventory() -> MockInventory {
 
     MockInventory::build(occurrences, architectural_issues)
 }
+
+fn control_plane_mock_inventory_json_bytes<T: Serialize>(
+    value: &T,
+    path: &Path,
+) -> Result<Vec<u8>, ControlPlaneMockInventoryBundleError> {
+    serde_json::to_vec(value).map_err(|source| ControlPlaneMockInventoryBundleError::Json {
+        path: path.display().to_string(),
+        source,
+    })
+}
+
+fn acquire_control_plane_mock_inventory_bundle_lock(
+    out_dir: &Path,
+) -> Result<ControlPlaneMockInventoryBundleLock, ControlPlaneMockInventoryBundleError> {
+    let lock_path = out_dir.join(".control_plane_mock_inventory.lock");
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_path)
+    {
+        Ok(_) => Ok(ControlPlaneMockInventoryBundleLock { path: lock_path }),
+        Err(source) if source.kind() == ErrorKind::AlreadyExists => {
+            Err(ControlPlaneMockInventoryBundleError::Busy {
+                path: lock_path.display().to_string(),
+            })
+        }
+        Err(source) => Err(ControlPlaneMockInventoryBundleError::Io {
+            path: lock_path.display().to_string(),
+            source,
+        }),
+    }
+}
+
+fn write_control_plane_mock_inventory_atomic(
+    path: &Path,
+    bytes: &[u8],
+) -> Result<(), ControlPlaneMockInventoryBundleError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| ControlPlaneMockInventoryBundleError::Io {
+            path: parent.display().to_string(),
+            source,
+        })?;
+    }
+
+    let temp_path = ambient_mock_guard_temp_path(path);
+    fs::write(&temp_path, bytes).map_err(|source| ControlPlaneMockInventoryBundleError::Io {
+        path: temp_path.display().to_string(),
+        source,
+    })?;
+    if let Err(source) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(ControlPlaneMockInventoryBundleError::Io {
+            path: path.display().to_string(),
+            source,
+        });
+    }
+    Ok(())
+}
+
+fn build_ambient_mock_guard_events(
+    report: &AmbientMockGuardReport,
+    trace_id: &str,
+    decision_id: &str,
+) -> Vec<AmbientMockGuardEvent> {
+    let mut events = vec![AmbientMockGuardEvent {
+        schema_version: AMBIENT_MOCK_GUARD_EVENT_SCHEMA_VERSION.to_string(),
+        trace_id: trace_id.to_string(),
+        decision_id: decision_id.to_string(),
+        policy_id: AMBIENT_MOCK_GUARD_POLICY_ID.to_string(),
+        component: AMBIENT_MOCK_GUARD_COMPONENT.to_string(),
+        event: "guard_started".to_string(),
+        outcome: "started".to_string(),
+        error_code: None,
+        seed: "ambient-mock-guard-static-scan-v1".to_string(),
+        scenario_id: "workspace-scan".to_string(),
+        diagnostic_id: None,
+        file_path: None,
+        line_number: None,
+        detail: Some("ambient mock guard scan started".to_string()),
+    }];
+
+    for violation in &report.violations {
+        events.push(AmbientMockGuardEvent {
+            schema_version: AMBIENT_MOCK_GUARD_EVENT_SCHEMA_VERSION.to_string(),
+            trace_id: trace_id.to_string(),
+            decision_id: decision_id.to_string(),
+            policy_id: AMBIENT_MOCK_GUARD_POLICY_ID.to_string(),
+            component: AMBIENT_MOCK_GUARD_COMPONENT.to_string(),
+            event: "violation_detected".to_string(),
+            outcome: "fail_closed".to_string(),
+            error_code: Some(violation.diagnostic_code.clone()),
+            seed: "ambient-mock-guard-static-scan-v1".to_string(),
+            scenario_id: "workspace-scan".to_string(),
+            diagnostic_id: Some(violation.violation_id.clone()),
+            file_path: Some(violation.file_path.clone()),
+            line_number: Some(violation.line_number),
+            detail: Some(violation.detail.clone()),
+        });
+    }
+
+    events.push(AmbientMockGuardEvent {
+        schema_version: AMBIENT_MOCK_GUARD_EVENT_SCHEMA_VERSION.to_string(),
+        trace_id: trace_id.to_string(),
+        decision_id: decision_id.to_string(),
+        policy_id: AMBIENT_MOCK_GUARD_POLICY_ID.to_string(),
+        component: AMBIENT_MOCK_GUARD_COMPONENT.to_string(),
+        event: "guard_completed".to_string(),
+        outcome: report.outcome.as_str().to_string(),
+        error_code: None,
+        seed: "ambient-mock-guard-static-scan-v1".to_string(),
+        scenario_id: "workspace-scan".to_string(),
+        diagnostic_id: None,
+        file_path: None,
+        line_number: None,
+        detail: Some(format!(
+            "{} files scanned; {} violation(s) recorded",
+            report.summary.scanned_file_count, report.summary.violation_count
+        )),
+    });
+
+    events
+}
+
+fn render_ambient_mock_guard_summary(
+    report: &AmbientMockGuardReport,
+    trace_id: &str,
+    decision_id: &str,
+) -> String {
+    let mut lines = vec![
+        "# Ambient Mock Guard Summary".to_string(),
+        String::new(),
+        format!("Outcome: `{}`", report.outcome),
+        format!("Policy: `{}`", report.policy_id),
+        format!("Bead: `{}`", report.bead_id),
+        format!("Trace: `{trace_id}`"),
+        format!("Decision: `{decision_id}`"),
+        format!("Scan root: `{}`", report.scan_root),
+        format!(
+            "Canonical inventory hash: `{}`",
+            report.canonical_inventory_hash
+        ),
+        format!("Scanned files: {}", report.summary.scanned_file_count),
+        format!("Violations: {}", report.summary.violation_count),
+        String::new(),
+    ];
+
+    if report.violations.is_empty() {
+        lines.push("No production `control_plane::mocks` seams were detected.".to_string());
+    } else {
+        lines.push("## Violations".to_string());
+        lines.push(String::new());
+        for violation in &report.violations {
+            lines.push(format!(
+                "- `{}` {}:{} {}",
+                violation.diagnostic_code,
+                violation.file_path,
+                violation.line_number,
+                violation.detail
+            ));
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn render_ambient_mock_guard_step_log(
+    report: &AmbientMockGuardReport,
+    trace_id: &str,
+    decision_id: &str,
+) -> String {
+    let mut output = String::new();
+    output.push_str(&format!("trace_id={trace_id}\n"));
+    output.push_str(&format!("decision_id={decision_id}\n"));
+    output.push_str(&format!("policy_id={}\n", report.policy_id));
+    output.push_str(&format!("outcome={}\n", report.outcome));
+    output.push_str(&format!(
+        "scanned_file_count={}\n",
+        report.summary.scanned_file_count
+    ));
+    output.push_str(&format!(
+        "violation_count={}\n",
+        report.summary.violation_count
+    ));
+    for violation in &report.violations {
+        output.push_str(&format!(
+            "violation={} {}:{} {}\n",
+            violation.diagnostic_code, violation.file_path, violation.line_number, violation.detail
+        ));
+    }
+    output
+}
+
+fn ambient_mock_guard_json_bytes<T: Serialize>(
+    value: &T,
+    path: &Path,
+) -> Result<Vec<u8>, AmbientMockGuardError> {
+    serde_json::to_vec(value).map_err(|source| AmbientMockGuardError::Json {
+        path: path.display().to_string(),
+        source,
+    })
+}
+
+fn acquire_ambient_mock_guard_bundle_lock(
+    out_dir: &Path,
+) -> Result<AmbientMockGuardBundleLock, AmbientMockGuardError> {
+    let lock_path = out_dir.join(".ambient_mock_guard.lock");
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_path)
+    {
+        Ok(_) => Ok(AmbientMockGuardBundleLock { path: lock_path }),
+        Err(source) if source.kind() == ErrorKind::AlreadyExists => {
+            Err(AmbientMockGuardError::Busy {
+                path: lock_path.display().to_string(),
+            })
+        }
+        Err(source) => Err(AmbientMockGuardError::Io {
+            path: lock_path.display().to_string(),
+            source,
+        }),
+    }
+}
+
+fn write_ambient_mock_guard_atomic(path: &Path, bytes: &[u8]) -> Result<(), AmbientMockGuardError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| AmbientMockGuardError::Io {
+            path: parent.display().to_string(),
+            source,
+        })?;
+    }
+
+    let temp_path = ambient_mock_guard_temp_path(path);
+    fs::write(&temp_path, bytes).map_err(|source| AmbientMockGuardError::Io {
+        path: temp_path.display().to_string(),
+        source,
+    })?;
+    if let Err(source) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(AmbientMockGuardError::Io {
+            path: path.display().to_string(),
+            source,
+        });
+    }
+    Ok(())
+}
+
 
 pub fn write_control_plane_mock_inventory_bundle(
     out_dir: impl AsRef<Path>,
@@ -2794,252 +3042,6 @@ fn render_control_plane_mock_inventory_step_log(
         ));
     }
     output
-}
-
-fn control_plane_mock_inventory_json_bytes<T: Serialize>(
-    value: &T,
-    path: &Path,
-) -> Result<Vec<u8>, ControlPlaneMockInventoryBundleError> {
-    serde_json::to_vec(value).map_err(|source| ControlPlaneMockInventoryBundleError::Json {
-        path: path.display().to_string(),
-        source,
-    })
-}
-
-fn acquire_control_plane_mock_inventory_bundle_lock(
-    out_dir: &Path,
-) -> Result<ControlPlaneMockInventoryBundleLock, ControlPlaneMockInventoryBundleError> {
-    let lock_path = out_dir.join(".control_plane_mock_inventory.lock");
-    match fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&lock_path)
-    {
-        Ok(_) => Ok(ControlPlaneMockInventoryBundleLock { path: lock_path }),
-        Err(source) if source.kind() == ErrorKind::AlreadyExists => {
-            Err(ControlPlaneMockInventoryBundleError::Busy {
-                path: lock_path.display().to_string(),
-            })
-        }
-        Err(source) => Err(ControlPlaneMockInventoryBundleError::Io {
-            path: lock_path.display().to_string(),
-            source,
-        }),
-    }
-}
-
-fn write_control_plane_mock_inventory_atomic(
-    path: &Path,
-    bytes: &[u8],
-) -> Result<(), ControlPlaneMockInventoryBundleError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| ControlPlaneMockInventoryBundleError::Io {
-            path: parent.display().to_string(),
-            source,
-        })?;
-    }
-
-    let temp_path = ambient_mock_guard_temp_path(path);
-    fs::write(&temp_path, bytes).map_err(|source| ControlPlaneMockInventoryBundleError::Io {
-        path: temp_path.display().to_string(),
-        source,
-    })?;
-    if let Err(source) = fs::rename(&temp_path, path) {
-        let _ = fs::remove_file(&temp_path);
-        return Err(ControlPlaneMockInventoryBundleError::Io {
-            path: path.display().to_string(),
-            source,
-        });
-    }
-    Ok(())
-}
-
-fn build_ambient_mock_guard_events(
-    report: &AmbientMockGuardReport,
-    trace_id: &str,
-    decision_id: &str,
-) -> Vec<AmbientMockGuardEvent> {
-    let mut events = vec![AmbientMockGuardEvent {
-        schema_version: AMBIENT_MOCK_GUARD_EVENT_SCHEMA_VERSION.to_string(),
-        trace_id: trace_id.to_string(),
-        decision_id: decision_id.to_string(),
-        policy_id: AMBIENT_MOCK_GUARD_POLICY_ID.to_string(),
-        component: AMBIENT_MOCK_GUARD_COMPONENT.to_string(),
-        event: "guard_started".to_string(),
-        outcome: "started".to_string(),
-        error_code: None,
-        seed: "ambient-mock-guard-static-scan-v1".to_string(),
-        scenario_id: "workspace-scan".to_string(),
-        diagnostic_id: None,
-        file_path: None,
-        line_number: None,
-        detail: Some("ambient mock guard scan started".to_string()),
-    }];
-
-    for violation in &report.violations {
-        events.push(AmbientMockGuardEvent {
-            schema_version: AMBIENT_MOCK_GUARD_EVENT_SCHEMA_VERSION.to_string(),
-            trace_id: trace_id.to_string(),
-            decision_id: decision_id.to_string(),
-            policy_id: AMBIENT_MOCK_GUARD_POLICY_ID.to_string(),
-            component: AMBIENT_MOCK_GUARD_COMPONENT.to_string(),
-            event: "violation_detected".to_string(),
-            outcome: "fail_closed".to_string(),
-            error_code: Some(violation.diagnostic_code.clone()),
-            seed: "ambient-mock-guard-static-scan-v1".to_string(),
-            scenario_id: "workspace-scan".to_string(),
-            diagnostic_id: Some(violation.violation_id.clone()),
-            file_path: Some(violation.file_path.clone()),
-            line_number: Some(violation.line_number),
-            detail: Some(violation.detail.clone()),
-        });
-    }
-
-    events.push(AmbientMockGuardEvent {
-        schema_version: AMBIENT_MOCK_GUARD_EVENT_SCHEMA_VERSION.to_string(),
-        trace_id: trace_id.to_string(),
-        decision_id: decision_id.to_string(),
-        policy_id: AMBIENT_MOCK_GUARD_POLICY_ID.to_string(),
-        component: AMBIENT_MOCK_GUARD_COMPONENT.to_string(),
-        event: "guard_completed".to_string(),
-        outcome: report.outcome.as_str().to_string(),
-        error_code: None,
-        seed: "ambient-mock-guard-static-scan-v1".to_string(),
-        scenario_id: "workspace-scan".to_string(),
-        diagnostic_id: None,
-        file_path: None,
-        line_number: None,
-        detail: Some(format!(
-            "{} files scanned; {} violation(s) recorded",
-            report.summary.scanned_file_count, report.summary.violation_count
-        )),
-    });
-
-    events
-}
-
-fn render_ambient_mock_guard_summary(
-    report: &AmbientMockGuardReport,
-    trace_id: &str,
-    decision_id: &str,
-) -> String {
-    let mut lines = vec![
-        "# Ambient Mock Guard Summary".to_string(),
-        String::new(),
-        format!("Outcome: `{}`", report.outcome),
-        format!("Policy: `{}`", report.policy_id),
-        format!("Bead: `{}`", report.bead_id),
-        format!("Trace: `{trace_id}`"),
-        format!("Decision: `{decision_id}`"),
-        format!("Scan root: `{}`", report.scan_root),
-        format!(
-            "Canonical inventory hash: `{}`",
-            report.canonical_inventory_hash
-        ),
-        format!("Scanned files: {}", report.summary.scanned_file_count),
-        format!("Violations: {}", report.summary.violation_count),
-        String::new(),
-    ];
-
-    if report.violations.is_empty() {
-        lines.push("No production `control_plane::mocks` seams were detected.".to_string());
-    } else {
-        lines.push("## Violations".to_string());
-        lines.push(String::new());
-        for violation in &report.violations {
-            lines.push(format!(
-                "- `{}` {}:{} {}",
-                violation.diagnostic_code,
-                violation.file_path,
-                violation.line_number,
-                violation.detail
-            ));
-        }
-    }
-
-    lines.join("\n")
-}
-
-fn render_ambient_mock_guard_step_log(
-    report: &AmbientMockGuardReport,
-    trace_id: &str,
-    decision_id: &str,
-) -> String {
-    let mut output = String::new();
-    output.push_str(&format!("trace_id={trace_id}\n"));
-    output.push_str(&format!("decision_id={decision_id}\n"));
-    output.push_str(&format!("policy_id={}\n", report.policy_id));
-    output.push_str(&format!("outcome={}\n", report.outcome));
-    output.push_str(&format!(
-        "scanned_file_count={}\n",
-        report.summary.scanned_file_count
-    ));
-    output.push_str(&format!(
-        "violation_count={}\n",
-        report.summary.violation_count
-    ));
-    for violation in &report.violations {
-        output.push_str(&format!(
-            "violation={} {}:{} {}\n",
-            violation.diagnostic_code, violation.file_path, violation.line_number, violation.detail
-        ));
-    }
-    output
-}
-
-fn ambient_mock_guard_json_bytes<T: Serialize>(
-    value: &T,
-    path: &Path,
-) -> Result<Vec<u8>, AmbientMockGuardError> {
-    serde_json::to_vec(value).map_err(|source| AmbientMockGuardError::Json {
-        path: path.display().to_string(),
-        source,
-    })
-}
-
-fn acquire_ambient_mock_guard_bundle_lock(
-    out_dir: &Path,
-) -> Result<AmbientMockGuardBundleLock, AmbientMockGuardError> {
-    let lock_path = out_dir.join(".ambient_mock_guard.lock");
-    match fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&lock_path)
-    {
-        Ok(_) => Ok(AmbientMockGuardBundleLock { path: lock_path }),
-        Err(source) if source.kind() == ErrorKind::AlreadyExists => {
-            Err(AmbientMockGuardError::Busy {
-                path: lock_path.display().to_string(),
-            })
-        }
-        Err(source) => Err(AmbientMockGuardError::Io {
-            path: lock_path.display().to_string(),
-            source,
-        }),
-    }
-}
-
-fn write_ambient_mock_guard_atomic(path: &Path, bytes: &[u8]) -> Result<(), AmbientMockGuardError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| AmbientMockGuardError::Io {
-            path: parent.display().to_string(),
-            source,
-        })?;
-    }
-
-    let temp_path = ambient_mock_guard_temp_path(path);
-    fs::write(&temp_path, bytes).map_err(|source| AmbientMockGuardError::Io {
-        path: temp_path.display().to_string(),
-        source,
-    })?;
-    if let Err(source) = fs::rename(&temp_path, path) {
-        let _ = fs::remove_file(&temp_path);
-        return Err(AmbientMockGuardError::Io {
-            path: path.display().to_string(),
-            source,
-        });
-    }
-    Ok(())
 }
 
 fn ambient_mock_guard_temp_path(path: &Path) -> PathBuf {

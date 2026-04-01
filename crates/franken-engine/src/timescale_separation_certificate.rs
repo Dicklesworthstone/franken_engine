@@ -423,17 +423,17 @@ pub fn compute_timescale_ratio(
     let obs_ratio = if obs_a == 0 || obs_b == 0 {
         0
     } else if obs_a >= obs_b {
-        obs_a * 1_000_000 / obs_b
+        (obs_a as u128 * 1_000_000 / obs_b as u128) as u64
     } else {
-        obs_b * 1_000_000 / obs_a
+        (obs_b as u128 * 1_000_000 / obs_a as u128) as u64
     };
 
     let write_ratio = if write_a == 0 || write_b == 0 {
         0
     } else if write_a >= write_b {
-        write_a * 1_000_000 / write_b
+        (write_a as u128 * 1_000_000 / write_b as u128) as u64
     } else {
-        write_b * 1_000_000 / write_a
+        (write_b as u128 * 1_000_000 / write_a as u128) as u64
     };
 
     let (ratio, basis) = if obs_ratio <= write_ratio {

@@ -89,12 +89,14 @@ impl ProofInput {
     pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(self.proof_id.as_bytes());
-        buf.push(self.proof_type as u8);
+        buf.extend_from_slice(self.proof_type.to_string().as_bytes());
         buf.extend_from_slice(&self.proof_epoch.as_u64().to_be_bytes());
         buf.extend_from_slice(&self.validity_start_ns.to_be_bytes());
         buf.extend_from_slice(&self.validity_end_ns.to_be_bytes());
+        buf.extend_from_slice(&self.issuer_signature);
         buf.extend_from_slice(self.canonical_hash.as_bytes());
         buf.extend_from_slice(self.linked_policy_id.as_bytes());
+        buf.extend_from_slice(&self.payload);
         buf
     }
 }
@@ -259,12 +261,14 @@ impl OptimizerHypothesis {
     pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(self.hypothesis_id.as_bytes());
+        // source_proof_ids is BTreeSet — deterministic iteration.
         for pid in &self.source_proof_ids {
             buf.extend_from_slice(pid.as_bytes());
         }
-        buf.push(self.kind.clone() as u8);
+        buf.extend_from_slice(self.kind.to_string().as_bytes());
+        buf.extend_from_slice(format!("{:?}", self.optimization_class).as_bytes());
         buf.extend_from_slice(&self.expected_speedup_millionths.to_be_bytes());
-        buf.push(self.risk as u8);
+        buf.extend_from_slice(self.risk.to_string().as_bytes());
         buf.extend_from_slice(&self.validity_epoch.as_u64().to_be_bytes());
         buf.extend_from_slice(self.derivation_hash.as_bytes());
         buf

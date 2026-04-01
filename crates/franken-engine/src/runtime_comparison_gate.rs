@@ -678,13 +678,15 @@ pub fn evaluate_gate(input: &GateInput<'_>) -> Result<GateEvidenceBundle, GateEr
     };
 
     let hash_input = format!(
-        "{}|{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}|blockers={}|repro={}",
         input.run_id,
         input.epoch.as_u64(),
         outcome,
         total_benchmarks,
         overall_vs_node,
         overall_vs_bun,
+        blockers.len(),
+        input.reproducibility.len(),
     );
     let evidence_hash = ContentHash::compute(hash_input.as_bytes());
 

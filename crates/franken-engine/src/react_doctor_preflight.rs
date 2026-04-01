@@ -48,6 +48,29 @@ const MAX_GUIDANCE_LEN: usize = 8192;
 /// Maximum support bundle entries.
 const MAX_BUNDLE_ENTRIES: usize = 5_000;
 
+fn hash_u64(hasher: &mut Sha256, value: u64) {
+    hasher.update(value.to_le_bytes());
+}
+
+fn hash_str(hasher: &mut Sha256, value: &str) {
+    hash_u64(hasher, value.len() as u64);
+    hasher.update(value.as_bytes());
+}
+
+fn hash_string_vec(hasher: &mut Sha256, values: &[String]) {
+    hash_u64(hasher, values.len() as u64);
+    for value in values {
+        hash_str(hasher, value);
+    }
+}
+
+fn hash_string_set(hasher: &mut Sha256, values: &BTreeSet<String>) {
+    hash_u64(hasher, values.len() as u64);
+    for value in values {
+        hash_str(hasher, value);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // CheckCategory
 // ---------------------------------------------------------------------------
@@ -204,11 +227,14 @@ impl DoctorCheck {
     /// Compute a deterministic content hash.
     pub fn content_hash(&self) -> ContentHash {
         let mut hasher = Sha256::new();
-        hasher.update(DOCTOR_PREFLIGHT_SCHEMA_VERSION.as_bytes());
-        hasher.update(self.check_id.as_bytes());
-        hasher.update(self.category.as_str().as_bytes());
-        hasher.update(self.severity.as_str().as_bytes());
-        hasher.update(self.message.as_bytes());
+        hash_str(&mut hasher, DOCTOR_PREFLIGHT_SCHEMA_VERSION);
+        hash_str(&mut hasher, self.check_id.as_str());
+        hash_str(&mut hasher, self.category.as_str());
+        hash_str(&mut hasher, self.severity.as_str());
+        hash_str(&mut hasher, self.message.as_str());
+        hash_str(&mut hasher, self.remediation.as_str());
+        hash_string_vec(&mut hasher, &self.related_mismatch_ids);
+        hash_string_set(&mut hasher, &self.tags);
         ContentHash::compute(&hasher.finalize())
     }
 
@@ -484,12 +510,14 @@ impl GuidanceEntry {
     /// Compute content hash.
     pub fn content_hash(&self) -> ContentHash {
         let mut hasher = Sha256::new();
-        hasher.update(DOCTOR_PREFLIGHT_SCHEMA_VERSION.as_bytes());
-        hasher.update(self.guidance_id.as_bytes());
-        hasher.update(self.title.as_bytes());
-        for step in &self.steps {
-            hasher.update(step.as_bytes());
-        }
+        hash_str(&mut hasher, DOCTOR_PREFLIGHT_SCHEMA_VERSION);
+        hash_str(&mut hasher, self.guidance_id.as_str());
+        hash_u64(&mut hasher, self.priority as u64);
+        hash_str(&mut hasher, self.category.as_str());
+        hash_str(&mut hasher, self.severity.as_str());
+        hash_str(&mut hasher, self.title.as_str());
+        hash_string_vec(&mut hasher, &self.steps);
+        hash_string_vec(&mut hasher, &self.originating_check_ids);
         ContentHash::compute(&hasher.finalize())
     }
 }
@@ -958,9 +986,10 @@ pub fn run_preflight(
     let passed = blockers.is_empty();
 
     let mut hasher = Sha256::new();
-    hasher.update(DOCTOR_PREFLIGHT_SCHEMA_VERSION.as_bytes());
-    hasher.update(if passed { b"pass" } else { b"fail" });
+    hash_str(&mut hasher, DOCTOR_PREFLIGHT_SCHEMA_VERSION);
+    hash_str(&mut hasher, if passed { "pass" } else { "fail" });
     hasher.update(report.report_hash.as_bytes());
+    hash_u64(&mut hasher, entries.len() as u64);
     let result_hash = ContentHash::compute(&hasher.finalize());
 
     Ok(PreflightResult {
@@ -1040,11 +1069,30 @@ pub fn build_support_bundle(report: &DoctorReport) -> Result<SupportBundle, Doct
     }
 
     let mut hasher = Sha256::new();
-    hasher.update(DOCTOR_PREFLIGHT_SCHEMA_VERSION.as_bytes());
-    hasher.update(report.epoch.as_u64().to_le_bytes());
+    hash_str(&mut hasher, DOCTOR_PREFLIGHT_SCHEMA_VERSION);
+    hash_u64(&mut hasher, report.epoch.as_u64());
+    hash_u64(&mut hasher, bundle_entries.len() as u64);
     for entry in &bundle_entries {
-        hasher.update(entry.key.as_bytes());
-        hasher.update(entry.value.as_bytes());
+        hash_str(&mut hasher, entry.key.as_str());
+        hash_str(&mut hasher, entry.value.as_str());
+        hash_str(&mut hasher, entry.category.as_str());
+    }
+    hash_u64(&mut hasher, summary.total_checks as u64);
+    hash_u64(&mut hasher, summary.pass_count as u64);
+    hash_u64(&mut hasher, summary.advisory_count as u64);
+    hash_u64(&mut hasher, summary.warning_count as u64);
+    hash_u64(&mut hasher, summary.error_count as u64);
+    hash_u64(&mut hasher, summary.critical_count as u64);
+    hash_u64(&mut hasher, summary.by_category.len() as u64);
+    for (category, count) in &summary.by_category {
+        hash_str(&mut hasher, category.as_str());
+        hash_u64(&mut hasher, *count as u64);
+    }
+    hash_u64(&mut hasher, u64::from(summary.is_ready));
+    hash_u64(&mut hasher, summary.aggregate_score);
+    hash_u64(&mut hasher, guidance.len() as u64);
+    for entry in &guidance {
+        hasher.update(entry.guidance_hash.as_bytes());
     }
     let bundle_hash = ContentHash::compute(&hasher.finalize());
 
@@ -1119,12 +1167,7 @@ pub fn generate_guidance(report: &DoctorReport) -> Result<Vec<GuidanceEntry>, Do
                 });
             }
 
-            let mut hasher = Sha256::new();
-            hasher.update(format!("gd-{guidance_num:04}").as_bytes());
-            hasher.update(title.as_bytes());
-            let guidance_hash = ContentHash::compute(&hasher.finalize());
-
-            guidance.push(GuidanceEntry {
+            let mut entry = GuidanceEntry {
                 guidance_id: format!("gd-{guidance_num:04}"),
                 priority,
                 category: cat,
@@ -1132,8 +1175,10 @@ pub fn generate_guidance(report: &DoctorReport) -> Result<Vec<GuidanceEntry>, Do
                 title,
                 steps,
                 originating_check_ids: check_ids,
-                guidance_hash,
-            });
+                guidance_hash: ContentHash::default(),
+            };
+            entry.guidance_hash = entry.content_hash();
+            guidance.push(entry);
             guidance_num += 1;
         }
     }
@@ -1384,6 +1429,31 @@ mod tests {
         let h1 = check.content_hash();
         let h2 = check.content_hash();
         assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn doctor_check_content_hash_changes_when_payload_changes() {
+        let base = DoctorCheck {
+            check_id: "dc-0001".to_string(),
+            category: CheckCategory::PackageHealth,
+            severity: CheckSeverity::Warning,
+            message: "test message".to_string(),
+            remediation: "fix it".to_string(),
+            related_mismatch_ids: vec!["m-1".to_string()],
+            tags: ["doctor"].into_iter().map(|s| s.to_string()).collect(),
+        };
+
+        let mut remediation_changed = base.clone();
+        remediation_changed.remediation = "apply a different fix".to_string();
+        assert_ne!(base.content_hash(), remediation_changed.content_hash());
+
+        let mut ids_changed = base.clone();
+        ids_changed.related_mismatch_ids.push("m-2".to_string());
+        assert_ne!(base.content_hash(), ids_changed.content_hash());
+
+        let mut tags_changed = base.clone();
+        tags_changed.tags.insert("react".to_string());
+        assert_ne!(base.content_hash(), tags_changed.content_hash());
     }
 
     #[test]
@@ -1739,6 +1809,30 @@ mod tests {
         assert!(result.total_findings() > 0);
     }
 
+    #[test]
+    fn preflight_result_hash_changes_when_entries_analyzed_changes() {
+        let warning = make_entry(
+            "warn-1",
+            MismatchDomain::CompileOutput,
+            MismatchSeverity::Warning,
+        );
+        let filtered_resolved = make_entry_full(
+            "resolved-1",
+            MismatchDomain::CompileOutput,
+            MismatchSeverity::Warning,
+            ComparisonTarget::NodeJs,
+            RemediationStatus::Resolved,
+        );
+
+        let result_one = run_preflight(&default_config(), std::slice::from_ref(&warning)).unwrap();
+        let result_two = run_preflight(&default_config(), &[warning, filtered_resolved]).unwrap();
+
+        assert_eq!(result_one.blockers, result_two.blockers);
+        assert_eq!(result_one.advisories, result_two.advisories);
+        assert_ne!(result_one.entries_analyzed, result_two.entries_analyzed);
+        assert_ne!(result_one.result_hash, result_two.result_hash);
+    }
+
     // -- build_support_bundle tests --
 
     #[test]
@@ -1878,6 +1972,74 @@ mod tests {
         for (a, b) in g1.iter().zip(g2.iter()) {
             assert_eq!(a.content_hash(), b.content_hash());
         }
+    }
+
+    #[test]
+    fn guidance_content_hash_changes_when_metadata_changes() {
+        let base = GuidanceEntry {
+            guidance_id: "gd-0000".to_string(),
+            priority: 2,
+            category: CheckCategory::JsxTransform,
+            severity: CheckSeverity::Error,
+            title: "jsx_transform: 1 issue(s) detected (max severity: error)".to_string(),
+            steps: vec!["update jsx runtime config".to_string()],
+            originating_check_ids: vec!["dc-0001".to_string()],
+            guidance_hash: ContentHash::default(),
+        };
+
+        let mut steps_changed = base.clone();
+        steps_changed
+            .steps
+            .push("clear lockfile and reinstall".to_string());
+        assert_ne!(base.content_hash(), steps_changed.content_hash());
+
+        let mut severity_changed = base.clone();
+        severity_changed.severity = CheckSeverity::Critical;
+        assert_ne!(base.content_hash(), severity_changed.content_hash());
+
+        let mut checks_changed = base.clone();
+        checks_changed
+            .originating_check_ids
+            .push("dc-0002".to_string());
+        assert_ne!(base.content_hash(), checks_changed.content_hash());
+    }
+
+    #[test]
+    fn generate_guidance_sets_hash_from_full_payload() {
+        let entries = vec![make_entry(
+            "e-1",
+            MismatchDomain::CompileOutput,
+            MismatchSeverity::Error,
+        )];
+        let report = run_doctor(&default_config(), &entries).unwrap();
+        let guidance = generate_guidance(&report).unwrap();
+        assert!(!guidance.is_empty());
+        for entry in &guidance {
+            assert_eq!(entry.guidance_hash, entry.content_hash());
+        }
+    }
+
+    #[test]
+    fn support_bundle_hash_changes_when_guidance_payload_changes() {
+        let mut report_a = DoctorReport::new(epoch(1));
+        report_a.add_check(DoctorCheck {
+            check_id: "dc-0001".to_string(),
+            category: CheckCategory::JsxTransform,
+            severity: CheckSeverity::Error,
+            message: "react compile output mismatch".to_string(),
+            remediation: "update jsx transform config".to_string(),
+            related_mismatch_ids: vec!["m-1".to_string()],
+            tags: ["doctor"].into_iter().map(|s| s.to_string()).collect(),
+        });
+
+        let mut report_b = report_a.clone();
+        report_b.checks[0].remediation = "switch to the automatic runtime and rebuild".to_string();
+        report_b.recompute_hash();
+
+        let bundle_a = build_support_bundle(&report_a).unwrap();
+        let bundle_b = build_support_bundle(&report_b).unwrap();
+        assert_ne!(bundle_a.guidance[0].steps, bundle_b.guidance[0].steps);
+        assert_ne!(bundle_a.bundle_hash, bundle_b.bundle_hash);
     }
 
     // -- is_react_ready tests --

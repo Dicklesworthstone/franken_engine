@@ -1,0 +1,108 @@
+{
+  "schema_version": "franken-engine.cross-repo-integration-suite.contract.v1",
+  "bead_id": "bd-1mgd",
+  "component": "cross_repo_integration_suite",
+  "suite_script": "./scripts/run_cross_repo_integration_suite.sh",
+  "replay_script": "./scripts/e2e/cross_repo_integration_suite_replay.sh",
+  "artifact_root": "artifacts/cross_repo_integration_suite",
+  "structured_log_fields": [
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "outcome",
+    "error_code"
+  ],
+  "shared_contract_targets": [
+    "cross_repo_integration_suite",
+    "cross_repo_contract_integration",
+    "cross_repo_contract_enrichment_integration",
+    "cross_repo_contract_edge_cases",
+    "sibling_integration_benchmark_gate_integration"
+  ],
+  "boundaries": [
+    {
+      "boundary": "asupersync",
+      "repo_path": "/dp/asupersync",
+      "test_targets": [
+        "asupersync_contract_matrix_integration",
+        "asupersync_contract_matrix_enrichment_integration"
+      ],
+      "suite_commands": [
+        "./scripts/e2e/run_asupersync_contract_matrix.sh <run-dir>/asupersync_contract_matrix /dp/asupersync"
+      ],
+      "verifies": [
+        "contract matrix generation",
+        "decision and evidence surface compatibility",
+        "version drift diagnostics"
+      ]
+    },
+    {
+      "boundary": "frankentui",
+      "repo_path": "/dp/frankentui",
+      "test_targets": [
+        "frankentui_adapter_integration",
+        "frankentui_adapter_enrichment_integration"
+      ],
+      "suite_commands": [],
+      "verifies": [
+        "dashboard envelope compatibility",
+        "incident replay rendering contracts",
+        "policy explanation card payload stability"
+      ]
+    },
+    {
+      "boundary": "frankensqlite",
+      "repo_path": "/dp/frankensqlite",
+      "test_targets": [
+        "storage_adapter_integration",
+        "storage_adapter_enrichment_integration"
+      ],
+      "suite_commands": [],
+      "verifies": [
+        "storage CRUD and migration behavior",
+        "deterministic event emission",
+        "persistence schema contract stability"
+      ]
+    },
+    {
+      "boundary": "fastapi_rust",
+      "repo_path": "/dp/fastapi_rust",
+      "test_targets": [
+        "service_endpoint_template_integration"
+      ],
+      "suite_commands": [],
+      "verifies": [
+        "health endpoint envelope",
+        "control actions",
+        "evidence export",
+        "replay control"
+      ]
+    },
+    {
+      "boundary": "sqlmodel_rust",
+      "repo_path": "/dp/sqlmodel_rust",
+      "test_targets": [
+        "sqlmodel_rust_boundary"
+      ],
+      "suite_commands": [],
+      "verifies": [
+        "typed boundary rules",
+        "inventory coverage on top of frankensqlite"
+      ]
+    }
+  ],
+  "degraded_mode_expectations": [
+    "boundary unavailability must fail with stable diagnostics",
+    "schema drift must produce explicit boundary attribution",
+    "structured log field drift must fail closed"
+  ],
+  "operator_verification": [
+    "./scripts/run_cross_repo_integration_suite.sh ci",
+    "./scripts/e2e/cross_repo_integration_suite_replay.sh",
+    "cat artifacts/cross_repo_integration_suite/<timestamp>/run_manifest.json",
+    "cat artifacts/cross_repo_integration_suite/<timestamp>/events.jsonl",
+    "cat artifacts/cross_repo_integration_suite/<timestamp>/commands.txt"
+  ]
+}

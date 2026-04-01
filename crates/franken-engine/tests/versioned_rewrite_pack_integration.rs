@@ -1453,6 +1453,14 @@ fn catalog_cross_interference_rejects_self_pair() {
 }
 
 #[test]
+fn catalog_cross_interference_self_pair_query_fails_closed() {
+    let mut cat = PackCatalog::new("self-query");
+    cat.register(make_pack("solo", vec![]));
+
+    assert!(cat.has_cross_blocking("solo", "solo"));
+}
+
+#[test]
 fn catalog_cross_interference_rejects_duplicate_pair_without_overwrite() {
     let mut cat = PackCatalog::new("dup-cross");
     cat.register(make_pack(

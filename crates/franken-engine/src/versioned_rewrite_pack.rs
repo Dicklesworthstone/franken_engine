@@ -919,10 +919,13 @@ impl PackCatalog {
 
     /// Check whether two packs have blocking cross-interference.
     ///
-    /// Returns `true` conservatively if the catalog is noncanonical or either
-    /// pack ID is unknown.
+    /// Returns `true` conservatively if the catalog is noncanonical, the
+    /// caller asks about a self-pair, or either pack ID is unknown.
     pub fn has_cross_blocking(&self, pack_a: &str, pack_b: &str) -> bool {
         if !self.is_canonical() {
+            return true;
+        }
+        if pack_a == pack_b {
             return true;
         }
         if !self.packs.contains_key(pack_a) || !self.packs.contains_key(pack_b) {
@@ -1946,6 +1949,14 @@ mod tests {
 
         assert!(!catalog.add_cross_interference("a", "a", InterferenceMetadata::build(vec![]),));
         assert!(catalog.cross_interference.is_empty());
+    }
+
+    #[test]
+    fn catalog_cross_interference_self_pair_queries_fail_closed() {
+        let mut catalog = PackCatalog::new("self-query");
+        catalog.register(test_pack("solo", vec![]));
+
+        assert!(catalog.has_cross_blocking("solo", "solo"));
     }
 
     #[test]

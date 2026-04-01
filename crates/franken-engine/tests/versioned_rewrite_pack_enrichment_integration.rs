@@ -1058,6 +1058,14 @@ fn enrichment_catalog_cross_interference_unknown_pair() {
 }
 
 #[test]
+fn enrichment_catalog_cross_interference_self_pair_fails_closed() {
+    let mut cat = PackCatalog::new("self-pair");
+    cat.register(default_pack("solo", vec![]));
+
+    assert!(cat.has_cross_blocking("solo", "solo"));
+}
+
+#[test]
 fn enrichment_catalog_hash_changes_on_register() {
     let mut cat = PackCatalog::new("hash-on-reg");
     let hash_before = cat.content_hash;

@@ -554,8 +554,8 @@ pub fn compute_regression(
         return None;
     }
 
-    let total_count: u64 = samples.iter().map(|s| s.sample_count).sum();
-    if total_count < config.min_sample_count {
+    let total_count: u64 = samples.iter().map(|s| s.sample_count).fold(0u64, u64::saturating_add);
+    if total_count == 0 || total_count < config.min_sample_count {
         return None;
     }
 
@@ -563,11 +563,11 @@ pub fn compute_regression(
     let baseline_sum: u128 = samples
         .iter()
         .map(|s| u128::from(s.baseline_value_millionths) * u128::from(s.sample_count))
-        .sum();
+        .fold(0u128, |acc, x| acc.saturating_add(x));
     let candidate_sum: u128 = samples
         .iter()
         .map(|s| u128::from(s.candidate_value_millionths) * u128::from(s.sample_count))
-        .sum();
+        .fold(0u128, |acc, x| acc.saturating_add(x));
 
     let baseline_mean = (baseline_sum / u128::from(total_count)) as u64;
     let candidate_mean = (candidate_sum / u128::from(total_count)) as u64;

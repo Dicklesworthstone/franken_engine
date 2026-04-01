@@ -996,7 +996,7 @@ pub fn total_compile_time_micros(report: &BatchReport) -> u64 {
         .reports
         .iter()
         .map(|r| r.total_compile_time_micros)
-        .sum()
+        .fold(0u64, |acc, x| acc.saturating_add(x))
 }
 
 // ---------------------------------------------------------------------------

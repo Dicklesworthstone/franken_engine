@@ -653,7 +653,7 @@ impl DocsAccuracyGate {
             .surfaces
             .iter()
             .map(|s| s.drift_class.severity_millionths())
-            .sum();
+            .fold(0u64, |acc, x| acc.saturating_add(x));
         let avg_severity = total_severity
             .checked_div(inventory.surfaces.len() as u64)
             .unwrap_or(0);

@@ -506,7 +506,7 @@ impl HarnessMigrationRegistry {
             .containment_tests
             .iter()
             .map(|t| t.local_test_count as u64)
-            .sum();
+            .fold(0u64, u64::saturating_add);
         if total_local == 0 {
             return 0;
         }
@@ -514,7 +514,7 @@ impl HarnessMigrationRegistry {
             .containment_tests
             .iter()
             .map(|t| t.upstream_test_count as u64)
-            .sum();
+            .fold(0u64, u64::saturating_add);
         total_upstream * SCALE / total_local
     }
 

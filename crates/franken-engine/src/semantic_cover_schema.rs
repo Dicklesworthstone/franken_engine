@@ -403,7 +403,7 @@ impl SemanticCover {
             .features
             .iter()
             .map(|f| f.coverage_ratio_millionths())
-            .sum();
+            .fold(0i64, |acc, x| acc.saturating_add(x));
         total_supported / self.features.len() as i64
     }
 

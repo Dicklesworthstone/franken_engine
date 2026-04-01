@@ -1048,7 +1048,7 @@ impl GovernanceEvaluator {
             .iter()
             .filter(|b| !b.within_budget)
             .map(|b| b.overshoot_millionths.unsigned_abs())
-            .sum();
+            .fold(0u64, |acc, x| acc.saturating_add(x));
         if total_overshoot > self.config.max_stall_budget_millionths {
             violations.push(ViolationKind::StallBudgetExceeded {
                 total_overshoot_millionths: total_overshoot,

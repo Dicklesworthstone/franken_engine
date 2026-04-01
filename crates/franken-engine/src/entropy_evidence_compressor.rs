@@ -1805,7 +1805,7 @@ mod tests {
                 est.observe(i);
             }
         }
-        let total_prob: i64 = (0..5u32).map(|i| est.probability_millionths(i)).sum();
+        let total_prob: i64 = (0..5u32).map(|i| est.probability_millionths(i)).fold(0i64, |acc, x| acc.saturating_add(x));
         assert!(total_prob <= MILLION);
         assert!(
             total_prob > 900_000,
@@ -2302,3 +2302,4 @@ mod tests {
         );
     }
 }
+

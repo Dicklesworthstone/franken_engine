@@ -193,7 +193,7 @@ impl PayoffTable {
             .iter()
             .filter(|e| e.role == role)
             .map(|e| e.payoff_millionths)
-            .sum()
+            .fold(0i64, |acc, x| acc.saturating_add(x))
     }
 
     /// Check budget balance: total rewards <= total penalties.
@@ -203,13 +203,13 @@ impl PayoffTable {
             .iter()
             .filter(|e| e.payoff_millionths > 0)
             .map(|e| e.payoff_millionths)
-            .sum();
+            .fold(0i64, |acc, x| acc.saturating_add(x));
         let total_negative: i64 = self
             .entries
             .iter()
             .filter(|e| e.payoff_millionths < 0)
             .map(|e| e.payoff_millionths.saturating_abs())
-            .sum();
+            .fold(0i64, |acc, x| acc.saturating_add(x));
         total_positive <= total_negative
     }
 
@@ -397,7 +397,7 @@ impl EnforcementPolicy {
 
     /// Total maximum penalty across all rules.
     pub fn max_total_penalty(&self) -> i64 {
-        self.rules.iter().map(|r| r.penalty_millionths).sum()
+        self.rules.iter().map(|r| r.penalty_millionths).fold(0i64, |acc, x| acc.saturating_add(x))
     }
 }
 

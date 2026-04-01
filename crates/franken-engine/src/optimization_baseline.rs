@@ -673,7 +673,7 @@ impl OpportunityMatrix {
             .iter()
             .filter(|o| o.status == OpportunityStatus::Approved)
             .map(|o| o.estimated_impact_millionths)
-            .sum()
+            .fold(0i64, |acc, x| acc.saturating_add(x))
     }
 
     pub fn derive_id(&self) -> EngineObjectId {
@@ -2124,3 +2124,4 @@ mod tests {
         assert_eq!(reg.count(), 0);
     }
 }
+

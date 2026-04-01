@@ -1056,7 +1056,7 @@ impl StaticAnalysisGraph {
             .components
             .values()
             .map(|c| c.hook_slots.len() as u64)
-            .sum();
+            .fold(0u64, |acc, x| acc.saturating_add(x));
         let effect_site_count = self
             .nodes
             .values()

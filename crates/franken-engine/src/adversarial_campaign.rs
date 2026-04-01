@@ -2373,23 +2373,23 @@ pub fn evaluate_compromise_suppression_gate(
             .samples
             .iter()
             .map(|sample| sample.attempt_count)
-            .sum(),
+            .fold(0u64, |acc, x| acc.saturating_add(x)),
         success_count: input
             .samples
             .iter()
             .map(|sample| sample.success_count)
-            .sum(),
+            .fold(0u64, |acc, x| acc.saturating_add(x)),
         compromise_rate_millionths: compromise_rate_millionths(
             input
                 .samples
                 .iter()
                 .map(|sample| sample.success_count)
-                .sum(),
+                .fold(0u64, |acc, x| acc.saturating_add(x)),
             input
                 .samples
                 .iter()
                 .map(|sample| sample.attempt_count)
-                .sum(),
+                .fold(0u64, |acc, x| acc.saturating_add(x)),
         ),
         p_value_millionths: None,
         confidence_interval: String::new(),

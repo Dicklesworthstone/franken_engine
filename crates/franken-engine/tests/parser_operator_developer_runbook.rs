@@ -131,6 +131,7 @@ fn parser_operator_runbook_doc_has_required_sections() {
         "latest complete directory",
         "without rerunning the lane",
         "PARSER_OPERATOR_DEVELOPER_RUNBOOK_REPLAY_RUN_DIR",
+        "operator_verification",
     ] {
         assert!(
             doc.contains(section),
@@ -270,6 +271,8 @@ fn parser_operator_runbook_script_contains_required_markers() {
         "cat ${step_logs_dir}/step_000.log",
         "parser_frontier_emit_manifest_environment_fields",
         "validate_parser_log_schema.sh --events",
+        "preserved_bundle_replay_command=",
+        "PARSER_OPERATOR_DEVELOPER_RUNBOOK_REPLAY_RUN_DIR=${run_dir}",
     ] {
         assert!(
             script.contains(marker),
@@ -341,6 +344,10 @@ fn readme_references_operator_runbook_gate_and_replay() {
     assert!(
         readme.contains("PARSER_OPERATOR_DEVELOPER_RUNBOOK_REPLAY_RUN_DIR"),
         "README missing exact-run-dir replay env var guidance"
+    );
+    assert!(
+        readme.contains("operator_verification"),
+        "README missing parser operator/developer runbook operator_verification guidance"
     );
     assert!(
         readme.contains("without rerunning the lane"),
@@ -688,4 +695,13 @@ fn parser_operator_runbook_replay_wrapper_surfaces_latest_complete_bundle() {
             "replay wrapper missing required marker: {marker}"
         );
     }
+}
+
+#[test]
+fn parser_operator_runbook_script_pins_preserved_bundle_operator_verification_command() {
+    let script = load_script();
+    assert!(
+        script.contains("PARSER_OPERATOR_DEVELOPER_RUNBOOK_REPLAY_RUN_DIR=${run_dir} ./scripts/e2e/parser_operator_developer_runbook_replay.sh ${mode}"),
+        "runbook script must emit exact preserved-bundle replay command in operator_verification"
+    );
 }

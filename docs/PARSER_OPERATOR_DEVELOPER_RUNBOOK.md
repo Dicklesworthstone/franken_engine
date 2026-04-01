@@ -135,6 +135,10 @@ The explicit run directory must already contain a complete bundle
 (`run_manifest.json`, `events.jsonl`, `commands.txt`, and
 `step_logs/step_000.log`) or the wrapper fails closed.
 
+The emitted `run_manifest.json` also includes this exact preserved-bundle
+replay command in `operator_verification`, so operators can verify the rerun
+path and the no-rerun preserved-bundle path from the same manifest.
+
 ## Escalation And Rollback Posture
 
 - If diagnostics, recovery, or compatibility drills fail, treat parser promotion
@@ -155,4 +159,6 @@ cat artifacts/parser_operator_developer_runbook/<timestamp>/events.jsonl
 cat artifacts/parser_operator_developer_runbook/<timestamp>/commands.txt
 cat artifacts/parser_operator_developer_runbook/<timestamp>/step_logs/step_000.log
 ./scripts/e2e/parser_operator_developer_runbook_replay.sh ci
+PARSER_OPERATOR_DEVELOPER_RUNBOOK_REPLAY_RUN_DIR=artifacts/parser_operator_developer_runbook/<timestamp> \
+  ./scripts/e2e/parser_operator_developer_runbook_replay.sh ci
 ```

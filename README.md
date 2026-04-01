@@ -1293,6 +1293,42 @@ Artifacts are written under:
 - `artifacts/cross_repo_integration_suite/<timestamp>/commands.txt`
 - `artifacts/cross_repo_integration_suite/<timestamp>/asupersync_contract_matrix/`
 
+## RGC FrankenNode Handoff Bundle Gate
+
+`bd-1lsy.5.10.3` packages the engine-owned support-surface contract and blocker
+ledger into a deterministic handoff bundle for `/dp/franken_node`, with
+sibling smoke checks and fail-closed routing when upstream evidence is missing,
+stale, or orphaned.
+
+```bash
+# franken_node handoff bundle gate (rch-backed check + test + clippy + sibling smoke checks)
+RGC_HANDOFF_BLOCKER_LEDGER_PATH=/abs/path/engine_product_blocker_ledger.json \
+  ./scripts/run_rgc_franken_node_handoff_bundle.sh ci
+
+# deterministic replay wrapper
+RGC_HANDOFF_BLOCKER_LEDGER_PATH=/abs/path/engine_product_blocker_ledger.json \
+  ./scripts/e2e/rgc_franken_node_handoff_bundle_replay.sh ci
+```
+
+The replay wrapper resolves the latest complete handoff bundle, warns when it
+must skip a newer incomplete run directory, and fails closed if no complete
+bundle exists.
+
+Artifacts are written under:
+
+- `artifacts/rgc_franken_node_handoff_bundle/<timestamp>/run_manifest.json`
+- `artifacts/rgc_franken_node_handoff_bundle/<timestamp>/events.jsonl`
+- `artifacts/rgc_franken_node_handoff_bundle/<timestamp>/commands.txt`
+- `artifacts/rgc_franken_node_handoff_bundle/<timestamp>/trace_ids.json`
+- `artifacts/rgc_franken_node_handoff_bundle/<timestamp>/franken_node_handoff_manifest.json`
+- `artifacts/rgc_franken_node_handoff_bundle/<timestamp>/sibling_smoke_verification.json`
+- `artifacts/rgc_franken_node_handoff_bundle/<timestamp>/support_surface_summary.md`
+- `artifacts/rgc_franken_node_handoff_bundle/<timestamp>/franken_node_handoff_bundle_contract.json`
+- `artifacts/rgc_franken_node_handoff_bundle/<timestamp>/support_surface_contract.json`
+- `artifacts/rgc_franken_node_handoff_bundle/<timestamp>/engine_product_blocker_ledger.json`
+- `artifacts/rgc_franken_node_handoff_bundle/<timestamp>/repo_split_contract.md`
+- `artifacts/rgc_franken_node_handoff_bundle/<timestamp>/step_logs/step_000.log`
+
 ## FRX Track D WASM Lane + Hybrid Router Sprint Gate
 
 `bd-mjh3.11.4` ships a deterministic gate for Track D WASM lane + hybrid router

@@ -115,6 +115,11 @@ fn load_replay_script() -> String {
     read_to_string(&path)
 }
 
+fn load_readme() -> String {
+    let path = repo_root().join("README.md");
+    read_to_string(&path)
+}
+
 #[test]
 fn rgc_408c_doc_contains_required_sections() {
     let path = repo_root().join("docs/RGC_FRANKEN_NODE_HANDOFF_BUNDLE_V1.md");
@@ -481,6 +486,36 @@ fn rgc_408c_replay_script_requires_complete_bundle_and_prints_key_artifacts() {
         assert!(
             script.contains(snippet),
             "replay script missing required snippet: {snippet}"
+        );
+    }
+}
+
+#[test]
+fn readme_references_handoff_bundle_gate_and_replay() {
+    let readme = load_readme();
+
+    for fragment in [
+        "## RGC FrankenNode Handoff Bundle Gate",
+        "/dp/franken_node",
+        "RGC_HANDOFF_BLOCKER_LEDGER_PATH=/abs/path/engine_product_blocker_ledger.json \\",
+        "./scripts/run_rgc_franken_node_handoff_bundle.sh ci",
+        "./scripts/e2e/rgc_franken_node_handoff_bundle_replay.sh ci",
+        "latest complete handoff bundle",
+        "newer incomplete run directory",
+        "artifacts/rgc_franken_node_handoff_bundle/<timestamp>/run_manifest.json",
+        "artifacts/rgc_franken_node_handoff_bundle/<timestamp>/events.jsonl",
+        "artifacts/rgc_franken_node_handoff_bundle/<timestamp>/commands.txt",
+        "artifacts/rgc_franken_node_handoff_bundle/<timestamp>/trace_ids.json",
+        "artifacts/rgc_franken_node_handoff_bundle/<timestamp>/franken_node_handoff_manifest.json",
+        "artifacts/rgc_franken_node_handoff_bundle/<timestamp>/sibling_smoke_verification.json",
+        "artifacts/rgc_franken_node_handoff_bundle/<timestamp>/support_surface_summary.md",
+        "artifacts/rgc_franken_node_handoff_bundle/<timestamp>/franken_node_handoff_bundle_contract.json",
+        "artifacts/rgc_franken_node_handoff_bundle/<timestamp>/engine_product_blocker_ledger.json",
+        "artifacts/rgc_franken_node_handoff_bundle/<timestamp>/step_logs/step_000.log",
+    ] {
+        assert!(
+            readme.contains(fragment),
+            "README missing franken_node handoff bundle fragment: {fragment}"
         );
     }
 }

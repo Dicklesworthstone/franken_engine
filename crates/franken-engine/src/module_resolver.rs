@@ -1623,6 +1623,7 @@ impl DeterministicModuleResolver {
         (probes, None)
     }
 
+    #[allow(clippy::type_complexity)]
     fn resolve_external_package_candidate<'a>(
         &'a self,
         specifier: &str,
@@ -1964,10 +1965,10 @@ fn resolve_package_export_target<'a>(
         .map(|(_, _, target, capture)| (target, capture))
 }
 
-fn resolve_package_export_path<'a>(
-    export_target: &'a ExternalPackageExportTarget,
+fn resolve_package_export_path(
+    export_target: &ExternalPackageExportTarget,
     style: ImportStyle,
-) -> Option<(&'a str, String)> {
+) -> Option<(&str, String)> {
     for condition in package_condition_order(style) {
         if let Some(path_template) = export_target.condition_targets.get(*condition) {
             return Some((path_template.as_str(), (*condition).to_string()));

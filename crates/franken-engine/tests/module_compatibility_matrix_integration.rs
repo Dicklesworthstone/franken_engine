@@ -16,7 +16,7 @@
     clippy::manual_abs_diff
 )]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -31,8 +31,9 @@ use frankenengine_engine::module_compatibility_matrix::{
     ExplicitShim, ModuleCompatibilityMatrix, ModuleFeature, ReferenceRuntime,
 };
 use frankenengine_engine::module_resolver::{
-    AllowAllPolicy, DeterministicModuleResolver, ImportStyle, ModuleDefinition, ModuleRequest,
-    ModuleResolver, ModuleSyntax, ResolutionContext, ResolutionErrorCode,
+    AllowAllPolicy, DeterministicModuleResolver, ExternalPackageDefinition,
+    ExternalPackageExportTarget, ImportStyle, ModuleDefinition, ModuleRequest, ModuleResolver,
+    ModuleSyntax, ResolutionContext, ResolutionErrorCode,
 };
 
 // ---------------------------------------------------------------------------
@@ -126,6 +127,26 @@ fn esm_def(source: &str) -> ModuleDefinition {
     ModuleDefinition::new(ModuleSyntax::EsModule, source)
 }
 
+fn cjs_def(source: &str) -> ModuleDefinition {
+    ModuleDefinition::new(ModuleSyntax::CommonJs, source)
+}
+
+fn export_target(
+    condition_targets: &[(&str, &str)],
+    fallback_target: Option<&str>,
+) -> ExternalPackageExportTarget {
+    let mut target = ExternalPackageExportTarget {
+        condition_targets: BTreeMap::new(),
+        fallback_target: fallback_target.map(str::to_string),
+    };
+    for (condition, path) in condition_targets {
+        target
+            .condition_targets
+            .insert((*condition).to_string(), (*path).to_string());
+    }
+    target
+}
+
 fn observe_bare_require_index_mjs_behavior(mode: CompatibilityMode) -> String {
     let mut resolver = DeterministicModuleResolver::new("/repo");
     resolver
@@ -173,6 +194,187 @@ fn observe_bare_require_index_mjs_behavior(mode: CompatibilityMode) -> String {
             "reject_mjs_package_entry_probe".to_string()
         }
     }
+}
+
+fn observe_conditional_exports_condition_order_behavior(mode: CompatibilityMode) -> String {
+    let mut resolver = DeterministicModuleResolver::default();
+    resolver
+        .register_external_package(
+            ExternalPackageDefinition::new("conditional-pkg")
+                .with_export(
+                    ".",
+                    export_target(
+                        &[
+                            ("import", "./esm/index.mjs"),
+                            ("require", "./cjs/index.cjs"),
+                            ("default", "./fallback/index.js"),
+                        ],
+                        None,
+                    ),
+                )
+                .with_export(
+                    "./fallback",
+                    export_target(&[("default", "./fallback/index.js")], None),
+                ),
+        )
+        .unwrap();
+    resolver
+        .register_external_module(
+            "conditional-pkg/esm/index.mjs",
+            esm_def("export default 'esm';"),
+        )
+        .unwrap();
+    resolver
+        .register_external_module(
+            "conditional-pkg/cjs/index.cjs",
+            cjs_def("module.exports = 'cjs';"),
+        )
+        .unwrap();
+    resolver
+        .register_external_module(
+            "conditional-pkg/fallback/index.js",
+            cjs_def("module.exports = 'fallback';"),
+        )
+        .unwrap();
+
+    let import_outcome = resolver
+        .resolve(
+            &ModuleRequest::new("conditional-pkg", ImportStyle::Import)
+                .with_compatibility_mode(mode),
+            &resolver_ctx(),
+            &allow_all(),
+        )
+        .expect("conditional exports import branch should resolve");
+    assert_eq!(
+        import_outcome.module.canonical_specifier,
+        "conditional-pkg/esm/index.mjs"
+    );
+    assert_eq!(
+        import_outcome.module.probe_sequence,
+        vec!["conditional-pkg", "conditional-pkg/esm/index.mjs"]
+    );
+
+    let require_outcome = resolver
+        .resolve(
+            &ModuleRequest::new("conditional-pkg", ImportStyle::Require)
+                .with_compatibility_mode(mode),
+            &resolver_ctx(),
+            &allow_all(),
+        )
+        .expect("conditional exports require branch should resolve");
+    assert_eq!(
+        require_outcome.module.canonical_specifier,
+        "conditional-pkg/cjs/index.cjs"
+    );
+    assert_eq!(
+        require_outcome.module.probe_sequence,
+        vec!["conditional-pkg", "conditional-pkg/cjs/index.cjs"]
+    );
+
+    let default_import_outcome = resolver
+        .resolve(
+            &ModuleRequest::new("conditional-pkg/fallback", ImportStyle::Import)
+                .with_compatibility_mode(mode),
+            &resolver_ctx(),
+            &allow_all(),
+        )
+        .expect("conditional exports default branch should resolve for import");
+    assert_eq!(
+        default_import_outcome.module.canonical_specifier,
+        "conditional-pkg/fallback/index.js"
+    );
+    assert_eq!(
+        default_import_outcome.module.probe_sequence,
+        vec![
+            "conditional-pkg/fallback",
+            "conditional-pkg/fallback/index.js"
+        ]
+    );
+
+    let default_require_outcome = resolver
+        .resolve(
+            &ModuleRequest::new("conditional-pkg/fallback", ImportStyle::Require)
+                .with_compatibility_mode(mode),
+            &resolver_ctx(),
+            &allow_all(),
+        )
+        .expect("conditional exports default branch should resolve for require");
+    assert_eq!(
+        default_require_outcome.module.canonical_specifier,
+        "conditional-pkg/fallback/index.js"
+    );
+    assert_eq!(
+        default_require_outcome.module.probe_sequence,
+        vec![
+            "conditional-pkg/fallback",
+            "conditional-pkg/fallback/index.js"
+        ]
+    );
+
+    "resolve_condition_import_require_default".to_string()
+}
+
+fn observe_dual_mode_exports_map_behavior(mode: CompatibilityMode) -> String {
+    let mut resolver = DeterministicModuleResolver::default();
+    resolver
+        .register_external_package(ExternalPackageDefinition::new("dual-mode-pkg").with_export(
+            ".",
+            export_target(
+                &[
+                    ("import", "./dist/index.mjs"),
+                    ("require", "./dist/index.cjs"),
+                ],
+                None,
+            ),
+        ))
+        .unwrap();
+    resolver
+        .register_external_module(
+            "dual-mode-pkg/dist/index.mjs",
+            esm_def("export default 'esm';"),
+        )
+        .unwrap();
+    resolver
+        .register_external_module(
+            "dual-mode-pkg/dist/index.cjs",
+            cjs_def("module.exports = 'cjs';"),
+        )
+        .unwrap();
+
+    let import_outcome = resolver
+        .resolve(
+            &ModuleRequest::new("dual-mode-pkg", ImportStyle::Import).with_compatibility_mode(mode),
+            &resolver_ctx(),
+            &allow_all(),
+        )
+        .expect("dual-mode import branch should resolve");
+    assert_eq!(
+        import_outcome.module.canonical_specifier,
+        "dual-mode-pkg/dist/index.mjs"
+    );
+    assert_eq!(
+        import_outcome.module.probe_sequence,
+        vec!["dual-mode-pkg", "dual-mode-pkg/dist/index.mjs"]
+    );
+
+    let require_outcome = resolver
+        .resolve(
+            &ModuleRequest::new("dual-mode-pkg", ImportStyle::Require)
+                .with_compatibility_mode(mode),
+            &resolver_ctx(),
+            &allow_all(),
+        )
+        .expect("dual-mode require branch should resolve");
+    assert_eq!(
+        require_outcome.module.canonical_specifier,
+        "dual-mode-pkg/dist/index.cjs"
+    );
+    assert_eq!(
+        require_outcome.module.probe_sequence,
+        vec!["dual-mode-pkg", "dual-mode-pkg/dist/index.cjs"]
+    );
+
+    "resolve_exports_by_import_style".to_string()
 }
 
 #[test]
@@ -2072,6 +2274,69 @@ fn external_package_root_require_evidence_matches_matrix_contract_across_modes()
             outcome.matched,
             "external package-root require evidence should match the matrix contract for {specimen_id}"
         );
+    }
+}
+
+#[test]
+fn conditional_exports_condition_order_behavior_matches_matrix_contract_across_modes() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    for mode in [
+        CompatibilityMode::Native,
+        CompatibilityMode::NodeCompat,
+        CompatibilityMode::BunCompat,
+    ] {
+        let observed_behavior = observe_conditional_exports_condition_order_behavior(mode);
+        assert_eq!(
+            observed_behavior,
+            "resolve_condition_import_require_default"
+        );
+
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "conditional-exports-condition-order",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    observed_behavior,
+                ),
+                &ctx(),
+            )
+            .expect(
+                "conditional exports condition-order behavior should match the matrix contract",
+            );
+        assert!(outcome.matched);
+    }
+}
+
+#[test]
+fn dual_mode_exports_map_behavior_matches_matrix_contract_across_modes() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    for mode in [
+        CompatibilityMode::Native,
+        CompatibilityMode::NodeCompat,
+        CompatibilityMode::BunCompat,
+    ] {
+        let observed_behavior = observe_dual_mode_exports_map_behavior(mode);
+        assert_eq!(observed_behavior, "resolve_exports_by_import_style");
+
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "dual-mode-exports-map",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    observed_behavior,
+                ),
+                &ctx(),
+            )
+            .expect("dual-mode exports map behavior should match the matrix contract");
+        assert!(outcome.matched);
     }
 }
 

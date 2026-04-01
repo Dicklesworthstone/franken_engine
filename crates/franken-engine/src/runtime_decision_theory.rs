@@ -802,8 +802,12 @@ fn empirical_kl_divergence(reference: &[i64], test: &[i64]) -> i64 {
         test_counts[bin] += 1;
     }
 
-    let ref_total: i64 = ref_counts.iter().sum();
-    let test_total: i64 = test_counts.iter().sum();
+    let ref_total: i64 = ref_counts
+        .iter()
+        .fold(0i64, |acc, x| acc.saturating_add(*x));
+    let test_total: i64 = test_counts
+        .iter()
+        .fold(0i64, |acc, x| acc.saturating_add(*x));
 
     if ref_total == 0 || test_total == 0 {
         return 0;

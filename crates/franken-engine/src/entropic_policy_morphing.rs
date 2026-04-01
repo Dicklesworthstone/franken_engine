@@ -137,7 +137,10 @@ impl PolicyProfile {
         }
 
         let values: Vec<i64> = self.dimensions.values().copied().collect();
-        let total: i64 = values.iter().map(|v| v.max(&0)).sum();
+        let total: i64 = values
+            .iter()
+            .map(|v| *v.max(&0))
+            .fold(0i64, i64::saturating_add);
         if total == 0 {
             return 0;
         }
@@ -556,11 +559,12 @@ impl EntropicPolicyMorpher {
             }
 
             // Apply blended profile.
+            let old_name = self.current_profile.name.clone();
             self.budget.record_step(blend_distance);
             self.current_profile = blended;
             self.current_regime = new_regime;
             self.in_fallback = false;
-            self.applied_count += 1;
+            self.applied_count = self.applied_count.saturating_add(1);
 
             let outcome = MorphingOutcome::Applied {
                 distance_millionths: blend_distance,
@@ -570,7 +574,7 @@ impl EntropicPolicyMorpher {
                 seq: self.step_count,
                 from_regime,
                 to_regime: new_regime,
-                from_profile_name: self.current_profile.name.clone(),
+                from_profile_name: old_name,
                 to_profile_name: self.current_profile.name.clone(),
                 outcome: outcome.clone(),
                 evidence_hash: self.compute_step_hash("blend_applied"),
@@ -687,8 +691,9 @@ impl EntropicPolicyMorpher {
             let cur = self.current_profile.dimensions.get(k).copied().unwrap_or(0);
             let tgt = target.dimensions.get(k).copied().unwrap_or(0);
             // blend = cur + rate * (tgt - cur) / MILLION
-            let delta = tgt - cur;
-            let blended = cur + delta.saturating_mul(rate).checked_div(MILLION).unwrap_or(0);
+            let delta = tgt.saturating_sub(cur);
+            let blended =
+                cur.saturating_add(delta.saturating_mul(rate).checked_div(MILLION).unwrap_or(0));
             dims.insert(k.clone(), blended);
         }
 

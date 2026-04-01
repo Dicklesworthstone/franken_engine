@@ -954,7 +954,7 @@ fn enforce_probability_floor_and_normalize(probs: &mut [i64], min_floor: i64) {
     }
 
     // Final exact correction (handles tiny rounding drift).
-    sum = probs.iter().sum();
+    sum = probs.iter().fold(0i64, |acc, x| acc.saturating_add(*x));
     if sum != MILLION {
         let diff = MILLION - sum;
         if let Some(idx) = probs

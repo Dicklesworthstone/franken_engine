@@ -771,7 +771,7 @@ pub fn build_cohort_matrix_with_edges(
     packages: Vec<PackageManifest>,
     edge_cases: Vec<EdgeCase>,
 ) -> CohortMatrix {
-    let total_subpaths: u64 = packages.iter().map(|m| m.subpath_count()).sum();
+    let total_subpaths: u64 = packages.iter().map(|m| m.subpath_count()).fold(0u64, u64::saturating_add);
 
     let mut hasher = Sha256::new();
     hasher.update(REACT_COHORT_SCHEMA_VERSION.as_bytes());

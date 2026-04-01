@@ -941,7 +941,7 @@ impl GovernanceEvaluator {
             .alignment_entries
             .iter()
             .map(|e| e.improvement_millionths as i128)
-            .sum();
+            .fold(0i128, i128::saturating_add);
         (sum / self.alignment_entries.len() as i128) as i64
     }
 
@@ -1251,7 +1251,7 @@ pub fn total_stall_overshoot(budgets: &[StallBudget]) -> u64 {
         .iter()
         .filter(|b| !b.within_budget)
         .map(|b| b.overshoot_millionths.unsigned_abs())
-        .sum()
+        .fold(0u64, u64::saturating_add)
 }
 
 /// Check which strategies from a required set are missing.

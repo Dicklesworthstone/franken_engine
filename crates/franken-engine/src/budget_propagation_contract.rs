@@ -707,7 +707,7 @@ impl BudgetPropagationValidator {
             .iter()
             .filter(|e| e.success)
             .map(|e| e.derived_ms)
-            .sum();
+            .fold(0u64, u64::saturating_add);
 
         let content = format!(
             "propagation_events={},success={},failed={},total_derived_ms={}",

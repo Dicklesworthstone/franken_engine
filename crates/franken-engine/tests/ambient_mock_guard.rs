@@ -77,7 +77,7 @@ mod tests {
     let commands = fs::read_to_string(out_dir.join("commands.txt")).expect("read commands");
     let command_lines: Vec<&str> = commands.lines().collect();
     let expected_commands = render_bundle_command_lines(
-        &vec![
+        &[
             env!("CARGO_BIN_EXE_franken_ambient_mock_guard").to_string(),
             "--out-dir".to_string(),
             out_dir.display().to_string(),

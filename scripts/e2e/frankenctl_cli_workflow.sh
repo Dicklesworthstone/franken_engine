@@ -264,6 +264,7 @@ run_artifact_flow() {
 
   for required_path in \
     "${doctor_input_path}" \
+    "${support_index_path}" \
     "${support_preflight_path}" \
     "${support_scorecard_path}" \
     "${support_rollout_path}" \

@@ -1167,6 +1167,25 @@ fn generic_frankenctl_workflow_script_uses_exact_run_dir_replay_contract() {
     );
 }
 
+#[test]
+fn generic_frankenctl_workflow_script_requires_support_bundle_index_before_success() {
+    let path = repo_root().join("scripts/e2e/frankenctl_cli_workflow.sh");
+    let script = read_to_string(&path);
+
+    assert!(
+        script.contains(
+            "\"${doctor_input_path}\" \\\n    \"${support_index_path}\" \\\n    \"${support_preflight_path}\""
+        ),
+        "generic workflow script should fail closed on a missing support bundle index in {}",
+        path.display()
+    );
+    assert!(
+        script.contains("failed_command=\"artifact_presence_check (${required_path})\""),
+        "generic workflow script should classify missing workflow artifacts as artifact_presence_check in {}",
+        path.display()
+    );
+}
+
 // ---------- contract and doc files exist ----------
 
 #[test]

@@ -1436,8 +1436,9 @@ fn frankenctl_dash_h_shows_help() {
 
 #[test]
 fn frankenctl_subcommand_help_paths_show_usage() {
-    let cases: [(&[&str], &str); 12] = [
+    let cases: [(&[&str], &str); 18] = [
         (&["compile", "--help"], "compile usage:"),
+        (&["help", "compile"], "compile usage:"),
         (&["run", "--help"], "run usage:"),
         (&["doctor", "--help"], "doctor usage:"),
         (&["verify", "--help"], "verify usage:"),
@@ -1445,16 +1446,24 @@ fn frankenctl_subcommand_help_paths_show_usage() {
             &["verify", "compile-artifact", "--help"],
             "verify compile-artifact usage:",
         ),
+        (
+            &["help", "verify", "compile-artifact"],
+            "verify compile-artifact usage:",
+        ),
         (&["verify", "receipt", "--help"], "verify receipt usage:"),
         (&["benchmark", "--help"], "benchmark usage:"),
         (&["benchmark", "run", "--help"], "benchmark run usage:"),
         (&["benchmark", "score", "--help"], "benchmark score usage:"),
+        (&["help", "benchmark", "score"], "benchmark score usage:"),
         (
             &["benchmark", "verify", "--help"],
             "benchmark verify usage:",
         ),
         (&["replay", "--help"], "replay usage:"),
         (&["replay", "run", "--help"], "replay run usage:"),
+        (&["help", "replay", "run"], "replay run usage:"),
+        (&["help", "react"], "react usage:"),
+        (&["help", "react", "build"], "react build usage:"),
     ];
 
     for (args, expected) in cases {

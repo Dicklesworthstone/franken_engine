@@ -945,7 +945,8 @@ fn parse_command(args: &[String]) -> Result<CommandSpec, String> {
         return Ok(CommandSpec::Help);
     }
     match args[0].as_str() {
-        "help" | "--help" | "-h" => Ok(CommandSpec::Help),
+        "help" => parse_help_command(&args[1..]),
+        "--help" | "-h" => Ok(CommandSpec::Help),
         "version" => Ok(CommandSpec::Version),
         "compile" => parse_compile_command(&args[1..]),
         "run" => parse_run_command(&args[1..]),
@@ -955,6 +956,103 @@ fn parse_command(args: &[String]) -> Result<CommandSpec, String> {
         "replay" => parse_replay_command(&args[1..]),
         "react" => parse_react_command(&args[1..]),
         other => Err(format!("unknown command `{other}`\n\n{}", usage())),
+    }
+}
+
+fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() || matches!(args[0].as_str(), "--help" | "-h") {
+        return Ok(CommandSpec::Help);
+    }
+
+    match args[0].as_str() {
+        "compile" => parse_leaf_help_topic("compile", HelpTopic::Compile, &args[1..]),
+        "run" => parse_leaf_help_topic("run", HelpTopic::Run, &args[1..]),
+        "doctor" => parse_leaf_help_topic("doctor", HelpTopic::Doctor, &args[1..]),
+        "verify" => parse_verify_help_command(&args[1..]),
+        "benchmark" => parse_benchmark_help_command(&args[1..]),
+        "replay" => parse_replay_help_command(&args[1..]),
+        "react" => parse_react_help_command(&args[1..]),
+        other => Err(format!(
+            "unknown help topic `{other}` (expected compile|run|doctor|verify|benchmark|replay|react)"
+        )),
+    }
+}
+
+fn parse_leaf_help_topic(
+    command: &str,
+    topic: HelpTopic,
+    args: &[String],
+) -> Result<CommandSpec, String> {
+    if args.is_empty() || matches!(args[0].as_str(), "--help" | "-h") {
+        return Ok(CommandSpec::HelpTopic(topic));
+    }
+
+    Err(format!(
+        "`help {command}` does not accept subtopic `{}`",
+        args[0]
+    ))
+}
+
+fn parse_verify_help_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() || matches!(args[0].as_str(), "--help" | "-h") {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Verify));
+    }
+
+    match args[0].as_str() {
+        "compile-artifact" => parse_leaf_help_topic(
+            "verify compile-artifact",
+            HelpTopic::VerifyCompileArtifact,
+            &args[1..],
+        ),
+        "receipt" => parse_leaf_help_topic("verify receipt", HelpTopic::VerifyReceipt, &args[1..]),
+        other => Err(format!(
+            "unknown verify help topic `{other}` (expected compile-artifact|receipt)"
+        )),
+    }
+}
+
+fn parse_benchmark_help_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() || matches!(args[0].as_str(), "--help" | "-h") {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Benchmark));
+    }
+
+    match args[0].as_str() {
+        "run" => parse_leaf_help_topic("benchmark run", HelpTopic::BenchmarkRun, &args[1..]),
+        "score" => parse_leaf_help_topic("benchmark score", HelpTopic::BenchmarkScore, &args[1..]),
+        "verify" => {
+            parse_leaf_help_topic("benchmark verify", HelpTopic::BenchmarkVerify, &args[1..])
+        }
+        other => Err(format!(
+            "unknown benchmark help topic `{other}` (expected run|score|verify)"
+        )),
+    }
+}
+
+fn parse_replay_help_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() || matches!(args[0].as_str(), "--help" | "-h") {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::Replay));
+    }
+
+    match args[0].as_str() {
+        "run" => parse_leaf_help_topic("replay run", HelpTopic::ReplayRun, &args[1..]),
+        other => Err(format!(
+            "unknown replay help topic `{other}` (expected run)"
+        )),
+    }
+}
+
+fn parse_react_help_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() || matches!(args[0].as_str(), "--help" | "-h") {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::React));
+    }
+
+    match args[0].as_str() {
+        "compile" => parse_leaf_help_topic("react compile", HelpTopic::ReactCompile, &args[1..]),
+        "build" => parse_leaf_help_topic("react build", HelpTopic::ReactBuild, &args[1..]),
+        "contract" => parse_leaf_help_topic("react contract", HelpTopic::ReactContract, &args[1..]),
+        other => Err(format!(
+            "unknown react help topic `{other}` (expected compile|build|contract)"
+        )),
     }
 }
 
@@ -4511,6 +4609,40 @@ mod tests {
     }
 
     #[test]
+    fn parse_top_level_help_topics() {
+        let compile = vec!["help".to_string(), "compile".to_string()];
+        let parsed = parse_command(&compile).expect("help compile should parse");
+        assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::Compile));
+
+        let verify_receipt = vec![
+            "help".to_string(),
+            "verify".to_string(),
+            "receipt".to_string(),
+        ];
+        let parsed = parse_command(&verify_receipt).expect("help verify receipt should parse");
+        assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::VerifyReceipt));
+
+        let benchmark_score = vec![
+            "help".to_string(),
+            "benchmark".to_string(),
+            "score".to_string(),
+        ];
+        let parsed = parse_command(&benchmark_score).expect("help benchmark score should parse");
+        assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::BenchmarkScore));
+    }
+
+    #[test]
+    fn parse_top_level_help_rejects_unknown_subtopics() {
+        let args = vec![
+            "help".to_string(),
+            "compile".to_string(),
+            "unexpected".to_string(),
+        ];
+        let error = parse_command(&args).expect_err("help compile unexpected should fail");
+        assert!(error.contains("does not accept subtopic `unexpected`"));
+    }
+
+    #[test]
     fn parse_verify_help_commands() {
         let top_level = vec!["verify".to_string(), "--help".to_string()];
         let parsed = parse_command(&top_level).expect("verify --help should parse");
@@ -4557,6 +4689,14 @@ mod tests {
         ];
         let parsed = parse_command(&compile).expect("react help compile should parse");
         assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::ReactCompile));
+
+        let top_level = vec![
+            "help".to_string(),
+            "react".to_string(),
+            "contract".to_string(),
+        ];
+        let parsed = parse_command(&top_level).expect("help react contract should parse");
+        assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::ReactContract));
     }
 
     #[test]

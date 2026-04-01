@@ -18,12 +18,17 @@ run_rch() {
 }
 
 run_binary() {
-  local out_dir="${artifact_root}/${timestamp}_uid${uid}_${mode}_$$"
-  mkdir -p "${out_dir}"
-  "${target_dir}/debug/franken_shipped_path_parity" \
-    --frankenctl-bin "${target_dir}/debug/frankenctl" \
-    --out-dir "${out_dir}" \
-    --fail-on-mismatch
+  local out_dir_rel="${artifact_root}/${timestamp}_uid${uid}_${mode}_$$"
+  local out_dir="${root_dir}/${out_dir_rel}"
+  run_rch bash -lc '
+    set -euo pipefail
+    cargo build -p frankenengine-engine --bin frankenctl --bin franken_shipped_path_parity
+    mkdir -p "$1"
+    "$CARGO_TARGET_DIR"/debug/franken_shipped_path_parity \
+      --frankenctl-bin "$CARGO_TARGET_DIR"/debug/frankenctl \
+      --out-dir "$1" \
+      --fail-on-mismatch
+  ' bash "${out_dir}"
 }
 
 case "${mode}" in
@@ -37,14 +42,12 @@ case "${mode}" in
     run_rch cargo clippy -p frankenengine-engine --bin franken_shipped_path_parity --test shipped_path_parity_cli -- -D warnings
     ;;
   run)
-    run_rch cargo build -p frankenengine-engine --bin frankenctl --bin franken_shipped_path_parity
     run_binary
     ;;
   ci)
     run_rch cargo check -p frankenengine-engine --bin franken_shipped_path_parity --test shipped_path_parity_cli
     run_rch cargo test -p frankenengine-engine --test shipped_path_parity_cli
     run_rch cargo clippy -p frankenengine-engine --bin franken_shipped_path_parity --test shipped_path_parity_cli -- -D warnings
-    run_rch cargo build -p frankenengine-engine --bin frankenctl --bin franken_shipped_path_parity
     run_binary
     ;;
   *)

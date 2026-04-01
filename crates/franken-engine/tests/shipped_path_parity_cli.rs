@@ -202,7 +202,10 @@ fn shipped_path_parity_runner_script_uses_unique_repo_local_namespaces() {
         "rch exec -- env CARGO_TARGET_DIR=\"${target_dir}\"",
         ".rch_target/franken_shipped_path_parity_uid",
         "${artifact_root}/${timestamp}_uid${uid}_${mode}_$$",
+        "run_rch bash -lc '",
         "cargo build -p frankenengine-engine --bin frankenctl --bin franken_shipped_path_parity",
+        "\"$CARGO_TARGET_DIR\"/debug/franken_shipped_path_parity",
+        "--frankenctl-bin \"$CARGO_TARGET_DIR\"/debug/frankenctl",
     ] {
         assert!(
             script.contains(snippet),
@@ -213,6 +216,14 @@ fn shipped_path_parity_runner_script_uses_unique_repo_local_namespaces() {
     assert!(
         !script.contains("target_rch_franken_shipped_path_parity"),
         "runner script must not default to a shared fixed target dir"
+    );
+    assert!(
+        !script.contains("\"${target_dir}/debug/franken_shipped_path_parity\""),
+        "runner script must not assume remote-built shipped-path parity binaries exist locally"
+    );
+    assert!(
+        !script.contains("\"${target_dir}/debug/frankenctl\""),
+        "runner script must not assume remote-built frankenctl binaries exist locally"
     );
     assert!(
         !script.contains("${artifact_root}/${run_stamp}"),

@@ -909,7 +909,11 @@ impl ArrayFastLaneEngine {
         let total_receipts = self.receipts.len() as u32;
         let total_accesses: u64 = self.array_lanes.values().map(|l| l.access_count).sum();
         let total_stores: u64 = self.array_lanes.values().map(|l| l.store_count).sum();
-        let total_oob: u64 = self.array_lanes.values().map(|l| l.oob_count).sum();
+        let total_oob: u64 = self
+            .array_lanes
+            .values()
+            .map(|l| l.oob_count)
+            .fold(0u64, u64::saturating_add);
 
         ArrayFastLaneDiagnostics {
             total_arrays,

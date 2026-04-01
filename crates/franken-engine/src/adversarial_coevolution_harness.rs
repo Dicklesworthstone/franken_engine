@@ -228,7 +228,7 @@ impl Exp3Weights {
             .collect();
 
         // Normalize to sum to MILLION
-        let sum: i64 = probs.iter().sum();
+        let sum: i64 = probs.iter().fold(0i64, |acc, x| acc.saturating_add(*x));
         if sum > 0 && sum != MILLION {
             let correction = MILLION - sum;
             probs[0] = (probs[0] + correction).max(0);
@@ -793,7 +793,7 @@ impl CoevolutionHarness {
             .entries
             .iter()
             .map(|e| e.defender_payoff_millionths)
-            .sum();
+            .fold(0i64, |acc, x| acc.saturating_add(x));
         total / n
     }
 }

@@ -711,6 +711,41 @@ fn report_deterministic_for_same_inputs() {
     );
 }
 
+#[test]
+fn report_uses_supplied_epoch_for_cooldown_evaluation() {
+    let policy = TierEligibilityPolicy {
+        deopt_cooldown_epochs: 5,
+        ..TierEligibilityPolicy::default()
+    };
+    let report_epoch = SecurityEpoch::from_raw(20);
+
+    let mut profile = make_profile(
+        "rm-cooldown-expired",
+        "fn_recent_but_expired",
+        ExecutionTier::Interpreted,
+        500,
+        0,
+    );
+    record_deopt(
+        &mut profile,
+        DeoptReason::TypeMismatch,
+        "bc:42",
+        &SecurityEpoch::from_raw(8),
+    );
+    profile.current_tier = ExecutionTier::Interpreted;
+    profile.last_transition_epoch = SecurityEpoch::from_raw(9);
+    profile.rehash();
+
+    let report = build_eligibility_report(&[profile], &policy, &report_epoch);
+
+    assert_eq!(report.total_functions, 1);
+    assert_eq!(report.eligible_count, 1);
+    assert!(
+        report.verdicts[0].eligible,
+        "report epoch should allow eligibility once cooldown has expired"
+    );
+}
+
 // =========================================================================
 // 12. Manifest
 // =========================================================================

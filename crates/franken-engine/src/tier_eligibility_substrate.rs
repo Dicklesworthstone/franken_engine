@@ -650,6 +650,19 @@ pub fn evaluate_eligibility(
     profile: &TierProfile,
     policy: &TierEligibilityPolicy,
 ) -> TierEligibilityVerdict {
+    evaluate_eligibility_at_epoch(profile, policy, &profile.last_transition_epoch)
+}
+
+/// Evaluate whether a function should tier up at a specific epoch.
+///
+/// This is the epoch-aware variant used by batch reports so deopt cooldowns
+/// are measured against the report epoch instead of a stale profile-local
+/// transition timestamp.
+pub fn evaluate_eligibility_at_epoch(
+    profile: &TierProfile,
+    policy: &TierEligibilityPolicy,
+    current_epoch: &SecurityEpoch,
+) -> TierEligibilityVerdict {
     let target = match next_tier_up(profile.current_tier) {
         Some(t) => t,
         None => {
@@ -703,13 +716,8 @@ pub fn evaluate_eligibility(
         }
     }
 
-    // Check 5: cooldown (use last_transition_epoch as current reference)
-    // We check against the profile's own last_transition_epoch as a proxy.
-    if cooldown_active(
-        profile,
-        policy.deopt_cooldown_epochs,
-        &profile.last_transition_epoch,
-    ) {
+    // Check 5: cooldown
+    if cooldown_active(profile, policy.deopt_cooldown_epochs, current_epoch) {
         rejection_reasons.push("deopt cooldown active".to_string());
     }
 
@@ -870,7 +878,7 @@ pub fn build_eligibility_report(
     let mut eligible_count = 0usize;
 
     for profile in profiles {
-        let verdict = evaluate_eligibility(profile, policy);
+        let verdict = evaluate_eligibility_at_epoch(profile, policy, epoch);
         if verdict.eligible {
             eligible_count += 1;
         }

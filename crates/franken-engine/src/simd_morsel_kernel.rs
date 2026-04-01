@@ -301,8 +301,11 @@ impl MorselKernelDescriptor {
         let mut data = Vec::new();
         data.extend_from_slice(kernel_id.as_bytes());
         data.push(b'|');
+        data.extend_from_slice(family.as_str().as_bytes());
+        data.push(b'|');
         data.extend_from_slice(&lane_width.width().to_le_bytes());
         data.extend_from_slice(&morsel_size.element_count().to_le_bytes());
+        data.extend_from_slice(format!("{callback_fence:?}").as_bytes());
         let content_hash = ContentHash::compute(&data);
 
         Self {
@@ -792,8 +795,15 @@ impl MorselKernelEngine {
         let mut receipt_data = Vec::new();
         receipt_data.extend_from_slice(kernel.kernel_id.as_bytes());
         receipt_data.push(b'|');
+        receipt_data.extend_from_slice(kernel.family.as_str().as_bytes());
         receipt_data.extend_from_slice(&input_length.to_le_bytes());
         receipt_data.extend_from_slice(&(morsel_count as u64).to_le_bytes());
+        receipt_data.extend_from_slice(&(vectorized_count as u64).to_le_bytes());
+        receipt_data.extend_from_slice(&(scalar_count as u64).to_le_bytes());
+        receipt_data.extend_from_slice(&(aborted_count as u64).to_le_bytes());
+        receipt_data.extend_from_slice(&total_elements.to_le_bytes());
+        receipt_data.extend_from_slice(&total_fences.to_le_bytes());
+        receipt_data.push(if self.kill_switch.engaged { 1 } else { 0 });
         receipt_data.extend_from_slice(&self.epoch.as_u64().to_le_bytes());
         let receipt_hash = ContentHash::compute(&receipt_data);
         let receipt_id = format!("mkr-{}", &receipt_hash.to_hex()[..16]);

@@ -638,6 +638,37 @@ fn interference_metadata_queries_fail_closed_when_noncanonical() {
 }
 
 #[test]
+fn interference_metadata_blank_rule_ids_are_noncanonical() {
+    let meta = InterferenceMetadata::build(vec![RuleInterference {
+        rule_a: " ".into(),
+        rule_b: "rule-b".into(),
+        kind: RuleInterferenceKind::SemanticOverlap,
+        is_blocking: true,
+        detail: "blank rule id".into(),
+    }]);
+
+    assert!(!meta.is_canonical());
+    assert!(meta.has_blocking());
+    assert!(!meta.is_clean());
+    assert!(meta.for_rule("rule-b").is_empty());
+}
+
+#[test]
+fn interference_metadata_self_pairs_are_noncanonical() {
+    let meta = InterferenceMetadata::build(vec![make_interference(
+        "same-rule",
+        "same-rule",
+        RuleInterferenceKind::PatternConflict,
+        true,
+    )]);
+
+    assert!(!meta.is_canonical());
+    assert!(meta.has_blocking());
+    assert!(!meta.is_clean());
+    assert!(meta.for_rule("same-rule").is_empty());
+}
+
+#[test]
 fn interference_metadata_deterministic_hash() {
     let build = || {
         InterferenceMetadata::build(vec![

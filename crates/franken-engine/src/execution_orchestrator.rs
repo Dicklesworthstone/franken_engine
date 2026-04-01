@@ -691,7 +691,11 @@ impl ExecutionOrchestrator {
     }
 
     fn package_fingerprint(package: &ExtensionPackage) -> Result<ContentHash, OrchestratorError> {
-        let encoded = serde_json::to_vec(package).map_err(|_| OrchestratorError::EmptySource)?;
+        // Sort capabilities for deterministic fingerprint regardless of insertion order.
+        let mut sorted_pkg = package.clone();
+        sorted_pkg.capabilities.sort();
+        let encoded =
+            serde_json::to_vec(&sorted_pkg).map_err(|_| OrchestratorError::EmptySource)?;
         Ok(ContentHash::compute(&encoded))
     }
 

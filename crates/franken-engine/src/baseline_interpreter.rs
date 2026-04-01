@@ -681,12 +681,8 @@ impl InterpreterCore {
             if let Some(frame) = self.call_stack.pop() {
                 self.register_base = frame.register_base;
                 self.finally_modes.truncate(frame.saved_finally_mode_depth);
-                if restored_pending_exception.is_none() {
-                    restored_pending_exception = frame.saved_pending_exception;
-                }
-                if restored_pending_return.is_none() {
-                    restored_pending_return = frame.saved_pending_return;
-                }
+                restored_pending_exception = frame.saved_pending_exception;
+                restored_pending_return = frame.saved_pending_return;
                 restored_suspended_abrupt_depth = Some(frame.saved_suspended_abrupt_depth);
             }
         }

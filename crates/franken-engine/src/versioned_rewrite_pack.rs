@@ -497,8 +497,16 @@ impl InterferenceMetadata {
             .collect()
     }
 
-    fn is_canonical(&self) -> bool {
-        *self == Self::build(self.entries.clone())
+    pub fn is_canonical(&self) -> bool {
+        Self::has_valid_entries(&self.entries) && *self == Self::build(self.entries.clone())
+    }
+
+    fn has_valid_entries(entries: &[RuleInterference]) -> bool {
+        entries.iter().all(|entry| {
+            !is_blank_identifier(&entry.rule_a)
+                && !is_blank_identifier(&entry.rule_b)
+                && entry.rule_a != entry.rule_b
+        })
     }
 
     fn canonicalize_entries(entries: Vec<RuleInterference>) -> Vec<RuleInterference> {
@@ -692,7 +700,7 @@ impl RewritePack {
         })
     }
 
-    fn is_canonical(&self) -> bool {
+    pub fn is_canonical(&self) -> bool {
         self.is_canonical_with_limits(MAX_RULES_PER_PACK, MAX_INTERFERENCE_ENTRIES)
     }
 
@@ -1382,6 +1390,36 @@ mod tests {
         assert!(meta.has_blocking());
         assert!(!meta.is_clean());
         assert!(meta.for_rule("r1").is_empty());
+    }
+
+    #[test]
+    fn interference_metadata_rejects_blank_rule_identifiers() {
+        let meta = InterferenceMetadata::build(vec![RuleInterference {
+            rule_a: "".to_string(),
+            rule_b: "rule-b".to_string(),
+            kind: RuleInterferenceKind::SemanticOverlap,
+            is_blocking: true,
+            detail: "blank rule id".to_string(),
+        }]);
+
+        assert!(!meta.is_canonical());
+        assert!(meta.has_blocking());
+        assert!(!meta.is_clean());
+        assert!(meta.for_rule("rule-b").is_empty());
+    }
+
+    #[test]
+    fn interference_metadata_rejects_self_pairs() {
+        let meta = InterferenceMetadata::build(vec![test_interference(
+            "same-rule",
+            "same-rule",
+            RuleInterferenceKind::PatternConflict,
+        )]);
+
+        assert!(!meta.is_canonical());
+        assert!(meta.has_blocking());
+        assert!(!meta.is_clean());
+        assert!(meta.for_rule("same-rule").is_empty());
     }
 
     #[test]

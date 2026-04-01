@@ -743,11 +743,11 @@ impl StructuralCausalModel {
             let mut valid_instruments = BTreeSet::new();
             for iv in &instrument_nodes {
                 let affects_treatment = self.has_path(&iv.to_string(), &treatment.to_string());
-                let direct_to_outcome = self.children_of(iv).iter().any(|c| {
-                    c == outcome
-                        || (c != treatment && self.has_path(&c.to_string(), &outcome.to_string()))
-                });
-                if affects_treatment && !direct_to_outcome {
+                let has_outcome_path_outside_treatment = self
+                    .all_directed_paths(iv, outcome)
+                    .iter()
+                    .any(|path| !path.iter().any(|node| node == treatment));
+                if affects_treatment && !has_outcome_path_outside_treatment {
                     valid_instruments.insert(iv.clone());
                 }
             }
@@ -1766,6 +1766,76 @@ mod tests {
             .find(|s| s.name.contains("instrumental_variable"));
         assert!(iv_surface.is_some());
         assert!(iv_surface.unwrap().node_ids.contains("Z"));
+    }
+
+    #[test]
+    fn test_intervention_surfaces_iv_allows_mediated_treatment_path() {
+        let mut scm = StructuralCausalModel::new();
+        scm.add_node(node(
+            "Z",
+            NodeRole::Instrument,
+            VariableDomain::PolicySetting,
+        ))
+        .unwrap();
+        scm.add_node(node("M", NodeRole::Endogenous, VariableDomain::RiskBelief))
+            .unwrap();
+        scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
+            .unwrap();
+        scm.add_node(node(
+            "Y",
+            NodeRole::Outcome,
+            VariableDomain::ObservedOutcome,
+        ))
+        .unwrap();
+        scm.add_edge(edge("Z", "M", EdgeSign::Positive, 500_000))
+            .unwrap();
+        scm.add_edge(edge("M", "T", EdgeSign::Positive, 500_000))
+            .unwrap();
+        scm.add_edge(edge("T", "Y", EdgeSign::Positive, 900_000))
+            .unwrap();
+
+        let surfaces = scm.compute_intervention_surfaces("T", "Y").unwrap();
+        let iv_surface = surfaces
+            .iter()
+            .find(|s| s.name.contains("instrumental_variable"))
+            .expect("mediated IV path should remain valid");
+        assert!(iv_surface.node_ids.contains("Z"));
+    }
+
+    #[test]
+    fn test_intervention_surfaces_iv_rejects_outcome_path_outside_treatment() {
+        let mut scm = StructuralCausalModel::new();
+        scm.add_node(node(
+            "Z",
+            NodeRole::Instrument,
+            VariableDomain::PolicySetting,
+        ))
+        .unwrap();
+        scm.add_node(node("M", NodeRole::Endogenous, VariableDomain::RiskBelief))
+            .unwrap();
+        scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
+            .unwrap();
+        scm.add_node(node(
+            "Y",
+            NodeRole::Outcome,
+            VariableDomain::ObservedOutcome,
+        ))
+        .unwrap();
+        scm.add_edge(edge("Z", "M", EdgeSign::Positive, 500_000))
+            .unwrap();
+        scm.add_edge(edge("M", "T", EdgeSign::Positive, 500_000))
+            .unwrap();
+        scm.add_edge(edge("M", "Y", EdgeSign::Positive, 400_000))
+            .unwrap();
+        scm.add_edge(edge("T", "Y", EdgeSign::Positive, 900_000))
+            .unwrap();
+
+        let surfaces = scm.compute_intervention_surfaces("T", "Y").unwrap();
+        assert!(
+            !surfaces
+                .iter()
+                .any(|s| s.name.contains("instrumental_variable") && s.node_ids.contains("Z"))
+        );
     }
 
     #[test]

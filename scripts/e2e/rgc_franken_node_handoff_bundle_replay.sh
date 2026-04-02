@@ -5,10 +5,13 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${root_dir}"
 
 artifact_root="${RGC_FRANKEN_NODE_HANDOFF_ARTIFACT_ROOT:-${root_dir}/artifacts/rgc_franken_node_handoff_bundle}"
+explicit_run_dir="${RGC_FRANKEN_NODE_HANDOFF_BUNDLE_REPLAY_RUN_DIR:-}"
 mode="${1:-ci}"
 main_exit=0
 
-"${root_dir}/scripts/run_rgc_franken_node_handoff_bundle.sh" "${mode}" || main_exit=$?
+if [[ -z "${explicit_run_dir}" ]]; then
+  "${root_dir}/scripts/run_rgc_franken_node_handoff_bundle.sh" "${mode}" || main_exit=$?
+fi
 
 artifact_dirs_by_mtime_desc() {
   local search_root="${1:-}"
@@ -25,21 +28,26 @@ latest_artifact_dir() {
   done < <(artifact_dirs_by_mtime_desc "${artifact_root}")
 }
 
+run_dir_is_complete() {
+  local candidate="${1:-}"
+  [[ -f "${candidate}/run_manifest.json" ]] || return 1
+  [[ -f "${candidate}/trace_ids.json" ]] || return 1
+  [[ -f "${candidate}/events.jsonl" ]] || return 1
+  [[ -f "${candidate}/commands.txt" ]] || return 1
+  [[ -f "${candidate}/franken_node_handoff_manifest.json" ]] || return 1
+  [[ -f "${candidate}/sibling_smoke_verification.json" ]] || return 1
+  [[ -f "${candidate}/support_surface_summary.md" ]] || return 1
+  [[ -f "${candidate}/franken_node_handoff_bundle_contract.json" ]] || return 1
+  [[ -f "${candidate}/support_surface_contract.json" ]] || return 1
+  [[ -f "${candidate}/engine_product_blocker_ledger.json" ]] || return 1
+  [[ -f "${candidate}/repo_split_contract.md" ]] || return 1
+  [[ -f "${candidate}/step_logs/step_000.log" ]] || return 1
+}
+
 latest_complete_run_dir() {
   local candidate
   while IFS= read -r candidate; do
-    [[ -f "${candidate}/run_manifest.json" ]] || continue
-    [[ -f "${candidate}/trace_ids.json" ]] || continue
-    [[ -f "${candidate}/events.jsonl" ]] || continue
-    [[ -f "${candidate}/commands.txt" ]] || continue
-    [[ -f "${candidate}/franken_node_handoff_manifest.json" ]] || continue
-    [[ -f "${candidate}/sibling_smoke_verification.json" ]] || continue
-    [[ -f "${candidate}/support_surface_summary.md" ]] || continue
-    [[ -f "${candidate}/franken_node_handoff_bundle_contract.json" ]] || continue
-    [[ -f "${candidate}/support_surface_contract.json" ]] || continue
-    [[ -f "${candidate}/engine_product_blocker_ledger.json" ]] || continue
-    [[ -f "${candidate}/repo_split_contract.md" ]] || continue
-    [[ -f "${candidate}/step_logs/step_000.log" ]] || continue
+    run_dir_is_complete "${candidate}" || continue
     printf '%s\n' "${candidate}"
     return 0
   done < <(artifact_dirs_by_mtime_desc "${artifact_root}")
@@ -55,19 +63,31 @@ missing_bundle_exit_code() {
   echo "${prior_exit}"
 }
 
-latest_artifact_dir_path="$(latest_artifact_dir)"
-latest_run_dir="$(latest_complete_run_dir)"
-if [[ -z "${latest_run_dir}" ]]; then
-  if [[ -n "${latest_artifact_dir_path}" ]]; then
-    echo "rgc franken_node handoff replay could not locate a complete run directory under ${artifact_root}; newest directory ${latest_artifact_dir_path} is incomplete" >&2
-  else
-    echo "rgc franken_node handoff replay could not locate a complete run directory under ${artifact_root}" >&2
-  fi
-  exit "$(missing_bundle_exit_code "${main_exit:-1}")"
-fi
+latest_artifact_dir_path=""
+latest_run_dir=""
 
-if [[ -n "${latest_artifact_dir_path}" && "${latest_artifact_dir_path}" != "${latest_run_dir}" ]]; then
-  echo "[rgc-franken-node-handoff] newest directory ${latest_artifact_dir_path} is incomplete; using latest complete run directory ${latest_run_dir}" >&2
+if [[ -n "${explicit_run_dir}" ]]; then
+  latest_run_dir="${explicit_run_dir}"
+  if ! run_dir_is_complete "${latest_run_dir}"; then
+    echo "rgc franken_node handoff replay explicit run directory ${latest_run_dir} is incomplete" >&2
+    exit "$(missing_bundle_exit_code "${main_exit:-1}")"
+  fi
+  echo "[rgc-franken-node-handoff] using explicit preserved run directory ${latest_run_dir}" >&2
+else
+  latest_artifact_dir_path="$(latest_artifact_dir)"
+  latest_run_dir="$(latest_complete_run_dir)"
+  if [[ -z "${latest_run_dir}" ]]; then
+    if [[ -n "${latest_artifact_dir_path}" ]]; then
+      echo "rgc franken_node handoff replay could not locate a complete run directory under ${artifact_root}; newest directory ${latest_artifact_dir_path} is incomplete" >&2
+    else
+      echo "rgc franken_node handoff replay could not locate a complete run directory under ${artifact_root}" >&2
+    fi
+    exit "$(missing_bundle_exit_code "${main_exit:-1}")"
+  fi
+
+  if [[ -n "${latest_artifact_dir_path}" && "${latest_artifact_dir_path}" != "${latest_run_dir}" ]]; then
+    echo "[rgc-franken-node-handoff] newest directory ${latest_artifact_dir_path} is incomplete; using latest complete run directory ${latest_run_dir}" >&2
+  fi
 fi
 
 echo "[rgc-franken-node-handoff] latest manifest: ${latest_run_dir}/run_manifest.json"

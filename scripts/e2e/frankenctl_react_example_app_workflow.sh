@@ -34,6 +34,7 @@ fixtures_dir="${run_dir}/fixtures"
 compile_source_path="${fixtures_dir}/example_app.tsx"
 build_entry_path="${fixtures_dir}/example_entry.jsx"
 support_bundle_dir="${run_dir}/support_bundle"
+support_index_path="${support_bundle_dir}/index.json"
 support_preflight_path="${support_bundle_dir}/preflight_report.json"
 support_scorecard_path="${support_bundle_dir}/onboarding_scorecard.json"
 support_rollout_path="${support_bundle_dir}/rollout_decision_artifact.json"
@@ -81,6 +82,7 @@ run_dir_is_complete() {
   [[ -f "${candidate}/react_example_app_e2e_report.json" ]] || return 1
   [[ -f "${candidate}/react_help.txt" ]] || return 1
   [[ -f "${candidate}/step_logs/step_000.log" ]] || return 1
+  [[ -f "${candidate}/support_bundle/index.json" ]] || return 1
   [[ -f "${candidate}/support_bundle/preflight_report.json" ]] || return 1
   [[ -f "${candidate}/support_bundle/onboarding_scorecard.json" ]] || return 1
   [[ -f "${candidate}/support_bundle/rollout_decision_artifact.json" ]] || return 1
@@ -122,6 +124,8 @@ replay_existing_run_dir() {
   cat "${candidate}/react_help.txt"
   echo "frankenctl React example-app workflow replay first step log: ${candidate}/step_logs/step_000.log"
   cat "${candidate}/step_logs/step_000.log"
+  echo "frankenctl React example-app workflow replay support bundle index: ${candidate}/support_bundle/index.json"
+  cat "${candidate}/support_bundle/index.json"
   echo "frankenctl React example-app workflow replay support bundle preflight: ${candidate}/support_bundle/preflight_report.json"
   cat "${candidate}/support_bundle/preflight_report.json"
   echo "frankenctl React example-app workflow replay support bundle onboarding scorecard: ${candidate}/support_bundle/onboarding_scorecard.json"
@@ -424,6 +428,7 @@ build_example_report() {
     --arg hydration_path "${hydration_report_path}" \
     --arg doctor_input_path "${doctor_input_path}" \
     --arg doctor_path "${doctor_report_path}" \
+    --arg support_index_path "${support_index_path}" \
     --arg support_preflight_path "${support_preflight_path}" \
     --arg support_scorecard_path "${support_scorecard_path}" \
     --arg support_rollout_path "${support_rollout_path}" \
@@ -472,6 +477,7 @@ build_example_report() {
           rollout_recommendation: $doctor[0].rollout_recommendation,
           blocked: $doctor[0].blocked,
           support_bundle_paths: [
+            $support_index_path,
             $support_preflight_path,
             $support_scorecard_path,
             $support_rollout_path,
@@ -532,6 +538,7 @@ build_example_report() {
         doctor_input: $doctor_input_path,
         doctor_report: $doctor_path,
         support_bundle: [
+          $support_index_path,
           $support_preflight_path,
           $support_scorecard_path,
           $support_rollout_path,
@@ -581,6 +588,7 @@ emit_trace_ids() {
     "react_build_hydration_report": "${hydration_report_path}",
     "doctor_input": "${doctor_input_path}",
     "doctor_report": "${doctor_report_path}",
+    "support_bundle_index": "${support_index_path}",
     "react_example_app_e2e_report": "${example_report_path}",
     "run_manifest": "${manifest_path}",
     "events": "${events_path}",
@@ -695,6 +703,7 @@ run_artifact_flow() {
     "${trace_ids_path}" \
     "${help_output_path}" \
     "${step_logs_dir}/step_000.log" \
+    "${support_index_path}" \
     "${support_preflight_path}" \
     "${support_scorecard_path}" \
     "${support_rollout_path}" \
@@ -838,7 +847,9 @@ write_manifest() {
     echo "    \"react_example_app_e2e_report\": \"${example_report_path}\","
     echo "    \"react_help\": \"${help_output_path}\","
     echo "    \"step_logs_dir\": \"${step_logs_dir}\","
+    echo "    \"support_bundle_index\": \"${support_index_path}\","
     echo '    "support_bundle": ['
+    echo '      "support_bundle/index.json",'
     echo '      "support_bundle/preflight_report.json",'
     echo '      "support_bundle/onboarding_scorecard.json",'
     echo '      "support_bundle/rollout_decision_artifact.json",'
@@ -848,6 +859,7 @@ write_manifest() {
     echo '  "consumer_routes": ['
     echo '    {"consumer":"docs_smoke","artifact":"react_example_app_e2e_report.json","command":"./scripts/e2e/frankenctl_react_example_app_workflow.sh artifacts"},'
     echo '    {"consumer":"rollout","artifact":"react_example_app_e2e_report.json","command":"./scripts/e2e/frankenctl_react_example_app_workflow.sh ci"},'
+    echo '    {"consumer":"doctor","artifact":"support_bundle/index.json","command":"frankenctl doctor --input <doctor_input.json> --out-dir <path>"},'
     echo '    {"consumer":"doctor","artifact":"support_bundle/preflight_report.json","command":"frankenctl doctor --input <doctor_input.json> --out-dir <path>"}'
     echo '  ],'
     echo '  "operator_verification": ['
@@ -862,6 +874,7 @@ write_manifest() {
     echo "    \"cat ${hydration_report_path}\","
     echo "    \"cat ${doctor_report_path}\","
     echo "    \"cat ${example_report_path}\","
+    echo "    \"cat ${support_index_path}\","
     echo "    \"${replay_command}\""
     echo '  ]'
     echo "}"

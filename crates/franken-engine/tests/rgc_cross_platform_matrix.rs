@@ -690,6 +690,17 @@ fn rgc_063_doc_mentions_manifest_auto_discovery_contract() {
 }
 
 #[test]
+fn rgc_063_doc_mentions_current_contract_version() {
+    let contract = parse_contract();
+    let doc = load_doc();
+    let needle = format!("- `contract_version`: `{}`", contract.contract_version);
+    assert!(
+        doc.contains(&needle),
+        "doc must advertise the current machine-readable contract version"
+    );
+}
+
+#[test]
 fn rgc_063_contract_has_nonempty_bead_id() {
     let contract = parse_contract();
     assert!(!contract.bead_id.trim().is_empty());

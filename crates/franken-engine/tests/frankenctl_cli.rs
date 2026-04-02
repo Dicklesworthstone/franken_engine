@@ -715,6 +715,7 @@ fn frankenctl_react_cli_workflow_script_emits_expected_artifacts_and_routes() {
     assert!(script.contains("react_compile_report.json"));
     assert!(script.contains("react_build_report.json"));
     assert!(script.contains("doctor_input.json"));
+    assert!(script.contains("support_bundle/index.json"));
     assert!(script.contains("support_bundle/preflight_report.json"));
     assert!(script.contains("support_bundle/onboarding_scorecard.json"));
     assert!(script.contains("support_bundle/rollout_decision_artifact.json"));
@@ -754,6 +755,7 @@ fn frankenctl_react_example_app_workflow_script_emits_expected_artifacts_and_rou
     assert!(script.contains("react_build_ssr_report.json"));
     assert!(script.contains("react_build_client_report.json"));
     assert!(script.contains("react_build_hydration_report.json"));
+    assert!(script.contains("support_bundle/index.json"));
     assert!(script.contains("support_bundle/preflight_report.json"));
     assert!(script.contains("support_bundle/onboarding_scorecard.json"));
     assert!(script.contains("support_bundle/rollout_decision_artifact.json"));
@@ -780,6 +782,30 @@ fn frankenctl_react_example_app_workflow_script_emits_expected_artifacts_and_rou
     assert!(script.contains("rch exec"));
     assert!(script.contains("falling back to local"));
     assert!(script.contains("usage: $0 [artifacts|check|test|clippy|ci]"));
+}
+
+#[test]
+fn react_workflow_scripts_pin_support_bundle_index_replay_contract() {
+    let cli_script =
+        fs::read_to_string(repo_root().join("scripts/e2e/frankenctl_react_cli_workflow.sh"))
+            .expect("react cli workflow script should exist");
+    assert!(cli_script.contains("support_index_path=\"${support_bundle_dir}/index.json\""));
+    assert!(cli_script.contains("${candidate}/support_bundle/index.json"));
+    assert!(cli_script.contains(
+        "frankenctl React CLI workflow replay support bundle index: ${candidate}/support_bundle/index.json"
+    ));
+    assert!(cli_script.contains(r#"\"support_bundle_index\": \"${support_index_path}\""#));
+
+    let example_script = fs::read_to_string(
+        repo_root().join("scripts/e2e/frankenctl_react_example_app_workflow.sh"),
+    )
+    .expect("react example-app workflow script should exist");
+    assert!(example_script.contains("support_index_path=\"${support_bundle_dir}/index.json\""));
+    assert!(example_script.contains("${candidate}/support_bundle/index.json"));
+    assert!(example_script.contains(
+        "frankenctl React example-app workflow replay support bundle index: ${candidate}/support_bundle/index.json"
+    ));
+    assert!(example_script.contains(r#"\"support_bundle_index\": \"${support_index_path}\""#));
 }
 
 #[test]

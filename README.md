@@ -1315,11 +1315,18 @@ RGC_HANDOFF_BLOCKER_LEDGER_PATH=/abs/path/engine_product_blocker_ledger.json \
 # deterministic replay wrapper
 RGC_HANDOFF_BLOCKER_LEDGER_PATH=/abs/path/engine_product_blocker_ledger.json \
   ./scripts/e2e/rgc_franken_node_handoff_bundle_replay.sh ci
+
+# exact preserved-run replay without rerunning the lane
+RGC_FRANKEN_NODE_HANDOFF_BUNDLE_REPLAY_RUN_DIR=artifacts/rgc_franken_node_handoff_bundle/<timestamp> \
+  ./scripts/e2e/rgc_franken_node_handoff_bundle_replay.sh ci
 ```
 
 The replay wrapper resolves the latest complete handoff bundle, warns when it
 must skip a newer incomplete run directory, and fails closed if no complete
-bundle exists.
+bundle exists. When `RGC_FRANKEN_NODE_HANDOFF_BUNDLE_REPLAY_RUN_DIR` is set,
+the wrapper replays that exact preserved bundle instead of rerunning the lane;
+the directory must already contain the full artifact set or replay fails
+closed.
 
 Artifacts are written under:
 

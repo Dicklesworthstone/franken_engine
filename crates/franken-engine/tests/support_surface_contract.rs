@@ -1120,8 +1120,8 @@ fn rgc_911b_contract_row_count_matches_expected() {
     let contract = parse_contract();
     assert_eq!(
         contract.surface_rows.len(),
-        13,
-        "contract must declare exactly 13 surface rows"
+        15,
+        "contract must declare exactly 15 surface rows"
     );
 }
 

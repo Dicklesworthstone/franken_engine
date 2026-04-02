@@ -463,11 +463,17 @@ fn rgc_408c_replay_script_requires_complete_bundle_and_prints_key_artifacts() {
     let script = load_replay_script();
 
     for snippet in [
+        "explicit_run_dir=\"${RGC_FRANKEN_NODE_HANDOFF_BUNDLE_REPLAY_RUN_DIR:-}\"",
+        "if [[ -z \"${explicit_run_dir}\" ]]; then",
+        "run_dir_is_complete()",
         "artifact_dirs_by_mtime_desc()",
         "find \"${search_root}\" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\\n' | sort -nr | cut -d' ' -f2-",
         "done < <(artifact_dirs_by_mtime_desc \"${artifact_root}\")",
         "[[ -f \"${candidate}/engine_product_blocker_ledger.json\" ]] || continue",
         "[[ -f \"${candidate}/step_logs/step_000.log\" ]] || continue",
+        "if ! run_dir_is_complete \"${latest_run_dir}\"; then",
+        "explicit run directory ${latest_run_dir} is incomplete",
+        "using explicit preserved run directory ${latest_run_dir}",
         "franken_node_handoff_manifest.json",
         "sibling_smoke_verification.json",
         "support_surface_summary.md",
@@ -500,8 +506,11 @@ fn readme_references_handoff_bundle_gate_and_replay() {
         "RGC_HANDOFF_BLOCKER_LEDGER_PATH=/abs/path/engine_product_blocker_ledger.json \\",
         "./scripts/run_rgc_franken_node_handoff_bundle.sh ci",
         "./scripts/e2e/rgc_franken_node_handoff_bundle_replay.sh ci",
+        "RGC_FRANKEN_NODE_HANDOFF_BUNDLE_REPLAY_RUN_DIR=artifacts/rgc_franken_node_handoff_bundle/<timestamp> \\",
+        "exact preserved-run replay without rerunning the lane",
         "latest complete handoff bundle",
         "newer incomplete run directory",
+        "the wrapper replays that exact preserved bundle instead of rerunning the lane",
         "artifacts/rgc_franken_node_handoff_bundle/<timestamp>/run_manifest.json",
         "artifacts/rgc_franken_node_handoff_bundle/<timestamp>/events.jsonl",
         "artifacts/rgc_franken_node_handoff_bundle/<timestamp>/commands.txt",
@@ -548,8 +557,31 @@ fn rgc_408c_operator_verification_commands_reference_env_runner_replay_and_rch_t
         "operator verification must reference the handoff replay wrapper"
     );
     assert!(
+        contract.operator_verification.iter().any(|cmd| cmd.contains(
+            "RGC_FRANKEN_NODE_HANDOFF_BUNDLE_REPLAY_RUN_DIR=artifacts/rgc_franken_node_handoff_bundle/<timestamp>"
+        )),
+        "operator verification must include explicit preserved-run replay"
+    );
+    assert!(
         contract.operator_verification.iter().any(|cmd| cmd
             .contains("cargo test -p frankenengine-engine --test franken_node_handoff_bundle")),
         "operator verification must include the focused rch-backed cargo test"
     );
+}
+
+#[test]
+fn rgc_408c_doc_references_explicit_preserved_run_replay() {
+    let path = repo_root().join("docs/RGC_FRANKEN_NODE_HANDOFF_BUNDLE_V1.md");
+    let doc = read_to_string(&path);
+
+    for fragment in [
+        "RGC_FRANKEN_NODE_HANDOFF_BUNDLE_REPLAY_RUN_DIR=artifacts/rgc_franken_node_handoff_bundle/<timestamp> \\",
+        "exact preserved-run replay",
+        "the wrapper fails closed",
+    ] {
+        assert!(
+            doc.contains(fragment),
+            "handoff bundle doc missing preserved-run replay fragment: {fragment}"
+        );
+    }
 }

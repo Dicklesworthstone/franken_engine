@@ -17,7 +17,7 @@ The matrix is evidence-first:
 ## Contract Version
 
 - `schema_version`: `franken-engine.rgc-cross-platform-matrix.v1`
-- `contract_version`: `1.1.1`
+- `contract_version`: `1.1.2`
 - `policy_id`: `policy-rgc-cross-platform-matrix-v1`
 
 ## Matrix Dimensions

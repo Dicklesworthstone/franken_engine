@@ -85,6 +85,7 @@
     "jq empty docs/support_surface_contract.json",
     "RGC_HANDOFF_BLOCKER_LEDGER_PATH=/abs/path/engine_product_blocker_ledger.json ./scripts/run_rgc_franken_node_handoff_bundle.sh ci",
     "RGC_HANDOFF_BLOCKER_LEDGER_PATH=/abs/path/engine_product_blocker_ledger.json ./scripts/e2e/rgc_franken_node_handoff_bundle_replay.sh ci",
+    "RGC_FRANKEN_NODE_HANDOFF_BUNDLE_REPLAY_RUN_DIR=artifacts/rgc_franken_node_handoff_bundle/<timestamp> ./scripts/e2e/rgc_franken_node_handoff_bundle_replay.sh ci",
     "rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=$PWD/target_rch_rgc_franken_node_handoff_bundle_verify CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine --test franken_node_handoff_bundle"
   ]
 }

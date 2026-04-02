@@ -90,8 +90,20 @@ RGC_HANDOFF_BLOCKER_LEDGER_PATH=/abs/path/engine_product_blocker_ledger.json \
   ./scripts/run_rgc_franken_node_handoff_bundle.sh ci
 RGC_HANDOFF_BLOCKER_LEDGER_PATH=/abs/path/engine_product_blocker_ledger.json \
   ./scripts/e2e/rgc_franken_node_handoff_bundle_replay.sh ci
+RGC_FRANKEN_NODE_HANDOFF_BUNDLE_REPLAY_RUN_DIR=artifacts/rgc_franken_node_handoff_bundle/<timestamp> \
+  ./scripts/e2e/rgc_franken_node_handoff_bundle_replay.sh ci
 rch exec -- env RUSTUP_TOOLCHAIN=nightly \
   CARGO_TARGET_DIR=$PWD/target_rch_rgc_franken_node_handoff_bundle_verify \
   CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 \
   cargo test -p frankenengine-engine --test franken_node_handoff_bundle
 ```
+
+The replay wrapper also supports exact preserved-run replay through
+`RGC_FRANKEN_NODE_HANDOFF_BUNDLE_REPLAY_RUN_DIR`. The explicit run directory
+must already contain the complete artifact set
+(`run_manifest.json`, `trace_ids.json`, `events.jsonl`, `commands.txt`,
+`franken_node_handoff_manifest.json`, `sibling_smoke_verification.json`,
+`support_surface_summary.md`, `franken_node_handoff_bundle_contract.json`,
+`support_surface_contract.json`, `engine_product_blocker_ledger.json`,
+`repo_split_contract.md`, and `step_logs/step_000.log`) or the wrapper fails
+closed without silently falling back to a different bundle.

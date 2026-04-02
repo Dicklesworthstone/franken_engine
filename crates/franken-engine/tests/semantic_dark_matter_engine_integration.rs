@@ -1,0 +1,344 @@
+//! Integration tests for semantic_dark_matter_engine (RGC-707).
+
+use frankenengine_engine::dark_matter_saturation_gate::{DarkMatterRegion, DarkMatterRegionKind};
+use frankenengine_engine::hash_tiers::ContentHash;
+use frankenengine_engine::novelty_scoring_contract::{CandidateKind, NoveltyCandidate};
+use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::semantic_dark_matter_engine::{
+    DarkMatterEngineConfig, DarkMatterEngineError, DarkMatterEngineOrchestrator,
+    DarkMatterSpecimenFamily, DarkMatterVerdict, dark_matter_corpus, run_dark_matter_corpus,
+};
+
+const MILLION: u64 = 1_000_000;
+
+fn test_epoch() -> SecurityEpoch {
+    SecurityEpoch::from_raw(1)
+}
+
+fn candidate(id: &str, kind: CandidateKind, desc_len: u64) -> NoveltyCandidate {
+    NoveltyCandidate {
+        candidate_id: id.to_string(),
+        kind,
+        description_length_bits: desc_len,
+        feature_vector: vec![desc_len; 4],
+        source_hash: ContentHash::compute(id.as_bytes()),
+    }
+}
+
+// --- Construction ---
+
+#[test]
+fn test_construction_defaults() {
+    let engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
+    let summary = engine.summary();
+    assert_eq!(summary.total_cycles, 0);
+    assert_eq!(summary.total_candidates, 0);
+}
+
+#[test]
+fn test_custom_config() {
+    let config = DarkMatterEngineConfig {
+        promotion_threshold_millionths: 300_000,
+        max_promotions_per_cycle: 5,
+        ..DarkMatterEngineConfig::default()
+    };
+    let engine = DarkMatterEngineOrchestrator::new(test_epoch(), config);
+    assert_eq!(engine.summary().total_cycles, 0);
+}
+
+// --- Discovery ---
+
+#[test]
+fn test_discover_single_candidate() {
+    let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
+    let result = engine
+        .discover(&[candidate("c1", CandidateKind::Program, 800_000)])
+        .unwrap();
+    assert_eq!(result.seq, 1);
+    assert_eq!(result.candidates_evaluated, 1);
+}
+
+#[test]
+fn test_discover_empty_error() {
+    let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
+    assert!(matches!(
+        engine.discover(&[]),
+        Err(DarkMatterEngineError::NoCandidates)
+    ));
+}
+
+#[test]
+fn test_discover_mixed_candidates() {
+    let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
+    let candidates = vec![
+        candidate("high", CandidateKind::Program, 900_000),
+        candidate("low", CandidateKind::Package, 100_000),
+        candidate("mid", CandidateKind::ReactComponent, 500_000),
+    ];
+    let result = engine.discover(&candidates).unwrap();
+    assert_eq!(result.candidates_evaluated, 3);
+    assert_eq!(result.candidates_promoted + result.candidates_rejected, 3);
+}
+
+#[test]
+fn test_discover_all_promoted() {
+    let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
+    let candidates = vec![
+        candidate("h1", CandidateKind::Program, 900_000),
+        candidate("h2", CandidateKind::Package, 800_000),
+    ];
+    let result = engine.discover(&candidates).unwrap();
+    assert_eq!(result.candidates_promoted, 2);
+    assert_eq!(result.candidates_rejected, 0);
+}
+
+#[test]
+fn test_discover_all_rejected() {
+    let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
+    let candidates = vec![
+        candidate("l1", CandidateKind::Program, 100_000),
+        candidate("l2", CandidateKind::Program, 200_000),
+    ];
+    let result = engine.discover(&candidates).unwrap();
+    assert_eq!(result.candidates_promoted, 0);
+    assert_eq!(result.candidates_rejected, 2);
+}
+
+#[test]
+fn test_max_novelty() {
+    let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
+    let candidates = vec![
+        candidate("a", CandidateKind::Program, 300_000),
+        candidate("b", CandidateKind::Program, 700_000),
+        candidate("c", CandidateKind::Program, 500_000),
+    ];
+    let result = engine.discover(&candidates).unwrap();
+    assert_eq!(result.max_novelty_millionths, 700_000);
+}
+
+#[test]
+fn test_avg_novelty() {
+    let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
+    let candidates = vec![
+        candidate("a", CandidateKind::Program, 300_000),
+        candidate("b", CandidateKind::Program, 600_000),
+        candidate("c", CandidateKind::Program, 900_000),
+    ];
+    let result = engine.discover(&candidates).unwrap();
+    assert_eq!(result.avg_novelty_millionths, 600_000);
+}
+
+// --- Multiple cycles ---
+
+#[test]
+fn test_multiple_cycles() {
+    let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
+    let _ = engine.discover(&[candidate("c1", CandidateKind::Program, 800_000)]);
+    let _ = engine.discover(&[candidate("c2", CandidateKind::Package, 200_000)]);
+    let _ = engine.discover(&[candidate("c3", CandidateKind::Program, 600_000)]);
+    let summary = engine.summary();
+    assert_eq!(summary.total_cycles, 3);
+    assert_eq!(summary.total_candidates, 3);
+}
+
+#[test]
+fn test_seq_increments() {
+    let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
+    let r1 = engine
+        .discover(&[candidate("c1", CandidateKind::Program, 800_000)])
+        .unwrap();
+    let r2 = engine
+        .discover(&[candidate("c2", CandidateKind::Program, 800_000)])
+        .unwrap();
+    assert_eq!(r1.seq, 1);
+    assert_eq!(r2.seq, 2);
+}
+
+// --- Summary ---
+
+#[test]
+fn test_summary_initial() {
+    let engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
+    let s = engine.summary();
+    assert_eq!(s.total_cycles, 0);
+    assert_eq!(s.total_promoted, 0);
+    assert_eq!(s.total_rejected, 0);
+}
+
+#[test]
+fn test_summary_after_discover() {
+    let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
+    let _ = engine.discover(&[candidate("x", CandidateKind::Program, 800_000)]);
+    let s = engine.summary();
+    assert_eq!(s.total_cycles, 1);
+    assert_eq!(s.total_candidates, 1);
+    assert_eq!(s.total_promoted, 1);
+}
+
+#[test]
+fn test_summary_hash_deterministic() {
+    let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
+    let _ = engine.discover(&[candidate("x", CandidateKind::Program, 800_000)]);
+    let s1 = engine.summary();
+    let s2 = engine.summary();
+    assert_eq!(s1.content_hash, s2.content_hash);
+}
+
+// --- Regions ---
+
+#[test]
+fn test_add_region() {
+    let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
+    engine.add_region(DarkMatterRegion {
+        region_id: "r1".to_string(),
+        kind: DarkMatterRegionKind::UntestedCodePath,
+        mass_millionths: 200_000,
+        retired: false,
+        discovered_at_epoch_secs: 0,
+        retired_at_epoch_secs: None,
+        priority_weight_millionths: MILLION,
+    });
+    assert_eq!(engine.regions().len(), 1);
+}
+
+#[test]
+fn test_multiple_regions() {
+    let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
+    for i in 0..3 {
+        engine.add_region(DarkMatterRegion {
+            region_id: format!("r{i}"),
+            kind: DarkMatterRegionKind::UnobservedInteraction,
+            mass_millionths: 100_000,
+            retired: false,
+            discovered_at_epoch_secs: 0,
+            retired_at_epoch_secs: None,
+            priority_weight_millionths: MILLION,
+        });
+    }
+    assert_eq!(engine.regions().len(), 3);
+}
+
+// --- History ---
+
+#[test]
+fn test_history_recorded() {
+    let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
+    let _ = engine.discover(&[candidate("x", CandidateKind::Program, 800_000)]);
+    assert_eq!(engine.history().len(), 1);
+}
+
+#[test]
+fn test_history_bounded() {
+    let config = DarkMatterEngineConfig {
+        max_history: 2,
+        ..DarkMatterEngineConfig::default()
+    };
+    let mut engine = DarkMatterEngineOrchestrator::new(test_epoch(), config);
+    for i in 0..5 {
+        let _ = engine.discover(&[candidate(&format!("c{i}"), CandidateKind::Program, 800_000)]);
+    }
+    assert!(engine.history().len() <= 2);
+}
+
+// --- Reset ---
+
+#[test]
+fn test_reset_clears() {
+    let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
+    let _ = engine.discover(&[candidate("x", CandidateKind::Program, 800_000)]);
+    engine.add_region(DarkMatterRegion {
+        region_id: "r1".to_string(),
+        kind: DarkMatterRegionKind::UntestedCodePath,
+        mass_millionths: 200_000,
+        retired: false,
+        discovered_at_epoch_secs: 0,
+        retired_at_epoch_secs: None,
+        priority_weight_millionths: MILLION,
+    });
+    engine.reset(SecurityEpoch::from_raw(2));
+    assert_eq!(engine.summary().total_cycles, 0);
+    assert!(engine.history().is_empty());
+    assert!(engine.regions().is_empty());
+}
+
+#[test]
+fn test_reset_allows_reuse() {
+    let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
+    let _ = engine.discover(&[candidate("x", CandidateKind::Program, 800_000)]);
+    engine.reset(SecurityEpoch::from_raw(2));
+    let r = engine
+        .discover(&[candidate("y", CandidateKind::Program, 800_000)])
+        .unwrap();
+    assert_eq!(r.seq, 1);
+}
+
+// --- Error display ---
+
+#[test]
+fn test_error_display() {
+    assert!(format!("{}", DarkMatterEngineError::NoCandidates).contains("no candidates"));
+    assert!(format!("{}", DarkMatterEngineError::BoardNotInitialized).contains("not initialized"));
+    assert!(
+        format!(
+            "{}",
+            DarkMatterEngineError::ConfigError {
+                detail: "bad".to_string()
+            }
+        )
+        .contains("bad")
+    );
+}
+
+// --- Evidence corpus ---
+
+#[test]
+fn test_corpus_all_pass() {
+    let inv = run_dark_matter_corpus();
+    for e in &inv.evidences {
+        assert_eq!(
+            e.verdict,
+            DarkMatterVerdict::Pass,
+            "failed: {} - {}",
+            e.specimen_id,
+            e.details
+        );
+    }
+}
+
+#[test]
+fn test_corpus_covers_families() {
+    let corpus = dark_matter_corpus();
+    for family in DarkMatterSpecimenFamily::ALL {
+        assert!(
+            corpus.iter().any(|s| s.family == *family),
+            "missing: {family:?}"
+        );
+    }
+}
+
+#[test]
+fn test_corpus_deterministic() {
+    let i1 = run_dark_matter_corpus();
+    let i2 = run_dark_matter_corpus();
+    assert_eq!(i1.inventory_hash, i2.inventory_hash);
+}
+
+// --- Promotion cap ---
+
+#[test]
+fn test_promotion_cap() {
+    let config = DarkMatterEngineConfig {
+        max_promotions_per_cycle: 2,
+        ..DarkMatterEngineConfig::default()
+    };
+    let mut engine = DarkMatterEngineOrchestrator::new(test_epoch(), config);
+    let candidates = vec![
+        candidate("h1", CandidateKind::Program, 900_000),
+        candidate("h2", CandidateKind::Program, 800_000),
+        candidate("h3", CandidateKind::Program, 700_000),
+        candidate("h4", CandidateKind::Program, 600_000),
+    ];
+    let result = engine.discover(&candidates).unwrap();
+    assert_eq!(result.candidates_promoted, 2);
+    assert_eq!(result.candidates_rejected, 2);
+}

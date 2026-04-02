@@ -128,6 +128,8 @@ fn parser_operator_runbook_doc_has_required_sections() {
         "step_logs/step_*.log",
         "./scripts/run_parser_operator_developer_runbook.sh ci",
         "./scripts/e2e/parser_operator_developer_runbook_replay.sh drill",
+        "instead of rerunning",
+        "latest complete bundles emitted by the dependent error-recovery and user-impact replay surfaces",
         "latest complete directory",
         "without rerunning the lane",
         "PARSER_OPERATOR_DEVELOPER_RUNBOOK_REPLAY_RUN_DIR",
@@ -273,6 +275,11 @@ fn parser_operator_runbook_script_contains_required_markers() {
         "validate_parser_log_schema.sh --events",
         "preserved_bundle_replay_command=",
         "PARSER_OPERATOR_DEVELOPER_RUNBOOK_REPLAY_RUN_DIR=${run_dir}",
+        "dependency_bundle_is_complete()",
+        "latest_complete_dependency_artifact_dir()",
+        "print_latest_dependency_bundle()",
+        "artifacts/parser_error_recovery_adversarial_e2e",
+        "artifacts/parser_user_impact_regression_alarms",
     ] {
         assert!(
             script.contains(marker),
@@ -295,6 +302,23 @@ fn parser_operator_runbook_script_uses_timeout_safe_compile_smoke() {
             "cargo check -p frankenengine-engine --test parser_operator_developer_runbook"
         ),
         "runbook script must not regress to cargo check for compile-only preflight"
+    );
+}
+
+#[test]
+fn parser_operator_runbook_drill_mode_reuses_dependency_bundles_instead_of_rerunning_lanes() {
+    let script = load_script();
+    assert!(
+        script.contains("latest complete dependency bundle inspection"),
+        "runbook drill mode must inspect latest complete dependency bundles"
+    );
+    assert!(
+        !script.contains("run_local_step \"${drill_replay_a}\" \"${root_dir}/${drill_replay_a}\""),
+        "runbook drill mode must not rerun the error-recovery replay wrapper directly"
+    );
+    assert!(
+        !script.contains("run_local_step \"${drill_replay_b}\" \"${root_dir}/${drill_replay_b}\""),
+        "runbook drill mode must not rerun the user-impact replay wrapper directly"
     );
 }
 
@@ -344,6 +368,10 @@ fn readme_references_operator_runbook_gate_and_replay() {
     assert!(
         readme.contains("PARSER_OPERATOR_DEVELOPER_RUNBOOK_REPLAY_RUN_DIR"),
         "README missing exact-run-dir replay env var guidance"
+    );
+    assert!(
+        readme.contains("reuses the latest complete dependency bundles"),
+        "README missing runbook drill dependency-bundle reuse guidance"
     );
     assert!(
         readme.contains("operator_verification"),

@@ -108,10 +108,16 @@ One-command replay wrapper:
 ./scripts/e2e/parser_operator_developer_runbook_replay.sh drill
 ```
 
-In `drill` mode, the local replay helper commands also write their stdout/stderr
-into later step logs (`step_logs/step_001.log`, `step_logs/step_002.log`, ...)
-so operators can inspect the exact replay-helper output without rerunning the
-same shell drills.
+In `drill` mode, the runbook lane first executes its own focused contract test
+through `rch`, then inspects the latest complete bundles emitted by the
+dependent error-recovery and user-impact replay surfaces instead of rerunning
+those heavy lanes from scratch. The local bundle-inspection helper writes its
+stdout/stderr into later step logs (`step_logs/step_001.log`,
+`step_logs/step_002.log`, ...) so operators can inspect the exact replay
+evidence without spending another remote compile/test cycle. If the newest
+dependency bundle is incomplete, the drill warns and falls back to the latest
+complete bundle; if no complete dependency bundle exists, the drill fails
+closed.
 
 By default, the replay wrapper reruns the selected lane and then prints the latest complete
 artifact bundle (`run_manifest.json`, `events.jsonl`, `commands.txt`, and

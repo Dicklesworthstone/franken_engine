@@ -150,6 +150,62 @@ run_local_step() {
   fi
 }
 
+dependency_bundle_is_complete() {
+  local candidate="${1:-}"
+  [[ -n "${candidate}" ]] || return 1
+  [[ -f "${candidate}/run_manifest.json" ]] || return 1
+  [[ -f "${candidate}/events.jsonl" ]] || return 1
+  [[ -f "${candidate}/commands.txt" ]] || return 1
+}
+
+latest_dependency_artifact_dir() {
+  local artifact_root="$1"
+  [[ -d "${artifact_root}" ]] || return 0
+  find "${artifact_root}" -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1
+}
+
+latest_complete_dependency_artifact_dir() {
+  local artifact_root="$1"
+  [[ -d "${artifact_root}" ]] || return 0
+  find "${artifact_root}" -mindepth 1 -maxdepth 1 -type d | sort | while IFS= read -r candidate; do
+    dependency_bundle_is_complete "${candidate}" || continue
+    printf '%s\n' "${candidate}"
+  done | tail -n 1
+}
+
+print_latest_dependency_bundle() {
+  local label="$1"
+  local artifact_root="$2"
+  local latest_dir latest_complete_dir
+
+  latest_dir="$(latest_dependency_artifact_dir "${artifact_root}")"
+  latest_complete_dir="$(latest_complete_dependency_artifact_dir "${artifact_root}")"
+
+  if [[ -z "${latest_complete_dir}" ]]; then
+    if [[ -n "${latest_dir}" ]]; then
+      echo "[${label}] newest directory ${latest_dir} is incomplete; no complete dependency bundle found under ${artifact_root}" >&2
+    else
+      echo "[${label}] no dependency bundle found under ${artifact_root}" >&2
+    fi
+    return 1
+  fi
+
+  if [[ -n "${latest_dir}" && "${latest_dir}" != "${latest_complete_dir}" ]]; then
+    echo "[${label}] newest directory ${latest_dir} is incomplete; using latest complete dependency bundle ${latest_complete_dir}" >&2
+  fi
+
+  echo "[${label}] latest manifest: ${latest_complete_dir}/run_manifest.json"
+  cat "${latest_complete_dir}/run_manifest.json"
+  echo "[${label}] latest events: ${latest_complete_dir}/events.jsonl"
+  cat "${latest_complete_dir}/events.jsonl"
+  echo "[${label}] latest commands: ${latest_complete_dir}/commands.txt"
+  cat "${latest_complete_dir}/commands.txt"
+  if [[ -f "${latest_complete_dir}/step_logs/step_000.log" ]]; then
+    echo "[${label}] latest first step log: ${latest_complete_dir}/step_logs/step_000.log"
+    cat "${latest_complete_dir}/step_logs/step_000.log"
+  fi
+}
+
 run_mode() {
   case "$mode" in
     check)
@@ -175,8 +231,14 @@ run_mode() {
     drill)
       run_step "cargo test -p frankenengine-engine --test parser_operator_developer_runbook -- --exact parser_operator_runbook_replay_drills_cover_required_paths" \
         cargo test -p frankenengine-engine --test parser_operator_developer_runbook -- --exact parser_operator_runbook_replay_drills_cover_required_paths || return 1
-      run_local_step "${drill_replay_a}" "${root_dir}/${drill_replay_a}" || return 1
-      run_local_step "${drill_replay_b}" "${root_dir}/${drill_replay_b}" || return 1
+      run_local_step "${drill_replay_a} (latest complete dependency bundle inspection)" \
+        print_latest_dependency_bundle \
+        "parser-error-recovery-adversarial" \
+        "${root_dir}/artifacts/parser_error_recovery_adversarial_e2e" || return 1
+      run_local_step "${drill_replay_b} (latest complete dependency bundle inspection)" \
+        print_latest_dependency_bundle \
+        "parser-user-impact-regression-alarms" \
+        "${root_dir}/artifacts/parser_user_impact_regression_alarms" || return 1
       ;;
     *)
       echo "usage: $0 [check|test|clippy|ci|drill]" >&2

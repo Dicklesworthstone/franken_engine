@@ -547,7 +547,7 @@ pub struct ContractSuiteResult {
 
 impl ContractSuiteResult {
     pub fn is_passing(&self) -> bool {
-        self.violations.is_empty()
+        self.violations.is_empty() && self.failed == 0
     }
 }
 

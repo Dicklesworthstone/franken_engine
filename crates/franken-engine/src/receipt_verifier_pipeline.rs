@@ -877,6 +877,9 @@ fn checkpoint_preimage(checkpoint: &SignedLogCheckpoint) -> Vec<u8> {
     preimage.push(0xff);
     preimage.extend_from_slice(&checkpoint.timestamp_ns.to_be_bytes());
     preimage.push(0xff);
+    // Length-prefix variable-length operator_key_id to prevent preimage
+    // collisions when key IDs contain delimiter bytes.
+    preimage.extend_from_slice(&(checkpoint.operator_key_id.len() as u32).to_be_bytes());
     preimage.extend_from_slice(checkpoint.operator_key_id.as_bytes());
     preimage
 }

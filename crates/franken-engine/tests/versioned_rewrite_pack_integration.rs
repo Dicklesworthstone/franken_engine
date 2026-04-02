@@ -1461,6 +1461,16 @@ fn catalog_cross_interference_self_pair_query_fails_closed() {
 }
 
 #[test]
+fn catalog_cross_interference_missing_metadata_for_known_pair_fails_closed() {
+    let mut cat = PackCatalog::new("missing-metadata");
+    cat.register(make_pack("alpha", vec![]));
+    cat.register(make_pack("beta", vec![]));
+
+    assert!(cat.has_cross_blocking("alpha", "beta"));
+    assert!(cat.has_cross_blocking("beta", "alpha"));
+}
+
+#[test]
 fn catalog_cross_interference_rejects_duplicate_pair_without_overwrite() {
     let mut cat = PackCatalog::new("dup-cross");
     cat.register(make_pack(

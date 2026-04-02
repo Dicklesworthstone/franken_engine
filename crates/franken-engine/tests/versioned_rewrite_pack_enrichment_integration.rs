@@ -1302,5 +1302,5 @@ fn enrichment_catalog_multiple_cross_interferences() {
 
     assert!(cat.has_cross_blocking("a", "b"));
     assert!(!cat.has_cross_blocking("b", "c"));
-    assert!(!cat.has_cross_blocking("a", "c")); // no entry at all
+    assert!(cat.has_cross_blocking("a", "c")); // missing metadata fails closed
 }

@@ -3,22 +3,16 @@
 //! Validates the end-to-end pipeline composing regime_signature_feature,
 //! entropic_policy_morphing, and signature_drift_gate.
 
-use std::collections::BTreeMap;
-
-use frankenengine_engine::entropic_policy_morphing::{
-    MorphingConfig, MorphingOutcome, PolicyProfile, TransitionBudget,
-};
+use frankenengine_engine::entropic_policy_morphing::{MorphingOutcome, PolicyProfile};
 use frankenengine_engine::regime_detector::Regime;
-use frankenengine_engine::regime_signature_feature::{
-    RegimeLabel, RuntimeTrace, SignatureConfig, TraceObservation,
-};
+use frankenengine_engine::regime_signature_feature::{RegimeLabel, RuntimeTrace, TraceObservation};
 use frankenengine_engine::rough_path_regime_geometry::{
-    GeometrySpecimenFamily, GeometryVerdict, PipelineStepResult, PipelineSummary, RegimeCorridor,
-    RegimeGeometryConfig, RegimeGeometryError, RegimeGeometryOrchestrator, RegimeTopology,
-    geometry_corpus, run_geometry_corpus,
+    GeometrySpecimenFamily, GeometryVerdict, PipelineStepResult, RegimeCorridor,
+    RegimeGeometryConfig, RegimeGeometryError, RegimeGeometryOrchestrator, geometry_corpus,
+    run_geometry_corpus,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
-use frankenengine_engine::signature_drift_gate::{DriftGateConfig, GateVerdict};
+use frankenengine_engine::signature_drift_gate::GateVerdict;
 
 const MILLION: i64 = 1_000_000;
 
@@ -145,9 +139,11 @@ fn test_orchestrator_construction_with_defaults() {
 
 #[test]
 fn test_orchestrator_construction_custom_config() {
-    let mut config = RegimeGeometryConfig::default();
-    config.record_history = false;
-    config.gate_enforced_fallback = false;
+    let config = RegimeGeometryConfig {
+        record_history: false,
+        gate_enforced_fallback: false,
+        ..RegimeGeometryConfig::default()
+    };
     config.max_history = 10;
     let orch = RegimeGeometryOrchestrator::new(anchor_profile(), test_epoch(), config);
     assert_eq!(orch.current_regime(), RegimeLabel::Abstention);
@@ -476,8 +472,10 @@ fn test_history_recorded() {
 
 #[test]
 fn test_history_bounded_by_config() {
-    let mut config = RegimeGeometryConfig::default();
-    config.max_history = 3;
+    let config = RegimeGeometryConfig {
+        max_history: 3,
+        ..RegimeGeometryConfig::default()
+    };
     let mut orch = RegimeGeometryOrchestrator::new(anchor_profile(), test_epoch(), config);
     for i in 0..10 {
         let _ = orch.process_trace(&stable_trace(&format!("t{i}")));
@@ -487,8 +485,10 @@ fn test_history_bounded_by_config() {
 
 #[test]
 fn test_history_disabled() {
-    let mut config = RegimeGeometryConfig::default();
-    config.record_history = false;
+    let config = RegimeGeometryConfig {
+        record_history: false,
+        ..RegimeGeometryConfig::default()
+    };
     let mut orch = RegimeGeometryOrchestrator::new(anchor_profile(), test_epoch(), config);
     let _ = orch.process_trace(&stable_trace("t1")).unwrap();
     assert!(orch.history().is_empty());
@@ -763,8 +763,10 @@ fn test_multi_epoch_cycle() {
 
 #[test]
 fn test_gate_enforced_fallback_disabled() {
-    let mut config = RegimeGeometryConfig::default();
-    config.gate_enforced_fallback = false;
+    let config = RegimeGeometryConfig {
+        gate_enforced_fallback: false,
+        ..RegimeGeometryConfig::default()
+    };
     let mut orch = RegimeGeometryOrchestrator::new(anchor_profile(), test_epoch(), config);
     let _ = orch.process_trace(&stable_trace("t1")).unwrap();
     let _ = orch.process_trace(&stable_trace("t2")).unwrap();

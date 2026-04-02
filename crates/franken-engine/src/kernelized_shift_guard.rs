@@ -20,7 +20,6 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -32,18 +31,6 @@ use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn hex_encode(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push_str(&format!("{b:02x}"));
-    }
-    out
-}
-
-// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
@@ -53,8 +40,6 @@ pub const SHIFT_GUARD_MANIFEST_SCHEMA_VERSION: &str =
 pub const SHIFT_GUARD_EVENT_SCHEMA_VERSION: &str = "franken-engine.kernelized-shift-guard-event.v1";
 pub const SHIFT_GUARD_COMPONENT: &str = "kernelized_shift_guard";
 pub const SHIFT_GUARD_POLICY_ID: &str = "RGC-706";
-
-const MILLION: i64 = 1_000_000;
 
 /// Maximum shift certificates retained in history.
 const MAX_SHIFT_HISTORY: usize = 256;

@@ -1800,8 +1800,10 @@ mod tests {
 
     #[test]
     fn test_history_bounded() {
-        let mut config = RegimeGeometryConfig::default();
-        config.max_history = 3;
+        let config = RegimeGeometryConfig {
+            max_history: 3,
+            ..RegimeGeometryConfig::default()
+        };
         let mut orch =
             RegimeGeometryOrchestrator::new(default_anchor_profile(), test_epoch(), config);
         for i in 0..10 {
@@ -1812,8 +1814,10 @@ mod tests {
 
     #[test]
     fn test_history_disabled() {
-        let mut config = RegimeGeometryConfig::default();
-        config.record_history = false;
+        let config = RegimeGeometryConfig {
+            record_history: false,
+            ..RegimeGeometryConfig::default()
+        };
         let mut orch =
             RegimeGeometryOrchestrator::new(default_anchor_profile(), test_epoch(), config);
         let _ = orch.process_trace(&simple_trace("t1")).unwrap();

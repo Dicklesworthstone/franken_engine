@@ -2431,6 +2431,8 @@ mod tests {
                 "pkg.js",
                 "pkg/index.cjs",
                 "pkg/index.js",
+                "pkg.mjs",
+                "pkg/index.mjs",
                 "/repo/pkg",
                 "/repo/pkg.cjs",
                 "/repo/pkg.js",
@@ -2780,6 +2782,12 @@ mod tests {
     #[test]
     fn require_probes_index_cjs_for_directory_specifier() {
         let mut resolver = DeterministicModuleResolver::new("/app");
+        resolver
+            .register_workspace_module(
+                "/app/main.js",
+                ModuleDefinition::new(ModuleSyntax::EsModule, "import './lib';"),
+            )
+            .unwrap();
         resolver
             .register_workspace_module(
                 "/app/lib/index.cjs",
@@ -3621,6 +3629,12 @@ mod tests {
     #[test]
     fn resolution_outcome_trace_record_roundtrip_preserves_required_fields() {
         let mut resolver = DeterministicModuleResolver::new("/app");
+        resolver
+            .register_workspace_module(
+                "/app/main.mjs",
+                ModuleDefinition::new(ModuleSyntax::EsModule, "import x from './lib';"),
+            )
+            .unwrap();
         resolver
             .register_workspace_module(
                 "/app/lib.mjs",

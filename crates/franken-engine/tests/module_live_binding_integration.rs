@@ -1145,6 +1145,137 @@ fn build_live_bindings_omits_ambiguous_star_re_exports() {
 }
 
 #[test]
+fn build_live_bindings_explicit_re_export_restores_export_after_ambiguous_stars() {
+    let mut graph = ModuleGraph::new();
+
+    let mut left = EsmModule::new("left", "export const foo = 1;", ModuleSyntax::EsModule);
+    left.add_export(ExportEntry::direct("foo", "foo"));
+    left.status = ModuleStatus::Linked;
+
+    let mut right = EsmModule::new("right", "export const foo = 2;", ModuleSyntax::EsModule);
+    right.add_export(ExportEntry::direct("foo_local", "foo"));
+    right.status = ModuleStatus::Linked;
+
+    let mut aggregator = EsmModule::new(
+        "aggregator",
+        "export * from 'left'; export * from 'right'; export { foo } from 'right';",
+        ModuleSyntax::EsModule,
+    );
+    aggregator.add_export(ExportEntry::star_re_export("left"));
+    aggregator.add_export(ExportEntry::star_re_export("right"));
+    aggregator.add_export(ExportEntry::re_export("foo", "right", "foo"));
+    aggregator.status = ModuleStatus::Linked;
+
+    let mut consumer = EsmModule::new(
+        "consumer",
+        "import { foo } from 'aggregator';",
+        ModuleSyntax::EsModule,
+    );
+    consumer.add_import(ImportEntry::new("aggregator", "foo", "foo"));
+    consumer.status = ModuleStatus::Linked;
+
+    graph.add_module(left).unwrap();
+    graph.add_module(right).unwrap();
+    graph.add_module(aggregator).unwrap();
+    graph.add_module(consumer).unwrap();
+
+    let mut map = build_live_bindings(&graph).unwrap();
+    let aggregator_foo = BindingId::new("aggregator", "foo");
+    let right_foo = BindingId::new("right", "foo");
+    let surface = map
+        .get_surface_cell(&aggregator_foo)
+        .expect("explicit re-export should restore a surface binding");
+
+    assert_eq!(surface.binding_type, BindingType::ReExport);
+    assert_eq!(surface.local_name, "foo");
+    assert_eq!(
+        map.get_cell(&aggregator_foo).unwrap().source_module,
+        "right"
+    );
+    assert_eq!(
+        map.get_cell(&aggregator_foo).unwrap().local_name,
+        "foo_local"
+    );
+    assert_eq!(
+        map.get_namespace("aggregator")
+            .unwrap()
+            .get_binding("foo")
+            .unwrap(),
+        &aggregator_foo
+    );
+
+    map.initialize_millionths(&right_foo, 2).unwrap();
+    let imported = map.read_through_import("consumer", "foo").unwrap();
+    assert_eq!(imported.source_module, "right");
+    assert_eq!(imported.local_name, "foo_local");
+    assert_eq!(imported.value_millionths, Some(2));
+}
+
+#[test]
+fn build_live_bindings_star_re_export_preserves_renamed_upstream_surface() {
+    let mut graph = ModuleGraph::new();
+
+    let mut leaf = EsmModule::new("leaf", "export const bar = 1;", ModuleSyntax::EsModule);
+    leaf.add_export(ExportEntry::direct("bar_local", "bar"));
+    leaf.status = ModuleStatus::Linked;
+
+    let mut relay = EsmModule::new(
+        "relay",
+        "export { bar as foo } from 'leaf';",
+        ModuleSyntax::EsModule,
+    );
+    relay.add_export(ExportEntry::re_export("foo", "leaf", "bar"));
+    relay.status = ModuleStatus::Linked;
+
+    let mut aggregator = EsmModule::new(
+        "aggregator",
+        "export * from 'relay';",
+        ModuleSyntax::EsModule,
+    );
+    aggregator.add_export(ExportEntry::star_re_export("relay"));
+    aggregator.status = ModuleStatus::Linked;
+
+    let mut consumer = EsmModule::new(
+        "consumer",
+        "import { foo } from 'aggregator';",
+        ModuleSyntax::EsModule,
+    );
+    consumer.add_import(ImportEntry::new("aggregator", "foo", "foo"));
+    consumer.status = ModuleStatus::Linked;
+
+    graph.add_module(leaf).unwrap();
+    graph.add_module(relay).unwrap();
+    graph.add_module(aggregator).unwrap();
+    graph.add_module(consumer).unwrap();
+
+    let mut map = build_live_bindings(&graph).unwrap();
+    let leaf_bar = BindingId::new("leaf", "bar");
+    let relay_foo = BindingId::new("relay", "foo");
+    let aggregator_foo = BindingId::new("aggregator", "foo");
+
+    assert_eq!(
+        map.get_surface_cell(&relay_foo).unwrap().binding_type,
+        BindingType::ReExport
+    );
+    assert_eq!(
+        map.get_surface_cell(&aggregator_foo).unwrap().binding_type,
+        BindingType::StarReExport
+    );
+    assert!(map.get_namespace("aggregator").unwrap().has_export("foo"));
+    assert_eq!(map.get_cell(&aggregator_foo).unwrap().source_module, "leaf");
+    assert_eq!(
+        map.get_cell(&aggregator_foo).unwrap().local_name,
+        "bar_local"
+    );
+
+    map.initialize_millionths(&leaf_bar, 3).unwrap();
+    let imported = map.read_through_import("consumer", "foo").unwrap();
+    assert_eq!(imported.source_module, "leaf");
+    assert_eq!(imported.local_name, "bar_local");
+    assert_eq!(imported.value_millionths, Some(3));
+}
+
+#[test]
 fn build_live_bindings_resolves_re_export_chains_independent_of_module_order() {
     let mut graph = ModuleGraph::new();
 

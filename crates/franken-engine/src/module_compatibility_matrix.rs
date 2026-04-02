@@ -1412,7 +1412,11 @@ mod tests {
     #[test]
     fn validation_requires_non_empty_divergence_reason() {
         let mut entry = valid_entry("case-empty-divergence-reason");
+        // Set native behavior different from node/bun, and match compat behaviors
+        // to native so the HiddenShim check doesn't trigger before divergence.
         entry.franken_native_behavior = "bridge".to_string();
+        entry.franken_node_compat_behavior = "bridge".to_string();
+        entry.franken_bun_compat_behavior = "bridge".to_string();
         entry.divergence = Some(DivergencePolicy {
             diverges_from: vec![ReferenceRuntime::Node, ReferenceRuntime::Bun],
             reason: String::new(),
@@ -1426,7 +1430,7 @@ mod tests {
         let error = matrix
             .validate_with_waivers(&waivers, &context())
             .expect_err("expected empty divergence reason to be rejected");
-        assert_eq!(error.code, CompatibilityMatrixErrorCode::HiddenShim);
+        assert_eq!(error.code, CompatibilityMatrixErrorCode::InvalidMatrix);
         assert!(error.message.contains("non-empty reason"));
     }
 
@@ -1434,6 +1438,8 @@ mod tests {
     fn validation_requires_non_empty_divergence_impact() {
         let mut entry = valid_entry("case-empty-divergence-impact");
         entry.franken_native_behavior = "bridge".to_string();
+        entry.franken_node_compat_behavior = "bridge".to_string();
+        entry.franken_bun_compat_behavior = "bridge".to_string();
         entry.divergence = Some(DivergencePolicy {
             diverges_from: vec![ReferenceRuntime::Node, ReferenceRuntime::Bun],
             reason: "bun/node differ from native".to_string(),
@@ -1447,7 +1453,7 @@ mod tests {
         let error = matrix
             .validate_with_waivers(&waivers, &context())
             .expect_err("expected empty divergence impact to be rejected");
-        assert_eq!(error.code, CompatibilityMatrixErrorCode::HiddenShim);
+        assert_eq!(error.code, CompatibilityMatrixErrorCode::InvalidMatrix);
         assert!(error.message.contains("non-empty impact"));
     }
 

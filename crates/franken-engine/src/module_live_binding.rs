@@ -790,41 +790,46 @@ pub fn build_live_bindings(graph: &ModuleGraph) -> Result<LiveBindingMap, LiveBi
                             continue;
                         }
 
-                        let resolved_source_id = match graph
-                            .resolve_export(module_specifier, &export_name)
-                        {
-                            Ok(binding) => BindingId::new(&binding.module_specifier, &export_name),
-                            Err(
-                                EsmLoaderError::AmbiguousExport { .. }
-                                | EsmLoaderError::ExportNotFound { .. },
-                            ) => {
-                                if map.cells.get(&alias_id).is_some_and(|cell| {
-                                    cell.binding_type == BindingType::StarReExport
-                                }) {
-                                    remove_star_re_export_surface(&mut map, &alias_id);
-                                    progressed = true;
+                        let source_surface_id =
+                            match graph.resolve_export(module_specifier, &export_name) {
+                                Ok(_) => {
+                                    // Star re-exports alias the target module's exported surface,
+                                    // not the canonical source module's requested name. This keeps
+                                    // renamed upstream re-exports (for example `bar as foo`)
+                                    // addressable across later passes.
+                                    BindingId::new(target_module, &export_name)
                                 }
-                                continue;
-                            }
-                            Err(EsmLoaderError::ModuleNotFound(_)) => {
-                                return Err(LiveBindingError::NamespaceNotFound {
-                                    module: target_module.to_string(),
-                                });
-                            }
-                            Err(EsmLoaderError::DuplicateExport { .. }) => {
-                                return Err(LiveBindingError::DuplicateExport {
-                                    module: module_specifier.clone(),
-                                    export_name: export_name.clone(),
-                                });
-                            }
-                            Err(_) => {
-                                return Err(LiveBindingError::NamespaceNotFound {
-                                    module: module_specifier.clone(),
-                                });
-                            }
-                        };
+                                Err(
+                                    EsmLoaderError::AmbiguousExport { .. }
+                                    | EsmLoaderError::ExportNotFound { .. },
+                                ) => {
+                                    if map.cells.get(&alias_id).is_some_and(|cell| {
+                                        cell.binding_type == BindingType::StarReExport
+                                    }) {
+                                        remove_star_re_export_surface(&mut map, &alias_id);
+                                        progressed = true;
+                                    }
+                                    continue;
+                                }
+                                Err(EsmLoaderError::ModuleNotFound(_)) => {
+                                    return Err(LiveBindingError::NamespaceNotFound {
+                                        module: target_module.to_string(),
+                                    });
+                                }
+                                Err(EsmLoaderError::DuplicateExport { .. }) => {
+                                    return Err(LiveBindingError::DuplicateExport {
+                                        module: module_specifier.clone(),
+                                        export_name: export_name.clone(),
+                                    });
+                                }
+                                Err(_) => {
+                                    return Err(LiveBindingError::NamespaceNotFound {
+                                        module: module_specifier.clone(),
+                                    });
+                                }
+                            };
 
-                        if !map.cells.contains_key(&resolved_source_id) {
+                        if !map.cells.contains_key(&source_surface_id) {
                             continue;
                         }
 
@@ -844,8 +849,8 @@ pub fn build_live_bindings(graph: &ModuleGraph) -> Result<LiveBindingMap, LiveBi
                             .iter()
                             .find(|entry| entry.alias == alias_id)
                             .map(|entry| entry.source.clone());
-                        if previous_source.as_ref() != Some(&resolved_source_id) {
-                            map.register_alias(alias_id, resolved_source_id);
+                        if previous_source.as_ref() != Some(&source_surface_id) {
+                            map.register_alias(alias_id, source_surface_id);
                             progressed = true;
                         }
                     }

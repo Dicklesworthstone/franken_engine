@@ -2704,14 +2704,15 @@ mod tests {
         binding
             .load_extension("ext-1", &mut cx, "d-1", "p-1")
             .unwrap();
-        // Loading again with same ID overwrites
-        binding
+        // Duplicate load with same ID now returns CellAlreadyExists
+        let err = binding
             .load_extension("ext-1", &mut cx, "d-2", "p-2")
-            .unwrap();
-
+            .unwrap_err();
+        assert!(matches!(err, CellError::CellAlreadyExists { .. }));
+        // Original cell is preserved
         let cell = binding.manager().get("ext-1").unwrap();
-        assert_eq!(cell.decision_id(), "d-2");
-        assert_eq!(cell.policy_id(), "p-2");
+        assert_eq!(cell.decision_id(), "d-1");
+        assert_eq!(cell.policy_id(), "p-1");
     }
 
     // -- Enrichment: PearlTower 2026-02-26 session 7 --

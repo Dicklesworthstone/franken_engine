@@ -470,7 +470,7 @@ fn minimize_witness_already_minimal() {
 fn minimize_witness_reduction_ratio() {
     let w = make_witness("min-3", 800_000, 200_000);
     let result = minimize_witness(&w).unwrap();
-    let ratio = result.reduction_ratio_millionths(w.replay_steps as u64);
+    let ratio = result.reduction_ratio_millionths(w.replay_steps);
     assert!(ratio > 0, "should have positive reduction ratio");
     assert!(ratio <= MILLIONTHS, "ratio should not exceed 1.0");
 }

@@ -3,6 +3,8 @@
 //! Validates the end-to-end pipeline composing regime_signature_feature,
 //! entropic_policy_morphing, and signature_drift_gate.
 
+use std::collections::BTreeMap;
+
 use frankenengine_engine::entropic_policy_morphing::{MorphingOutcome, PolicyProfile};
 use frankenengine_engine::regime_detector::Regime;
 use frankenengine_engine::regime_signature_feature::{RegimeLabel, RuntimeTrace, TraceObservation};
@@ -142,9 +144,9 @@ fn test_orchestrator_construction_custom_config() {
     let config = RegimeGeometryConfig {
         record_history: false,
         gate_enforced_fallback: false,
+        max_history: 10,
         ..RegimeGeometryConfig::default()
     };
-    config.max_history = 10;
     let orch = RegimeGeometryOrchestrator::new(anchor_profile(), test_epoch(), config);
     assert_eq!(orch.current_regime(), RegimeLabel::Abstention);
 }

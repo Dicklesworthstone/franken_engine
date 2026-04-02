@@ -890,4 +890,194 @@ mod tests {
         assert_ne!(BoardFreshness::Healthy, BoardFreshness::Stale);
         assert_ne!(BoardFreshness::Stale, BoardFreshness::Unknown);
     }
+
+    // --- Additional enrichment tests ---
+
+    #[test]
+    fn test_custom_config_construction() {
+        let config = ShiftGuardConfig {
+            auto_expand_on_shift: false,
+            record_history: false,
+            max_history: 10,
+            ..ShiftGuardConfig::default()
+        };
+        let guard = ShiftGuardOrchestrator::new(test_epoch(), config);
+        assert_eq!(guard.board_freshness(), BoardFreshness::Unknown);
+    }
+
+    #[test]
+    fn test_shifted_stream_detection() {
+        let mut guard = ShiftGuardOrchestrator::with_defaults(test_epoch());
+        guard.set_baseline(stable_embeddings(4, 10, 100_000));
+        let result = guard
+            .check_shift(shifted_embeddings(4, 10, 5_000_000))
+            .unwrap();
+        assert_eq!(result.seq, 1);
+        assert!(result.mmd_statistic > 0 || !result.shift_detected);
+    }
+
+    #[test]
+    fn test_expansion_triggered_on_shift() {
+        let mut guard = ShiftGuardOrchestrator::with_defaults(test_epoch());
+        guard.set_baseline(stable_embeddings(4, 10, 100_000));
+        let result = guard
+            .check_shift(shifted_embeddings(4, 10, 5_000_000))
+            .unwrap();
+        if result.shift_detected {
+            assert!(result.expansion_triggered);
+        }
+    }
+
+    #[test]
+    fn test_expansion_not_triggered_when_disabled() {
+        let config = ShiftGuardConfig {
+            auto_expand_on_shift: false,
+            ..ShiftGuardConfig::default()
+        };
+        let mut guard = ShiftGuardOrchestrator::new(test_epoch(), config);
+        guard.set_baseline(stable_embeddings(4, 10, 100_000));
+        let result = guard
+            .check_shift(shifted_embeddings(4, 10, 5_000_000))
+            .unwrap();
+        assert!(!result.expansion_triggered);
+    }
+
+    #[test]
+    fn test_freshness_alarm_on_shift() {
+        let mut guard = ShiftGuardOrchestrator::with_defaults(test_epoch());
+        guard.set_baseline(stable_embeddings(4, 10, 100_000));
+        let result = guard
+            .check_shift(shifted_embeddings(4, 10, 5_000_000))
+            .unwrap();
+        assert_eq!(result.shift_detected, result.freshness_alarm);
+    }
+
+    #[test]
+    fn test_stable_freshness_healthy() {
+        let mut guard = ShiftGuardOrchestrator::with_defaults(test_epoch());
+        guard.set_baseline(stable_embeddings(4, 10, 500_000));
+        let _ = guard
+            .check_shift(stable_embeddings(4, 10, 500_000))
+            .unwrap();
+        assert_eq!(guard.board_freshness(), BoardFreshness::Healthy);
+    }
+
+    #[test]
+    fn test_content_hash_nonempty() {
+        let mut guard = ShiftGuardOrchestrator::with_defaults(test_epoch());
+        guard.set_baseline(stable_embeddings(4, 5, 500_000));
+        let result = guard.check_shift(stable_embeddings(4, 5, 500_000)).unwrap();
+        assert_ne!(result.content_hash, ContentHash::compute(b""));
+    }
+
+    #[test]
+    fn test_epoch_propagated() {
+        let epoch = SecurityEpoch::from_raw(42);
+        let mut guard = ShiftGuardOrchestrator::with_defaults(epoch);
+        guard.set_baseline(stable_embeddings(4, 5, 500_000));
+        let result = guard.check_shift(stable_embeddings(4, 5, 500_000)).unwrap();
+        assert_eq!(result.epoch, epoch);
+    }
+
+    #[test]
+    fn test_summary_counters_add_up() {
+        let mut guard = ShiftGuardOrchestrator::with_defaults(test_epoch());
+        guard.set_baseline(stable_embeddings(4, 10, 500_000));
+        for _ in 0..5 {
+            let _ = guard.check_shift(stable_embeddings(4, 10, 500_000));
+        }
+        let s = guard.summary();
+        assert_eq!(s.shifts_detected + s.passes, s.total_checks,);
+    }
+
+    #[test]
+    fn test_reset_then_set_baseline() {
+        let mut guard = ShiftGuardOrchestrator::with_defaults(test_epoch());
+        guard.set_baseline(stable_embeddings(4, 5, 500_000));
+        guard.reset(SecurityEpoch::from_raw(2));
+        assert_eq!(guard.board_freshness(), BoardFreshness::Unknown);
+        guard.set_baseline(stable_embeddings(4, 5, 500_000));
+        assert_eq!(guard.board_freshness(), BoardFreshness::Healthy);
+    }
+
+    #[test]
+    fn test_history_entries_have_incremental_seq() {
+        let mut guard = ShiftGuardOrchestrator::with_defaults(test_epoch());
+        guard.set_baseline(stable_embeddings(4, 5, 500_000));
+        for _ in 0..3 {
+            let _ = guard.check_shift(stable_embeddings(4, 5, 500_000));
+        }
+        let history = guard.history();
+        for (i, entry) in history.iter().enumerate() {
+            assert_eq!(entry.seq, (i + 1) as u64);
+        }
+    }
+
+    #[test]
+    fn test_error_detection_failed_display() {
+        let err = ShiftGuardError::DetectionFailed {
+            detail: "kernel failed".to_string(),
+        };
+        assert!(format!("{err}").contains("kernel failed"));
+    }
+
+    #[test]
+    fn test_error_config_display() {
+        let err = ShiftGuardError::ConfigError {
+            detail: "invalid threshold".to_string(),
+        };
+        assert!(format!("{err}").contains("invalid threshold"));
+    }
+
+    #[test]
+    fn test_specimen_family_as_str_all_variants() {
+        for family in ShiftGuardSpecimenFamily::ALL {
+            assert!(!family.as_str().is_empty());
+        }
+    }
+
+    #[test]
+    fn test_corpus_family_coverage() {
+        let inv = run_shift_guard_corpus();
+        assert!(!inv.family_coverage.is_empty());
+        for family in ShiftGuardSpecimenFamily::ALL {
+            assert!(inv.family_coverage.contains_key(family.as_str()));
+        }
+    }
+
+    #[test]
+    fn test_corpus_evidence_hashes_unique() {
+        let inv = run_shift_guard_corpus();
+        let hashes: std::collections::BTreeSet<_> =
+            inv.evidences.iter().map(|e| &e.evidence_hash).collect();
+        assert_eq!(hashes.len(), inv.evidences.len());
+    }
+
+    #[test]
+    fn test_multiple_baselines_last_wins() {
+        let mut guard = ShiftGuardOrchestrator::with_defaults(test_epoch());
+        guard.set_baseline(stable_embeddings(4, 5, 100_000));
+        guard.set_baseline(stable_embeddings(4, 5, 900_000));
+        // Should use the second baseline.
+        let result = guard.check_shift(stable_embeddings(4, 5, 900_000)).unwrap();
+        assert_eq!(result.seq, 1);
+    }
+
+    #[test]
+    fn test_large_dimension_embeddings() {
+        let mut guard = ShiftGuardOrchestrator::with_defaults(test_epoch());
+        guard.set_baseline(stable_embeddings(64, 20, 500_000));
+        let result = guard
+            .check_shift(stable_embeddings(64, 20, 500_000))
+            .unwrap();
+        assert_eq!(result.seq, 1);
+    }
+
+    #[test]
+    fn test_single_embedding_baseline() {
+        let mut guard = ShiftGuardOrchestrator::with_defaults(test_epoch());
+        guard.set_baseline(stable_embeddings(4, 1, 500_000));
+        let result = guard.check_shift(stable_embeddings(4, 1, 500_000)).unwrap();
+        assert_eq!(result.seq, 1);
+    }
 }

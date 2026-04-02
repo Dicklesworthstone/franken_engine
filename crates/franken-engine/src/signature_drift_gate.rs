@@ -73,8 +73,11 @@ impl SignatureSnapshot {
         let content_hash = {
             let mut buf = Vec::new();
             buf.extend_from_slice(DRIFT_GATE_SCHEMA_VERSION.as_bytes());
+            buf.extend_from_slice(&(signature_id.len() as u64).to_le_bytes());
             buf.extend_from_slice(signature_id.as_bytes());
+            buf.extend_from_slice(&(features.len() as u64).to_le_bytes());
             for (k, v) in &features {
+                buf.extend_from_slice(&(k.len() as u64).to_le_bytes());
                 buf.extend_from_slice(k.as_bytes());
                 buf.extend_from_slice(&v.to_le_bytes());
             }

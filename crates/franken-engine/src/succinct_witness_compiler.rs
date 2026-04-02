@@ -91,16 +91,26 @@ pub struct WitnessSchema {
 impl WitnessSchema {
     pub fn compute_id(&self) -> String {
         let mut h = Sha256::new();
-        h.update(self.name.as_bytes());
+        // Length-prefix all variable-length fields to prevent hash collisions
+        // between distinct schemas that produce the same byte concatenation.
+        let lp = |h: &mut Sha256, s: &[u8]| {
+            h.update((s.len() as u64).to_le_bytes());
+            h.update(s);
+        };
+        lp(&mut h, self.name.as_bytes());
+        h.update(self.epoch.as_u64().to_le_bytes());
+        h.update((self.payload_families.len() as u64).to_le_bytes());
         for fam in &self.payload_families {
-            h.update(fam.as_bytes());
+            lp(&mut h, fam.as_bytes());
         }
+        h.update((self.constraints.len() as u64).to_le_bytes());
         for c in &self.constraints {
-            h.update(c.dimension.to_string().as_bytes());
+            lp(&mut h, c.dimension.to_string().as_bytes());
             h.update(c.min_score_millionths.to_le_bytes());
         }
+        h.update((self.required_fields.len() as u64).to_le_bytes());
         for f in &self.required_fields {
-            h.update(f.as_bytes());
+            lp(&mut h, f.as_bytes());
         }
         format!("ws-{}", hex::encode(&h.finalize()[..16]))
     }
@@ -352,13 +362,21 @@ pub struct ProvenanceAttachment {
 impl ProvenanceAttachment {
     pub fn content_hash(&self) -> String {
         let mut h = Sha256::new();
-        h.update(self.toolchain_hash.as_bytes());
-        h.update(self.git_hash.as_bytes());
-        h.update(self.environment_hash.as_bytes());
+        let lp = |h: &mut Sha256, s: &[u8]| {
+            h.update((s.len() as u64).to_le_bytes());
+            h.update(s);
+        };
+        lp(&mut h, self.toolchain_hash.as_bytes());
+        lp(&mut h, self.git_hash.as_bytes());
+        lp(&mut h, self.environment_hash.as_bytes());
         h.update(self.collection_epoch.as_u64().to_le_bytes());
-        h.update(self.packed_at.as_bytes());
-        if let Some(ref ls) = self.legal_summary {
-            h.update(ls.as_bytes());
+        lp(&mut h, self.packed_at.as_bytes());
+        match &self.legal_summary {
+            Some(ls) => {
+                h.update([1u8]);
+                lp(&mut h, ls.as_bytes());
+            }
+            None => h.update([0u8]),
         }
         hex::encode(h.finalize())
     }

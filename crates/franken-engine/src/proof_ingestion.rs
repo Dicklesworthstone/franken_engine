@@ -17,7 +17,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
-use crate::hash_tiers::ContentHash;
+use crate::hash_tiers::{AuthenticityHash, ContentHash};
 use crate::proof_schema::OptimizationClass;
 use crate::security_epoch::SecurityEpoch;
 
@@ -462,6 +462,8 @@ pub struct IngestionConfig {
     /// Active policy ID that proofs must match.
     pub active_policy_id: String,
     /// Signing key for receipts and signatures.
+    /// SECURITY: excluded from serialization to prevent key leakage.
+    #[serde(skip, default)]
     pub signing_key: [u8; 32],
     /// Churn dampening threshold: max invalidations per window.
     pub churn_threshold: u64,
@@ -985,12 +987,12 @@ impl ProofIngestionEngine {
     // Helpers
     // -----------------------------------------------------------------------
 
-    /// Simplified HMAC-like signature using signing key.
+    /// Keyed hash signature using the proper AuthenticityHash construction
+    /// (avoids length-extension vulnerability of naive H(key||msg)).
     fn compute_signature(&self, data: &[u8]) -> Vec<u8> {
-        let mut input = Vec::with_capacity(32 + data.len());
-        input.extend_from_slice(&self.config.signing_key);
-        input.extend_from_slice(data);
-        ContentHash::compute(&input).as_bytes().to_vec()
+        AuthenticityHash::compute_keyed(&self.config.signing_key, data)
+            .as_bytes()
+            .to_vec()
     }
 
     fn specialization_receipt_preimage(

@@ -247,16 +247,29 @@ impl FlatteningOccurrence {
         classification: FlatteningClassification,
     ) -> ContentHash {
         let mut buf = Vec::new();
+        buf.extend_from_slice(&(id.len() as u64).to_le_bytes());
         buf.extend_from_slice(id.as_bytes());
-        buf.extend_from_slice(format!("{domain}").as_bytes());
+        let domain_str = format!("{domain}");
+        buf.extend_from_slice(&(domain_str.len() as u64).to_le_bytes());
+        buf.extend_from_slice(domain_str.as_bytes());
+        buf.extend_from_slice(&(boundary.source_module.len() as u64).to_le_bytes());
         buf.extend_from_slice(boundary.source_module.as_bytes());
+        buf.extend_from_slice(&(boundary.target_module.len() as u64).to_le_bytes());
         buf.extend_from_slice(boundary.target_module.as_bytes());
+        buf.extend_from_slice(&(boundary.api_surface.len() as u64).to_le_bytes());
         buf.extend_from_slice(boundary.api_surface.as_bytes());
         if let Some(line) = boundary.line_hint {
+            buf.push(1); // has_line marker
             buf.extend_from_slice(&line.to_le_bytes());
+        } else {
+            buf.push(0); // no_line marker
         }
-        buf.extend_from_slice(format!("{translation_kind}").as_bytes());
-        buf.extend_from_slice(format!("{classification}").as_bytes());
+        let tk_str = format!("{translation_kind}");
+        buf.extend_from_slice(&(tk_str.len() as u64).to_le_bytes());
+        buf.extend_from_slice(tk_str.as_bytes());
+        let cls_str = format!("{classification}");
+        buf.extend_from_slice(&(cls_str.len() as u64).to_le_bytes());
+        buf.extend_from_slice(cls_str.as_bytes());
         ContentHash::compute(&buf)
     }
 

@@ -452,7 +452,9 @@ impl RegimeGeometryOrchestrator {
             let mut buf = Vec::new();
             buf.extend_from_slice(REGIME_GEOMETRY_SCHEMA_VERSION.as_bytes());
             buf.extend_from_slice(&seq.to_le_bytes());
+            buf.extend_from_slice(&(trace.trace_id.len() as u64).to_le_bytes());
             buf.extend_from_slice(trace.trace_id.as_bytes());
+            buf.extend_from_slice(&(signature.signature_hash.len() as u64).to_le_bytes());
             buf.extend_from_slice(signature.signature_hash.as_bytes());
             ContentHash::compute(&buf)
         };
@@ -664,9 +666,14 @@ impl RegimeGeometryOrchestrator {
         // Rehash topology.
         let mut buf = Vec::new();
         buf.extend_from_slice(REGIME_GEOMETRY_SCHEMA_VERSION.as_bytes());
+        buf.extend_from_slice(&(self.topology.corridors.len() as u64).to_le_bytes());
         for c in &self.topology.corridors {
-            buf.extend_from_slice(c.from.as_str().as_bytes());
-            buf.extend_from_slice(c.to.as_str().as_bytes());
+            let from_str = c.from.as_str();
+            buf.extend_from_slice(&(from_str.len() as u64).to_le_bytes());
+            buf.extend_from_slice(from_str.as_bytes());
+            let to_str = c.to.as_str();
+            buf.extend_from_slice(&(to_str.len() as u64).to_le_bytes());
+            buf.extend_from_slice(to_str.as_bytes());
             buf.extend_from_slice(&c.observation_count.to_le_bytes());
         }
         self.topology.content_hash = ContentHash::compute(&buf);

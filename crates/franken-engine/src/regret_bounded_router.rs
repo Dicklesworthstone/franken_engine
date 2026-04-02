@@ -261,11 +261,13 @@ impl Exp3State {
         let probs = self.arm_probabilities();
         let p_arm = probs[arm].max(1); // avoid division by zero
 
-        // Importance-weighted reward: r̂ = r / p
-        let importance_weighted = reward_millionths * MILLION / p_arm;
+        // Importance-weighted reward: r̂ = r / p (widen to i128 to avoid overflow)
+        let importance_weighted =
+            (reward_millionths as i128 * MILLION as i128 / p_arm as i128) as i64;
 
-        // Update log-weight: log_w += η · r̂ / MILLION
-        let delta = self.eta_millionths * importance_weighted / MILLION;
+        // Update log-weight: log_w += η · r̂ / MILLION (widen to avoid overflow)
+        let delta =
+            (self.eta_millionths as i128 * importance_weighted as i128 / MILLION as i128) as i64;
         self.log_weights_millionths[arm] += delta;
 
         self.rounds += 1;

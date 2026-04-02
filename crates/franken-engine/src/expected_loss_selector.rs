@@ -339,9 +339,14 @@ impl LossMatrix {
                 .cmp(&b.action.to_string())
                 .then_with(|| a.state.to_string().cmp(&b.state.to_string()))
         });
+        buf.extend_from_slice(&(sorted.len() as u64).to_le_bytes());
         for entry in &sorted {
-            buf.extend_from_slice(entry.action.to_string().as_bytes());
-            buf.extend_from_slice(entry.state.to_string().as_bytes());
+            let action_bytes = entry.action.to_string().into_bytes();
+            buf.extend_from_slice(&(action_bytes.len() as u64).to_le_bytes());
+            buf.extend_from_slice(&action_bytes);
+            let state_bytes = entry.state.to_string().into_bytes();
+            buf.extend_from_slice(&(state_bytes.len() as u64).to_le_bytes());
+            buf.extend_from_slice(&state_bytes);
             buf.extend_from_slice(&entry.loss_millionths.to_le_bytes());
         }
         ContentHash::compute(&buf)

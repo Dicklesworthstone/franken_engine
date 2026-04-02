@@ -284,8 +284,9 @@ impl SubstrateOrchestrator {
             let mut buf = Vec::new();
             buf.extend_from_slice(CACHE_OBLIVIOUS_SCHEMA_VERSION.as_bytes());
             buf.extend_from_slice(&seq.to_le_bytes());
-            buf.extend_from_slice(format!("{kind:?}").as_bytes());
-            buf.extend_from_slice(format!("{active:?}").as_bytes());
+            // Use stable byte discriminants instead of Debug format for hash stability
+            buf.extend_from_slice(&(kind as u8).to_le_bytes());
+            buf.extend_from_slice(&(active as u8).to_le_bytes());
             ContentHash::compute(&buf)
         };
 

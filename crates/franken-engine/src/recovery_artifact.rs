@@ -395,11 +395,17 @@ impl ArtifactBuilder {
             )
             .as_bytes(),
         );
+        id_buf.extend_from_slice(&(self.proof_elements.len() as u64).to_le_bytes());
         for proof in &self.proof_elements {
-            id_buf.extend_from_slice(format!("{proof}").as_bytes());
+            let proof_bytes = format!("{proof}").into_bytes();
+            id_buf.extend_from_slice(&(proof_bytes.len() as u64).to_le_bytes());
+            id_buf.extend_from_slice(&proof_bytes);
         }
+        id_buf.extend_from_slice(&(self.operator_actions.len() as u64).to_le_bytes());
         for action in &self.operator_actions {
+            id_buf.extend_from_slice(&(action.operator.len() as u64).to_le_bytes());
             id_buf.extend_from_slice(action.operator.as_bytes());
+            id_buf.extend_from_slice(&(action.action.len() as u64).to_le_bytes());
             id_buf.extend_from_slice(action.action.as_bytes());
             id_buf.extend_from_slice(action.authorization_hash.as_bytes());
             id_buf.extend_from_slice(&action.timestamp_ticks.to_le_bytes());
@@ -497,11 +503,17 @@ impl RecoveryArtifactStore {
             )
             .as_bytes(),
         );
+        id_buf.extend_from_slice(&(artifact.proof_bundle.len() as u64).to_le_bytes());
         for proof in &artifact.proof_bundle {
-            id_buf.extend_from_slice(format!("{proof}").as_bytes());
+            let proof_bytes = format!("{proof}").into_bytes();
+            id_buf.extend_from_slice(&(proof_bytes.len() as u64).to_le_bytes());
+            id_buf.extend_from_slice(&proof_bytes);
         }
+        id_buf.extend_from_slice(&(artifact.operator_actions.len() as u64).to_le_bytes());
         for action in &artifact.operator_actions {
+            id_buf.extend_from_slice(&(action.operator.len() as u64).to_le_bytes());
             id_buf.extend_from_slice(action.operator.as_bytes());
+            id_buf.extend_from_slice(&(action.action.len() as u64).to_le_bytes());
             id_buf.extend_from_slice(action.action.as_bytes());
             id_buf.extend_from_slice(action.authorization_hash.as_bytes());
             id_buf.extend_from_slice(&action.timestamp_ticks.to_le_bytes());

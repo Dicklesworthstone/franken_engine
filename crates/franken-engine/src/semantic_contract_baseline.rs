@@ -346,8 +346,11 @@ impl HookSemanticContract {
                     .as_bytes(),
             );
         }
+        data.extend_from_slice(&(self.ordering_constraints.len() as u64).to_le_bytes());
         for constraint in &self.ordering_constraints {
+            data.extend_from_slice(&(constraint.before.len() as u64).to_le_bytes());
             data.extend_from_slice(constraint.before.as_bytes());
+            data.extend_from_slice(&(constraint.after.len() as u64).to_le_bytes());
             data.extend_from_slice(constraint.after.as_bytes());
             data.push(u8::from(constraint.strict));
         }
@@ -441,7 +444,9 @@ impl EffectSemanticContract {
                 .expect("effect timing should serialize for deterministic hashing")
                 .as_bytes(),
         );
+        data.extend_from_slice(&(self.capability_requirements.len() as u64).to_le_bytes());
         for cap in &self.capability_requirements {
+            data.extend_from_slice(&(cap.len() as u64).to_le_bytes());
             data.extend_from_slice(cap.as_bytes());
         }
         data.extend_from_slice(

@@ -24,9 +24,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::dark_matter_saturation_gate::{
-    BoardState, DarkMatterEstimate, DarkMatterRegion, DarkMatterRegionKind, SaturationConfig,
-};
+use crate::dark_matter_saturation_gate::{BoardState, DarkMatterRegion, SaturationConfig};
 use crate::hash_tiers::ContentHash;
 use crate::novelty_scoring_contract::{CandidateKind, NoveltyCandidate, ScoringConfig};
 use crate::security_epoch::SecurityEpoch;
@@ -297,11 +295,11 @@ impl DarkMatterEngineOrchestrator {
 
     /// Get the engine summary.
     pub fn summary(&self) -> DarkMatterEngineSummary {
-        let coverage = if self.total_candidates > 0 {
-            self.total_promoted.saturating_mul(MILLION) / self.total_candidates
-        } else {
-            0
-        };
+        let coverage = self
+            .total_promoted
+            .saturating_mul(MILLION)
+            .checked_div(self.total_candidates)
+            .unwrap_or(0);
         let hash_input = format!(
             "summary:{}:{}:{}:{}",
             self.cycle_count, self.total_candidates, self.total_promoted, self.total_rejected,
@@ -668,6 +666,7 @@ pub fn run_dark_matter_corpus() -> DarkMatterEvidenceInventory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dark_matter_saturation_gate::DarkMatterRegionKind;
 
     fn test_epoch() -> SecurityEpoch {
         SecurityEpoch::from_raw(1)

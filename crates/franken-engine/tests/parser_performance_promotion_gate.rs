@@ -545,10 +545,24 @@ fn parser_performance_gate_script_contains_fail_closed_rch_markers() {
         "rch_last_remote_exit_code",
         "rch_has_recoverable_artifact_timeout",
         "rch_reject_artifact_retrieval_failure",
+        "termination_signal=\"\"",
+        "current_step_pid=\"\"",
+        "current_step_command=\"\"",
+        "write_incomplete_bundle_snapshot",
+        "(incomplete-or-interrupted)",
+        ": >\"$log_path\"",
+        "set_failed_command_for_exit",
+        "trap finalize_on_exit EXIT",
+        "trap on_interrupt INT",
+        "trap on_terminate TERM",
+        "if wait \"$current_step_pid\"; then",
+        "pkill -TERM -P \"$current_step_pid\"",
+        "(signal-${termination_signal})",
         "missing-remote-exit-marker",
         "(rch-exit=${run_rc})",
         "(timeout-${rch_timeout_seconds}s)",
         "(remote-exit=${remote_exit_code})",
+        "parser_frontier_json_escape \"${replay_command}\"",
         "running locally",
         "RCH-E326",
         "rsync error: .*code 23",
@@ -676,6 +690,12 @@ fn parser_performance_doc_uses_repo_local_target_dir_example_and_step_logs() {
         "doc must describe missing remote-exit markers as fail-closed"
     );
     assert!(
+        doc.contains("prewrites a fail-closed")
+            && doc.contains("in-flight command")
+            && doc.contains("step-log-only partial output"),
+        "doc must describe provisional triad preservation for interrupted runs"
+    );
+    assert!(
         doc.contains("`(rch-exit=<code>)`")
             && doc.contains("`(remote-exit=<code>)`")
             && doc.contains("`(timeout-<N>s)`"),
@@ -733,6 +753,12 @@ fn readme_references_performance_promotion_gate_and_replay() {
     assert!(
         readme.contains("step_logs/step_*.log"),
         "README missing parser performance step-log artifact guidance"
+    );
+    assert!(
+        readme.contains("in-flight command")
+            && readme.contains("step-log-only")
+            && readme.contains("step_000.log"),
+        "README missing interrupted-run manifest guidance"
     );
     assert!(
         readme.contains("latest complete artifact bundle"),

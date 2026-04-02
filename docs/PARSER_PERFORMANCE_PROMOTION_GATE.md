@@ -140,6 +140,10 @@ Fail-closed `rch` policy:
 - artifact retrieval failures (`Artifact retrieval failed`, rsync code-23
   retrieval errors) are hard failures.
 - missing remote-exit markers are hard failures.
+- once a remote step begins, the runner prewrites a fail-closed
+  `run_manifest.json`, `events.jsonl`, and `commands.txt` bundle anchored to
+  the in-flight command, so interrupted runs do not degrade into
+  step-log-only partial output.
 - only remote `exit=0` paired with explicit artifact-timeout signatures is
   treated as recoverable (manifest remains fail-closed on any other ambiguity).
 - non-recoverable transport, timeout, or cancellation paths surface directly in
@@ -178,6 +182,10 @@ Each run emits:
 If the gate fails before any remote step starts, the manifest still emits a
 fail-closed operator verification command that explains no step logs were
 captured, rather than pointing at a nonexistent `step_000.log`.
+If an operator aborts a hanging run or the shell terminates mid-step, the
+runner still leaves the manifest triad plus `step_000.log`, with
+`failed_command` anchored to the in-flight remote command rather than leaving a
+step-log-only partial bundle.
 
 Manifest includes gate mode, deterministic replay command, benchmark protocol
 hash, blocked pair inventory, deterministic environment fingerprint fields,

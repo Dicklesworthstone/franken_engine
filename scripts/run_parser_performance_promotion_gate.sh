@@ -137,6 +137,9 @@ failed_command=""
 manifest_written=false
 step_log_index=0
 fixture_status="unchecked"
+termination_signal=""
+current_step_pid=""
+current_step_command=""
 
 run_step() {
   local command_text="$1"
@@ -144,22 +147,31 @@ run_step() {
   shift
 
   commands_run+=("$command_text")
+  current_step_command="$command_text"
   echo "==> $command_text"
   log_path="${step_logs_dir}/step_$(printf '%03d' "${step_log_index}").log"
   step_log_index=$((step_log_index + 1))
+  : >"$log_path"
+  write_incomplete_bundle_snapshot "$command_text"
 
-  if run_rch "$@" > >(tee "$log_path") 2>&1; then
+  run_rch "$@" > >(tee "$log_path") 2>&1 &
+  current_step_pid="$!"
+
+  if wait "$current_step_pid"; then
     run_rc=0
   else
     run_rc=$?
   fi
+  current_step_pid=""
 
   if ! rch_reject_local_fallback "$log_path"; then
+    current_step_command=""
     failed_command="${command_text} (rch-local-fallback-detected)"
     return 1
   fi
 
   if ! rch_reject_artifact_retrieval_failure "$log_path"; then
+    current_step_command=""
     failed_command="${command_text} (rch-artifact-retrieval-failed)"
     return 1
   fi
@@ -170,26 +182,33 @@ run_step() {
     if [[ "$remote_exit_code" == "0" ]] && rch_has_recoverable_artifact_timeout "$log_path"; then
       echo "==> recovered: remote execution succeeded; artifact retrieval timed out" | tee -a "$log_path"
     elif [[ "$run_rc" -eq 124 ]]; then
+      current_step_command=""
       failed_command="${command_text} (timeout-${rch_timeout_seconds}s)"
       return 1
     elif [[ -n "$remote_exit_code" ]]; then
+      current_step_command=""
       failed_command="${command_text} (remote-exit=${remote_exit_code})"
       return 1
     else
+      current_step_command=""
       failed_command="${command_text} (rch-exit=${run_rc})"
       return 1
     fi
   fi
 
   if [[ -z "$remote_exit_code" ]]; then
+    current_step_command=""
     failed_command="${command_text} (missing-remote-exit-marker)"
     return 1
   fi
 
   if [[ "$remote_exit_code" != "0" ]]; then
+    current_step_command=""
     failed_command="${command_text} (remote-exit=${remote_exit_code})"
     return 1
   fi
+
+  current_step_command=""
 }
 
 run_mode() {
@@ -258,6 +277,7 @@ operator_verification_step_log_command() {
 
 write_manifest() {
   local exit_code="${1:-0}"
+  local quiet="${2:-false}"
   local outcome error_code_json git_commit dirty_worktree idx comma
   local blocked_pairs failing_workload_ids quantile_inventory corpus_inventory replay_pointers
   local protocol_version protocol_hash operator_step_log_command
@@ -294,7 +314,7 @@ write_manifest() {
   printf '%s\n' "${commands_run[@]}" >"$commands_path"
 
   {
-    echo "{\"schema_version\":\"franken-engine.parser-log-event.v1\",\"trace_id\":\"${trace_id}\",\"decision_id\":\"${decision_id}\",\"policy_id\":\"${policy_id}\",\"component\":\"${component}\",\"event\":\"performance_gate_completed\",\"outcome\":\"${outcome}\",\"error_code\":${error_code_json},\"blocked_pairs\":${blocked_pairs},\"failing_workload_ids\":${failing_workload_ids},\"corpus_inventory\":${corpus_inventory},\"quantile_inventory\":${quantile_inventory},\"replay_pointers\":${replay_pointers},\"protocol_version\":\"${protocol_version}\",\"protocol_hash\":\"${protocol_hash}\",\"replay_command\":\"${replay_command}\"}"
+    echo "{\"schema_version\":\"franken-engine.parser-log-event.v1\",\"trace_id\":\"${trace_id}\",\"decision_id\":\"${decision_id}\",\"policy_id\":\"${policy_id}\",\"component\":\"${component}\",\"event\":\"performance_gate_completed\",\"outcome\":\"${outcome}\",\"error_code\":${error_code_json},\"blocked_pairs\":${blocked_pairs},\"failing_workload_ids\":${failing_workload_ids},\"corpus_inventory\":${corpus_inventory},\"quantile_inventory\":${quantile_inventory},\"replay_pointers\":${replay_pointers},\"protocol_version\":\"$(parser_frontier_json_escape "${protocol_version}")\",\"protocol_hash\":\"$(parser_frontier_json_escape "${protocol_hash}")\",\"replay_command\":\"$(parser_frontier_json_escape "${replay_command}")\"}"
   } >"$events_path"
 
   {
@@ -352,14 +372,90 @@ write_manifest() {
     echo "    \"cat ${events_path}\","
     echo "    \"cat ${commands_path}\","
     echo "    \"$(parser_frontier_json_escape "${operator_step_log_command}")\","
-    echo "    \"${replay_command}\""
+    echo "    \"$(parser_frontier_json_escape "${replay_command}")\""
     echo "  ]"
     echo "}"
   } >"$manifest_path"
 
-  echo "parser performance promotion gate manifest: ${manifest_path}"
-  echo "parser performance promotion gate events: ${events_path}"
+  if [[ "$quiet" != true ]]; then
+    echo "parser performance promotion gate manifest: ${manifest_path}"
+    echo "parser performance promotion gate events: ${events_path}"
+  fi
 }
+
+write_incomplete_bundle_snapshot() {
+  local snapshot_failed_command="$1"
+  local previous_failed_command="$failed_command"
+
+  failed_command="${snapshot_failed_command} (incomplete-or-interrupted)"
+  manifest_written=false
+  write_manifest 1 true
+  manifest_written=false
+  failed_command="$previous_failed_command"
+}
+
+set_failed_command_for_exit() {
+  local exit_code="${1:-0}"
+  local last_command_index
+
+  if [[ -n "$failed_command" ]]; then
+    return
+  fi
+
+  if [[ -n "$termination_signal" ]]; then
+    if [[ -n "$current_step_command" ]]; then
+      failed_command="${current_step_command} (signal-${termination_signal})"
+    elif (( ${#commands_run[@]} > 0 )); then
+      last_command_index=$(( ${#commands_run[@]} - 1 ))
+      failed_command="${commands_run[$last_command_index]} (signal-${termination_signal})"
+    else
+      failed_command="parser performance promotion gate interrupted before remote step start (signal-${termination_signal})"
+    fi
+    return
+  fi
+
+  if [[ "$exit_code" -ne 0 ]]; then
+    failed_command="parser performance promotion gate exited before manifest write (shell-exit=${exit_code})"
+  fi
+}
+
+finalize_on_exit() {
+  local exit_code=$?
+  set_failed_command_for_exit "$exit_code"
+  write_manifest "$exit_code"
+}
+
+on_interrupt() {
+  termination_signal="SIGINT"
+  if [[ -n "$current_step_pid" ]]; then
+    kill "$current_step_pid" 2>/dev/null || true
+    if command -v pkill >/dev/null 2>&1; then
+      pkill -TERM -P "$current_step_pid" 2>/dev/null || true
+    fi
+    wait "$current_step_pid" 2>/dev/null || true
+  fi
+  set_failed_command_for_exit 130
+  write_manifest 130
+  exit 130
+}
+
+on_terminate() {
+  termination_signal="SIGTERM"
+  if [[ -n "$current_step_pid" ]]; then
+    kill "$current_step_pid" 2>/dev/null || true
+    if command -v pkill >/dev/null 2>&1; then
+      pkill -TERM -P "$current_step_pid" 2>/dev/null || true
+    fi
+    wait "$current_step_pid" 2>/dev/null || true
+  fi
+  set_failed_command_for_exit 143
+  write_manifest 143
+  exit 143
+}
+
+trap finalize_on_exit EXIT
+trap on_interrupt INT
+trap on_terminate TERM
 
 main_exit=0
 if require_fixture && run_mode; then

@@ -822,6 +822,10 @@ workers are not forced through `/tmp`-backed incremental state.
 The replay wrapper prints the latest complete artifact bundle and warns when it
 has to skip a newer incomplete run directory, so operators do not accidentally
 triage against partial output.
+If an operator aborts a hanging run or the shell terminates mid-step, the
+runner still leaves `run_manifest.json`, `events.jsonl`, `commands.txt`, and
+`step_000.log` anchored to the in-flight command instead of a step-log-only
+partial bundle.
 
 Contract and vectors:
 

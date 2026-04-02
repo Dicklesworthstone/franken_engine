@@ -1,0 +1,67 @@
+{
+  "schema_version": "franken-engine.external-replication-catalog.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-2501.2",
+  "generated_by": "bd-2501.2",
+  "generated_at_utc": "2026-04-02T04:15:00Z",
+  "minimum_claim_count": 2,
+  "claims": [
+    {
+      "claim_id": "benchmark_peer_claim_bundle",
+      "title": "Extension-Heavy Benchmark Peer Claim Bundle",
+      "status_bead_id": "bd-19l0",
+      "supporting_beads": [
+        "bd-1ze",
+        "bd-3gsv"
+      ],
+      "primary_doc": "docs/EXTENSION_HEAVY_BENCHMARK_SUITE_V1.md",
+      "verifier_doc": "docs/THIRD_PARTY_VERIFIER_TOOLKIT.md",
+      "artifact_root": "artifacts/benchmarks/<timestamp>/",
+      "verification_commands": [
+        "./scripts/run_third_party_verifier_suite.sh ci",
+        "franken-verify benchmark reproduce --bundle artifacts/<bundle_id> --summary",
+        "franken-verify benchmark verify --bundle artifacts/<bundle_id> --summary"
+      ],
+      "claim_summary": "Node/Bun comparative benchmark claims can be rerun by independent parties through a neutral verifier surface.",
+      "replication_gap": "This lane remains non-replicated until an external verifier reruns the published bundle and records an equivalent verdict."
+    },
+    {
+      "claim_id": "security_enforcement_verifier_bundle",
+      "title": "Security Enforcement Independent Verification Bundle",
+      "status_bead_id": "bd-1lsy.11.9",
+      "supporting_beads": [
+        "bd-3gsv",
+        "bd-3rd"
+      ],
+      "primary_doc": "docs/RGC_SECURITY_ENFORCEMENT_VERIFICATION_PACK_V1.md",
+      "verifier_doc": "docs/THIRD_PARTY_VERIFIER_TOOLKIT.md",
+      "artifact_root": "artifacts/rgc_security_enforcement_verification_pack/<timestamp>/",
+      "verification_commands": [
+        "./scripts/run_rgc_security_enforcement_verification_pack.sh ci",
+        "./scripts/run_third_party_verifier_suite.sh ci",
+        "franken-verify containment --input artifacts/<bundle_id>/containment_verification_input.json --summary"
+      ],
+      "claim_summary": "Capability, IFC, and containment claims can be rerun by third parties from deterministic verifier-facing artifacts.",
+      "replication_gap": "This lane remains non-replicated until an external verifier reruns the adversarial bundle and publishes equivalent containment verdicts."
+    },
+    {
+      "claim_id": "runtime_replay_verifier_bundle",
+      "title": "Runtime Replay and Receipt Verification Bundle",
+      "status_bead_id": "bd-1lsy.11.7",
+      "supporting_beads": [
+        "bd-3gsv",
+        "bd-3ab3"
+      ],
+      "primary_doc": "docs/RGC_RUNTIME_SEMANTICS_VERIFICATION_PACK_V1.md",
+      "verifier_doc": "docs/THIRD_PARTY_VERIFIER_TOOLKIT.md",
+      "artifact_root": "artifacts/rgc_runtime_semantics_verification_pack/<timestamp>/",
+      "verification_commands": [
+        "./scripts/run_rgc_runtime_semantics_verification_pack.sh ci",
+        "./scripts/run_third_party_verifier_suite.sh ci",
+        "franken-verify replay --input artifacts/<bundle_id>/replay_verification_input.json --summary"
+      ],
+      "claim_summary": "Deterministic runtime and replay claims can be independently rerun from receipt-linked bundles without project-private context.",
+      "replication_gap": "This lane remains non-replicated until a third party reruns the replay bundle and confirms the published verdicts."
+    }
+  ]
+}

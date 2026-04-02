@@ -1,0 +1,64 @@
+{
+  "schema_version": "franken-engine.open-tool-adoption-catalog.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-2501.3",
+  "generated_by": "bd-2501.3",
+  "generated_at_utc": "2026-04-02T04:15:00Z",
+  "minimum_tool_count": 1,
+  "tools": [
+    {
+      "tool_id": "third_party_verifier_toolkit",
+      "title": "Third-Party Verifier Toolkit",
+      "release_status_bead_id": "bd-3gsv",
+      "supporting_beads": [
+        "bd-3ab3"
+      ],
+      "primary_doc": "docs/THIRD_PARTY_VERIFIER_TOOLKIT.md",
+      "artifact_root": "artifacts/third_party_verifier/<timestamp>/",
+      "adoption_evidence_doc": "docs/THIRD_PARTY_VERIFIER_TOOLKIT_ADOPTION_EVIDENCE_V1.md",
+      "verification_commands": [
+        "./scripts/run_third_party_verifier_suite.sh ci",
+        "./scripts/e2e/third_party_verifier_replay.sh ci",
+        "rch exec -- cargo build -p frankenengine-engine --bin franken-verify"
+      ],
+      "external_user_value": "External operators can verify benchmark, replay, containment, and attestation claims without running the FrankenEngine control plane.",
+      "adoption_gap": "This tool lane remains non-adopted until independent outside-project users are documented in the linked adoption-evidence surface."
+    },
+    {
+      "tool_id": "extension_heavy_benchmark_suite",
+      "title": "Extension-Heavy Benchmark Suite v1.0",
+      "release_status_bead_id": "bd-19l0",
+      "supporting_beads": [
+        "bd-1ze"
+      ],
+      "primary_doc": "docs/EXTENSION_HEAVY_BENCHMARK_SUITE_V1.md",
+      "artifact_root": "artifacts/benchmarks/<timestamp>/",
+      "adoption_evidence_doc": "docs/EXTENSION_HEAVY_BENCHMARK_ADOPTION_EVIDENCE_V1.md",
+      "verification_commands": [
+        "frankenctl benchmark verify --bundle artifacts/<bundle_id> --output artifacts/<bundle_id>/verify_report.json",
+        "franken-verify benchmark verify --bundle artifacts/<bundle_id> --summary",
+        "franken-verify benchmark reproduce --bundle artifacts/<bundle_id> --summary"
+      ],
+      "external_user_value": "Other runtime teams can use the benchmark suite as a neutral scoring and publication surface.",
+      "adoption_gap": "This tool lane remains non-adopted until outside-project users are documented through explicit benchmark-adoption evidence."
+    },
+    {
+      "tool_id": "parser_third_party_rerun_kit",
+      "title": "Parser Third-Party Rerun Kit",
+      "release_status_bead_id": "bd-2mds.1.7.4",
+      "supporting_beads": [
+        "bd-2mds.1.7.3"
+      ],
+      "primary_doc": "docs/PARSER_THIRD_PARTY_RERUN_KIT.md",
+      "artifact_root": "artifacts/parser_third_party_rerun_kit/<timestamp>/",
+      "adoption_evidence_doc": "docs/PARSER_THIRD_PARTY_RERUN_KIT_ADOPTION_EVIDENCE_V1.md",
+      "verification_commands": [
+        "./scripts/run_parser_third_party_rerun_kit.sh ci",
+        "./scripts/e2e/parser_third_party_rerun_kit_replay.sh",
+        "rch exec -- env RUSTUP_TOOLCHAIN=nightly cargo test -p frankenengine-engine --test parser_third_party_rerun_kit"
+      ],
+      "external_user_value": "External operators can rerun parser reproducibility evidence without insider knowledge.",
+      "adoption_gap": "This tool lane remains non-adopted until outside-project users and their rerun outcomes are documented explicitly."
+    }
+  ]
+}

@@ -7,7 +7,13 @@
   "generated_at_utc": "2026-03-21T21:26:00Z",
   "source_inputs": [
     "PLAN_TO_CREATE_FRANKEN_ENGINE.md",
-    "docs/SCIENTIFIC_CONTRIBUTION_TARGETS_V1.md"
+    "docs/SCIENTIFIC_CONTRIBUTION_TARGETS_V1.md",
+    "docs/SCIENTIFIC_REPORT_CATALOG_V1.md",
+    "docs/scientific_report_catalog_v1.json",
+    "docs/EXTERNAL_REPLICATION_CATALOG_V1.md",
+    "docs/external_replication_catalog_v1.json",
+    "docs/OPEN_TOOL_ADOPTION_CATALOG_V1.md",
+    "docs/open_tool_adoption_catalog_v1.json"
   ],
   "required_contributions": [
     {
@@ -134,9 +140,18 @@
     "contribution_status_report.json",
     "output_contract_status_report.json",
     "dependency_status_report.json",
+    "technical_report_status_report.json",
+    "external_replication_status_report.json",
+    "open_tool_adoption_status_report.json",
     "scientific_contribution_summary.md",
     "scientific_contribution_targets_v1.json",
     "scientific_contribution_targets_v1.md",
+    "scientific_report_catalog_v1.json",
+    "SCIENTIFIC_REPORT_CATALOG_V1.md",
+    "external_replication_catalog_v1.json",
+    "EXTERNAL_REPLICATION_CATALOG_V1.md",
+    "open_tool_adoption_catalog_v1.json",
+    "OPEN_TOOL_ADOPTION_CATALOG_V1.md",
     "step_logs/step_*.log"
   ],
   "required_readme_fragments": [
@@ -147,6 +162,12 @@
     "bd-2501.1",
     "bd-2501.2",
     "bd-2501.3",
+    "docs/SCIENTIFIC_REPORT_CATALOG_V1.md",
+    "docs/EXTERNAL_REPLICATION_CATALOG_V1.md",
+    "docs/OPEN_TOOL_ADOPTION_CATALOG_V1.md",
+    "technical_report_status_report.json",
+    "external_replication_status_report.json",
+    "open_tool_adoption_status_report.json",
     "artifacts/scientific_contribution_targets/<timestamp>/trace_ids.json",
     "target_rch_scientific_contribution_targets_verify"
   ],
@@ -158,6 +179,9 @@
   },
   "operator_verification": [
     "jq empty docs/scientific_contribution_targets_v1.json",
+    "jq empty docs/scientific_report_catalog_v1.json",
+    "jq empty docs/external_replication_catalog_v1.json",
+    "jq empty docs/open_tool_adoption_catalog_v1.json",
     "./scripts/run_scientific_contribution_targets.sh bundle",
     "./scripts/e2e/scientific_contribution_targets_replay.sh show",
     "rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=$PWD/target_rch_scientific_contribution_targets_verify CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine --test scientific_contribution_targets"

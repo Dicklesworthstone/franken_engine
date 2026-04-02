@@ -890,6 +890,9 @@ accidentally triage against partial output. It also states whether the printed
 bundle came from the current failed invocation or from an older complete
 fallback directory, so operators do not mistake stale evidence for a failed
 rerun.
+In `drill` mode, the runbook lane reuses the latest complete dependency bundles
+from the parser error-recovery and user-impact drill surfaces instead of
+rerunning those heavy lanes from scratch.
 
 To inspect a preserved complete bundle without rerunning the lane, point the
 wrapper at an exact run directory:
@@ -1651,7 +1654,13 @@ evidence dependencies remain closed.
 Contract and vectors:
 
 - [`docs/SCIENTIFIC_CONTRIBUTION_TARGETS_V1.md`](./docs/SCIENTIFIC_CONTRIBUTION_TARGETS_V1.md)
+- [`docs/SCIENTIFIC_REPORT_CATALOG_V1.md`](./docs/SCIENTIFIC_REPORT_CATALOG_V1.md)
+- [`docs/EXTERNAL_REPLICATION_CATALOG_V1.md`](./docs/EXTERNAL_REPLICATION_CATALOG_V1.md)
+- [`docs/OPEN_TOOL_ADOPTION_CATALOG_V1.md`](./docs/OPEN_TOOL_ADOPTION_CATALOG_V1.md)
 - `docs/scientific_contribution_targets_v1.json`
+- `docs/scientific_report_catalog_v1.json`
+- `docs/external_replication_catalog_v1.json`
+- `docs/open_tool_adoption_catalog_v1.json`
 - `scripts/run_scientific_contribution_targets.sh`
 - `scripts/e2e/scientific_contribution_targets_replay.sh`
 - `crates/franken-engine/tests/scientific_contribution_targets.rs`
@@ -1665,15 +1674,27 @@ Artifacts are written under:
 - `artifacts/scientific_contribution_targets/<timestamp>/contribution_status_report.json`
 - `artifacts/scientific_contribution_targets/<timestamp>/output_contract_status_report.json`
 - `artifacts/scientific_contribution_targets/<timestamp>/dependency_status_report.json`
+- `artifacts/scientific_contribution_targets/<timestamp>/technical_report_status_report.json`
+- `artifacts/scientific_contribution_targets/<timestamp>/external_replication_status_report.json`
+- `artifacts/scientific_contribution_targets/<timestamp>/open_tool_adoption_status_report.json`
 - `artifacts/scientific_contribution_targets/<timestamp>/scientific_contribution_summary.md`
 - `artifacts/scientific_contribution_targets/<timestamp>/scientific_contribution_targets_v1.json`
 - `artifacts/scientific_contribution_targets/<timestamp>/scientific_contribution_targets_v1.md`
+- `artifacts/scientific_contribution_targets/<timestamp>/scientific_report_catalog_v1.json`
+- `artifacts/scientific_contribution_targets/<timestamp>/SCIENTIFIC_REPORT_CATALOG_V1.md`
+- `artifacts/scientific_contribution_targets/<timestamp>/external_replication_catalog_v1.json`
+- `artifacts/scientific_contribution_targets/<timestamp>/EXTERNAL_REPLICATION_CATALOG_V1.md`
+- `artifacts/scientific_contribution_targets/<timestamp>/open_tool_adoption_catalog_v1.json`
+- `artifacts/scientific_contribution_targets/<timestamp>/OPEN_TOOL_ADOPTION_CATALOG_V1.md`
 - `artifacts/scientific_contribution_targets/<timestamp>/step_logs/step_*.log`
 
 Operator verification:
 
 ```bash
 jq empty docs/scientific_contribution_targets_v1.json
+jq empty docs/scientific_report_catalog_v1.json
+jq empty docs/external_replication_catalog_v1.json
+jq empty docs/open_tool_adoption_catalog_v1.json
 ./scripts/run_scientific_contribution_targets.sh bundle
 ./scripts/e2e/scientific_contribution_targets_replay.sh show
 

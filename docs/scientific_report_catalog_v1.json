@@ -1,0 +1,75 @@
+{
+  "schema_version": "franken-engine.scientific-report-catalog.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-2501.1",
+  "generated_by": "bd-2501.1",
+  "generated_at_utc": "2026-04-02T03:40:00Z",
+  "minimum_report_count": 4,
+  "reports": [
+    {
+      "report_id": "probabilistic_guardplane_observability",
+      "title": "Probabilistic Guardplane and Observability-On Publication Policy",
+      "status_bead_id": "bd-1lsy.11.20.3",
+      "supporting_beads": [
+        "bd-1lsy.11.20",
+        "bd-1lsy.11.20.2"
+      ],
+      "primary_doc": "docs/RGC_OBSERVABILITY_PUBLICATION_POLICY_V1.md",
+      "artifact_root": "artifacts/rgc_observability_publication_policy/<timestamp>/",
+      "verification_commands": [
+        "jq empty docs/rgc_observability_publication_policy_v1.json",
+        "./scripts/run_rgc_observability_publication_policy.sh ci",
+        "./scripts/e2e/rgc_observability_publication_policy_replay.sh ci"
+      ],
+      "research_claim": "Telemetry-cost-aware claim publication stays auditable, replayable, and fail-closed when calibration quality degrades.",
+      "negative_result_surface": "Suppress publishable claims when observability evidence is missing, unstable, or green only under observability-off cells."
+    },
+    {
+      "report_id": "security_enforcement_verification",
+      "title": "Security Enforcement Verification Pack",
+      "status_bead_id": "bd-1lsy.11.9",
+      "supporting_beads": [],
+      "primary_doc": "docs/RGC_SECURITY_ENFORCEMENT_VERIFICATION_PACK_V1.md",
+      "artifact_root": "artifacts/rgc_security_enforcement_verification_pack/<timestamp>/",
+      "verification_commands": [
+        "jq empty docs/rgc_security_enforcement_verification_pack_v1.json",
+        "./scripts/run_rgc_security_enforcement_verification_pack.sh ci",
+        "./scripts/e2e/rgc_security_enforcement_verification_pack_replay.sh ci"
+      ],
+      "research_claim": "Capability denials, IFC enforcement, and containment escalation remain adversarially testable with deterministic replay evidence.",
+      "negative_result_surface": "The report lane stays red when adversarial scenarios uncover silent bypasses, degraded-mode gaps, or missing replay artifacts."
+    },
+    {
+      "report_id": "runtime_semantics_replay_pack",
+      "title": "Runtime Semantics Verification Pack",
+      "status_bead_id": "bd-1lsy.11.7",
+      "supporting_beads": [],
+      "primary_doc": "docs/RGC_RUNTIME_SEMANTICS_VERIFICATION_PACK_V1.md",
+      "artifact_root": "artifacts/rgc_runtime_semantics_verification_pack/<timestamp>/",
+      "verification_commands": [
+        "jq empty docs/rgc_runtime_semantics_verification_pack_v1.json",
+        "./scripts/run_rgc_runtime_semantics_verification_pack.sh ci",
+        "./scripts/e2e/rgc_runtime_semantics_verification_pack_replay.sh ci"
+      ],
+      "research_claim": "Native runtime behavior is pinned through deterministic unit, integration, and replay-linked end-to-end evidence.",
+      "negative_result_surface": "The report lane fails closed when runtime semantics drift, error-path replay diverges, or required structured evidence is incomplete."
+    },
+    {
+      "report_id": "extension_heavy_benchmark_methodology",
+      "title": "Extension-Heavy Benchmark Methodology and Peer Comparison",
+      "status_bead_id": "bd-19l0",
+      "supporting_beads": [
+        "bd-1ze"
+      ],
+      "primary_doc": "docs/EXTENSION_HEAVY_BENCHMARK_SUITE_V1.md",
+      "artifact_root": "artifacts/benchmarks/<timestamp>/",
+      "verification_commands": [
+        "frankenctl benchmark run --profile small --family boot-storm --out-dir ./artifacts/benchmarks",
+        "frankenctl benchmark verify --bundle ./artifacts/benchmarks --summary --output ./artifacts/benchmark_verify.json",
+        "frankenctl benchmark score --input ./artifacts/publication_gate_input.json --output ./artifacts/benchmark_score.json"
+      ],
+      "research_claim": "FrankenEngine benchmark claims are tied to a neutral, artifact-backed methodology that remains reproducible against Node and Bun peers.",
+      "negative_result_surface": "The report lane must record blocked publication, missing peer evidence, and below-threshold outcomes instead of silently hiding losing or inconclusive runs."
+    }
+  ]
+}

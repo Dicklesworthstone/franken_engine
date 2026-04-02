@@ -62,6 +62,86 @@ struct GateRunner {
     manifest_schema_version: String,
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+struct ScientificReportCatalog {
+    schema_version: String,
+    contract_version: String,
+    bead_id: String,
+    generated_by: String,
+    generated_at_utc: String,
+    minimum_report_count: usize,
+    reports: Vec<ScientificReportEntry>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+struct ScientificReportEntry {
+    report_id: String,
+    title: String,
+    status_bead_id: String,
+    supporting_beads: Vec<String>,
+    primary_doc: String,
+    artifact_root: String,
+    verification_commands: Vec<String>,
+    research_claim: String,
+    negative_result_surface: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+struct ExternalReplicationCatalog {
+    schema_version: String,
+    contract_version: String,
+    bead_id: String,
+    generated_by: String,
+    generated_at_utc: String,
+    minimum_claim_count: usize,
+    claims: Vec<ExternalReplicationEntry>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+struct ExternalReplicationEntry {
+    claim_id: String,
+    title: String,
+    status_bead_id: String,
+    supporting_beads: Vec<String>,
+    primary_doc: String,
+    verifier_doc: String,
+    artifact_root: String,
+    verification_commands: Vec<String>,
+    claim_summary: String,
+    replication_gap: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+struct OpenToolAdoptionCatalog {
+    schema_version: String,
+    contract_version: String,
+    bead_id: String,
+    generated_by: String,
+    generated_at_utc: String,
+    minimum_tool_count: usize,
+    tools: Vec<OpenToolAdoptionEntry>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+struct OpenToolAdoptionEntry {
+    tool_id: String,
+    title: String,
+    release_status_bead_id: String,
+    supporting_beads: Vec<String>,
+    primary_doc: String,
+    artifact_root: String,
+    adoption_evidence_doc: String,
+    verification_commands: Vec<String>,
+    external_user_value: String,
+    adoption_gap: String,
+}
+
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -77,6 +157,21 @@ fn parse_contract() -> ScientificContributionTargetsContract {
         .expect("scientific contribution targets contract must parse")
 }
 
+fn parse_report_catalog() -> ScientificReportCatalog {
+    let raw = read_to_string("docs/scientific_report_catalog_v1.json");
+    serde_json::from_str(&raw).expect("scientific report catalog must parse")
+}
+
+fn parse_external_replication_catalog() -> ExternalReplicationCatalog {
+    let raw = read_to_string("docs/external_replication_catalog_v1.json");
+    serde_json::from_str(&raw).expect("external replication catalog must parse")
+}
+
+fn parse_open_tool_adoption_catalog() -> OpenToolAdoptionCatalog {
+    let raw = read_to_string("docs/open_tool_adoption_catalog_v1.json");
+    serde_json::from_str(&raw).expect("open tool adoption catalog must parse")
+}
+
 #[test]
 fn strategy_doc_contains_required_sections() {
     let doc = read_to_string("docs/SCIENTIFIC_CONTRIBUTION_TARGETS_V1.md");
@@ -87,6 +182,9 @@ fn strategy_doc_contains_required_sections() {
         "## Required Contributions",
         "## Output Contract Milestones",
         "## Upstream Dependencies",
+        "## Technical Report Catalog",
+        "## External Replication Catalog",
+        "## Open Tool Adoption Catalog",
         "## Closure Semantics",
         "## Bundle Artifacts",
         "## Operator Verification",
@@ -115,6 +213,205 @@ fn strategy_contract_has_expected_identity_and_counts() {
     assert_eq!(contract.required_contributions.len(), 5);
     assert_eq!(contract.output_contract_milestones.len(), 3);
     assert_eq!(contract.upstream_dependencies.len(), 7);
+}
+
+#[test]
+fn report_catalog_has_expected_identity_and_four_report_lanes() {
+    let catalog = parse_report_catalog();
+
+    assert_eq!(
+        catalog.schema_version,
+        "franken-engine.scientific-report-catalog.v1"
+    );
+    assert_eq!(catalog.contract_version, "1.0.0");
+    assert_eq!(catalog.bead_id, "bd-2501.1");
+    assert_eq!(catalog.generated_by, "bd-2501.1");
+    assert!(catalog.generated_at_utc.ends_with('Z'));
+    assert_eq!(catalog.minimum_report_count, 4);
+    assert_eq!(catalog.reports.len(), 4);
+
+    let report_ids: Vec<_> = catalog
+        .reports
+        .iter()
+        .map(|entry| entry.report_id.as_str())
+        .collect();
+    assert_eq!(
+        report_ids,
+        vec![
+            "probabilistic_guardplane_observability",
+            "security_enforcement_verification",
+            "runtime_semantics_replay_pack",
+            "extension_heavy_benchmark_methodology",
+        ]
+    );
+}
+
+#[test]
+fn report_catalog_entries_reference_existing_docs_and_replayable_surfaces() {
+    let catalog = parse_report_catalog();
+
+    for entry in &catalog.reports {
+        let full = repo_root().join(&entry.primary_doc);
+        assert!(
+            full.exists(),
+            "primary doc missing for {}: {}",
+            entry.report_id,
+            full.display()
+        );
+        assert!(
+            entry.artifact_root.contains("<timestamp>"),
+            "artifact root must stay operator-readable for {}",
+            entry.report_id
+        );
+        assert!(
+            !entry.title.is_empty()
+                && !entry.status_bead_id.is_empty()
+                && !entry.research_claim.is_empty()
+                && !entry.negative_result_surface.is_empty(),
+            "catalog entry {} must be fully described",
+            entry.report_id
+        );
+        assert!(
+            !entry.verification_commands.is_empty(),
+            "catalog entry {} must declare verification commands",
+            entry.report_id
+        );
+    }
+}
+
+#[test]
+fn external_replication_catalog_has_expected_identity_and_claim_lanes() {
+    let catalog = parse_external_replication_catalog();
+
+    assert_eq!(
+        catalog.schema_version,
+        "franken-engine.external-replication-catalog.v1"
+    );
+    assert_eq!(catalog.contract_version, "1.0.0");
+    assert_eq!(catalog.bead_id, "bd-2501.2");
+    assert_eq!(catalog.generated_by, "bd-2501.2");
+    assert!(catalog.generated_at_utc.ends_with('Z'));
+    assert_eq!(catalog.minimum_claim_count, 2);
+    assert_eq!(catalog.claims.len(), 3);
+
+    let claim_ids: Vec<_> = catalog
+        .claims
+        .iter()
+        .map(|entry| entry.claim_id.as_str())
+        .collect();
+    assert_eq!(
+        claim_ids,
+        vec![
+            "benchmark_peer_claim_bundle",
+            "security_enforcement_verifier_bundle",
+            "runtime_replay_verifier_bundle",
+        ]
+    );
+}
+
+#[test]
+fn external_replication_catalog_entries_reference_existing_docs_and_verifier_surfaces() {
+    let catalog = parse_external_replication_catalog();
+
+    for entry in &catalog.claims {
+        let primary_doc = repo_root().join(&entry.primary_doc);
+        let verifier_doc = repo_root().join(&entry.verifier_doc);
+        assert!(
+            primary_doc.exists(),
+            "primary doc missing for {}: {}",
+            entry.claim_id,
+            primary_doc.display()
+        );
+        assert!(
+            verifier_doc.exists(),
+            "verifier doc missing for {}: {}",
+            entry.claim_id,
+            verifier_doc.display()
+        );
+        assert!(
+            entry.artifact_root.contains("<timestamp>"),
+            "artifact root must stay operator-readable for {}",
+            entry.claim_id
+        );
+        assert!(
+            !entry.title.is_empty()
+                && !entry.status_bead_id.is_empty()
+                && !entry.claim_summary.is_empty()
+                && !entry.replication_gap.is_empty(),
+            "catalog entry {} must be fully described",
+            entry.claim_id
+        );
+        assert!(
+            !entry.verification_commands.is_empty(),
+            "catalog entry {} must declare verification commands",
+            entry.claim_id
+        );
+    }
+}
+
+#[test]
+fn open_tool_adoption_catalog_has_expected_identity_and_candidate_tools() {
+    let catalog = parse_open_tool_adoption_catalog();
+
+    assert_eq!(
+        catalog.schema_version,
+        "franken-engine.open-tool-adoption-catalog.v1"
+    );
+    assert_eq!(catalog.contract_version, "1.0.0");
+    assert_eq!(catalog.bead_id, "bd-2501.3");
+    assert_eq!(catalog.generated_by, "bd-2501.3");
+    assert!(catalog.generated_at_utc.ends_with('Z'));
+    assert_eq!(catalog.minimum_tool_count, 1);
+    assert_eq!(catalog.tools.len(), 3);
+
+    let tool_ids: Vec<_> = catalog.tools.iter().map(|entry| entry.tool_id.as_str()).collect();
+    assert_eq!(
+        tool_ids,
+        vec![
+            "third_party_verifier_toolkit",
+            "extension_heavy_benchmark_suite",
+            "parser_third_party_rerun_kit",
+        ]
+    );
+}
+
+#[test]
+fn open_tool_adoption_catalog_entries_reference_existing_docs_and_adoption_surfaces() {
+    let catalog = parse_open_tool_adoption_catalog();
+
+    for entry in &catalog.tools {
+        let primary_doc = repo_root().join(&entry.primary_doc);
+        assert!(
+            primary_doc.exists(),
+            "primary doc missing for {}: {}",
+            entry.tool_id,
+            primary_doc.display()
+        );
+        assert!(
+            entry.artifact_root.contains("<timestamp>"),
+            "artifact root must stay operator-readable for {}",
+            entry.tool_id
+        );
+        assert!(
+            entry.adoption_evidence_doc.starts_with("docs/")
+                && entry.adoption_evidence_doc.ends_with(".md"),
+            "tool {} must declare an operator-readable adoption evidence path",
+            entry.tool_id
+        );
+        assert!(
+            !entry.title.is_empty()
+                && !entry.release_status_bead_id.is_empty()
+                && !entry.external_user_value.is_empty()
+                && !entry.adoption_gap.is_empty(),
+            "catalog entry {} must be fully described",
+            entry.tool_id
+        );
+        assert!(
+            !entry.verification_commands.is_empty(),
+            "catalog entry {} must declare verification commands",
+            entry.tool_id
+        );
+    }
 }
 
 #[test]
@@ -248,9 +545,18 @@ fn strategy_runner_and_replay_scripts_are_replayable() {
         "contribution_status_report.json",
         "output_contract_status_report.json",
         "dependency_status_report.json",
+        "technical_report_status_report.json",
+        "external_replication_status_report.json",
+        "open_tool_adoption_status_report.json",
         "scientific_contribution_summary.md",
         "scientific_contribution_targets_v1.json",
         "scientific_contribution_targets_v1.md",
+        "scientific_report_catalog_v1.json",
+        "SCIENTIFIC_REPORT_CATALOG_V1.md",
+        "external_replication_catalog_v1.json",
+        "EXTERNAL_REPLICATION_CATALOG_V1.md",
+        "open_tool_adoption_catalog_v1.json",
+        "OPEN_TOOL_ADOPTION_CATALOG_V1.md",
         "step_logs/step_*.log",
     ] {
         assert!(
@@ -279,6 +585,27 @@ fn strategy_runner_and_replay_scripts_are_replayable() {
         contract
             .operator_verification
             .iter()
+            .any(|cmd| cmd.contains("jq empty docs/scientific_report_catalog_v1.json")),
+        "operator verification should include the scientific report catalog JSON check"
+    );
+    assert!(
+        contract
+            .operator_verification
+            .iter()
+            .any(|cmd| cmd.contains("jq empty docs/external_replication_catalog_v1.json")),
+        "operator verification should include the external replication catalog JSON check"
+    );
+    assert!(
+        contract
+            .operator_verification
+            .iter()
+            .any(|cmd| cmd.contains("jq empty docs/open_tool_adoption_catalog_v1.json")),
+        "operator verification should include the open tool adoption catalog JSON check"
+    );
+    assert!(
+        contract
+            .operator_verification
+            .iter()
             .any(|cmd| cmd.contains("./scripts/run_scientific_contribution_targets.sh bundle")),
         "operator verification should include the local bundle runner"
     );
@@ -302,11 +629,26 @@ fn strategy_runner_and_replay_scripts_are_replayable() {
         "cargo test -p frankenengine-engine --test scientific_contribution_targets",
         "cargo clippy -p frankenengine-engine --test scientific_contribution_targets -- -D warnings",
         "declared source input is missing",
+        "scientific report catalog JSON is invalid",
+        "scientific report catalog has fewer than four declared report lanes",
+        "external replication catalog JSON is invalid",
+        "external replication catalog has fewer than two declared claim lanes",
+        "open tool adoption catalog JSON is invalid",
+        "open tool adoption catalog has fewer than one declared tool lane",
         "scientific contribution targets have open output-contract milestone beads",
         "manifest: $manifest",
         "contribution_status_report.json",
         "output_contract_status_report.json",
         "dependency_status_report.json",
+        "technical_report_status_report.json",
+        "external_replication_status_report.json",
+        "open_tool_adoption_status_report.json",
+        "scientific_report_catalog_v1.json",
+        "SCIENTIFIC_REPORT_CATALOG_V1.md",
+        "external_replication_catalog_v1.json",
+        "EXTERNAL_REPLICATION_CATALOG_V1.md",
+        "open_tool_adoption_catalog_v1.json",
+        "OPEN_TOOL_ADOPTION_CATALOG_V1.md",
         "target_rch_scientific_contribution_targets_verify",
     ] {
         assert!(
@@ -349,6 +691,12 @@ fn readme_surface_is_pinned_by_machine_contract() {
             "bd-2501.1",
             "bd-2501.2",
             "bd-2501.3",
+            "docs/SCIENTIFIC_REPORT_CATALOG_V1.md",
+            "docs/EXTERNAL_REPLICATION_CATALOG_V1.md",
+            "docs/OPEN_TOOL_ADOPTION_CATALOG_V1.md",
+            "technical_report_status_report.json",
+            "external_replication_status_report.json",
+            "open_tool_adoption_status_report.json",
             "artifacts/scientific_contribution_targets/<timestamp>/trace_ids.json",
             "target_rch_scientific_contribution_targets_verify",
         ]

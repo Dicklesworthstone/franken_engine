@@ -77,6 +77,27 @@ fn parse_doc_contract() -> ObservabilityPublicationPolicyDocContract {
     .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()))
 }
 
+fn attestation_hash_for_required_artifact<'a>(
+    attestation: &'a SupportBundleObservabilityAttestationArtifact,
+    artifact_name: &str,
+) -> Option<&'a str> {
+    match artifact_name {
+        "observability_budget_sentinel_report.json" => {
+            Some(attestation.quality_report_hash.as_str())
+        }
+        "observability_on_supremacy_matrix.json" => {
+            Some(attestation.supremacy_matrix_hash.as_str())
+        }
+        "observability_claim_delta_report.json" => Some(attestation.claim_delta_hash.as_str()),
+        "telemetry_demotion_receipts.json" => Some(attestation.demotion_receipts_hash.as_str()),
+        "observability_publication_policy.json" => {
+            Some(attestation.publication_policy_hash.as_str())
+        }
+        "support_bundle_observability_attestation.json" => None,
+        _ => None,
+    }
+}
+
 #[test]
 fn write_observability_publication_bundle_emits_expected_artifacts() {
     let out_dir = unique_dir("artifacts");
@@ -746,6 +767,34 @@ fn attestation_hash_fields_are_non_empty_hex() {
         assert!(
             hash.chars().all(|c| c.is_ascii_hexdigit()),
             "{label} must be valid hex"
+        );
+    }
+}
+
+#[test]
+fn attestation_covers_all_required_prerequisite_artifact_hashes() {
+    let out_dir = unique_dir("attestation_required_hashes");
+    let artifacts =
+        write_observability_publication_bundle(&out_dir).expect("write publication bundle");
+    let policy: ObservabilityPublicationPolicyArtifact = serde_json::from_slice(
+        &fs::read(&artifacts.observability_publication_policy_path).expect("read policy"),
+    )
+    .expect("parse policy");
+    let attestation: SupportBundleObservabilityAttestationArtifact = serde_json::from_slice(
+        &fs::read(&artifacts.support_bundle_observability_attestation_path)
+            .expect("read attestation"),
+    )
+    .expect("parse attestation");
+
+    for artifact_name in &policy.required_artifacts {
+        if artifact_name == "support_bundle_observability_attestation.json" {
+            continue;
+        }
+        let hash = attestation_hash_for_required_artifact(&attestation, artifact_name)
+            .unwrap_or_else(|| panic!("missing attestation hash mapping for {artifact_name}"));
+        assert!(
+            !hash.is_empty(),
+            "required artifact hash for {artifact_name} must not be empty"
         );
     }
 }

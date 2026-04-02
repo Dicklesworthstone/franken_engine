@@ -1177,9 +1177,31 @@ fn effective_shipped_capture_mode(
 fn support_bundle_attested(
     publication_policy: &ObservabilityPublicationPolicyArtifact,
     shipped_capture_mode: ObservabilityMode,
+    prerequisite_hashes_complete: bool,
 ) -> bool {
-    publication_policy.publication_gate_pass
-        || shipped_capture_mode == ObservabilityMode::ExactShadow
+    prerequisite_hashes_complete
+        && (publication_policy.publication_gate_pass
+            || shipped_capture_mode == ObservabilityMode::ExactShadow)
+}
+
+fn missing_attestation_prerequisite_artifacts(
+    publication_policy: &ObservabilityPublicationPolicyArtifact,
+    artifact_hashes: &BTreeMap<String, String>,
+) -> Vec<String> {
+    publication_policy
+        .required_artifacts
+        .iter()
+        .filter(|artifact_name| {
+            artifact_name.as_str() != SUPPORT_BUNDLE_OBSERVABILITY_ATTESTATION_FILE
+        })
+        .filter(
+            |artifact_name| match artifact_hashes.get(artifact_name.as_str()) {
+                Some(hash) => hash.trim().is_empty(),
+                None => true,
+            },
+        )
+        .cloned()
+        .collect()
 }
 
 fn build_support_bundle_attestation(
@@ -1191,7 +1213,13 @@ fn build_support_bundle_attestation(
 ) -> SupportBundleObservabilityAttestationArtifact {
     let suppressed_claim_count = publication_policy.suppressed_claims.len() as u64;
     let shipped_capture_mode = effective_shipped_capture_mode(publication_policy);
-    let attested = support_bundle_attested(publication_policy, shipped_capture_mode);
+    let missing_prerequisite_artifacts =
+        missing_attestation_prerequisite_artifacts(publication_policy, artifact_hashes);
+    let attested = support_bundle_attested(
+        publication_policy,
+        shipped_capture_mode,
+        missing_prerequisite_artifacts.is_empty(),
+    );
     let mut operator_summary = vec![
         format!(
             "policy default shipped capture mode: {}",
@@ -1217,6 +1245,12 @@ fn build_support_bundle_attestation(
             supremacy_matrix.cells.len()
         ),
     ];
+    if !missing_prerequisite_artifacts.is_empty() {
+        operator_summary.push(format!(
+            "attestation downgraded: missing prerequisite artifact hashes: {}",
+            missing_prerequisite_artifacts.join(", ")
+        ));
+    }
     operator_summary.extend(
         publication_policy
             .suppressed_claims
@@ -2080,7 +2114,8 @@ mod tests {
 
         assert!(support_bundle_attested(
             &policy,
-            effective_shipped_capture_mode(&policy)
+            effective_shipped_capture_mode(&policy),
+            true
         ));
     }
 
@@ -2116,7 +2151,78 @@ mod tests {
 
         assert!(support_bundle_attested(
             &policy,
-            effective_shipped_capture_mode(&policy)
+            effective_shipped_capture_mode(&policy),
+            true
         ));
+    }
+
+    #[test]
+    fn support_bundle_attested_fails_closed_when_prerequisite_hashes_missing() {
+        let policy = ObservabilityPublicationPolicyArtifact {
+            schema_version: PUBLICATION_POLICY_SCHEMA_VERSION.to_string(),
+            component: COMPONENT.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            default_shipped_mode: ObservabilityMode::Budgeted,
+            quality_gate_pass: false,
+            hot_path_summary: HotPathPublicationSummary {
+                manifest_id: "manifest-fail".to_string(),
+                manifest_hash: "hash-fail".to_string(),
+                overall_mode: "budgeted".to_string(),
+                publishable: false,
+                calibration_pass_count: 2,
+                calibration_total: 3,
+                thinning_retention_millionths: Some(500_000),
+                rejection_reasons: vec!["calibration gap".to_string()],
+            },
+            allowed_cells: vec!["dispatch_sensitive::exact_shadow".to_string()],
+            suppressed_claims: vec![SuppressedClaim {
+                workload_id: "dispatch_sensitive".to_string(),
+                workload_class: ObservabilityWorkloadClass::DispatchSensitive,
+                mode: ObservabilityMode::Budgeted,
+                reasons: vec!["suppressed budgeted".to_string()],
+            }],
+            required_artifacts: vec![
+                OBSERVABILITY_BUDGET_SENTINEL_REPORT_FILE.to_string(),
+                OBSERVABILITY_ON_SUPREMACY_MATRIX_FILE.to_string(),
+            ],
+            fail_closed_conditions: vec!["quality degraded".to_string()],
+            publication_gate_pass: false,
+        };
+
+        assert!(!support_bundle_attested(
+            &policy,
+            effective_shipped_capture_mode(&policy),
+            false
+        ));
+    }
+
+    #[test]
+    fn build_support_bundle_attestation_reports_missing_prerequisite_hashes() {
+        let epoch = SecurityEpoch::from_raw(SAMPLE_EPOCH);
+        let quality_bundle = build_quality_bundle(epoch);
+        let hot_path_summary =
+            build_hot_path_summary(epoch).expect("hot-path summary should build");
+        let supremacy_matrix = build_supremacy_matrix(epoch);
+        let publication_policy =
+            build_publication_policy(&quality_bundle, &supremacy_matrix, &hot_path_summary);
+        let artifact_hashes = BTreeMap::from([(
+            OBSERVABILITY_BUDGET_SENTINEL_REPORT_FILE.to_string(),
+            "deadbeef".to_string(),
+        )]);
+
+        let attestation = build_support_bundle_attestation(
+            &quality_bundle,
+            &supremacy_matrix,
+            &publication_policy,
+            &hot_path_summary,
+            &artifact_hashes,
+        );
+
+        assert!(!attestation.attested);
+        assert!(attestation.operator_summary.iter().any(|line| {
+            line.contains("missing prerequisite artifact hashes")
+                && line.contains(OBSERVABILITY_ON_SUPREMACY_MATRIX_FILE)
+                && line.contains(OBSERVABILITY_CLAIM_DELTA_REPORT_FILE)
+        }));
     }
 }

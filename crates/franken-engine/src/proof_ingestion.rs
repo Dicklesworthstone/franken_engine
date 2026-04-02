@@ -106,7 +106,9 @@ impl ProofInput {
         append_u64(&mut buf, self.proof_epoch.as_u64());
         append_u64(&mut buf, self.validity_start_ns);
         append_u64(&mut buf, self.validity_end_ns);
-        append_len_prefixed_bytes(&mut buf, &self.issuer_signature);
+        // Note: issuer_signature is intentionally excluded from canonical bytes
+        // because the signature is computed FROM canonical_bytes — including it
+        // would create a circular dependency.
         append_len_prefixed_bytes(&mut buf, self.canonical_hash.as_bytes());
         append_len_prefixed_str(&mut buf, &self.linked_policy_id);
         append_len_prefixed_bytes(&mut buf, &self.payload);
@@ -2123,7 +2125,7 @@ mod tests {
         append_u64(&mut expected, proof.proof_epoch.as_u64());
         append_u64(&mut expected, proof.validity_start_ns);
         append_u64(&mut expected, proof.validity_end_ns);
-        append_len_prefixed_bytes(&mut expected, &proof.issuer_signature);
+        // issuer_signature excluded: it's computed FROM canonical_bytes
         append_len_prefixed_bytes(&mut expected, proof.canonical_hash.as_bytes());
         append_len_prefixed_str(&mut expected, &proof.linked_policy_id);
         append_len_prefixed_bytes(&mut expected, &proof.payload);

@@ -502,7 +502,7 @@ fn parser_final_readiness_doc_has_required_sections() {
         "evidence indexer + cross-run correlation (`PSRP-09.5.2`)",
         "user-impact regression alarms + SLO guardrails (`PSRP-10.5.2`)",
         "blocked_dependency_ids` inventory must stay aligned with the bead\ngraph",
-        "risk_register_hash is computed deterministically as `sha256`",
+        "risk_register_hash` is computed deterministically as `sha256`",
         "step_logs/step_*.log",
         "./scripts/run_parser_final_readiness_dossier.sh ci",
         "./scripts/e2e/parser_final_readiness_dossier_replay.sh check",
@@ -1039,7 +1039,7 @@ fn parser_final_readiness_script_uses_repo_local_target_dir_and_retained_step_lo
         "script must not route readiness dossier remote builds through /tmp"
     );
     assert!(
-        script.contains("cat ${step_logs_dir}/step_01.log"),
+        script.contains("printf 'cat %s/%s\\n' \"${step_logs_dir}\" \"${first_step_log_name}\""),
         "manifest operator verification should surface a retained step log"
     );
     assert!(

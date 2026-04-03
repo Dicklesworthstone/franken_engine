@@ -69,6 +69,10 @@ fn make_request(action: &str, ts: u64) -> EvidenceEmissionRequest {
             let mut m = BTreeMap::new();
             m.insert("allow".to_string(), 0.1);
             m.insert("deny".to_string(), 0.4);
+            // Include the action itself so validation passes —
+            // the ledger builder requires the chosen action to appear
+            // in expected_losses.
+            m.insert(action.to_string(), 0.1);
             m
         },
         chosen_expected_loss: 0.1,
@@ -105,6 +109,13 @@ fn v1_to_v2_migration(
     migrated
         .metadata
         .insert("migrated_from".to_string(), "evidence-v1".to_string());
+    // Recompute artifact hash since metadata changed (artifact_hash covers
+    // ledger_entry + metadata).
+    let mut payload = serde_json::to_vec(&migrated.ledger_entry).unwrap();
+    if let Ok(meta_bytes) = serde_json::to_vec(&migrated.metadata) {
+        payload.extend_from_slice(&meta_bytes);
+    }
+    migrated.artifact_hash = ContentHash::compute(&payload);
     Ok(migrated)
 }
 

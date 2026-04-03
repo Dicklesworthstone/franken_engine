@@ -318,6 +318,8 @@ fn build_report_fails_when_scorecard_flags_are_inconsistent() {
         .get_mut("performance_delta")
         .expect("performance dimension")
         .meets_target = false;
+    // Recompute result_hash so it passes the integrity check before the flag check
+    scorecard.result_hash = scorecard.compute_hash();
 
     let err = build_category_shift_report(report_input(scorecard)).unwrap_err();
     assert!(matches!(

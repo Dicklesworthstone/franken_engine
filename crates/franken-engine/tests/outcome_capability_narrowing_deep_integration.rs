@@ -736,10 +736,12 @@ fn deep_report_outcome_counts() {
     let sandbox = CapabilityGrant::sandbox();
     let compute = CapabilityGrant::compute_only();
 
+    // record_outcome_propagation updates the *last* transition matching the
+    // boundary label, so we must record the outcome right after its transition.
     v.validate_narrowing("t0", "t1", "b1", &full, &sandbox);
-    v.validate_narrowing("t1", "t2", "b2", &sandbox, &compute);
-
     v.record_outcome_propagation("b1", BoundaryOutcome::Success, BoundaryOutcome::Success);
+
+    v.validate_narrowing("t1", "t2", "b2", &sandbox, &compute);
     v.record_outcome_propagation("b2", BoundaryOutcome::Failure, BoundaryOutcome::Success);
 
     let report = v.build_report();

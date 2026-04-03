@@ -222,7 +222,7 @@ fn docs_fixture_equality_is_reflexive() {
 #[test]
 fn artifact_context_default_trace_fields() {
     let ctx = ArtifactContext::new("/tmp/test-ctx");
-    assert_eq!(ctx.trace_id, "trace.rgc.610a");
+    assert_eq!(ctx.trace_id, "trace-rgc-610a");
     assert_eq!(ctx.decision_id, "decision.rgc.610a");
     assert_eq!(ctx.policy_id, "policy.rgc.610a");
 }

@@ -244,7 +244,7 @@ fn enrichment_replay_entry_lookup_key_no_referrer() {
 fn enrichment_replay_entry_lookup_key_require_style() {
     let entry = make_entry("lodash", Some("index.js"), TsRequestStyle::Require);
     let key = entry.lookup_key();
-    assert!(key.contains("Require"));
+    assert!(key.contains("require")); // stable_request_style_key returns lowercase
     assert!(key.contains("lodash"));
     assert!(key.contains("index.js"));
 }

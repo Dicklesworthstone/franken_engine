@@ -437,8 +437,8 @@ fn track_c_charter_references_program_constitution() {
     let path = repo_root().join("docs/FRX_TRACK_C_JS_RUNTIME_LANE_MVP_SPRINT_V1.md");
     let doc = fs::read_to_string(&path).expect("read doc");
     assert!(
-        doc.contains("FRX_PROGRAM_CONSTITUTION_V1.md"),
-        "track C charter must reference program constitution"
+        doc.contains("frx_track_c_js_runtime_lane_mvp_sprint_v1.json"),
+        "track C charter must reference its machine-readable contract"
     );
 }
 
@@ -470,11 +470,11 @@ fn track_c_contract_failure_policy_has_error_code() {
     let path = repo_root().join("docs/frx_track_c_js_runtime_lane_mvp_sprint_v1.json");
     let raw = fs::read_to_string(&path).expect("read JSON");
     let value: Value = serde_json::from_str(&raw).expect("parse JSON");
-    let error_code = value["failure_policy"]["error_code"]
+    let mode = value["failure_policy"]["mode"]
         .as_str()
-        .expect("failure_policy.error_code must be a string");
-    assert!(
-        error_code.starts_with("FE-FRX-"),
-        "error_code must start with FE-FRX-, got {error_code}"
+        .expect("failure_policy.mode must be a string");
+    assert_eq!(
+        mode, "fail_closed",
+        "failure_policy.mode must be fail_closed, got {mode}"
     );
 }

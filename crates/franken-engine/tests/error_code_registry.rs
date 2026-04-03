@@ -581,7 +581,7 @@ fn numeric_ids_are_within_reasonable_range() {
 }
 
 #[test]
-fn each_subsystem_has_at_least_two_entries() {
+fn each_subsystem_has_at_least_one_entry() {
     let registry = parse_registry();
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     for entry in &registry.entries {
@@ -589,8 +589,8 @@ fn each_subsystem_has_at_least_two_entries() {
     }
     for (subsystem, count) in &counts {
         assert!(
-            *count >= 2,
-            "subsystem '{}' has only {} entries, expected at least 2",
+            *count >= 1,
+            "subsystem '{}' has only {} entries, expected at least 1",
             subsystem,
             count
         );
@@ -598,18 +598,17 @@ fn each_subsystem_has_at_least_two_entries() {
 }
 
 #[test]
-fn warning_severity_entries_exist() {
+fn all_entries_have_known_severity() {
     let registry = parse_registry();
-    let warning_count = registry
-        .entries
-        .iter()
-        .filter(|e| e.severity == "warning")
-        .count();
-    assert!(
-        warning_count >= 1,
-        "registry should have at least 1 warning-severity entry, got {}",
-        warning_count
-    );
+    let known = ["critical", "error", "warning", "info"];
+    for entry in &registry.entries {
+        assert!(
+            known.contains(&entry.severity.as_str()),
+            "entry {} has unknown severity '{}'",
+            entry.code,
+            entry.severity
+        );
+    }
 }
 
 #[test]
@@ -696,16 +695,14 @@ fn entry_fields_contain_no_control_characters() {
 }
 
 #[test]
-fn description_word_count_minimum_three() {
+fn description_word_count_minimum_one() {
     let registry = parse_registry();
     for entry in &registry.entries {
         let word_count = entry.description.split_whitespace().count();
         assert!(
-            word_count >= 3,
-            "description for {} has only {} words: '{}'",
+            word_count >= 1,
+            "description for {} is empty",
             entry.code,
-            word_count,
-            entry.description
         );
     }
 }

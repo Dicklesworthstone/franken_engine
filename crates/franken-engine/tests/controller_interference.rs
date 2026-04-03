@@ -1264,7 +1264,7 @@ fn enrichment_evaluate_read_snapshot_reflects_initial() {
         &["cpu", "latency"],
         &[],
         1_000_000,
-        0,
+        1_000_000,
         "read-only",
     )];
     let read_requests = [
@@ -1290,8 +1290,8 @@ fn enrichment_evaluate_read_snapshot_reflects_initial() {
         &metrics,
     ));
     assert!(evaluation.pass);
-    assert_eq!(evaluation.read_snapshots.get("cpu"), Some(&10));
-    assert_eq!(evaluation.read_snapshots.get("latency"), Some(&100));
+    assert_eq!(evaluation.read_snapshots.get("reader:cpu"), Some(&10));
+    assert_eq!(evaluation.read_snapshots.get("reader:latency"), Some(&100));
 }
 
 // ===========================================================================

@@ -873,8 +873,14 @@ fn prototype_chain_with_shadowed_accessor() {
     .unwrap();
 
     let child = heap.alloc(Some(proto));
-    // Own data property shadows prototype's accessor.
-    heap.set_property(child, str_key("x"), int_val(42)).unwrap();
+    // Own data property shadows prototype's accessor — use define_property to
+    // install directly (set_property now returns TypeError for accessor chains).
+    heap.define_property(
+        child,
+        str_key("x"),
+        PropertyDescriptor::data(int_val(42)),
+    )
+    .unwrap();
 
     let val = heap.get_property(child, &str_key("x")).unwrap();
     assert_eq!(val, int_val(42)); // own data property, not accessor
@@ -1127,9 +1133,9 @@ fn set_property_on_accessor_returns_false() {
     )
     .unwrap();
 
-    // set_property on accessor property returns false (interpreter handles).
-    let result = heap.set_property(h, str_key("x"), int_val(42)).unwrap();
-    assert!(!result);
+    // set_property on accessor property returns TypeError (interpreter must handle).
+    let result = heap.set_property(h, str_key("x"), int_val(42));
+    assert!(result.is_err(), "accessor set should return TypeError");
 }
 
 // ===========================================================================

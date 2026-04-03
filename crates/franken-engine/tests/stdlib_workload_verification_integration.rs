@@ -819,7 +819,7 @@ fn manifest_not_empty_and_healthy() {
     assert!(m.report_id.contains(VERIFICATION_BEAD_ID));
     assert!(m.is_healthy);
     assert_eq!(m.total_scenarios, 0);
-    assert_eq!(m.pass_rate_millionths, 1_000_000);
+    assert_eq!(m.pass_rate_millionths, 0); // empty manifest: 0 scenarios => 0 pass rate
 }
 
 #[test]

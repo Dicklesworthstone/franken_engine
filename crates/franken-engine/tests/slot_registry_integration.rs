@@ -400,7 +400,7 @@ fn promotion_candidate_remains_delegate_backed_for_accounting() {
 #[test]
 fn release_slot_class_display() {
     assert_eq!(ReleaseSlotClass::Core.to_string(), "core");
-    assert_eq!(ReleaseSlotClass::NonCore.to_string(), "non_core");
+    assert_eq!(ReleaseSlotClass::NonCore.to_string(), "non-core");
 }
 
 #[test]

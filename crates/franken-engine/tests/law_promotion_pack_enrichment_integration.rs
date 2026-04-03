@@ -1430,8 +1430,8 @@ fn enrichment_scope_tag_order_affects_hash() {
         epoch(1),
         vec![],
     );
-    // Different tag order => different hash (tags are not sorted before hashing)
-    assert_ne!(law_a.law_hash, law_b.law_hash);
+    // Tags are sorted before hashing, so different order => same hash.
+    assert_eq!(law_a.law_hash, law_b.law_hash);
 }
 
 #[test]
@@ -1456,7 +1456,8 @@ fn enrichment_evidence_ids_order_affects_hash() {
         epoch(1),
         vec!["ev-2".into(), "ev-1".into()],
     );
-    assert_ne!(law_a.law_hash, law_b.law_hash);
+    // Evidence IDs are sorted before hashing, so different order => same hash.
+    assert_eq!(law_a.law_hash, law_b.law_hash);
 }
 
 #[test]

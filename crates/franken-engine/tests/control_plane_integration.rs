@@ -36,6 +36,12 @@ fn make_request(seed: u64) -> DecisionRequest {
 }
 
 fn make_evidence(ts: u64, action: &str) -> EvidenceLedger {
+    let chosen = match action {
+        "allow" => 0.1,
+        "deny" => 0.2,
+        "timeout" => 0.3,
+        _ => 0.1,
+    };
     EvidenceLedgerBuilder::new()
         .ts_unix_ms(ts)
         .component("control_plane_integration_test")
@@ -44,7 +50,7 @@ fn make_evidence(ts: u64, action: &str) -> EvidenceLedger {
         .expected_loss("allow", 0.1)
         .expected_loss("deny", 0.2)
         .expected_loss("timeout", 0.3)
-        .chosen_expected_loss(0.1)
+        .chosen_expected_loss(chosen)
         .calibration_score(0.94)
         .fallback_active(false)
         .build()

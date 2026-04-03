@@ -65,6 +65,9 @@ fn make_request(category: ActionCategory, action: &str) -> EvidenceEmissionReque
             let mut m = BTreeMap::new();
             m.insert("allow".to_string(), 0.1);
             m.insert("deny".to_string(), 0.9);
+            // Include the action itself so validation passes for
+            // dynamically-named actions (ChosenActionMissingExpectedLoss).
+            m.insert(action.to_string(), 0.1);
             m
         },
         chosen_expected_loss: 0.1,
@@ -95,6 +98,8 @@ fn make_request_with_seed(
             let mut m = BTreeMap::new();
             m.insert("allow".to_string(), 0.1);
             m.insert("deny".to_string(), 0.9);
+            // Include the action itself so validation passes.
+            m.insert(action.to_string(), 0.1);
             m
         },
         chosen_expected_loss: 0.1,

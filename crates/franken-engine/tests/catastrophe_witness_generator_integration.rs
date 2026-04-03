@@ -1956,9 +1956,9 @@ fn enrichment_classify_region_negative_margin() {
 
 #[test]
 fn enrichment_classify_region_negative_threshold() {
-    // threshold = -2M, margin=1M, metric=-1M => delta=1M > margin => RobustWin
+    // threshold = -2M, margin=1M, metric=-1M => delta=1M = margin => BrittleWin (not strictly >)
     let region = catastrophe_witness_generator::classify_region(-1_000_000, -2_000_000, 1_000_000);
-    assert_eq!(region, PhaseRegion::RobustWin);
+    assert_eq!(region, PhaseRegion::BrittleWin);
 }
 
 #[test]

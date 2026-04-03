@@ -217,8 +217,8 @@ fn set_evasion_alert_threshold_controls_alert_generation() {
     let mut engine = GuardplaneCalibrationEngine::new();
     let ctx = test_ctx();
 
-    // Set threshold to 100% — rate must be strictly greater, so no alerts fire.
-    engine.set_evasion_alert_threshold(1_000_000);
+    // Set threshold above 100% — rate can never reach it, so no alerts fire.
+    engine.set_evasion_alert_threshold(1_000_001);
     let outcomes = vec![
         make_outcome(AttackDimension::Exfiltration, 9, 10, false), // 90% evasion
     ];

@@ -469,8 +469,8 @@ fn rgc_408c_replay_script_requires_complete_bundle_and_prints_key_artifacts() {
         "artifact_dirs_by_mtime_desc()",
         "find \"${search_root}\" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\\n' | sort -nr | cut -d' ' -f2-",
         "done < <(artifact_dirs_by_mtime_desc \"${artifact_root}\")",
-        "[[ -f \"${candidate}/engine_product_blocker_ledger.json\" ]] || continue",
-        "[[ -f \"${candidate}/step_logs/step_000.log\" ]] || continue",
+        "[[ -f \"${candidate}/engine_product_blocker_ledger.json\" ]] || return 1",
+        "[[ -f \"${candidate}/step_logs/step_000.log\" ]] || return 1",
         "if ! run_dir_is_complete \"${latest_run_dir}\"; then",
         "explicit run directory ${latest_run_dir} is incomplete",
         "using explicit preserved run directory ${latest_run_dir}",
@@ -577,7 +577,7 @@ fn rgc_408c_doc_references_explicit_preserved_run_replay() {
     for fragment in [
         "RGC_FRANKEN_NODE_HANDOFF_BUNDLE_REPLAY_RUN_DIR=artifacts/rgc_franken_node_handoff_bundle/<timestamp> \\",
         "exact preserved-run replay",
-        "the wrapper fails closed",
+        "the wrapper fails\nclosed",
     ] {
         assert!(
             doc.contains(fragment),

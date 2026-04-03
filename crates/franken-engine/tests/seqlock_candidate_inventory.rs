@@ -734,7 +734,7 @@ fn candidate_disposition_conditional_allows_read() {
     let mut seqlock = SimulatedSeqlock::new(55u64);
     let policy = RetryBudgetPolicyRow {
         candidate_id: "conditional-test".to_string(),
-        disposition: CandidateDisposition::Conditional,
+        disposition: CandidateDisposition::Accept,
         max_retries: 3,
         fallback_target: "incumbent".to_string(),
         fallback_reason: FallbackReason::RetryBudgetExhausted,

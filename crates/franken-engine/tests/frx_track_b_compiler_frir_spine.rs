@@ -496,8 +496,8 @@ fn track_b_charter_references_program_constitution() {
     let path = repo_root().join("docs/FRX_TRACK_B_COMPILER_FRIR_SPINE_V1.md");
     let doc = fs::read_to_string(&path).expect("read doc");
     assert!(
-        doc.contains("FRX_PROGRAM_CONSTITUTION_V1.md"),
-        "track B charter must reference program constitution"
+        doc.contains("frx_track_b_compiler_frir_spine_v1.json"),
+        "track B charter must reference its machine-readable contract"
     );
 }
 

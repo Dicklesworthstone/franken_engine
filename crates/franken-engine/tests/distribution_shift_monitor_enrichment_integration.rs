@@ -934,8 +934,16 @@ fn enrichment_detect_shift_insufficient_samples() {
         min_effect_size_millionths: 10_000,
         abstention_sample_floor: 10,
     };
-    let bench = build_window(StreamKind::Benchmark, vec![emb(&[100_000])], 0);
-    let live = build_window(StreamKind::LiveWorkload, vec![emb(&[900_000])], 0);
+    let bench = build_window(
+        StreamKind::Benchmark,
+        (0..5).map(|i| emb(&[100_000 + i * 100])).collect(),
+        0,
+    );
+    let live = build_window(
+        StreamKind::LiveWorkload,
+        (0..5).map(|i| emb(&[900_000 + i * 100])).collect(),
+        0,
+    );
     let cert = detect_shift(&bench, &live, &config);
     assert!(matches!(
         cert.verdict,

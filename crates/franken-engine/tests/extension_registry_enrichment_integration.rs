@@ -1319,14 +1319,7 @@ fn enrichment_max_artifacts_boundary_accepted() {
     m.artifacts = (0..1024)
         .map(|i| enrichment_artifact(&format!("file_{i}.dat")))
         .collect();
-    let mut buf = Vec::new();
-    for art in &m.artifacts {
-        buf.extend_from_slice(art.path.as_bytes());
-        buf.push(0);
-        buf.extend_from_slice(art.content_hash.as_bytes());
-        buf.extend_from_slice(&art.size_bytes.to_le_bytes());
-    }
-    m.artifacts_root_hash = ContentHash::compute(&buf);
+    m.artifacts_root_hash = m.compute_artifacts_root();
     let result = enrichment_publish(&mut reg, &m, &sk);
     assert!(result.is_ok());
 }

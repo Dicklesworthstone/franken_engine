@@ -1932,9 +1932,10 @@ fn candidate_status_counts_as_neither_native_nor_delegate() {
     reg.begin_candidacy(&p, "sha256:cand".into(), "t".into())
         .unwrap();
 
-    // Candidate is counted as neither native nor delegate
+    // PromotionCandidate is counted as delegate (the delegate still runs
+    // until promotion completes), so native_count + delegate_count == total.
     assert_eq!(reg.native_count(), 0);
-    assert_eq!(reg.delegate_count(), 0);
+    assert_eq!(reg.delegate_count(), 1);
     assert_eq!(reg.len(), 1);
 }
 
@@ -2582,11 +2583,11 @@ fn replacement_progress_candidate_slot_not_counted_as_delegate() {
         .snapshot_replacement_progress("t", "d", "p", &BTreeMap::new())
         .unwrap();
 
-    // Candidate is neither native nor delegate
+    // PromotionCandidate is counted as delegate (the delegate still runs
+    // until promotion completes).
     assert_eq!(snapshot.native_slots, 0);
-    assert_eq!(snapshot.delegate_slots, 0);
-    // But it IS not native, so it appears in replacement order
-    // (the code checks !entry.status.is_native(), not entry.status.is_delegate())
+    assert_eq!(snapshot.delegate_slots, 1);
+    // It is not native, so it appears in recommended replacement order.
     assert_eq!(snapshot.recommended_replacement_order.len(), 1);
 }
 

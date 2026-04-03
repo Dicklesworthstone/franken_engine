@@ -461,7 +461,13 @@ fn raw_expression_for_complex_syntax() {
         .expect("complex expression");
     match &tree.body[0] {
         Statement::Expression(expr) => {
-            assert!(matches!(&expr.expression, Expression::Raw(v) if v == "a + b * c"));
+            // The parser now fully parses binary expressions instead of falling
+            // back to Expression::Raw.  "a + b * c" becomes Add(a, Mul(b, c)).
+            assert!(
+                matches!(&expr.expression, Expression::Binary { .. }),
+                "expected Binary expression, got {:?}",
+                expr.expression,
+            );
         }
         _ => panic!("expected expression"),
     }

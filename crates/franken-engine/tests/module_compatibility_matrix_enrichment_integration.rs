@@ -266,9 +266,9 @@ fn interop_gate_script_emits_trace_ids_artifact_contract() {
     for needle in [
         "trace_ids_path=\"${run_dir}/trace_ids.json\"",
         "write_trace_ids()",
-        "\"trace_ids\": \"${trace_ids_path}\"",
-        "\"step_logs\": \"${step_logs_dir}\"",
-        "\"first_step_log\": \"${step_logs_dir}/step_000.log\"",
+        "\\\"trace_ids\\\": \\\"${trace_ids_path}\\\"",
+        "\\\"step_logs\\\": \\\"${step_logs_dir}\\\"",
+        "\\\"first_step_log\\\": \\\"${step_logs_dir}/step_000.log\\\"",
         "cat ${trace_ids_path}",
         "cat ${step_logs_dir}/step_000.log",
         "rgc module interop verification matrix trace ids: ${trace_ids_path}",
@@ -333,7 +333,7 @@ fn interop_gate_script_emits_operator_verification_commands_documented_in_readme
         "cat ${trace_ids_path}",
         "cat ${step_logs_dir}/step_000.log",
         "./scripts/e2e/rgc_module_resolution_trace_contract_smoke.sh ${module_resolution_trace_path}",
-        "rg -n 'compatibility_disposition|remediation_guidance' crates/franken-engine/src/esm_cjs_interop_parity.rs",
+        "rg -n '\\''compatibility_disposition|remediation_guidance'\\'' crates/franken-engine/src/esm_cjs_interop_parity.rs",
     ] {
         assert!(
             script.contains(needle),

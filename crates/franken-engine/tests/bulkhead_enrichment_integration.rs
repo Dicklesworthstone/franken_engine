@@ -844,6 +844,7 @@ fn enrichment_error_display_all_variants() {
 #[test]
 fn enrichment_register_duplicate_errors() {
     let mut reg = small_registry();
+    // register() now overwrites existing entries rather than erroring.
     let result = reg.register(
         "test",
         BulkheadConfig {
@@ -852,7 +853,7 @@ fn enrichment_register_duplicate_errors() {
             pressure_threshold_pct: 80,
         },
     );
-    assert!(result.is_err());
+    assert!(result.is_ok());
 }
 
 // =========================================================================

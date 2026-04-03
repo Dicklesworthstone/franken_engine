@@ -763,7 +763,9 @@ fn test_certify_substrate_overrides_not_applied_for_cold_profile() {
 
 #[test]
 fn test_apply_override_debug_mode_caps_confidence() {
-    let profile = hot_profile("debug-cap", SubstrateKind::FlatArray, 50_000);
+    // Need enough accesses to get confidence > 500_000.
+    // confidence = min(access_count * 1_000_000 / 1_000_000, 950_000) = min(access_count, 950_000).
+    let profile = hot_profile("debug-cap", SubstrateKind::FlatArray, 600_000);
     let mut decision = evaluate_substrate(&profile, None);
     // Ensure initial confidence is above 500_000
     assert!(decision.confidence_millionths > 500_000);

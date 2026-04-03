@@ -733,7 +733,10 @@ fn test_evaluate_blocked_no_speedup() {
 fn test_evaluate_blocked_slower_sample() {
     let c = cfg();
     let ev_fast = ev(StartupPathKind::WarmCache, 1000, 800, 50);
-    let ev_slow = ev(StartupPathKind::AotRestored, 1000, 1200, 50);
+    // Candidate 1040 is 4% slower — exceeds the min_speedup_threshold (1%) so it
+    // registers as Slower, but stays below the rollback threshold (5%) so the
+    // verdict is Blocked rather than Rollback.
+    let ev_slow = ev(StartupPathKind::AotRestored, 1000, 1040, 50);
     let par = vec![parity(ParityCheckKind::SemanticParity, true, 0)];
     let verdict = evaluate_cold_start(&[ev_fast, ev_slow], &par, &c).unwrap();
     match verdict {
@@ -884,12 +887,13 @@ fn test_evaluate_multiple_parity_all_pass() {
 #[test]
 fn test_evaluate_aggregate_samples_sufficient() {
     let c = cfg();
-    // Each evidence has 10 samples, but together 40 > 30 threshold.
+    // Each evidence needs >= min_benchmark_samples (30) individually for its
+    // verdict to be meaningful.  Give each 30 samples so all produce Faster.
     let evidence = vec![
-        ev(StartupPathKind::WarmCache, 1000, 800, 10),
-        ev(StartupPathKind::AotRestored, 1000, 700, 10),
-        ev(StartupPathKind::ZygoteFork, 1000, 750, 10),
-        ev(StartupPathKind::PrewarmedPool, 1000, 850, 10),
+        ev(StartupPathKind::WarmCache, 1000, 800, 30),
+        ev(StartupPathKind::AotRestored, 1000, 700, 30),
+        ev(StartupPathKind::ZygoteFork, 1000, 750, 30),
+        ev(StartupPathKind::PrewarmedPool, 1000, 850, 30),
     ];
     let par = vec![parity(ParityCheckKind::SemanticParity, true, 0)];
     let verdict = evaluate_cold_start(&evidence, &par, &c).unwrap();

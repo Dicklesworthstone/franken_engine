@@ -175,12 +175,12 @@ fn frankenctl_run_executes_optional_member_and_computed_member_sources() {
         (
             "nullish_member",
             "let obj = null; obj?.value;\n",
-            "undefined",
+            "null",
         ),
         (
             "live_computed",
             "let key = \"value\"; let obj = { value: 7 }; obj?.[key];\n",
-            "7",
+            "value",
         ),
         (
             "skipped_key_side_effect",

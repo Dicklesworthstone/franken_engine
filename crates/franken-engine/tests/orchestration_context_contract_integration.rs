@@ -186,7 +186,9 @@ fn integration_derive_child_exceeds_fraction_strict() {
 #[test]
 fn integration_derive_child_depth_limit() {
     let mut parent = root_ctx("parent", 100_000);
-    parent.depth = 63; // One below max of 64.
+    // child_depth = parent.depth + 1; exceeds when child_depth > max_depth (64).
+    // So parent.depth must be 64 to make child_depth = 65 > 64.
+    parent.depth = 64;
     let rule = default_rule();
     let err = derive_child_context(
         &mut parent,

@@ -832,8 +832,8 @@ fn correlated_regression_from_e2e_has_complete_fields() {
         )
         .unwrap();
 
-    let event_a = r#"{"schema_version":"franken-engine.parser-log-event.v1","trace_id":"ta","decision_id":"da","policy_id":"p","component":"parser","event":"drift_detected","outcome":"fail","error_code":"FE-001","scenario_id":"fixture-x"}"#;
-    let event_b = r#"{"schema_version":"franken-engine.parser-log-event.v1","trace_id":"tb","decision_id":"db","policy_id":"p","component":"parser","event":"drift_detected","outcome":"fail","error_code":"FE-001","scenario_id":"fixture-x"}"#;
+    let event_a = r#"{"schema_version":"franken-engine.parser-log-event.v1","trace_id":"ta","decision_id":"da","policy_id":"p","component":"parser","event":"drift_detected","outcome":"fail","error_code":"FE-001","scenario_id":"fixture-x","replay_command":"./replay_a.sh"}"#;
+    let event_b = r#"{"schema_version":"franken-engine.parser-log-event.v1","trace_id":"tb","decision_id":"db","policy_id":"p","component":"parser","event":"drift_detected","outcome":"fail","error_code":"FE-001","scenario_id":"fixture-x","replay_command":"./replay_b.sh"}"#;
     builder.add_events_jsonl("run-field-a", event_a).unwrap();
     builder.add_events_jsonl("run-field-b", event_b).unwrap();
 

@@ -524,10 +524,10 @@ fn track_e_contract_bead_id_is_hierarchical() {
         repo_root().join("docs/frx_track_e_verification_fuzz_formal_coverage_sprint_v1.json");
     let raw = fs::read_to_string(&path).expect("read JSON");
     let value: Value = serde_json::from_str(&raw).expect("parse");
-    let bead_id = value["bead_id"].as_str().expect("bead_id");
+    let bead_id = value["primary_bead"].as_str().expect("primary_bead");
     assert!(
         bead_id.starts_with("bd-"),
-        "bead_id must start with bd-: {bead_id}"
+        "primary_bead must start with bd-: {bead_id}"
     );
 }
 
@@ -538,9 +538,9 @@ fn track_e_contract_outputs_blocking_reports_exists() {
     let raw = fs::read_to_string(&path).expect("read JSON");
     let value: Value = serde_json::from_str(&raw).expect("parse");
     assert!(
-        value["outputs"]["blocking_reports"].is_object()
-            || value["outputs"]["blocking_reports"].is_array(),
-        "outputs.blocking_reports must exist"
+        value["outputs"]["blocking_report"].is_object()
+            || value["outputs"]["blocking_report"].is_array(),
+        "outputs.blocking_report must exist"
     );
 }
 

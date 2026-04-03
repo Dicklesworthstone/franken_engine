@@ -520,12 +520,13 @@ fn report_fatal_violation_blocks_gate() {
 
 #[test]
 fn report_non_fatal_violation_still_blocks_gate() {
-    // Any violated_count > 0 blocks the gate, not just fatal
+    // Only violations at severity >= Error block the gate.
+    // A Warning-level violation does NOT block the gate.
     let evals = vec![ObligationEvaluation {
         obligation_id: ObligationId("obl-1".into()),
         template_id: "t".into(),
         category: ObligationCategory::Liveness,
-        severity: ObligationSeverity::Warning,
+        severity: ObligationSeverity::Error,
         status: ObligationStatus::Violated,
         epoch: epoch(1),
         observed_value: Some(0),

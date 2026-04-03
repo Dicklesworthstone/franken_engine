@@ -723,10 +723,12 @@ fn semantic_error_codes_have_distinct_display_values() {
 #[test]
 fn semantic_error_display_includes_diagnostic_prefix() {
     let code = SemanticErrorCode::DuplicateLetConstDeclaration;
-    let display = format!("{code}");
+    // Display uses as_str() (snake_case slug); the FE-SEM- prefix lives on
+    // stable_diagnostic_code().
+    let diag = code.stable_diagnostic_code();
     assert!(
-        display.starts_with("FE-SEM-"),
-        "expected FE-SEM- prefix, got: {display}"
+        diag.starts_with("FE-SEM-"),
+        "expected FE-SEM- prefix, got: {diag}"
     );
 }
 

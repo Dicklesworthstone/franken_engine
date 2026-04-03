@@ -389,7 +389,9 @@ fn safety_lazy_inline_unsupported_pattern() {
 
 #[test]
 fn safety_suspense_constant_folding_pattern_ok() {
-    // Suspense + ConstantFolding: async boundary but NOT InlineExpansion, so pattern is OK.
+    // Suspense + ConstantFolding: async boundary with ConstantFolding triggers
+    // the unsupported-pattern check (InlineExpansion | ConstantFolding are both
+    // rejected for async boundaries).
     let req = suspense_islands();
     let checks = evaluate_safety(&req);
     let unsup = checks
@@ -397,8 +399,8 @@ fn safety_suspense_constant_folding_pattern_ok() {
         .find(|c| c.check_kind == SafetyCheckKind::UnsupportedPatternAbsence)
         .unwrap();
     assert!(
-        unsup.passed,
-        "Suspense+ConstantFolding should not trigger unsupported pattern"
+        !unsup.passed,
+        "Suspense+ConstantFolding should trigger unsupported pattern"
     );
 }
 
@@ -517,6 +519,7 @@ fn specialize_class_rejected_purity_required() {
 fn specialize_lazy_inline_rejected_unsupported() {
     let mut cfg = SpecializationConfig::default_config();
     cfg.require_purity_proof = false;
+    cfg.min_speedup_threshold_millionths = 0; // avoid low-benefit rejection before unsupported check
     let result = specialize_lane(&lazy_streaming(), &cfg).unwrap();
     assert!(result.is_rejected());
     assert!(

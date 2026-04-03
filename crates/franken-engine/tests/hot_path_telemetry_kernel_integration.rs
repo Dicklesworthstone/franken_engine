@@ -173,8 +173,10 @@ fn integration_submit_returns_entry_with_correct_fields() {
 
 #[test]
 fn integration_budget_exhaustion_transitions_to_degraded() {
-    let mut k = make_kernel("k1", MILLION, 5);
-    for i in 0..5 {
+    let mut k = make_kernel("k1", MILLION, 3);
+    // Budget of 3 exhausts before adaptive rate degradation kicks in (at 75%).
+    // With 100% sampling rate, all 3 submissions are accepted, then budget hits 0.
+    for i in 0..3 {
         let result = submit_observation(&mut k, &format!("key_{i}"), MILLION);
         assert!(result.is_ok());
     }

@@ -463,8 +463,10 @@ fn test_repr_permissive_passes() {
 
 #[test]
 fn test_repr_marginal() {
+    // equal_families() produce entropy == FIXED_ONE; require strictly more so entropy_ok fails
+    // while gini_ok and share_ok still pass, yielding MarginallyRepresentative (2 of 3 pass).
     let config = GateConfig {
-        min_entropy: FIXED_ONE,
+        min_entropy: FIXED_ONE + 1,
         ..GateConfig::default()
     };
     assert_eq!(
@@ -549,8 +551,10 @@ fn test_evaluate_recommendations() {
 
 #[test]
 fn test_evaluate_permissive_passes() {
+    // dominant_families() has all 9 families so it won't trigger the CherryPicked heuristic
+    // (which fires when covered_families <= 2 and max_family_share > 500_000).
     assert!(
-        evaluate(&cherry_picked_families(), &GateConfig::permissive())
+        evaluate(&dominant_families(), &GateConfig::permissive())
             .decision
             .allows_proceed()
     );
@@ -795,16 +799,14 @@ fn test_all_families_one_workload_fails() {
 
 #[test]
 fn test_permissive_single_family_passes() {
-    let r = evaluate(
-        &[FamilyCoverage::new(
-            WorkloadFamily::ResourceSpiky,
-            1,
-            FIXED_ONE,
-            FIXED_ONE,
-            0,
-        )],
-        &GateConfig::permissive(),
-    );
+    // Need >= 3 families to avoid the CherryPicked heuristic
+    // (covered_families <= 2 && max_family_share > 500_000).
+    let fams = vec![
+        FamilyCoverage::new(WorkloadFamily::ResourceSpiky, 1, 400_000, FIXED_ONE, 0),
+        FamilyCoverage::new(WorkloadFamily::BranchHeavy, 1, 300_000, FIXED_ONE, 0),
+        FamilyCoverage::new(WorkloadFamily::Vectorizable, 1, 300_000, FIXED_ONE, 0),
+    ];
+    let r = evaluate(&fams, &GateConfig::permissive());
     assert!(r.decision.allows_proceed());
 }
 

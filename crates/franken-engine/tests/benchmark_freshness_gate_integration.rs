@@ -555,11 +555,16 @@ fn test_silence_reset_by_alarm_and_acquisition() {
     gate.silence_tracker.check_silence(epoch(200), 50);
     assert!(gate.silence_tracker.silence_exceeded);
 
-    gate.record_acquisition(make_acquisition(
+    // Use a directly-constructed AcquisitionEvidence with a recent epoch.
+    // The make_acquisition helper uses epoch(10) which is regressive
+    // (before the last signal at epoch(100)) and would be ignored.
+    gate.record_acquisition(AcquisitionEvidence::new(
         ShiftDomain::General,
         50,
         100,
         AcquisitionStatus::Active,
+        epoch(200),
+        100_000,
     ));
     assert!(!gate.silence_tracker.silence_exceeded);
 }

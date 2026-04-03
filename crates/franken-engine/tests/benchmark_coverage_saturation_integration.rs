@@ -1282,6 +1282,12 @@ fn e2e_progression_from_empty_to_saturated() {
     config.min_entries_per_family = 2;
     config.min_saturation_score_millionths = 200_000;
     config.min_feature_diversity = 1;
+    // Restrict target families to only the two we populate, otherwise the 7
+    // uncovered families force a Sparse verdict.
+    config.target_families = [WorkloadFamily::BranchHeavy, WorkloadFamily::Vectorizable]
+        .iter()
+        .copied()
+        .collect();
 
     let mut board = SaturationBoard::new();
 
@@ -1452,6 +1458,12 @@ fn e2e_adequate_when_not_all_saturated() {
     config.min_families_covered = 2;
     config.min_entries_per_family = 1;
     config.min_saturation_score_millionths = 999_999;
+    // Restrict target families to only the two we populate, otherwise the 7
+    // uncovered families force a Sparse verdict instead of Adequate.
+    config.target_families = [WorkloadFamily::BranchHeavy, WorkloadFamily::Vectorizable]
+        .iter()
+        .copied()
+        .collect();
 
     board
         .add_entry(make_entry(

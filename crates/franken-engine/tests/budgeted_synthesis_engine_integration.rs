@@ -815,8 +815,8 @@ fn archive_no_counterexamples_from_verified() {
     let r = SynthesisReport::new(epoch(), "k1", SynthesisBudget::default(), candidates);
     let mut a = CounterexampleArchive::new();
     a.ingest(&r);
-    // verified candidates have no counterexamples, but ingest creates the entry
-    assert_eq!(a.schema_count(), 1);
+    // verified candidates have no counterexamples so ingest does not create an entry
+    assert_eq!(a.schema_count(), 0);
     assert_eq!(a.total_count, 0);
     assert!(a.for_schema("k1").is_empty());
 }

@@ -18,6 +18,7 @@
 )]
 
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -39,6 +40,8 @@ use frankenengine_engine::stdlib::{
 };
 
 const FP_SCALE: i64 = 1_000_000;
+const JSON_STRINGIFY_INLINE_ARTIFACT_BEGIN: &str = "__RGC_JSON_STRINGIFY_ARTIFACT_BEGIN__:";
+const JSON_STRINGIFY_INLINE_ARTIFACT_END: &str = "__RGC_JSON_STRINGIFY_ARTIFACT_END__:";
 
 fn parse_json_value(input: &str) -> Result<JsValue, StdlibError> {
     let mut heap = ObjectHeap::new();
@@ -1128,6 +1131,27 @@ fn json_stringify_compound_traversal_scenario_emits_artifact_bundle() {
     .expect("parse scenario report");
     assert_eq!(saved_report["bead_id"].as_str(), Some(BEAD_ID));
     assert_eq!(saved_report["case_count"].as_u64(), Some(6));
+
+    for required in [
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "trace_ids.json",
+        REPORT_NAME,
+    ] {
+        emit_json_stringify_inline_artifact(
+            required,
+            &fs::read_to_string(artifact_dir.join(required)).expect("read inline artifact"),
+        );
+    }
+    for idx in 0..6 {
+        let relative = format!("step_logs/step_{idx:03}.log");
+        emit_json_stringify_inline_artifact(
+            relative.as_str(),
+            &fs::read_to_string(artifact_dir.join(relative.as_str()))
+                .expect("read inline step log"),
+        );
+    }
 }
 
 #[test]
@@ -2661,6 +2685,20 @@ fn json_stringify_compound_traversal_artifact_dir() -> PathBuf {
     std::env::var_os("RGC_JSON_STRINGIFY_COMPOUND_TRAVERSAL_ARTIFACT_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| artifact_root("json_stringify_compound_traversal"))
+}
+
+fn emit_json_stringify_inline_artifact(relative_path: &str, content: &str) {
+    if std::env::var_os("RGC_JSON_STRINGIFY_COMPOUND_TRAVERSAL_INLINE_ARTIFACTS").is_none() {
+        return;
+    }
+
+    println!("{JSON_STRINGIFY_INLINE_ARTIFACT_BEGIN}{relative_path}");
+    print!("{content}");
+    if !content.ends_with('\n') {
+        println!();
+    }
+    println!("{JSON_STRINGIFY_INLINE_ARTIFACT_END}{relative_path}");
+    std::io::stdout().flush().expect("flush inline artifact");
 }
 
 // ---------------------------------------------------------------------------

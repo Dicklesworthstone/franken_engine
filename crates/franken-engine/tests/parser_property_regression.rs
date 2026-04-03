@@ -740,8 +740,9 @@ fn parse_error_code_as_str_is_nonempty_and_snake_case() {
         let s = code.as_str();
         assert!(!s.is_empty());
         assert!(
-            s.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
-            "as_str should be snake_case, got {s}"
+            s.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+            "as_str should be snake_case (with optional digits), got {s}"
         );
     }
 }

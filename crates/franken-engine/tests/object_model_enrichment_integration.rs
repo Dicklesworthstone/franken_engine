@@ -1050,8 +1050,8 @@ fn enrichment_set_property_accessor_rejects() {
         },
     )
     .unwrap();
-    let result = heap.set_property(obj, str_key("x"), int_val(99)).unwrap();
-    assert!(!result);
+    let result = heap.set_property(obj, str_key("x"), int_val(99));
+    assert!(result.is_err(), "accessor set should return TypeError");
 }
 
 #[test]

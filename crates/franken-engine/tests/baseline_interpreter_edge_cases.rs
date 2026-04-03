@@ -527,8 +527,9 @@ fn mul_type_error() {
             rhs: 2,
         },
     ]);
-    let err = quickjs_execute(&m).unwrap_err();
-    assert!(matches!(err, InterpreterError::TypeError { .. }));
+    // JS semantics: true coerces to 1, so true * 2 = 2
+    let result = quickjs_execute(&m).unwrap();
+    assert_eq!(result.value, Value::Int(2));
 }
 
 #[test]
@@ -542,8 +543,9 @@ fn div_type_error() {
             rhs: 2,
         },
     ]);
-    let err = quickjs_execute(&m).unwrap_err();
-    assert!(matches!(err, InterpreterError::TypeError { .. }));
+    // JS semantics: null coerces to 0, so null / 1 = 0
+    let result = quickjs_execute(&m).unwrap();
+    assert_eq!(result.value, Value::Int(0));
 }
 
 // ===========================================================================

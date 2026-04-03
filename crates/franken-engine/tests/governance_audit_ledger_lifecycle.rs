@@ -945,7 +945,7 @@ fn governance_log_event_fields_are_populated_on_success() {
     let event = &events[0];
     assert_eq!(event.component, "governance_audit_ledger");
     assert_eq!(event.event, "append_decision");
-    assert_eq!(event.outcome, "accepted");
+    assert_eq!(event.outcome, "success");
     assert!(event.error_code.is_none());
     assert_eq!(event.decision_id, "evt-check");
     assert!(!event.trace_id.is_empty());

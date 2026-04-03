@@ -270,8 +270,7 @@ fn enrichment_context_tick_beyond_bound_returns_false() {
     ctx.create_mask(&justification("checkpoint_write")).unwrap();
     assert!(ctx.tick()); // 1
     assert!(ctx.tick()); // 2
-    assert!(ctx.tick()); // 3
-    assert!(!ctx.tick()); // 4 — exceeded
+    assert!(!ctx.tick()); // 3 — hit bound (ops_executed reaches max_ops)
 }
 
 // ===========================================================================

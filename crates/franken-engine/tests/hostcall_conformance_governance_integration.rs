@@ -631,6 +631,8 @@ fn test_e2e_permissive_config_approves_low_conformance() {
 #[test]
 fn test_e2e_degraded_mode_with_ack_passes() {
     let mut ev = GovernanceEvaluator::with_config(GovernanceConfig::permissive());
+    // Satisfy required_axes=1 from the permissive config.
+    ev.add_conformance(ConformanceAxis::Protocol, 50, 50);
     ev.add_degraded_mode(DegradedModeKind::PartialFunctionality, 1_000, true);
     let receipt = ev.evaluate(ep());
     assert!(receipt.is_approved());

@@ -318,11 +318,11 @@ fn migration_state_display_all() {
 
 #[test]
 fn migration_state_is_terminal() {
+    // Source: is_terminal matches Committed | RolledBack | DryRunFailed only.
     let terminal = [
         MigrationState::Committed,
         MigrationState::RolledBack,
         MigrationState::DryRunFailed,
-        MigrationState::VerificationFailed,
     ];
     for state in &terminal {
         assert!(state.is_terminal(), "{state:?} should be terminal");
@@ -335,6 +335,7 @@ fn migration_state_is_terminal() {
         MigrationState::Executing,
         MigrationState::Verifying,
         MigrationState::Verified,
+        MigrationState::VerificationFailed,
         MigrationState::RollingBack,
     ];
     for state in &non_terminal {

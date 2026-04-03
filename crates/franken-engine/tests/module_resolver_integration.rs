@@ -464,6 +464,11 @@ fn observe_scoped_bare_require_index_mjs_behavior(mode: CompatibilityMode) -> St
                     "@scope/pkg.js",
                     "@scope/pkg/index.cjs",
                     "@scope/pkg/index.js",
+                    "/@scope/pkg",
+                    "/@scope/pkg.cjs",
+                    "/@scope/pkg.js",
+                    "/@scope/pkg/index.cjs",
+                    "/@scope/pkg/index.js",
                 ]
             );
             "reject_mjs_package_entry_probe".to_string()

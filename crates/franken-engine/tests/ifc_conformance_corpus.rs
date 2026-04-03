@@ -1109,10 +1109,11 @@ fn conformance_asset_manifest_current_schema_is_nonempty() {
 // ---------- canonicalize_conformance_output props dedup ----------
 
 #[test]
-fn canonicalize_conformance_output_deduplicates_props() {
+fn canonicalize_conformance_output_sorts_props() {
+    // canonicalize_conformance_output sorts but does not deduplicate.
     let raw = "props: alpha, alpha, beta, beta";
     let result = conformance_harness::canonicalize_conformance_output(raw);
-    assert_eq!(result, "props:alpha,beta");
+    assert_eq!(result, "props:alpha,alpha,beta,beta");
 }
 
 // ---------- DeterministicRng clone and copy ----------

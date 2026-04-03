@@ -332,12 +332,13 @@ fn version_compatibility_entry_serde_roundtrip() {
 }
 
 #[test]
-fn version_compatibility_registry_has_three_entries() {
+fn version_compatibility_registry_has_four_entries() {
     let registry = version_compatibility_registry();
-    assert_eq!(registry.len(), 3);
+    assert_eq!(registry.len(), 4);
     let boundaries: BTreeSet<&str> = registry.iter().map(|e| e.boundary.as_str()).collect();
     assert!(boundaries.contains("frankentui"));
     assert!(boundaries.contains("frankensqlite"));
+    assert!(boundaries.contains("sqlmodel_rust"));
     assert!(boundaries.contains("fastapi_rust"));
 }
 
@@ -359,11 +360,12 @@ fn version_compatibility_registry_current_geq_minimum() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn integration_point_inventory_has_three_boundaries() {
+fn integration_point_inventory_has_four_boundaries() {
     let inv = integration_point_inventory();
-    assert_eq!(inv.len(), 3);
+    assert_eq!(inv.len(), 4);
     assert!(inv.contains_key("frankentui"));
     assert!(inv.contains_key("frankensqlite"));
+    assert!(inv.contains_key("sqlmodel_rust"));
     assert!(inv.contains_key("fastapi_rust"));
 }
 

@@ -1145,11 +1145,12 @@ fn test_replay_command_contains_scenario_fixture_refs() {
         scenario_id: "my-scenario".to_string(),
         react_trace: mk_trace_with("r", "my-fixture", "my-scenario", events.clone()),
         franken_trace: mk_trace_with("f", "my-fixture", "my-scenario", events),
-        react_trace_path: Some("/data/react/traces".into()),
-        franken_trace_path: Some("/data/franken/traces".into()),
+        react_trace_path: Some("/data/react/traces/test.json".into()),
+        franken_trace_path: Some("/data/franken/traces/test.json".into()),
     };
     let result = evaluate_case(input).unwrap();
     assert!(result.replay_command.contains("my-fixture"));
+    // build_replay_command uses parent() on the path, so dirs are /data/react/traces and /data/franken/traces
     assert!(result.replay_command.contains("/data/react/traces"));
     assert!(result.replay_command.contains("/data/franken/traces"));
 }

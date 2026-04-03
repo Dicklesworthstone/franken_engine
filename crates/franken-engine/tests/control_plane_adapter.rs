@@ -169,15 +169,22 @@ fn adapter_surfaces_decision_and_evidence_without_direct_upstream_imports() {
     ));
     assert_eq!(adapter.events().len(), 1);
 
+    let action = verdict_to_action(verdict);
+    let chosen = match action {
+        "allow" => 0.1,
+        "deny" => 0.2,
+        "timeout" => 0.3,
+        _ => 0.1,
+    };
     let entry = control_plane::EvidenceLedgerBuilder::new()
         .ts_unix_ms(request.ts_unix_ms)
         .component("control_plane_adapter_test")
-        .action(verdict_to_action(verdict))
+        .action(action)
         .posterior(vec![0.8, 0.2])
         .expected_loss("allow", 0.1)
         .expected_loss("deny", 0.2)
         .expected_loss("timeout", 0.3)
-        .chosen_expected_loss(0.1)
+        .chosen_expected_loss(chosen)
         .calibration_score(0.95)
         .fallback_active(false)
         .build()

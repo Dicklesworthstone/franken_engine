@@ -429,7 +429,18 @@ fn constraint_lattice_cycle_detected() {
     let lattice = ConstraintLattice {
         top_id: "b".into(),
         bottom_id: "a".into(),
-        constraints: vec![],
+        constraints: vec![
+            SideConstraint {
+                constraint_id: "a".into(),
+                constraint_class: "base".into(),
+                description: "node a".into(),
+            },
+            SideConstraint {
+                constraint_id: "b".into(),
+                constraint_class: "base".into(),
+                description: "node b".into(),
+            },
+        ],
         covers: vec![
             CoverRelation {
                 lower: "a".into(),

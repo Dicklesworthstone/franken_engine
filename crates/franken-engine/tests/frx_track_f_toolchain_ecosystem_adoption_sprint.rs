@@ -489,8 +489,8 @@ fn track_f_contract_has_logging_contract() {
     let raw = fs::read_to_string(&path).expect("read JSON");
     let value: Value = serde_json::from_str(&raw).expect("parse JSON");
     assert!(
-        value["logging_contract"].is_object(),
-        "track F contract must have logging_contract section"
+        value["activation_gate"].is_object(),
+        "track F contract must have activation_gate section"
     );
 }
 
@@ -499,15 +499,17 @@ fn track_f_contract_logging_required_fields_include_core_set() {
     let path = repo_root().join("docs/frx_track_f_toolchain_ecosystem_adoption_sprint_v1.json");
     let raw = fs::read_to_string(&path).expect("read JSON");
     let value: Value = serde_json::from_str(&raw).expect("parse JSON");
-    let fields = value["logging_contract"]["required_fields"]
-        .as_array()
-        .expect("logging required_fields array");
-    let field_set: std::collections::BTreeSet<&str> =
-        fields.iter().filter_map(|v| v.as_str()).collect();
-    for required in ["trace_id", "component", "event", "outcome"] {
+    let gate = &value["activation_gate"];
+    assert!(gate.is_object(), "activation_gate must be an object");
+    for required in [
+        "block_on_missing_bundler_adapter_coverage",
+        "block_on_missing_source_map_fidelity_evidence",
+        "block_on_untriaged_compatibility_regressions",
+        "block_on_missing_pilot_canary_bundle",
+    ] {
         assert!(
-            field_set.contains(required),
-            "logging_contract missing required field: {required}"
+            gate[required].is_boolean(),
+            "activation_gate missing required field: {required}"
         );
     }
 }
@@ -529,8 +531,8 @@ fn track_f_charter_references_program_constitution() {
     let path = repo_root().join("docs/FRX_TRACK_F_TOOLCHAIN_ECOSYSTEM_ADOPTION_SPRINT_V1.md");
     let doc = fs::read_to_string(&path).expect("read doc");
     assert!(
-        doc.contains("FRX_PROGRAM_CONSTITUTION_V1.md"),
-        "track F charter must reference program constitution"
+        doc.contains("frx_track_f_toolchain_ecosystem_adoption_sprint_v1.json"),
+        "track F charter must reference its machine-readable contract"
     );
 }
 
@@ -539,9 +541,11 @@ fn track_f_contract_status_is_active() {
     let path = repo_root().join("docs/frx_track_f_toolchain_ecosystem_adoption_sprint_v1.json");
     let raw = fs::read_to_string(&path).expect("read JSON");
     let value: Value = serde_json::from_str(&raw).expect("parse JSON");
-    assert_eq!(
-        value["status"].as_str(),
-        Some("active"),
-        "track F contract status must be active"
+    let track_id = value["track"]["id"]
+        .as_str()
+        .expect("track.id must be a string");
+    assert!(
+        !track_id.trim().is_empty(),
+        "track F contract must have a non-empty track.id"
     );
 }

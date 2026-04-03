@@ -918,11 +918,11 @@ fn emit_structured_events_gate_report_event_is_present() {
         &report,
     );
 
-    // there should be a gate_report event
-    let gate_events: Vec<_> = events.iter().filter(|e| e.event == "gate_report").collect();
+    // there should be a gate_confidence_evaluated event
+    let gate_events: Vec<_> = events.iter().filter(|e| e.event == "gate_confidence_evaluated").collect();
     assert!(
         !gate_events.is_empty(),
-        "structured events must include a gate_report event"
+        "structured events must include a gate_confidence_evaluated event"
     );
     for ge in &gate_events {
         assert_eq!(ge.schema_version, FLAKE_WORKFLOW_EVENT_SCHEMA_VERSION);

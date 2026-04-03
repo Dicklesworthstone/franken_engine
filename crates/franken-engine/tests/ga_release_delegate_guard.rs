@@ -717,7 +717,8 @@ fn promotion_status_is_native_and_is_delegate() {
         candidate_digest: "sha256:c".to_string(),
     };
     assert!(!candidate.is_native());
-    assert!(!candidate.is_delegate());
+    // PromotionCandidate is still delegate-backed (delegate runs until promotion completes)
+    assert!(candidate.is_delegate());
 
     let promoted = PromotionStatus::Promoted {
         native_digest: "sha256:n".to_string(),

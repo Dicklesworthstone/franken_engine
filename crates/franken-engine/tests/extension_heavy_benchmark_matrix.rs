@@ -680,18 +680,18 @@ fn golden_output_workload_ids_match_matrix_workload_ids() {
 }
 
 #[test]
-fn workload_matrix_family_definitions_all_have_description() {
+fn workload_matrix_family_definitions_all_have_purpose() {
     let matrix = read_json("docs/extension_heavy_workload_matrix_v1.json");
     let families = matrix["family_definitions"].as_array().expect("array");
     for family in families {
         let fid = require_string_field(family, "family_id");
-        let desc = family
-            .get("description")
+        let purpose = family
+            .get("purpose")
             .and_then(Value::as_str)
-            .unwrap_or_else(|| panic!("family {fid} missing description"));
+            .unwrap_or_else(|| panic!("family {fid} missing purpose"));
         assert!(
-            !desc.trim().is_empty(),
-            "family {fid} description must be nonempty"
+            !purpose.trim().is_empty(),
+            "family {fid} purpose must be nonempty"
         );
     }
 }

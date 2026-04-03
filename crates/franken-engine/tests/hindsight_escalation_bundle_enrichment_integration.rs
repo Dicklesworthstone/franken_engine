@@ -1072,15 +1072,16 @@ fn enrichment_pipeline_advisory_within_budget_escalates() {
 
 #[test]
 fn enrichment_pipeline_warning_exceeds_default_budget_defers() {
-    // Warning content cost: 50000+30000+40000+60000 = 180000 > default budget 100000
-    // So with default budget, a below-threshold warning will defer
+    // Warning content has 4 items with severity-adjusted cost:
+    // (50000+30000+40000+60000) * 500000 / 1000000 = 90000
+    // Default budget is 100000, so 90000 fits within budget → Escalate
     let mut pipeline = default_pipeline(100);
     let receipt = pipeline.process_trigger(make_trigger(
         "warn-budget",
         EscalationTriggerKind::RegressionObserved,
         TriggerSeverity::Warning,
     ));
-    assert_eq!(receipt.decision, EscalationDecision::Defer);
+    assert_eq!(receipt.decision, EscalationDecision::Escalate);
 }
 
 #[test]

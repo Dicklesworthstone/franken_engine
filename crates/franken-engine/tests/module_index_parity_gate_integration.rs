@@ -687,7 +687,8 @@ fn test_evaluate_fail_open_insufficient() {
         &insufficient_cold_start(),
         100_000_000,
     );
-    assert_eq!(d, GateDecision::Approved);
+    // fail_open with insufficient cold-start data returns Inconclusive, not Approved.
+    assert_eq!(d, GateDecision::Inconclusive);
 }
 
 #[test]

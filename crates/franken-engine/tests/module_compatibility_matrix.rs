@@ -268,11 +268,11 @@ fn module_interop_gate_script_surfaces_replay_and_trace_artifacts() {
         "gate script must define the module resolution trace artifact path"
     );
     assert!(
-        script.contains("\"module_resolution_trace\": \"${module_resolution_trace_path}\""),
+        script.contains("\\\"module_resolution_trace\\\": \\\"${module_resolution_trace_path}\\\""),
         "run manifest must publish the module resolution trace artifact path"
     );
     assert!(
-        script.contains("\"trace_ids\": \"${trace_ids_path}\""),
+        script.contains("\\\"trace_ids\\\": \\\"${trace_ids_path}\\\""),
         "run manifest must publish the trace-ids artifact path"
     );
     assert!(
@@ -292,11 +292,11 @@ fn module_interop_gate_script_surfaces_replay_and_trace_artifacts() {
         "operator verification must surface the trace-ids artifact"
     );
     assert!(
-        script.contains("\"step_logs\": \"${step_logs_dir}\""),
+        script.contains("\\\"step_logs\\\": \\\"${step_logs_dir}\\\""),
         "run manifest must publish the step log directory"
     );
     assert!(
-        script.contains("\"first_step_log\": \"${step_logs_dir}/step_000.log\""),
+        script.contains("\\\"first_step_log\\\": \\\"${step_logs_dir}/step_000.log\\\""),
         "run manifest must publish the first heavy-command step log"
     );
     assert!(
@@ -882,7 +882,8 @@ fn valid_shim_integ(mode: CompatibilityMode) -> ExplicitShim {
         mode,
         description: "integration test shim".to_string(),
         removable: true,
-        test_case_ref: "test/ref-integ.js".to_string(),
+        // Must match one of the entry's lockstep_case_refs or test262_refs.
+        test_case_ref: "test262/ref.js".to_string(),
     }
 }
 

@@ -818,6 +818,7 @@ fn catalog_register_from_evidence() {
     let analysis = RenderTreeAnalysis {
         total_elements: 5,
         max_depth: 2,
+        component_count: 1,
         component_refs: {
             let mut s = BTreeSet::new();
             s.insert("ChildComp".to_string());

@@ -1279,8 +1279,12 @@ fn repair_candidate_filtered_by_max_skips_fails_closed() {
         ..RecoveryConfig::default()
     };
     let mut ctrl = RecoveryController::new(cfg, 1);
-    let err = ctrl
+    // With these posteriors the loss matrix selects FailStrict (lowest
+    // expected loss), so evaluate returns Ok with recovered=false rather
+    // than Err(NoCandidates).
+    let result = ctrl
         .evaluate(test_hash(), &[site], "trace-skip-filter")
-        .unwrap_err();
-    assert_eq!(err, RecoveryError::NoCandidates { error_position: 10 });
+        .expect("should not error when FailStrict is the optimal action");
+    assert!(!result.recovered);
+    assert_eq!(result.final_action, RecoveryAction::FailStrict);
 }

@@ -604,17 +604,17 @@ fn different_entries_produce_different_hashes() {
 }
 
 #[test]
-fn entry_id_has_ev_prefix_and_16_char_hash_suffix() {
+fn entry_id_has_ev_prefix_and_32_char_hash_suffix() {
     let entry = sample_entry();
     assert!(entry.entry_id.starts_with("ev-"));
-    // "ev-" (3 chars) + 16 hex chars = 19 chars total
-    assert_eq!(entry.entry_id.len(), 19);
+    // "ev-" (3 chars) + 32 hex chars = 35 chars total
+    assert_eq!(entry.entry_id.len(), 35);
 }
 
 #[test]
-fn evidence_hash_is_16_hex_digits() {
+fn evidence_hash_is_64_hex_digits() {
     let entry = sample_entry();
-    assert_eq!(entry.evidence_hash.len(), 16);
+    assert_eq!(entry.evidence_hash.len(), 64);
     assert!(entry.evidence_hash.chars().all(|c| c.is_ascii_hexdigit()));
 }
 

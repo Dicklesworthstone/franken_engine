@@ -297,7 +297,7 @@ fn rgc_610_doc_wires_scripts_and_artifacts() {
     assert!(doc.contains("./scripts/run_rgc_cold_start_compilation_lane.sh ci"));
     assert!(doc.contains("./scripts/e2e/rgc_cold_start_compilation_lane_replay.sh ci"));
     assert!(doc.contains(
-        "`check` mode emits only `run_manifest.json`, `events.jsonl`, `commands.txt`, and `step_logs/`."
+        "`check` mode emits only `run_manifest.json`, `events.jsonl`, `commands.txt`,\nand `step_logs/`."
     ));
     assert!(doc.contains("`run` and `ci` emit the full cold-start evidence bundle."));
     assert!(doc.contains(REPORT_FILE));

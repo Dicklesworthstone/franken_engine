@@ -961,6 +961,15 @@ fn enrichment_high_tail_regression_denied() {
 #[test]
 fn enrichment_high_interference_denied() {
     let mut gate = SpecializationRollbackGate::with_defaults(SecurityEpoch::from_raw(1));
+    // Create an interference report with severity above DEFAULT_MAX_INTERFERENCE_MILLIONTHS (100_000)
+    let high_interference_report = InterferenceReport::new(
+        "ir-high",
+        "envelope-a",
+        "envelope-b",
+        InterferenceKind::SharedState,
+        200_000,
+        BTreeSet::new(),
+    );
     let ev = SpecializationEvidence::new(
         "ev-int",
         SpecializationKind::AllocationElision,
@@ -968,8 +977,8 @@ fn enrichment_high_interference_denied() {
         100,
         1_000_000,
         0,
-        200_000, // above DEFAULT_MAX_INTERFERENCE_MILLIONTHS (100_000)
-        vec![],
+        0,
+        vec![high_interference_report],
     );
     let verdict = gate.evaluate("r-int", &ev, 0);
     assert_eq!(verdict, GateVerdict::Denied);

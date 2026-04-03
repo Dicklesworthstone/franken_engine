@@ -504,9 +504,9 @@ fn runner_script_contains_manifest_auto_discovery_contract() {
         "FE-PARSER-CROSS-ARCH-MATRIX-0002",
         "FE-PARSER-CROSS-ARCH-MATRIX-0003",
         "\"matrix_inputs\": {",
-        "\"missing_required_inputs\":",
-        "\"event\":\"gate_completed\"",
-        "\"missing_required_inputs\":${missing_required_inputs}",
+        "\\\"missing_required_inputs\\\":",
+        "\\\"event\\\":\\\"gate_completed\\\"",
+        "\\\"missing_required_inputs\\\":${missing_required_inputs}",
         "auto_discovered",
     ] {
         assert!(

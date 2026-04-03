@@ -179,7 +179,8 @@ fn enrichment_packed_variants_are_packed() {
 #[test]
 fn enrichment_immutable_variants() {
     assert!(ElementKind::Frozen.is_immutable());
-    assert!(ElementKind::Sealed.is_immutable());
+    // Sealed arrays have fixed length but mutable values, so not immutable.
+    assert!(!ElementKind::Sealed.is_immutable());
     assert!(!ElementKind::PackedSmi.is_immutable());
     assert!(!ElementKind::HoleyElements.is_immutable());
 }
@@ -614,7 +615,9 @@ fn enrichment_arrays_by_kind_groups_correctly() {
 #[test]
 fn enrichment_freeze_transition() {
     let mut engine = default_engine();
-    engine.register_array("arr1", ElementKind::PackedSmi, 10);
+    // Use PackedElements as initial kind — the transition lattice only
+    // allows PackedElements/HoleyElements -> Frozen (not PackedSmi -> Frozen).
+    engine.register_array("arr1", ElementKind::PackedElements, 10);
     let receipt = engine.transition_element_kind(
         "arr1",
         ElementKind::Frozen,

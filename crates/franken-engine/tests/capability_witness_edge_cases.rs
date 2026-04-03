@@ -766,12 +766,12 @@ fn validator_zero_trials_does_not_flag_confidence() {
 
     let validator = WitnessValidator::new();
     let errors = validator.validate(&witness);
-    // Should not have InvalidConfidence because n_trials == 0
+    // Zero trials means no empirical evidence — validator flags this as InvalidConfidence
     assert!(
-        !errors
+        errors
             .iter()
             .any(|e| matches!(e, WitnessError::InvalidConfidence { .. })),
-        "zero trials should skip confidence check, got: {errors:?}"
+        "zero trials should be flagged as InvalidConfidence, got: {errors:?}"
     );
 }
 

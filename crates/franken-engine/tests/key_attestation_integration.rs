@@ -430,7 +430,9 @@ fn is_expired_before_expiry() {
 #[test]
 fn is_expired_at_expiry() {
     let att = create_test_attestation(KeyRole::Signing, 1, 100, 200);
-    assert!(att.is_expired(DeterministicTimestamp(200)));
+    // Source uses strict greater-than: current_time.0 > expires_at.0
+    // At exactly expires_at, the attestation is NOT yet expired.
+    assert!(!att.is_expired(DeterministicTimestamp(200)));
 }
 
 #[test]
@@ -1560,7 +1562,9 @@ fn large_nonce_value() {
 fn minimal_expiry_window() {
     let att = create_test_attestation(KeyRole::Signing, 1, 100, 101);
     assert!(!att.is_expired(DeterministicTimestamp(100)));
-    assert!(att.is_expired(DeterministicTimestamp(101)));
+    // At exactly expires_at (101), not yet expired (strict greater-than).
+    assert!(!att.is_expired(DeterministicTimestamp(101)));
+    assert!(att.is_expired(DeterministicTimestamp(102)));
 }
 
 #[test]

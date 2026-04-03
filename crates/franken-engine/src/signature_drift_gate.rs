@@ -75,6 +75,9 @@ impl SignatureSnapshot {
             buf.extend_from_slice(DRIFT_GATE_SCHEMA_VERSION.as_bytes());
             buf.extend_from_slice(&(signature_id.len() as u64).to_le_bytes());
             buf.extend_from_slice(signature_id.as_bytes());
+            let regime_str = regime.to_string();
+            buf.extend_from_slice(&(regime_str.len() as u64).to_le_bytes());
+            buf.extend_from_slice(regime_str.as_bytes());
             buf.extend_from_slice(&(features.len() as u64).to_le_bytes());
             for (k, v) in &features {
                 buf.extend_from_slice(&(k.len() as u64).to_le_bytes());
@@ -82,6 +85,7 @@ impl SignatureSnapshot {
                 buf.extend_from_slice(&v.to_le_bytes());
             }
             buf.extend_from_slice(&observation_count.to_le_bytes());
+            buf.extend_from_slice(&epoch.as_u64().to_le_bytes());
             ContentHash::compute(&buf)
         };
         Self {
@@ -542,10 +546,15 @@ fn compute_decision_hash(
 ) -> ContentHash {
     let mut buf = Vec::new();
     buf.extend_from_slice(DRIFT_GATE_SCHEMA_VERSION.as_bytes());
+    buf.extend_from_slice(&(claim_id.len() as u64).to_le_bytes());
     buf.extend_from_slice(claim_id.as_bytes());
+    buf.extend_from_slice(&(verdict.len() as u64).to_le_bytes());
     buf.extend_from_slice(verdict.as_bytes());
+    buf.extend_from_slice(&(reasons.len() as u64).to_le_bytes());
     for r in reasons {
-        buf.extend_from_slice(r.to_string().as_bytes());
+        let r_str = r.to_string();
+        buf.extend_from_slice(&(r_str.len() as u64).to_le_bytes());
+        buf.extend_from_slice(r_str.as_bytes());
     }
     ContentHash::compute(&buf)
 }
@@ -600,6 +609,7 @@ pub fn batch_evaluate(
 
     let mut hash_buf = Vec::new();
     hash_buf.extend_from_slice(DRIFT_GATE_SCHEMA_VERSION.as_bytes());
+    hash_buf.extend_from_slice(&(decisions.len() as u64).to_le_bytes());
     for d in &decisions {
         hash_buf.extend_from_slice(d.content_hash.as_bytes());
     }
@@ -973,7 +983,9 @@ pub fn run_evidence_corpus(epoch: SecurityEpoch) -> (Vec<DriftGateSpecimen>, Con
     let specimens = build_evidence_corpus(epoch);
     let mut hash_buf = Vec::new();
     hash_buf.extend_from_slice(DRIFT_GATE_SCHEMA_VERSION.as_bytes());
+    hash_buf.extend_from_slice(&(specimens.len() as u64).to_le_bytes());
     for s in &specimens {
+        hash_buf.extend_from_slice(&(s.id.len() as u64).to_le_bytes());
         hash_buf.extend_from_slice(s.id.as_bytes());
         hash_buf.extend_from_slice(s.decision.content_hash.as_bytes());
     }

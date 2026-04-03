@@ -446,7 +446,9 @@ impl FlatteningInventory {
         buf.extend_from_slice(&self.assessed_epoch.as_u64().to_le_bytes());
         let mut sorted: Vec<_> = self.occurrences.iter().collect();
         sorted.sort_by(|a, b| a.id.cmp(&b.id));
+        buf.extend_from_slice(&(sorted.len() as u64).to_le_bytes());
         for occ in &sorted {
+            buf.extend_from_slice(&(occ.id.len() as u64).to_le_bytes());
             buf.extend_from_slice(occ.id.as_bytes());
             buf.extend_from_slice(occ.content_hash.as_bytes());
         }

@@ -2917,8 +2917,16 @@ fn find_top_level_eq(source: &str) -> Option<usize> {
             '=' if depth == 0 => {
                 // Skip `==` and `=>`
                 let next = source.as_bytes().get(i + 1).copied();
+                let prev = if i > 0 { source.as_bytes().get(i - 1).copied() } else { None };
                 if next != Some(b'=') && next != Some(b'>') {
-                    return Some(i);
+                    // Skip `!=`, `<=`, `>=`, `+=`, etc.
+                    let is_compound = matches!(
+                        prev,
+                        Some(b'<' | b'>' | b'!' | b'=' | b'+' | b'-' | b'*' | b'/' | b'%' | b'&' | b'|' | b'^' | b'~')
+                    );
+                    if !is_compound {
+                        return Some(i);
+                    }
                 }
             }
             _ => {}
@@ -2939,15 +2947,27 @@ fn parse_object_binding_pattern(
 
     let segments = split_pattern_elements(inner);
     let mut properties = Vec::with_capacity(segments.len());
+    let mut seen_rest = false;
 
     for segment in &segments {
         let seg = segment.trim();
+
+        if seen_rest {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "rest element must be the absolute last property in object pattern (no trailing commas allowed)",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
+
         if seg.is_empty() {
             continue;
         }
 
         // Rest element in object pattern: `...rest`
         if let Some(rest_src) = seg.strip_prefix("...") {
+            seen_rest = true;
             let inner_pat = parse_binding_pattern(rest_src.trim(), span, context)?;
             properties.push(ObjectPatternProperty {
                 key: Expression::Identifier(rest_src.trim().to_string()),
@@ -3006,31 +3026,6 @@ fn parse_object_binding_pattern(
                 shorthand: true,
             });
         }
-    }
-
-    // ES2020 early error: rest element must be last property
-    let rest_count = properties
-        .iter()
-        .filter(|p| matches!(&p.value, BindingPattern::Rest(_)))
-        .count();
-    if rest_count > 1 {
-        return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
-            "object pattern has more than one rest element",
-            context.source_label.to_string(),
-            Some(span.clone()),
-        ));
-    }
-    if rest_count == 1
-        && let Some(last) = properties.last()
-        && !matches!(&last.value, BindingPattern::Rest(_))
-    {
-        return Err(ParseError::new(
-            ParseErrorCode::UnsupportedSyntax,
-            "rest element must be the last property in object pattern",
-            context.source_label.to_string(),
-            Some(span.clone()),
-        ));
     }
 
     Ok(BindingPattern::ObjectPattern(properties))
@@ -3106,11 +3101,8 @@ fn parse_array_binding_pattern(
         ));
     }
     if let Some(&pos) = rest_positions.first() {
-        // Rest must be the last non-hole element
-        let last_non_hole = elements.iter().rposition(|e| e.is_some());
-        if let Some(last) = last_non_hole
-            && pos != last
-        {
+        // Rest must be the absolute last element (no trailing commas/holes allowed after it)
+        if pos != elements.len() - 1 {
             return Err(ParseError::new(
                 ParseErrorCode::UnsupportedSyntax,
                 "rest element must be the last element in array pattern",
@@ -7646,8 +7638,8 @@ mod tests {
             .expect_err("multiple rest in object pattern must fail");
         let msg = format!("{err}");
         assert!(
-            msg.contains("more than one rest"),
-            "error should mention multiple rest: {msg}"
+            msg.contains("rest element must be the absolute last property"),
+            "error should mention absolute last property: {msg}"
         );
     }
 

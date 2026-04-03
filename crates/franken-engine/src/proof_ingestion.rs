@@ -1092,11 +1092,10 @@ pub fn create_proof_input(
         payload: payload.to_vec(),
     };
 
-    // Sign the proof.
-    let mut sig_input = Vec::with_capacity(32 + proof.canonical_bytes().len());
-    sig_input.extend_from_slice(signing_key);
-    sig_input.extend_from_slice(&proof.canonical_bytes());
-    proof.issuer_signature = ContentHash::compute(&sig_input).as_bytes().to_vec();
+    // Sign the proof using proper keyed hash (matching compute_signature).
+    proof.issuer_signature = AuthenticityHash::compute_keyed(signing_key, &proof.canonical_bytes())
+        .as_bytes()
+        .to_vec();
 
     Ok(proof)
 }
@@ -1891,7 +1890,12 @@ mod tests {
         let cfg = test_config();
         let json = serde_json::to_string(&cfg).unwrap();
         let restored: IngestionConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored, cfg);
+        // signing_key is excluded from serialization (security: prevent key leakage),
+        // so it deserializes as the default [0; 32].
+        assert_eq!(restored.active_policy_id, cfg.active_policy_id);
+        assert_eq!(restored.churn_threshold, cfg.churn_threshold);
+        assert_eq!(restored.signing_key, [0u8; 32]);
+        assert!(!json.contains("signing_key"));
     }
 
     #[test]

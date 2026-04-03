@@ -851,21 +851,15 @@ impl ObjectHeap {
             match obj {
                 ManagedObject::Ordinary(o) => {
                     if let Some(desc) = o.get_own_property(&key) {
-                        if h == handle && desc.is_accessor() {
-                            // Accessor set trap on the receiver itself is
-                            // handled by interpreter.
-                            return Ok(false);
-                        }
-                        if h != handle && desc.is_accessor() {
-                            // Prototype has an accessor — per the spec we
-                            // create an own data property on the receiver
-                            // instead of invoking the accessor's setter.
-                            break;
+                        if desc.is_accessor() {
+                            return Err(ObjectError::TypeError(
+                                "accessor set must be handled by interpreter".to_string(),
+                            ));
                         }
                         if !desc.is_writable() {
                             return Ok(false); // Non-writable property found on object or its prototype chain
                         }
-                        // We found a writable property on the prototype chain, or on the object itself.
+                        // We found a writable data property on the prototype chain, or on the object itself.
                         break;
                     }
                     current = o.prototype;
@@ -4772,8 +4766,18 @@ mod tests {
         .unwrap();
 
         let child = heap.alloc(Some(proto));
-        // Child shadows with data property.
-        heap.set_property(child, str_key("x"), int_val(42)).unwrap();
+        // Child shadows with data property (must use define_property, not set_property, because inherited accessors intercept sets).
+        heap.define_property(
+            child,
+            str_key("x"),
+            PropertyDescriptor::Data {
+                value: int_val(42),
+                writable: true,
+                enumerable: true,
+                configurable: true,
+            },
+        )
+        .unwrap();
 
         // Child's own property takes precedence.
         assert_eq!(

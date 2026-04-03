@@ -248,6 +248,8 @@ fn unsupported_syntax_error(
 
 fn unsupported_frontier_expression_error(
     feature_family: &str,
+    diagnostic_code: &str,
+    site_id: &str,
     message_template: &str,
     span: Option<SourceSpan>,
 ) -> LoweringPipelineError {
@@ -257,13 +259,13 @@ fn unsupported_frontier_expression_error(
         hash_algorithm: PARSER_DIAGNOSTIC_HASH_ALGORITHM.to_string(),
         hash_prefix: PARSER_DIAGNOSTIC_HASH_PREFIX.to_string(),
         parse_error_code: ParseErrorCode::UnsupportedSyntax,
-        diagnostic_code: "FE-LOWER-OPTIONAL-CHAIN-0001".to_string(),
+        diagnostic_code: diagnostic_code.to_string(),
         category: ParseDiagnosticCategory::Syntax,
         severity: ParseDiagnosticSeverity::Error,
         message_template: message_template.to_string(),
         source_label: "ir0".to_string(),
         span,
-        site_id: "lower_ir0_to_ir1.optional_chaining_frontier".to_string(),
+        site_id: site_id.to_string(),
         stage: ParserGapStage::Ir0ToIr1,
         owner: COMPONENT.to_string(),
         feature_family: feature_family.to_string(),
@@ -1279,6 +1281,10 @@ fn lower_statement_to_ir1_with_flow(
                         .map_err(LoweringPipelineError::SemanticViolation)?;
                         ops.push(Ir1Op::StoreBinding { binding_id: bid });
                         ops.push(Ir1Op::Pop);
+                    } else {
+                        // The exception is pushed onto the stack by EnterCatch.
+                        // We must pop it so the stack remains balanced.
+                        ops.push(Ir1Op::Pop);
                     }
                     for inner in &handler.body.body {
                         lower_statement_to_ir1_with_flow(
@@ -1651,16 +1657,10 @@ pub fn lower_ir2_to_ir3(
                 let count = *arg_count;
                 let mut args = Vec::new();
                 for _ in 0..count {
-                    args.push(
-                        value_stack
-                            .pop()
-                            .unwrap_or(0),
-                    );
+                    args.push(value_stack.pop().unwrap_or(0));
                 }
                 args.reverse();
-                let _callee = value_stack
-                    .pop()
-                    .unwrap_or(0); // Pop callee, not used for HostCall cap
+                let _callee = value_stack.pop().unwrap_or(0); // Pop callee, not used for HostCall cap
                 let start = register_cursor;
                 for arg_reg in args {
                     let dst = alloc_register(&mut register_cursor);
@@ -1669,9 +1669,7 @@ pub fn lower_ir2_to_ir3(
                 }
                 (start, count)
             } else {
-                let hostcall_arg = value_stack
-                    .pop()
-                    .unwrap_or(0);
+                let hostcall_arg = value_stack.pop().unwrap_or(0);
                 let start = alloc_register(&mut register_cursor);
                 ir3.instructions.push(Ir3Instruction::Move {
                     dst: start,
@@ -1727,25 +1725,17 @@ pub fn lower_ir2_to_ir3(
                 let dst = *binding_registers
                     .entry(*binding_id)
                     .or_insert_with(|| alloc_register(&mut register_cursor));
-                let src = value_stack
-                    .pop()
-                    .unwrap_or(0);
+                let src = value_stack.pop().unwrap_or(0);
                 ir3.instructions.push(Ir3Instruction::Move { dst, src });
                 value_stack.push(dst);
             }
             Ir1Op::Call { arg_count } => {
                 let mut args = Vec::new();
                 for _ in 0..*arg_count {
-                    args.push(
-                        value_stack
-                            .pop()
-                            .unwrap_or(0),
-                    );
+                    args.push(value_stack.pop().unwrap_or(0));
                 }
                 args.reverse();
-                let callee = value_stack
-                    .pop()
-                    .unwrap_or(0);
+                let callee = value_stack.pop().unwrap_or(0);
 
                 let start_reg = register_cursor;
                 for arg_reg in args {
@@ -1775,9 +1765,7 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(string_reg);
             }
             Ir1Op::ExportBinding { .. } => {
-                let register = value_stack
-                    .pop()
-                    .unwrap_or(0);
+                let register = value_stack.pop().unwrap_or(0);
                 ir3.instructions.push(Ir3Instruction::Move {
                     dst: register,
                     src: register,
@@ -1785,24 +1773,18 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(register);
             }
             Ir1Op::Await => {
-                let current = value_stack
-                    .pop()
-                    .unwrap_or(0);
+                let current = value_stack.pop().unwrap_or(0);
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions
                     .push(Ir3Instruction::Move { dst, src: current });
                 value_stack.push(dst);
             }
             Ir1Op::Return => {
-                let value = value_stack
-                    .pop()
-                    .unwrap_or(0);
+                let value = value_stack.pop().unwrap_or(0);
                 ir3.instructions.push(Ir3Instruction::Return { value });
             }
             Ir1Op::Nop | Ir1Op::Pop => {
-                let register = value_stack
-                    .pop()
-                    .unwrap_or(0);
+                let register = value_stack.pop().unwrap_or(0);
                 ir3.instructions.push(Ir3Instruction::Move {
                     dst: register,
                     src: register,
@@ -1844,12 +1826,8 @@ pub fn lower_ir2_to_ir3(
                 ir3.instructions.push(Ir3Instruction::EndFinally);
             }
             Ir1Op::BinaryOp { operator } => {
-                let rhs = value_stack
-                    .pop()
-                    .unwrap_or(0);
-                let lhs = value_stack
-                    .pop()
-                    .unwrap_or(0);
+                let rhs = value_stack.pop().unwrap_or(0);
+                let lhs = value_stack.pop().unwrap_or(0);
                 let dst = alloc_register(&mut register_cursor);
                 let instr = match operator {
                     BinaryOperator::Add => Ir3Instruction::Add { dst, lhs, rhs },
@@ -1886,9 +1864,7 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(dst);
             }
             Ir1Op::UnaryOp { operator } => {
-                let src = value_stack
-                    .pop()
-                    .unwrap_or(0);
+                let src = value_stack.pop().unwrap_or(0);
                 let dst = alloc_register(&mut register_cursor);
                 let instr = match operator {
                     UnaryOperator::Negate => Ir3Instruction::UnaryNeg { dst, src },
@@ -1913,9 +1889,7 @@ pub fn lower_ir2_to_ir3(
                 let dst = *binding_registers
                     .entry(*binding_id)
                     .or_insert_with(|| alloc_register(&mut register_cursor));
-                let src = value_stack
-                    .pop()
-                    .unwrap_or(0);
+                let src = value_stack.pop().unwrap_or(0);
                 match operator {
                     AssignmentOperator::Assign => {
                         ir3.instructions.push(Ir3Instruction::Move { dst, src });
@@ -2050,9 +2024,7 @@ pub fn lower_ir2_to_ir3(
                 });
             }
             Ir1Op::JumpIfFalsy { label_id } => {
-                let cond = value_stack
-                    .pop()
-                    .unwrap_or(0);
+                let cond = value_stack.pop().unwrap_or(0);
                 let truthy_skip_index = ir3.instructions.len();
                 ir3.instructions
                     .push(Ir3Instruction::JumpIf { cond, target: 0 });
@@ -2066,9 +2038,7 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(cond);
             }
             Ir1Op::JumpIfFalsyConsume { label_id } => {
-                let cond = value_stack
-                    .pop()
-                    .unwrap_or(0);
+                let cond = value_stack.pop().unwrap_or(0);
                 let truthy_skip_index = ir3.instructions.len();
                 ir3.instructions
                     .push(Ir3Instruction::JumpIf { cond, target: 0 });
@@ -2081,9 +2051,7 @@ pub fn lower_ir2_to_ir3(
                 });
             }
             Ir1Op::JumpIfTruthy { label_id } => {
-                let cond = value_stack
-                    .pop()
-                    .unwrap_or(0);
+                let cond = value_stack.pop().unwrap_or(0);
                 let instruction_index = ir3.instructions.len();
                 ir3.instructions
                     .push(Ir3Instruction::JumpIf { cond, target: 0 });
@@ -2093,9 +2061,7 @@ pub fn lower_ir2_to_ir3(
                 });
             }
             Ir1Op::JumpIfNullish { label_id } => {
-                let cond = value_stack
-                    .pop()
-                    .unwrap_or(0);
+                let cond = value_stack.pop().unwrap_or(0);
                 let instruction_index = ir3.instructions.len();
                 ir3.instructions
                     .push(Ir3Instruction::JumpIfNullish { cond, target: 0 });
@@ -2107,9 +2073,7 @@ pub fn lower_ir2_to_ir3(
             Ir1Op::GetProperty { key } => {
                 let (obj, key_reg) = match key {
                     Ir1PropertyKey::Static(key) => {
-                        let obj = value_stack
-                            .pop()
-                            .unwrap_or(0);
+                        let obj = value_stack.pop().unwrap_or(0);
                         let key_reg = alloc_register(&mut register_cursor);
                         let pool_index = push_constant(&mut ir3.constant_pool, key);
                         ir3.instructions.push(Ir3Instruction::LoadStr {
@@ -2119,12 +2083,8 @@ pub fn lower_ir2_to_ir3(
                         (obj, key_reg)
                     }
                     Ir1PropertyKey::Dynamic => {
-                        let key_reg = value_stack
-                            .pop()
-                            .unwrap_or(0);
-                        let obj = value_stack
-                            .pop()
-                            .unwrap_or(0);
+                        let key_reg = value_stack.pop().unwrap_or(0);
+                        let obj = value_stack.pop().unwrap_or(0);
                         (obj, key_reg)
                     }
                 };
@@ -2137,14 +2097,10 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(dst);
             }
             Ir1Op::SetProperty { key } => {
-                let val = value_stack
-                    .pop()
-                    .unwrap_or(0);
+                let val = value_stack.pop().unwrap_or(0);
                 let (obj, key_reg) = match key {
                     Ir1PropertyKey::Static(key) => {
-                        let obj = value_stack
-                            .pop()
-                            .unwrap_or(0);
+                        let obj = value_stack.pop().unwrap_or(0);
                         let key_reg = alloc_register(&mut register_cursor);
                         let pool_index = push_constant(&mut ir3.constant_pool, key);
                         ir3.instructions.push(Ir3Instruction::LoadStr {
@@ -2154,12 +2110,8 @@ pub fn lower_ir2_to_ir3(
                         (obj, key_reg)
                     }
                     Ir1PropertyKey::Dynamic => {
-                        let key_reg = value_stack
-                            .pop()
-                            .unwrap_or(0);
-                        let obj = value_stack
-                            .pop()
-                            .unwrap_or(0);
+                        let key_reg = value_stack.pop().unwrap_or(0);
+                        let obj = value_stack.pop().unwrap_or(0);
                         (obj, key_reg)
                     }
                 };
@@ -2173,9 +2125,7 @@ pub fn lower_ir2_to_ir3(
             Ir1Op::DeleteProperty { key } => {
                 let (obj, key_reg) = match key {
                     Ir1PropertyKey::Static(key) => {
-                        let obj = value_stack
-                            .pop()
-                            .unwrap_or(0);
+                        let obj = value_stack.pop().unwrap_or(0);
                         let key_reg = alloc_register(&mut register_cursor);
                         let pool_index = push_constant(&mut ir3.constant_pool, key);
                         ir3.instructions.push(Ir3Instruction::LoadStr {
@@ -2185,12 +2135,8 @@ pub fn lower_ir2_to_ir3(
                         (obj, key_reg)
                     }
                     Ir1PropertyKey::Dynamic => {
-                        let key_reg = value_stack
-                            .pop()
-                            .unwrap_or(0);
-                        let obj = value_stack
-                            .pop()
-                            .unwrap_or(0);
+                        let key_reg = value_stack.pop().unwrap_or(0);
+                        let obj = value_stack.pop().unwrap_or(0);
                         (obj, key_reg)
                     }
                 };
@@ -2205,11 +2151,7 @@ pub fn lower_ir2_to_ir3(
             Ir1Op::NewArray { count } => {
                 let mut elements = Vec::new();
                 for _ in 0..*count {
-                    elements.push(
-                        value_stack
-                            .pop()
-                            .unwrap_or(0),
-                    );
+                    elements.push(value_stack.pop().unwrap_or(0));
                 }
                 elements.reverse();
 
@@ -2235,12 +2177,8 @@ pub fn lower_ir2_to_ir3(
             Ir1Op::NewObject { count } => {
                 let mut properties = Vec::new();
                 for _ in 0..*count {
-                    let val = value_stack
-                        .pop()
-                        .unwrap_or(0);
-                    let key = value_stack
-                        .pop()
-                        .unwrap_or(0);
+                    let val = value_stack.pop().unwrap_or(0);
+                    let key = value_stack.pop().unwrap_or(0);
                     properties.push((key, val));
                 }
                 properties.reverse();
@@ -2258,9 +2196,7 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(dst);
             }
             Ir1Op::Throw => {
-                let value = value_stack
-                    .pop()
-                    .unwrap_or(0);
+                let value = value_stack.pop().unwrap_or(0);
                 ir3.instructions.push(Ir3Instruction::Throw { value });
             }
             Ir1Op::LoadThis => {
@@ -2357,16 +2293,10 @@ pub fn lower_ir2_to_ir3(
                 let count = *arg_count as usize;
                 let mut arg_regs = Vec::with_capacity(count);
                 for _ in 0..count {
-                    arg_regs.push(
-                        value_stack
-                            .pop()
-                            .unwrap_or(0),
-                    );
+                    arg_regs.push(value_stack.pop().unwrap_or(0));
                 }
                 arg_regs.reverse();
-                let callee = value_stack
-                    .pop()
-                    .unwrap_or(0);
+                let callee = value_stack.pop().unwrap_or(0);
                 let dst = alloc_register(&mut register_cursor);
                 // Copy args into contiguous registers so RegRange is valid.
                 let args = if arg_regs.is_empty() {
@@ -2400,11 +2330,7 @@ pub fn lower_ir2_to_ir3(
                 // Pop part registers in reverse order and collect them.
                 let mut part_regs: Vec<u32> = Vec::with_capacity(total);
                 for _ in 0..total {
-                    part_regs.push(
-                        value_stack
-                            .pop()
-                            .unwrap_or(0),
-                    );
+                    part_regs.push(value_stack.pop().unwrap_or(0));
                 }
                 part_regs.reverse();
                 let dst = alloc_register(&mut register_cursor);
@@ -3493,6 +3419,8 @@ fn lower_expression_to_ir1(
             } else {
                 return Err(unsupported_frontier_expression_error(
                     "assignment_target",
+                    "FE-LOWER-ASSIGN-0001",
+                    "lower_ir0_to_ir1.assignment_target",
                     "assignment to non-lvalue target is not supported; only identifiers and member expressions are valid assignment targets",
                     None,
                 ));

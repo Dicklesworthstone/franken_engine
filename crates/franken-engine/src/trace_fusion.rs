@@ -1539,9 +1539,17 @@ impl TraceFusionEngine {
             .values()
             .filter(|t| t.enabled)
             .map(|t| t.cost_savings_millionths)
-            .sum();
-        let total_executions: u64 = self.active_traces.values().map(|t| t.execution_count).sum();
-        let total_exits: u64 = self.active_traces.values().map(|t| t.side_exit_count).sum();
+            .fold(0i64, |acc, x| acc.saturating_add(x));
+        let total_executions: u64 = self
+            .active_traces
+            .values()
+            .map(|t| t.execution_count)
+            .fold(0u64, u64::saturating_add);
+        let total_exits: u64 = self
+            .active_traces
+            .values()
+            .map(|t| t.side_exit_count)
+            .fold(0u64, u64::saturating_add);
         let formed_count = self
             .records
             .iter()

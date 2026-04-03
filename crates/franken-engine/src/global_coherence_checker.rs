@@ -592,7 +592,10 @@ impl GlobalCoherenceChecker {
         self.collect_violations(&mut violations, hook_violations);
 
         // Compute summary
-        let total_severity: i64 = violations.iter().map(|v| v.severity.0).sum();
+        let total_severity: i64 = violations
+            .iter()
+            .map(|v| v.severity.0)
+            .fold(0i64, |acc, x| acc.saturating_add(x));
         let blocking_count = violations
             .iter()
             .filter(|v| v.severity.is_blocking())

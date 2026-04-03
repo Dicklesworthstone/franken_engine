@@ -370,8 +370,11 @@ impl StatisticalSummary {
         let total_wt: i64 = comparisons
             .iter()
             .map(|c| c.wall_time_delta_millionths)
-            .sum();
-        let total_mem: i64 = comparisons.iter().map(|c| c.memory_delta_millionths).sum();
+            .fold(0i64, |acc, x| acc.saturating_add(x));
+        let total_mem: i64 = comparisons
+            .iter()
+            .map(|c| c.memory_delta_millionths)
+            .fold(0i64, |acc, x| acc.saturating_add(x));
         let pos_wt = comparisons
             .iter()
             .filter(|c| c.has_positive_wall_time_delta())

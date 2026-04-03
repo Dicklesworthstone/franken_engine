@@ -854,8 +854,10 @@ pub fn build_brittleness_report(
     let brittle_region_count = seen_brittle.len() as u64;
 
     // Sum sharpness.
-    let total_boundary_sharpness_millionths: u64 =
-        boundaries.iter().map(|b| b.sharpness_millionths).sum();
+    let total_boundary_sharpness_millionths: u64 = boundaries
+        .iter()
+        .map(|b| b.sharpness_millionths)
+        .fold(0u64, u64::saturating_add);
 
     let report_id = generate_report_id(&epoch, &boundaries, &witnesses);
 
@@ -984,7 +986,10 @@ pub fn franken_engine_catastrophe_manifest() -> BrittlenessReport {
     let boundaries = vec![boundary_fold, boundary_cliff, boundary_cusp];
     let witnesses = vec![witness_fold, witness_cliff];
 
-    let total_sharpness: u64 = boundaries.iter().map(|b| b.sharpness_millionths).sum();
+    let total_sharpness: u64 = boundaries
+        .iter()
+        .map(|b| b.sharpness_millionths)
+        .fold(0u64, u64::saturating_add);
 
     let report_id = format!(
         "manifest-report-{}-{}",

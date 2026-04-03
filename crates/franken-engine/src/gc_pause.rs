@@ -521,7 +521,10 @@ impl PauseTracker {
 
     /// Total bytes reclaimed across all recorded pauses.
     pub fn total_bytes_reclaimed(&self) -> u64 {
-        self.records.iter().map(|r| r.bytes_reclaimed).sum()
+        self.records
+            .iter()
+            .map(|r| r.bytes_reclaimed)
+            .fold(0u64, u64::saturating_add)
     }
 
     /// Total objects collected across all recorded pauses.

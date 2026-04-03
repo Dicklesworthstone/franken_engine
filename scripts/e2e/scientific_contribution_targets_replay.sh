@@ -32,9 +32,18 @@ latest_complete_run_dir() {
     [[ -f "${candidate}/contribution_status_report.json" ]] || continue
     [[ -f "${candidate}/output_contract_status_report.json" ]] || continue
     [[ -f "${candidate}/dependency_status_report.json" ]] || continue
+    [[ -f "${candidate}/technical_report_status_report.json" ]] || continue
+    [[ -f "${candidate}/external_replication_status_report.json" ]] || continue
+    [[ -f "${candidate}/open_tool_adoption_status_report.json" ]] || continue
     [[ -f "${candidate}/scientific_contribution_summary.md" ]] || continue
     [[ -f "${candidate}/scientific_contribution_targets_v1.json" ]] || continue
     [[ -f "${candidate}/scientific_contribution_targets_v1.md" ]] || continue
+    [[ -f "${candidate}/scientific_report_catalog_v1.json" ]] || continue
+    [[ -f "${candidate}/SCIENTIFIC_REPORT_CATALOG_V1.md" ]] || continue
+    [[ -f "${candidate}/external_replication_catalog_v1.json" ]] || continue
+    [[ -f "${candidate}/EXTERNAL_REPLICATION_CATALOG_V1.md" ]] || continue
+    [[ -f "${candidate}/open_tool_adoption_catalog_v1.json" ]] || continue
+    [[ -f "${candidate}/OPEN_TOOL_ADOPTION_CATALOG_V1.md" ]] || continue
     printf '%s\n' "${candidate}"
   done | tail -n 1
 }
@@ -69,12 +78,30 @@ echo "[scientific-contribution-targets] latest output-contract report: ${latest_
 cat "${latest_run_dir}/output_contract_status_report.json"
 echo "[scientific-contribution-targets] latest dependency report: ${latest_run_dir}/dependency_status_report.json"
 cat "${latest_run_dir}/dependency_status_report.json"
+echo "[scientific-contribution-targets] latest technical report status: ${latest_run_dir}/technical_report_status_report.json"
+cat "${latest_run_dir}/technical_report_status_report.json"
+echo "[scientific-contribution-targets] latest external replication status: ${latest_run_dir}/external_replication_status_report.json"
+cat "${latest_run_dir}/external_replication_status_report.json"
+echo "[scientific-contribution-targets] latest open tool adoption status: ${latest_run_dir}/open_tool_adoption_status_report.json"
+cat "${latest_run_dir}/open_tool_adoption_status_report.json"
 echo "[scientific-contribution-targets] latest summary: ${latest_run_dir}/scientific_contribution_summary.md"
 cat "${latest_run_dir}/scientific_contribution_summary.md"
 echo "[scientific-contribution-targets] latest contract: ${latest_run_dir}/scientific_contribution_targets_v1.json"
 cat "${latest_run_dir}/scientific_contribution_targets_v1.json"
 echo "[scientific-contribution-targets] latest doc: ${latest_run_dir}/scientific_contribution_targets_v1.md"
 cat "${latest_run_dir}/scientific_contribution_targets_v1.md"
+echo "[scientific-contribution-targets] latest scientific report catalog JSON: ${latest_run_dir}/scientific_report_catalog_v1.json"
+cat "${latest_run_dir}/scientific_report_catalog_v1.json"
+echo "[scientific-contribution-targets] latest scientific report catalog doc: ${latest_run_dir}/SCIENTIFIC_REPORT_CATALOG_V1.md"
+cat "${latest_run_dir}/SCIENTIFIC_REPORT_CATALOG_V1.md"
+echo "[scientific-contribution-targets] latest external replication catalog JSON: ${latest_run_dir}/external_replication_catalog_v1.json"
+cat "${latest_run_dir}/external_replication_catalog_v1.json"
+echo "[scientific-contribution-targets] latest external replication catalog doc: ${latest_run_dir}/EXTERNAL_REPLICATION_CATALOG_V1.md"
+cat "${latest_run_dir}/EXTERNAL_REPLICATION_CATALOG_V1.md"
+echo "[scientific-contribution-targets] latest open tool adoption catalog JSON: ${latest_run_dir}/open_tool_adoption_catalog_v1.json"
+cat "${latest_run_dir}/open_tool_adoption_catalog_v1.json"
+echo "[scientific-contribution-targets] latest open tool adoption catalog doc: ${latest_run_dir}/OPEN_TOOL_ADOPTION_CATALOG_V1.md"
+cat "${latest_run_dir}/OPEN_TOOL_ADOPTION_CATALOG_V1.md"
 if [[ -f "${latest_run_dir}/step_logs/step_000.log" ]]; then
   echo "[scientific-contribution-targets] latest first step log: ${latest_run_dir}/step_logs/step_000.log"
   cat "${latest_run_dir}/step_logs/step_000.log"

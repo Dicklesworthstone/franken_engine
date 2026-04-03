@@ -364,7 +364,11 @@ fn open_tool_adoption_catalog_has_expected_identity_and_candidate_tools() {
     assert_eq!(catalog.minimum_tool_count, 1);
     assert_eq!(catalog.tools.len(), 3);
 
-    let tool_ids: Vec<_> = catalog.tools.iter().map(|entry| entry.tool_id.as_str()).collect();
+    let tool_ids: Vec<_> = catalog
+        .tools
+        .iter()
+        .map(|entry| entry.tool_id.as_str())
+        .collect();
     assert_eq!(
         tool_ids,
         vec![
@@ -661,9 +665,27 @@ fn strategy_runner_and_replay_scripts_are_replayable() {
         "run_scientific_contribution_targets.sh",
         "latest_complete_run_dir",
         "newest directory",
+        "${candidate}/technical_report_status_report.json",
+        "${candidate}/external_replication_status_report.json",
+        "${candidate}/open_tool_adoption_status_report.json",
+        "${candidate}/scientific_report_catalog_v1.json",
+        "${candidate}/SCIENTIFIC_REPORT_CATALOG_V1.md",
+        "${candidate}/external_replication_catalog_v1.json",
+        "${candidate}/EXTERNAL_REPLICATION_CATALOG_V1.md",
+        "${candidate}/open_tool_adoption_catalog_v1.json",
+        "${candidate}/OPEN_TOOL_ADOPTION_CATALOG_V1.md",
         "contribution_status_report.json",
         "output_contract_status_report.json",
         "dependency_status_report.json",
+        "technical report status",
+        "external replication status",
+        "open tool adoption status",
+        "scientific report catalog JSON",
+        "scientific report catalog doc",
+        "external replication catalog JSON",
+        "external replication catalog doc",
+        "open tool adoption catalog JSON",
+        "open tool adoption catalog doc",
         "scientific_contribution_summary.md",
         "scientific_contribution_targets_v1.json",
         "scientific_contribution_targets_v1.md",

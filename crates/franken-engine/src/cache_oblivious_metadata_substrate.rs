@@ -795,6 +795,7 @@ pub fn run_cache_oblivious_corpus() -> CacheObliviousEvidenceInventory {
     let inventory_hash = {
         let mut buf = Vec::new();
         buf.extend_from_slice(CACHE_OBLIVIOUS_SCHEMA_VERSION.as_bytes());
+        buf.extend_from_slice(&(evidences.len() as u64).to_le_bytes());
         for e in &evidences {
             buf.extend_from_slice(e.evidence_hash.as_bytes());
         }

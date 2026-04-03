@@ -73,18 +73,18 @@ pub struct LawProvenanceSource {
 impl LawProvenanceSource {
     fn recompute_hash(&mut self) {
         let mut data = Vec::new();
-        data.extend_from_slice(
-            serde_json::to_string(&self.source_kind)
-                .expect("source_kind must serialize for hash")
-                .as_bytes(),
+        push_string_len(
+            &mut data,
+            &serde_json::to_string(&self.source_kind)
+                .expect("source_kind must serialize for hash"),
         );
-        data.extend_from_slice(self.source_id.as_bytes());
+        push_string_len(&mut data, &self.source_id);
         push_strings(&mut data, &self.policy_ids);
         for property in &self.formal_properties {
-            data.extend_from_slice(property.to_string().as_bytes());
+            push_string_len(&mut data, &property.to_string());
         }
         push_strings(&mut data, &self.decision_types);
-        data.extend_from_slice(self.support_summary.as_bytes());
+        push_string_len(&mut data, &self.support_summary);
         self.source_hash = ContentHash::compute(&data);
     }
 }
@@ -100,8 +100,9 @@ pub struct LawProvenanceRecord {
 impl LawProvenanceRecord {
     fn recompute_hash(&mut self) {
         let mut data = Vec::new();
-        data.extend_from_slice(self.provenance_id.as_bytes());
-        data.extend_from_slice(self.candidate_id.as_bytes());
+        push_string_len(&mut data, &self.provenance_id);
+        push_string_len(&mut data, &self.candidate_id);
+        data.extend_from_slice(&(self.sources.len() as u64).to_le_bytes());
         for source in &self.sources {
             data.extend_from_slice(source.source_hash.as_bytes());
         }
@@ -124,10 +125,11 @@ pub struct CandidateScopeHypothesis {
 impl CandidateScopeHypothesis {
     fn recompute_hash(&mut self) {
         let mut data = Vec::new();
-        data.extend_from_slice(self.scope_id.as_bytes());
+        push_string_len(&mut data, &self.scope_id);
         push_strings(&mut data, &self.policy_ids);
+        data.extend_from_slice(&(self.formal_properties.len() as u64).to_le_bytes());
         for property in &self.formal_properties {
-            data.extend_from_slice(property.to_string().as_bytes());
+            push_string_len(&mut data, &property.to_string());
         }
         push_strings(&mut data, &self.decision_types);
         push_strings(&mut data, &self.capability_names);
@@ -153,17 +155,17 @@ pub struct LawCandidate {
 impl LawCandidate {
     fn recompute_hash(&mut self) {
         let mut data = Vec::new();
-        data.extend_from_slice(self.candidate_id.as_bytes());
-        data.extend_from_slice(
-            serde_json::to_string(&self.kind)
-                .expect("law kind must serialize for hash")
-                .as_bytes(),
+        push_string_len(&mut data, &self.candidate_id);
+        push_string_len(
+            &mut data,
+            &serde_json::to_string(&self.kind)
+                .expect("law kind must serialize for hash"),
         );
-        data.extend_from_slice(self.statement.as_bytes());
+        push_string_len(&mut data, &self.statement);
         data.extend_from_slice(&self.rank_millionths.to_le_bytes());
-        data.extend_from_slice(self.ranking_rationale.as_bytes());
-        data.extend_from_slice(self.scope_hypothesis_id.as_bytes());
-        data.extend_from_slice(self.provenance_id.as_bytes());
+        push_string_len(&mut data, &self.ranking_rationale);
+        push_string_len(&mut data, &self.scope_hypothesis_id);
+        push_string_len(&mut data, &self.provenance_id);
         push_strings(&mut data, &self.supporting_source_ids);
         self.candidate_hash = ContentHash::compute(&data);
     }
@@ -182,10 +184,10 @@ pub struct InvariantSeed {
 impl InvariantSeed {
     fn recompute_hash(&mut self) {
         let mut data = Vec::new();
-        data.extend_from_slice(self.seed_id.as_bytes());
-        data.extend_from_slice(self.statement.as_bytes());
-        data.extend_from_slice(self.derived_candidate_id.as_bytes());
-        data.extend_from_slice(self.scope_hypothesis_id.as_bytes());
+        push_string_len(&mut data, &self.seed_id);
+        push_string_len(&mut data, &self.statement);
+        push_string_len(&mut data, &self.derived_candidate_id);
+        push_string_len(&mut data, &self.scope_hypothesis_id);
         push_strings(&mut data, &self.supporting_source_ids);
         self.seed_hash = ContentHash::compute(&data);
     }
@@ -205,11 +207,11 @@ pub struct NormalFormHypothesis {
 impl NormalFormHypothesis {
     fn recompute_hash(&mut self) {
         let mut data = Vec::new();
-        data.extend_from_slice(self.hypothesis_id.as_bytes());
-        data.extend_from_slice(self.canonical_form.as_bytes());
+        push_string_len(&mut data, &self.hypothesis_id);
+        push_string_len(&mut data, &self.canonical_form);
         push_strings(&mut data, &self.merge_shapes);
-        data.extend_from_slice(self.derived_candidate_id.as_bytes());
-        data.extend_from_slice(self.scope_hypothesis_id.as_bytes());
+        push_string_len(&mut data, &self.derived_candidate_id);
+        push_string_len(&mut data, &self.scope_hypothesis_id);
         push_strings(&mut data, &self.supporting_source_ids);
         self.hypothesis_hash = ContentHash::compute(&data);
     }
@@ -451,21 +453,26 @@ impl LawMiningCatalog {
 
     fn recompute_hash(&mut self) {
         let mut data = Vec::new();
-        data.extend_from_slice(self.schema_version.as_bytes());
-        data.extend_from_slice(self.bead_id.as_bytes());
+        push_string_len(&mut data, &self.schema_version);
+        push_string_len(&mut data, &self.bead_id);
         data.extend_from_slice(&self.generated_epoch.to_le_bytes());
+        data.extend_from_slice(&(self.candidates.len() as u64).to_le_bytes());
         for candidate in &self.candidates {
             data.extend_from_slice(candidate.candidate_hash.as_bytes());
         }
+        data.extend_from_slice(&(self.invariant_seed_ledger.len() as u64).to_le_bytes());
         for seed in &self.invariant_seed_ledger {
             data.extend_from_slice(seed.seed_hash.as_bytes());
         }
+        data.extend_from_slice(&(self.normal_form_hypotheses.len() as u64).to_le_bytes());
         for hypothesis in &self.normal_form_hypotheses {
             data.extend_from_slice(hypothesis.hypothesis_hash.as_bytes());
         }
+        data.extend_from_slice(&(self.provenance_index.len() as u64).to_le_bytes());
         for provenance in &self.provenance_index {
             data.extend_from_slice(provenance.provenance_hash.as_bytes());
         }
+        data.extend_from_slice(&(self.scope_hypotheses.len() as u64).to_le_bytes());
         for scope in &self.scope_hypotheses {
             data.extend_from_slice(scope.scope_hash.as_bytes());
         }
@@ -936,20 +943,27 @@ fn accumulate_evidence_entry(
     });
 }
 
+fn push_string_len(data: &mut Vec<u8>, value: &str) {
+    data.extend_from_slice(&(value.len() as u64).to_le_bytes());
+    data.extend_from_slice(value.as_bytes());
+}
+
 fn hashed_id(prefix: &str, parts: &[&str]) -> String {
     let mut data = Vec::new();
+    push_string_len(&mut data, prefix);
+    data.extend_from_slice(&(parts.len() as u64).to_le_bytes());
     for part in parts {
-        data.extend_from_slice(part.as_bytes());
-        data.push(0xff);
+        push_string_len(&mut data, part);
     }
-    let hash = ContentHash::compute(&data).to_hex();
-    format!("{prefix}-{}", &hash[..12])
+
+    let digest = ContentHash::compute(&data).to_hex();
+    format!("{prefix}-{}", &digest[..16])
 }
 
 fn push_strings(data: &mut Vec<u8>, values: &[String]) {
+    data.extend_from_slice(&(values.len() as u64).to_le_bytes());
     for value in values {
-        data.extend_from_slice(value.as_bytes());
-        data.push(0xff);
+        push_string_len(data, value);
     }
 }
 
@@ -1821,15 +1835,15 @@ mod tests {
         let a = sample_counterexample(
             10,
             FormalProperty::MergeDeterminism,
-            &["fs.read"],
-            &[("r", "a")],
+            &["x"],
+            &[("k", "v")],
             &["m"],
         );
         let b = sample_counterexample(
             11,
             FormalProperty::Monotonicity,
-            &["net.send"],
-            &[("r", "b")],
+            &["y"],
+            &[("k", "v")],
             &["n"],
         );
         let catalog = LawMiningCatalog::from_sources(5, &[a, b], &[]);

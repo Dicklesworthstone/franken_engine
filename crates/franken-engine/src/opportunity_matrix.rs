@@ -613,32 +613,35 @@ fn compute_score_millionths(
     }
 }
 
+fn hash_update_str(hasher: &mut Sha256, s: &str) {
+    hasher.update((s.len() as u64).to_le_bytes());
+    hasher.update(s.as_bytes());
+}
+
 fn build_matrix_id(request: &OpportunityMatrixRequest) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(request.trace_id.as_bytes());
-    hasher.update(request.decision_id.as_bytes());
-    hasher.update(request.policy_id.as_bytes());
-    hasher.update(request.optimization_run_id.as_bytes());
+    hash_update_str(&mut hasher, &request.trace_id);
+    hash_update_str(&mut hasher, &request.decision_id);
+    hash_update_str(&mut hasher, &request.policy_id);
+    hash_update_str(&mut hasher, &request.optimization_run_id);
     hasher.update(request.benchmark_pressure_millionths.to_le_bytes());
     // Sort hotspots and candidates for insertion-order independence.
     let mut sorted_hotspots: Vec<_> = request.hotspots.iter().collect();
     sorted_hotspots.sort_by(|a, b| (&a.module, &a.function).cmp(&(&b.module, &b.function)));
     for hotspot in &sorted_hotspots {
-        hasher.update(hotspot.module.as_bytes());
-        hasher.update(hotspot.function.as_bytes());
+        hash_update_str(&mut hasher, &hotspot.module);
+        hash_update_str(&mut hasher, &hotspot.function);
         hasher.update(hotspot.sample_count.to_le_bytes());
     }
     let mut sorted_candidates: Vec<_> = request.candidates.iter().collect();
     sorted_candidates.sort_by(|a, b| a.opportunity_id.cmp(&b.opportunity_id));
     for candidate in &sorted_candidates {
-        hasher.update(candidate.opportunity_id.as_bytes());
-        hasher.update(candidate.target_module.as_bytes());
-        hasher.update(candidate.target_function.as_bytes());
+        hash_update_str(&mut hasher, &candidate.opportunity_id);
+        hash_update_str(&mut hasher, &candidate.target_module);
+        hash_update_str(&mut hasher, &candidate.target_function);
         hasher.update(candidate.estimated_speedup_millionths.to_le_bytes());
         hasher.update(candidate.implementation_complexity.to_le_bytes());
         hasher.update(candidate.regression_risk_millionths.to_le_bytes());
-        hasher.update(candidate.security_clearance_millionths.to_le_bytes());
-        hasher.update(candidate.engineering_effort_hours_millionths.to_le_bytes());
     }
     let digest = hasher.finalize();
     format!("opm-{digest:x}")

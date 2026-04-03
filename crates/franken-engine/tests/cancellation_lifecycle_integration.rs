@@ -28,9 +28,9 @@ use frankenengine_engine::cancellation_lifecycle::{
     CancellationOutcome, LifecycleEvent,
 };
 use frankenengine_engine::control_plane::ContextAdapter;
-use frankenengine_engine::control_plane::mocks::{MockBudget, MockCx, trace_id_from_seed};
 use frankenengine_engine::execution_cell::{CellError, CellKind, CellManager, ExecutionCell};
 use frankenengine_engine::region_lifecycle::{CancelReason, FinalizeResult, RegionState};
+use frankenengine_test_support::control_plane::{MockBudget, MockCx, trace_id_from_seed};
 
 // ---------------------------------------------------------------------------
 // Helpers

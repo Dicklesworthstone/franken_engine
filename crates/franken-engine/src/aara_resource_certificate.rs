@@ -846,11 +846,8 @@ impl CertificateBundle {
         if self.certificates.is_empty() {
             return 0;
         }
-        let total = self.certificates.len() as i64;
-        (self.certified_count as i64)
-            .checked_mul(MILLION)
-            .unwrap_or(0)
-            / total
+        let total = self.certificates.len() as i128;
+        ((self.certified_count as i128 * MILLION as i128) / total) as i64
     }
 
     /// Whether the bundle passes (no violations and certification rate above threshold).

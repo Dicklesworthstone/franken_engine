@@ -804,10 +804,7 @@ impl TransferReport {
         if self.accepted == 0 {
             return 0;
         }
-        (self.rolled_back_count as i64)
-            .checked_mul(MILLION)
-            .and_then(|n| n.checked_div(self.accepted as i64))
-            .unwrap_or(0)
+        ((self.rolled_back_count as i128 * MILLION as i128) / self.accepted as i128) as i64
     }
 
     /// Whether the session is healthy: low rollback rate and moderate drift.

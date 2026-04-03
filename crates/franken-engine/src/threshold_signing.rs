@@ -206,10 +206,15 @@ impl ThresholdSigningPolicy {
         for share in &input.authorized_shares {
             canonical.extend_from_slice(share.as_bytes());
         }
-        // Include scoped_operations (BTreeSet, deterministic iteration).
+        // Include scoped_operations with length prefixes to prevent
+        // delimiter collisions between variable-length scope strings and zone.
+        canonical.extend_from_slice(&(input.scoped_operations.len() as u32).to_be_bytes());
         for op in &input.scoped_operations {
-            canonical.extend_from_slice(op.to_string().as_bytes());
+            let op_bytes = op.to_string();
+            canonical.extend_from_slice(&(op_bytes.len() as u32).to_be_bytes());
+            canonical.extend_from_slice(op_bytes.as_bytes());
         }
+        canonical.extend_from_slice(&(input.zone.len() as u32).to_be_bytes());
         canonical.extend_from_slice(input.zone.as_bytes());
         canonical.extend_from_slice(&input.epoch.as_u64().to_be_bytes());
 
@@ -329,6 +334,11 @@ impl ThresholdCeremony {
         let mut canonical = Vec::new();
         canonical.extend_from_slice(policy.policy_id.as_bytes());
         canonical.extend_from_slice(preimage_hash.as_bytes());
+        // Include scope in ceremony ID to prevent scope confusion:
+        // two ceremonies for different scopes must have distinct IDs.
+        let scope_bytes = scope.to_string();
+        canonical.extend_from_slice(&(scope_bytes.len() as u32).to_be_bytes());
+        canonical.extend_from_slice(scope_bytes.as_bytes());
         canonical.extend_from_slice(&initiated_at.0.to_be_bytes());
 
         let ceremony_id = engine_object_id::derive_id(
@@ -528,10 +538,21 @@ impl ThresholdResult {
             return Err(ThresholdError::PreimageMismatch);
         }
 
-        // Check threshold is met.
-        if (self.signatures.len() as u32) < self.threshold_k {
+        // Reject duplicate signers: a single compromised key must not
+        // satisfy the threshold by repeating its signature k times.
+        let mut seen_signers = std::collections::BTreeSet::new();
+        for partial in &self.signatures {
+            if !seen_signers.insert(&partial.signer) {
+                return Err(ThresholdError::PartialSignatureInvalid {
+                    holder: partial.signer.clone(),
+                });
+            }
+        }
+
+        // Check threshold is met (after dedup to prevent inflation).
+        if (seen_signers.len() as u32) < self.threshold_k {
             return Err(ThresholdError::InsufficientThresholdShares {
-                collected: self.signatures.len() as u32,
+                collected: seen_signers.len() as u32,
                 required: self.threshold_k,
             });
         }

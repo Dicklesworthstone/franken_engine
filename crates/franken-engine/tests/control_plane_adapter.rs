@@ -19,6 +19,7 @@ use frankenengine_engine::control_plane::{
     DecisionVerdict, EvidenceEmitter, FallbackPolicy, InMemoryEvidenceEmitter, LossMatrix,
     Posterior,
 };
+use frankenengine_test_support::control_plane as control_plane_mocks;
 
 fn collect_rs_files(root: &Path, out: &mut Vec<PathBuf>) {
     if !root.exists() {
@@ -288,7 +289,7 @@ fn control_plane_adapter_error_codes_are_stable() {
 
 #[test]
 fn mock_budget_tracks_consumption() {
-    let mut budget = control_plane::mocks::MockBudget::new(100);
+    let mut budget = control_plane_mocks::MockBudget::new(100);
     assert_eq!(budget.remaining_ms(), 100);
     assert_eq!(budget.consumed_ms(), 0);
 
@@ -299,14 +300,14 @@ fn mock_budget_tracks_consumption() {
 
 #[test]
 fn mock_budget_rejects_overspend() {
-    let mut budget = control_plane::mocks::MockBudget::new(10);
+    let mut budget = control_plane_mocks::MockBudget::new(10);
     let result = budget.consume(20);
     assert!(result.is_err());
 }
 
 #[test]
 fn mock_decision_contract_drains_queued_verdicts() {
-    let mut mock = control_plane::mocks::MockDecisionContract::new(vec![
+    let mut mock = control_plane_mocks::MockDecisionContract::new(vec![
         DecisionVerdict::Allow,
         DecisionVerdict::Deny,
     ]);
@@ -325,7 +326,7 @@ fn mock_decision_contract_drains_queued_verdicts() {
 
 #[test]
 fn mock_evidence_emitter_collects_entries() {
-    let mut emitter = control_plane::mocks::MockEvidenceEmitter::new();
+    let mut emitter = control_plane_mocks::MockEvidenceEmitter::new();
     assert!(emitter.entries().is_empty());
     assert!(emitter.events().is_empty());
 
@@ -445,16 +446,16 @@ fn adapter_event_serde_roundtrip() {
 
 #[test]
 fn mock_id_constructors_produce_distinct_ids_for_different_seeds() {
-    let trace_a = control_plane::mocks::trace_id_from_seed(1);
-    let trace_b = control_plane::mocks::trace_id_from_seed(2);
+    let trace_a = control_plane_mocks::trace_id_from_seed(1);
+    let trace_b = control_plane_mocks::trace_id_from_seed(2);
     assert_ne!(trace_a, trace_b);
 
-    let decision_a = control_plane::mocks::decision_id_from_seed(1);
-    let decision_b = control_plane::mocks::decision_id_from_seed(2);
+    let decision_a = control_plane_mocks::decision_id_from_seed(1);
+    let decision_b = control_plane_mocks::decision_id_from_seed(2);
     assert_ne!(decision_a, decision_b);
 
-    let policy_a = control_plane::mocks::policy_id_from_seed(1);
-    let policy_b = control_plane::mocks::policy_id_from_seed(2);
+    let policy_a = control_plane_mocks::policy_id_from_seed(1);
+    let policy_b = control_plane_mocks::policy_id_from_seed(2);
     assert_ne!(policy_a, policy_b);
 }
 
@@ -475,8 +476,8 @@ fn adapter_event_has_nonempty_component() {
 
 #[test]
 fn mock_id_same_seed_produces_same_id() {
-    let a = control_plane::mocks::trace_id_from_seed(42);
-    let b = control_plane::mocks::trace_id_from_seed(42);
+    let a = control_plane_mocks::trace_id_from_seed(42);
+    let b = control_plane_mocks::trace_id_from_seed(42);
     assert_eq!(a, b);
 }
 
@@ -567,7 +568,7 @@ fn evidence_ledger_builder_missing_component_fails() {
 
 #[test]
 fn mock_budget_consume_exact_remaining_succeeds_with_zero_left() {
-    let mut budget = control_plane::mocks::MockBudget::new(42);
+    let mut budget = control_plane_mocks::MockBudget::new(42);
     budget.consume(42).expect("exact remaining should succeed");
     assert_eq!(budget.remaining_ms(), 0);
     assert_eq!(budget.consumed_ms(), 42);
@@ -585,7 +586,7 @@ fn mock_budget_consume_exact_remaining_succeeds_with_zero_left() {
 #[test]
 fn mock_decision_contract_empty_queue_returns_timeout_fallback() {
     // Construct with an empty queue — no pre-loaded verdicts.
-    let mut mock = control_plane::mocks::MockDecisionContract::new(Vec::<DecisionVerdict>::new());
+    let mut mock = control_plane_mocks::MockDecisionContract::new(Vec::<DecisionVerdict>::new());
     let request = DecisionRequest {
         decision_id: control_plane::DecisionId::from_parts(3_000, 1_u128),
         policy_id: control_plane::PolicyId::new("test.empty", 1),
@@ -785,21 +786,21 @@ fn decision_verdict_copy_semantics_all_variants() {
 
 #[test]
 fn mock_failure_mode_default_is_never() {
-    let default_mode = control_plane::mocks::MockFailureMode::default();
-    assert_eq!(default_mode, control_plane::mocks::MockFailureMode::Never);
+    let default_mode = control_plane_mocks::MockFailureMode::default();
+    assert_eq!(default_mode, control_plane_mocks::MockFailureMode::Never);
 }
 
 #[test]
 fn mock_failure_mode_serde_like_clone_eq_all_variants() {
     let variants = [
-        control_plane::mocks::MockFailureMode::Never,
-        control_plane::mocks::MockFailureMode::FailAlways { code: "serde_like" },
-        control_plane::mocks::MockFailureMode::FailAfterN {
+        control_plane_mocks::MockFailureMode::Never,
+        control_plane_mocks::MockFailureMode::FailAlways { code: "serde_like" },
+        control_plane_mocks::MockFailureMode::FailAfterN {
             remaining_successes: 3,
             code: "serde_fan",
         },
-        control_plane::mocks::MockFailureMode::LatencyInjection { millis: 10 },
-        control_plane::mocks::MockFailureMode::PanicOnCall,
+        control_plane_mocks::MockFailureMode::LatencyInjection { millis: 10 },
+        control_plane_mocks::MockFailureMode::PanicOnCall,
     ];
     for v in &variants {
         let cloned = v.clone();
@@ -809,11 +810,10 @@ fn mock_failure_mode_serde_like_clone_eq_all_variants() {
 
 #[test]
 fn mock_decision_contract_fail_always_returns_gateway_error() {
-    let mut contract =
-        control_plane::mocks::MockDecisionContract::new(vec![DecisionVerdict::Allow])
-            .with_failure_mode(control_plane::mocks::MockFailureMode::FailAlways {
-                code: "always_fail_code",
-            });
+    let mut contract = control_plane_mocks::MockDecisionContract::new(vec![DecisionVerdict::Allow])
+        .with_failure_mode(control_plane_mocks::MockFailureMode::FailAlways {
+            code: "always_fail_code",
+        });
     let request = DecisionRequest {
         decision_id: control_plane::DecisionId::from_parts(5_000, 1_u128),
         policy_id: control_plane::PolicyId::new("test.fail_always", 1),
@@ -839,8 +839,8 @@ fn mock_decision_contract_fail_always_returns_gateway_error() {
 
 #[test]
 fn mock_evidence_emitter_fail_always_returns_evidence_emission_error() {
-    let mut emitter = control_plane::mocks::MockEvidenceEmitter::new().with_failure_mode(
-        control_plane::mocks::MockFailureMode::FailAlways {
+    let mut emitter = control_plane_mocks::MockEvidenceEmitter::new().with_failure_mode(
+        control_plane_mocks::MockFailureMode::FailAlways {
             code: "emit_always_fail",
         },
     );
@@ -885,9 +885,8 @@ fn mock_evidence_emitter_fail_always_returns_evidence_emission_error() {
 fn mock_cx_implements_context_adapter_trait() {
     use frankenengine_engine::control_plane::ContextAdapter;
 
-    let trace = control_plane::mocks::trace_id_from_seed(100);
-    let mut cx =
-        control_plane::mocks::MockCx::new(trace, control_plane::mocks::MockBudget::new(200));
+    let trace = control_plane_mocks::trace_id_from_seed(100);
+    let mut cx = control_plane_mocks::MockCx::new(trace, control_plane_mocks::MockBudget::new(200));
 
     // ContextAdapter::trace_id
     assert_eq!(cx.trace_id(), trace);
@@ -906,16 +905,16 @@ fn mock_cx_implements_context_adapter_trait() {
 
 #[test]
 fn schema_version_from_seed_produces_deterministic_versions() {
-    let v1 = control_plane::mocks::schema_version_from_seed(0);
-    let v2 = control_plane::mocks::schema_version_from_seed(0);
+    let v1 = control_plane_mocks::schema_version_from_seed(0);
+    let v2 = control_plane_mocks::schema_version_from_seed(0);
     assert_eq!(v1, v2);
 
-    let v3 = control_plane::mocks::schema_version_from_seed(1);
+    let v3 = control_plane_mocks::schema_version_from_seed(1);
     // Different seeds should give at least a different minor or patch
-    let v4 = control_plane::mocks::schema_version_from_seed(10);
+    let v4 = control_plane_mocks::schema_version_from_seed(10);
     // Just verify determinism for same seed
-    assert_eq!(v3, control_plane::mocks::schema_version_from_seed(1));
-    assert_eq!(v4, control_plane::mocks::schema_version_from_seed(10));
+    assert_eq!(v3, control_plane_mocks::schema_version_from_seed(1));
+    assert_eq!(v4, control_plane_mocks::schema_version_from_seed(10));
 }
 
 #[test]
@@ -1021,7 +1020,7 @@ fn loss_matrix_empty_actions_returns_error() {
 
 #[test]
 fn mock_budget_multiple_zero_consumes_leave_budget_unchanged() {
-    let mut budget = control_plane::mocks::MockBudget::new(100);
+    let mut budget = control_plane_mocks::MockBudget::new(100);
     for _ in 0..10 {
         budget.consume(0).expect("zero consume must succeed");
     }
@@ -1032,7 +1031,7 @@ fn mock_budget_multiple_zero_consumes_leave_budget_unchanged() {
 #[test]
 fn mock_budget_panic_on_overspend_builder_returns_self() {
     // Verify the builder pattern returns self so chaining works.
-    let b = control_plane::mocks::MockBudget::new(50).panic_on_overspend(false);
+    let b = control_plane_mocks::MockBudget::new(50).panic_on_overspend(false);
     assert_eq!(b.remaining_ms(), 50);
     assert_eq!(b.consumed_ms(), 0);
 }

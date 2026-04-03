@@ -21,9 +21,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use frankenengine_engine::control_plane::mocks::{
-    MockBudget, MockCx, decision_id_from_seed, policy_id_from_seed, trace_id_from_seed,
-};
 use frankenengine_engine::evidence_emission::{
     ActionCategory, CanonicalEvidenceEmitter, CanonicalEvidenceEntry, EmitterConfig,
     EvidenceEmissionRequest,
@@ -31,6 +28,9 @@ use frankenengine_engine::evidence_emission::{
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::migration_compatibility::*;
 use frankenengine_engine::policy_checkpoint::DeterministicTimestamp;
+use frankenengine_test_support::control_plane::{
+    MockBudget, MockCx, decision_id_from_seed, policy_id_from_seed, trace_id_from_seed,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers

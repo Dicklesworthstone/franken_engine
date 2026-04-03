@@ -160,6 +160,7 @@ dependencies = [
  "franken-evidence",
  "franken-kernel",
  "frankenengine-extension-host",
+ "frankenengine-test-support",
  "hex",
  "serde",
  "serde_json",
@@ -189,6 +190,13 @@ dependencies = [
  "serde_json",
  "sha2",
  "toml",
+]
+
+[[package]]
+name = "frankenengine-test-support"
+version = "0.1.0"
+dependencies = [
+ "frankenengine-engine",
 ]
 
 [[package]]

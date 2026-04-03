@@ -22,10 +22,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use frankenengine_engine::control_plane::mocks::{
-    MockDecisionContract, MockFailureMode, decision_id_from_seed, policy_id_from_seed,
-    trace_id_from_seed,
-};
 use frankenengine_engine::control_plane::{DecisionRequest, DecisionVerdict};
 use frankenengine_engine::receipt_verifier_pipeline::{
     LayerCheck, LayerResult, UnifiedReceiptVerificationVerdict, VerificationFailureClass,
@@ -38,6 +34,10 @@ use frankenengine_engine::safe_mode_fallback::{
     SafeModeStatus, attestation_health_from_verdict,
 };
 use frankenengine_engine::signature_preimage::SigningKey;
+use frankenengine_test_support::control_plane::{
+    MockDecisionContract, MockFailureMode, decision_id_from_seed, policy_id_from_seed,
+    trace_id_from_seed,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers

@@ -73,7 +73,7 @@ fn zero_placeholder_scan_cli_writes_artifact_bundle() {
         inventory.findings.len(),
         ZERO_PLACEHOLDER_SCAN_FINDING_COUNT
     );
-    assert_eq!(inventory.open_placeholder_finding_count(), 2);
+    assert_eq!(inventory.open_placeholder_finding_count(), 1);
 
     let manifest: ZeroPlaceholderScanRunManifest =
         serde_json::from_slice(&fs::read(out_dir.join("run_manifest.json")).unwrap())
@@ -88,7 +88,7 @@ fn zero_placeholder_scan_cli_writes_artifact_bundle() {
         manifest.finding_count as usize,
         ZERO_PLACEHOLDER_SCAN_FINDING_COUNT
     );
-    assert_eq!(manifest.open_placeholder_finding_count, 2);
+    assert_eq!(manifest.open_placeholder_finding_count, 1);
     assert_eq!(
         manifest.open_placeholder_finding_count
             + manifest.fail_closed_finding_count
@@ -230,7 +230,7 @@ fn zero_placeholder_inventory_counts_match_expectations() {
         inventory.findings.len(),
         ZERO_PLACEHOLDER_SCAN_FINDING_COUNT
     );
-    assert_eq!(inventory.open_placeholder_finding_count(), 2);
+    assert_eq!(inventory.open_placeholder_finding_count(), 1);
     assert_eq!(
         inventory.open_placeholder_finding_count()
             + inventory.fail_closed_finding_count()

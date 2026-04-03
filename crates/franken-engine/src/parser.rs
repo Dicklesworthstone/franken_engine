@@ -2917,12 +2917,29 @@ fn find_top_level_eq(source: &str) -> Option<usize> {
             '=' if depth == 0 => {
                 // Skip `==` and `=>`
                 let next = source.as_bytes().get(i + 1).copied();
-                let prev = if i > 0 { source.as_bytes().get(i - 1).copied() } else { None };
+                let prev = if i > 0 {
+                    source.as_bytes().get(i - 1).copied()
+                } else {
+                    None
+                };
                 if next != Some(b'=') && next != Some(b'>') {
                     // Skip `!=`, `<=`, `>=`, `+=`, etc.
                     let is_compound = matches!(
                         prev,
-                        Some(b'<' | b'>' | b'!' | b'=' | b'+' | b'-' | b'*' | b'/' | b'%' | b'&' | b'|' | b'^' | b'~')
+                        Some(
+                            b'<' | b'>'
+                                | b'!'
+                                | b'='
+                                | b'+'
+                                | b'-'
+                                | b'*'
+                                | b'/'
+                                | b'%'
+                                | b'&'
+                                | b'|'
+                                | b'^'
+                                | b'~'
+                        )
                     );
                     if !is_compound {
                         return Some(i);

@@ -1780,7 +1780,7 @@ mod tests {
         for s in statuses {
             displays.insert(s.to_string());
         }
-        assert_eq!(displays.len(), 5);
+        assert_eq!(displays.len(), 6);
     }
 
     #[test]

@@ -19,7 +19,6 @@
 )]
 
 use frankenengine_engine::cancellation_lifecycle::LifecycleEvent;
-use frankenengine_engine::control_plane::mocks::{MockBudget, MockCx, trace_id_from_seed};
 use frankenengine_engine::extension_host_lifecycle::{
     ExtensionHostLifecycleManager, HostLifecycleError, HostLifecycleEvent,
 };
@@ -28,6 +27,7 @@ use frankenengine_engine::frankenlab_extension_lifecycle::{
     run_scenario,
 };
 use frankenengine_engine::lab_runtime::Verdict;
+use frankenengine_test_support::control_plane::{MockBudget, MockCx, trace_id_from_seed};
 
 // ---------------------------------------------------------------------------
 // Helpers

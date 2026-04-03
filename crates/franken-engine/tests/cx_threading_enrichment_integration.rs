@@ -15,7 +15,6 @@
 
 use std::collections::BTreeSet;
 
-use frankenengine_engine::control_plane::mocks::{MockBudget, MockCx, trace_id_from_seed};
 use frankenengine_engine::cx_threading::{
     CxThreadedEvent, CxThreadedGateway, CxThreadingError, EffectAuditLog, EffectCategory,
     HOSTCALL_BUDGET_COST_MS, HostcallDescriptor, HostcallReceipt, HostcallRegistration,
@@ -24,6 +23,7 @@ use frankenengine_engine::cx_threading::{
     TELEMETRY_EMIT_BUDGET_COST_MS, TelemetryDescriptor, TelemetryLevel, TelemetryReceipt,
     run_full_lifecycle,
 };
+use frankenengine_test_support::control_plane::{MockBudget, MockCx, trace_id_from_seed};
 
 // ---------------------------------------------------------------------------
 // Helpers

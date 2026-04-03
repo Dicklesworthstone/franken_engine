@@ -75,8 +75,7 @@ impl LawProvenanceSource {
         let mut data = Vec::new();
         push_string_len(
             &mut data,
-            &serde_json::to_string(&self.source_kind)
-                .expect("source_kind must serialize for hash"),
+            &serde_json::to_string(&self.source_kind).expect("source_kind must serialize for hash"),
         );
         push_string_len(&mut data, &self.source_id);
         push_strings(&mut data, &self.policy_ids);
@@ -158,8 +157,7 @@ impl LawCandidate {
         push_string_len(&mut data, &self.candidate_id);
         push_string_len(
             &mut data,
-            &serde_json::to_string(&self.kind)
-                .expect("law kind must serialize for hash"),
+            &serde_json::to_string(&self.kind).expect("law kind must serialize for hash"),
         );
         push_string_len(&mut data, &self.statement);
         data.extend_from_slice(&self.rank_millionths.to_le_bytes());

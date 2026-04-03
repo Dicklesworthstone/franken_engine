@@ -449,7 +449,7 @@ impl Scorecard {
             return None;
         }
         let n = values.len();
-        
+
         let mut sorted = values.clone();
         sorted.sort_unstable();
 

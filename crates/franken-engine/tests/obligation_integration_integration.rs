@@ -22,7 +22,7 @@ use frankenengine_engine::obligation_integration::{
 };
 use frankenengine_engine::region_lifecycle::{CancelReason, DrainDeadline, RegionState};
 
-use frankenengine_engine::control_plane::mocks::{MockBudget, MockCx, trace_id_from_seed};
+use frankenengine_test_support::control_plane::{MockBudget, MockCx, trace_id_from_seed};
 
 fn mock_cx(budget_ms: u64) -> MockCx {
     MockCx::new(trace_id_from_seed(1), MockBudget::new(budget_ms))

@@ -640,11 +640,8 @@ impl RewritePack {
         if self.rules.is_empty() {
             return 0;
         }
-        let total = self.rules.len() as i64;
-        (self.proven_sound_count as i64)
-            .checked_mul(MILLION)
-            .unwrap_or(0)
-            / total
+        let total = self.rules.len() as i128;
+        ((self.proven_sound_count as i128 * MILLION as i128) / total) as i64
     }
 
     /// Whether this pack has any blocking internal interferences.

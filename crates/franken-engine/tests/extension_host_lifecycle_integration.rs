@@ -30,28 +30,22 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::cancellation_lifecycle::LifecycleEvent;
-use frankenengine_engine::control_plane::mocks::{MockBudget, MockCx};
 use frankenengine_engine::extension_host_lifecycle::{
     ExtensionHostLifecycleManager, ExtensionRecord, HostLifecycleError, HostLifecycleEvent,
 };
 use frankenengine_engine::region_lifecycle::RegionState;
+use frankenengine_test_support::control_plane::{MockBudget, MockCx, trace_id_from_seed};
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 fn mock_cx(budget_ms: u64) -> MockCx {
-    MockCx::new(
-        frankenengine_engine::control_plane::mocks::trace_id_from_seed(1),
-        MockBudget::new(budget_ms),
-    )
+    MockCx::new(trace_id_from_seed(1), MockBudget::new(budget_ms))
 }
 
 fn mock_cx_seed(seed: u64, budget_ms: u64) -> MockCx {
-    MockCx::new(
-        frankenengine_engine::control_plane::mocks::trace_id_from_seed(seed),
-        MockBudget::new(budget_ms),
-    )
+    MockCx::new(trace_id_from_seed(seed), MockBudget::new(budget_ms))
 }
 
 // ===========================================================================

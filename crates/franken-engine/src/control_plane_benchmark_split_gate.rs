@@ -512,7 +512,7 @@ fn coefficient_of_variation_millionths(samples: &[u64]) -> Option<u64> {
 
     let len = samples.len() as f64;
     let mean = samples.iter().map(|value| *value as f64).sum::<f64>() / len;
-    if mean == 0.0 {
+    if mean <= 0.0 || !mean.is_finite() {
         return None;
     }
 

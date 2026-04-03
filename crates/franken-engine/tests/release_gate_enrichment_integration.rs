@@ -13,12 +13,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use frankenengine_engine::control_plane::mocks::{MockBudget, MockCx, trace_id_from_seed};
 use frankenengine_engine::lab_runtime::Verdict;
 use frankenengine_engine::release_gate::{
     ExceptionPolicy, GateCheckKind, GateCheckResult, GateConfig, GateEvent, GateFailureDetail,
     GateFailureReport, IdempotencyVerification, ReleaseGate, ReleaseGateResult,
 };
+use frankenengine_test_support::control_plane::{MockBudget, MockCx, trace_id_from_seed};
 
 fn mock_cx(budget_ms: u64) -> MockCx {
     MockCx::new(trace_id_from_seed(99), MockBudget::new(budget_ms))

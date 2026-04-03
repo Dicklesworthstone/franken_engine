@@ -20,18 +20,42 @@
 
 use std::collections::BTreeSet;
 
-use frankenengine_engine::object_model::{JsValue, ObjectHeap, PropertyKey, SymbolId};
+use frankenengine_engine::object_model::{
+    JsValue, ObjectHeap, PropertyDescriptor, PropertyKey, SymbolId,
+};
 use frankenengine_engine::stdlib::{
-    ArrayMethodResult, BuiltinId, CollectionKind, StdlibError, StringFastPathConsumer,
-    StringFastPathGateError, StringObservationMode, StringRepresentationKind, alloc_array_instance,
-    alloc_map_instance, alloc_set_instance, derive_string_fast_path_eligibility, exec_array_method,
-    exec_boolean_method, exec_error_constructor, exec_global_function, exec_heap_collection_method,
-    exec_math, exec_number_method, exec_string_method, exec_string_method_with_receipt,
-    install_stdlib, json_parse, json_stringify, read_array_elements,
-    require_string_fast_path_eligibility,
+    ArrayMethodResult, BuiltinId, CollectionKind, GlobalEnvironment, StdlibError,
+    StringFastPathConsumer, StringFastPathGateError, StringObservationMode,
+    StringRepresentationKind, alloc_array_instance, alloc_map_instance, alloc_set_instance,
+    derive_string_fast_path_eligibility, exec_array_method, exec_boolean_method,
+    exec_error_constructor, exec_global_function, exec_heap_collection_method, exec_math,
+    exec_number_method, exec_string_method, exec_string_method_with_receipt, install_stdlib,
+    json_parse, json_stringify, read_array_elements, require_string_fast_path_eligibility,
 };
 
 const FP_SCALE: i64 = 1_000_000;
+
+fn parse_json_value(input: &str) -> Result<JsValue, StdlibError> {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    json_parse(&mut heap, &env, input)
+}
+
+fn parse_json_with_heap(input: &str) -> (ObjectHeap, GlobalEnvironment, JsValue) {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let value = json_parse(&mut heap, &env, input).expect("parse JSON into heap");
+    (heap, env, value)
+}
+
+fn stringify_json_value(value: &JsValue) -> Result<JsValue, StdlibError> {
+    let heap = ObjectHeap::new();
+    json_stringify(&heap, value)
+}
+
+fn stringify_json_with_heap(heap: &ObjectHeap, value: &JsValue) -> Result<JsValue, StdlibError> {
+    json_stringify(heap, value)
+}
 
 // ===========================================================================
 // A. Serde Roundtrip (6 tests)
@@ -604,47 +628,77 @@ fn enrichment_string_split_with_limit() {
 
 #[test]
 fn enrichment_json_parse_whitespace_trimmed() {
-    assert_eq!(json_parse("  null  ").unwrap(), JsValue::Null);
-    assert_eq!(json_parse("  true  ").unwrap(), JsValue::Bool(true));
-    assert_eq!(json_parse("  42  ").unwrap(), JsValue::Int(42 * FP_SCALE));
+    assert_eq!(parse_json_value("  null  ").unwrap(), JsValue::Null);
+    assert_eq!(parse_json_value("  true  ").unwrap(), JsValue::Bool(true));
+    assert_eq!(
+        parse_json_value("  42  ").unwrap(),
+        JsValue::Int(42 * FP_SCALE)
+    );
 }
 
 #[test]
 fn enrichment_json_parse_unicode_escape() {
     // "\u0041" should parse as "A" (code point 65).
-    let result = json_parse(r#""\u0041""#).unwrap();
+    let result = parse_json_value(r#""\u0041""#).unwrap();
     assert_eq!(result, JsValue::Str("A".into()));
 }
 
 #[test]
 fn enrichment_json_parse_escape_sequences() {
-    let result = json_parse(r#""line\nnewline""#).unwrap();
+    let result = parse_json_value(r#""line\nnewline""#).unwrap();
     assert_eq!(result, JsValue::Str("line\nnewline".into()));
 
-    let result2 = json_parse(r#""tab\there""#).unwrap();
+    let result2 = parse_json_value(r#""tab\there""#).unwrap();
     assert_eq!(result2, JsValue::Str("tab\there".into()));
 
-    let result3 = json_parse(r#""back\\slash""#).unwrap();
+    let result3 = parse_json_value(r#""back\\slash""#).unwrap();
     assert_eq!(result3, JsValue::Str("back\\slash".into()));
 }
 
 #[test]
+fn enrichment_json_parse_rejects_unsupported_numeric_forms() {
+    assert!(parse_json_value("1e3").is_err());
+    assert!(parse_json_value("0.1234567").is_err());
+}
+
+#[test]
 fn enrichment_json_stringify_symbol_returns_undefined() {
-    let result = json_stringify(&JsValue::Symbol(SymbolId(42))).unwrap();
+    let result = stringify_json_value(&JsValue::Symbol(SymbolId(42))).unwrap();
     assert_eq!(result, JsValue::Undefined);
 }
 
 #[test]
-fn enrichment_json_stringify_object_returns_placeholder() {
-    let mut heap = ObjectHeap::new();
-    let env = install_stdlib(&mut heap);
-    let obj_handle = env.global_object;
-    let result = json_stringify(&JsValue::Object(obj_handle)).unwrap();
-    if let JsValue::Str(s) = &result {
-        assert_eq!(s, "[json-object]");
-    } else {
-        panic!("expected string result");
-    }
+fn enrichment_json_stringify_object_traverses_compound_heap_state() {
+    let (heap, _env, value) = parse_json_with_heap(r#"{"a":1,"b":[2,null,"ok"]}"#);
+    assert_eq!(
+        stringify_json_with_heap(&heap, &value).unwrap(),
+        JsValue::Str(r#"{"a":1,"b":[2,null,"ok"]}"#.into())
+    );
+}
+
+#[test]
+fn enrichment_json_stringify_rejects_accessor_backed_properties() {
+    let (mut heap, _env, value) = parse_json_with_heap("{}");
+    let JsValue::Object(handle) = value else {
+        panic!("expected object handle");
+    };
+    heap.define_property(
+        handle,
+        PropertyKey::from("computed"),
+        PropertyDescriptor::Accessor {
+            get: None,
+            set: None,
+            enumerable: true,
+            configurable: true,
+        },
+    )
+    .unwrap();
+
+    let err = stringify_json_with_heap(&heap, &JsValue::Object(handle)).unwrap_err();
+    assert!(
+        matches!(err, StdlibError::JsonStringifyError(ref message) if message.contains("accessor property `computed`")),
+        "unexpected error: {err}"
+    );
 }
 
 // ===========================================================================
@@ -1041,43 +1095,65 @@ fn enrichment_string_repeat() {
 
 #[test]
 fn enrichment_json_parse_object() {
-    let result = json_parse(r#"{"a":1,"b":"hello"}"#).unwrap();
-    // Objects starting with '{' are returned as json-compound descriptors.
-    if let JsValue::Str(s) = &result {
-        assert!(
-            s.contains("json-compound"),
-            "expected compound descriptor, got: {s}"
-        );
-    } else {
-        panic!("expected Str(json-compound:...), got: {result:?}");
-    }
+    let (heap, env, result) = parse_json_with_heap(r#"{"a":1,"b":"hello"}"#);
+    let JsValue::Object(handle) = result else {
+        panic!("expected heap-backed object, got: {result:?}");
+    };
+    assert_eq!(
+        heap.get_prototype_of(handle).unwrap(),
+        Some(env.prototypes.object_prototype)
+    );
+    assert_eq!(
+        heap.get_property(handle, &PropertyKey::from("a")).unwrap(),
+        JsValue::Int(FP_SCALE)
+    );
+    assert_eq!(
+        heap.get_property(handle, &PropertyKey::from("b")).unwrap(),
+        JsValue::Str("hello".into())
+    );
+}
+
+#[test]
+fn enrichment_json_parse_duplicate_keys_last_wins() {
+    let (heap, _env, result) = parse_json_with_heap(r#"{"a":1,"a":2}"#);
+    let JsValue::Object(handle) = result else {
+        panic!("expected heap-backed object, got: {result:?}");
+    };
+    assert_eq!(
+        heap.get_property(handle, &PropertyKey::from("a")).unwrap(),
+        JsValue::Int(2 * FP_SCALE)
+    );
 }
 
 #[test]
 fn enrichment_json_parse_array() {
-    let result = json_parse("[1,2,3]").unwrap();
-    // Arrays are returned as json-compound descriptors (no JsValue::Array variant).
-    if let JsValue::Str(s) = &result {
-        assert!(
-            s.contains("json-compound"),
-            "expected json-compound descriptor, got: {s}"
-        );
-    } else {
-        panic!("expected Str(json-compound:...), got: {result:?}");
-    }
+    let (heap, env, result) = parse_json_with_heap("[1,2,3]");
+    let JsValue::Object(handle) = result else {
+        panic!("expected heap-backed array, got: {result:?}");
+    };
+    assert_eq!(
+        heap.get_prototype_of(handle).unwrap(),
+        Some(env.prototypes.array_prototype)
+    );
+    assert_eq!(
+        read_array_elements(&heap, handle).unwrap(),
+        vec![
+            JsValue::Int(FP_SCALE),
+            JsValue::Int(2 * FP_SCALE),
+            JsValue::Int(3 * FP_SCALE),
+        ]
+    );
 }
 
 #[test]
 fn enrichment_json_parse_invalid_returns_error() {
-    // json_parse treats anything starting with '{' as a compound and returns a descriptor,
-    // so use a truly unparseable prefix to trigger an error.
-    let result = json_parse("<<<not valid>>>");
+    let result = parse_json_value("<<<not valid>>>");
     assert!(result.is_err());
 }
 
 #[test]
 fn enrichment_json_stringify_null() {
-    let result = json_stringify(&JsValue::Null).unwrap();
+    let result = stringify_json_value(&JsValue::Null).unwrap();
     assert_eq!(result, JsValue::Str("null".into()));
 }
 

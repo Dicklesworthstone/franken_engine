@@ -874,9 +874,10 @@ fn scan_inventory_is_deterministic() {
 
 #[test]
 fn scan_inventory_open_placeholder_count_tracks_remaining_runtime_gaps() {
-    // Two runtime gaps remain open; iterator execution is now resolved.
+    // One runtime gap remains open; iterator execution and stringify traversal
+    // are now resolved.
     let inv = zero_placeholder_scan_inventory();
-    assert_eq!(inv.open_placeholder_finding_count(), 2);
+    assert_eq!(inv.open_placeholder_finding_count(), 1);
 }
 
 #[test]

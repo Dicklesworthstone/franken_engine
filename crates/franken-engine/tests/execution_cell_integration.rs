@@ -20,12 +20,12 @@
 )]
 
 use frankenengine_engine::control_plane::TraceId;
-use frankenengine_engine::control_plane::mocks::{MockBudget, MockCx};
 use frankenengine_engine::cx_threading::EffectCategory;
 use frankenengine_engine::execution_cell::{
     CellError, CellEvent, CellKind, CellManager, ExecutionCell,
 };
 use frankenengine_engine::region_lifecycle::{CancelReason, DrainDeadline, RegionState};
+use frankenengine_test_support::control_plane::{MockBudget, MockCx};
 
 // ---------------------------------------------------------------------------
 // Helpers

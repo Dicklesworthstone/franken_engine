@@ -321,10 +321,8 @@ impl EmbeddingBuilder {
                 for comp in &mut filtered {
                     // Map [min, max] → [0, MILLION]
                     let shifted = comp.value_millionths.saturating_sub(min_val);
-                    comp.value_millionths = shifted
-                        .checked_mul(MILLION)
-                        .map(|n| n / range)
-                        .unwrap_or(MILLION);
+                    comp.value_millionths =
+                        ((shifted as i128 * MILLION as i128) / range as i128) as i64;
                 }
             }
         }

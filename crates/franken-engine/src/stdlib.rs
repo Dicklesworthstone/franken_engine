@@ -14,6 +14,7 @@
 //!
 //! Plan reference: Section 10.2 item 10, bd-1lsy.4.6.
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -904,13 +905,14 @@ pub fn exec_math(builtin: BuiltinId, args: &[JsValue]) -> Result<JsValue, Stdlib
                 return Ok(JsValue::Int(0));
             }
             // hypot(a,b,...) = sqrt(a^2 + b^2 + ...) in fixed-point units.
-            let mut sum_sq: i64 = 0;
+            let mut sum_sq: i128 = 0;
             for (i, arg) in args.iter().enumerate() {
-                let v = coerce_to_int(&format!("Math.hypot arg {i}"), arg)? / FP_SCALE;
-                sum_sq = sum_sq.saturating_add(v.saturating_mul(v));
+                let v = coerce_to_int(&format!("Math.hypot arg {i}"), arg)? as i128;
+                sum_sq = sum_sq.saturating_add(v * v);
             }
-            // sqrt(sum_sq) * FP_SCALE
-            let result = isqrt_i64(sum_sq) * FP_SCALE;
+            // Taking sqrt on the squared sum (scaled by FP_SCALE^2) naturally yields 
+            // the result scaled by FP_SCALE without any precision loss prior to sqrt.
+            let result = isqrt_i128(sum_sq) as i64;
             Ok(JsValue::Int(result))
         }
         BuiltinId::MathFround => {
@@ -1082,7 +1084,12 @@ pub fn exec_string_static(builtin: BuiltinId, args: &[JsValue]) -> Result<JsValu
             let mut result = String::new();
             for (i, arg) in args.iter().enumerate() {
                 let code = coerce_to_int(&format!("String.fromCodePoint arg {i}"), arg)? / FP_SCALE;
-                let cp = code.max(0) as u32;
+                if code < 0 || code > 0x10FFFF {
+                    return Err(StdlibError::RangeError(format!(
+                        "String.fromCodePoint: invalid Unicode code point {code}"
+                    )));
+                }
+                let cp = code as u32;
                 match char::from_u32(cp) {
                     Some(ch) => result.push(ch),
                     None => {
@@ -2641,67 +2648,468 @@ pub fn exec_symbol_static(builtin: BuiltinId, args: &[JsValue]) -> Result<JsValu
 /// Deterministic JSON.parse baseline.
 ///
 /// Compound array/object semantics are defined in
-/// `docs/RGC_COMPOUND_JSON_RUNTIME_CONTRACT_V1.md`. The implementation leaves
-/// for `bd-2muur.1` must return real heap-backed `JsValue::Object` handles for
-/// supported compound inputs instead of descriptor strings.
-pub fn json_parse(input: &str) -> Result<JsValue, StdlibError> {
-    let trimmed = input.trim();
-    if trimmed == "null" {
-        return Ok(JsValue::Null);
+/// `docs/RGC_COMPOUND_JSON_RUNTIME_CONTRACT_V1.md`. Compound results allocate
+/// into `heap` using the installed stdlib prototypes from `env`.
+pub fn json_parse(
+    heap: &mut ObjectHeap,
+    env: &GlobalEnvironment,
+    input: &str,
+) -> Result<JsValue, StdlibError> {
+    let node = JsonParser::new(input).parse()?;
+    materialize_json_node(heap, env, node)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum JsonNode {
+    Null,
+    Bool(bool),
+    Number(i64),
+    String(String),
+    Array(Vec<JsonNode>),
+    Object(Vec<(String, JsonNode)>),
+}
+
+struct JsonParser<'a> {
+    input: &'a str,
+    pos: usize,
+}
+
+impl<'a> JsonParser<'a> {
+    fn new(input: &'a str) -> Self {
+        Self { input, pos: 0 }
     }
-    if trimmed == "true" {
-        return Ok(JsValue::Bool(true));
+
+    fn parse(mut self) -> Result<JsonNode, StdlibError> {
+        self.skip_whitespace();
+        let value = self.parse_value()?;
+        self.skip_whitespace();
+        if self.pos != self.input.len() {
+            return Err(self.unexpected_token());
+        }
+        Ok(value)
     }
-    if trimmed == "false" {
-        return Ok(JsValue::Bool(false));
+
+    fn parse_value(&mut self) -> Result<JsonNode, StdlibError> {
+        self.skip_whitespace();
+        match self.peek_byte() {
+            Some(b'n') => self.consume_literal("null", JsonNode::Null),
+            Some(b't') => self.consume_literal("true", JsonNode::Bool(true)),
+            Some(b'f') => self.consume_literal("false", JsonNode::Bool(false)),
+            Some(b'"') => self.parse_string().map(JsonNode::String),
+            Some(b'[') => self.parse_array(),
+            Some(b'{') => self.parse_object(),
+            Some(b'-' | b'0'..=b'9') => self.parse_number().map(JsonNode::Number),
+            Some(_) => Err(self.unexpected_token()),
+            None => Err(self.error("unexpected end of input")),
+        }
     }
-    if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
-        let inner = &trimmed[1..trimmed.len() - 1];
-        return Ok(JsValue::Str(unescape_json_string(inner)?));
+
+    fn consume_literal(&mut self, literal: &str, value: JsonNode) -> Result<JsonNode, StdlibError> {
+        if self
+            .input
+            .get(self.pos..)
+            .is_some_and(|tail| tail.starts_with(literal))
+        {
+            self.pos += literal.len();
+            Ok(value)
+        } else {
+            Err(self.unexpected_token())
+        }
     }
-    if let Ok(n) = trimmed.parse::<i64>() {
-        return Ok(JsValue::Int(n * FP_SCALE));
+
+    fn parse_string(&mut self) -> Result<String, StdlibError> {
+        if self.peek_byte() != Some(b'"') {
+            return Err(self.unexpected_token());
+        }
+        let start = self.pos + 1;
+        let bytes = self.input.as_bytes();
+        let mut cursor = start;
+        while let Some(&byte) = bytes.get(cursor) {
+            match byte {
+                b'"' => {
+                    let raw = &self.input[start..cursor];
+                    self.pos = cursor + 1;
+                    return unescape_json_string(raw);
+                }
+                b'\\' => {
+                    cursor += 1;
+                    if cursor >= bytes.len() {
+                        self.pos = cursor;
+                        return Err(self.error("unexpected end of string after \\"));
+                    }
+                }
+                0x00..=0x1F => {
+                    self.pos = cursor;
+                    return Err(self.error("control character in string literal"));
+                }
+                _ => {}
+            }
+            cursor += 1;
+        }
+        self.pos = self.input.len();
+        Err(self.error("unterminated string literal"))
     }
-    // Objects and arrays require heap allocation — return a parse descriptor.
-    if trimmed.starts_with('{') || trimmed.starts_with('[') {
-        return Ok(JsValue::Str(format!("[json-compound:{}]", trimmed.len())));
+
+    fn parse_array(&mut self) -> Result<JsonNode, StdlibError> {
+        self.expect_byte(b'[')?;
+        self.skip_whitespace();
+        let mut elements = Vec::new();
+        if self.consume_byte_if(b']') {
+            return Ok(JsonNode::Array(elements));
+        }
+        loop {
+            elements.push(self.parse_value()?);
+            self.skip_whitespace();
+            if self.consume_byte_if(b',') {
+                self.skip_whitespace();
+                continue;
+            }
+            if self.consume_byte_if(b']') {
+                return Ok(JsonNode::Array(elements));
+            }
+            return Err(self.error("expected ',' or ']'"));
+        }
     }
-    Err(StdlibError::JsonParseError(format!(
-        "unexpected token at position 0: {}",
-        &trimmed[..trimmed.len().min(20)]
-    )))
+
+    fn parse_object(&mut self) -> Result<JsonNode, StdlibError> {
+        self.expect_byte(b'{')?;
+        self.skip_whitespace();
+        let mut entries = Vec::new();
+        if self.consume_byte_if(b'}') {
+            return Ok(JsonNode::Object(entries));
+        }
+        loop {
+            let key = self.parse_string()?;
+            self.skip_whitespace();
+            self.expect_byte(b':')?;
+            self.skip_whitespace();
+            let value = self.parse_value()?;
+            entries.push((key, value));
+            self.skip_whitespace();
+            if self.consume_byte_if(b',') {
+                self.skip_whitespace();
+                continue;
+            }
+            if self.consume_byte_if(b'}') {
+                return Ok(JsonNode::Object(entries));
+            }
+            return Err(self.error("expected ',' or '}'"));
+        }
+    }
+
+    fn parse_number(&mut self) -> Result<i64, StdlibError> {
+        let start = self.pos;
+        if self.consume_byte_if(b'-') && self.peek_byte().is_none() {
+            return Err(self.error("unexpected end of number literal"));
+        }
+
+        match self.peek_byte() {
+            Some(b'0') => {
+                self.pos += 1;
+                if matches!(self.peek_byte(), Some(b'0'..=b'9')) {
+                    return Err(self.error("leading zeroes are not allowed"));
+                }
+            }
+            Some(b'1'..=b'9') => {
+                self.pos += 1;
+                while matches!(self.peek_byte(), Some(b'0'..=b'9')) {
+                    self.pos += 1;
+                }
+            }
+            _ => return Err(self.error("invalid number literal")),
+        }
+
+        if self.consume_byte_if(b'.') {
+            if !matches!(self.peek_byte(), Some(b'0'..=b'9')) {
+                return Err(self.error("fractional part requires at least one digit"));
+            }
+            while matches!(self.peek_byte(), Some(b'0'..=b'9')) {
+                self.pos += 1;
+            }
+        }
+
+        if matches!(self.peek_byte(), Some(b'e' | b'E')) {
+            return Err(self.error("exponent notation is not supported"));
+        }
+
+        parse_json_fixed_number(&self.input[start..self.pos])
+    }
+
+    fn skip_whitespace(&mut self) {
+        while let Some(ch) = self.input[self.pos..].chars().next() {
+            if ch.is_whitespace() {
+                self.pos += ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn expect_byte(&mut self, expected: u8) -> Result<(), StdlibError> {
+        if self.consume_byte_if(expected) {
+            Ok(())
+        } else {
+            Err(self.error(&format!("expected '{}'", expected as char)))
+        }
+    }
+
+    fn consume_byte_if(&mut self, expected: u8) -> bool {
+        if self.peek_byte() == Some(expected) {
+            self.pos += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn peek_byte(&self) -> Option<u8> {
+        self.input.as_bytes().get(self.pos).copied()
+    }
+
+    fn error(&self, message: &str) -> StdlibError {
+        StdlibError::JsonParseError(format!("{message} at position {}", self.pos))
+    }
+
+    fn unexpected_token(&self) -> StdlibError {
+        if self.pos >= self.input.len() {
+            return self.error("unexpected end of input");
+        }
+        let snippet: String = self.input[self.pos..].chars().take(20).collect();
+        StdlibError::JsonParseError(format!(
+            "unexpected token at position {}: {snippet}",
+            self.pos
+        ))
+    }
+}
+
+fn parse_json_fixed_number(raw: &str) -> Result<i64, StdlibError> {
+    let (negative, digits) = if let Some(rest) = raw.strip_prefix('-') {
+        (true, rest)
+    } else {
+        (false, raw)
+    };
+
+    let (integer_digits, fractional_digits) = match digits.split_once('.') {
+        Some((integer, fractional)) => (integer, fractional),
+        None => (digits, ""),
+    };
+
+    if fractional_digits.len() > 6 {
+        return Err(StdlibError::JsonParseError(
+            "number literal exceeds fixed-point precision".into(),
+        ));
+    }
+
+    let integer_value = integer_digits.parse::<i128>().map_err(|_| {
+        StdlibError::JsonParseError("invalid integer component in number literal".into())
+    })?;
+    let fractional_value = if fractional_digits.is_empty() {
+        0
+    } else {
+        fractional_digits.parse::<i128>().map_err(|_| {
+            StdlibError::JsonParseError("invalid fractional component in number literal".into())
+        })?
+    };
+    let fractional_scale = 10_i128.pow((6 - fractional_digits.len()) as u32);
+    let mut scaled = integer_value
+        .checked_mul(i128::from(FP_SCALE))
+        .and_then(|value| value.checked_add(fractional_value.checked_mul(fractional_scale)?))
+        .ok_or_else(|| StdlibError::JsonParseError("number literal overflows i64".into()))?;
+
+    if negative {
+        scaled = -scaled;
+    }
+
+    i64::try_from(scaled)
+        .map_err(|_| StdlibError::JsonParseError("number literal overflows i64".into()))
+}
+
+fn materialize_json_node(
+    heap: &mut ObjectHeap,
+    env: &GlobalEnvironment,
+    node: JsonNode,
+) -> Result<JsValue, StdlibError> {
+    match node {
+        JsonNode::Null => Ok(JsValue::Null),
+        JsonNode::Bool(value) => Ok(JsValue::Bool(value)),
+        JsonNode::Number(value) => Ok(JsValue::Int(value)),
+        JsonNode::String(value) => Ok(JsValue::Str(value)),
+        JsonNode::Array(elements) => {
+            let elements = elements
+                .into_iter()
+                .map(|element| materialize_json_node(heap, env, element))
+                .collect::<Result<Vec<_>, _>>()?;
+            let handle = alloc_array_instance(heap, env.prototypes.array_prototype, &elements)?;
+            Ok(JsValue::Object(handle))
+        }
+        JsonNode::Object(entries) => {
+            let handle = heap.alloc(Some(env.prototypes.object_prototype));
+            set_class_tag(heap, handle, "Object");
+            for (key, node) in entries {
+                let value = materialize_json_node(heap, env, node)?;
+                let defined = heap
+                    .set_property(handle, PropertyKey::from(key.as_str()), value)
+                    .map_err(object_error)?;
+                if !defined {
+                    return Err(StdlibError::JsonParseError(format!(
+                        "failed to materialize object property `{key}`"
+                    )));
+                }
+            }
+            Ok(JsValue::Object(handle))
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JsonStringifyPosition {
+    TopLevel,
+    ArrayElement,
+    ObjectProperty,
 }
 
 /// Deterministic JSON.stringify baseline.
 ///
 /// Compound traversal, omission rules, and fail-closed unsupported edges are
-/// defined in `docs/RGC_COMPOUND_JSON_RUNTIME_CONTRACT_V1.md`. The
-/// implementation leaves for `bd-2muur.1` must derive output from real heap
-/// state instead of `[json-object]` placeholders.
-pub fn json_stringify(value: &JsValue) -> Result<JsValue, StdlibError> {
+/// defined in `docs/RGC_COMPOUND_JSON_RUNTIME_CONTRACT_V1.md`. Compound values
+/// derive output from live `heap` state via their `ObjectHandle`s.
+pub fn json_stringify(heap: &ObjectHeap, value: &JsValue) -> Result<JsValue, StdlibError> {
+    let mut active = BTreeSet::new();
+    match stringify_json_value(heap, value, JsonStringifyPosition::TopLevel, &mut active)? {
+        Some(serialized) => Ok(JsValue::Str(serialized)),
+        None => Ok(JsValue::Undefined),
+    }
+}
+
+fn stringify_json_value(
+    heap: &ObjectHeap,
+    value: &JsValue,
+    position: JsonStringifyPosition,
+    active: &mut BTreeSet<ObjectHandle>,
+) -> Result<Option<String>, StdlibError> {
     match value {
-        JsValue::Undefined => Ok(JsValue::Undefined),
-        JsValue::Null => Ok(JsValue::Str("null".into())),
-        JsValue::Bool(b) => Ok(JsValue::Str(if *b { "true" } else { "false" }.into())),
-        JsValue::Int(n) => {
-            let units = n / FP_SCALE;
-            let frac = n % FP_SCALE;
-            if frac == 0 {
-                Ok(JsValue::Str(format!("{units}")))
-            } else {
-                let frac_abs = frac.abs();
-                let frac_str = format!("{frac_abs:06}");
-                let trimmed = frac_str.trim_end_matches('0');
-                let sign = if *n < 0 && units == 0 { "-" } else { "" };
-                Ok(JsValue::Str(format!("{sign}{units}.{trimmed}")))
+        JsValue::Undefined | JsValue::Symbol(_) | JsValue::Function(_) => Ok(match position {
+            JsonStringifyPosition::TopLevel | JsonStringifyPosition::ObjectProperty => None,
+            JsonStringifyPosition::ArrayElement => Some("null".to_string()),
+        }),
+        JsValue::Null => Ok(Some("null".to_string())),
+        JsValue::Bool(value) => Ok(Some(if *value { "true" } else { "false" }.to_string())),
+        JsValue::Int(value) => Ok(Some(format_json_number(*value))),
+        JsValue::Str(value) => Ok(Some(format!("\"{}\"", escape_json_string(value)))),
+        JsValue::Object(handle) => stringify_json_object(heap, *handle, active).map(Some),
+    }
+}
+
+fn stringify_json_object(
+    heap: &ObjectHeap,
+    handle: ObjectHandle,
+    active: &mut BTreeSet<ObjectHandle>,
+) -> Result<String, StdlibError> {
+    if !active.insert(handle) {
+        return Err(StdlibError::JsonStringifyError(
+            "circular object graphs are not supported".into(),
+        ));
+    }
+
+    let result = (|| {
+        let object = heap.get(handle).map_err(|err| {
+            StdlibError::JsonStringifyError(format!("invalid object handle: {err}"))
+        })?;
+        let ordinary = object.as_ordinary().ok_or_else(|| {
+            StdlibError::JsonStringifyError("proxy objects are not supported".into())
+        })?;
+
+        if ordinary.callable || ordinary.constructable {
+            return Err(StdlibError::JsonStringifyError(
+                "callable object handles are not supported".into(),
+            ));
+        }
+
+        match ordinary.class_tag.as_deref() {
+            Some("Array") => stringify_json_array(heap, handle, active),
+            Some("Object") | None => stringify_json_plain_object(heap, ordinary, active),
+            Some(tag) => Err(StdlibError::JsonStringifyError(format!(
+                "unsupported object class `{tag}`"
+            ))),
+        }
+    })();
+
+    active.remove(&handle);
+    result
+}
+
+fn stringify_json_array(
+    heap: &ObjectHeap,
+    handle: ObjectHandle,
+    active: &mut BTreeSet<ObjectHandle>,
+) -> Result<String, StdlibError> {
+    let elements = read_array_elements(heap, handle).map_err(|_| {
+        StdlibError::JsonStringifyError(
+            "array serialization requires dense own data properties".into(),
+        )
+    })?;
+    let mut serialized = Vec::with_capacity(elements.len());
+    for value in &elements {
+        serialized.push(
+            stringify_json_value(heap, value, JsonStringifyPosition::ArrayElement, active)?
+                .unwrap_or_else(|| "null".to_string()),
+        );
+    }
+    Ok(format!("[{}]", serialized.join(",")))
+}
+
+fn stringify_json_plain_object(
+    heap: &ObjectHeap,
+    ordinary: &crate::object_model::OrdinaryObject,
+    active: &mut BTreeSet<ObjectHandle>,
+) -> Result<String, StdlibError> {
+    let mut serialized = Vec::new();
+    for key in ordinary.own_property_keys() {
+        let PropertyKey::String(name) = key else {
+            continue;
+        };
+        let Some(descriptor) = ordinary.properties.get(&PropertyKey::String(name.clone())) else {
+            continue;
+        };
+        if !descriptor.is_enumerable() {
+            continue;
+        }
+        match descriptor {
+            PropertyDescriptor::Data { value, .. } => {
+                if let Some(serialized_value) = stringify_json_value(
+                    heap,
+                    value,
+                    JsonStringifyPosition::ObjectProperty,
+                    active,
+                )? {
+                    serialized.push(format!(
+                        "\"{}\":{}",
+                        escape_json_string(&name),
+                        serialized_value
+                    ));
+                }
+            }
+            PropertyDescriptor::Accessor { .. } => {
+                return Err(StdlibError::JsonStringifyError(format!(
+                    "enumerable accessor property `{name}` is not supported"
+                )));
             }
         }
-        JsValue::Str(s) => Ok(JsValue::Str(format!("\"{}\"", escape_json_string(s)))),
-        JsValue::Symbol(_) => Ok(JsValue::Undefined), // Symbols are omitted
-        JsValue::Object(_) | JsValue::Function(_) => {
-            // Complex objects need heap traversal; return placeholder.
-            Ok(JsValue::Str("[json-object]".into()))
-        }
+    }
+    Ok(format!("{{{}}}", serialized.join(",")))
+}
+
+fn format_json_number(value: i64) -> String {
+    let units = value / FP_SCALE;
+    let frac = value % FP_SCALE;
+    if frac == 0 {
+        format!("{units}")
+    } else {
+        let frac_abs = frac.abs();
+        let frac_str = format!("{frac_abs:06}");
+        let trimmed = frac_str.trim_end_matches('0');
+        let sign = if value < 0 && units == 0 { "-" } else { "" };
+        format!("{sign}{units}.{trimmed}")
     }
 }
 
@@ -2811,6 +3219,21 @@ fn resolve_array_index(idx: i64, len: i64) -> i64 {
 
 /// Integer square root (floor) for fixed-point sqrt.
 fn isqrt_i64(n: i64) -> i64 {
+    if n <= 0 {
+        return 0;
+    }
+    let mut x = n;
+    #[allow(clippy::manual_div_ceil)]
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x
+}
+
+/// Integer square root (floor) for 128-bit numbers.
+fn isqrt_i128(n: i128) -> i128 {
     if n <= 0 {
         return 0;
     }
@@ -4199,6 +4622,19 @@ fn install_global_properties(
 mod tests {
     use super::*;
 
+    fn parse_json_value(input: &str) -> Result<JsValue, StdlibError> {
+        let mut heap = ObjectHeap::new();
+        let env = install_stdlib(&mut heap);
+        json_parse(&mut heap, &env, input)
+    }
+
+    fn parse_json_with_heap(input: &str) -> (ObjectHeap, GlobalEnvironment, JsValue) {
+        let mut heap = ObjectHeap::new();
+        let env = install_stdlib(&mut heap);
+        let value = json_parse(&mut heap, &env, input).expect("parse JSON into heap");
+        (heap, env, value)
+    }
+
     // -- BuiltinRegistry tests -----------------------------------------------
 
     #[test]
@@ -4765,12 +5201,12 @@ mod tests {
 
     #[test]
     fn test_json_parse_primitives() {
-        assert_eq!(json_parse("null").unwrap(), JsValue::Null);
-        assert_eq!(json_parse("true").unwrap(), JsValue::Bool(true));
-        assert_eq!(json_parse("false").unwrap(), JsValue::Bool(false));
-        assert_eq!(json_parse("42").unwrap(), JsValue::Int(42 * FP_SCALE));
+        assert_eq!(parse_json_value("null").unwrap(), JsValue::Null);
+        assert_eq!(parse_json_value("true").unwrap(), JsValue::Bool(true));
+        assert_eq!(parse_json_value("false").unwrap(), JsValue::Bool(false));
+        assert_eq!(parse_json_value("42").unwrap(), JsValue::Int(42 * FP_SCALE));
         assert_eq!(
-            json_parse("\"hello\"").unwrap(),
+            parse_json_value("\"hello\"").unwrap(),
             JsValue::Str("hello".into())
         );
     }
@@ -4778,56 +5214,89 @@ mod tests {
     #[test]
     fn test_json_parse_escape() {
         assert_eq!(
-            json_parse("\"hello\\nworld\"").unwrap(),
+            parse_json_value("\"hello\\nworld\"").unwrap(),
             JsValue::Str("hello\nworld".into())
         );
         assert_eq!(
-            json_parse("\"tab\\there\"").unwrap(),
+            parse_json_value("\"tab\\there\"").unwrap(),
             JsValue::Str("tab\there".into())
         );
     }
 
     #[test]
     fn test_json_stringify_primitives() {
+        let heap = ObjectHeap::new();
         assert_eq!(
-            json_stringify(&JsValue::Null).unwrap(),
+            json_stringify(&heap, &JsValue::Null).unwrap(),
             JsValue::Str("null".into())
         );
         assert_eq!(
-            json_stringify(&JsValue::Bool(true)).unwrap(),
+            json_stringify(&heap, &JsValue::Bool(true)).unwrap(),
             JsValue::Str("true".into())
         );
         assert_eq!(
-            json_stringify(&JsValue::Int(42 * FP_SCALE)).unwrap(),
+            json_stringify(&heap, &JsValue::Int(42 * FP_SCALE)).unwrap(),
             JsValue::Str("42".into())
         );
         assert_eq!(
-            json_stringify(&JsValue::Str("hello".into())).unwrap(),
+            json_stringify(&heap, &JsValue::Str("hello".into())).unwrap(),
             JsValue::Str("\"hello\"".into())
         );
     }
 
     #[test]
     fn test_json_stringify_escape() {
+        let heap = ObjectHeap::new();
         assert_eq!(
-            json_stringify(&JsValue::Str("line\nnewline".into())).unwrap(),
+            json_stringify(&heap, &JsValue::Str("line\nnewline".into())).unwrap(),
             JsValue::Str("\"line\\nnewline\"".into())
         );
     }
 
     #[test]
     fn test_json_stringify_negative_fractional_number() {
+        let heap = ObjectHeap::new();
         assert_eq!(
-            json_stringify(&JsValue::Int(-(FP_SCALE / 2))).unwrap(),
+            json_stringify(&heap, &JsValue::Int(-(FP_SCALE / 2))).unwrap(),
             JsValue::Str("-0.5".into())
         );
     }
 
     #[test]
     fn test_json_stringify_undefined() {
+        let heap = ObjectHeap::new();
         assert_eq!(
-            json_stringify(&JsValue::Undefined).unwrap(),
+            json_stringify(&heap, &JsValue::Undefined).unwrap(),
             JsValue::Undefined
+        );
+    }
+
+    #[test]
+    fn test_json_stringify_object_traverses_runtime_state() {
+        let mut heap = ObjectHeap::new();
+        let env = install_stdlib(&mut heap);
+        let value = json_parse(&mut heap, &env, r#"{"answer":42,"nested":[1,null,"ok"]}"#).unwrap();
+        assert_eq!(
+            json_stringify(&heap, &value).unwrap(),
+            JsValue::Str(r#"{"answer":42,"nested":[1,null,"ok"]}"#.into())
+        );
+    }
+
+    #[test]
+    fn test_json_stringify_rejects_circular_object_graphs() {
+        let mut heap = ObjectHeap::new();
+        let env = install_stdlib(&mut heap);
+        let value = json_parse(&mut heap, &env, "{}").unwrap();
+        let JsValue::Object(handle) = value else {
+            panic!("expected object handle");
+        };
+        heap.set_property(handle, PropertyKey::from("self"), JsValue::Object(handle))
+            .unwrap();
+
+        let err = json_stringify(&heap, &JsValue::Object(handle)).unwrap_err();
+        assert!(
+            matches!(err, StdlibError::JsonStringifyError(ref message) if message.contains("circular")),
+            "unexpected error: {err}"
         );
     }
 
@@ -4912,9 +5381,51 @@ mod tests {
     }
 
     #[test]
-    fn test_json_parse_compound_placeholder() {
-        let result = json_parse("[1,2,3]").unwrap();
-        assert!(matches!(result, JsValue::Str(s) if s.starts_with("[json-compound:")));
+    fn test_json_parse_compound_materializes_array() {
+        let (heap, _env, result) = parse_json_with_heap("[1,2,3]");
+        let JsValue::Object(handle) = result else {
+            panic!("expected heap-backed array, got {result:?}");
+        };
+        assert_eq!(
+            read_array_elements(&heap, handle).unwrap(),
+            vec![
+                JsValue::Int(FP_SCALE),
+                JsValue::Int(2 * FP_SCALE),
+                JsValue::Int(3 * FP_SCALE),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_json_parse_nested_object_materializes_heap() {
+        let (heap, env, result) = parse_json_with_heap(r#"{"outer":{"items":[1,"two",null]}}"#);
+        let JsValue::Object(root) = result else {
+            panic!("expected heap-backed object, got {result:?}");
+        };
+        let nested = heap
+            .get_property(root, &PropertyKey::from("outer"))
+            .expect("read nested property");
+        let JsValue::Object(nested_handle) = nested else {
+            panic!("expected nested object handle, got {nested:?}");
+        };
+        let array = heap
+            .get_property(nested_handle, &PropertyKey::from("items"))
+            .expect("read nested array property");
+        let JsValue::Object(array_handle) = array else {
+            panic!("expected array handle, got {array:?}");
+        };
+        assert_eq!(
+            heap.get_prototype_of(root).unwrap(),
+            Some(env.prototypes.object_prototype)
+        );
+        assert_eq!(
+            read_array_elements(&heap, array_handle).unwrap(),
+            vec![
+                JsValue::Int(FP_SCALE),
+                JsValue::Str("two".into()),
+                JsValue::Null,
+            ]
+        );
     }
 
     // -- Math sqrt/log tests -------------------------------------------------

@@ -40,6 +40,28 @@ use frankenengine_engine::stdlib::{
 
 const FP_SCALE: i64 = 1_000_000;
 
+fn parse_json_value(input: &str) -> Result<JsValue, StdlibError> {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    json_parse(&mut heap, &env, input)
+}
+
+fn parse_json_with_heap(input: &str) -> (ObjectHeap, GlobalEnvironment, JsValue) {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let value = json_parse(&mut heap, &env, input).expect("parse JSON into heap");
+    (heap, env, value)
+}
+
+fn stringify_json_value(value: &JsValue) -> Result<JsValue, StdlibError> {
+    let heap = ObjectHeap::new();
+    json_stringify(&heap, value)
+}
+
+fn stringify_json_with_heap(heap: &ObjectHeap, value: &JsValue) -> Result<JsValue, StdlibError> {
+    json_stringify(heap, value)
+}
+
 // ---------------------------------------------------------------------------
 // install_stdlib smoke tests
 // ---------------------------------------------------------------------------
@@ -573,7 +595,7 @@ fn number_parse_float_installed_on_constructor() {
 #[test]
 fn json_stringify_null() {
     assert_eq!(
-        json_stringify(&JsValue::Null).unwrap(),
+        stringify_json_value(&JsValue::Null).unwrap(),
         JsValue::Str("null".into())
     );
 }
@@ -581,11 +603,11 @@ fn json_stringify_null() {
 #[test]
 fn json_stringify_bool() {
     assert_eq!(
-        json_stringify(&JsValue::Bool(true)).unwrap(),
+        stringify_json_value(&JsValue::Bool(true)).unwrap(),
         JsValue::Str("true".into())
     );
     assert_eq!(
-        json_stringify(&JsValue::Bool(false)).unwrap(),
+        stringify_json_value(&JsValue::Bool(false)).unwrap(),
         JsValue::Str("false".into())
     );
 }
@@ -593,11 +615,11 @@ fn json_stringify_bool() {
 #[test]
 fn json_stringify_int() {
     assert_eq!(
-        json_stringify(&JsValue::Int(42 * FP_SCALE)).unwrap(),
+        stringify_json_value(&JsValue::Int(42 * FP_SCALE)).unwrap(),
         JsValue::Str("42".into())
     );
     assert_eq!(
-        json_stringify(&JsValue::Int(3_141_593)).unwrap(),
+        stringify_json_value(&JsValue::Int(3_141_593)).unwrap(),
         JsValue::Str("3.141593".into())
     );
 }
@@ -605,11 +627,11 @@ fn json_stringify_int() {
 #[test]
 fn json_stringify_string_with_escapes() {
     assert_eq!(
-        json_stringify(&JsValue::Str("hello \"world\"".into())).unwrap(),
+        stringify_json_value(&JsValue::Str("hello \"world\"".into())).unwrap(),
         JsValue::Str("\"hello \\\"world\\\"\"".into())
     );
     assert_eq!(
-        json_stringify(&JsValue::Str("line\nnewline".into())).unwrap(),
+        stringify_json_value(&JsValue::Str("line\nnewline".into())).unwrap(),
         JsValue::Str("\"line\\nnewline\"".into())
     );
 }
@@ -617,36 +639,536 @@ fn json_stringify_string_with_escapes() {
 #[test]
 fn json_stringify_undefined_returns_undefined() {
     assert_eq!(
-        json_stringify(&JsValue::Undefined).unwrap(),
+        stringify_json_value(&JsValue::Undefined).unwrap(),
         JsValue::Undefined
     );
 }
 
 #[test]
+fn json_stringify_heap_backed_object_round_trips_nested_values() {
+    let (heap, _env, value) = parse_json_with_heap(r#"{"a":1,"nested":[2,"ok",null]}"#);
+    assert_eq!(
+        stringify_json_with_heap(&heap, &value).unwrap(),
+        JsValue::Str(r#"{"a":1,"nested":[2,"ok",null]}"#.into())
+    );
+}
+
+#[test]
+fn json_stringify_object_omits_undefined_function_and_symbol_properties() {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let handle = heap.alloc(Some(env.prototypes.object_prototype));
+    heap.set_property(
+        handle,
+        PropertyKey::from("keep"),
+        JsValue::Int(7 * FP_SCALE),
+    )
+    .unwrap();
+    heap.set_property(
+        handle,
+        PropertyKey::from("drop_undefined"),
+        JsValue::Undefined,
+    )
+    .unwrap();
+    heap.set_property(
+        handle,
+        PropertyKey::from("drop_function"),
+        JsValue::Function(5),
+    )
+    .unwrap();
+    heap.set_property(
+        handle,
+        PropertyKey::Symbol(SymbolId(99)),
+        JsValue::Str("hidden".into()),
+    )
+    .unwrap();
+
+    assert_eq!(
+        stringify_json_with_heap(&heap, &JsValue::Object(handle)).unwrap(),
+        JsValue::Str(r#"{"keep":7}"#.into())
+    );
+}
+
+#[test]
+fn json_stringify_array_nulls_unsupported_values() {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let handle = alloc_array_instance(
+        &mut heap,
+        env.prototypes.array_prototype,
+        &[
+            JsValue::Int(FP_SCALE),
+            JsValue::Undefined,
+            JsValue::Symbol(SymbolId(2)),
+            JsValue::Function(7),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(
+        stringify_json_with_heap(&heap, &JsValue::Object(handle)).unwrap(),
+        JsValue::Str("[1,null,null,null]".into())
+    );
+}
+
+#[test]
+fn json_stringify_rejects_circular_objects() {
+    let (mut heap, _env, value) = parse_json_with_heap("{}");
+    let JsValue::Object(handle) = value else {
+        panic!("expected object handle");
+    };
+    heap.set_property(handle, PropertyKey::from("self"), JsValue::Object(handle))
+        .unwrap();
+
+    let err = stringify_json_with_heap(&heap, &JsValue::Object(handle)).unwrap_err();
+    assert!(
+        matches!(err, StdlibError::JsonStringifyError(ref message) if message.contains("circular")),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn json_stringify_rejects_enumerable_accessor_properties() {
+    let (mut heap, _env, value) = parse_json_with_heap("{}");
+    let JsValue::Object(handle) = value else {
+        panic!("expected object handle");
+    };
+    heap.define_property(
+        handle,
+        PropertyKey::from("computed"),
+        PropertyDescriptor::Accessor {
+            get: None,
+            set: None,
+            enumerable: true,
+            configurable: true,
+        },
+    )
+    .unwrap();
+
+    let err = stringify_json_with_heap(&heap, &JsValue::Object(handle)).unwrap_err();
+    assert!(
+        matches!(err, StdlibError::JsonStringifyError(ref message) if message.contains("accessor property `computed`")),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn json_stringify_rejects_proxy_objects() {
+    let mut heap = ObjectHeap::new();
+    let _env = install_stdlib(&mut heap);
+    let target = heap.alloc_plain();
+    let handler = heap.alloc_plain();
+    let proxy = heap.alloc_proxy(target, handler);
+
+    let err = stringify_json_with_heap(&heap, &JsValue::Object(proxy)).unwrap_err();
+    assert!(
+        matches!(err, StdlibError::JsonStringifyError(ref message) if message.contains("proxy")),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn json_stringify_compound_traversal_scenario_emits_artifact_bundle() {
+    const BEAD_ID: &str = "bd-2muur.1.3";
+    const COMPONENT: &str = "stdlib.json_stringify";
+    const REPORT_NAME: &str = "json_stringify_compound_traversal_report.json";
+
+    let context = DeterministicTestContext::new(
+        "bd-2muur.1.3-json-stringify-compound-traversal",
+        "json-stringify-compound-traversal-fixture",
+        HarnessLane::E2e,
+        92_013,
+    );
+    let replay_command = "cargo test -p frankenengine-engine --test stdlib_integration json_stringify_compound_traversal_scenario_emits_artifact_bundle -- --exact --nocapture";
+    let artifact_dir = json_stringify_compound_traversal_artifact_dir();
+    let step_logs_dir = artifact_dir.join("step_logs");
+    fs::create_dir_all(&step_logs_dir).expect("create artifact step_logs directory");
+
+    let mut cases = Vec::new();
+    let mut events = Vec::new();
+    let mut commands = vec![replay_command.to_string()];
+
+    let mut append_case = |sequence: u64,
+                           case_id: &'static str,
+                           outcome: &'static str,
+                           error_code: Option<&'static str>,
+                           input_shape: &'static str,
+                           omission_behavior: Option<&'static str>,
+                           failure_behavior: Option<&'static str>,
+                           serialized: Option<String>,
+                           error: Option<String>| {
+        let case_trace_id = format!("{}:{case_id}", context.trace_id);
+        let case_report = JsonStringifyCompoundTraversalCaseReport {
+            case_id,
+            case_trace_id: case_trace_id.clone(),
+            outcome,
+            input_shape,
+            serialized: serialized.clone(),
+            omission_behavior,
+            failure_behavior,
+            error: error.clone(),
+        };
+        let mut event = serde_json::to_value(context.event(EventInput {
+            sequence,
+            component: COMPONENT,
+            event: "json_stringify_case",
+            outcome,
+            error_code,
+            timing_us: 10 + sequence,
+            timestamp_unix_ms: 1_700_000_920_130 + sequence,
+        }))
+        .expect("serialize scenario event");
+        let event_object = event
+            .as_object_mut()
+            .expect("scenario event should serialize as object");
+        event_object.insert("case_id".to_string(), serde_json::json!(case_id));
+        event_object.insert(
+            "case_trace_id".to_string(),
+            serde_json::json!(case_trace_id),
+        );
+        event_object.insert("input_shape".to_string(), serde_json::json!(input_shape));
+        event_object.insert(
+            "omission_behavior".to_string(),
+            serde_json::json!(omission_behavior),
+        );
+        event_object.insert(
+            "failure_behavior".to_string(),
+            serde_json::json!(failure_behavior),
+        );
+        event_object.insert("serialized".to_string(), serde_json::json!(serialized));
+        event_object.insert("failure_message".to_string(), serde_json::json!(error));
+        events.push(event);
+        commands.push(format!(
+            "json_stringify case_id={case_id} input_shape={input_shape} outcome={outcome}"
+        ));
+        fs::write(
+                step_logs_dir.join(format!("step_{:03}.log", sequence - 1)),
+                format!(
+                    "case_id={case_id}\ncase_trace_id={case_trace_id}\noutcome={outcome}\ninput_shape={input_shape}\nomission_behavior={}\nfailure_behavior={}\nserialized={}\nerror={}\n",
+                    omission_behavior.unwrap_or("none"),
+                    failure_behavior.unwrap_or("none"),
+                    case_report.serialized.as_deref().unwrap_or("none"),
+                    case_report.error.as_deref().unwrap_or("none"),
+                ),
+            )
+            .expect("write step log");
+        cases.push(case_report);
+    };
+
+    let (heap, _env, value) = parse_json_with_heap(r#"{"a":1,"nested":[2,"ok",null]}"#);
+    let round_trip = stringify_json_with_heap(&heap, &value).unwrap();
+    assert_eq!(
+        round_trip,
+        JsValue::Str(r#"{"a":1,"nested":[2,"ok",null]}"#.into())
+    );
+    append_case(
+        1,
+        "compound-object-roundtrip",
+        "pass",
+        None,
+        "plain_object_with_nested_array",
+        None,
+        None,
+        Some(r#"{"a":1,"nested":[2,"ok",null]}"#.to_string()),
+        None,
+    );
+
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let handle = heap.alloc(Some(env.prototypes.object_prototype));
+    heap.set_property(
+        handle,
+        PropertyKey::from("keep"),
+        JsValue::Int(7 * FP_SCALE),
+    )
+    .unwrap();
+    heap.set_property(
+        handle,
+        PropertyKey::from("drop_undefined"),
+        JsValue::Undefined,
+    )
+    .unwrap();
+    heap.set_property(
+        handle,
+        PropertyKey::from("drop_function"),
+        JsValue::Function(5),
+    )
+    .unwrap();
+    heap.set_property(
+        handle,
+        PropertyKey::Symbol(SymbolId(99)),
+        JsValue::Str("hidden".into()),
+    )
+    .unwrap();
+    let omitted = stringify_json_with_heap(&heap, &JsValue::Object(handle)).unwrap();
+    assert_eq!(omitted, JsValue::Str(r#"{"keep":7}"#.into()));
+    append_case(
+        2,
+        "object-omits-unsupported-properties",
+        "pass",
+        None,
+        "plain_object_with_undefined_function_and_symbol_key",
+        Some("omit_object_properties:undefined,function,symbol_keyed"),
+        None,
+        Some(r#"{"keep":7}"#.to_string()),
+        None,
+    );
+
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let handle = alloc_array_instance(
+        &mut heap,
+        env.prototypes.array_prototype,
+        &[
+            JsValue::Int(FP_SCALE),
+            JsValue::Undefined,
+            JsValue::Symbol(SymbolId(2)),
+            JsValue::Function(7),
+        ],
+    )
+    .unwrap();
+    let null_filled = stringify_json_with_heap(&heap, &JsValue::Object(handle)).unwrap();
+    assert_eq!(null_filled, JsValue::Str("[1,null,null,null]".into()));
+    append_case(
+        3,
+        "array-null-fills-unsupported-values",
+        "pass",
+        None,
+        "array_with_undefined_symbol_and_function_slots",
+        Some("array_elements:undefined,symbol,function=>null"),
+        None,
+        Some("[1,null,null,null]".to_string()),
+        None,
+    );
+
+    let (mut heap, _env, value) = parse_json_with_heap("{}");
+    let JsValue::Object(handle) = value else {
+        panic!("expected object handle");
+    };
+    heap.set_property(handle, PropertyKey::from("self"), JsValue::Object(handle))
+        .unwrap();
+    let circular_error = stringify_json_with_heap(&heap, &JsValue::Object(handle)).unwrap_err();
+    assert!(
+        matches!(circular_error, StdlibError::JsonStringifyError(ref message) if message.contains("circular")),
+        "unexpected error: {circular_error}"
+    );
+    append_case(
+        4,
+        "circular-reference-rejected",
+        "fail_closed",
+        Some("FE-STDLIB-JSON-STRINGIFY-CIRCULAR"),
+        "plain_object_with_self_reference",
+        None,
+        Some("reject_circular_reference"),
+        None,
+        Some(circular_error.to_string()),
+    );
+
+    let (mut heap, _env, value) = parse_json_with_heap("{}");
+    let JsValue::Object(handle) = value else {
+        panic!("expected object handle");
+    };
+    heap.define_property(
+        handle,
+        PropertyKey::from("computed"),
+        PropertyDescriptor::Accessor {
+            get: None,
+            set: None,
+            enumerable: true,
+            configurable: true,
+        },
+    )
+    .unwrap();
+    let accessor_error = stringify_json_with_heap(&heap, &JsValue::Object(handle)).unwrap_err();
+    assert!(
+        matches!(accessor_error, StdlibError::JsonStringifyError(ref message) if message.contains("accessor property `computed`")),
+        "unexpected error: {accessor_error}"
+    );
+    append_case(
+        5,
+        "enumerable-accessor-rejected",
+        "fail_closed",
+        Some("FE-STDLIB-JSON-STRINGIFY-ACCESSOR"),
+        "plain_object_with_enumerable_accessor",
+        None,
+        Some("reject_enumerable_accessor"),
+        None,
+        Some(accessor_error.to_string()),
+    );
+
+    let mut heap = ObjectHeap::new();
+    let _env = install_stdlib(&mut heap);
+    let target = heap.alloc_plain();
+    let handler = heap.alloc_plain();
+    let proxy = heap.alloc_proxy(target, handler);
+    let proxy_error = stringify_json_with_heap(&heap, &JsValue::Object(proxy)).unwrap_err();
+    assert!(
+        matches!(proxy_error, StdlibError::JsonStringifyError(ref message) if message.contains("proxy")),
+        "unexpected error: {proxy_error}"
+    );
+    append_case(
+        6,
+        "proxy-object-rejected",
+        "fail_closed",
+        Some("FE-STDLIB-JSON-STRINGIFY-PROXY"),
+        "proxy_object",
+        None,
+        Some("reject_proxy_object"),
+        None,
+        Some(proxy_error.to_string()),
+    );
+
+    let trace_ids_json = serde_json::json!({
+        "trace_id": context.trace_id,
+        "decision_id": context.decision_id,
+        "policy_id": context.policy_id,
+        "case_trace_ids": cases
+            .iter()
+            .map(|case| serde_json::json!({
+                "case_id": case.case_id,
+                "trace_id": case.case_trace_id,
+            }))
+            .collect::<Vec<_>>(),
+    });
+    let report = JsonStringifyCompoundTraversalScenarioReport {
+        schema_version: "franken-engine.json-stringify-compound-traversal.v1",
+        bead_id: BEAD_ID,
+        trace_id: context.trace_id.clone(),
+        decision_id: context.decision_id.clone(),
+        policy_id: context.policy_id.clone(),
+        case_count: cases.len(),
+        cases,
+    };
+    let manifest = serde_json::json!({
+        "schema_version": "franken-engine.json-stringify-compound-traversal.run-manifest.v1",
+        "bead_id": BEAD_ID,
+        "component": COMPONENT,
+        "scenario_id": context.scenario_id,
+        "fixture_id": context.fixture_id,
+        "lane": context.lane,
+        "seed": context.seed,
+        "run_id": "json-stringify-compound-traversal",
+        "trace_id": context.trace_id,
+        "decision_id": context.decision_id,
+        "policy_id": context.policy_id,
+        "generated_at_unix_ms": 1_700_000_920_199u64,
+        "event_count": events.len(),
+        "command_count": commands.len(),
+        "outcome": "pass",
+        "replay_command": replay_command,
+        "artifact_paths": {
+            "run_manifest": "run_manifest.json",
+            "events_jsonl": "events.jsonl",
+            "commands": "commands.txt",
+            "trace_ids": "trace_ids.json",
+            "report": REPORT_NAME,
+            "step_logs": "step_logs/",
+        },
+        "operator_verification": [
+            "cat run_manifest.json",
+            "cat events.jsonl",
+            "cat commands.txt",
+            "cat trace_ids.json",
+            format!("cat {REPORT_NAME}"),
+        ],
+    });
+
+    let events_jsonl = events
+        .iter()
+        .map(|event| serde_json::to_string(event).expect("serialize event line"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(
+        artifact_dir.join("run_manifest.json"),
+        serde_json::to_vec_pretty(&manifest).expect("manifest json"),
+    )
+    .expect("write run manifest");
+    fs::write(
+        artifact_dir.join("events.jsonl"),
+        format!("{events_jsonl}\n"),
+    )
+    .expect("write events jsonl");
+    fs::write(
+        artifact_dir.join("commands.txt"),
+        commands.join("\n") + "\n",
+    )
+    .expect("write commands");
+    fs::write(
+        artifact_dir.join("trace_ids.json"),
+        serde_json::to_vec_pretty(&trace_ids_json).expect("trace ids json"),
+    )
+    .expect("write trace ids");
+    fs::write(
+        artifact_dir.join(REPORT_NAME),
+        serde_json::to_vec_pretty(&report).expect("report json"),
+    )
+    .expect("write report");
+
+    for required in [
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "trace_ids.json",
+        REPORT_NAME,
+    ] {
+        assert!(
+            artifact_dir.join(required).exists(),
+            "missing required artifact {}",
+            artifact_dir.join(required).display()
+        );
+    }
+    for idx in 0..6 {
+        let path = step_logs_dir.join(format!("step_{idx:03}.log"));
+        assert!(path.exists(), "missing step log {}", path.display());
+    }
+
+    let saved_report: serde_json::Value = serde_json::from_slice(
+        &fs::read(artifact_dir.join(REPORT_NAME)).expect("read scenario report"),
+    )
+    .expect("parse scenario report");
+    assert_eq!(saved_report["bead_id"].as_str(), Some(BEAD_ID));
+    assert_eq!(saved_report["case_count"].as_u64(), Some(6));
+}
+
+#[test]
 fn json_parse_primitives() {
-    assert_eq!(json_parse("null").unwrap(), JsValue::Null);
-    assert_eq!(json_parse("true").unwrap(), JsValue::Bool(true));
-    assert_eq!(json_parse("false").unwrap(), JsValue::Bool(false));
-    assert_eq!(json_parse("42").unwrap(), JsValue::Int(42 * FP_SCALE));
+    assert_eq!(parse_json_value("null").unwrap(), JsValue::Null);
+    assert_eq!(parse_json_value("true").unwrap(), JsValue::Bool(true));
+    assert_eq!(parse_json_value("false").unwrap(), JsValue::Bool(false));
+    assert_eq!(parse_json_value("42").unwrap(), JsValue::Int(42 * FP_SCALE));
 }
 
 #[test]
 fn json_parse_string() {
     assert_eq!(
-        json_parse("\"hello\"").unwrap(),
+        parse_json_value("\"hello\"").unwrap(),
         JsValue::Str("hello".into())
     );
 }
 
 #[test]
-fn json_parse_compound_returns_placeholder() {
-    let result = json_parse("[1,2,3]").unwrap();
-    assert!(matches!(result, JsValue::Str(s) if s.starts_with("[json-compound:")));
+fn json_parse_compound_materializes_array() {
+    let (heap, env, result) = parse_json_with_heap("[1,2,3]");
+    let JsValue::Object(handle) = result else {
+        panic!("expected heap-backed array, got {result:?}");
+    };
+    assert_eq!(
+        heap.get_prototype_of(handle).unwrap(),
+        Some(env.prototypes.array_prototype)
+    );
+    assert_eq!(
+        read_array_elements(&heap, handle).unwrap(),
+        vec![
+            JsValue::Int(FP_SCALE),
+            JsValue::Int(2 * FP_SCALE),
+            JsValue::Int(3 * FP_SCALE),
+        ]
+    );
 }
 
 #[test]
 fn json_parse_invalid_returns_error() {
-    let result = json_parse("not_valid_json");
+    let result = parse_json_value("not_valid_json");
     assert!(result.is_err());
 }
 
@@ -1958,34 +2480,34 @@ fn string_ascii_fast_path_hotloop_emits_artifact_report() {
 
 #[test]
 fn json_parse_negative_number() {
-    let result = json_parse("-42").unwrap();
+    let result = parse_json_value("-42").unwrap();
     assert_eq!(result, JsValue::Int(-42 * FP_SCALE));
 }
 
 #[test]
 fn json_stringify_negative_number() {
-    let result = json_stringify(&JsValue::Int(-10 * FP_SCALE)).unwrap();
+    let result = stringify_json_value(&JsValue::Int(-10 * FP_SCALE)).unwrap();
     assert_eq!(result, JsValue::Str("-10".into()));
 }
 
 #[test]
 fn json_stringify_negative_fractional_number() {
-    let result = json_stringify(&JsValue::Int(-(FP_SCALE / 2))).unwrap();
+    let result = stringify_json_value(&JsValue::Int(-(FP_SCALE / 2))).unwrap();
     assert_eq!(result, JsValue::Str("-0.5".into()));
 }
 
 #[test]
 fn json_stringify_string() {
-    let result = json_stringify(&JsValue::Str("hello".into())).unwrap();
+    let result = stringify_json_value(&JsValue::Str("hello".into())).unwrap();
     assert_eq!(result, JsValue::Str("\"hello\"".into()));
 }
 
 #[test]
 fn json_roundtrip_string() {
     let original = JsValue::Str("test value".into());
-    let stringified = json_stringify(&original).unwrap();
+    let stringified = stringify_json_value(&original).unwrap();
     if let JsValue::Str(s) = &stringified {
-        let parsed = json_parse(s).unwrap();
+        let parsed = parse_json_value(s).unwrap();
         assert_eq!(parsed, original);
     }
 }
@@ -1993,9 +2515,9 @@ fn json_roundtrip_string() {
 #[test]
 fn json_roundtrip_number() {
     let original = JsValue::Int(42 * FP_SCALE);
-    let stringified = json_stringify(&original).unwrap();
+    let stringified = stringify_json_value(&original).unwrap();
     if let JsValue::Str(s) = &stringified {
-        let parsed = json_parse(s).unwrap();
+        let parsed = parse_json_value(s).unwrap();
         assert_eq!(parsed, original);
     }
 }
@@ -2101,6 +2623,29 @@ struct StringAsciiFastPathScenarioReport {
     slice_receipt: serde_json::Value,
 }
 
+#[derive(Debug, Serialize)]
+struct JsonStringifyCompoundTraversalCaseReport {
+    case_id: &'static str,
+    case_trace_id: String,
+    outcome: &'static str,
+    input_shape: &'static str,
+    serialized: Option<String>,
+    omission_behavior: Option<&'static str>,
+    failure_behavior: Option<&'static str>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct JsonStringifyCompoundTraversalScenarioReport {
+    schema_version: &'static str,
+    bead_id: &'static str,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
+    case_count: usize,
+    cases: Vec<JsonStringifyCompoundTraversalCaseReport>,
+}
+
 fn artifact_root(label: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2110,6 +2655,12 @@ fn artifact_root(label: &str) -> PathBuf {
         "franken_engine_{label}_{nanos}_{}",
         std::process::id()
     ))
+}
+
+fn json_stringify_compound_traversal_artifact_dir() -> PathBuf {
+    std::env::var_os("RGC_JSON_STRINGIFY_COMPOUND_TRAVERSAL_ARTIFACT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| artifact_root("json_stringify_compound_traversal"))
 }
 
 // ---------------------------------------------------------------------------

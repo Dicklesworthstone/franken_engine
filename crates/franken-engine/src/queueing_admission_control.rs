@@ -398,7 +398,7 @@ pub fn compute_worker_pool_sizing(input: &SizingInput) -> WorkerPoolSizing {
     // (normalizing ns to seconds conceptually, but we keep it all relative)
 
     // Simpler approach: offered load in abstract units
-    let offered_load = lambda_m.saturating_mul(service_ns);
+    let offered_load_i128 = lambda_m as i128 * service_ns as i128;
 
     let mut best_c = 1u64;
     let mut best_util = MILLIONTHS; // start at 100%
@@ -407,14 +407,11 @@ pub fn compute_worker_pool_sizing(input: &SizingInput) -> WorkerPoolSizing {
         // utilization = offered_load / (c * normalization)
         // We normalize so that at c=1 with lambda_m=1_000_000 and service_ns=1_000_000_000,
         // utilization = 100% (1_000_000)
-        let denom = c.saturating_mul(MILLIONTHS).saturating_mul(1_000_000_000);
-        let util_m = if denom == 0 {
+        let denom_i128 = c as i128 * MILLIONTHS as i128 * 1_000_000_000i128;
+        let util_m = if denom_i128 == 0 {
             MILLIONTHS
         } else {
-            offered_load
-                .saturating_mul(MILLIONTHS)
-                .checked_div(denom)
-                .unwrap_or(MILLIONTHS)
+            ((offered_load_i128 * MILLIONTHS as i128) / denom_i128) as u64
         };
 
         if util_m <= input.target_utilization_millionths {
@@ -430,17 +427,17 @@ pub fn compute_worker_pool_sizing(input: &SizingInput) -> WorkerPoolSizing {
     // Wait approximation for M/D/c: W_q ≈ (ρ^(√(2(c+1)))) / (c(1-ρ)) * service
     // Simplified: as c increases, wait drops. Find smallest c where wait fits.
     let min_c = find_min_workers_for_slo(
-        offered_load,
+        offered_load_i128,
         service_ns,
         input.target_p99_ns,
         input.max_workers,
     );
 
     // Max useful: workers beyond which utilization drops below 10%
-    let max_useful = find_max_useful_workers(offered_load, input.max_workers);
+    let max_useful = find_max_useful_workers(offered_load_i128, input.max_workers);
 
     let recommended = best_c.max(min_c);
-    let estimated_wait = estimate_p99_wait(offered_load, service_ns, recommended);
+    let estimated_wait = estimate_p99_wait(offered_load_i128, service_ns, recommended);
 
     WorkerPoolSizing {
         recommended_workers: recommended,
@@ -455,7 +452,7 @@ pub fn compute_worker_pool_sizing(input: &SizingInput) -> WorkerPoolSizing {
 }
 
 fn find_min_workers_for_slo(
-    offered_load: u64,
+    offered_load: i128,
     service_ns: u64,
     target_p99_ns: u64,
     max_workers: u64,
@@ -469,17 +466,14 @@ fn find_min_workers_for_slo(
     max_workers.max(1)
 }
 
-fn find_max_useful_workers(offered_load: u64, max_workers: u64) -> u64 {
+fn find_max_useful_workers(offered_load: i128, max_workers: u64) -> u64 {
     let min_useful_utilization = 100_000u64; // 10%
     for c in (1..=max_workers.max(1)).rev() {
-        let denom = c.saturating_mul(MILLIONTHS).saturating_mul(1_000_000_000);
-        let util_m = if denom == 0 {
+        let denom_i128 = c as i128 * MILLIONTHS as i128 * 1_000_000_000i128;
+        let util_m = if denom_i128 == 0 {
             0
         } else {
-            offered_load
-                .saturating_mul(MILLIONTHS)
-                .checked_div(denom)
-                .unwrap_or(0)
+            ((offered_load.saturating_mul(MILLIONTHS as i128)) / denom_i128) as u64
         };
         if util_m >= min_useful_utilization {
             return c;
@@ -489,17 +483,13 @@ fn find_max_useful_workers(offered_load: u64, max_workers: u64) -> u64 {
 }
 
 /// Estimate p99 wait time using M/D/c approximation.
-fn estimate_p99_wait(offered_load: u64, service_ns: u64, num_workers: u64) -> u64 {
+fn estimate_p99_wait(offered_load: i128, service_ns: u64, num_workers: u64) -> u64 {
     let c = num_workers.max(1);
-    let denom = c.saturating_mul(MILLIONTHS).saturating_mul(1_000_000_000);
-    let rho_m = if denom == 0 {
+    let denom_i128 = c as i128 * MILLIONTHS as i128 * 1_000_000_000i128;
+    let rho_m = if denom_i128 == 0 {
         MILLIONTHS
     } else {
-        offered_load
-            .saturating_mul(MILLIONTHS)
-            .checked_div(denom)
-            .unwrap_or(MILLIONTHS)
-            .min(MILLIONTHS)
+        (((offered_load.saturating_mul(MILLIONTHS as i128)) / denom_i128) as u64).min(MILLIONTHS)
     };
 
     if rho_m >= MILLIONTHS {
@@ -515,7 +505,7 @@ fn estimate_p99_wait(offered_load: u64, service_ns: u64, num_workers: u64) -> u6
         return service_ns.saturating_mul(100);
     }
 
-    // mean_wait = rho * service / (2 * c * (1 - rho))
+    // mean_wait = rho * service / (2 * c * one_minus_rho)
     // In millionths: rho_m * service_ns / (2 * c * one_minus_rho_m / MILLIONTHS)
     let numerator = rho_m.saturating_mul(service_ns);
     let denominator = 2u64

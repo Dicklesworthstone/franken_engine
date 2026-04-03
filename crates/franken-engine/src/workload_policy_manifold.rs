@@ -1608,10 +1608,12 @@ mod tests {
 
     #[test]
     fn boundary_direction_serde_roundtrip() {
-        for d in [BoundaryDirection::Above, BoundaryDirection::Below] {
-            let json = serde_json::to_string(&d).unwrap();
-            let back: BoundaryDirection = serde_json::from_str(&json).unwrap();
-            assert_eq!(d, back);
-        }
+        let above = serde_json::to_string(&BoundaryDirection::Above).unwrap();
+        let above_back: BoundaryDirection = serde_json::from_str(&above).unwrap();
+        assert_eq!(BoundaryDirection::Above, above_back);
+
+        let below = serde_json::to_string(&BoundaryDirection::Below).unwrap();
+        let below_back: BoundaryDirection = serde_json::from_str(&below).unwrap();
+        assert_eq!(BoundaryDirection::Below, below_back);
     }
 }

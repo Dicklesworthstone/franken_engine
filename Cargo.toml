@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/franken-engine",
+  "crates/franken-engine-test-support",
   "crates/franken-extension-host",
   "crates/franken-metamorphic",
 ]

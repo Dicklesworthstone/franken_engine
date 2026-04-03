@@ -20,12 +20,12 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
-use frankenengine_engine::control_plane::mocks::{MockBudget, MockCx, trace_id_from_seed};
 use frankenengine_engine::frankenlab_extension_lifecycle::{
     ScenarioAssertion, ScenarioKind, ScenarioResult, ScenarioSuiteResult, run_all_scenarios,
     run_scenario,
 };
 use frankenengine_engine::lab_runtime::Verdict;
+use frankenengine_test_support::control_plane::{MockBudget, MockCx, trace_id_from_seed};
 
 // ===========================================================================
 // helpers

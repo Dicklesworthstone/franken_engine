@@ -18,11 +18,11 @@
     clippy::manual_abs_diff
 )]
 
-use frankenengine_engine::control_plane::mocks::{MockBudget, MockCx, trace_id_from_seed};
 use frankenengine_engine::frankenlab_release_gate::{
     GateConfig, GateEvent, GateKind, GateReport, GateResult, GateVerdict, OverallVerdict,
     ReleaseGateRunner,
 };
+use frankenengine_test_support::control_plane::{MockBudget, MockCx, trace_id_from_seed};
 
 // ---------------------------------------------------------------------------
 // Helpers

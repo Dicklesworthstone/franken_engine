@@ -598,10 +598,7 @@ pub fn batch_evaluate(
     let pass_rate_millionths = if decisions.is_empty() {
         0
     } else {
-        (pass_count as i64)
-            .checked_mul(MILLION)
-            .map(|n| n / decisions.len() as i64)
-            .unwrap_or(0)
+        ((pass_count as i128 * MILLION as i128) / decisions.len() as i128) as i64
     };
 
     let mut hash_buf = Vec::new();

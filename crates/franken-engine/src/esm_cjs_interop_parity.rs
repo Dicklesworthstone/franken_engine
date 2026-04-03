@@ -4047,7 +4047,22 @@ mod tests {
             InteropActualOutcome::Success
         );
         assert_eq!(bun_compat_evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(
+            bun_compat_evidence.compatibility_disposition,
+            InteropCompatibilityDisposition::Supported
+        );
         assert_eq!(bun_compat_evidence.linked_count, 2);
+        assert!(bun_compat_evidence.error_detail.is_none());
+        assert_eq!(
+            bun_compat_evidence.remediation_guidance.guidance_code,
+            "no_remediation_required"
+        );
+        assert!(
+            bun_compat_evidence
+                .remediation_guidance
+                .message
+                .contains("package_type_module_extensionless_relative_bun_compat")
+        );
         assert!(
             bun_compat_evidence
                 .binding_verdicts
@@ -4233,7 +4248,22 @@ mod tests {
             InteropActualOutcome::Success
         );
         assert_eq!(bun_compat_evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(
+            bun_compat_evidence.compatibility_disposition,
+            InteropCompatibilityDisposition::Supported
+        );
         assert_eq!(bun_compat_evidence.linked_count, 2);
+        assert!(bun_compat_evidence.error_detail.is_none());
+        assert_eq!(
+            bun_compat_evidence.remediation_guidance.guidance_code,
+            "no_remediation_required"
+        );
+        assert!(
+            bun_compat_evidence
+                .remediation_guidance
+                .message
+                .contains("scoped_package_type_module_extensionless_relative_bun_compat")
+        );
         assert!(
             bun_compat_evidence
                 .binding_verdicts
@@ -4261,6 +4291,11 @@ mod tests {
             );
             assert_eq!(evidence.linked_count, 3);
             assert!(evidence.error_detail.is_none());
+            assert_eq!(
+                evidence.remediation_guidance.guidance_code,
+                "no_remediation_required"
+            );
+            assert!(evidence.remediation_guidance.message.contains(specimen_id));
             assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
         }
     }

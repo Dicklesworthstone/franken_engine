@@ -142,8 +142,8 @@ impl LatencyDistribution {
         let n = samples.len();
         Self {
             p50_us: samples[n / 2],
-            p95_us: samples[(n as f64 * 0.95) as usize],
-            p99_us: samples[(n as f64 * 0.99) as usize],
+            p95_us: samples[(n * 95) / 100],
+            p99_us: samples[(n * 99) / 100],
             min_us: samples[0],
             max_us: samples[n - 1],
             sample_count: n,

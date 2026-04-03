@@ -23,15 +23,15 @@
 use std::collections::BTreeMap;
 
 use frankenengine_engine::control_plane::ContextAdapter;
-use frankenengine_engine::control_plane::mocks::{
-    MockBudget, MockCx, decision_id_from_seed, policy_id_from_seed, trace_id_from_seed,
-};
 use frankenengine_engine::evidence_emission::{
     ActionCategory, CanonicalEvidenceEmitter, CanonicalEvidenceEntry, EmitterConfig,
     EvidenceEmissionError, EvidenceEmissionEvent, EvidenceEmissionRequest, EvidenceEntryId,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_test_support::control_plane::{
+    MockBudget, MockCx, decision_id_from_seed, policy_id_from_seed, trace_id_from_seed,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers

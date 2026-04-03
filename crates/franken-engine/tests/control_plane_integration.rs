@@ -13,11 +13,11 @@
     clippy::manual_abs_diff
 )]
 
-use frankenengine_engine::control_plane::mocks::{
+use frankenengine_engine::control_plane::*;
+use frankenengine_test_support::control_plane::{
     MockBudget, MockCx, MockDecisionContract, MockEvidenceEmitter, MockFailureMode,
     decision_id_from_seed, policy_id_from_seed, trace_id_from_seed,
 };
-use frankenengine_engine::control_plane::*;
 
 // ---------------------------------------------------------------------------
 // Helpers

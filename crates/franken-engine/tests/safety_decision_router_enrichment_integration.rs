@@ -15,13 +15,13 @@
 
 use std::collections::BTreeSet;
 
-use frankenengine_engine::control_plane::{
-    DecisionContract, FallbackPolicy, Posterior,
-    mocks::{MockBudget, MockCx, decision_id_from_seed, policy_id_from_seed, trace_id_from_seed},
-};
+use frankenengine_engine::control_plane::{DecisionContract, FallbackPolicy, Posterior};
 use frankenengine_engine::safety_decision_router::{
     ActionSummary, SafetyAction, SafetyContract, SafetyDecisionEvent, SafetyDecisionRequest,
     SafetyDecisionResult, SafetyDecisionRouter, SafetyRouterError, SafetyVerdict,
+};
+use frankenengine_test_support::control_plane::{
+    MockBudget, MockCx, decision_id_from_seed, policy_id_from_seed, trace_id_from_seed,
 };
 
 // ---------------------------------------------------------------------------

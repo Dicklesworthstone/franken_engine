@@ -15,6 +15,9 @@ use frankenengine_engine::evidence_emission::{
     EvidenceEmissionEvent, EvidenceEmissionRequest, EvidenceEntryId,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_test_support::control_plane::{
+    decision_id_from_seed, policy_id_from_seed, trace_id_from_seed,
+};
 
 // ---------------------------------------------------------------------------
 // ActionCategory — variants, ALL, as_str, Display, serde
@@ -444,9 +447,9 @@ fn request_serde_roundtrip() {
     let req = EvidenceEmissionRequest {
         category: ActionCategory::DecisionContract,
         action_name: "quarantine".to_string(),
-        trace_id: frankenengine_engine::control_plane::mocks::trace_id_from_seed(1),
-        decision_id: frankenengine_engine::control_plane::mocks::decision_id_from_seed(1),
-        policy_id: frankenengine_engine::control_plane::mocks::policy_id_from_seed(1),
+        trace_id: trace_id_from_seed(1),
+        decision_id: decision_id_from_seed(1),
+        policy_id: policy_id_from_seed(1),
         ts_unix_ms: 1_700_000_000_000,
         posterior: vec![0.7, 0.3],
         expected_losses: {
@@ -470,9 +473,9 @@ fn request_json_fields_present() {
     let req = EvidenceEmissionRequest {
         category: ActionCategory::Cancellation,
         action_name: "cancel".to_string(),
-        trace_id: frankenengine_engine::control_plane::mocks::trace_id_from_seed(2),
-        decision_id: frankenengine_engine::control_plane::mocks::decision_id_from_seed(2),
-        policy_id: frankenengine_engine::control_plane::mocks::policy_id_from_seed(2),
+        trace_id: trace_id_from_seed(2),
+        decision_id: decision_id_from_seed(2),
+        policy_id: policy_id_from_seed(2),
         ts_unix_ms: 100,
         posterior: vec![0.5, 0.5],
         expected_losses: BTreeMap::new(),
@@ -507,9 +510,9 @@ fn request_clone_equality() {
     let req = EvidenceEmissionRequest {
         category: ActionCategory::ObligationLifecycle,
         action_name: "fulfill".to_string(),
-        trace_id: frankenengine_engine::control_plane::mocks::trace_id_from_seed(3),
-        decision_id: frankenengine_engine::control_plane::mocks::decision_id_from_seed(3),
-        policy_id: frankenengine_engine::control_plane::mocks::policy_id_from_seed(3),
+        trace_id: trace_id_from_seed(3),
+        decision_id: decision_id_from_seed(3),
+        policy_id: policy_id_from_seed(3),
         ts_unix_ms: 999,
         posterior: vec![0.9, 0.1],
         expected_losses: BTreeMap::new(),

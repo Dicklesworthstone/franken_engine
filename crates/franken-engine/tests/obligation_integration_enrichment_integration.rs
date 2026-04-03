@@ -712,8 +712,8 @@ fn enrichment_detect_leaks_no_leaks_while_running() {
 
 #[test]
 fn enrichment_detect_leaks_after_close_finds_pending() {
-    use frankenengine_engine::control_plane::mocks::{MockBudget, MockCx, trace_id_from_seed};
     use frankenengine_engine::region_lifecycle::{CancelReason, DrainDeadline};
+    use frankenengine_test_support::control_plane::{MockBudget, MockCx, trace_id_from_seed};
 
     let mut cell = ExecutionCell::new("ext-dlc", CellKind::Extension, "trace-dlc");
     let mut cx = MockCx::new(trace_id_from_seed(1), MockBudget::new(200));
@@ -758,8 +758,8 @@ fn enrichment_detect_leaks_after_close_finds_pending() {
 
 #[test]
 fn enrichment_should_fail_run_lab_with_leaks() {
-    use frankenengine_engine::control_plane::mocks::{MockBudget, MockCx, trace_id_from_seed};
     use frankenengine_engine::region_lifecycle::{CancelReason, DrainDeadline};
+    use frankenengine_test_support::control_plane::{MockBudget, MockCx, trace_id_from_seed};
 
     let mut cell = ExecutionCell::new("ext-lab", CellKind::Extension, "trace-lab");
     let mut cx = MockCx::new(trace_id_from_seed(1), MockBudget::new(200));
@@ -787,8 +787,8 @@ fn enrichment_should_fail_run_lab_with_leaks() {
 
 #[test]
 fn enrichment_should_fail_run_production_with_leaks_false() {
-    use frankenengine_engine::control_plane::mocks::{MockBudget, MockCx, trace_id_from_seed};
     use frankenengine_engine::region_lifecycle::{CancelReason, DrainDeadline};
+    use frankenengine_test_support::control_plane::{MockBudget, MockCx, trace_id_from_seed};
 
     let mut cell = ExecutionCell::new("ext-prod", CellKind::Extension, "trace-prod");
     let mut cx = MockCx::new(trace_id_from_seed(1), MockBudget::new(200));

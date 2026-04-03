@@ -19,3 +19,6 @@ frankenengine-extension-host = { path = "../franken-extension-host" }
 franken-kernel = { path = "/dp/asupersync/franken_kernel" }
 franken-decision = { path = "/dp/asupersync/franken_decision" }
 franken-evidence = { path = "/dp/asupersync/franken_evidence" }
+
+[dev-dependencies]
+frankenengine-test-support = { path = "../franken-engine-test-support" }

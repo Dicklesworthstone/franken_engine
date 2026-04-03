@@ -596,6 +596,36 @@ rch exec -- env RUSTUP_TOOLCHAIN=nightly \
 
 Gate run manifests are written under `artifacts/parser_phase0_gate/<timestamp>/run_manifest.json`.
 
+## Parser Phase0 Artifact Contract
+
+`bd-2muur.6.1` defines the truthful performance-artifact contract for the
+parser phase0 lane and the explicit degraded-mode receipt path that future
+generator work must satisfy instead of emitting placeholder visuals.
+
+```bash
+# parser phase0 artifact contract gate (rch-backed check + test + clippy)
+./scripts/run_parser_phase0_artifact_contract.sh ci
+
+# deterministic replay wrapper
+./scripts/e2e/parser_phase0_artifact_contract_replay.sh ci
+```
+
+Contract and vectors:
+
+- [`docs/PARSER_PHASE0_ARTIFACT_CONTRACT_V1.md`](./docs/PARSER_PHASE0_ARTIFACT_CONTRACT_V1.md)
+- `docs/parser_phase0_artifact_contract_v1.json`
+- `crates/franken-engine/tests/parser_phase0_artifact_contract.rs`
+
+Artifacts are written under:
+
+- `artifacts/parser_phase0_artifact_contract/<timestamp>/run_manifest.json`
+- `artifacts/parser_phase0_artifact_contract/<timestamp>/trace_ids.json`
+- `artifacts/parser_phase0_artifact_contract/<timestamp>/events.jsonl`
+- `artifacts/parser_phase0_artifact_contract/<timestamp>/commands.txt`
+- `artifacts/parser_phase0_artifact_contract/<timestamp>/parser_phase0_artifact_contract.json`
+- `artifacts/parser_phase0_artifact_contract/<timestamp>/parser_phase0_artifact_contract_validation_report.json`
+- `artifacts/parser_phase0_artifact_contract/<timestamp>/step_logs/step_*.log`
+
 ## Parser Frontier Harness
 
 `bd-1lsy.2.6.4` aggregates the existing parser frontier proof surfaces into one

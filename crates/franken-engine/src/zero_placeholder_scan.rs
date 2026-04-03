@@ -446,17 +446,17 @@ fn runtime_findings() -> Vec<ZeroPlaceholderFinding> {
         ZeroPlaceholderFinding {
             finding_id: "runtime::json_stringify_object_placeholder".to_string(),
             subsystem: ZeroPlaceholderSubsystem::Runtime,
-            status: ZeroPlaceholderStatus::OpenPlaceholder,
-            severity: ZeroPlaceholderSeverity::High,
+            status: ZeroPlaceholderStatus::Resolved,
+            severity: ZeroPlaceholderSeverity::Low,
             owner: "stdlib".to_string(),
             owner_bead_id: JSON_RUNTIME_BEAD_ID.to_string(),
             subject_area: "json.stringify.object".to_string(),
             source_reference: "crates/franken-engine/src/stdlib.rs::json_stringify".to_string(),
             observed_behavior:
-                "JSON.stringify returns the [json-object] placeholder for Object and Function values instead of traversing heap state."
+                "JSON.stringify now traverses heap-backed Array and Object handles directly, applying deterministic omission/nulling rules and fail-closed errors for cycles, proxies, accessors, and unsupported object classes."
                     .to_string(),
             required_behavior:
-                "Stringify object graphs and callable values through deterministic heap traversal instead of placeholder output."
+                "Stringify object graphs through deterministic heap traversal with explicit omission/nulling rules and fail-closed errors for unsupported cases."
                     .to_string(),
             diagnostic_code: None,
         },
@@ -1025,7 +1025,7 @@ mod tests {
             inventory.findings.len(),
             ZERO_PLACEHOLDER_SCAN_FINDING_COUNT
         );
-        assert_eq!(inventory.open_placeholder_finding_count(), 2);
+        assert_eq!(inventory.open_placeholder_finding_count(), 1);
 
         let parser_count = inventory
             .findings
@@ -1068,7 +1068,7 @@ mod tests {
                 .iter()
                 .filter(|finding| finding.status == ZeroPlaceholderStatus::OpenPlaceholder)
                 .count(),
-            2
+            1
         );
         let iterator_finding = runtime_findings
             .iter()
@@ -1149,7 +1149,7 @@ mod tests {
             manifest.finding_count as usize,
             ZERO_PLACEHOLDER_SCAN_FINDING_COUNT
         );
-        assert_eq!(manifest.open_placeholder_finding_count, 2);
+        assert_eq!(manifest.open_placeholder_finding_count, 1);
         assert_eq!(
             manifest.open_placeholder_finding_count
                 + manifest.fail_closed_finding_count

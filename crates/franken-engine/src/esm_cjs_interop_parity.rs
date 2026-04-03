@@ -3010,6 +3010,54 @@ mod tests {
     }
 
     #[test]
+    fn default_export_esm_to_cjs_is_supported_with_no_remediation() {
+        let inv = run_interop_parity_corpus();
+        let evidence = inv
+            .evidence
+            .iter()
+            .find(|ev| ev.specimen_id == "default_export_esm_to_cjs")
+            .expect("default export specimen should exist");
+        assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
+        assert_eq!(evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(evidence.linked_count, 2);
+        assert_eq!(
+            evidence.compatibility_disposition,
+            InteropCompatibilityDisposition::Supported
+        );
+        assert_eq!(evidence.binding_verdicts.len(), 1);
+        assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
+        assert!(evidence.error_detail.is_none());
+        assert_eq!(
+            evidence.remediation_guidance.guidance_code,
+            "no_remediation_required"
+        );
+    }
+
+    #[test]
+    fn star_re_export_across_boundary_is_supported_with_no_remediation() {
+        let inv = run_interop_parity_corpus();
+        let evidence = inv
+            .evidence
+            .iter()
+            .find(|ev| ev.specimen_id == "star_re_export_across_boundary")
+            .expect("star re-export specimen should exist");
+        assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
+        assert_eq!(evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(evidence.linked_count, 3);
+        assert_eq!(
+            evidence.compatibility_disposition,
+            InteropCompatibilityDisposition::Supported
+        );
+        assert_eq!(evidence.binding_verdicts.len(), 2);
+        assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
+        assert!(evidence.error_detail.is_none());
+        assert_eq!(
+            evidence.remediation_guidance.guidance_code,
+            "no_remediation_required"
+        );
+    }
+
+    #[test]
     fn family_coverage_sums() {
         let inv = run_interop_parity_corpus();
         let total: u64 = inv.family_coverage.values().sum();

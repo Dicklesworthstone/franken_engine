@@ -1697,7 +1697,7 @@ fn flow_envelope_secret_to_sealed_sink_without_authorization_is_blocked() {
     let assessment = env.assess_flow_authorization(&Label::Secret, &ClearanceClass::SealedSink);
     assert!(assessment.envelope_authorized);
     assert!(!assessment.flow_authorized);
-    assert!(!assessment.requires_declassification());
+    assert!(assessment.requires_declassification());
     assert_eq!(
         assessment.advisories,
         vec![FlowAuthorizationAdvisory::ExplicitAuthorizationRequired {
@@ -1723,7 +1723,7 @@ fn flow_envelope_top_secret_to_sealed_sink_ignores_secret_only_authorization_ref
     let assessment = env.assess_flow_authorization(&Label::TopSecret, &ClearanceClass::SealedSink);
     assert!(!assessment.envelope_authorized);
     assert!(!assessment.flow_authorized);
-    assert!(!assessment.requires_declassification());
+    assert!(assessment.requires_declassification());
     assert_eq!(
         assessment.advisories,
         vec![

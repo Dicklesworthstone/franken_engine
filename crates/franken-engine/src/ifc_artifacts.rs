@@ -479,9 +479,20 @@ impl FlowAuthorizationAssessment {
         !self.advisories.is_empty()
     }
 
-    /// Whether the flow requires an explicit declassification step.
+    /// Whether the flow still requires declassification follow-up.
+    ///
+    /// This is true both when a concrete obligation has already been
+    /// materialized and when the assessment is fail-closed on missing
+    /// authorization material for a flow that still needs declassification.
     pub fn requires_declassification(&self) -> bool {
         self.declassification_obligation.is_some()
+            || self.advisories.iter().any(|advisory| {
+                matches!(
+                    advisory,
+                    FlowAuthorizationAdvisory::ExplicitAuthorizationRequired { .. }
+                        | FlowAuthorizationAdvisory::DeclassificationObligationRequired { .. }
+                )
+            })
     }
 }
 
@@ -2473,7 +2484,7 @@ mod tests {
         let assessment = env.assess_flow_authorization(&Label::Secret, &ClearanceClass::SealedSink);
         assert!(assessment.envelope_authorized);
         assert!(!assessment.flow_authorized);
-        assert!(!assessment.requires_declassification());
+        assert!(assessment.requires_declassification());
         assert!(assessment.has_advisories());
         assert_eq!(
             assessment.advisories,
@@ -2558,7 +2569,7 @@ mod tests {
             env.assess_flow_authorization(&Label::TopSecret, &ClearanceClass::SealedSink);
         assert!(!assessment.envelope_authorized);
         assert!(!assessment.flow_authorized);
-        assert!(!assessment.requires_declassification());
+        assert!(assessment.requires_declassification());
         assert_eq!(
             assessment.advisories,
             vec![
@@ -2568,6 +2579,27 @@ mod tests {
                 }
             ],
         );
+    }
+
+    #[test]
+    fn flow_assessment_keeps_non_declassification_flows_clear() {
+        let env = FlowEnvelope {
+            envelope_id: "env-public-open".to_string(),
+            extension_id: "ext-public-open".to_string(),
+            producible_labels: [Label::Public].into_iter().collect(),
+            accessible_clearances: [ClearanceClass::OpenSink].into_iter().collect(),
+            authorized_declassifications: vec![],
+            policy_ref: "pol-public-open".to_string(),
+            epoch_id: 7,
+            schema_version: IfcSchemaVersion::CURRENT,
+        };
+
+        let assessment = env.assess_flow_authorization(&Label::Public, &ClearanceClass::OpenSink);
+        assert!(assessment.envelope_authorized);
+        assert!(assessment.flow_authorized);
+        assert!(!assessment.requires_declassification());
+        assert!(!assessment.has_advisories());
+        assert!(assessment.declassification_obligation.is_none());
     }
 
     // -- Exfiltration scenario test --
@@ -2603,7 +2635,7 @@ mod tests {
         let assessment = env.assess_flow_authorization(&header_label, &ClearanceClass::SealedSink);
         assert!(ClearanceClass::SealedSink.can_receive(&header_label));
         assert!(!assessment.flow_authorized);
-        assert!(!assessment.requires_declassification());
+        assert!(assessment.requires_declassification());
         assert_eq!(
             assessment.advisories,
             vec![FlowAuthorizationAdvisory::ExplicitAuthorizationRequired {

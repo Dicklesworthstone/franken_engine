@@ -1059,7 +1059,7 @@ fn sealed_sink_ignores_blank_authorization_refs() {
     let assessment = env.assess_flow_authorization(&Label::Secret, &ClearanceClass::SealedSink);
     assert!(assessment.envelope_authorized);
     assert!(!assessment.flow_authorized);
-    assert!(!assessment.requires_declassification());
+    assert!(assessment.requires_declassification());
     assert_eq!(
         assessment.advisories,
         vec![FlowAuthorizationAdvisory::ExplicitAuthorizationRequired {
@@ -1085,7 +1085,7 @@ fn sealed_sink_ignores_non_matching_flow_authorization_refs() {
     let assessment = env.assess_flow_authorization(&Label::Secret, &ClearanceClass::SealedSink);
     assert!(assessment.envelope_authorized);
     assert!(!assessment.flow_authorized);
-    assert!(!assessment.requires_declassification());
+    assert!(assessment.requires_declassification());
     assert_eq!(
         assessment.advisories,
         vec![FlowAuthorizationAdvisory::ExplicitAuthorizationRequired {

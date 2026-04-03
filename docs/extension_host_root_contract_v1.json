@@ -1,0 +1,81 @@
+{
+  "schema_version": "franken-engine.extension-host.root-contract.v1",
+  "bead_id": "bd-2muur.2.1",
+  "policy_id": "policy-rgc-920b-extension-host-root-contract-v1",
+  "crate_name": "frankenengine-extension-host",
+  "root_contract": {
+    "variant": "direct_public_api_without_placeholder_sentinel",
+    "rationale": "The crate root is the intentional public API for extension manifest validation, lifecycle management, information-flow controls, escrow and receipt surfaces, and delegate-cell control. It should expose meaningful constants, types, and functions directly, and it must not expose dummy placeholder symbols just to satisfy linkage or discovery assumptions.",
+    "placeholder_symbols_forbidden": [
+      "placeholder_extension_host_symbol"
+    ],
+    "required_public_constants": [
+      "CURRENT_ENGINE_VERSION",
+      "MAX_NAME_LEN",
+      "DEFAULT_TERMINATION_GRACE_PERIOD_NS",
+      "MAX_DELEGATE_LIFETIME_NS"
+    ],
+    "required_public_functions": [
+      "validate_manifest",
+      "validate_manifest_with_context",
+      "compute_content_hash",
+      "allowed_lifecycle_transitions",
+      "lifecycle_target_state"
+    ],
+    "required_public_types": [
+      "ExtensionHostConfig",
+      "ExtensionManifest",
+      "ManifestValidationContext",
+      "ExtensionLifecycleManager",
+      "FlowLabel",
+      "HostcallDispatcher",
+      "CapabilityEscrowGateway",
+      "DelegateCellFactory"
+    ],
+    "root_categories": [
+      {
+        "id": "manifest_validation",
+        "description": "Manifest/config validation, canonical serialization, and content-hash helpers."
+      },
+      {
+        "id": "lifecycle",
+        "description": "Extension lifecycle state machine, budgets, cancellation, and transition telemetry."
+      },
+      {
+        "id": "ifc_and_dispatch",
+        "description": "Flow labels, sink policy, and hostcall-dispatch enforcement surfaces."
+      },
+      {
+        "id": "escrow_and_receipts",
+        "description": "Capability-escrow decisions, receipts, replay context, and decision gateways."
+      },
+      {
+        "id": "delegate_cells",
+        "description": "Delegate-cell manifests, policies, evidence, and factory-based construction."
+      }
+    ]
+  },
+  "validation": {
+    "source_file": "crates/franken-extension-host/src/lib.rs",
+    "contract_test": "crates/franken-extension-host/tests/root_contract.rs",
+    "runner": "scripts/run_rgc_extension_host_root_contract.sh",
+    "replay": "scripts/e2e/rgc_extension_host_root_contract_replay.sh",
+    "artifact_files": [
+      "extension_host_root_contract.json",
+      "extension_host_root_contract_validation_report.json",
+      "extension_host_root_surface_report.json"
+    ]
+  },
+  "operator_verification": [
+    "./scripts/run_rgc_extension_host_root_contract.sh ci",
+    "./scripts/e2e/rgc_extension_host_root_contract_replay.sh ci",
+    "cat artifacts/rgc_extension_host_root_contract/<timestamp>/run_manifest.json",
+    "cat artifacts/rgc_extension_host_root_contract/<timestamp>/trace_ids.json",
+    "cat artifacts/rgc_extension_host_root_contract/<timestamp>/extension_host_root_contract.json",
+    "cat artifacts/rgc_extension_host_root_contract/<timestamp>/extension_host_root_contract_validation_report.json",
+    "cat artifacts/rgc_extension_host_root_contract/<timestamp>/extension_host_root_surface_report.json",
+    "cat artifacts/rgc_extension_host_root_contract/<timestamp>/events.jsonl",
+    "cat artifacts/rgc_extension_host_root_contract/<timestamp>/commands.txt",
+    "cat artifacts/rgc_extension_host_root_contract/<timestamp>/step_logs/step_000.log"
+  ]
+}

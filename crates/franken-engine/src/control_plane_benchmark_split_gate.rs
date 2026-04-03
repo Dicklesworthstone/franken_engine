@@ -516,6 +516,11 @@ fn coefficient_of_variation_millionths(samples: &[u64]) -> Option<u64> {
         return None;
     }
 
+    let variance_divisor = if len > 1.0 {
+        len - 1.0
+    } else {
+        len
+    };
     let variance = samples
         .iter()
         .map(|value| {
@@ -523,7 +528,7 @@ fn coefficient_of_variation_millionths(samples: &[u64]) -> Option<u64> {
             delta * delta
         })
         .sum::<f64>()
-        / len;
+        / variance_divisor;
     let stddev = variance.sqrt();
     Some(((stddev / mean) * 1_000_000.0).round() as u64)
 }

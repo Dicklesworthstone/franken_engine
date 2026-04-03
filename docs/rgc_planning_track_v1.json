@@ -10,6 +10,7 @@
   "source_contracts": [
     {
       "artifact_id": "scope_source",
+      "schema_version": "rgc.compatibility-target-matrix.v1",
       "source_bead_id": "bd-1lsy.1.1",
       "source_json": "docs/rgc_executable_compatibility_target_matrix_v1.json",
       "source_doc": "docs/RGC_EXECUTABLE_COMPATIBILITY_TARGET_MATRIX_V1.md",
@@ -17,6 +18,7 @@
     },
     {
       "artifact_id": "milestone_source",
+      "schema_version": "rgc.milestone-gatebook.v1",
       "source_bead_id": "bd-1lsy.1.2",
       "source_json": "docs/rgc_milestone_gatebook_v1.json",
       "source_doc": "docs/RGC_MILESTONE_GATEBOOK_V1.md",
@@ -24,6 +26,7 @@
     },
     {
       "artifact_id": "risk_source",
+      "schema_version": "rgc.risk-register.v1",
       "source_bead_id": "bd-1lsy.1.3",
       "source_json": "docs/rgc_risk_register_v1.json",
       "source_doc": "docs/RGC_RISK_REGISTER_V1.md",
@@ -31,6 +34,7 @@
     },
     {
       "artifact_id": "wave_source",
+      "schema_version": "rgc.execution-wave-protocol.v1",
       "source_bead_id": "bd-1lsy.1.4+bd-1lsy.1.5",
       "source_json": "docs/frx_handoff_packet_schema_v1.json",
       "source_doc": "docs/RGC_EXECUTION_WAVE_PROTOCOL.md",

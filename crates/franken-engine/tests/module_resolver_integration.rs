@@ -1404,6 +1404,194 @@ fn external_package_exports_reject_targets_that_escape_package_root() {
 }
 
 #[test]
+fn external_package_wildcard_exports_resolve_targets_by_import_style() {
+    let mut resolver = DeterministicModuleResolver::new("/repo");
+    resolver
+        .register_external_package(ExternalPackageDefinition::new("wild-pkg").with_export(
+            "./feature/*",
+            export_target(
+                &[("import", "./esm/*.mjs"), ("require", "./cjs/*.cjs")],
+                Some("./fallback/*.js"),
+            ),
+        ))
+        .unwrap();
+    resolver
+        .register_external_module("wild-pkg/esm/button.mjs", esm_def("export default 'esm';"))
+        .unwrap();
+    resolver
+        .register_external_module(
+            "wild-pkg/cjs/button.cjs",
+            cjs_def("module.exports = 'cjs';"),
+        )
+        .unwrap();
+
+    let import_outcome = resolver
+        .resolve(
+            &ModuleRequest::new("wild-pkg/feature/button", ImportStyle::Import),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect("wildcard exports map should resolve import targets");
+    assert_eq!(
+        import_outcome.module.canonical_specifier,
+        "wild-pkg/esm/button.mjs"
+    );
+    assert_eq!(import_outcome.module.record.syntax, ModuleSyntax::EsModule);
+    assert_eq!(
+        import_outcome.module.probe_sequence,
+        vec!["wild-pkg/feature/button", "wild-pkg/esm/button.mjs"]
+    );
+
+    let require_outcome = resolver
+        .resolve(
+            &ModuleRequest::new("wild-pkg/feature/button", ImportStyle::Require),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect("wildcard exports map should resolve require targets");
+    assert_eq!(
+        require_outcome.module.canonical_specifier,
+        "wild-pkg/cjs/button.cjs"
+    );
+    assert_eq!(require_outcome.module.record.syntax, ModuleSyntax::CommonJs);
+    assert_eq!(
+        require_outcome.module.probe_sequence,
+        vec!["wild-pkg/feature/button", "wild-pkg/cjs/button.cjs"]
+    );
+}
+
+#[test]
+fn external_package_exact_export_precedes_wildcard_export() {
+    let mut resolver = DeterministicModuleResolver::new("/repo");
+    resolver
+        .register_external_package(
+            ExternalPackageDefinition::new("wild-pkg")
+                .with_export(".", export_target(&[("default", "./root.js")], None))
+                .with_export(
+                    "./feature/*",
+                    export_target(&[("default", "./wild/*.js")], None),
+                )
+                .with_export(
+                    "./feature/exact",
+                    export_target(&[("default", "./exact/index.js")], None),
+                ),
+        )
+        .unwrap();
+    resolver
+        .register_external_module("wild-pkg/wild/other.js", esm_def("export default 'wild';"))
+        .unwrap();
+    resolver
+        .register_external_module(
+            "wild-pkg/exact/index.js",
+            esm_def("export default 'exact';"),
+        )
+        .unwrap();
+
+    let exact_outcome = resolver
+        .resolve(
+            &ModuleRequest::new("wild-pkg/feature/exact", ImportStyle::Import),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect("exact export entry should win over wildcard exports");
+    assert_eq!(
+        exact_outcome.module.canonical_specifier,
+        "wild-pkg/exact/index.js"
+    );
+    assert_eq!(
+        exact_outcome.module.probe_sequence,
+        vec!["wild-pkg/feature/exact", "wild-pkg/exact/index.js"]
+    );
+
+    let wildcard_outcome = resolver
+        .resolve(
+            &ModuleRequest::new("wild-pkg/feature/other", ImportStyle::Import),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect("wildcard export should still handle non-exact subpaths");
+    assert_eq!(
+        wildcard_outcome.module.canonical_specifier,
+        "wild-pkg/wild/other.js"
+    );
+    assert_eq!(
+        wildcard_outcome.module.probe_sequence,
+        vec!["wild-pkg/feature/other", "wild-pkg/wild/other.js"]
+    );
+}
+
+#[test]
+fn scoped_external_package_more_specific_wildcard_export_wins() {
+    let mut resolver = DeterministicModuleResolver::new("/repo");
+    resolver
+        .register_external_package(
+            ExternalPackageDefinition::new("@scope/wild-pkg")
+                .with_export(
+                    "./feature/*",
+                    export_target(&[("default", "./general/*.js")], None),
+                )
+                .with_export(
+                    "./feature/internal/*",
+                    export_target(&[("default", "./internal/*.mjs")], None),
+                ),
+        )
+        .unwrap();
+    resolver
+        .register_external_module(
+            "@scope/wild-pkg/general/button.js",
+            esm_def("export default 'general';"),
+        )
+        .unwrap();
+    resolver
+        .register_external_module(
+            "@scope/wild-pkg/internal/secret.mjs",
+            esm_def("export default 'internal';"),
+        )
+        .unwrap();
+
+    let internal_outcome = resolver
+        .resolve(
+            &ModuleRequest::new(
+                "@scope/wild-pkg/feature/internal/secret",
+                ImportStyle::Import,
+            ),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect("more specific scoped wildcard export should win");
+    assert_eq!(
+        internal_outcome.module.canonical_specifier,
+        "@scope/wild-pkg/internal/secret.mjs"
+    );
+    assert_eq!(
+        internal_outcome.module.probe_sequence,
+        vec![
+            "@scope/wild-pkg/feature/internal/secret",
+            "@scope/wild-pkg/internal/secret.mjs",
+        ]
+    );
+
+    let general_outcome = resolver
+        .resolve(
+            &ModuleRequest::new("@scope/wild-pkg/feature/button", ImportStyle::Import),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect("general scoped wildcard export should still resolve unmatched subpaths");
+    assert_eq!(
+        general_outcome.module.canonical_specifier,
+        "@scope/wild-pkg/general/button.js"
+    );
+    assert_eq!(
+        general_outcome.module.probe_sequence,
+        vec![
+            "@scope/wild-pkg/feature/button",
+            "@scope/wild-pkg/general/button.js",
+        ]
+    );
+}
+
+#[test]
 fn external_extension_probe_entry_resolves_from_bare_require_specifier() {
     let mut resolver = DeterministicModuleResolver::default();
     resolver

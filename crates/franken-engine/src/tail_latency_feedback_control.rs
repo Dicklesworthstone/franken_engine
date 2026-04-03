@@ -104,8 +104,9 @@ impl LatencyTarget {
 
     /// Effective upper bound including tolerance.
     pub fn upper_bound_nanos(&self) -> u64 {
-        let tolerance_nanos =
-            self.budget_nanos.saturating_mul(self.tolerance_millionths) / MILLIONTHS;
+        let tolerance_nanos = ((self.budget_nanos as u128)
+            .saturating_mul(self.tolerance_millionths as u128)
+            / MILLIONTHS as u128) as u64;
         self.budget_nanos.saturating_add(tolerance_nanos)
     }
 }

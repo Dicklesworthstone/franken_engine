@@ -1084,7 +1084,7 @@ pub fn exec_string_static(builtin: BuiltinId, args: &[JsValue]) -> Result<JsValu
             let mut result = String::new();
             for (i, arg) in args.iter().enumerate() {
                 let code = coerce_to_int(&format!("String.fromCodePoint arg {i}"), arg)? / FP_SCALE;
-                if code < 0 || code > 0x10FFFF {
+                if !(0..=0x10FFFF).contains(&code) {
                     return Err(StdlibError::RangeError(format!(
                         "String.fromCodePoint: invalid Unicode code point {code}"
                     )));
@@ -2836,9 +2836,9 @@ impl<'a> JsonParser<'a> {
     }
 
     fn skip_whitespace(&mut self) {
-        while let Some(ch) = self.input[self.pos..].chars().next() {
-            if ch.is_whitespace() {
-                self.pos += ch.len_utf8();
+        while let Some(b) = self.peek_byte() {
+            if matches!(b, b' ' | b'\t' | b'\n' | b'\r') {
+                self.pos += 1;
             } else {
                 break;
             }

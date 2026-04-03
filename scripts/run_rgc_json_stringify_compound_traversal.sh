@@ -10,9 +10,14 @@ parser_frontier_bootstrap_env
 mode="${1:-ci}"
 toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
 target_dir="${CARGO_TARGET_DIR:-/data/projects/franken_engine/target_rch_rgc_json_stringify_compound_traversal}"
-artifact_root="${RGC_JSON_STRINGIFY_COMPOUND_TRAVERSAL_ARTIFACT_ROOT:-artifacts/rgc_json_stringify_compound_traversal}"
+artifact_root_input="${RGC_JSON_STRINGIFY_COMPOUND_TRAVERSAL_ARTIFACT_ROOT:-artifacts/rgc_json_stringify_compound_traversal}"
 rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+if [[ "${artifact_root_input}" = /* ]]; then
+  artifact_root="${artifact_root_input}"
+else
+  artifact_root="${root_dir}/${artifact_root_input}"
+fi
 run_dir="${artifact_root}/${timestamp}"
 replay_command="./scripts/e2e/rgc_json_stringify_compound_traversal_replay.sh ${mode}"
 

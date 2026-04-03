@@ -869,7 +869,7 @@ impl CatastrophicTailTournamentGate {
         // Simplified: e_value = (max_payoff / mean_payoff) if mean > 0.
         let mean = sorted.iter().fold(0i64, |acc, &x| acc.saturating_add(x)) / n as i64;
         let e_value = if mean > 0 {
-            max_payoff.saturating_mul(MILLION) / mean
+            ((max_payoff as i128).saturating_mul(MILLION as i128) / mean as i128) as i64
         } else if max_payoff > 0 {
             self.config.e_value_alarm_threshold_millionths + 1
         } else {
@@ -892,16 +892,14 @@ impl CatastrophicTailTournamentGate {
     }
 
     fn compute_aggregate_cvar(&self, metrics: &[TailRiskMetrics]) -> i64 {
-        let mut total_weight: i64 = 0;
-        let mut weighted_cvar: i64 = 0;
+        let mut total_weight: i128 = 0;
+        let mut weighted_cvar_sum: i128 = 0;
 
         for m in metrics {
             if let Some(tc) = self.threat_classes.get(&m.threat_class_id) {
-                weighted_cvar += m
-                    .cvar_millionths
-                    .saturating_mul(tc.impact_weight_millionths)
-                    / MILLION;
-                total_weight = total_weight.saturating_add(tc.impact_weight_millionths);
+                weighted_cvar_sum +=
+                    (m.cvar_millionths as i128) * (tc.impact_weight_millionths as i128);
+                total_weight += tc.impact_weight_millionths as i128;
             }
         }
 
@@ -909,7 +907,7 @@ impl CatastrophicTailTournamentGate {
             return 0;
         }
 
-        weighted_cvar.saturating_mul(MILLION) / total_weight
+        (weighted_cvar_sum / total_weight) as i64
     }
 
     fn build_continuation_cliff_atlas(

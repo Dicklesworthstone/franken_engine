@@ -1168,7 +1168,7 @@ pub struct PolicyBundle {
     pub drift_config: DriftConfig,
     /// Budget configuration.
     pub budget_config: BudgetConfig,
-    /// Risk-factor weights for expected-loss computation (millionths).
+    /// Risk-factor weights for expected loss computation (millionths).
     pub risk_weights: BTreeMap<RiskFactor, i64>,
     /// Default action when all guardrails are clear.
     pub default_action: LaneAction,
@@ -1451,17 +1451,17 @@ impl DecisionContext {
 
     fn compute_expected_loss(&self, state: &DecisionState, _lane: &LaneId) -> i64 {
         // Weighted sum of risk-factor beliefs × risk weights.
-        let mut total: i64 = 0;
+        let mut total: i128 = 0;
         for factor in &RiskFactor::ALL {
             let belief = state
                 .risk_belief_millionths
                 .get(factor)
                 .copied()
-                .unwrap_or(0);
-            let weight = self.config.risk_weights.get(factor).copied().unwrap_or(0);
-            total = total.saturating_add(belief.saturating_mul(weight) / MILLION);
+                .unwrap_or(0) as i128;
+            let weight = self.config.risk_weights.get(factor).copied().unwrap_or(0) as i128;
+            total += (belief * weight) / MILLION as i128;
         }
-        total
+        total.clamp(i64::MIN as i128, i64::MAX as i128) as i64
     }
 
     fn make_trace(
@@ -1965,7 +1965,8 @@ mod tests {
         let config = DriftConfig {
             reference_window: 5,
             test_window: 5,
-            ..Default::default()
+            min_samples: 5,
+            kl_threshold_millionths: 1,
         };
         let mut drift = DriftDetector::new(config);
         // Add many observations.

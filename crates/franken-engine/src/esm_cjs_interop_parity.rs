@@ -3633,6 +3633,21 @@ mod tests {
         assert_eq!(evidence.module_count, 1);
         assert_eq!(evidence.linked_count, 1);
         assert_eq!(evidence.cycle_count, 0);
+        assert_eq!(
+            evidence.compatibility_disposition,
+            InteropCompatibilityDisposition::Supported
+        );
+        assert!(evidence.error_detail.is_none());
+        assert_eq!(
+            evidence.remediation_guidance.guidance_code,
+            "no_remediation_required"
+        );
+        assert!(
+            evidence
+                .remediation_guidance
+                .message
+                .contains("esm_single_module")
+        );
     }
 
     #[test]
@@ -3645,6 +3660,20 @@ mod tests {
         assert_eq!(evidence.verdict, InteropVerdict::Pass);
         assert_eq!(evidence.actual_outcome, InteropActualOutcome::CycleDetected);
         assert!(evidence.cycle_count > 0);
+        assert_eq!(
+            evidence.compatibility_disposition,
+            InteropCompatibilityDisposition::Unsupported
+        );
+        assert_eq!(
+            evidence.remediation_guidance.guidance_code,
+            "break_mixed_module_cycle"
+        );
+        assert!(
+            evidence
+                .remediation_guidance
+                .message
+                .contains("cycle_esm_esm")
+        );
     }
 
     #[test]
@@ -3684,6 +3713,17 @@ mod tests {
         assert_eq!(
             evidence.compatibility_disposition,
             InteropCompatibilityDisposition::Supported
+        );
+        assert!(evidence.error_detail.is_none());
+        assert_eq!(
+            evidence.remediation_guidance.guidance_code,
+            "no_remediation_required"
+        );
+        assert!(
+            evidence
+                .remediation_guidance
+                .message
+                .contains("cycle_mixed_esm_cjs")
         );
         assert_eq!(evidence.binding_verdicts.len(), 2);
         assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
@@ -3725,6 +3765,16 @@ mod tests {
         assert_eq!(
             evidence.compatibility_disposition,
             InteropCompatibilityDisposition::Degraded
+        );
+        assert_eq!(
+            evidence.remediation_guidance.guidance_code,
+            "stabilize_async_boundary"
+        );
+        assert!(
+            evidence
+                .remediation_guidance
+                .message
+                .contains("async_rejection_propagation")
         );
     }
 
@@ -4089,6 +4139,20 @@ mod tests {
             InteropActualOutcome::LinkFailure
         );
         assert_eq!(native_evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(
+            native_evidence.compatibility_disposition,
+            InteropCompatibilityDisposition::Unsupported
+        );
+        assert_eq!(
+            native_evidence.remediation_guidance.guidance_code,
+            "repair_link_boundary"
+        );
+        assert!(
+            native_evidence
+                .remediation_guidance
+                .message
+                .contains("cjs_requires_esm_named_native")
+        );
         assert!(
             native_evidence
                 .error_detail
@@ -4110,6 +4174,20 @@ mod tests {
             InteropActualOutcome::LinkFailure
         );
         assert_eq!(node_compat_evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(
+            node_compat_evidence.compatibility_disposition,
+            InteropCompatibilityDisposition::Unsupported
+        );
+        assert_eq!(
+            node_compat_evidence.remediation_guidance.guidance_code,
+            "repair_link_boundary"
+        );
+        assert!(
+            node_compat_evidence
+                .remediation_guidance
+                .message
+                .contains("cjs_requires_esm_named_node_compat")
+        );
         assert!(
             node_compat_evidence
                 .error_detail
@@ -4131,8 +4209,22 @@ mod tests {
             InteropActualOutcome::Success
         );
         assert_eq!(bun_compat_evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(
+            bun_compat_evidence.compatibility_disposition,
+            InteropCompatibilityDisposition::Supported
+        );
         assert_eq!(bun_compat_evidence.linked_count, 2);
         assert!(bun_compat_evidence.error_detail.is_none());
+        assert_eq!(
+            bun_compat_evidence.remediation_guidance.guidance_code,
+            "no_remediation_required"
+        );
+        assert!(
+            bun_compat_evidence
+                .remediation_guidance
+                .message
+                .contains("cjs_requires_esm_named_bun_compat")
+        );
         assert!(
             bun_compat_evidence
                 .binding_verdicts
@@ -4188,6 +4280,11 @@ mod tests {
             assert_eq!(evidence.linked_count, 2);
             assert_eq!(evidence.binding_verdicts.len(), expected_binding_count);
             assert!(evidence.error_detail.is_none());
+            assert_eq!(
+                evidence.remediation_guidance.guidance_code,
+                "no_remediation_required"
+            );
+            assert!(evidence.remediation_guidance.message.contains(specimen_id));
             assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
         }
     }

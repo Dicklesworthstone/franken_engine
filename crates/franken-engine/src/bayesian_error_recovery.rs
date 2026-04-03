@@ -193,9 +193,9 @@ pub struct Posterior {
 impl Posterior {
     /// Create a posterior from raw millionths. Normalizes to sum to MILLION.
     pub fn new(recoverable: u64, ambiguous: u64, unrecoverable: u64) -> Self {
-        let total = recoverable
-            .saturating_add(ambiguous)
-            .saturating_add(unrecoverable);
+        let total = (recoverable as u128)
+            .saturating_add(ambiguous as u128)
+            .saturating_add(unrecoverable as u128);
         if total == 0 {
             return Self {
                 recoverable: MILLION / 3,
@@ -203,14 +203,14 @@ impl Posterior {
                 unrecoverable: MILLION - 2 * (MILLION / 3),
             };
         }
-        let r = recoverable
-            .saturating_mul(MILLION)
+        let r = ((recoverable as u128)
+            .saturating_mul(MILLION as u128)
             .checked_div(total)
-            .unwrap_or(0);
-        let a = ambiguous
-            .saturating_mul(MILLION)
+            .unwrap_or(0)) as u64;
+        let a = ((ambiguous as u128)
+            .saturating_mul(MILLION as u128)
             .checked_div(total)
-            .unwrap_or(0);
+            .unwrap_or(0)) as u64;
         let u = MILLION.saturating_sub(r).saturating_sub(a);
         Self {
             recoverable: r,
@@ -1888,7 +1888,7 @@ mod tests {
     // --- Component and schema constants ---
 
     #[test]
-    fn component_name() {
+    fn component_component() {
         assert_eq!(COMPONENT, "bayesian_error_recovery");
     }
 

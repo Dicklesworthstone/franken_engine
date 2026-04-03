@@ -681,9 +681,9 @@ impl TimingStats {
             .checked_div(mean_us)
             .unwrap_or(0);
 
-        // Percentiles.
-        let p95_idx = ((count as u64 * 95) / 100) as usize;
-        let p99_idx = ((count as u64 * 99) / 100) as usize;
+        // Percentiles (nearest-rank method: ceil(P/100 * N) - 1 as 0-based index).
+        let p95_idx = ((count as u64 * 95).saturating_sub(1) / 100) as usize;
+        let p99_idx = ((count as u64 * 99).saturating_sub(1) / 100) as usize;
         let p95_us = sorted[p95_idx.min(count - 1)];
         let p99_us = sorted[p99_idx.min(count - 1)];
 
@@ -1421,10 +1421,10 @@ mod tests {
     fn timing_stats_percentiles() {
         let durations: Vec<u64> = (1..=100).collect();
         let stats = TimingStats::from_durations(&durations);
-        // p95_idx = (100*95)/100 = 95 → sorted[95] = 96
-        assert_eq!(stats.p95_us, 96);
-        // p99_idx = (100*99)/100 = 99 → sorted[99] = 100
-        assert_eq!(stats.p99_us, 100);
+        // p95_idx = (100*95 - 1)/100 = 94 → sorted[94] = 95
+        assert_eq!(stats.p95_us, 95);
+        // p99_idx = (100*99 - 1)/100 = 98 → sorted[98] = 99
+        assert_eq!(stats.p99_us, 99);
     }
 
     // -- ParityVerdict --

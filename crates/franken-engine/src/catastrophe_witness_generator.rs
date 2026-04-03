@@ -248,7 +248,7 @@ impl ManifoldCoordinate {
             return None;
         }
         let diff = (self.value_millionths as i128) - (other.value_millionths as i128);
-        Some(diff * diff)
+        Some(diff.saturating_mul(diff))
     }
 }
 

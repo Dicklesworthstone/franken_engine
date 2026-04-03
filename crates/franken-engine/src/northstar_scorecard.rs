@@ -401,7 +401,7 @@ pub struct ScorecardEvaluation {
 pub struct Scorecard {
     /// Threshold definitions.
     thresholds: Vec<Threshold>,
-    /// Observations per metric kind (sorted for quantile computation).
+    /// Observations per metric kind (kept in chronological order).
     observations: BTreeMap<MetricKind, Vec<i64>>,
     /// Maximum observations to keep per metric (ring-buffer semantics).
     max_observations: usize,
@@ -433,10 +433,9 @@ impl Scorecard {
     /// Record a metric observation.
     pub fn record(&mut self, sample: MetricSample) {
         let values = self.observations.entry(sample.kind).or_default();
-        // Insert in sorted order.
-        let pos = values.partition_point(|&x| x < sample.value);
-        values.insert(pos, sample.value);
-        // Trim if over limit.
+        // Append in chronological order.
+        values.push(sample.value);
+        // Trim oldest if over limit.
         if values.len() > self.max_observations {
             values.remove(0);
         }
@@ -450,13 +449,17 @@ impl Scorecard {
             return None;
         }
         let n = values.len();
-        let min = values[0];
-        let max = values[n - 1];
-        let sum: i64 = values.iter().sum();
+        
+        let mut sorted = values.clone();
+        sorted.sort_unstable();
+
+        let min = sorted[0];
+        let max = sorted[n - 1];
+        let sum: i64 = sorted.iter().sum();
         let mean = sum / n as i64;
-        let p50 = values[n / 2];
-        let p95 = values[(n * 95) / 100];
-        let p99 = values[(n * 99) / 100];
+        let p50 = sorted[n / 2];
+        let p95 = sorted[(n * 95) / 100];
+        let p99 = sorted[(n * 99) / 100];
 
         Some(MetricSummary {
             kind,

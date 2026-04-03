@@ -3105,26 +3105,36 @@ mod tests {
 
         let operator_catalog = structured_reduction_operator_catalog_for_suite(&suite);
         assert_eq!(operator_catalog.operator_count, 2);
+        let expected_routes = vec![
+            "parity".to_string(),
+            "law_mining".to_string(),
+            "docs".to_string(),
+            "frontier_hole".to_string(),
+        ];
         assert!(
             operator_catalog
                 .operators
                 .iter()
                 .any(|operator| operator.operator_id == "hierarchical_ddmin")
         );
+        assert!(
+            operator_catalog
+                .operators
+                .iter()
+                .all(|operator| operator.consumer_routes == expected_routes)
+        );
 
         let hdd_report = hdd_reducer_report_for_suite(&suite);
         assert_eq!(hdd_report.total_failures, 1);
         assert_eq!(hdd_report.changed_failures, 1);
         assert_eq!(hdd_report.stable_failures, 1);
-        assert_eq!(
-            hdd_report.entries[0].routes,
-            vec!["parity", "law_mining", "docs", "frontier_hole"]
-        );
+        assert_eq!(hdd_report.entries[0].routes, expected_routes);
 
         let structured_repros = minimized_structured_repros_for_suite(&suite);
         assert_eq!(structured_repros.len(), 1);
         assert!(structured_repros[0].structured_repro_id.starts_with("sr-"));
         assert!(structured_repros[0].reduction_stable);
+        assert_eq!(structured_repros[0].routes, expected_routes);
 
         let stability_matrix = reduction_stability_matrix_for_suite(&suite);
         assert_eq!(stability_matrix.total_failures, 1);

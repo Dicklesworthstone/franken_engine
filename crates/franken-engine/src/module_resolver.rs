@@ -2373,6 +2373,8 @@ mod tests {
         assert_eq!(external_package_root("pkg.js"), "pkg");
         assert_eq!(external_package_root("@scope/pkg.js"), "@scope/pkg");
         assert_eq!(external_package_root("pkg/index.cjs"), "pkg");
+        assert_eq!(external_package_root("pkg/index.mjs"), "pkg");
+        assert_eq!(external_package_root("@scope/pkg/index.mjs"), "@scope/pkg");
     }
 
     #[test]
@@ -4262,6 +4264,94 @@ mod tests {
             .map(|outcome| outcome.module.record.id.clone())
             .collect::<Vec<_>>();
         assert_eq!(ids, vec!["external:pkg/index.cjs", "external:pkg/lib.mjs"]);
+    }
+
+    #[test]
+    fn resolve_chain_supports_external_relative_import_edges_from_index_mjs_in_bun_compat_mode() {
+        let mut resolver = DeterministicModuleResolver::new("/repo");
+        resolver
+            .register_external_module(
+                "pkg/index.mjs",
+                ModuleDefinition::new(
+                    ModuleSyntax::EsModule,
+                    "import './sub.mjs'; export default 'esm';",
+                )
+                .with_dependency(ModuleDependency::new("./sub.mjs", ImportStyle::Import)),
+            )
+            .unwrap();
+        resolver
+            .register_external_module(
+                "pkg/sub.mjs",
+                ModuleDefinition::new(ModuleSyntax::EsModule, "export const value = 1;"),
+            )
+            .unwrap();
+
+        let outcomes = resolver
+            .resolve_chain(
+                &ModuleRequest::new("pkg", ImportStyle::Require)
+                    .with_compatibility_mode(CompatibilityMode::BunCompat),
+                &context(),
+                &AllowAllPolicy,
+            )
+            .expect(
+                "bun_compat chain should keep external index.mjs imports inside the package root",
+            );
+        let ids = outcomes
+            .iter()
+            .map(|outcome| outcome.module.record.id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["external:pkg/index.mjs", "external:pkg/sub.mjs"]);
+        assert_eq!(outcomes[0].module.canonical_specifier, "pkg/index.mjs");
+        assert_eq!(outcomes[1].module.canonical_specifier, "pkg/sub.mjs");
+    }
+
+    #[test]
+    fn resolve_chain_supports_scoped_external_relative_import_edges_from_index_mjs_in_bun_compat_mode()
+     {
+        let mut resolver = DeterministicModuleResolver::new("/repo");
+        resolver
+            .register_external_module(
+                "@scope/pkg/index.mjs",
+                ModuleDefinition::new(
+                    ModuleSyntax::EsModule,
+                    "import './sub.mjs'; export default 'esm';",
+                )
+                .with_dependency(ModuleDependency::new("./sub.mjs", ImportStyle::Import)),
+            )
+            .unwrap();
+        resolver
+            .register_external_module(
+                "@scope/pkg/sub.mjs",
+                ModuleDefinition::new(ModuleSyntax::EsModule, "export const value = 1;"),
+            )
+            .unwrap();
+
+        let outcomes = resolver
+            .resolve_chain(
+                &ModuleRequest::new("@scope/pkg", ImportStyle::Require)
+                    .with_compatibility_mode(CompatibilityMode::BunCompat),
+                &context(),
+                &AllowAllPolicy,
+            )
+            .expect(
+                "bun_compat chain should keep scoped external index.mjs imports inside the package root",
+            );
+        let ids = outcomes
+            .iter()
+            .map(|outcome| outcome.module.record.id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            vec![
+                "external:@scope/pkg/index.mjs",
+                "external:@scope/pkg/sub.mjs",
+            ]
+        );
+        assert_eq!(
+            outcomes[0].module.canonical_specifier,
+            "@scope/pkg/index.mjs"
+        );
+        assert_eq!(outcomes[1].module.canonical_specifier, "@scope/pkg/sub.mjs");
     }
 
     // ── Enrichment: ModuleRequest with_referrer serde ────────────

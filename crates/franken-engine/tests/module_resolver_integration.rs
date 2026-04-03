@@ -1470,6 +1470,54 @@ fn bun_compat_require_resolves_bare_package_index_mjs_entrypoint() {
 }
 
 #[test]
+fn bun_compat_external_bare_require_index_mjs_keeps_relative_dependencies_at_package_root() {
+    let mut resolver = DeterministicModuleResolver::default();
+    resolver
+        .register_external_module(
+            "pkg/index.mjs",
+            esm_def("import './sub.mjs'; export default 'esm';")
+                .with_dependency(ModuleDependency::new("./sub.mjs", ImportStyle::Import)),
+        )
+        .unwrap();
+    resolver
+        .register_external_module("pkg/sub.mjs", esm_def("export const value = 1;"))
+        .unwrap();
+
+    let outcomes = resolver
+        .resolve_chain(
+            &ModuleRequest::new("pkg", ImportStyle::Require)
+                .with_compatibility_mode(CompatibilityMode::BunCompat),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect(
+            "bun_compat require() should keep external index.mjs relative imports inside the package root",
+        );
+
+    let ids = outcomes
+        .iter()
+        .map(|outcome| outcome.module.record.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec!["external:pkg/index.mjs", "external:pkg/sub.mjs"]);
+    assert_eq!(outcomes[0].module.canonical_specifier, "pkg/index.mjs");
+    assert_eq!(
+        outcomes[0].module.probe_sequence,
+        vec![
+            "pkg",
+            "pkg.cjs",
+            "pkg.js",
+            "pkg/index.cjs",
+            "pkg/index.js",
+            "pkg.mjs",
+            "pkg/index.mjs",
+        ]
+    );
+    assert_eq!(outcomes[1].module.canonical_specifier, "pkg/sub.mjs");
+    assert_eq!(outcomes[1].module.probe_sequence, vec!["pkg/sub.mjs"]);
+    assert_eq!(outcomes[1].module.record.syntax, ModuleSyntax::EsModule);
+}
+
+#[test]
 fn scoped_external_extension_probe_entry_resolves_from_bare_require_specifier() {
     let mut resolver = DeterministicModuleResolver::default();
     resolver
@@ -1494,6 +1542,66 @@ fn scoped_external_extension_probe_entry_resolves_from_bare_require_specifier() 
         outcome.module.probe_sequence,
         vec!["@scope/pkg", "@scope/pkg.cjs", "@scope/pkg.js"]
     );
+}
+
+#[test]
+fn bun_compat_scoped_external_bare_require_index_mjs_keeps_relative_dependencies_at_package_root() {
+    let mut resolver = DeterministicModuleResolver::default();
+    resolver
+        .register_external_module(
+            "@scope/pkg/index.mjs",
+            esm_def("import './sub.mjs'; export default 'esm';")
+                .with_dependency(ModuleDependency::new("./sub.mjs", ImportStyle::Import)),
+        )
+        .unwrap();
+    resolver
+        .register_external_module("@scope/pkg/sub.mjs", esm_def("export const value = 1;"))
+        .unwrap();
+
+    let outcomes = resolver
+        .resolve_chain(
+            &ModuleRequest::new("@scope/pkg", ImportStyle::Require)
+                .with_compatibility_mode(CompatibilityMode::BunCompat),
+            &test_context(),
+            &allow_all(),
+        )
+        .expect(
+            "bun_compat require() should keep scoped external index.mjs relative imports inside the package root",
+        );
+
+    let ids = outcomes
+        .iter()
+        .map(|outcome| outcome.module.record.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ids,
+        vec![
+            "external:@scope/pkg/index.mjs",
+            "external:@scope/pkg/sub.mjs"
+        ]
+    );
+    assert_eq!(
+        outcomes[0].module.canonical_specifier,
+        "@scope/pkg/index.mjs"
+    );
+    assert_eq!(
+        outcomes[0].module.probe_sequence,
+        vec![
+            "@scope/pkg",
+            "@scope/pkg.cjs",
+            "@scope/pkg.js",
+            "@scope/pkg/index.cjs",
+            "@scope/pkg/index.js",
+            "@scope/pkg.mjs",
+            "@scope/pkg/index.mjs",
+        ]
+    );
+    assert_eq!(outcomes[1].module.canonical_specifier, "@scope/pkg/sub.mjs");
+    assert_eq!(
+        outcomes[1].module.probe_sequence,
+        vec!["@scope/pkg/sub.mjs"]
+    );
+    assert_eq!(outcomes[1].module.record.syntax, ModuleSyntax::EsModule);
 }
 
 #[test]

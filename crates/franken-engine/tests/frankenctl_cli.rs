@@ -29,6 +29,10 @@ use frankenengine_engine::proof_schema::{
     AttestationValidityWindow, OptReceipt, OptimizationClass, ReceiptAttestationBindings,
     proof_schema_version_current,
 };
+use frankenengine_engine::react_mismatch_catalog::{
+    ComparisonTarget, MismatchCatalog, MismatchDomain, MismatchEntry, MismatchSeverity,
+    RemediationStatus,
+};
 use frankenengine_engine::receipt_verifier_pipeline::{
     AttestationLayerInput, ConsistencyProofInput, LogOperatorKey, ReceiptVerifierCliInput,
     SignatureLayerInput, SignedLogCheckpoint, SignerRevocationCache, TransparencyLayerInput,
@@ -46,7 +50,7 @@ use frankenengine_engine::tee_attestation_policy::{
     RevocationProbeStatus, RevocationSource, RevocationSourceType, TeeAttestationPolicy,
     TeePlatform, TrustRootPinning, TrustRootSource,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn temp_path(name: &str, ext: &str) -> PathBuf {
     let mut path = std::env::temp_dir();
@@ -75,6 +79,34 @@ fn repo_root() -> PathBuf {
 
 fn write_source(path: &Path, source: &str) {
     fs::write(path, source).expect("source fixture should write");
+}
+
+fn write_react_mismatch_catalog(path: &Path) {
+    let mut catalog = MismatchCatalog::new(SecurityEpoch::from_raw(7));
+    catalog
+        .add_entry(MismatchEntry {
+            entry_id: "react-ssr-open".to_string(),
+            domain: MismatchDomain::ServerSideRender,
+            severity: MismatchSeverity::Error,
+            target: ComparisonTarget::NodeJs,
+            summary: "SSR entry mismatch".to_string(),
+            expected_behavior: "render should match".to_string(),
+            actual_behavior: "render diverged".to_string(),
+            reproduction: "cargo test -- react_ssr_case".to_string(),
+            remediation: RemediationStatus::InProgress,
+            advisory: "Switch to the documented SSR compatibility path.".to_string(),
+            react_version_range: ">=18".to_string(),
+            evidence_hash: ContentHash::compute(b"react-ssr-open"),
+            detected_epoch: SecurityEpoch::from_raw(4),
+            verified_epoch: SecurityEpoch::from_raw(7),
+            tags: BTreeSet::from(["react".to_string(), "ssr".to_string(), "doctor".to_string()]),
+        })
+        .expect("catalog entry should be added");
+    fs::write(
+        path,
+        serde_json::to_vec_pretty(&catalog).expect("catalog should serialize"),
+    )
+    .expect("catalog fixture should write");
 }
 
 fn parse_stdout_json(output: &std::process::Output) -> serde_json::Value {
@@ -488,6 +520,7 @@ fn frankenctl_react_help_is_available_without_changing_top_level_help() {
     assert!(stdout.contains("react usage:"));
     assert!(stdout.contains("frankenctl react compile"));
     assert!(stdout.contains("frankenctl react build"));
+    assert!(stdout.contains("frankenctl react doctor"));
     assert!(stdout.contains("frankenctl react contract"));
 }
 
@@ -550,6 +583,11 @@ fn frankenctl_react_contract_emits_machine_readable_contract() {
             .as_array()
             .is_some_and(|commands| commands.len() >= 3)
     );
+    assert!(stdout_json["commands"].as_array().is_some_and(|commands| {
+        commands
+            .iter()
+            .any(|command| command["name"].as_str() == Some("react doctor"))
+    }));
     assert!(
         stdout_json["compile_capabilities"]
             .as_array()
@@ -561,6 +599,60 @@ fn frankenctl_react_contract_emits_machine_readable_contract() {
     assert_eq!(stdout_json, output_json);
 
     let _ = fs::remove_file(output_path);
+}
+
+#[test]
+fn frankenctl_react_doctor_emits_machine_readable_support_report() {
+    let catalog_path = temp_path("frankenctl_react_doctor_catalog", "json");
+    let report_path = temp_path("frankenctl_react_doctor_report", "json");
+    write_react_mismatch_catalog(&catalog_path);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "react",
+            "doctor",
+            "--catalog",
+            catalog_path.to_str().expect("path should be utf8"),
+            "--trace-id",
+            "trace-react-doctor",
+            "--decision-id",
+            "decision-react-doctor",
+            "--policy-id",
+            "policy-react-doctor",
+            "--out",
+            report_path.to_str().expect("path should be utf8"),
+        ])
+        .output()
+        .expect("react doctor should execute");
+
+    assert_eq!(output.status.code(), Some(25));
+    let stdout_json = parse_stdout_json(&output);
+    assert_eq!(
+        stdout_json["schema_version"].as_str(),
+        Some("franken-engine.frankenctl.react-doctor.v1")
+    );
+    assert_eq!(stdout_json["blocked"].as_bool(), Some(true));
+    assert_eq!(stdout_json["ready"].as_bool(), Some(false));
+    assert_eq!(
+        stdout_json["support_repro_index"]["entry_count"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        stdout_json["support_repro_index"]["entries"][0]["entry_id"].as_str(),
+        Some("react-ssr-open")
+    );
+    assert_eq!(
+        stdout_json["support_repro_index"]["entries"][0]["reproduction"].as_str(),
+        Some("cargo test -- react_ssr_case")
+    );
+
+    let output_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&report_path).expect("react doctor report should exist"))
+            .expect("react doctor report should parse");
+    assert_eq!(stdout_json, output_json);
+
+    let _ = fs::remove_file(catalog_path);
+    let _ = fs::remove_file(report_path);
 }
 
 #[test]

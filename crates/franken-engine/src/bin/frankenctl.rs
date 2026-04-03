@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -27,6 +27,16 @@ use frankenengine_engine::lowering_pipeline::{
 };
 use frankenengine_engine::module_compatibility_matrix::CompatibilityScenarioReport;
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParseEventIr, ParserOptions};
+use frankenengine_engine::react_doctor_preflight::{
+    DoctorConfig as ReactDoctorConfig, DoctorReport as ReactDoctorReport,
+    PreflightResult as ReactPreflightResult, SupportBundle as ReactSupportBundle,
+    build_support_bundle as build_react_support_bundle, is_react_ready as react_report_is_ready,
+    run_doctor as run_react_doctor, run_preflight as run_react_preflight,
+};
+use frankenengine_engine::react_mismatch_catalog::{
+    ComparisonTarget as ReactComparisonTarget, MismatchCatalog,
+    MismatchSeverity as ReactMismatchSeverity,
+};
 use frankenengine_engine::receipt_verifier_pipeline::{
     ReceiptVerifierCliInput, UnifiedReceiptVerificationVerdict, render_verdict_summary,
     verify_receipt_by_id,
@@ -41,6 +51,7 @@ use frankenengine_engine::runtime_diagnostics_cli::{
     build_compatibility_advisories, build_onboarding_scorecard, build_rollout_decision_artifact,
     parse_decision_type, parse_evidence_severity, run_preflight_doctor,
 };
+use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::third_party_verifier::{
     BenchmarkClaimBundle, ClaimedBenchmarkOutcome, THIRD_PARTY_VERIFIER_COMPONENT,
     ThirdPartyVerificationReport, VerificationCheckResult, VerificationVerdict, VerifierEvent,
@@ -56,6 +67,9 @@ const FRANKENCTL_SCHEMA_VERSION: &str = "franken-engine.frankenctl.v1";
 const COMPILE_ARTIFACT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.compile-artifact.v1";
 const REACT_CLI_CONTRACT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.react-cli-contract.v1";
 const REACT_CLI_REPORT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.react-cli-report.v1";
+const REACT_DOCTOR_REPORT_SCHEMA_VERSION: &str = "franken-engine.frankenctl.react-doctor.v1";
+const REACT_DOCTOR_REPRO_INDEX_SCHEMA_VERSION: &str =
+    "franken-engine.frankenctl.react-doctor-repro-index.v1";
 const REACT_CAPABILITY_CONTRACT_POLICY_ID: &str = "policy-rgc-react-capability-contract-v1";
 const REACT_CAPABILITY_CONTRACT_JSON: &str =
     include_str!("../../../../docs/rgc_react_capability_contract_v1.json");
@@ -106,6 +120,7 @@ enum HelpTopic {
     React,
     ReactCompile,
     ReactBuild,
+    ReactDoctor,
     ReactContract,
 }
 
@@ -127,6 +142,7 @@ impl HelpTopic {
             Self::React => react_usage(),
             Self::ReactCompile => react_compile_usage(),
             Self::ReactBuild => react_build_usage(),
+            Self::ReactDoctor => react_doctor_usage(),
             Self::ReactContract => react_contract_usage(),
         }
     }
@@ -229,6 +245,7 @@ struct ReplayArgs {
 enum ReactArgs {
     Compile(ReactCompileArgs),
     Build(ReactBuildArgs),
+    Doctor(ReactDoctorArgs),
     Contract(ReactContractArgs),
 }
 
@@ -248,6 +265,20 @@ struct ReactBuildArgs {
     entry: PathBuf,
     target: ReactBuildTarget,
     out: Option<PathBuf>,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReactDoctorArgs {
+    catalog: PathBuf,
+    out: Option<PathBuf>,
+    summary: bool,
+    current_epoch: Option<u64>,
+    min_severity: ReactMismatchSeverity,
+    include_resolved: bool,
+    targets: Vec<ReactComparisonTarget>,
     trace_id: String,
     decision_id: String,
     policy_id: String,
@@ -859,6 +890,53 @@ struct ReactCliReportOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
+struct ReactDoctorCommandOutput {
+    schema_version: String,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
+    command: String,
+    input_catalog_path: String,
+    catalog_schema_version: String,
+    catalog_bead_id: String,
+    catalog_policy_id: String,
+    catalog_hash: ContentHash,
+    catalog_epoch: SecurityEpoch,
+    entries_analyzed: usize,
+    blocked: bool,
+    ready: bool,
+    report: ReactDoctorReport,
+    preflight: ReactPreflightResult,
+    support_bundle: ReactSupportBundle,
+    support_repro_index: ReactDoctorReproIndex,
+    output: Option<String>,
+    observability_mode: ObservabilityModeOutput,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ReactDoctorReproIndex {
+    schema_version: String,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
+    entry_count: usize,
+    entries: Vec<ReactDoctorReproEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ReactDoctorReproEntry {
+    entry_id: String,
+    domain: String,
+    severity: String,
+    target: String,
+    remediation_status: String,
+    reproduction: String,
+    advisory: String,
+    verified_epoch: u64,
+    tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct ReactCliRequest {
     input_path: String,
     source_form: Option<String>,
@@ -1049,9 +1127,10 @@ fn parse_react_help_command(args: &[String]) -> Result<CommandSpec, String> {
     match args[0].as_str() {
         "compile" => parse_leaf_help_topic("react compile", HelpTopic::ReactCompile, &args[1..]),
         "build" => parse_leaf_help_topic("react build", HelpTopic::ReactBuild, &args[1..]),
+        "doctor" => parse_leaf_help_topic("react doctor", HelpTopic::ReactDoctor, &args[1..]),
         "contract" => parse_leaf_help_topic("react contract", HelpTopic::ReactContract, &args[1..]),
         other => Err(format!(
-            "unknown react help topic `{other}` (expected compile|build|contract)"
+            "unknown react help topic `{other}` (expected compile|build|doctor|contract)"
         )),
     }
 }
@@ -1476,17 +1555,19 @@ fn parse_react_command(args: &[String]) -> Result<CommandSpec, String> {
         "help" | "--help" | "-h" => match args.get(1).map(String::as_str) {
             Some("compile") => Ok(CommandSpec::HelpTopic(HelpTopic::ReactCompile)),
             Some("build") => Ok(CommandSpec::HelpTopic(HelpTopic::ReactBuild)),
+            Some("doctor") => Ok(CommandSpec::HelpTopic(HelpTopic::ReactDoctor)),
             Some("contract") => Ok(CommandSpec::HelpTopic(HelpTopic::ReactContract)),
             Some(other) => Err(format!(
-                "unknown react help topic `{other}` (expected compile|build|contract)"
+                "unknown react help topic `{other}` (expected compile|build|doctor|contract)"
             )),
             None => Ok(CommandSpec::HelpTopic(HelpTopic::React)),
         },
         "compile" => parse_react_compile_command(&args[1..]),
         "build" => parse_react_build_command(&args[1..]),
+        "doctor" => parse_react_doctor_command(&args[1..]),
         "contract" => parse_react_contract_command(&args[1..]),
         other => Err(format!(
-            "unknown react subcommand `{other}` (expected compile|build|contract)"
+            "unknown react subcommand `{other}` (expected compile|build|doctor|contract)"
         )),
     }
 }
@@ -1588,6 +1669,64 @@ fn parse_react_build_command(args: &[String]) -> Result<CommandSpec, String> {
         target: target
             .ok_or_else(|| "react build requires --target <ssr|client|hydration>".to_string())?,
         out,
+        trace_id,
+        decision_id,
+        policy_id,
+    })))
+}
+
+fn parse_react_doctor_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::ReactDoctor));
+    }
+
+    let mut catalog: Option<PathBuf> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut summary = false;
+    let mut current_epoch: Option<u64> = None;
+    let mut min_severity = ReactMismatchSeverity::Info;
+    let mut include_resolved = false;
+    let mut targets = Vec::<ReactComparisonTarget>::new();
+    let mut trace_id = "trace-frankenctl-react-doctor".to_string();
+    let mut decision_id = "decision-frankenctl-react-doctor".to_string();
+    let mut policy_id = "frankenctl.react.doctor.v1".to_string();
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--catalog" => catalog = Some(PathBuf::from(next_arg(args, &mut index, "--catalog")?)),
+            "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            "--summary" => summary = true,
+            "--current-epoch" => {
+                current_epoch = Some(parse_u64(
+                    &next_arg(args, &mut index, "--current-epoch")?,
+                    "--current-epoch",
+                )?)
+            }
+            "--min-severity" => {
+                min_severity =
+                    parse_react_mismatch_severity(&next_arg(args, &mut index, "--min-severity")?)?
+            }
+            "--include-resolved" => include_resolved = true,
+            "--target" => targets.push(parse_react_comparison_target(&next_arg(
+                args, &mut index, "--target",
+            )?)?),
+            "--trace-id" => trace_id = next_arg(args, &mut index, "--trace-id")?,
+            "--decision-id" => decision_id = next_arg(args, &mut index, "--decision-id")?,
+            "--policy-id" => policy_id = next_arg(args, &mut index, "--policy-id")?,
+            flag => return Err(format!("unknown react doctor flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    Ok(CommandSpec::React(ReactArgs::Doctor(ReactDoctorArgs {
+        catalog: catalog.ok_or_else(|| "react doctor requires --catalog <path>".to_string())?,
+        out,
+        summary,
+        current_epoch,
+        min_severity,
+        include_resolved,
+        targets,
         trace_id,
         decision_id,
         policy_id,
@@ -3589,6 +3728,7 @@ fn execute_react(args: ReactArgs) -> Result<i32, String> {
     match args {
         ReactArgs::Compile(args) => execute_react_compile(args),
         ReactArgs::Build(args) => execute_react_build(args),
+        ReactArgs::Doctor(args) => execute_react_doctor(args),
         ReactArgs::Contract(args) => execute_react_contract(args),
     }
 }
@@ -3655,6 +3795,91 @@ fn execute_react_build(args: ReactBuildArgs) -> Result<i32, String> {
     if output.blocked { Ok(25) } else { Ok(0) }
 }
 
+fn execute_react_doctor(args: ReactDoctorArgs) -> Result<i32, String> {
+    if !args.catalog.is_file() {
+        return Err(format!(
+            "react doctor requires an existing --catalog <path> (missing `{}`)",
+            args.catalog.display()
+        ));
+    }
+
+    let catalog = load_json_file::<MismatchCatalog>(&args.catalog)?;
+    let mut config = ReactDoctorConfig {
+        min_mismatch_severity: args.min_severity,
+        include_resolved: args.include_resolved,
+        current_epoch: SecurityEpoch::from_raw(
+            args.current_epoch.unwrap_or(catalog.epoch.as_u64()),
+        ),
+        ..ReactDoctorConfig::default()
+    };
+    if !args.targets.is_empty() {
+        config.focus_targets = args.targets.iter().copied().collect::<BTreeSet<_>>();
+    }
+
+    let report = run_react_doctor(&config, catalog.entries())
+        .map_err(|error| format!("react doctor failed to assemble report: {error}"))?;
+    let preflight = run_react_preflight(&config, catalog.entries())
+        .map_err(|error| format!("react doctor failed to evaluate preflight: {error}"))?;
+    let support_bundle = build_react_support_bundle(&report)
+        .map_err(|error| format!("react doctor failed to build support bundle: {error}"))?;
+    let repro_entries = catalog
+        .entries()
+        .iter()
+        .filter(|entry| config.is_entry_relevant(entry))
+        .map(|entry| ReactDoctorReproEntry {
+            entry_id: entry.entry_id.clone(),
+            domain: entry.domain.as_str().to_string(),
+            severity: entry.severity.as_str().to_string(),
+            target: entry.target.as_str().to_string(),
+            remediation_status: entry.remediation.as_str().to_string(),
+            reproduction: entry.reproduction.clone(),
+            advisory: entry.advisory.clone(),
+            verified_epoch: entry.verified_epoch.as_u64(),
+            tags: entry.tags.iter().cloned().collect(),
+        })
+        .collect::<Vec<_>>();
+    let repro_index = ReactDoctorReproIndex {
+        schema_version: REACT_DOCTOR_REPRO_INDEX_SCHEMA_VERSION.to_string(),
+        trace_id: args.trace_id.clone(),
+        decision_id: args.decision_id.clone(),
+        policy_id: args.policy_id.clone(),
+        entry_count: repro_entries.len(),
+        entries: repro_entries,
+    };
+    let output = ReactDoctorCommandOutput {
+        schema_version: REACT_DOCTOR_REPORT_SCHEMA_VERSION.to_string(),
+        trace_id: args.trace_id,
+        decision_id: args.decision_id,
+        policy_id: args.policy_id,
+        command: "react-doctor".to_string(),
+        input_catalog_path: args.catalog.display().to_string(),
+        catalog_schema_version: catalog.schema_version.clone(),
+        catalog_bead_id: catalog.bead_id.clone(),
+        catalog_policy_id: catalog.policy_id.clone(),
+        catalog_hash: catalog.catalog_hash,
+        catalog_epoch: catalog.epoch,
+        entries_analyzed: catalog.entries().len(),
+        blocked: !preflight.passed,
+        ready: react_report_is_ready(&report) && preflight.passed,
+        report,
+        preflight,
+        support_bundle,
+        support_repro_index: repro_index,
+        output: args.out.as_ref().map(|path| path.display().to_string()),
+        observability_mode: default_capture_observability_mode(),
+    };
+
+    if let Some(path) = &args.out {
+        write_json_file(path, &output)?;
+    }
+    if args.summary {
+        println!("{}", render_react_doctor_summary(&output));
+    } else {
+        print_json(&output)?;
+    }
+    if output.blocked { Ok(25) } else { Ok(0) }
+}
+
 fn execute_react_contract(args: ReactContractArgs) -> Result<i32, String> {
     let contract = parse_react_capability_contract()?;
     let compile_capabilities = contract
@@ -3718,6 +3943,12 @@ fn execute_react_contract(args: ReactContractArgs) -> Result<i32, String> {
                 output_schema_version: REACT_CLI_REPORT_SCHEMA_VERSION.to_string(),
                 behavior: "fail_closed_until_build_target_is_shipped".to_string(),
                 usage: "frankenctl react build --entry <path> --target <ssr|client|hydration> [--out <report.json>]".to_string(),
+            },
+            ReactCliCommandContract {
+                name: "react doctor".to_string(),
+                output_schema_version: REACT_DOCTOR_REPORT_SCHEMA_VERSION.to_string(),
+                behavior: "consume_react_mismatch_catalog_and_emit_doctor_bundle".to_string(),
+                usage: "frankenctl react doctor --catalog <react_mismatch_catalog.json> [--summary] [--min-severity <info|warning|error|critical>] [--include-resolved] [--target <nodejs|bun|deno|v8_reference>] [--current-epoch <n>] [--out <react_doctor_report.json>]".to_string(),
             },
             ReactCliCommandContract {
                 name: "react contract".to_string(),
@@ -3938,6 +4169,30 @@ fn parse_react_source_form(value: &str) -> Result<ReactSourceForm, String> {
         "jsx-fragment" => Ok(ReactSourceForm::JsxFragment),
         other => Err(format!(
             "invalid react source form `{other}` (expected jsx|tsx|jsx-fragment)"
+        )),
+    }
+}
+
+fn parse_react_comparison_target(value: &str) -> Result<ReactComparisonTarget, String> {
+    match value {
+        "nodejs" => Ok(ReactComparisonTarget::NodeJs),
+        "bun" => Ok(ReactComparisonTarget::Bun),
+        "deno" => Ok(ReactComparisonTarget::Deno),
+        "v8_reference" => Ok(ReactComparisonTarget::V8Reference),
+        other => Err(format!(
+            "invalid react comparison target `{other}` (expected nodejs|bun|deno|v8_reference)"
+        )),
+    }
+}
+
+fn parse_react_mismatch_severity(value: &str) -> Result<ReactMismatchSeverity, String> {
+    match value {
+        "info" => Ok(ReactMismatchSeverity::Info),
+        "warning" => Ok(ReactMismatchSeverity::Warning),
+        "error" => Ok(ReactMismatchSeverity::Error),
+        "critical" => Ok(ReactMismatchSeverity::Critical),
+        other => Err(format!(
+            "invalid react mismatch severity `{other}` (expected info|warning|error|critical)"
         )),
     }
 }
@@ -4369,8 +4624,29 @@ fn command_label(command: &CommandSpec) -> &'static str {
         CommandSpec::Verify(_) => "verify",
         CommandSpec::Benchmark(_) => "benchmark",
         CommandSpec::Replay(_) => "replay",
-        CommandSpec::React(_) => "react",
+        CommandSpec::React(ReactArgs::Compile(_)) => "react-compile",
+        CommandSpec::React(ReactArgs::Build(_)) => "react-build",
+        CommandSpec::React(ReactArgs::Doctor(_)) => "react-doctor",
+        CommandSpec::React(ReactArgs::Contract(_)) => "react-contract",
     }
+}
+
+fn render_react_doctor_summary(output: &ReactDoctorCommandOutput) -> String {
+    let summary = &output.support_bundle.summary;
+    [
+        "react doctor summary:".to_string(),
+        format!("  ready: {}", output.ready),
+        format!("  blocked: {}", output.blocked),
+        format!("  entries analyzed: {}", output.entries_analyzed),
+        format!("  blockers: {}", output.preflight.blocker_count()),
+        format!("  advisories: {}", output.preflight.advisory_count()),
+        format!(
+            "  repro entries: {}",
+            output.support_repro_index.entry_count
+        ),
+        format!("  aggregate score: {}", summary.aggregate_score),
+    ]
+    .join("\n")
 }
 
 fn command_remediation(command: &str) -> &'static str {
@@ -4385,8 +4661,14 @@ fn command_remediation(command: &str) -> &'static str {
             "Validate benchmark subcommand args (run|score|verify), then rerun `frankenctl benchmark ...`."
         }
         "replay" => "Validate trace JSON and mode, then rerun `frankenctl replay run`.",
-        "react" => {
+        "react-compile" | "react-build" => {
             "Inspect `frankenctl react contract` and rerun with a declared source-form/runtime/target combination."
+        }
+        "react-doctor" => {
+            "Validate the mismatch catalog path and optional filtering flags, then rerun `frankenctl react doctor`."
+        }
+        "react-contract" => {
+            "Rerun `frankenctl react contract` to inspect the current machine-readable React CLI contract."
         }
         _ => "Run `frankenctl --help` for command usage details.",
     }
@@ -4516,12 +4798,19 @@ fn react_usage() -> String {
         "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
         "  frankenctl react build --entry <path> --target <ssr|client|hydration>",
         "      [--out <report.json>] [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
+        "  frankenctl react doctor --catalog <react_mismatch_catalog.json> [--summary]",
+        "      [--min-severity <info|warning|error|critical>] [--include-resolved]",
+        "      [--target <nodejs|bun|deno|v8_reference>] [--current-epoch <n>]",
+        "      [--out <react_doctor_report.json>] [--trace-id <id>] [--decision-id <id>]",
+        "      [--policy-id <id>]",
         "  frankenctl react contract [--out <react_cli_contract.json>]",
         "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
         "",
         "notes:",
         "  react compile/build currently fail closed with deterministic unsupported-surface guidance",
         "  until the owning implementation and parity-gate beads are actually shipped.",
+        "  react doctor consumes a machine-readable mismatch catalog and emits support guidance",
+        "  even while compile/build surfaces remain blocked.",
     ]
     .join("\n")
 }
@@ -4549,6 +4838,22 @@ fn react_build_usage() -> String {
         "behavior:",
         "  emits a deterministic react-cli report tied to the embedded React capability contract",
         "  and exits non-zero until the requested build target is shipped.",
+    ]
+    .join("\n")
+}
+
+fn react_doctor_usage() -> String {
+    [
+        "react doctor usage:",
+        "  frankenctl react doctor --catalog <react_mismatch_catalog.json> [--summary]",
+        "      [--min-severity <info|warning|error|critical>] [--include-resolved]",
+        "      [--target <nodejs|bun|deno|v8_reference>] [--current-epoch <n>]",
+        "      [--out <react_doctor_report.json>] [--trace-id <id>] [--decision-id <id>]",
+        "      [--policy-id <id>]",
+        "",
+        "behavior:",
+        "  loads a deterministic React mismatch catalog, runs React-aware doctor/preflight",
+        "  analysis, and emits support-bundle plus repro-index data in one machine-readable report.",
     ]
     .join("\n")
 }
@@ -4690,6 +4995,14 @@ mod tests {
         let parsed = parse_command(&compile).expect("react help compile should parse");
         assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::ReactCompile));
 
+        let doctor = vec![
+            "react".to_string(),
+            "help".to_string(),
+            "doctor".to_string(),
+        ];
+        let parsed = parse_command(&doctor).expect("react help doctor should parse");
+        assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::ReactDoctor));
+
         let top_level = vec![
             "help".to_string(),
             "react".to_string(),
@@ -4749,6 +5062,41 @@ mod tests {
     }
 
     #[test]
+    fn parse_react_doctor_command() {
+        let args = vec![
+            "react".to_string(),
+            "doctor".to_string(),
+            "--catalog".to_string(),
+            "react_mismatch_catalog.json".to_string(),
+            "--summary".to_string(),
+            "--min-severity".to_string(),
+            "warning".to_string(),
+            "--include-resolved".to_string(),
+            "--target".to_string(),
+            "nodejs".to_string(),
+            "--target".to_string(),
+            "bun".to_string(),
+            "--current-epoch".to_string(),
+            "42".to_string(),
+            "--out".to_string(),
+            "react-doctor-report.json".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("react doctor should parse");
+        match parsed {
+            CommandSpec::React(ReactArgs::Doctor(spec)) => {
+                assert_eq!(spec.catalog, PathBuf::from("react_mismatch_catalog.json"));
+                assert!(spec.summary);
+                assert_eq!(spec.current_epoch, Some(42));
+                assert_eq!(spec.min_severity, ReactMismatchSeverity::Warning);
+                assert!(spec.include_resolved);
+                assert_eq!(spec.targets.len(), 2);
+                assert_eq!(spec.out, Some(PathBuf::from("react-doctor-report.json")));
+            }
+            other => panic!("expected react doctor command, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn parse_react_contract_command() {
         let args = vec![
             "react".to_string(),
@@ -4796,6 +5144,80 @@ mod tests {
         assert_eq!(
             output["capability_contract_policy_id"].as_str(),
             Some(REACT_CAPABILITY_CONTRACT_POLICY_ID)
+        );
+        let command_names = output["commands"]
+            .as_array()
+            .expect("commands should be an array")
+            .iter()
+            .filter_map(|value| value["name"].as_str())
+            .collect::<Vec<_>>();
+        assert!(command_names.contains(&"react doctor"));
+    }
+
+    #[test]
+    fn execute_react_doctor_emits_machine_readable_support_report() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("frankenctl-react-doctor-{}", current_unix_ns()));
+        fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+
+        let catalog_path = temp_dir.join("react_mismatch_catalog.json");
+        let out = temp_dir.join("react_doctor_report.json");
+
+        let mut catalog = MismatchCatalog::new(SecurityEpoch::from_raw(7));
+        catalog
+            .add_entry(frankenengine_engine::react_mismatch_catalog::MismatchEntry {
+                entry_id: "react-ssr-open".to_string(),
+                domain: frankenengine_engine::react_mismatch_catalog::MismatchDomain::ServerSideRender,
+                severity: ReactMismatchSeverity::Error,
+                target: ReactComparisonTarget::NodeJs,
+                summary: "SSR entry mismatch".to_string(),
+                expected_behavior: "render should match".to_string(),
+                actual_behavior: "render diverged".to_string(),
+                reproduction: "cargo test -- react_ssr_case".to_string(),
+                remediation: frankenengine_engine::react_mismatch_catalog::RemediationStatus::InProgress,
+                advisory: "Switch to the documented SSR compatibility path.".to_string(),
+                react_version_range: ">=18".to_string(),
+                evidence_hash: ContentHash::compute(b"react-ssr-open"),
+                detected_epoch: SecurityEpoch::from_raw(4),
+                verified_epoch: SecurityEpoch::from_raw(7),
+                tags: ["react", "ssr"]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+            })
+            .expect("catalog entry should be added");
+        write_json_file(&catalog_path, &catalog).expect("catalog should serialize");
+
+        let exit_code = execute_react_doctor(ReactDoctorArgs {
+            catalog: catalog_path.clone(),
+            out: Some(out.clone()),
+            summary: false,
+            current_epoch: None,
+            min_severity: ReactMismatchSeverity::Info,
+            include_resolved: false,
+            targets: vec![ReactComparisonTarget::NodeJs],
+            trace_id: "trace-react-doctor".to_string(),
+            decision_id: "decision-react-doctor".to_string(),
+            policy_id: "policy-react-doctor".to_string(),
+        })
+        .expect("react doctor should execute");
+        assert_eq!(exit_code, 25);
+
+        let output: serde_json::Value =
+            load_json_file(&out).expect("react doctor output should parse");
+        assert_eq!(
+            output["schema_version"].as_str(),
+            Some(REACT_DOCTOR_REPORT_SCHEMA_VERSION)
+        );
+        assert_eq!(output["blocked"].as_bool(), Some(true));
+        assert_eq!(output["ready"].as_bool(), Some(false));
+        assert_eq!(
+            output["support_repro_index"]["entry_count"].as_u64(),
+            Some(1)
+        );
+        assert_eq!(
+            output["support_repro_index"]["entries"][0]["entry_id"].as_str(),
+            Some("react-ssr-open")
         );
     }
 

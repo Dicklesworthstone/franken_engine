@@ -604,10 +604,13 @@ fn compute_stats(samples: &[u64]) -> Option<SampleStatsNs> {
     }
 
     let sample_count = samples.len();
+    if sample_count == 0 {
+        return None;
+    }
     let sample_count_f64 = sample_count as f64;
 
     let mean = samples.iter().map(|sample| *sample as f64).sum::<f64>() / sample_count_f64;
-    if mean <= 0.0 {
+    if mean <= 0.0 || mean.is_nan() {
         return None;
     }
 

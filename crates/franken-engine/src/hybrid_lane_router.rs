@@ -553,10 +553,10 @@ impl AdaptiveWeights {
         let p = probs[idx].max(1); // avoid division by zero
 
         // Importance-weighted reward
-        let iw_reward = (reward_millionths * MILLION) / p;
-        let scaled = (self.eta_millionths * iw_reward) / MILLION;
+        let iw_reward = (reward_millionths as i128 * MILLION as i128) / (p as i128);
+        let scaled = (self.eta_millionths as i128 * iw_reward) / (MILLION as i128);
 
-        self.log_weights_millionths[idx] += scaled;
+        self.log_weights_millionths[idx] += scaled as i64;
 
         // Clamp to prevent overflow
         for w in &mut self.log_weights_millionths {
@@ -1888,7 +1888,7 @@ mod tests {
 
     #[test]
     fn exp_millionths_one_million_is_e() {
-        // e^1 ~ 2.718, so exp_millionths(1_000_000) should be ~ 2_718_000
+        // e^1 ~ 2.718, so exp_millionths(1_000_000) should be ~2_718_000
         let val = exp_millionths(MILLION);
         assert!(
             val > 2_500_000 && val < 3_000_000,
@@ -2005,7 +2005,7 @@ mod tests {
     fn risk_accumulator_serde_roundtrip() {
         let mut ra = RiskAccumulator::new();
         let obs = good_observation(LaneChoice::Js);
-        ra.record(&obs, 800_000);
+        ra.record(&obs, 500_000);
         let json = serde_json::to_string(&ra).unwrap();
         let back: RiskAccumulator = serde_json::from_str(&json).unwrap();
         assert_eq!(ra, back);

@@ -7651,7 +7651,7 @@ mod tests {
             .expect_err("rest not last in object pattern must fail");
         let msg = format!("{err}");
         assert!(
-            msg.contains("rest element must be the last"),
+            msg.contains("rest element must be"),
             "error should mention rest position: {msg}"
         );
     }

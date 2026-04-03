@@ -261,11 +261,8 @@ impl TransitionBudgetTracker {
         if self.max_transitions == 0 {
             return MILLION;
         }
-        let consumed = self.transitions_consumed.min(self.max_transitions) as i64;
-        consumed
-            .checked_mul(MILLION)
-            .map(|n| n / self.max_transitions as i64)
-            .unwrap_or(MILLION)
+        let consumed = self.transitions_consumed.min(self.max_transitions) as i128;
+        (consumed * MILLION as i128 / self.max_transitions as i128) as i64
     }
 }
 

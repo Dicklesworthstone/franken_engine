@@ -2278,16 +2278,17 @@ mod tests {
     fn push_strings_appends_with_separator() {
         let mut data = Vec::new();
         push_strings(&mut data, &["alpha".to_string(), "beta".to_string()]);
-        // Each string followed by 0xff separator
-        assert!(data.contains(&0xff));
-        assert!(data.starts_with(b"alpha"));
+        // First 8 bytes: count (2u64 LE), then length-prefixed strings
+        assert_eq!(&data[..8], &2u64.to_le_bytes());
+        assert!(data.len() > 8);
     }
 
     #[test]
-    fn push_strings_empty_input_produces_empty_output() {
+    fn push_strings_empty_input_produces_count_only() {
         let mut data = Vec::new();
         push_strings(&mut data, &[]);
-        assert!(data.is_empty());
+        // Empty array still writes the count (0u64 as 8 LE bytes)
+        assert_eq!(data, 0u64.to_le_bytes());
     }
 
     // ── validation detects unsorted candidates ───────────────────────

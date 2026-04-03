@@ -110,7 +110,13 @@ Each entry below is binding for conformance and lockstep gates.
 - `SEM-ERR-001`: `try/catch/finally` completion order and rethrow behavior is deterministic.
 - `SEM-ERR-002`: native error type classification (`TypeError`, `RangeError`, etc.) is stable.
 - `SEM-JSN-001`: `JSON.stringify` key omission behavior for `undefined`, functions, and symbols is stable.
+- `SEM-JSN-002`: compound JSON arrays/objects materialize as heap-backed runtime values instead of descriptor placeholders.
+- `SEM-JSN-003`: `JSON.stringify` over compound runtime values uses deterministic own-key ordering, container-sensitive omission/nulling rules, and explicit cycle failure.
+- `SEM-JSN-004`: unsupported JSON extension surfaces (`reviver`, `replacer`, `space`, unsupported numeric forms) are explicit and fail closed rather than being silently approximated.
 - `SEM-REG-001`: regexp unicode class/match group behavior aligns with test262 coverage target.
+
+Compound JSON representation and unsupported-edge policy are defined in
+[`docs/RGC_COMPOUND_JSON_RUNTIME_CONTRACT_V1.md`](./RGC_COMPOUND_JSON_RUNTIME_CONTRACT_V1.md).
 
 ## 5. Edge-Case Coverage Requirements
 
@@ -134,7 +140,8 @@ Minimum edge-case families:
 - `-0`, `NaN`, bigint conversion, and overflow-visible paths.
 
 6. Serialization edge behavior.
-- non-enumerables, sparse arrays, replacer behavior, and key ordering constraints.
+- non-enumerables, sparse arrays, duplicate object keys, replacer behavior,
+  top-level unsupported returns, cycle handling, and key ordering constraints.
 
 ## 6. test262 And Lockstep Mapping Rules
 

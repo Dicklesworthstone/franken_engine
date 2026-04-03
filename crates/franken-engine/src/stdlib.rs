@@ -2638,7 +2638,12 @@ pub fn exec_symbol_static(builtin: BuiltinId, args: &[JsValue]) -> Result<JsValu
 // JSON operations
 // ---------------------------------------------------------------------------
 
-/// Deterministic JSON.parse for simple values.
+/// Deterministic JSON.parse baseline.
+///
+/// Compound array/object semantics are defined in
+/// `docs/RGC_COMPOUND_JSON_RUNTIME_CONTRACT_V1.md`. The implementation leaves
+/// for `bd-2muur.1` must return real heap-backed `JsValue::Object` handles for
+/// supported compound inputs instead of descriptor strings.
 pub fn json_parse(input: &str) -> Result<JsValue, StdlibError> {
     let trimmed = input.trim();
     if trimmed == "null" {
@@ -2667,7 +2672,12 @@ pub fn json_parse(input: &str) -> Result<JsValue, StdlibError> {
     )))
 }
 
-/// Deterministic JSON.stringify for simple values.
+/// Deterministic JSON.stringify baseline.
+///
+/// Compound traversal, omission rules, and fail-closed unsupported edges are
+/// defined in `docs/RGC_COMPOUND_JSON_RUNTIME_CONTRACT_V1.md`. The
+/// implementation leaves for `bd-2muur.1` must derive output from real heap
+/// state instead of `[json-object]` placeholders.
 pub fn json_stringify(value: &JsValue) -> Result<JsValue, StdlibError> {
     match value {
         JsValue::Undefined => Ok(JsValue::Undefined),

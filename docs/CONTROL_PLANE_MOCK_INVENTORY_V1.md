@@ -4,6 +4,8 @@ Bead: `bd-3nr.1.1.1`
 
 This surface turns the canonical control-plane mock seam inventory into a replayable operator artifact bundle. It exists so downstream beads can consume a stable inventory contract instead of re-running ad hoc scans or reading the Rust source directly.
 
+The exposure-model decision and current-consumer inventory for `bd-2muur.3.1` live in [`CONTROL_PLANE_TEST_SUPPORT_MODEL_V1.md`](./CONTROL_PLANE_TEST_SUPPORT_MODEL_V1.md).
+
 ## Scope
 
 - Emits the canonical `asupersync_residual_mock_inventory.json` inventory.

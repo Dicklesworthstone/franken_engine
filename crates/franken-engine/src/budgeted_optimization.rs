@@ -199,7 +199,7 @@ impl BudgetLimit {
         if self.max_value == 0 {
             return MILLION;
         }
-        (self.current_value as i64) * MILLION / (self.max_value as i64)
+        (self.current_value as i128 * MILLION as i128 / self.max_value as i128) as i64
     }
 
     /// Consume some budget. Returns true if within limits.
@@ -1770,6 +1770,7 @@ mod tests {
     fn campaign_status_display_all_unique() {
         let statuses = [
             CampaignStatus::Pending,
+            CampaignStatus::Saturating,
             CampaignStatus::Extracting,
             CampaignStatus::Completed,
             CampaignStatus::Failed,

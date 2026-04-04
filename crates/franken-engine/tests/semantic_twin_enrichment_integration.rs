@@ -682,8 +682,8 @@ fn enrichment_log_event_json_field_names() {
         "component",
         "trace_id",
         "decision_id",
-        "timestamp_ns",
-        "variable_id",
+        "variable",
+        "observed_value_millionths",
     ] {
         assert!(
             json.contains(&format!("\"{}\"", field)),

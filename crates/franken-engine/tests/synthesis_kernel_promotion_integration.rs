@@ -1719,3 +1719,33 @@ fn ledger_counts_after_mixed_operations() {
     assert_eq!(ledger.entries.len(), 5);
     assert_eq!(ledger.demotion_receipts().len(), 2);
 }
+
+// ---------------------------------------------------------------------------
+// Enrichment: golden-path promotion lifecycle
+// ---------------------------------------------------------------------------
+
+#[test]
+fn synthesis_kernel_promotion_golden_path() {
+    // Full lifecycle: create gate -> evaluate with good evidence -> promoted ->
+    // record in ledger -> verify active -> supersede -> verify superseded.
+    let gate = PromotionGate::with_defaults();
+    let evidence = good_evidence();
+    let decision = gate.evaluate("kernel-golden", &evidence);
+    assert!(decision.is_promoted(), "good evidence should promote");
+
+    let kernel = PromotedKernel::new(
+        "kernel-golden",
+        "kernel-golden-orig",
+        baseline_target(),
+        epoch(),
+        960_000,
+        950_000,
+    );
+    let mut ledger = PromotionLedger::new();
+    ledger.record_promotion(kernel);
+    assert_eq!(ledger.active_count(), 1);
+
+    ledger.supersede_kernel("kernel-golden", "kernel-golden-v2", epoch2());
+    assert_eq!(ledger.active_count(), 0);
+    assert_eq!(ledger.superseded_count(), 1);
+}

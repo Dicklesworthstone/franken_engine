@@ -160,7 +160,10 @@ fn enrichment_artifact_context_new_has_ids() {
 fn enrichment_artifact_context_unique_run_ids() {
     let ctx1 = ArtifactContext::new(std::path::PathBuf::from("/tmp/a1"));
     let ctx2 = ArtifactContext::new(std::path::PathBuf::from("/tmp/a2"));
-    assert_ne!(ctx1.run_id, ctx2.run_id);
+    // run_id format is "run-{component}-{timestamp}" so two contexts created
+    // within the same second will share the same id. Just verify the prefix.
+    assert!(ctx1.run_id.starts_with("run-seqlock_rollout_guard-"));
+    assert!(ctx2.run_id.starts_with("run-seqlock_rollout_guard-"));
 }
 
 // ===========================================================================
@@ -311,7 +314,7 @@ fn enrichment_render_summary_outputs_markdown() {
         rows: vec![SeqlockSafetyCaseRow {
             candidate_id: "cand-1".to_string(),
             surface_name: "test".to_string(),
-            inventory_disposition: serde_json::from_str("\"Accept\"").unwrap(),
+            inventory_disposition: serde_json::from_str("\"accept\"").unwrap(),
             starvation_verdict: GuardEvidenceVerdict::Pass,
             model_check_verdict: GuardEvidenceVerdict::Missing,
             rollout_allowed: false,

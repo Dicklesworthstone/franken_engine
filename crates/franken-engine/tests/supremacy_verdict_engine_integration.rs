@@ -1066,3 +1066,47 @@ fn test_mixed_observability_modes() {
             .any(|v| v.kind == SideConstraintKind::ObservabilityMismatch)
     );
 }
+
+// ===========================================================================
+// Enrichment: verdict and evidence tests
+// ===========================================================================
+
+#[test]
+fn enrichment_verdict_for_insufficient_evidence_is_deferred() {
+    // With fewer than min_observations the verdict is Inconclusive.
+    let config = VerdictConfig {
+        min_observations: 100,
+        ..VerdictConfig::default()
+    };
+    let ms: Vec<_> = (0..5).map(|_| measurement("c1", 500, 1000)).collect();
+    let report = evaluate_supremacy(&ms, &config, &epoch(), 1000).unwrap();
+    assert_eq!(report.board_verdict, SupremacyVerdict::Inconclusive);
+}
+
+#[test]
+fn enrichment_verdict_with_conflicting_evidence_defers() {
+    // Alternating improvements and regressions produce an Inconclusive or
+    // Rejected verdict (no clear winner).
+    let config = relaxed_config();
+    let mut ms = Vec::new();
+    for i in 0..50 {
+        if i % 2 == 0 {
+            ms.push(measurement("c1", 500, 1000)); // improvement
+        } else {
+            ms.push(measurement("c1", 1500, 1000)); // regression
+        }
+    }
+    let report = evaluate_supremacy(&ms, &config, &epoch(), 1000).unwrap();
+    // Conflicting evidence should NOT produce Confirmed.
+    assert_ne!(report.board_verdict, SupremacyVerdict::Confirmed);
+}
+
+#[test]
+fn enrichment_verdict_evidence_includes_witness_hash() {
+    // The verdict report receipt includes a non-zero verdict_hash.
+    let config = relaxed_config();
+    let ms: Vec<_> = (0..50).map(|_| measurement("c1", 500, 1000)).collect();
+    let report = evaluate_supremacy(&ms, &config, &epoch(), 1000).unwrap();
+    // verdict_hash must not be all zeros.
+    assert_ne!(report.receipt.verdict_hash.as_bytes(), &[0u8; 32]);
+}

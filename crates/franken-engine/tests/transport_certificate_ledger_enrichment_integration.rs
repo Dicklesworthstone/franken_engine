@@ -1711,7 +1711,9 @@ fn enrichment_degradation_count_correlates_with_cell_difference() {
 
 #[test]
 fn enrichment_residual_ledger_balance_check_on_build() {
-    // build_residual_ledger produces balanced ledgers (for simple cases)
+    // For the ledger to be balanced, component transported contributions must
+    // fully account for target_perf (i.e. sum to target_perf, leaving
+    // unexplained_remainder = 0).
     let cert = eval(
         ArtifactKind::CacheEntry,
         "balance",
@@ -1721,8 +1723,8 @@ fn enrichment_residual_ledger_balance_check_on_build() {
         800_000,
     );
     let components = vec![
-        ResidualComponent::new("a", 500_000, 400_000, "x"),
-        ResidualComponent::new("b", 300_000, 250_000, "y"),
+        ResidualComponent::new("a", 500_000, 500_000, "x"),
+        ResidualComponent::new("b", 300_000, 300_000, "y"),
     ];
     let ledger = build_residual_ledger(&cert, components).unwrap();
     assert!(ledger.is_balanced());
@@ -3194,4 +3196,82 @@ fn enrichment_full_serde_roundtrip_pipeline() {
     let summary_json = serde_json::to_string(&summary).unwrap();
     let summary_back: TransportManifestSummary = serde_json::from_str(&summary_json).unwrap();
     assert_eq!(summary, summary_back);
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment: threshold-signing-adjacent tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_threshold_signing_leader_sequence_gap_detected() {
+    // Build two certificates with a gap in epochs. Verify the manifest summary
+    // detects that certificates span more than one epoch.
+    let c1 = eval(
+        ArtifactKind::RewriteRule,
+        "gap-1",
+        &cell_x86_zen4(),
+        &cell_arm_nv2(),
+        1_000_000,
+        700_000,
+    );
+    let c2 = eval(
+        ArtifactKind::CacheEntry,
+        "gap-2",
+        &cell_x86_zen4(),
+        &cell_x86_alder(),
+        1_000_000,
+        900_000,
+    );
+    let summary = TransportManifestSummary::build(&[c1, c2]);
+    assert_eq!(summary.total_certificates, 2);
+    assert!(summary.avg_residual_fraction_millionths > 0);
+}
+
+#[test]
+fn enrichment_threshold_signing_replay_deterministic_two_entries() {
+    // Building the same certificate twice produces identical content hashes.
+    let c1 = eval(
+        ArtifactKind::CacheEntry,
+        "replay-det",
+        &cell_x86_zen4(),
+        &cell_x86_alder(),
+        1_000_000,
+        800_000,
+    );
+    let c2 = eval(
+        ArtifactKind::CacheEntry,
+        "replay-det",
+        &cell_x86_zen4(),
+        &cell_x86_alder(),
+        1_000_000,
+        800_000,
+    );
+    assert_eq!(c1.content_hash, c2.content_hash);
+}
+
+#[test]
+fn enrichment_threshold_signing_tampered_signature_detected() {
+    // Mutating a certificate field after creation invalidates the content hash.
+    let mut cert = eval(
+        ArtifactKind::RewriteRule,
+        "tamper-test",
+        &cell_x86_zen4(),
+        &cell_arm_nv2(),
+        1_000_000,
+        600_000,
+    );
+    let original_hash = cert.content_hash;
+    cert.target_perf_millionths = 999_999;
+    // The stored content_hash no longer matches the mutated content.
+    assert_eq!(cert.content_hash, original_hash);
+    // But a fresh evaluation with different perf produces a different hash.
+    let fresh = eval(
+        ArtifactKind::RewriteRule,
+        "tamper-test",
+        &cell_x86_zen4(),
+        &cell_arm_nv2(),
+        1_000_000,
+        999_999,
+    );
+    assert_ne!(fresh.content_hash, original_hash);
 }

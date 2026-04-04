@@ -2935,3 +2935,25 @@ fn enrichment_governance_event_failure_contains_reason() {
     assert!(event.metadata.contains_key("reason"));
     assert!(!event.metadata["reason"].is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// Enrichment: expired quote rejection
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_tee_attestation_expired_quote_rejected() {
+    let policy = sample_policy(1);
+    // Standard freshness window max is 300 seconds; 500 exceeds it.
+    let quote = sgx_quote(500);
+    let err = policy
+        .evaluate_quote(
+            &quote,
+            DecisionImpact::Standard,
+            SecurityEpoch::from_raw(1),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        TeeAttestationPolicyError::AttestationStale { .. }
+    ));
+}

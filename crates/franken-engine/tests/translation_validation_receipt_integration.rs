@@ -1095,3 +1095,41 @@ fn test_proof_mode_display_formatting() {
     assert_eq!(ProofMode::Axiomatic.to_string(), "axiomatic");
     assert_eq!(ProofMode::Composite.to_string(), "composite");
 }
+
+// ---------------------------------------------------------------------------
+// Enrichment: provenance hash sensitivity
+// ---------------------------------------------------------------------------
+
+#[test]
+fn translation_receipt_provenance_hash_changes_with_input() {
+    // Two receipts with different baseline_ir_hash should produce different
+    // content hashes (provenance tracking).
+    let r1 = TranslationValidationReceipt::new(
+        1,
+        "opt-a",
+        None,
+        epoch(1),
+        1000,
+        hash(b"baseline-A"),
+        hash(b"optimized-X"),
+        vec![rule("r1", -100)],
+        proven(),
+        "cost-model-1",
+    );
+    let r2 = TranslationValidationReceipt::new(
+        1,
+        "opt-a",
+        None,
+        epoch(1),
+        1000,
+        hash(b"baseline-B"),
+        hash(b"optimized-X"),
+        vec![rule("r1", -100)],
+        proven(),
+        "cost-model-1",
+    );
+    assert_ne!(
+        r1.content_hash, r2.content_hash,
+        "different baselines must produce different hashes"
+    );
+}

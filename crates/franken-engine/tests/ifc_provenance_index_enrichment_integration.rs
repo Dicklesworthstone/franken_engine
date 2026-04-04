@@ -1823,17 +1823,16 @@ fn enrichment_query_results_sorted() {
         &ctx,
     )
     .unwrap();
-    idx.insert_flow_event(
-        &flow_event(
-            "ev-m",
-            "ext-a",
-            Label::Internal,
-            Label::Confidential,
-            FlowDecision::Declassified,
-        ),
-        &ctx,
-    )
-    .unwrap();
+    let mut ev_m = flow_event(
+        "ev-m",
+        "ext-a",
+        Label::Internal,
+        Label::Confidential,
+        FlowDecision::Declassified,
+    );
+    // Declassified flow events require a receipt_ref.
+    ev_m.receipt_ref = Some("receipt-m".to_string());
+    idx.insert_flow_event(&ev_m, &ctx).unwrap();
 
     let results = idx.flow_events_by_extension("ext-a", &ctx).unwrap();
     assert_eq!(results.len(), 3);

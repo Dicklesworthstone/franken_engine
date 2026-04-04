@@ -1577,3 +1577,21 @@ fn test_trace_tree_id_changes_on_extend() {
     tree.extend_at_exit(0, &exit_id, b2, &policy);
     assert_ne!(tree.tree_id, original_id);
 }
+
+// ---------------------------------------------------------------------------
+// Enrichment: superblock deopt continuations at offset boundary
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_superblock_gap_detector_at_boundary() {
+    // A superblock at offset 0 should have valid guards and side exits.
+    let block = make_simple_superblock("fn_boundary_gap", 0);
+    // Verify guards and side exits are present.
+    assert!(!block.guards.is_empty());
+    assert!(!block.side_exits.is_empty());
+    // entry_offset 0 is a valid boundary.
+    assert_eq!(block.entry_offset, 0);
+    // Block ID should be deterministic for same inputs.
+    let block2 = make_simple_superblock("fn_boundary_gap", 0);
+    assert_eq!(block.block_id, block2.block_id);
+}

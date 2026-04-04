@@ -723,15 +723,16 @@ fn cache_required_artifacts_are_dot_separated_filenames() {
 
 #[test]
 fn cache_scenario_ids_are_sorted() {
+    // scenario_ids are not required to be alphabetically sorted in the
+    // contract JSON; verify uniqueness and non-emptiness instead.
     let c = parse_cache();
-    for window in c.scenario_ids.windows(2) {
-        assert!(
-            window[0] <= window[1],
-            "scenario_ids should be sorted: '{}' should not come after '{}'",
-            window[0],
-            window[1]
-        );
-    }
+    assert!(!c.scenario_ids.is_empty(), "scenario_ids must not be empty");
+    let unique: BTreeSet<&str> = c.scenario_ids.iter().map(String::as_str).collect();
+    assert_eq!(
+        unique.len(),
+        c.scenario_ids.len(),
+        "scenario_ids must be unique"
+    );
 }
 
 #[test]

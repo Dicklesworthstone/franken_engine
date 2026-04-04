@@ -611,8 +611,8 @@ fn fleet_message_checkpoint_has_no_sequence() {
 }
 
 #[test]
-#[should_panic(expected = "checkpoints have no single originator")]
 fn fleet_message_checkpoint_node_id_panics() {
+    // node_id() no longer panics for checkpoints — returns __checkpoint__ fallback.
     let checkpoint = QuorumCheckpoint {
         checkpoint_seq: 1,
         epoch: SecurityEpoch::from_raw(1),
@@ -625,7 +625,7 @@ fn fleet_message_checkpoint_node_id_panics() {
         extensions: BTreeMap::new(),
     };
     let msg = FleetMessage::Checkpoint(checkpoint);
-    let _ = msg.node_id(); // should panic
+    assert_eq!(msg.node_id().as_str(), "__checkpoint__");
 }
 
 #[test]

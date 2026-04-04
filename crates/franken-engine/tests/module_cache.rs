@@ -1149,7 +1149,7 @@ fn cache_trace_access_serde_roundtrip() {
 #[test]
 fn cache_trace_access_default_locality_is_warm() {
     // The serde(default) on locality means missing field defaults to Warm
-    let json = r#"{"sequence":1,"key":{"module_id":"m","version":{"source_hash":"0000000000000000000000000000000000000000000000000000000000000000","policy_version":1,"trust_revision":1}}}"#;
+    let json = r#"{"sequence":1,"key":{"module_id":"m","version":{"source_hash":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"policy_version":1,"trust_revision":1}}}"#;
     let access: CacheTraceAccess = serde_json::from_str(json).expect("deserialize");
     assert_eq!(access.locality, CacheLocalityClass::Warm);
 }

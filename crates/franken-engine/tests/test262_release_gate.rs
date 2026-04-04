@@ -2321,3 +2321,36 @@ fn waiver_reason_serde_snake_case_values() {
         "\"not_yet_implemented\""
     );
 }
+
+// ---------------------------------------------------------------------------
+// Enrichment: gate runner emits operator-verification-style log events
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test262_gate_script_emits_operator_verification_commands() {
+    let profile = load_profile();
+    let pins = load_pins();
+    let waivers = load_waivers();
+
+    let run = runner("2026-02-22", false)
+        .run(
+            &pins,
+            &profile,
+            &waivers,
+            &[observed(
+                "language/expressions/optional-chaining/pass.js",
+                "13.3.1",
+                Test262ObservedOutcome::Pass,
+            )],
+            None,
+        )
+        .expect("gate run");
+
+    // Each included test produces a log event with an operator-facing event tag.
+    assert!(!run.logs.is_empty(), "gate run should emit log events");
+    for log in &run.logs {
+        assert!(!log.event.is_empty(), "event tag must not be empty");
+        assert!(!log.trace_id.is_empty(), "trace_id must not be empty");
+        assert!(!log.policy_id.is_empty(), "policy_id must not be empty");
+    }
+}

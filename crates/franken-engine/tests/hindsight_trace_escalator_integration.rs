@@ -1351,6 +1351,9 @@ fn end_to_end_escalation_lifecycle() {
     assert!(matches!(d5.verdict, EscalationVerdict::Approved { .. }));
 
     // 5. Same correlation ID suppressed by cooldown.
+    // Complete one escalation first to free a capacity slot so cooldown
+    // check is reached before capacity suppression.
+    esc.complete_escalation();
     let mut t6 = make_trigger(
         "lifecycle-5",
         TriggerCategory::Regression,

@@ -557,9 +557,8 @@ fn trace_signature_debug_format_non_empty() {
 // ===========================================================================
 
 #[test]
-#[should_panic(expected = "overflow")]
 fn classify_with_no_centroids_panics_on_empty_centroid_list() {
-    // Known limitation: classify_regime panics with overflow when centroids is empty.
+    // Previously panicked with overflow; now returns Abstention gracefully.
     let config = SignatureConfig {
         max_dim: MAX_SIGNATURE_DIM,
         min_trace_length: MIN_TRACE_LENGTH,
@@ -569,7 +568,9 @@ fn classify_with_no_centroids_panics_on_empty_centroid_list() {
     let trace = make_trace("t-noc", "m", &[500_000, 500_000, 500_000, 500_000], 1);
     let sig = extract_signature(&trace, &config);
     assert!(sig.valid);
-    let (_label, _conf) = classify_regime(&sig, &config);
+    let (label, conf) = classify_regime(&sig, &config);
+    assert!(matches!(label, RegimeLabel::Abstention));
+    assert_eq!(conf, 0);
 }
 
 #[test]

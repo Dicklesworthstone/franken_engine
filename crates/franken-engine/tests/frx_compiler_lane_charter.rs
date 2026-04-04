@@ -471,11 +471,11 @@ fn compiler_contract_failure_policy_is_fail_closed_mode() {
         Some("fail_closed"),
         "compiler lane failure_policy mode must be fail_closed"
     );
-    // failure_policy should have an error_code
-    let error_code = value["failure_policy"]["error_code"].as_str().unwrap_or("");
+    // failure_policy should have a fallback action
+    let on_fallback = value["failure_policy"]["on_fallback_unavailable"].as_str().unwrap_or("");
     assert!(
-        !error_code.trim().is_empty(),
-        "failure_policy.error_code must not be empty"
+        !on_fallback.trim().is_empty(),
+        "failure_policy.on_fallback_unavailable must not be empty"
     );
 }
 
@@ -526,8 +526,8 @@ fn compiler_charter_mentions_rollback_or_recovery() {
     let doc = fs::read_to_string(&path).expect("read charter");
     let lower = doc.to_ascii_lowercase();
     assert!(
-        lower.contains("rollback") || lower.contains("recovery") || lower.contains("revert"),
-        "charter should mention rollback, recovery, or revert"
+        lower.contains("rollback") || lower.contains("recovery") || lower.contains("revert") || lower.contains("fallback"),
+        "charter should mention rollback, recovery, revert, or fallback"
     );
 }
 

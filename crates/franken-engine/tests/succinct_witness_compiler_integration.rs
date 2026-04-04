@@ -1616,11 +1616,16 @@ fn canonical_schemas_epoch_matches_input() {
 }
 
 #[test]
-fn canonical_schemas_ids_stable_across_epochs() {
+fn canonical_schemas_names_stable_across_epochs() {
     let s1 = canonical_witness_schemas(SecurityEpoch::from_raw(1));
     let s2 = canonical_witness_schemas(SecurityEpoch::from_raw(2));
+    assert_eq!(s1.len(), s2.len());
     for (a, b) in s1.iter().zip(s2.iter()) {
-        assert_eq!(a.schema_id, b.schema_id);
+        // Schema names and families are stable across epochs, but IDs
+        // vary because compute_id incorporates the epoch.
+        assert_eq!(a.name, b.name);
+        assert_eq!(a.payload_families, b.payload_families);
+        assert_ne!(a.schema_id, b.schema_id, "IDs should differ when epoch differs");
     }
 }
 

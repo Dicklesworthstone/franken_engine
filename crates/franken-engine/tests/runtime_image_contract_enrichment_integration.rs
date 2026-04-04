@@ -772,8 +772,9 @@ fn enrichment_hash_sensitive_to_image_order() {
     ))
     .unwrap();
 
-    // Image order matters because the hash iterates in Vec insertion order.
-    assert_ne!(r1.content_hash(), r2.content_hash());
+    // content_hash() sorts images by image_id, so insertion order is
+    // deliberately irrelevant — the hash is insertion-order-independent.
+    assert_eq!(r1.content_hash(), r2.content_hash());
 }
 
 // ---------------------------------------------------------------------------

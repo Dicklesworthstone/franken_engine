@@ -40,13 +40,18 @@ fn make_ledger_entry(seq: u64, ts: u64, action: &str) -> CanonicalEvidenceEntry 
         .calibration_score(0.85)
         .fallback_active(false)
         .posterior(vec![0.7, 0.3])
-        .expected_loss("allow", 0.1)
+        .expected_loss(action, 0.1)
         .expected_loss("deny", 0.9)
         .top_feature("severity", 0.6)
         .build()
         .unwrap();
 
-    let payload = serde_json::to_vec(&ledger).unwrap();
+    let metadata: BTreeMap<String, String> = BTreeMap::new();
+    // artifact hash must include metadata to match verify_artifact_integrity.
+    let mut payload = serde_json::to_vec(&ledger).unwrap();
+    if let Ok(meta_bytes) = serde_json::to_vec(&metadata) {
+        payload.extend_from_slice(&meta_bytes);
+    }
     let artifact_hash = ContentHash::compute(&payload);
 
     CanonicalEvidenceEntry {
@@ -63,7 +68,7 @@ fn make_ledger_entry(seq: u64, ts: u64, action: &str) -> CanonicalEvidenceEntry 
         artifact_hash,
         ledger_entry: ledger,
         chain_hash: ContentHash::compute(b"placeholder"),
-        metadata: BTreeMap::new(),
+        metadata,
     }
 }
 
@@ -654,7 +659,7 @@ fn checker_tampered_artifact_detected() {
         .calibration_score(0.0)
         .fallback_active(false)
         .posterior(vec![0.5, 0.5])
-        .expected_loss("x", 0.0)
+        .expected_loss("tampered_action", 0.0)
         .build()
         .unwrap();
     let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());

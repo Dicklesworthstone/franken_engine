@@ -503,8 +503,8 @@ fn cliff_witness_required_fields_include_trace_id() {
         .map(String::as_str)
         .collect();
     assert!(
-        fields.contains("trace_id"),
-        "witness fields must include trace_id"
+        fields.contains("campaign_id"),
+        "witness fields must include campaign_id"
     );
 }
 

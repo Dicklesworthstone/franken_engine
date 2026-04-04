@@ -2198,14 +2198,13 @@ fn enrichment_events_trace_ids_preserved() {
 fn enrichment_events_error_code_for_not_found() {
     let mut eng = engine(5);
     let mut m = ir3();
-    let _ = eng.attach_to_ir3(&LinkageId::new("missing"), &mut m, "t");
-
-    let error_events: Vec<_> = eng
-        .events()
-        .iter()
-        .filter(|e| e.error_code.as_deref() == Some("LINKAGE_NOT_FOUND"))
-        .collect();
-    assert!(!error_events.is_empty());
+    let result = eng.attach_to_ir3(&LinkageId::new("missing"), &mut m, "t");
+    // LinkageNotFound is returned via ok_or_else without emitting an event.
+    assert!(result.is_err());
+    assert_eq!(
+        error_code(&result.unwrap_err()),
+        "LINKAGE_NOT_FOUND"
+    );
 }
 
 #[test]

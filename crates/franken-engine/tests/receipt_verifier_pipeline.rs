@@ -250,6 +250,7 @@ fn build_cli_input(wrong_signature_key: bool) -> ReceiptVerifierCliInput {
     preimage.push(0xff);
     preimage.extend_from_slice(&checkpoint_stub.timestamp_ns.to_be_bytes());
     preimage.push(0xff);
+    preimage.extend_from_slice(&(checkpoint_stub.operator_key_id.len() as u32).to_be_bytes());
     preimage.extend_from_slice(checkpoint_stub.operator_key_id.as_bytes());
     checkpoint.signature = sign_preimage(&operator_signing_key, &preimage).expect("checkpoint sig");
 
@@ -505,6 +506,7 @@ fn build_valid_request() -> (String, UnifiedReceiptVerificationRequest) {
     preimage.push(0xff);
     preimage.extend_from_slice(&checkpoint_stub.timestamp_ns.to_be_bytes());
     preimage.push(0xff);
+    preimage.extend_from_slice(&(checkpoint_stub.operator_key_id.len() as u32).to_be_bytes());
     preimage.extend_from_slice(checkpoint_stub.operator_key_id.as_bytes());
     checkpoint.signature = sign_preimage(&operator_signing_key, &preimage).expect("checkpoint sig");
 

@@ -612,9 +612,8 @@ fn calibration_report_computes_rates() {
     assert_eq!(report.false_positives, 10);
     assert_eq!(report.true_negatives, 90);
     assert_eq!(report.false_negatives, 20);
-    // FPR = 10 / (80+10) = 0.1111 ≈ 111_111 millionths
-    assert!(report.false_positive_rate_millionths > 100_000);
-    assert!(report.false_positive_rate_millionths < 120_000);
+    // FPR = FP / (FP + TN) = 10 / (10 + 90) = 10 / 100 = 0.10 = 100_000 millionths
+    assert_eq!(report.false_positive_rate_millionths, 100_000);
 }
 
 #[test]

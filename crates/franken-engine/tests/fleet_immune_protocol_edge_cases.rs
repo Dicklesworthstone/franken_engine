@@ -586,8 +586,8 @@ fn fleet_message_checkpoint_sequence_is_none() {
 }
 
 #[test]
-#[should_panic(expected = "checkpoints have no single originator")]
 fn fleet_message_checkpoint_node_id_panics() {
+    // node_id() no longer panics for checkpoints — returns first participating node.
     let mut nodes = BTreeSet::new();
     nodes.insert(NodeId::new("n1"));
     let mut sigs = BTreeMap::new();
@@ -604,7 +604,7 @@ fn fleet_message_checkpoint_node_id_panics() {
         extensions: BTreeMap::new(),
     };
     let msg = FleetMessage::Checkpoint(cp);
-    let _ = msg.node_id(); // should panic
+    assert_eq!(msg.node_id().as_str(), "n1");
 }
 
 #[test]

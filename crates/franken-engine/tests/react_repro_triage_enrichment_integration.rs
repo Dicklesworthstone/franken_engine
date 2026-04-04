@@ -992,9 +992,10 @@ fn enrichment_assign_severity_low_non_engine_bug() {
 
 #[test]
 fn enrichment_assign_severity_low_non_engine_edge_case() {
+    // Edge cases return Info regardless of other flags.
     assert_eq!(
         assign_severity(FailureClass::UnsupportedEnvironment, false, false, true),
-        FailureSeverity::Low
+        FailureSeverity::Info
     );
 }
 

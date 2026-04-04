@@ -2062,3 +2062,31 @@ fn integration_emitter_resync_after_policy_advance() {
         .can_emit(SecurityEpoch::from_raw(7), &store)
         .unwrap();
 }
+
+// ===========================================================================
+// Enrichment: expired attestation and mismatched policy version
+// ===========================================================================
+
+#[test]
+fn tee_attestation_edge_expired_attestation_fails() {
+    // An attestation quote whose age exceeds the freshness window is rejected.
+    let policy = sample_policy(1);
+    let mut quote = quote_for_sgx();
+    quote.quote_age_secs = 999; // well above the 300-second standard max
+    let err = policy
+        .evaluate_quote(&quote, DecisionImpact::Standard, SecurityEpoch::from_raw(1))
+        .unwrap_err();
+    assert!(matches!(err, TeeAttestationPolicyError::AttestationStale { .. }));
+}
+
+#[test]
+fn tee_attestation_edge_mismatched_policy_version_fails() {
+    // A policy with schema_version=0 fails validation.
+    let mut policy = sample_policy(1);
+    policy.schema_version = 0;
+    let err = policy.validate().unwrap_err();
+    assert!(matches!(
+        err,
+        TeeAttestationPolicyError::ParseFailed { .. }
+    ));
+}

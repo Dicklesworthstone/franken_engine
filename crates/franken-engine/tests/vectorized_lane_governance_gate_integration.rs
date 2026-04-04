@@ -819,7 +819,10 @@ fn test_evaluate_permissive_approves_bad_evidence() {
         Some(&bad_tail()),
         &cfg,
     );
-    assert_eq!(result.verdict, LaneVerdict::Approved);
+    // Permissive config allows all thresholds, but skew records that fail
+    // their own threshold (measured > threshold) still produce a blocking
+    // reason, yielding ConditionalApproval when parity is ok.
+    assert_eq!(result.verdict, LaneVerdict::ConditionalApproval);
 }
 
 #[test]

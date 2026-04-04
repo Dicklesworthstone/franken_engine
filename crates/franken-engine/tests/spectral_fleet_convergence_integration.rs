@@ -1683,7 +1683,11 @@ fn enrichment_lifecycle_weighted_barbell() {
     topo.add_edge(3, 5, 5_000_000).unwrap();
 
     assert!(topo.is_connected());
-    let analyzer = SpectralAnalyzer::default();
+    // Barbell with a very weak bridge needs more iterations to converge.
+    let analyzer = SpectralAnalyzer {
+        max_iterations: 500,
+        ..SpectralAnalyzer::default()
+    };
     let r = analyzer.analyze(&topo).unwrap();
     assert!(r.algebraic_connectivity_millionths > 0);
     assert!(r.algebraic_connectivity_millionths < 5_000_000);

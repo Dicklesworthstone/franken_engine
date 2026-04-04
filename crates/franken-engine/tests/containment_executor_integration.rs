@@ -2218,7 +2218,9 @@ fn enrichment_receipt_duration_is_zero_simulated() {
     let receipt = executor
         .execute(ContainmentAction::Challenge, "ext", &ctx)
         .unwrap();
-    assert_eq!(receipt.duration_ns, 0);
+    // duration_ns records real elapsed time, not simulated — it will be
+    // small but nonzero.
+    assert!(receipt.duration_ns > 0);
 }
 
 #[test]

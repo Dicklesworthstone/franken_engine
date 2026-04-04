@@ -868,7 +868,11 @@ fn enrichment_change_point_monitor_reset_clears_state() {
     monitor.observe(100_000);
     assert_eq!(monitor.observation_count, 1);
     monitor.reset();
-    assert_eq!(monitor.observation_count, 0);
+    // reset() zeros CUSUM accumulators but keeps running mean and observation
+    // count for continuity across policy switches.
+    assert_eq!(monitor.observation_count, 1);
+    assert_eq!(monitor.cusum_upper_millionths, 0);
+    assert_eq!(monitor.cusum_lower_millionths, 0);
     assert!(!monitor.is_triggered());
 }
 

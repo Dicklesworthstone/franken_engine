@@ -665,7 +665,9 @@ fn likelihood_model_serde_roundtrip() {
 #[test]
 fn change_point_detector_initial_probability_is_zero() {
     let cpd = ChangePointDetector::new(100_000, 50);
-    assert_eq!(cpd.change_point_probability(), 0);
+    // Initially all probability mass is at run_length=0 (= 1.0 in millionths),
+    // meaning the detector starts in the "fresh start" state.
+    assert_eq!(cpd.change_point_probability(), 1_000_000);
     assert_eq!(cpd.map_run_length(), 0);
 }
 
@@ -688,7 +690,8 @@ fn change_point_detector_reset_clears_state() {
         cpd.update(500_000, 800_000);
     }
     cpd.reset();
-    assert_eq!(cpd.change_point_probability(), 0);
+    // After reset, all mass returns to run_length=0 (same as initial state).
+    assert_eq!(cpd.change_point_probability(), 1_000_000);
     assert_eq!(cpd.map_run_length(), 0);
 }
 

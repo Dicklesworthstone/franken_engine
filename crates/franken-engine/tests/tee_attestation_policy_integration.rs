@@ -3059,3 +3059,32 @@ fn enrichment_evaluate_quote_max_u64_age_rejected() {
         .expect_err("must fail");
     assert_eq!(err.error_code(), "tee_policy_attestation_stale");
 }
+
+// ---------------------------------------------------------------------------
+// Enrichment: stale quote with age mismatch
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tee_attestation_stale_quote_with_age_mismatch() {
+    // A quote that is exactly at the high-impact max age passes for standard
+    // but fails for high-impact decisions.
+    let policy = sample_policy(1);
+    let mut quote = sgx_quote();
+    // Standard max is 300 s, high-impact max is 60 s; set age in between.
+    quote.quote_age_secs = 120;
+    policy
+        .evaluate_quote(
+            &quote,
+            DecisionImpact::Standard,
+            SecurityEpoch::from_raw(1),
+        )
+        .expect("120 s should be within standard window");
+    let err = policy
+        .evaluate_quote(
+            &quote,
+            DecisionImpact::HighImpact,
+            SecurityEpoch::from_raw(1),
+        )
+        .expect_err("120 s should exceed high-impact window");
+    assert_eq!(err.error_code(), "tee_policy_attestation_stale");
+}

@@ -195,7 +195,7 @@ fn enrichment_report_serde_roundtrip() {
 fn enrichment_render_report_summary_contains_verdict() {
     let report = make_report(VerificationVerdict::Verified);
     let summary = render_report_summary(&report);
-    assert!(summary.contains("Verified"));
+    assert!(summary.contains("verified"));
 }
 
 #[test]

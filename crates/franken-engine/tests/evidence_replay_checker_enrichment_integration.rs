@@ -37,12 +37,13 @@ use frankenengine_engine::security_epoch::SecurityEpoch;
 // ---------------------------------------------------------------------------
 
 fn make_ledger_entry(seq: u64) -> EvidenceLedger {
+    let action = format!("action_{seq}");
     EvidenceLedgerBuilder::new()
         .ts_unix_ms(1_700_000_000_000 + seq * 1000)
         .component("enrichment-component")
-        .action(format!("action_{seq}"))
+        .action(action.clone())
         .posterior(vec![0.7, 0.3])
-        .expected_loss("allow", 0.1)
+        .expected_loss(&action, 0.1)
         .expected_loss("deny", 0.9)
         .chosen_expected_loss(0.1)
         .calibration_score(0.85)
@@ -70,7 +71,12 @@ fn build_valid_entry(
     prev_chain_hash: Option<&ContentHash>,
 ) -> CanonicalEvidenceEntry {
     let ledger = make_ledger_entry(seq);
-    let payload = serde_json::to_vec(&ledger).unwrap();
+    let metadata: BTreeMap<String, String> = BTreeMap::new();
+    // artifact hash must include metadata to match verify_artifact_integrity.
+    let mut payload = serde_json::to_vec(&ledger).unwrap();
+    if let Ok(meta_bytes) = serde_json::to_vec(&metadata) {
+        payload.extend_from_slice(&meta_bytes);
+    }
     let artifact_hash = ContentHash::compute(&payload);
     let chain_hash = compute_chain_hash(prev_chain_hash, &artifact_hash);
     CanonicalEvidenceEntry {
@@ -87,7 +93,7 @@ fn build_valid_entry(
         artifact_hash,
         ledger_entry: ledger,
         chain_hash,
-        metadata: BTreeMap::new(),
+        metadata,
     }
 }
 

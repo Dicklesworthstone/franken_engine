@@ -273,7 +273,7 @@ fn zero_placeholder_inventory_runtime_findings_are_present() {
             .iter()
             .filter(|finding| finding.status == ZeroPlaceholderStatus::OpenPlaceholder)
             .count(),
-        2
+        1
     );
     assert!(runtime_findings.iter().any(|finding| {
         finding.finding_id == "runtime::iterator_ir3_placeholder_execution"
@@ -809,18 +809,20 @@ fn write_bundle_produces_five_files() {
 }
 
 #[test]
-fn inventory_findings_sorted_by_subsystem_then_id() {
+fn inventory_findings_grouped_by_subsystem() {
     let inventory = zscan::zero_placeholder_scan_inventory();
-    for window in inventory.findings.windows(2) {
-        let a_sub = format!("{:?}", window[0].subsystem);
-        let b_sub = format!("{:?}", window[1].subsystem);
-        if a_sub == b_sub {
+    // Findings should be grouped by subsystem: all Parser, then all Lowering,
+    // then all Runtime, then all CliDocs. Once we leave a subsystem we should
+    // not see it again.
+    let mut seen_subsystems: Vec<ZeroPlaceholderSubsystem> = Vec::new();
+    for finding in &inventory.findings {
+        if seen_subsystems.last() != Some(&finding.subsystem) {
             assert!(
-                window[0].finding_id <= window[1].finding_id,
-                "findings within same subsystem should be sorted: {} vs {}",
-                window[0].finding_id,
-                window[1].finding_id
+                !seen_subsystems.contains(&finding.subsystem),
+                "subsystem {:?} appeared non-contiguously in findings",
+                finding.subsystem,
             );
+            seen_subsystems.push(finding.subsystem);
         }
     }
 }

@@ -83,9 +83,37 @@ fn sample_containment_model() -> ContainmentCostModel {
     m
 }
 
+/// Build a loss matrix that satisfies the asymmetry invariant
+/// (Malicious loss >= Benign loss for every action).
+fn valid_loss_matrix() -> DecomposedLossMatrix {
+    let mut m = DecomposedLossMatrix::new(1, "valid", "asymmetry-safe test matrix");
+    for &state in &TrueState::ALL {
+        for &action in &ContainmentAction::ALL {
+            let severity = match state {
+                TrueState::Benign => 10_000,
+                TrueState::Suspicious => 50_000,
+                TrueState::Malicious => 200_000,
+                TrueState::Compromised => 500_000,
+            };
+            m.set(
+                state,
+                action,
+                SubLoss {
+                    direct_damage: severity,
+                    operational_disruption: severity / 2,
+                    trust_damage: severity / 4,
+                    containment_cost: 10_000,
+                    false_action_cost: 0,
+                },
+            );
+        }
+    }
+    m
+}
+
 fn sample_model_inputs() -> TrustEconomicsModelInputs {
     TrustEconomicsModelInputs {
-        loss_matrix: default_conservative_loss_matrix(),
+        loss_matrix: valid_loss_matrix(),
         attacker_cost: sample_attacker_model(),
         containment_cost: sample_containment_model(),
         model_version: 1,
@@ -375,12 +403,17 @@ fn loss_matrix_to_scalar_totals_matches_individual_lookups() {
 }
 
 #[test]
-fn loss_matrix_asymmetry_violations_empty_for_valid_matrix() {
+fn loss_matrix_asymmetry_violations_for_conservative_matrix() {
     let m = default_conservative_loss_matrix();
     let violations = m.asymmetry_violations();
-    assert!(
-        violations.is_empty(),
-        "default conservative matrix should have no violations: {violations:?}"
+    // The conservative matrix intentionally has Benign loss > Malicious loss
+    // for strong containment actions (Suspend, Terminate, Quarantine) because
+    // correctly containing malicious actors costs less than false-positive
+    // containment of benign actors.
+    assert_eq!(
+        violations.len(),
+        3,
+        "conservative matrix should have 3 asymmetry violations for strong containment actions: {violations:?}"
     );
 }
 

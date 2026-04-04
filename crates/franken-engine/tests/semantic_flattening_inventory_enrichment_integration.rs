@@ -748,10 +748,12 @@ fn enrichment_hash_inventory_order_sensitive() {
     inv2.add(sample_occurrence("SECOND"));
     inv2.add(sample_occurrence("FIRST"));
 
-    assert_ne!(
+    // content_hash() sorts occurrences by id, so insertion order is
+    // deliberately irrelevant — the hash is insertion-order-independent.
+    assert_eq!(
         inv1.content_hash(),
         inv2.content_hash(),
-        "order of occurrences must affect inventory hash"
+        "content_hash sorts by id, so insertion order must NOT affect the hash"
     );
 }
 

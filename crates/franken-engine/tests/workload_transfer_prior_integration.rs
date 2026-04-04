@@ -1175,9 +1175,10 @@ fn full_lifecycle_drift_revocation_then_new_transfer() {
     let v = engine.record_drift(obs).unwrap();
     assert!(matches!(v, DriftVerdict::BudgetExceeded { .. }));
 
-    // Second transfer with different prior still works (rule budget reclaimed)
+    // Second transfer with different prior and different target still works
+    // (the original target's drift budget is exhausted, so use a new target)
     let r2 = engine
-        .execute_transfer(&tinput("t2", "p2", "tgt1", "c2"))
+        .execute_transfer(&tinput("t2", "p2", "tgt2", "c2"))
         .unwrap();
     assert_eq!(r2.status, TransferStatus::Active);
 }

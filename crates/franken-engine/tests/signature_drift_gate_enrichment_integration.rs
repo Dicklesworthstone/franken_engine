@@ -82,10 +82,10 @@ fn make_scope_record(claim_id: &str, ep: SecurityEpoch) -> ClaimScopeRecord {
 
 #[test]
 fn enrichment_snapshot_hash_same_when_regime_differs() {
-    // Content hash does NOT include regime — only id, features, observation_count
+    // Content hash now includes regime, so different regimes produce different hashes.
     let a = snap("s", normal(), &[("x", 42)], 10, epoch(1));
     let b = snap("s", elevated(), &[("x", 42)], 10, epoch(1));
-    assert_eq!(a.content_hash, b.content_hash);
+    assert_ne!(a.content_hash, b.content_hash);
 }
 
 #[test]
@@ -97,10 +97,10 @@ fn enrichment_snapshot_hash_differs_on_observation_count() {
 
 #[test]
 fn enrichment_snapshot_hash_same_when_epoch_differs() {
-    // Content hash does NOT include epoch
+    // Content hash now includes epoch, so different epochs produce different hashes.
     let a = snap("s", normal(), &[("x", 42)], 10, epoch(1));
     let b = snap("s", normal(), &[("x", 42)], 10, epoch(2));
-    assert_eq!(a.content_hash, b.content_hash);
+    assert_ne!(a.content_hash, b.content_hash);
 }
 
 #[test]

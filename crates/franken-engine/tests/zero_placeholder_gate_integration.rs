@@ -106,7 +106,7 @@ fn make_waiver(entry: &PlaceholderEntry, sub: Subsystem) -> Waiver {
         subsystem: sub,
         justification: "deferred to next sprint".to_string(),
         owner: "team-alpha".to_string(),
-        expires_epoch: 200,
+        expires_epoch: 150,
         status: WaiverStatus::Active,
         created_epoch: 50,
     }
@@ -422,14 +422,14 @@ fn validate_waiver_active_within_epoch() {
 fn validate_waiver_active_at_boundary() {
     let e = blocking_entry(Subsystem::Parser);
     let w = make_waiver(&e, Subsystem::Parser);
-    assert_eq!(validate_waiver(&w, 200), WaiverStatus::Active);
+    assert_eq!(validate_waiver(&w, 150), WaiverStatus::Active);
 }
 
 #[test]
 fn validate_waiver_expired_past_boundary() {
     let e = blocking_entry(Subsystem::Parser);
     let w = make_waiver(&e, Subsystem::Parser);
-    assert_eq!(validate_waiver(&w, 201), WaiverStatus::Expired);
+    assert_eq!(validate_waiver(&w, 151), WaiverStatus::Expired);
 }
 
 #[test]
@@ -1021,7 +1021,7 @@ fn gate_waiver_duration_exceeded_error() {
     let mut cfg = GateConfig::default();
     cfg.waiver_max_duration_epochs = 10;
     let e = blocking_entry(Subsystem::Parser);
-    let w = make_waiver(&e, Subsystem::Parser); // duration = 200 - 50 = 150
+    let w = make_waiver(&e, Subsystem::Parser); // duration = 150 - 50 = 100
     let scans = vec![scan_with(Subsystem::Parser, vec![e])];
     let r = evaluate_gate(&scans, &[w], &cfg, &epoch(100), 1);
     assert!(matches!(r, Err(GateError::WaiverDurationExceeded { .. })));
@@ -1364,7 +1364,7 @@ fn zero_placeholder_gate_cli_writes_artifact_bundle() {
     )
     .expect("parse report");
     assert_eq!(report["verdict"], "block");
-    assert_eq!(report["blocked_count"], 2);
+    assert_eq!(report["blocked_count"], 1);
     assert_eq!(report["warned_count"], 0);
     assert_eq!(report["waived_count"], 0);
 

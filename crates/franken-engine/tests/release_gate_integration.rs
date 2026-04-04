@@ -1511,8 +1511,8 @@ fn enrichment_exception_multiple_applications_idempotent() {
     gate.apply_exception(&mut result, "first", None).unwrap();
     let digest_after_first = result.result_digest.clone();
     gate.apply_exception(&mut result, "second", None).unwrap();
-    // Second apply should change justification but recompute digest
-    assert_eq!(result.exception_justification, "second");
+    // After first apply verdict is Pass; second apply is a no-op (already passing).
+    assert_eq!(result.exception_justification, "first");
     assert!(result.exception_applied);
     // Digest may differ because justification differs in exception_applied state
     assert_eq!(result.verdict, Verdict::Pass);

@@ -1508,8 +1508,9 @@ fn enrichment_gate_submit_at_exact_expiry_epoch_rejected() {
         SecurityEpoch::from_raw(100),
         1000,
     );
-    // Token with expiry_epoch=100 at current_epoch=100 is expired
-    assert!(result.is_err());
+    // is_expired uses strict greater-than: current_epoch > expiry_epoch.
+    // At exact expiry (current == expiry) the token is still valid.
+    assert!(result.is_ok());
 }
 
 #[test]

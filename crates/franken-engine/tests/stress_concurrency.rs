@@ -1817,9 +1817,13 @@ fn enrichment_extension_state_display_matches_as_str() {
 #[test]
 fn enrichment_extension_state_is_alive_running() {
     assert!(ExtensionState::Running.is_alive());
-    assert!(ExtensionState::Suspending.is_alive());
-    assert!(ExtensionState::Suspended.is_alive());
+    assert!(ExtensionState::Starting.is_alive());
     assert!(ExtensionState::Resuming.is_alive());
+    assert!(ExtensionState::Loading.is_alive());
+    assert!(ExtensionState::Validating.is_alive());
+    // Suspending and Suspended are NOT alive per the source.
+    assert!(!ExtensionState::Suspending.is_alive());
+    assert!(!ExtensionState::Suspended.is_alive());
 }
 
 #[test]
@@ -1833,8 +1837,8 @@ fn enrichment_extension_state_is_not_alive_terminal() {
 fn enrichment_extension_state_is_terminal() {
     assert!(ExtensionState::Terminated.is_terminal());
     assert!(ExtensionState::Quarantined.is_terminal());
+    assert!(ExtensionState::Unloaded.is_terminal());
     assert!(!ExtensionState::Running.is_terminal());
-    assert!(!ExtensionState::Unloaded.is_terminal());
 }
 
 #[test]

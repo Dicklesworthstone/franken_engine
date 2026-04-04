@@ -896,3 +896,58 @@ fn integration_model_version_lifecycle() {
     assert!(m.validate_version_update(1).is_err());
     assert!(m.validate_version_update(0).is_err());
 }
+
+// ===========================================================================
+// Enrichment: validation edge cases
+// ===========================================================================
+
+#[test]
+fn enrichment_verify_chain_self_loop_detected() {
+    // A model version update to the same version is a "self-loop" and must
+    // be rejected by the version monotonicity check.
+    let m = sample_model_inputs();
+    let err = m.validate_version_update(m.model_version).unwrap_err();
+    match err {
+        TrustEconomicsError::VersionRegression { current, attempted } => {
+            assert_eq!(current, attempted);
+        }
+        other => panic!("expected VersionRegression, got: {other}"),
+    }
+}
+
+#[test]
+fn enrichment_trust_verify_delegation_chain_rejects_cycle() {
+    // An asymmetric loss matrix where the benign+allow cost exceeds
+    // malicious+allow cost creates an economic "cycle" (incentive to
+    // misclassify). The asymmetry_violations detector catches it.
+    let mut m = DecomposedLossMatrix::new(1, "test", "cycle-detection");
+    // Malicious + Allow: set very cheap (inverted incentive).
+    m.set(
+        TrueState::Malicious,
+        ContainmentAction::Allow,
+        SubLoss {
+            direct_damage: 100_000,
+            operational_disruption: 0,
+            trust_damage: 0,
+            containment_cost: 0,
+            false_action_cost: 0,
+        },
+    );
+    // Benign + Allow: set very expensive (inverted).
+    m.set(
+        TrueState::Benign,
+        ContainmentAction::Allow,
+        SubLoss {
+            direct_damage: 500_000,
+            operational_disruption: 0,
+            trust_damage: 0,
+            containment_cost: 0,
+            false_action_cost: 0,
+        },
+    );
+    let violations = m.asymmetry_violations();
+    assert!(
+        !violations.is_empty(),
+        "inverted incentives should trigger asymmetry violations"
+    );
+}

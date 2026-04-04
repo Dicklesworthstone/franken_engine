@@ -83,15 +83,13 @@ fn corpus_has_at_least_one_per_outcome_type() {
     let has_lowered = corpus
         .iter()
         .any(|s| s.expected_outcome == ExpectedOutcome::LoweredToEs2020);
-    let has_fail_closed = corpus
-        .iter()
-        .any(|s| s.expected_outcome == ExpectedOutcome::FailClosed);
     let has_known_gap = corpus
         .iter()
         .any(|s| s.expected_outcome == ExpectedOutcome::KnownGap);
     assert!(has_normalized, "missing NormalizedAway specimen");
     assert!(has_lowered, "missing LoweredToEs2020 specimen");
-    assert!(has_fail_closed, "missing FailClosed specimen");
+    // Note: the corpus no longer contains FailClosed specimens since namespace
+    // lowering was implemented (previously namespace_simple was FailClosed).
     assert!(has_known_gap, "missing KnownGap specimen");
 }
 
@@ -507,7 +505,7 @@ fn enum_specimen_lowers_to_es2020() {
 }
 
 #[test]
-fn namespace_specimen_fails_closed() {
+fn namespace_specimen_lowered_to_es2020() {
     let inv = run_diagnostic_corpus();
     let ev = inv
         .evidence
@@ -515,8 +513,8 @@ fn namespace_specimen_fails_closed() {
         .find(|e| e.specimen_id == "namespace_simple")
         .unwrap();
     assert_eq!(ev.verdict, SpecimenVerdict::Pass);
-    assert_eq!(ev.expected_outcome, ExpectedOutcome::FailClosed);
-    assert_eq!(ev.actual_outcome, ActualOutcome::Rejected);
+    assert_eq!(ev.expected_outcome, ExpectedOutcome::LoweredToEs2020);
+    assert_eq!(ev.actual_outcome, ActualOutcome::Success);
 }
 
 #[test]

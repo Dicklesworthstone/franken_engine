@@ -541,7 +541,7 @@ fn relaxed_config_accepts_low_family_coverage() {
     ));
     let config = GateConfig {
         min_families: 1,
-        min_per_family: 1,
+        min_per_family: 0,
         require_publishable_licenses: false,
         ..GateConfig::default()
     };

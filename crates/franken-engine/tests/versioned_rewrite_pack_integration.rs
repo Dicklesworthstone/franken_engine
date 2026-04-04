@@ -62,12 +62,14 @@ fn make_interference(
     kind: RuleInterferenceKind,
     blocking: bool,
 ) -> RuleInterference {
+    // Use canonical (sorted) order for detail so hash is order-invariant.
+    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
     RuleInterference {
         rule_a: a.into(),
         rule_b: b.into(),
         kind,
         is_blocking: blocking,
-        detail: format!("{a} <-> {b}"),
+        detail: format!("{lo} <-> {hi}"),
     }
 }
 

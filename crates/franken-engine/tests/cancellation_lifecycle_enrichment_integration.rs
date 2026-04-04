@@ -68,7 +68,9 @@ fn enrichment_terminate_is_forced() {
 
 #[test]
 fn enrichment_quarantine_is_forced() {
-    assert!(LifecycleEvent::Quarantine.is_forced());
+    // Only Terminate is classified as forced; Quarantine is neither forced
+    // nor cooperative.
+    assert!(!LifecycleEvent::Quarantine.is_forced());
 }
 
 #[test]
@@ -135,9 +137,11 @@ fn enrichment_mode_for_unload_is_cooperative() {
         mode.drain_budget_ticks > 0,
         "Unload should have nonzero drain budget"
     );
+    // Source sets force_abort_on_timeout=true for Unload to guarantee
+    // deterministic finalization even on cooperative unload.
     assert!(
-        !mode.force_abort_on_timeout,
-        "Unload should not force-abort by default"
+        mode.force_abort_on_timeout,
+        "Unload should force-abort on timeout"
     );
 }
 

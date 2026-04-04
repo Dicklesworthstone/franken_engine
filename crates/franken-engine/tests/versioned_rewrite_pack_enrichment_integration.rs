@@ -84,12 +84,13 @@ fn disabled_rule(id: &str, category: RewriteCategory) -> RewriteRuleEntry {
 }
 
 fn interference(a: &str, b: &str, kind: RuleInterferenceKind, blocking: bool) -> RuleInterference {
+    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
     RuleInterference {
         rule_a: a.into(),
         rule_b: b.into(),
         kind,
         is_blocking: blocking,
-        detail: format!("enrichment {a}<->{b}"),
+        detail: format!("enrichment {lo}<->{hi}"),
     }
 }
 
@@ -1038,8 +1039,14 @@ fn enrichment_catalog_cross_interference_symmetric_lookup() {
 #[test]
 fn enrichment_catalog_cross_interference_no_blocking() {
     let mut cat = PackCatalog::new("no-cross-block");
-    cat.register(default_pack("x", vec![]));
-    cat.register(default_pack("y", vec![]));
+    cat.register(default_pack(
+        "x",
+        vec![simple_rule("r1", RewriteCategory::AlgebraicSimplification)],
+    ));
+    cat.register(default_pack(
+        "y",
+        vec![simple_rule("r1", RewriteCategory::AlgebraicSimplification)],
+    ));
 
     let meta = InterferenceMetadata::build(vec![interference(
         "x:r1",
@@ -1273,9 +1280,18 @@ fn enrichment_pack_proven_sound_count_mixed() {
 #[test]
 fn enrichment_catalog_multiple_cross_interferences() {
     let mut cat = PackCatalog::new("multi-cross");
-    cat.register(default_pack("a", vec![]));
-    cat.register(default_pack("b", vec![]));
-    cat.register(default_pack("c", vec![]));
+    cat.register(default_pack(
+        "a",
+        vec![simple_rule("r1", RewriteCategory::AlgebraicSimplification)],
+    ));
+    cat.register(default_pack(
+        "b",
+        vec![simple_rule("r1", RewriteCategory::AlgebraicSimplification)],
+    ));
+    cat.register(default_pack(
+        "c",
+        vec![simple_rule("r1", RewriteCategory::AlgebraicSimplification)],
+    ));
 
     // a<->b blocking
     cat.add_cross_interference(
@@ -1303,4 +1319,17 @@ fn enrichment_catalog_multiple_cross_interferences() {
     assert!(cat.has_cross_blocking("a", "b"));
     assert!(!cat.has_cross_blocking("b", "c"));
     assert!(cat.has_cross_blocking("a", "c")); // missing metadata fails closed
+}
+
+// ---------------------------------------------------------------------------
+// PackVersion — version mismatch compatibility
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enrichment_version_mismatch_not_compatible() {
+    // Different major versions are never compatible.
+    let v1 = PackVersion { major: 1, minor: 0 };
+    let v2 = PackVersion { major: 2, minor: 0 };
+    assert!(!v1.is_compatible_with(&v2));
+    assert!(!v2.is_compatible_with(&v1));
 }

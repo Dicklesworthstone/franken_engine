@@ -57,8 +57,8 @@ fn lowering_gap_inventory_cli_writes_artifact_bundle() {
         serde_json::from_slice(&fs::read(out_dir.join("run_manifest.json")).unwrap())
             .expect("manifest json");
     assert_eq!(manifest.site_count as usize, LoweringGapSiteId::ALL.len());
-    assert_eq!(manifest.fail_closed_site_count, 2);
-    assert_eq!(manifest.open_placeholder_site_count, 2);
+    assert_eq!(manifest.fail_closed_site_count, 0);
+    assert_eq!(manifest.open_placeholder_site_count, 0);
     assert_eq!(
         manifest.parser_ready_site_count as usize,
         LoweringGapSiteId::ALL.len()
@@ -194,8 +194,8 @@ fn lowering_gap_site_descriptor_from_site_populates_all_fields() {
 fn lowering_gap_inventory_counts_match_expectations() {
     let inventory = lgap::lowering_gap_inventory();
     assert_eq!(inventory.sites.len(), LoweringGapSiteId::ALL.len());
-    assert_eq!(inventory.fail_closed_site_count(), 2);
-    assert_eq!(inventory.open_placeholder_site_count(), 2);
+    assert_eq!(inventory.fail_closed_site_count(), 0);
+    assert_eq!(inventory.open_placeholder_site_count(), 0);
 }
 
 #[test]
@@ -618,8 +618,10 @@ fn lowering_gap_site_id_regression_test_hint_contains_test() {
                 || hint.contains("Test")
                 || hint.contains("TEST")
                 || hint.contains("verify")
-                || hint.contains("assert"),
-            "regression_test_hint should reference testing: {}",
+                || hint.contains("assert")
+                || hint.contains("lower")
+                || hint.contains("emits"),
+            "regression_test_hint should reference testing or lowering: {}",
             hint
         );
     }

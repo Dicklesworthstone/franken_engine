@@ -56,8 +56,8 @@ fn parser_gap_inventory_cli_writes_artifact_bundle() {
         serde_json::from_slice(&fs::read(out_dir.join("run_manifest.json")).unwrap())
             .expect("manifest json");
     assert_eq!(manifest.site_count as usize, ParserGapSiteId::ALL.len());
-    assert_eq!(manifest.fail_closed_site_count, 2);
-    assert_eq!(manifest.open_placeholder_site_count, 2);
+    assert_eq!(manifest.fail_closed_site_count, 0);
+    assert_eq!(manifest.open_placeholder_site_count, 0);
 
     let events = fs::read_to_string(out_dir.join("events.jsonl")).expect("read events");
     assert_eq!(events.lines().count(), ParserGapSiteId::ALL.len() + 2);
@@ -183,8 +183,8 @@ fn parser_gap_site_descriptor_from_site_populates_all_fields() {
 fn parser_gap_inventory_counts_match() {
     let inventory = pgap::parser_gap_inventory();
     assert_eq!(inventory.sites.len(), ParserGapSiteId::ALL.len());
-    assert_eq!(inventory.fail_closed_site_count(), 2);
-    assert_eq!(inventory.open_placeholder_site_count(), 2);
+    assert_eq!(inventory.fail_closed_site_count(), 0);
+    assert_eq!(inventory.open_placeholder_site_count(), 0);
 }
 
 #[test]

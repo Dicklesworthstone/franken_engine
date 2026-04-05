@@ -1028,7 +1028,7 @@ fn franken_law_mining_candidate_catalog_schema_version() {
     );
     assert!(catalog["bead_id"].is_string());
     assert!(catalog["generated_epoch"].is_number());
-    assert!(catalog["catalog_hash"].is_string());
+    assert!(catalog["catalog_hash"].is_array());
 }
 
 #[test]
@@ -1310,7 +1310,7 @@ fn franken_law_mining_run_manifest_has_schema_version() {
         Some("franken-engine.law-mining.run-manifest.v1")
     );
     assert!(manifest["bead_id"].is_string());
-    assert!(manifest["catalog_hash"].is_string());
+    assert!(manifest["catalog_hash"].is_array());
     assert!(manifest["generated_epoch"].is_number());
     assert!(manifest["command_invocation"].is_string());
 }

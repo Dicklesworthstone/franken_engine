@@ -42,6 +42,8 @@ pub const AMBIENT_MOCK_GUARD_BEAD_ID: &str = "bd-3nr.1.2.2";
 pub const AMBIENT_MOCK_GUARD_POLICY_ID: &str = "frankenengine.control-plane-mocks.fail-closed.v1";
 pub const AMBIENT_MOCK_GUARD_REPORT_SCHEMA_VERSION: &str =
     "frankenengine.ambient-mock-guard-report.v1";
+pub const AMBIENT_MOCK_GUARD_REGRESSION_REPORT_SCHEMA_VERSION: &str =
+    "frankenengine.ambient-mock-guard-regression-report.v1";
 pub const AMBIENT_MOCK_GUARD_TRACE_IDS_SCHEMA_VERSION: &str =
     "frankenengine.ambient-mock-guard.trace-ids.v1";
 pub const AMBIENT_MOCK_GUARD_RUN_MANIFEST_SCHEMA_VERSION: &str =
@@ -49,6 +51,10 @@ pub const AMBIENT_MOCK_GUARD_RUN_MANIFEST_SCHEMA_VERSION: &str =
 pub const AMBIENT_MOCK_GUARD_EVENT_SCHEMA_VERSION: &str =
     "frankenengine.ambient-mock-guard.event.v1";
 pub const AMBIENT_MOCK_GUARD_SCAN_ROOT: &str = "crates/franken-engine/src";
+pub const AMBIENT_MOCK_GUARD_REGRESSION_BEAD_ID: &str = "bd-2muur.3.3";
+pub const AMBIENT_MOCK_GUARD_REGRESSION_POLICY_ID: &str =
+    "frankenengine.control-plane-mocks.guard-regression.v1";
+pub const AMBIENT_MOCK_GUARD_REGRESSION_SEED: &str = "ambient-mock-guard-regression-fixtures-v1";
 
 static NEXT_AMBIENT_MOCK_GUARD_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -937,7 +943,9 @@ fn build_ambient_mock_guard_events(
         error_code: None,
         seed: "ambient-mock-guard-static-scan-v1".to_string(),
         scenario_id: "workspace-scan".to_string(),
+        rule_id: None,
         diagnostic_id: None,
+        source_path: None,
         file_path: None,
         line_number: None,
         detail: Some("ambient mock guard scan started".to_string()),
@@ -955,7 +963,9 @@ fn build_ambient_mock_guard_events(
             error_code: Some(violation.diagnostic_code.clone()),
             seed: "ambient-mock-guard-static-scan-v1".to_string(),
             scenario_id: "workspace-scan".to_string(),
+            rule_id: Some(violation.rule.as_str().to_string()),
             diagnostic_id: Some(violation.violation_id.clone()),
+            source_path: Some(violation.file_path.clone()),
             file_path: Some(violation.file_path.clone()),
             line_number: Some(violation.line_number),
             detail: Some(violation.detail.clone()),
@@ -973,7 +983,9 @@ fn build_ambient_mock_guard_events(
         error_code: None,
         seed: "ambient-mock-guard-static-scan-v1".to_string(),
         scenario_id: "workspace-scan".to_string(),
+        rule_id: None,
         diagnostic_id: None,
+        source_path: None,
         file_path: None,
         line_number: None,
         detail: Some(format!(
@@ -1047,8 +1059,12 @@ fn render_ambient_mock_guard_step_log(
     ));
     for violation in &report.violations {
         output.push_str(&format!(
-            "violation={} {}:{} {}\n",
-            violation.diagnostic_code, violation.file_path, violation.line_number, violation.detail
+            "violation={} rule_id={} source_path={} line={} {}\n",
+            violation.diagnostic_code,
+            violation.rule.as_str(),
+            violation.file_path,
+            violation.line_number,
+            violation.detail
         ));
     }
     output
@@ -1061,6 +1077,229 @@ fn ambient_mock_guard_json_bytes<T: Serialize>(
     serde_json::to_vec(value).map_err(|source| AmbientMockGuardError::Json {
         path: path.display().to_string(),
         source,
+    })
+}
+
+fn ambient_mock_guard_temp_dir(label: &str) -> PathBuf {
+    let sequence = NEXT_AMBIENT_MOCK_GUARD_TEMP_FILE_ID.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "frankenengine-ambient-mock-guard-{label}-{}-{sequence}",
+        std::process::id()
+    ))
+}
+
+fn write_ambient_mock_guard_fixture_file(
+    root: &Path,
+    relative_path: &str,
+    contents: &str,
+) -> Result<(), AmbientMockGuardError> {
+    let path = root.join(relative_path);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| AmbientMockGuardError::Io {
+            path: parent.display().to_string(),
+            source,
+        })?;
+    }
+    fs::write(&path, contents).map_err(|source| AmbientMockGuardError::Io {
+        path: path.display().to_string(),
+        source,
+    })
+}
+
+fn sorted_unique_strings(values: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut values: Vec<String> = values
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    values.sort();
+    values
+}
+
+fn evaluate_ambient_mock_guard_regression_scenario(
+    scenario_id: &str,
+    description: &str,
+    fixture_files: &[(&str, &str)],
+    expected_outcome: AmbientMockGuardOutcome,
+    expected_rule_ids: &[AmbientMockGuardRule],
+    expected_diagnostic_codes: &[&str],
+    expected_source_paths: &[&str],
+) -> Result<AmbientMockGuardRegressionScenario, AmbientMockGuardError> {
+    let root = ambient_mock_guard_temp_dir(scenario_id);
+    for (relative_path, contents) in fixture_files {
+        write_ambient_mock_guard_fixture_file(&root, relative_path, contents)?;
+    }
+
+    let report_result = evaluate_ambient_mock_guard_in_root(&root);
+    let cleanup_result = fs::remove_dir_all(&root);
+    let report = report_result?;
+    if let Err(source) = cleanup_result {
+        return Err(AmbientMockGuardError::Io {
+            path: root.display().to_string(),
+            source,
+        });
+    }
+
+    let expected_rule_ids = sorted_unique_strings(
+        expected_rule_ids
+            .iter()
+            .map(|rule| rule.as_str().to_string()),
+    );
+    let actual_rule_ids = sorted_unique_strings(
+        report
+            .violations
+            .iter()
+            .map(|violation| violation.rule.as_str().to_string()),
+    );
+    let expected_diagnostic_codes = sorted_unique_strings(
+        expected_diagnostic_codes
+            .iter()
+            .map(|code| (*code).to_string()),
+    );
+    let actual_diagnostic_codes = sorted_unique_strings(
+        report
+            .violations
+            .iter()
+            .map(|violation| violation.diagnostic_code.clone()),
+    );
+    let expected_source_paths =
+        sorted_unique_strings(expected_source_paths.iter().map(|path| (*path).to_string()));
+    let actual_source_paths = sorted_unique_strings(
+        report
+            .violations
+            .iter()
+            .map(|violation| violation.file_path.clone()),
+    );
+
+    let mut notes = Vec::new();
+    if report.outcome != expected_outcome {
+        notes.push(format!(
+            "expected outcome `{expected_outcome}`, got `{}`",
+            report.outcome
+        ));
+    }
+    if actual_rule_ids != expected_rule_ids {
+        notes.push(format!(
+            "expected rule_ids {:?}, got {:?}",
+            expected_rule_ids, actual_rule_ids
+        ));
+    }
+    if actual_diagnostic_codes != expected_diagnostic_codes {
+        notes.push(format!(
+            "expected diagnostic_codes {:?}, got {:?}",
+            expected_diagnostic_codes, actual_diagnostic_codes
+        ));
+    }
+    if actual_source_paths != expected_source_paths {
+        notes.push(format!(
+            "expected source_paths {:?}, got {:?}",
+            expected_source_paths, actual_source_paths
+        ));
+    }
+
+    Ok(AmbientMockGuardRegressionScenario {
+        scenario_id: scenario_id.to_string(),
+        description: description.to_string(),
+        expected_outcome,
+        actual_outcome: report.outcome,
+        expected_rule_ids,
+        actual_rule_ids,
+        expected_diagnostic_codes,
+        actual_diagnostic_codes,
+        expected_source_paths,
+        actual_source_paths,
+        passed: notes.is_empty(),
+        notes,
+    })
+}
+
+fn evaluate_ambient_mock_guard_regression_report(
+    canonical_inventory_hash: &str,
+) -> Result<AmbientMockGuardRegressionReport, AmbientMockGuardError> {
+    let scenarios = vec![
+        evaluate_ambient_mock_guard_regression_scenario(
+            "cfg_test_only_mock_usage",
+            "test-only `control_plane::mocks` usage must remain allowed when sealed behind `#[cfg(test)]`",
+            &[(
+                "crates/franken-engine/src/lib.rs",
+                r#"
+#[cfg(test)]
+mod tests {
+    use crate::control_plane::mocks::{MockBudget, MockCx};
+
+    #[test]
+    fn helper() {
+        let _cx = MockCx::new(crate::control_plane::mocks::trace_id_from_seed(1), MockBudget::new(10));
+    }
+}
+"#,
+            )],
+            AmbientMockGuardOutcome::Pass,
+            &[],
+            &[],
+            &[],
+        )?,
+        evaluate_ambient_mock_guard_regression_scenario(
+            "production_mock_reference_fails_closed",
+            "production code must fail closed when it imports `control_plane::mocks` and constructs a fake context",
+            &[(
+                "crates/franken-engine/src/lib.rs",
+                r#"
+use crate::control_plane::mocks::{MockBudget, MockCx};
+
+fn build() {
+    let _cx = MockCx::new(trace_id_from_seed(7), MockBudget::new(10));
+}
+"#,
+            )],
+            AmbientMockGuardOutcome::FailClosed,
+            &[
+                AmbientMockGuardRule::NoProductionMockModuleReference,
+                AmbientMockGuardRule::NoProductionFakeContextSymbol,
+            ],
+            &["AMG-PROD-MOCK-CX", "AMG-PROD-MOCK-MODULE-REFERENCE"],
+            &["crates/franken-engine/src/lib.rs"],
+        )?,
+        evaluate_ambient_mock_guard_regression_scenario(
+            "unguarded_mock_module_fails_closed",
+            "a production-default `pub mod mocks` definition must be flagged immediately with actionable diagnostics",
+            &[
+                (
+                    "crates/franken-engine/src/control_plane/mod.rs",
+                    r#"
+pub mod mocks {
+    pub struct MockCx;
+}
+"#,
+                ),
+                ("crates/franken-engine/src/lib.rs", "pub mod control_plane;"),
+            ],
+            AmbientMockGuardOutcome::FailClosed,
+            &[AmbientMockGuardRule::MockModuleMustBeCfgTest],
+            &["AMG-ARCH-UNGARDED-MOCK-MODULE"],
+            &["crates/franken-engine/src/control_plane/mod.rs"],
+        )?,
+    ];
+    let summary = AmbientMockGuardRegressionSummary {
+        scenario_count: scenarios.len() as u64,
+        passed_scenario_count: scenarios.iter().filter(|scenario| scenario.passed).count() as u64,
+        failed_scenario_count: scenarios.iter().filter(|scenario| !scenario.passed).count() as u64,
+    };
+
+    Ok(AmbientMockGuardRegressionReport {
+        schema_version: AMBIENT_MOCK_GUARD_REGRESSION_REPORT_SCHEMA_VERSION.to_string(),
+        component: AMBIENT_MOCK_GUARD_COMPONENT.to_string(),
+        bead_id: AMBIENT_MOCK_GUARD_REGRESSION_BEAD_ID.to_string(),
+        policy_id: AMBIENT_MOCK_GUARD_REGRESSION_POLICY_ID.to_string(),
+        canonical_inventory_hash: canonical_inventory_hash.to_string(),
+        suite_seed: AMBIENT_MOCK_GUARD_REGRESSION_SEED.to_string(),
+        outcome: if summary.failed_scenario_count == 0 {
+            AmbientMockGuardOutcome::Pass
+        } else {
+            AmbientMockGuardOutcome::FailClosed
+        },
+        summary,
+        scenarios,
     })
 }
 
@@ -1378,6 +1617,8 @@ pub struct AmbientMockGuardReport {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AmbientMockGuardArtifactPaths {
     pub ambient_mock_guard_report: String,
+    pub control_plane_mock_surface_migration_report: String,
+    pub control_plane_mock_guard_regression_report: String,
     pub trace_ids: String,
     pub run_manifest: String,
     pub events_jsonl: String,
@@ -1386,6 +1627,42 @@ pub struct AmbientMockGuardArtifactPaths {
     pub summary_md: String,
     pub env_json: String,
     pub repro_lock: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AmbientMockGuardRegressionSummary {
+    pub scenario_count: u64,
+    pub passed_scenario_count: u64,
+    pub failed_scenario_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AmbientMockGuardRegressionScenario {
+    pub scenario_id: String,
+    pub description: String,
+    pub expected_outcome: AmbientMockGuardOutcome,
+    pub actual_outcome: AmbientMockGuardOutcome,
+    pub expected_rule_ids: Vec<String>,
+    pub actual_rule_ids: Vec<String>,
+    pub expected_diagnostic_codes: Vec<String>,
+    pub actual_diagnostic_codes: Vec<String>,
+    pub expected_source_paths: Vec<String>,
+    pub actual_source_paths: Vec<String>,
+    pub passed: bool,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AmbientMockGuardRegressionReport {
+    pub schema_version: String,
+    pub component: String,
+    pub bead_id: String,
+    pub policy_id: String,
+    pub canonical_inventory_hash: String,
+    pub suite_seed: String,
+    pub outcome: AmbientMockGuardOutcome,
+    pub summary: AmbientMockGuardRegressionSummary,
+    pub scenarios: Vec<AmbientMockGuardRegressionScenario>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1427,7 +1704,11 @@ pub struct AmbientMockGuardEvent {
     pub seed: String,
     pub scenario_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diagnostic_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1440,6 +1721,8 @@ pub struct AmbientMockGuardEvent {
 pub struct AmbientMockGuardArtifacts {
     pub out_dir: PathBuf,
     pub report_path: PathBuf,
+    pub migration_report_path: PathBuf,
+    pub regression_report_path: PathBuf,
     pub trace_ids_path: PathBuf,
     pub run_manifest_path: PathBuf,
     pub events_path: PathBuf,
@@ -1835,6 +2118,8 @@ pub fn write_ambient_mock_guard_bundle_in_root(
 
     let report = evaluate_ambient_mock_guard_in_root(workspace_root)?;
     let report_path = out_dir.join("ambient_mock_guard_report.json");
+    let migration_report_path = out_dir.join("control_plane_mock_surface_migration_report.json");
+    let regression_report_path = out_dir.join("control_plane_mock_guard_regression_report.json");
     let trace_ids_path = out_dir.join("trace_ids.json");
     let run_manifest_path = out_dir.join("run_manifest.json");
     let events_path = out_dir.join("events.jsonl");
@@ -1845,6 +2130,10 @@ pub fn write_ambient_mock_guard_bundle_in_root(
     let repro_lock_path = out_dir.join("repro.lock");
 
     let report_bytes = ambient_mock_guard_json_bytes(&report, &report_path)?;
+    let regression_report =
+        evaluate_ambient_mock_guard_regression_report(&report.canonical_inventory_hash)?;
+    let regression_report_bytes =
+        ambient_mock_guard_json_bytes(&regression_report, &regression_report_path)?;
     let report_hash = sha256_hex(&report_bytes);
     let short_hash = report_hash.chars().take(16).collect::<String>();
     let trace_id = format!("trace-ambient-mock-guard-{short_hash}");
@@ -1919,6 +2208,10 @@ pub fn write_ambient_mock_guard_bundle_in_root(
         violation_count: report.summary.violation_count,
         artifact_paths: AmbientMockGuardArtifactPaths {
             ambient_mock_guard_report: "ambient_mock_guard_report.json".to_string(),
+            control_plane_mock_surface_migration_report:
+                "control_plane_mock_surface_migration_report.json".to_string(),
+            control_plane_mock_guard_regression_report:
+                "control_plane_mock_guard_regression_report.json".to_string(),
             trace_ids: "trace_ids.json".to_string(),
             run_manifest: "run_manifest.json".to_string(),
             events_jsonl: "events.jsonl".to_string(),
@@ -1933,6 +2226,8 @@ pub fn write_ambient_mock_guard_bundle_in_root(
 
     let _bundle_lock = acquire_ambient_mock_guard_bundle_lock(&out_dir)?;
     write_ambient_mock_guard_atomic(&report_path, &report_bytes)?;
+    write_ambient_mock_guard_atomic(&migration_report_path, &report_bytes)?;
+    write_ambient_mock_guard_atomic(&regression_report_path, &regression_report_bytes)?;
     write_ambient_mock_guard_atomic(&trace_ids_path, &trace_ids_bytes)?;
     write_ambient_mock_guard_atomic(&events_path, events_jsonl.as_bytes())?;
     write_ambient_mock_guard_atomic(&commands_path, commands_buf.as_bytes())?;
@@ -1949,10 +2244,30 @@ pub fn write_ambient_mock_guard_bundle_in_root(
     write_ambient_mock_guard_atomic(&env_path, &env_json)?;
     write_ambient_mock_guard_atomic(&repro_lock_path, &repro_lock)?;
     write_ambient_mock_guard_atomic(&run_manifest_path, &manifest_bytes)?;
+    if regression_report.outcome != AmbientMockGuardOutcome::Pass {
+        let detail = regression_report
+            .scenarios
+            .iter()
+            .find(|scenario| !scenario.passed)
+            .map(|scenario| {
+                format!(
+                    "regression scenario `{}` failed: {}",
+                    scenario.scenario_id,
+                    scenario.notes.join("; ")
+                )
+            })
+            .unwrap_or_else(|| "ambient mock guard regression suite failed".to_string());
+        return Err(AmbientMockGuardError::Io {
+            path: regression_report_path.display().to_string(),
+            source: io::Error::other(detail),
+        });
+    }
 
     Ok(AmbientMockGuardArtifacts {
         out_dir,
         report_path,
+        migration_report_path,
+        regression_report_path,
         trace_ids_path,
         run_manifest_path,
         events_path,
@@ -4162,6 +4477,8 @@ mod tests {
             .expect("bundle should be written");
         assert_eq!(artifacts.outcome, AmbientMockGuardOutcome::Pass);
         assert!(artifacts.report_path.exists());
+        assert!(artifacts.migration_report_path.exists());
+        assert!(artifacts.regression_report_path.exists());
         assert!(artifacts.trace_ids_path.exists());
         assert!(artifacts.run_manifest_path.exists());
         assert!(artifacts.events_path.exists());
@@ -4178,6 +4495,18 @@ mod tests {
         assert_eq!(
             manifest.artifact_paths.ambient_mock_guard_report,
             "ambient_mock_guard_report.json"
+        );
+        assert_eq!(
+            manifest
+                .artifact_paths
+                .control_plane_mock_surface_migration_report,
+            "control_plane_mock_surface_migration_report.json"
+        );
+        assert_eq!(
+            manifest
+                .artifact_paths
+                .control_plane_mock_guard_regression_report,
+            "control_plane_mock_guard_regression_report.json"
         );
 
         let repro_lock: serde_json::Value =

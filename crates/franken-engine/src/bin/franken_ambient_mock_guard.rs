@@ -25,6 +25,8 @@ struct CommandOutput {
     schema_version: String,
     out_dir: String,
     ambient_mock_guard_report: String,
+    control_plane_mock_surface_migration_report: String,
+    control_plane_mock_guard_regression_report: String,
     trace_ids: String,
     run_manifest: String,
     events_jsonl: String,
@@ -81,6 +83,14 @@ fn run() -> Result<i32, String> {
         schema_version: OUTPUT_SCHEMA_VERSION.to_string(),
         out_dir: artifacts.out_dir.display().to_string(),
         ambient_mock_guard_report: artifacts.report_path.display().to_string(),
+        control_plane_mock_surface_migration_report: artifacts
+            .migration_report_path
+            .display()
+            .to_string(),
+        control_plane_mock_guard_regression_report: artifacts
+            .regression_report_path
+            .display()
+            .to_string(),
         trace_ids: artifacts.trace_ids_path.display().to_string(),
         run_manifest: artifacts.run_manifest_path.display().to_string(),
         events_jsonl: artifacts.events_path.display().to_string(),

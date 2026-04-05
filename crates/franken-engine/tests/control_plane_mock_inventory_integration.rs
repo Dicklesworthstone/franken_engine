@@ -1031,6 +1031,8 @@ fn ambient_mock_guard_trace_ids_serde_roundtrip() {
 fn ambient_mock_guard_artifact_paths_serde_roundtrip() {
     let paths = AmbientMockGuardArtifactPaths {
         ambient_mock_guard_report: "report.json".to_string(),
+        control_plane_mock_surface_migration_report: "migration-report.json".to_string(),
+        control_plane_mock_guard_regression_report: "guard-regression-report.json".to_string(),
         trace_ids: "trace_ids.json".to_string(),
         run_manifest: "run_manifest.json".to_string(),
         events_jsonl: "events.jsonl".to_string(),
@@ -1063,6 +1065,8 @@ fn ambient_mock_guard_run_manifest_serde_roundtrip() {
         violation_count: 5,
         artifact_paths: AmbientMockGuardArtifactPaths {
             ambient_mock_guard_report: "report.json".to_string(),
+            control_plane_mock_surface_migration_report: "migration-report.json".to_string(),
+            control_plane_mock_guard_regression_report: "guard-regression-report.json".to_string(),
             trace_ids: "trace_ids.json".to_string(),
             run_manifest: "run_manifest.json".to_string(),
             events_jsonl: "events.jsonl".to_string(),
@@ -1095,7 +1099,9 @@ fn ambient_mock_guard_event_serde_with_all_fields() {
         error_code: Some("AMG-001".to_string()),
         seed: "seed-abc".to_string(),
         scenario_id: "scenario-1".to_string(),
+        rule_id: Some("no_production_mock_module_reference".to_string()),
         diagnostic_id: Some("diag-1".to_string()),
+        source_path: Some("src/foo.rs".to_string()),
         file_path: Some("src/foo.rs".to_string()),
         line_number: Some(42),
         detail: Some("detail info".to_string()),
@@ -1118,7 +1124,9 @@ fn ambient_mock_guard_event_serde_with_no_optional_fields() {
         error_code: None,
         seed: "seed-xyz".to_string(),
         scenario_id: "scenario-2".to_string(),
+        rule_id: None,
         diagnostic_id: None,
+        source_path: None,
         file_path: None,
         line_number: None,
         detail: None,
@@ -1126,12 +1134,49 @@ fn ambient_mock_guard_event_serde_with_no_optional_fields() {
     let json = serde_json::to_string(&event).unwrap();
     // Optional None fields should be absent from JSON
     assert!(!json.contains("error_code"));
+    assert!(!json.contains("rule_id"));
     assert!(!json.contains("diagnostic_id"));
+    assert!(!json.contains("source_path"));
     assert!(!json.contains("file_path"));
     assert!(!json.contains("line_number"));
     assert!(!json.contains("detail"));
     let back: AmbientMockGuardEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, back);
+}
+
+#[test]
+fn ambient_mock_guard_regression_report_serde_roundtrip() {
+    let report = AmbientMockGuardRegressionReport {
+        schema_version: AMBIENT_MOCK_GUARD_REGRESSION_REPORT_SCHEMA_VERSION.to_string(),
+        component: AMBIENT_MOCK_GUARD_COMPONENT.to_string(),
+        bead_id: AMBIENT_MOCK_GUARD_REGRESSION_BEAD_ID.to_string(),
+        policy_id: AMBIENT_MOCK_GUARD_REGRESSION_POLICY_ID.to_string(),
+        canonical_inventory_hash: "hash-123".to_string(),
+        suite_seed: AMBIENT_MOCK_GUARD_REGRESSION_SEED.to_string(),
+        outcome: AmbientMockGuardOutcome::Pass,
+        summary: AmbientMockGuardRegressionSummary {
+            scenario_count: 3,
+            passed_scenario_count: 3,
+            failed_scenario_count: 0,
+        },
+        scenarios: vec![AmbientMockGuardRegressionScenario {
+            scenario_id: "scenario-1".to_string(),
+            description: "fixture".to_string(),
+            expected_outcome: AmbientMockGuardOutcome::Pass,
+            actual_outcome: AmbientMockGuardOutcome::Pass,
+            expected_rule_ids: Vec::new(),
+            actual_rule_ids: Vec::new(),
+            expected_diagnostic_codes: Vec::new(),
+            actual_diagnostic_codes: Vec::new(),
+            expected_source_paths: Vec::new(),
+            actual_source_paths: Vec::new(),
+            passed: true,
+            notes: Vec::new(),
+        }],
+    };
+    let json = serde_json::to_string(&report).unwrap();
+    let back: AmbientMockGuardRegressionReport = serde_json::from_str(&json).unwrap();
+    assert_eq!(report, back);
 }
 
 // ---------------------------------------------------------------------------
@@ -1555,6 +1600,10 @@ fn ambient_mock_guard_constants_nonempty() {
     assert!(!AMBIENT_MOCK_GUARD_BEAD_ID.is_empty());
     assert!(!AMBIENT_MOCK_GUARD_POLICY_ID.is_empty());
     assert!(!AMBIENT_MOCK_GUARD_REPORT_SCHEMA_VERSION.is_empty());
+    assert!(!AMBIENT_MOCK_GUARD_REGRESSION_REPORT_SCHEMA_VERSION.is_empty());
+    assert!(!AMBIENT_MOCK_GUARD_REGRESSION_BEAD_ID.is_empty());
+    assert!(!AMBIENT_MOCK_GUARD_REGRESSION_POLICY_ID.is_empty());
+    assert!(!AMBIENT_MOCK_GUARD_REGRESSION_SEED.is_empty());
     assert!(!AMBIENT_MOCK_GUARD_TRACE_IDS_SCHEMA_VERSION.is_empty());
     assert!(!AMBIENT_MOCK_GUARD_RUN_MANIFEST_SCHEMA_VERSION.is_empty());
     assert!(!AMBIENT_MOCK_GUARD_EVENT_SCHEMA_VERSION.is_empty());

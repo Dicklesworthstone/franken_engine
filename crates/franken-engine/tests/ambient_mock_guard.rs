@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use frankenengine_engine::control_plane_mock_inventory::{
-    AmbientMockGuardReport, render_bundle_command_lines,
+    AmbientMockGuardRegressionReport, AmbientMockGuardReport, render_bundle_command_lines,
 };
 
 fn unique_temp_dir(label: &str) -> PathBuf {
@@ -31,6 +31,14 @@ fn read_report(out_dir: &Path) -> AmbientMockGuardReport {
         &fs::read(out_dir.join("ambient_mock_guard_report.json")).expect("read report"),
     )
     .expect("deserialize report")
+}
+
+fn read_regression_report(out_dir: &Path) -> AmbientMockGuardRegressionReport {
+    serde_json::from_slice(
+        &fs::read(out_dir.join("control_plane_mock_guard_regression_report.json"))
+            .expect("read regression report"),
+    )
+    .expect("deserialize regression report")
 }
 
 fn run_guard_binary(workspace_root: &Path, out_dir: &Path) -> std::process::Output {
@@ -70,6 +78,16 @@ mod tests {
     assert!(out_dir.join("run_manifest.json").exists());
     assert!(out_dir.join("events.jsonl").exists());
     assert!(out_dir.join("commands.txt").exists());
+    assert!(
+        out_dir
+            .join("control_plane_mock_surface_migration_report.json")
+            .exists()
+    );
+    assert!(
+        out_dir
+            .join("control_plane_mock_guard_regression_report.json")
+            .exists()
+    );
     assert!(out_dir.join("step_logs/step_001_scan.log").exists());
     assert!(out_dir.join("summary.md").exists());
     assert!(out_dir.join("env.json").exists());
@@ -95,6 +113,28 @@ mod tests {
             .iter()
             .any(|line| line.contains("rch exec --")),
         "commands.txt must include an rch replay line"
+    );
+    let regression_report = read_regression_report(&out_dir);
+    assert_eq!(regression_report.outcome.as_str(), "pass");
+    assert_eq!(regression_report.summary.scenario_count, 3);
+    assert_eq!(regression_report.summary.failed_scenario_count, 0);
+    assert!(
+        regression_report
+            .scenarios
+            .iter()
+            .all(|scenario| scenario.passed)
+    );
+    assert_eq!(
+        regression_report
+            .scenarios
+            .iter()
+            .map(|scenario| scenario.scenario_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "cfg_test_only_mock_usage",
+            "production_mock_reference_fails_closed",
+            "unguarded_mock_module_fails_closed",
+        ]
     );
 
     let _ = fs::remove_dir_all(fixture_root);
@@ -139,6 +179,8 @@ mod tests {
 
     for key in [
         "ambient_mock_guard_report",
+        "control_plane_mock_surface_migration_report",
+        "control_plane_mock_guard_regression_report",
         "trace_ids",
         "run_manifest",
         "events_jsonl",
@@ -202,6 +244,19 @@ fn make_mock() -> MockCx {
             .iter()
             .any(|violation| violation.diagnostic_code == "AMG-PROD-MOCK-CX")
     );
+    let events_jsonl = fs::read_to_string(out_dir.join("events.jsonl")).expect("read events");
+    let violation_events: Vec<serde_json::Value> = events_jsonl
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<serde_json::Value>(line).expect("event line should deserialize")
+        })
+        .filter(|event| event["event"] == "violation_detected")
+        .collect();
+    assert!(violation_events.iter().any(|event| {
+        event["error_code"] == "AMG-PROD-MOCK-MODULE-REFERENCE"
+            && event["rule_id"] == "no_production_mock_module_reference"
+            && event["source_path"] == "crates/franken-engine/src/lib.rs"
+    }));
 
     let _ = fs::remove_dir_all(fixture_root);
     let _ = fs::remove_dir_all(out_dir);

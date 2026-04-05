@@ -4226,37 +4226,21 @@ mod tests {
     #[test]
     fn canonical_inventory_not_empty() {
         let inv = build_canonical_inventory();
-        assert!(inv.summary.total_occurrences > 0);
-    }
-
-    #[test]
-    fn canonical_inventory_has_must_fix() {
-        let inv = build_canonical_inventory();
-        assert!(inv.has_must_fix());
-        assert!(inv.summary.must_fix_count >= 5);
+        // Source-derived inventory should find at least some mock usage in the
+        // codebase (test-only at minimum).
+        assert!(
+            inv.summary.total_occurrences > 0,
+            "source-derived inventory found zero occurrences — scanner may be broken"
+        );
     }
 
     #[test]
     fn canonical_inventory_has_test_only() {
         let inv = build_canonical_inventory();
-        assert!(inv.summary.test_only_count >= 13);
-    }
-
-    #[test]
-    fn canonical_inventory_has_architectural_issues() {
-        let inv = build_canonical_inventory();
-        assert_eq!(inv.summary.architectural_issue_count, 2);
-    }
-
-    #[test]
-    fn canonical_inventory_orchestrator_must_fix() {
-        let inv = build_canonical_inventory();
-        let orch_items = inv.for_file("crates/franken-engine/src/execution_orchestrator.rs");
-        assert!(!orch_items.is_empty());
+        // Many src modules use MockCx/MockBudget inside #[cfg(test)] blocks.
         assert!(
-            orch_items
-                .iter()
-                .all(|o| o.classification == SeamClassification::MustFixProduction)
+            inv.summary.test_only_count > 0,
+            "expected at least some test-only mock occurrences"
         );
     }
 
@@ -4281,6 +4265,25 @@ mod tests {
         let json = serde_json::to_string(&inv).unwrap();
         let inv2: MockInventory = serde_json::from_str(&json).unwrap();
         assert_eq!(inv, inv2);
+    }
+
+    #[test]
+    fn source_derived_inventory_classifies_test_only_correctly() {
+        let inv = build_canonical_inventory();
+        for occ in inv.test_only_items() {
+            assert_eq!(occ.classification, SeamClassification::AcceptableTestOnly);
+            assert!(occ.inside_cfg_test);
+            assert_eq!(occ.remediation, RemediationStrategy::NoAction);
+        }
+    }
+
+    #[test]
+    fn source_derived_inventory_must_fix_items_not_inside_cfg_test() {
+        let inv = build_canonical_inventory();
+        for occ in inv.must_fix_items() {
+            assert!(!occ.inside_cfg_test);
+            assert_eq!(occ.classification, SeamClassification::MustFixProduction);
+        }
     }
 
     #[test]
@@ -4447,22 +4450,22 @@ mod tests {
     #[test]
     fn inventory_by_kind_breakdown() {
         let inv = build_canonical_inventory();
-        assert!(inv.count_by_kind(SeamKind::MockContext) > 0);
-        assert!(inv.count_by_kind(SeamKind::MockBudget) > 0);
+        // Source-derived scanner should find MockContext usage in at least
+        // test-only files (many modules use MockCx in cfg(test) blocks).
+        assert!(
+            inv.count_by_kind(SeamKind::MockContext) > 0,
+            "expected at least one MockContext occurrence"
+        );
     }
 
     #[test]
     fn inventory_affected_files_count() {
         let inv = build_canonical_inventory();
-        // At least 14 distinct files (1 production + 13 test)
-        assert!(inv.summary.affected_files >= 14);
-    }
-
-    #[test]
-    fn inventory_must_fix_files_count() {
-        let inv = build_canonical_inventory();
-        // Only execution_orchestrator.rs has must-fix items
-        assert_eq!(inv.summary.must_fix_files, 1);
+        // Source-derived scanner should find mock usage across multiple files.
+        assert!(
+            inv.summary.affected_files > 0,
+            "expected at least one affected file"
+        );
     }
 
     #[test]
@@ -4843,5 +4846,202 @@ fn build_cell_close_context(trace_id: &str, budget_ms: u64) -> KernelContext<'st
     #[test]
     fn bead_id_constant() {
         assert_eq!(BEAD_ID, "bd-3nr.1.1.1");
+    }
+
+    // -----------------------------------------------------------------------
+    // Source-derived inventory scanner tests (bd-2muur.5.1)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn source_derived_inventory_finds_production_mock_usage() {
+        let root = unique_temp_dir("source-derived-production");
+        write_fixture_file(
+            &root,
+            "crates/franken-engine/src/executor.rs",
+            r#"
+use crate::control_plane::mocks::{MockBudget, MockCx};
+
+fn execute() {
+    let cx = MockCx::new(trace_id_from_seed(1), MockBudget::new(10_000));
+}
+"#,
+        );
+
+        let inv =
+            build_source_derived_inventory(&root).expect("source-derived inventory should work");
+
+        assert!(inv.summary.total_occurrences > 0);
+        assert!(inv.summary.must_fix_count > 0);
+
+        let must_fix = inv.must_fix_items();
+        assert!(!must_fix.is_empty());
+        assert!(
+            must_fix
+                .iter()
+                .any(|o| o.kind == SeamKind::MockContext
+                    && o.file_path.contains("executor.rs"))
+        );
+        assert!(must_fix.iter().any(|o| o.kind == SeamKind::MockBudget));
+        assert!(
+            must_fix
+                .iter()
+                .any(|o| o.kind == SeamKind::SeedDerivedTraceId)
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn source_derived_inventory_classifies_cfg_test_as_test_only() {
+        let root = unique_temp_dir("source-derived-test-only");
+        write_fixture_file(
+            &root,
+            "crates/franken-engine/src/widget.rs",
+            r#"
+pub fn real_code() {}
+
+#[cfg(test)]
+mod tests {
+    use crate::control_plane::mocks::{MockBudget, MockCx};
+
+    fn helper() {
+        let _cx = MockCx::new(trace_id_from_seed(1), MockBudget::new(10));
+    }
+}
+"#,
+        );
+
+        let inv =
+            build_source_derived_inventory(&root).expect("source-derived inventory should work");
+
+        assert!(inv.summary.test_only_count > 0);
+        assert_eq!(inv.summary.must_fix_count, 0);
+
+        for occ in inv.test_only_items() {
+            assert!(occ.inside_cfg_test);
+            assert_eq!(occ.remediation, RemediationStrategy::NoAction);
+        }
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn source_derived_inventory_detects_unguarded_mock_module() {
+        let root = unique_temp_dir("source-derived-unguarded");
+        write_fixture_file(
+            &root,
+            "crates/franken-engine/src/control_plane.rs",
+            r#"
+pub mod mocks {
+    pub struct MockCx;
+}
+"#,
+        );
+
+        let inv =
+            build_source_derived_inventory(&root).expect("source-derived inventory should work");
+
+        assert!(
+            inv.occurrences
+                .iter()
+                .any(|o| o.kind == SeamKind::UnguardedMockModule)
+        );
+        assert!(
+            inv.architectural_issues
+                .iter()
+                .any(|i| i.description.contains("pub mod mocks"))
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn source_derived_inventory_is_deterministic() {
+        let root = unique_temp_dir("source-derived-determinism");
+        write_fixture_file(
+            &root,
+            "crates/franken-engine/src/test_mod.rs",
+            r#"
+#[cfg(test)]
+mod tests {
+    fn helper() {
+        let _ = MockCx::new();
+    }
+}
+"#,
+        );
+
+        let inv1 =
+            build_source_derived_inventory(&root).expect("first scan");
+        let inv2 =
+            build_source_derived_inventory(&root).expect("second scan");
+        assert_eq!(inv1.inventory_hash, inv2.inventory_hash);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn source_derived_inventory_skips_self() {
+        let inv = build_canonical_inventory();
+        // The scanner skips control_plane_mock_inventory.rs itself, so no
+        // occurrence should reference that file.
+        assert!(
+            inv.occurrences.iter().all(|o| !o
+                .file_path
+                .ends_with("control_plane_mock_inventory.rs"))
+        );
+    }
+
+    #[test]
+    fn source_derived_inventory_empty_tree_returns_empty() {
+        let root = unique_temp_dir("source-derived-empty");
+        fs::create_dir_all(root.join("crates/franken-engine/src"))
+            .expect("create scan root");
+
+        let inv =
+            build_source_derived_inventory(&root).expect("empty tree scan");
+        assert_eq!(inv.summary.total_occurrences, 0);
+        assert!(inv.occurrences.is_empty());
+        assert!(inv.architectural_issues.is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn all_seam_kinds_in_line_detects_multiple_symbols() {
+        let line = "let cx = MockCx::new(trace_id_from_seed(1), MockBudget::new(10));";
+        let hits = all_seam_kinds_in_line(line);
+        let kinds: Vec<SeamKind> = hits.iter().map(|(k, _)| *k).collect();
+        assert!(kinds.contains(&SeamKind::MockContext));
+        assert!(kinds.contains(&SeamKind::MockBudget));
+        assert!(kinds.contains(&SeamKind::SeedDerivedTraceId));
+        assert!(kinds.contains(&SeamKind::HardcodedBudget));
+    }
+
+    #[test]
+    fn all_seam_kinds_in_line_returns_empty_for_clean_code() {
+        let line = "let x = compute_budget(real_cx);";
+        let hits = all_seam_kinds_in_line(line);
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn seam_kind_from_diagnostic_code_mapping() {
+        assert_eq!(
+            seam_kind_from_diagnostic_code("AMG-PROD-MOCK-CX"),
+            SeamKind::MockContext
+        );
+        assert_eq!(
+            seam_kind_from_diagnostic_code("AMG-PROD-MOCK-BUDGET"),
+            SeamKind::MockBudget
+        );
+        assert_eq!(
+            seam_kind_from_diagnostic_code("AMG-PROD-SEED-TRACE-ID"),
+            SeamKind::SeedDerivedTraceId
+        );
+        assert_eq!(
+            seam_kind_from_diagnostic_code("AMG-ARCH-UNGARDED-MOCK-MODULE"),
+            SeamKind::UnguardedMockModule
+        );
     }
 }

@@ -694,179 +694,360 @@ impl Drop for ControlPlaneMockInventoryBundleLock {
 }
 
 // ---------------------------------------------------------------------------
-// build_canonical_inventory — the actual 2026-03-09 scan results
+// build_source_derived_inventory — live source-tree scanning
 // ---------------------------------------------------------------------------
 
-/// Build the canonical inventory from the 2026-03-09 codebase scan.
-///
-/// This encodes every occurrence found by the automated grep + manual
-/// classification pass as structured, versioned data.
-pub fn build_canonical_inventory() -> MockInventory {
-    fn must_fix(
-        file_path: &str,
-        line: u32,
-        kind: SeamKind,
-        sev: SeamSeverity,
-        desc: &str,
-        rem: RemediationStrategy,
-    ) -> SeamOccurrence {
-        SeamOccurrence::new(SeamOccurrenceInput {
-            file_path,
-            line_number: line,
-            kind,
-            classification: SeamClassification::MustFixProduction,
-            severity: sev,
-            inside_cfg_test: false,
-            description: desc,
-            remediation: rem,
-            remediation_bead: "bd-3nr.1.2.1",
-        })
+/// Mapping from diagnostic code prefix to [`SeamKind`].
+fn seam_kind_from_diagnostic_code(code: &str) -> SeamKind {
+    match code {
+        "AMG-PROD-MOCK-CX" => SeamKind::MockContext,
+        "AMG-PROD-MOCK-BUDGET" => SeamKind::MockBudget,
+        "AMG-PROD-MOCK-DECISION-CONTRACT" => SeamKind::MockDecisionContract,
+        "AMG-PROD-MOCK-EVIDENCE-EMITTER" => SeamKind::MockEvidenceEmitter,
+        "AMG-PROD-MOCK-FAILURE-MODE" => SeamKind::MockFailureMode,
+        "AMG-PROD-SEED-TRACE-ID" => SeamKind::SeedDerivedTraceId,
+        "AMG-PROD-SEED-DECISION-ID" => SeamKind::SeedDerivedDecisionId,
+        "AMG-PROD-SEED-POLICY-ID" => SeamKind::SeedDerivedPolicyId,
+        "AMG-PROD-SEED-SCHEMA-VERSION" => SeamKind::SeedDerivedSchemaVersion,
+        "AMG-ARCH-UNGARDED-MOCK-MODULE" => SeamKind::UnguardedMockModule,
+        "AMG-PROD-MOCK-MODULE-REFERENCE" => SeamKind::MockContext,
+        _ => SeamKind::MockContext,
     }
-    fn test_only(file_path: &str, line: u32, desc: &str) -> SeamOccurrence {
-        SeamOccurrence::new(SeamOccurrenceInput {
-            file_path,
-            line_number: line,
-            kind: SeamKind::MockContext,
-            classification: SeamClassification::AcceptableTestOnly,
-            severity: SeamSeverity::Low,
-            inside_cfg_test: true,
-            description: desc,
-            remediation: RemediationStrategy::NoAction,
-            remediation_bead: "",
-        })
-    }
+}
 
-    let orch = "crates/franken-engine/src/execution_orchestrator.rs";
-    let occurrences = vec![
-        // === MUST-FIX PRODUCTION ===
-        must_fix(
-            orch,
-            30,
-            SeamKind::MockContext,
-            SeamSeverity::Critical,
-            "Unconditional top-level import of MockCx, MockBudget, trace_id_from_seed in production module",
-            RemediationStrategy::ThreadRealContext,
+/// Remediation strategy derived from the seam kind.
+fn remediation_for_kind(kind: SeamKind) -> RemediationStrategy {
+    match kind {
+        SeamKind::MockBudget | SeamKind::HardcodedBudget => RemediationStrategy::PropagateBudget,
+        SeamKind::UnguardedMockModule => RemediationStrategy::AddCfgTestGuard,
+        _ => RemediationStrategy::ThreadRealContext,
+    }
+}
+
+/// Match a single source line against all known mock/fake symbols and return
+/// every [`SeamKind`] that matches. This is used by the source-derived
+/// inventory scanner to detect all mock usage in a line (not just the first).
+fn all_seam_kinds_in_line(line: &str) -> Vec<(SeamKind, &'static str)> {
+    let symbols: &[(&str, SeamKind, &str)] = &[
+        ("MockCx", SeamKind::MockContext, "MockCx reference"),
+        ("MockBudget", SeamKind::MockBudget, "MockBudget reference"),
+        (
+            "MockDecisionContract",
+            SeamKind::MockDecisionContract,
+            "MockDecisionContract reference",
         ),
-        must_fix(
-            orch,
-            30,
-            SeamKind::MockBudget,
-            SeamSeverity::Critical,
-            "Unconditional top-level import of MockBudget in production module",
-            RemediationStrategy::PropagateBudget,
+        (
+            "MockEvidenceEmitter",
+            SeamKind::MockEvidenceEmitter,
+            "MockEvidenceEmitter reference",
         ),
-        must_fix(
-            orch,
-            30,
+        (
+            "MockFailureMode",
+            SeamKind::MockFailureMode,
+            "MockFailureMode reference",
+        ),
+        (
+            "trace_id_from_seed",
             SeamKind::SeedDerivedTraceId,
-            SeamSeverity::High,
-            "Unconditional import of trace_id_from_seed in production module",
-            RemediationStrategy::ThreadRealContext,
+            "trace_id_from_seed reference",
         ),
-        must_fix(
-            orch,
-            519,
-            SeamKind::MockContext,
-            SeamSeverity::Critical,
-            "MockCx::new() called in execute() production path for cell.close()",
-            RemediationStrategy::ThreadRealContext,
+        (
+            "decision_id_from_seed",
+            SeamKind::SeedDerivedDecisionId,
+            "decision_id_from_seed reference",
         ),
-        must_fix(
-            orch,
-            519,
-            SeamKind::HardcodedBudget,
-            SeamSeverity::Critical,
-            "Hardcoded MockBudget::new(10_000) in production execute() path",
-            RemediationStrategy::PropagateBudget,
+        (
+            "policy_id_from_seed",
+            SeamKind::SeedDerivedPolicyId,
+            "policy_id_from_seed reference",
         ),
-        // === ACCEPTABLE TEST-ONLY ===
-        test_only(
-            "crates/franken-engine/src/obligation_integration.rs",
-            640,
-            "MockCx/MockBudget/trace_id_from_seed inside #[cfg(test)] mod tests",
-        ),
-        test_only(
-            "crates/franken-engine/src/frankenlab_extension_lifecycle.rs",
-            546,
-            "MockCx/MockBudget/trace_id_from_seed inside #[cfg(test)] mod tests",
-        ),
-        test_only(
-            "crates/franken-engine/src/frankenlab_release_gate.rs",
-            620,
-            "MockCx/MockBudget/trace_id_from_seed inside #[cfg(test)] mod tests",
-        ),
-        test_only(
-            "crates/franken-engine/src/extension_host_lifecycle.rs",
-            694,
-            "MockCx/MockBudget/trace_id_from_seed inside #[cfg(test)] mod tests",
-        ),
-        test_only(
-            "crates/franken-engine/src/safety_decision_router.rs",
-            749,
-            "MockCx/MockBudget/decision_id_from_seed/policy_id_from_seed inside #[cfg(test)]",
-        ),
-        test_only(
-            "crates/franken-engine/src/safe_mode_fallback.rs",
-            1321,
-            "MockCx/MockBudget/MockDecisionContract/MockFailureMode inside #[cfg(test)]",
-        ),
-        test_only(
-            "crates/franken-engine/src/evidence_replay_checker.rs",
-            932,
-            "MockCx/MockBudget/decision_id_from_seed/policy_id_from_seed inside #[cfg(test)]",
-        ),
-        test_only(
-            "crates/franken-engine/src/evidence_emission.rs",
-            569,
-            "MockCx/MockBudget/decision_id_from_seed/policy_id_from_seed inside #[cfg(test)]",
-        ),
-        test_only(
-            "crates/franken-engine/src/execution_cell.rs",
-            990,
-            "MockCx/MockBudget inside #[cfg(test)]",
-        ),
-        test_only(
-            "crates/franken-engine/src/release_gate.rs",
-            768,
-            "MockCx/MockBudget inside #[cfg(test)]",
-        ),
-        test_only(
-            "crates/franken-engine/src/migration_compatibility.rs",
-            1639,
-            "MockCx/MockBudget/decision_id_from_seed/policy_id_from_seed inside #[cfg(test)]",
-        ),
-        test_only(
-            "crates/franken-engine/src/cancellation_lifecycle.rs",
-            589,
-            "MockCx/MockBudget inside #[cfg(test)]",
-        ),
-        test_only(
-            "crates/franken-engine/src/cx_threading.rs",
-            933,
-            "MockCx/MockBudget/trace_id_from_seed inside #[cfg(test)]",
+        (
+            "schema_version_from_seed",
+            SeamKind::SeedDerivedSchemaVersion,
+            "schema_version_from_seed reference",
         ),
     ];
 
-    let architectural_issues = vec![
-        ArchitecturalIssue {
-            id: "ARCH-001".to_string(),
-            description: "control_plane/mod.rs line 284: pub mod mocks {{ }} has no #[cfg(test)] guard despite being documented as 'Test helper mock types'".to_string(),
-            file_path: "crates/franken-engine/src/control_plane/mod.rs".to_string(),
-            severity: SeamSeverity::High,
-            remediation: RemediationStrategy::AddCfgTestGuard,
-            remediation_bead: "bd-3nr.1.2.2".to_string(),
-        },
-        ArchitecturalIssue {
-            id: "ARCH-002".to_string(),
-            description: "execution_orchestrator.rs execute() uses MockCx for cell.close() — all extension executions bypass real budget/context tracking".to_string(),
-            file_path: "crates/franken-engine/src/execution_orchestrator.rs".to_string(),
-            severity: SeamSeverity::Critical,
-            remediation: RemediationStrategy::ThreadRealContext,
-            remediation_bead: "bd-3nr.1.2.1".to_string(),
-        },
-    ];
+    let mut hits = Vec::new();
+    for &(symbol, kind, desc) in symbols {
+        if contains_ident(line, symbol) {
+            hits.push((kind, desc));
+        }
+    }
+    // Detect hardcoded budget patterns like `MockBudget::new(N)` separately.
+    if contains_ident(line, "MockBudget") && line.contains("::new(") {
+        hits.push((SeamKind::HardcodedBudget, "hardcoded MockBudget::new() call"));
+    }
+    hits
+}
 
-    MockInventory::build(occurrences, architectural_issues)
+/// Scan a single Rust source file and emit [`SeamOccurrence`] records for
+/// every mock/fake/stub usage found. Uses the same brace-depth and
+/// `#[cfg(test)]` scope tracking as the ambient mock guard scanner.
+fn scan_file_for_seam_occurrences(
+    workspace_root: &Path,
+    file_path: &Path,
+    relative_path: &str,
+) -> Result<Vec<SeamOccurrence>, AmbientMockGuardError> {
+    let source = fs::read_to_string(file_path).map_err(|source| AmbientMockGuardError::Io {
+        path: file_path.display().to_string(),
+        source,
+    })?;
+
+    let file_is_test = relative_path.contains("/tests/");
+    let mut occurrences = Vec::new();
+    let mut in_block_comment = false;
+    let mut brace_depth = 0usize;
+    let mut pending_test_scope = false;
+    let mut pending_mock_module_scope = false;
+    let mut scope_stack: Vec<GuardScopeFrame> = Vec::new();
+
+    for (index, raw_line) in source.lines().enumerate() {
+        let line_number = (index + 1) as u32;
+        let code_line = strip_non_code_segments(raw_line, &mut in_block_comment);
+        let trimmed = code_line.trim();
+        let line_has_cfg_test = is_cfg_test_attribute(trimmed);
+
+        if line_has_cfg_test {
+            pending_test_scope = true;
+        }
+
+        let is_test_context = file_is_test
+            || pending_test_scope
+            || line_has_cfg_test
+            || scope_stack
+                .iter()
+                .any(|frame| frame.kind == GuardScopeKind::TestOnly);
+
+        // Detect mock module definitions.
+        if is_mock_module_definition(trimmed) {
+            pending_mock_module_scope = true;
+            if !is_test_context {
+                occurrences.push(SeamOccurrence::new(SeamOccurrenceInput {
+                    file_path: relative_path,
+                    line_number,
+                    kind: SeamKind::UnguardedMockModule,
+                    classification: SeamClassification::MustFixProduction,
+                    severity: SeamSeverity::High,
+                    inside_cfg_test: false,
+                    description: "mock helper module reachable from production code",
+                    remediation: RemediationStrategy::AddCfgTestGuard,
+                    remediation_bead: "bd-3nr.1.2.2",
+                }));
+            }
+        }
+
+        // Detect mock/fake symbol usage on non-empty lines.
+        if !trimmed.is_empty() {
+            let hits = all_seam_kinds_in_line(trimmed);
+            for (kind, desc) in hits {
+                let (classification, severity) = if is_test_context {
+                    (SeamClassification::AcceptableTestOnly, SeamSeverity::Low)
+                } else {
+                    let sev = match kind {
+                        SeamKind::MockContext
+                        | SeamKind::MockBudget
+                        | SeamKind::HardcodedBudget => SeamSeverity::Critical,
+                        SeamKind::SeedDerivedTraceId
+                        | SeamKind::SeedDerivedDecisionId
+                        | SeamKind::SeedDerivedPolicyId => SeamSeverity::High,
+                        _ => SeamSeverity::Medium,
+                    };
+                    (SeamClassification::MustFixProduction, sev)
+                };
+                occurrences.push(SeamOccurrence::new(SeamOccurrenceInput {
+                    file_path: relative_path,
+                    line_number,
+                    kind,
+                    classification,
+                    severity,
+                    inside_cfg_test: is_test_context,
+                    description: desc,
+                    remediation: if is_test_context {
+                        RemediationStrategy::NoAction
+                    } else {
+                        remediation_for_kind(kind)
+                    },
+                    remediation_bead: if is_test_context { "" } else { "bd-3nr.1.2.1" },
+                }));
+            }
+        }
+
+        // Mock module reference detection for production paths.
+        if !trimmed.is_empty() && !is_test_context && is_production_mock_module_reference(trimmed) {
+            // Only add if we didn't already capture via symbol-level matching.
+            let already_captured = occurrences.iter().any(|o| {
+                o.file_path == relative_path
+                    && o.line_number == line_number
+                    && o.classification == SeamClassification::MustFixProduction
+            });
+            if !already_captured {
+                occurrences.push(SeamOccurrence::new(SeamOccurrenceInput {
+                    file_path: relative_path,
+                    line_number,
+                    kind: SeamKind::MockContext,
+                    classification: SeamClassification::MustFixProduction,
+                    severity: SeamSeverity::Critical,
+                    inside_cfg_test: false,
+                    description: "production code imports from control_plane::mocks",
+                    remediation: RemediationStrategy::ThreadRealContext,
+                    remediation_bead: "bd-3nr.1.2.1",
+                }));
+            }
+        }
+
+        // Track brace depth and scope stack (same logic as ambient guard scanner).
+        let open_braces = trimmed.chars().filter(|ch| *ch == '{').count();
+        if open_braces > 0 {
+            if pending_test_scope {
+                scope_stack.push(GuardScopeFrame {
+                    kind: GuardScopeKind::TestOnly,
+                    depth: brace_depth + 1,
+                });
+                pending_test_scope = false;
+            }
+            if pending_mock_module_scope {
+                scope_stack.push(GuardScopeFrame {
+                    kind: GuardScopeKind::MockModule,
+                    depth: brace_depth + 1,
+                });
+                pending_mock_module_scope = false;
+            }
+        }
+
+        if pending_test_scope && pending_scope_consumed_without_block(trimmed, open_braces) {
+            pending_test_scope = false;
+        }
+        if pending_mock_module_scope && pending_scope_consumed_without_block(trimmed, open_braces) {
+            pending_mock_module_scope = false;
+        }
+
+        let close_braces = trimmed.chars().filter(|ch| *ch == '}').count();
+        brace_depth += open_braces;
+        brace_depth = brace_depth.saturating_sub(close_braces);
+
+        while scope_stack
+            .last()
+            .is_some_and(|frame| brace_depth < frame.depth)
+        {
+            scope_stack.pop();
+        }
+    }
+
+    // Normalise to workspace-relative paths.
+    for occ in &mut occurrences {
+        if occ
+            .file_path
+            .starts_with(workspace_root.display().to_string().as_str())
+        {
+            occ.file_path = relative_path.to_string();
+        }
+    }
+
+    Ok(occurrences)
+}
+
+/// Build the mock inventory by scanning the actual source tree under
+/// `workspace_root`. This replaces the former hardcoded ledger with live
+/// source-derived detection.
+pub fn build_source_derived_inventory(
+    workspace_root: &Path,
+) -> Result<MockInventory, AmbientMockGuardError> {
+    let scan_root = AMBIENT_MOCK_GUARD_SCAN_ROOT;
+    let source_root = workspace_root.join(scan_root);
+    if !source_root.exists() {
+        return Err(AmbientMockGuardError::MissingScanRoot {
+            path: workspace_root.display().to_string(),
+            expected: scan_root.to_string(),
+        });
+    }
+
+    let mut rust_files = Vec::new();
+    collect_rust_files(&source_root, &mut rust_files)?;
+
+    let mut all_occurrences = Vec::new();
+    for file_path in &rust_files {
+        let relative_path = relative_path_from(workspace_root, file_path);
+        // Skip self to avoid circular detection.
+        if relative_path == "crates/franken-engine/src/control_plane_mock_inventory.rs" {
+            continue;
+        }
+        all_occurrences.extend(scan_file_for_seam_occurrences(
+            workspace_root,
+            file_path,
+            &relative_path,
+        )?);
+    }
+
+    // Derive architectural issues from the production-level occurrences.
+    let mut architectural_issues = Vec::new();
+    let mut seen_arch_ids = std::collections::BTreeSet::new();
+
+    // ARCH-001: unguarded mock module.
+    for occ in all_occurrences
+        .iter()
+        .filter(|o| o.kind == SeamKind::UnguardedMockModule)
+    {
+        let arch_id = format!("ARCH-UNGUARDED-{}", occ.file_path.replace('/', "_"));
+        if seen_arch_ids.insert(arch_id.clone()) {
+            architectural_issues.push(ArchitecturalIssue {
+                id: arch_id,
+                description: format!(
+                    "{}:{} — `pub mod mocks` without #[cfg(test)] guard",
+                    occ.file_path, occ.line_number
+                ),
+                file_path: occ.file_path.clone(),
+                severity: SeamSeverity::High,
+                remediation: RemediationStrategy::AddCfgTestGuard,
+                remediation_bead: "bd-3nr.1.2.2".to_string(),
+            });
+        }
+    }
+
+    // ARCH-002: production code using MockCx/MockBudget for real execution.
+    for occ in all_occurrences.iter().filter(|o| {
+        o.classification == SeamClassification::MustFixProduction
+            && matches!(
+                o.kind,
+                SeamKind::MockContext | SeamKind::MockBudget | SeamKind::HardcodedBudget
+            )
+    }) {
+        let arch_id = format!(
+            "ARCH-PROD-MOCK-{}-{}",
+            occ.file_path.replace('/', "_"),
+            occ.line_number
+        );
+        if seen_arch_ids.insert(arch_id.clone()) {
+            architectural_issues.push(ArchitecturalIssue {
+                id: arch_id,
+                description: format!(
+                    "{}:{} — production code uses {} bypassing real context/budget tracking",
+                    occ.file_path, occ.line_number, occ.kind
+                ),
+                file_path: occ.file_path.clone(),
+                severity: SeamSeverity::Critical,
+                remediation: remediation_for_kind(occ.kind),
+                remediation_bead: "bd-3nr.1.2.1".to_string(),
+            });
+        }
+    }
+
+    Ok(MockInventory::build(all_occurrences, architectural_issues))
+}
+
+/// Build the canonical inventory by scanning the live source tree.
+///
+/// Prior to bd-2muur.5.1 this function returned a hardcoded ledger from the
+/// 2026-03-09 codebase scan. It now delegates to [`build_source_derived_inventory`]
+/// which scans the actual source files for mock/fake/stub usage. If the scan
+/// fails (e.g. workspace root cannot be located), an empty inventory is returned
+/// so callers that do not have access to the workspace still get a valid value.
+pub fn build_canonical_inventory() -> MockInventory {
+    let root = repo_root();
+    match build_source_derived_inventory(&root) {
+        Ok(inventory) => inventory,
+        Err(_) => MockInventory::build(Vec::new(), Vec::new()),
+    }
 }
 
 fn control_plane_mock_inventory_json_bytes<T: Serialize>(

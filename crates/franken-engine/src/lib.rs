@@ -328,6 +328,7 @@ pub mod render_lane_specializer;
 pub mod replacement_lineage_log;
 pub mod reproducibility_provenance_pack;
 pub mod reputation;
+pub mod resolver_package_index;
 pub mod resource_certificate_consumer;
 pub mod resource_certificate_governance;
 pub mod resource_certificate_governance_gate;

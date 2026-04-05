@@ -63,7 +63,10 @@ fn lowering_gap_inventory_cli_writes_artifact_bundle() {
         manifest.parser_ready_site_count as usize,
         LoweringGapSiteId::ALL.len()
     );
-    assert_eq!(manifest.execution_ready_site_count, 0);
+    assert_eq!(
+        manifest.execution_ready_site_count as usize,
+        LoweringGapSiteId::ALL.len()
+    );
 
     let events = fs::read_to_string(out_dir.join("events.jsonl")).expect("read events");
     assert_eq!(events.lines().count(), LoweringGapSiteId::ALL.len() + 2);
@@ -308,7 +311,10 @@ fn lowering_gap_inventory_parser_ready_count() {
 #[test]
 fn lowering_gap_inventory_execution_ready_count() {
     let inventory = lgap::lowering_gap_inventory();
-    assert_eq!(inventory.execution_ready_site_count(), 0);
+    assert_eq!(
+        inventory.execution_ready_site_count(),
+        LoweringGapSiteId::ALL.len()
+    );
 }
 
 #[test]

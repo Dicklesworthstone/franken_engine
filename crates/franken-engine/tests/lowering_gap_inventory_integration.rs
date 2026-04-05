@@ -101,9 +101,9 @@ fn all_sites_are_parser_ready() {
 }
 
 #[test]
-fn no_sites_are_execution_ready() {
+fn all_sites_are_execution_ready() {
     let inventory = lowering_gap_inventory();
-    assert_eq!(inventory.execution_ready_site_count(), 0);
+    assert_eq!(inventory.execution_ready_site_count(), 6);
 }
 
 #[test]
@@ -345,7 +345,7 @@ fn bundle_manifest_has_correct_counts() {
     assert_eq!(manifest.fail_closed_site_count, 0);
     assert_eq!(manifest.open_placeholder_site_count, 0);
     assert_eq!(manifest.parser_ready_site_count, 6);
-    assert_eq!(manifest.execution_ready_site_count, 0);
+    assert_eq!(manifest.execution_ready_site_count, 6);
 }
 
 #[test]

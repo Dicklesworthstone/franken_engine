@@ -127,6 +127,14 @@ impl LoweringGapSiteId {
         "lowering_pipeline"
     }
 
+    pub const fn parser_ready_syntax(self) -> bool {
+        true
+    }
+
+    pub const fn execution_ready_semantics(self) -> bool {
+        matches!(self.status(), LoweringGapStatus::Resolved)
+    }
+
     pub const fn ast_node_family(self) -> &'static str {
         match self {
             Self::BinaryNonArithmeticAddPlaceholder => "expression.binary_non_arithmetic",
@@ -288,8 +296,8 @@ impl LoweringGapSiteDescriptor {
             execution_consequence: site.execution_consequence().to_string(),
             user_visible_divergence: site.user_visible_divergence().to_string(),
             target_replacement_strategy: site.target_replacement_strategy().to_string(),
-            parser_ready_syntax: true,
-            execution_ready_semantics: false,
+            parser_ready_syntax: site.parser_ready_syntax(),
+            execution_ready_semantics: site.execution_ready_semantics(),
             source_reference: site.source_reference().to_string(),
             regression_test_hint: site.regression_test_hint().to_string(),
         }
@@ -764,7 +772,7 @@ mod tests {
         assert_eq!(desc.owner, "lowering_pipeline");
         assert_eq!(desc.ast_node_family, "statement.for_of");
         assert!(desc.parser_ready_syntax);
-        assert!(!desc.execution_ready_semantics);
+        assert!(desc.execution_ready_semantics);
         assert!(!desc.emitted_ir_shape.is_empty());
         assert!(!desc.regression_test_hint.is_empty());
     }
@@ -801,7 +809,7 @@ mod tests {
             fail_closed_site_count: 0,
             open_placeholder_site_count: 0,
             parser_ready_site_count: 6,
-            execution_ready_site_count: 0,
+            execution_ready_site_count: 6,
             artifact_paths: LoweringGapInventoryArtifactPaths {
                 lowering_gap_inventory: "inventory.json".to_string(),
                 run_manifest: "manifest.json".to_string(),
@@ -832,7 +840,10 @@ mod tests {
             inventory.parser_ready_site_count(),
             LoweringGapSiteId::ALL.len()
         );
-        assert_eq!(inventory.execution_ready_site_count(), 0);
+        assert_eq!(
+            inventory.execution_ready_site_count(),
+            LoweringGapSiteId::ALL.len()
+        );
         assert_eq!(inventory.fail_closed_site_count(), 0);
         assert_eq!(inventory.open_placeholder_site_count(), 0);
     }
@@ -885,7 +896,10 @@ mod tests {
             manifest.parser_ready_site_count,
             LoweringGapSiteId::ALL.len() as u64
         );
-        assert_eq!(manifest.execution_ready_site_count, 0);
+        assert_eq!(
+            manifest.execution_ready_site_count,
+            LoweringGapSiteId::ALL.len() as u64
+        );
 
         let events = fs::read_to_string(&artifacts.events_path).expect("read events");
         assert_eq!(events.lines().count(), LoweringGapSiteId::ALL.len() + 2);
@@ -1498,7 +1512,7 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_from_site_sets_parser_ready_true_and_execution_ready_false() {
+    fn descriptor_from_site_sets_parser_ready_true_and_execution_ready_for_resolved_sites() {
         for site in LoweringGapSiteId::ALL {
             let desc = LoweringGapSiteDescriptor::from_site(site);
             assert!(
@@ -1507,8 +1521,8 @@ mod tests {
                 site.as_str()
             );
             assert!(
-                !desc.execution_ready_semantics,
-                "execution_ready_semantics should be false for {}",
+                desc.execution_ready_semantics,
+                "execution_ready_semantics should be true for {}",
                 site.as_str()
             );
         }
@@ -1583,7 +1597,7 @@ mod tests {
         assert!(detail.contains("0 fail-closed"));
         assert!(detail.contains("0 open placeholders"));
         assert!(detail.contains("6 parser-ready"));
-        assert!(detail.contains("0 execution-ready"));
+        assert!(detail.contains("6 execution-ready"));
     }
 
     #[test]

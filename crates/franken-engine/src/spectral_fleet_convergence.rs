@@ -728,21 +728,10 @@ fn eigen_residual_inf_norm_millionths(
 /// Integer square root of i128.
 fn isqrt_i128(n: i128) -> i128 {
     if n <= 0 {
-        return 0;
+        0
+    } else {
+        n.unsigned_abs().isqrt() as i128
     }
-    let bits = 128 - n.leading_zeros();
-    let mut x = 1i128 << bits.div_ceil(2);
-    for _ in 0..20 {
-        if x == 0 {
-            break;
-        }
-        let next = (x + n / x) / 2;
-        if next >= x {
-            break;
-        }
-        x = next;
-    }
-    x
 }
 
 /// Integer log₂(n) in millionths using fractional-bit extraction.

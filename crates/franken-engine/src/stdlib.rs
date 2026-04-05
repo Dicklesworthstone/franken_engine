@@ -3235,16 +3235,10 @@ fn isqrt_i64(n: i64) -> i64 {
 /// Integer square root (floor) for 128-bit numbers.
 fn isqrt_i128(n: i128) -> i128 {
     if n <= 0 {
-        return 0;
+        0
+    } else {
+        n.unsigned_abs().isqrt() as i128
     }
-    let mut x = n;
-    #[allow(clippy::manual_div_ceil)]
-    let mut y = (x + 1) / 2;
-    while y < x {
-        x = y;
-        y = (x + n / x) / 2;
-    }
-    x
 }
 
 /// Fixed-point natural logarithm using iterative series.

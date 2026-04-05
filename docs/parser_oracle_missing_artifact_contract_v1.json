@@ -1,0 +1,170 @@
+{
+  "schema_version": "franken-engine.parser-oracle-missing-artifact-contract.v1",
+  "bead_id": "bd-2muur.7.1",
+  "policy_id": "policy-parser-oracle-missing-artifact-contract-v1",
+  "generated_by": "bd-2muur.7.1",
+  "generated_at_utc": "2026-04-03T20:22:27Z",
+  "track": {
+    "id": "RGC-920G.1",
+    "name": "Parser Oracle Missing Artifact Contract"
+  },
+  "source_inputs": [
+    "README.md",
+    "docs/PARSER_ORACLE_GATE.md",
+    "scripts/run_parser_oracle_gate.sh",
+    "scripts/e2e/parser_oracle_replay_failure.sh"
+  ],
+  "required_structured_log_fields": [
+    "schema_version",
+    "trace_id",
+    "decision_id",
+    "policy_id",
+    "component",
+    "event",
+    "outcome",
+    "error_code",
+    "artifact_path",
+    "artifact_role",
+    "stage",
+    "reason_code",
+    "consumer_action"
+  ],
+  "generated_artifacts": [
+    "artifacts/parser_oracle_missing_artifact_contract/<timestamp>/run_manifest.json",
+    "artifacts/parser_oracle_missing_artifact_contract/<timestamp>/trace_ids.json",
+    "artifacts/parser_oracle_missing_artifact_contract/<timestamp>/events.jsonl",
+    "artifacts/parser_oracle_missing_artifact_contract/<timestamp>/commands.txt",
+    "artifacts/parser_oracle_missing_artifact_contract/<timestamp>/step_logs/step_000.log",
+    "artifacts/parser_oracle_missing_artifact_contract/<timestamp>/parser_oracle_missing_artifact_contract.json",
+    "artifacts/parser_oracle_missing_artifact_contract/<timestamp>/parser_oracle_missing_artifact_contract_validation_report.json"
+  ],
+  "artifact_contract": {
+    "receipt_path": "parser_oracle_missing_artifact_receipt.json",
+    "covered_artifacts": [
+      "baseline.json",
+      "relation_report.json",
+      "relation_events.jsonl",
+      "metamorphic_evidence.jsonl",
+      "drift_digest.md"
+    ],
+    "required_receipt_fields": [
+      "schema_version",
+      "trace_id",
+      "decision_id",
+      "policy_id",
+      "component",
+      "artifact_path",
+      "artifact_role",
+      "stage",
+      "reason_code",
+      "reason_id",
+      "consumer_action",
+      "missing_artifacts",
+      "placeholder_rejected"
+    ],
+    "reason_matrix": [
+      {
+        "code": "FE-PO-MISSING-0001",
+        "reason_id": "not_run_by_design",
+        "stage": "mode_selection",
+        "consumer_action": "record_and_continue",
+        "allowed_artifact_roles": [
+          "baseline",
+          "relation_report",
+          "relation_events",
+          "metamorphic_evidence",
+          "drift_digest"
+        ],
+        "placeholder_rejected": true
+      },
+      {
+        "code": "FE-PO-MISSING-0002",
+        "reason_id": "skipped_by_gate_condition",
+        "stage": "gate_condition",
+        "consumer_action": "surface_degraded",
+        "allowed_artifact_roles": [
+          "baseline",
+          "relation_report",
+          "relation_events",
+          "metamorphic_evidence",
+          "drift_digest"
+        ],
+        "placeholder_rejected": true
+      },
+      {
+        "code": "FE-PO-MISSING-0003",
+        "reason_id": "failed_before_artifact_creation",
+        "stage": "execution",
+        "consumer_action": "fail_closed",
+        "allowed_artifact_roles": [
+          "baseline",
+          "relation_report",
+          "relation_events",
+          "metamorphic_evidence",
+          "drift_digest"
+        ],
+        "placeholder_rejected": true
+      },
+      {
+        "code": "FE-PO-MISSING-0004",
+        "reason_id": "missing_unexpected_absence",
+        "stage": "post_run_validation",
+        "consumer_action": "fail_closed",
+        "allowed_artifact_roles": [
+          "baseline",
+          "relation_report",
+          "relation_events",
+          "metamorphic_evidence",
+          "drift_digest"
+        ],
+        "placeholder_rejected": true
+      }
+    ],
+    "rejected_anonymous_backfills": [
+      {
+        "artifact_path": "baseline.json",
+        "signature_type": "literal_json",
+        "signature_value": "{}",
+        "classification": "anonymous_placeholder"
+      },
+      {
+        "artifact_path": "relation_report.json",
+        "signature_type": "literal_json",
+        "signature_value": "{\"status\":\"not_run\"}",
+        "classification": "status_only_placeholder"
+      },
+      {
+        "artifact_path": "relation_events.jsonl",
+        "signature_type": "zero_bytes",
+        "signature_value": "",
+        "classification": "empty_file_placeholder"
+      },
+      {
+        "artifact_path": "metamorphic_evidence.jsonl",
+        "signature_type": "zero_bytes",
+        "signature_value": "",
+        "classification": "empty_file_placeholder"
+      },
+      {
+        "artifact_path": "drift_digest.md",
+        "signature_type": "zero_bytes",
+        "signature_value": "",
+        "classification": "empty_file_placeholder"
+      }
+    ],
+    "consumer_fail_closed_reasons": [
+      "covered artifact missing without parser_oracle_missing_artifact_receipt.json",
+      "unknown reason_id or stage in missing-artifact receipt",
+      "missing-artifact receipt allows anonymous placeholder backfill",
+      "covered artifact omitted without listing it in missing_artifacts",
+      "covered artifact and missing-artifact receipt disagree about consumer_action"
+    ]
+  },
+  "operator_verification": [
+    "jq empty docs/parser_oracle_missing_artifact_contract_v1.json",
+    "rch exec -- env CARGO_TARGET_DIR=\"$PWD/target_rch_parser_oracle_missing_artifact_contract_verify\" cargo test -p frankenengine-engine --test parser_oracle_missing_artifact_contract",
+    "./scripts/run_parser_oracle_missing_artifact_contract.sh ci",
+    "./scripts/e2e/parser_oracle_missing_artifact_contract_replay.sh ci",
+    "PARSER_ORACLE_MISSING_ARTIFACT_CONTRACT_REPLAY_RUN_DIR=artifacts/parser_oracle_missing_artifact_contract/<timestamp> ./scripts/e2e/parser_oracle_missing_artifact_contract_replay.sh ci"
+  ]
+}

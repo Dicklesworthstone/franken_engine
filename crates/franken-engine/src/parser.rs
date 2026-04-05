@@ -3167,6 +3167,11 @@ fn split_pattern_elements(source: &str) -> Vec<&str> {
         }
     }
     out.push(&source[start..]);
+    if let Some(last) = out.last() {
+        if last.trim().is_empty() && source.trim_end().ends_with(',') {
+            out.pop();
+        }
+    }
     out
 }
 

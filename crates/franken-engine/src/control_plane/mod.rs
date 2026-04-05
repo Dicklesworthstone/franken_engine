@@ -279,9 +279,10 @@ fn action_to_verdict(action: &str) -> Option<DecisionVerdict> {
     }
 }
 
-/// Test helper mock types used by integration suites without reaching into
-/// upstream control-plane crates directly.
-pub mod mocks {
+/// Test helper mock types stay test-only within the runtime crate so unit tests
+/// keep a single `frankenengine_engine` type identity.
+#[cfg(test)]
+pub(crate) mod mocks {
     use std::collections::VecDeque;
     use std::thread;
     use std::time::Duration;
@@ -1791,6 +1792,13 @@ mod tests {
     }
 
     #[test]
+    fn mock_failure_mode_clone_latency_injection() {
+        let m = MockFailureMode::LatencyInjection { millis: 0 };
+        let m2 = m.clone();
+        assert_eq!(m, m2);
+    }
+
+    #[test]
     fn mock_failure_mode_clone_panic_on_call() {
         let m = MockFailureMode::PanicOnCall;
         let m2 = m.clone();
@@ -1802,6 +1810,7 @@ mod tests {
         for m in &[
             MockFailureMode::Never,
             MockFailureMode::FailAlways { code: "x" },
+            MockFailureMode::LatencyInjection { millis: 0 },
             MockFailureMode::PanicOnCall,
         ] {
             assert!(!format!("{m:?}").is_empty());

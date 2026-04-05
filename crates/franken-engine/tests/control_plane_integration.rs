@@ -13,6 +13,9 @@
     clippy::manual_abs_diff
 )]
 
+use std::fs;
+use std::path::PathBuf;
+
 use frankenengine_engine::control_plane::*;
 use frankenengine_test_support::control_plane::{
     MockBudget, MockCx, MockDecisionContract, MockEvidenceEmitter, MockFailureMode,
@@ -55,6 +58,22 @@ fn make_evidence(ts: u64, action: &str) -> EvidenceLedger {
         .fallback_active(false)
         .build()
         .expect("valid evidence")
+}
+
+#[test]
+fn runtime_crate_keeps_mock_helpers_out_of_production_surface() {
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/control_plane/mod.rs");
+    let content = fs::read_to_string(&source)
+        .unwrap_or_else(|err| panic!("read {}: {err}", source.display()));
+
+    assert!(
+        !content.contains("pub mod mocks {"),
+        "runtime crate must not export a live control_plane::mocks module"
+    );
+    assert!(
+        content.contains("pub(crate) mod mocks {"),
+        "runtime crate tests must keep mock helpers behind a cfg(test) module"
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -11,13 +11,12 @@ Implementation bead: `bd-2muur.7.2`
 `bd-2muur.7.1` defines the typed missing-artifact receipt contract for parser
 oracle runs.
 
-Today `scripts/run_parser_oracle_gate.sh` still has a `write_placeholders()`
-fallback that writes anonymous placeholder files such as `{}`,
-`{"status":"not_run"}`, and zero-byte backfills when the real lane has not
-produced artifacts. This contract makes that behavior explicitly unacceptable
-as a steady-state truth surface: future implementation work must replace those
-anonymous placeholders with a machine-readable receipt that says what did not
-run, why it did not run, and how downstream consumers must react.
+The contract exists because the parser-oracle gate previously used anonymous
+placeholder backfills such as `{}`, `{"status":"not_run"}`, and zero-byte
+files when the real lane had not produced evidence. Those legacy signatures are
+now explicitly rejected. The shipped path must emit a machine-readable receipt
+that says what did not run, why it did not run, and how downstream consumers
+must react.
 
 ## Covered Artifacts
 

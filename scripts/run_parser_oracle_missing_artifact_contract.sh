@@ -161,14 +161,17 @@ validate_source_inputs() {
   fi
 
   if [[ -f "${gate_script}" ]]; then
-    if ! rg -q 'write_placeholders\(\)' "${gate_script}"; then
-      validation_errors+=("gate script no longer exposes write_placeholders() context")
+    if ! rg -q 'write_missing_artifact_receipt' "${gate_script}"; then
+      validation_errors+=("gate script must expose the missing-artifact receipt writer")
     fi
-    if ! rg -q 'echo "\{\}" >"\$baseline_path"' "${gate_script}"; then
-      validation_errors+=("gate script no longer contains baseline.json placeholder signature")
+    if ! rg -q 'parser_oracle_missing_artifact_receipt.json' "${gate_script}"; then
+      validation_errors+=("gate script must reference parser_oracle_missing_artifact_receipt.json")
     fi
-    if ! rg -q 'echo "\{\\\"status\\\":\\\"not_run\\\"\}" >"\$relation_report_path"' "${gate_script}"; then
-      validation_errors+=("gate script no longer contains relation_report.json placeholder signature")
+    if rg -q 'echo "\{\}" >"\$baseline_path"' "${gate_script}"; then
+      validation_errors+=("gate script must not emit baseline.json placeholder backfills")
+    fi
+    if rg -q 'echo "\{\\\"status\\\":\\\"not_run\\\"\}" >"\$relation_report_path"' "${gate_script}"; then
+      validation_errors+=("gate script must not emit relation_report.json status placeholders")
     fi
   fi
 

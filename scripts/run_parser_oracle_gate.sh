@@ -734,7 +734,7 @@ write_manifest() {
     error_code_json='"FE-PARSER-ORACLE-0001"'
   fi
 
-  write_placeholders
+  write_missing_artifact_receipt "$exit_code"
   write_supporting_artifacts
 
   git_commit="$(git rev-parse HEAD 2>/dev/null || echo "unknown")"
@@ -745,9 +745,52 @@ write_manifest() {
   fi
 
   printf '%s\n' "${commands_run[@]}" >"$commands_path"
-  {
-    echo "{\"schema_version\":\"franken-engine.parser-log-event.v1\",\"taxonomy_version\":\"${taxonomy_version}\",\"trace_id\":\"${trace_id}\",\"decision_id\":\"${decision_id}\",\"policy_id\":\"${policy_id}\",\"component\":\"parser_oracle_gate\",\"event\":\"gate_completed\",\"replay_command\":\"./scripts/run_parser_oracle_gate.sh ${mode}\",\"outcome\":\"${outcome}\",\"error_code\":${error_code_json}}"
-  } >"$events_path"
+  : >"$events_path"
+  if [[ -f "$missing_artifact_receipt_path" ]]; then
+    jq -c \
+      --arg taxonomy_version "$taxonomy_version" \
+      --arg replay_command "./scripts/run_parser_oracle_gate.sh ${mode}" \
+      '{
+        schema_version: "franken-engine.parser-log-event.v1",
+        taxonomy_version: $taxonomy_version,
+        trace_id,
+        decision_id,
+        policy_id,
+        component: "parser_oracle_gate",
+        event: "missing_artifact_receipt_written",
+        replay_command: $replay_command,
+        artifact_path,
+        artifact_role,
+        stage,
+        reason_code,
+        consumer_action,
+        missing_artifacts,
+        outcome: "degraded",
+        error_code: null
+      }' \
+      "$missing_artifact_receipt_path" >"$events_path"
+  fi
+
+  jq -nc \
+    --arg taxonomy_version "$taxonomy_version" \
+    --arg trace_id "$trace_id" \
+    --arg decision_id "$decision_id" \
+    --arg policy_id "$policy_id" \
+    --arg replay_command "./scripts/run_parser_oracle_gate.sh ${mode}" \
+    --arg outcome "$outcome" \
+    --argjson error_code "${error_code_json}" \
+    '{
+      schema_version: "franken-engine.parser-log-event.v1",
+      taxonomy_version: $taxonomy_version,
+      trace_id: $trace_id,
+      decision_id: $decision_id,
+      policy_id: $policy_id,
+      component: "parser_oracle_gate",
+      event: "gate_completed",
+      replay_command: $replay_command,
+      outcome: $outcome,
+      error_code: $error_code
+    }' >>"$events_path"
 
   {
     echo "{"
@@ -794,6 +837,11 @@ write_manifest() {
     echo "    \"relation_events\": \"${relation_events_path}\","
     echo "    \"metamorphic_evidence\": \"${evidence_path}\","
     echo "    \"drift_digest\": \"${drift_digest_path}\","
+    if [[ -f "$missing_artifact_receipt_path" ]]; then
+      echo "    \"missing_artifact_receipt\": \"${missing_artifact_receipt_path}\","
+    else
+      echo '    "missing_artifact_receipt": null,'
+    fi
     echo "    \"minimized_failures_dir\": \"${failures_dir}\","
     echo "    \"golden_checksums\": \"${golden_checksums_path}\","
     echo "    \"proof_note\": \"${proof_note_path}\","
@@ -814,9 +862,6 @@ handle_signal() {
   fi
   exit 130
 }
-
-trap 'handle_signal INT' INT
-trap 'handle_signal TERM' TERM
 
 run_mode() {
   case "$mode" in
@@ -900,15 +945,29 @@ run_mode() {
   esac
 }
 
-main_exit=0
-run_mode || main_exit=$?
-write_manifest "$main_exit"
+main() {
+  local main_exit=0
 
-if ! "${root_dir}/scripts/validate_parser_log_schema.sh" --events "$events_path"; then
-  failed_command="${failed_command:-validate_parser_log_schema.sh --events ${events_path}}"
-  manifest_written=false
-  write_manifest 3
-  main_exit=3
+  prepare_run_context
+  ensure_required_tools
+
+  trap 'handle_signal INT' INT
+  trap 'handle_signal TERM' TERM
+
+  run_mode || main_exit=$?
+  write_manifest "$main_exit"
+
+  if ! "${root_dir}/scripts/validate_parser_log_schema.sh" --events "$events_path"; then
+    failed_command="${failed_command:-validate_parser_log_schema.sh --events ${events_path}}"
+    manifest_written=false
+    write_manifest 3
+    main_exit=3
+  fi
+
+  return "$main_exit"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+  exit $?
 fi
-
-exit "$main_exit"

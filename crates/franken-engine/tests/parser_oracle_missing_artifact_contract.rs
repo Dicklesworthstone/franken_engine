@@ -219,7 +219,7 @@ fn parser_oracle_gate_doc_mentions_contract() {
     let doc = gate_doc();
     assert!(doc.contains("## Missing-Artifact Contract"));
     assert!(doc.contains("docs/PARSER_ORACLE_MISSING_ARTIFACT_CONTRACT_V1.md"));
-    assert!(doc.contains("write_placeholders()"));
+    assert!(doc.contains("parser_oracle_missing_artifact_receipt.json"));
 }
 
 #[test]
@@ -339,17 +339,19 @@ fn parser_oracle_missing_artifact_contract_has_required_reason_matrix() {
 }
 
 #[test]
-fn parser_oracle_missing_artifact_contract_rejects_current_placeholder_backfills() {
+fn parser_oracle_missing_artifact_contract_rejects_legacy_placeholder_backfills() {
     let script = gate_script();
     let contract = parse_contract();
 
-    assert!(script.contains("echo \"{}\" >\"$baseline_path\""));
+    assert!(script.contains("parser_oracle_missing_artifact_receipt.json"));
+    assert!(script.contains("write_missing_artifact_receipt"));
+    assert!(!script.contains("echo \"{}\" >\"$baseline_path\""));
     assert!(
-        script.contains("echo \"{\\\"status\\\":\\\"not_run\\\"}\" >\"$relation_report_path\"")
+        !script.contains("echo \"{\\\"status\\\":\\\"not_run\\\"}\" >\"$relation_report_path\"")
     );
-    assert!(script.contains(": >\"$relation_events_path\""));
-    assert!(script.contains(": >\"$evidence_path\""));
-    assert!(script.contains(": >\"$drift_digest_path\""));
+    assert!(!script.contains(": >\"$relation_events_path\""));
+    assert!(!script.contains(": >\"$evidence_path\""));
+    assert!(!script.contains(": >\"$drift_digest_path\""));
 
     let rejected = contract
         .artifact_contract

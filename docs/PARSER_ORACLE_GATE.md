@@ -66,6 +66,7 @@ Each run writes to `artifacts/parser_oracle/<timestamp>/`:
 - `relation_report.json`
 - `relation_events.jsonl`
 - `metamorphic_evidence.jsonl`
+- `parser_oracle_missing_artifact_receipt.json` when one or more covered artifacts are intentionally absent or missing unexpectedly
 - `minimized_failures/`
 - `golden_checksums.txt`
 - `proof_note.md`
@@ -75,6 +76,15 @@ Each run writes to `artifacts/parser_oracle/<timestamp>/`:
 - `manifest.json`
 - `events.jsonl`
 - `commands.txt`
+
+`baseline.json`, `relation_report.json`, `relation_events.jsonl`,
+`metamorphic_evidence.jsonl`, and `drift_digest.md` are now strict truth
+surfaces. The gate no longer backfills them with `{}`,
+`{"status":"not_run"}`, or zero-byte placeholder files. When one or more of
+those artifacts is absent, the lane emits
+`parser_oracle_missing_artifact_receipt.json` with the explicit reason code,
+stage, consumer action, and missing-artifact list defined in
+`docs/PARSER_ORACLE_MISSING_ARTIFACT_CONTRACT_V1.md`.
 
 ## Logging Schema Validation
 
@@ -113,6 +123,25 @@ The gate also emits `drift_digest.md` with:
 - ranked drift-class inventory
 - deterministic drift clusters (`cluster:<family_id>`)
 - owner hints and remediation mapping per cluster
+
+## Missing-Artifact Contract
+
+The parser-oracle gate reuses the typed missing-artifact contract from
+`docs/PARSER_ORACLE_MISSING_ARTIFACT_CONTRACT_V1.md`.
+
+Covered artifacts are:
+
+- `baseline.json`
+- `relation_report.json`
+- `relation_events.jsonl`
+- `metamorphic_evidence.jsonl`
+- `drift_digest.md`
+
+If any covered artifact is absent, the gate emits
+`parser_oracle_missing_artifact_receipt.json` instead of a placeholder file and
+records the corresponding `reason_id`, `reason_code`, `stage`,
+`consumer_action`, and `missing_artifacts` metadata in `events.jsonl`,
+`proof_note.md`, `manifest.json`, and `repro.lock`.
 
 ## Replay
 

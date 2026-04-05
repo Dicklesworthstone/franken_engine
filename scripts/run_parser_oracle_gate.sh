@@ -15,6 +15,7 @@ fixture_catalog="${PARSER_ORACLE_FIXTURE_CATALOG:-crates/franken-engine/tests/fi
 report_schema_version="${PARSER_ORACLE_REPORT_SCHEMA_VERSION:-franken-engine.parser-oracle.report.v1}"
 taxonomy_version="${PARSER_ORACLE_TAXONOMY_VERSION:-franken-engine.parser-oracle.taxonomy.v1}"
 remediation_map_version="${PARSER_ORACLE_REMEDIATION_MAP_VERSION:-franken-engine.parser-oracle.remediation-map.v1}"
+missing_artifact_contract_json="${root_dir}/docs/parser_oracle_missing_artifact_contract_v1.json"
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
@@ -37,26 +38,36 @@ proof_note_path="${run_dir}/proof_note.md"
 drift_digest_path="${run_dir}/drift_digest.md"
 env_path="${run_dir}/env.json"
 repro_lock_path="${run_dir}/repro.lock"
+missing_artifact_receipt_path="${run_dir}/parser_oracle_missing_artifact_receipt.json"
 
 trace_id="trace-parser-oracle-${timestamp}"
 decision_id="decision-parser-oracle-${timestamp}"
 policy_id="policy-parser-oracle-v1"
 
-mkdir -p "$run_dir" "$failures_dir" "$command_logs_dir"
+prepare_run_context() {
+  mkdir -p "$run_dir" "$failures_dir" "$command_logs_dir"
 
-bootstrap_script="${root_dir}/scripts/e2e/parser_oracle_env_bootstrap.sh"
-if [[ -f "$bootstrap_script" ]]; then
-  # shellcheck source=/dev/null
-  source "$bootstrap_script"
-  if declare -F parser_oracle_apply_deterministic_env >/dev/null 2>&1; then
-    parser_oracle_apply_deterministic_env
+  local bootstrap_script
+  bootstrap_script="${root_dir}/scripts/e2e/parser_oracle_env_bootstrap.sh"
+  if [[ -f "$bootstrap_script" ]]; then
+    # shellcheck source=/dev/null
+    source "$bootstrap_script"
+    if declare -F parser_oracle_apply_deterministic_env >/dev/null 2>&1; then
+      parser_oracle_apply_deterministic_env
+    fi
   fi
-fi
+}
 
-if ! command -v rch >/dev/null 2>&1; then
-  echo "rch is required for parser oracle gate heavy commands" >&2
-  exit 2
-fi
+ensure_required_tools() {
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "jq is required for parser oracle gate artifact validation" >&2
+    exit 2
+  fi
+  if ! command -v rch >/dev/null 2>&1; then
+    echo "rch is required for parser oracle gate heavy commands" >&2
+    exit 2
+  fi
+}
 
 run_rch() {
   timeout "${rch_timeout_seconds}" \
@@ -191,6 +202,155 @@ owner_hint_for_family() {
     diagnostics.* | error.*) echo "diagnostics" ;;
     *) echo "parser-frontier" ;;
   esac
+}
+
+artifact_role_for_path() {
+  case "$1" in
+    baseline.json) echo "baseline" ;;
+    relation_report.json) echo "relation_report" ;;
+    relation_events.jsonl) echo "relation_events" ;;
+    metamorphic_evidence.jsonl) echo "metamorphic_evidence" ;;
+    drift_digest.md) echo "drift_digest" ;;
+    parser_oracle_missing_artifact_receipt.json) echo "missing_artifact_receipt" ;;
+    *)
+      echo "unknown_artifact_role_for_parser_oracle_missing_artifact: $1" >&2
+      return 1
+      ;;
+  esac
+}
+
+missing_artifact_reason_field() {
+  local reason_id="$1"
+  local field="$2"
+
+  jq -r \
+    --arg reason_id "$reason_id" \
+    --arg field "$field" \
+    '
+      .artifact_contract.reason_matrix[]
+      | select(.reason_id == $reason_id)
+      | .[$field]
+    ' \
+    "$missing_artifact_contract_json"
+}
+
+emit_missing_artifact_receipt() {
+  local reason_id="$1"
+  shift
+
+  if [[ "$#" -eq 0 ]]; then
+    rm -f "$missing_artifact_receipt_path"
+    return 0
+  fi
+
+  local stage reason_code consumer_action first_artifact first_role
+  local missing_artifacts_json="[]"
+
+  stage="$(missing_artifact_reason_field "$reason_id" "stage")"
+  reason_code="$(missing_artifact_reason_field "$reason_id" "code")"
+  consumer_action="$(missing_artifact_reason_field "$reason_id" "consumer_action")"
+
+  if [[ -z "$stage" || -z "$reason_code" || -z "$consumer_action" ]]; then
+    echo "parser oracle missing-artifact contract does not define reason_id=${reason_id}" >&2
+    return 1
+  fi
+
+  first_artifact="$1"
+  first_role="$(artifact_role_for_path "$first_artifact")"
+
+  while [[ "$#" -gt 0 ]]; do
+    local artifact_path="$1"
+    local artifact_role
+    artifact_role="$(artifact_role_for_path "$artifact_path")"
+    missing_artifacts_json="$(
+      jq -c \
+        --arg artifact_path "$artifact_path" \
+        --arg artifact_role "$artifact_role" \
+        '. + [{artifact_path: $artifact_path, artifact_role: $artifact_role}]' \
+        <<<"$missing_artifacts_json"
+    )"
+    shift
+  done
+
+  jq -n \
+    --arg schema_version "franken-engine.parser-oracle-missing-artifact-receipt.v1" \
+    --arg contract_schema_version "franken-engine.parser-oracle-missing-artifact-contract.v1" \
+    --arg trace_id "$trace_id" \
+    --arg decision_id "$decision_id" \
+    --arg policy_id "$policy_id" \
+    --arg component "parser_oracle_gate" \
+    --arg artifact_path "$first_artifact" \
+    --arg artifact_role "$first_role" \
+    --arg stage "$stage" \
+    --arg reason_code "$reason_code" \
+    --arg reason_id "$reason_id" \
+    --arg consumer_action "$consumer_action" \
+    --arg generated_at_utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --argjson placeholder_rejected true \
+    --argjson missing_artifacts "$missing_artifacts_json" \
+    '{
+      schema_version: $schema_version,
+      contract_schema_version: $contract_schema_version,
+      trace_id: $trace_id,
+      decision_id: $decision_id,
+      policy_id: $policy_id,
+      component: $component,
+      artifact_path: $artifact_path,
+      artifact_role: $artifact_role,
+      stage: $stage,
+      reason_code: $reason_code,
+      reason_id: $reason_id,
+      consumer_action: $consumer_action,
+      generated_at_utc: $generated_at_utc,
+      placeholder_rejected: $placeholder_rejected,
+      missing_artifacts: $missing_artifacts
+    }' >"$missing_artifact_receipt_path"
+}
+
+select_missing_artifact_reason_id() {
+  local exit_code="${1:-0}"
+
+  if [[ -n "${PARSER_ORACLE_MISSING_ARTIFACT_REASON_OVERRIDE:-}" ]]; then
+    printf '%s\n' "$PARSER_ORACLE_MISSING_ARTIFACT_REASON_OVERRIDE"
+    return 0
+  fi
+
+  case "$mode" in
+    check|test)
+      printf '%s\n' "not_run_by_design"
+      ;;
+    *)
+      if [[ "$exit_code" -ne 0 ]]; then
+        if [[ -f "$relation_report_path" ]]; then
+          printf '%s\n' "missing_unexpected_absence"
+        else
+          printf '%s\n' "failed_before_artifact_creation"
+        fi
+      else
+        printf '%s\n' "missing_unexpected_absence"
+      fi
+      ;;
+  esac
+}
+
+write_missing_artifact_receipt() {
+  local exit_code="${1:-0}"
+  local reason_id
+  local missing_paths=()
+
+  [[ -f "$baseline_path" ]] || missing_paths+=("baseline.json")
+  [[ -f "$relation_report_path" ]] || missing_paths+=("relation_report.json")
+  [[ -f "$relation_events_path" ]] || missing_paths+=("relation_events.jsonl")
+  [[ -f "$evidence_path" ]] || missing_paths+=("metamorphic_evidence.jsonl")
+  [[ -f "$drift_digest_path" ]] || missing_paths+=("drift_digest.md")
+
+  if [[ "${#missing_paths[@]}" -eq 0 ]]; then
+    rm -f "$missing_artifact_receipt_path"
+    return 0
+  fi
+
+  reason_id="$(select_missing_artifact_reason_id "$exit_code")"
+  emit_missing_artifact_receipt "$reason_id" "${missing_paths[@]}"
 }
 
 validate_relation_report_contract() {
@@ -349,14 +509,6 @@ run_step() {
   rm -f "$log_path"
 }
 
-write_placeholders() {
-  [[ -f "$baseline_path" ]] || echo "{}" >"$baseline_path"
-  [[ -f "$relation_report_path" ]] || echo "{\"status\":\"not_run\"}" >"$relation_report_path"
-  [[ -f "$relation_events_path" ]] || : >"$relation_events_path"
-  [[ -f "$evidence_path" ]] || : >"$evidence_path"
-  [[ -f "$drift_digest_path" ]] || : >"$drift_digest_path"
-}
-
 write_supporting_artifacts() {
   local git_commit kernel os_name arch cpu_model cpu_feature_profile cores mem_kb mem_bytes
   local rustc_version cargo_version deterministic_env_version toolchain_fingerprint
@@ -424,13 +576,18 @@ write_supporting_artifacts() {
     }' >"$env_path"
 
   local equivalent minor critical action fallback
-  equivalent="$(jq -r '.summary.equivalent_count // 0' "$relation_report_path")"
-  minor="$(jq -r '.summary.minor_drift_count // 0' "$relation_report_path")"
-  critical="$(jq -r '.summary.critical_drift_count // 0' "$relation_report_path")"
-  action="$(jq -r '.decision.action // "unknown"' "$relation_report_path")"
-  fallback="$(jq -r '.decision.fallback_reason // "none"' "$relation_report_path")"
+  local receipt_reason_id receipt_reason_code receipt_consumer_action receipt_stage
+  local outputs_json checksum_path checksum_value
+  outputs_json='[]'
 
-  cat >"$proof_note_path" <<EOF_NOTE
+  if [[ -f "$relation_report_path" ]]; then
+    equivalent="$(jq -r '.summary.equivalent_count // 0' "$relation_report_path")"
+    minor="$(jq -r '.summary.minor_drift_count // 0' "$relation_report_path")"
+    critical="$(jq -r '.summary.critical_drift_count // 0' "$relation_report_path")"
+    action="$(jq -r '.decision.action // "unknown"' "$relation_report_path")"
+    fallback="$(jq -r '.decision.fallback_reason // "none"' "$relation_report_path")"
+
+    cat >"$proof_note_path" <<EOF_NOTE
 # Parser Oracle Proof Note
 
 - trace_id: ${trace_id}
@@ -465,50 +622,99 @@ cargo run -p frankenengine-engine --bin franken_parser_oracle_report -- \
   --fixture-catalog ${fixture_catalog}
 \`\`\`
 EOF_NOTE
+  else
+    receipt_reason_id="$(jq -r '.reason_id // "unknown"' "$missing_artifact_receipt_path")"
+    receipt_reason_code="$(jq -r '.reason_code // "unknown"' "$missing_artifact_receipt_path")"
+    receipt_consumer_action="$(jq -r '.consumer_action // "unknown"' "$missing_artifact_receipt_path")"
+    receipt_stage="$(jq -r '.stage // "unknown"' "$missing_artifact_receipt_path")"
 
-  local baseline_sha relation_sha relation_events_sha evidence_sha env_sha proof_sha
-  local drift_digest_sha
-  baseline_sha="$(sha256sum "$baseline_path" | awk '{print $1}')"
-  relation_sha="$(sha256sum "$relation_report_path" | awk '{print $1}')"
-  relation_events_sha="$(sha256sum "$relation_events_path" | awk '{print $1}')"
-  evidence_sha="$(sha256sum "$evidence_path" | awk '{print $1}')"
-  drift_digest_sha="$(sha256sum "$drift_digest_path" | awk '{print $1}')"
-  env_sha="$(sha256sum "$env_path" | awk '{print $1}')"
-  proof_sha="$(sha256sum "$proof_note_path" | awk '{print $1}')"
+    cat >"$proof_note_path" <<EOF_NOTE
+# Parser Oracle Proof Note
 
-  cat >"$repro_lock_path" <<EOF_REPRO
-{
-  "schema_version": "franken-engine.repro-lock.v1",
-  "generated_at_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "lock_id": "parser-oracle-${timestamp}",
-  "source_commit": "${git_commit}",
-  "partition": "${partition}",
-  "gate_mode": "${gate_mode}",
-  "seed": ${seed},
-  "commands_log": "${commands_path}",
-  "inputs": [
-    { "path": "${fixture_catalog}" }
-  ],
-  "outputs": [
-    { "path": "${baseline_path}", "sha256": "sha256:${baseline_sha}" },
-    { "path": "${relation_report_path}", "sha256": "sha256:${relation_sha}" },
-    { "path": "${relation_events_path}", "sha256": "sha256:${relation_events_sha}" },
-    { "path": "${evidence_path}", "sha256": "sha256:${evidence_sha}" },
-    { "path": "${drift_digest_path}", "sha256": "sha256:${drift_digest_sha}" }
-  ]
-}
-EOF_REPRO
+- trace_id: ${trace_id}
+- decision_id: ${decision_id}
+- policy_id: ${policy_id}
+- partition: ${partition}
+- gate_mode: ${gate_mode}
+- fixture_catalog: ${fixture_catalog}
+- report_schema_version: ${report_schema_version}
+- taxonomy_version: ${taxonomy_version}
+- remediation_map_version: ${remediation_map_version}
+- toolchain_fingerprint: ${toolchain_fingerprint}
 
-  cat >"$golden_checksums_path" <<EOF_SUM
-${baseline_sha}  ${baseline_path}
-${relation_sha}  ${relation_report_path}
-${relation_events_sha}  ${relation_events_path}
-${evidence_sha}  ${evidence_path}
-${drift_digest_sha}  ${drift_digest_path}
-${env_sha}  ${env_path}
-${proof_sha}  ${proof_note_path}
-$(sha256sum "$repro_lock_path" | awk '{print $1}')  ${repro_lock_path}
-EOF_SUM
+## Missing-Artifact Receipt
+
+- receipt_path: ${missing_artifact_receipt_path}
+- reason_id: ${receipt_reason_id}
+- reason_code: ${receipt_reason_code}
+- stage: ${receipt_stage}
+- consumer_action: ${receipt_consumer_action}
+
+## Replay
+
+\`\`\`bash
+./scripts/run_parser_oracle_gate.sh ${mode}
+\`\`\`
+EOF_NOTE
+  fi
+
+  for checksum_path in \
+    "$baseline_path" \
+    "$relation_report_path" \
+    "$relation_events_path" \
+    "$evidence_path" \
+    "$drift_digest_path" \
+    "$missing_artifact_receipt_path"; do
+    [[ -f "$checksum_path" ]] || continue
+    checksum_value="$(sha256sum "$checksum_path" | awk '{print $1}')"
+    outputs_json="$(
+      jq -c \
+        --arg path "$checksum_path" \
+        --arg sha "sha256:${checksum_value}" \
+        '. + [{path: $path, sha256: $sha}]' \
+        <<<"$outputs_json"
+    )"
+  done
+
+  jq -n \
+    --arg schema_version "franken-engine.repro-lock.v1" \
+    --arg generated_at_utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg lock_id "parser-oracle-${timestamp}" \
+    --arg source_commit "${git_commit}" \
+    --arg partition "${partition}" \
+    --arg gate_mode "${gate_mode}" \
+    --arg commands_log "${commands_path}" \
+    --arg fixture_catalog "${fixture_catalog}" \
+    --argjson seed "${seed}" \
+    --argjson outputs "$outputs_json" \
+    '{
+      schema_version: $schema_version,
+      generated_at_utc: $generated_at_utc,
+      lock_id: $lock_id,
+      source_commit: $source_commit,
+      partition: $partition,
+      gate_mode: $gate_mode,
+      seed: $seed,
+      commands_log: $commands_log,
+      inputs: [{path: $fixture_catalog}],
+      outputs: $outputs
+    }' >"$repro_lock_path"
+
+  : >"$golden_checksums_path"
+  for checksum_path in \
+    "$baseline_path" \
+    "$relation_report_path" \
+    "$relation_events_path" \
+    "$evidence_path" \
+    "$drift_digest_path" \
+    "$missing_artifact_receipt_path" \
+    "$env_path" \
+    "$proof_note_path" \
+    "$repro_lock_path"; do
+    [[ -f "$checksum_path" ]] || continue
+    checksum_value="$(sha256sum "$checksum_path" | awk '{print $1}')"
+    printf '%s  %s\n' "$checksum_value" "$checksum_path" >>"$golden_checksums_path"
+  done
 }
 
 write_manifest() {

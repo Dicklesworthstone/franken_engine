@@ -26,7 +26,7 @@ const DOCS_HELP_AUDIT_CONTRACT_JSON: &str =
     include_str!("../../../docs/rgc_docs_help_surface_audit_v1.json");
 const CLI_DOCS_HELP_POLICY_ID: &str = "policy-rgc-docs-help-surface-audit-v1";
 const CLI_DOCS_HELP_BEAD_ID: &str = "bd-1lsy.10.11.1";
-const JSON_RUNTIME_BEAD_ID: &str = "bd-1lsy.4.9.1";
+const JSON_RUNTIME_BEAD_ID: &str = "bd-2muur.1.4";
 const ITERATOR_RUNTIME_BEAD_ID: &str = "bd-1lsy.4.8";
 
 static NEXT_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(0);
@@ -429,14 +429,14 @@ fn runtime_findings() -> Vec<ZeroPlaceholderFinding> {
         ZeroPlaceholderFinding {
             finding_id: "runtime::json_parse_compound_placeholder".to_string(),
             subsystem: ZeroPlaceholderSubsystem::Runtime,
-            status: ZeroPlaceholderStatus::OpenPlaceholder,
-            severity: ZeroPlaceholderSeverity::High,
+            status: ZeroPlaceholderStatus::Resolved,
+            severity: ZeroPlaceholderSeverity::Low,
             owner: "stdlib".to_string(),
             owner_bead_id: JSON_RUNTIME_BEAD_ID.to_string(),
             subject_area: "json.parse.compound".to_string(),
             source_reference: "crates/franken-engine/src/stdlib.rs::json_parse".to_string(),
             observed_behavior:
-                "JSON.parse returns a [json-compound:<len>] descriptor for arrays and objects instead of a heap-backed value."
+                "JSON.parse now materializes arrays and objects as heap-backed runtime values, including nested compound structures, without descriptor placeholders."
                     .to_string(),
             required_behavior:
                 "Parse arrays and objects into deterministic runtime values without placeholder descriptors."
@@ -1025,7 +1025,7 @@ mod tests {
             inventory.findings.len(),
             ZERO_PLACEHOLDER_SCAN_FINDING_COUNT
         );
-        assert_eq!(inventory.open_placeholder_finding_count(), 1);
+        assert_eq!(inventory.open_placeholder_finding_count(), 0);
 
         let parser_count = inventory
             .findings
@@ -1068,7 +1068,7 @@ mod tests {
                 .iter()
                 .filter(|finding| finding.status == ZeroPlaceholderStatus::OpenPlaceholder)
                 .count(),
-            1
+            0
         );
         let iterator_finding = runtime_findings
             .iter()
@@ -1076,6 +1076,12 @@ mod tests {
             .expect("iterator runtime finding");
         assert_eq!(iterator_finding.status, ZeroPlaceholderStatus::Resolved);
         assert_eq!(iterator_finding.severity, ZeroPlaceholderSeverity::Low);
+        let parse_finding = runtime_findings
+            .iter()
+            .find(|finding| finding.finding_id == "runtime::json_parse_compound_placeholder")
+            .expect("json parse runtime finding");
+        assert_eq!(parse_finding.status, ZeroPlaceholderStatus::Resolved);
+        assert_eq!(parse_finding.owner_bead_id, JSON_RUNTIME_BEAD_ID);
     }
 
     #[test]
@@ -1149,7 +1155,7 @@ mod tests {
             manifest.finding_count as usize,
             ZERO_PLACEHOLDER_SCAN_FINDING_COUNT
         );
-        assert_eq!(manifest.open_placeholder_finding_count, 1);
+        assert_eq!(manifest.open_placeholder_finding_count, 0);
         assert_eq!(
             manifest.open_placeholder_finding_count
                 + manifest.fail_closed_finding_count

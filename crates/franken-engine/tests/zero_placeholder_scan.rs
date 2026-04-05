@@ -73,7 +73,7 @@ fn zero_placeholder_scan_cli_writes_artifact_bundle() {
         inventory.findings.len(),
         ZERO_PLACEHOLDER_SCAN_FINDING_COUNT
     );
-    assert_eq!(inventory.open_placeholder_finding_count(), 1);
+    assert_eq!(inventory.open_placeholder_finding_count(), 0);
 
     let manifest: ZeroPlaceholderScanRunManifest =
         serde_json::from_slice(&fs::read(out_dir.join("run_manifest.json")).unwrap())
@@ -88,7 +88,7 @@ fn zero_placeholder_scan_cli_writes_artifact_bundle() {
         manifest.finding_count as usize,
         ZERO_PLACEHOLDER_SCAN_FINDING_COUNT
     );
-    assert_eq!(manifest.open_placeholder_finding_count, 1);
+    assert_eq!(manifest.open_placeholder_finding_count, 0);
     assert_eq!(
         manifest.open_placeholder_finding_count
             + manifest.fail_closed_finding_count
@@ -224,13 +224,49 @@ fn zero_placeholder_scan_replay_wrapper_uses_absolute_artifact_root_default() {
 }
 
 #[test]
+fn json_compound_placeholder_closure_script_uses_rch_and_repo_local_target_dir() {
+    let script = read_repo_text("scripts/run_rgc_json_compound_placeholder_closure.sh");
+    assert!(
+        script.contains("rch exec -- env"),
+        "closure runner should offload heavy commands through rch"
+    );
+    assert!(
+        script.contains("/data/projects/franken_engine/target_rch_rgc_json_compound_placeholder_closure"),
+        "closure runner should use the stable repo-local target namespace"
+    );
+    assert!(
+        !script.contains("/tmp/rch_target_rgc_json_compound_placeholder_closure"),
+        "closure runner should avoid /tmp-backed target directories"
+    );
+}
+
+#[test]
+fn json_compound_placeholder_closure_replay_wrapper_prints_required_artifacts() {
+    let script = read_repo_text("scripts/e2e/rgc_json_compound_placeholder_closure_replay.sh");
+    for marker in [
+        "latest_complete_run_dir()",
+        "json_compound_placeholder_closure_report.json",
+        "trace_ids.json",
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "step_logs/step_000.log",
+    ] {
+        assert!(
+            script.contains(marker),
+            "closure replay wrapper missing required marker: {marker}"
+        );
+    }
+}
+
+#[test]
 fn zero_placeholder_inventory_counts_match_expectations() {
     let inventory = zscan::zero_placeholder_scan_inventory();
     assert_eq!(
         inventory.findings.len(),
         ZERO_PLACEHOLDER_SCAN_FINDING_COUNT
     );
-    assert_eq!(inventory.open_placeholder_finding_count(), 1);
+    assert_eq!(inventory.open_placeholder_finding_count(), 0);
     assert_eq!(
         inventory.open_placeholder_finding_count()
             + inventory.fail_closed_finding_count()
@@ -273,8 +309,16 @@ fn zero_placeholder_inventory_runtime_findings_are_present() {
             .iter()
             .filter(|finding| finding.status == ZeroPlaceholderStatus::OpenPlaceholder)
             .count(),
-        1
+        0
     );
+    for finding_id in [
+        "runtime::json_parse_compound_placeholder",
+        "runtime::json_stringify_object_placeholder",
+    ] {
+        assert!(runtime_findings.iter().any(|finding| {
+            finding.finding_id == finding_id && finding.status == ZeroPlaceholderStatus::Resolved
+        }));
+    }
     assert!(runtime_findings.iter().any(|finding| {
         finding.finding_id == "runtime::iterator_ir3_placeholder_execution"
             && finding.status == ZeroPlaceholderStatus::Resolved

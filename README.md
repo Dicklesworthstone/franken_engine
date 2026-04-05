@@ -664,6 +664,39 @@ Artifacts are written under:
 - `artifacts/lowering_gap_inventory/<timestamp>/run_manifest.json`
 - `artifacts/lowering_gap_inventory/<timestamp>/events.jsonl`
 - `artifacts/lowering_gap_inventory/<timestamp>/commands.txt`
+
+## Lowering Gap Truth Invariant
+
+`bd-2muur.4.1` defines the machine-readable invariant that binds lowering-gap
+`status`, `parser_ready_syntax`, `execution_ready_semantics`, and the
+operator-facing prose fields. The contract exists so `bd-2muur.4.2` can apply a
+truthful model to the generator without inventing ad hoc rules at edit time,
+and so `bd-2muur.4.3` can align consumers to the same story.
+
+```bash
+# lowering-gap truth invariant validation (rch-backed focused test lane)
+./scripts/run_lowering_gap_truth_invariant.sh ci
+
+# deterministic replay wrapper
+./scripts/e2e/lowering_gap_truth_invariant_replay.sh ci
+```
+
+Contract and vectors:
+
+- [`docs/LOWERING_GAP_TRUTH_INVARIANT_V1.md`](./docs/LOWERING_GAP_TRUTH_INVARIANT_V1.md)
+- `docs/lowering_gap_truth_invariant_v1.json`
+- `crates/franken-engine/tests/lowering_gap_truth_invariant.rs`
+
+Artifacts are written under:
+
+- `artifacts/lowering_gap_truth_invariant/<timestamp>/run_manifest.json`
+- `artifacts/lowering_gap_truth_invariant/<timestamp>/trace_ids.json`
+- `artifacts/lowering_gap_truth_invariant/<timestamp>/events.jsonl`
+- `artifacts/lowering_gap_truth_invariant/<timestamp>/commands.txt`
+- `artifacts/lowering_gap_truth_invariant/<timestamp>/step_logs/step_000.log`
+- `artifacts/lowering_gap_truth_invariant/<timestamp>/lowering_gap_truth_invariant.json`
+- `artifacts/lowering_gap_truth_invariant/<timestamp>/lowering_gap_truth_invariant_validation_report.json`
+
 Event->AST equivalence manifests are written under
 `artifacts/parser_event_ast_equivalence/<timestamp>/run_manifest.json`.
 Reducer promotion manifests are written under

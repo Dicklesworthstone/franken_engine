@@ -38,10 +38,17 @@ use frankenengine_engine::stdlib::{
     exec_string_method_with_receipt, exec_string_static, exec_symbol_static, install_stdlib,
     json_parse, json_stringify, read_array_elements, read_map_entries, read_set_values,
 };
+use frankenengine_engine::zero_placeholder_scan::{
+    ZeroPlaceholderFinding, ZeroPlaceholderStatus, zero_placeholder_scan_inventory,
+};
 
 const FP_SCALE: i64 = 1_000_000;
 const JSON_STRINGIFY_INLINE_ARTIFACT_BEGIN: &str = "__RGC_JSON_STRINGIFY_ARTIFACT_BEGIN__:";
 const JSON_STRINGIFY_INLINE_ARTIFACT_END: &str = "__RGC_JSON_STRINGIFY_ARTIFACT_END__:";
+const JSON_COMPOUND_PLACEHOLDER_CLOSURE_INLINE_ARTIFACT_BEGIN: &str =
+    "__RGC_JSON_COMPOUND_PLACEHOLDER_CLOSURE_ARTIFACT_BEGIN__:";
+const JSON_COMPOUND_PLACEHOLDER_CLOSURE_INLINE_ARTIFACT_END: &str =
+    "__RGC_JSON_COMPOUND_PLACEHOLDER_CLOSURE_ARTIFACT_END__:";
 
 fn parse_json_value(input: &str) -> Result<JsValue, StdlibError> {
     let mut heap = ObjectHeap::new();
@@ -1150,6 +1157,293 @@ fn json_stringify_compound_traversal_scenario_emits_artifact_bundle() {
             relative.as_str(),
             &fs::read_to_string(artifact_dir.join(relative.as_str()))
                 .expect("read inline step log"),
+        );
+    }
+}
+
+#[test]
+fn json_compound_placeholder_closure_scenario_emits_artifact_bundle() {
+    const SCHEMA_VERSION: &str = "franken-engine.json-compound-placeholder-closure.v1";
+    const BEAD_ID: &str = "bd-2muur.1.4";
+    const COMPONENT: &str = "stdlib.json_compound_placeholder_closure";
+    const REPORT_NAME: &str = "json_compound_placeholder_closure_report.json";
+
+    let context = DeterministicTestContext::new(
+        "bd-2muur.1.4-json-compound-placeholder-closure",
+        "json-compound-placeholder-closure-fixture",
+        HarnessLane::E2e,
+        92_014,
+    );
+    let replay_command = "cargo test -p frankenengine-engine --test stdlib_integration json_compound_placeholder_closure_scenario_emits_artifact_bundle -- --exact --nocapture";
+    let artifact_dir = json_compound_placeholder_closure_artifact_dir();
+    let step_logs_dir = artifact_dir.join("step_logs");
+    fs::create_dir_all(&step_logs_dir).expect("create artifact step_logs directory");
+
+    let mut events = Vec::new();
+    let mut commands = vec![replay_command.to_string()];
+    let mut record_step = |
+        sequence: u64,
+        case_id: &'static str,
+        event_name: &'static str,
+        outcome: &'static str,
+        finding_id: Option<&str>,
+        detail: String,
+    | {
+        let mut event = serde_json::to_value(context.event(EventInput {
+            sequence,
+            component: COMPONENT,
+            event: event_name,
+            outcome,
+            error_code: None,
+            timing_us: 20 + sequence,
+            timestamp_unix_ms: 1_700_000_920_140 + sequence,
+        }))
+        .expect("serialize closure event");
+        let event_object = event
+            .as_object_mut()
+            .expect("closure event should serialize as object");
+        event_object.insert("case_id".to_string(), serde_json::json!(case_id));
+        event_object.insert("finding_id".to_string(), serde_json::json!(finding_id));
+        event_object.insert("waiver_state".to_string(), serde_json::json!("none"));
+        event_object.insert("detail".to_string(), serde_json::json!(detail.clone()));
+        events.push(event);
+        commands.push(match finding_id {
+            Some(finding_id) => {
+                format!(
+                    "{event_name} case_id={case_id} outcome={outcome} finding_id={finding_id}"
+                )
+            }
+            None => format!("{event_name} case_id={case_id} outcome={outcome}"),
+        });
+        fs::write(
+            step_logs_dir.join(format!("step_{:03}.log", sequence - 1)),
+            format!(
+                "case_id={case_id}\nevent={event_name}\noutcome={outcome}\nfinding_id={}\nwaiver_state=none\ndetail={detail}\n",
+                finding_id.unwrap_or("none"),
+            ),
+        )
+        .expect("write closure step log");
+    };
+
+    let (heap, _env, value) = parse_json_with_heap(r#"{"answer":42,"nested":[1,null,"ok"]}"#);
+    let JsValue::Object(_) = value else {
+        panic!("expected heap-backed compound JSON value");
+    };
+    let round_trip = stringify_json_with_heap(&heap, &value).expect("stringify heap-backed value");
+    let JsValue::Str(round_trip_serialized) = round_trip else {
+        panic!("expected JSON.stringify to return a string");
+    };
+    assert_eq!(
+        round_trip_serialized,
+        r#"{"answer":42,"nested":[1,null,"ok"]}"#
+    );
+    record_step(
+        1,
+        "compound-roundtrip",
+        "json_compound_roundtrip",
+        "pass",
+        None,
+        format!("round_trip_serialized={round_trip_serialized}"),
+    );
+
+    let inventory = zero_placeholder_scan_inventory();
+    let runtime_findings: Vec<ZeroPlaceholderFinding> = [
+        "runtime::json_parse_compound_placeholder",
+        "runtime::json_stringify_object_placeholder",
+    ]
+    .into_iter()
+    .map(|finding_id| {
+        inventory
+            .findings
+            .iter()
+            .find(|finding| finding.finding_id == finding_id)
+            .unwrap_or_else(|| panic!("missing runtime finding {finding_id}"))
+            .clone()
+    })
+    .collect();
+    let runtime_open_placeholder_count = runtime_findings
+        .iter()
+        .filter(|finding| finding.status == ZeroPlaceholderStatus::OpenPlaceholder)
+        .count();
+    assert_eq!(runtime_open_placeholder_count, 0);
+
+    let runtime_findings_report: Vec<JsonCompoundPlaceholderClosureFindingReport> = runtime_findings
+        .iter()
+        .map(|finding| {
+            assert_eq!(
+                finding.status,
+                ZeroPlaceholderStatus::Resolved,
+                "runtime finding {} should be resolved",
+                finding.finding_id
+            );
+            assert_eq!(finding.owner_bead_id, BEAD_ID);
+            JsonCompoundPlaceholderClosureFindingReport {
+                finding_id: finding.finding_id.clone(),
+                owner_bead_id: finding.owner_bead_id.clone(),
+                status: finding.status,
+                observed_behavior: finding.observed_behavior.clone(),
+                required_behavior: finding.required_behavior.clone(),
+            }
+        })
+        .collect();
+
+    for (sequence, finding) in runtime_findings.iter().enumerate() {
+        let case_id = if finding.finding_id == "runtime::json_parse_compound_placeholder" {
+            "scan-json-parse-closure"
+        } else {
+            "scan-json-stringify-closure"
+        };
+        record_step(
+            sequence as u64 + 2,
+            case_id,
+            "scanner_finding_verified",
+            "resolved",
+            Some(finding.finding_id.as_str()),
+            format!(
+                "owner_bead_id={} observed_behavior={}",
+                finding.owner_bead_id, finding.observed_behavior
+            ),
+        );
+    }
+
+    record_step(
+        4,
+        "runtime-placeholder-summary",
+        "runtime_placeholder_summary",
+        "pass",
+        None,
+        format!("runtime_open_placeholder_count={runtime_open_placeholder_count}"),
+    );
+
+    let trace_ids_json = serde_json::json!({
+        "trace_ids": [context.trace_id.clone()],
+        "decision_id": context.decision_id.clone(),
+        "policy_id": context.policy_id.clone(),
+    });
+    let report = JsonCompoundPlaceholderClosureScenarioReport {
+        schema_version: SCHEMA_VERSION,
+        bead_id: BEAD_ID,
+        trace_id: context.trace_id.clone(),
+        decision_id: context.decision_id.clone(),
+        policy_id: context.policy_id.clone(),
+        case_count: 4,
+        runtime_open_placeholder_count,
+        round_trip_serialized: round_trip_serialized.clone(),
+        runtime_findings: runtime_findings_report,
+    };
+    let manifest = serde_json::json!({
+        "schema_version": "franken-engine.json-compound-placeholder-closure.run-manifest.v1",
+        "bead_id": BEAD_ID,
+        "component": COMPONENT,
+        "scenario_id": context.scenario_id,
+        "fixture_id": context.fixture_id,
+        "lane": context.lane,
+        "seed": context.seed,
+        "run_id": "json-compound-placeholder-closure",
+        "trace_id": context.trace_id,
+        "decision_id": context.decision_id,
+        "policy_id": context.policy_id,
+        "generated_at_unix_ms": 1_700_000_920_199u64,
+        "event_count": events.len(),
+        "command_count": commands.len(),
+        "outcome": "pass",
+        "replay_command": replay_command,
+        "artifact_paths": {
+            "run_manifest": "run_manifest.json",
+            "events_jsonl": "events.jsonl",
+            "commands": "commands.txt",
+            "trace_ids": "trace_ids.json",
+            "report": REPORT_NAME,
+            "step_logs": "step_logs/",
+        },
+        "operator_verification": [
+            "cat run_manifest.json",
+            "cat events.jsonl",
+            "cat commands.txt",
+            "cat trace_ids.json",
+            format!("cat {REPORT_NAME}"),
+        ],
+    });
+
+    let events_jsonl = events
+        .iter()
+        .map(|event| serde_json::to_string(event).expect("serialize closure event line"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    fs::write(
+        artifact_dir.join("run_manifest.json"),
+        serde_json::to_vec_pretty(&manifest).expect("closure manifest json"),
+    )
+    .expect("write closure run manifest");
+    fs::write(
+        artifact_dir.join("events.jsonl"),
+        format!("{events_jsonl}\n"),
+    )
+    .expect("write closure events jsonl");
+    fs::write(
+        artifact_dir.join("commands.txt"),
+        commands.join("\n") + "\n",
+    )
+    .expect("write closure commands");
+    fs::write(
+        artifact_dir.join("trace_ids.json"),
+        serde_json::to_vec_pretty(&trace_ids_json).expect("closure trace ids json"),
+    )
+    .expect("write closure trace ids");
+    fs::write(
+        artifact_dir.join(REPORT_NAME),
+        serde_json::to_vec_pretty(&report).expect("closure report json"),
+    )
+    .expect("write closure report");
+
+    for required in [
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "trace_ids.json",
+        REPORT_NAME,
+    ] {
+        assert!(
+            artifact_dir.join(required).exists(),
+            "missing required artifact {}",
+            artifact_dir.join(required).display()
+        );
+    }
+    for idx in 0..4 {
+        let path = step_logs_dir.join(format!("step_{idx:03}.log"));
+        assert!(path.exists(), "missing step log {}", path.display());
+    }
+
+    let saved_report: serde_json::Value = serde_json::from_slice(
+        &fs::read(artifact_dir.join(REPORT_NAME)).expect("read closure report"),
+    )
+    .expect("parse closure report");
+    assert_eq!(saved_report["bead_id"].as_str(), Some(BEAD_ID));
+    assert_eq!(
+        saved_report["runtime_open_placeholder_count"].as_u64(),
+        Some(0)
+    );
+
+    for required in [
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "trace_ids.json",
+        REPORT_NAME,
+    ] {
+        emit_json_compound_placeholder_closure_inline_artifact(
+            required,
+            &fs::read_to_string(artifact_dir.join(required))
+                .expect("read closure inline artifact"),
+        );
+    }
+    for idx in 0..4 {
+        let relative = format!("step_logs/step_{idx:03}.log");
+        emit_json_compound_placeholder_closure_inline_artifact(
+            relative.as_str(),
+            &fs::read_to_string(artifact_dir.join(relative.as_str()))
+                .expect("read closure inline step log"),
         );
     }
 }
@@ -2670,6 +2964,28 @@ struct JsonStringifyCompoundTraversalScenarioReport {
     cases: Vec<JsonStringifyCompoundTraversalCaseReport>,
 }
 
+#[derive(Debug, Serialize)]
+struct JsonCompoundPlaceholderClosureFindingReport {
+    finding_id: String,
+    owner_bead_id: String,
+    status: ZeroPlaceholderStatus,
+    observed_behavior: String,
+    required_behavior: String,
+}
+
+#[derive(Debug, Serialize)]
+struct JsonCompoundPlaceholderClosureScenarioReport {
+    schema_version: &'static str,
+    bead_id: &'static str,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
+    case_count: usize,
+    runtime_open_placeholder_count: usize,
+    round_trip_serialized: String,
+    runtime_findings: Vec<JsonCompoundPlaceholderClosureFindingReport>,
+}
+
 fn artifact_root(label: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2698,6 +3014,26 @@ fn emit_json_stringify_inline_artifact(relative_path: &str, content: &str) {
         println!();
     }
     println!("{JSON_STRINGIFY_INLINE_ARTIFACT_END}{relative_path}");
+    std::io::stdout().flush().expect("flush inline artifact");
+}
+
+fn json_compound_placeholder_closure_artifact_dir() -> PathBuf {
+    std::env::var_os("RGC_JSON_COMPOUND_PLACEHOLDER_CLOSURE_ARTIFACT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| artifact_root("json_compound_placeholder_closure"))
+}
+
+fn emit_json_compound_placeholder_closure_inline_artifact(relative_path: &str, content: &str) {
+    if std::env::var_os("RGC_JSON_COMPOUND_PLACEHOLDER_CLOSURE_INLINE_ARTIFACTS").is_none() {
+        return;
+    }
+
+    println!("{JSON_COMPOUND_PLACEHOLDER_CLOSURE_INLINE_ARTIFACT_BEGIN}{relative_path}");
+    print!("{content}");
+    if !content.ends_with('\n') {
+        println!();
+    }
+    println!("{JSON_COMPOUND_PLACEHOLDER_CLOSURE_INLINE_ARTIFACT_END}{relative_path}");
     std::io::stdout().flush().expect("flush inline artifact");
 }
 

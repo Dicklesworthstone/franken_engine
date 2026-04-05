@@ -873,11 +873,26 @@ fn scan_inventory_is_deterministic() {
 }
 
 #[test]
-fn scan_inventory_open_placeholder_count_tracks_remaining_runtime_gaps() {
-    // One runtime gap remains open; iterator execution and stringify traversal
-    // are now resolved.
+fn scan_inventory_open_placeholder_count_is_zero_after_json_runtime_closure() {
     let inv = zero_placeholder_scan_inventory();
-    assert_eq!(inv.open_placeholder_finding_count(), 1);
+    assert_eq!(inv.open_placeholder_finding_count(), 0);
+}
+
+#[test]
+fn scan_inventory_marks_json_runtime_findings_resolved_and_routes_them_to_closure_bead() {
+    let inv = zero_placeholder_scan_inventory();
+    for finding_id in [
+        "runtime::json_parse_compound_placeholder",
+        "runtime::json_stringify_object_placeholder",
+    ] {
+        let finding = inv
+            .findings
+            .iter()
+            .find(|finding| finding.finding_id == finding_id)
+            .unwrap_or_else(|| panic!("missing runtime finding {finding_id}"));
+        assert_eq!(finding.status, ZeroPlaceholderStatus::Resolved);
+        assert_eq!(finding.owner_bead_id, "bd-2muur.1.4");
+    }
 }
 
 #[test]

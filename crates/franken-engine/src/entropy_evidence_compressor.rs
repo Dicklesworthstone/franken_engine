@@ -268,7 +268,7 @@ impl SufficientStatistic {
 
     /// Verify that the sufficient statistic is consistent.
     pub fn is_consistent(&self) -> bool {
-        let count_sum: u64 = self.symbol_counts.values().sum();
+        let count_sum: u64 = self.symbol_counts.values().copied().fold(0, |acc, x| acc.saturating_add(x));
         count_sum == self.total_count
     }
 
@@ -445,7 +445,7 @@ impl ArithmeticCoder {
                 sum_fi_log2_fi += freq as i128 * integer_log2_millionths(freq) as i128;
             }
         }
-        let expected = log2_total as i128 - sum_fi_log2_fi / self.total_frequency as i128;
+        let expected = log2_total as i128 - sum_fi_log2_fi / self.total_frequency.max(1) as i128;
         expected.max(0) as i64
     }
 }

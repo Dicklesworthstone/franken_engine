@@ -1150,7 +1150,7 @@ fn allocate_tracked_budget_exceeded() {
     gc.register_heap("ext-a".into()).unwrap();
     let mut reg = make_registry(100);
 
-    let result = gc.allocate_tracked("ext-a", 200, &mut reg);
+    let result = gc.allocate_tracked("ext-a", 200, &mut reg, frankenengine_engine::gc::AllocationDomain::ExtensionHeap);
     assert!(matches!(result, Err(GcError::DomainError(_))));
 }
 

@@ -3708,34 +3708,50 @@ fn lower_expression_to_ir1(
             ops.push(Ir1Op::LoadThis);
         }
         Expression::ArrayLiteral(elements) => {
-            let mut non_hole_count = 0u32;
-            for elem in elements.iter().flatten() {
-                lower_expression_to_ir1(
-                    elem,
-                    ops,
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    root_scope_id,
-                    label_counter,
-                )?;
-                non_hole_count += 1;
+            for elem in elements {
+                if let Some(expr) = elem {
+                    lower_expression_to_ir1(
+                        expr,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                } else {
+                    ops.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Undefined,
+                    });
+                }
             }
             ops.push(Ir1Op::NewArray {
-                count: non_hole_count,
+                count: elements.len() as u32,
             });
         }
         Expression::ObjectLiteral(properties) => {
             for prop in properties {
-                // Extract key as string from the key expression.
-                let key_str = match &prop.key {
-                    Expression::Identifier(name) => name.clone(),
-                    Expression::StringLiteral(s) => s.clone(),
-                    other => format!("{other:?}"),
-                };
-                ops.push(Ir1Op::LoadLiteral {
-                    value: Ir1Literal::String(key_str),
-                });
+                if prop.computed {
+                    lower_expression_to_ir1(
+                        &prop.key,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                } else {
+                    let key_str = match &prop.key {
+                        Expression::Identifier(name) => name.clone(),
+                        Expression::StringLiteral(s) => s.clone(),
+                        Expression::NumericLiteral(n) => n.to_string(),
+                        other => format!("{other:?}"),
+                    };
+                    ops.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::String(key_str),
+                    });
+                }
                 lower_expression_to_ir1(
                     &prop.value,
                     ops,

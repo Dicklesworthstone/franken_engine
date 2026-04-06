@@ -268,7 +268,14 @@ impl SufficientStatistic {
 
     /// Verify that the sufficient statistic is consistent.
     pub fn is_consistent(&self) -> bool {
-        let count_sum: u64 = self.symbol_counts.values().copied().fold(0, |acc, x| acc.saturating_add(x));
+        let mut count_sum: u64 = 0;
+        for &x in self.symbol_counts.values() {
+            if let Some(sum) = count_sum.checked_add(x) {
+                count_sum = sum;
+            } else {
+                return false;
+            }
+        }
         count_sum == self.total_count
     }
 
@@ -285,7 +292,12 @@ impl SufficientStatistic {
         let mean_wide = self.mean_millionths as i128;
         let mean_sq = (mean_wide * mean_wide / MILLION as i128) as i64;
         let variance = (self.sum_squared_millionths / n - mean_sq).max(1);
-        n * MILLION / variance
+
+        let n_wide = self.total_count as i128;
+        let variance_wide = variance as i128;
+        let fisher_wide = (n_wide * MILLION as i128) / variance_wide;
+
+        fisher_wide.min(i64::MAX as i128) as i64
     }
 }
 
@@ -345,7 +357,7 @@ impl ArithmeticCoder {
     ///
     /// Uses range-based arithmetic coding with integer arithmetic.
     pub fn encode(&self, symbols: &[u32]) -> Result<CompressedEvidence, EntropyError> {
-        if symbols.is_empty() {
+        if symbols.is_empty() || self.total_frequency == 0 {
             return Err(EntropyError::EmptyInput);
         }
 
@@ -420,6 +432,10 @@ impl ArithmeticCoder {
         // l_i = -log₂(freq_i / total) = log₂(total) - log₂(freq_i).
         // Kraft sum = Σ 2^(-l_i) = Σ freq_i / total = 1 (by construction).
         // This is always satisfied for arithmetic coding, but we verify.
+
+        if self.total_frequency == 0 {
+            return Err(EntropyError::EmptyInput);
+        }
 
         let sum: u64 = self.frequency_table.values().map(|(_, f)| *f).sum();
         let kraft_sum_millionths = sum as i64 * MILLION / self.total_frequency as i64;

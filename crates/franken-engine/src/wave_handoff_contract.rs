@@ -1918,7 +1918,7 @@ mod tests {
                 bead_id: format!("bd-entry-{}", i),
                 required_status: RequiredBeadStatus::Closed,
                 required_artifact: format!("artifacts/entry_{}.json", i),
-                mandatory: i.is_multiple_of(2),
+                mandatory: i % 2 == 0,
             });
             contract.exit_criteria.push(WaveCriterion {
                 criterion_id: format!("exit-gen-{}", i),

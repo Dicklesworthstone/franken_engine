@@ -3167,10 +3167,11 @@ fn split_pattern_elements(source: &str) -> Vec<&str> {
         }
     }
     out.push(&source[start..]);
-    if let Some(last) = out.last() {
-        if last.trim().is_empty() && source.trim_end().ends_with(',') {
-            out.pop();
-        }
+    if let Some(last) = out.last()
+        && last.trim().is_empty()
+        && source.trim_end().ends_with(',')
+    {
+        out.pop();
     }
     out
 }
@@ -5166,6 +5167,11 @@ fn parse_array_literal(
             )?));
         }
     }
+    if let Some(None) = elements.last()
+        && trimmed.ends_with(',')
+    {
+        elements.pop();
+    }
     Ok(Expression::ArrayLiteral(elements))
 }
 
@@ -5327,14 +5333,14 @@ fn parse_i64_numeric_literal(input: &str) -> Option<i64> {
         digits
     };
 
-    let value = if let Some(hex) = digits_ref
+    let value_u64 = if let Some(hex) = digits_ref
         .strip_prefix("0x")
         .or_else(|| digits_ref.strip_prefix("0X"))
     {
         if hex.is_empty() || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
             return None;
         }
-        i64::from_str_radix(hex, 16).ok()?
+        u64::from_str_radix(hex, 16).ok()?
     } else if let Some(oct) = digits_ref
         .strip_prefix("0o")
         .or_else(|| digits_ref.strip_prefix("0O"))
@@ -5342,7 +5348,7 @@ fn parse_i64_numeric_literal(input: &str) -> Option<i64> {
         if oct.is_empty() || !oct.chars().all(|c| matches!(c, '0'..='7')) {
             return None;
         }
-        i64::from_str_radix(oct, 8).ok()?
+        u64::from_str_radix(oct, 8).ok()?
     } else if let Some(bin) = digits_ref
         .strip_prefix("0b")
         .or_else(|| digits_ref.strip_prefix("0B"))
@@ -5350,14 +5356,24 @@ fn parse_i64_numeric_literal(input: &str) -> Option<i64> {
         if bin.is_empty() || !bin.chars().all(|c| c == '0' || c == '1') {
             return None;
         }
-        i64::from_str_radix(bin, 2).ok()?
+        u64::from_str_radix(bin, 2).ok()?
     } else if digits_ref.chars().all(|c| c.is_ascii_digit()) {
-        digits_ref.parse::<i64>().ok()?
+        digits_ref.parse::<u64>().ok()?
     } else {
         return None;
     };
 
-    Some(if is_neg { -value } else { value })
+    if is_neg {
+        if value_u64 > (i64::MAX as u64 + 1) {
+            return None;
+        }
+        Some(value_u64.wrapping_neg() as i64)
+    } else {
+        if value_u64 > (i64::MAX as u64) {
+            return None;
+        }
+        Some(value_u64 as i64)
+    }
 }
 
 fn parse_quoted_string(input: &str) -> Option<String> {

@@ -803,10 +803,12 @@ impl AdmissionController {
             self.decision_sequence,
         );
 
-        if self.receipts.len() >= self.policy.max_receipts {
-            self.receipts.remove(0);
+        if self.policy.max_receipts > 0 {
+            while self.receipts.len() >= self.policy.max_receipts {
+                self.receipts.remove(0);
+            }
+            self.receipts.push(receipt.clone());
         }
-        self.receipts.push(receipt.clone());
         receipt
     }
 

@@ -520,17 +520,10 @@ impl BudgetAccountant {
 /// Integer square root (deterministic, no floating point).
 fn isqrt_millionths(n: i64) -> i64 {
     if n <= 0 {
-        return 1;
+        1
+    } else {
+        (n.unsigned_abs().isqrt() as i64).max(1)
     }
-    // Newton's method for integer square root.
-    let mut x = n;
-    #[allow(clippy::manual_div_ceil)]
-    let mut y = (x + 1) / 2;
-    while y < x {
-        x = y;
-        y = (x + n / x) / 2;
-    }
-    x.max(1)
 }
 
 // ---------------------------------------------------------------------------

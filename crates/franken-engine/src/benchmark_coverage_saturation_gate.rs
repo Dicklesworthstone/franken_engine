@@ -592,7 +592,7 @@ fn compute_gini(shares: &[u64]) -> u64 {
     let mean = shares
         .iter()
         .copied()
-        .sum::<u64>()
+        .fold(0u64, |acc, x| acc.saturating_add(x))
         .checked_div(n)
         .unwrap_or(0);
     if mean == 0 {
@@ -603,7 +603,7 @@ fn compute_gini(shares: &[u64]) -> u64 {
     let mut abs_diff_sum: u128 = 0;
     for &a in shares {
         for &b in shares {
-            abs_diff_sum += a.abs_diff(b) as u128;
+            abs_diff_sum = abs_diff_sum.saturating_add(a.abs_diff(b) as u128);
         }
     }
 

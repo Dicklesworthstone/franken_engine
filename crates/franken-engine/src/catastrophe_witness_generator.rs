@@ -1032,7 +1032,7 @@ fn compute_coordinate_distance(
     for coord in source {
         if let Some(&target_val) = target_map.get(coord.dimension_name.as_str()) {
             let diff = coord.value_millionths as i128 - target_val as i128;
-            sum_sq += diff * diff;
+            sum_sq = sum_sq.saturating_add(diff.saturating_mul(diff));
         }
     }
 
@@ -1047,16 +1047,10 @@ fn compute_coordinate_distance(
 /// Integer square root (floor) for i128.
 fn integer_sqrt_i128(n: i128) -> i128 {
     if n <= 0 {
-        return 0;
+        0
+    } else {
+        n.unsigned_abs().isqrt() as i128
     }
-    let mut x = n;
-    #[allow(clippy::manual_div_ceil)]
-    let mut y = (x / 2) + (x % 2);
-    while y < x {
-        x = y;
-        y = (x + n / x) / 2;
-    }
-    x
 }
 
 /// Integer square root (ceiling) for u64.
@@ -1070,17 +1064,7 @@ fn integer_sqrt_ceil(n: u64) -> u64 {
 
 /// Integer square root (floor) for u64.
 fn integer_sqrt_u64(n: u64) -> u64 {
-    if n == 0 {
-        return 0;
-    }
-    let mut x = n;
-    #[allow(clippy::manual_div_ceil)]
-    let mut y = (x + 1) / 2;
-    while y < x {
-        x = y;
-        y = (x + n / x) / 2;
-    }
-    x
+    n.isqrt()
 }
 
 /// Estimate the number of replay steps for a witness.

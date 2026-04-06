@@ -581,10 +581,12 @@ impl RegimeShiftEngine {
                 self.certificate_sequence,
             );
             det.reset_accumulators();
-            if self.certificates.len() >= self.config.max_certificates {
-                self.certificates.remove(0);
+            if self.config.max_certificates > 0 {
+                while self.certificates.len() >= self.config.max_certificates {
+                    self.certificates.remove(0);
+                }
+                self.certificates.push(cert);
             }
-            self.certificates.push(cert);
         }
 
         (severity, action)

@@ -906,8 +906,8 @@ impl ReputationGraph {
             return 0;
         }
 
-        let mut risk_sum: i64 = 0;
-        let mut dep_count: i64 = 0;
+        let mut risk_sum: i128 = 0;
+        let mut dep_count: i128 = 0;
 
         for dep_id in &ext.dependencies {
             dep_count += 1;
@@ -921,17 +921,17 @@ impl ReputationGraph {
                     TrustLevel::Established => 50_000,
                     TrustLevel::Trusted => 0,
                 };
-                risk_sum = risk_sum.saturating_add(dep_risk);
+                risk_sum += dep_risk as i128;
             } else {
                 // Unknown dependency = high risk.
-                risk_sum = risk_sum.saturating_add(500_000);
+                risk_sum += 500_000;
             }
         }
 
         if dep_count == 0 {
             return 0;
         }
-        risk_sum / dep_count
+        (risk_sum / dep_count) as i64
     }
 
     /// Get all trust transitions for an extension.

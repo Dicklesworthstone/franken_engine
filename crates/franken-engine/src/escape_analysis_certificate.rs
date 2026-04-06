@@ -407,10 +407,9 @@ impl OptimizationEligibilityEnvelope {
         if self.total_sites == 0 {
             return 0;
         }
-        (self.scalar_replacement_count as i64)
-            .saturating_mul(MILLION)
-            .checked_div(self.total_sites as i64)
-            .unwrap_or(0)
+        let scalar = self.scalar_replacement_count as i128;
+        let total = self.total_sites as i128;
+        (scalar * (MILLION as i128) / total) as i64
     }
 }
 

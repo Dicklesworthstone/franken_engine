@@ -337,16 +337,10 @@ impl ConfidenceInterval {
 /// Integer square root for fixed-point millionths arithmetic.
 fn isqrt_millionths(val: i64) -> i64 {
     if val <= 0 {
-        return 0;
+        0
+    } else {
+        val.unsigned_abs().isqrt() as i64
     }
-    let mut x = val;
-    #[allow(clippy::manual_div_ceil)]
-    let mut y = (x + 1) / 2;
-    while y < x {
-        x = y;
-        y = (x + val / x) / 2;
-    }
-    x
 }
 
 // ---------------------------------------------------------------------------

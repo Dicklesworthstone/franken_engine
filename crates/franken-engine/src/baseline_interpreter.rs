@@ -241,6 +241,147 @@ enum AbruptCompletion {
     Return(Value),
 }
 
+// ---------------------------------------------------------------------------
+// Scope chain — closure environment support (bd-6a61n.1.1)
+// ---------------------------------------------------------------------------
+
+/// Binding kind for `DeclareBinding`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BindingKind {
+    Var = 0,
+    Let = 1,
+    Const = 2,
+    Param = 3,
+    Function = 4,
+}
+
+impl BindingKind {
+    fn from_u8(val: u8) -> Self {
+        match val {
+            0 => Self::Var,
+            1 => Self::Let,
+            2 => Self::Const,
+            3 => Self::Param,
+            4 => Self::Function,
+            _ => Self::Var,
+        }
+    }
+
+    fn is_hoisted(self) -> bool {
+        matches!(self, Self::Var | Self::Param | Self::Function)
+    }
+}
+
+/// A single binding in a scope environment.
+#[derive(Debug, Clone)]
+struct ScopeBinding {
+    value: Value,
+    kind: BindingKind,
+    /// `true` once initialized (let/const start uninitialized in TDZ).
+    initialized: bool,
+}
+
+/// A single scope frame in the environment chain.
+#[derive(Debug, Clone)]
+struct ScopeFrame {
+    bindings: BTreeMap<String, ScopeBinding>,
+}
+
+impl ScopeFrame {
+    fn new() -> Self {
+        Self {
+            bindings: BTreeMap::new(),
+        }
+    }
+
+    fn declare(&mut self, name: String, kind: BindingKind) {
+        let initialized = kind.is_hoisted();
+        self.bindings.insert(
+            name,
+            ScopeBinding {
+                value: Value::Undefined,
+                kind,
+                initialized,
+            },
+        );
+    }
+
+    fn get(&self, name: &str) -> Option<&ScopeBinding> {
+        self.bindings.get(name)
+    }
+
+    fn get_mut(&mut self, name: &str) -> Option<&mut ScopeBinding> {
+        self.bindings.get_mut(name)
+    }
+}
+
+/// A scope chain is a stack of scope frames. Innermost is last.
+#[derive(Debug, Clone)]
+struct ScopeChain {
+    frames: Vec<ScopeFrame>,
+}
+
+impl ScopeChain {
+    fn new() -> Self {
+        // Start with a global scope.
+        Self {
+            frames: vec![ScopeFrame::new()],
+        }
+    }
+
+    fn push(&mut self) {
+        self.frames.push(ScopeFrame::new());
+    }
+
+    fn pop(&mut self) {
+        if self.frames.len() > 1 {
+            self.frames.pop();
+        }
+    }
+
+    fn current_mut(&mut self) -> &mut ScopeFrame {
+        self.frames.last_mut().expect("scope chain never empty")
+    }
+
+    /// Resolve a binding by walking outward from innermost scope.
+    fn resolve(&self, name: &str) -> Option<(usize, &ScopeBinding)> {
+        for (idx, frame) in self.frames.iter().enumerate().rev() {
+            if let Some(binding) = frame.get(name) {
+                return Some((idx, binding));
+            }
+        }
+        None
+    }
+
+    /// Resolve a mutable binding by walking outward from innermost scope.
+    fn resolve_mut(&mut self, name: &str) -> Option<&mut ScopeBinding> {
+        for frame in self.frames.iter_mut().rev() {
+            if let Some(binding) = frame.get_mut(name) {
+                return Some(binding);
+            }
+        }
+        None
+    }
+
+    /// Snapshot current scope chain for closure capture.
+    fn snapshot(&self) -> Vec<ScopeFrame> {
+        self.frames.clone()
+    }
+
+    /// Depth of the scope chain.
+    fn depth(&self) -> usize {
+        self.frames.len()
+    }
+}
+
+/// A closure value: function code reference + captured environment.
+#[derive(Debug, Clone)]
+struct ClosureValue {
+    function_index: u32,
+    /// Captured scope chain snapshot at closure creation time.
+    captured_env: Vec<ScopeFrame>,
+}
+
 /// A call stack frame.
 #[derive(Debug, Clone)]
 struct CallFrame {
@@ -266,6 +407,8 @@ struct CallFrame {
     saved_suspended_abrupt_depth: usize,
     /// Count of active finally modes before entering the callee.
     saved_finally_mode_depth: usize,
+    /// Scope chain depth before entering the callee, restored on return.
+    saved_scope_depth: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +450,10 @@ pub enum InterpreterError {
     Halted,
     /// An exception was thrown but no catch handler was found.
     UncaughtException { value: String },
+    /// Access to a let/const binding before initialization (TDZ).
+    UninitializedBinding { name: String },
+    /// Assignment to a const binding.
+    ConstAssignment { name: String },
 }
 
 impl fmt::Display for InterpreterError {
@@ -358,6 +505,15 @@ impl fmt::Display for InterpreterError {
             Self::Halted => write!(f, "execution halted"),
             Self::UncaughtException { value } => {
                 write!(f, "uncaught exception: {value}")
+            }
+            Self::UninitializedBinding { name } => {
+                write!(
+                    f,
+                    "cannot access '{name}' before initialization (temporal dead zone)"
+                )
+            }
+            Self::ConstAssignment { name } => {
+                write!(f, "assignment to constant variable '{name}'")
             }
         }
     }
@@ -515,6 +671,12 @@ pub struct InterpreterCore {
     last_pre_run_seed: Option<ExecutionSeed>,
     /// Caller-visible state immediately after the most recent execute().
     last_post_run_seed: Option<ExecutionSeed>,
+    /// Runtime scope chain for lexical variable resolution.
+    scope_chain: ScopeChain,
+    /// Closure store: maps closure IDs to captured environments.
+    closures: Vec<ClosureValue>,
+    /// Pending capture names for the next `CreateClosure` instruction.
+    pending_captures: Vec<u32>,
 }
 
 impl InterpreterCore {
@@ -543,6 +705,9 @@ impl InterpreterCore {
             finally_modes: Vec::new(),
             last_pre_run_seed: None,
             last_post_run_seed: None,
+            scope_chain: ScopeChain::new(),
+            closures: Vec::new(),
+            pending_captures: Vec::new(),
         }
     }
 
@@ -650,6 +815,10 @@ impl InterpreterCore {
             self.finally_modes.truncate(frame.saved_finally_mode_depth);
             self.pending_exception = frame.saved_pending_exception;
             self.pending_return = frame.saved_pending_return;
+            // Restore scope chain to caller's depth.
+            while self.scope_chain.depth() > frame.saved_scope_depth {
+                self.scope_chain.pop();
+            }
             // ES2020 §9.2.2 step 13: if this is a constructor call and the
             // return value is not an object, use the allocated `this` object
             // instead.
@@ -957,6 +1126,7 @@ impl InterpreterCore {
                             }
 
                             // Push frame.
+                            let scope_depth = self.scope_chain.depth();
                             self.call_stack.push(CallFrame {
                                 return_ip: self.ip + 1,
                                 return_reg: dst,
@@ -969,7 +1139,19 @@ impl InterpreterCore {
                                     .suspended_abrupt_completions
                                     .len(),
                                 saved_finally_mode_depth: self.finally_modes.len(),
+                                saved_scope_depth: scope_depth,
                             });
+
+                            // If calling a closure, restore its captured environment.
+                            if let Some(closure) =
+                                self.closures.iter().find(|c| c.function_index == func_idx)
+                            {
+                                let captured = closure.captured_env.clone();
+                                self.scope_chain.frames = captured;
+                            }
+
+                            // Push a fresh scope for the callee's locals.
+                            self.scope_chain.push();
 
                             self.register_base += self.config.max_registers as usize;
 
@@ -1287,6 +1469,7 @@ impl InterpreterCore {
                             }
 
                             // Push constructor frame with `construct_this`.
+                            let scope_depth = self.scope_chain.depth();
                             self.call_stack.push(CallFrame {
                                 return_ip: self.ip + 1,
                                 return_reg: dst,
@@ -1299,7 +1482,17 @@ impl InterpreterCore {
                                     .suspended_abrupt_completions
                                     .len(),
                                 saved_finally_mode_depth: self.finally_modes.len(),
+                                saved_scope_depth: scope_depth,
                             });
+
+                            // If calling a closure, restore its captured environment.
+                            if let Some(closure) =
+                                self.closures.iter().find(|c| c.function_index == func_idx)
+                            {
+                                let captured = closure.captured_env.clone();
+                                self.scope_chain.frames = captured;
+                            }
+                            self.scope_chain.push();
 
                             self.register_base += self.config.max_registers as usize;
                             let req_len = self.register_base + self.config.max_registers as usize;
@@ -1467,6 +1660,117 @@ impl InterpreterCore {
                             self.ip += 1;
                         }
                     }
+                }
+
+                // ���─ Closure / scope-chain instructions ────────────────
+                Ir3Instruction::CreateClosure {
+                    dst,
+                    function_index,
+                    ..
+                } => {
+                    // Snapshot the current scope chain including any
+                    // bindings declared so far. Pending captures were
+                    // accumulated by prior PushCapture instructions but
+                    // the scope chain snapshot already contains those
+                    // bindings, so we just clear them.
+                    let captured_env = self.scope_chain.snapshot();
+                    self.closures.push(ClosureValue {
+                        function_index,
+                        captured_env,
+                    });
+                    self.pending_captures.clear();
+                    // Store the function index as the Value so Call can
+                    // look up the closure by function_index.
+                    self.write_reg(dst, Value::Function(function_index))?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::PushCapture { name_pool_index } => {
+                    self.pending_captures.push(name_pool_index);
+                    self.ip += 1;
+                }
+                Ir3Instruction::PushScope => {
+                    self.scope_chain.push();
+                    self.ip += 1;
+                }
+                Ir3Instruction::PopScope => {
+                    self.scope_chain.pop();
+                    self.ip += 1;
+                }
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index,
+                    kind,
+                } => {
+                    let name = module
+                        .constant_pool
+                        .get(name_pool_index as usize)
+                        .cloned()
+                        .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
+                    let binding_kind = BindingKind::from_u8(kind);
+                    self.scope_chain.current_mut().declare(name, binding_kind);
+                    self.ip += 1;
+                }
+                Ir3Instruction::LoadScoped {
+                    dst,
+                    name_pool_index,
+                } => {
+                    let name = module
+                        .constant_pool
+                        .get(name_pool_index as usize)
+                        .cloned()
+                        .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
+                    let val = if let Some((_, binding)) = self.scope_chain.resolve(&name) {
+                        if !binding.initialized {
+                            return Err(InterpreterError::UninitializedBinding {
+                                name: name.clone(),
+                            });
+                        }
+                        binding.value.clone()
+                    } else {
+                        Value::Undefined
+                    };
+                    self.write_reg(dst, val)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::StoreScoped {
+                    src,
+                    name_pool_index,
+                } => {
+                    let name = module
+                        .constant_pool
+                        .get(name_pool_index as usize)
+                        .cloned()
+                        .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
+                    let val = self.read_reg(src)?;
+                    if let Some(binding) = self.scope_chain.resolve_mut(&name) {
+                        if !binding.initialized {
+                            return Err(InterpreterError::UninitializedBinding {
+                                name: name.clone(),
+                            });
+                        }
+                        if binding.kind == BindingKind::Const {
+                            return Err(InterpreterError::ConstAssignment { name: name.clone() });
+                        }
+                        binding.value = val;
+                    }
+                    // Silently ignore stores to undeclared variables
+                    // (strict mode would throw, but baseline is lenient).
+                    self.ip += 1;
+                }
+                Ir3Instruction::InitBinding {
+                    name_pool_index,
+                    src,
+                } => {
+                    let name = module
+                        .constant_pool
+                        .get(name_pool_index as usize)
+                        .cloned()
+                        .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
+                    let val = self.read_reg(src)?;
+                    if let Some(binding) = self.scope_chain.resolve_mut(&name) {
+                        binding.value = val;
+                        binding.initialized = true;
+                    }
+                    self.ip += 1;
                 }
             }
         }
@@ -2009,7 +2313,7 @@ impl InterpreterCore {
 
     /// Allocate a new object with an explicit prototype link.
     fn alloc_object_with_prototype(&mut self, prototype: Option<ObjectId>) -> ObjectId {
-        let id = ObjectId(u32::try_from(self.heap.len()).unwrap_or(u32::MAX));
+        let id = ObjectId(u32::try_from(self.heap.len()).expect("capacity exceeded u32::MAX"));
         let mut object = HeapObject::new();
         object.prototype = prototype;
         self.heap.push(object);
@@ -2022,7 +2326,7 @@ impl InterpreterCore {
     }
 
     fn alloc_iterator(&mut self, iterator: RuntimeIteratorState) -> u32 {
-        let handle = u32::try_from(self.iterators.len()).unwrap_or(u32::MAX);
+        let handle = u32::try_from(self.iterators.len()).expect("capacity exceeded u32::MAX");
         self.iterators.push(iterator);
         handle
     }
@@ -5661,5 +5965,314 @@ mod tests {
             }
             other => panic!("expected UncaughtException, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Closure / scope chain tests (bd-6a61n.1.1)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn scope_chain_declare_and_load() {
+        // DeclareBinding "x" (var), StoreScoped "x" <- r1, LoadScoped r0 <- "x", Halt
+        let m = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadInt { dst: 1, value: 42 },
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: 0, // var
+                },
+                Ir3Instruction::StoreScoped {
+                    src: 1,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::LoadScoped {
+                    dst: 0,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec!["x".to_string()],
+        );
+        let result = quickjs_execute(&m).unwrap();
+        assert_eq!(result.value, Value::Int(42));
+    }
+
+    #[test]
+    fn scope_chain_nested_scopes() {
+        // Outer scope: declare x=10
+        // Inner scope: declare y=20, load x (should find outer) into r0
+        let m = test_module_with_pool(
+            vec![
+                // Outer scope
+                Ir3Instruction::LoadInt { dst: 1, value: 10 },
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0, // x
+                    kind: 0,
+                },
+                Ir3Instruction::StoreScoped {
+                    src: 1,
+                    name_pool_index: 0,
+                },
+                // Inner scope
+                Ir3Instruction::PushScope,
+                Ir3Instruction::LoadInt { dst: 2, value: 20 },
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 1, // y
+                    kind: 0,
+                },
+                Ir3Instruction::StoreScoped {
+                    src: 2,
+                    name_pool_index: 1,
+                },
+                // Load x from outer scope inside inner scope into r0
+                Ir3Instruction::LoadScoped {
+                    dst: 0,
+                    name_pool_index: 0, // x
+                },
+                Ir3Instruction::PopScope,
+                Ir3Instruction::Halt,
+            ],
+            vec!["x".to_string(), "y".to_string()],
+        );
+        let result = quickjs_execute(&m).unwrap();
+        assert_eq!(result.value, Value::Int(10));
+    }
+
+    #[test]
+    fn scope_chain_let_tdz_enforcement() {
+        // DeclareBinding "x" (let), then try LoadScoped before InitBinding
+        let m = test_module_with_pool(
+            vec![
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: 1, // let
+                },
+                Ir3Instruction::LoadScoped {
+                    dst: 0,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec!["x".to_string()],
+        );
+        let err = quickjs_execute(&m).unwrap_err();
+        assert!(matches!(err, InterpreterError::UninitializedBinding { .. }));
+    }
+
+    #[test]
+    fn scope_chain_const_assignment_blocked() {
+        // DeclareBinding "x" (const), InitBinding, then try StoreScoped
+        let m = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 42 },
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: 2, // const
+                },
+                Ir3Instruction::InitBinding {
+                    name_pool_index: 0,
+                    src: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 1, value: 99 },
+                Ir3Instruction::StoreScoped {
+                    src: 1,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec!["x".to_string()],
+        );
+        let err = quickjs_execute(&m).unwrap_err();
+        assert!(matches!(err, InterpreterError::ConstAssignment { .. }));
+    }
+
+    #[test]
+    fn closure_captures_outer_variable() {
+        // Declare x=10, create closure (fn 1), call closure, closure loads x
+        let m = {
+            let mut m = test_module_with_pool(
+                vec![
+                    // ip=0: declare x and set to 10
+                    Ir3Instruction::LoadInt { dst: 0, value: 10 },
+                    Ir3Instruction::DeclareBinding {
+                        name_pool_index: 0,
+                        kind: 0,
+                    },
+                    Ir3Instruction::StoreScoped {
+                        src: 0,
+                        name_pool_index: 0,
+                    },
+                    // ip=3: create closure referencing fn 0 (entry at ip=7)
+                    Ir3Instruction::PushCapture { name_pool_index: 0 },
+                    Ir3Instruction::CreateClosure {
+                        dst: 1,
+                        function_index: 0,
+                        capture_count: 1,
+                    },
+                    // ip=5: call closure, result -> r0
+                    Ir3Instruction::Call {
+                        dst: 0,
+                        callee: 1,
+                        args: RegRange {
+                            start: 10,
+                            count: 0,
+                        },
+                    },
+                    // ip=6: halt — should have x=10 in r0
+                    Ir3Instruction::Halt,
+                    // ip=7: closure body: load x from captured env, return it
+                    Ir3Instruction::LoadScoped {
+                        dst: 0,
+                        name_pool_index: 0,
+                    },
+                    Ir3Instruction::Return { value: 0 },
+                ],
+                vec!["x".to_string()],
+            );
+            m.function_table.push(Ir3FunctionDesc {
+                entry: 7,
+                arity: 0,
+                frame_size: 4,
+                name: Some("closure".to_string()),
+            });
+            m
+        };
+        let result = quickjs_execute(&m).unwrap();
+        assert_eq!(result.value, Value::Int(10));
+    }
+
+    #[test]
+    fn closure_modification_visible_through_shared_scope() {
+        // Declare x=10, create closure that increments x, call it, load x — should be 11
+        let m = {
+            let mut m = test_module_with_pool(
+                vec![
+                    // ip=0: declare x=10
+                    Ir3Instruction::LoadInt { dst: 0, value: 10 },
+                    Ir3Instruction::DeclareBinding {
+                        name_pool_index: 0,
+                        kind: 0,
+                    },
+                    Ir3Instruction::StoreScoped {
+                        src: 0,
+                        name_pool_index: 0,
+                    },
+                    // ip=3: create closure
+                    Ir3Instruction::CreateClosure {
+                        dst: 1,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    // ip=4: call closure
+                    Ir3Instruction::Call {
+                        dst: 2,
+                        callee: 1,
+                        args: RegRange {
+                            start: 10,
+                            count: 0,
+                        },
+                    },
+                    // ip=5: after call, load x into r0 — should be 11
+                    Ir3Instruction::LoadScoped {
+                        dst: 0,
+                        name_pool_index: 0,
+                    },
+                    Ir3Instruction::Halt,
+                    // ip=7: closure body: load x, add 1, store back, return
+                    Ir3Instruction::LoadScoped {
+                        dst: 0,
+                        name_pool_index: 0,
+                    },
+                    Ir3Instruction::LoadInt { dst: 1, value: 1 },
+                    Ir3Instruction::Add {
+                        dst: 2,
+                        lhs: 0,
+                        rhs: 1,
+                    },
+                    Ir3Instruction::StoreScoped {
+                        src: 2,
+                        name_pool_index: 0,
+                    },
+                    Ir3Instruction::Return { value: 2 },
+                ],
+                vec!["x".to_string()],
+            );
+            m.function_table.push(Ir3FunctionDesc {
+                entry: 7,
+                arity: 0,
+                frame_size: 4,
+                name: Some("incrementer".to_string()),
+            });
+            m
+        };
+        let result = quickjs_execute(&m).unwrap();
+        // The closure modified x in the shared scope, so after return
+        // the outer LoadScoped should see 11.
+        assert_eq!(result.value, Value::Int(11));
+    }
+
+    #[test]
+    fn scope_chain_pop_hides_inner_bindings() {
+        // Declare x=10 in outer, PushScope, declare y=20, PopScope,
+        // LoadScoped y -> should be Undefined (not found)
+        let m = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 10 },
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: 0,
+                },
+                Ir3Instruction::StoreScoped {
+                    src: 0,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::PushScope,
+                Ir3Instruction::LoadInt { dst: 1, value: 20 },
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 1,
+                    kind: 0,
+                },
+                Ir3Instruction::StoreScoped {
+                    src: 1,
+                    name_pool_index: 1,
+                },
+                Ir3Instruction::PopScope,
+                // y should no longer be visible — load into r0
+                Ir3Instruction::LoadScoped {
+                    dst: 0,
+                    name_pool_index: 1,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec!["x".to_string(), "y".to_string()],
+        );
+        let result = quickjs_execute(&m).unwrap();
+        assert_eq!(result.value, Value::Undefined);
+    }
+
+    #[test]
+    fn scope_chain_init_binding_exits_tdz() {
+        // DeclareBinding "x" (let), InitBinding with value, LoadScoped into r0 succeeds
+        let m = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadInt { dst: 1, value: 77 },
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: 1, // let
+                },
+                Ir3Instruction::InitBinding {
+                    name_pool_index: 0,
+                    src: 1,
+                },
+                Ir3Instruction::LoadScoped {
+                    dst: 0,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec!["x".to_string()],
+        );
+        let result = quickjs_execute(&m).unwrap();
+        assert_eq!(result.value, Value::Int(77));
     }
 }

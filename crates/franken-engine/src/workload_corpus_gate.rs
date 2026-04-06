@@ -1931,7 +1931,7 @@ mod tests {
         let ids: Vec<String> = corpus.specimens.keys().cloned().collect();
         // Half identical, half semantic divergence
         for (i, id) in ids.iter().enumerate() {
-            let class = if i.is_multiple_of(2) {
+            let class = if i % 2 == 0 {
                 DivergenceClass::Identical
             } else {
                 DivergenceClass::SemanticDivergence

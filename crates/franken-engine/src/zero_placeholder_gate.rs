@@ -776,6 +776,9 @@ pub fn evaluate_gate(
     }
     for w in &sorted_waivers {
         append_str(&mut input_buf, &w.waiver_id);
+        input_buf.extend_from_slice(w.placeholder_hash.as_bytes());
+        append_u64(&mut input_buf, w.expires_epoch);
+        append_str(&mut input_buf, w.status.as_str());
     }
     let input_hash = ContentHash::compute(&input_buf);
 

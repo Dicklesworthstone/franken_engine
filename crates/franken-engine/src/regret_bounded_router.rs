@@ -874,10 +874,14 @@ fn integer_exp_millionths(x_millionths: i64) -> i64 {
     }
 
     let scaled = if k >= 0 {
-        let shift = u32::try_from(k).unwrap_or(u32::MAX).min(60);
+        let shift = u32::try_from(k)
+            .expect("capacity exceeded u32::MAX")
+            .min(60);
         sum.checked_shl(shift).unwrap_or(i128::MAX)
     } else {
-        let shift = u32::try_from(-k).unwrap_or(u32::MAX).min(120);
+        let shift = u32::try_from(-k)
+            .expect("capacity exceeded u32::MAX")
+            .min(120);
         sum >> shift
     };
     scaled.clamp(1, i64::MAX as i128) as i64
@@ -1022,25 +1026,11 @@ fn integer_ln_millionths(n: u64) -> i64 {
 /// Newton's method with convergence guard from a bit-shift seed.
 fn sqrt_of_millionths(n_millionths: i64) -> i64 {
     if n_millionths <= 0 {
-        return 0;
+        0
+    } else {
+        let n_wide = n_millionths as i128 * MILLION as i128;
+        n_wide.unsigned_abs().isqrt() as i64
     }
-    // sqrt(n_millionths / MILLION) * MILLION = sqrt(n_millionths * MILLION).
-    let n_wide = n_millionths as i128 * MILLION as i128;
-    // Bit-shift seed.
-    let bits = 128 - n_wide.leading_zeros();
-    let mut x = 1i128 << bits.div_ceil(2);
-
-    for _ in 0..20 {
-        if x == 0 {
-            break;
-        }
-        let next = (x + n_wide / x) / 2;
-        if next >= x {
-            break;
-        }
-        x = next;
-    }
-    x as i64
 }
 
 // ---------------------------------------------------------------------------

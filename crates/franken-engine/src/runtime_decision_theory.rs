@@ -350,9 +350,9 @@ impl CvarGuardrail {
             return None;
         }
         // CVaR = mean of observations in the tail.
-        let sum: i64 = tail.iter().sum();
-        let count = tail.len() as i64;
-        Some(sum / count)
+        let sum: i128 = tail.iter().map(|&x| x as i128).sum();
+        let count = tail.len() as i128;
+        Some((sum / count) as i64)
     }
 
     /// Check whether CVaR exceeds the configured threshold.
@@ -786,19 +786,21 @@ fn empirical_kl_divergence(reference: &[i64], test: &[i64]) -> i64 {
         return 0; // all observations identical
     }
 
-    let range = global_max - global_min;
-    let bin_width = range / DRIFT_HISTOGRAM_BINS as i64 + 1;
+    let range = global_max.wrapping_sub(global_min) as u64;
+    let bin_width = range / (DRIFT_HISTOGRAM_BINS as u64) + 1;
 
     // Build histograms with Laplace smoothing (add 1 to each bin).
     let mut ref_counts = [1i64; DRIFT_HISTOGRAM_BINS];
     let mut test_counts = [1i64; DRIFT_HISTOGRAM_BINS];
 
     for &v in reference {
-        let bin = ((v - global_min) / bin_width).min(DRIFT_HISTOGRAM_BINS as i64 - 1) as usize;
+        let diff = v.wrapping_sub(global_min) as u64;
+        let bin = (diff / bin_width).min(DRIFT_HISTOGRAM_BINS as u64 - 1) as usize;
         ref_counts[bin] += 1;
     }
     for &v in test {
-        let bin = ((v - global_min) / bin_width).min(DRIFT_HISTOGRAM_BINS as i64 - 1) as usize;
+        let diff = v.wrapping_sub(global_min) as u64;
+        let bin = (diff / bin_width).min(DRIFT_HISTOGRAM_BINS as u64 - 1) as usize;
         test_counts[bin] += 1;
     }
 

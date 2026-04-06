@@ -1365,10 +1365,12 @@ impl RedBlueLoopIntegrator {
             if entry.attempts == 0 {
                 continue;
             }
-            entry.detection_rate_millionths =
-                clamp_millionths(((entry.detected as u128 * 1_000_000_u128) / entry.attempts as u128) as u64);
-            entry.escape_rate_millionths =
-                clamp_millionths(((entry.escaped as u128 * 1_000_000_u128) / entry.attempts as u128) as u64);
+            entry.detection_rate_millionths = clamp_millionths(
+                ((entry.detected as u128 * 1_000_000_u128) / entry.attempts as u128) as u64,
+            );
+            entry.escape_rate_millionths = clamp_millionths(
+                ((entry.escaped as u128 * 1_000_000_u128) / entry.attempts as u128) as u64,
+            );
         }
         map
     }

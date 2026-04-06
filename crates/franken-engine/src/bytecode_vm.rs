@@ -491,7 +491,8 @@ impl BytecodeVm {
                 })
             }
             Instruction::NewObject { dst } => {
-                let object_id = ObjectId(u32::try_from(self.heap.len()).unwrap_or(u32::MAX));
+                let object_id =
+                    ObjectId(u32::try_from(self.heap.len()).expect("capacity exceeded u32::MAX"));
                 let object = HeapObject::new(self.shape_algebra.root_shape_id());
                 self.heap.push(object);
                 self.write_register(dst, Value::Object(object_id))?;
@@ -544,7 +545,7 @@ impl BytecodeVm {
                     .shape_algebra
                     .apply_mutation(current_shape_id, mutation)
                     .expect("heap object shape must participate in canonical algebra");
-                let revision_after = revision_before.unwrap_or(0) + 1;
+                let revision_after = revision_before.unwrap_or(0).saturating_add(1);
                 {
                     let heap_object =
                         self.heap
@@ -554,11 +555,10 @@ impl BytecodeVm {
                             })?;
                     heap_object.shape_id = outcome.shape.shape_id;
                     if let Some(slot) = existing_slot {
-                        if slot < heap_object.slots.len() {
-                            heap_object.slots[slot] = stored_value;
-                        } else {
-                            heap_object.slots.push(stored_value);
+                        if slot >= heap_object.slots.len() {
+                            heap_object.slots.resize(slot + 1, Value::Undefined);
                         }
+                        heap_object.slots[slot] = stored_value;
                     } else {
                         let slot = heap_object.slots.len();
                         if let Some(layout) = outcome.transition.property_layout.as_ref() {

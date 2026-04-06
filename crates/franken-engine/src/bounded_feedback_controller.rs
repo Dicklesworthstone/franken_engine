@@ -731,10 +731,12 @@ impl FeedbackCoordinator {
                 let decision = controller.tick(obs);
                 decisions.push(decision.clone());
                 // Add to log with bounded size.
-                if self.decision_log.len() >= self.max_log_entries {
-                    self.decision_log.remove(0);
+                if self.max_log_entries > 0 {
+                    while self.decision_log.len() >= self.max_log_entries {
+                        self.decision_log.remove(0);
+                    }
+                    self.decision_log.push(decision.clone());
                 }
-                self.decision_log.push(decision);
             }
             let _ = key; // suppress unused warning in loop
         }

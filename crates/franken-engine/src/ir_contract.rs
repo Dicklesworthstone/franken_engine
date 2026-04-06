@@ -1269,6 +1269,40 @@ pub enum Ir3Instruction {
     /// End a finally block.  If a pending exception exists, re-throw it;
     /// otherwise continue to the next instruction.
     EndFinally,
+
+    // ── Closure / scope-chain instructions ────────────────────────────
+    /// Create a closure from a function index and the current environment.
+    /// `function_index` identifies the function body in the function table.
+    /// `capture_count` is the number of preceding PushCapture instructions
+    /// that define the free variables captured by this closure.
+    CreateClosure {
+        dst: Reg,
+        function_index: u32,
+        capture_count: u32,
+    },
+    /// Push a capture slot name for the next CreateClosure.
+    /// The interpreter resolves the name in the current scope chain
+    /// and records the binding reference as a closure capture.
+    PushCapture { name_pool_index: u32 },
+    /// Push a new scope/environment onto the runtime scope chain.
+    PushScope,
+    /// Pop the innermost scope/environment from the runtime scope chain.
+    PopScope,
+    /// Declare a variable binding in the current scope.
+    /// `kind`: 0=var, 1=let, 2=const, 3=parameter, 4=function.
+    DeclareBinding {
+        name_pool_index: u32,
+        kind: u8,
+    },
+    /// Load a variable from the scope chain by name (walking outward).
+    LoadScoped { dst: Reg, name_pool_index: u32 },
+    /// Store a value into a variable in the scope chain by name.
+    StoreScoped { src: Reg, name_pool_index: u32 },
+    /// Initialize a let/const binding (move it out of TDZ).
+    InitBinding {
+        name_pool_index: u32,
+        src: Reg,
+    },
 }
 
 impl Ir3Instruction {
@@ -1769,6 +1803,103 @@ impl Ir3Instruction {
                 );
                 map.insert("args".to_string(), args.canonical_value());
                 map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+            }
+            Self::CreateClosure {
+                dst,
+                function_index,
+                capture_count,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("create_closure".to_string()),
+                );
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert(
+                    "function_index".to_string(),
+                    CanonicalValue::U64(u64::from(*function_index)),
+                );
+                map.insert(
+                    "capture_count".to_string(),
+                    CanonicalValue::U64(u64::from(*capture_count)),
+                );
+            }
+            Self::PushCapture { name_pool_index } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("push_capture".to_string()),
+                );
+                map.insert(
+                    "name_pool_index".to_string(),
+                    CanonicalValue::U64(u64::from(*name_pool_index)),
+                );
+            }
+            Self::PushScope => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("push_scope".to_string()),
+                );
+            }
+            Self::PopScope => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("pop_scope".to_string()),
+                );
+            }
+            Self::DeclareBinding {
+                name_pool_index,
+                kind,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("declare_binding".to_string()),
+                );
+                map.insert(
+                    "name_pool_index".to_string(),
+                    CanonicalValue::U64(u64::from(*name_pool_index)),
+                );
+                map.insert("kind".to_string(), CanonicalValue::U64(u64::from(*kind)));
+            }
+            Self::LoadScoped {
+                dst,
+                name_pool_index,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("load_scoped".to_string()),
+                );
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert(
+                    "name_pool_index".to_string(),
+                    CanonicalValue::U64(u64::from(*name_pool_index)),
+                );
+            }
+            Self::StoreScoped {
+                src,
+                name_pool_index,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("store_scoped".to_string()),
+                );
+                map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
+                map.insert(
+                    "name_pool_index".to_string(),
+                    CanonicalValue::U64(u64::from(*name_pool_index)),
+                );
+            }
+            Self::InitBinding {
+                name_pool_index,
+                src,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("init_binding".to_string()),
+                );
+                map.insert(
+                    "name_pool_index".to_string(),
+                    CanonicalValue::U64(u64::from(*name_pool_index)),
+                );
+                map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
             }
         }
         CanonicalValue::Map(map)

@@ -516,11 +516,7 @@ fn coefficient_of_variation_millionths(samples: &[u64]) -> Option<u64> {
         return None;
     }
 
-    let variance_divisor = if len > 1.0 {
-        len - 1.0
-    } else {
-        len
-    };
+    let variance_divisor = if len > 1.0 { len - 1.0 } else { len };
     let variance = samples
         .iter()
         .map(|value| {

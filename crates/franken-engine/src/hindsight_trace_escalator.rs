@@ -673,10 +673,12 @@ impl HindsightTraceEscalator {
         };
 
         // Bounded log.
-        if self.decision_log.len() >= self.max_log_entries {
-            self.decision_log.remove(0);
+        if self.max_log_entries > 0 {
+            while self.decision_log.len() >= self.max_log_entries {
+                self.decision_log.remove(0);
+            }
+            self.decision_log.push(decision.clone());
         }
-        self.decision_log.push(decision.clone());
 
         decision
     }

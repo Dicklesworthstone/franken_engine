@@ -755,6 +755,154 @@ fn alloc_pattern_primary_binding(
     Ok(primary_binding)
 }
 
+/// Emit IR1 ops to destructure a value (already stored in `source_bid`) into
+/// the individual bindings declared by `pattern`. For object patterns this
+/// emits `LoadBinding(source) + GetProperty(key) + StoreBinding(target) + Pop`
+/// for each property. Array patterns use numeric index strings.
+fn lower_destructuring_to_ir1(
+    pattern: &BindingPattern,
+    source_bid: BindingId,
+    ops: &mut Vec<Ir1Op>,
+    binding_lookup: &BTreeMap<String, BindingId>,
+    label_counter: &mut u32,
+) {
+    match pattern {
+        BindingPattern::Identifier(_) => {
+            // Simple binding — already handled by StoreBinding above.
+        }
+        BindingPattern::ObjectPattern(props) => {
+            for prop in props {
+                let target_names = prop.value.binding_names();
+                let target_name = match target_names.first() {
+                    Some(n) => *n,
+                    None => continue,
+                };
+                let target_bid = match binding_lookup.get(target_name) {
+                    Some(bid) => *bid,
+                    None => continue,
+                };
+
+                // Determine the property key string.
+                let key_str = if prop.shorthand {
+                    target_name.to_string()
+                } else {
+                    match &prop.key {
+                        Expression::Identifier(name) => name.clone(),
+                        Expression::StringLiteral(s) => s.clone(),
+                        Expression::NumericLiteral(n) => n.to_string(),
+                        _ => target_name.to_string(),
+                    }
+                };
+
+                // Load the source object, get the property, store to target binding.
+                ops.push(Ir1Op::LoadBinding {
+                    binding_id: source_bid,
+                });
+                ops.push(Ir1Op::GetProperty {
+                    key: Ir1PropertyKey::Static(key_str),
+                });
+
+                // Handle default value: if the extracted value is undefined
+                // and this is an AssignmentPattern, use the default.
+                if let BindingPattern::AssignmentPattern { .. } = &prop.value {
+                    // For now, store the property value; default value lowering
+                    // requires conditional branches (JumpIfNullish) which can
+                    // be added incrementally.
+                }
+
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: target_bid,
+                });
+                ops.push(Ir1Op::Pop);
+
+                // Recurse for nested patterns.
+                if !matches!(prop.value, BindingPattern::Identifier(_)) {
+                    lower_destructuring_to_ir1(
+                        &prop.value,
+                        target_bid,
+                        ops,
+                        binding_lookup,
+                        label_counter,
+                    );
+                }
+            }
+        }
+        BindingPattern::ArrayPattern(elements) => {
+            for (index, element) in elements.iter().enumerate() {
+                let element = match element {
+                    Some(el) => el,
+                    None => continue, // hole: `[, b]`
+                };
+
+                // Handle rest element: `[a, ...rest]`
+                if let BindingPattern::Rest(inner) = element {
+                    let target_names = inner.binding_names();
+                    let target_name = match target_names.first() {
+                        Some(n) => *n,
+                        None => continue,
+                    };
+                    if let Some(&target_bid) = binding_lookup.get(target_name) {
+                        // Rest collects remaining elements — for now store
+                        // undefined as placeholder since array slicing requires
+                        // runtime support not yet available.
+                        ops.push(Ir1Op::LoadLiteral {
+                            value: Ir1Literal::Undefined,
+                        });
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: target_bid,
+                        });
+                        ops.push(Ir1Op::Pop);
+                    }
+                    continue;
+                }
+
+                let target_names = element.binding_names();
+                let target_name = match target_names.first() {
+                    Some(n) => *n,
+                    None => continue,
+                };
+                let target_bid = match binding_lookup.get(target_name) {
+                    Some(bid) => *bid,
+                    None => continue,
+                };
+
+                // Load source array, get element by index string.
+                ops.push(Ir1Op::LoadBinding {
+                    binding_id: source_bid,
+                });
+                ops.push(Ir1Op::GetProperty {
+                    key: Ir1PropertyKey::Static(index.to_string()),
+                });
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: target_bid,
+                });
+                ops.push(Ir1Op::Pop);
+
+                // Recurse for nested patterns.
+                if !matches!(element, BindingPattern::Identifier(_)) {
+                    lower_destructuring_to_ir1(
+                        element,
+                        target_bid,
+                        ops,
+                        binding_lookup,
+                        label_counter,
+                    );
+                }
+            }
+        }
+        BindingPattern::AssignmentPattern { left, .. } => {
+            // The outer assignment pattern with default value. The value has
+            // already been stored to source_bid. Recurse into the left-hand
+            // pattern for nested destructuring.
+            lower_destructuring_to_ir1(left, source_bid, ops, binding_lookup, label_counter);
+        }
+        BindingPattern::Rest(inner) => {
+            // Rest at top level (unusual but valid). Recurse into inner.
+            lower_destructuring_to_ir1(inner, source_bid, ops, binding_lookup, label_counter);
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn lower_statement_to_ir1(
     statement: &Statement,
@@ -819,7 +967,8 @@ fn lower_statement_to_ir1_with_flow(
                 }
             }
             for d in &vd.declarations {
-                let bid = alloc_pattern_primary_binding(
+                // Allocate all bindings referenced by the pattern first.
+                let primary_bid = alloc_pattern_primary_binding(
                     bindings,
                     binding_lookup,
                     binding_index,
@@ -828,6 +977,8 @@ fn lower_statement_to_ir1_with_flow(
                     binding_kind,
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
+
+                // Lower the initializer expression (pushes value onto stack).
                 if let Some(init) = &d.initializer {
                     lower_expression_to_ir1(
                         init,
@@ -843,8 +994,25 @@ fn lower_statement_to_ir1_with_flow(
                         value: Ir1Literal::Undefined,
                     });
                 }
-                ops.push(Ir1Op::StoreBinding { binding_id: bid });
+
+                // Store the initializer value to the primary binding so we can
+                // reload it for each destructured property.
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: primary_bid,
+                });
                 ops.push(Ir1Op::Pop);
+
+                // If the pattern is a simple Identifier, we're done.
+                // For destructuring patterns, emit property-extraction ops.
+                if !matches!(d.pattern, BindingPattern::Identifier(_)) {
+                    lower_destructuring_to_ir1(
+                        &d.pattern,
+                        primary_bid,
+                        ops,
+                        binding_lookup,
+                        label_counter,
+                    );
+                }
             }
         }
         Statement::Block(block) => {
@@ -1220,6 +1388,22 @@ fn lower_statement_to_ir1_with_flow(
             } else {
                 None
             };
+            let break_via_finally_label = if tc.finalizer.is_some() {
+                control_flow.break_label.map(|_| alloc_label(label_counter))
+            } else {
+                None
+            };
+            let continue_via_finally_label = if tc.finalizer.is_some() {
+                control_flow
+                    .continue_label
+                    .map(|_| alloc_label(label_counter))
+            } else {
+                None
+            };
+            let inner_control_flow = ControlFlowTargets {
+                break_label: break_via_finally_label.or(control_flow.break_label),
+                continue_label: continue_via_finally_label.or(control_flow.continue_label),
+            };
             // When there is a catch handler, allocate a distinct catch label.
             // When there is only a finally (no catch), route exceptions
             // directly to the finally label so `EnterCatch` is NOT emitted
@@ -1242,7 +1426,7 @@ fn lower_statement_to_ir1_with_flow(
                     binding_index,
                     scope_id,
                     label_counter,
-                    control_flow,
+                    inner_control_flow,
                 )?;
             }
             ops.push(Ir1Op::EndTry);
@@ -1295,7 +1479,7 @@ fn lower_statement_to_ir1_with_flow(
                             binding_index,
                             scope_id,
                             label_counter,
-                            control_flow,
+                            inner_control_flow,
                         )?;
                     }
                 }
@@ -1328,6 +1512,55 @@ fn lower_statement_to_ir1_with_flow(
                     }
                 }
                 ops.push(Ir1Op::EndFinally);
+                ops.push(Ir1Op::Jump {
+                    label_id: end_label,
+                });
+            }
+            if let Some(finalizer) = &tc.finalizer {
+                if let (Some(via_break_label), Some(actual_break_label)) =
+                    (break_via_finally_label, control_flow.break_label)
+                {
+                    ops.push(Ir1Op::Label {
+                        id: via_break_label,
+                    });
+                    for inner in &finalizer.body {
+                        lower_statement_to_ir1_with_flow(
+                            inner,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                            control_flow,
+                        )?;
+                    }
+                    ops.push(Ir1Op::Jump {
+                        label_id: actual_break_label,
+                    });
+                }
+                if let (Some(via_continue_label), Some(actual_continue_label)) =
+                    (continue_via_finally_label, control_flow.continue_label)
+                {
+                    ops.push(Ir1Op::Label {
+                        id: via_continue_label,
+                    });
+                    for inner in &finalizer.body {
+                        lower_statement_to_ir1_with_flow(
+                            inner,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                            control_flow,
+                        )?;
+                    }
+                    ops.push(Ir1Op::Jump {
+                        label_id: actual_continue_label,
+                    });
+                }
             }
             ops.push(Ir1Op::Label { id: end_label });
         }
@@ -6710,14 +6943,14 @@ mod tests {
             Some(Expression::NumericLiteral(3)),
         ]));
         let result = lower_ir0_to_ir1(&ir0).expect("array should lower");
-        // Only non-hole elements are lowered (flatten skips None);
-        // count reflects the actual pushed values, not total slots.
+        // Holes are lowered as LoadLiteral { Undefined }, so count
+        // reflects total slots including holes.
         assert!(
             result
                 .module
                 .ops
                 .iter()
-                .any(|op| matches!(op, Ir1Op::NewArray { count: 2 }))
+                .any(|op| matches!(op, Ir1Op::NewArray { count: 3 }))
         );
     }
 
@@ -8523,5 +8756,217 @@ mod tests {
             nullish_count, 2,
             "nested chain a?.b?.c must emit 2 JumpIfNullish ops"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Destructuring completeness tests (bd-6a61n.1.5)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn object_destructuring_emits_get_property() {
+        // const { a, b } = source
+        let ir0 = stmt_ir0(vec![Statement::VariableDeclaration(VariableDeclaration {
+            kind: VariableDeclarationKind::Const,
+            declarations: vec![VariableDeclarator {
+                pattern: BindingPattern::ObjectPattern(vec![
+                    ObjectPatternProperty {
+                        key: Expression::Identifier("a".into()),
+                        value: BindingPattern::Identifier("a".into()),
+                        computed: false,
+                        shorthand: true,
+                    },
+                    ObjectPatternProperty {
+                        key: Expression::Identifier("b".into()),
+                        value: BindingPattern::Identifier("b".into()),
+                        computed: false,
+                        shorthand: true,
+                    },
+                ]),
+                initializer: Some(Expression::Identifier("source".into())),
+                span: span(),
+            }],
+            span: span(),
+        })]);
+        let result = lower_ir0_to_ir1(&ir0).expect("should lower");
+        let get_props: Vec<_> = result
+            .module
+            .ops
+            .iter()
+            .filter_map(|op| {
+                if let Ir1Op::GetProperty {
+                    key: Ir1PropertyKey::Static(k),
+                } = op
+                {
+                    Some(k.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            get_props.contains(&"a"),
+            "should emit GetProperty for 'a', got: {get_props:?}"
+        );
+        assert!(
+            get_props.contains(&"b"),
+            "should emit GetProperty for 'b', got: {get_props:?}"
+        );
+    }
+
+    #[test]
+    fn object_destructuring_rename_emits_correct_key() {
+        // const { a: x } = source — key is "a", binding is "x"
+        let ir0 = stmt_ir0(vec![Statement::VariableDeclaration(VariableDeclaration {
+            kind: VariableDeclarationKind::Const,
+            declarations: vec![VariableDeclarator {
+                pattern: BindingPattern::ObjectPattern(vec![ObjectPatternProperty {
+                    key: Expression::Identifier("a".into()),
+                    value: BindingPattern::Identifier("x".into()),
+                    computed: false,
+                    shorthand: false,
+                }]),
+                initializer: Some(Expression::Identifier("source".into())),
+                span: span(),
+            }],
+            span: span(),
+        })]);
+        let result = lower_ir0_to_ir1(&ir0).expect("should lower");
+        let get_props: Vec<_> = result
+            .module
+            .ops
+            .iter()
+            .filter_map(|op| {
+                if let Ir1Op::GetProperty {
+                    key: Ir1PropertyKey::Static(k),
+                } = op
+                {
+                    Some(k.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            get_props.contains(&"a".to_string()),
+            "should emit GetProperty for key 'a', got: {get_props:?}"
+        );
+        // Verify binding "x" exists.
+        let scope = result.module.scopes.first().expect("root scope");
+        assert!(scope.bindings.iter().any(|b| b.name == "x"));
+    }
+
+    #[test]
+    fn array_destructuring_emits_indexed_get_property() {
+        // const [a, b] = source
+        let ir0 = stmt_ir0(vec![Statement::VariableDeclaration(VariableDeclaration {
+            kind: VariableDeclarationKind::Const,
+            declarations: vec![VariableDeclarator {
+                pattern: BindingPattern::ArrayPattern(vec![
+                    Some(BindingPattern::Identifier("a".into())),
+                    Some(BindingPattern::Identifier("b".into())),
+                ]),
+                initializer: Some(Expression::Identifier("source".into())),
+                span: span(),
+            }],
+            span: span(),
+        })]);
+        let result = lower_ir0_to_ir1(&ir0).expect("should lower");
+        let get_props: Vec<_> = result
+            .module
+            .ops
+            .iter()
+            .filter_map(|op| {
+                if let Ir1Op::GetProperty {
+                    key: Ir1PropertyKey::Static(k),
+                } = op
+                {
+                    Some(k.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            get_props.contains(&"0".to_string()),
+            "should emit GetProperty for index '0'"
+        );
+        assert!(
+            get_props.contains(&"1".to_string()),
+            "should emit GetProperty for index '1'"
+        );
+    }
+
+    #[test]
+    fn array_destructuring_with_hole() {
+        // const [, b] = source — first element is a hole
+        let ir0 = stmt_ir0(vec![Statement::VariableDeclaration(VariableDeclaration {
+            kind: VariableDeclarationKind::Const,
+            declarations: vec![VariableDeclarator {
+                pattern: BindingPattern::ArrayPattern(vec![
+                    None, // hole
+                    Some(BindingPattern::Identifier("b".into())),
+                ]),
+                initializer: Some(Expression::Identifier("source".into())),
+                span: span(),
+            }],
+            span: span(),
+        })]);
+        let result = lower_ir0_to_ir1(&ir0).expect("should lower");
+        let get_props: Vec<_> = result
+            .module
+            .ops
+            .iter()
+            .filter_map(|op| {
+                if let Ir1Op::GetProperty {
+                    key: Ir1PropertyKey::Static(k),
+                } = op
+                {
+                    Some(k.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        // Should only have index "1" (skipping hole at 0).
+        assert!(
+            get_props.contains(&"1".to_string()),
+            "should emit GetProperty for index '1', got: {get_props:?}"
+        );
+        assert!(
+            !get_props.contains(&"0".to_string()),
+            "should NOT emit GetProperty for hole at index '0'"
+        );
+    }
+
+    #[test]
+    fn destructuring_allocates_all_named_bindings() {
+        // const { a, b: c } = source — should allocate both "a" and "c"
+        let ir0 = stmt_ir0(vec![Statement::VariableDeclaration(VariableDeclaration {
+            kind: VariableDeclarationKind::Const,
+            declarations: vec![VariableDeclarator {
+                pattern: BindingPattern::ObjectPattern(vec![
+                    ObjectPatternProperty {
+                        key: Expression::Identifier("a".into()),
+                        value: BindingPattern::Identifier("a".into()),
+                        computed: false,
+                        shorthand: true,
+                    },
+                    ObjectPatternProperty {
+                        key: Expression::Identifier("b".into()),
+                        value: BindingPattern::Identifier("c".into()),
+                        computed: false,
+                        shorthand: false,
+                    },
+                ]),
+                initializer: Some(Expression::Identifier("source".into())),
+                span: span(),
+            }],
+            span: span(),
+        })]);
+        let result = lower_ir0_to_ir1(&ir0).expect("should lower");
+        let scope = result.module.scopes.first().expect("root scope");
+        let names: Vec<&str> = scope.bindings.iter().map(|b| b.name.as_str()).collect();
+        assert!(names.contains(&"a"), "binding 'a' should exist");
+        assert!(names.contains(&"c"), "binding 'c' should exist");
     }
 }

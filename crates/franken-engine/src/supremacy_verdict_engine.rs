@@ -1001,17 +1001,7 @@ fn compute_verdict_hash(
 
 /// Integer square root for `u128`.
 fn isqrt(n: u128) -> u128 {
-    if n == 0 {
-        return 0;
-    }
-    let mut x = n;
-    #[allow(clippy::manual_div_ceil)]
-    let mut y = (x + 1) / 2;
-    while y < x {
-        x = y;
-        y = (x + n / x) / 2;
-    }
-    x
+    n.isqrt()
 }
 
 /// Generate a human-readable summary of a verdict report.

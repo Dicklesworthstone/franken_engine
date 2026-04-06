@@ -910,7 +910,7 @@ pub fn exec_math(builtin: BuiltinId, args: &[JsValue]) -> Result<JsValue, Stdlib
                 let v = coerce_to_int(&format!("Math.hypot arg {i}"), arg)? as i128;
                 sum_sq = sum_sq.saturating_add(v * v);
             }
-            // Taking sqrt on the squared sum (scaled by FP_SCALE^2) naturally yields 
+            // Taking sqrt on the squared sum (scaled by FP_SCALE^2) naturally yields
             // the result scaled by FP_SCALE without any precision loss prior to sqrt.
             let result = isqrt_i128(sum_sq) as i64;
             Ok(JsValue::Int(result))
@@ -2163,7 +2163,16 @@ pub fn exec_string_method(
         }
         BuiltinId::StringPrototypeIncludes => {
             let search = require_str("String.prototype.includes", args, 0)?;
-            Ok(JsValue::Bool(this.contains(search.as_str())))
+            let utf16_len = utf16_code_units(this) as i64;
+            let pos = opt_int_arg(args, 1)
+                .map(|n| (n / FP_SCALE).clamp(0, utf16_len) as usize)
+                .unwrap_or(0);
+            let haystack = if search.is_empty() {
+                this.to_string()
+            } else {
+                utf16_slice_lossless(this, pos, utf16_len as usize, "String.prototype.includes")?
+            };
+            Ok(JsValue::Bool(haystack.contains(search.as_str())))
         }
         BuiltinId::StringPrototypeStartsWith => {
             let search = require_str("String.prototype.startsWith", args, 0)?;
@@ -3220,16 +3229,10 @@ fn resolve_array_index(idx: i64, len: i64) -> i64 {
 /// Integer square root (floor) for fixed-point sqrt.
 fn isqrt_i64(n: i64) -> i64 {
     if n <= 0 {
-        return 0;
+        0
+    } else {
+        n.unsigned_abs().isqrt() as i64
     }
-    let mut x = n;
-    #[allow(clippy::manual_div_ceil)]
-    let mut y = (x + 1) / 2;
-    while y < x {
-        x = y;
-        y = (x + n / x) / 2;
-    }
-    x
 }
 
 /// Integer square root (floor) for 128-bit numbers.
@@ -3312,8 +3315,10 @@ fn percent_decode(input: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hex = &input[i + 1..i + 3];
-            if let Ok(byte) = u8::from_str_radix(hex, 16) {
+            let hex_bytes = &bytes[i + 1..i + 3];
+            if let Ok(hex_str) = std::str::from_utf8(hex_bytes)
+                && let Ok(byte) = u8::from_str_radix(hex_str, 16)
+            {
                 decoded_bytes.push(byte);
                 i += 3;
                 continue;

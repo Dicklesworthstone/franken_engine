@@ -187,17 +187,23 @@ fn encode_into(buf: &mut Vec<u8>, value: &CanonicalValue) {
         }
         CanonicalValue::Bytes(v) => {
             buf.push(TAG_BYTES);
-            buf.extend_from_slice(&(u32::try_from(v.len()).unwrap_or(u32::MAX)).to_be_bytes());
+            buf.extend_from_slice(
+                &(u32::try_from(v.len()).expect("capacity exceeded u32::MAX")).to_be_bytes(),
+            );
             buf.extend_from_slice(v);
         }
         CanonicalValue::String(v) => {
             buf.push(TAG_STRING);
-            buf.extend_from_slice(&(u32::try_from(v.len()).unwrap_or(u32::MAX)).to_be_bytes());
+            buf.extend_from_slice(
+                &(u32::try_from(v.len()).expect("capacity exceeded u32::MAX")).to_be_bytes(),
+            );
             buf.extend_from_slice(v.as_bytes());
         }
         CanonicalValue::Array(items) => {
             buf.push(TAG_ARRAY);
-            buf.extend_from_slice(&(u32::try_from(items.len()).unwrap_or(u32::MAX)).to_be_bytes());
+            buf.extend_from_slice(
+                &(u32::try_from(items.len()).expect("capacity exceeded u32::MAX")).to_be_bytes(),
+            );
             for item in items {
                 encode_into(buf, item);
             }
@@ -206,11 +212,11 @@ fn encode_into(buf: &mut Vec<u8>, value: &CanonicalValue) {
             buf.push(TAG_MAP);
             // BTreeMap guarantees lexicographic ordering.
             buf.extend_from_slice(
-                &(u32::try_from(entries.len()).unwrap_or(u32::MAX)).to_be_bytes(),
+                &(u32::try_from(entries.len()).expect("capacity exceeded u32::MAX")).to_be_bytes(),
             );
             for (key, val) in entries {
                 buf.extend_from_slice(
-                    &(u32::try_from(key.len()).unwrap_or(u32::MAX)).to_be_bytes(),
+                    &(u32::try_from(key.len()).expect("capacity exceeded u32::MAX")).to_be_bytes(),
                 );
                 buf.extend_from_slice(key.as_bytes());
                 encode_into(buf, val);

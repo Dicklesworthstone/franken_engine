@@ -1387,6 +1387,14 @@ impl ExecutionOrchestrator {
             crate::ir_contract::Ir3Instruction::EnterCatch { .. } => "enter_catch",
             crate::ir_contract::Ir3Instruction::EnterFinally => "enter_finally",
             crate::ir_contract::Ir3Instruction::EndFinally => "end_finally",
+            crate::ir_contract::Ir3Instruction::CreateClosure { .. } => "create_closure",
+            crate::ir_contract::Ir3Instruction::PushCapture { .. } => "push_capture",
+            crate::ir_contract::Ir3Instruction::PushScope => "push_scope",
+            crate::ir_contract::Ir3Instruction::PopScope => "pop_scope",
+            crate::ir_contract::Ir3Instruction::DeclareBinding { .. } => "declare_binding",
+            crate::ir_contract::Ir3Instruction::LoadScoped { .. } => "load_scoped",
+            crate::ir_contract::Ir3Instruction::StoreScoped { .. } => "store_scoped",
+            crate::ir_contract::Ir3Instruction::InitBinding { .. } => "init_binding",
         }
     }
 

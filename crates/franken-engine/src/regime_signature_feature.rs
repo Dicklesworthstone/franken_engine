@@ -175,16 +175,10 @@ impl TraceSignature {
 /// Integer square root via Newton's method.
 fn isqrt(n: i64) -> i64 {
     if n <= 0 {
-        return 0;
+        0
+    } else {
+        n.unsigned_abs().isqrt() as i64
     }
-    let mut x = n;
-    #[allow(clippy::manual_div_ceil)]
-    let mut y = (x + 1) / 2;
-    while y < x {
-        x = y;
-        y = (x + n / x) / 2;
-    }
-    x
 }
 
 // ---------------------------------------------------------------------------

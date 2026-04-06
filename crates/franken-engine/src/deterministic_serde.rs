@@ -187,38 +187,38 @@ fn encode_into(buf: &mut Vec<u8>, value: &CanonicalValue) {
         }
         CanonicalValue::Bytes(v) => {
             buf.push(TAG_BYTES);
-            buf.extend_from_slice(
-                &(u32::try_from(v.len()).unwrap_or(u32::MAX)).to_be_bytes(),
-            );
-            buf.extend_from_slice(v);
+            // Clamp length to u32::MAX and only write that many bytes so
+            // the encoded length prefix matches the data that follows,
+            // preventing decode-cursor misalignment on roundtrip.
+            let clamped = v.len().min(u32::MAX as usize);
+            buf.extend_from_slice(&(clamped as u32).to_be_bytes());
+            buf.extend_from_slice(&v[..clamped]);
         }
         CanonicalValue::String(v) => {
             buf.push(TAG_STRING);
-            buf.extend_from_slice(
-                &(u32::try_from(v.len()).unwrap_or(u32::MAX)).to_be_bytes(),
-            );
-            buf.extend_from_slice(v.as_bytes());
+            let bytes = v.as_bytes();
+            let clamped = bytes.len().min(u32::MAX as usize);
+            buf.extend_from_slice(&(clamped as u32).to_be_bytes());
+            buf.extend_from_slice(&bytes[..clamped]);
         }
         CanonicalValue::Array(items) => {
             buf.push(TAG_ARRAY);
-            buf.extend_from_slice(
-                &(u32::try_from(items.len()).unwrap_or(u32::MAX)).to_be_bytes(),
-            );
-            for item in items {
+            let clamped = items.len().min(u32::MAX as usize);
+            buf.extend_from_slice(&(clamped as u32).to_be_bytes());
+            for item in items.iter().take(clamped) {
                 encode_into(buf, item);
             }
         }
         CanonicalValue::Map(entries) => {
             buf.push(TAG_MAP);
             // BTreeMap guarantees lexicographic ordering.
-            buf.extend_from_slice(
-                &(u32::try_from(entries.len()).unwrap_or(u32::MAX)).to_be_bytes(),
-            );
-            for (key, val) in entries {
-                buf.extend_from_slice(
-                    &(u32::try_from(key.len()).unwrap_or(u32::MAX)).to_be_bytes(),
-                );
-                buf.extend_from_slice(key.as_bytes());
+            let clamped = entries.len().min(u32::MAX as usize);
+            buf.extend_from_slice(&(clamped as u32).to_be_bytes());
+            for (key, val) in entries.iter().take(clamped) {
+                let key_bytes = key.as_bytes();
+                let key_clamped = key_bytes.len().min(u32::MAX as usize);
+                buf.extend_from_slice(&(key_clamped as u32).to_be_bytes());
+                buf.extend_from_slice(&key_bytes[..key_clamped]);
                 encode_into(buf, val);
             }
         }

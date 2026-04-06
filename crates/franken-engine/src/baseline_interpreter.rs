@@ -1521,7 +1521,7 @@ impl InterpreterCore {
 
                             // Allocate the `this` object for the constructor.
                             let prototype = self.ensure_function_prototype(func_idx);
-                            let this_id = self.alloc_object_with_prototype(Some(prototype));
+                            let this_id = self.alloc_object_with_prototype(Some(prototype))?;
                             if let Some(this_obj) = self.heap.get_mut(this_id.0 as usize) {
                                 this_obj.constructor_function = Some(func_idx);
                             }
@@ -1747,7 +1747,11 @@ impl InterpreterCore {
                     // the scope chain snapshot already contains those
                     // bindings, so we just clear them.
                     let captured_env = self.scope_chain.snapshot();
-                    let closure_id = self.closures.len() as u32;
+                    let closure_id = u32::try_from(self.closures.len())
+                        .map_err(|_| InterpreterError::TypeError {
+                            expected: "closure table capacity".into(),
+                            got: format!("exceeded u32::MAX ({})", self.closures.len()),
+                        })?;
                     self.closures.push(ClosureValue {
                         function_index,
                         captured_env,
@@ -2391,23 +2395,39 @@ impl InterpreterCore {
     // -- Heap operations ---------------------------------------------------
 
     /// Allocate a new object with an explicit prototype link.
-    fn alloc_object_with_prototype(&mut self, prototype: Option<ObjectId>) -> ObjectId {
-        let id = ObjectId(u32::try_from(self.heap.len()).unwrap_or(u32::MAX));
+    ///
+    /// Returns an error if the heap exceeds `u32::MAX` objects, preventing
+    /// silent ObjectId aliasing.
+    fn alloc_object_with_prototype(
+        &mut self,
+        prototype: Option<ObjectId>,
+    ) -> Result<ObjectId, InterpreterError> {
+        let id = ObjectId(u32::try_from(self.heap.len()).map_err(|_| {
+            InterpreterError::TypeError {
+                expected: "heap capacity".into(),
+                got: format!("exceeded u32::MAX ({})", self.heap.len()),
+            }
+        })?);
         let mut object = HeapObject::new();
         object.prototype = prototype;
         self.heap.push(object);
-        id
+        Ok(id)
     }
 
     /// Allocate a new object on the heap and return its ID.
-    pub fn alloc_object(&mut self) -> ObjectId {
+    pub fn alloc_object(&mut self) -> Result<ObjectId, InterpreterError> {
         self.alloc_object_with_prototype(None)
     }
 
-    fn alloc_iterator(&mut self, iterator: RuntimeIteratorState) -> u32 {
-        let handle = u32::try_from(self.iterators.len()).unwrap_or(u32::MAX);
+    fn alloc_iterator(&mut self, iterator: RuntimeIteratorState) -> Result<u32, InterpreterError> {
+        let handle = u32::try_from(self.iterators.len()).map_err(|_| {
+            InterpreterError::TypeError {
+                expected: "iterator table capacity".into(),
+                got: format!("exceeded u32::MAX ({})", self.iterators.len()),
+            }
+        })?;
         self.iterators.push(iterator);
-        handle
+        Ok(handle)
     }
 
     fn expect_iterator_handle(&self, iterator: Value) -> Result<u32, InterpreterError> {

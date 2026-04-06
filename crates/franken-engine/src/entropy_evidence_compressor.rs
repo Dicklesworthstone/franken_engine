@@ -178,7 +178,8 @@ impl EntropyEstimator {
             return 0;
         }
         let count = self.frequencies.get(&symbol).copied().unwrap_or(0);
-        count as i64 * MILLION / self.total_count as i64
+        // Use i128 to prevent overflow when count * MILLION exceeds i64::MAX.
+        (count as i128 * MILLION as i128 / self.total_count.max(1) as i128) as i64
     }
 
     /// Maximum entropy for this alphabet size: log₂(|Σ|) in millionths.
@@ -438,7 +439,9 @@ impl ArithmeticCoder {
         }
 
         let sum: u64 = self.frequency_table.values().map(|(_, f)| *f).sum();
-        let kraft_sum_millionths = sum as i64 * MILLION / self.total_frequency as i64;
+        // Use i128 to prevent overflow when sum * MILLION exceeds i64::MAX.
+        let kraft_sum_millionths =
+            (sum as i128 * MILLION as i128 / self.total_frequency.max(1) as i128) as i64;
 
         if kraft_sum_millionths > MILLION + 1000 {
             // Allow tiny rounding tolerance.

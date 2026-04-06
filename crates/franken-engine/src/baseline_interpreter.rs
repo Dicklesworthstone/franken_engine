@@ -2415,19 +2415,20 @@ impl InterpreterCore {
     }
 
     /// Allocate a new object on the heap and return its ID.
-    pub fn alloc_object(&mut self) -> Result<ObjectId, InterpreterError> {
+    ///
+    /// Panics if the heap exceeds `u32::MAX` objects. For fallible
+    /// allocation in the interpreter loop, use
+    /// `alloc_object_with_prototype` directly.
+    pub fn alloc_object(&mut self) -> ObjectId {
         self.alloc_object_with_prototype(None)
+            .expect("heap object capacity exceeded")
     }
 
-    fn alloc_iterator(&mut self, iterator: RuntimeIteratorState) -> Result<u32, InterpreterError> {
-        let handle = u32::try_from(self.iterators.len()).map_err(|_| {
-            InterpreterError::TypeError {
-                expected: "iterator table capacity".into(),
-                got: format!("exceeded u32::MAX ({})", self.iterators.len()),
-            }
-        })?;
+    fn alloc_iterator(&mut self, iterator: RuntimeIteratorState) -> u32 {
+        let handle = u32::try_from(self.iterators.len())
+            .expect("iterator table capacity exceeded");
         self.iterators.push(iterator);
-        Ok(handle)
+        handle
     }
 
     fn expect_iterator_handle(&self, iterator: Value) -> Result<u32, InterpreterError> {
@@ -5100,7 +5101,7 @@ mod tests {
         let config = InterpreterConfig::quickjs_defaults();
         let mut core = InterpreterCore::new(config, "test");
         let prototype = core.alloc_object();
-        let instance = core.alloc_object_with_prototype(Some(prototype));
+        let instance = core.alloc_object_with_prototype(Some(prototype)).unwrap();
         core.heap[prototype.0 as usize]
             .properties
             .insert("7".to_string(), Value::Int(42));
@@ -5124,8 +5125,8 @@ mod tests {
         let config = InterpreterConfig::quickjs_defaults();
         let mut core = InterpreterCore::new(config, "test");
         let prototype_a = core.alloc_object();
-        let prototype_b = core.alloc_object_with_prototype(Some(prototype_a));
-        let instance = core.alloc_object_with_prototype(Some(prototype_b));
+        let prototype_b = core.alloc_object_with_prototype(Some(prototype_a)).unwrap();
+        let instance = core.alloc_object_with_prototype(Some(prototype_b)).unwrap();
         core.heap[prototype_a.0 as usize].prototype = Some(prototype_b);
         core.registers[0] = Value::Object(instance);
 

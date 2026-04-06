@@ -515,7 +515,7 @@ pub fn lower_ir0_to_ir1(
                     )?;
                     let binding_name =
                         make_internal_binding_name("default_export", synthetic_export_index);
-                    synthetic_export_index = synthetic_export_index.saturating_add(1);
+                    synthetic_export_index = synthetic_export_index.checked_add(1).expect("synthetic export capacity exceeded");
                     let binding_id = alloc_binding(
                         &mut bindings,
                         &mut binding_lookup,

@@ -1637,4 +1637,441 @@ mod tests {
         let back: ReplayControlResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
     }
+
+    // -- Enrichment: edge cases and structural coverage (PearlTower 2026-03-02) --
+
+    #[test]
+    fn control_action_all_variants_accepted() {
+        let counter = Rc::new(Cell::new(0u32));
+        let mut tmpl = template(counter.clone());
+        let auth = auth_with_scopes(&[SCOPE_CONTROL_WRITE]);
+        let ctx = context();
+        let variants = [
+            ControlAction::Start,
+            ControlAction::Stop,
+            ControlAction::Suspend,
+            ControlAction::Quarantine,
+        ];
+        for action in &variants {
+            let req = ControlActionRequest {
+                extension_id: "ext-1".into(),
+                action: *action,
+                reason: "test".into(),
+            };
+            let resp = tmpl.control_action_endpoint(&auth, &ctx, &req);
+            assert_eq!(resp.status, "ok");
+            let data = resp.data.unwrap();
+            assert_eq!(data.action, *action);
+            assert!(data.accepted);
+        }
+        assert_eq!(counter.get(), 4);
+    }
+
+    #[test]
+    fn control_action_rejects_whitespace_only_extension_id() {
+        let counter = Rc::new(Cell::new(0u32));
+        let mut tmpl = template(counter.clone());
+        let auth = auth_with_scopes(&[SCOPE_CONTROL_WRITE]);
+        let ctx = context();
+        let req = ControlActionRequest {
+            extension_id: "   \t  ".into(),
+            action: ControlAction::Start,
+            reason: "valid reason".into(),
+        };
+        let resp = tmpl.control_action_endpoint(&auth, &ctx, &req);
+        assert_eq!(resp.status, "error");
+        assert!(resp.data.is_none());
+        let err = resp.error.unwrap();
+        assert_eq!(err.error_code, "invalid_request");
+        assert_eq!(counter.get(), 0); // executor never called
+    }
+
+    #[test]
+    fn evidence_export_until_before_since_rejected() {
+        let counter = Rc::new(Cell::new(0u32));
+        let tmpl = template(counter);
+        let auth = auth_with_scopes(&[SCOPE_EVIDENCE_READ]);
+        let ctx = context();
+        let req = EvidenceExportRequest {
+            since_epoch_seconds: 100,
+            until_epoch_seconds: Some(50),
+            page_size: 10,
+            cursor: None,
+        };
+        let resp = tmpl.evidence_export_endpoint(&auth, &ctx, &req);
+        assert_eq!(resp.status, "error");
+        let err = resp.error.unwrap();
+        assert!(
+            err.details
+                .values()
+                .any(|v| v.contains("since_epoch_seconds"))
+        );
+    }
+
+    #[test]
+    fn evidence_export_with_cursor_forwards_to_provider() {
+        let counter = Rc::new(Cell::new(0u32));
+        let tmpl = template(counter);
+        let auth = auth_with_scopes(&[SCOPE_EVIDENCE_READ]);
+        let ctx = context();
+        let req = EvidenceExportRequest {
+            since_epoch_seconds: 0,
+            until_epoch_seconds: None,
+            page_size: 50,
+            cursor: Some("cursor-abc".into()),
+        };
+        let resp = tmpl.evidence_export_endpoint(&auth, &ctx, &req);
+        assert_eq!(resp.status, "ok");
+        let data = resp.data.unwrap();
+        // MockEvidenceProvider echoes cursor as next_cursor
+        assert_eq!(data.next_cursor, Some("cursor-abc".to_string()));
+        assert_eq!(data.records.len(), 1);
+    }
+
+    #[test]
+    fn evidence_export_page_size_at_lower_boundary() {
+        let counter = Rc::new(Cell::new(0u32));
+        let tmpl = template(counter);
+        let auth = auth_with_scopes(&[SCOPE_EVIDENCE_READ]);
+        let ctx = context();
+        let req = EvidenceExportRequest {
+            since_epoch_seconds: 0,
+            until_epoch_seconds: None,
+            page_size: 1,
+            cursor: None,
+        };
+        let resp = tmpl.evidence_export_endpoint(&auth, &ctx, &req);
+        assert_eq!(resp.status, "ok");
+    }
+
+    #[test]
+    fn evidence_export_page_size_1001_rejected() {
+        let counter = Rc::new(Cell::new(0u32));
+        let tmpl = template(counter);
+        let auth = auth_with_scopes(&[SCOPE_EVIDENCE_READ]);
+        let ctx = context();
+        let req = EvidenceExportRequest {
+            since_epoch_seconds: 0,
+            until_epoch_seconds: None,
+            page_size: 1001,
+            cursor: None,
+        };
+        let resp = tmpl.evidence_export_endpoint(&auth, &ctx, &req);
+        assert_eq!(resp.status, "error");
+    }
+
+    #[test]
+    fn replay_status_requires_only_read_scope() {
+        let counter = Rc::new(Cell::new(0u32));
+        let mut tmpl = template(counter);
+        // read-only scope should be sufficient for Status
+        let auth = auth_with_scopes(&[SCOPE_REPLAY_READ]);
+        let ctx = context();
+        let req = ReplayControlRequest {
+            command: ReplayCommand::Status,
+            trace_id: None,
+            session_id: Some("sess-1".into()),
+        };
+        let resp = tmpl.replay_control_endpoint(&auth, &ctx, &req);
+        assert_eq!(resp.status, "ok");
+    }
+
+    #[test]
+    fn replay_start_denied_with_only_read_scope() {
+        let counter = Rc::new(Cell::new(0u32));
+        let mut tmpl = template(counter);
+        let auth = auth_with_scopes(&[SCOPE_REPLAY_READ]);
+        let ctx = context();
+        let req = ReplayControlRequest {
+            command: ReplayCommand::Start,
+            trace_id: Some("trace-x".into()),
+            session_id: None,
+        };
+        let resp = tmpl.replay_control_endpoint(&auth, &ctx, &req);
+        assert_eq!(resp.status, "error");
+        let err = resp.error.unwrap();
+        assert_eq!(err.error_code, "unauthorized");
+    }
+
+    #[test]
+    fn replay_stop_denied_with_only_read_scope() {
+        let counter = Rc::new(Cell::new(0u32));
+        let mut tmpl = template(counter);
+        let auth = auth_with_scopes(&[SCOPE_REPLAY_READ]);
+        let ctx = context();
+        let req = ReplayControlRequest {
+            command: ReplayCommand::Stop,
+            trace_id: None,
+            session_id: Some("sess-1".into()),
+        };
+        let resp = tmpl.replay_control_endpoint(&auth, &ctx, &req);
+        assert_eq!(resp.status, "error");
+        let err = resp.error.unwrap();
+        assert_eq!(err.error_code, "unauthorized");
+    }
+
+    #[test]
+    fn auth_with_multiple_scopes_grants_all() {
+        let auth = auth_with_scopes(&[
+            SCOPE_HEALTH_READ,
+            SCOPE_CONTROL_WRITE,
+            SCOPE_EVIDENCE_READ,
+            SCOPE_REPLAY_READ,
+            SCOPE_REPLAY_WRITE,
+        ]);
+        assert!(auth.has_scope(SCOPE_HEALTH_READ));
+        assert!(auth.has_scope(SCOPE_CONTROL_WRITE));
+        assert!(auth.has_scope(SCOPE_EVIDENCE_READ));
+        assert!(auth.has_scope(SCOPE_REPLAY_READ));
+        assert!(auth.has_scope(SCOPE_REPLAY_WRITE));
+        assert!(!auth.has_scope("engine.admin.write"));
+    }
+
+    #[test]
+    fn endpoint_failure_details_can_be_populated() {
+        let mut f = EndpointFailure::new("quota_exceeded", "too many requests");
+        f.details.insert("retry_after_seconds".into(), "30".into());
+        assert_eq!(f.details.len(), 1);
+        assert_eq!(f.details["retry_after_seconds"], "30");
+        // serde roundtrip preserves details
+        let json = serde_json::to_string(&f).unwrap();
+        let back: EndpointFailure = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.details.len(), 1);
+    }
+
+    #[test]
+    fn health_endpoint_log_has_health_read_event() {
+        let counter = Rc::new(Cell::new(0u32));
+        let tmpl = template(counter);
+        let auth = auth_with_scopes(&[SCOPE_HEALTH_READ]);
+        let ctx = context();
+        let resp = tmpl.health_endpoint(&auth, &ctx);
+        assert_eq!(resp.log.event, "health.read");
+        assert_eq!(resp.log.outcome, "ok");
+        assert_eq!(resp.log.trace_id, "trace-01");
+        assert_eq!(resp.log.component, "service.api");
+    }
+
+    #[test]
+    fn control_action_log_has_control_execute_event() {
+        let counter = Rc::new(Cell::new(0u32));
+        let mut tmpl = template(counter);
+        let auth = auth_with_scopes(&[SCOPE_CONTROL_WRITE]);
+        let ctx = context();
+        let req = ControlActionRequest {
+            extension_id: "ext-1".into(),
+            action: ControlAction::Start,
+            reason: "testing".into(),
+        };
+        let resp = tmpl.control_action_endpoint(&auth, &ctx, &req);
+        assert_eq!(resp.log.event, "control.execute");
+        assert_eq!(resp.log.outcome, "ok");
+    }
+
+    #[test]
+    fn evidence_export_log_has_evidence_export_event() {
+        let counter = Rc::new(Cell::new(0u32));
+        let tmpl = template(counter);
+        let auth = auth_with_scopes(&[SCOPE_EVIDENCE_READ]);
+        let ctx = context();
+        let req = EvidenceExportRequest {
+            since_epoch_seconds: 0,
+            until_epoch_seconds: None,
+            page_size: 100,
+            cursor: None,
+        };
+        let resp = tmpl.evidence_export_endpoint(&auth, &ctx, &req);
+        assert_eq!(resp.log.event, "evidence.export");
+        assert_eq!(resp.log.outcome, "ok");
+    }
+
+    #[test]
+    fn replay_control_log_has_replay_control_event() {
+        let counter = Rc::new(Cell::new(0u32));
+        let mut tmpl = template(counter);
+        let auth = auth_with_scopes(&[SCOPE_REPLAY_WRITE]);
+        let ctx = context();
+        let req = ReplayControlRequest {
+            command: ReplayCommand::Start,
+            trace_id: Some("trace-replay".into()),
+            session_id: None,
+        };
+        let resp = tmpl.replay_control_endpoint(&auth, &ctx, &req);
+        assert_eq!(resp.log.event, "replay.control");
+        assert_eq!(resp.log.outcome, "ok");
+    }
+
+    #[test]
+    fn unauthorized_error_includes_required_scope_in_details() {
+        let counter = Rc::new(Cell::new(0u32));
+        let tmpl = template(counter);
+        let auth = auth_with_scopes(&[]);
+        let ctx = context();
+        let resp = tmpl.health_endpoint(&auth, &ctx);
+        assert_eq!(resp.status, "error");
+        let err = resp.error.unwrap();
+        assert_eq!(err.error_code, "unauthorized");
+        assert!(
+            err.details
+                .values()
+                .any(|v| v.contains("engine.health.read"))
+        );
+    }
+
+    #[test]
+    fn ok_response_preserves_request_id_and_trace_id() {
+        let counter = Rc::new(Cell::new(0u32));
+        let tmpl = template(counter);
+        let auth = auth_with_scopes(&[SCOPE_HEALTH_READ]);
+        let ctx = RequestContext {
+            trace_id: "trace-unique-42".into(),
+            request_id: "req-unique-99".into(),
+            component: "api.gateway".into(),
+            decision_id: Some("dec-7".into()),
+            policy_id: Some("pol-3".into()),
+        };
+        let resp = tmpl.health_endpoint(&auth, &ctx);
+        assert_eq!(resp.trace_id, "trace-unique-42");
+        assert_eq!(resp.request_id, "req-unique-99");
+        assert_eq!(resp.log.decision_id, Some("dec-7".into()));
+        assert_eq!(resp.log.policy_id, Some("pol-3".into()));
+    }
+
+    #[test]
+    fn context_without_optional_fields_produces_none_in_log() {
+        let counter = Rc::new(Cell::new(0u32));
+        let tmpl = template(counter);
+        let auth = auth_with_scopes(&[SCOPE_HEALTH_READ]);
+        let ctx = RequestContext {
+            trace_id: "trace-1".into(),
+            request_id: "req-1".into(),
+            component: "svc".into(),
+            decision_id: None,
+            policy_id: None,
+        };
+        let resp = tmpl.health_endpoint(&auth, &ctx);
+        assert_eq!(resp.log.decision_id, None);
+        assert_eq!(resp.log.policy_id, None);
+    }
+
+    #[test]
+    fn control_action_serde_all_variants_roundtrip() {
+        let variants = [
+            ControlAction::Start,
+            ControlAction::Stop,
+            ControlAction::Suspend,
+            ControlAction::Quarantine,
+        ];
+        for action in &variants {
+            let json = serde_json::to_string(action).unwrap();
+            let back: ControlAction = serde_json::from_str(&json).unwrap();
+            assert_eq!(*action, back);
+        }
+    }
+
+    #[test]
+    fn replay_command_serde_all_variants_roundtrip() {
+        let variants = [
+            ReplayCommand::Start,
+            ReplayCommand::Stop,
+            ReplayCommand::Status,
+        ];
+        for cmd in &variants {
+            let json = serde_json::to_string(cmd).unwrap();
+            let back: ReplayCommand = serde_json::from_str(&json).unwrap();
+            assert_eq!(*cmd, back);
+        }
+    }
+
+    #[test]
+    fn error_response_log_includes_error_code_in_log_event() {
+        let counter = Rc::new(Cell::new(0u32));
+        let tmpl = template(counter);
+        let auth = auth_with_scopes(&[]);
+        let ctx = context();
+        let resp = tmpl.health_endpoint(&auth, &ctx);
+        assert_eq!(resp.log.error_code, Some("unauthorized".into()));
+    }
+
+    #[test]
+    fn health_endpoint_data_contains_provider_values() {
+        let counter = Rc::new(Cell::new(0u32));
+        let tmpl = template(counter);
+        let auth = auth_with_scopes(&[SCOPE_HEALTH_READ]);
+        let ctx = context();
+        let resp = tmpl.health_endpoint(&auth, &ctx);
+        let data = resp.data.unwrap();
+        assert_eq!(data.runtime_status, "nominal");
+        assert!(data.loaded_extensions.contains(&"ext-a".to_string()));
+        assert_eq!(data.security_epoch, 5);
+        assert_eq!(data.gc_pressure_basis_points, 120);
+    }
+
+    #[test]
+    fn endpoint_response_json_field_names_stable() {
+        let counter = Rc::new(Cell::new(0u32));
+        let tmpl = template(counter);
+        let auth = auth_with_scopes(&[SCOPE_HEALTH_READ]);
+        let ctx = context();
+        let resp = tmpl.health_endpoint(&auth, &ctx);
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"status\""));
+        assert!(json.contains("\"endpoint\""));
+        assert!(json.contains("\"trace_id\""));
+        assert!(json.contains("\"request_id\""));
+        assert!(json.contains("\"data\""));
+        assert!(json.contains("\"log\""));
+    }
+
+    #[test]
+    fn evidence_export_none_until_accepted() {
+        let counter = Rc::new(Cell::new(0u32));
+        let tmpl = template(counter);
+        let auth = auth_with_scopes(&[SCOPE_EVIDENCE_READ]);
+        let ctx = context();
+        let req = EvidenceExportRequest {
+            since_epoch_seconds: 0,
+            until_epoch_seconds: None,
+            page_size: 500,
+            cursor: None,
+        };
+        let resp = tmpl.evidence_export_endpoint(&auth, &ctx, &req);
+        assert_eq!(resp.status, "ok");
+    }
+
+    #[test]
+    fn control_action_reason_at_257_chars_rejected() {
+        let counter = Rc::new(Cell::new(0u32));
+        let mut tmpl = template(counter.clone());
+        let auth = auth_with_scopes(&[SCOPE_CONTROL_WRITE]);
+        let ctx = context();
+        let long_reason: String = "x".repeat(257);
+        let req = ControlActionRequest {
+            extension_id: "ext-1".into(),
+            action: ControlAction::Start,
+            reason: long_reason,
+        };
+        let resp = tmpl.control_action_endpoint(&auth, &ctx, &req);
+        assert_eq!(resp.status, "error");
+        assert_eq!(counter.get(), 0);
+    }
+
+    #[test]
+    fn scope_constants_are_dot_separated() {
+        for scope in &[
+            SCOPE_HEALTH_READ,
+            SCOPE_CONTROL_WRITE,
+            SCOPE_EVIDENCE_READ,
+            SCOPE_REPLAY_READ,
+            SCOPE_REPLAY_WRITE,
+        ] {
+            assert!(
+                scope.contains('.'),
+                "scope '{}' missing dot separator",
+                scope
+            );
+            let parts: Vec<&str> = scope.split('.').collect();
+            assert!(parts.len() >= 2, "scope '{}' needs at least 2 parts", scope);
+        }
+    }
 }

@@ -2910,4 +2910,935 @@ mod tests {
         assert!(m.summary_line().contains("safe"));
         assert!(!m.summary_line().contains("UNVERIFIED"));
     }
+
+    // -- Enrichment: PearlTower 2026-03-02 --
+
+    // =========================================================================
+    // Verdict determination: threshold boundary
+    // =========================================================================
+
+    #[test]
+    fn test_verdict_severity_exactly_at_threshold_bridgeable() {
+        // Threshold is 750_000 by default. Exactly at threshold + all bridgeable → AdapterRequired.
+        let a = SemanticTransportAnalyzer::new();
+        let spec = simple_spec("at-thresh", vec![delta(750_000, true)]);
+        let input = simple_input(vec![spec]);
+        let result = a.analyze(&input).unwrap();
+        assert_eq!(
+            result.ledger.entries[0].verdict,
+            TransportVerdict::AdapterRequired,
+        );
+    }
+
+    #[test]
+    fn test_verdict_severity_exactly_at_threshold_unbridgeable() {
+        // At threshold + unbridgeable → Incompatible.
+        let a = SemanticTransportAnalyzer::new();
+        let spec = simple_spec("at-thresh-unbr", vec![delta(750_000, false)]);
+        let input = simple_input(vec![spec]);
+        let result = a.analyze(&input).unwrap();
+        assert_eq!(
+            result.ledger.entries[0].verdict,
+            TransportVerdict::Incompatible,
+        );
+    }
+
+    #[test]
+    fn test_verdict_multiple_deltas_sum_below_threshold_all_bridgeable() {
+        // Two deltas: 200k + 300k = 500k < 750k threshold, all bridgeable → AdapterRequired.
+        let a = SemanticTransportAnalyzer::new();
+        let spec = simple_spec(
+            "multi-delta-below",
+            vec![delta(200_000, true), delta(300_000, true)],
+        );
+        let input = simple_input(vec![spec]);
+        let result = a.analyze(&input).unwrap();
+        assert_eq!(
+            result.ledger.entries[0].verdict,
+            TransportVerdict::AdapterRequired,
+        );
+    }
+
+    #[test]
+    fn test_verdict_multiple_deltas_mixed_bridgeability_below_threshold() {
+        // Below threshold but one unbridgeable → Incompatible.
+        let a = SemanticTransportAnalyzer::new();
+        let spec = simple_spec(
+            "mixed-bridge-below",
+            vec![delta(100_000, true), delta(100_000, false)],
+        );
+        let input = simple_input(vec![spec]);
+        let result = a.analyze(&input).unwrap();
+        assert_eq!(
+            result.ledger.entries[0].verdict,
+            TransportVerdict::Incompatible,
+        );
+    }
+
+    #[test]
+    fn test_verdict_multiple_deltas_sum_above_threshold_all_bridgeable() {
+        // 400k + 400k = 800k > 750k, all bridgeable → AdapterRequired.
+        let a = SemanticTransportAnalyzer::new();
+        let spec = simple_spec(
+            "above-thresh-bridg",
+            vec![delta(400_000, true), delta(400_000, true)],
+        );
+        let input = simple_input(vec![spec]);
+        let result = a.analyze(&input).unwrap();
+        assert_eq!(
+            result.ledger.entries[0].verdict,
+            TransportVerdict::AdapterRequired,
+        );
+    }
+
+    #[test]
+    fn test_verdict_custom_threshold() {
+        // Custom low threshold: 100k. Delta of 200k bridgeable should still be AdapterRequired.
+        let config = TransportAnalyzerConfig {
+            incompatibility_threshold_millionths: 100_000,
+            ..TransportAnalyzerConfig::default()
+        };
+        let a = SemanticTransportAnalyzer::with_config(config);
+        let spec = simple_spec("custom-thresh", vec![delta(200_000, true)]);
+        let input = simple_input(vec![spec]);
+        let result = a.analyze(&input).unwrap();
+        assert_eq!(
+            result.ledger.entries[0].verdict,
+            TransportVerdict::AdapterRequired,
+        );
+    }
+
+    // =========================================================================
+    // Multiple morphisms for same domain/version pair
+    // =========================================================================
+
+    #[test]
+    fn test_multiple_morphisms_same_domain_version() {
+        let a = SemanticTransportAnalyzer::new();
+        let entry_spec = TransportEntrySpec {
+            fragment_name: "multi-morph-entry".to_string(),
+            domain: ContractDomain::Hook,
+            source_version: v(0, 1, 0),
+            target_version: v(0, 2, 0),
+            behavioral_deltas: vec![delta(300_000, true)],
+            required_invariants: vec!["inv1".to_string(), "inv2".to_string()],
+            verified_invariants: vec!["inv1".to_string(), "inv2".to_string()],
+            broken_invariants: vec![],
+        };
+        let morph1 = MorphismSpec {
+            name: "morph-safe".to_string(),
+            domain: ContractDomain::Hook,
+            source_version: v(0, 1, 0),
+            target_version: v(0, 2, 0),
+            preserved_invariants: vec!["inv1".to_string()],
+            broken_invariants: vec![],
+            verified: true,
+            description: "Safe morph.".to_string(),
+            adapter_ref: None,
+        };
+        let morph2 = MorphismSpec {
+            name: "morph-lossy".to_string(),
+            domain: ContractDomain::Hook,
+            source_version: v(0, 1, 0),
+            target_version: v(0, 2, 0),
+            preserved_invariants: vec!["inv1".to_string()],
+            broken_invariants: vec!["inv-dropped".to_string()],
+            verified: true,
+            description: "Lossy morph.".to_string(),
+            adapter_ref: None,
+        };
+        let input = TransportAnalysisInput {
+            entries: vec![entry_spec],
+            morphisms: vec![morph1, morph2],
+            epoch: 1,
+        };
+        let result = a.analyze(&input).unwrap();
+        // Lossy morphism should trigger regression mask.
+        assert_eq!(
+            result.outcome,
+            TransportAnalysisOutcome::RegressionMaskDetected,
+        );
+        assert_eq!(result.ledger.morphisms.len(), 2);
+        assert!(result.ledger.morphisms[0].is_safe());
+        assert!(!result.ledger.morphisms[1].is_safe());
+    }
+
+    // =========================================================================
+    // Regression mask budget exhaustion
+    // =========================================================================
+
+    #[test]
+    fn test_regression_mask_budget_exhaustion() {
+        let config = TransportAnalyzerConfig {
+            max_regression_masks: 1,
+            ..TransportAnalyzerConfig::default()
+        };
+        let a = SemanticTransportAnalyzer::with_config(config);
+        // Create multiple entries that would all produce masks.
+        let specs: Vec<TransportEntrySpec> = (0..5)
+            .map(|i| TransportEntrySpec {
+                fragment_name: format!("masked-{i}"),
+                domain: ContractDomain::Hook,
+                source_version: v(0, 1, 0),
+                target_version: v(0, 2, 0),
+                behavioral_deltas: vec![],
+                required_invariants: vec!["inv".to_string()],
+                verified_invariants: vec![], // 0/1 verified → mask type 3
+                broken_invariants: vec![],
+            })
+            .collect();
+        let input = simple_input(specs);
+        let result = a.analyze(&input).unwrap();
+        // Budget limits masks to 1.
+        assert_eq!(result.ledger.regression_masks.len(), 1);
+    }
+
+    // =========================================================================
+    // Analyzer serde roundtrip
+    // =========================================================================
+
+    #[test]
+    fn test_analyzer_serde_roundtrip() {
+        let a = SemanticTransportAnalyzer::new();
+        let json = serde_json::to_string(&a).unwrap();
+        let back: SemanticTransportAnalyzer = serde_json::from_str(&json).unwrap();
+        assert_eq!(a.config.max_entries, back.config.max_entries);
+        assert_eq!(
+            a.config.incompatibility_threshold_millionths,
+            back.config.incompatibility_threshold_millionths,
+        );
+    }
+
+    #[test]
+    fn test_analyzer_custom_config_serde() {
+        let config = TransportAnalyzerConfig {
+            max_entries: 42,
+            max_morphisms_per_entry: 7,
+            max_regression_masks: 3,
+            incompatibility_threshold_millionths: 999_999,
+            detect_regression_masks: false,
+        };
+        let a = SemanticTransportAnalyzer::with_config(config);
+        let json = serde_json::to_string(&a).unwrap();
+        let back: SemanticTransportAnalyzer = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.config.max_entries, 42);
+        assert_eq!(back.config.max_morphisms_per_entry, 7);
+        assert_eq!(back.config.max_regression_masks, 3);
+        assert_eq!(back.config.incompatibility_threshold_millionths, 999_999);
+        assert!(!back.config.detect_regression_masks);
+    }
+
+    // =========================================================================
+    // RegressionMask with morphism_id populated
+    // =========================================================================
+
+    #[test]
+    fn test_regression_mask_has_morphism_id_when_lossy() {
+        let a = SemanticTransportAnalyzer::new();
+        let input = TransportAnalysisInput {
+            entries: vec![TransportEntrySpec {
+                fragment_name: "morph-id-check".to_string(),
+                domain: ContractDomain::Effect,
+                source_version: v(0, 1, 0),
+                target_version: v(0, 2, 0),
+                behavioral_deltas: vec![delta(200_000, true)],
+                required_invariants: vec!["inv".to_string()],
+                verified_invariants: vec!["inv".to_string()],
+                broken_invariants: vec![],
+            }],
+            morphisms: vec![MorphismSpec {
+                name: "lossy-with-id".to_string(),
+                domain: ContractDomain::Effect,
+                source_version: v(0, 1, 0),
+                target_version: v(0, 2, 0),
+                preserved_invariants: vec!["inv".to_string()],
+                broken_invariants: vec!["dropped".to_string()],
+                verified: true,
+                description: "Lossy.".to_string(),
+                adapter_ref: None,
+            }],
+            epoch: 1,
+        };
+        let result = a.analyze(&input).unwrap();
+        let mask = &result.ledger.regression_masks[0];
+        assert!(
+            mask.morphism_id.is_some(),
+            "lossy-morphism mask should include morphism_id"
+        );
+    }
+
+    #[test]
+    fn test_regression_mask_no_morphism_id_for_low_coverage() {
+        let a = SemanticTransportAnalyzer::new();
+        let input = simple_input(vec![TransportEntrySpec {
+            fragment_name: "low-cov-no-morph".to_string(),
+            domain: ContractDomain::Hook,
+            source_version: v(0, 1, 0),
+            target_version: v(0, 2, 0),
+            behavioral_deltas: vec![delta(100_000, true)],
+            required_invariants: vec![
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+                "d".to_string(),
+            ],
+            verified_invariants: vec!["a".to_string()], // 1/4 < 50% → mask type 2
+            broken_invariants: vec![],
+        }]);
+        let result = a.analyze(&input).unwrap();
+        // Find the low-coverage mask (mask type 2 has no morphism_id).
+        let low_cov_masks: Vec<_> = result
+            .ledger
+            .regression_masks
+            .iter()
+            .filter(|m| m.morphism_id.is_none())
+            .collect();
+        assert!(!low_cov_masks.is_empty());
+    }
+
+    // =========================================================================
+    // Multiple mask types on same entry
+    // =========================================================================
+
+    #[test]
+    fn test_multiple_mask_types_on_same_entry() {
+        // Entry with: adapter verdict + lossy morphism (type 1) + low invariant coverage (type 2)
+        let a = SemanticTransportAnalyzer::new();
+        let input = TransportAnalysisInput {
+            entries: vec![TransportEntrySpec {
+                fragment_name: "double-mask".to_string(),
+                domain: ContractDomain::Hook,
+                source_version: v(0, 1, 0),
+                target_version: v(0, 2, 0),
+                behavioral_deltas: vec![delta(200_000, true)],
+                required_invariants: vec![
+                    "a".to_string(),
+                    "b".to_string(),
+                    "c".to_string(),
+                    "d".to_string(),
+                ],
+                verified_invariants: vec!["a".to_string()], // 1/4 = 250k < 500k
+                broken_invariants: vec![],
+            }],
+            morphisms: vec![MorphismSpec {
+                name: "lossy-double".to_string(),
+                domain: ContractDomain::Hook,
+                source_version: v(0, 1, 0),
+                target_version: v(0, 2, 0),
+                preserved_invariants: vec!["a".to_string()],
+                broken_invariants: vec!["b".to_string()],
+                verified: true,
+                description: "Lossy.".to_string(),
+                adapter_ref: None,
+            }],
+            epoch: 1,
+        };
+        let result = a.analyze(&input).unwrap();
+        // Should have at least 2 masks: lossy morphism mask + low coverage mask.
+        assert!(
+            result.ledger.regression_masks.len() >= 2,
+            "expected at least 2 masks, got {}",
+            result.ledger.regression_masks.len(),
+        );
+    }
+
+    // =========================================================================
+    // Confidence edge cases
+    // =========================================================================
+
+    #[test]
+    fn test_confidence_zero_verified() {
+        let a = SemanticTransportAnalyzer::new();
+        let spec = TransportEntrySpec {
+            fragment_name: "zero-conf".to_string(),
+            domain: ContractDomain::Hook,
+            source_version: v(0, 1, 0),
+            target_version: v(0, 2, 0),
+            behavioral_deltas: vec![],
+            required_invariants: vec!["inv1".to_string(), "inv2".to_string()],
+            verified_invariants: vec![],
+            broken_invariants: vec![],
+        };
+        let input = simple_input(vec![spec]);
+        let result = a.analyze(&input).unwrap();
+        assert_eq!(result.ledger.entries[0].confidence_millionths, 0);
+    }
+
+    #[test]
+    fn test_confidence_all_verified() {
+        let a = SemanticTransportAnalyzer::new();
+        let spec = TransportEntrySpec {
+            fragment_name: "full-conf".to_string(),
+            domain: ContractDomain::Hook,
+            source_version: v(0, 1, 0),
+            target_version: v(0, 2, 0),
+            behavioral_deltas: vec![],
+            required_invariants: vec!["inv1".to_string(), "inv2".to_string(), "inv3".to_string()],
+            verified_invariants: vec!["inv1".to_string(), "inv2".to_string(), "inv3".to_string()],
+            broken_invariants: vec![],
+        };
+        let input = simple_input(vec![spec]);
+        let result = a.analyze(&input).unwrap();
+        assert_eq!(result.ledger.entries[0].confidence_millionths, MILLION);
+    }
+
+    // =========================================================================
+    // VersionPair edge cases
+    // =========================================================================
+
+    #[test]
+    fn test_version_pair_patch_only_upgrade() {
+        let pair = VersionPair::new(v(1, 0, 0), v(1, 0, 1));
+        assert!(pair.is_same_major());
+        assert!(pair.is_upgrade());
+        assert!(!pair.is_downgrade());
+    }
+
+    #[test]
+    fn test_version_pair_zero_versions() {
+        let pair = VersionPair::new(v(0, 0, 0), v(0, 0, 1));
+        assert!(pair.is_same_major());
+        assert!(pair.is_upgrade());
+    }
+
+    #[test]
+    fn test_version_pair_display_large_numbers() {
+        let pair = VersionPair::new(v(100, 200, 300), v(101, 0, 0));
+        let s = format!("{pair}");
+        assert!(s.contains("100.200.300"));
+        assert!(s.contains("101.0.0"));
+    }
+
+    // =========================================================================
+    // Multiple version pairs in one ledger
+    // =========================================================================
+
+    #[test]
+    fn test_ledger_multiple_version_pairs() {
+        let a = SemanticTransportAnalyzer::new();
+        let specs = vec![
+            TransportEntrySpec {
+                fragment_name: "frag-v1v2".to_string(),
+                domain: ContractDomain::Hook,
+                source_version: v(1, 0, 0),
+                target_version: v(2, 0, 0),
+                behavioral_deltas: vec![],
+                required_invariants: vec!["inv".to_string()],
+                verified_invariants: vec!["inv".to_string()],
+                broken_invariants: vec![],
+            },
+            TransportEntrySpec {
+                fragment_name: "frag-v2v3".to_string(),
+                domain: ContractDomain::Effect,
+                source_version: v(2, 0, 0),
+                target_version: v(3, 0, 0),
+                behavioral_deltas: vec![],
+                required_invariants: vec!["inv".to_string()],
+                verified_invariants: vec!["inv".to_string()],
+                broken_invariants: vec![],
+            },
+        ];
+        let input = simple_input(specs);
+        let result = a.analyze(&input).unwrap();
+        let pairs = result.ledger.version_pairs();
+        assert_eq!(pairs.len(), 2);
+    }
+
+    // =========================================================================
+    // Entry is_blocking negative cases
+    // =========================================================================
+
+    #[test]
+    fn test_entry_not_blocking_for_unchanged() {
+        let a = SemanticTransportAnalyzer::new();
+        let spec = simple_spec("not-blocking", vec![]);
+        let input = simple_input(vec![spec]);
+        let result = a.analyze(&input).unwrap();
+        assert!(!result.ledger.entries[0].is_blocking());
+    }
+
+    #[test]
+    fn test_entry_not_blocking_for_adapter_required() {
+        let a = SemanticTransportAnalyzer::new();
+        let spec = simple_spec("adapter-not-block", vec![delta(200_000, true)]);
+        let input = simple_input(vec![spec]);
+        let result = a.analyze(&input).unwrap();
+        assert!(!result.ledger.entries[0].is_blocking());
+    }
+
+    // =========================================================================
+    // Report rendering: delta lines
+    // =========================================================================
+
+    #[test]
+    fn test_render_report_shows_delta_details() {
+        let a = SemanticTransportAnalyzer::new();
+        let spec = simple_spec(
+            "with-deltas",
+            vec![BehavioralDelta {
+                aspect: "effect-ordering".to_string(),
+                source_behavior: "before-render".to_string(),
+                target_behavior: "after-render".to_string(),
+                severity_millionths: 300_000,
+                adapter_bridgeable: true,
+            }],
+        );
+        let input = simple_input(vec![spec]);
+        let result = a.analyze(&input).unwrap();
+        let report = render_transport_report(&result);
+        assert!(report.contains("Delta:"), "report should show delta lines");
+        assert!(
+            report.contains("effect-ordering"),
+            "report should show delta aspect"
+        );
+    }
+
+    // =========================================================================
+    // Hash determinism for morphisms and masks
+    // =========================================================================
+
+    #[test]
+    fn test_morphism_hash_deterministic() {
+        let a = SemanticTransportAnalyzer::new();
+        let morph_spec = MorphismSpec {
+            name: "det-morph".to_string(),
+            domain: ContractDomain::Suspense,
+            source_version: v(0, 1, 0),
+            target_version: v(0, 2, 0),
+            preserved_invariants: vec!["inv".to_string()],
+            broken_invariants: vec![],
+            verified: true,
+            description: "Test.".to_string(),
+            adapter_ref: None,
+        };
+        let input1 = TransportAnalysisInput {
+            entries: vec![],
+            morphisms: vec![morph_spec.clone()],
+            epoch: 1,
+        };
+        let input2 = TransportAnalysisInput {
+            entries: vec![],
+            morphisms: vec![morph_spec],
+            epoch: 2,
+        };
+        let r1 = a.analyze(&input1).unwrap();
+        let r2 = a.analyze(&input2).unwrap();
+        assert_eq!(
+            r1.ledger.morphisms[0].evidence_hash, r2.ledger.morphisms[0].evidence_hash,
+            "morphism hash should be deterministic regardless of epoch"
+        );
+    }
+
+    #[test]
+    fn test_different_morphism_names_different_hashes() {
+        let a = SemanticTransportAnalyzer::new();
+        let make_input = |name: &str| TransportAnalysisInput {
+            entries: vec![],
+            morphisms: vec![MorphismSpec {
+                name: name.to_string(),
+                domain: ContractDomain::Hook,
+                source_version: v(0, 1, 0),
+                target_version: v(0, 2, 0),
+                preserved_invariants: vec![],
+                broken_invariants: vec![],
+                verified: true,
+                description: "Test.".to_string(),
+                adapter_ref: None,
+            }],
+            epoch: 1,
+        };
+        let r1 = a.analyze(&make_input("morph-alpha")).unwrap();
+        let r2 = a.analyze(&make_input("morph-beta")).unwrap();
+        assert_ne!(
+            r1.ledger.morphisms[0].evidence_hash,
+            r2.ledger.morphisms[0].evidence_hash,
+        );
+    }
+
+    // =========================================================================
+    // Ledger new() defaults
+    // =========================================================================
+
+    #[test]
+    fn test_ledger_new_defaults() {
+        let ledger = SemanticTransportLedger::new(100);
+        assert_eq!(ledger.compiled_epoch, 100);
+        assert_eq!(ledger.schema_version, TRANSPORT_LEDGER_SCHEMA_VERSION);
+        assert_eq!(ledger.bead_id, TRANSPORT_LEDGER_BEAD_ID);
+        assert!(ledger.entries.is_empty());
+        assert!(ledger.morphisms.is_empty());
+        assert!(ledger.regression_masks.is_empty());
+        assert_eq!(ledger.entry_count(), 0);
+        assert_eq!(ledger.unchanged_count(), 0);
+        assert_eq!(ledger.adapter_required_count(), 0);
+        assert_eq!(ledger.incompatible_count(), 0);
+    }
+
+    // =========================================================================
+    // TransportEntry serde roundtrip
+    // =========================================================================
+
+    #[test]
+    fn test_transport_entry_serde_roundtrip() {
+        let a = SemanticTransportAnalyzer::new();
+        let spec = simple_spec("serde-entry", vec![delta(100_000, true)]);
+        let input = simple_input(vec![spec]);
+        let result = a.analyze(&input).unwrap();
+        let entry = &result.ledger.entries[0];
+        let json = serde_json::to_string(entry).unwrap();
+        let back: TransportEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(*entry, back);
+    }
+
+    // =========================================================================
+    // CompatibilityMorphism serde roundtrip
+    // =========================================================================
+
+    #[test]
+    fn test_compatibility_morphism_serde_roundtrip() {
+        let a = SemanticTransportAnalyzer::new();
+        let input = TransportAnalysisInput {
+            entries: vec![],
+            morphisms: vec![MorphismSpec {
+                name: "serde-morph".to_string(),
+                domain: ContractDomain::Context,
+                source_version: v(1, 0, 0),
+                target_version: v(2, 0, 0),
+                preserved_invariants: vec!["inv1".to_string(), "inv2".to_string()],
+                broken_invariants: vec!["inv3".to_string()],
+                verified: true,
+                description: "Serde test.".to_string(),
+                adapter_ref: Some("some::adapter".to_string()),
+            }],
+            epoch: 5,
+        };
+        let result = a.analyze(&input).unwrap();
+        let morph = &result.ledger.morphisms[0];
+        let json = serde_json::to_string(morph).unwrap();
+        let back: CompatibilityMorphism = serde_json::from_str(&json).unwrap();
+        assert_eq!(*morph, back);
+    }
+
+    // =========================================================================
+    // RegressionMask serde roundtrip
+    // =========================================================================
+
+    #[test]
+    fn test_regression_mask_serde_roundtrip() {
+        let mask = RegressionMask {
+            id: derive_id(
+                ObjectDomain::EvidenceRecord,
+                "mask-serde",
+                &SchemaId::from_definition(b"mask-serde"),
+                b"mask-serde-data",
+            )
+            .unwrap(),
+            entry_id: derive_id(
+                ObjectDomain::EvidenceRecord,
+                "mask-entry",
+                &SchemaId::from_definition(b"mask-entry"),
+                b"mask-entry-data",
+            )
+            .unwrap(),
+            morphism_id: Some(
+                derive_id(
+                    ObjectDomain::EvidenceRecord,
+                    "mask-morph",
+                    &SchemaId::from_definition(b"mask-morph"),
+                    b"mask-morph-data",
+                )
+                .unwrap(),
+            ),
+            masked_aspect: "serde-aspect".to_string(),
+            reason: "serde test reason".to_string(),
+            risk_millionths: 600_000,
+            debt_code: DEBT_REGRESSION_MASKED.to_string(),
+            evidence_hash: ContentHash::compute(b"mask-serde-test"),
+        };
+        let json = serde_json::to_string(&mask).unwrap();
+        let back: RegressionMask = serde_json::from_str(&json).unwrap();
+        assert_eq!(mask, back);
+    }
+
+    // =========================================================================
+    // Regression mask boundary: exactly 500k is high risk
+    // =========================================================================
+
+    #[test]
+    fn test_regression_mask_exactly_at_500k_is_high_risk() {
+        let mask = RegressionMask {
+            id: derive_id(
+                ObjectDomain::EvidenceRecord,
+                "test",
+                &SchemaId::from_definition(b"exact"),
+                b"exact-500k",
+            )
+            .unwrap(),
+            entry_id: derive_id(
+                ObjectDomain::EvidenceRecord,
+                "test",
+                &SchemaId::from_definition(b"exact"),
+                b"exact-500k-entry",
+            )
+            .unwrap(),
+            morphism_id: None,
+            masked_aspect: "boundary".to_string(),
+            reason: "boundary test".to_string(),
+            risk_millionths: 500_000,
+            debt_code: DEBT_REGRESSION_MASKED.to_string(),
+            evidence_hash: ContentHash::compute(b"boundary"),
+        };
+        assert!(mask.is_high_risk(), "500_000 should be >= 500_000");
+    }
+
+    #[test]
+    fn test_regression_mask_just_below_500k_not_high_risk() {
+        let mask = RegressionMask {
+            id: derive_id(
+                ObjectDomain::EvidenceRecord,
+                "test",
+                &SchemaId::from_definition(b"below"),
+                b"below-500k",
+            )
+            .unwrap(),
+            entry_id: derive_id(
+                ObjectDomain::EvidenceRecord,
+                "test",
+                &SchemaId::from_definition(b"below"),
+                b"below-500k-entry",
+            )
+            .unwrap(),
+            morphism_id: None,
+            masked_aspect: "boundary".to_string(),
+            reason: "below boundary".to_string(),
+            risk_millionths: 499_999,
+            debt_code: DEBT_REGRESSION_MASKED.to_string(),
+            evidence_hash: ContentHash::compute(b"below-boundary"),
+        };
+        assert!(!mask.is_high_risk(), "499_999 should be < 500_000");
+    }
+
+    // =========================================================================
+    // Ledger entries_by_verdict for each verdict
+    // =========================================================================
+
+    #[test]
+    fn test_entries_by_verdict_all_types() {
+        let a = SemanticTransportAnalyzer::new();
+        let s_unchanged = simple_spec("v-unchanged", vec![]);
+        let s_adapter = simple_spec("v-adapter", vec![delta(200_000, true)]);
+        let s_incompat = {
+            let mut s = simple_spec("v-incompat", vec![]);
+            s.broken_invariants = vec!["broken".to_string()];
+            s
+        };
+        let input = simple_input(vec![s_unchanged, s_adapter, s_incompat]);
+        let result = a.analyze(&input).unwrap();
+        let ledger = &result.ledger;
+
+        assert_eq!(
+            ledger
+                .entries_by_verdict(&TransportVerdict::Unchanged)
+                .len(),
+            1,
+        );
+        assert_eq!(
+            ledger
+                .entries_by_verdict(&TransportVerdict::AdapterRequired)
+                .len(),
+            1,
+        );
+        assert_eq!(
+            ledger
+                .entries_by_verdict(&TransportVerdict::Incompatible)
+                .len(),
+            1,
+        );
+        assert_eq!(
+            ledger.entries_by_verdict(&TransportVerdict::Unknown).len(),
+            0,
+        );
+    }
+
+    // =========================================================================
+    // Analysis result epoch propagation
+    // =========================================================================
+
+    #[test]
+    fn test_analysis_result_epoch_propagation() {
+        let a = SemanticTransportAnalyzer::new();
+        let input = TransportAnalysisInput {
+            entries: vec![simple_spec("ep-test", vec![])],
+            morphisms: vec![],
+            epoch: 42_000,
+        };
+        let result = a.analyze(&input).unwrap();
+        assert_eq!(result.analysis_epoch, 42_000);
+        assert_eq!(result.ledger.compiled_epoch, 42_000);
+    }
+
+    // =========================================================================
+    // Report epoch in header
+    // =========================================================================
+
+    #[test]
+    fn test_render_report_header_contains_epoch() {
+        let a = SemanticTransportAnalyzer::new();
+        let input = TransportAnalysisInput {
+            entries: vec![],
+            morphisms: vec![],
+            epoch: 999,
+        };
+        let result = a.analyze(&input).unwrap();
+        let report = render_transport_report(&result);
+        assert!(
+            report.contains("epoch 999"),
+            "report header should show epoch"
+        );
+    }
+
+    // =========================================================================
+    // ContractDomain and TransportVerdict Ord consistency
+    // =========================================================================
+
+    #[test]
+    fn test_contract_domain_ord_consistent() {
+        let mut domains = vec![
+            ContractDomain::Portal,
+            ContractDomain::Hook,
+            ContractDomain::Suspense,
+            ContractDomain::Effect,
+        ];
+        domains.sort();
+        // Just verify sorting doesn't panic and produces deterministic order.
+        let sorted_again = {
+            let mut d = domains.clone();
+            d.sort();
+            d
+        };
+        assert_eq!(domains, sorted_again);
+    }
+
+    #[test]
+    fn test_transport_verdict_ord_consistent() {
+        let mut verdicts = vec![
+            TransportVerdict::Unknown,
+            TransportVerdict::Unchanged,
+            TransportVerdict::Incompatible,
+            TransportVerdict::AdapterRequired,
+        ];
+        verdicts.sort();
+        let sorted_again = {
+            let mut v = verdicts.clone();
+            v.sort();
+            v
+        };
+        assert_eq!(verdicts, sorted_again);
+    }
+
+    // =========================================================================
+    // E2E: full pipeline with all artifact types
+    // =========================================================================
+
+    #[test]
+    fn test_e2e_full_pipeline_with_all_artifact_types() {
+        let a = SemanticTransportAnalyzer::new();
+        let entries = vec![
+            simple_spec("hook.cleanup", vec![]),
+            simple_spec("effect.timing", vec![delta(200_000, true)]),
+            {
+                let mut s = simple_spec("context.resolution", vec![]);
+                s.broken_invariants = vec!["ordering".to_string()];
+                s
+            },
+        ];
+        let morphisms = vec![
+            MorphismSpec {
+                name: "effect-bridge".to_string(),
+                domain: ContractDomain::Effect,
+                source_version: v(0, 1, 0),
+                target_version: v(0, 2, 0),
+                preserved_invariants: vec!["timing".to_string()],
+                broken_invariants: vec![],
+                verified: true,
+                description: "Bridges effect timing.".to_string(),
+                adapter_ref: Some("adapters::effect".to_string()),
+            },
+            MorphismSpec {
+                name: "lossy-context".to_string(),
+                domain: ContractDomain::Hook,
+                source_version: v(0, 1, 0),
+                target_version: v(0, 2, 0),
+                preserved_invariants: vec!["basic".to_string()],
+                broken_invariants: vec!["deep-ordering".to_string()],
+                verified: true,
+                description: "Lossy context adapter.".to_string(),
+                adapter_ref: None,
+            },
+        ];
+        let input = TransportAnalysisInput {
+            entries,
+            morphisms,
+            epoch: 50,
+        };
+        let result = a.analyze(&input).unwrap();
+
+        // Verify structure.
+        assert_eq!(result.total_entries, 3);
+        assert_eq!(result.unchanged_entries, 1);
+        assert_eq!(result.adapter_entries, 1);
+        assert_eq!(result.incompatible_entries, 1);
+        assert_eq!(result.ledger.morphisms.len(), 2);
+        assert!(result.regression_mask_count > 0);
+        assert!(!result.can_release());
+        assert!(should_block_gate(&result));
+
+        // Report should contain all sections.
+        let report = render_transport_report(&result);
+        assert!(report.contains("incompatible"));
+        assert!(report.contains("adapter-required"));
+        assert!(report.contains("unchanged"));
+        assert!(report.contains("Morphisms"));
+
+        // Serde roundtrip of full result.
+        let json = serde_json::to_string(&result).unwrap();
+        let back: TransportAnalysisResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(result.result_hash, back.result_hash);
+        assert_eq!(result.outcome, back.outcome);
+        assert_eq!(result.ledger.entries.len(), back.ledger.entries.len());
+    }
+
+    // =========================================================================
+    // Ledger summary with mixed counts
+    // =========================================================================
+
+    #[test]
+    fn test_ledger_summary_line_with_mixed_entries() {
+        let a = SemanticTransportAnalyzer::new();
+        let specs = vec![
+            simple_spec("s1", vec![]),
+            simple_spec("s2", vec![delta(100_000, true)]),
+            simple_spec("s3", vec![delta(200_000, true)]),
+        ];
+        let input = simple_input(specs);
+        let result = a.analyze(&input).unwrap();
+        let s = result.ledger.summary_line();
+        assert!(s.contains("3 entries"));
+        assert!(s.contains("1 unchanged"));
+        assert!(s.contains("2 adapter-required"));
+        assert!(s.contains("0 incompatible"));
+    }
+
+    // =========================================================================
+    // Result schema_version and bead_id propagation
+    // =========================================================================
+
+    #[test]
+    fn test_result_schema_version_and_bead_id() {
+        let a = SemanticTransportAnalyzer::new();
+        let input = simple_input(vec![simple_spec("meta-test", vec![])]);
+        let result = a.analyze(&input).unwrap();
+        assert_eq!(result.schema_version, TRANSPORT_LEDGER_SCHEMA_VERSION);
+        assert_eq!(result.bead_id, TRANSPORT_LEDGER_BEAD_ID);
+    }
 }

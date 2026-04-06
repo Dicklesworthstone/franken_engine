@@ -4344,3 +4344,934 @@ mod tests {
         assert!(result.run_id.contains("fix-001"));
     }
 }
+
+// ── Enrichment: PearlTower 2026-03-02 ──────────────────────────────────────
+
+#[cfg(test)]
+mod enrichment_tests {
+    use super::*;
+
+    fn valid_fixture() -> TestFixture {
+        TestFixture {
+            fixture_id: "fix-enrich".into(),
+            fixture_version: TestFixture::CURRENT_VERSION,
+            seed: 77,
+            virtual_time_start_micros: 5000,
+            policy_id: "policy-enrich".into(),
+            steps: vec![
+                ScenarioStep {
+                    component: "router".into(),
+                    event: "dispatch".into(),
+                    advance_micros: 100,
+                    metadata: BTreeMap::new(),
+                },
+                ScenarioStep {
+                    component: "executor".into(),
+                    event: "run".into(),
+                    advance_micros: 200,
+                    metadata: BTreeMap::new(),
+                },
+            ],
+            expected_events: vec![],
+            determinism_check: false,
+        }
+    }
+
+    fn run_valid_fixture() -> RunResult {
+        let runner = DeterministicRunner::default();
+        runner.run_fixture(&valid_fixture()).unwrap()
+    }
+
+    // ── verify_replay ────────────────────────────────────────────────
+
+    #[test]
+    fn verify_replay_identical_runs_match() {
+        let result = run_valid_fixture();
+        let v = verify_replay(&result, &result);
+        assert!(v.matches);
+        assert!(v.reason.is_none());
+        assert!(v.mismatch_kind.is_none());
+        assert!(v.diverged_event_sequence.is_none());
+        assert!(v.transcript_mismatch_index.is_none());
+    }
+
+    #[test]
+    fn verify_replay_deterministic_across_runners() {
+        let f = valid_fixture();
+        let r1 = DeterministicRunner::default().run_fixture(&f).unwrap();
+        let r2 = DeterministicRunner::default().run_fixture(&f).unwrap();
+        let v = verify_replay(&r1, &r2);
+        assert!(v.matches, "same fixture should produce identical runs");
+    }
+
+    #[test]
+    fn verify_replay_different_seeds_mismatch() {
+        let f1 = valid_fixture();
+        let mut f2 = valid_fixture();
+        f2.seed = 999;
+        f2.fixture_id = "fix-other".into();
+        let r1 = DeterministicRunner::default().run_fixture(&f1).unwrap();
+        let r2 = DeterministicRunner::default().run_fixture(&f2).unwrap();
+        let v = verify_replay(&r1, &r2);
+        assert!(!v.matches);
+        assert!(v.mismatch_kind.is_some());
+    }
+
+    #[test]
+    fn verify_replay_reports_event_counts() {
+        let result = run_valid_fixture();
+        let v = verify_replay(&result, &result);
+        assert_eq!(v.expected_event_count, 2);
+        assert_eq!(v.actual_event_count, 2);
+        assert_eq!(v.expected_transcript_len, 2);
+        assert_eq!(v.actual_transcript_len, 2);
+    }
+
+    // ── evaluate_replay_performance ──────────────────────────────────
+
+    #[test]
+    fn performance_faster_than_realtime() {
+        let result = run_valid_fixture();
+        let perf = evaluate_replay_performance(&result, 10);
+        assert!(perf.faster_than_realtime);
+        assert!(perf.speedup_milli > 1000);
+    }
+
+    #[test]
+    fn performance_slower_than_realtime() {
+        let result = run_valid_fixture();
+        let virt = result
+            .end_virtual_time_micros
+            .saturating_sub(result.start_virtual_time_micros);
+        let perf = evaluate_replay_performance(&result, virt + 1000);
+        assert!(!perf.faster_than_realtime);
+    }
+
+    #[test]
+    fn performance_zero_wall_time_max_speedup() {
+        let result = run_valid_fixture();
+        let perf = evaluate_replay_performance(&result, 0);
+        assert_eq!(perf.speedup_milli, u64::MAX);
+        assert!(perf.faster_than_realtime);
+    }
+
+    #[test]
+    fn performance_serde_roundtrip() {
+        let perf = ReplayPerformance {
+            virtual_duration_micros: 300,
+            wall_duration_micros: 100,
+            faster_than_realtime: true,
+            speedup_milli: 3000,
+        };
+        let json = serde_json::to_string(&perf).unwrap();
+        let back: ReplayPerformance = serde_json::from_str(&json).unwrap();
+        assert_eq!(perf, back);
+    }
+
+    // ── build_evidence_linkage ───────────────────────────────────────
+
+    #[test]
+    fn evidence_linkage_empty_events() {
+        let linkage = build_evidence_linkage(&[]);
+        assert!(linkage.is_empty());
+    }
+
+    #[test]
+    fn evidence_linkage_row_per_event() {
+        let result = run_valid_fixture();
+        let linkage = build_evidence_linkage(&result.events);
+        assert_eq!(linkage.len(), result.events.len());
+        for (i, row) in linkage.iter().enumerate() {
+            assert_eq!(row.event_sequence, i as u64);
+            assert!(!row.evidence_hash.is_empty());
+        }
+    }
+
+    #[test]
+    fn evidence_linkage_hashes_deterministic() {
+        let result = run_valid_fixture();
+        let l1 = build_evidence_linkage(&result.events);
+        let l2 = build_evidence_linkage(&result.events);
+        assert_eq!(l1, l2);
+    }
+
+    #[test]
+    fn evidence_linkage_record_serde_roundtrip() {
+        let record = EvidenceLinkageRecord {
+            trace_id: "t".into(),
+            decision_id: "d".into(),
+            policy_id: "p".into(),
+            event_sequence: 0,
+            evidence_hash: "abc123".into(),
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        let back: EvidenceLinkageRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(record, back);
+    }
+
+    // ── validate_replay_input ───────────────────────────────────────
+
+    #[test]
+    fn validate_replay_input_valid() {
+        let result = run_valid_fixture();
+        validate_replay_input(&result, Some("snapshot-1")).unwrap();
+    }
+
+    #[test]
+    fn validate_replay_input_missing_snapshot() {
+        let result = run_valid_fixture();
+        let err = validate_replay_input(&result, None).unwrap_err();
+        assert_eq!(err.code, ReplayInputErrorCode::MissingModelSnapshot);
+    }
+
+    #[test]
+    fn validate_replay_input_empty_snapshot() {
+        let result = run_valid_fixture();
+        let err = validate_replay_input(&result, Some("  ")).unwrap_err();
+        assert_eq!(err.code, ReplayInputErrorCode::MissingModelSnapshot);
+    }
+
+    #[test]
+    fn validate_replay_input_sequence_gap() {
+        let mut result = run_valid_fixture();
+        result.events[1].sequence = 99;
+        let err = validate_replay_input(&result, Some("s")).unwrap_err();
+        assert_eq!(err.code, ReplayInputErrorCode::PartialTrace);
+        assert!(err.message.contains("gap"));
+    }
+
+    #[test]
+    fn validate_replay_input_empty_trace_id() {
+        let mut result = run_valid_fixture();
+        result.events[0].trace_id = "".into();
+        let err = validate_replay_input(&result, Some("s")).unwrap_err();
+        assert_eq!(err.code, ReplayInputErrorCode::PartialTrace);
+        assert!(err.message.contains("trace_id"));
+    }
+
+    #[test]
+    fn validate_replay_input_empty_decision_id() {
+        let mut result = run_valid_fixture();
+        result.events[0].decision_id = " ".into();
+        let err = validate_replay_input(&result, Some("s")).unwrap_err();
+        assert_eq!(err.code, ReplayInputErrorCode::PartialTrace);
+        assert!(err.message.contains("decision_id"));
+    }
+
+    #[test]
+    fn validate_replay_input_empty_policy_id() {
+        let mut result = run_valid_fixture();
+        result.events[1].policy_id = "".into();
+        let err = validate_replay_input(&result, Some("s")).unwrap_err();
+        assert_eq!(err.code, ReplayInputErrorCode::PartialTrace);
+    }
+
+    #[test]
+    fn validate_replay_input_transcript_length_mismatch() {
+        let mut result = run_valid_fixture();
+        result.random_transcript.push(999);
+        let err = validate_replay_input(&result, Some("s")).unwrap_err();
+        assert_eq!(err.code, ReplayInputErrorCode::CorruptedTranscript);
+        assert!(err.message.contains("length"));
+    }
+
+    #[test]
+    fn validate_replay_input_corrupted_digest() {
+        let mut result = run_valid_fixture();
+        result.output_digest = "tampered-digest".into();
+        let err = validate_replay_input(&result, Some("s")).unwrap_err();
+        assert_eq!(err.code, ReplayInputErrorCode::CorruptedTranscript);
+        assert!(err.message.contains("digest"));
+    }
+
+    // ── compare_counterfactual ──────────────────────────────────────
+
+    #[test]
+    fn counterfactual_identical_runs_no_divergence() {
+        let result = run_valid_fixture();
+        let delta = compare_counterfactual(&result, &result);
+        assert!(!delta.digest_changed);
+        assert_eq!(delta.changed_events, 0);
+        assert_eq!(delta.changed_outcomes, 0);
+        assert_eq!(delta.changed_error_codes, 0);
+        assert!(delta.diverged_at_sequence.is_none());
+        assert!(!delta.transcript_changed);
+        assert!(delta.divergence_samples.is_empty());
+    }
+
+    #[test]
+    fn counterfactual_different_seeds_shows_divergence() {
+        let f1 = valid_fixture();
+        let mut f2 = valid_fixture();
+        f2.seed = 888;
+        f2.fixture_id = "fix-alt".into();
+        let r1 = DeterministicRunner::default().run_fixture(&f1).unwrap();
+        let r2 = DeterministicRunner::default().run_fixture(&f2).unwrap();
+        let delta = compare_counterfactual(&r1, &r2);
+        assert!(delta.digest_changed);
+        assert!(delta.transcript_changed);
+    }
+
+    #[test]
+    fn counterfactual_different_event_count_missing_events() {
+        let f1 = valid_fixture();
+        let mut f2 = valid_fixture();
+        f2.steps.pop();
+        f2.fixture_id = "fix-short".into();
+        let r1 = DeterministicRunner::default().run_fixture(&f1).unwrap();
+        let r2 = DeterministicRunner::default().run_fixture(&f2).unwrap();
+        let delta = compare_counterfactual(&r1, &r2);
+        assert!(delta.changed_events > 0);
+        assert!(
+            delta
+                .divergence_samples
+                .iter()
+                .any(|s| { s.kind == CounterfactualDivergenceKind::MissingCounterfactualEvent })
+        );
+    }
+
+    #[test]
+    fn counterfactual_delta_serde_roundtrip() {
+        let result = run_valid_fixture();
+        let delta = compare_counterfactual(&result, &result);
+        let json = serde_json::to_string(&delta).unwrap();
+        let back: CounterfactualDelta = serde_json::from_str(&json).unwrap();
+        assert_eq!(delta, back);
+    }
+
+    #[test]
+    fn counterfactual_max_divergence_samples_capped() {
+        // Create two runs with more than 8 divergent events.
+        let mut f1 = valid_fixture();
+        for i in 0..12_u64 {
+            f1.steps.push(ScenarioStep {
+                component: format!("c{i}"),
+                event: format!("e{i}"),
+                advance_micros: 10 + i,
+                metadata: BTreeMap::new(),
+            });
+        }
+        let mut f2 = f1.clone();
+        f2.seed = 12345;
+        f2.fixture_id = "fix-many-alt".into();
+        f1.fixture_id = "fix-many-base".into();
+        let r1 = DeterministicRunner::default().run_fixture(&f1).unwrap();
+        let r2 = DeterministicRunner::default().run_fixture(&f2).unwrap();
+        let delta = compare_counterfactual(&r1, &r2);
+        assert!(delta.divergence_samples.len() <= 8);
+    }
+
+    // ── diagnose_cross_machine_replay ───────────────────────────────
+
+    #[test]
+    fn cross_machine_same_env_same_run_matches() {
+        let result = run_valid_fixture();
+        let env = ReplayEnvironmentFingerprint::local();
+        let diag = diagnose_cross_machine_replay(&result, &result, &env, &env);
+        assert!(diag.cross_machine_match);
+        assert!(diag.environment_mismatches.is_empty());
+        assert!(diag.diagnosis.is_none());
+    }
+
+    #[test]
+    fn cross_machine_different_env_same_run_reports_env_delta() {
+        let result = run_valid_fixture();
+        let env_a = ReplayEnvironmentFingerprint::local();
+        let env_b = ReplayEnvironmentFingerprint {
+            os: "freebsd".into(),
+            architecture: "riscv64".into(),
+            ..env_a.clone()
+        };
+        let diag = diagnose_cross_machine_replay(&result, &result, &env_a, &env_b);
+        assert!(diag.cross_machine_match);
+        assert!(!diag.environment_mismatches.is_empty());
+        assert!(diag.environment_mismatches.contains(&"os".to_string()));
+        assert!(
+            diag.environment_mismatches
+                .contains(&"architecture".to_string())
+        );
+        let d = diag.diagnosis.as_deref().unwrap();
+        assert!(d.contains("matched across environment"));
+    }
+
+    #[test]
+    fn cross_machine_mismatch_with_env_delta_includes_both() {
+        let f = valid_fixture();
+        let r1 = DeterministicRunner::default().run_fixture(&f).unwrap();
+        let mut f2 = f.clone();
+        f2.seed = 555;
+        f2.fixture_id = "fix-cross-alt".into();
+        let r2 = DeterministicRunner::default().run_fixture(&f2).unwrap();
+        let env_a = ReplayEnvironmentFingerprint::local();
+        let env_b = ReplayEnvironmentFingerprint {
+            endian: "big".into(),
+            ..env_a.clone()
+        };
+        let diag = diagnose_cross_machine_replay(&r1, &r2, &env_a, &env_b);
+        assert!(!diag.cross_machine_match);
+        let d = diag.diagnosis.as_deref().unwrap();
+        assert!(d.contains("mismatch"));
+        assert!(d.contains("environment"));
+    }
+
+    #[test]
+    fn cross_machine_diagnosis_serde_roundtrip() {
+        let result = run_valid_fixture();
+        let env = ReplayEnvironmentFingerprint::local();
+        let diag = diagnose_cross_machine_replay(&result, &result, &env, &env);
+        let json = serde_json::to_string(&diag).unwrap();
+        let back: CrossMachineReplayDiagnosis = serde_json::from_str(&json).unwrap();
+        assert_eq!(diag, back);
+    }
+
+    // ── ReplayEnvironmentFingerprint ────────────────────────────────
+
+    #[test]
+    fn environment_fingerprint_local_not_empty() {
+        let fp = ReplayEnvironmentFingerprint::local();
+        assert!(!fp.os.is_empty());
+        assert!(!fp.architecture.is_empty());
+        assert!(!fp.family.is_empty());
+        assert!(fp.pointer_width_bits > 0);
+        assert!(!fp.endian.is_empty());
+    }
+
+    #[test]
+    fn environment_fingerprint_serde_roundtrip() {
+        let fp = ReplayEnvironmentFingerprint::local();
+        let json = serde_json::to_string(&fp).unwrap();
+        let back: ReplayEnvironmentFingerprint = serde_json::from_str(&json).unwrap();
+        assert_eq!(fp, back);
+    }
+
+    // ── RunReport ───────────────────────────────────────────────────
+
+    #[test]
+    fn run_report_from_result_pass() {
+        let result = run_valid_fixture();
+        let report = RunReport::from_result(&result);
+        assert!(report.pass);
+        assert!(report.first_error_code.is_none());
+        assert_eq!(report.event_count, 2);
+        assert_eq!(report.fixture_id, "fix-enrich");
+    }
+
+    #[test]
+    fn run_report_from_result_fail_with_error_code() {
+        let mut f = valid_fixture();
+        f.steps[0]
+            .metadata
+            .insert("error_code".into(), "FE-TEST-001".into());
+        let result = DeterministicRunner::default().run_fixture(&f).unwrap();
+        let report = RunReport::from_result(&result);
+        assert!(!report.pass);
+        assert_eq!(report.first_error_code.as_deref(), Some("FE-TEST-001"));
+    }
+
+    #[test]
+    fn run_report_to_markdown_contains_fields() {
+        let result = run_valid_fixture();
+        let report = RunReport::from_result(&result);
+        let md = report.to_markdown();
+        assert!(md.contains("# E2E Run Report"));
+        assert!(md.contains("fix-enrich"));
+        assert!(md.contains("pass"));
+        assert!(md.contains(&report.output_digest));
+    }
+
+    #[test]
+    fn run_report_serde_roundtrip() {
+        let result = run_valid_fixture();
+        let report = RunReport::from_result(&result);
+        let json = serde_json::to_string(&report).unwrap();
+        let back: RunReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(report, back);
+    }
+
+    // ── ScenarioClass ───────────────────────────────────────────────
+
+    #[test]
+    fn scenario_class_all_has_six_entries() {
+        assert_eq!(ScenarioClass::ALL.len(), 6);
+    }
+
+    #[test]
+    fn scenario_class_as_str_all_distinct() {
+        let mut set = std::collections::BTreeSet::new();
+        for c in &ScenarioClass::ALL {
+            set.insert(c.as_str());
+        }
+        assert_eq!(set.len(), 6);
+    }
+
+    #[test]
+    fn scenario_class_as_str_matches_serde() {
+        for c in &ScenarioClass::ALL {
+            let json = serde_json::to_string(c).unwrap();
+            let expected = format!("\"{}\"", c.as_str());
+            assert_eq!(json, expected, "as_str and serde should agree for {c:?}");
+        }
+    }
+
+    // ── select_rgc_advanced_scenario_matrix ──────────────────────────
+
+    #[test]
+    fn select_matrix_empty_classes_returns_all() {
+        let all = select_rgc_advanced_scenario_matrix(&[], true);
+        assert_eq!(all.len(), 6, "should have all 6 scenario classes");
+    }
+
+    #[test]
+    fn select_matrix_filter_by_class() {
+        let baseline_only = select_rgc_advanced_scenario_matrix(&[ScenarioClass::Baseline], true);
+        assert!(!baseline_only.is_empty());
+        assert!(
+            baseline_only
+                .iter()
+                .all(|s| s.scenario_class == ScenarioClass::Baseline)
+        );
+    }
+
+    #[test]
+    fn select_matrix_exclude_fault_injection() {
+        let no_fault = select_rgc_advanced_scenario_matrix(&[], false);
+        assert!(
+            no_fault
+                .iter()
+                .all(|s| s.scenario_class != ScenarioClass::FaultInjection)
+        );
+        assert_eq!(no_fault.len(), 5);
+    }
+
+    #[test]
+    fn select_matrix_sorted_by_scenario_id() {
+        let all = select_rgc_advanced_scenario_matrix(&[], true);
+        for w in all.windows(2) {
+            assert!(
+                w[0].scenario_id <= w[1].scenario_id,
+                "should be sorted: {} <= {}",
+                w[0].scenario_id,
+                w[1].scenario_id
+            );
+        }
+    }
+
+    // ── assert_structured_logs ───────────────────────────────────────
+
+    #[test]
+    fn assert_logs_match() {
+        let result = run_valid_fixture();
+        let expectations = vec![LogExpectation {
+            component: "router".into(),
+            event: "dispatch".into(),
+            outcome: "ok".into(),
+            error_code: None,
+        }];
+        assert_structured_logs(&result.events, &expectations).unwrap();
+    }
+
+    #[test]
+    fn assert_logs_missing_returns_error() {
+        let result = run_valid_fixture();
+        let expectations = vec![LogExpectation {
+            component: "nonexistent".into(),
+            event: "missing".into(),
+            outcome: "ok".into(),
+            error_code: None,
+        }];
+        let err = assert_structured_logs(&result.events, &expectations).unwrap_err();
+        assert_eq!(err.missing.len(), 1);
+        assert!(err.to_string().contains("1"));
+    }
+
+    #[test]
+    fn assert_logs_empty_expectations_pass() {
+        let result = run_valid_fixture();
+        assert_structured_logs(&result.events, &[]).unwrap();
+    }
+
+    // ── parse_fixture_with_migration ────────────────────────────────
+
+    #[test]
+    fn parse_migration_v1_fixture() {
+        let f = valid_fixture();
+        let bytes = serde_json::to_vec(&f).unwrap();
+        let parsed = parse_fixture_with_migration(&bytes).unwrap();
+        assert_eq!(parsed.fixture_id, f.fixture_id);
+        assert_eq!(parsed.fixture_version, TestFixture::CURRENT_VERSION);
+    }
+
+    #[test]
+    fn parse_migration_v0_fixture() {
+        let json = serde_json::json!({
+            "fixture_id": "legacy-1",
+            "fixture_version": 0,
+            "seed": 42,
+            "virtual_time_start_micros": 1000,
+            "policy_id": "policy-legacy",
+            "steps": [{"component": "c", "event": "e"}]
+        });
+        let bytes = serde_json::to_vec(&json).unwrap();
+        let parsed = parse_fixture_with_migration(&bytes).unwrap();
+        assert_eq!(parsed.fixture_id, "legacy-1");
+        assert_eq!(parsed.fixture_version, TestFixture::CURRENT_VERSION);
+        assert!(parsed.determinism_check);
+        assert!(parsed.expected_events.is_empty());
+    }
+
+    #[test]
+    fn parse_migration_unsupported_version() {
+        let json = serde_json::json!({
+            "fixture_id": "bad",
+            "fixture_version": 99,
+            "seed": 1,
+            "virtual_time_start_micros": 0,
+            "policy_id": "p",
+            "steps": [{"component": "c", "event": "e"}]
+        });
+        let bytes = serde_json::to_vec(&json).unwrap();
+        let err = parse_fixture_with_migration(&bytes).unwrap_err();
+        assert!(matches!(
+            err,
+            FixtureMigrationError::UnsupportedVersion { .. }
+        ));
+    }
+
+    #[test]
+    fn parse_migration_invalid_json() {
+        let err = parse_fixture_with_migration(b"not json").unwrap_err();
+        assert!(matches!(
+            err,
+            FixtureMigrationError::InvalidFixturePayload { .. }
+        ));
+    }
+
+    #[test]
+    fn parse_migration_missing_version_field() {
+        let json = serde_json::json!({"fixture_id": "x"});
+        let bytes = serde_json::to_vec(&json).unwrap();
+        let err = parse_fixture_with_migration(&bytes).unwrap_err();
+        assert!(matches!(
+            err,
+            FixtureMigrationError::InvalidFixturePayload { .. }
+        ));
+    }
+
+    // ── DeterministicRunner ─────────────────────────────────────────
+
+    #[test]
+    fn runner_trace_id_uses_config_prefix() {
+        let runner = DeterministicRunner {
+            config: DeterministicRunnerConfig {
+                trace_prefix: "custom-prefix".into(),
+            },
+        };
+        let result = runner.run_fixture(&valid_fixture()).unwrap();
+        assert!(result.events[0].trace_id.starts_with("custom-prefix-"));
+    }
+
+    #[test]
+    fn runner_events_have_sequential_sequence() {
+        let result = run_valid_fixture();
+        for (i, e) in result.events.iter().enumerate() {
+            assert_eq!(e.sequence, i as u64);
+        }
+    }
+
+    #[test]
+    fn runner_advances_virtual_time() {
+        let result = run_valid_fixture();
+        assert!(result.end_virtual_time_micros > result.start_virtual_time_micros);
+        assert_eq!(
+            result.end_virtual_time_micros,
+            result.start_virtual_time_micros + 100 + 200
+        );
+    }
+
+    #[test]
+    fn runner_error_outcome_on_error_code_metadata() {
+        let mut f = valid_fixture();
+        f.steps[0]
+            .metadata
+            .insert("error_code".into(), "ERR-1".into());
+        let result = DeterministicRunner::default().run_fixture(&f).unwrap();
+        assert_eq!(result.events[0].outcome, "error");
+        assert_eq!(result.events[0].error_code.as_deref(), Some("ERR-1"));
+    }
+
+    #[test]
+    fn runner_custom_outcome_metadata() {
+        let mut f = valid_fixture();
+        f.steps[0].metadata.insert("outcome".into(), "warn".into());
+        let result = DeterministicRunner::default().run_fixture(&f).unwrap();
+        assert_eq!(result.events[0].outcome, "warn");
+    }
+
+    #[test]
+    fn runner_invalid_fixture_returns_error() {
+        let mut f = valid_fixture();
+        f.fixture_id = "".into();
+        let err = DeterministicRunner::default().run_fixture(&f).unwrap_err();
+        assert!(matches!(err, FixtureValidationError::MissingFixtureId));
+    }
+
+    // ── RunResult serde ─────────────────────────────────────────────
+
+    #[test]
+    fn run_result_serde_roundtrip() {
+        let result = run_valid_fixture();
+        let json = serde_json::to_string(&result).unwrap();
+        let back: RunResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(result, back);
+    }
+
+    // ── HarnessEvent serde ──────────────────────────────────────────
+
+    #[test]
+    fn harness_event_serde_roundtrip() {
+        let result = run_valid_fixture();
+        for event in &result.events {
+            let json = serde_json::to_string(event).unwrap();
+            let back: HarnessEvent = serde_json::from_str(&json).unwrap();
+            assert_eq!(*event, back);
+        }
+    }
+
+    // ── ReplayVerification serde ────────────────────────────────────
+
+    #[test]
+    fn replay_verification_serde_roundtrip() {
+        let result = run_valid_fixture();
+        let v = verify_replay(&result, &result);
+        let json = serde_json::to_string(&v).unwrap();
+        let back: ReplayVerification = serde_json::from_str(&json).unwrap();
+        assert_eq!(v, back);
+    }
+
+    // ── RunManifest serde ───────────────────────────────────────────
+
+    #[test]
+    fn run_manifest_serde_roundtrip() {
+        let manifest = RunManifest {
+            fixture_id: "f".into(),
+            run_id: "r".into(),
+            seed: 1,
+            event_count: 2,
+            output_digest: "d".into(),
+            replay_pointer: "replay://r".into(),
+            model_snapshot_pointer: "model://s".into(),
+            artifact_schema_version: 1,
+            environment_fingerprint: ReplayEnvironmentFingerprint::local(),
+        };
+        let json = serde_json::to_string(&manifest).unwrap();
+        let back: RunManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(manifest, back);
+    }
+
+    // ── GoldenBaseline / SignedGoldenUpdate serde ────────────────────
+
+    #[test]
+    fn golden_baseline_serde_roundtrip() {
+        let gb = GoldenBaseline {
+            fixture_id: "fix".into(),
+            output_digest: "abc".into(),
+            source_run_id: "run-1".into(),
+        };
+        let json = serde_json::to_string(&gb).unwrap();
+        let back: GoldenBaseline = serde_json::from_str(&json).unwrap();
+        assert_eq!(gb, back);
+    }
+
+    #[test]
+    fn signed_golden_update_serde_roundtrip() {
+        let u = SignedGoldenUpdate {
+            update_id: "u1".into(),
+            fixture_id: "fix".into(),
+            previous_digest: "old".into(),
+            next_digest: "new".into(),
+            source_run_id: "run-2".into(),
+            signer: "dev".into(),
+            signature: "sig".into(),
+            rationale: "intentional change".into(),
+        };
+        let json = serde_json::to_string(&u).unwrap();
+        let back: SignedGoldenUpdate = serde_json::from_str(&json).unwrap();
+        assert_eq!(u, back);
+    }
+
+    // ── Error Display implementations ───────────────────────────────
+
+    #[test]
+    fn replay_input_error_display_includes_code() {
+        let err = ReplayInputError {
+            code: ReplayInputErrorCode::CorruptedTranscript,
+            message: "bad data".into(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("corrupted_transcript"));
+        assert!(msg.contains("bad data"));
+    }
+
+    #[test]
+    fn log_assertion_error_display_count() {
+        let err = LogAssertionError {
+            missing: vec![
+                LogExpectation {
+                    component: "a".into(),
+                    event: "b".into(),
+                    outcome: "ok".into(),
+                    error_code: None,
+                },
+                LogExpectation {
+                    component: "c".into(),
+                    event: "d".into(),
+                    outcome: "ok".into(),
+                    error_code: None,
+                },
+            ],
+        };
+        assert!(err.to_string().contains("2"));
+    }
+
+    #[test]
+    fn golden_verification_error_display_all_variants() {
+        let variants: Vec<String> = vec![
+            GoldenVerificationError::MissingBaseline {
+                fixture_id: "fix1".into(),
+            }
+            .to_string(),
+            GoldenVerificationError::DigestMismatch {
+                expected: "a".into(),
+                actual: "b".into(),
+            }
+            .to_string(),
+        ];
+        let mut set = std::collections::BTreeSet::new();
+        for v in &variants {
+            set.insert(v.clone());
+        }
+        assert_eq!(set.len(), variants.len());
+    }
+
+    // ── ArtifactCompletenessReport serde ─────────────────────────────
+
+    #[test]
+    fn artifact_completeness_report_serde_roundtrip() {
+        let report = ArtifactCompletenessReport {
+            complete: true,
+            missing_files: vec![],
+            diagnostics: vec![],
+            event_count: 2,
+            linkage_count: 2,
+        };
+        let json = serde_json::to_string(&report).unwrap();
+        let back: ArtifactCompletenessReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(report, back);
+    }
+
+    // ── ScenarioArtifactPaths / ScenarioEvidencePack serde ──────────
+
+    #[test]
+    fn scenario_artifact_paths_serde_roundtrip() {
+        let paths = ScenarioArtifactPaths {
+            manifest: "m.json".into(),
+            events: "e.jsonl".into(),
+            evidence_linkage: "l.json".into(),
+            report_json: "r.json".into(),
+            report_markdown: "r.md".into(),
+        };
+        let json = serde_json::to_string(&paths).unwrap();
+        let back: ScenarioArtifactPaths = serde_json::from_str(&json).unwrap();
+        assert_eq!(paths, back);
+    }
+
+    // ── ScenarioMatrixReport serde ──────────────────────────────────
+
+    #[test]
+    fn scenario_matrix_report_serde_roundtrip() {
+        let report = ScenarioMatrixReport {
+            schema_version: "v1".into(),
+            summary_id: "s1".into(),
+            total_scenarios: 2,
+            pass_scenarios: 1,
+            fail_scenarios: 1,
+            scenario_packs: vec![],
+        };
+        let json = serde_json::to_string(&report).unwrap();
+        let back: ScenarioMatrixReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(report, back);
+    }
+
+    // ── DeterministicRunnerConfig ───────────────────────────────────
+
+    #[test]
+    fn runner_config_default_trace_prefix() {
+        let config = DeterministicRunnerConfig::default();
+        assert_eq!(config.trace_prefix, "trace");
+    }
+
+    #[test]
+    fn runner_config_serde_roundtrip() {
+        let config = DeterministicRunnerConfig {
+            trace_prefix: "test-prefix".into(),
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let back: DeterministicRunnerConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(config, back);
+    }
+
+    // ── rgc_advanced_scenario_matrix_registry ───────────────────────
+
+    #[test]
+    fn rgc_registry_has_all_scenario_classes() {
+        let registry = rgc_advanced_scenario_matrix_registry();
+        let mut classes: Vec<_> = registry.iter().map(|s| s.scenario_class).collect();
+        classes.sort_by_key(|c| c.as_str().to_string());
+        classes.dedup();
+        assert_eq!(classes.len(), 6, "all 6 scenario classes should be present");
+    }
+
+    #[test]
+    fn rgc_registry_all_fixtures_valid() {
+        let registry = rgc_advanced_scenario_matrix_registry();
+        for entry in &registry {
+            entry.fixture.validate().unwrap_or_else(|e| {
+                panic!("fixture for {} should be valid: {e}", entry.scenario_id);
+            });
+        }
+    }
+
+    #[test]
+    fn rgc_registry_all_runnable() {
+        let registry = rgc_advanced_scenario_matrix_registry();
+        let runner = DeterministicRunner::default();
+        for entry in &registry {
+            runner.run_fixture(&entry.fixture).unwrap_or_else(|e| {
+                panic!("fixture for {} should run: {e}", entry.scenario_id);
+            });
+        }
+    }
+
+    #[test]
+    fn rgc_registry_each_has_unit_anchors() {
+        let registry = rgc_advanced_scenario_matrix_registry();
+        for entry in &registry {
+            assert!(
+                !entry.unit_anchor_ids.is_empty(),
+                "scenario {} must have unit anchors",
+                entry.scenario_id
+            );
+        }
+    }
+
+    #[test]
+    fn rgc_registry_sorted_by_scenario_id() {
+        let registry = rgc_advanced_scenario_matrix_registry();
+        for w in registry.windows(2) {
+            assert!(
+                w[0].scenario_id <= w[1].scenario_id,
+                "registry should be sorted"
+            );
+        }
+    }
+}

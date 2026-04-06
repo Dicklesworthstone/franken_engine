@@ -10332,3 +10332,940 @@ mod enrichment_tests {
         assert_eq!(ctx.request_count_within_window(999_999), 0);
     }
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// Enrichment test module (batch 2): delegate-cell types, guardplane,
+// escrow transitions, purpose policy, helper functions.
+// ────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod enrichment_batch2_tests {
+    use super::*;
+
+    // ── DelegationScope ─────────────────────────────────────────────────
+
+    #[test]
+    fn delegation_scope_serde_round_trip() {
+        let variants = [
+            DelegationScope::ModuleReplacement,
+            DelegationScope::ConfigUpdate,
+            DelegationScope::DiagnosticCollection,
+            DelegationScope::TrustChainRotation,
+            DelegationScope::Custom("audit_probe".to_string()),
+        ];
+        for scope in &variants {
+            let json = serde_json::to_string(scope).expect("serialize");
+            let back: DelegationScope = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(*scope, back);
+        }
+    }
+
+    #[test]
+    fn delegation_scope_as_str_non_custom_agrees_with_display() {
+        let standard = [
+            DelegationScope::ModuleReplacement,
+            DelegationScope::ConfigUpdate,
+            DelegationScope::DiagnosticCollection,
+            DelegationScope::TrustChainRotation,
+        ];
+        for scope in &standard {
+            assert_eq!(scope.as_str(), scope.to_string());
+        }
+    }
+
+    #[test]
+    fn delegation_scope_display_custom_includes_value() {
+        let custom = DelegationScope::Custom("my_scope".to_string());
+        assert_eq!(custom.to_string(), "custom:my_scope");
+        assert_eq!(custom.as_str(), "custom");
+    }
+
+    // ── GuardplanePolicyAction ──────────────────────────────────────────
+
+    #[test]
+    fn guardplane_policy_action_serde_round_trip() {
+        let variants = [
+            GuardplanePolicyAction::Allow,
+            GuardplanePolicyAction::Challenge,
+            GuardplanePolicyAction::Sandbox,
+            GuardplanePolicyAction::Suspend,
+            GuardplanePolicyAction::Terminate,
+            GuardplanePolicyAction::Quarantine,
+        ];
+        for action in &variants {
+            let json = serde_json::to_string(action).expect("serialize");
+            let back: GuardplanePolicyAction = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(*action, back);
+        }
+    }
+
+    #[test]
+    fn guardplane_policy_action_as_str_display_agree() {
+        let variants = [
+            GuardplanePolicyAction::Allow,
+            GuardplanePolicyAction::Challenge,
+            GuardplanePolicyAction::Sandbox,
+            GuardplanePolicyAction::Suspend,
+            GuardplanePolicyAction::Terminate,
+            GuardplanePolicyAction::Quarantine,
+        ];
+        for action in &variants {
+            assert_eq!(action.as_str(), action.to_string());
+        }
+    }
+
+    #[test]
+    fn guardplane_policy_action_fail_closed_fallback_escalates() {
+        assert_eq!(
+            GuardplanePolicyAction::Allow.fail_closed_fallback(),
+            GuardplanePolicyAction::Sandbox
+        );
+        assert_eq!(
+            GuardplanePolicyAction::Challenge.fail_closed_fallback(),
+            GuardplanePolicyAction::Sandbox
+        );
+        assert_eq!(
+            GuardplanePolicyAction::Sandbox.fail_closed_fallback(),
+            GuardplanePolicyAction::Suspend
+        );
+        assert_eq!(
+            GuardplanePolicyAction::Suspend.fail_closed_fallback(),
+            GuardplanePolicyAction::Terminate
+        );
+        assert_eq!(
+            GuardplanePolicyAction::Terminate.fail_closed_fallback(),
+            GuardplanePolicyAction::Quarantine
+        );
+        assert_eq!(
+            GuardplanePolicyAction::Quarantine.fail_closed_fallback(),
+            GuardplanePolicyAction::Quarantine
+        );
+    }
+
+    #[test]
+    fn guardplane_policy_action_is_containment_action() {
+        assert!(!GuardplanePolicyAction::Allow.is_containment_action());
+        assert!(!GuardplanePolicyAction::Challenge.is_containment_action());
+        assert!(GuardplanePolicyAction::Sandbox.is_containment_action());
+        assert!(GuardplanePolicyAction::Suspend.is_containment_action());
+        assert!(GuardplanePolicyAction::Terminate.is_containment_action());
+        assert!(GuardplanePolicyAction::Quarantine.is_containment_action());
+    }
+
+    // ── DelegateCellPolicy ──────────────────────────────────────────────
+
+    #[test]
+    fn delegate_cell_policy_default_values() {
+        let policy = DelegateCellPolicy::default();
+        assert_eq!(policy.initial_posterior_micros, 200_000);
+        assert_eq!(policy.capability_escalation_penalty_micros, 220_000);
+        assert_eq!(policy.flow_violation_penalty_micros, 150_000);
+        assert_eq!(policy.declassification_denial_penalty_micros, 110_000);
+        assert_eq!(policy.false_positive_cost_micros, 400_000);
+        assert_eq!(policy.false_negative_cost_micros, 850_000);
+    }
+
+    #[test]
+    fn delegate_cell_policy_serde_round_trip() {
+        let policy = DelegateCellPolicy::default();
+        let json = serde_json::to_string(&policy).expect("serialize");
+        let back: DelegateCellPolicy = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(policy, back);
+    }
+
+    // ── DelegateGuardplaneState ─────────────────────────────────────────
+
+    #[test]
+    fn delegate_guardplane_state_serde_round_trip() {
+        let state = DelegateGuardplaneState {
+            delegate_id: "del-a".to_string(),
+            posterior_micros: 350_000,
+        };
+        let json = serde_json::to_string(&state).expect("serialize");
+        let back: DelegateGuardplaneState = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(state, back);
+    }
+
+    // ── escrow_transition_allowed ───────────────────────────────────────
+
+    #[test]
+    fn escrow_transition_requested_to_all_valid_targets() {
+        assert!(escrow_transition_allowed(
+            CapabilityEscrowState::Requested,
+            CapabilityEscrowState::Challenged
+        ));
+        assert!(escrow_transition_allowed(
+            CapabilityEscrowState::Requested,
+            CapabilityEscrowState::Sandboxed
+        ));
+        assert!(escrow_transition_allowed(
+            CapabilityEscrowState::Requested,
+            CapabilityEscrowState::Approved
+        ));
+        assert!(escrow_transition_allowed(
+            CapabilityEscrowState::Requested,
+            CapabilityEscrowState::Denied
+        ));
+        assert!(escrow_transition_allowed(
+            CapabilityEscrowState::Requested,
+            CapabilityEscrowState::Expired
+        ));
+    }
+
+    #[test]
+    fn escrow_transition_challenged_forward_transitions() {
+        assert!(escrow_transition_allowed(
+            CapabilityEscrowState::Challenged,
+            CapabilityEscrowState::Sandboxed
+        ));
+        assert!(escrow_transition_allowed(
+            CapabilityEscrowState::Challenged,
+            CapabilityEscrowState::Approved
+        ));
+        assert!(escrow_transition_allowed(
+            CapabilityEscrowState::Challenged,
+            CapabilityEscrowState::Denied
+        ));
+        assert!(escrow_transition_allowed(
+            CapabilityEscrowState::Challenged,
+            CapabilityEscrowState::Expired
+        ));
+    }
+
+    #[test]
+    fn escrow_transition_sandboxed_forward_transitions() {
+        assert!(escrow_transition_allowed(
+            CapabilityEscrowState::Sandboxed,
+            CapabilityEscrowState::Challenged
+        ));
+        assert!(escrow_transition_allowed(
+            CapabilityEscrowState::Sandboxed,
+            CapabilityEscrowState::Approved
+        ));
+        assert!(escrow_transition_allowed(
+            CapabilityEscrowState::Sandboxed,
+            CapabilityEscrowState::Denied
+        ));
+        assert!(escrow_transition_allowed(
+            CapabilityEscrowState::Sandboxed,
+            CapabilityEscrowState::Expired
+        ));
+    }
+
+    #[test]
+    fn escrow_transition_terminal_states_self_transitions_only() {
+        assert!(escrow_transition_allowed(
+            CapabilityEscrowState::Denied,
+            CapabilityEscrowState::Denied
+        ));
+        assert!(escrow_transition_allowed(
+            CapabilityEscrowState::Expired,
+            CapabilityEscrowState::Expired
+        ));
+        assert!(!escrow_transition_allowed(
+            CapabilityEscrowState::Denied,
+            CapabilityEscrowState::Approved
+        ));
+        assert!(!escrow_transition_allowed(
+            CapabilityEscrowState::Expired,
+            CapabilityEscrowState::Approved
+        ));
+        assert!(!escrow_transition_allowed(
+            CapabilityEscrowState::Denied,
+            CapabilityEscrowState::Challenged
+        ));
+    }
+
+    #[test]
+    fn escrow_transition_approved_can_expire_or_self() {
+        assert!(escrow_transition_allowed(
+            CapabilityEscrowState::Approved,
+            CapabilityEscrowState::Expired
+        ));
+        assert!(escrow_transition_allowed(
+            CapabilityEscrowState::Approved,
+            CapabilityEscrowState::Approved
+        ));
+        assert!(!escrow_transition_allowed(
+            CapabilityEscrowState::Approved,
+            CapabilityEscrowState::Denied
+        ));
+        assert!(!escrow_transition_allowed(
+            CapabilityEscrowState::Approved,
+            CapabilityEscrowState::Challenged
+        ));
+    }
+
+    // ── purpose_allowed_for_target ──────────────────────────────────────
+
+    #[test]
+    fn purpose_allowed_for_public_target_accepts_all_purposes() {
+        assert!(purpose_allowed_for_target(
+            &DeclassificationPurpose::UserConsent,
+            SecrecyLevel::Public
+        ));
+        assert!(purpose_allowed_for_target(
+            &DeclassificationPurpose::AggregationAnonymization,
+            SecrecyLevel::Public
+        ));
+        assert!(purpose_allowed_for_target(
+            &DeclassificationPurpose::PublicApiResponse,
+            SecrecyLevel::Public
+        ));
+        assert!(purpose_allowed_for_target(
+            &DeclassificationPurpose::DiagnosticExport,
+            SecrecyLevel::Public
+        ));
+        assert!(purpose_allowed_for_target(
+            &DeclassificationPurpose::OperatorOverride,
+            SecrecyLevel::Public
+        ));
+        assert!(purpose_allowed_for_target(
+            &DeclassificationPurpose::Custom("any".to_string()),
+            SecrecyLevel::Public
+        ));
+    }
+
+    #[test]
+    fn purpose_allowed_internal_rejects_public_api_response() {
+        assert!(!purpose_allowed_for_target(
+            &DeclassificationPurpose::PublicApiResponse,
+            SecrecyLevel::Internal
+        ));
+    }
+
+    #[test]
+    fn purpose_allowed_confidential_rejects_custom_and_public_api() {
+        assert!(!purpose_allowed_for_target(
+            &DeclassificationPurpose::PublicApiResponse,
+            SecrecyLevel::Confidential
+        ));
+        assert!(!purpose_allowed_for_target(
+            &DeclassificationPurpose::Custom("any".to_string()),
+            SecrecyLevel::Confidential
+        ));
+    }
+
+    #[test]
+    fn purpose_allowed_secret_only_consent_and_override() {
+        assert!(purpose_allowed_for_target(
+            &DeclassificationPurpose::UserConsent,
+            SecrecyLevel::Secret
+        ));
+        assert!(purpose_allowed_for_target(
+            &DeclassificationPurpose::OperatorOverride,
+            SecrecyLevel::Secret
+        ));
+        assert!(!purpose_allowed_for_target(
+            &DeclassificationPurpose::DiagnosticExport,
+            SecrecyLevel::Secret
+        ));
+        assert!(!purpose_allowed_for_target(
+            &DeclassificationPurpose::AggregationAnonymization,
+            SecrecyLevel::Secret
+        ));
+    }
+
+    #[test]
+    fn purpose_allowed_top_secret_only_operator_override() {
+        assert!(purpose_allowed_for_target(
+            &DeclassificationPurpose::OperatorOverride,
+            SecrecyLevel::TopSecret
+        ));
+        assert!(!purpose_allowed_for_target(
+            &DeclassificationPurpose::UserConsent,
+            SecrecyLevel::TopSecret
+        ));
+        assert!(!purpose_allowed_for_target(
+            &DeclassificationPurpose::DiagnosticExport,
+            SecrecyLevel::TopSecret
+        ));
+    }
+
+    // ── secrecy_drop_levels / integrity_raise_levels ────────────────────
+
+    #[test]
+    fn secrecy_drop_levels_same_level_is_zero() {
+        let label = FlowLabel::new(SecrecyLevel::Secret, IntegrityLevel::Validated);
+        assert_eq!(secrecy_drop_levels(label, label), 0);
+    }
+
+    #[test]
+    fn secrecy_drop_levels_downward_is_positive() {
+        let current = FlowLabel::new(SecrecyLevel::Secret, IntegrityLevel::Validated);
+        let target = FlowLabel::new(SecrecyLevel::Public, IntegrityLevel::Validated);
+        assert_eq!(secrecy_drop_levels(current, target), 3);
+    }
+
+    #[test]
+    fn secrecy_drop_levels_upward_is_zero_saturating() {
+        let current = FlowLabel::new(SecrecyLevel::Public, IntegrityLevel::Validated);
+        let target = FlowLabel::new(SecrecyLevel::Secret, IntegrityLevel::Validated);
+        assert_eq!(secrecy_drop_levels(current, target), 0);
+    }
+
+    #[test]
+    fn integrity_raise_levels_same_is_zero() {
+        let label = FlowLabel::new(SecrecyLevel::Public, IntegrityLevel::Validated);
+        assert_eq!(integrity_raise_levels(label, label), 0);
+    }
+
+    #[test]
+    fn integrity_raise_levels_upward_is_positive() {
+        let current = FlowLabel::new(SecrecyLevel::Public, IntegrityLevel::Untrusted);
+        let target = FlowLabel::new(SecrecyLevel::Public, IntegrityLevel::Trusted);
+        assert_eq!(integrity_raise_levels(current, target), 3);
+    }
+
+    #[test]
+    fn integrity_raise_levels_downward_is_zero_saturating() {
+        let current = FlowLabel::new(SecrecyLevel::Public, IntegrityLevel::Trusted);
+        let target = FlowLabel::new(SecrecyLevel::Public, IntegrityLevel::Untrusted);
+        assert_eq!(integrity_raise_levels(current, target), 0);
+    }
+
+    // ── declassification_label_distance ─────────────────────────────────
+
+    #[test]
+    fn label_distance_same_label_is_zero() {
+        let label = FlowLabel::new(SecrecyLevel::Internal, IntegrityLevel::Validated);
+        assert_eq!(declassification_label_distance(label, label), 0);
+    }
+
+    #[test]
+    fn label_distance_uses_max_of_secrecy_and_integrity() {
+        let current = FlowLabel::new(SecrecyLevel::TopSecret, IntegrityLevel::Untrusted);
+        let target = FlowLabel::new(SecrecyLevel::Public, IntegrityLevel::Trusted);
+        let distance = declassification_label_distance(current, target);
+        assert_eq!(distance, 4); // secrecy drops 4, integrity raises 3
+    }
+
+    // ── denial_severity ─────────────────────────────────────────────────
+
+    #[test]
+    fn denial_severity_high_for_small_distance() {
+        assert_eq!(denial_severity(0), DeclassificationEvidenceSeverity::High);
+        assert_eq!(denial_severity(1), DeclassificationEvidenceSeverity::High);
+        assert_eq!(denial_severity(2), DeclassificationEvidenceSeverity::High);
+    }
+
+    #[test]
+    fn denial_severity_critical_for_large_distance() {
+        assert_eq!(
+            denial_severity(3),
+            DeclassificationEvidenceSeverity::Critical
+        );
+        assert_eq!(
+            denial_severity(4),
+            DeclassificationEvidenceSeverity::Critical
+        );
+    }
+
+    // ── guardplane_action_from_posterior thresholds ──────────────────────
+
+    #[test]
+    fn guardplane_action_threshold_boundaries() {
+        assert_eq!(
+            guardplane_action_from_posterior(GUARDPLANE_CHALLENGE_THRESHOLD_MICROS - 1),
+            GuardplanePolicyAction::Allow
+        );
+        assert_eq!(
+            guardplane_action_from_posterior(GUARDPLANE_CHALLENGE_THRESHOLD_MICROS),
+            GuardplanePolicyAction::Challenge
+        );
+        assert_eq!(
+            guardplane_action_from_posterior(GUARDPLANE_SANDBOX_THRESHOLD_MICROS - 1),
+            GuardplanePolicyAction::Challenge
+        );
+        assert_eq!(
+            guardplane_action_from_posterior(GUARDPLANE_SANDBOX_THRESHOLD_MICROS),
+            GuardplanePolicyAction::Sandbox
+        );
+        assert_eq!(
+            guardplane_action_from_posterior(GUARDPLANE_SUSPEND_THRESHOLD_MICROS - 1),
+            GuardplanePolicyAction::Sandbox
+        );
+        assert_eq!(
+            guardplane_action_from_posterior(GUARDPLANE_SUSPEND_THRESHOLD_MICROS),
+            GuardplanePolicyAction::Suspend
+        );
+        assert_eq!(
+            guardplane_action_from_posterior(GUARDPLANE_TERMINATE_THRESHOLD_MICROS - 1),
+            GuardplanePolicyAction::Suspend
+        );
+        assert_eq!(
+            guardplane_action_from_posterior(GUARDPLANE_TERMINATE_THRESHOLD_MICROS),
+            GuardplanePolicyAction::Terminate
+        );
+        assert_eq!(
+            guardplane_action_from_posterior(GUARDPLANE_QUARANTINE_THRESHOLD_MICROS - 1),
+            GuardplanePolicyAction::Terminate
+        );
+        assert_eq!(
+            guardplane_action_from_posterior(GUARDPLANE_QUARANTINE_THRESHOLD_MICROS),
+            GuardplanePolicyAction::Quarantine
+        );
+        assert_eq!(
+            guardplane_action_from_posterior(GUARDPLANE_MAX_POSTERIOR_MICROS),
+            GuardplanePolicyAction::Quarantine
+        );
+    }
+
+    // ── DelegateCellManifest validation ─────────────────────────────────
+
+    #[test]
+    fn delegate_cell_manifest_serde_round_trip() {
+        let base = ExtensionManifest {
+            name: "del-ext".to_string(),
+            version: "1.0.0".to_string(),
+            entrypoint: "dist/del.js".to_string(),
+            capabilities: [Capability::FsRead].into_iter().collect(),
+            publisher_signature: Some(vec![1, 2]),
+            content_hash: [0x42; 32],
+            trust_chain_ref: Some("chain/del".to_string()),
+            min_engine_version: "0.1.0".to_string(),
+        };
+        let manifest = DelegateCellManifest {
+            base_manifest: base,
+            delegation_scope: DelegationScope::ConfigUpdate,
+            delegator_id: "engine-core".to_string(),
+            max_lifetime_ns: 500_000,
+        };
+        let json = serde_json::to_string(&manifest).expect("serialize");
+        let back: DelegateCellManifest = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(manifest, back);
+    }
+
+    // ── to_hex helper ───────────────────────────────────────────────────
+
+    #[test]
+    fn to_hex_empty_input() {
+        assert_eq!(to_hex(&[]), "");
+    }
+
+    #[test]
+    fn to_hex_known_bytes() {
+        assert_eq!(to_hex(&[0x00, 0xff, 0xab, 0x12]), "00ffab12");
+    }
+
+    #[test]
+    fn to_hex_single_byte() {
+        assert_eq!(to_hex(&[0x0a]), "0a");
+    }
+
+    // ── bytes_to_hex helper ─────────────────────────────────────────────
+
+    #[test]
+    fn bytes_to_hex_matches_to_hex() {
+        let data = [0xDE, 0xAD, 0xBE, 0xEF];
+        assert_eq!(bytes_to_hex(&data), to_hex(&data));
+    }
+
+    // ── derive_receipt_id determinism ────────────────────────────────────
+
+    #[test]
+    fn derive_receipt_id_is_deterministic() {
+        let a = derive_receipt_id("req-1", 1000, "approved");
+        let b = derive_receipt_id("req-1", 1000, "approved");
+        assert_eq!(a, b);
+        assert!(a.starts_with("dcr-"));
+    }
+
+    #[test]
+    fn derive_receipt_id_different_inputs_differ() {
+        let a = derive_receipt_id("req-1", 1000, "approved");
+        let b = derive_receipt_id("req-2", 1000, "approved");
+        let c = derive_receipt_id("req-1", 1001, "approved");
+        let d = derive_receipt_id("req-1", 1000, "denied");
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+        assert_ne!(a, d);
+    }
+
+    // ── derive_escrow_receipt_id determinism ─────────────────────────────
+
+    #[test]
+    fn derive_escrow_receipt_id_is_deterministic() {
+        let a = derive_escrow_receipt_id("req-1", 42, "challenge", "challenged");
+        let b = derive_escrow_receipt_id("req-1", 42, "challenge", "challenged");
+        assert_eq!(a, b);
+        assert!(a.starts_with("escr-"));
+    }
+
+    // ── derive_emergency_grant_id determinism ───────────────────────────
+
+    #[test]
+    fn derive_emergency_grant_id_is_deterministic() {
+        let a = derive_emergency_grant_id("req-1", "admin", 500);
+        let b = derive_emergency_grant_id("req-1", "admin", 500);
+        assert_eq!(a, b);
+        assert!(a.starts_with("egrant-"));
+    }
+
+    #[test]
+    fn derive_emergency_grant_id_different_inputs_differ() {
+        let a = derive_emergency_grant_id("req-1", "admin", 500);
+        let b = derive_emergency_grant_id("req-2", "admin", 500);
+        let c = derive_emergency_grant_id("req-1", "ops", 500);
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+    }
+
+    // ── DeclassificationGateway integration ─────────────────────────────
+
+    #[test]
+    fn declassification_gateway_default_evaluates_approved_request() {
+        let mut gw = DeclassificationGateway::default();
+        let caps: BTreeSet<Capability> = [Capability::Declassify].into_iter().collect();
+        let context = FlowEnforcementContext::new("t", "d", "p");
+        let outcome = gw.evaluate_request(
+            DeclassificationRequest {
+                request_id: "dr-1".to_string(),
+                requester: "ext-a".to_string(),
+                data_ref: DataRef::new("ns", "k"),
+                current_label: FlowLabel::new(SecrecyLevel::Secret, IntegrityLevel::Validated),
+                target_label: FlowLabel::new(SecrecyLevel::Confidential, IntegrityLevel::Validated),
+                purpose: DeclassificationPurpose::OperatorOverride,
+                justification: "approved by ops".to_string(),
+                timestamp_ns: 100,
+            },
+            &caps,
+            500_000,
+            &context,
+        );
+        assert!(matches!(outcome, DeclassificationOutcome::Approved { .. }));
+        assert_eq!(gw.receipt_log().receipts().len(), 1);
+        assert_eq!(gw.events().len(), 1);
+        assert_eq!(gw.denied_evidence().len(), 0);
+    }
+
+    #[test]
+    fn declassification_gateway_rejects_empty_justification() {
+        let mut gw = DeclassificationGateway::default();
+        let caps: BTreeSet<Capability> = [Capability::Declassify].into_iter().collect();
+        let context = FlowEnforcementContext::new("t", "d", "p");
+        let outcome = gw.evaluate_request(
+            DeclassificationRequest {
+                request_id: "dr-2".to_string(),
+                requester: "ext-a".to_string(),
+                data_ref: DataRef::new("ns", "k"),
+                current_label: FlowLabel::new(SecrecyLevel::Secret, IntegrityLevel::Validated),
+                target_label: FlowLabel::new(SecrecyLevel::Confidential, IntegrityLevel::Validated),
+                purpose: DeclassificationPurpose::OperatorOverride,
+                justification: "".to_string(),
+                timestamp_ns: 200,
+            },
+            &caps,
+            500_000,
+            &context,
+        );
+        assert!(matches!(
+            outcome,
+            DeclassificationOutcome::Denied {
+                reason: DeclassificationDenialReason::EmptyJustification,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn declassification_gateway_rejects_no_declassification_required() {
+        let mut gw = DeclassificationGateway::default();
+        let caps: BTreeSet<Capability> = [Capability::Declassify].into_iter().collect();
+        let context = FlowEnforcementContext::new("t", "d", "p");
+        let outcome = gw.evaluate_request(
+            DeclassificationRequest {
+                request_id: "dr-3".to_string(),
+                requester: "ext-a".to_string(),
+                data_ref: DataRef::new("ns", "k"),
+                current_label: FlowLabel::new(SecrecyLevel::Public, IntegrityLevel::Trusted),
+                target_label: FlowLabel::new(SecrecyLevel::Secret, IntegrityLevel::Untrusted),
+                purpose: DeclassificationPurpose::OperatorOverride,
+                justification: "valid justification".to_string(),
+                timestamp_ns: 300,
+            },
+            &caps,
+            500_000,
+            &context,
+        );
+        assert!(matches!(
+            outcome,
+            DeclassificationOutcome::Denied {
+                reason: DeclassificationDenialReason::NoDeclassificationRequired,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn declassification_gateway_rejects_missing_capability() {
+        let mut gw = DeclassificationGateway::default();
+        let caps: BTreeSet<Capability> = [Capability::FsRead].into_iter().collect();
+        let context = FlowEnforcementContext::new("t", "d", "p");
+        let outcome = gw.evaluate_request(
+            DeclassificationRequest {
+                request_id: "dr-4".to_string(),
+                requester: "ext-a".to_string(),
+                data_ref: DataRef::new("ns", "k"),
+                current_label: FlowLabel::new(SecrecyLevel::Secret, IntegrityLevel::Validated),
+                target_label: FlowLabel::new(SecrecyLevel::Confidential, IntegrityLevel::Validated),
+                purpose: DeclassificationPurpose::OperatorOverride,
+                justification: "needs declassify".to_string(),
+                timestamp_ns: 400,
+            },
+            &caps,
+            500_000,
+            &context,
+        );
+        assert!(matches!(
+            outcome,
+            DeclassificationOutcome::Denied {
+                reason: DeclassificationDenialReason::MissingCapability { .. },
+                ..
+            }
+        ));
+        assert_eq!(gw.denied_evidence().len(), 1);
+    }
+
+    // ── EscrowFloodProtectionContract ───────────────────────────────────
+
+    #[test]
+    fn escrow_flood_protection_contract_id() {
+        let contract = EscrowFloodProtectionContract::default();
+        assert_eq!(contract.contract_id(), "escrow_flood_protection");
+    }
+
+    #[test]
+    fn escrow_flood_protection_allows_under_limit() {
+        let contract = EscrowFloodProtectionContract {
+            max_open_requests_per_extension: 10,
+        };
+        let request = CapabilityEscrowRequest {
+            request_id: "r".to_string(),
+            extension_id: "e".to_string(),
+            hostcall_type: HostcallType::FsWrite,
+            capability: Capability::FsWrite,
+            justification: "needed".to_string(),
+            timestamp_ns: 100,
+            expires_at_ns: 200,
+        };
+        let context = CapabilityEscrowEvaluationContext {
+            open_requests_for_extension: 5,
+        };
+        assert!(matches!(
+            contract.evaluate(&request, &context),
+            CapabilityEscrowContractVerdict::Continue
+        ));
+    }
+
+    #[test]
+    fn escrow_flood_protection_denies_at_limit() {
+        let contract = EscrowFloodProtectionContract {
+            max_open_requests_per_extension: 10,
+        };
+        let request = CapabilityEscrowRequest {
+            request_id: "r".to_string(),
+            extension_id: "e".to_string(),
+            hostcall_type: HostcallType::FsWrite,
+            capability: Capability::FsWrite,
+            justification: "needed".to_string(),
+            timestamp_ns: 100,
+            expires_at_ns: 200,
+        };
+        let context = CapabilityEscrowEvaluationContext {
+            open_requests_for_extension: 10,
+        };
+        assert!(matches!(
+            contract.evaluate(&request, &context),
+            CapabilityEscrowContractVerdict::Deny { .. }
+        ));
+    }
+
+    // ── EscrowJustificationContract ─────────────────────────────────────
+
+    #[test]
+    fn escrow_justification_contract_challenges_empty() {
+        let contract = EscrowJustificationContract;
+        let request = CapabilityEscrowRequest {
+            request_id: "r".to_string(),
+            extension_id: "e".to_string(),
+            hostcall_type: HostcallType::FsWrite,
+            capability: Capability::FsWrite,
+            justification: "".to_string(),
+            timestamp_ns: 100,
+            expires_at_ns: 200,
+        };
+        let context = CapabilityEscrowEvaluationContext {
+            open_requests_for_extension: 0,
+        };
+        assert!(matches!(
+            contract.evaluate(&request, &context),
+            CapabilityEscrowContractVerdict::Challenge { .. }
+        ));
+    }
+
+    #[test]
+    fn escrow_justification_contract_continues_with_justification() {
+        let contract = EscrowJustificationContract;
+        let request = CapabilityEscrowRequest {
+            request_id: "r".to_string(),
+            extension_id: "e".to_string(),
+            hostcall_type: HostcallType::FsWrite,
+            capability: Capability::FsWrite,
+            justification: "valid reason".to_string(),
+            timestamp_ns: 100,
+            expires_at_ns: 200,
+        };
+        let context = CapabilityEscrowEvaluationContext {
+            open_requests_for_extension: 0,
+        };
+        assert!(matches!(
+            contract.evaluate(&request, &context),
+            CapabilityEscrowContractVerdict::Continue
+        ));
+    }
+
+    // ── EscrowDefaultRouteContract ──────────────────────────────────────
+
+    #[test]
+    fn escrow_default_route_challenge_for_sinks() {
+        let contract = EscrowDefaultRouteContract;
+        let request = CapabilityEscrowRequest {
+            request_id: "r".to_string(),
+            extension_id: "e".to_string(),
+            hostcall_type: HostcallType::FsWrite,
+            capability: Capability::FsWrite,
+            justification: "needed".to_string(),
+            timestamp_ns: 100,
+            expires_at_ns: 200,
+        };
+        let context = CapabilityEscrowEvaluationContext {
+            open_requests_for_extension: 0,
+        };
+        assert!(matches!(
+            contract.evaluate(&request, &context),
+            CapabilityEscrowContractVerdict::Challenge { .. }
+        ));
+    }
+
+    #[test]
+    fn escrow_default_route_sandbox_for_read_ops() {
+        let contract = EscrowDefaultRouteContract;
+        let request = CapabilityEscrowRequest {
+            request_id: "r".to_string(),
+            extension_id: "e".to_string(),
+            hostcall_type: HostcallType::FsRead,
+            capability: Capability::FsRead,
+            justification: "needed".to_string(),
+            timestamp_ns: 100,
+            expires_at_ns: 200,
+        };
+        let context = CapabilityEscrowEvaluationContext {
+            open_requests_for_extension: 0,
+        };
+        assert!(matches!(
+            contract.evaluate(&request, &context),
+            CapabilityEscrowContractVerdict::Sandbox { .. }
+        ));
+    }
+
+    // ── Decision contracts ──────────────────────────────────────────────
+
+    #[test]
+    fn requester_capability_contract_approves_with_declassify() {
+        let contract = RequesterCapabilityContract;
+        let caps: BTreeSet<Capability> = [Capability::Declassify].into_iter().collect();
+        let ctx = DeclassificationEvaluationContext::new(&caps, None, 100);
+        let request = DeclassificationRequest {
+            request_id: "dr".to_string(),
+            requester: "ext".to_string(),
+            data_ref: DataRef::new("ns", "k"),
+            current_label: FlowLabel::new(SecrecyLevel::Secret, IntegrityLevel::Validated),
+            target_label: FlowLabel::new(SecrecyLevel::Internal, IntegrityLevel::Validated),
+            purpose: DeclassificationPurpose::OperatorOverride,
+            justification: "test".to_string(),
+            timestamp_ns: 100,
+        };
+        assert!(matches!(
+            contract.evaluate(&request, &ctx),
+            DecisionVerdict::Approved { .. }
+        ));
+    }
+
+    #[test]
+    fn label_distance_contract_denies_zero_distance() {
+        let contract = LabelDistanceContract;
+        let caps = BTreeSet::new();
+        let ctx = DeclassificationEvaluationContext::new(&caps, None, 100);
+        let label = FlowLabel::new(SecrecyLevel::Secret, IntegrityLevel::Validated);
+        let request = DeclassificationRequest {
+            request_id: "dr".to_string(),
+            requester: "ext".to_string(),
+            data_ref: DataRef::new("ns", "k"),
+            current_label: label,
+            target_label: label,
+            purpose: DeclassificationPurpose::OperatorOverride,
+            justification: "test".to_string(),
+            timestamp_ns: 100,
+        };
+        assert!(matches!(
+            contract.evaluate(&request, &ctx),
+            DecisionVerdict::Denied {
+                reason: DeclassificationDenialReason::NoDeclassificationRequired
+            }
+        ));
+    }
+
+    #[test]
+    fn rate_limit_contract_denies_over_limit() {
+        let contract = RateLimitContract::new(2, 1000);
+        let caps = BTreeSet::new();
+        let history = vec![50, 90, 95];
+        let ctx = DeclassificationEvaluationContext::new(&caps, Some(&history), 100);
+        let request = DeclassificationRequest {
+            request_id: "dr".to_string(),
+            requester: "ext".to_string(),
+            data_ref: DataRef::new("ns", "k"),
+            current_label: FlowLabel::new(SecrecyLevel::Secret, IntegrityLevel::Validated),
+            target_label: FlowLabel::new(SecrecyLevel::Internal, IntegrityLevel::Validated),
+            purpose: DeclassificationPurpose::OperatorOverride,
+            justification: "test".to_string(),
+            timestamp_ns: 100,
+        };
+        assert!(matches!(
+            contract.evaluate(&request, &ctx),
+            DecisionVerdict::Denied {
+                reason: DeclassificationDenialReason::RateLimited { .. }
+            }
+        ));
+    }
+
+    // ── CapabilityEscrowReceiptCompletenessReport ───────────────────────
+
+    #[test]
+    fn capability_escrow_receipt_completeness_report_serde_round_trip() {
+        let report = CapabilityEscrowReceiptCompletenessReport {
+            complete: true,
+            receipts: 5,
+            events: 5,
+            evidence: 5,
+            missing_event_receipt_ids: vec![],
+            missing_evidence_receipt_ids: vec![],
+        };
+        let json = serde_json::to_string(&report).expect("serialize");
+        let back: CapabilityEscrowReceiptCompletenessReport =
+            serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(report, back);
+    }
+
+    // ── CapabilityEscrowGateway completeness ────────────────────────────
+
+    #[test]
+    fn capability_escrow_gateway_empty_completeness() {
+        let gw = CapabilityEscrowGateway::default();
+        let report = gw.receipt_completeness_report();
+        assert!(report.complete);
+        assert_eq!(report.receipts, 0);
+        assert_eq!(report.events, 0);
+        assert_eq!(report.evidence, 0);
+    }
+}

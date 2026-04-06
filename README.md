@@ -248,6 +248,29 @@ Pass an explicit waiver bundle with
 `RGC_ZERO_PLACEHOLDER_GATE_WAIVERS=/abs/path/waivers.json` when a time-bounded
 waiver is intentionally part of the evaluation.
 
+## RGC Compound JSON Runtime Proof Lanes
+
+Compound `JSON.parse` / `JSON.stringify` semantics are defined in
+[`docs/RGC_COMPOUND_JSON_RUNTIME_CONTRACT_V1.md`](./docs/RGC_COMPOUND_JSON_RUNTIME_CONTRACT_V1.md).
+`bd-2muur.1.3` and `bd-2muur.1.4` provide the shipped proof lanes that show the
+runtime traverses heap-backed compound values and that the old placeholder
+strings remain closed in the zero-placeholder inventory.
+
+- `./scripts/run_rgc_json_stringify_compound_traversal.sh ci`
+- `./scripts/e2e/rgc_json_stringify_compound_traversal_replay.sh ci`
+- `./scripts/run_rgc_json_compound_placeholder_closure.sh ci`
+- `./scripts/e2e/rgc_json_compound_placeholder_closure_replay.sh ci`
+
+These lanes emit:
+
+- `json_stringify_compound_traversal_report.json`
+- `json_compound_placeholder_closure_report.json`
+- `run_manifest.json`
+- `trace_ids.json`
+- `events.jsonl`
+- `commands.txt`
+- `step_logs/step_*.log`
+
 ## Parser Oracle Missing-Artifact Contract
 
 `bd-2muur.7.1` and `bd-2muur.7.2` replace anonymous parser-oracle placeholder

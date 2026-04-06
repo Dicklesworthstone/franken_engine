@@ -262,6 +262,26 @@ fn json_compound_placeholder_closure_replay_wrapper_prints_required_artifacts() 
 }
 
 #[test]
+fn readme_mentions_compound_json_runtime_proof_lanes() {
+    let readme = read_repo_text("README.md");
+    for fragment in [
+        "## RGC Compound JSON Runtime Proof Lanes",
+        "docs/RGC_COMPOUND_JSON_RUNTIME_CONTRACT_V1.md",
+        "./scripts/run_rgc_json_stringify_compound_traversal.sh ci",
+        "./scripts/e2e/rgc_json_stringify_compound_traversal_replay.sh ci",
+        "./scripts/run_rgc_json_compound_placeholder_closure.sh ci",
+        "./scripts/e2e/rgc_json_compound_placeholder_closure_replay.sh ci",
+        "json_stringify_compound_traversal_report.json",
+        "json_compound_placeholder_closure_report.json",
+    ] {
+        assert!(
+            readme.contains(fragment),
+            "missing README fragment: {fragment}"
+        );
+    }
+}
+
+#[test]
 fn zero_placeholder_inventory_counts_match_expectations() {
     let inventory = zscan::zero_placeholder_scan_inventory();
     assert_eq!(

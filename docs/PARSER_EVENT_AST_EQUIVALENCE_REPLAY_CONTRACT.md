@@ -100,6 +100,14 @@ Canonical gate command:
 ./scripts/run_parser_event_ast_equivalence.sh ci
 ```
 
+Expanded matrix sweep for `bd-2mds.1.4.4.2`:
+
+```bash
+PARSER_EVENT_AST_EQUIVALENCE_BEAD_ID=bd-2mds.1.4.4.2 \
+PARSER_EVENT_AST_EQUIVALENCE_SCENARIO=matrix \
+./scripts/run_parser_event_ast_equivalence.sh ci
+```
+
 Modes:
 
 - `check`: compile focused event->AST equivalence test target

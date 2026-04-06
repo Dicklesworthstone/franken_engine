@@ -1460,7 +1460,7 @@ pub fn read_array_elements(
 ) -> Result<Vec<JsValue>, StdlibError> {
     require_collection_kind(heap, handle, CollectionKind::Array)?;
     let len = get_count_property(heap, handle, ARRAY_LENGTH_PROP)?;
-    let mut elements = Vec::with_capacity(len);
+    let mut elements = Vec::with_capacity(len.min(1024));
     for index in 0..len {
         elements.push(get_required_own_data_property(
             heap,
@@ -1477,7 +1477,7 @@ pub fn read_map_entries(
 ) -> Result<Vec<(JsValue, JsValue)>, StdlibError> {
     require_collection_kind(heap, handle, CollectionKind::Map)?;
     let len = get_count_property(heap, handle, MAP_NEXT_INDEX_PROP)?;
-    let mut entries = Vec::with_capacity(len);
+    let mut entries = Vec::with_capacity(len.min(1024));
     for index in 0..len {
         let key = get_required_own_data_property(heap, handle, &map_key_slot(index))?;
         let value = get_required_own_data_property(heap, handle, &map_value_slot(index))?;
@@ -1492,7 +1492,7 @@ pub fn read_set_values(
 ) -> Result<Vec<JsValue>, StdlibError> {
     require_collection_kind(heap, handle, CollectionKind::Set)?;
     let len = get_count_property(heap, handle, SET_NEXT_INDEX_PROP)?;
-    let mut values = Vec::with_capacity(len);
+    let mut values = Vec::with_capacity(len.min(1024));
     for index in 0..len {
         values.push(get_required_own_data_property(
             heap,

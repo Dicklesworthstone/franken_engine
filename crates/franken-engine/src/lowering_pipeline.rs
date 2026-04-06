@@ -2511,7 +2511,7 @@ pub fn lower_ir2_to_ir3(
             Ir1Op::Construct { arg_count } => {
                 // Pop callee + arg_count args from value stack; push result.
                 let count = *arg_count as usize;
-                let mut arg_regs = Vec::with_capacity(count);
+                let mut arg_regs = Vec::with_capacity(count.min(1024));
                 for _ in 0..count {
                     arg_regs.push(value_stack.pop().unwrap_or(0));
                 }
@@ -2548,7 +2548,7 @@ pub fn lower_ir2_to_ir3(
                     (*quasi_count as usize) + (*quasi_count as usize).saturating_sub(1)
                 };
                 // Pop part registers in reverse order and collect them.
-                let mut part_regs: Vec<u32> = Vec::with_capacity(total);
+                let mut part_regs: Vec<u32> = Vec::with_capacity(total.min(1024));
                 for _ in 0..total {
                     part_regs.push(value_stack.pop().unwrap_or(0));
                 }

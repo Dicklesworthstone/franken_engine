@@ -990,7 +990,14 @@ impl InterpreterCore {
                 });
             }
 
-            let instr = module.instructions[self.ip].clone();
+            let instr = module
+                .instructions
+                .get(self.ip)
+                .ok_or(InterpreterError::InstructionOutOfBounds {
+                    ip: self.ip,
+                    count: module.instructions.len(),
+                })?
+                .clone();
             self.instructions_executed += 1;
 
             match instr {

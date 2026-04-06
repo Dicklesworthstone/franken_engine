@@ -207,7 +207,7 @@ fn build_inclusion_proof(entry_hashes: &[ContentHash], index: usize) -> Option<I
     let mut pos = index;
 
     while current_level.len() > 1 {
-        if pos.is_multiple_of(2) {
+        if pos % 2 == 0 {
             // We're a left child; sibling is to our right (if exists).
             if pos + 1 < current_level.len() {
                 path.push(MerkleProofStep {
@@ -726,7 +726,7 @@ impl ReplacementLineageLog {
 
         // Auto-checkpoint.
         if self.config.checkpoint_interval > 0
-            && (sequence + 1).is_multiple_of(self.config.checkpoint_interval)
+            && ((sequence + 1) % self.config.checkpoint_interval == 0)
         {
             let _ = self.create_checkpoint(timestamp_ns, SecurityEpoch::from_raw(1));
         }

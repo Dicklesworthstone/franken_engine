@@ -211,7 +211,7 @@ impl<T: Clone> SnapshotFastPath<T> {
         let mut writer_pressure_observations = 0;
         loop {
             let start = self.sequence.load(Ordering::Acquire);
-            if !start.is_multiple_of(2) {
+            if start % 2 != 0 {
                 writer_pressure_observations += 1;
                 self.total_retries.fetch_add(1, Ordering::Relaxed);
                 self.writer_pressure_observations
@@ -234,7 +234,7 @@ impl<T: Clone> SnapshotFastPath<T> {
 
             let cloned = self.snapshot_read().clone();
             let end = self.sequence.load(Ordering::Acquire);
-            if start == end && end.is_multiple_of(2) {
+            if start == end && (end % 2 == 0) {
                 if let Some(value) = cloned {
                     self.fast_path_reads.fetch_add(1, Ordering::Relaxed);
                     return FastPathReadResult {

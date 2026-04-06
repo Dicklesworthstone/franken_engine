@@ -652,7 +652,7 @@ impl TimingStats {
         let max_us = sorted[count - 1];
         let sum: u64 = sorted.iter().fold(0u64, |acc, x| acc.saturating_add(*x));
         let mean_us = sum / count as u64;
-        let median_us = if count.is_multiple_of(2) {
+        let median_us = if count % 2 == 0 {
             (sorted[count / 2 - 1] + sorted[count / 2]) / 2
         } else {
             sorted[count / 2]

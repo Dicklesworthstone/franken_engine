@@ -501,7 +501,7 @@ impl EvidenceReplayChecker {
             // Progress reporting.
             if processed > 0
                 && self.config.progress_interval > 0
-                && processed.is_multiple_of(self.config.progress_interval)
+                && (processed % self.config.progress_interval == 0)
             {
                 self.push_event(entry, "replay_progress", "in_progress", None);
             }

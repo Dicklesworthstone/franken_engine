@@ -747,7 +747,7 @@ pub fn evaluate_sampling(
             let accepted = if period == 0 {
                 true
             } else {
-                event_sequence.is_multiple_of(period)
+                (event_sequence % period == 0)
             };
             let adjusted_weight = if accepted && period > 0 {
                 weight.saturating_mul(period)

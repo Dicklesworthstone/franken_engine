@@ -759,6 +759,7 @@ fn alloc_pattern_primary_binding(
 /// the individual bindings declared by `pattern`. For object patterns this
 /// emits `LoadBinding(source) + GetProperty(key) + StoreBinding(target) + Pop`
 /// for each property. Array patterns use numeric index strings.
+#[allow(clippy::only_used_in_recursion)]
 fn lower_destructuring_to_ir1(
     pattern: &BindingPattern,
     source_bid: BindingId,

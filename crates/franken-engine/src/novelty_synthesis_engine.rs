@@ -991,7 +991,7 @@ fn generate_grammar_guided(kind: ProgramKind, seed: u64) -> String {
 /// Mutation-based: small perturbation of a base template.
 fn generate_mutation_based(kind: ProgramKind, seed: u64) -> String {
     let idx = seed % 50;
-    let op = if seed.is_multiple_of(3) {
+    let op = if seed % 3 == 0 {
         "+"
     } else if seed % 3 == 1 {
         "-"

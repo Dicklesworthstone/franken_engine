@@ -92,6 +92,9 @@ pub enum Value {
     Object(ObjectId),
     /// Function reference (function table index).
     Function(u32),
+    /// Closure reference (index into interpreter closure store). Closures
+    /// carry both a function_index and a captured scope chain snapshot.
+    Closure(u32),
     /// Internal iterator state handle used by dedicated iteration instructions.
     Iterator(u32),
 }
@@ -104,7 +107,7 @@ impl Value {
             Self::Bool(b) => *b,
             Self::Int(n) => *n != 0,
             Self::Str(s) => !s.is_empty(),
-            Self::Object(_) | Self::Function(_) | Self::Iterator(_) => true,
+            Self::Object(_) | Self::Function(_) | Self::Closure(_) | Self::Iterator(_) => true,
         }
     }
 
@@ -121,7 +124,7 @@ impl Value {
             Self::Int(_) => "number",
             Self::Str(_) => "string",
             Self::Object(_) => "object",
-            Self::Function(_) => "function",
+            Self::Function(_) | Self::Closure(_) => "function",
             Self::Iterator(_) => "iterator",
         }
     }
@@ -133,7 +136,7 @@ impl Value {
             Self::Bool(_) => "boolean",
             Self::Int(_) => "number",
             Self::Str(_) => "string",
-            Self::Function(_) => "function",
+            Self::Function(_) | Self::Closure(_) => "function",
             Self::Iterator(_) => "object",
         }
     }
@@ -149,6 +152,7 @@ impl fmt::Display for Value {
             Self::Str(s) => write!(f, "{s}"),
             Self::Object(id) => write!(f, "[object#{}]", id.0),
             Self::Function(idx) => write!(f, "[function#{idx}]"),
+            Self::Closure(idx) => write!(f, "[closure#{idx}]"),
             Self::Iterator(idx) => write!(f, "[iterator#{idx}]"),
         }
     }
@@ -409,6 +413,10 @@ struct CallFrame {
     saved_finally_mode_depth: usize,
     /// Scope chain depth before entering the callee, restored on return.
     saved_scope_depth: usize,
+    /// Full scope chain snapshot saved before a closure call replaces
+    /// the chain with the captured environment. `None` for plain function
+    /// calls where the chain is only extended, not replaced.
+    saved_scope_chain: Option<Vec<ScopeFrame>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -815,9 +823,14 @@ impl InterpreterCore {
             self.finally_modes.truncate(frame.saved_finally_mode_depth);
             self.pending_exception = frame.saved_pending_exception;
             self.pending_return = frame.saved_pending_return;
-            // Restore scope chain to caller's depth.
-            while self.scope_chain.depth() > frame.saved_scope_depth {
-                self.scope_chain.pop();
+            // Restore scope chain. For closure calls, restore the
+            // full saved chain; for plain calls, just pop to depth.
+            if let Some(saved) = frame.saved_scope_chain {
+                self.scope_chain.frames = saved;
+            } else {
+                while self.scope_chain.depth() > frame.saved_scope_depth {
+                    self.scope_chain.pop();
+                }
             }
             // ES2020 §9.2.2 step 13: if this is a constructor call and the
             // return value is not an object, use the allocated `this` object
@@ -1098,8 +1111,30 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::Call { callee, args, dst } => {
                     let callee_val = self.read_reg(callee)?;
-                    match callee_val {
-                        Value::Function(func_idx) => {
+
+                    // Resolve function index and optional captured environment.
+                    let (func_idx, captured_env) = match &callee_val {
+                        Value::Function(idx) => (*idx, None),
+                        Value::Closure(closure_id) => {
+                            let closure =
+                                self.closures.get(*closure_id as usize).ok_or_else(|| {
+                                    InterpreterError::TypeError {
+                                        expected: "valid closure".to_string(),
+                                        got: format!("closure#{closure_id} not found"),
+                                    }
+                                })?;
+                            (closure.function_index, Some(closure.captured_env.clone()))
+                        }
+                        _ => {
+                            return Err(InterpreterError::TypeError {
+                                expected: "function".to_string(),
+                                got: callee_val.type_name().to_string(),
+                            });
+                        }
+                    };
+
+                    match &callee_val {
+                        Value::Function(_) | Value::Closure(_) => {
                             let func = module.function_table.get(func_idx as usize).ok_or(
                                 InterpreterError::FunctionNotFound {
                                     index: func_idx,
@@ -1125,8 +1160,16 @@ impl InterpreterCore {
                                 arg_vals.push(self.read_reg(reg)?);
                             }
 
-                            // Push frame.
+                            // Push frame. For closure calls, save the
+                            // entire caller scope chain so it can be
+                            // restored on return (the closure replaces
+                            // the chain with its captured environment).
                             let scope_depth = self.scope_chain.depth();
+                            let saved_chain = if captured_env.is_some() {
+                                Some(self.scope_chain.snapshot())
+                            } else {
+                                None
+                            };
                             self.call_stack.push(CallFrame {
                                 return_ip: self.ip + 1,
                                 return_reg: dst,
@@ -1140,14 +1183,12 @@ impl InterpreterCore {
                                     .len(),
                                 saved_finally_mode_depth: self.finally_modes.len(),
                                 saved_scope_depth: scope_depth,
+                                saved_scope_chain: saved_chain,
                             });
 
                             // If calling a closure, restore its captured environment.
-                            if let Some(closure) =
-                                self.closures.iter().find(|c| c.function_index == func_idx)
-                            {
-                                let captured = closure.captured_env.clone();
-                                self.scope_chain.frames = captured;
+                            if let Some(env) = captured_env {
+                                self.scope_chain.frames = env;
                             }
 
                             // Push a fresh scope for the callee's locals.
@@ -1433,8 +1474,30 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::Construct { callee, args, dst } => {
                     let callee_val = self.read_reg(callee)?;
-                    match callee_val {
-                        Value::Function(func_idx) => {
+
+                    // Resolve function index and optional captured environment.
+                    let (func_idx, captured_env) = match &callee_val {
+                        Value::Function(idx) => (*idx, None),
+                        Value::Closure(closure_id) => {
+                            let closure =
+                                self.closures.get(*closure_id as usize).ok_or_else(|| {
+                                    InterpreterError::TypeError {
+                                        expected: "valid closure".to_string(),
+                                        got: format!("closure#{closure_id} not found"),
+                                    }
+                                })?;
+                            (closure.function_index, Some(closure.captured_env.clone()))
+                        }
+                        _ => {
+                            return Err(InterpreterError::TypeError {
+                                expected: "function".to_string(),
+                                got: callee_val.type_name().to_string(),
+                            });
+                        }
+                    };
+
+                    match &callee_val {
+                        Value::Function(_) | Value::Closure(_) => {
                             let func = module.function_table.get(func_idx as usize).ok_or(
                                 InterpreterError::FunctionNotFound {
                                     index: func_idx,
@@ -1470,6 +1533,11 @@ impl InterpreterCore {
 
                             // Push constructor frame with `construct_this`.
                             let scope_depth = self.scope_chain.depth();
+                            let saved_chain = if captured_env.is_some() {
+                                Some(self.scope_chain.snapshot())
+                            } else {
+                                None
+                            };
                             self.call_stack.push(CallFrame {
                                 return_ip: self.ip + 1,
                                 return_reg: dst,
@@ -1483,14 +1551,12 @@ impl InterpreterCore {
                                     .len(),
                                 saved_finally_mode_depth: self.finally_modes.len(),
                                 saved_scope_depth: scope_depth,
+                                saved_scope_chain: saved_chain,
                             });
 
                             // If calling a closure, restore its captured environment.
-                            if let Some(closure) =
-                                self.closures.iter().find(|c| c.function_index == func_idx)
-                            {
-                                let captured = closure.captured_env.clone();
-                                self.scope_chain.frames = captured;
+                            if let Some(env) = captured_env {
+                                self.scope_chain.frames = env;
                             }
                             self.scope_chain.push();
 
@@ -1541,7 +1607,7 @@ impl InterpreterCore {
                             Value::Object(_) | Value::Iterator(_) => {
                                 result.push_str("[object Object]");
                             }
-                            Value::Function(_) => result.push_str("function"),
+                            Value::Function(_) | Value::Closure(_) => result.push_str("function"),
                         }
                     }
                     self.write_reg(dst, Value::Str(result))?;
@@ -1674,14 +1740,15 @@ impl InterpreterCore {
                     // the scope chain snapshot already contains those
                     // bindings, so we just clear them.
                     let captured_env = self.scope_chain.snapshot();
+                    let closure_id = self.closures.len() as u32;
                     self.closures.push(ClosureValue {
                         function_index,
                         captured_env,
                     });
                     self.pending_captures.clear();
-                    // Store the function index as the Value so Call can
-                    // look up the closure by function_index.
-                    self.write_reg(dst, Value::Function(function_index))?;
+                    // Store the closure ID (not function_index) so Call can
+                    // look up the correct closure instance.
+                    self.write_reg(dst, Value::Closure(closure_id))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::PushCapture { name_pool_index } => {
@@ -1787,7 +1854,7 @@ impl InterpreterCore {
             (Value::Str(x), other) => {
                 let other_str = match other {
                     Value::Object(_) | Value::Iterator(_) => "[object Object]".to_string(),
-                    Value::Function(_) => "function".to_string(),
+                    Value::Function(_) | Value::Closure(_) => "function".to_string(),
                     _ => other.to_string(),
                 };
                 Ok(Value::Str(format!("{x}{other_str}")))
@@ -1795,7 +1862,7 @@ impl InterpreterCore {
             (other, Value::Str(y)) => {
                 let other_str = match other {
                     Value::Object(_) | Value::Iterator(_) => "[object Object]".to_string(),
-                    Value::Function(_) => "function".to_string(),
+                    Value::Function(_) | Value::Closure(_) => "function".to_string(),
                     _ => other.to_string(),
                 };
                 Ok(Value::Str(format!("{other_str}{y}")))
@@ -2251,7 +2318,11 @@ impl InterpreterCore {
                     trimmed.parse::<i64>().ok()
                 }
             }
-            Value::Undefined | Value::Object(_) | Value::Function(_) | Value::Iterator(_) => None,
+            Value::Undefined
+            | Value::Object(_)
+            | Value::Function(_)
+            | Value::Closure(_)
+            | Value::Iterator(_) => None,
         }
     }
 
@@ -2264,6 +2335,7 @@ impl InterpreterCore {
             | (Value::Str(_), Value::Str(_))
             | (Value::Object(_), Value::Object(_))
             | (Value::Function(_), Value::Function(_))
+            | (Value::Closure(_), Value::Closure(_))
             | (Value::Iterator(_), Value::Iterator(_)) => a == b,
             (Value::Null, Value::Undefined) | (Value::Undefined, Value::Null) => true,
             // ES2020 §7.2.14: null/undefined are only == to each other, never
@@ -2313,7 +2385,7 @@ impl InterpreterCore {
 
     /// Allocate a new object with an explicit prototype link.
     fn alloc_object_with_prototype(&mut self, prototype: Option<ObjectId>) -> ObjectId {
-        let id = ObjectId(u32::try_from(self.heap.len()).expect("capacity exceeded u32::MAX"));
+        let id = ObjectId(u32::try_from(self.heap.len()).unwrap_or(u32::MAX));
         let mut object = HeapObject::new();
         object.prototype = prototype;
         self.heap.push(object);
@@ -2326,7 +2398,7 @@ impl InterpreterCore {
     }
 
     fn alloc_iterator(&mut self, iterator: RuntimeIteratorState) -> u32 {
-        let handle = u32::try_from(self.iterators.len()).expect("capacity exceeded u32::MAX");
+        let handle = u32::try_from(self.iterators.len()).unwrap_or(u32::MAX);
         self.iterators.push(iterator);
         handle
     }

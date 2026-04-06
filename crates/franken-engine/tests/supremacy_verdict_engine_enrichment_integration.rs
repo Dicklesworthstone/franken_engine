@@ -323,7 +323,7 @@ fn enrich_observability_mode_multiple_required_all_present() {
     ];
     let mut ms = Vec::new();
     for i in 0..30u64 {
-        let mode = if i.is_multiple_of(2) {
+        let mode = if i % 2 == 0 {
             ObservabilityMode::BudgetedCapture
         } else {
             ObservabilityMode::ExactShadow

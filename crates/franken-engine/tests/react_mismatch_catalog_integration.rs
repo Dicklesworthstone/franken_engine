@@ -60,7 +60,7 @@ fn entry_full(
 fn full_domain_catalog() -> MismatchCatalog {
     let mut cat = MismatchCatalog::new(epoch(1));
     for (i, &domain) in ALL_DOMAINS.iter().enumerate() {
-        let target = if i.is_multiple_of(2) {
+        let target = if i % 2 == 0 {
             ComparisonTarget::NodeJs
         } else {
             ComparisonTarget::Bun
@@ -704,7 +704,7 @@ fn gate_fail_aggregate_score() {
 fn gate_fail_stale_entries() {
     let mut cat = MismatchCatalog::new(epoch(10));
     for (i, &domain) in ALL_DOMAINS.iter().enumerate() {
-        let target = if i.is_multiple_of(2) {
+        let target = if i % 2 == 0 {
             ComparisonTarget::NodeJs
         } else {
             ComparisonTarget::Bun
@@ -1246,7 +1246,7 @@ fn full_workflow_add_evaluate_remediate_pass() {
 
     // Add entries for all domains.
     for (i, &domain) in ALL_DOMAINS.iter().enumerate() {
-        let target = if i.is_multiple_of(2) {
+        let target = if i % 2 == 0 {
             ComparisonTarget::NodeJs
         } else {
             ComparisonTarget::Bun

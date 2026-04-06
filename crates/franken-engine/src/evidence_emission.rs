@@ -189,7 +189,7 @@ pub struct CanonicalEvidenceEntry {
 impl CanonicalEvidenceEntry {
     /// Verify the artifact hash matches the ledger entry content.
     pub fn verify_artifact_integrity(&self) -> bool {
-        let mut payload = serde_json::to_vec(&self.ledger_entry).unwrap_or_default();
+        let mut payload = serde_json::to_vec(&self.ledger_entry).expect("serialization failed");
         if let Ok(meta_bytes) = serde_json::to_vec(&self.metadata) {
             payload.extend_from_slice(&meta_bytes);
         }
@@ -361,7 +361,7 @@ impl CanonicalEvidenceEmitter {
 
         // Compute artifact hash covering both ledger entry AND metadata so
         // neither can be tampered with independently.
-        let mut hash_input = serde_json::to_vec(&ledger_entry).unwrap_or_default();
+        let mut hash_input = serde_json::to_vec(&ledger_entry).expect("serialization failed");
         if let Ok(meta_bytes) = serde_json::to_vec(&request.metadata) {
             hash_input.extend_from_slice(&meta_bytes);
         }

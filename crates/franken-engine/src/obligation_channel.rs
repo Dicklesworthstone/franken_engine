@@ -1315,7 +1315,7 @@ mod tests {
         for i in 0u64..30 {
             chan.set_tick(i);
             let id = chan.send("t").unwrap();
-            if i.is_multiple_of(3) {
+            if i % 3 == 0 {
                 chan.abort(id, &AbortReason::OperatorAbort, "h").unwrap();
             } else {
                 chan.commit(id, "h").unwrap();

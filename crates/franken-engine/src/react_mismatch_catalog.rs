@@ -1470,7 +1470,7 @@ mod tests {
         let mut cat = MismatchCatalog::new(test_epoch(1));
         // Add entries for all domains and required targets.
         for (i, &domain) in ALL_DOMAINS.iter().enumerate() {
-            let target = if i.is_multiple_of(2) {
+            let target = if i % 2 == 0 {
                 ComparisonTarget::NodeJs
             } else {
                 ComparisonTarget::Bun
@@ -1507,7 +1507,7 @@ mod tests {
     fn test_gate_verdict_fail_critical() {
         let mut cat = MismatchCatalog::new(test_epoch(1));
         for (i, &domain) in ALL_DOMAINS.iter().enumerate() {
-            let target = if i.is_multiple_of(2) {
+            let target = if i % 2 == 0 {
                 ComparisonTarget::NodeJs
             } else {
                 ComparisonTarget::Bun
@@ -1535,7 +1535,7 @@ mod tests {
     fn test_gate_verdict_fail_aggregate_score() {
         let mut cat = MismatchCatalog::new(test_epoch(1));
         for (i, &domain) in ALL_DOMAINS.iter().enumerate() {
-            let target = if i.is_multiple_of(2) {
+            let target = if i % 2 == 0 {
                 ComparisonTarget::NodeJs
             } else {
                 ComparisonTarget::Bun
@@ -1875,7 +1875,7 @@ mod tests {
     fn test_stale_entries_fail_gate() {
         let mut cat = MismatchCatalog::new(test_epoch(10));
         for (i, &domain) in ALL_DOMAINS.iter().enumerate() {
-            let target = if i.is_multiple_of(2) {
+            let target = if i % 2 == 0 {
                 ComparisonTarget::NodeJs
             } else {
                 ComparisonTarget::Bun

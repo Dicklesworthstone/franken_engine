@@ -1251,7 +1251,7 @@ pub fn compile_regexp(
         pattern,
         nfa_state_count,
         tier.as_str(),
-        serde_json::to_string(&flags).unwrap_or_default(),
+        serde_json::to_string(&flags).expect("serialization failed"),
         epoch.as_u64()
     );
     let automata_hash = hex_encode(ContentHash::compute(automata_hash_input.as_bytes()).as_bytes());
@@ -1893,7 +1893,7 @@ fn run_single_regexp_specimen(specimen: &RegExpSpecimen) -> RegExpSpecimenEviden
         "evidence:{}:{}:{}",
         specimen.specimen_id,
         actual,
-        serde_json::to_string(&verdict).unwrap_or_default(),
+        serde_json::to_string(&verdict).expect("serialization failed"),
     );
 
     RegExpSpecimenEvidence {

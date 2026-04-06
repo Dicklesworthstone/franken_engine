@@ -668,7 +668,7 @@ impl ClosureStore {
         creation_env: EnvironmentHandle,
     ) -> ClosureHandle {
         let handle =
-            ClosureHandle(u32::try_from(self.closures.len()).expect("capacity exceeded u32::MAX"));
+            ClosureHandle(u32::try_from(self.closures.len()).unwrap_or(u32::MAX));
         let max_capture_label = captures
             .iter()
             .map(|c| &c.label)

@@ -553,7 +553,7 @@ pub fn build_operator_safety_copilot_surface(
         .iter()
         .enumerate()
         .map(|(idx, candidate)| {
-            let rank = u32::try_from(idx + 1).expect("capacity exceeded u32::MAX");
+            let rank = u32::try_from(idx + 1).unwrap_or(u32::MAX);
             let rollback = build_rollback_command(
                 &input.trace_id,
                 &input.decision_id,
@@ -894,7 +894,7 @@ pub fn build_fleet_health_overview(
     });
 
     let active_incidents_count =
-        u32::try_from(incidents.len()).expect("capacity exceeded u32::MAX");
+        u32::try_from(incidents.len()).unwrap_or(u32::MAX);
 
     FleetHealthOverview {
         trust_level_distribution,
@@ -1168,7 +1168,7 @@ fn recommendation_by_rank(
     }
 
     let available =
-        u32::try_from(surface.alternatives.len() + 1).expect("capacity exceeded u32::MAX");
+        u32::try_from(surface.alternatives.len() + 1).unwrap_or(u32::MAX);
 
     let idx_u32 = requested_rank.saturating_sub(2);
     let idx = match usize::try_from(idx_u32) {

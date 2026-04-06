@@ -875,12 +875,12 @@ fn integer_exp_millionths(x_millionths: i64) -> i64 {
 
     let scaled = if k >= 0 {
         let shift = u32::try_from(k)
-            .expect("capacity exceeded u32::MAX")
+            .unwrap_or(u32::MAX)
             .min(60);
         sum.checked_shl(shift).unwrap_or(i128::MAX)
     } else {
         let shift = u32::try_from(-k)
-            .expect("capacity exceeded u32::MAX")
+            .unwrap_or(u32::MAX)
             .min(120);
         sum >> shift
     };
@@ -1786,7 +1786,7 @@ mod tests {
 
         // Alternate wildly between 0 and MILLION for high variance.
         for i in 0..30u64 {
-            let reward = if i.is_multiple_of(2) { 0 } else { MILLION };
+            let reward = if i % 2 == 0 { 0 } else { MILLION };
             let signal = RewardSignal {
                 arm_index: (i % 2) as usize,
                 reward_millionths: reward,

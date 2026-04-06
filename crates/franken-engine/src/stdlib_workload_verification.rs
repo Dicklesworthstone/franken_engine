@@ -726,8 +726,8 @@ pub fn suite_coverage_millionths(suite: &WorkloadSuite) -> u64 {
     let mut seen = std::collections::BTreeSet::new();
     for s in &suite.scenarios {
         seen.insert((
-            serde_json::to_string(&s.method).unwrap_or_default(),
-            serde_json::to_string(&s.callback_kind).unwrap_or_default(),
+            serde_json::to_string(&s.method).expect("serialization failed"),
+            serde_json::to_string(&s.callback_kind).expect("serialization failed"),
         ));
     }
 

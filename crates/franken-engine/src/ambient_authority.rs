@@ -2149,7 +2149,7 @@ mod tests {
                 line: i as usize + 1,
                 source_line: format!("line{i}"),
                 suggested_alternative: format!("alt{i}"),
-                exempted: i.is_multiple_of(2),
+                exempted: (i % 2 == 0),
             })
             .collect();
         let result = AuditResult {

@@ -12,9 +12,10 @@
 //! - **Adaptive Radix Trie (ART)** — safe, `Vec`-backed trie for
 //!   prefix-based package-name lookups (scoped packages, subpath
 //!   patterns). Supports longest-prefix-match and prefix enumeration.
-//! - **Minimal Perfect Hash Index (MPHF)** — CHD-style two-level
-//!   displacement hash for O(1) exact-match on known export keys.
-//!   Falls back gracefully for keys outside the build-time keyset.
+//! - **Hash Index** — open-addressed hash table with linear probing
+//!   for O(1) amortized exact-match on known export keys.
+//!   Falls back gracefully (returns `None`) for keys outside the
+//!   build-time keyset.
 //! - **Subpath Index** — combines ART prefix search with MPHF exact
 //!   match to resolve `package/subpath` specifiers in one lookup.
 //!
@@ -545,7 +546,7 @@ impl<V: Clone + Eq + Serialize> AdaptiveRadixTrie<V> {
 }
 
 // ---------------------------------------------------------------------------
-// MphfIndex — CHD-style minimal perfect hash for exact-match lookups
+// MphfIndex — open-addressed hash table for exact-match lookups
 // ---------------------------------------------------------------------------
 
 /// Open-addressed hash table with linear probing and key verification.

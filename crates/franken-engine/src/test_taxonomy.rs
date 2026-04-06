@@ -2152,7 +2152,7 @@ mod tests {
         let mut records = Vec::new();
         for (i, class) in TestClass::ALL.iter().enumerate() {
             for (j, surface) in TestSurface::ALL.iter().enumerate() {
-                let outcome = if (i + j).is_multiple_of(3) {
+                let outcome = if (i + j) % 3 == 0 {
                     TestOutcome::Fail
                 } else {
                     TestOutcome::Pass
@@ -2160,7 +2160,7 @@ mod tests {
                 let mut r = make_record(&format!("cx-{i}-{j}"), outcome);
                 r.test_class = *class;
                 r.surface = *surface;
-                r.determinism_satisfied = i.is_multiple_of(2);
+                r.determinism_satisfied = (i % 2 == 0);
                 records.push(r);
             }
         }
@@ -2243,7 +2243,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, f)| {
-                let outcome = if i.is_multiple_of(10) {
+                let outcome = if i % 10 == 0 {
                     TestOutcome::Fail
                 } else {
                     TestOutcome::Pass

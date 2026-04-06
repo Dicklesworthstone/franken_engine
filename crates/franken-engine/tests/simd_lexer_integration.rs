@@ -678,10 +678,10 @@ fn stress_large_mixed_input_differential_parity() {
     let mut input = String::new();
     for i in 0u64..500 {
         input.push_str(&format!("var x{} = {}; ", i, i));
-        if i.is_multiple_of(5) {
+        if i % 5 == 0 {
             input.push_str(&format!("\"string{}\" ", i));
         }
-        if i.is_multiple_of(7) {
+        if i % 7 == 0 {
             input.push_str("== != && || ");
         }
     }

@@ -835,7 +835,7 @@ pub fn run_fast_lane_evidence() -> FastLaneEvidenceManifest {
         certificates.push(cert);
     }
 
-    let hash_data = serde_json::to_vec(&certificates).unwrap_or_default();
+    let hash_data = serde_json::to_vec(&certificates).expect("serialize certificates");
 
     FastLaneEvidenceManifest {
         schema_version: TYPED_ARRAY_SCHEMA_VERSION.to_string(),

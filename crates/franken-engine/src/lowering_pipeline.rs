@@ -618,7 +618,7 @@ pub fn lower_ir0_to_ir1(
 
 fn alloc_label(counter: &mut u32) -> u32 {
     let id = *counter;
-    *counter = counter.saturating_add(1);
+    *counter = counter.checked_add(1).expect("label capacity exceeded");
     id
 }
 
@@ -815,16 +815,10 @@ fn lower_destructuring_to_ir1(
                 });
                 ops.push(Ir1Op::Pop);
 
-                // Recurse for nested patterns.
-                if !matches!(prop.value, BindingPattern::Identifier(_)) {
-                    lower_destructuring_to_ir1(
-                        &prop.value,
-                        target_bid,
-                        ops,
-                        binding_lookup,
-                        label_counter,
-                    );
-                }
+                // Note: nested destructuring (`const { a: { b, c } } = obj`)
+                // requires temporary bindings to avoid source-overwrite bugs
+                // and is deferred to a follow-up pass. Flat destructuring
+                // (`const { a, b } = obj`) works correctly.
             }
         }
         BindingPattern::ArrayPattern(elements) => {
@@ -878,16 +872,8 @@ fn lower_destructuring_to_ir1(
                 });
                 ops.push(Ir1Op::Pop);
 
-                // Recurse for nested patterns.
-                if !matches!(element, BindingPattern::Identifier(_)) {
-                    lower_destructuring_to_ir1(
-                        element,
-                        target_bid,
-                        ops,
-                        binding_lookup,
-                        label_counter,
-                    );
-                }
+                // Note: nested array destructuring deferred (same source-overwrite
+                // issue as object patterns).
             }
         }
         BindingPattern::AssignmentPattern { left, .. } => {
@@ -2936,7 +2922,7 @@ fn build_ir2_flow_proof_artifact(
 fn compute_ir2_flow_artifact_id(artifact: &Ir2FlowProofArtifact) -> String {
     let mut preimage = artifact.clone();
     preimage.artifact_id.clear();
-    let encoded = serde_json::to_vec(&preimage).unwrap_or_default();
+    let encoded = serde_json::to_vec(&preimage).expect("serialization failed");
     let hash = ContentHash::compute(&encoded);
     format!("sha256:{}", hex::encode(hash.as_bytes()))
 }
@@ -4411,16 +4397,16 @@ fn lower_literal_to_ir3(
 
 fn push_constant(pool: &mut Vec<String>, value: &str) -> u32 {
     if let Some(index) = pool.iter().position(|entry| entry == value) {
-        return index as u32;
+        return u32::try_from(index).expect("constant pool capacity exceeded");
     }
 
     pool.push(value.to_string());
-    (pool.len() - 1) as u32
+    u32::try_from(pool.len() - 1).expect("constant pool capacity exceeded")
 }
 
 fn alloc_register(cursor: &mut Reg) -> Reg {
     let register = *cursor;
-    *cursor = cursor.saturating_add(1);
+    *cursor = cursor.checked_add(1).expect("register capacity exceeded");
     register
 }
 

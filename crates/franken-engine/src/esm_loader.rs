@@ -422,7 +422,7 @@ impl ModuleGraph {
                 // Already linked; return ancestor index.
                 return Ok(self.modules[specifier]
                     .dfs_ancestor_index
-                    .expect("capacity exceeded u32::MAX"));
+                    .unwrap_or(u32::MAX));
             }
             ModuleStatus::Linking => {
                 // Cycle detected!
@@ -837,11 +837,11 @@ impl ModuleGraph {
                     let dep_ll = lowlink_map
                         .get(dep.as_str())
                         .copied()
-                        .expect("capacity exceeded u32::MAX");
+                        .unwrap_or(u32::MAX);
                     let cur_ll = lowlink_map
                         .get(specifier)
                         .copied()
-                        .expect("capacity exceeded u32::MAX");
+                        .unwrap_or(u32::MAX);
                     if dep_ll < cur_ll {
                         lowlink_map.insert(specifier.to_string(), dep_ll);
                     }
@@ -849,11 +849,11 @@ impl ModuleGraph {
                     let dep_idx = index_map
                         .get(dep.as_str())
                         .copied()
-                        .expect("capacity exceeded u32::MAX");
+                        .unwrap_or(u32::MAX);
                     let cur_ll = lowlink_map
                         .get(specifier)
                         .copied()
-                        .expect("capacity exceeded u32::MAX");
+                        .unwrap_or(u32::MAX);
                     if dep_idx < cur_ll {
                         lowlink_map.insert(specifier.to_string(), dep_idx);
                     }

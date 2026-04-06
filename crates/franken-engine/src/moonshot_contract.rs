@@ -2247,7 +2247,7 @@ mod tests {
                 required_at_stage: MoonshotStage::all()[i % 4],
                 artifact_type: ArtifactType::Proof,
                 description: format!("stress obligation {i}"),
-                blocking: i.is_multiple_of(2),
+                blocking: (i % 2 == 0),
             });
         }
         c.validate().unwrap();

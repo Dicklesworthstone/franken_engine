@@ -1556,7 +1556,7 @@ mod tests {
         let fields: Vec<FieldDescriptor> = (0..field_count)
             .map(|i| FieldDescriptor {
                 name: format!("field_{i}"),
-                field_type: if i.is_multiple_of(2) {
+                field_type: if i % 2 == 0 {
                     ScalarFieldType::Number
                 } else {
                     ScalarFieldType::StringRef

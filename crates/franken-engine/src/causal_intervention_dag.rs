@@ -1120,7 +1120,7 @@ pub fn run_causal_dag_evidence() -> CausalDagEvidenceManifest {
     let id_count = certificates.iter().filter(|c| c.is_identifiable).count() as u32;
     let unid_count = certificates.iter().filter(|c| !c.is_identifiable).count() as u32;
 
-    let hash_data = serde_json::to_vec(&certificates).unwrap_or_default();
+    let hash_data = serde_json::to_vec(&certificates).expect("serialization failed");
 
     CausalDagEvidenceManifest {
         schema_version: CAUSAL_DAG_SCHEMA_VERSION.to_string(),

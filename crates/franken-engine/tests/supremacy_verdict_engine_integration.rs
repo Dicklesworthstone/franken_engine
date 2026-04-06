@@ -1050,7 +1050,7 @@ fn test_mixed_observability_modes() {
     let config = relaxed_config();
     let mut ms = Vec::new();
     for i in 0..30u64 {
-        let mode = if i.is_multiple_of(2) {
+        let mode = if i % 2 == 0 {
             ObservabilityMode::BudgetedCapture
         } else {
             ObservabilityMode::ExactShadow

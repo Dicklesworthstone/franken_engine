@@ -1060,7 +1060,7 @@ pub fn euler_characteristic(complex: &FrontierComplex) -> i64 {
     let mut chi: i64 = 0;
     for s in &complex.simplices {
         let d = s.dimension.as_u32();
-        if d.is_multiple_of(2) {
+        if d % 2 == 0 {
             chi += 1;
         } else {
             chi -= 1;

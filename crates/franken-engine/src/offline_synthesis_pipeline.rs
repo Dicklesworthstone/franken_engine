@@ -566,7 +566,7 @@ impl OfflineSynthesisPipeline {
             }
         }
 
-        let input_hash = deterministic_hash(&serde_json::to_string(spec).unwrap_or_default());
+        let input_hash = deterministic_hash(&serde_json::to_string(spec).expect("serialization failed"));
         let output_hash = deterministic_hash(&format!("parsed_{}", spec.spec_id));
 
         Ok(ParsedConstraints {

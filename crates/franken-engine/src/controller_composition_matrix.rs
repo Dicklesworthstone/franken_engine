@@ -456,7 +456,7 @@ fn metadata_gaps_for_controller(contract: &ControllerContract) -> Vec<Controller
 }
 
 fn registry_id_from_contracts(controllers: &[ControllerContract]) -> String {
-    let json = serde_json::to_vec(controllers).unwrap_or_default();
+    let json = serde_json::to_vec(controllers).expect("serialization failed");
     format!("registry-{}", to_hex(&hash_bytes(&json)[..12]))
 }
 

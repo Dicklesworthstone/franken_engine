@@ -1638,7 +1638,7 @@ fn enrichment_cache_serde_multiple_entries() {
         let key = AnalysisCacheKey {
             effect_graph_hash: ContentHash::compute(&[i]),
             manifest_hash: ContentHash::compute(&[i + 10]),
-            path_sensitive: i.is_multiple_of(2),
+            path_sensitive: (i % 2 == 0),
         };
         cache.insert(key, report.clone());
     }

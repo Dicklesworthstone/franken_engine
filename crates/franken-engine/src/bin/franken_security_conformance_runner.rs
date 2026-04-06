@@ -129,7 +129,7 @@ fn environment_fingerprint() -> String {
         "rust_toolchain",
         std::env::var("RUSTUP_TOOLCHAIN").unwrap_or_else(|_| "unknown".to_string()),
     );
-    digest_hex(serde_json::to_string(&kv).unwrap_or_default().as_bytes())
+    digest_hex(serde_json::to_string(&kv).expect("serialization failed").as_bytes())
 }
 
 #[derive(Debug, Serialize)]

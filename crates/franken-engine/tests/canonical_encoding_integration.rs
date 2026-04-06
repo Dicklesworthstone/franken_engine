@@ -1465,7 +1465,7 @@ fn sequential_accepts_and_rejects_interleaved() {
 
     // Verify alternating pattern.
     for (idx, event) in events.iter().enumerate() {
-        if idx.is_multiple_of(2) {
+        if idx % 2 == 0 {
             assert!(matches!(event.event_type, GuardEventType::Accepted));
         } else {
             assert!(matches!(event.event_type, GuardEventType::Rejected { .. }));

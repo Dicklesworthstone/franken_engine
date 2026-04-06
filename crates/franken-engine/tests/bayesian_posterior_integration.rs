@@ -947,7 +947,7 @@ fn updater_many_sequential_updates_no_overflow() {
 fn updater_alternating_evidence_stays_valid() {
     let mut updater = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-alt");
     for i in 0u64..50 {
-        if i.is_multiple_of(2) {
+        if i % 2 == 0 {
             updater.update(&benign_evidence());
         } else {
             updater.update(&malicious_evidence());

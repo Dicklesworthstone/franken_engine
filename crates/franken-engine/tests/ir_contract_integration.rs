@@ -2239,7 +2239,7 @@ fn ir4_many_hostcall_decisions() {
         ir4.hostcall_decisions.push(HostcallDecisionRecord {
             seq: i,
             capability: CapabilityTag(format!("cap:{i}")),
-            allowed: i.is_multiple_of(2),
+            allowed: (i % 2 == 0),
             instruction_index: i as u32,
         });
     }

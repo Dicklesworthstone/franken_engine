@@ -352,7 +352,7 @@ fn default_centroids() -> Vec<RegimeCentroid> {
                 let mut v = vec![300_000; dim];
                 // Degraded: low overall with variance
                 for (i, c) in v.iter_mut().enumerate() {
-                    if i.is_multiple_of(3) {
+                    if i % 3 == 0 {
                         *c = 100_000;
                     }
                 }
@@ -1128,8 +1128,8 @@ fn run_single_specimen(specimen: &SignatureSpecimen) -> SignatureSpecimenEvidenc
         "{}:{}:{}:{}",
         specimen.specimen_id,
         verdict as u8,
-        serde_json::to_string(&signature_valid).unwrap_or_default(),
-        serde_json::to_string(&classified_regime).unwrap_or_default(),
+        serde_json::to_string(&signature_valid).expect("serialization failed"),
+        serde_json::to_string(&classified_regime).expect("serialization failed"),
     );
 
     SignatureSpecimenEvidence {

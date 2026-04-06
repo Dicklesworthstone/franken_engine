@@ -2484,7 +2484,7 @@ fn e2e_large_trace() {
         .map(|i| {
             make_decision(
                 i,
-                if i.is_multiple_of(3) {
+                if i % 3 == 0 {
                     "wasm"
                 } else {
                     "native"

@@ -248,6 +248,20 @@ Pass an explicit waiver bundle with
 `RGC_ZERO_PLACEHOLDER_GATE_WAIVERS=/abs/path/waivers.json` when a time-bounded
 waiver is intentionally part of the evaluation.
 
+## Parser Oracle Missing-Artifact Contract
+
+`bd-2muur.7.1` and `bd-2muur.7.2` replace anonymous parser-oracle placeholder
+backfills with typed receipts and explicit degraded-mode evidence. The contract
+document lives in
+[`docs/PARSER_ORACLE_MISSING_ARTIFACT_CONTRACT_V1.md`](./docs/PARSER_ORACLE_MISSING_ARTIFACT_CONTRACT_V1.md),
+and the gate behavior is documented in
+[`docs/PARSER_ORACLE_GATE.md`](./docs/PARSER_ORACLE_GATE.md).
+
+- `./scripts/run_parser_oracle_missing_artifact_contract.sh ci`
+- `./scripts/e2e/parser_oracle_missing_artifact_contract_replay.sh ci`
+- `./scripts/run_parser_oracle_missing_artifact_writer.sh ci`
+- `./scripts/e2e/parser_oracle_missing_artifact_writer_replay.sh ci`
+
 ## Execution Profile Contract Migration
 
 Operator-facing execution labels now use the honest profile contract:

@@ -376,14 +376,14 @@ pub fn build_merkle_proof(leaves: &[ContentHash], index: usize) -> Vec<(ContentH
     let mut idx = index;
 
     while current_level.len() > 1 {
-        let sibling_idx = if idx % 2 == 0 {
+        let sibling_idx = if idx.is_multiple_of(2) {
             idx + 1
         } else {
             idx - 1
         };
         if sibling_idx < current_level.len() {
             // true = sibling is on the right
-            proof.push((current_level[sibling_idx], (idx % 2 == 0)));
+            proof.push((current_level[sibling_idx], idx.is_multiple_of(2)));
         }
 
         let mut next_level = Vec::with_capacity(current_level.len().div_ceil(2));

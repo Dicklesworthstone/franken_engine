@@ -497,7 +497,7 @@ impl GovernanceAuditLedger {
         };
 
         self.entries.push(entry.clone());
-        if self.entries.len() % self.config.checkpoint_interval == 0 {
+        if self.entries.len().is_multiple_of(self.config.checkpoint_interval) {
             let checkpoint = match self.create_checkpoint(entry.timestamp_ns) {
                 Ok(checkpoint) => checkpoint,
                 Err(err) => {

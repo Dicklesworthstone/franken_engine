@@ -460,7 +460,7 @@ impl DecisionMarkerStream {
         });
 
         // Check if we should emit a checkpoint.
-        if self.checkpoint_interval > 0 && (marker_id % self.checkpoint_interval == 0) {
+        if self.checkpoint_interval > 0 && marker_id.is_multiple_of(self.checkpoint_interval) {
             self.emit_checkpoint(marker_id);
         }
 

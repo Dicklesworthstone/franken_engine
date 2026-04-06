@@ -613,7 +613,7 @@ impl RegretBoundedRouter {
 
         // Detect regime shift periodically.
         let round = self.exp3.rounds;
-        if round > 0 && (round % self.arms.len( == 0) as u64) {
+        if round > 0 && round.is_multiple_of(self.arms.len() as u64) {
             self.detect_regime_shift();
         }
 

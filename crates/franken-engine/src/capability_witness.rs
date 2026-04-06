@@ -3230,7 +3230,7 @@ impl WitnessPublicationPipeline {
         let tree_head = self.create_tree_head(timestamp_ns)?;
         let consistency_chain = self.build_consistency_chain(&tree_head)?;
 
-        if (self.log_entries.len() as u64) % self.config.checkpoint_interval == 0 {
+        if (self.log_entries.len() as u64).is_multiple_of(self.config.checkpoint_interval) {
             self.checkpoints.push(tree_head.clone());
         }
 

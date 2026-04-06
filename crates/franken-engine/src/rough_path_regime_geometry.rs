@@ -633,7 +633,7 @@ impl RegimeGeometryOrchestrator {
         }
 
         // Refresh baseline periodically on pass.
-        if decision.verdict == GateVerdict::Pass && (self.step_count % 10 == 0) {
+        if decision.verdict == GateVerdict::Pass && self.step_count.is_multiple_of(10) {
             self.baseline_snapshot = Some(current_snapshot);
         }
 

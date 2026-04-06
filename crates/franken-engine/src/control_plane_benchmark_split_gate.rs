@@ -2869,6 +2869,7 @@ mod tests {
         original.p99_ns = 999;
         assert_eq!(original.p99_ns, 999);
         assert_eq!(cloned.p99_ns, 300);
+        let _ = original;
     }
 
     #[test]
@@ -2886,6 +2887,7 @@ mod tests {
         original.throughput_ops_per_sec = 0;
         assert_eq!(original.throughput_ops_per_sec, 0);
         assert_eq!(cloned.throughput_ops_per_sec, 1000);
+        let _ = original;
     }
 
     #[test]

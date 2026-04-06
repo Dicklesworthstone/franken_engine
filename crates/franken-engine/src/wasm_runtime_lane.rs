@@ -1830,7 +1830,7 @@ mod tests {
             },
         ];
         let ids: Vec<u32> = ops.iter().map(|op| op.target_element()).collect();
-        assert_eq!(ids, vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(ids, [1, 2, 3, 4, 5, 6]);
     }
 
     #[test]

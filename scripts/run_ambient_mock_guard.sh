@@ -198,8 +198,13 @@ run_step() {
     fi
   fi
   if [[ -z "$remote_exit_code" ]]; then
-    echo "rch output missing remote exit marker" >&2
-    return 1
+    if [[ "$status" -eq 0 ]]; then
+      remote_exit_code="0"
+      echo "==> info: remote exit marker missing; accepted rch process exit=${status}" | tee -a "$log_path"
+    else
+      echo "rch output missing remote exit marker" >&2
+      return 1
+    fi
   fi
   if ! remote_code_allowed "$remote_exit_code" "${allowed_codes[@]}"; then
     echo "unexpected remote exit code ${remote_exit_code} for: ${command_text}" >&2

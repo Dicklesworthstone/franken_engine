@@ -2201,10 +2201,7 @@ fn enrichment_events_error_code_for_not_found() {
     let result = eng.attach_to_ir3(&LinkageId::new("missing"), &mut m, "t");
     // LinkageNotFound is returned via ok_or_else without emitting an event.
     assert!(result.is_err());
-    assert_eq!(
-        error_code(&result.unwrap_err()),
-        "LINKAGE_NOT_FOUND"
-    );
+    assert_eq!(error_code(&result.unwrap_err()), "LINKAGE_NOT_FOUND");
 }
 
 #[test]

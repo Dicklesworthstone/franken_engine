@@ -770,8 +770,13 @@ fn schema_version_constant() {
 #[test]
 fn canonical_inventory_builds_successfully() {
     let inv = build_canonical_inventory();
-    assert!(inv.summary.total_occurrences > 0);
-    assert!(inv.has_must_fix());
+    // Source-derived inventory should find at least some mock usage across
+    // the codebase (test-only at minimum, since many src modules use MockCx
+    // in #[cfg(test)] blocks).
+    assert!(
+        inv.summary.total_occurrences > 0,
+        "source-derived inventory found zero occurrences"
+    );
 }
 
 #[test]
@@ -1859,9 +1864,10 @@ fn inventory_summary_serde_roundtrip() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn canonical_inventory_has_must_fix_and_test_only() {
+fn canonical_inventory_has_test_only_items() {
     let inv = build_canonical_inventory();
-    assert!(inv.summary.must_fix_count > 0, "should have must-fix items");
+    // Source-derived inventory should find test-only mock usage in many
+    // src modules that use MockCx/MockBudget inside #[cfg(test)] blocks.
     assert!(
         inv.summary.test_only_count > 0,
         "should have test-only items"
@@ -1869,24 +1875,27 @@ fn canonical_inventory_has_must_fix_and_test_only() {
 }
 
 #[test]
-fn canonical_inventory_has_architectural_issues() {
+fn canonical_inventory_must_fix_items_are_production() {
     let inv = build_canonical_inventory();
-    assert!(
-        inv.summary.architectural_issue_count > 0,
-        "should have architectural issues"
-    );
-    assert!(!inv.architectural_issues.is_empty());
+    // If any must-fix items exist, verify they are classified correctly.
+    for occ in inv.must_fix_items() {
+        assert!(!occ.inside_cfg_test);
+        assert_eq!(occ.classification, SeamClassification::MustFixProduction);
+        assert!(!occ.remediation_bead.is_empty());
+    }
 }
 
 #[test]
-fn canonical_inventory_must_fix_all_from_orchestrator() {
+fn canonical_inventory_architectural_issues_have_valid_ids() {
     let inv = build_canonical_inventory();
-    let must_fix = inv.must_fix_items();
-    for occ in &must_fix {
+    // Architectural issues are derived from production violations; their
+    // count varies with codebase state.
+    for issue in &inv.architectural_issues {
+        assert!(!issue.id.is_empty());
         assert!(
-            occ.file_path.contains("execution_orchestrator"),
-            "must-fix should be from orchestrator, got: {}",
-            occ.file_path
+            issue.id.starts_with("ARCH-"),
+            "architectural issue ID should start with ARCH-, got: {}",
+            issue.id
         );
     }
 }

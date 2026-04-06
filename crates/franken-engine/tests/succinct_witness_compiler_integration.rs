@@ -1625,7 +1625,10 @@ fn canonical_schemas_names_stable_across_epochs() {
         // vary because compute_id incorporates the epoch.
         assert_eq!(a.name, b.name);
         assert_eq!(a.payload_families, b.payload_families);
-        assert_ne!(a.schema_id, b.schema_id, "IDs should differ when epoch differs");
+        assert_ne!(
+            a.schema_id, b.schema_id,
+            "IDs should differ when epoch differs"
+        );
     }
 }
 

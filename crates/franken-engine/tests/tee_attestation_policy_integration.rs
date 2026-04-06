@@ -3073,11 +3073,7 @@ fn tee_attestation_stale_quote_with_age_mismatch() {
     // Standard max is 300 s, high-impact max is 60 s; set age in between.
     quote.quote_age_secs = 120;
     policy
-        .evaluate_quote(
-            &quote,
-            DecisionImpact::Standard,
-            SecurityEpoch::from_raw(1),
-        )
+        .evaluate_quote(&quote, DecisionImpact::Standard, SecurityEpoch::from_raw(1))
         .expect("120 s should be within standard window");
     let err = policy
         .evaluate_quote(

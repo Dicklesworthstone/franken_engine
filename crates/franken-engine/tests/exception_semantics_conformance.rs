@@ -19,12 +19,14 @@ use frankenengine_engine::baseline_interpreter::{InterpreterError, QuickJsLane, 
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::{Ir0Module, Ir3FunctionDesc, Ir3Instruction, Ir3Module};
 use frankenengine_engine::lowering_pipeline::{
-    lower_ir0_to_ir1, lower_ir1_to_ir2, lower_ir2_to_ir3,
+    LoweringContext, lower_ir0_to_ir1, lower_ir0_to_ir3, lower_ir1_to_ir2, lower_ir2_to_ir3,
 };
 use frankenengine_engine::module_async_evaluation::{AsyncModuleEvaluator, AsyncModulePhase};
 use frankenengine_engine::module_live_binding::LiveBindingMap;
 use frankenengine_engine::object_model::JsValue;
+use frankenengine_engine::parser_api_stability::parse_script;
 use frankenengine_engine::promise_model::PromiseHandle;
+use frankenengine_engine::{JsEngine, QuickJsInspiredNativeEngine};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -48,6 +50,26 @@ fn lower_to_ir3(stmts: Vec<Statement>) -> Ir3Module {
     let ir1 = lower_ir0_to_ir1(&ir0).expect("IR0->IR1").module;
     let ir2 = lower_ir1_to_ir2(&ir1).expect("IR1->IR2").module;
     lower_ir2_to_ir3(&ir2).expect("IR2->IR3").module
+}
+
+fn lower_source_to_ir3(source: &str) -> Ir3Module {
+    let tree = parse_script(source).expect("source should parse");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "exception_conformance_source.js");
+    lower_ir0_to_ir3(
+        &ir0,
+        &LoweringContext::new(
+            "trace-exception-source",
+            "decision-exception-source",
+            "policy-exception-source",
+        ),
+    )
+    .expect("source should lower")
+    .ir3
+}
+
+fn eval_source(source: &str) -> String {
+    let mut engine = QuickJsInspiredNativeEngine;
+    engine.eval(source).expect("source should eval").value
 }
 
 fn test_module(instructions: Vec<Ir3Instruction>) -> Ir3Module {
@@ -499,6 +521,106 @@ fn conformance_lowered_try_catch_finally_return_in_finally_overrides_catch_retur
         .execute(&ir3, "conformance")
         .expect("finally return should override catch return");
     assert_eq!(result.value, Value::Int(2));
+}
+
+#[test]
+fn conformance_source_break_from_try_finally_executes_finally_before_loop_exit() {
+    let source = r#"
+        let finallyCount = 0;
+        while (true) {
+            try {
+                break;
+            } finally {
+                finallyCount = finallyCount + 1;
+            }
+        }
+        finallyCount;
+    "#;
+
+    let ir3 = lower_source_to_ir3(source);
+    assert!(
+        ir3.instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::BeginTry { .. })),
+        "break-through-finally source must lower to BeginTry"
+    );
+    assert!(
+        ir3.instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::EnterFinally)),
+        "break-through-finally source must lower to EnterFinally"
+    );
+
+    assert_eq!(eval_source(source), "1");
+}
+
+#[test]
+fn conformance_source_continue_from_try_finally_executes_finally_each_iteration() {
+    let source = r#"
+        let finallyCount = 0;
+        let i = 0;
+        while (i < 2) {
+            i = i + 1;
+            try {
+                continue;
+            } finally {
+                finallyCount = finallyCount + 1;
+            }
+        }
+        finallyCount;
+    "#;
+
+    let ir3 = lower_source_to_ir3(source);
+    assert!(
+        ir3.instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::BeginTry { .. })),
+        "continue-through-finally source must lower to BeginTry"
+    );
+    assert!(
+        ir3.instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::EnterFinally)),
+        "continue-through-finally source must lower to EnterFinally"
+    );
+
+    assert_eq!(eval_source(source), "2");
+}
+
+#[test]
+#[ignore = "blocked on real function/closure lowering: arrow functions lower inline and do not materialize callable closure values yet"]
+fn conformance_source_catch_binding_can_be_captured_by_closure_after_unwinding() {
+    let source = r#"
+        let reader = null;
+        try {
+            throw 7;
+        } catch (e) {
+            reader = () => e;
+        }
+        reader();
+    "#;
+
+    let ir3 = lower_source_to_ir3(source);
+    assert!(
+        ir3.instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::Throw { .. })),
+        "closure capture source must lower to Throw"
+    );
+    assert!(
+        ir3.instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::EnterCatch { .. })),
+        "closure capture source must lower to EnterCatch"
+    );
+    assert!(
+        ir3.instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::Call { .. })),
+        "closure capture source must lower to Call"
+    );
+
+    assert_eq!(eval_source(source), "7");
 }
 
 // ---------------------------------------------------------------------------

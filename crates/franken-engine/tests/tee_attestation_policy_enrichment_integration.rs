@@ -2946,11 +2946,7 @@ fn enrichment_tee_attestation_expired_quote_rejected() {
     // Standard freshness window max is 300 seconds; 500 exceeds it.
     let quote = sgx_quote(500);
     let err = policy
-        .evaluate_quote(
-            &quote,
-            DecisionImpact::Standard,
-            SecurityEpoch::from_raw(1),
-        )
+        .evaluate_quote(&quote, DecisionImpact::Standard, SecurityEpoch::from_raw(1))
         .unwrap_err();
     assert!(matches!(
         err,

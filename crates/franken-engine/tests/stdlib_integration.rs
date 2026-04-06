@@ -502,10 +502,12 @@ fn string_concat() {
 
 #[test]
 fn string_receipt_tracks_unicode_observability_for_slice() {
+    // "a😀b" in UTF-16 is [0x0061, 0xD83D, 0xDE00, 0x0062] — 4 code units.
+    // slice(1, 3) extracts the complete surrogate pair for 😀.
     let traced = exec_string_method_with_receipt(
         BuiltinId::StringPrototypeSlice,
         "a😀b",
-        &[JsValue::Int(FP_SCALE), JsValue::Int(2 * FP_SCALE)],
+        &[JsValue::Int(FP_SCALE), JsValue::Int(3 * FP_SCALE)],
     )
     .unwrap();
     let receipt = traced.receipt.expect("string receipt");
@@ -1181,14 +1183,12 @@ fn json_compound_placeholder_closure_scenario_emits_artifact_bundle() {
 
     let mut events = Vec::new();
     let mut commands = vec![replay_command.to_string()];
-    let mut record_step = |
-        sequence: u64,
-        case_id: &'static str,
-        event_name: &'static str,
-        outcome: &'static str,
-        finding_id: Option<&str>,
-        detail: String,
-    | {
+    let mut record_step = |sequence: u64,
+                           case_id: &'static str,
+                           event_name: &'static str,
+                           outcome: &'static str,
+                           finding_id: Option<&str>,
+                           detail: String| {
         let mut event = serde_json::to_value(context.event(EventInput {
             sequence,
             component: COMPONENT,
@@ -1209,9 +1209,7 @@ fn json_compound_placeholder_closure_scenario_emits_artifact_bundle() {
         events.push(event);
         commands.push(match finding_id {
             Some(finding_id) => {
-                format!(
-                    "{event_name} case_id={case_id} outcome={outcome} finding_id={finding_id}"
-                )
+                format!("{event_name} case_id={case_id} outcome={outcome} finding_id={finding_id}")
             }
             None => format!("{event_name} case_id={case_id} outcome={outcome}"),
         });
@@ -1267,25 +1265,26 @@ fn json_compound_placeholder_closure_scenario_emits_artifact_bundle() {
         .count();
     assert_eq!(runtime_open_placeholder_count, 0);
 
-    let runtime_findings_report: Vec<JsonCompoundPlaceholderClosureFindingReport> = runtime_findings
-        .iter()
-        .map(|finding| {
-            assert_eq!(
-                finding.status,
-                ZeroPlaceholderStatus::Resolved,
-                "runtime finding {} should be resolved",
-                finding.finding_id
-            );
-            assert_eq!(finding.owner_bead_id, BEAD_ID);
-            JsonCompoundPlaceholderClosureFindingReport {
-                finding_id: finding.finding_id.clone(),
-                owner_bead_id: finding.owner_bead_id.clone(),
-                status: finding.status,
-                observed_behavior: finding.observed_behavior.clone(),
-                required_behavior: finding.required_behavior.clone(),
-            }
-        })
-        .collect();
+    let runtime_findings_report: Vec<JsonCompoundPlaceholderClosureFindingReport> =
+        runtime_findings
+            .iter()
+            .map(|finding| {
+                assert_eq!(
+                    finding.status,
+                    ZeroPlaceholderStatus::Resolved,
+                    "runtime finding {} should be resolved",
+                    finding.finding_id
+                );
+                assert_eq!(finding.owner_bead_id, BEAD_ID);
+                JsonCompoundPlaceholderClosureFindingReport {
+                    finding_id: finding.finding_id.clone(),
+                    owner_bead_id: finding.owner_bead_id.clone(),
+                    status: finding.status,
+                    observed_behavior: finding.observed_behavior.clone(),
+                    required_behavior: finding.required_behavior.clone(),
+                }
+            })
+            .collect();
 
     for (sequence, finding) in runtime_findings.iter().enumerate() {
         let case_id = if finding.finding_id == "runtime::json_parse_compound_placeholder" {
@@ -1434,8 +1433,7 @@ fn json_compound_placeholder_closure_scenario_emits_artifact_bundle() {
     ] {
         emit_json_compound_placeholder_closure_inline_artifact(
             required,
-            &fs::read_to_string(artifact_dir.join(required))
-                .expect("read closure inline artifact"),
+            &fs::read_to_string(artifact_dir.join(required)).expect("read closure inline artifact"),
         );
     }
     for idx in 0..4 {
@@ -2483,10 +2481,12 @@ fn string_normalize_ascii() {
 
 #[test]
 fn string_representation_scenario_emits_artifact_triad_and_reports() {
+    // "prefix-" is 7 UTF-16 units, 😀 is 2 units (surrogate pair at 7..9).
+    // slice(7, 9) extracts the complete emoji without exposing lone surrogates.
     let slice = exec_string_method_with_receipt(
         BuiltinId::StringPrototypeSlice,
         "prefix-😀-suffix",
-        &[JsValue::Int(7 * FP_SCALE), JsValue::Int(8 * FP_SCALE)],
+        &[JsValue::Int(7 * FP_SCALE), JsValue::Int(9 * FP_SCALE)],
     )
     .unwrap();
     let concat = exec_string_method_with_receipt(

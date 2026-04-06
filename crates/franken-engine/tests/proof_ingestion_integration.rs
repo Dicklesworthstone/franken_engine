@@ -385,7 +385,10 @@ fn ingestion_config_serde_roundtrip() {
     assert_eq!(restored.churn_window_ns, cfg.churn_window_ns);
     assert_eq!(restored.plas_speedup_estimate, cfg.plas_speedup_estimate);
     assert_eq!(restored.ifc_speedup_estimate, cfg.ifc_speedup_estimate);
-    assert_eq!(restored.replay_speedup_estimate, cfg.replay_speedup_estimate);
+    assert_eq!(
+        restored.replay_speedup_estimate,
+        cfg.replay_speedup_estimate
+    );
     assert_eq!(restored.signing_key, [0u8; 32]); // confirms skip behavior
 }
 

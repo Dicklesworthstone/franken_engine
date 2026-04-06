@@ -494,7 +494,9 @@ fn fixture_ref_contains_at_least_two_dots() {
         assert!(
             dot_count >= 2,
             "fixture_ref '{}' for {} must contain at least 2 dots (compat.X.*), got {}",
-            entry.fixture_ref, entry.id, dot_count
+            entry.fixture_ref,
+            entry.id,
+            dot_count
         );
     }
 }

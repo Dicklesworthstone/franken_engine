@@ -231,7 +231,9 @@ fn json_compound_placeholder_closure_script_uses_rch_and_repo_local_target_dir()
         "closure runner should offload heavy commands through rch"
     );
     assert!(
-        script.contains("/data/projects/franken_engine/target_rch_rgc_json_compound_placeholder_closure"),
+        script.contains(
+            "/data/projects/franken_engine/target_rch_rgc_json_compound_placeholder_closure"
+        ),
         "closure runner should use the stable repo-local target namespace"
     );
     assert!(

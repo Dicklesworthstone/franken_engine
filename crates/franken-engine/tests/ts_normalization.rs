@@ -754,7 +754,10 @@ fn ts_ingestion_error_code_stable_code_all_variants() {
 #[test]
 fn ts_ingestion_error_code_stage_all_variants() {
     let cases = [
-        (TsIngestionErrorCode::NormalizationFailed, "normalize_typescript"),
+        (
+            TsIngestionErrorCode::NormalizationFailed,
+            "normalize_typescript",
+        ),
         (TsIngestionErrorCode::ParseFailed, "parse_normalized_source"),
         (TsIngestionErrorCode::LoweringFailed, "lower_to_ir3"),
         (

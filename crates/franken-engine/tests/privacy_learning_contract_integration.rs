@@ -1686,7 +1686,10 @@ fn registry_serde_roundtrip() {
 
     // Verify JSON serialization correctly fails with the expected error.
     let result = serde_json::to_string(&reg);
-    assert!(result.is_err(), "BTreeMap<EngineObjectId, _> cannot serialize to JSON");
+    assert!(
+        result.is_err(),
+        "BTreeMap<EngineObjectId, _> cannot serialize to JSON"
+    );
 }
 
 // ===========================================================================

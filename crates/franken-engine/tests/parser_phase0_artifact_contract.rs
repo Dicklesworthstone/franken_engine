@@ -98,7 +98,9 @@ fn replay_script() -> String {
 }
 
 fn placeholder_rejected(signatures: &[String], content: &str) -> bool {
-    signatures.iter().any(|signature| content.contains(signature))
+    signatures
+        .iter()
+        .any(|signature| content.contains(signature))
 }
 
 #[test]
@@ -136,7 +138,12 @@ fn parser_phase0_artifact_contract_is_versioned_and_bound() {
     assert_eq!(contract.track.id, "RGC-920F.1");
     assert_eq!(contract.track.name, "Parser Phase0 Artifact Contract");
     assert!(contract.generated_at_utc.ends_with('Z'));
-    assert!(contract.source_inputs.iter().any(|path| path == "README.md"));
+    assert!(
+        contract
+            .source_inputs
+            .iter()
+            .any(|path| path == "README.md")
+    );
     assert!(
         contract
             .source_inputs
@@ -158,7 +165,10 @@ fn parser_phase0_artifact_contract_declares_required_generated_artifacts() {
         "artifacts/parser_phase0_artifact_contract/<timestamp>/parser_phase0_artifact_contract_validation_report.json",
     ] {
         assert!(
-            contract.generated_artifacts.iter().any(|entry| entry == artifact),
+            contract
+                .generated_artifacts
+                .iter()
+                .any(|entry| entry == artifact),
             "missing generated artifact contract entry: {artifact}"
         );
     }
@@ -205,12 +215,16 @@ fn parser_phase0_artifact_contract_covers_real_and_degraded_modes() {
         .iter()
         .map(|shape| shape.shape_id.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(shape_ids, vec!["real_flamegraph_svg", "profile_summary_only"]);
+    assert_eq!(
+        shape_ids,
+        vec!["real_flamegraph_svg", "profile_summary_only"]
+    );
 
     for shape in &contract.artifact_contract.accepted_real_artifact_shapes {
         assert_eq!(shape.mode, "real_capture");
         assert!(
-            shape.required_receipt_fields
+            shape
+                .required_receipt_fields
                 .iter()
                 .any(|field| field == "placeholder_rejected")
         );
@@ -362,9 +376,17 @@ fn parser_phase0_artifact_gate_script_emits_required_artifacts() {
     assert!(script.contains("trace_ids.json"));
     assert!(script.contains("parser_phase0_artifact_contract_validation_report.json"));
     assert!(script.contains("parser_phase0_artifact_contract.json"));
-    assert!(script.contains("cargo check -p frankenengine-engine --test parser_phase0_artifact_contract"));
-    assert!(script.contains("cargo test -p frankenengine-engine --test parser_phase0_artifact_contract"));
-    assert!(script.contains("cargo clippy -p frankenengine-engine --test parser_phase0_artifact_contract -- -D warnings"));
+    assert!(
+        script
+            .contains("cargo check -p frankenengine-engine --test parser_phase0_artifact_contract")
+    );
+    assert!(
+        script
+            .contains("cargo test -p frankenengine-engine --test parser_phase0_artifact_contract")
+    );
+    assert!(script.contains(
+        "cargo clippy -p frankenengine-engine --test parser_phase0_artifact_contract -- -D warnings"
+    ));
 }
 
 #[test]

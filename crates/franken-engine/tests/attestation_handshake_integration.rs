@@ -792,7 +792,10 @@ fn handshake_rejects_tampered_quote_after_response_signing() {
     // issued_at_ns is part of the quote's signature_payload, so tampering
     // it causes the quote signature check (step 4) to fail before the
     // response signature is ever verified.
-    assert!(matches!(err, HandshakeError::QuoteVerificationFailed { .. }));
+    assert!(matches!(
+        err,
+        HandshakeError::QuoteVerificationFailed { .. }
+    ));
 }
 
 #[test]

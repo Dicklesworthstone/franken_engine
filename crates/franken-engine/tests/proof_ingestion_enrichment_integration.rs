@@ -287,7 +287,10 @@ fn enrichment_ingestion_config_serde_roundtrip() {
     assert_eq!(restored.churn_window_ns, cfg.churn_window_ns);
     assert_eq!(restored.plas_speedup_estimate, cfg.plas_speedup_estimate);
     assert_eq!(restored.ifc_speedup_estimate, cfg.ifc_speedup_estimate);
-    assert_eq!(restored.replay_speedup_estimate, cfg.replay_speedup_estimate);
+    assert_eq!(
+        restored.replay_speedup_estimate,
+        cfg.replay_speedup_estimate
+    );
     assert_eq!(restored.signing_key, [0u8; 32]); // confirms skip behavior
 }
 
@@ -664,10 +667,7 @@ fn enrichment_proof_canonical_bytes_starts_with_proof_id() {
     // canonical_bytes uses length-prefixed encoding: 8-byte BE length then data.
     let id_bytes = proof.proof_id.as_bytes();
     let prefix_len = 8; // u64 big-endian length prefix
-    assert_eq!(
-        &bytes[prefix_len..prefix_len + id_bytes.len()],
-        id_bytes
-    );
+    assert_eq!(&bytes[prefix_len..prefix_len + id_bytes.len()], id_bytes);
 }
 
 #[test]

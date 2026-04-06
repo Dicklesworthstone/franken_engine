@@ -919,7 +919,10 @@ fn emit_structured_events_gate_report_event_is_present() {
     );
 
     // there should be a gate_confidence_evaluated event
-    let gate_events: Vec<_> = events.iter().filter(|e| e.event == "gate_confidence_evaluated").collect();
+    let gate_events: Vec<_> = events
+        .iter()
+        .filter(|e| e.event == "gate_confidence_evaluated")
+        .collect();
     assert!(
         !gate_events.is_empty(),
         "structured events must include a gate_confidence_evaluated event"

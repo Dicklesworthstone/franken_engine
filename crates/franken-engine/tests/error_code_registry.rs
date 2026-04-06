@@ -699,11 +699,7 @@ fn description_word_count_minimum_one() {
     let registry = parse_registry();
     for entry in &registry.entries {
         let word_count = entry.description.split_whitespace().count();
-        assert!(
-            word_count >= 1,
-            "description for {} is empty",
-            entry.code,
-        );
+        assert!(word_count >= 1, "description for {} is empty", entry.code,);
     }
 }
 

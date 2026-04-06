@@ -727,10 +727,7 @@ fn browser_constraints_reference_declared_browsers() {
     for case in &matrix.cases {
         for constraint in &case.browser_constraints {
             // Constraints have the form "browser>=version"; extract the browser name.
-            let browser_name = constraint
-                .split(">=")
-                .next()
-                .unwrap_or(constraint);
+            let browser_name = constraint.split(">=").next().unwrap_or(constraint);
             assert!(
                 declared.contains(browser_name),
                 "case {} references undeclared browser constraint: {}",

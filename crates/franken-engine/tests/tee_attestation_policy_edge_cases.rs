@@ -2076,7 +2076,10 @@ fn tee_attestation_edge_expired_attestation_fails() {
     let err = policy
         .evaluate_quote(&quote, DecisionImpact::Standard, SecurityEpoch::from_raw(1))
         .unwrap_err();
-    assert!(matches!(err, TeeAttestationPolicyError::AttestationStale { .. }));
+    assert!(matches!(
+        err,
+        TeeAttestationPolicyError::AttestationStale { .. }
+    ));
 }
 
 #[test]
@@ -2085,8 +2088,5 @@ fn tee_attestation_edge_mismatched_policy_version_fails() {
     let mut policy = sample_policy(1);
     policy.schema_version = 0;
     let err = policy.validate().unwrap_err();
-    assert!(matches!(
-        err,
-        TeeAttestationPolicyError::ParseFailed { .. }
-    ));
+    assert!(matches!(err, TeeAttestationPolicyError::ParseFailed { .. }));
 }

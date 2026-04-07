@@ -667,7 +667,9 @@ impl Ir2FlowLattice {
                     obligation.target_clearance.clone(),
                 )
             })
-            .expect("checked above");
+            .ok_or_else(|| FlowLatticeError::ObligationNotFound {
+                obligation_id: obligation_id.to_string(),
+            })?;
         let (decision_contract_id, obligation_source_label, obligation_target_clearance) =
             decision_contract_id;
         let obligation_route_ref = self
@@ -803,10 +805,11 @@ impl Ir2FlowLattice {
         }
 
         let record_use_result = {
-            let obligation = self
-                .obligations
-                .get_mut(obligation_id)
-                .expect("checked above");
+            let obligation = self.obligations.get_mut(obligation_id).ok_or_else(|| {
+                FlowLatticeError::ObligationNotFound {
+                    obligation_id: obligation_id.to_string(),
+                }
+            })?;
             obligation.record_use()
         };
         if let Err(err) = record_use_result {

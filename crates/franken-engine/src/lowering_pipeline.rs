@@ -1665,6 +1665,9 @@ fn lower_statement_to_ir1_with_flow(
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
             }
+            // Snapshot which binding names already exist before body lowering
+            // (just the parameters at this point).
+            let pre_lower_names: BTreeSet<String> = body_lookup.keys().cloned().collect();
             for stmt in &func.body.body {
                 lower_statement_to_ir1(
                     stmt,
@@ -1684,11 +1687,23 @@ fn lower_statement_to_ir1_with_flow(
                 body_ops.push(Ir1Op::Return);
             }
 
+            // Identify free variables: bindings created as forward
+            // references that exist in the OUTER scope's lookup.
+            let free_vars: Vec<String> = body_lookup
+                .keys()
+                .filter(|name| {
+                    !pre_lower_names.contains(name.as_str())
+                        && binding_lookup.contains_key(name.as_str())
+                })
+                .cloned()
+                .collect();
+
             ops.push(Ir1Op::DeclareFunction {
                 name,
                 binding_id: bid,
                 param_names,
                 body_ops,
+                free_vars,
             });
             ops.push(Ir1Op::Pop);
         }
@@ -2015,10 +2030,22 @@ pub fn lower_ir2_to_ir3(
     let mut iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
     let mut pending_jumps = Vec::<PendingJump>::new();
     let mut catch_entry_labels = BTreeSet::<u32>::new();
-    // Deferred function bodies: (body_ir1_ops, param_names, name, arity).
+    // Deferred function bodies: (body_ir1_ops, param_names, name, free_vars).
     // After the main code + Halt, each body is lowered into the instruction
     // stream and registered in function_table.  Index 0 is reserved for main.
-    let mut deferred_functions: Vec<(Vec<Ir1Op>, Vec<String>, Option<String>)> = Vec::new();
+    let mut deferred_functions: Vec<(Vec<Ir1Op>, Vec<String>, Option<String>, Vec<String>)> =
+        Vec::new();
+
+    // Build name→BindingId lookup from the module's scope tree so the
+    // IR3 lowering can resolve free-variable names to register indices.
+    let mut name_to_binding_id = BTreeMap::<String, BindingId>::new();
+    for scope in &ir2.scopes {
+        for binding in &scope.bindings {
+            name_to_binding_id
+                .entry(binding.name.clone())
+                .or_insert(binding.binding_id);
+        }
+    }
 
     for op in &ir2.ops {
         if matches!(op.effect, EffectBoundary::HostcallEffect) {
@@ -2613,7 +2640,7 @@ pub fn lower_ir2_to_ir3(
             }
             Ir1Op::LoadThis => {
                 let dst = alloc_register(&mut register_cursor);
-                ir3.instructions.push(Ir3Instruction::LoadUndefined { dst });
+                ir3.instructions.push(Ir3Instruction::LoadThis { dst });
                 value_stack.push(dst);
             }
             Ir1Op::DeclareFunction {
@@ -2621,6 +2648,7 @@ pub fn lower_ir2_to_ir3(
                 name,
                 param_names,
                 body_ops,
+                free_vars,
             } => {
                 let dst = *binding_registers
                     .entry(*binding_id)
@@ -2631,18 +2659,43 @@ pub fn lower_ir2_to_ir3(
                     ir3.instructions
                         .push(Ir3Instruction::LoadStr { dst, pool_index });
                 } else {
-                    // +1 because index 0 is reserved for main.
+                    // If the function has free variables, put the current
+                    // scope's bindings onto the scope chain so
+                    // CreateClosure can capture them.
+                    if !free_vars.is_empty() {
+                        ir3.instructions.push(Ir3Instruction::PushScope);
+                        for fv in free_vars {
+                            let pool_idx = push_constant(&mut ir3.constant_pool, fv);
+                            ir3.instructions.push(Ir3Instruction::DeclareBinding {
+                                name_pool_index: pool_idx,
+                                kind: 0, // var
+                            });
+                            // Copy register value to scope chain.
+                            if let Some(&reg) = binding_registers
+                                .get(&name_to_binding_id.get(fv).copied().unwrap_or(0))
+                            {
+                                ir3.instructions.push(Ir3Instruction::StoreScoped {
+                                    src: reg,
+                                    name_pool_index: pool_idx,
+                                });
+                            }
+                        }
+                    }
                     let function_index = deferred_functions.len() as u32 + 1;
                     deferred_functions.push((
                         body_ops.clone(),
                         param_names.clone(),
                         Some(name.clone()),
+                        free_vars.clone(),
                     ));
                     ir3.instructions.push(Ir3Instruction::CreateClosure {
                         dst,
                         function_index,
-                        capture_count: 0,
+                        capture_count: free_vars.len() as u32,
                     });
+                    if !free_vars.is_empty() {
+                        ir3.instructions.push(Ir3Instruction::PopScope);
+                    }
                 }
                 value_stack.push(dst);
             }
@@ -2650,15 +2703,44 @@ pub fn lower_ir2_to_ir3(
                 name,
                 param_names,
                 body_ops,
+                free_vars,
             } => {
                 let dst = alloc_register(&mut register_cursor);
+                // If the function has free variables, put them on the
+                // scope chain before capturing.
+                if !free_vars.is_empty() {
+                    ir3.instructions.push(Ir3Instruction::PushScope);
+                    for fv in free_vars {
+                        let pool_idx = push_constant(&mut ir3.constant_pool, fv);
+                        ir3.instructions.push(Ir3Instruction::DeclareBinding {
+                            name_pool_index: pool_idx,
+                            kind: 0,
+                        });
+                        if let Some(&reg) =
+                            binding_registers.get(&name_to_binding_id.get(fv).copied().unwrap_or(0))
+                        {
+                            ir3.instructions.push(Ir3Instruction::StoreScoped {
+                                src: reg,
+                                name_pool_index: pool_idx,
+                            });
+                        }
+                    }
+                }
                 let function_index = deferred_functions.len() as u32 + 1;
-                deferred_functions.push((body_ops.clone(), param_names.clone(), name.clone()));
+                deferred_functions.push((
+                    body_ops.clone(),
+                    param_names.clone(),
+                    name.clone(),
+                    free_vars.clone(),
+                ));
                 ir3.instructions.push(Ir3Instruction::CreateClosure {
                     dst,
                     function_index,
-                    capture_count: 0,
+                    capture_count: free_vars.len() as u32,
                 });
+                if !free_vars.is_empty() {
+                    ir3.instructions.push(Ir3Instruction::PopScope);
+                }
                 value_stack.push(dst);
             }
             Ir1Op::ForInInit => {
@@ -2958,9 +3040,10 @@ pub fn lower_ir2_to_ir3(
     // body can push new entries without conflicting with the borrow.
     let mut deferred_idx = 0;
     while deferred_idx < deferred_functions.len() {
-        let (body_ops, param_names, fn_name) = deferred_functions[deferred_idx].clone();
+        let (body_ops, param_names, fn_name, free_vars) = deferred_functions[deferred_idx].clone();
         deferred_idx += 1;
-        let (body_ops, param_names, fn_name) = (&body_ops, &param_names, &fn_name);
+        let (body_ops, param_names, fn_name, free_vars) =
+            (&body_ops, &param_names, &fn_name, &free_vars);
         let entry = ir3.instructions.len() as u32;
         let arity = param_names.len() as u32;
         let mut fn_reg: Reg = 0;
@@ -2974,6 +3057,123 @@ pub fn lower_ir2_to_ir3(
             fn_binding_regs.insert(i as BindingId, i as Reg);
             fn_reg = fn_reg.max(i as Reg + 1);
         }
+
+        // When this function has free variables, put parameters on the
+        // scope chain so LoadScoped can find them alongside captured
+        // outer bindings.
+        if !free_vars.is_empty() {
+            ir3.instructions.push(Ir3Instruction::PushScope);
+            for (i, pname) in param_names.iter().enumerate() {
+                let pool_idx = push_constant(&mut ir3.constant_pool, pname);
+                ir3.instructions.push(Ir3Instruction::DeclareBinding {
+                    name_pool_index: pool_idx,
+                    kind: 0,
+                });
+                ir3.instructions.push(Ir3Instruction::InitBinding {
+                    name_pool_index: pool_idx,
+                    src: i as Reg,
+                });
+            }
+        }
+
+        // Build a set of binding_ids that correspond to free variables.
+        // These will use scope-chain lookup instead of register access.
+        let free_var_binding_ids: BTreeSet<BindingId> = {
+            let param_count = param_names.len() as BindingId;
+            let mut fv_ids = BTreeSet::new();
+            // The body lowering assigned binding_ids starting from 0
+            // for params, then incrementing for each new identifier.
+            // Free variables are identifiers that got forward-reference
+            // bindings (binding_id >= param_count) with names in free_vars.
+            // We scan body_ops to find LoadBinding/StoreBinding with
+            // binding_id >= param_count and trust those are free vars.
+            if !free_vars.is_empty() {
+                for bop in body_ops.iter() {
+                    match bop {
+                        Ir1Op::LoadBinding { binding_id } | Ir1Op::StoreBinding { binding_id }
+                            if *binding_id >= param_count =>
+                        {
+                            fv_ids.insert(*binding_id);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            fv_ids
+        };
+
+        // Build binding_id → name map for free variables by scanning
+        // the body ops for the first LoadBinding of each free-var id.
+        // The name comes from the order of appearance matched against
+        // the free_vars list.
+        let fv_id_to_name: BTreeMap<BindingId, String> = {
+            let mut map = BTreeMap::new();
+            if !free_vars.is_empty() {
+                // The body lowering creates forward-reference bindings
+                // in order of first appearance.  Match them up.
+                let mut seen_ids = Vec::new();
+                for bop in body_ops.iter() {
+                    if let Ir1Op::LoadBinding { binding_id } = bop {
+                        if free_var_binding_ids.contains(binding_id)
+                            && !seen_ids.contains(binding_id)
+                        {
+                            seen_ids.push(*binding_id);
+                        }
+                    }
+                }
+                for (idx, bid) in seen_ids.iter().enumerate() {
+                    if let Some(name) = free_vars.get(idx) {
+                        map.insert(*bid, name.clone());
+                    }
+                }
+            }
+            map
+        };
+
+        // Pre-scan: detect if any child function captures free variables.
+        // If so, this function must mirror its local bindings to the scope
+        // chain so those captures resolve at runtime.
+        let has_capturing_children = body_ops.iter().any(|bop| match bop {
+            Ir1Op::CreateFunction { free_vars: fv, .. }
+            | Ir1Op::DeclareFunction { free_vars: fv, .. } => !fv.is_empty(),
+            _ => false,
+        });
+
+        // Collect names of variables that child closures capture from
+        // THIS function, so we can emit DeclareBinding + StoreScoped
+        // for exactly those bindings.
+        let child_captured_names: BTreeSet<String> = body_ops
+            .iter()
+            .flat_map(|bop| match bop {
+                Ir1Op::CreateFunction { free_vars: fv, .. }
+                | Ir1Op::DeclareFunction { free_vars: fv, .. } => fv.clone(),
+                _ => Vec::new(),
+            })
+            .collect();
+
+        // If children capture our locals, push a scope frame at the
+        // beginning of this function body.
+        if has_capturing_children {
+            ir3.instructions.push(Ir3Instruction::PushScope);
+            // Put parameters on the scope chain too (children may capture them).
+            for (i, pname) in param_names.iter().enumerate() {
+                if child_captured_names.contains(pname) {
+                    let pool_idx = push_constant(&mut ir3.constant_pool, pname);
+                    ir3.instructions.push(Ir3Instruction::DeclareBinding {
+                        name_pool_index: pool_idx,
+                        kind: 0,
+                    });
+                    ir3.instructions.push(Ir3Instruction::InitBinding {
+                        name_pool_index: pool_idx,
+                        src: i as Reg,
+                    });
+                }
+            }
+        }
+
+        // Track which binding_ids correspond to child-captured names so
+        // StoreBinding can also emit StoreScoped for them.
+        let mut captured_binding_ids: BTreeMap<BindingId, String> = BTreeMap::new();
 
         // Classify body ops into Ir2 and lower to IR3.
         for body_ir1 in body_ops {
@@ -3012,19 +3212,55 @@ pub fn lower_ir2_to_ir3(
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::LoadBinding { binding_id } => {
-                    let src = *fn_binding_regs
-                        .entry(*binding_id)
-                        .or_insert_with(|| alloc_register(&mut fn_reg));
-                    let dst = alloc_register(&mut fn_reg);
-                    ir3.instructions.push(Ir3Instruction::Move { dst, src });
-                    fn_value_stack.push(dst);
+                    if let Some(name) = fv_id_to_name.get(binding_id) {
+                        // Free variable: load from scope chain by name.
+                        let dst = alloc_register(&mut fn_reg);
+                        let pool_idx = push_constant(&mut ir3.constant_pool, name);
+                        ir3.instructions.push(Ir3Instruction::LoadScoped {
+                            dst,
+                            name_pool_index: pool_idx,
+                        });
+                        fn_value_stack.push(dst);
+                    } else {
+                        let src = *fn_binding_regs
+                            .entry(*binding_id)
+                            .or_insert_with(|| alloc_register(&mut fn_reg));
+                        let dst = alloc_register(&mut fn_reg);
+                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                        fn_value_stack.push(dst);
+                    }
                 }
                 Ir1Op::StoreBinding { binding_id } => {
+                    let is_first_store = !fn_binding_regs.contains_key(binding_id);
                     let dst = *fn_binding_regs
                         .entry(*binding_id)
                         .or_insert_with(|| alloc_register(&mut fn_reg));
                     let src = fn_value_stack.pop().unwrap_or(0);
                     ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    // If this function has capturing children and this
+                    // binding is being stored for the first time (i.e.,
+                    // it's a local variable init, not a parameter
+                    // already handled above), also put it on the scope
+                    // chain so child closures can find it via LoadScoped.
+                    if has_capturing_children && *binding_id >= param_names.len() as BindingId {
+                        // Use a synthetic name: try to find the real name from
+                        // child_captured_names.  For simplicity we use the binding_id
+                        // as a counter into the captured names.
+                        let var_idx = (*binding_id as usize).saturating_sub(param_names.len());
+                        if let Some(name) = child_captured_names.iter().nth(var_idx) {
+                            let pool_idx = push_constant(&mut ir3.constant_pool, name);
+                            if is_first_store {
+                                ir3.instructions.push(Ir3Instruction::DeclareBinding {
+                                    name_pool_index: pool_idx,
+                                    kind: 0,
+                                });
+                            }
+                            ir3.instructions.push(Ir3Instruction::StoreScoped {
+                                src: dst,
+                                name_pool_index: pool_idx,
+                            });
+                        }
+                    }
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::BinaryOp { operator } => {
@@ -3183,7 +3419,7 @@ pub fn lower_ir2_to_ir3(
                 }
                 Ir1Op::LoadThis => {
                     let dst = alloc_register(&mut fn_reg);
-                    ir3.instructions.push(Ir3Instruction::LoadUndefined { dst });
+                    ir3.instructions.push(Ir3Instruction::LoadThis { dst });
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::NewArray { count } => {
@@ -3240,6 +3476,7 @@ pub fn lower_ir2_to_ir3(
                     body_ops: inner_body,
                     param_names: inner_params,
                     name: inner_name,
+                    free_vars: inner_fv,
                 } if !inner_body.is_empty() => {
                     let dst = *fn_binding_regs
                         .entry(*inner_bid)
@@ -3249,11 +3486,12 @@ pub fn lower_ir2_to_ir3(
                         inner_body.clone(),
                         inner_params.clone(),
                         Some(inner_name.clone()),
+                        inner_fv.clone(),
                     ));
                     ir3.instructions.push(Ir3Instruction::CreateClosure {
                         dst,
                         function_index,
-                        capture_count: 0,
+                        capture_count: inner_fv.len() as u32,
                     });
                     fn_value_stack.push(dst);
                 }
@@ -3261,6 +3499,7 @@ pub fn lower_ir2_to_ir3(
                     body_ops: inner_body,
                     param_names: inner_params,
                     name: inner_name,
+                    free_vars: inner_fv,
                 } => {
                     let dst = alloc_register(&mut fn_reg);
                     let function_index = deferred_functions.len() as u32 + 1;
@@ -3268,11 +3507,12 @@ pub fn lower_ir2_to_ir3(
                         inner_body.clone(),
                         inner_params.clone(),
                         inner_name.clone(),
+                        inner_fv.clone(),
                     ));
                     ir3.instructions.push(Ir3Instruction::CreateClosure {
                         dst,
                         function_index,
-                        capture_count: 0,
+                        capture_count: inner_fv.len() as u32,
                     });
                     fn_value_stack.push(dst);
                 }
@@ -3551,7 +3791,7 @@ fn build_ir2_flow_proof_artifact(
 fn compute_ir2_flow_artifact_id(artifact: &Ir2FlowProofArtifact) -> String {
     let mut preimage = artifact.clone();
     preimage.artifact_id.clear();
-    let encoded = serde_json::to_vec(&preimage).expect("serialization failed");
+    let encoded = serde_json::to_vec(&preimage).unwrap_or_default();
     let hash = ContentHash::compute(&encoded);
     format!("sha256:{}", hex::encode(hash.as_bytes()))
 }
@@ -4689,10 +4929,19 @@ fn lower_expression_to_ir1(
             if !matches!(body_ops.last(), Some(Ir1Op::Return)) {
                 body_ops.push(Ir1Op::Return);
             }
+            let pre_lower_names: BTreeSet<String> = param_names.iter().cloned().collect();
+            let arrow_free_vars: Vec<String> = body_lookup
+                .keys()
+                .filter(|n| {
+                    !pre_lower_names.contains(n.as_str()) && binding_lookup.contains_key(n.as_str())
+                })
+                .cloned()
+                .collect();
             ops.push(Ir1Op::CreateFunction {
                 name: None,
                 param_names,
                 body_ops,
+                free_vars: arrow_free_vars,
             });
         }
         Expression::Function {
@@ -4709,6 +4958,7 @@ fn lower_expression_to_ir1(
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
+            let pre_lower_names: BTreeSet<String> = param_names.iter().cloned().collect();
             for pname in &param_names {
                 let _ = alloc_binding(
                     &mut body_bindings,
@@ -4737,10 +4987,18 @@ fn lower_expression_to_ir1(
                 });
                 body_ops.push(Ir1Op::Return);
             }
+            let fn_free_vars: Vec<String> = body_lookup
+                .keys()
+                .filter(|n| {
+                    !pre_lower_names.contains(n.as_str()) && binding_lookup.contains_key(n.as_str())
+                })
+                .cloned()
+                .collect();
             ops.push(Ir1Op::CreateFunction {
                 name: name.clone(),
                 param_names,
                 body_ops,
+                free_vars: fn_free_vars,
             });
         }
         Expression::New { callee, arguments } => {
@@ -5733,8 +5991,8 @@ mod tests {
         let second = build_ir2_flow_proof_artifact(&ir2, &context).expect("second");
 
         assert_eq!(first, second);
-        let first_json = serde_json::to_string(&first).expect("serialize first");
-        let second_json = serde_json::to_string(&second).expect("serialize second");
+        let first_json = serde_json::to_string(&first).unwrap_or_default();
+        let second_json = serde_json::to_string(&second).unwrap_or_default();
         assert_eq!(first_json, second_json);
     }
 

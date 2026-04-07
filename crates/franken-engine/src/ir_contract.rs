@@ -448,6 +448,10 @@ pub enum Ir1Op {
         binding_id: BindingId,
         param_names: Vec<String>,
         body_ops: Vec<Ir1Op>,
+        /// Names of variables from enclosing scopes referenced inside
+        /// the function body (free variables / upvalues).  The IR3
+        /// lowering uses these to emit scope-chain capture instructions.
+        free_vars: Vec<String>,
     },
     /// Create a function value (expression position — arrow functions and
     /// function expressions).  The resulting value is pushed onto the stack.
@@ -455,6 +459,8 @@ pub enum Ir1Op {
         name: Option<String>,
         param_names: Vec<String>,
         body_ops: Vec<Ir1Op>,
+        /// Free variables from enclosing scope (see DeclareFunction).
+        free_vars: Vec<String>,
     },
     /// Begin a try block; on exception, jump to catch_label.
     /// If a finally block exists, `finally_label` points to its entry.
@@ -710,6 +716,7 @@ impl Ir1Op {
                 binding_id,
                 param_names,
                 body_ops,
+                free_vars,
             } => {
                 map.insert(
                     "op".to_string(),
@@ -733,11 +740,21 @@ impl Ir1Op {
                     "body_ops".to_string(),
                     CanonicalValue::Array(body_ops.iter().map(Ir1Op::canonical_value).collect()),
                 );
+                map.insert(
+                    "free_vars".to_string(),
+                    CanonicalValue::Array(
+                        free_vars
+                            .iter()
+                            .map(|s| CanonicalValue::String(s.clone()))
+                            .collect(),
+                    ),
+                );
             }
             Self::CreateFunction {
                 name,
                 param_names,
                 body_ops,
+                free_vars,
             } => {
                 map.insert(
                     "op".to_string(),
@@ -760,6 +777,15 @@ impl Ir1Op {
                 map.insert(
                     "body_ops".to_string(),
                     CanonicalValue::Array(body_ops.iter().map(Ir1Op::canonical_value).collect()),
+                );
+                map.insert(
+                    "free_vars".to_string(),
+                    CanonicalValue::Array(
+                        free_vars
+                            .iter()
+                            .map(|s| CanonicalValue::String(s.clone()))
+                            .collect(),
+                    ),
                 );
             }
             Self::BeginTry {
@@ -1306,6 +1332,8 @@ pub enum Ir3Instruction {
     TemplateLiteral { parts: RegRange, dst: Reg },
     /// Halt execution.
     Halt,
+    /// Load the current `this` binding into a register.
+    LoadThis { dst: Reg },
 
     // ── Exception handling (unwind-capable IR) ────────────────────────
     /// Push a catch frame onto the exception handler stack.
@@ -1615,6 +1643,13 @@ impl Ir3Instruction {
             }
             Self::Halt => {
                 map.insert("op".to_string(), CanonicalValue::String("halt".to_string()));
+            }
+            Self::LoadThis { dst } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("load_this".to_string()),
+                );
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
             }
             Self::BeginTry {
                 catch_target,

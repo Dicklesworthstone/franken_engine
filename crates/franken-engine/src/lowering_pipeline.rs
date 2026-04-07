@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{
     ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, ExportKind, Expression,
-    ParseGoal, SourceSpan, Statement, UnaryOperator, VariableDeclarationKind,
+    MethodKind, ParseGoal, SourceSpan, Statement, UnaryOperator, VariableDeclarationKind,
 };
 use crate::flow_lattice::{
     Clearance, DeclassificationObligation, FlowCheckResult as LatticeFlowCheckResult,
@@ -450,9 +450,10 @@ pub fn validate_ir0_static_semantics(ir0: &Ir0Module) -> SemanticValidationResul
             | Statement::Switch(_)
             | Statement::Break(_)
             | Statement::Continue(_)
-            | Statement::FunctionDeclaration(_) => {
-                // Control flow and function declarations: static semantic
-                // analysis for these is handled recursively as needed.
+            | Statement::FunctionDeclaration(_)
+            | Statement::ClassDeclaration(_) => {
+                // Control flow, function and class declarations: static
+                // semantic analysis for these is handled recursively as needed.
             }
         }
     }
@@ -673,6 +674,12 @@ fn reserve_root_scope_bindings(
             }
             Statement::FunctionDeclaration(function) => {
                 if let Some(name) = &function.name {
+                    reserve_binding_id(binding_lookup, binding_index, name);
+                    declared.insert(name.clone());
+                }
+            }
+            Statement::ClassDeclaration(cls) => {
+                if let Some(name) = &cls.name {
                     reserve_binding_id(binding_lookup, binding_index, name);
                     declared.insert(name.clone());
                 }
@@ -1704,6 +1711,73 @@ fn lower_statement_to_ir1_with_flow(
                 param_names,
                 body_ops,
                 free_vars,
+            });
+            ops.push(Ir1Op::Pop);
+        }
+        Statement::ClassDeclaration(cls) => {
+            let class_name = cls.name.clone().unwrap_or_else(|| "anonymous".to_string());
+            // Find the constructor method, if any.
+            let constructor = cls.body.iter().find(|m| m.kind == MethodKind::Constructor);
+            // Lower constructor as a function declaration.
+            let param_names: Vec<String> = constructor
+                .map(|c| {
+                    c.params
+                        .iter()
+                        .filter_map(|p| p.name().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mut body_ops = Vec::new();
+            let mut body_bindings = Vec::new();
+            let mut body_lookup = BTreeMap::new();
+            let mut body_binding_index: BindingId = 0;
+            let body_scope = ScopeId { depth: 0, index: 0 };
+            let mut body_label_counter: u32 = 0;
+            for pname in &param_names {
+                let _ = alloc_binding(
+                    &mut body_bindings,
+                    &mut body_lookup,
+                    &mut body_binding_index,
+                    body_scope,
+                    pname,
+                    BindingKind::Parameter,
+                )
+                .map_err(LoweringPipelineError::SemanticViolation)?;
+            }
+            if let Some(ctor) = constructor {
+                for stmt in &ctor.body.body {
+                    lower_statement_to_ir1(
+                        stmt,
+                        &mut body_ops,
+                        &mut body_bindings,
+                        &mut body_lookup,
+                        &mut body_binding_index,
+                        body_scope,
+                        &mut body_label_counter,
+                    )?;
+                }
+            }
+            if !matches!(body_ops.last(), Some(Ir1Op::Return)) {
+                body_ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Undefined,
+                });
+                body_ops.push(Ir1Op::Return);
+            }
+            let bid = alloc_binding(
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                &class_name,
+                BindingKind::Let,
+            )
+            .map_err(LoweringPipelineError::SemanticViolation)?;
+            ops.push(Ir1Op::DeclareFunction {
+                name: class_name,
+                binding_id: bid,
+                param_names,
+                body_ops,
+                free_vars: Vec::new(),
             });
             ops.push(Ir1Op::Pop);
         }
@@ -3170,10 +3244,6 @@ pub fn lower_ir2_to_ir3(
                 }
             }
         }
-
-        // Track which binding_ids correspond to child-captured names so
-        // StoreBinding can also emit StoreScoped for them.
-        let mut captured_binding_ids: BTreeMap<BindingId, String> = BTreeMap::new();
 
         // Classify body ops into Ir2 and lower to IR3.
         for body_ir1 in body_ops {

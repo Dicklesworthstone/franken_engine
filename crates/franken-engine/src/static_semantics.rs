@@ -881,6 +881,124 @@ fn analyze_statement(
             state.bindings.extend(func_bindings);
         }
 
+        Statement::ClassDeclaration(class_decl) => {
+            if let Some(ref name) = class_decl.name {
+                check_reserved(state, name, &class_decl.span);
+
+                if let Some(prev_span) = lexical_names.get(name) {
+                    state.push_error(
+                        StaticErrorKind::DuplicateBinding,
+                        format!(
+                            "identifier '{}' has already been declared at line {}",
+                            name, prev_span.start_line
+                        ),
+                        class_decl.span.clone(),
+                    );
+                } else {
+                    lexical_names.insert(name.clone(), class_decl.span.clone());
+                }
+
+                if let Some(prev_span) = var_names.get(name) {
+                    state.push_error(
+                        StaticErrorKind::LexicalVarCollision,
+                        format!(
+                            "class binding '{}' collides with var declaration at line {}",
+                            name, prev_span.start_line
+                        ),
+                        class_decl.span.clone(),
+                    );
+                }
+
+                if let Some(prev_span) = state.import_bindings.get(name) {
+                    state.push_error(
+                        StaticErrorKind::DuplicateBinding,
+                        format!(
+                            "identifier '{}' already declared as import binding at line {}",
+                            name, prev_span.start_line
+                        ),
+                        class_decl.span.clone(),
+                    );
+                }
+
+                let bid = state.alloc_binding_id();
+                bindings.push(ResolvedBinding {
+                    name: name.clone(),
+                    binding_id: bid,
+                    scope: scope_id,
+                    kind: BindingKind::Let,
+                });
+            }
+
+            if let Some(super_class) = &class_decl.super_class {
+                check_await_in_expression(state, super_class, &class_decl.span);
+            }
+
+            for method in &class_decl.body {
+                check_await_in_expression(state, &method.key, &method.span);
+
+                let method_scope_id = state.alloc_scope_id(scope_id.depth + 1);
+                let mut method_bindings: Vec<ResolvedBinding> = Vec::new();
+                let mut method_lex: BTreeMap<String, SourceSpan> = BTreeMap::new();
+                let mut method_var: BTreeMap<String, SourceSpan> = BTreeMap::new();
+                let mut seen_params: BTreeSet<String> = BTreeSet::new();
+
+                for param in &method.params {
+                    for bound_name in param.pattern.binding_names() {
+                        check_reserved(state, bound_name, &param.span);
+                        if !seen_params.insert(bound_name.to_string()) && state.is_module {
+                            state.push_error(
+                                StaticErrorKind::DuplicateParameter,
+                                format!("duplicate parameter name '{}'", bound_name),
+                                param.span.clone(),
+                            );
+                        }
+                        let bid = state.alloc_binding_id();
+                        method_bindings.push(ResolvedBinding {
+                            name: bound_name.to_string(),
+                            binding_id: bid,
+                            scope: method_scope_id,
+                            kind: BindingKind::Parameter,
+                        });
+                    }
+                    check_destructuring_duplicates(state, &param.pattern, &param.span);
+                }
+
+                let prev_in_function = state.in_function;
+                let prev_in_loop = state.in_loop;
+                let prev_in_switch = state.in_switch;
+                let prev_const_bindings = state.const_bindings.clone();
+                state.in_function = true;
+                state.in_loop = false;
+                state.in_switch = false;
+                state.const_bindings = BTreeSet::new();
+
+                for child in &method.body.body {
+                    analyze_statement(
+                        state,
+                        child,
+                        method_scope_id,
+                        &mut method_bindings,
+                        &mut method_lex,
+                        &mut method_var,
+                    );
+                }
+
+                state.in_function = prev_in_function;
+                state.in_loop = prev_in_loop;
+                state.in_switch = prev_in_switch;
+                state.const_bindings = prev_const_bindings;
+
+                let method_scope = ScopeNode {
+                    scope_id: method_scope_id,
+                    parent: Some(scope_id),
+                    kind: ScopeKind::Function,
+                    bindings: method_bindings.clone(),
+                };
+                state.scopes.push(method_scope);
+                state.bindings.extend(method_bindings);
+            }
+        }
+
         Statement::ForIn(for_in_stmt) => {
             check_await_in_expression(state, &for_in_stmt.object, &for_in_stmt.span);
             // Check binding names for reserved words
@@ -1350,7 +1468,6 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
         | Expression::NullLiteral
         | Expression::UndefinedLiteral
         | Expression::This
-        | Expression::Function { .. }
         | Expression::Raw(_) => {}
     }
 }
@@ -1452,7 +1569,6 @@ fn collect_identifier_refs(expr: &Expression, out: &mut Vec<String>) {
         | Expression::NullLiteral
         | Expression::UndefinedLiteral
         | Expression::This
-        | Expression::Function { .. }
         | Expression::Raw(_) => {}
     }
 }

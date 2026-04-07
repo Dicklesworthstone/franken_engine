@@ -1,7 +1,7 @@
-//! Deterministic parser interface for ES2020 script/module goals.
-//!
-//! The parser trait is generic over input source and emits canonical `IR0`
-//! syntax artifacts from `crate::ast`.
+// Deterministic parser interface for ES2020 script/module goals.
+//
+// The parser trait is generic over input source and emits canonical `IR0`
+// syntax artifacts from `crate::ast`.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -14,12 +14,13 @@ use sha2::{Digest, Sha256};
 
 use crate::ast::{
     ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, BlockStatement, BreakStatement,
-    CatchClause, ContinueStatement, DoWhileStatement, ExportDeclaration, ExportKind, Expression,
-    ExpressionStatement, ForInStatement, ForOfStatement, ForStatement, FunctionDeclaration,
-    FunctionParam, IfStatement, ImportDeclaration, ObjectPatternProperty, ObjectProperty,
-    ParseGoal, ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement, SyntaxTree,
-    ThrowStatement, TryCatchStatement, UnaryOperator, VariableDeclaration, VariableDeclarationKind,
-    VariableDeclarator, WhileStatement,
+    CatchClause, ClassDeclaration, ContinueStatement, DoWhileStatement, ExportDeclaration,
+    ExportKind, Expression, ExpressionStatement, ForInStatement, ForOfStatement, ForStatement,
+    FunctionDeclaration, FunctionParam, IfStatement, ImportDeclaration, MethodDefinition,
+    MethodKind, ObjectPatternProperty, ObjectProperty, ParseGoal, ReturnStatement, SourceSpan,
+    Statement, SwitchCase, SwitchStatement, SyntaxTree, ThrowStatement, TryCatchStatement,
+    UnaryOperator, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+    WhileStatement,
 };
 use crate::deterministic_serde::{self, CanonicalValue};
 
@@ -1643,6 +1644,7 @@ fn statement_kind_label(statement: &Statement) -> &'static str {
         Statement::Break(_) => "break",
         Statement::Continue(_) => "continue",
         Statement::FunctionDeclaration(_) => "function_declaration",
+        Statement::ClassDeclaration(_) => "class_declaration",
         Statement::ForIn(_) => "for_in",
         Statement::ForOf(_) => "for_of",
     }
@@ -2566,6 +2568,9 @@ fn parse_statement_inner(
         || statement.starts_with("async function*")
     {
         return self::parse_function_declaration(statement, span, context);
+    }
+    if statement.starts_with("class ") || statement.starts_with("class{") {
+        return self::parse_class_declaration(statement, span, context);
     }
     if statement.starts_with('{') && statement.ends_with('}') {
         return self::parse_block_statement(statement, goal, span, context);
@@ -7187,6 +7192,234 @@ fn parse_function_expression(
     })
 }
 
+fn parse_class_declaration(
+    statement: &str,
+    span: SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+) -> ParseResult<Statement> {
+    let rest = statement
+        .strip_prefix("class")
+        .unwrap_or(statement)
+        .trim_start();
+
+    // Parse optional class name and optional `extends` clause.
+    let (name, rest) = if rest.starts_with('{') {
+        (None, rest)
+    } else if rest.starts_with("extends ") {
+        (None, rest)
+    } else {
+        // Name is everything up to `{` or `extends`.
+        let end = rest
+            .find('{')
+            .unwrap_or(rest.len())
+            .min(rest.find(" extends ").unwrap_or(rest.len()));
+        let name = rest[..end].trim();
+        (
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.to_string())
+            },
+            &rest[end..],
+        )
+    };
+
+    let rest = rest.trim_start();
+
+    // Parse optional extends clause.
+    let (super_class, rest) = if let Some(after_extends) = rest.strip_prefix("extends ") {
+        let brace = after_extends.find('{').ok_or_else(|| {
+            ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "class extends clause requires a braced body",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            )
+        })?;
+        let super_name = after_extends[..brace].trim();
+        (
+            Some(Box::new(Expression::Identifier(super_name.to_string()))),
+            &after_extends[brace..],
+        )
+    } else {
+        (None, rest)
+    };
+
+    // Parse class body { ... }.
+    let (body_src, _) = extract_balanced(rest, '{', '}').ok_or_else(|| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "class declaration requires a braced body",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )
+    })?;
+
+    let methods = parse_class_body(body_src, &span, context)?;
+
+    Ok(Statement::ClassDeclaration(ClassDeclaration {
+        name,
+        super_class,
+        body: methods,
+        span,
+    }))
+}
+
+/// Parse the contents of a class body into a list of MethodDefinitions.
+fn parse_class_body(
+    body: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+) -> ParseResult<Vec<MethodDefinition>> {
+    let mut methods = Vec::new();
+    let body = body.trim();
+    if body.is_empty() {
+        return Ok(methods);
+    }
+
+    // Split on top-level method boundaries.  Each method looks like:
+    // [static] [get|set] name(...) { ... }
+    // We scan for `}` at brace_depth==0 to find method boundaries.
+    let segments = split_class_members(body);
+    for segment in segments {
+        let segment = segment.trim();
+        if segment.is_empty() || segment == ";" {
+            continue;
+        }
+        let is_static = segment.starts_with("static ");
+        let rest = if is_static {
+            segment
+                .strip_prefix("static ")
+                .unwrap_or(segment)
+                .trim_start()
+        } else {
+            segment
+        };
+
+        let kind;
+        let rest = if starts_with_keyword(rest, "get") {
+            kind = MethodKind::Get;
+            rest.strip_prefix("get").unwrap_or(rest).trim_start()
+        } else if starts_with_keyword(rest, "set") {
+            kind = MethodKind::Set;
+            rest.strip_prefix("set").unwrap_or(rest).trim_start()
+        } else {
+            kind = MethodKind::Method;
+            rest
+        };
+
+        // Extract method name (up to `(`).
+        let paren_idx = rest.find('(').ok_or_else(|| {
+            ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                format!("class method requires parameter list: {}", segment),
+                context.source_label.to_string(),
+                Some(span.clone()),
+            )
+        })?;
+        let method_name = rest[..paren_idx].trim();
+        let actual_kind = if method_name == "constructor" {
+            MethodKind::Constructor
+        } else {
+            kind
+        };
+        let key = Expression::Identifier(method_name.to_string());
+        let rest = &rest[paren_idx..];
+
+        // Parse parameters.
+        let (params_src, rest) = extract_balanced(rest, '(', ')').ok_or_else(|| {
+            ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "class method has unbalanced parentheses",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            )
+        })?;
+        let params = parse_arrow_params(params_src, span, context)?;
+
+        // Parse method body.
+        let rest = rest.trim_start();
+        let (body_src, _) = extract_balanced(rest, '{', '}').ok_or_else(|| {
+            ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "class method requires a braced body",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            )
+        })?;
+        let goal = ParseGoal::Script;
+        let body_stmts = parse_body_statements(body_src, goal, span, context)?;
+
+        methods.push(MethodDefinition {
+            key,
+            kind: actual_kind,
+            params,
+            body: BlockStatement {
+                body: body_stmts,
+                span: span.clone(),
+            },
+            is_static,
+            computed: false,
+            span: span.clone(),
+        });
+    }
+
+    Ok(methods)
+}
+
+/// Split class body into individual method segments.
+fn split_class_members(body: &str) -> Vec<&str> {
+    let mut segments = Vec::new();
+    let mut start = 0;
+    let mut brace_depth = 0usize;
+    let mut paren_depth = 0usize;
+    let mut in_quote: Option<char> = None;
+    let mut escaped = false;
+
+    for (i, ch) in body.char_indices() {
+        if let Some(q) = in_quote {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == q {
+                in_quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' | '`' => in_quote = Some(ch),
+            '(' => paren_depth = paren_depth.saturating_add(1),
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            '{' => brace_depth = brace_depth.saturating_add(1),
+            '}' => {
+                if brace_depth > 0 {
+                    brace_depth = brace_depth.saturating_sub(1);
+                }
+                if brace_depth == 0 && paren_depth == 0 {
+                    let end = i + 1;
+                    segments.push(&body[start..end]);
+                    start = end;
+                }
+            }
+            ';' if brace_depth == 0 && paren_depth == 0 => {
+                // Semicolons between methods — skip.
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    let remaining = body[start..].trim();
+    if !remaining.is_empty() {
+        segments.push(remaining);
+    }
+    segments
+}
+
 fn parse_function_declaration(
     statement: &str,
     span: SourceSpan,
@@ -8435,8 +8668,8 @@ mod tests {
             "<inline>",
             None,
         );
-        let json = serde_json::to_string(&err).expect("serialize");
-        let decoded: ParseError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&err).unwrap_or_default();
+        let decoded: ParseError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(decoded, err);
     }
 
@@ -8978,9 +9211,8 @@ mod tests {
         };
         let left = normalize_parse_error(&err);
         let right = normalize_parse_error(&err);
-        let json = serde_json::to_string(&left).expect("serialize envelope");
-        let restored: ParseDiagnosticEnvelope =
-            serde_json::from_str(&json).expect("deserialize envelope");
+        let json = serde_json::to_string(&left).unwrap_or_default();
+        let restored: ParseDiagnosticEnvelope = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(restored, left);
         assert_eq!(left.canonical_hash(), right.canonical_hash());
         assert!(

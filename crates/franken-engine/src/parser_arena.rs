@@ -485,7 +485,8 @@ impl ParserArena {
             | Statement::Switch(_)
             | Statement::Break(_)
             | Statement::Continue(_)
-            | Statement::FunctionDeclaration(_) => {
+            | Statement::FunctionDeclaration(_)
+            | Statement::ClassDeclaration(_) => {
                 return Err(ArenaError::UnsupportedStatement {
                     kind: statement_kind_name(statement),
                 });
@@ -738,6 +739,7 @@ fn statement_kind_name(statement: &Statement) -> &'static str {
         Statement::Break(_) => "break",
         Statement::Continue(_) => "continue",
         Statement::FunctionDeclaration(_) => "function_declaration",
+        Statement::ClassDeclaration(_) => "class_declaration",
     }
 }
 

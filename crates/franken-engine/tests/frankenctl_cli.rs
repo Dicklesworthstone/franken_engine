@@ -1027,6 +1027,124 @@ fn frankenctl_cli_workflow_script_fails_closed_on_rch_drift() {
 }
 
 #[test]
+fn pipeline_integration_verification_script_emits_expected_artifacts_and_routes() {
+    let script =
+        fs::read_to_string(repo_root().join("scripts/test_pipeline_integration_verification.sh"))
+            .expect("pipeline integration verification script should exist");
+
+    assert!(script.contains("source \"${root_dir}/scripts/e2e/parser_deterministic_env.sh\""));
+    assert!(script.contains("parser_frontier_bootstrap_env"));
+    assert!(script.contains("bead_id=\"bd-6a61n.7\""));
+    assert!(script.contains("component=\"pipeline_integration_verification\""));
+    assert!(script.contains(
+        "toolchain_bin_dir=\"${RUSTUP_HOME:-${HOME}/.rustup}/toolchains/${toolchain}-x86_64-unknown-linux-gnu/bin\""
+    ));
+    assert!(script.contains(
+        "artifact_root_input=\"${PIPELINE_INTEGRATION_VERIFICATION_ARTIFACT_ROOT:-artifacts/pipeline_integration_verification}\""
+    ));
+    assert!(script.contains("pipeline_verification.jsonl"));
+    assert!(script.contains("run_manifest.json"));
+    assert!(script.contains("events.jsonl"));
+    assert!(script.contains("commands.txt"));
+    assert!(script.contains("trace_ids.json"));
+    assert!(script.contains("pipeline_verification_report.json"));
+    assert!(script.contains("summary.md"));
+    assert!(script.contains("specimens_dir"));
+    assert!(script.contains("reports_dir"));
+    assert!(script.contains("step_logs_dir"));
+    assert!(script.contains("rch exec -- env"));
+    assert!(script.contains("\"PATH=${toolchain_bin_dir}:${PATH}\""));
+    assert!(script.contains("cargo run -p frankenengine-engine --bin frankenctl --"));
+    assert!(script.contains("extract_json_report_from_step_log()"));
+    assert!(script.contains("rch_strip_ansi \"${log_path}\" >\"${stripped_log}\""));
+    assert!(script.contains(
+        "elif extract_json_report_from_step_log \"${step_log}\" \"${report_file}\"; then"
+    ));
+    assert!(script.contains("report_source=\"${step_log_rel}\""));
+    assert_eq!(script.match_indices("\"name\":").count(), 21);
+    assert!(script.contains("\"closure_mutation\""));
+    assert!(script.contains("\"promise_resolve\""));
+    assert!(script.contains(
+        "--arg schema_version \"franken-engine.pipeline-integration-verification.manifest.v1\""
+    ));
+    assert!(script.contains(
+        "--arg schema_version \"franken-engine.pipeline-integration-verification.report.v1\""
+    ));
+    assert!(script.contains("replay_command: $replay_command"));
+}
+
+#[test]
+fn pipeline_integration_verification_script_fails_closed_on_rch_drift() {
+    let script =
+        fs::read_to_string(repo_root().join("scripts/test_pipeline_integration_verification.sh"))
+            .expect("pipeline integration verification script should exist");
+
+    assert!(script.contains("rch is required for pipeline integration verification"));
+    assert!(script.contains("jq is required for pipeline integration verification"));
+    assert!(script.contains("Remote command finished: exit="));
+    assert!(script.contains("rch reported local fallback"));
+    assert!(script.contains("frankenctl run exited with an error"));
+    assert!(script.contains("missing or invalid report json"));
+    assert!(script.contains("if [[ \"${fail_count}\" -gt 0 || \"${error_count}\" -gt 0 ]]; then"));
+    assert!(script.contains("exit 1"));
+}
+
+#[test]
+fn pipeline_integration_verification_replay_script_pins_artifact_contract() {
+    let script = fs::read_to_string(
+        repo_root().join("scripts/e2e/pipeline_integration_verification_replay.sh"),
+    )
+    .expect("pipeline integration verification replay script should exist");
+
+    assert!(
+        script
+            .contains("explicit_run_dir=\"${PIPELINE_INTEGRATION_VERIFICATION_REPLAY_RUN_DIR:-}\"")
+    );
+    assert!(script.contains("run_dir_is_complete()"));
+    assert!(script.contains("if [[ -z \"${explicit_run_dir}\" ]]; then"));
+    assert!(script.contains(
+        "\"${root_dir}/scripts/test_pipeline_integration_verification.sh\" || main_exit=$?"
+    ));
+    assert!(script.contains("if run_dir_is_complete \"${explicit_run_dir}\"; then"));
+    assert!(script.contains(
+        "pipeline integration verification replay explicit run directory is incomplete: ${explicit_run_dir}"
+    ));
+
+    for required_path in [
+        "${candidate}/run_manifest.json",
+        "${candidate}/events.jsonl",
+        "${candidate}/commands.txt",
+        "${candidate}/trace_ids.json",
+        "${candidate}/pipeline_verification_report.json",
+        "${candidate}/pipeline_verification.jsonl",
+        "${candidate}/summary.md",
+        "${candidate}/reports",
+        "${candidate}/step_logs",
+    ] {
+        assert!(
+            script.contains(required_path),
+            "expected replay completeness check for {required_path}"
+        );
+    }
+
+    for replay_output in [
+        "[pipeline-integration-verification] latest manifest: ${latest_run_dir}/run_manifest.json",
+        "[pipeline-integration-verification] latest trace ids: ${latest_run_dir}/trace_ids.json",
+        "[pipeline-integration-verification] latest events: ${latest_run_dir}/events.jsonl",
+        "[pipeline-integration-verification] latest commands: ${latest_run_dir}/commands.txt",
+        "[pipeline-integration-verification] latest jsonl log: ${latest_run_dir}/pipeline_verification.jsonl",
+        "[pipeline-integration-verification] latest report: ${latest_run_dir}/pipeline_verification_report.json",
+        "[pipeline-integration-verification] latest summary: ${latest_run_dir}/summary.md",
+        "[pipeline-integration-verification] first step log: ${first_step_log_path}",
+    ] {
+        assert!(
+            script.contains(replay_output),
+            "expected replay output contract for {replay_output}"
+        );
+    }
+}
+
+#[test]
 fn frankenctl_compile_then_verify_compile_artifact_round_trip() {
     let source_path = temp_path("frankenctl_compile_source", "js");
     let artifact_path = temp_path("frankenctl_compile_artifact", "json");

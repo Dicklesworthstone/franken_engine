@@ -243,6 +243,21 @@ fn json_compound_placeholder_closure_script_uses_rch_and_repo_local_target_dir()
 }
 
 #[test]
+fn json_compound_placeholder_closure_script_only_requires_artifacts_for_emitting_modes() {
+    let script = read_repo_text("scripts/run_rgc_json_compound_placeholder_closure.sh");
+    assert!(
+        script.contains(
+            "if [[ \"${mode}\" == \"test\" || \"${mode}\" == \"replay\" || \"${mode}\" == \"ci\" ]]; then"
+        ),
+        "closure runner should only require artifact bundles for modes that emit them"
+    );
+    assert!(
+        script.contains("json compound placeholder closure ${mode} completed via rch"),
+        "closure runner should report successful non-artifact modes without requiring bundle files"
+    );
+}
+
+#[test]
 fn json_compound_placeholder_closure_replay_wrapper_prints_required_artifacts() {
     let script = read_repo_text("scripts/e2e/rgc_json_compound_placeholder_closure_replay.sh");
     for marker in [

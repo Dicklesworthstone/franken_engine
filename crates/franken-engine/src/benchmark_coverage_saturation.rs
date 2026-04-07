@@ -1144,7 +1144,9 @@ impl SaturationBoard {
         let kl_score = if complexities.is_empty() {
             0
         } else {
-            let total: u64 = complexities.iter().sum();
+            let total: u64 = complexities
+                .iter()
+                .fold(0u64, |acc, &x| acc.saturating_add(x));
             let count = complexities.len() as u64;
             let mean = total.checked_div(count).unwrap_or(0);
             if mean == 0 {

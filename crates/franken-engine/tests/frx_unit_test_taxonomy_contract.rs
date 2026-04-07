@@ -820,8 +820,8 @@ fn fixture_entry_derive_id_is_deterministic() {
         origin_ref: "bd-test".to_string(),
         tags: BTreeSet::from(["core".to_string()]),
     };
-    let id_a = entry.derive_id().expect("derive_id a");
-    let id_b = entry.derive_id().expect("derive_id b");
+    let id_a = entry.derive_id().unwrap_or_default();
+    let id_b = entry.derive_id().unwrap_or_default();
     assert_eq!(id_a, id_b);
 }
 

@@ -675,6 +675,73 @@ fn external_package_root_require_specimen(
     }
 }
 
+fn bare_require_index_mjs_specimen(
+    specimen_id: &str,
+    description: &str,
+    package_entry_specifier: &str,
+    package_sub_specifier: &str,
+    bare_request: &str,
+    sub_value_source: &str,
+    expected_outcome: InteropExpectedOutcome,
+) -> InteropSpecimen {
+    let success = expected_outcome == InteropExpectedOutcome::Success;
+
+    InteropSpecimen {
+        specimen_id: specimen_id.into(),
+        description: description.into(),
+        family: InteropFamily::CjsRequiresEsm,
+        modules: vec![
+            SpecimenModule {
+                specifier: package_sub_specifier.into(),
+                syntax: ModuleSyntax::EsModule,
+                source: format!("export const value = {sub_value_source};"),
+                imports: vec![],
+                exports: vec![ExportEntry::direct("value", "value")],
+                has_default_export: false,
+                has_top_level_await: false,
+            },
+            SpecimenModule {
+                specifier: package_entry_specifier.into(),
+                syntax: ModuleSyntax::EsModule,
+                source: "import { value } from './sub.mjs'; export { value };".into(),
+                imports: vec![ImportEntry::new("./sub.mjs", "value", "value")],
+                exports: vec![ExportEntry::direct("value", "value")],
+                has_default_export: false,
+                has_top_level_await: false,
+            },
+            SpecimenModule {
+                specifier: "entry.cjs".into(),
+                syntax: ModuleSyntax::CommonJs,
+                source: format!("const pkg = require('{bare_request}');"),
+                imports: vec![ImportEntry::new(bare_request, "value", "pkg")],
+                exports: vec![],
+                has_default_export: false,
+                has_top_level_await: false,
+            },
+        ],
+        entry_point: "entry.cjs".into(),
+        expected_outcome,
+        expected_linked_count: success.then_some(3),
+        expected_binding_states: if success {
+            vec![
+                ExpectedBindingState {
+                    module_specifier: package_sub_specifier.into(),
+                    export_name: "value".into(),
+                    expected_state: BindingCellState::Initialized,
+                },
+                ExpectedBindingState {
+                    module_specifier: package_entry_specifier.into(),
+                    export_name: "value".into(),
+                    expected_state: BindingCellState::Initialized,
+                },
+            ]
+        } else {
+            vec![]
+        },
+        expected_async_phases: vec![],
+    }
+}
+
 fn esm_imports_cjs_default_specimen(specimen_id: &str, description: &str) -> InteropSpecimen {
     InteropSpecimen {
         specimen_id: specimen_id.into(),
@@ -922,6 +989,60 @@ pub fn interop_parity_corpus() -> Vec<InteropSpecimen> {
             "@scope/pkg/sub.cjs",
             "@scope/pkg",
             "7",
+        ),
+        bare_require_index_mjs_specimen(
+            "bare_require_package_index_mjs_native",
+            "Native CJS entry bare-requires a package whose only entry point is index.mjs and fails closed before implicit .mjs package-entry probing",
+            "pkg/index.mjs",
+            "pkg/sub.mjs",
+            "pkg",
+            "41",
+            InteropExpectedOutcome::LinkFailure,
+        ),
+        bare_require_index_mjs_specimen(
+            "bare_require_package_index_mjs_node_compat",
+            "Node-compatible CJS entry still fails closed when a package root only exposes index.mjs to bare require()",
+            "pkg/index.mjs",
+            "pkg/sub.mjs",
+            "pkg",
+            "41",
+            InteropExpectedOutcome::LinkFailure,
+        ),
+        bare_require_index_mjs_specimen(
+            "bare_require_package_index_mjs_bun_compat",
+            "Bun-compatible CJS entry bare-requires a package whose index.mjs entry sync-bridges into ESM while keeping ./sub.mjs anchored at the package root",
+            "pkg/index.mjs",
+            "pkg/sub.mjs",
+            "pkg",
+            "41",
+            InteropExpectedOutcome::Success,
+        ),
+        bare_require_index_mjs_specimen(
+            "scoped_bare_require_package_index_mjs_native",
+            "Native CJS entry bare-requires a scoped package whose only entry point is index.mjs and fails closed before implicit scoped .mjs package-entry probing",
+            "@scope/pkg/index.mjs",
+            "@scope/pkg/sub.mjs",
+            "@scope/pkg",
+            "7",
+            InteropExpectedOutcome::LinkFailure,
+        ),
+        bare_require_index_mjs_specimen(
+            "scoped_bare_require_package_index_mjs_node_compat",
+            "Node-compatible CJS entry still fails closed when a scoped package root only exposes index.mjs to bare require()",
+            "@scope/pkg/index.mjs",
+            "@scope/pkg/sub.mjs",
+            "@scope/pkg",
+            "7",
+            InteropExpectedOutcome::LinkFailure,
+        ),
+        bare_require_index_mjs_specimen(
+            "scoped_bare_require_package_index_mjs_bun_compat",
+            "Bun-compatible CJS entry bare-requires a scoped package whose index.mjs entry sync-bridges into ESM while keeping ./sub.mjs anchored at the scoped package root",
+            "@scope/pkg/index.mjs",
+            "@scope/pkg/sub.mjs",
+            "@scope/pkg",
+            "7",
+            InteropExpectedOutcome::Success,
         ),
         // ── ESM imports CJS ──
         InteropSpecimen {
@@ -2686,6 +2807,33 @@ pub fn write_interop_parity_bundle(
 mod tests {
     use super::*;
 
+    const BARE_REQUIRE_INDEX_MJS_MODE_CASES: [(&str, CompatibilityMode); 6] = [
+        (
+            "bare_require_package_index_mjs_native",
+            CompatibilityMode::Native,
+        ),
+        (
+            "bare_require_package_index_mjs_node_compat",
+            CompatibilityMode::NodeCompat,
+        ),
+        (
+            "bare_require_package_index_mjs_bun_compat",
+            CompatibilityMode::BunCompat,
+        ),
+        (
+            "scoped_bare_require_package_index_mjs_native",
+            CompatibilityMode::Native,
+        ),
+        (
+            "scoped_bare_require_package_index_mjs_node_compat",
+            CompatibilityMode::NodeCompat,
+        ),
+        (
+            "scoped_bare_require_package_index_mjs_bun_compat",
+            CompatibilityMode::BunCompat,
+        ),
+    ];
+
     const EXTERNAL_PACKAGE_ROOT_REQUIRE_MODE_CASES: [(&str, CompatibilityMode); 6] = [
         (
             "external_extension_probe_package_root_require_native",
@@ -4367,6 +4515,68 @@ mod tests {
                 .iter()
                 .all(|verdict| verdict.pass)
         );
+    }
+
+    #[test]
+    fn run_single_specimen_bare_require_index_mjs_mode_split_matches_resolver_contract() {
+        let corpus = interop_parity_corpus();
+
+        for (specimen_id, compatibility_mode) in BARE_REQUIRE_INDEX_MJS_MODE_CASES {
+            let specimen = corpus
+                .iter()
+                .find(|specimen| specimen.specimen_id == specimen_id)
+                .unwrap_or_else(|| {
+                    panic!("bare require() index.mjs specimen missing: {specimen_id}")
+                });
+            let evidence = run_single_specimen(specimen);
+            assert_eq!(evidence.compatibility_mode, compatibility_mode);
+            assert_eq!(evidence.verdict, InteropVerdict::Pass);
+
+            match compatibility_mode {
+                CompatibilityMode::Native | CompatibilityMode::NodeCompat => {
+                    assert_eq!(evidence.actual_outcome, InteropActualOutcome::LinkFailure);
+                    assert_eq!(
+                        evidence.compatibility_disposition,
+                        InteropCompatibilityDisposition::Unsupported
+                    );
+                    assert_eq!(
+                        evidence.remediation_guidance.guidance_code,
+                        "repair_link_boundary"
+                    );
+                    assert!(evidence.remediation_guidance.message.contains(specimen_id));
+                    assert!(evidence.error_detail.is_some());
+                }
+                CompatibilityMode::BunCompat => {
+                    assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
+                    assert_eq!(
+                        evidence.compatibility_disposition,
+                        InteropCompatibilityDisposition::Supported
+                    );
+                    assert_eq!(evidence.linked_count, 3);
+                    assert!(evidence.error_detail.is_none());
+                    assert_eq!(
+                        evidence.remediation_guidance.guidance_code,
+                        "no_remediation_required"
+                    );
+                    assert!(evidence.remediation_guidance.message.contains(specimen_id));
+                    assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bare_require_index_mjs_cases_are_explicitly_mode_tagged_in_corpus() {
+        let corpus_ids: BTreeSet<String> = interop_parity_corpus()
+            .into_iter()
+            .map(|specimen| specimen.specimen_id)
+            .collect();
+        for (specimen_id, _) in BARE_REQUIRE_INDEX_MJS_MODE_CASES {
+            assert!(
+                corpus_ids.contains(specimen_id),
+                "missing explicit bare require() index.mjs specimen {specimen_id}"
+            );
+        }
     }
 
     #[test]

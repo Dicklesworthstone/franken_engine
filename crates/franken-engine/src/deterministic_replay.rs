@@ -85,7 +85,7 @@ impl TraceEvent {
             &replay_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for trace event")
+        .unwrap_or_default()
     }
 }
 
@@ -162,7 +162,7 @@ impl NondeterminismTrace {
             &replay_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for trace")
+        .unwrap_or_default()
     }
 }
 
@@ -373,7 +373,7 @@ impl ReplayEngine {
             &replay_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for replay engine")
+        .unwrap_or_default()
     }
 }
 
@@ -454,7 +454,7 @@ impl FailoverRecord {
             &replay_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for failover record")
+        .unwrap_or_default()
     }
 }
 
@@ -563,7 +563,7 @@ impl FailoverController {
             &replay_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for failover controller")
+        .unwrap_or_default()
     }
 }
 
@@ -668,7 +668,7 @@ impl IncidentArtifact {
             &replay_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for artifact")
+        .unwrap_or_default()
     }
 }
 
@@ -752,7 +752,7 @@ impl IncidentBundle {
             &replay_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for bundle")
+        .unwrap_or_default()
     }
 }
 

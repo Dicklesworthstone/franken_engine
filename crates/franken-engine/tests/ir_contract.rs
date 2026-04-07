@@ -1319,6 +1319,8 @@ fn enrichment_ir1_all_ops_serde_roundtrip() {
         Ir1Op::DeclareFunction {
             name: "f".to_string(),
             binding_id: 10,
+            param_names: Vec::new(),
+            body_ops: Vec::new(),
         },
         Ir1Op::BeginTry {
             catch_label: 100,

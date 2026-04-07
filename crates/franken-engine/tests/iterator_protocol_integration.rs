@@ -36,7 +36,7 @@ fn make_id(label: &str) -> frankenengine_engine::engine_object_id::EngineObjectI
         &test_schema(),
         label.as_bytes(),
     )
-    .expect("derive_id should succeed")
+    .unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------

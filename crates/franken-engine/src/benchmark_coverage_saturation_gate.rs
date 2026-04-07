@@ -636,7 +636,7 @@ fn compute_normalised_entropy(shares: &[u64]) -> u64 {
     // Since we work in fixed-point millionths, convert shares to f64 for
     // log computation, then convert back. This is deterministic because
     // the inputs are fixed-point and we only use the result as a millionths value.
-    let total: u64 = shares.iter().sum();
+    let total: u64 = shares.iter().fold(0u64, |acc, &x| acc.saturating_add(x));
     if total == 0 {
         return 0;
     }

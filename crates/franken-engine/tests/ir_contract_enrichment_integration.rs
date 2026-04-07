@@ -549,6 +549,8 @@ fn enrichment_ir1_op_all_variants_serde_sample() {
         Ir1Op::DeclareFunction {
             name: "foo".to_string(),
             binding_id: 10,
+            param_names: Vec::new(),
+            body_ops: Vec::new(),
         },
         Ir1Op::BeginTry {
             catch_label: 5,

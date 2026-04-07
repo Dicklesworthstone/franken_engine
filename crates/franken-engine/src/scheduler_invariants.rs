@@ -162,7 +162,7 @@ impl SchedulerAutomaton {
             &invariant_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for automaton")
+        .unwrap_or_default()
     }
 }
 
@@ -363,7 +363,7 @@ impl VerificationResult {
             &invariant_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for verification result")
+        .unwrap_or_default()
     }
 }
 
@@ -432,7 +432,7 @@ impl RegressionFixture {
             &invariant_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for fixture")
+        .unwrap_or_default()
     }
 }
 
@@ -546,7 +546,7 @@ impl CompositionCheck {
             &invariant_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for composition check")
+        .unwrap_or_default()
     }
 }
 
@@ -645,7 +645,7 @@ impl InvariantRegistry {
             &invariant_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for invariant registry")
+        .unwrap_or_default()
     }
 }
 

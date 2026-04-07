@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::control_plane::{
     ContextAdapter, DecisionContract, DecisionId, DecisionOutcome, EvalContext, EvidenceLedger,
-    FallbackPolicy, LossMatrix, PolicyId, Posterior,
+    FallbackPolicy, LossMatrix, PolicyId, Posterior, evaluate_contract,
 };
 
 // ---------------------------------------------------------------------------
@@ -552,7 +552,7 @@ impl SafetyDecisionRouter {
         };
 
         // Evaluate decision contract.
-        let outcome = franken_decision::evaluate(&contract, &posterior, &eval_ctx);
+        let outcome = evaluate_contract(&contract, &posterior, &eval_ctx);
 
         // Map outcome to verdict.
         let verdict = self.map_outcome(&outcome, request.action);

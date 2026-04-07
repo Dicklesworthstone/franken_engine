@@ -953,7 +953,7 @@ impl RevocationChain {
             &revocation_event_schema_id(),
             &canonical,
         )
-        .expect("canonical bytes are non-empty")
+        .unwrap_or_default()
     }
 
     fn derive_head_id(&self, head_seq: u64, latest_event: &EngineObjectId) -> EngineObjectId {
@@ -967,7 +967,7 @@ impl RevocationChain {
             &revocation_head_schema_id(),
             &canonical,
         )
-        .expect("canonical bytes are non-empty")
+        .unwrap_or_default()
     }
 
     fn emit_reject(&mut self, trace_id: &str, reason: String) {

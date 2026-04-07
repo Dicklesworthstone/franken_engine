@@ -150,6 +150,12 @@ impl fmt::Display for SchemaId {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct EngineObjectId(pub [u8; OBJECT_ID_LEN]);
 
+impl Default for EngineObjectId {
+    fn default() -> Self {
+        Self([0; OBJECT_ID_LEN])
+    }
+}
+
 impl EngineObjectId {
     /// Access the raw bytes.
     pub fn as_bytes(&self) -> &[u8; OBJECT_ID_LEN] {

@@ -12,13 +12,1239 @@
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "asupersync-integration")]
 pub use franken_decision::{
     DecisionContract, DecisionOutcome, EvalContext, FallbackPolicy, LossMatrix, Posterior,
 };
+#[cfg(feature = "asupersync-integration")]
 pub use franken_evidence::{EvidenceLedger, EvidenceLedgerBuilder};
+#[cfg(feature = "asupersync-integration")]
 pub use franken_kernel::{
     Budget, CapabilitySet, Cx, DecisionId, NoCaps, PolicyId, SchemaVersion, TraceId,
 };
+
+#[cfg(not(feature = "asupersync-integration"))]
+pub use standalone::{
+    Budget, CapabilitySet, Cx, DecisionContract, DecisionId, DecisionOutcome, EvalContext,
+    EvidenceLedger, EvidenceLedgerBuilder, FallbackPolicy, LossMatrix, NoCaps, PolicyId, Posterior,
+    SchemaVersion, TraceId,
+};
+
+#[cfg(not(feature = "asupersync-integration"))]
+mod standalone {
+    use std::collections::BTreeMap;
+    use std::fmt;
+    use std::marker::PhantomData;
+    use std::str::FromStr;
+
+    use serde::{Deserialize, Serialize};
+
+    const NORMALIZATION_TOLERANCE: f64 = 1e-6;
+
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(transparent)]
+    pub struct TraceId(#[serde(with = "hex_u128")] u128);
+
+    impl TraceId {
+        pub const fn from_raw(raw: u128) -> Self {
+            Self(raw)
+        }
+
+        pub const fn from_parts(ts_ms: u64, random: u128) -> Self {
+            let ts_bits = (ts_ms as u128) << 80;
+            let rand_bits = random & 0xFFFF_FFFF_FFFF_FFFF_FFFF;
+            Self(ts_bits | rand_bits)
+        }
+
+        pub const fn timestamp_ms(self) -> u64 {
+            (self.0 >> 80) as u64
+        }
+
+        pub const fn as_u128(self) -> u128 {
+            self.0
+        }
+
+        pub const fn to_bytes(self) -> [u8; 16] {
+            self.0.to_be_bytes()
+        }
+
+        pub const fn from_bytes(bytes: [u8; 16]) -> Self {
+            Self(u128::from_be_bytes(bytes))
+        }
+    }
+
+    impl fmt::Debug for TraceId {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "TraceId({:032x})", self.0)
+        }
+    }
+
+    impl fmt::Display for TraceId {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{:032x}", self.0)
+        }
+    }
+
+    impl FromStr for TraceId {
+        type Err = ParseIdError;
+
+        fn from_str(s: &str) -> Result<Self, Self::Err> {
+            let val = u128::from_str_radix(s, 16).map_err(|_| ParseIdError {
+                kind: "TraceId",
+                input_len: s.len(),
+            })?;
+            Ok(Self(val))
+        }
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(transparent)]
+    pub struct DecisionId(#[serde(with = "hex_u128")] u128);
+
+    impl DecisionId {
+        pub const fn from_raw(raw: u128) -> Self {
+            Self(raw)
+        }
+
+        pub const fn from_parts(ts_ms: u64, random: u128) -> Self {
+            let ts_bits = (ts_ms as u128) << 80;
+            let rand_bits = random & 0xFFFF_FFFF_FFFF_FFFF_FFFF;
+            Self(ts_bits | rand_bits)
+        }
+
+        pub const fn timestamp_ms(self) -> u64 {
+            (self.0 >> 80) as u64
+        }
+
+        pub const fn as_u128(self) -> u128 {
+            self.0
+        }
+
+        pub const fn to_bytes(self) -> [u8; 16] {
+            self.0.to_be_bytes()
+        }
+
+        pub const fn from_bytes(bytes: [u8; 16]) -> Self {
+            Self(u128::from_be_bytes(bytes))
+        }
+    }
+
+    impl fmt::Debug for DecisionId {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "DecisionId({:032x})", self.0)
+        }
+    }
+
+    impl fmt::Display for DecisionId {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{:032x}", self.0)
+        }
+    }
+
+    impl FromStr for DecisionId {
+        type Err = ParseIdError;
+
+        fn from_str(s: &str) -> Result<Self, Self::Err> {
+            let val = u128::from_str_radix(s, 16).map_err(|_| ParseIdError {
+                kind: "DecisionId",
+                input_len: s.len(),
+            })?;
+            Ok(Self(val))
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct PolicyId {
+        #[serde(rename = "n")]
+        name: String,
+        #[serde(rename = "v")]
+        version: u32,
+    }
+
+    impl PolicyId {
+        pub fn new(name: impl Into<String>, version: u32) -> Self {
+            Self {
+                name: name.into(),
+                version,
+            }
+        }
+
+        pub fn name(&self) -> &str {
+            &self.name
+        }
+
+        pub const fn version(&self) -> u32 {
+            self.version
+        }
+    }
+
+    impl fmt::Display for PolicyId {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{}@v{}", self.name, self.version)
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct SchemaVersion {
+        pub major: u32,
+        pub minor: u32,
+        pub patch: u32,
+    }
+
+    impl SchemaVersion {
+        pub const fn new(major: u32, minor: u32, patch: u32) -> Self {
+            Self {
+                major,
+                minor,
+                patch,
+            }
+        }
+
+        pub const fn is_compatible(&self, other: &Self) -> bool {
+            self.major == other.major
+        }
+    }
+
+    impl fmt::Display for SchemaVersion {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+        }
+    }
+
+    impl FromStr for SchemaVersion {
+        type Err = ParseVersionError;
+
+        fn from_str(s: &str) -> Result<Self, Self::Err> {
+            let parts: Vec<&str> = s.split('.').collect();
+            if parts.len() != 3 {
+                return Err(ParseVersionError);
+            }
+            let major = parts[0].parse().map_err(|_| ParseVersionError)?;
+            let minor = parts[1].parse().map_err(|_| ParseVersionError)?;
+            let patch = parts[2].parse().map_err(|_| ParseVersionError)?;
+            Ok(Self {
+                major,
+                minor,
+                patch,
+            })
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    pub struct Budget {
+        remaining_ms: u64,
+    }
+
+    impl Budget {
+        pub const fn new(ms: u64) -> Self {
+            Self { remaining_ms: ms }
+        }
+
+        pub const fn remaining_ms(self) -> u64 {
+            self.remaining_ms
+        }
+
+        pub const fn consume(self, ms: u64) -> Option<Self> {
+            if self.remaining_ms >= ms {
+                Some(Self {
+                    remaining_ms: self.remaining_ms - ms,
+                })
+            } else {
+                None
+            }
+        }
+
+        pub const fn is_exhausted(self) -> bool {
+            self.remaining_ms == 0
+        }
+
+        #[must_use]
+        pub const fn min(self, other: Self) -> Self {
+            if self.remaining_ms <= other.remaining_ms {
+                self
+            } else {
+                other
+            }
+        }
+
+        pub const UNLIMITED: Self = Self {
+            remaining_ms: u64::MAX,
+        };
+    }
+
+    pub trait CapabilitySet: Clone + fmt::Debug + Send + Sync {
+        fn capability_names(&self) -> Vec<&str>;
+        fn count(&self) -> usize;
+
+        fn is_empty(&self) -> bool {
+            self.count() == 0
+        }
+    }
+
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    pub struct NoCaps;
+
+    impl CapabilitySet for NoCaps {
+        fn capability_names(&self) -> Vec<&str> {
+            Vec::new()
+        }
+
+        fn count(&self) -> usize {
+            0
+        }
+    }
+
+    pub struct Cx<'a, C: CapabilitySet = NoCaps> {
+        trace_id: TraceId,
+        budget: Budget,
+        capabilities: C,
+        depth: u32,
+        _scope: PhantomData<&'a ()>,
+    }
+
+    impl<C: CapabilitySet> Cx<'_, C> {
+        pub fn new(trace_id: TraceId, budget: Budget, capabilities: C) -> Self {
+            Self {
+                trace_id,
+                budget,
+                capabilities,
+                depth: 0,
+                _scope: PhantomData,
+            }
+        }
+
+        pub fn child(&self, capabilities: C, budget: Budget) -> Cx<'_, C> {
+            Cx {
+                trace_id: self.trace_id,
+                budget: self.budget.min(budget),
+                capabilities,
+                depth: self.depth + 1,
+                _scope: PhantomData,
+            }
+        }
+
+        pub const fn trace_id(&self) -> TraceId {
+            self.trace_id
+        }
+
+        pub const fn budget(&self) -> Budget {
+            self.budget
+        }
+
+        pub fn capabilities(&self) -> &C {
+            &self.capabilities
+        }
+
+        pub const fn depth(&self) -> u32 {
+            self.depth
+        }
+
+        pub fn consume_budget(&mut self, ms: u64) -> bool {
+            match self.budget.consume(ms) {
+                Some(new_budget) => {
+                    self.budget = new_budget;
+                    true
+                }
+                None => false,
+            }
+        }
+    }
+
+    impl<C: CapabilitySet> fmt::Debug for Cx<'_, C> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("Cx")
+                .field("trace_id", &self.trace_id)
+                .field("budget_ms", &self.budget.remaining_ms())
+                .field("capabilities", &self.capabilities)
+                .field("depth", &self.depth)
+                .finish()
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum DecisionValidationError {
+        EmptySpace {
+            field: &'static str,
+        },
+        DimensionMismatch {
+            expected: usize,
+            got: usize,
+        },
+        InvalidLoss {
+            state: usize,
+            action: usize,
+            value: f64,
+        },
+        NegativeLoss {
+            state: usize,
+            action: usize,
+            value: f64,
+        },
+        InvalidPosteriorProbability {
+            index: usize,
+            value: f64,
+        },
+        PosteriorNotNormalized {
+            sum: f64,
+        },
+        ThresholdOutOfRange {
+            field: &'static str,
+            value: f64,
+        },
+    }
+
+    impl fmt::Display for DecisionValidationError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::EmptySpace { field } => write!(f, "{field} must not be empty"),
+                Self::DimensionMismatch { expected, got } => {
+                    write!(f, "dimension mismatch: expected {expected}, got {got}")
+                }
+                Self::InvalidLoss {
+                    state,
+                    action,
+                    value,
+                } => write!(
+                    f,
+                    "loss[{state},{action}] must be finite and non-negative, got {value}"
+                ),
+                Self::NegativeLoss {
+                    state,
+                    action,
+                    value,
+                } => write!(f, "loss[{state},{action}] must be >= 0, got {value}"),
+                Self::InvalidPosteriorProbability { index, value } => write!(
+                    f,
+                    "posterior[{index}] must be finite and non-negative, got {value}"
+                ),
+                Self::PosteriorNotNormalized { sum } => {
+                    write!(f, "posterior sums to {sum}, expected ~1.0")
+                }
+                Self::ThresholdOutOfRange { field, value } => {
+                    write!(f, "{field} is out of range: {value}")
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for DecisionValidationError {}
+
+    #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+    pub struct LossMatrix {
+        state_names: Vec<String>,
+        action_names: Vec<String>,
+        values: Vec<f64>,
+    }
+
+    impl LossMatrix {
+        pub fn new(
+            state_names: Vec<String>,
+            action_names: Vec<String>,
+            values: Vec<f64>,
+        ) -> Result<Self, DecisionValidationError> {
+            if state_names.is_empty() {
+                return Err(DecisionValidationError::EmptySpace {
+                    field: "state_names",
+                });
+            }
+            if action_names.is_empty() {
+                return Err(DecisionValidationError::EmptySpace {
+                    field: "action_names",
+                });
+            }
+
+            let expected = state_names.len() * action_names.len();
+            if values.len() != expected {
+                return Err(DecisionValidationError::DimensionMismatch {
+                    expected,
+                    got: values.len(),
+                });
+            }
+
+            let n_actions = action_names.len();
+            for (index, &value) in values.iter().enumerate() {
+                if !value.is_finite() {
+                    return Err(DecisionValidationError::InvalidLoss {
+                        state: index / n_actions,
+                        action: index % n_actions,
+                        value,
+                    });
+                }
+                if value < 0.0 {
+                    return Err(DecisionValidationError::NegativeLoss {
+                        state: index / n_actions,
+                        action: index % n_actions,
+                        value,
+                    });
+                }
+            }
+
+            Ok(Self {
+                state_names,
+                action_names,
+                values,
+            })
+        }
+
+        pub fn get(&self, state: usize, action: usize) -> f64 {
+            self.values[state * self.action_names.len() + action]
+        }
+
+        pub fn n_states(&self) -> usize {
+            self.state_names.len()
+        }
+
+        pub fn n_actions(&self) -> usize {
+            self.action_names.len()
+        }
+
+        pub fn state_names(&self) -> &[String] {
+            &self.state_names
+        }
+
+        pub fn action_names(&self) -> &[String] {
+            &self.action_names
+        }
+
+        pub fn expected_loss(&self, posterior: &Posterior, action: usize) -> f64 {
+            posterior
+                .probs()
+                .iter()
+                .enumerate()
+                .map(|(state, &probability)| probability * self.get(state, action))
+                .sum()
+        }
+
+        pub fn expected_losses(&self, posterior: &Posterior) -> BTreeMap<String, f64> {
+            self.action_names
+                .iter()
+                .enumerate()
+                .map(|(action_index, name)| {
+                    (name.clone(), self.expected_loss(posterior, action_index))
+                })
+                .collect()
+        }
+
+        pub fn bayes_action(&self, posterior: &Posterior) -> usize {
+            (0..self.action_names.len())
+                .min_by(|&left, &right| {
+                    self.expected_loss(posterior, left)
+                        .partial_cmp(&self.expected_loss(posterior, right))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .unwrap_or(0)
+        }
+    }
+
+    impl Default for LossMatrix {
+        fn default() -> Self {
+            Self {
+                state_names: vec!["default".to_string()],
+                action_names: vec!["allow".to_string()],
+                values: vec![0.0],
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+    pub struct Posterior {
+        probs: Vec<f64>,
+    }
+
+    impl Posterior {
+        pub fn new(probs: Vec<f64>) -> Result<Self, DecisionValidationError> {
+            for (index, &value) in probs.iter().enumerate() {
+                if !value.is_finite() || value < 0.0 {
+                    return Err(DecisionValidationError::InvalidPosteriorProbability {
+                        index,
+                        value,
+                    });
+                }
+            }
+
+            let sum: f64 = probs.iter().sum();
+            if (sum - 1.0).abs() > NORMALIZATION_TOLERANCE {
+                return Err(DecisionValidationError::PosteriorNotNormalized { sum });
+            }
+
+            Ok(Self { probs })
+        }
+
+        #[allow(clippy::cast_precision_loss)]
+        pub fn uniform(n: usize) -> Self {
+            let cardinality = n.max(1);
+            let probability = 1.0 / cardinality as f64;
+            Self {
+                probs: vec![probability; cardinality],
+            }
+        }
+
+        pub fn probs(&self) -> &[f64] {
+            &self.probs
+        }
+
+        pub fn probs_mut(&mut self) -> &mut [f64] {
+            &mut self.probs
+        }
+
+        pub fn len(&self) -> usize {
+            self.probs.len()
+        }
+
+        pub fn is_empty(&self) -> bool {
+            self.probs.is_empty()
+        }
+
+        pub fn bayesian_update(&mut self, likelihoods: &[f64]) {
+            assert_eq!(likelihoods.len(), self.probs.len());
+            for (probability, &likelihood) in self.probs.iter_mut().zip(likelihoods) {
+                *probability *= likelihood;
+            }
+            self.normalize();
+        }
+
+        pub fn normalize(&mut self) {
+            let sum: f64 = self.probs.iter().sum();
+            if sum > 0.0 {
+                for probability in &mut self.probs {
+                    *probability /= sum;
+                }
+            }
+        }
+
+        pub fn entropy(&self) -> f64 {
+            self.probs
+                .iter()
+                .filter(|&&probability| probability > 0.0)
+                .map(|&probability| -probability * probability.log2())
+                .sum()
+        }
+
+        pub fn map_state(&self) -> usize {
+            self.probs
+                .iter()
+                .enumerate()
+                .max_by(|left, right| {
+                    left.1
+                        .partial_cmp(right.1)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map_or(0, |(index, _)| index)
+        }
+    }
+
+    impl Default for Posterior {
+        fn default() -> Self {
+            Self::uniform(1)
+        }
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+    pub struct FallbackPolicy {
+        pub calibration_drift_threshold: f64,
+        pub e_process_breach_threshold: f64,
+        pub confidence_width_threshold: f64,
+    }
+
+    impl FallbackPolicy {
+        pub fn new(
+            calibration_drift_threshold: f64,
+            e_process_breach_threshold: f64,
+            confidence_width_threshold: f64,
+        ) -> Result<Self, DecisionValidationError> {
+            if !calibration_drift_threshold.is_finite()
+                || !(0.0..=1.0).contains(&calibration_drift_threshold)
+            {
+                return Err(DecisionValidationError::ThresholdOutOfRange {
+                    field: "calibration_drift_threshold",
+                    value: calibration_drift_threshold,
+                });
+            }
+            if !e_process_breach_threshold.is_finite() || e_process_breach_threshold < 0.0 {
+                return Err(DecisionValidationError::ThresholdOutOfRange {
+                    field: "e_process_breach_threshold",
+                    value: e_process_breach_threshold,
+                });
+            }
+            if !confidence_width_threshold.is_finite() || confidence_width_threshold < 0.0 {
+                return Err(DecisionValidationError::ThresholdOutOfRange {
+                    field: "confidence_width_threshold",
+                    value: confidence_width_threshold,
+                });
+            }
+
+            Ok(Self {
+                calibration_drift_threshold,
+                e_process_breach_threshold,
+                confidence_width_threshold,
+            })
+        }
+
+        pub fn should_fallback(
+            &self,
+            calibration_score: f64,
+            e_process: f64,
+            ci_width: f64,
+        ) -> bool {
+            calibration_score < self.calibration_drift_threshold
+                || e_process > self.e_process_breach_threshold
+                || ci_width > self.confidence_width_threshold
+        }
+    }
+
+    impl Default for FallbackPolicy {
+        fn default() -> Self {
+            Self {
+                calibration_drift_threshold: 0.7,
+                e_process_breach_threshold: 20.0,
+                confidence_width_threshold: 0.5,
+            }
+        }
+    }
+
+    pub trait DecisionContract {
+        fn name(&self) -> &str;
+        fn state_space(&self) -> &[String];
+        fn action_set(&self) -> &[String];
+        fn loss_matrix(&self) -> &LossMatrix;
+        fn update_posterior(&self, posterior: &mut Posterior, state_index: usize);
+        fn choose_action(&self, posterior: &Posterior) -> usize;
+        fn fallback_action(&self) -> usize;
+        fn fallback_policy(&self) -> &FallbackPolicy;
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct DecisionAuditEntry {
+        pub decision_id: DecisionId,
+        pub trace_id: TraceId,
+        pub contract_name: String,
+        pub action_chosen: String,
+        pub expected_loss: f64,
+        pub calibration_score: f64,
+        pub fallback_active: bool,
+        pub posterior_snapshot: Vec<f64>,
+        pub expected_loss_by_action: BTreeMap<String, f64>,
+        pub ts_unix_ms: u64,
+    }
+
+    impl DecisionAuditEntry {
+        pub fn to_evidence_ledger(&self) -> EvidenceLedger {
+            let mut builder = EvidenceLedgerBuilder::new()
+                .ts_unix_ms(self.ts_unix_ms)
+                .component(&self.contract_name)
+                .action(&self.action_chosen)
+                .posterior(self.posterior_snapshot.clone())
+                .chosen_expected_loss(self.expected_loss)
+                .calibration_score(self.calibration_score)
+                .fallback_active(self.fallback_active);
+
+            for (action, &loss) in &self.expected_loss_by_action {
+                builder = builder.expected_loss(action, loss);
+            }
+
+            builder
+                .build()
+                .expect("standalone audit entry should produce valid evidence ledger")
+        }
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct DecisionOutcome {
+        pub action_index: usize,
+        pub action_name: String,
+        pub expected_loss: f64,
+        pub expected_losses: BTreeMap<String, f64>,
+        pub fallback_active: bool,
+        pub audit_entry: DecisionAuditEntry,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct EvalContext {
+        pub calibration_score: f64,
+        pub e_process: f64,
+        pub ci_width: f64,
+        pub decision_id: DecisionId,
+        pub trace_id: TraceId,
+        pub ts_unix_ms: u64,
+    }
+
+    #[derive(Clone, Debug, Serialize, PartialEq)]
+    pub struct EvidenceLedger {
+        #[serde(rename = "ts")]
+        pub ts_unix_ms: u64,
+        #[serde(rename = "c")]
+        pub component: String,
+        #[serde(rename = "a")]
+        pub action: String,
+        #[serde(rename = "p")]
+        pub posterior: Vec<f64>,
+        #[serde(rename = "el")]
+        pub expected_loss_by_action: BTreeMap<String, f64>,
+        #[serde(rename = "cel")]
+        pub chosen_expected_loss: f64,
+        #[serde(rename = "cal")]
+        pub calibration_score: f64,
+        #[serde(rename = "fb")]
+        pub fallback_active: bool,
+        #[serde(rename = "tf")]
+        pub top_features: Vec<(String, f64)>,
+    }
+
+    impl<'de> Deserialize<'de> for EvidenceLedger {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            #[derive(Deserialize)]
+            struct EvidenceLedgerRepr {
+                #[serde(rename = "ts")]
+                ts_unix_ms: u64,
+                #[serde(rename = "c")]
+                component: String,
+                #[serde(rename = "a")]
+                action: String,
+                #[serde(rename = "p")]
+                posterior: Vec<f64>,
+                #[serde(rename = "el")]
+                expected_loss_by_action: BTreeMap<String, f64>,
+                #[serde(rename = "cel")]
+                chosen_expected_loss: f64,
+                #[serde(rename = "cal")]
+                calibration_score: f64,
+                #[serde(rename = "fb")]
+                fallback_active: bool,
+                #[serde(rename = "tf")]
+                top_features: Vec<(String, f64)>,
+            }
+
+            let repr = EvidenceLedgerRepr::deserialize(deserializer)?;
+            Ok(Self {
+                ts_unix_ms: repr.ts_unix_ms,
+                component: repr.component,
+                action: repr.action,
+                posterior: repr.posterior,
+                expected_loss_by_action: repr.expected_loss_by_action,
+                chosen_expected_loss: repr.chosen_expected_loss,
+                calibration_score: repr.calibration_score,
+                fallback_active: repr.fallback_active,
+                top_features: repr.top_features,
+            })
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum EvidenceValidationError {
+        PosteriorNotNormalized {
+            sum: f64,
+        },
+        PosteriorEmpty,
+        InvalidPosteriorProbability {
+            index: usize,
+            value: f64,
+        },
+        InvalidExpectedLoss {
+            action: String,
+            value: f64,
+        },
+        CalibrationOutOfRange {
+            value: f64,
+        },
+        NegativeExpectedLoss {
+            action: String,
+            value: f64,
+        },
+        NegativeChosenExpectedLoss {
+            value: f64,
+        },
+        InvalidChosenExpectedLoss {
+            value: f64,
+        },
+        ChosenActionMissingExpectedLoss {
+            action: String,
+        },
+        ChosenExpectedLossMismatch {
+            action: String,
+            chosen: f64,
+            mapped: f64,
+        },
+        EmptyComponent,
+        EmptyAction,
+    }
+
+    impl fmt::Display for EvidenceValidationError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::PosteriorNotNormalized { sum } => {
+                    write!(f, "posterior sums to {sum}, expected ~1.0")
+                }
+                Self::PosteriorEmpty => write!(f, "posterior must not be empty"),
+                Self::InvalidPosteriorProbability { index, value } => {
+                    write!(
+                        f,
+                        "posterior[{index}] must be finite and non-negative, got {value}"
+                    )
+                }
+                Self::InvalidExpectedLoss { action, value } => {
+                    write!(
+                        f,
+                        "expected_loss for '{action}' must be finite, got {value}"
+                    )
+                }
+                Self::CalibrationOutOfRange { value } => {
+                    write!(f, "calibration_score {value} not in [0, 1]")
+                }
+                Self::NegativeExpectedLoss { action, value } => {
+                    write!(f, "expected_loss for '{action}' is negative: {value}")
+                }
+                Self::NegativeChosenExpectedLoss { value } => {
+                    write!(f, "chosen_expected_loss is negative: {value}")
+                }
+                Self::InvalidChosenExpectedLoss { value } => {
+                    write!(f, "chosen_expected_loss must be finite, got {value}")
+                }
+                Self::ChosenActionMissingExpectedLoss { action } => write!(
+                    f,
+                    "expected_loss_by_action is missing the chosen action '{action}'"
+                ),
+                Self::ChosenExpectedLossMismatch {
+                    action,
+                    chosen,
+                    mapped,
+                } => write!(
+                    f,
+                    "chosen_expected_loss {chosen} disagrees with expected_loss_by_action['{action}']={mapped}"
+                ),
+                Self::EmptyComponent => write!(f, "component must not be empty"),
+                Self::EmptyAction => write!(f, "action must not be empty"),
+            }
+        }
+    }
+
+    impl std::error::Error for EvidenceValidationError {}
+
+    impl EvidenceLedger {
+        pub fn validate(&self) -> Vec<EvidenceValidationError> {
+            let mut errors = Vec::new();
+
+            if self.component.is_empty() {
+                errors.push(EvidenceValidationError::EmptyComponent);
+            }
+            if self.action.is_empty() {
+                errors.push(EvidenceValidationError::EmptyAction);
+            }
+
+            if self.posterior.is_empty() {
+                errors.push(EvidenceValidationError::PosteriorEmpty);
+            } else {
+                let mut posterior_has_invalid_entry = false;
+                for (index, &value) in self.posterior.iter().enumerate() {
+                    if !value.is_finite() || value < 0.0 {
+                        errors.push(EvidenceValidationError::InvalidPosteriorProbability {
+                            index,
+                            value,
+                        });
+                        posterior_has_invalid_entry = true;
+                    }
+                }
+                if !posterior_has_invalid_entry {
+                    let sum: f64 = self.posterior.iter().sum();
+                    if (sum - 1.0).abs() > NORMALIZATION_TOLERANCE {
+                        errors.push(EvidenceValidationError::PosteriorNotNormalized { sum });
+                    }
+                }
+            }
+
+            if !(0.0..=1.0).contains(&self.calibration_score) {
+                errors.push(EvidenceValidationError::CalibrationOutOfRange {
+                    value: self.calibration_score,
+                });
+            }
+
+            let chosen_expected_loss_valid = if !self.chosen_expected_loss.is_finite() {
+                errors.push(EvidenceValidationError::InvalidChosenExpectedLoss {
+                    value: self.chosen_expected_loss,
+                });
+                false
+            } else if self.chosen_expected_loss < 0.0 {
+                errors.push(EvidenceValidationError::NegativeChosenExpectedLoss {
+                    value: self.chosen_expected_loss,
+                });
+                false
+            } else {
+                true
+            };
+
+            for (action, &loss) in &self.expected_loss_by_action {
+                if !loss.is_finite() {
+                    errors.push(EvidenceValidationError::InvalidExpectedLoss {
+                        action: action.clone(),
+                        value: loss,
+                    });
+                } else if loss < 0.0 {
+                    errors.push(EvidenceValidationError::NegativeExpectedLoss {
+                        action: action.clone(),
+                        value: loss,
+                    });
+                }
+            }
+
+            if let Some(&mapped) = self.expected_loss_by_action.get(&self.action) {
+                if chosen_expected_loss_valid
+                    && mapped.is_finite()
+                    && mapped >= 0.0
+                    && (mapped - self.chosen_expected_loss).abs() > 1e-12
+                {
+                    errors.push(EvidenceValidationError::ChosenExpectedLossMismatch {
+                        action: self.action.clone(),
+                        chosen: self.chosen_expected_loss,
+                        mapped,
+                    });
+                }
+            } else if !self.expected_loss_by_action.is_empty() {
+                errors.push(EvidenceValidationError::ChosenActionMissingExpectedLoss {
+                    action: self.action.clone(),
+                });
+            }
+
+            errors
+        }
+
+        pub fn is_valid(&self) -> bool {
+            self.validate().is_empty()
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum EvidenceBuilderError {
+        MissingField { field: &'static str },
+        Validation(Vec<EvidenceValidationError>),
+    }
+
+    impl fmt::Display for EvidenceBuilderError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::MissingField { field } => {
+                    write!(f, "EvidenceLedger builder missing required field: {field}")
+                }
+                Self::Validation(errors) => {
+                    write!(f, "EvidenceLedger validation failed: ")?;
+                    for (index, error) in errors.iter().enumerate() {
+                        if index > 0 {
+                            write!(f, "; ")?;
+                        }
+                        write!(f, "{error}")?;
+                    }
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for EvidenceBuilderError {}
+
+    #[derive(Clone, Debug, Default)]
+    #[must_use]
+    pub struct EvidenceLedgerBuilder {
+        ts_unix_ms: Option<u64>,
+        component: Option<String>,
+        action: Option<String>,
+        posterior: Option<Vec<f64>>,
+        expected_loss_by_action: BTreeMap<String, f64>,
+        chosen_expected_loss: Option<f64>,
+        calibration_score: Option<f64>,
+        fallback_active: bool,
+        top_features: Vec<(String, f64)>,
+    }
+
+    impl EvidenceLedgerBuilder {
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        pub fn ts_unix_ms(mut self, ts: u64) -> Self {
+            self.ts_unix_ms = Some(ts);
+            self
+        }
+
+        pub fn component(mut self, component: impl Into<String>) -> Self {
+            self.component = Some(component.into());
+            self
+        }
+
+        pub fn action(mut self, action: impl Into<String>) -> Self {
+            self.action = Some(action.into());
+            self
+        }
+
+        pub fn posterior(mut self, posterior: Vec<f64>) -> Self {
+            self.posterior = Some(posterior);
+            self
+        }
+
+        pub fn expected_loss(mut self, action: impl Into<String>, loss: f64) -> Self {
+            self.expected_loss_by_action.insert(action.into(), loss);
+            self
+        }
+
+        pub fn chosen_expected_loss(mut self, loss: f64) -> Self {
+            self.chosen_expected_loss = Some(loss);
+            self
+        }
+
+        pub fn calibration_score(mut self, score: f64) -> Self {
+            self.calibration_score = Some(score);
+            self
+        }
+
+        pub fn fallback_active(mut self, active: bool) -> Self {
+            self.fallback_active = active;
+            self
+        }
+
+        pub fn top_feature(mut self, name: impl Into<String>, weight: f64) -> Self {
+            self.top_features.push((name.into(), weight));
+            self
+        }
+
+        pub fn build(self) -> Result<EvidenceLedger, EvidenceBuilderError> {
+            let entry = EvidenceLedger {
+                ts_unix_ms: self.ts_unix_ms.ok_or(EvidenceBuilderError::MissingField {
+                    field: "ts_unix_ms",
+                })?,
+                component: self
+                    .component
+                    .ok_or(EvidenceBuilderError::MissingField { field: "component" })?,
+                action: self
+                    .action
+                    .ok_or(EvidenceBuilderError::MissingField { field: "action" })?,
+                posterior: self
+                    .posterior
+                    .ok_or(EvidenceBuilderError::MissingField { field: "posterior" })?,
+                expected_loss_by_action: self.expected_loss_by_action,
+                chosen_expected_loss: self.chosen_expected_loss.ok_or(
+                    EvidenceBuilderError::MissingField {
+                        field: "chosen_expected_loss",
+                    },
+                )?,
+                calibration_score: self.calibration_score.ok_or(
+                    EvidenceBuilderError::MissingField {
+                        field: "calibration_score",
+                    },
+                )?,
+                fallback_active: self.fallback_active,
+                top_features: self.top_features,
+            };
+
+            let errors = entry.validate();
+            if errors.is_empty() {
+                Ok(entry)
+            } else {
+                Err(EvidenceBuilderError::Validation(errors))
+            }
+        }
+    }
+
+    pub fn evaluate_contract<C: DecisionContract>(
+        contract: &C,
+        posterior: &Posterior,
+        ctx: &EvalContext,
+    ) -> DecisionOutcome {
+        let loss_matrix = contract.loss_matrix();
+        let expected_losses = loss_matrix.expected_losses(posterior);
+        let fallback_active = contract.fallback_policy().should_fallback(
+            ctx.calibration_score,
+            ctx.e_process,
+            ctx.ci_width,
+        );
+
+        let action_index = if fallback_active {
+            contract.fallback_action()
+        } else {
+            contract.choose_action(posterior)
+        };
+
+        let action_name = contract
+            .action_set()
+            .get(action_index)
+            .cloned()
+            .unwrap_or_else(|| "deny".to_string());
+        let expected_loss = expected_losses
+            .get(&action_name)
+            .copied()
+            .unwrap_or_else(|| loss_matrix.expected_loss(posterior, action_index));
+
+        let audit_entry = DecisionAuditEntry {
+            decision_id: ctx.decision_id,
+            trace_id: ctx.trace_id,
+            contract_name: contract.name().to_string(),
+            action_chosen: action_name.clone(),
+            expected_loss,
+            calibration_score: ctx.calibration_score,
+            fallback_active,
+            posterior_snapshot: posterior.probs().to_vec(),
+            expected_loss_by_action: expected_losses.clone(),
+            ts_unix_ms: ctx.ts_unix_ms,
+        };
+
+        DecisionOutcome {
+            action_index,
+            action_name,
+            expected_loss,
+            expected_losses,
+            fallback_active,
+            audit_entry,
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct ParseIdError {
+        pub kind: &'static str,
+        pub input_len: usize,
+    }
+
+    impl fmt::Display for ParseIdError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "invalid {} hex string (length {})",
+                self.kind, self.input_len
+            )
+        }
+    }
+
+    impl std::error::Error for ParseIdError {}
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct ParseVersionError;
+
+    impl fmt::Display for ParseVersionError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "invalid schema version (expected major.minor.patch)")
+        }
+    }
+
+    impl std::error::Error for ParseVersionError {}
+
+    mod hex_u128 {
+        use serde::{Deserialize, Deserializer, Serializer};
+
+        pub fn serialize<S>(value: &u128, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            serializer.serialize_str(&format!("{value:032x}"))
+        }
+
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<u128, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let s = String::deserialize(deserializer)?;
+            u128::from_str_radix(&s, 16)
+                .map_err(|_| serde::de::Error::custom(format!("invalid hex u128: {s}")))
+        }
+    }
+}
 
 const ADAPTER_COMPONENT: &str = "control_plane_adapter";
 
@@ -156,6 +1382,25 @@ pub trait DecisionAdapter {
     fn events(&self) -> &[AdapterEvent];
 }
 
+/// Centralized decision-contract evaluation boundary for upstream integration.
+#[cfg(feature = "asupersync-integration")]
+pub fn evaluate_contract<C: DecisionContract>(
+    contract: &C,
+    posterior: &Posterior,
+    ctx: &EvalContext,
+) -> DecisionOutcome {
+    franken_decision::evaluate(contract, posterior, ctx)
+}
+
+#[cfg(not(feature = "asupersync-integration"))]
+pub fn evaluate_contract<C: DecisionContract>(
+    contract: &C,
+    posterior: &Posterior,
+    ctx: &EvalContext,
+) -> DecisionOutcome {
+    standalone::evaluate_contract(contract, posterior, ctx)
+}
+
 /// Canonical decision adapter backed by `franken_decision::evaluate`.
 #[derive(Debug, Clone)]
 pub struct ContractDecisionAdapter<C: DecisionContract> {
@@ -187,7 +1432,7 @@ impl<C: DecisionContract> DecisionAdapter for ContractDecisionAdapter<C> {
             trace_id: request.trace_id,
             ts_unix_ms: request.ts_unix_ms,
         };
-        let outcome = franken_decision::evaluate(&self.contract, &self.posterior, &ctx);
+        let outcome = evaluate_contract(&self.contract, &self.posterior, &ctx);
         let verdict = action_to_verdict(&outcome.action_name).ok_or_else(|| {
             self.events.push(new_event(
                 request,
@@ -581,6 +1826,68 @@ mod tests {
             .expect("valid evidence")
     }
 
+    #[derive(Debug, Clone)]
+    struct MiniContract {
+        loss_matrix: LossMatrix,
+        fallback: FallbackPolicy,
+    }
+
+    impl MiniContract {
+        fn new() -> Self {
+            Self {
+                loss_matrix: LossMatrix::new(
+                    vec!["good".to_string(), "bad".to_string()],
+                    vec![
+                        "allow".to_string(),
+                        "deny".to_string(),
+                        "timeout".to_string(),
+                    ],
+                    vec![
+                        0.01, 0.4, 0.6, // good
+                        0.8, 0.1, 0.3, // bad
+                    ],
+                )
+                .expect("valid loss matrix"),
+                fallback: FallbackPolicy::default(),
+            }
+        }
+    }
+
+    impl DecisionContract for MiniContract {
+        fn name(&self) -> &str {
+            "mini_contract"
+        }
+
+        fn state_space(&self) -> &[String] {
+            self.loss_matrix.state_names()
+        }
+
+        fn action_set(&self) -> &[String] {
+            self.loss_matrix.action_names()
+        }
+
+        fn loss_matrix(&self) -> &LossMatrix {
+            &self.loss_matrix
+        }
+
+        fn update_posterior(&self, posterior: &mut Posterior, state_index: usize) {
+            let _ = state_index;
+            posterior.bayesian_update(&[0.8, 0.2]);
+        }
+
+        fn choose_action(&self, posterior: &Posterior) -> usize {
+            self.loss_matrix.bayes_action(posterior)
+        }
+
+        fn fallback_action(&self) -> usize {
+            2
+        }
+
+        fn fallback_policy(&self) -> &FallbackPolicy {
+            &self.fallback
+        }
+    }
+
     #[test]
     fn mock_context_tracks_budget_and_can_panic_on_overspend() {
         let trace_id = trace_id_from_seed(1);
@@ -638,6 +1945,26 @@ mod tests {
                 code: "mock_fail_after_n"
             }
         ));
+    }
+
+    #[test]
+    fn evaluate_contract_centralizes_upstream_decision_contract_calls() {
+        let contract = MiniContract::new();
+        let posterior = Posterior::uniform(2);
+        let ctx = EvalContext {
+            calibration_score: 0.94,
+            e_process: 0.11,
+            ci_width: 0.045,
+            decision_id: decision_id_from_seed(77),
+            trace_id: trace_id_from_seed(77),
+            ts_unix_ms: 1_700_000_000_077,
+        };
+
+        let outcome = evaluate_contract(&contract, &posterior, &ctx);
+
+        assert_eq!(outcome.action_name, "deny");
+        assert!(!outcome.fallback_active);
+        assert!(outcome.expected_loss > 0.0);
     }
 
     #[test]

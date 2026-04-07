@@ -206,7 +206,10 @@ impl Exp3Weights {
             return vec![];
         }
 
-        let total: i64 = self.weights_millionths.iter().sum();
+        let total: i64 = self
+            .weights_millionths
+            .iter()
+            .fold(0i64, |acc, &x| acc.saturating_add(x));
         if total <= 0 {
             // Uniform fallback
             let uniform = MILLION / n;

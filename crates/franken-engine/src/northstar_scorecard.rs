@@ -455,7 +455,7 @@ impl Scorecard {
 
         let min = sorted[0];
         let max = sorted[n - 1];
-        let sum: i64 = sorted.iter().sum();
+        let sum: i64 = sorted.iter().fold(0i64, |acc, &x| acc.saturating_add(x));
         let mean = sum / n as i64;
         let p50 = sorted[n / 2];
         let p95 = sorted[(n * 95) / 100];

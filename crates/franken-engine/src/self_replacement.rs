@@ -254,6 +254,9 @@ impl DelegateCellManifest {
         slot_id: &SlotId,
         delegate_type: DelegateType,
         behavior_hash: &[u8; 32],
+        capability_envelope: &AuthorityEnvelope,
+        sandbox: &SandboxConfiguration,
+        hooks: &[MonitoringHook],
         zone: &str,
     ) -> Result<EngineObjectId, IdError> {
         let mut canonical = Vec::new();
@@ -262,6 +265,18 @@ impl DelegateCellManifest {
         canonical.extend_from_slice(delegate_type.to_string().as_bytes());
         canonical.push(b'|');
         canonical.extend_from_slice(behavior_hash);
+        canonical.push(b'|');
+        if let Ok(json) = serde_json::to_vec(capability_envelope) {
+            canonical.extend_from_slice(&json);
+        }
+        canonical.push(b'|');
+        if let Ok(json) = serde_json::to_vec(sandbox) {
+            canonical.extend_from_slice(&json);
+        }
+        canonical.push(b'|');
+        if let Ok(json) = serde_json::to_vec(hooks) {
+            canonical.extend_from_slice(&json);
+        }
         let schema_id =
             engine_object_id::SchemaId::from_definition(manifest_schema_hash().0.as_slice());
         engine_object_id::derive_id(ObjectDomain::SignedManifest, zone, &schema_id, &canonical)
@@ -276,6 +291,9 @@ impl DelegateCellManifest {
             input.slot_id,
             input.delegate_type,
             input.expected_behavior_hash,
+            input.capability_envelope,
+            input.sandbox,
+            input.monitoring_hooks,
             input.zone,
         )
         .map_err(SelfReplacementError::IdDerivationFailed)?;
@@ -1321,6 +1339,9 @@ mod tests {
             &test_slot_id(),
             DelegateType::QuickJsBacked,
             &test_behavior_hash(),
+            &test_authority_envelope(),
+            &test_sandbox(),
+            &test_monitoring_hooks(),
             "zone-a",
         )
         .unwrap();
@@ -1328,6 +1349,9 @@ mod tests {
             &test_slot_id(),
             DelegateType::QuickJsBacked,
             &test_behavior_hash(),
+            &test_authority_envelope(),
+            &test_sandbox(),
+            &test_monitoring_hooks(),
             "zone-a",
         )
         .unwrap();
@@ -1336,10 +1360,19 @@ mod tests {
 
     #[test]
     fn manifest_id_differs_by_zone() {
+        let envelope = AuthorityEnvelope {
+            required: Vec::new(),
+            permitted: Vec::new(),
+        };
+        let sandbox = SandboxConfiguration::default();
+        let hooks: Vec<MonitoringHook> = Vec::new();
         let id1 = DelegateCellManifest::derive_manifest_id(
             &test_slot_id(),
             DelegateType::QuickJsBacked,
             &test_behavior_hash(),
+            &envelope,
+            &sandbox,
+            &hooks,
             "zone-a",
         )
         .unwrap();
@@ -1347,6 +1380,9 @@ mod tests {
             &test_slot_id(),
             DelegateType::QuickJsBacked,
             &test_behavior_hash(),
+            &envelope,
+            &sandbox,
+            &hooks,
             "zone-b",
         )
         .unwrap();
@@ -2045,6 +2081,9 @@ mod tests {
             &test_slot_id(),
             DelegateType::QuickJsBacked,
             &[1u8; 32],
+            &test_authority_envelope(),
+            &test_sandbox(),
+            &test_monitoring_hooks(),
             "zone",
         )
         .unwrap();
@@ -2052,6 +2091,9 @@ mod tests {
             &test_slot_id(),
             DelegateType::QuickJsBacked,
             &[2u8; 32],
+            &test_authority_envelope(),
+            &test_sandbox(),
+            &test_monitoring_hooks(),
             "zone",
         )
         .unwrap();
@@ -2341,6 +2383,9 @@ mod tests {
             &test_slot_id(),
             DelegateType::QuickJsBacked,
             &hash,
+            &test_authority_envelope(),
+            &test_sandbox(),
+            &test_monitoring_hooks(),
             "zone",
         )
         .unwrap();
@@ -2348,6 +2393,9 @@ mod tests {
             &test_slot_id(),
             DelegateType::WasmBacked,
             &hash,
+            &test_authority_envelope(),
+            &test_sandbox(),
+            &test_monitoring_hooks(),
             "zone",
         )
         .unwrap();

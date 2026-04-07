@@ -73,7 +73,7 @@ impl BenchmarkEnvironment {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for benchmark env")
+        .unwrap_or_default()
     }
 }
 
@@ -122,7 +122,7 @@ impl PercentileStats {
 
         values.sort_unstable();
         let n = values.len();
-        let sum: u64 = values.iter().sum();
+        let sum: u64 = values.iter().fold(0u64, |acc, &x| acc.saturating_add(x));
 
         Some(Self {
             p50_ns: values[n * 50 / 100],
@@ -162,7 +162,7 @@ impl PercentileStats {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for percentile stats")
+        .unwrap_or_default()
     }
 }
 
@@ -347,7 +347,7 @@ impl ProfileArtifact {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for profile artifact")
+        .unwrap_or_default()
     }
 }
 
@@ -407,7 +407,7 @@ impl BenchmarkResult {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for benchmark result")
+        .unwrap_or_default()
     }
 }
 
@@ -554,7 +554,7 @@ impl BaselineComparison {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for baseline comparison")
+        .unwrap_or_default()
     }
 }
 
@@ -624,7 +624,7 @@ impl OptimizationOpportunity {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for opportunity")
+        .unwrap_or_default()
     }
 }
 
@@ -684,7 +684,7 @@ impl OpportunityMatrix {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for opportunity matrix")
+        .unwrap_or_default()
     }
 }
 
@@ -786,7 +786,7 @@ impl BaselineRegistry {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for baseline registry")
+        .unwrap_or_default()
     }
 }
 

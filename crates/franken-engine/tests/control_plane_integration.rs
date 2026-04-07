@@ -76,6 +76,22 @@ fn runtime_crate_keeps_mock_helpers_out_of_production_surface() {
     );
 }
 
+#[test]
+fn safety_router_uses_control_plane_decision_boundary() {
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/safety_decision_router.rs");
+    let content = fs::read_to_string(&source)
+        .unwrap_or_else(|err| panic!("read {}: {err}", source.display()));
+
+    assert!(
+        content.contains("evaluate_contract(&contract, &posterior, &eval_ctx)"),
+        "safety router must evaluate contracts through control_plane::evaluate_contract"
+    );
+    assert!(
+        !content.contains("franken_decision::evaluate(&contract, &posterior, &eval_ctx)"),
+        "safety router must not bypass the control-plane boundary with a direct upstream evaluate call"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // DecisionVerdict serde / Debug
 // ---------------------------------------------------------------------------

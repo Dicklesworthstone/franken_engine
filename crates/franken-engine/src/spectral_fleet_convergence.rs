@@ -1130,7 +1130,7 @@ mod tests {
     fn deflate_uniform_removes_mean() {
         let mut v = vec![MILLION, 2 * MILLION, 3 * MILLION];
         deflate_uniform(&mut v, 3);
-        let sum: i64 = v.iter().sum();
+        let sum: i64 = v.iter().fold(0i64, |acc, &x| acc.saturating_add(x));
         assert!(sum.abs() < 3); // should be ~0 (rounding).
     }
 

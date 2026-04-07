@@ -196,6 +196,58 @@ fn observe_bare_require_index_mjs_behavior(mode: CompatibilityMode) -> String {
     }
 }
 
+fn observe_scoped_bare_require_index_mjs_behavior(mode: CompatibilityMode) -> String {
+    let mut resolver = DeterministicModuleResolver::new("/repo");
+    resolver
+        .register_workspace_module("@scope/pkg/index.mjs", esm_def("export default 'esm';"))
+        .unwrap();
+
+    match resolver.resolve(
+        &ModuleRequest::new("@scope/pkg", ImportStyle::Require).with_compatibility_mode(mode),
+        &resolver_ctx(),
+        &allow_all(),
+    ) {
+        Ok(outcome) => {
+            assert_eq!(mode, CompatibilityMode::BunCompat);
+            assert_eq!(
+                outcome.module.canonical_specifier,
+                "/repo/@scope/pkg/index.mjs"
+            );
+            assert_eq!(outcome.module.record.syntax, ModuleSyntax::EsModule);
+            assert!(
+                outcome
+                    .module
+                    .probe_sequence
+                    .iter()
+                    .any(|probe| probe == "@scope/pkg/index.mjs")
+            );
+            assert!(
+                outcome
+                    .module
+                    .probe_sequence
+                    .iter()
+                    .any(|probe| probe == "/repo/@scope/pkg/index.mjs")
+            );
+            "allow_via_sync_bridge_after_mjs_probe".to_string()
+        }
+        Err(error) => {
+            assert!(matches!(
+                mode,
+                CompatibilityMode::Native | CompatibilityMode::NodeCompat
+            ));
+            assert_eq!(error.code, ResolutionErrorCode::ModuleNotFound);
+            assert!(
+                error
+                    .probe_sequence
+                    .iter()
+                    .all(|probe| !probe.ends_with(".mjs")),
+                "native/node_compat must stay fail-closed and avoid implicit scoped .mjs package-entry probes"
+            );
+            "reject_mjs_package_entry_probe".to_string()
+        }
+    }
+}
+
 fn observe_conditional_exports_condition_order_behavior(mode: CompatibilityMode) -> String {
     let mut resolver = DeterministicModuleResolver::default();
     resolver
@@ -1689,6 +1741,56 @@ fn default_matrix_pins_bare_require_index_mjs_contract() {
 }
 
 #[test]
+fn default_matrix_pins_scoped_bare_require_index_mjs_contract() {
+    let m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let entry = m
+        .entry("scoped-bare-require-package-index-mjs")
+        .expect("default matrix should include scoped bare require() index.mjs probe case");
+
+    assert_eq!(entry.feature, ModuleFeature::Cjs);
+    assert_eq!(entry.node_behavior, "reject_mjs_package_entry_probe");
+    assert_eq!(entry.bun_behavior, "allow_via_sync_bridge_after_mjs_probe");
+    assert_eq!(
+        entry.franken_native_behavior,
+        "reject_mjs_package_entry_probe"
+    );
+    assert_eq!(
+        entry.franken_node_compat_behavior,
+        "reject_mjs_package_entry_probe"
+    );
+    assert_eq!(
+        entry.franken_bun_compat_behavior,
+        "allow_via_sync_bridge_after_mjs_probe"
+    );
+    assert_eq!(entry.explicit_shims.len(), 1);
+    assert_eq!(
+        entry.explicit_shims[0].shim_id,
+        "shim-bun-scoped-bare-require-index-mjs-v1"
+    );
+    assert_eq!(entry.explicit_shims[0].mode, CompatibilityMode::BunCompat);
+    assert!(
+        entry
+            .lockstep_case_refs
+            .contains(&"lockstep/module/scoped-bare-require-package-index-mjs".to_string())
+    );
+
+    let divergence = entry
+        .divergence
+        .as_ref()
+        .expect("scoped bare require() index.mjs case must record the Bun divergence explicitly");
+    assert_eq!(divergence.diverges_from, vec![ReferenceRuntime::Bun]);
+    assert_eq!(
+        divergence.waiver_id,
+        "waiver-modcomp-scoped-bare-require-index-mjs-bun"
+    );
+    assert!(
+        divergence.migration_guidance.contains("bun_compat")
+            && divergence.migration_guidance.contains("scoped package"),
+        "scoped bare require() index.mjs divergence should carry actionable migration guidance"
+    );
+}
+
+#[test]
 fn default_matrix_pins_exports_map_contracts() {
     let m = ModuleCompatibilityMatrix::from_default_json().unwrap();
 
@@ -2374,31 +2476,172 @@ fn bare_require_index_mjs_behavior_matches_matrix_contract_across_modes() {
     let required = m.required_waiver_ids();
     m.validate_with_waivers(&required, &ctx()).unwrap();
 
-    for (mode, expected_behavior) in [
-        (CompatibilityMode::Native, "reject_mjs_package_entry_probe"),
+    for (case_id, observer) in [
         (
-            CompatibilityMode::NodeCompat,
-            "reject_mjs_package_entry_probe",
+            "bare-require-package-index-mjs",
+            observe_bare_require_index_mjs_behavior as fn(CompatibilityMode) -> String,
         ),
         (
-            CompatibilityMode::BunCompat,
-            "allow_via_sync_bridge_after_mjs_probe",
+            "scoped-bare-require-package-index-mjs",
+            observe_scoped_bare_require_index_mjs_behavior as fn(CompatibilityMode) -> String,
         ),
     ] {
-        let observed_behavior = observe_bare_require_index_mjs_behavior(mode);
-        assert_eq!(observed_behavior, expected_behavior);
+        for (mode, expected_behavior) in [
+            (CompatibilityMode::Native, "reject_mjs_package_entry_probe"),
+            (
+                CompatibilityMode::NodeCompat,
+                "reject_mjs_package_entry_probe",
+            ),
+            (
+                CompatibilityMode::BunCompat,
+                "allow_via_sync_bridge_after_mjs_probe",
+            ),
+        ] {
+            let observed_behavior = observer(mode);
+            assert_eq!(observed_behavior, expected_behavior);
+
+            let outcome = m
+                .evaluate_observation(
+                    &CompatibilityObservation::new(
+                        case_id,
+                        CompatibilityRuntime::FrankenEngine,
+                        mode,
+                        observed_behavior,
+                    ),
+                    &ctx(),
+                )
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "bare require() index.mjs behavior should match the matrix contract for {case_id} in {mode:?}: {err}"
+                    )
+                });
+            assert!(outcome.matched);
+        }
+    }
+}
+
+#[test]
+fn bare_require_index_mjs_interop_evidence_matches_matrix_contract_across_modes() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    let inventory = run_interop_parity_corpus();
+    for (
+        case_id,
+        specimen_id,
+        mode,
+        expected_outcome,
+        expected_behavior,
+        expected_disposition,
+        expected_guidance_code,
+        expected_message_fragment,
+    ) in [
+        (
+            "bare-require-package-index-mjs",
+            "bare_require_package_index_mjs_native",
+            CompatibilityMode::Native,
+            InteropActualOutcome::LinkFailure,
+            "reject_mjs_package_entry_probe",
+            InteropCompatibilityDisposition::Unsupported,
+            "repair_link_boundary",
+            "align exports/imports or replace the boundary with an explicit shim before retrying",
+        ),
+        (
+            "bare-require-package-index-mjs",
+            "bare_require_package_index_mjs_node_compat",
+            CompatibilityMode::NodeCompat,
+            InteropActualOutcome::LinkFailure,
+            "reject_mjs_package_entry_probe",
+            InteropCompatibilityDisposition::Unsupported,
+            "repair_link_boundary",
+            "align exports/imports or replace the boundary with an explicit shim before retrying",
+        ),
+        (
+            "bare-require-package-index-mjs",
+            "bare_require_package_index_mjs_bun_compat",
+            CompatibilityMode::BunCompat,
+            InteropActualOutcome::Success,
+            "allow_via_sync_bridge_after_mjs_probe",
+            InteropCompatibilityDisposition::Supported,
+            "no_remediation_required",
+            "no mitigation is required",
+        ),
+        (
+            "scoped-bare-require-package-index-mjs",
+            "scoped_bare_require_package_index_mjs_native",
+            CompatibilityMode::Native,
+            InteropActualOutcome::LinkFailure,
+            "reject_mjs_package_entry_probe",
+            InteropCompatibilityDisposition::Unsupported,
+            "repair_link_boundary",
+            "align exports/imports or replace the boundary with an explicit shim before retrying",
+        ),
+        (
+            "scoped-bare-require-package-index-mjs",
+            "scoped_bare_require_package_index_mjs_node_compat",
+            CompatibilityMode::NodeCompat,
+            InteropActualOutcome::LinkFailure,
+            "reject_mjs_package_entry_probe",
+            InteropCompatibilityDisposition::Unsupported,
+            "repair_link_boundary",
+            "align exports/imports or replace the boundary with an explicit shim before retrying",
+        ),
+        (
+            "scoped-bare-require-package-index-mjs",
+            "scoped_bare_require_package_index_mjs_bun_compat",
+            CompatibilityMode::BunCompat,
+            InteropActualOutcome::Success,
+            "allow_via_sync_bridge_after_mjs_probe",
+            InteropCompatibilityDisposition::Supported,
+            "no_remediation_required",
+            "no mitigation is required",
+        ),
+    ] {
+        let evidence = inventory
+            .evidence
+            .iter()
+            .find(|ev| ev.specimen_id == specimen_id)
+            .unwrap_or_else(|| {
+                panic!("bare require() index.mjs specimen should exist: {specimen_id}")
+            });
+        assert_eq!(evidence.compatibility_mode, mode);
+        assert_eq!(evidence.actual_outcome, expected_outcome);
+        assert_eq!(evidence.verdict, InteropVerdict::Pass);
+        assert_eq!(evidence.compatibility_disposition, expected_disposition);
+        if expected_outcome == InteropActualOutcome::LinkFailure {
+            assert!(evidence.error_detail.is_some());
+        } else {
+            assert!(evidence.error_detail.is_none());
+            assert_eq!(evidence.linked_count, 3);
+            assert!(evidence.binding_verdicts.iter().all(|verdict| verdict.pass));
+        }
+        assert_remediation_guidance(
+            specimen_id,
+            evidence.remediation_guidance.guidance_code.as_str(),
+            expected_guidance_code,
+            evidence.remediation_guidance.message.as_str(),
+            expected_message_fragment,
+        );
 
         let outcome = m
             .evaluate_observation(
                 &CompatibilityObservation::new(
-                    "bare-require-package-index-mjs",
+                    case_id,
                     CompatibilityRuntime::FrankenEngine,
                     mode,
-                    observed_behavior,
+                    expected_behavior,
                 ),
                 &ctx(),
             )
-            .expect("bare require() index.mjs behavior should match the matrix contract");
-        assert!(outcome.matched);
+            .unwrap_or_else(|err| {
+                panic!(
+                    "bare require() index.mjs evidence should evaluate against the matrix for {specimen_id}: {err}"
+                )
+            });
+        assert!(
+            outcome.matched,
+            "bare require() index.mjs evidence should match the matrix contract for {specimen_id}"
+        );
     }
 }

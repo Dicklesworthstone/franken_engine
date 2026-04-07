@@ -798,17 +798,47 @@ fn enrichment_bundle_serde_with_signers() {
 // 13. DelegateCellManifest enrichment
 // ===========================================================================
 
+fn test_envelope() -> (
+    frankenengine_engine::slot_registry::AuthorityEnvelope,
+    frankenengine_engine::self_replacement::SandboxConfiguration,
+    Vec<frankenengine_engine::self_replacement::MonitoringHook>,
+) {
+    (
+        frankenengine_engine::slot_registry::AuthorityEnvelope {
+            required: Vec::new(),
+            permitted: Vec::new(),
+        },
+        frankenengine_engine::self_replacement::SandboxConfiguration::default(),
+        Vec::new(),
+    )
+}
+
 #[test]
 fn enrichment_manifest_derive_id_deterministic_100_iterations() {
+    let (ae, sb, hk) = test_envelope();
     let s = default_slot();
     let bh = default_behavior_hash();
-    let first =
-        DelegateCellManifest::derive_manifest_id(&s, DelegateType::WasmBacked, &bh, "zone-det")
-            .unwrap();
+    let first = DelegateCellManifest::derive_manifest_id(
+        &s,
+        DelegateType::WasmBacked,
+        &bh,
+        &ae,
+        &sb,
+        &hk,
+        "zone-det",
+    )
+    .unwrap();
     for _ in 0..100 {
-        let id =
-            DelegateCellManifest::derive_manifest_id(&s, DelegateType::WasmBacked, &bh, "zone-det")
-                .unwrap();
+        let id = DelegateCellManifest::derive_manifest_id(
+            &s,
+            DelegateType::WasmBacked,
+            &bh,
+            &ae,
+            &sb,
+            &hk,
+            "zone-det",
+        )
+        .unwrap();
         assert_eq!(first, id);
     }
 }
@@ -816,10 +846,14 @@ fn enrichment_manifest_derive_id_deterministic_100_iterations() {
 #[test]
 fn enrichment_manifest_id_varies_by_slot() {
     let bh = default_behavior_hash();
+    let (ae, sb, hk) = test_envelope();
     let id1 = DelegateCellManifest::derive_manifest_id(
         &slot("slot-a"),
         DelegateType::QuickJsBacked,
         &bh,
+        &ae,
+        &sb,
+        &hk,
         "z",
     )
     .unwrap();
@@ -827,6 +861,9 @@ fn enrichment_manifest_id_varies_by_slot() {
         &slot("slot-b"),
         DelegateType::QuickJsBacked,
         &bh,
+        &ae,
+        &sb,
+        &hk,
         "z",
     )
     .unwrap();
@@ -835,26 +872,58 @@ fn enrichment_manifest_id_varies_by_slot() {
 
 #[test]
 fn enrichment_manifest_id_varies_by_behavior_hash() {
+    let (ae, sb, hk) = test_envelope();
     let s = default_slot();
     let bh1 = [0x00; 32];
     let bh2 = [0xFF; 32];
-    let id1 = DelegateCellManifest::derive_manifest_id(&s, DelegateType::QuickJsBacked, &bh1, "z")
-        .unwrap();
-    let id2 = DelegateCellManifest::derive_manifest_id(&s, DelegateType::QuickJsBacked, &bh2, "z")
-        .unwrap();
+    let id1 = DelegateCellManifest::derive_manifest_id(
+        &s,
+        DelegateType::QuickJsBacked,
+        &bh1,
+        &ae,
+        &sb,
+        &hk,
+        "z",
+    )
+    .unwrap();
+    let id2 = DelegateCellManifest::derive_manifest_id(
+        &s,
+        DelegateType::QuickJsBacked,
+        &bh2,
+        &ae,
+        &sb,
+        &hk,
+        "z",
+    )
+    .unwrap();
     assert_ne!(id1, id2);
 }
 
 #[test]
 fn enrichment_manifest_id_varies_by_zone() {
+    let (ae, sb, hk) = test_envelope();
     let s = default_slot();
     let bh = default_behavior_hash();
-    let id1 =
-        DelegateCellManifest::derive_manifest_id(&s, DelegateType::QuickJsBacked, &bh, "zone-x")
-            .unwrap();
-    let id2 =
-        DelegateCellManifest::derive_manifest_id(&s, DelegateType::QuickJsBacked, &bh, "zone-y")
-            .unwrap();
+    let id1 = DelegateCellManifest::derive_manifest_id(
+        &s,
+        DelegateType::QuickJsBacked,
+        &bh,
+        &ae,
+        &sb,
+        &hk,
+        "zone-x",
+    )
+    .unwrap();
+    let id2 = DelegateCellManifest::derive_manifest_id(
+        &s,
+        DelegateType::QuickJsBacked,
+        &bh,
+        &ae,
+        &sb,
+        &hk,
+        "zone-y",
+    )
+    .unwrap();
     assert_ne!(id1, id2);
 }
 
@@ -1451,11 +1520,19 @@ fn enrichment_lifecycle_serde_roundtrip_with_decisions_and_receipts() {
 
 #[test]
 fn enrichment_cross_artifact_ids_all_distinct() {
+    let (ae, sb, hk) = test_envelope();
     let s = default_slot();
     let bh = default_behavior_hash();
-    let manifest_id =
-        DelegateCellManifest::derive_manifest_id(&s, DelegateType::QuickJsBacked, &bh, "cross")
-            .unwrap();
+    let manifest_id = DelegateCellManifest::derive_manifest_id(
+        &s,
+        DelegateType::QuickJsBacked,
+        &bh,
+        &ae,
+        &sb,
+        &hk,
+        "cross",
+    )
+    .unwrap();
     let receipt_id =
         ReplacementReceipt::derive_receipt_id(&s, "old", "new", 1000, "cross").unwrap();
     let decision_id =
@@ -1469,12 +1546,20 @@ fn enrichment_cross_artifact_ids_all_distinct() {
 
 #[test]
 fn enrichment_same_slot_different_artifact_types_distinct_ids() {
+    let (ae, sb, hk) = test_envelope();
     let s = slot("shared-slot");
     let bh = [0x11; 32];
     // All three artifact types for the same slot should produce different IDs
-    let m_id =
-        DelegateCellManifest::derive_manifest_id(&s, DelegateType::WasmBacked, &bh, "shared-zone")
-            .unwrap();
+    let m_id = DelegateCellManifest::derive_manifest_id(
+        &s,
+        DelegateType::WasmBacked,
+        &bh,
+        &ae,
+        &sb,
+        &hk,
+        "shared-zone",
+    )
+    .unwrap();
     let r_id =
         ReplacementReceipt::derive_receipt_id(&s, "old", "new", 5000, "shared-zone").unwrap();
     let d_id = PromotionDecision::derive_decision_id(&s, "new", 5000, "shared-zone").unwrap();

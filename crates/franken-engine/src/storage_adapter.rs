@@ -363,7 +363,8 @@ impl InMemoryStorageAdapter {
     }
 
     fn state_hash(&self) -> String {
-        let bytes = serde_json::to_vec(&(self.schema_version, &self.stores)).unwrap_or_default();
+        let bytes =
+            serde_json::to_vec(&(self.schema_version, &self.stores)).expect("serialization failed");
         digest_hex(&bytes)
     }
 

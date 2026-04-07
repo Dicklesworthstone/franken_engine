@@ -652,7 +652,7 @@ impl ScalarLexer {
                 while index < input.len() {
                     let current = input[index];
                     if current == b'\\' {
-                        index = index.saturating_add(2);
+                        index = index.saturating_add(2).min(input.len());
                         continue;
                     }
                     if current == quote {
@@ -874,7 +874,7 @@ impl SwarLexer {
                 while index < len {
                     let current = input[index];
                     if current == b'\\' {
-                        index = index.saturating_add(2);
+                        index = index.saturating_add(2).min(input.len());
                         continue;
                     }
                     if current == quote {

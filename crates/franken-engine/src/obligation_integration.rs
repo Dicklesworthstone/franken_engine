@@ -393,10 +393,11 @@ impl ObligationTracker {
         cell.commit_obligation(operation_id)?;
 
         let (trace_id, cell_id, op_id, category) = {
-            let op = self
-                .operations
-                .get_mut(operation_id)
-                .expect("checked above");
+            let op = self.operations.get_mut(operation_id).ok_or_else(|| {
+                ObligationIntegrationError::OperationNotFound {
+                    operation_id: operation_id.to_string(),
+                }
+            })?;
             op.phase = OperationPhase::Committed;
             (
                 op.trace_id.clone(),
@@ -450,10 +451,11 @@ impl ObligationTracker {
         cell.abort_obligation(operation_id)?;
 
         let (trace_id, cell_id, op_id, category) = {
-            let op = self
-                .operations
-                .get_mut(operation_id)
-                .expect("checked above");
+            let op = self.operations.get_mut(operation_id).ok_or_else(|| {
+                ObligationIntegrationError::OperationNotFound {
+                    operation_id: operation_id.to_string(),
+                }
+            })?;
             op.phase = OperationPhase::Aborted;
             (
                 op.trace_id.clone(),

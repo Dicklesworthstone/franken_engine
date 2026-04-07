@@ -28,6 +28,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::Arc;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -420,6 +421,75 @@ struct CallFrame {
 }
 
 // ---------------------------------------------------------------------------
+// Interpreter hooks
+// ---------------------------------------------------------------------------
+
+pub type ExtensionId = String;
+pub type ObjectRef = ObjectId;
+pub type PropertyKey = String;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChallengeToken {
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AllocKind {
+    Object,
+    Array,
+    Function,
+    Closure,
+    RegExp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HookContext {
+    pub extension_id: ExtensionId,
+    pub instruction_count: u64,
+    pub current_ip: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FunctionRef {
+    Function {
+        function_index: u32,
+        name: Option<String>,
+    },
+    Closure {
+        closure_id: u32,
+        function_index: u32,
+        name: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HookAction {
+    Allow,
+    Challenge(ChallengeToken),
+    Sandbox,
+    Suspend,
+    Terminate(String),
+    Quarantine(String),
+}
+
+/// `pre_import` is part of the stable hook contract even though the current
+/// IR3 baseline interpreter does not yet execute an `ImportModule` instruction.
+pub trait InterpreterHook: Send + Sync {
+    fn pre_property_access(
+        &self,
+        ctx: &HookContext,
+        target: &ObjectRef,
+        key: &PropertyKey,
+    ) -> HookAction;
+
+    fn pre_call(&self, ctx: &HookContext, callee: &FunctionRef, args: &[Value]) -> HookAction;
+
+    fn pre_allocation(&self, ctx: &HookContext, kind: AllocKind, size_hint: usize) -> HookAction;
+
+    fn pre_import(&self, ctx: &HookContext, specifier: &str) -> HookAction;
+}
+
+// ---------------------------------------------------------------------------
 // InterpreterError
 // ---------------------------------------------------------------------------
 
@@ -462,6 +532,13 @@ pub enum InterpreterError {
     UninitializedBinding { name: String },
     /// Assignment to a const binding.
     ConstAssignment { name: String },
+    /// String allocation size exceeded.
+    StringLimitExceeded { length: usize, max: usize },
+    /// Guardplane containment hook requested a fail-closed action.
+    ContainmentActionRequested {
+        action: String,
+        reason: Option<String>,
+    },
 }
 
 impl fmt::Display for InterpreterError {
@@ -523,6 +600,20 @@ impl fmt::Display for InterpreterError {
             Self::ConstAssignment { name } => {
                 write!(f, "assignment to constant variable '{name}'")
             }
+            Self::StringLimitExceeded { length, max } => {
+                write!(
+                    f,
+                    "string allocation size exceeded ({} bytes > {} bytes)",
+                    length, max
+                )
+            }
+            Self::ContainmentActionRequested { action, reason } => {
+                if let Some(reason) = reason {
+                    write!(f, "containment action requested: {action} ({reason})")
+                } else {
+                    write!(f, "containment action requested: {action}")
+                }
+            }
         }
     }
 }
@@ -540,6 +631,8 @@ pub struct InterpreterConfig {
     pub max_registers: u32,
     /// Maximum call depth.
     pub max_call_depth: usize,
+    /// Maximum string allocation size (bytes).
+    pub max_string_size: usize,
     /// Set of capabilities granted to this execution context.
     pub granted_capabilities: Vec<String>,
 }
@@ -551,6 +644,7 @@ impl InterpreterConfig {
             instruction_budget: DEFAULT_QUICKJS_BUDGET,
             max_registers: DEFAULT_QUICKJS_MAX_REGISTERS,
             max_call_depth: MAX_CALL_DEPTH,
+            max_string_size: 33_554_432,
             granted_capabilities: Vec::new(),
         }
     }
@@ -561,6 +655,7 @@ impl InterpreterConfig {
             instruction_budget: DEFAULT_V8_BUDGET,
             max_registers: DEFAULT_V8_MAX_REGISTERS,
             max_call_depth: MAX_CALL_DEPTH,
+            max_string_size: 268_435_456,
             granted_capabilities: Vec::new(),
         }
     }
@@ -571,6 +666,7 @@ impl InterpreterConfig {
             instruction_budget: config.deterministic_budget,
             max_registers: config.deterministic_max_registers,
             max_call_depth: config.max_call_depth,
+            max_string_size: 33_554_432,
             granted_capabilities: Vec::new(),
         }
     }
@@ -581,6 +677,7 @@ impl InterpreterConfig {
             instruction_budget: config.throughput_budget,
             max_registers: config.throughput_max_registers,
             max_call_depth: config.max_call_depth,
+            max_string_size: 268_435_456,
             granted_capabilities: Vec::new(),
         }
     }
@@ -633,6 +730,7 @@ struct ExecutionSeed {
 /// The core interpreter loop shared between both lanes.
 pub struct InterpreterCore {
     config: InterpreterConfig,
+    hook: Option<Arc<dyn InterpreterHook>>,
     /// Register file (flat, indexed by register number).
     registers: Vec<Value>,
     /// Call stack.
@@ -693,6 +791,7 @@ impl InterpreterCore {
         let max_regs = config.max_registers as usize;
         Self {
             config,
+            hook: None,
             registers: vec![Value::Undefined; max_regs],
             call_stack: Vec::new(),
             heap: Vec::new(),
@@ -717,6 +816,14 @@ impl InterpreterCore {
             closures: Vec::new(),
             pending_captures: Vec::new(),
         }
+    }
+
+    pub fn set_hook(&mut self, hook: Arc<dyn InterpreterHook>) {
+        self.hook = Some(hook);
+    }
+
+    pub fn clear_hook(&mut self) {
+        self.hook = None;
     }
 
     /// Execute an IR3 module and return the result.
@@ -969,6 +1076,107 @@ impl InterpreterCore {
         frame.finally_target
     }
 
+    fn hook_context(&self, module: &Ir3Module) -> HookContext {
+        // IR3 modules do not yet expose a dedicated extension id at interpreter
+        // runtime, so source_label is the deterministic provenance token
+        // available at the hook boundary today.
+        HookContext {
+            extension_id: module.header.source_label.clone(),
+            instruction_count: self.instructions_executed,
+            current_ip: self.ip,
+        }
+    }
+
+    fn function_ref(&self, module: &Ir3Module, callee: &Value, function_index: u32) -> FunctionRef {
+        let name = module
+            .function_table
+            .get(function_index as usize)
+            .and_then(|desc| desc.name.clone());
+        match callee {
+            Value::Function(_) => FunctionRef::Function {
+                function_index,
+                name,
+            },
+            Value::Closure(closure_id) => FunctionRef::Closure {
+                closure_id: *closure_id,
+                function_index,
+                name,
+            },
+            _ => FunctionRef::Function {
+                function_index,
+                name,
+            },
+        }
+    }
+
+    fn enforce_hook_action(&self, action: HookAction) -> Result<(), InterpreterError> {
+        match action {
+            HookAction::Allow => Ok(()),
+            HookAction::Challenge(token) => Err(InterpreterError::ContainmentActionRequested {
+                action: "challenge".to_string(),
+                reason: Some(token.token),
+            }),
+            HookAction::Sandbox => Err(InterpreterError::ContainmentActionRequested {
+                action: "sandbox".to_string(),
+                reason: None,
+            }),
+            HookAction::Suspend => Err(InterpreterError::ContainmentActionRequested {
+                action: "suspend".to_string(),
+                reason: None,
+            }),
+            HookAction::Terminate(reason) => Err(InterpreterError::ContainmentActionRequested {
+                action: "terminate".to_string(),
+                reason: Some(reason),
+            }),
+            HookAction::Quarantine(reason) => Err(InterpreterError::ContainmentActionRequested {
+                action: "quarantine".to_string(),
+                reason: Some(reason),
+            }),
+        }
+    }
+
+    fn run_pre_property_access_hook(
+        &self,
+        module: &Ir3Module,
+        target: ObjectId,
+        key: &str,
+    ) -> Result<(), InterpreterError> {
+        let Some(hook) = self.hook.as_ref() else {
+            return Ok(());
+        };
+        let ctx = self.hook_context(module);
+        let property_key = key.to_string();
+        self.enforce_hook_action(hook.pre_property_access(&ctx, &target, &property_key))
+    }
+
+    fn run_pre_call_hook(
+        &self,
+        module: &Ir3Module,
+        callee: &Value,
+        function_index: u32,
+        args: &[Value],
+    ) -> Result<(), InterpreterError> {
+        let Some(hook) = self.hook.as_ref() else {
+            return Ok(());
+        };
+        let ctx = self.hook_context(module);
+        let function_ref = self.function_ref(module, callee, function_index);
+        self.enforce_hook_action(hook.pre_call(&ctx, &function_ref, args))
+    }
+
+    fn run_pre_allocation_hook(
+        &self,
+        module: &Ir3Module,
+        kind: AllocKind,
+        size_hint: usize,
+    ) -> Result<(), InterpreterError> {
+        let Some(hook) = self.hook.as_ref() else {
+            return Ok(());
+        };
+        let ctx = self.hook_context(module);
+        self.enforce_hook_action(hook.pre_allocation(&ctx, kind, size_hint))
+    }
+
     fn run_loop(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
         loop {
             if self.ip >= module.instructions.len() {
@@ -1167,6 +1375,8 @@ impl InterpreterCore {
                                 arg_vals.push(self.read_reg(reg)?);
                             }
 
+                            self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
+
                             // Push frame. For closure calls, save the
                             // entire caller scope chain so it can be
                             // restored on return (the closure replaces
@@ -1295,6 +1505,7 @@ impl InterpreterCore {
 
                     match obj_val {
                         Value::Object(oid) => {
+                            self.run_pre_property_access_hook(module, oid, &key_str)?;
                             let prop = self.prototype_chain_get(oid, &key_str)?;
                             self.write_reg(dst, prop)?;
                         }
@@ -1315,6 +1526,7 @@ impl InterpreterCore {
 
                     match obj_val {
                         Value::Object(oid) => {
+                            self.run_pre_property_access_hook(module, oid, &key_str)?;
                             let heap_obj = self
                                 .heap
                                 .get_mut(oid.0 as usize)
@@ -1337,6 +1549,7 @@ impl InterpreterCore {
 
                     match obj_val {
                         Value::Object(oid) => {
+                            self.run_pre_property_access_hook(module, oid, &key_str)?;
                             self.heap
                                 .get_mut(oid.0 as usize)
                                 .ok_or(InterpreterError::ObjectNotFound { id: oid.0 })?
@@ -1354,7 +1567,14 @@ impl InterpreterCore {
                     }
                     self.ip += 1;
                 }
-                Ir3Instruction::NewObject { dst } | Ir3Instruction::NewArray { dst } => {
+                Ir3Instruction::NewObject { dst } => {
+                    self.run_pre_allocation_hook(module, AllocKind::Object, 0)?;
+                    let id = self.alloc_object();
+                    self.write_reg(dst, Value::Object(id))?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::NewArray { dst } => {
+                    self.run_pre_allocation_hook(module, AllocKind::Array, 0)?;
                     let id = self.alloc_object();
                     self.write_reg(dst, Value::Object(id))?;
                     self.ip += 1;
@@ -1538,6 +1758,8 @@ impl InterpreterCore {
                                 arg_vals.push(self.read_reg(reg)?);
                             }
 
+                            self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
+
                             // Push constructor frame with `construct_this`.
                             let scope_depth = self.scope_chain.depth();
                             let saved_chain = if captured_env.is_some() {
@@ -1605,17 +1827,17 @@ impl InterpreterCore {
                             },
                         )?;
                         let val = self.read_reg(reg)?;
-                        match val {
-                            Value::Str(s) => result.push_str(&s),
-                            Value::Int(n) => result.push_str(&n.to_string()),
-                            Value::Bool(b) => result.push_str(if b { "true" } else { "false" }),
-                            Value::Null => result.push_str("null"),
-                            Value::Undefined => result.push_str("undefined"),
-                            Value::Object(_) | Value::Iterator(_) => {
-                                result.push_str("[object Object]");
-                            }
-                            Value::Function(_) | Value::Closure(_) => result.push_str("function"),
-                        }
+                        let part_str = match val {
+                            Value::Str(s) => s,
+                            Value::Int(n) => n.to_string(),
+                            Value::Bool(b) => (if b { "true" } else { "false" }).to_string(),
+                            Value::Null => "null".to_string(),
+                            Value::Undefined => "undefined".to_string(),
+                            Value::Object(_) | Value::Iterator(_) => "[object Object]".to_string(),
+                            Value::Function(_) | Value::Closure(_) => "function".to_string(),
+                        };
+                        self.check_string_limit(result.len().saturating_add(part_str.len()))?;
+                        result.push_str(&part_str);
                     }
                     self.write_reg(dst, Value::Str(result))?;
                     self.ip += 1;
@@ -1739,8 +1961,13 @@ impl InterpreterCore {
                 Ir3Instruction::CreateClosure {
                     dst,
                     function_index,
-                    ..
+                    capture_count,
                 } => {
+                    self.run_pre_allocation_hook(
+                        module,
+                        AllocKind::Closure,
+                        capture_count as usize,
+                    )?;
                     // Snapshot the current scope chain including any
                     // bindings declared so far. Pending captures were
                     // accumulated by prior PushCapture instructions but
@@ -1857,18 +2084,33 @@ impl InterpreterCore {
 
     // -- Arithmetic helpers ------------------------------------------------
 
+    fn check_string_limit(&self, len: usize) -> Result<(), InterpreterError> {
+        if len > self.config.max_string_size {
+            Err(InterpreterError::StringLimitExceeded {
+                length: len,
+                max: self.config.max_string_size,
+            })
+        } else {
+            Ok(())
+        }
+    }
+
     fn eval_add(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
         match (&a, &b) {
             (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x.wrapping_add(*y))),
-            (Value::Str(x), Value::Str(y)) => Ok(Value::Str(format!("{x}{y}"))),
+            (Value::Str(x), Value::Str(y)) => {
+                self.check_string_limit(x.len().saturating_add(y.len()))?;
+                Ok(Value::Str(format!("{x}{y}")))
+            }
             (Value::Str(x), other) => {
                 let other_str = match other {
                     Value::Object(_) | Value::Iterator(_) => "[object Object]".to_string(),
                     Value::Function(_) | Value::Closure(_) => "function".to_string(),
                     _ => other.to_string(),
                 };
+                self.check_string_limit(x.len().saturating_add(other_str.len()))?;
                 Ok(Value::Str(format!("{x}{other_str}")))
             }
             (other, Value::Str(y)) => {
@@ -1877,6 +2119,7 @@ impl InterpreterCore {
                     Value::Function(_) | Value::Closure(_) => "function".to_string(),
                     _ => other.to_string(),
                 };
+                self.check_string_limit(other_str.len().saturating_add(y.len()))?;
                 Ok(Value::Str(format!("{other_str}{y}")))
             }
             _ => {
@@ -2845,6 +3088,7 @@ mod tests {
     use crate::ir_contract::{
         CapabilityTag, Ir3FunctionDesc, IrHeader, IrLevel, IrSchemaVersion, RegRange,
     };
+    use std::sync::{Arc, Mutex};
 
     // -- helpers --------------------------------------------------------
 
@@ -2890,6 +3134,400 @@ mod tests {
     fn assert_both_lanes_value(module: &Ir3Module, expected: Value) {
         assert_eq!(quickjs_execute(module).unwrap().value, expected);
         assert_eq!(v8_execute(module).unwrap().value, expected);
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum HookRecord {
+        Property {
+            ctx: HookContext,
+            target: ObjectId,
+            key: String,
+        },
+        Call {
+            ctx: HookContext,
+            callee: FunctionRef,
+            args: Vec<Value>,
+        },
+        Allocation {
+            ctx: HookContext,
+            kind: AllocKind,
+            size_hint: usize,
+        },
+        Import {
+            ctx: HookContext,
+            specifier: String,
+        },
+    }
+
+    #[derive(Debug)]
+    struct RecordingHook {
+        records: Mutex<Vec<HookRecord>>,
+        property_action: HookAction,
+        call_action: HookAction,
+        allocation_action: HookAction,
+        import_action: HookAction,
+    }
+
+    impl RecordingHook {
+        fn allow_all() -> Self {
+            Self {
+                records: Mutex::new(Vec::new()),
+                property_action: HookAction::Allow,
+                call_action: HookAction::Allow,
+                allocation_action: HookAction::Allow,
+                import_action: HookAction::Allow,
+            }
+        }
+
+        fn with_allocation_action(action: HookAction) -> Self {
+            Self {
+                allocation_action: action,
+                ..Self::allow_all()
+            }
+        }
+
+        fn records(&self) -> Vec<HookRecord> {
+            self.records.lock().unwrap().clone()
+        }
+    }
+
+    impl InterpreterHook for RecordingHook {
+        fn pre_property_access(
+            &self,
+            ctx: &HookContext,
+            target: &ObjectRef,
+            key: &PropertyKey,
+        ) -> HookAction {
+            self.records.lock().unwrap().push(HookRecord::Property {
+                ctx: ctx.clone(),
+                target: *target,
+                key: key.clone(),
+            });
+            self.property_action.clone()
+        }
+
+        fn pre_call(&self, ctx: &HookContext, callee: &FunctionRef, args: &[Value]) -> HookAction {
+            self.records.lock().unwrap().push(HookRecord::Call {
+                ctx: ctx.clone(),
+                callee: callee.clone(),
+                args: args.to_vec(),
+            });
+            self.call_action.clone()
+        }
+
+        fn pre_allocation(
+            &self,
+            ctx: &HookContext,
+            kind: AllocKind,
+            size_hint: usize,
+        ) -> HookAction {
+            self.records.lock().unwrap().push(HookRecord::Allocation {
+                ctx: ctx.clone(),
+                kind,
+                size_hint,
+            });
+            self.allocation_action.clone()
+        }
+
+        fn pre_import(&self, ctx: &HookContext, specifier: &str) -> HookAction {
+            self.records.lock().unwrap().push(HookRecord::Import {
+                ctx: ctx.clone(),
+                specifier: specifier.to_string(),
+            });
+            self.import_action.clone()
+        }
+    }
+
+    #[test]
+    fn interpreter_hook_called_on_property_access() {
+        let hook = Arc::new(RecordingHook::allow_all());
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "test-trace");
+        core.set_hook(hook.clone());
+
+        let oid = core.alloc_object();
+        core.heap[oid.0 as usize]
+            .properties
+            .insert("secret".to_string(), Value::Int(99));
+        core.registers[1] = Value::Object(oid);
+        core.registers[2] = Value::Str("secret".to_string());
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::GetProperty {
+                    obj: 1,
+                    key: 2,
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        assert_eq!(result.value, Value::Int(99));
+        assert_eq!(
+            hook.records(),
+            vec![HookRecord::Property {
+                ctx: HookContext {
+                    extension_id: "test".to_string(),
+                    instruction_count: 1,
+                    current_ip: 0,
+                },
+                target: oid,
+                key: "secret".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn interpreter_hook_called_on_call() {
+        let hook = Arc::new(RecordingHook::allow_all());
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "test-trace");
+        core.set_hook(hook.clone());
+        core.registers[1] = Value::Int(5);
+        core.registers[3] = Value::Function(0);
+
+        let result = core
+            .execute(&test_module_with_functions(
+                vec![
+                    Ir3Instruction::Call {
+                        callee: 3,
+                        args: RegRange { start: 1, count: 1 },
+                        dst: 0,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::Return { value: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 1,
+                    frame_size: 2,
+                    name: Some("identity".to_string()),
+                }],
+            ))
+            .unwrap();
+
+        assert_eq!(result.value, Value::Int(5));
+        assert_eq!(
+            hook.records(),
+            vec![HookRecord::Call {
+                ctx: HookContext {
+                    extension_id: "test".to_string(),
+                    instruction_count: 1,
+                    current_ip: 0,
+                },
+                callee: FunctionRef::Function {
+                    function_index: 0,
+                    name: Some("identity".to_string()),
+                },
+                args: vec![Value::Int(5)],
+            }]
+        );
+    }
+
+    #[test]
+    fn interpreter_hook_called_on_allocation() {
+        let hook = Arc::new(RecordingHook::allow_all());
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "test-trace");
+        core.set_hook(hook.clone());
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::NewObject { dst: 0 },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        assert!(matches!(result.value, Value::Object(_)));
+        assert_eq!(
+            hook.records(),
+            vec![HookRecord::Allocation {
+                ctx: HookContext {
+                    extension_id: "test".to_string(),
+                    instruction_count: 1,
+                    current_ip: 0,
+                },
+                kind: AllocKind::Object,
+                size_hint: 0,
+            }]
+        );
+    }
+
+    #[test]
+    fn interpreter_hook_called_on_closure_allocation() {
+        let hook = Arc::new(RecordingHook::allow_all());
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "test-trace");
+        core.set_hook(hook.clone());
+
+        let result = core
+            .execute(&test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateClosure {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 2,
+                    },
+                    Ir3Instruction::Halt,
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 1,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("closure_target".to_string()),
+                }],
+            ))
+            .unwrap();
+
+        assert!(matches!(result.value, Value::Closure(0)));
+        assert_eq!(
+            hook.records(),
+            vec![HookRecord::Allocation {
+                ctx: HookContext {
+                    extension_id: "test".to_string(),
+                    instruction_count: 1,
+                    current_ip: 0,
+                },
+                kind: AllocKind::Closure,
+                size_hint: 2,
+            }]
+        );
+    }
+
+    #[test]
+    fn interpreter_hook_allow_continues_execution() {
+        let hook = Arc::new(RecordingHook::allow_all());
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "test-trace");
+        core.set_hook(hook);
+
+        let oid = core.alloc_object();
+        core.registers[1] = Value::Object(oid);
+        core.registers[2] = Value::Str("key".to_string());
+        core.registers[3] = Value::Int(7);
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::SetProperty {
+                    obj: 1,
+                    key: 2,
+                    val: 3,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 1,
+                    key: 2,
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        assert_eq!(result.value, Value::Int(7));
+    }
+
+    #[test]
+    fn interpreter_hook_terminate_stops_execution() {
+        let hook = Arc::new(RecordingHook::with_allocation_action(
+            HookAction::Terminate("policy denied object allocation".to_string()),
+        ));
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "test-trace");
+        core.set_hook(hook.clone());
+
+        let err = core
+            .execute(&test_module(vec![Ir3Instruction::NewObject { dst: 0 }]))
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            InterpreterError::ContainmentActionRequested {
+                action: "terminate".to_string(),
+                reason: Some("policy denied object allocation".to_string()),
+            }
+        );
+        assert_eq!(hook.records().len(), 1);
+    }
+
+    #[test]
+    fn interpreter_hook_none_preserves_execution_when_unset() {
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "test-trace");
+        let oid = core.alloc_object();
+        core.heap[oid.0 as usize]
+            .properties
+            .insert("stable".to_string(), Value::Int(12));
+        core.registers[1] = Value::Object(oid);
+        core.registers[2] = Value::Str("stable".to_string());
+
+        let result = core
+            .execute(&test_module(vec![
+                Ir3Instruction::GetProperty {
+                    obj: 1,
+                    key: 2,
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+            ]))
+            .unwrap();
+
+        assert_eq!(result.value, Value::Int(12));
+        assert!(core.hook.is_none());
+    }
+
+    #[test]
+    fn interpreter_hook_receives_correct_context() {
+        let hook = Arc::new(RecordingHook::allow_all());
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "test-trace");
+        core.set_hook(hook.clone());
+
+        let mut module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 4, value: 1 },
+            Ir3Instruction::NewArray { dst: 0 },
+            Ir3Instruction::Halt,
+        ]);
+        module.header.source_label = "extension://hook-test".to_string();
+
+        let result = core.execute(&module).unwrap();
+        assert!(matches!(result.value, Value::Object(_)));
+        assert_eq!(
+            hook.records(),
+            vec![HookRecord::Allocation {
+                ctx: HookContext {
+                    extension_id: "extension://hook-test".to_string(),
+                    instruction_count: 2,
+                    current_ip: 1,
+                },
+                kind: AllocKind::Array,
+                size_hint: 0,
+            }]
+        );
+    }
+
+    #[test]
+    fn interpreter_hook_pre_import_surface_is_available() {
+        let hook = RecordingHook::allow_all();
+        let config = InterpreterConfig::quickjs_defaults();
+        let core = InterpreterCore::new(config, "test-trace");
+        let mut module = test_module(vec![Ir3Instruction::Halt]);
+        module.header.source_label = "extension://import-surface".to_string();
+
+        let ctx = core.hook_context(&module);
+        let action = hook.pre_import(&ctx, "lodash");
+
+        assert_eq!(action, HookAction::Allow);
+        assert_eq!(
+            hook.records(),
+            vec![HookRecord::Import {
+                ctx: HookContext {
+                    extension_id: "extension://import-surface".to_string(),
+                    instruction_count: 0,
+                    current_ip: 0,
+                },
+                specifier: "lodash".to_string(),
+            }]
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -4122,9 +4760,24 @@ mod tests {
             InterpreterError::UnsupportedMembershipSemantics {
                 operator: "instanceof".to_string(),
             },
+            InterpreterError::IteratorNotFound { handle: 11 },
             InterpreterError::Halted,
             InterpreterError::UncaughtException {
                 value: "error msg".to_string(),
+            },
+            InterpreterError::UninitializedBinding {
+                name: "late".to_string(),
+            },
+            InterpreterError::ConstAssignment {
+                name: "CONST_X".to_string(),
+            },
+            InterpreterError::StringLimitExceeded {
+                length: 1024,
+                max: 512,
+            },
+            InterpreterError::ContainmentActionRequested {
+                action: "terminate".to_string(),
+                reason: Some("policy".to_string()),
             },
         ];
         for v in &variants {
@@ -4134,8 +4787,8 @@ mod tests {
         }
         assert_eq!(
             variants.len(),
-            15,
-            "all 15 InterpreterError variants covered"
+            20,
+            "all 20 InterpreterError variants covered"
         );
     }
 

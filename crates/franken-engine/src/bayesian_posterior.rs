@@ -440,7 +440,7 @@ impl ChangePointDetector {
         new_probs[0] = change_mass;
 
         // Normalize.
-        let total: i64 = new_probs.iter().sum();
+        let total: i64 = new_probs.iter().fold(0i64, |acc, &x| acc.saturating_add(x));
         if total > 0 {
             for p in &mut new_probs {
                 *p = *p * MILLION / total;

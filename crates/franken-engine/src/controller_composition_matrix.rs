@@ -623,7 +623,7 @@ fn coupling_score_millionths(
 }
 
 fn graph_id_from_edges(controller_names: &[String], edges: &[ControllerInteractionEdge]) -> String {
-    let json = serde_json::to_vec(&(controller_names, edges)).unwrap_or_default();
+    let json = serde_json::to_vec(&(controller_names, edges)).expect("serialization failed");
     format!("graph-{}", to_hex(&hash_bytes(&json)[..12]))
 }
 
@@ -910,7 +910,7 @@ impl ControllerCompositionMatrix {
             &matrix_schema(),
             &canonical,
         )
-        .expect("derive_id for composition matrix")
+        .unwrap_or_default()
     }
 
     fn to_canonical_value(&self) -> CanonicalValue {
@@ -1297,7 +1297,7 @@ impl GateResult {
             &matrix_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for gate result")
+        .unwrap_or_default()
     }
 }
 

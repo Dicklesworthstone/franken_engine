@@ -255,6 +255,9 @@ fn manifest_id_differs_by_delegate_type() {
         &test_slot_id(),
         DelegateType::QuickJsBacked,
         &test_behavior_hash(),
+        &test_authority_envelope(),
+        &test_sandbox(),
+        &test_monitoring_hooks(),
         "zone",
     )
     .unwrap();
@@ -262,6 +265,9 @@ fn manifest_id_differs_by_delegate_type() {
         &test_slot_id(),
         DelegateType::WasmBacked,
         &test_behavior_hash(),
+        &test_authority_envelope(),
+        &test_sandbox(),
+        &test_monitoring_hooks(),
         "zone",
     )
     .unwrap();
@@ -269,6 +275,9 @@ fn manifest_id_differs_by_delegate_type() {
         &test_slot_id(),
         DelegateType::ExternalProcess,
         &test_behavior_hash(),
+        &test_authority_envelope(),
+        &test_sandbox(),
+        &test_monitoring_hooks(),
         "zone",
     )
     .unwrap();
@@ -1148,6 +1157,9 @@ fn deterministic_id_derivation_all_artifact_types() {
             &test_slot_id(),
             DelegateType::QuickJsBacked,
             &test_behavior_hash(),
+            &test_authority_envelope(),
+            &test_sandbox(),
+            &test_monitoring_hooks(),
             "zone",
         )
         .unwrap();
@@ -1155,6 +1167,9 @@ fn deterministic_id_derivation_all_artifact_types() {
             &test_slot_id(),
             DelegateType::QuickJsBacked,
             &test_behavior_hash(),
+            &test_authority_envelope(),
+            &test_sandbox(),
+            &test_monitoring_hooks(),
             "zone",
         )
         .unwrap();
@@ -1185,6 +1200,9 @@ fn all_artifact_ids_from_different_types_are_distinct() {
         &test_slot_id(),
         DelegateType::QuickJsBacked,
         &test_behavior_hash(),
+        &test_authority_envelope(),
+        &test_sandbox(),
+        &test_monitoring_hooks(),
         "zone",
     )
     .unwrap();

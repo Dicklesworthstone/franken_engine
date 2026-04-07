@@ -441,8 +441,21 @@ pub enum Ir1Op {
     Throw,
     /// Load `this` binding.
     LoadThis,
-    /// Declare a function and bind it.
-    DeclareFunction { name: String, binding_id: BindingId },
+    /// Declare a function and bind it.  When `body_ops` is non-empty the
+    /// function body is lowered independently with its own register frame.
+    DeclareFunction {
+        name: String,
+        binding_id: BindingId,
+        param_names: Vec<String>,
+        body_ops: Vec<Ir1Op>,
+    },
+    /// Create a function value (expression position — arrow functions and
+    /// function expressions).  The resulting value is pushed onto the stack.
+    CreateFunction {
+        name: Option<String>,
+        param_names: Vec<String>,
+        body_ops: Vec<Ir1Op>,
+    },
     /// Begin a try block; on exception, jump to catch_label.
     /// If a finally block exists, `finally_label` points to its entry.
     BeginTry {
@@ -692,7 +705,12 @@ impl Ir1Op {
                     CanonicalValue::String("load_this".to_string()),
                 );
             }
-            Self::DeclareFunction { name, binding_id } => {
+            Self::DeclareFunction {
+                name,
+                binding_id,
+                param_names,
+                body_ops,
+            } => {
                 map.insert(
                     "op".to_string(),
                     CanonicalValue::String("declare_function".to_string()),
@@ -701,6 +719,47 @@ impl Ir1Op {
                 map.insert(
                     "binding_id".to_string(),
                     CanonicalValue::U64(u64::from(*binding_id)),
+                );
+                map.insert(
+                    "param_names".to_string(),
+                    CanonicalValue::Array(
+                        param_names
+                            .iter()
+                            .map(|s| CanonicalValue::String(s.clone()))
+                            .collect(),
+                    ),
+                );
+                map.insert(
+                    "body_ops".to_string(),
+                    CanonicalValue::Array(body_ops.iter().map(Ir1Op::canonical_value).collect()),
+                );
+            }
+            Self::CreateFunction {
+                name,
+                param_names,
+                body_ops,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("create_function".to_string()),
+                );
+                map.insert(
+                    "name".to_string(),
+                    name.as_ref()
+                        .map_or(CanonicalValue::Null, |n| CanonicalValue::String(n.clone())),
+                );
+                map.insert(
+                    "param_names".to_string(),
+                    CanonicalValue::Array(
+                        param_names
+                            .iter()
+                            .map(|s| CanonicalValue::String(s.clone()))
+                            .collect(),
+                    ),
+                );
+                map.insert(
+                    "body_ops".to_string(),
+                    CanonicalValue::Array(body_ops.iter().map(Ir1Op::canonical_value).collect()),
                 );
             }
             Self::BeginTry {

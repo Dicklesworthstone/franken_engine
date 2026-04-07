@@ -858,10 +858,19 @@ fn harness_from_manifest() {
 
     let slot_id = test_slot_id();
     let behavior_hash = [0xCC; 32];
+    let envelope = frankenengine_engine::slot_registry::AuthorityEnvelope {
+        required: Vec::new(),
+        permitted: Vec::new(),
+    };
+    let sandbox = frankenengine_engine::self_replacement::SandboxConfiguration::default();
+    let hooks: Vec<frankenengine_engine::self_replacement::MonitoringHook> = Vec::new();
     let manifest_id = DelegateCellManifest::derive_manifest_id(
         &slot_id,
         DelegateType::WasmBacked,
         &behavior_hash,
+        &envelope,
+        &sandbox,
+        &hooks,
         "test-zone",
     )
     .unwrap();

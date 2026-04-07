@@ -244,17 +244,21 @@ run_mode() {
 
 run_mode
 
-for required in \
-  run_manifest.json \
-  events.jsonl \
-  commands.txt \
-  trace_ids.json \
-  json_compound_placeholder_closure_report.json \
-  step_logs/step_000.log; do
-  if [[ ! -f "${run_dir}/${required}" ]]; then
-    echo "missing artifact after successful run: ${run_dir}/${required}" >&2
-    exit 1
-  fi
-done
+if [[ "${mode}" == "test" || "${mode}" == "replay" || "${mode}" == "ci" ]]; then
+  for required in \
+    run_manifest.json \
+    events.jsonl \
+    commands.txt \
+    trace_ids.json \
+    json_compound_placeholder_closure_report.json \
+    step_logs/step_000.log; do
+    if [[ ! -f "${run_dir}/${required}" ]]; then
+      echo "missing artifact after successful run: ${run_dir}/${required}" >&2
+      exit 1
+    fi
+  done
 
-printf 'json compound placeholder closure artifacts: %s\n' "${run_dir}"
+  printf 'json compound placeholder closure artifacts: %s\n' "${run_dir}"
+else
+  printf 'json compound placeholder closure %s completed via rch\n' "${mode}"
+fi

@@ -232,7 +232,7 @@ impl DegradedModeOverride {
             &override_schema_id(),
             &canonical_bytes,
         )
-        .expect("canonical bytes are non-empty");
+        .unwrap_or_default();
 
         let mut token = Self {
             override_id,

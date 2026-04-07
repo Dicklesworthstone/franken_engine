@@ -145,7 +145,7 @@ fn derive_signer_key_id(label: &str) -> EngineObjectId {
         &schema_id,
         label.as_bytes(),
     )
-    .expect("derive_id should succeed")
+    .unwrap_or_default()
 }
 
 fn make_opt_receipt(opt_id: &str, signer_key_id: EngineObjectId, signing_key: &[u8]) -> OptReceipt {

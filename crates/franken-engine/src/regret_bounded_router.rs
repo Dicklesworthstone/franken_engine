@@ -918,7 +918,7 @@ fn enforce_probability_floor_and_normalize(probs: &mut [i64], min_floor: i64) {
         *p = (*p).max(floor);
     }
 
-    let mut sum: i64 = probs.iter().sum();
+    let mut sum: i64 = probs.iter().fold(0i64, |acc, &x| acc.saturating_add(x));
     if sum < MILLION {
         if let Some(idx) = probs
             .iter()
@@ -1074,7 +1074,7 @@ mod tests {
         let probs = state.arm_probabilities();
         assert_eq!(probs.len(), 3);
         // Should be roughly uniform (within rounding).
-        let sum: i64 = probs.iter().sum();
+        let sum: i64 = probs.iter().fold(0i64, |acc, &x| acc.saturating_add(x));
         assert_eq!(sum, MILLION);
     }
 

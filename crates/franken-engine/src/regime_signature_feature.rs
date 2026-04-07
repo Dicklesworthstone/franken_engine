@@ -1880,7 +1880,10 @@ mod tests {
         let config = SignatureConfig::default();
         let trace = make_trace("t", "cpu", &[1, 2, 3, 4, 5, 6, 7, 8], 1);
         let sig = extract_signature(&trace, &config);
-        let total_buckets: u64 = sig.bucket_counts.iter().sum();
+        let total_buckets: u64 = sig
+            .bucket_counts
+            .iter()
+            .fold(0u64, |acc, &x| acc.saturating_add(x));
         assert_eq!(total_buckets, sig.observation_count);
     }
 

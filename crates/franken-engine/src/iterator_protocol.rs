@@ -702,7 +702,7 @@ mod tests {
             &test_schema_id(),
             label.as_bytes(),
         )
-        .expect("derive_id should succeed")
+        .unwrap_or_default()
     }
 
     // -- IteratorResult --

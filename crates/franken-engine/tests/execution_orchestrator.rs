@@ -66,8 +66,13 @@ fn end_to_end_simple_source() {
 #[test]
 fn end_to_end_object_destructuring_uses_original_source_value() {
     let mut orch = ExecutionOrchestrator::with_defaults();
-    let pkg = simple_package("ext-obj-destructure", "const { a, b } = { a: 1, b: 2 }; a + b;");
-    let result = orch.execute(&pkg).expect("object destructuring should execute");
+    let pkg = simple_package(
+        "ext-obj-destructure",
+        "const { a, b } = { a: 1, b: 2 }; a + b;",
+    );
+    let result = orch
+        .execute(&pkg)
+        .expect("object destructuring should execute");
 
     assert_eq!(result.execution_value, "3");
 }
@@ -79,7 +84,9 @@ fn end_to_end_array_destructuring_uses_original_source_value() {
         "ext-arr-destructure",
         "const [x, y, z] = [10, 20, 30]; x + y + z;",
     );
-    let result = orch.execute(&pkg).expect("array destructuring should execute");
+    let result = orch
+        .execute(&pkg)
+        .expect("array destructuring should execute");
 
     assert_eq!(result.execution_value, "60");
 }

@@ -329,7 +329,8 @@ impl CausalDagBuilder {
         }
 
         // Compute structure hash
-        let hash_input = serde_json::to_vec(&(&self.variables, &self.edges)).unwrap_or_default();
+        let hash_input =
+            serde_json::to_vec(&(&self.variables, &self.edges)).expect("serialization failed");
         let structure_hash = ContentHash::compute(&hash_input);
 
         Ok(CausalDag {

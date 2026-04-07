@@ -983,16 +983,13 @@ fn build_claim_delta_report(
     let surfaces = ObservabilityWorkloadClass::ALL
         .into_iter()
         .flat_map(|workload| {
-            ObservabilityMode::ALL.into_iter().map(move |mode| {
-                let report = telemetry_reports
-                    .get(&WorkloadModeKey { workload, mode })
-                    .expect("telemetry report exists");
+            ObservabilityMode::ALL.into_iter().filter_map(move |mode| {
+                let report = telemetry_reports.get(&WorkloadModeKey { workload, mode })?;
                 let cell = supremacy_matrix
                     .cells
                     .iter()
-                    .find(|cell| cell.workload_class == workload && cell.mode == mode)
-                    .expect("supremacy cell exists");
-                ObservabilityClaimSurface {
+                    .find(|cell| cell.workload_class == workload && cell.mode == mode)?;
+                Some(ObservabilityClaimSurface {
                     workload_id: workload.workload_id().to_string(),
                     workload_class: workload,
                     mode,
@@ -1004,7 +1001,7 @@ fn build_claim_delta_report(
                     exact_capture: mode != ObservabilityMode::Off && report.is_all_exact(),
                     claim_allowed: cell.decision.allowed,
                     suppression_reasons: cell.decision.suppression_reasons.clone(),
-                }
+                })
             })
         })
         .collect::<Vec<_>>();

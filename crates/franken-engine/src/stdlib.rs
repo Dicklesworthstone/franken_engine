@@ -37,6 +37,8 @@ const MAX_STRING_REPEAT: usize = 1_048_576;
 const STRING_INLINE_CHAR_MAX: usize = 22;
 /// Budget for forcing a concrete flatten in the baseline string lane.
 const STRING_FLATTEN_BUDGET_CODE_UNITS: usize = 256;
+/// Maximum allowed elements when reading standard collections into native vectors.
+const MAX_COLLECTION_SIZE: usize = 1_048_576;
 
 // ---------------------------------------------------------------------------
 // BuiltinId — identifies a native function implementation
@@ -1460,7 +1462,12 @@ pub fn read_array_elements(
 ) -> Result<Vec<JsValue>, StdlibError> {
     require_collection_kind(heap, handle, CollectionKind::Array)?;
     let len = get_count_property(heap, handle, ARRAY_LENGTH_PROP)?;
-    let mut elements = Vec::with_capacity(len.min(1024));
+    if len > MAX_COLLECTION_SIZE {
+        return Err(StdlibError::RangeError(format!(
+            "Array length {len} exceeds maximum native collection size {MAX_COLLECTION_SIZE}"
+        )));
+    }
+    let mut elements = Vec::with_capacity(len);
     for index in 0..len {
         elements.push(get_required_own_data_property(
             heap,
@@ -1477,7 +1484,12 @@ pub fn read_map_entries(
 ) -> Result<Vec<(JsValue, JsValue)>, StdlibError> {
     require_collection_kind(heap, handle, CollectionKind::Map)?;
     let len = get_count_property(heap, handle, MAP_NEXT_INDEX_PROP)?;
-    let mut entries = Vec::with_capacity(len.min(1024));
+    if len > MAX_COLLECTION_SIZE {
+        return Err(StdlibError::RangeError(format!(
+            "Map length {len} exceeds maximum native collection size {MAX_COLLECTION_SIZE}"
+        )));
+    }
+    let mut entries = Vec::with_capacity(len);
     for index in 0..len {
         let key = get_required_own_data_property(heap, handle, &map_key_slot(index))?;
         let value = get_required_own_data_property(heap, handle, &map_value_slot(index))?;
@@ -1492,7 +1504,12 @@ pub fn read_set_values(
 ) -> Result<Vec<JsValue>, StdlibError> {
     require_collection_kind(heap, handle, CollectionKind::Set)?;
     let len = get_count_property(heap, handle, SET_NEXT_INDEX_PROP)?;
-    let mut values = Vec::with_capacity(len.min(1024));
+    if len > MAX_COLLECTION_SIZE {
+        return Err(StdlibError::RangeError(format!(
+            "Set length {len} exceeds maximum native collection size {MAX_COLLECTION_SIZE}"
+        )));
+    }
+    let mut values = Vec::with_capacity(len);
     for index in 0..len {
         values.push(get_required_own_data_property(
             heap,
@@ -2310,9 +2327,10 @@ pub fn exec_string_method(
                 ));
             }
             let count = count as usize;
-            if count > MAX_STRING_REPEAT {
+            let final_len = this.len().saturating_mul(count);
+            if final_len > MAX_STRING_REPEAT {
                 return Err(StdlibError::RangeError(format!(
-                    "repeat count {count} exceeds maximum {MAX_STRING_REPEAT}"
+                    "repeat resulting length {final_len} exceeds maximum {MAX_STRING_REPEAT}"
                 )));
             }
             Ok(JsValue::Str(this.repeat(count)))

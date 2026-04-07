@@ -593,7 +593,7 @@ impl CVaRConstraint {
 
         // CVaR: mean of all samples >= VaR.
         let tail: Vec<u64> = sorted[var_index..].to_vec();
-        let tail_sum: u64 = tail.iter().sum();
+        let tail_sum: u64 = tail.iter().fold(0u64, |acc, &x| acc.saturating_add(x));
         let cvar_us = if tail.is_empty() {
             var_us
         } else {

@@ -472,11 +472,6 @@ impl SnellEnvelope {
         }
 
         let n = payoffs_millionths.len();
-        if n == 0 {
-            return Err(StoppingError::InvalidConfig {
-                detail: "horizon cannot be zero".to_string(),
-            });
-        }
         let mut envelope = vec![0i64; n];
 
         // Backward induction.

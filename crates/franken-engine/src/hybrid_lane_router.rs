@@ -196,7 +196,10 @@ impl ConformalState {
         if self.window.is_empty() {
             return MILLION; // vacuously valid
         }
-        let sum: i64 = self.window.iter().sum();
+        let sum: i64 = self
+            .window
+            .iter()
+            .fold(0i64, |acc, &x| acc.saturating_add(x));
         sum / self.window.len() as i64
     }
 
@@ -526,7 +529,7 @@ impl AdaptiveWeights {
             .map(|w| exp_millionths(w - max_w))
             .collect();
 
-        let sum: i64 = exps.iter().sum();
+        let sum: i64 = exps.iter().fold(0i64, |acc, &x| acc.saturating_add(x));
         if sum == 0 {
             return vec![MILLION / 2, MILLION / 2];
         }
@@ -654,7 +657,7 @@ impl RoutingDecisionTrace {
             &router_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for decision trace")
+        .unwrap_or_default()
     }
 }
 
@@ -958,7 +961,7 @@ impl HybridLaneRouter {
             &router_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for router")
+        .unwrap_or_default()
     }
 }
 
@@ -986,7 +989,7 @@ impl RouterSummary {
             &router_schema(),
             canonical.as_bytes(),
         )
-        .expect("derive_id for summary")
+        .unwrap_or_default()
     }
 }
 

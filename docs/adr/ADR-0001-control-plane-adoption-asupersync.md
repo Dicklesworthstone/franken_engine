@@ -19,19 +19,49 @@ FrankenEngine adopts `/dp/asupersync` as the canonical source for control-plane
 primitives. The listed types are imported from canonical crates and are never redefined
 inside this repository.
 
-## Canonical Imported Types
+## Exact Imported Control-Plane Surface
 
-| Canonical type | Cargo package | Rust crate path | Canonical ownership track |
-| --- | --- | --- | --- |
-| `Cx` | `franken-kernel` | `franken_kernel` | 10.11 |
-| `TraceId` | `franken-kernel` | `franken_kernel` | 10.11 |
-| `Budget` | `franken-kernel` | `franken_kernel` | 10.11 |
-| `DecisionId` | `franken-decision` | `franken_decision` | 10.11 |
-| `PolicyId` | `franken-decision` | `franken_decision` | 10.11 |
-| `SchemaVersion` | `franken-evidence` | `franken_evidence` | 10.11 |
+The approved import boundary is `crates/franken-engine/src/control_plane/mod.rs`.
+RC-6.3 contract tests in
+`crates/franken-engine/tests/asupersync_dependency_contracts.rs` type-check the
+exact upstream API surface below and fail early if `/dp/asupersync` drifts.
+
+### `franken-kernel` / `franken_kernel`
+
+| Imported symbol | Kind | Current use |
+| --- | --- | --- |
+| `Budget` | struct | budget threading through `KernelContext` and adapter callers |
+| `CapabilitySet` | trait | capability-generic `Cx` plumbing |
+| `Cx` | struct | canonical execution context wrapper in `KernelContext` |
+| `DecisionId` | struct | decision identity carried through adapter requests |
+| `NoCaps` | struct | zero-capability default for `Cx` |
+| `PolicyId` | struct | policy identity carried through adapter requests |
+| `SchemaVersion` | struct | schema compatibility identity exposed by the adapter boundary |
+| `TraceId` | struct | trace identity threaded through `Cx` and adapter requests |
+
+### `franken-decision` / `franken_decision`
+
+| Imported symbol | Kind | Current use |
+| --- | --- | --- |
+| `DecisionContract` | trait | contract trait re-exported from `control_plane` |
+| `DecisionOutcome` | struct | result type from decision evaluation |
+| `EvalContext` | struct | calibration/e-process/CI-width evaluation input |
+| `FallbackPolicy` | struct | fallback thresholds for degraded decisions |
+| `LossMatrix` | struct | expected-loss model for contract evaluation |
+| `Posterior` | struct | posterior belief state for contract evaluation |
+| `evaluate` | function | canonical evaluation engine used by `control_plane::evaluate_contract` |
+
+### `franken-evidence` / `franken_evidence`
+
+| Imported symbol | Kind | Current use |
+| --- | --- | --- |
+| `EvidenceLedger` | struct | emitted evidence entry type returned to adapter callers |
+| `EvidenceLedgerBuilder` | struct | canonical builder used for adapter evidence emission |
 
 `franken-kernel`/`franken_kernel`, `franken-decision`/`franken_decision`, and
-`franken-evidence`/`franken_evidence` are both normative references.
+`franken-evidence`/`franken_evidence` are all normative references. The table
+above is intentionally exact rather than aspirational: if the import list
+changes, this ADR and the RC-6.3 contract tests must change together.
 
 ## Version Policy
 
@@ -39,9 +69,9 @@ Version policy for `/dp/asupersync` imports is strict and explicit:
 
 | Cargo package | Allowed range | Pinning policy | Upgrade gate |
 | --- | --- | --- | --- |
-| `franken-kernel` | `>=0.1.0, <0.2.0` | Lockfile pins exact release | 10.11 owner review + compatibility notes |
-| `franken-decision` | `>=0.1.0, <0.2.0` | Lockfile pins exact release | 10.11 owner review + compatibility notes |
-| `franken-evidence` | `>=0.1.0, <0.2.0` | Lockfile pins exact release | 10.11 owner review + compatibility notes |
+| `franken-kernel` | `>=0.2.0, <0.3.0` | Lockfile pins exact release | 10.11 owner review + compatibility notes |
+| `franken-decision` | `>=0.2.0, <0.3.0` | Lockfile pins exact release | 10.11 owner review + compatibility notes |
+| `franken-evidence` | `>=0.2.0, <0.3.0` | Lockfile pins exact release | 10.11 owner review + compatibility notes |
 
 For `0.x` crates, minor-version changes are treated as potentially breaking and require
 explicit review before adoption.
@@ -60,17 +90,17 @@ Correct `Cargo.toml` examples:
 
 ```toml
 [dependencies]
-franken-kernel = "0.1"
-franken-decision = "0.1"
-franken-evidence = "0.1"
+franken-kernel = "0.2"
+franken-decision = "0.2"
+franken-evidence = "0.2"
 ```
 
 Correct Rust source examples:
 
 ```rust
-use franken_kernel::Cx;
-use franken_decision::{DecisionId, PolicyId};
-use franken_evidence::SchemaVersion;
+use franken_kernel::{Cx, DecisionId, PolicyId, SchemaVersion};
+use franken_decision::{DecisionContract, evaluate};
+use franken_evidence::EvidenceLedgerBuilder;
 ```
 
 Common mistakes (forbidden):
@@ -95,8 +125,11 @@ If a required primitive is missing upstream:
 
 ## Dependency Policy: No Local Forks
 
-FrankenEngine must not define local substitutes for canonical control-plane types:
-`Cx`, `TraceId`, `DecisionId`, `PolicyId`, `SchemaVersion`, and `Budget`.
+FrankenEngine must not define local substitutes for the exact imported control-plane
+surface documented above. At minimum, that includes `Budget`, `CapabilitySet`,
+`Cx`, `DecisionId`, `NoCaps`, `PolicyId`, `SchemaVersion`, `TraceId`,
+`DecisionContract`, `DecisionOutcome`, `EvalContext`, `FallbackPolicy`,
+`LossMatrix`, `Posterior`, `EvidenceLedger`, and `EvidenceLedgerBuilder`.
 
 This policy treats all of the following as forbidden local forks:
 
@@ -104,11 +137,11 @@ This policy treats all of the following as forbidden local forks:
 - Newtype wrappers intended to impersonate canonical primitives at integration boundaries.
 - Local modules that re-export locally defined substitutes under canonical names.
 
-Canonical crate ownership for these types remains:
+Current import ownership for the enforced boundary is:
 
-- `franken_kernel`: `Cx`, `TraceId`, `Budget`
-- `franken_decision`: `DecisionId`, `PolicyId`
-- `franken_evidence`: `SchemaVersion`
+- `franken_kernel`: `Budget`, `CapabilitySet`, `Cx`, `DecisionId`, `NoCaps`, `PolicyId`, `SchemaVersion`, `TraceId`
+- `franken_decision`: `DecisionContract`, `DecisionOutcome`, `EvalContext`, `FallbackPolicy`, `LossMatrix`, `Posterior`, `evaluate`
+- `franken_evidence`: `EvidenceLedger`, `EvidenceLedgerBuilder`
 
 Enforcement is provided by `scripts/check_no_local_control_plane_type_forks.sh`.
 The script blocks new local definitions and supports an explicit baseline allowlist
@@ -136,3 +169,5 @@ Remediation process for violations:
 
 - Dependency policy docs and CI checks should enforce no local forked primitive types.
 - New integration code should reference this ADR and the companion naming/dependency beads.
+- RC-6.3 contract tests should type-check the exact upstream re-exports and the
+  `control_plane::evaluate_contract` signature under `asupersync-integration`.

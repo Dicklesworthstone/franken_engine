@@ -2222,6 +2222,17 @@ For extension-heavy, high-trust workloads, yes. For broad legacy compatibility-o
 ### 2. Do I need asupersync to use this?
 Yes, for full control-plane guarantees. FrankenEngine can run with reduced local mode, but constitutional guarantees require `/dp/asupersync` integration.
 
+To verify both build modes, run `./scripts/test_standalone_build.sh ci`. That gate records
+artifacts under `artifacts/standalone_build_gate/<timestamp>/`, sends every heavy Cargo lane
+through `rch`, and treats the standalone mode as the blocking gate:
+
+- `cargo check -p frankenengine-engine --no-default-features`
+- `cargo test -p frankenengine-engine --no-default-features`
+- `cargo check -p frankenengine-engine --all-features`
+
+If the sibling `/dp` dependencies needed for full integration are unavailable, the script records
+that lane as skipped in the manifest instead of pretending the repo is fully integrated.
+
 ### 3. Can I run without frankentui?
 Yes for basic CLI workflows. Advanced operator views, replay dashboards, and policy explanation consoles use `/dp/frankentui`.
 

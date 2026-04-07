@@ -3540,6 +3540,14 @@ fn parse_primary_expression(
         return parse_new_expression(rest.trim(), span, context, recursion_depth);
     }
 
+    // Function expression: `function(a, b) { ... }` or `function name(a, b) { ... }`
+    if let Some(rest) = expression
+        .strip_prefix("function")
+        .filter(|r| r.starts_with('(') || r.starts_with(' ') || r.starts_with('\t'))
+    {
+        return parse_function_expression(rest, span, context, recursion_depth);
+    }
+
     // Template literal: `text ${expr} text`
     if expression.starts_with('`') && expression.ends_with('`') {
         return parse_template_literal(expression, span, context, recursion_depth);
@@ -4905,6 +4913,7 @@ fn contains_optional_chain(expression: &Expression) -> bool {
         | Expression::NullLiteral
         | Expression::UndefinedLiteral
         | Expression::This
+        | Expression::Function { .. }
         | Expression::Raw(_) => false,
     }
 }
@@ -7105,6 +7114,77 @@ fn parse_continue_statement(statement: &str, span: SourceSpan) -> ParseResult<St
         Some(body.to_string())
     };
     Ok(Statement::Continue(ContinueStatement { label, span }))
+}
+
+/// Parse a function expression: `function(a, b) { ... }` or `function name(a, b) { ... }`.
+/// `rest` is the text after the `function` keyword (already stripped).
+fn parse_function_expression(
+    rest: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+    _recursion_depth: u64,
+) -> ParseResult<Expression> {
+    let rest = rest.trim_start();
+    let is_generator = rest.starts_with('*');
+    let rest = if is_generator { &rest[1..] } else { rest }.trim_start();
+
+    // Parse optional name (function expressions can be anonymous).
+    let (name, rest) = if rest.starts_with('(') {
+        (None, rest)
+    } else {
+        let paren_idx = rest.find('(').ok_or_else(|| {
+            ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "function expression requires a parameter list",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            )
+        })?;
+        let name = rest[..paren_idx].trim();
+        (
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.to_string())
+            },
+            &rest[paren_idx..],
+        )
+    };
+
+    // Parse parameters.
+    let (params_src, rest) = extract_balanced(rest, '(', ')').ok_or_else(|| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "function expression has unbalanced parentheses",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )
+    })?;
+    let params = parse_arrow_params(params_src, span, context)?;
+
+    // Parse body.
+    let rest = rest.trim_start();
+    let (body_src, _) = extract_balanced(rest, '{', '}').ok_or_else(|| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "function expression requires a braced body",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )
+    })?;
+    let goal = ParseGoal::Script;
+    let body_stmts = parse_body_statements(body_src, goal, span, context)?;
+
+    Ok(Expression::Function {
+        name,
+        params,
+        body: BlockStatement {
+            body: body_stmts,
+            span: span.clone(),
+        },
+        is_async: false,
+        is_generator,
+    })
 }
 
 fn parse_function_declaration(

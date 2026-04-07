@@ -4695,6 +4695,54 @@ fn lower_expression_to_ir1(
                 body_ops,
             });
         }
+        Expression::Function {
+            name, params, body, ..
+        } => {
+            // Same as ArrowFunction but with a BlockStatement body and optional name.
+            let param_names: Vec<String> = params
+                .iter()
+                .filter_map(|p| p.name().map(String::from))
+                .collect();
+            let mut body_ops = Vec::new();
+            let mut body_bindings = Vec::new();
+            let mut body_lookup = BTreeMap::new();
+            let mut body_binding_index: BindingId = 0;
+            let body_scope = ScopeId { depth: 0, index: 0 };
+            let mut body_label_counter: u32 = 0;
+            for pname in &param_names {
+                let _ = alloc_binding(
+                    &mut body_bindings,
+                    &mut body_lookup,
+                    &mut body_binding_index,
+                    body_scope,
+                    pname,
+                    BindingKind::Parameter,
+                )
+                .map_err(LoweringPipelineError::SemanticViolation)?;
+            }
+            for stmt in &body.body {
+                lower_statement_to_ir1(
+                    stmt,
+                    &mut body_ops,
+                    &mut body_bindings,
+                    &mut body_lookup,
+                    &mut body_binding_index,
+                    body_scope,
+                    &mut body_label_counter,
+                )?;
+            }
+            if !matches!(body_ops.last(), Some(Ir1Op::Return)) {
+                body_ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Undefined,
+                });
+                body_ops.push(Ir1Op::Return);
+            }
+            ops.push(Ir1Op::CreateFunction {
+                name: name.clone(),
+                param_names,
+                body_ops,
+            });
+        }
         Expression::New { callee, arguments } => {
             lower_expression_to_ir1(
                 callee,

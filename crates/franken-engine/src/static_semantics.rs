@@ -1327,6 +1327,22 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
                 walk_expression(state, expr, span);
             }
         }
+        Expression::Function { body, .. } => {
+            for stmt in &body.body {
+                let fn_scope_id = state.alloc_scope_id(0);
+                let mut fn_bindings = Vec::new();
+                let mut fn_lex = BTreeMap::new();
+                let mut fn_var = BTreeMap::new();
+                analyze_statement(
+                    state,
+                    stmt,
+                    fn_scope_id,
+                    &mut fn_bindings,
+                    &mut fn_lex,
+                    &mut fn_var,
+                );
+            }
+        }
         Expression::Identifier(_)
         | Expression::StringLiteral(_)
         | Expression::NumericLiteral(_)
@@ -1334,6 +1350,7 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
         | Expression::NullLiteral
         | Expression::UndefinedLiteral
         | Expression::This
+        | Expression::Function { .. }
         | Expression::Raw(_) => {}
     }
 }
@@ -1425,12 +1442,17 @@ fn collect_identifier_refs(expr: &Expression, out: &mut Vec<String>) {
                 collect_identifier_refs(expr, out);
             }
         }
+        Expression::Function { .. } => {
+            // Function expression bodies introduce their own scope;
+            // identifiers inside are not TDZ-relevant for the outer scope.
+        }
         Expression::StringLiteral(_)
         | Expression::NumericLiteral(_)
         | Expression::BooleanLiteral(_)
         | Expression::NullLiteral
         | Expression::UndefinedLiteral
         | Expression::This
+        | Expression::Function { .. }
         | Expression::Raw(_) => {}
     }
 }

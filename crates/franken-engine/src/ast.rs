@@ -1354,6 +1354,15 @@ pub enum Expression {
         quasis: Vec<String>,
         expressions: Vec<Expression>,
     },
+    /// Function expression: `function(a, b) { return a + b }` or
+    /// `function name(a, b) { ... }` (named function expression).
+    Function {
+        name: Option<String>,
+        params: Vec<FunctionParam>,
+        body: BlockStatement,
+        is_async: bool,
+        is_generator: bool,
+    },
     Raw(String),
 }
 
@@ -1616,6 +1625,15 @@ impl Expression {
                             .collect(),
                     ),
                 );
+            }
+            Self::Function { name, .. } => {
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String("function_expression".to_string()),
+                );
+                if let Some(n) = name {
+                    map.insert("name".to_string(), CanonicalValue::String(n.clone()));
+                }
             }
             Self::Raw(value) => {
                 map.insert(

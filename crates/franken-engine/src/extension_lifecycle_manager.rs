@@ -753,7 +753,7 @@ impl ExtensionLifecycleManager {
         }
 
         // Record the transition.
-        let record = self.extensions.get_mut(extension_id).unwrap();
+        let record = self.extensions.get_mut(extension_id).expect("record must exist after read");
         let seq = record.next_sequence;
         record.next_sequence += 1;
         record.transition_log.push(TransitionRecord {

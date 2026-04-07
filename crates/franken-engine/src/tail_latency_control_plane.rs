@@ -389,7 +389,9 @@ pub fn build_tail_latency_control_plane_report(
 
     let execution_envelope = envelope_map
         .get(&ExecutionStage::ExecutionQuantum)
-        .expect("execution quantum envelope must exist");
+        .ok_or_else(|| TailLatencyControlPlaneWriteError::PolicyValidation { 
+            detail: "execution quantum envelope must exist".to_string() 
+        })?;
     let feedback_policy = default_feedback_policy(execution_envelope);
     feedback_policy
         .validate()

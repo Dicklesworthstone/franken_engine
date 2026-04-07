@@ -1314,9 +1314,9 @@ pub fn infer_capabilities(
 
     inferred_capabilities.sort_by_key(|c| std::cmp::Reverse(c.confidence_millionths));
 
-    let cap_bytes =
-        serde_json::to_vec(&(&inferred_capabilities, &minimum_capability_set)).unwrap_or_default();
-    let capability_hash = ContentHash::compute(&cap_bytes);
+    let bytes = serde_json::to_vec(&(&inferred_capabilities, &minimum_capability_set))
+        .expect("serialization failed");
+    let capability_hash = ContentHash::compute(&bytes);
 
     Ok(CapabilityInferenceResult {
         inferred_capabilities,

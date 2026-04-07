@@ -1640,9 +1640,55 @@ fn lower_statement_to_ir1_with_flow(
                 BindingKind::Var,
             )
             .map_err(LoweringPipelineError::SemanticViolation)?;
+
+            // Lower function body with its own fresh scope.
+            let param_names: Vec<String> = func
+                .params
+                .iter()
+                .filter_map(|p| p.name().map(String::from))
+                .collect();
+            let mut body_ops = Vec::new();
+            let mut body_bindings = Vec::new();
+            let mut body_lookup = BTreeMap::new();
+            let mut body_binding_index: BindingId = 0;
+            let body_scope = ScopeId { depth: 0, index: 0 };
+            let mut body_label_counter: u32 = 0;
+            // Allocate parameter bindings in the body scope.
+            for pname in &param_names {
+                let _ = alloc_binding(
+                    &mut body_bindings,
+                    &mut body_lookup,
+                    &mut body_binding_index,
+                    body_scope,
+                    pname,
+                    BindingKind::Parameter,
+                )
+                .map_err(LoweringPipelineError::SemanticViolation)?;
+            }
+            for stmt in &func.body.body {
+                lower_statement_to_ir1(
+                    stmt,
+                    &mut body_ops,
+                    &mut body_bindings,
+                    &mut body_lookup,
+                    &mut body_binding_index,
+                    body_scope,
+                    &mut body_label_counter,
+                )?;
+            }
+            // Ensure body ends with a return.
+            if !matches!(body_ops.last(), Some(Ir1Op::Return)) {
+                body_ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Undefined,
+                });
+                body_ops.push(Ir1Op::Return);
+            }
+
             ops.push(Ir1Op::DeclareFunction {
                 name,
                 binding_id: bid,
+                param_names,
+                body_ops,
             });
             ops.push(Ir1Op::Pop);
         }
@@ -1853,6 +1899,84 @@ pub fn lower_ir1_to_ir2(
     })
 }
 
+// ── Operator → IR3 instruction helpers (shared by main + function-body lowering) ──
+
+fn lower_binary_op_to_ir3(
+    operator: BinaryOperator,
+    dst: Reg,
+    lhs: Reg,
+    rhs: Reg,
+) -> Ir3Instruction {
+    match operator {
+        BinaryOperator::Add => Ir3Instruction::Add { dst, lhs, rhs },
+        BinaryOperator::Subtract => Ir3Instruction::Sub { dst, lhs, rhs },
+        BinaryOperator::Multiply => Ir3Instruction::Mul { dst, lhs, rhs },
+        BinaryOperator::Divide => Ir3Instruction::Div { dst, lhs, rhs },
+        BinaryOperator::Remainder => Ir3Instruction::Mod { dst, lhs, rhs },
+        BinaryOperator::Exponentiate => Ir3Instruction::Exp { dst, lhs, rhs },
+        BinaryOperator::LessThan => Ir3Instruction::Lt { dst, lhs, rhs },
+        BinaryOperator::LessThanOrEqual => Ir3Instruction::Lte { dst, lhs, rhs },
+        BinaryOperator::GreaterThan => Ir3Instruction::Gt { dst, lhs, rhs },
+        BinaryOperator::GreaterThanOrEqual => Ir3Instruction::Gte { dst, lhs, rhs },
+        BinaryOperator::Equal => Ir3Instruction::Eq { dst, lhs, rhs },
+        BinaryOperator::StrictEqual => Ir3Instruction::StrictEq { dst, lhs, rhs },
+        BinaryOperator::NotEqual => Ir3Instruction::NotEq { dst, lhs, rhs },
+        BinaryOperator::StrictNotEqual => Ir3Instruction::StrictNotEq { dst, lhs, rhs },
+        BinaryOperator::BitwiseAnd => Ir3Instruction::BitAnd { dst, lhs, rhs },
+        BinaryOperator::BitwiseOr => Ir3Instruction::BitOr { dst, lhs, rhs },
+        BinaryOperator::BitwiseXor => Ir3Instruction::BitXor { dst, lhs, rhs },
+        BinaryOperator::LeftShift => Ir3Instruction::Shl { dst, lhs, rhs },
+        BinaryOperator::RightShift => Ir3Instruction::Shr { dst, lhs, rhs },
+        BinaryOperator::UnsignedRightShift => Ir3Instruction::Ushr { dst, lhs, rhs },
+        BinaryOperator::Instanceof => Ir3Instruction::InstanceOf { dst, lhs, rhs },
+        BinaryOperator::In => Ir3Instruction::InOp { dst, lhs, rhs },
+        // Logical operators should be lowered to short-circuit form before
+        // reaching this helper.  Fall back to a no-op move for safety.
+        BinaryOperator::LogicalAnd
+        | BinaryOperator::LogicalOr
+        | BinaryOperator::NullishCoalescing => Ir3Instruction::Move { dst, src: lhs },
+    }
+}
+
+fn lower_unary_op_to_ir3(operator: UnaryOperator, dst: Reg, src: Reg) -> Ir3Instruction {
+    match operator {
+        UnaryOperator::Negate => Ir3Instruction::UnaryNeg { dst, src },
+        UnaryOperator::BitwiseNot => Ir3Instruction::BitNot { dst, src },
+        UnaryOperator::LogicalNot => Ir3Instruction::LogicalNot { dst, src },
+        UnaryOperator::Typeof => Ir3Instruction::TypeOf { dst, src },
+        UnaryOperator::Void => Ir3Instruction::Void { dst, src },
+        UnaryOperator::UnaryPlus => Ir3Instruction::UnaryPlus { dst, src },
+        // delete is lowered through DeleteProperty before reaching here.
+        UnaryOperator::Delete => Ir3Instruction::LoadBool { dst, value: true },
+    }
+}
+
+fn lower_assign_op_to_ir3(
+    operator: AssignmentOperator,
+    dst: Reg,
+    lhs: Reg,
+    rhs: Reg,
+) -> Ir3Instruction {
+    match operator {
+        AssignmentOperator::Assign => Ir3Instruction::Move { dst, src: rhs },
+        AssignmentOperator::AddAssign => Ir3Instruction::Add { dst, lhs, rhs },
+        AssignmentOperator::SubtractAssign => Ir3Instruction::Sub { dst, lhs, rhs },
+        AssignmentOperator::MultiplyAssign => Ir3Instruction::Mul { dst, lhs, rhs },
+        AssignmentOperator::DivideAssign => Ir3Instruction::Div { dst, lhs, rhs },
+        AssignmentOperator::RemainderAssign => Ir3Instruction::Mod { dst, lhs, rhs },
+        AssignmentOperator::ExponentiateAssign => Ir3Instruction::Exp { dst, lhs, rhs },
+        AssignmentOperator::BitwiseAndAssign => Ir3Instruction::BitAnd { dst, lhs, rhs },
+        AssignmentOperator::BitwiseOrAssign => Ir3Instruction::BitOr { dst, lhs, rhs },
+        AssignmentOperator::BitwiseXorAssign => Ir3Instruction::BitXor { dst, lhs, rhs },
+        AssignmentOperator::LeftShiftAssign => Ir3Instruction::Shl { dst, lhs, rhs },
+        AssignmentOperator::RightShiftAssign => Ir3Instruction::Shr { dst, lhs, rhs },
+        AssignmentOperator::UnsignedRightShiftAssign => Ir3Instruction::Ushr { dst, lhs, rhs },
+        AssignmentOperator::LogicalAndAssign => Ir3Instruction::Move { dst, src: rhs },
+        AssignmentOperator::LogicalOrAssign => Ir3Instruction::Move { dst, src: rhs },
+        AssignmentOperator::NullishCoalescingAssign => Ir3Instruction::Move { dst, src: rhs },
+    }
+}
+
 pub fn lower_ir2_to_ir3(
     ir2: &Ir2Module,
 ) -> Result<LoweringPassResult<Ir3Module>, LoweringPipelineError> {
@@ -1891,6 +2015,10 @@ pub fn lower_ir2_to_ir3(
     let mut iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
     let mut pending_jumps = Vec::<PendingJump>::new();
     let mut catch_entry_labels = BTreeSet::<u32>::new();
+    // Deferred function bodies: (body_ir1_ops, param_names, name, arity).
+    // After the main code + Halt, each body is lowered into the instruction
+    // stream and registered in function_table.  Index 0 is reserved for main.
+    let mut deferred_functions: Vec<(Vec<Ir1Op>, Vec<String>, Option<String>)> = Vec::new();
 
     for op in &ir2.ops {
         if matches!(op.effect, EffectBoundary::HostcallEffect) {
@@ -2034,16 +2162,31 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(dst);
             }
             Ir1Op::Return => {
-                let value = value_stack.pop().unwrap_or(0);
-                ir3.instructions.push(Ir3Instruction::Return { value });
+                // The main loop only processes module-level Returns
+                // (function body Returns are handled in the deferred
+                // function loop).  At module level the completion value
+                // is always in register 0 (kept up-to-date by Pop),
+                // so use register 0 regardless of value_stack state
+                // which may be stale after control flow (switch, if).
+                let _discard = value_stack.pop();
+                ir3.instructions.push(Ir3Instruction::Return { value: 0 });
             }
             Ir1Op::Nop | Ir1Op::Pop => {
                 let register = value_stack.pop().unwrap_or(0);
-                ir3.instructions.push(Ir3Instruction::Move {
-                    dst: register,
-                    src: register,
-                });
-                if matches!(op.inner, Ir1Op::Nop) {
+                if matches!(op.inner, Ir1Op::Pop) {
+                    // Expression-statement completion: move the discarded
+                    // value into register 0 so the interpreter returns it as
+                    // the script completion value when execution falls off
+                    // the end of the instruction stream.
+                    ir3.instructions.push(Ir3Instruction::Move {
+                        dst: 0,
+                        src: register,
+                    });
+                } else {
+                    ir3.instructions.push(Ir3Instruction::Move {
+                        dst: register,
+                        src: register,
+                    });
                     value_stack.push(register);
                 }
             }
@@ -2473,13 +2616,49 @@ pub fn lower_ir2_to_ir3(
                 ir3.instructions.push(Ir3Instruction::LoadUndefined { dst });
                 value_stack.push(dst);
             }
-            Ir1Op::DeclareFunction { binding_id, name } => {
+            Ir1Op::DeclareFunction {
+                binding_id,
+                name,
+                param_names,
+                body_ops,
+            } => {
                 let dst = *binding_registers
                     .entry(*binding_id)
                     .or_insert_with(|| alloc_register(&mut register_cursor));
-                let pool_index = push_constant(&mut ir3.constant_pool, name);
-                ir3.instructions
-                    .push(Ir3Instruction::LoadStr { dst, pool_index });
+                if body_ops.is_empty() {
+                    // Legacy / bodyless path: just load the name as a string.
+                    let pool_index = push_constant(&mut ir3.constant_pool, name);
+                    ir3.instructions
+                        .push(Ir3Instruction::LoadStr { dst, pool_index });
+                } else {
+                    // +1 because index 0 is reserved for main.
+                    let function_index = deferred_functions.len() as u32 + 1;
+                    deferred_functions.push((
+                        body_ops.clone(),
+                        param_names.clone(),
+                        Some(name.clone()),
+                    ));
+                    ir3.instructions.push(Ir3Instruction::CreateClosure {
+                        dst,
+                        function_index,
+                        capture_count: 0,
+                    });
+                }
+                value_stack.push(dst);
+            }
+            Ir1Op::CreateFunction {
+                name,
+                param_names,
+                body_ops,
+            } => {
+                let dst = alloc_register(&mut register_cursor);
+                let function_index = deferred_functions.len() as u32 + 1;
+                deferred_functions.push((body_ops.clone(), param_names.clone(), name.clone()));
+                ir3.instructions.push(Ir3Instruction::CreateClosure {
+                    dst,
+                    function_index,
+                    capture_count: 0,
+                });
                 value_stack.push(dst);
             }
             Ir1Op::ForInInit => {
@@ -2771,6 +2950,385 @@ pub fn lower_ir2_to_ir3(
         frame_size: register_cursor.max(1),
         name: Some("main".to_string()),
     });
+
+    // ── Deferred function bodies ──────────────────────────────────────
+    // Each body is lowered with its own register frame (starting at 0)
+    // and appended after the main Halt.  Use index-based iteration so
+    // that nested DeclareFunction / CreateFunction discovered inside a
+    // body can push new entries without conflicting with the borrow.
+    let mut deferred_idx = 0;
+    while deferred_idx < deferred_functions.len() {
+        let (body_ops, param_names, fn_name) = deferred_functions[deferred_idx].clone();
+        deferred_idx += 1;
+        let (body_ops, param_names, fn_name) = (&body_ops, &param_names, &fn_name);
+        let entry = ir3.instructions.len() as u32;
+        let arity = param_names.len() as u32;
+        let mut fn_reg: Reg = 0;
+        let mut fn_binding_regs = BTreeMap::<BindingId, Reg>::new();
+        let mut fn_value_stack: Vec<Reg> = Vec::new();
+        let mut fn_label_targets = BTreeMap::<u32, u32>::new();
+        let mut fn_pending_jumps = Vec::<PendingJump>::new();
+
+        // Allocate parameter registers r0..rN-1.
+        for (i, _pname) in param_names.iter().enumerate() {
+            fn_binding_regs.insert(i as BindingId, i as Reg);
+            fn_reg = fn_reg.max(i as Reg + 1);
+        }
+
+        // Classify body ops into Ir2 and lower to IR3.
+        for body_ir1 in body_ops {
+            let (effect, cap, flow) = classify_ir1_op(body_ir1);
+            let ir2_op = Ir2Op {
+                inner: body_ir1.clone(),
+                effect,
+                required_capability: cap,
+                flow,
+            };
+            // We handle a core subset of ops that appear in function bodies.
+            match &ir2_op.inner {
+                Ir1Op::LoadLiteral { value } => {
+                    let dst = alloc_register(&mut fn_reg);
+                    match value {
+                        Ir1Literal::Integer(n) => {
+                            ir3.instructions
+                                .push(Ir3Instruction::LoadInt { dst, value: *n });
+                        }
+                        Ir1Literal::String(s) => {
+                            let pool_index = push_constant(&mut ir3.constant_pool, s);
+                            ir3.instructions
+                                .push(Ir3Instruction::LoadStr { dst, pool_index });
+                        }
+                        Ir1Literal::Boolean(b) => {
+                            ir3.instructions
+                                .push(Ir3Instruction::LoadBool { dst, value: *b });
+                        }
+                        Ir1Literal::Null => {
+                            ir3.instructions.push(Ir3Instruction::LoadNull { dst });
+                        }
+                        Ir1Literal::Undefined => {
+                            ir3.instructions.push(Ir3Instruction::LoadUndefined { dst });
+                        }
+                    }
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::LoadBinding { binding_id } => {
+                    let src = *fn_binding_regs
+                        .entry(*binding_id)
+                        .or_insert_with(|| alloc_register(&mut fn_reg));
+                    let dst = alloc_register(&mut fn_reg);
+                    ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::StoreBinding { binding_id } => {
+                    let dst = *fn_binding_regs
+                        .entry(*binding_id)
+                        .or_insert_with(|| alloc_register(&mut fn_reg));
+                    let src = fn_value_stack.pop().unwrap_or(0);
+                    ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::BinaryOp { operator } => {
+                    let rhs = fn_value_stack.pop().unwrap_or(0);
+                    let lhs = fn_value_stack.pop().unwrap_or(0);
+                    let dst = alloc_register(&mut fn_reg);
+                    let instr = lower_binary_op_to_ir3(*operator, dst, lhs, rhs);
+                    ir3.instructions.push(instr);
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::UnaryOp { operator } => {
+                    let operand = fn_value_stack.pop().unwrap_or(0);
+                    let dst = alloc_register(&mut fn_reg);
+                    let instr = lower_unary_op_to_ir3(*operator, dst, operand);
+                    ir3.instructions.push(instr);
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::Return => {
+                    let value = fn_value_stack.pop().unwrap_or(0);
+                    ir3.instructions.push(Ir3Instruction::Return { value });
+                }
+                Ir1Op::Call { arg_count } => {
+                    let count = *arg_count as usize;
+                    let mut args = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        args.push(fn_value_stack.pop().unwrap_or(0));
+                    }
+                    args.reverse();
+                    let callee = fn_value_stack.pop().unwrap_or(0);
+                    let start_reg = fn_reg;
+                    for arg_reg in &args {
+                        let dst = alloc_register(&mut fn_reg);
+                        ir3.instructions
+                            .push(Ir3Instruction::Move { dst, src: *arg_reg });
+                    }
+                    let dst = alloc_register(&mut fn_reg);
+                    ir3.instructions.push(Ir3Instruction::Call {
+                        callee,
+                        args: RegRange {
+                            start: start_reg,
+                            count: count as u32,
+                        },
+                        dst,
+                    });
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::Label { id } => {
+                    let target = ir3.instructions.len() as u32;
+                    fn_label_targets.insert(*id, target);
+                }
+                Ir1Op::Jump { label_id } => {
+                    let idx = ir3.instructions.len();
+                    ir3.instructions.push(Ir3Instruction::Jump { target: 0 });
+                    fn_pending_jumps.push(PendingJump::Unconditional {
+                        instruction_index: idx,
+                        label_id: *label_id,
+                    });
+                }
+                Ir1Op::JumpIfFalsy { label_id } | Ir1Op::JumpIfFalsyConsume { label_id } => {
+                    let cond = fn_value_stack.pop().unwrap_or(0);
+                    let idx = ir3.instructions.len();
+                    ir3.instructions
+                        .push(Ir3Instruction::JumpIf { cond, target: 0 });
+                    fn_pending_jumps.push(PendingJump::Conditional {
+                        instruction_index: idx,
+                        label_id: *label_id,
+                    });
+                }
+                Ir1Op::JumpIfTruthy { label_id } => {
+                    let cond = fn_value_stack.pop().unwrap_or(0);
+                    let idx = ir3.instructions.len();
+                    ir3.instructions
+                        .push(Ir3Instruction::JumpIf { cond, target: 0 });
+                    fn_pending_jumps.push(PendingJump::Conditional {
+                        instruction_index: idx,
+                        label_id: *label_id,
+                    });
+                }
+                Ir1Op::Pop | Ir1Op::Nop => {
+                    let reg = fn_value_stack.pop().unwrap_or(0);
+                    if matches!(body_ir1, Ir1Op::Pop) {
+                        ir3.instructions
+                            .push(Ir3Instruction::Move { dst: 0, src: reg });
+                    }
+                }
+                Ir1Op::AssignOp {
+                    binding_id,
+                    operator,
+                } => {
+                    let src = fn_value_stack.pop().unwrap_or(0);
+                    let dst = *fn_binding_regs
+                        .entry(*binding_id)
+                        .or_insert_with(|| alloc_register(&mut fn_reg));
+                    if *operator == AssignmentOperator::Assign {
+                        ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    } else {
+                        let result = alloc_register(&mut fn_reg);
+                        let instr = lower_assign_op_to_ir3(*operator, result, dst, src);
+                        ir3.instructions.push(instr);
+                        ir3.instructions
+                            .push(Ir3Instruction::Move { dst, src: result });
+                    }
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::GetProperty { key } => {
+                    let (obj, key_reg) = match key {
+                        Ir1PropertyKey::Static(k) => {
+                            let obj = fn_value_stack.pop().unwrap_or(0);
+                            let kr = alloc_register(&mut fn_reg);
+                            let pool_index = push_constant(&mut ir3.constant_pool, k);
+                            ir3.instructions.push(Ir3Instruction::LoadStr {
+                                dst: kr,
+                                pool_index,
+                            });
+                            (obj, kr)
+                        }
+                        Ir1PropertyKey::Dynamic => {
+                            let kr = fn_value_stack.pop().unwrap_or(0);
+                            let obj = fn_value_stack.pop().unwrap_or(0);
+                            (obj, kr)
+                        }
+                    };
+                    let dst = alloc_register(&mut fn_reg);
+                    ir3.instructions.push(Ir3Instruction::GetProperty {
+                        obj,
+                        key: key_reg,
+                        dst,
+                    });
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::SetProperty { key } => {
+                    let value = fn_value_stack.pop().unwrap_or(0);
+                    let (obj, key_reg) = match key {
+                        Ir1PropertyKey::Static(k) => {
+                            let obj = fn_value_stack.pop().unwrap_or(0);
+                            let kr = alloc_register(&mut fn_reg);
+                            let pool_index = push_constant(&mut ir3.constant_pool, k);
+                            ir3.instructions.push(Ir3Instruction::LoadStr {
+                                dst: kr,
+                                pool_index,
+                            });
+                            (obj, kr)
+                        }
+                        Ir1PropertyKey::Dynamic => {
+                            let kr = fn_value_stack.pop().unwrap_or(0);
+                            let obj = fn_value_stack.pop().unwrap_or(0);
+                            (obj, kr)
+                        }
+                    };
+                    ir3.instructions.push(Ir3Instruction::SetProperty {
+                        obj,
+                        key: key_reg,
+                        val: value,
+                    });
+                    fn_value_stack.push(value);
+                }
+                Ir1Op::LoadThis => {
+                    let dst = alloc_register(&mut fn_reg);
+                    ir3.instructions.push(Ir3Instruction::LoadUndefined { dst });
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::NewArray { count } => {
+                    let cnt = *count as usize;
+                    let mut elems = Vec::with_capacity(cnt);
+                    for _ in 0..cnt {
+                        elems.push(fn_value_stack.pop().unwrap_or(0));
+                    }
+                    elems.reverse();
+                    let dst = alloc_register(&mut fn_reg);
+                    ir3.instructions.push(Ir3Instruction::NewArray { dst });
+                    for (i, val_reg) in elems.into_iter().enumerate() {
+                        let key_reg = alloc_register(&mut fn_reg);
+                        let pool_index = push_constant(&mut ir3.constant_pool, &i.to_string());
+                        ir3.instructions.push(Ir3Instruction::LoadStr {
+                            dst: key_reg,
+                            pool_index,
+                        });
+                        ir3.instructions.push(Ir3Instruction::SetProperty {
+                            obj: dst,
+                            key: key_reg,
+                            val: val_reg,
+                        });
+                    }
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::NewObject { count } => {
+                    let cnt = *count as usize;
+                    let mut properties = Vec::with_capacity(cnt);
+                    for _ in 0..cnt {
+                        let val = fn_value_stack.pop().unwrap_or(0);
+                        let key = fn_value_stack.pop().unwrap_or(0);
+                        properties.push((key, val));
+                    }
+                    properties.reverse();
+                    let dst = alloc_register(&mut fn_reg);
+                    ir3.instructions.push(Ir3Instruction::NewObject { dst });
+                    for (key_reg, val_reg) in properties {
+                        ir3.instructions.push(Ir3Instruction::SetProperty {
+                            obj: dst,
+                            key: key_reg,
+                            val: val_reg,
+                        });
+                    }
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::Throw => {
+                    let value = fn_value_stack.pop().unwrap_or(0);
+                    ir3.instructions.push(Ir3Instruction::Throw { value });
+                }
+                // Nested function definitions inside function bodies.
+                Ir1Op::DeclareFunction {
+                    binding_id: inner_bid,
+                    body_ops: inner_body,
+                    param_names: inner_params,
+                    name: inner_name,
+                } if !inner_body.is_empty() => {
+                    let dst = *fn_binding_regs
+                        .entry(*inner_bid)
+                        .or_insert_with(|| alloc_register(&mut fn_reg));
+                    let function_index = deferred_functions.len() as u32 + 1;
+                    deferred_functions.push((
+                        inner_body.clone(),
+                        inner_params.clone(),
+                        Some(inner_name.clone()),
+                    ));
+                    ir3.instructions.push(Ir3Instruction::CreateClosure {
+                        dst,
+                        function_index,
+                        capture_count: 0,
+                    });
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::CreateFunction {
+                    body_ops: inner_body,
+                    param_names: inner_params,
+                    name: inner_name,
+                } => {
+                    let dst = alloc_register(&mut fn_reg);
+                    let function_index = deferred_functions.len() as u32 + 1;
+                    deferred_functions.push((
+                        inner_body.clone(),
+                        inner_params.clone(),
+                        inner_name.clone(),
+                    ));
+                    ir3.instructions.push(Ir3Instruction::CreateClosure {
+                        dst,
+                        function_index,
+                        capture_count: 0,
+                    });
+                    fn_value_stack.push(dst);
+                }
+                // Fallthrough: unhandled ops in function bodies become nops.
+                _ => {}
+            }
+        }
+
+        // Ensure function body ends with Return.
+        if !matches!(ir3.instructions.last(), Some(Ir3Instruction::Return { .. })) {
+            ir3.instructions.push(Ir3Instruction::Return { value: 0 });
+        }
+
+        // Resolve pending jumps within this function body.
+        for pj in fn_pending_jumps {
+            match pj {
+                PendingJump::Unconditional {
+                    instruction_index,
+                    label_id,
+                } => {
+                    if let Some(&target) = fn_label_targets.get(&label_id) {
+                        ir3.instructions[instruction_index] = Ir3Instruction::Jump { target };
+                    }
+                }
+                PendingJump::Conditional {
+                    instruction_index,
+                    label_id,
+                } => {
+                    if let Some(&target) = fn_label_targets.get(&label_id) {
+                        match &mut ir3.instructions[instruction_index] {
+                            Ir3Instruction::JumpIf {
+                                target: jump_target,
+                                ..
+                            }
+                            | Ir3Instruction::JumpIfNullish {
+                                target: jump_target,
+                                ..
+                            } => {
+                                *jump_target = target;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        ir3.function_table.push(Ir3FunctionDesc {
+            entry,
+            arity,
+            frame_size: fn_reg.max(1),
+            name: fn_name.clone(),
+        });
+    }
+
     ir3.required_capabilities = required_capabilities
         .into_iter()
         .map(CapabilityTag)
@@ -2780,7 +3338,14 @@ pub fn lower_ir2_to_ir3(
 
     let source_hash_matches = ir3.header.source_hash.as_ref() == Some(&ir2_hash);
     let has_main_function = !ir3.function_table.is_empty();
-    let has_terminal_halt = matches!(ir3.instructions.last(), Some(Ir3Instruction::Halt));
+    // Function bodies are appended after the main Halt, so the last
+    // instruction may be a Return from the final deferred body.  Check
+    // that a Halt exists anywhere in the stream (the main block always
+    // emits one at the end of its own instruction window).
+    let has_terminal_halt = ir3
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Ir3Instruction::Halt));
     let instruction_len = ir3.instructions.len();
     let control_flow_targets_resolved =
         ir3.instructions
@@ -3714,8 +4279,18 @@ fn lower_expression_to_ir1(
             consequent,
             alternate,
         } => {
-            // Ternaries must preserve branch selection; lowering both arms eagerly
-            // changes side effects and discards the consequent value.
+            // Both branches store into a shared temporary binding so the
+            // result is in a single register regardless of which branch
+            // executed at runtime (the value_stack is tracked linearly and
+            // would otherwise reference a register from only one branch).
+            let result_binding = alloc_internal_binding(
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                "cond_result",
+            )?;
+
             lower_expression_to_ir1(
                 test,
                 ops,
@@ -3740,6 +4315,10 @@ fn lower_expression_to_ir1(
                 root_scope_id,
                 label_counter,
             )?;
+            ops.push(Ir1Op::StoreBinding {
+                binding_id: result_binding,
+            });
+            ops.push(Ir1Op::Pop);
             ops.push(Ir1Op::Jump {
                 label_id: end_label,
             });
@@ -3753,7 +4332,14 @@ fn lower_expression_to_ir1(
                 root_scope_id,
                 label_counter,
             )?;
+            ops.push(Ir1Op::StoreBinding {
+                binding_id: result_binding,
+            });
+            ops.push(Ir1Op::Pop);
             ops.push(Ir1Op::Label { id: end_label });
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: result_binding,
+            });
         }
         Expression::Call { callee, arguments } => {
             lower_expression_to_ir1(
@@ -4050,19 +4636,26 @@ fn lower_expression_to_ir1(
             });
         }
         Expression::ArrowFunction { params, body, .. } => {
-            for param in params {
-                let _binding_id = alloc_binding(
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    root_scope_id,
-                    param
-                        .pattern
-                        .binding_names()
-                        .first()
-                        .copied()
-                        .unwrap_or("_"),
-                    BindingKind::Let,
+            // Lower arrow function body with its own fresh scope.
+            let param_names: Vec<String> = params
+                .iter()
+                .filter_map(|p| p.name().map(String::from))
+                .collect();
+            let mut body_ops = Vec::new();
+            let mut body_bindings = Vec::new();
+            let mut body_lookup = BTreeMap::new();
+            let mut body_binding_index: BindingId = 0;
+            let body_scope = ScopeId { depth: 0, index: 0 };
+            let mut body_label_counter: u32 = 0;
+            // Allocate parameter bindings in the body scope.
+            for pname in &param_names {
+                let _ = alloc_binding(
+                    &mut body_bindings,
+                    &mut body_lookup,
+                    &mut body_binding_index,
+                    body_scope,
+                    pname,
+                    BindingKind::Parameter,
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
             }
@@ -4070,29 +4663,37 @@ fn lower_expression_to_ir1(
                 ArrowBody::Expression(expr) => {
                     lower_expression_to_ir1(
                         expr,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        label_counter,
+                        &mut body_ops,
+                        &mut body_bindings,
+                        &mut body_lookup,
+                        &mut body_binding_index,
+                        body_scope,
+                        &mut body_label_counter,
                     )?;
                 }
                 ArrowBody::Block(block) => {
                     for stmt in &block.body {
                         lower_statement_to_ir1(
                             stmt,
-                            ops,
-                            bindings,
-                            binding_lookup,
-                            binding_index,
-                            root_scope_id,
-                            label_counter,
+                            &mut body_ops,
+                            &mut body_bindings,
+                            &mut body_lookup,
+                            &mut body_binding_index,
+                            body_scope,
+                            &mut body_label_counter,
                         )?;
                     }
                 }
             }
-            ops.push(Ir1Op::Return);
+            // Ensure body ends with a return.
+            if !matches!(body_ops.last(), Some(Ir1Op::Return)) {
+                body_ops.push(Ir1Op::Return);
+            }
+            ops.push(Ir1Op::CreateFunction {
+                name: None,
+                param_names,
+                body_ops,
+            });
         }
         Expression::New { callee, arguments } => {
             lower_expression_to_ir1(
@@ -4199,13 +4800,15 @@ fn classify_ir1_op(
             }),
         ),
         Ir1Op::Call { .. } => (
-            EffectBoundary::HostcallEffect,
-            Some(CapabilityTag("hostcall.invoke".to_string())),
-            Some(FlowAnnotation {
-                data_label: Label::Confidential,
-                sink_clearance: Label::Confidential,
-                declassification_required: false,
-            }),
+            // User-defined function calls are pure; they must reach the
+            // regular Ir1Op::Call → Ir3Instruction::Call lowering path
+            // so the interpreter can set up a call frame and execute the
+            // function body.  Hostcall-grade IFC gating, when required,
+            // should be emitted as a separate guard instruction rather
+            // than hijacking the call itself.
+            EffectBoundary::Pure,
+            None,
+            None,
         ),
         Ir1Op::Await => (
             EffectBoundary::ReadEffect,

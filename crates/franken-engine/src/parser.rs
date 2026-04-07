@@ -2345,7 +2345,39 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
             '[' => bracket_depth = bracket_depth.saturating_add(1),
             ']' => bracket_depth = bracket_depth.saturating_sub(1),
             '{' => brace_depth = brace_depth.saturating_add(1),
-            '}' => brace_depth = brace_depth.saturating_sub(1),
+            '}' => {
+                let was_positive = brace_depth > 0;
+                brace_depth = brace_depth.saturating_sub(1);
+                // A closing brace that returns to brace_depth==0 may
+                // terminate a block-level statement (function decl,
+                // if/else, for, while, etc.).  Only split here when the
+                // CURRENT segment starts with a block keyword so we
+                // don't break function expressions or object literals
+                // embedded in larger expressions.
+                if was_positive && brace_depth == 0 && paren_depth == 0 && bracket_depth == 0 {
+                    let seg = line[segment_start..].trim_start();
+                    let starts_with_block = starts_with_keyword(seg, "function")
+                        || starts_with_keyword(seg, "if")
+                        || starts_with_keyword(seg, "for")
+                        || starts_with_keyword(seg, "while")
+                        || starts_with_keyword(seg, "do")
+                        || starts_with_keyword(seg, "try")
+                        || starts_with_keyword(seg, "switch")
+                        || starts_with_keyword(seg, "class");
+                    if starts_with_block {
+                        let after = index.saturating_add(1);
+                        let rest = line[after..].trim_start();
+                        let continues = starts_with_keyword(rest, "else")
+                            || starts_with_keyword(rest, "catch")
+                            || starts_with_keyword(rest, "finally")
+                            || starts_with_keyword(rest, "while");
+                        if !rest.is_empty() && !continues {
+                            push_segment(&mut out, line, segment_start, after);
+                            segment_start = after;
+                        }
+                    }
+                }
+            }
             ';' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 push_segment(&mut out, line, segment_start, index);
                 segment_start = index.saturating_add(ch.len_utf8());
@@ -2355,6 +2387,16 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
     }
     push_segment(&mut out, line, segment_start, line.len());
     out
+}
+
+/// Returns true when `text` starts with the keyword `kw` followed by a
+/// non-alphanumeric, non-underscore character (or end of string).
+fn starts_with_keyword(text: &str, kw: &str) -> bool {
+    text.starts_with(kw)
+        && text
+            .as_bytes()
+            .get(kw.len())
+            .map_or(true, |b| !b.is_ascii_alphanumeric() && *b != b'_')
 }
 
 fn push_segment<'a>(

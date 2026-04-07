@@ -551,9 +551,9 @@ impl HarnessMigrationRegistry {
 
         let evidence_linked_scenarios = self.scenarios.iter().filter(|s| s.evidence_linked).count();
 
-        let content_bytes =
-            serde_json::to_vec(&(&self.scenarios, &self.containment_tests)).unwrap_or_default();
-        let content_hash = ContentHash::compute(&content_bytes);
+        let input_bytes = serde_json::to_vec(&(&self.scenarios, &self.containment_tests))
+            .expect("serialization failed");
+        let content_hash = ContentHash::compute(&input_bytes);
 
         HarnessMigrationReport {
             schema_version: HARNESS_MIGRATION_SCHEMA_VERSION.to_owned(),

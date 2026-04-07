@@ -834,26 +834,14 @@ impl ModuleGraph {
                         lowlink_map,
                         counter,
                     );
-                    let dep_ll = lowlink_map
-                        .get(dep.as_str())
-                        .copied()
-                        .unwrap_or(u32::MAX);
-                    let cur_ll = lowlink_map
-                        .get(specifier)
-                        .copied()
-                        .unwrap_or(u32::MAX);
+                    let dep_ll = lowlink_map.get(dep.as_str()).copied().unwrap_or(u32::MAX);
+                    let cur_ll = lowlink_map.get(specifier).copied().unwrap_or(u32::MAX);
                     if dep_ll < cur_ll {
                         lowlink_map.insert(specifier.to_string(), dep_ll);
                     }
                 } else if on_stack.contains(dep.as_str()) {
-                    let dep_idx = index_map
-                        .get(dep.as_str())
-                        .copied()
-                        .unwrap_or(u32::MAX);
-                    let cur_ll = lowlink_map
-                        .get(specifier)
-                        .copied()
-                        .unwrap_or(u32::MAX);
+                    let dep_idx = index_map.get(dep.as_str()).copied().unwrap_or(u32::MAX);
+                    let cur_ll = lowlink_map.get(specifier).copied().unwrap_or(u32::MAX);
                     if dep_idx < cur_ll {
                         lowlink_map.insert(specifier.to_string(), dep_idx);
                     }

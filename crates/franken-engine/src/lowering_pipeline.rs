@@ -515,7 +515,8 @@ pub fn lower_ir0_to_ir1(
                     )?;
                     let binding_name =
                         make_internal_binding_name("default_export", synthetic_export_index);
-                    synthetic_export_index = synthetic_export_index.checked_add(1).expect("synthetic export capacity exceeded");
+                    synthetic_export_index =
+                        synthetic_export_index.checked_add(1).unwrap_or(u32::MAX);
                     let binding_id = alloc_binding(
                         &mut bindings,
                         &mut binding_lookup,
@@ -618,7 +619,7 @@ pub fn lower_ir0_to_ir1(
 
 fn alloc_label(counter: &mut u32) -> u32 {
     let id = *counter;
-    *counter = counter.checked_add(1).expect("label capacity exceeded");
+    *counter = counter.checked_add(1).unwrap_or(u32::MAX);
     id
 }
 
@@ -733,26 +734,35 @@ fn alloc_pattern_primary_binding(
     binding_kind: BindingKind,
 ) -> Result<BindingId, SemanticError> {
     let names = pattern.binding_names();
-    let primary_name = names.first().copied().unwrap_or("_");
-    let primary_binding = alloc_binding(
-        bindings,
-        binding_lookup,
-        binding_index,
-        scope_id,
-        primary_name,
-        binding_kind,
-    )?;
-    for extra_name in names.iter().skip(1) {
-        let _ = alloc_binding(
+    let mut first_user_binding = None;
+
+    for name in names {
+        let binding_id = alloc_binding(
             bindings,
             binding_lookup,
             binding_index,
             scope_id,
-            extra_name,
+            name,
             binding_kind,
         )?;
+        if first_user_binding.is_none() {
+            first_user_binding = Some(binding_id);
+        }
     }
-    Ok(primary_binding)
+
+    if matches!(pattern, BindingPattern::Identifier(_)) {
+        return Ok(first_user_binding.unwrap_or(0));
+    }
+
+    let source_name = make_internal_binding_name("destructure_source", *binding_index);
+    alloc_binding(
+        bindings,
+        binding_lookup,
+        binding_index,
+        scope_id,
+        &source_name,
+        BindingKind::Let,
+    )
 }
 
 /// Emit IR1 ops to destructure a value (already stored in `source_bid`) into
@@ -1172,6 +1182,15 @@ fn lower_statement_to_ir1_with_flow(
             .map_err(LoweringPipelineError::SemanticViolation)?;
             ops.push(Ir1Op::StoreBinding { binding_id: bid });
             ops.push(Ir1Op::Pop);
+            if !matches!(for_in_stmt.binding, BindingPattern::Identifier(_)) {
+                lower_destructuring_to_ir1(
+                    &for_in_stmt.binding,
+                    bid,
+                    ops,
+                    binding_lookup,
+                    label_counter,
+                );
+            }
 
             lower_statement_to_ir1_with_flow(
                 &for_in_stmt.body,
@@ -1241,6 +1260,15 @@ fn lower_statement_to_ir1_with_flow(
             .map_err(LoweringPipelineError::SemanticViolation)?;
             ops.push(Ir1Op::StoreBinding { binding_id: bid });
             ops.push(Ir1Op::Pop);
+            if !matches!(for_of_stmt.binding, BindingPattern::Identifier(_)) {
+                lower_destructuring_to_ir1(
+                    &for_of_stmt.binding,
+                    bid,
+                    ops,
+                    binding_lookup,
+                    label_counter,
+                );
+            }
 
             lower_statement_to_ir1_with_flow(
                 &for_of_stmt.body,
@@ -1950,8 +1978,14 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(dst);
             }
             Ir1Op::Call { arg_count } => {
-                let mut args = Vec::new();
-                for _ in 0..*arg_count {
+                let count = *arg_count as usize;
+                if count > value_stack.len() {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "Value stack underflow in Call",
+                    });
+                }
+                let mut args = Vec::with_capacity(count);
+                for _ in 0..count {
                     args.push(value_stack.pop().unwrap_or(0));
                 }
                 args.reverse();
@@ -2369,8 +2403,14 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(dst);
             }
             Ir1Op::NewArray { count } => {
-                let mut elements = Vec::new();
-                for _ in 0..*count {
+                let cnt = *count as usize;
+                if cnt > value_stack.len() {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "Value stack underflow in NewArray",
+                    });
+                }
+                let mut elements = Vec::with_capacity(cnt);
+                for _ in 0..cnt {
                     elements.push(value_stack.pop().unwrap_or(0));
                 }
                 elements.reverse();
@@ -2395,8 +2435,17 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(dst);
             }
             Ir1Op::NewObject { count } => {
-                let mut properties = Vec::new();
-                for _ in 0..*count {
+                let cnt = *count as usize;
+                if cnt
+                    .checked_mul(2)
+                    .map_or(true, |needed| needed > value_stack.len())
+                {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "Value stack underflow in NewObject",
+                    });
+                }
+                let mut properties = Vec::with_capacity(cnt);
+                for _ in 0..cnt {
                     let val = value_stack.pop().unwrap_or(0);
                     let key = value_stack.pop().unwrap_or(0);
                     properties.push((key, val));
@@ -2511,6 +2560,15 @@ pub fn lower_ir2_to_ir3(
             Ir1Op::Construct { arg_count } => {
                 // Pop callee + arg_count args from value stack; push result.
                 let count = *arg_count as usize;
+                // We need `count` args + 1 callee.
+                if count
+                    .checked_add(1)
+                    .map_or(true, |needed| needed > value_stack.len())
+                {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "Value stack underflow in Construct",
+                    });
+                }
                 let mut arg_regs = Vec::with_capacity(count.min(1024));
                 for _ in 0..count {
                     arg_regs.push(value_stack.pop().unwrap_or(0));
@@ -2547,6 +2605,11 @@ pub fn lower_ir2_to_ir3(
                 } else {
                     (*quasi_count as usize) + (*quasi_count as usize).saturating_sub(1)
                 };
+                if total > value_stack.len() {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "Value stack underflow in TemplateLiteral",
+                    });
+                }
                 // Pop part registers in reverse order and collect them.
                 let mut part_regs: Vec<u32> = Vec::with_capacity(total.min(1024));
                 for _ in 0..total {
@@ -4398,16 +4461,16 @@ fn lower_literal_to_ir3(
 
 fn push_constant(pool: &mut Vec<String>, value: &str) -> u32 {
     if let Some(index) = pool.iter().position(|entry| entry == value) {
-        return u32::try_from(index).expect("constant pool capacity exceeded");
+        return u32::try_from(index).unwrap_or(u32::MAX);
     }
 
     pool.push(value.to_string());
-    u32::try_from(pool.len() - 1).expect("constant pool capacity exceeded")
+    u32::try_from(pool.len() - 1).unwrap_or(u32::MAX)
 }
 
 fn alloc_register(cursor: &mut Reg) -> Reg {
     let register = *cursor;
-    *cursor = cursor.checked_add(1).expect("register capacity exceeded");
+    *cursor = cursor.checked_add(1).unwrap_or(u32::MAX);
     register
 }
 
@@ -8955,5 +9018,60 @@ mod tests {
         let names: Vec<&str> = scope.bindings.iter().map(|b| b.name.as_str()).collect();
         assert!(names.contains(&"a"), "binding 'a' should exist");
         assert!(names.contains(&"c"), "binding 'c' should exist");
+    }
+
+    #[test]
+    fn destructuring_uses_internal_source_binding() {
+        let ir0 = stmt_ir0(vec![Statement::VariableDeclaration(VariableDeclaration {
+            kind: VariableDeclarationKind::Const,
+            declarations: vec![VariableDeclarator {
+                pattern: BindingPattern::ObjectPattern(vec![
+                    ObjectPatternProperty {
+                        key: Expression::Identifier("a".into()),
+                        value: BindingPattern::Identifier("a".into()),
+                        computed: false,
+                        shorthand: true,
+                    },
+                    ObjectPatternProperty {
+                        key: Expression::Identifier("b".into()),
+                        value: BindingPattern::Identifier("b".into()),
+                        computed: false,
+                        shorthand: true,
+                    },
+                ]),
+                initializer: Some(Expression::Identifier("source".into())),
+                span: span(),
+            }],
+            span: span(),
+        })]);
+        let result = lower_ir0_to_ir1(&ir0).expect("should lower");
+        let scope = result.module.scopes.first().expect("root scope");
+        let internal_source = scope
+            .bindings
+            .iter()
+            .find(|binding| binding.name.contains("destructure_source"))
+            .expect("destructuring should allocate an internal source binding");
+        let a_binding = scope
+            .bindings
+            .iter()
+            .find(|binding| binding.name == "a")
+            .expect("binding a should exist");
+        assert_ne!(
+            internal_source.binding_id, a_binding.binding_id,
+            "source binding must not alias the first user binding"
+        );
+        let first_store = result
+            .module
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                Ir1Op::StoreBinding { binding_id } => Some(*binding_id),
+                _ => None,
+            })
+            .expect("destructuring should store the initializer");
+        assert_eq!(
+            first_store, internal_source.binding_id,
+            "initializer should land in the internal source binding"
+        );
     }
 }

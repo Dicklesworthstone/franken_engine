@@ -1290,19 +1290,13 @@ pub enum Ir3Instruction {
     PopScope,
     /// Declare a variable binding in the current scope.
     /// `kind`: 0=var, 1=let, 2=const, 3=parameter, 4=function.
-    DeclareBinding {
-        name_pool_index: u32,
-        kind: u8,
-    },
+    DeclareBinding { name_pool_index: u32, kind: u8 },
     /// Load a variable from the scope chain by name (walking outward).
     LoadScoped { dst: Reg, name_pool_index: u32 },
     /// Store a value into a variable in the scope chain by name.
     StoreScoped { src: Reg, name_pool_index: u32 },
     /// Initialize a let/const binding (move it out of TDZ).
-    InitBinding {
-        name_pool_index: u32,
-        src: Reg,
-    },
+    InitBinding { name_pool_index: u32, src: Reg },
 }
 
 impl Ir3Instruction {

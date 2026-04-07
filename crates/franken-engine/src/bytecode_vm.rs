@@ -174,6 +174,9 @@ pub enum VmError {
         executed_steps: u64,
         step_budget: u64,
     },
+    ShapeTransitionFailed {
+        reason: String,
+    },
 }
 
 impl VmError {
@@ -188,6 +191,7 @@ impl VmError {
             Self::InvalidJumpTarget { .. } => "invalid_jump_target",
             Self::MissingReturn => "missing_return",
             Self::BudgetExhausted { .. } => "budget_exhausted",
+            Self::ShapeTransitionFailed { .. } => "shape_transition_failed",
         }
     }
 }
@@ -491,8 +495,7 @@ impl BytecodeVm {
                 })
             }
             Instruction::NewObject { dst } => {
-                let object_id =
-                    ObjectId(u32::try_from(self.heap.len()).unwrap_or(u32::MAX));
+                let object_id = ObjectId(u32::try_from(self.heap.len()).unwrap_or(u32::MAX));
                 let object = HeapObject::new(self.shape_algebra.root_shape_id());
                 self.heap.push(object);
                 self.write_register(dst, Value::Object(object_id))?;
@@ -544,7 +547,9 @@ impl BytecodeVm {
                 let outcome = self
                     .shape_algebra
                     .apply_mutation(current_shape_id, mutation)
-                    .expect("heap object shape must participate in canonical algebra");
+                    .map_err(|e| VmError::ShapeTransitionFailed {
+                        reason: e.to_string(),
+                    })?;
                 let revision_after = revision_before.unwrap_or(0).saturating_add(1);
                 {
                     let heap_object =
@@ -1525,6 +1530,10 @@ mod tests {
             VmError::BudgetExhausted {
                 executed_steps: 0,
                 step_budget: 0,
+            }
+            .code(),
+            VmError::ShapeTransitionFailed {
+                reason: "test".to_string(),
             }
             .code(),
         ];

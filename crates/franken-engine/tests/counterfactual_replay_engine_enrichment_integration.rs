@@ -2484,11 +2484,7 @@ fn e2e_large_trace() {
         .map(|i| {
             make_decision(
                 i,
-                if i % 3 == 0 {
-                    "wasm"
-                } else {
-                    "native"
-                },
+                if i % 3 == 0 { "wasm" } else { "native" },
                 500_000 + i as i64 * 1_000,
             )
         })

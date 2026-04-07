@@ -1596,8 +1596,7 @@ fn compute_backpressure_snapshot(
 
     for timing in chunk_timings {
         let overload_units = timing.elapsed_us / delay_quantum_us;
-        let current_depth =
-            u32::try_from(overload_units.saturating_sub(1)).unwrap_or(u32::MAX);
+        let current_depth = u32::try_from(overload_units.saturating_sub(1)).unwrap_or(u32::MAX);
         queue_depth = current_depth;
         peak_queue_depth = peak_queue_depth.max(current_depth);
         if current_depth > 0 {

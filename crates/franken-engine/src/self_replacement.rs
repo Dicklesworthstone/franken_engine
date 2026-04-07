@@ -340,7 +340,11 @@ impl SignaturePreimage for DelegateCellManifest {
                 self.capability_envelope
                     .permitted
                     .iter()
-                    .map(|c| CanonicalValue::String(serde_json::to_string(c).expect("serialization failed")))
+                    .map(|c| {
+                        CanonicalValue::String(
+                            serde_json::to_string(c).expect("serialization failed"),
+                        )
+                    })
                     .collect(),
             ),
         );
@@ -350,7 +354,11 @@ impl SignaturePreimage for DelegateCellManifest {
                 self.capability_envelope
                     .required
                     .iter()
-                    .map(|c| CanonicalValue::String(serde_json::to_string(c).expect("serialization failed")))
+                    .map(|c| {
+                        CanonicalValue::String(
+                            serde_json::to_string(c).expect("serialization failed"),
+                        )
+                    })
                     .collect(),
             ),
         );

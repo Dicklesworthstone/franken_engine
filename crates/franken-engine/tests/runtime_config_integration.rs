@@ -148,7 +148,10 @@ challenge_timeout_ns = 8000000000
     assert_eq!(config.execution.deterministic_budget, 50_000);
     assert_eq!(config.orchestrator.max_concurrent_sagas, 8);
     assert_eq!(config.guardplane.priors.benign_millionths, 800_000);
-    assert_eq!(config.guardplane.thresholds.tail_confidence_millionths, 950_000);
+    assert_eq!(
+        config.guardplane.thresholds.tail_confidence_millionths,
+        950_000
+    );
     assert_eq!(config.guardplane.containment.grace_period_ns, 3_000_000_000);
 }
 
@@ -195,9 +198,11 @@ fn validation_rejects_priors_not_summing_to_million() {
     // Sum is now 500_000 + 40_000 + 10_000 + 100_000 = 650_000 ≠ 1_000_000
     let err = config.validate().unwrap_err();
     if let ConfigError::ValidationFailed { errors } = err {
-        assert!(errors
-            .iter()
-            .any(|e| e.section.contains("guardplane") || e.section.contains("priors")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.section.contains("guardplane") || e.section.contains("priors"))
+        );
     } else {
         panic!("expected ValidationFailed");
     }
@@ -211,7 +216,11 @@ fn validation_collects_multiple_errors() {
     config.execution.deterministic_max_registers = 0;
     let err = config.validate().unwrap_err();
     if let ConfigError::ValidationFailed { errors } = err {
-        assert!(errors.len() >= 3, "should collect 3+ errors, got {}", errors.len());
+        assert!(
+            errors.len() >= 3,
+            "should collect 3+ errors, got {}",
+            errors.len()
+        );
     } else {
         panic!("expected ValidationFailed");
     }
@@ -260,8 +269,7 @@ fn guardplane_config_json_serde_roundtrip() {
 fn runtime_config_toml_roundtrip() {
     let original = RuntimeConfig::default();
     let toml_str = toml::to_string(&original).expect("should serialize to TOML");
-    let roundtripped =
-        RuntimeConfig::from_toml(&toml_str).expect("should parse serialized TOML");
+    let roundtripped = RuntimeConfig::from_toml(&toml_str).expect("should parse serialized TOML");
     assert_eq!(original, roundtripped);
 }
 

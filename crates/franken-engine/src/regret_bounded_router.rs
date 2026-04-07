@@ -874,14 +874,10 @@ fn integer_exp_millionths(x_millionths: i64) -> i64 {
     }
 
     let scaled = if k >= 0 {
-        let shift = u32::try_from(k)
-            .unwrap_or(u32::MAX)
-            .min(60);
+        let shift = u32::try_from(k).unwrap_or(u32::MAX).min(60);
         sum.checked_shl(shift).unwrap_or(i128::MAX)
     } else {
-        let shift = u32::try_from(-k)
-            .unwrap_or(u32::MAX)
-            .min(120);
+        let shift = u32::try_from(-k).unwrap_or(u32::MAX).min(120);
         sum >> shift
     };
     scaled.clamp(1, i64::MAX as i128) as i64

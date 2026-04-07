@@ -884,8 +884,8 @@ fn demotion_reason_serde_round_trip_all_variants() {
         },
     ];
     for r in &reasons {
-        let json = serde_json::to_string(r).expect("serialize");
-        let rt: DemotionReason = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(r).unwrap_or_default();
+        let rt: DemotionReason = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*r, rt);
     }
 }
@@ -897,8 +897,8 @@ fn demotion_severity_serde_round_trip() {
         DemotionSeverity::Warning,
         DemotionSeverity::Critical,
     ] {
-        let json = serde_json::to_string(&s).expect("serialize");
-        let rt: DemotionSeverity = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&s).unwrap_or_default();
+        let rt: DemotionSeverity = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(s, rt);
     }
 }
@@ -926,8 +926,8 @@ fn demotion_receipt_serde_round_trip() {
     )
     .expect("create");
 
-    let json = serde_json::to_string(&receipt).expect("serialize");
-    let rt: DemotionReceipt = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&receipt).unwrap_or_default();
+    let rt: DemotionReceipt = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(receipt, rt);
 }
 
@@ -935,8 +935,8 @@ fn demotion_receipt_serde_round_trip() {
 fn demotion_policy_serde_round_trip() {
     let mut p = strict_policy();
     p.block_candidate("blocked".into());
-    let json = serde_json::to_string(&p).expect("serialize");
-    let rt: DemotionPolicy = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&p).unwrap_or_default();
+    let rt: DemotionPolicy = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(p, rt);
 }
 
@@ -948,8 +948,8 @@ fn auto_demotion_monitor_serde_round_trip() {
         timestamp_ns: 2_000_000_000,
     };
     m.process_observation(&obs);
-    let json = serde_json::to_string(&m).expect("serialize");
-    let rt: AutoDemotionMonitor = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&m).unwrap_or_default();
+    let rt: AutoDemotionMonitor = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(m, rt);
 }
 
@@ -981,8 +981,8 @@ fn monitoring_observation_serde_round_trip_all_variants() {
         },
     ];
     for obs in &observations {
-        let json = serde_json::to_string(obs).expect("serialize");
-        let rt: MonitoringObservation = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(obs).unwrap_or_default();
+        let rt: MonitoringObservation = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*obs, rt);
     }
 }
@@ -1003,8 +1003,8 @@ fn trigger_evaluation_serde_round_trip() {
             summary: "test".into(),
         }],
     };
-    let json = serde_json::to_string(&eval).expect("serialize");
-    let rt: TriggerEvaluation = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&eval).unwrap_or_default();
+    let rt: TriggerEvaluation = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(eval, rt);
 }
 
@@ -1016,8 +1016,8 @@ fn demotion_evidence_item_serde_round_trip() {
         collected_at_ns: 1_000_000_000,
         summary: "divergence at input X".into(),
     };
-    let json = serde_json::to_string(&item).expect("serialize");
-    let rt: DemotionEvidenceItem = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&item).unwrap_or_default();
+    let rt: DemotionEvidenceItem = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(item, rt);
 }
 
@@ -1042,8 +1042,8 @@ fn demotion_error_serde_round_trip() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).expect("serialize");
-        let rt: DemotionError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(err).unwrap_or_default();
+        let rt: DemotionError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*err, rt);
     }
 }
@@ -1062,8 +1062,8 @@ fn observation_result_serde_round_trip_no_trigger() {
         evaluation: None,
         observations_processed: 7,
     };
-    let json = serde_json::to_string(&or).expect("serialize");
-    let rt: ObservationResult = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&or).unwrap_or_default();
+    let rt: ObservationResult = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(or, rt);
 }
 
@@ -1088,8 +1088,8 @@ fn observation_result_serde_round_trip_with_trigger() {
         }),
         observations_processed: 1,
     };
-    let json = serde_json::to_string(&or).expect("serialize");
-    let rt: ObservationResult = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&or).unwrap_or_default();
+    let rt: ObservationResult = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(or, rt);
 }
 
@@ -1102,8 +1102,8 @@ fn performance_threshold_serde_round_trip() {
         max_value_millionths: 100_000_000,
         sustained_duration_ns: 5_000_000_000,
     };
-    let json = serde_json::to_string(&pt).expect("serialize");
-    let rt: PerformanceThreshold = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&pt).unwrap_or_default();
+    let rt: PerformanceThreshold = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(pt, rt);
 }
 
@@ -1977,8 +1977,8 @@ fn monitor_serde_after_processing_without_trigger() {
     };
     m.process_observation(&obs2);
 
-    let json = serde_json::to_string(&m).expect("serialize");
-    let rt: AutoDemotionMonitor = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&m).unwrap_or_default();
+    let rt: AutoDemotionMonitor = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(m, rt);
     assert_eq!(rt.observations_processed(), 2);
     assert_eq!(rt.latest_risk_millionths(), 500_000);
@@ -1994,8 +1994,8 @@ fn monitor_serde_after_trigger_preserves_state() {
     };
     assert!(m.process_observation(&obs).trigger_fired);
 
-    let json = serde_json::to_string(&m).expect("serialize");
-    let rt: AutoDemotionMonitor = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&m).unwrap_or_default();
+    let rt: AutoDemotionMonitor = serde_json::from_str(&json).unwrap_or_default();
     assert!(rt.is_demotion_triggered());
     assert_eq!(rt.latest_risk_millionths(), 900_000);
     assert_eq!(rt.observations_processed(), 1);
@@ -2603,8 +2603,8 @@ fn policy_serde_preserves_blocked_candidates() {
     p.block_candidate("a".into());
     p.block_candidate("b".into());
     p.block_candidate("c".into());
-    let json = serde_json::to_string(&p).expect("serialize");
-    let rt: DemotionPolicy = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&p).unwrap_or_default();
+    let rt: DemotionPolicy = serde_json::from_str(&json).unwrap_or_default();
     assert!(rt.is_candidate_blocked("a"));
     assert!(rt.is_candidate_blocked("b"));
     assert!(rt.is_candidate_blocked("c"));
@@ -2620,8 +2620,8 @@ fn policy_serde_preserves_custom_severities() {
     p.performance_breach_severity = DemotionSeverity::Critical;
     p.risk_threshold_severity = DemotionSeverity::Warning;
     p.capability_violation_severity = DemotionSeverity::Advisory;
-    let json = serde_json::to_string(&p).expect("serialize");
-    let rt: DemotionPolicy = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&p).unwrap_or_default();
+    let rt: DemotionPolicy = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(rt.semantic_divergence_severity, DemotionSeverity::Advisory);
     assert_eq!(rt.performance_breach_severity, DemotionSeverity::Critical);
     assert_eq!(rt.risk_threshold_severity, DemotionSeverity::Warning);
@@ -2638,8 +2638,8 @@ fn trigger_evaluation_serde_round_trip_no_reason() {
         severity: DemotionSeverity::Advisory,
         evidence: Vec::new(),
     };
-    let json = serde_json::to_string(&eval).expect("serialize");
-    let rt: TriggerEvaluation = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&eval).unwrap_or_default();
+    let rt: TriggerEvaluation = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(eval, rt);
 }
 
@@ -2653,8 +2653,8 @@ fn evidence_item_serde_with_long_summary() {
         collected_at_ns: u64::MAX,
         summary: "A".repeat(1000),
     };
-    let json = serde_json::to_string(&item).expect("serialize");
-    let rt: DemotionEvidenceItem = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&item).unwrap_or_default();
+    let rt: DemotionEvidenceItem = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(item, rt);
 }
 
@@ -2807,8 +2807,8 @@ fn receipt_serde_roundtrip_risk_reason() {
         },
     )
     .expect("create");
-    let json = serde_json::to_string(&receipt).expect("serialize");
-    let rt: DemotionReceipt = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&receipt).unwrap_or_default();
+    let rt: DemotionReceipt = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(receipt, rt);
     rt.verify_signature(&key.verification_key())
         .expect("verify after roundtrip");

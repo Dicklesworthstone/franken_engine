@@ -16,6 +16,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -34,10 +35,14 @@ struct ParserFrontierHarnessFixture {
     replay_command_template: String,
 }
 
+fn parse_json_slice<T: DeserializeOwned>(bytes: &[u8], context: &str) -> T {
+    serde_json::from_slice(bytes).unwrap_or_else(|error| panic!("{context}: {error}"))
+}
+
 fn load_fixture() -> ParserFrontierHarnessFixture {
     let path = Path::new("tests/fixtures/parser_frontier_harness_v1.json");
     let bytes = fs::read(path).expect("read parser frontier harness fixture");
-    serde_json::from_slice(&bytes).expect("deserialize parser frontier harness fixture")
+    parse_json_slice(&bytes, "parse parser frontier harness fixture")
 }
 
 fn load_script() -> String {

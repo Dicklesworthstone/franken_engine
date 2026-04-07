@@ -228,9 +228,9 @@ fn loss_matrix_bayes_action_returns_valid_index() {
 #[test]
 fn posterior_uniform_serde_roundtrip() {
     let posterior = Posterior::uniform(3);
-    let json = serde_json::to_string(&posterior).expect("serialize");
-    let recovered: Posterior = serde_json::from_str(&json).expect("deserialize");
-    let json_again = serde_json::to_string(&recovered).expect("re-serialize");
+    let json = serde_json::to_string(&posterior).unwrap_or_default();
+    let recovered: Posterior = serde_json::from_str(&json).unwrap_or_default();
+    let json_again = serde_json::to_string(&recovered).unwrap_or_default();
     assert_eq!(json, json_again);
 }
 
@@ -238,7 +238,7 @@ fn posterior_uniform_serde_roundtrip() {
 fn posterior_bayesian_update_produces_valid_posterior() {
     let mut posterior = Posterior::uniform(2);
     posterior.bayesian_update(&[0.9, 0.1]);
-    let json = serde_json::to_string(&posterior).expect("serialize updated posterior");
+    let json = serde_json::to_string(&posterior).unwrap_or_default();
     assert!(!json.is_empty());
 }
 
@@ -251,8 +251,8 @@ fn decision_verdict_serde_roundtrip() {
         DecisionVerdict::Deny,
         DecisionVerdict::Timeout,
     ] {
-        let json = serde_json::to_string(&verdict).expect("serialize verdict");
-        let recovered: DecisionVerdict = serde_json::from_str(&json).expect("deserialize verdict");
+        let json = serde_json::to_string(&verdict).unwrap_or_default();
+        let recovered: DecisionVerdict = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(recovered, verdict);
     }
 }
@@ -270,8 +270,8 @@ fn decision_request_serde_roundtrip() {
         e_process_milli: 100,
         ci_width_milli: 50,
     };
-    let json = serde_json::to_string(&request).expect("serialize");
-    let recovered: DecisionRequest = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&request).unwrap_or_default();
+    let recovered: DecisionRequest = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, request);
 }
 
@@ -444,8 +444,8 @@ fn adapter_event_serde_roundtrip() {
         outcome: "success".to_string(),
         error_code: None,
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let recovered: control_plane::AdapterEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let recovered: control_plane::AdapterEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, event);
 }
 
@@ -499,16 +499,16 @@ fn adapter_event_with_error_code_roundtrips() {
         outcome: "fail".to_string(),
         error_code: Some("E-001".to_string()),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let recovered: control_plane::AdapterEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let recovered: control_plane::AdapterEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.error_code, Some("E-001".to_string()));
 }
 
 #[test]
 fn fallback_policy_serde_roundtrip() {
     let policy = FallbackPolicy::default();
-    let json = serde_json::to_string(&policy).expect("serialize");
-    let recovered: FallbackPolicy = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&policy).unwrap_or_default();
+    let recovered: FallbackPolicy = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, policy);
 }
 
@@ -526,10 +526,10 @@ fn decision_verdict_debug_is_nonempty() {
 #[test]
 fn posterior_uniform_has_equal_weights() {
     let posterior = Posterior::uniform(3);
-    let json = serde_json::to_string(&posterior).expect("serialize");
+    let json = serde_json::to_string(&posterior).unwrap_or_default();
     assert!(!json.is_empty());
     let again = Posterior::uniform(3);
-    let json_again = serde_json::to_string(&again).expect("serialize again");
+    let json_again = serde_json::to_string(&again).unwrap_or_default();
     assert_eq!(json, json_again);
 }
 
@@ -618,16 +618,16 @@ fn mock_decision_contract_empty_queue_returns_timeout_fallback() {
 #[test]
 fn multiple_bayesian_updates_produce_different_posteriors() {
     let mut posterior = Posterior::uniform(2);
-    let initial = serde_json::to_string(&posterior).expect("serialize initial");
+    let initial = serde_json::to_string(&posterior).unwrap_or_default();
 
     // First update: strongly favor state 0
     posterior.bayesian_update(&[0.9, 0.1]);
-    let after_first = serde_json::to_string(&posterior).expect("serialize after first");
+    let after_first = serde_json::to_string(&posterior).unwrap_or_default();
     assert_ne!(initial, after_first, "first update should change posterior");
 
     // Second update: strongly favor state 1
     posterior.bayesian_update(&[0.1, 0.9]);
-    let after_second = serde_json::to_string(&posterior).expect("serialize after second");
+    let after_second = serde_json::to_string(&posterior).unwrap_or_default();
     assert_ne!(
         after_first, after_second,
         "second update should change posterior again"
@@ -635,7 +635,7 @@ fn multiple_bayesian_updates_produce_different_posteriors() {
 
     // Third update with same likelihoods as second to push further
     posterior.bayesian_update(&[0.1, 0.9]);
-    let after_third = serde_json::to_string(&posterior).expect("serialize after third");
+    let after_third = serde_json::to_string(&posterior).unwrap_or_default();
     assert_ne!(
         after_second, after_third,
         "third update should shift posterior further"

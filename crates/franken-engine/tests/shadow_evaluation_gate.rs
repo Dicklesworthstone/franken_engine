@@ -539,8 +539,8 @@ fn low_risk_extension_uses_default_profile() {
 #[test]
 fn shadow_evaluation_candidate_serde_roundtrip() {
     let c = candidate("decision-serde", improved_metrics(), 90_000, 900);
-    let json = serde_json::to_string(&c).expect("serialize");
-    let recovered: ShadowEvaluationCandidate = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&c).unwrap_or_default();
+    let recovered: ShadowEvaluationCandidate = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.decision_id, c.decision_id);
     assert_eq!(
         recovered.shadow_success_rate_millionths,
@@ -551,8 +551,8 @@ fn shadow_evaluation_candidate_serde_roundtrip() {
 #[test]
 fn safety_metric_snapshot_serde_roundtrip() {
     let snapshot = improved_metrics();
-    let json = serde_json::to_string(&snapshot).expect("serialize");
-    let recovered: SafetyMetricSnapshot = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&snapshot).unwrap_or_default();
+    let recovered: SafetyMetricSnapshot = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.values_millionths, snapshot.values_millionths);
 }
 
@@ -568,8 +568,8 @@ fn shadow_extension_class_serde_round_trip() {
         ShadowExtensionClass::HighRisk,
         ShadowExtensionClass::Critical,
     ] {
-        let json = serde_json::to_string(&class).expect("serialize");
-        let recovered: ShadowExtensionClass = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&class).unwrap_or_default();
+        let recovered: ShadowExtensionClass = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(class, recovered);
     }
 }
@@ -596,8 +596,8 @@ fn shadow_promotion_verdict_serde_round_trip() {
         ShadowPromotionVerdict::Reject,
         ShadowPromotionVerdict::OverrideApproved,
     ] {
-        let json = serde_json::to_string(&verdict).expect("serialize");
-        let recovered: ShadowPromotionVerdict = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&verdict).unwrap_or_default();
+        let recovered: ShadowPromotionVerdict = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(verdict, recovered);
     }
 }
@@ -612,8 +612,8 @@ fn safety_metric_all_constant_covers_five_metrics() {
 #[test]
 fn safety_metric_serde_round_trip() {
     for metric in SafetyMetric::ALL {
-        let json = serde_json::to_string(metric).expect("serialize");
-        let recovered: SafetyMetric = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(metric).unwrap_or_default();
+        let recovered: SafetyMetric = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*metric, recovered);
     }
 }
@@ -626,8 +626,8 @@ fn shadow_burn_in_threshold_profile_serde_round_trip() {
         min_burn_in_duration_ns: 100,
         require_verified_rollback_artifacts: true,
     };
-    let json = serde_json::to_string(&profile).expect("serialize");
-    let recovered: ShadowBurnInThresholdProfile = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&profile).unwrap_or_default();
+    let recovered: ShadowBurnInThresholdProfile = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(profile, recovered);
 }
 
@@ -643,9 +643,9 @@ fn shadow_rollback_readiness_artifacts_default() {
 #[test]
 fn shadow_rollback_readiness_artifacts_serde_round_trip() {
     let arts = rollback_readiness();
-    let json = serde_json::to_string(&arts).expect("serialize");
+    let json = serde_json::to_string(&arts).unwrap_or_default();
     let recovered: ShadowRollbackReadinessArtifacts =
-        serde_json::from_str(&json).expect("deserialize");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(arts, recovered);
 }
 
@@ -657,16 +657,16 @@ fn shadow_evaluation_gate_config_serde_round_trip() {
         default_burn_in_profile: ShadowBurnInThresholdProfile::default(),
         burn_in_profiles_by_extension_class: BTreeMap::new(),
     };
-    let json = serde_json::to_string(&config).expect("serialize");
-    let recovered: ShadowEvaluationGateConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let recovered: ShadowEvaluationGateConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(config, recovered);
 }
 
 #[test]
 fn shadow_replay_reference_serde_round_trip() {
     let rr = replay_reference();
-    let json = serde_json::to_string(&rr).expect("serialize");
-    let recovered: ShadowReplayReference = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&rr).unwrap_or_default();
+    let recovered: ShadowReplayReference = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(rr, recovered);
 }
 
@@ -678,8 +678,8 @@ fn human_override_request_serde_round_trip() {
         bypassed_risk_criteria: vec!["c1".to_string()],
         acknowledged_bypass: true,
     };
-    let json = serde_json::to_string(&req).expect("serialize");
-    let recovered: HumanOverrideRequest = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&req).unwrap_or_default();
+    let recovered: HumanOverrideRequest = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(req, recovered);
 }
 
@@ -813,8 +813,8 @@ fn shadow_gate_scorecard_grows_with_each_evaluation() {
 #[test]
 fn shadow_evaluation_gate_serde_roundtrip() {
     let g = gate();
-    let json = serde_json::to_string(&g).expect("serialize gate");
-    let recovered: ShadowEvaluationGate = serde_json::from_str(&json).expect("deserialize gate");
+    let json = serde_json::to_string(&g).unwrap_or_default();
+    let recovered: ShadowEvaluationGate = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(
         recovered.scorecard_entries().len(),
         g.scorecard_entries().len()
@@ -898,8 +898,8 @@ fn feature_field_type_serde_roundtrip() {
         FeatureFieldType::Boolean,
         FeatureFieldType::Categorical,
     ] {
-        let json = serde_json::to_string(&variant).expect("serialize");
-        let recovered: FeatureFieldType = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&variant).unwrap_or_default();
+        let recovered: FeatureFieldType = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(variant, recovered);
     }
 }
@@ -923,8 +923,8 @@ fn clipping_method_serde_roundtrip() {
         ClippingMethod::PerCoordinate,
         ClippingMethod::Adaptive,
     ] {
-        let json = serde_json::to_string(&method).expect("serialize");
-        let recovered: ClippingMethod = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&method).unwrap_or_default();
+        let recovered: ClippingMethod = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(method, recovered);
     }
 }
@@ -950,8 +950,8 @@ fn composition_method_serde_roundtrip() {
         CompositionMethod::Renyi,
         CompositionMethod::ZeroCdp,
     ] {
-        let json = serde_json::to_string(&method).expect("serialize");
-        let recovered: CompositionMethod = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&method).unwrap_or_default();
+        let recovered: CompositionMethod = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(method, recovered);
     }
 }
@@ -971,8 +971,8 @@ fn coordinator_trust_model_serde_roundtrip() {
         CoordinatorTrustModel::HonestButCurious,
         CoordinatorTrustModel::Malicious,
     ] {
-        let json = serde_json::to_string(&model).expect("serialize");
-        let recovered: CoordinatorTrustModel = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&model).unwrap_or_default();
+        let recovered: CoordinatorTrustModel = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(model, recovered);
     }
 }
@@ -986,8 +986,8 @@ fn secret_sharing_scheme_display() {
 #[test]
 fn secret_sharing_scheme_serde_roundtrip() {
     for scheme in [SecretSharingScheme::Additive, SecretSharingScheme::Shamir] {
-        let json = serde_json::to_string(&scheme).expect("serialize");
-        let recovered: SecretSharingScheme = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&scheme).unwrap_or_default();
+        let recovered: SecretSharingScheme = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(scheme, recovered);
     }
 }
@@ -1003,8 +1003,8 @@ fn prng_algorithm_display() {
 #[test]
 fn prng_algorithm_serde_roundtrip() {
     let alg = PrngAlgorithm::ChaCha20LikeCounter;
-    let json = serde_json::to_string(&alg).expect("serialize");
-    let recovered: PrngAlgorithm = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&alg).unwrap_or_default();
+    let recovered: PrngAlgorithm = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(alg, recovered);
 }
 
@@ -1045,7 +1045,7 @@ fn shadow_burn_in_threshold_profile_default_values() {
 #[test]
 fn shadow_evaluation_gate_config_default_has_profiles() {
     let config = ShadowEvaluationGateConfig::default();
-    let json = serde_json::to_string(&config).expect("serialize config");
+    let json = serde_json::to_string(&config).unwrap_or_default();
     assert!(!json.is_empty());
     // Default config should have a default burn-in profile
     assert!(

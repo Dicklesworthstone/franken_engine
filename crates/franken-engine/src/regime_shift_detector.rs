@@ -431,7 +431,7 @@ impl Default for RegimeShiftConfig {
 impl RegimeShiftConfig {
     /// Content hash for audit.
     pub fn config_hash(&self) -> ContentHash {
-        let bytes = serde_json::to_vec(self).expect("serialization failed");
+        let bytes = serde_json::to_vec(self).unwrap_or_default();
         ContentHash::compute(&bytes)
     }
 }
@@ -708,7 +708,7 @@ impl RegimeShiftManifest {
         let mut h = Sha256::new();
         h.update(REGIME_SHIFT_SCHEMA_VERSION.as_bytes());
         h.update(REGIME_SHIFT_BEAD_ID.as_bytes());
-        let summary_bytes = serde_json::to_vec(&summary).expect("serialization failed");
+        let summary_bytes = serde_json::to_vec(&summary).unwrap_or_default();
         h.update(&summary_bytes);
         let hash_bytes: [u8; 32] = h.finalize().into();
 

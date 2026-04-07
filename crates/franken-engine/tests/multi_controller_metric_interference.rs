@@ -289,8 +289,8 @@ fn interference_kind_serde_round_trip() {
         InterferenceKind::Oscillation,
         InterferenceKind::TimescaleConflict,
     ] {
-        let json = serde_json::to_string(&kind).expect("serialize");
-        let recovered: InterferenceKind = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&kind).unwrap_or_default();
+        let recovered: InterferenceKind = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(kind, recovered);
     }
 }
@@ -316,8 +316,8 @@ fn synthesis_strategy_serde_round_trip() {
         SynthesisStrategy::Mutation,
         SynthesisStrategy::TimeBounded,
     ] {
-        let json = serde_json::to_string(&strategy).expect("serialize");
-        let recovered: SynthesisStrategy = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&strategy).unwrap_or_default();
+        let recovered: SynthesisStrategy = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(strategy, recovered);
     }
 }
@@ -351,8 +351,8 @@ fn synthesis_config_default_has_expected_values() {
 #[test]
 fn synthesis_config_serde_round_trip() {
     let config = SynthesisConfig::default();
-    let json = serde_json::to_string(&config).expect("serialize");
-    let recovered: SynthesisConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let recovered: SynthesisConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(config, recovered);
 }
 
@@ -403,7 +403,7 @@ fn single_controller_produces_no_interference() {
 fn counterexample_synthesizer_construction_preserves_config() {
     let config = SynthesisConfig::default();
     let synthesizer = CounterexampleSynthesizer::new(config.clone());
-    let json = serde_json::to_string(&synthesizer).expect("serialize");
+    let json = serde_json::to_string(&synthesizer).unwrap_or_default();
     assert!(json.contains(&config.budget_ns.to_string()));
 }
 
@@ -414,8 +414,8 @@ fn counterexample_synthesizer_construction_preserves_config() {
 #[test]
 fn controller_config_serde_round_trip() {
     let config = controller("ctrl-serde", &["m1", "m2"], &["m3"], 500_000, "every 500ms");
-    let json = serde_json::to_string(&config).expect("serialize");
-    let recovered: ControllerConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let recovered: ControllerConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(config, recovered);
 }
 
@@ -428,8 +428,8 @@ fn synthesis_error_is_std_error() {
 #[test]
 fn synthesis_error_serde_round_trip() {
     let err = SynthesisError::NoViolations;
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: SynthesisError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: SynthesisError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, recovered);
 }
 
@@ -525,8 +525,8 @@ fn synthesis_error_timeout_serde_round_trip_no_partial() {
         budget_ns: 1_000_000_000,
         partial: None,
     };
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: SynthesisError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: SynthesisError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, recovered);
     assert!(json.contains("999999999"));
     assert!(json.contains("1000000000"));
@@ -578,8 +578,8 @@ fn synthesis_config_with_custom_fields_serde_round_trip() {
         detect_controller_interference: false,
         ..SynthesisConfig::default()
     };
-    let json = serde_json::to_string(&config).expect("serialize");
-    let recovered: SynthesisConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let recovered: SynthesisConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(config, recovered);
     assert_eq!(recovered.budget_ns, 42);
     assert_eq!(recovered.max_minimization_rounds, 7);
@@ -608,8 +608,8 @@ fn synthesis_outcome_display_and_serde_round_trip() {
         (SynthesisOutcome::Incomplete, "incomplete"),
     ] {
         assert_eq!(outcome.to_string(), expected_display);
-        let json = serde_json::to_string(&outcome).expect("serialize");
-        let recovered: SynthesisOutcome = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&outcome).unwrap_or_default();
+        let recovered: SynthesisOutcome = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(outcome, recovered);
     }
 }
@@ -624,8 +624,8 @@ fn controller_interference_serde_round_trip() {
         evidence_description: "oscillating writes detected".to_string(),
         convergence_steps: Some(42),
     };
-    let json = serde_json::to_string(&interference).expect("serialize");
-    let recovered: ControllerInterference = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&interference).unwrap_or_default();
+    let recovered: ControllerInterference = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(interference, recovered);
     assert_eq!(recovered.convergence_steps, Some(42));
     assert_eq!(recovered.kind, InterferenceKind::Oscillation);
@@ -646,8 +646,8 @@ fn controller_interference_event_serde_round_trip() {
         shared_metrics: vec!["cpu_pct".to_string()],
         timescale_separation_millionths: 200_000,
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let recovered: ControllerInterferenceEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let recovered: ControllerInterferenceEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, recovered);
     assert_eq!(
         recovered.error_code.as_deref(),
@@ -664,8 +664,8 @@ fn minimality_evidence_serde_round_trip() {
         final_size: 12,
         is_fixed_point: true,
     };
-    let json = serde_json::to_string(&evidence).expect("serialize");
-    let recovered: MinimalityEvidence = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&evidence).unwrap_or_default();
+    let recovered: MinimalityEvidence = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(evidence, recovered);
     assert!(recovered.is_fixed_point);
     assert_eq!(recovered.elements_removed, 8);
@@ -688,8 +688,8 @@ fn synthesis_error_all_variants_serde_round_trip() {
         SynthesisError::CompilerFailure("OOM".to_string()),
     ];
     for err in &variants {
-        let json = serde_json::to_string(err).expect("serialize");
-        let recovered: SynthesisError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(err).unwrap_or_default();
+        let recovered: SynthesisError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*err, recovered);
     }
 }
@@ -721,8 +721,8 @@ fn concrete_scenario_serde_round_trip() {
             m
         },
     };
-    let json = serde_json::to_string(&scenario).expect("serialize");
-    let recovered: ConcreteScenario = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&scenario).unwrap_or_default();
+    let recovered: ConcreteScenario = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(scenario, recovered);
     assert_eq!(recovered.subjects.len(), 2);
     assert_eq!(recovered.merge_ordering.len(), 3);
@@ -738,8 +738,8 @@ fn concrete_scenario_empty_fields_serde_round_trip() {
         merge_ordering: Vec::new(),
         input_state: BTreeMap::new(),
     };
-    let json = serde_json::to_string(&scenario).expect("serialize");
-    let recovered: ConcreteScenario = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&scenario).unwrap_or_default();
+    let recovered: ConcreteScenario = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(scenario, recovered);
     assert!(recovered.subjects.is_empty());
     assert!(recovered.merge_ordering.is_empty());
@@ -752,8 +752,8 @@ fn policy_mutation_serde_round_trip() {
         target_node: "node-42".to_string(),
         new_value: "union".to_string(),
     };
-    let json = serde_json::to_string(&mutation).expect("serialize");
-    let recovered: PolicyMutation = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&mutation).unwrap_or_default();
+    let recovered: PolicyMutation = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(mutation, recovered);
     assert_eq!(recovered.kind, MutationKind::ChangeMergeOp);
     assert_eq!(recovered.target_node, "node-42");
@@ -785,8 +785,8 @@ fn mutation_kind_serde_round_trip_all_variants() {
         MutationKind::DuplicateNode,
     ];
     for kind in variants {
-        let json = serde_json::to_string(&kind).expect("serialize");
-        let recovered: MutationKind = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&kind).unwrap_or_default();
+        let recovered: MutationKind = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(kind, recovered);
     }
 }

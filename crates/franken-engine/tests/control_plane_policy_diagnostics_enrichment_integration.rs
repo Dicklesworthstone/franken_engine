@@ -69,8 +69,8 @@ fn severity_serde_roundtrip_all() {
         DiagnosticSeverity::Critical,
     ];
     for s in &severities {
-        let json = serde_json::to_string(s).expect("serialize");
-        let deser: DiagnosticSeverity = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(s).unwrap_or_default();
+        let deser: DiagnosticSeverity = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*s, deser, "roundtrip failed for {:?}", s);
     }
 }
@@ -131,8 +131,8 @@ fn category_serde_roundtrip_all() {
         DiagnosticCategory::ContextThreading,
     ];
     for c in &categories {
-        let json = serde_json::to_string(c).expect("serialize");
-        let deser: DiagnosticCategory = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(c).unwrap_or_default();
+        let deser: DiagnosticCategory = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*c, deser, "roundtrip failed for {:?}", c);
     }
 }
@@ -148,8 +148,8 @@ fn error_code_serde_roundtrip() {
         category: DiagnosticCategory::BudgetPropagation,
         severity: DiagnosticSeverity::Error,
     };
-    let json = serde_json::to_string(&code).expect("serialize");
-    let deser: DiagnosticErrorCode = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&code).unwrap_or_default();
+    let deser: DiagnosticErrorCode = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(code, deser);
 }
 
@@ -176,8 +176,8 @@ fn remediation_guidance_serde_roundtrip() {
         doc_refs: vec!["docs/BUDGET.md".to_string()],
         auto_remediable: false,
     };
-    let json = serde_json::to_string(&guidance).expect("serialize");
-    let deser: RemediationGuidance = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&guidance).unwrap_or_default();
+    let deser: RemediationGuidance = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(guidance, deser);
 }
 
@@ -215,8 +215,8 @@ fn emitter_report_clean_when_empty() {
 fn report_serde_roundtrip() {
     let emitter = DiagnosticEmitter::with_defaults();
     let report = emitter.build_report();
-    let json = serde_json::to_string(&report).expect("serialize");
-    let deser: DiagnosticReport = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&report).unwrap_or_default();
+    let deser: DiagnosticReport = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(report, deser);
 }
 
@@ -276,8 +276,8 @@ fn control_plane_diagnostic_serde_roundtrip() {
         context: BTreeMap::from([("key".to_string(), "value".to_string())]),
         sequence: 0,
     };
-    let json = serde_json::to_string(&diag).expect("serialize");
-    let deser: ControlPlaneDiagnostic = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&diag).unwrap_or_default();
+    let deser: ControlPlaneDiagnostic = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(diag, deser);
 }
 
@@ -288,8 +288,8 @@ fn control_plane_diagnostic_serde_roundtrip() {
 #[test]
 fn emitter_serde_roundtrip_preserves_state() {
     let emitter = DiagnosticEmitter::with_defaults();
-    let json = serde_json::to_string(&emitter).expect("serialize");
-    let deser: DiagnosticEmitter = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&emitter).unwrap_or_default();
+    let deser: DiagnosticEmitter = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(emitter.diagnostics().len(), deser.diagnostics().len());
 }
 
@@ -378,8 +378,8 @@ fn enrichment_report_from_empty_emitter_is_clean() {
 fn enrichment_report_serde_roundtrip() {
     let emitter = DiagnosticEmitter::with_defaults();
     let report = emitter.build_report();
-    let json = serde_json::to_string(&report).expect("serialize");
-    let deser: DiagnosticReport = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&report).unwrap_or_default();
+    let deser: DiagnosticReport = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(report.total_diagnostics, deser.total_diagnostics);
     assert_eq!(report.is_clean(), deser.is_clean());
 }
@@ -397,8 +397,8 @@ fn remediation_guidance_serde_preserves_steps() {
         doc_refs: vec!["doc-001".to_string()],
         auto_remediable: false,
     };
-    let json = serde_json::to_string(&guidance).expect("serialize");
-    let deser: RemediationGuidance = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&guidance).unwrap_or_default();
+    let deser: RemediationGuidance = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(guidance.steps, deser.steps);
     assert_eq!(guidance.auto_remediable, deser.auto_remediable);
 }

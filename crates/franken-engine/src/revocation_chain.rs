@@ -1846,8 +1846,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serialize");
-            let restored: ChainError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(err).unwrap_or_default();
+            let restored: ChainError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*err, restored);
         }
     }
@@ -1915,8 +1915,8 @@ mod tests {
             prev_event: Some(EngineObjectId([10; 32])),
             event_seq: 5,
         };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let restored: RevocationEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&event).unwrap_or_default();
+        let restored: RevocationEvent = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(event, restored);
     }
 
@@ -1930,8 +1930,8 @@ mod tests {
             zone: TEST_ZONE.to_string(),
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
-        let json = serde_json::to_string(&head).expect("serialize");
-        let restored: RevocationHead = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&head).unwrap_or_default();
+        let restored: RevocationHead = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(head, restored);
     }
 
@@ -1957,8 +1957,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serialize");
-            let restored: ChainEventType = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(v).unwrap_or_default();
+            let restored: ChainEventType = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*v, restored);
         }
     }
@@ -1973,8 +1973,8 @@ mod tests {
             zone: TEST_ZONE.to_string(),
             trace_id: "t-serde".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let restored: ChainEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&event).unwrap_or_default();
+        let restored: ChainEvent = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(event, restored);
     }
 

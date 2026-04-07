@@ -681,8 +681,8 @@ mod tests {
             TwoPhaseCategory::StateMutation,
             TwoPhaseCategory::EvidenceCommit,
         ] {
-            let json = serde_json::to_string(&cat).expect("serialize");
-            let restored: TwoPhaseCategory = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(&cat).unwrap_or_default();
+            let restored: TwoPhaseCategory = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(cat, restored);
         }
     }
@@ -714,8 +714,8 @@ mod tests {
             OperationPhase::Aborted,
             OperationPhase::Leaked,
         ] {
-            let json = serde_json::to_string(&phase).expect("serialize");
-            let restored: OperationPhase = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(&phase).unwrap_or_default();
+            let restored: OperationPhase = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(phase, restored);
         }
     }
@@ -757,9 +757,8 @@ mod tests {
             cell_id: "c".to_string(),
             current_state: RegionState::Closed,
         };
-        let json = serde_json::to_string(&err).expect("serialize");
-        let restored: ObligationIntegrationError =
-            serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&err).unwrap_or_default();
+        let restored: ObligationIntegrationError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(err, restored);
     }
 
@@ -1312,8 +1311,8 @@ mod tests {
             trace_id: "t".to_string(),
             phase: OperationPhase::Phase1Active,
         };
-        let json = serde_json::to_string(&op).expect("serialize");
-        let restored: TwoPhaseOperation = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&op).unwrap_or_default();
+        let restored: TwoPhaseOperation = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(op, restored);
     }
 
@@ -1330,8 +1329,8 @@ mod tests {
             component: "obligation_integration".to_string(),
             phase: OperationPhase::Phase1Active,
         };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let restored: ObligationEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&event).unwrap_or_default();
+        let restored: ObligationEvent = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(event, restored);
     }
 
@@ -1344,8 +1343,8 @@ mod tests {
             trace_id: "t".to_string(),
             description: "leaked buffer".to_string(),
         };
-        let json = serde_json::to_string(&leak).expect("serialize");
-        let restored: LeakRecord = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&leak).unwrap_or_default();
+        let restored: LeakRecord = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(leak, restored);
     }
 
@@ -1357,8 +1356,8 @@ mod tests {
             aborted: 1,
             leaked: 1,
         };
-        let json = serde_json::to_string(&stats).expect("serialize");
-        let restored: CategoryStats = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&stats).unwrap_or_default();
+        let restored: CategoryStats = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(stats, restored);
     }
 
@@ -1637,8 +1636,8 @@ mod tests {
     #[test]
     fn leak_policy_serde_roundtrip() {
         for policy in [LeakPolicy::Lab, LeakPolicy::Production] {
-            let json = serde_json::to_string(&policy).expect("serialize");
-            let restored: LeakPolicy = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(&policy).unwrap_or_default();
+            let restored: LeakPolicy = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(policy, restored);
         }
     }

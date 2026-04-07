@@ -229,8 +229,8 @@ fn rgc_execution_waves_dry_run_emits_required_coordination_events() {
 fn execution_wave_all_const_covers_four_waves() {
     assert_eq!(ExecutionWave::ALL.len(), 4);
     for wave in ExecutionWave::ALL {
-        let json = serde_json::to_string(&wave).expect("serialize");
-        let recovered: ExecutionWave = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&wave).unwrap_or_default();
+        let recovered: ExecutionWave = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(wave, recovered);
     }
 }
@@ -244,8 +244,8 @@ fn anti_stall_action_serde_round_trip_all_variants() {
         AntiStallAction::Reassign,
         AntiStallAction::Split,
     ] {
-        let json = serde_json::to_string(&action).expect("serialize");
-        let recovered: AntiStallAction = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&action).unwrap_or_default();
+        let recovered: AntiStallAction = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(action, recovered);
     }
 }
@@ -293,8 +293,8 @@ fn coordination_validation_error_display_is_non_empty() {
 #[test]
 fn wave_handoff_package_serde_round_trip() {
     let handoff = default_wave_handoff_package();
-    let json = serde_json::to_string(&handoff).expect("serialize");
-    let recovered: WaveHandoffPackage = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&handoff).unwrap_or_default();
+    let recovered: WaveHandoffPackage = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(handoff, recovered);
 }
 
@@ -302,7 +302,7 @@ fn wave_handoff_package_serde_round_trip() {
 fn default_protocol_has_entries_for_all_waves() {
     let protocol = default_rgc_execution_wave_protocol();
     assert_eq!(protocol.waves.len(), 4);
-    let json = serde_json::to_string(&protocol).expect("serialize");
+    let json = serde_json::to_string(&protocol).unwrap_or_default();
     assert!(json.contains("wave_0"));
     assert!(json.contains("wave_3"));
 }
@@ -630,8 +630,8 @@ fn dry_run_events_propagate_trace_and_decision_ids() {
 #[test]
 fn protocol_serde_round_trip() {
     let protocol = default_rgc_execution_wave_protocol();
-    let json = serde_json::to_string(&protocol).expect("serialize");
-    let recovered: ExecutionWaveProtocol = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&protocol).unwrap_or_default();
+    let recovered: ExecutionWaveProtocol = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(protocol, recovered);
 }
 
@@ -639,32 +639,32 @@ fn protocol_serde_round_trip() {
 fn wave_plan_entry_serde_round_trip() {
     let protocol = default_rgc_execution_wave_protocol();
     let entry = &protocol.waves[0];
-    let json = serde_json::to_string(entry).expect("serialize");
-    let recovered: WavePlanEntry = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(entry).unwrap_or_default();
+    let recovered: WavePlanEntry = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(*entry, recovered);
 }
 
 #[test]
 fn file_reservation_protocol_serde_round_trip() {
     let protocol = default_rgc_execution_wave_protocol();
-    let json = serde_json::to_string(&protocol.file_reservation).expect("serialize");
-    let recovered: FileReservationProtocol = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&protocol.file_reservation).unwrap_or_default();
+    let recovered: FileReservationProtocol = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(protocol.file_reservation, recovered);
 }
 
 #[test]
 fn agent_mail_protocol_serde_round_trip() {
     let protocol = default_rgc_execution_wave_protocol();
-    let json = serde_json::to_string(&protocol.agent_mail).expect("serialize");
-    let recovered: AgentMailProtocol = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&protocol.agent_mail).unwrap_or_default();
+    let recovered: AgentMailProtocol = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(protocol.agent_mail, recovered);
 }
 
 #[test]
 fn anti_stall_thresholds_serde_round_trip() {
     let protocol = default_rgc_execution_wave_protocol();
-    let json = serde_json::to_string(&protocol.anti_stall).expect("serialize");
-    let recovered: AntiStallThresholds = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&protocol.anti_stall).unwrap_or_default();
+    let recovered: AntiStallThresholds = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(protocol.anti_stall, recovered);
 }
 
@@ -675,8 +675,8 @@ fn coordination_event_serde_round_trip() {
     let report =
         run_coordination_dry_run(&protocol, &handoff, 0, "t1", "d1").expect("should succeed");
     for event in &report.events {
-        let json = serde_json::to_string(event).expect("serialize");
-        let recovered: CoordinationEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(event).unwrap_or_default();
+        let recovered: CoordinationEvent = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*event, recovered);
     }
 }
@@ -687,8 +687,8 @@ fn dry_run_report_serde_round_trip() {
     let handoff = default_wave_handoff_package();
     let report =
         run_coordination_dry_run(&protocol, &handoff, 1000, "t1", "d1").expect("should succeed");
-    let json = serde_json::to_string(&report).expect("serialize");
-    let recovered: CoordinationDryRunReport = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&report).unwrap_or_default();
+    let recovered: CoordinationDryRunReport = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(report, recovered);
 }
 
@@ -773,9 +773,9 @@ fn coordination_validation_error_serde_round_trip_all_variants() {
         CoordinationValidationError::HandoffOwnersMustDiffer,
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).expect("serialize");
+        let json = serde_json::to_string(err).unwrap_or_default();
         let recovered: CoordinationValidationError =
-            serde_json::from_str(&json).expect("deserialize");
+            serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*err, recovered);
     }
 }

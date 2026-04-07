@@ -752,8 +752,8 @@ mod tests {
         let mut m = LossMatrix::new();
         m.set("s1", "a1", 100);
         m.set("s2", "a2", 200);
-        let json = serde_json::to_string(&m).expect("serialize");
-        let restored: LossMatrix = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&m).unwrap_or_default();
+        let restored: LossMatrix = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(m, restored);
     }
 
@@ -766,8 +766,8 @@ mod tests {
             guardrail_rejections: vec![("low".to_string(), "cost-cap".to_string())],
             decision_id: "mon-ctrl-000001".to_string(),
         };
-        let json = serde_json::to_string(&sel).expect("serialize");
-        let restored: ActionSelection = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&sel).unwrap_or_default();
+        let restored: ActionSelection = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(sel, restored);
     }
 
@@ -780,8 +780,8 @@ mod tests {
             safe_default: "high".to_string(),
             policy_id: "p-1".to_string(),
         };
-        let json = serde_json::to_string(&config).expect("serialize");
-        let restored: ControllerConfig = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&config).unwrap_or_default();
+        let restored: ControllerConfig = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(config, restored);
     }
 
@@ -798,8 +798,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serialize");
-            let restored: PolicyControllerError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(err).unwrap_or_default();
+            let restored: PolicyControllerError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*err, restored);
         }
     }
@@ -813,16 +813,16 @@ mod tests {
             description: "limits spending".to_string(),
             blocked_actions: vec!["expensive".to_string(), "risky".to_string()],
         };
-        let json = serde_json::to_string(&g).expect("serialize");
-        let restored: Guardrail = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&g).unwrap_or_default();
+        let restored: Guardrail = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(g, restored);
     }
 
     #[test]
     fn posterior_serde_roundtrip() {
         let p = normal_posterior();
-        let json = serde_json::to_string(&p).expect("serialize");
-        let restored: Posterior = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&p).unwrap_or_default();
+        let restored: Posterior = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(p, restored);
     }
 

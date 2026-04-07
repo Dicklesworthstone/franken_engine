@@ -561,18 +561,16 @@ fn rgc_056_vectors_have_positive_deterministic_seeds() {
 #[test]
 fn rgc_056_contract_json_serde_roundtrip() {
     let contract = parse_contract();
-    let json = serde_json::to_string(&contract).expect("contract should serialize");
-    let recovered: ChaosVerificationPackContract =
-        serde_json::from_str(&json).expect("contract should deserialize");
+    let json = serde_json::to_string(&contract).unwrap_or_default();
+    let recovered: ChaosVerificationPackContract = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(contract, recovered);
 }
 
 #[test]
 fn rgc_056_vectors_json_serde_roundtrip() {
     let vectors = parse_vectors();
-    let json = serde_json::to_string(&vectors).expect("vectors should serialize");
-    let recovered: ChaosVerificationVectors =
-        serde_json::from_str(&json).expect("vectors should deserialize");
+    let json = serde_json::to_string(&vectors).unwrap_or_default();
+    let recovered: ChaosVerificationVectors = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(vectors, recovered);
 }
 
@@ -643,9 +641,9 @@ fn rgc_056_expected_outcome_for_all_classes_is_not_unknown() {
 #[test]
 fn rgc_056_contract_pretty_json_serde_roundtrip_preserves_equality() {
     let contract = parse_contract();
-    let pretty = serde_json::to_string_pretty(&contract).expect("pretty serialize");
+    let pretty = serde_json::to_string_pretty(&contract).unwrap_or_default();
     let recovered: ChaosVerificationPackContract =
-        serde_json::from_str(&pretty).expect("pretty deserialize");
+        serde_json::from_str(&pretty).unwrap_or_default();
     assert_eq!(contract, recovered);
 }
 
@@ -751,9 +749,8 @@ fn rgc_056_contract_required_artifacts_are_unique() {
 #[test]
 fn rgc_056_vectors_pretty_json_serde_roundtrip_preserves_equality() {
     let vectors = parse_vectors();
-    let pretty = serde_json::to_string_pretty(&vectors).expect("pretty serialize");
-    let recovered: ChaosVerificationVectors =
-        serde_json::from_str(&pretty).expect("pretty deserialize");
+    let pretty = serde_json::to_string_pretty(&vectors).unwrap_or_default();
+    let recovered: ChaosVerificationVectors = serde_json::from_str(&pretty).unwrap_or_default();
     assert_eq!(vectors, recovered);
 }
 

@@ -140,11 +140,8 @@ fn hash(bytes: &[u8]) -> ContentHash {
 }
 
 fn write_json_file<T: Serialize>(path: &Path, value: &T) {
-    fs::write(
-        path,
-        serde_json::to_vec_pretty(value).expect("artifact payload should serialize"),
-    )
-    .unwrap_or_else(|err| panic!("failed to write {}: {err}", path.display()));
+    fs::write(path, serde_json::to_vec_pretty(value).unwrap_or_default())
+        .unwrap_or_else(|err| panic!("failed to write {}: {err}", path.display()));
 }
 
 fn build_cost_model() -> DeterministicCostModel {

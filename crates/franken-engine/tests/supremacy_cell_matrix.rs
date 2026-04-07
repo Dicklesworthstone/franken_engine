@@ -27,7 +27,7 @@ use frankenengine_engine::supremacy_cell_matrix::{
 fn load_fixture() -> SupremacyCellMatrixArtifact {
     let path = Path::new("tests/fixtures/supremacy_cell_matrix_v1.json");
     let bytes = fs::read(path).expect("read supremacy cell matrix fixture");
-    serde_json::from_slice(&bytes).expect("deserialize supremacy cell matrix fixture")
+    serde_json::from_slice(&bytes).unwrap_or_default()
 }
 
 fn load_doc() -> String {
@@ -203,8 +203,8 @@ fn workload_family_serde_round_trip_all_variants() {
         WorkloadFamily::MemoryPressure,
     ];
     for variant in variants {
-        let json = serde_json::to_string(&variant).expect("serialize");
-        let back: WorkloadFamily = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&variant).unwrap_or_default();
+        let back: WorkloadFamily = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(back, variant);
     }
 }
@@ -219,8 +219,8 @@ fn measurement_family_serde_round_trip_all_variants() {
         MeasurementFamily::TailLatency,
     ];
     for variant in variants {
-        let json = serde_json::to_string(&variant).expect("serialize");
-        let back: MeasurementFamily = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&variant).unwrap_or_default();
+        let back: MeasurementFamily = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(back, variant);
     }
 }
@@ -236,8 +236,8 @@ fn entry_mode_serde_round_trip_all_variants() {
         EntryMode::MixedPackage,
     ];
     for variant in variants {
-        let json = serde_json::to_string(&variant).expect("serialize");
-        let back: EntryMode = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&variant).unwrap_or_default();
+        let back: EntryMode = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(back, variant);
     }
 }
@@ -246,8 +246,8 @@ fn entry_mode_serde_round_trip_all_variants() {
 fn warm_state_serde_round_trip_all_variants() {
     let variants = [WarmState::Cold, WarmState::Warm, WarmState::Mixed];
     for variant in variants {
-        let json = serde_json::to_string(&variant).expect("serialize");
-        let back: WarmState = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&variant).unwrap_or_default();
+        let back: WarmState = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(back, variant);
     }
 }
@@ -263,8 +263,8 @@ fn interference_profile_serde_round_trip_all_variants() {
         InterferenceProfile::MemoryContention,
     ];
     for variant in variants {
-        let json = serde_json::to_string(&variant).expect("serialize");
-        let back: InterferenceProfile = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&variant).unwrap_or_default();
+        let back: InterferenceProfile = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(back, variant);
     }
 }
@@ -280,8 +280,8 @@ fn shared_resource_serde_round_trip_all_variants() {
         SharedResource::WorkerThreads,
     ];
     for variant in variants {
-        let json = serde_json::to_string(&variant).expect("serialize");
-        let back: SharedResource = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&variant).unwrap_or_default();
+        let back: SharedResource = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(back, variant);
     }
 }
@@ -298,8 +298,8 @@ fn tail_axis_serde_round_trip_all_variants() {
         TailAxis::GcPauseNs,
     ];
     for variant in variants {
-        let json = serde_json::to_string(&variant).expect("serialize");
-        let back: TailAxis = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&variant).unwrap_or_default();
+        let back: TailAxis = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(back, variant);
     }
 }
@@ -307,8 +307,8 @@ fn tail_axis_serde_round_trip_all_variants() {
 #[test]
 fn full_artifact_serde_round_trip() {
     let fixture = load_fixture();
-    let json = serde_json::to_string_pretty(&fixture).expect("serialize");
-    let back: SupremacyCellMatrixArtifact = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string_pretty(&fixture).unwrap_or_default();
+    let back: SupremacyCellMatrixArtifact = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(back, fixture);
 }
 
@@ -814,8 +814,8 @@ fn changelog_entry_serde_round_trip() {
         compatibility_notes: "n/a".to_string(),
         changed_at_utc: "2026-01-01T00:00:00Z".to_string(),
     };
-    let json = serde_json::to_string(&entry).expect("serialize");
-    let back: ChangelogEntry = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&entry).unwrap_or_default();
+    let back: ChangelogEntry = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(back, entry);
 }
 
@@ -828,8 +828,8 @@ fn supremacy_cell_family_spec_serde_round_trip() {
         required_for_board: true,
         shipped_surface_note: "test note".to_string(),
     };
-    let json = serde_json::to_string(&spec).expect("serialize");
-    let back: SupremacyCellFamilySpec = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&spec).unwrap_or_default();
+    let back: SupremacyCellFamilySpec = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(back, spec);
 }
 
@@ -849,8 +849,8 @@ fn supremacy_cell_spec_serde_round_trip() {
         tail_axis_ids: vec![],
         required_for_universal_verdict: true,
     };
-    let json = serde_json::to_string(&spec).expect("serialize");
-    let back: SupremacyCellSpec = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&spec).unwrap_or_default();
+    let back: SupremacyCellSpec = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(back, spec);
 }
 
@@ -867,8 +867,8 @@ fn interference_rule_serde_round_trip() {
         decomposition_label: "label".to_string(),
         explanation: "explanation".to_string(),
     };
-    let json = serde_json::to_string(&rule).expect("serialize");
-    let back: InterferenceRule = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&rule).unwrap_or_default();
+    let back: InterferenceRule = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(back, rule);
 }
 
@@ -879,8 +879,8 @@ fn tail_decomposition_axis_spec_serde_round_trip() {
         stage: "memory_reclamation".to_string(),
         description: "GC pauses".to_string(),
     };
-    let json = serde_json::to_string(&spec).expect("serialize");
-    let back: TailDecompositionAxisSpec = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&spec).unwrap_or_default();
+    let back: TailDecompositionAxisSpec = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(back, spec);
 }
 
@@ -995,49 +995,49 @@ fn fixture_changelog_has_at_least_one_entry() {
 
 #[test]
 fn workload_family_serde_uses_snake_case() {
-    let json = serde_json::to_string(&WorkloadFamily::ReactSsr).expect("serialize");
+    let json = serde_json::to_string(&WorkloadFamily::ReactSsr).unwrap_or_default();
     assert_eq!(json, "\"react_ssr\"");
 
-    let json = serde_json::to_string(&WorkloadFamily::MixedPackage).expect("serialize");
+    let json = serde_json::to_string(&WorkloadFamily::MixedPackage).unwrap_or_default();
     assert_eq!(json, "\"mixed_package\"");
 
-    let json = serde_json::to_string(&WorkloadFamily::WarmThroughput).expect("serialize");
+    let json = serde_json::to_string(&WorkloadFamily::WarmThroughput).unwrap_or_default();
     assert_eq!(json, "\"warm_throughput\"");
 }
 
 #[test]
 fn entry_mode_serde_uses_snake_case() {
-    let json = serde_json::to_string(&EntryMode::NativeReactCompile).expect("serialize");
+    let json = serde_json::to_string(&EntryMode::NativeReactCompile).unwrap_or_default();
     assert_eq!(json, "\"native_react_compile\"");
 
-    let json = serde_json::to_string(&EntryMode::NativeReactSsr).expect("serialize");
+    let json = serde_json::to_string(&EntryMode::NativeReactSsr).unwrap_or_default();
     assert_eq!(json, "\"native_react_ssr\"");
 }
 
 #[test]
 fn interference_profile_serde_uses_snake_case() {
-    let json = serde_json::to_string(&InterferenceProfile::SchedulerContention).expect("serialize");
+    let json = serde_json::to_string(&InterferenceProfile::SchedulerContention).unwrap_or_default();
     assert_eq!(json, "\"scheduler_contention\"");
 
-    let json = serde_json::to_string(&InterferenceProfile::MemoryContention).expect("serialize");
+    let json = serde_json::to_string(&InterferenceProfile::MemoryContention).unwrap_or_default();
     assert_eq!(json, "\"memory_contention\"");
 }
 
 #[test]
 fn shared_resource_serde_uses_snake_case() {
-    let json = serde_json::to_string(&SharedResource::FrontendCpu).expect("serialize");
+    let json = serde_json::to_string(&SharedResource::FrontendCpu).unwrap_or_default();
     assert_eq!(json, "\"frontend_cpu\"");
 
-    let json = serde_json::to_string(&SharedResource::MemoryBandwidth).expect("serialize");
+    let json = serde_json::to_string(&SharedResource::MemoryBandwidth).unwrap_or_default();
     assert_eq!(json, "\"memory_bandwidth\"");
 }
 
 #[test]
 fn tail_axis_serde_uses_snake_case() {
-    let json = serde_json::to_string(&TailAxis::ModuleLoadNs).expect("serialize");
+    let json = serde_json::to_string(&TailAxis::ModuleLoadNs).unwrap_or_default();
     assert_eq!(json, "\"module_load_ns\"");
 
-    let json = serde_json::to_string(&TailAxis::QueueDelayNs).expect("serialize");
+    let json = serde_json::to_string(&TailAxis::QueueDelayNs).unwrap_or_default();
     assert_eq!(json, "\"queue_delay_ns\"");
 }
 

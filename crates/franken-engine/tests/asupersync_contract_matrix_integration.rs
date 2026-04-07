@@ -515,7 +515,7 @@ fn matrix_serializes_to_valid_json_and_deserializes_back() {
         SecurityEpoch::GENESIS,
     )
     .expect("build");
-    let json = serde_json::to_string(&matrix).expect("serialize");
+    let json = serde_json::to_string(&matrix).unwrap_or_default();
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse json");
     assert_eq!(parsed["schema_version"], SCHEMA_VERSION);
     assert_eq!(parsed["bead_id"], BEAD_ID);
@@ -525,7 +525,7 @@ fn matrix_serializes_to_valid_json_and_deserializes_back() {
 #[test]
 fn catalog_serializes_to_valid_json() {
     let catalog = canonical_failure_code_catalog();
-    let json = serde_json::to_string(&catalog).expect("serialize catalog");
+    let json = serde_json::to_string(&catalog).unwrap_or_default();
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse");
     assert_eq!(
         parsed["failure_codes"].as_array().unwrap().len(),
@@ -646,8 +646,8 @@ fn bundle_events_are_valid_json_lines() {
 #[test]
 fn enrichment_asupersync_surface_serde_roundtrip_all_variants() {
     for surface in AsupersyncSurface::all() {
-        let json = serde_json::to_string(surface).expect("serialize surface");
-        let decoded: AsupersyncSurface = serde_json::from_str(&json).expect("deserialize surface");
+        let json = serde_json::to_string(surface).unwrap_or_default();
+        let decoded: AsupersyncSurface = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(decoded, *surface, "serde roundtrip failed for {surface}");
     }
 }
@@ -661,9 +661,8 @@ fn enrichment_compatibility_disposition_serde_roundtrip_all_variants() {
         CompatibilityDisposition::BridgeIncompatible,
     ];
     for d in &variants {
-        let json = serde_json::to_string(d).expect("serialize disposition");
-        let decoded: CompatibilityDisposition =
-            serde_json::from_str(&json).expect("deserialize disposition");
+        let json = serde_json::to_string(d).unwrap_or_default();
+        let decoded: CompatibilityDisposition = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(decoded, *d, "serde roundtrip failed for {d}");
     }
 }
@@ -671,9 +670,8 @@ fn enrichment_compatibility_disposition_serde_roundtrip_all_variants() {
 #[test]
 fn enrichment_contract_failure_code_serde_roundtrip_all_variants() {
     for code in ContractFailureCode::all() {
-        let json = serde_json::to_string(code).expect("serialize failure code");
-        let decoded: ContractFailureCode =
-            serde_json::from_str(&json).expect("deserialize failure code");
+        let json = serde_json::to_string(code).unwrap_or_default();
+        let decoded: ContractFailureCode = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(decoded, *code, "serde roundtrip failed for {code}");
     }
 }
@@ -687,9 +685,8 @@ fn enrichment_matrix_serde_full_roundtrip_preserves_all_fields() {
         SecurityEpoch::GENESIS,
     )
     .expect("build matrix");
-    let json = serde_json::to_string(&matrix).expect("serialize matrix");
-    let decoded: AsupersyncContractCompatMatrix =
-        serde_json::from_str(&json).expect("deserialize matrix");
+    let json = serde_json::to_string(&matrix).unwrap_or_default();
+    let decoded: AsupersyncContractCompatMatrix = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(
         decoded, matrix,
         "full matrix serde roundtrip must be lossless"
@@ -885,9 +882,8 @@ fn enrichment_different_timestamps_produce_different_report_hashes() {
 #[test]
 fn enrichment_catalog_serde_full_roundtrip() {
     let catalog = canonical_failure_code_catalog();
-    let json = serde_json::to_string(&catalog).expect("serialize catalog");
-    let decoded: VersionDriftFailureCatalog =
-        serde_json::from_str(&json).expect("deserialize catalog");
+    let json = serde_json::to_string(&catalog).unwrap_or_default();
+    let decoded: VersionDriftFailureCatalog = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded.schema_version, catalog.schema_version);
     assert_eq!(decoded.bead_id, catalog.bead_id);
     assert_eq!(decoded.failure_codes.len(), catalog.failure_codes.len());

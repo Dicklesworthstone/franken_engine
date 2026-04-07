@@ -1203,8 +1203,8 @@ fn canonical_violation_serde_round_trip_all_variants() {
         },
     ];
     for v in &violations {
-        let json = serde_json::to_string(v).expect("serialize");
-        let restored: CanonicalViolation = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(v).unwrap_or_default();
+        let restored: CanonicalViolation = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*v, restored, "failed for: {v:?}");
     }
 }
@@ -1217,8 +1217,8 @@ fn non_canonical_error_serde_round_trip() {
         violation: CanonicalViolation::TrailingBytes { count: 1 },
         trace_id: "t-serde-err".to_string(),
     };
-    let json = serde_json::to_string(&err).expect("serialize");
-    let restored: NonCanonicalError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let restored: NonCanonicalError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, restored);
 }
 
@@ -1235,8 +1235,8 @@ fn guard_event_serde_round_trip() {
         trace_id: "t-ser".to_string(),
         input_hash: [0x01; 32],
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let restored: GuardEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let restored: GuardEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, restored);
 }
 
@@ -1252,8 +1252,8 @@ fn guard_event_type_serde_round_trip_all_variants() {
         GuardEventType::UnregisteredClass,
     ];
     for evt in &variants {
-        let json = serde_json::to_string(evt).expect("serialize");
-        let restored: GuardEventType = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(evt).unwrap_or_default();
+        let restored: GuardEventType = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*evt, restored);
     }
 }

@@ -976,11 +976,25 @@ pub fn run_suite(
     })
 }
 
+fn json_serialization_error(context: &str, error: serde_json::Error) -> std::io::Error {
+    std::io::Error::other(format!("{context}: {error}"))
+}
+
+fn serialize_json_line<T: ?Sized + Serialize>(value: &T, context: &str) -> std::io::Result<String> {
+    serde_json::to_string(value).map_err(|error| json_serialization_error(context, error))
+}
+
+fn serialize_json_pretty<T: ?Sized + Serialize>(
+    value: &T,
+    context: &str,
+) -> std::io::Result<Vec<u8>> {
+    serde_json::to_vec_pretty(value).map_err(|error| json_serialization_error(context, error))
+}
+
 pub fn write_evidence_jsonl(path: &Path, entries: &[RelationEvidenceEntry]) -> std::io::Result<()> {
     let mut lines = String::new();
     for entry in entries {
-        let json =
-            serde_json::to_string(entry).expect("evidence entry serialization should succeed");
+        let json = serialize_json_line(entry, "failed to serialize relation evidence entry")?;
         lines.push_str(&json);
         lines.push('\n');
     }
@@ -1077,7 +1091,7 @@ pub fn write_seed_transcript_jsonl(
 ) -> std::io::Result<()> {
     let mut lines = String::new();
     for entry in entries {
-        let json = serde_json::to_string(entry).expect("seed transcript serialization should pass");
+        let json = serialize_json_line(entry, "failed to serialize seed transcript entry")?;
         lines.push_str(&json);
         lines.push('\n');
     }
@@ -1124,8 +1138,7 @@ pub fn seed_manifest_for_suite(suite: &SuiteExecution) -> SeedManifest {
 }
 
 pub fn write_seed_manifest_json(path: &Path, manifest: &SeedManifest) -> std::io::Result<()> {
-    let payload =
-        serde_json::to_vec_pretty(manifest).expect("seed manifest serialization should succeed");
+    let payload = serialize_json_pretty(manifest, "failed to serialize seed manifest")?;
     fs::write(path, payload)
 }
 
@@ -1172,8 +1185,10 @@ pub fn write_property_generator_catalog_json(
     path: &Path,
     catalog: &PropertyGeneratorCatalogReport,
 ) -> std::io::Result<()> {
-    let payload = serde_json::to_vec_pretty(catalog)
-        .expect("property generator catalog serialization should succeed");
+    let payload = serialize_json_pretty(
+        catalog,
+        "failed to serialize property generator catalog report",
+    )?;
     fs::write(path, payload)
 }
 
@@ -1228,8 +1243,10 @@ pub fn write_generator_choice_stream_schema_json(
     path: &Path,
     schema: &GeneratorChoiceStreamSchemaReport,
 ) -> std::io::Result<()> {
-    let payload = serde_json::to_vec_pretty(schema)
-        .expect("generator choice stream schema serialization should succeed");
+    let payload = serialize_json_pretty(
+        schema,
+        "failed to serialize generator choice stream schema report",
+    )?;
     fs::write(path, payload)
 }
 
@@ -1254,8 +1271,10 @@ pub fn write_structured_reduction_operator_catalog_json(
     path: &Path,
     catalog: &StructuredReductionOperatorCatalogReport,
 ) -> std::io::Result<()> {
-    let payload = serde_json::to_vec_pretty(catalog)
-        .expect("structured reduction operator catalog serialization should succeed");
+    let payload = serialize_json_pretty(
+        catalog,
+        "failed to serialize structured reduction operator catalog report",
+    )?;
     fs::write(path, payload)
 }
 
@@ -1302,8 +1321,10 @@ pub fn write_minimized_property_counterexamples_jsonl(
 ) -> std::io::Result<()> {
     let mut lines = String::new();
     for counterexample in counterexamples {
-        let json = serde_json::to_string(counterexample)
-            .expect("minimized property counterexample serialization should succeed");
+        let json = serialize_json_line(
+            counterexample,
+            "failed to serialize minimized property counterexample",
+        )?;
         lines.push_str(&json);
         lines.push('\n');
     }
@@ -1354,8 +1375,7 @@ pub fn write_minimized_structured_repros_jsonl(
 ) -> std::io::Result<()> {
     let mut lines = String::new();
     for repro in repros {
-        let json = serde_json::to_string(repro)
-            .expect("minimized structured repro serialization should succeed");
+        let json = serialize_json_line(repro, "failed to serialize minimized structured repro")?;
         lines.push_str(&json);
         lines.push('\n');
     }
@@ -1421,8 +1441,7 @@ pub fn write_shrinker_verdict_report_json(
     path: &Path,
     report: &ShrinkerVerdictReport,
 ) -> std::io::Result<()> {
-    let payload = serde_json::to_vec_pretty(report)
-        .expect("shrinker verdict report serialization should succeed");
+    let payload = serialize_json_pretty(report, "failed to serialize shrinker verdict report")?;
     fs::write(path, payload)
 }
 
@@ -1482,8 +1501,7 @@ pub fn write_hdd_reducer_report_json(
     path: &Path,
     report: &HddReducerReport,
 ) -> std::io::Result<()> {
-    let payload =
-        serde_json::to_vec_pretty(report).expect("hdd reducer report serialization should succeed");
+    let payload = serialize_json_pretty(report, "failed to serialize HDD reducer report")?;
     fs::write(path, payload)
 }
 
@@ -1535,8 +1553,10 @@ pub fn write_reduction_stability_matrix_json(
     path: &Path,
     report: &ReductionStabilityMatrixReport,
 ) -> std::io::Result<()> {
-    let payload = serde_json::to_vec_pretty(report)
-        .expect("reduction stability matrix serialization should succeed");
+    let payload = serialize_json_pretty(
+        report,
+        "failed to serialize reduction stability matrix report",
+    )?;
     fs::write(path, payload)
 }
 
@@ -1650,8 +1670,7 @@ pub fn write_campaign_triage_report_json(
     path: &Path,
     report: &CampaignTriageReport,
 ) -> std::io::Result<()> {
-    let payload =
-        serde_json::to_vec_pretty(report).expect("triage report serialization should succeed");
+    let payload = serialize_json_pretty(report, "failed to serialize campaign triage report")?;
     fs::write(path, payload)
 }
 
@@ -1705,8 +1724,10 @@ pub fn write_repro_governance_actions_json(
     path: &Path,
     report: &ReproGovernanceActionsReport,
 ) -> std::io::Result<()> {
-    let payload = serde_json::to_vec_pretty(report)
-        .expect("repro governance actions serialization should succeed");
+    let payload = serialize_json_pretty(
+        report,
+        "failed to serialize repro governance actions report",
+    )?;
     fs::write(path, payload)
 }
 
@@ -2356,7 +2377,7 @@ fn write_failure_artifact(path: &Path, artifact: &FailureArtifact) -> std::io::R
 
     let path = path.join(file_name);
     let payload =
-        serde_json::to_vec_pretty(artifact).expect("failure artifact serialization should succeed");
+        serialize_json_pretty(artifact, "failed to serialize metamorphic failure artifact")?;
     fs::write(&path, payload)?;
     Ok(path)
 }
@@ -3509,7 +3530,7 @@ mod tests {
         let output_path = std::env::temp_dir().join(file_name);
 
         super::write_seed_transcript_jsonl(&output_path, &transcript)
-            .expect("writer should serialize transcript");
+            .expect("seed transcript should serialize and write");
         let payload =
             std::fs::read_to_string(&output_path).expect("seed transcript file should exist");
         let _ = std::fs::remove_file(&output_path);

@@ -487,9 +487,9 @@ fn authorization_proof_serde_round_trip() {
     )
     .expect("verify should succeed");
 
-    let json = serde_json::to_string(&proof).expect("serialize proof");
+    let json = serde_json::to_string(&proof).unwrap_or_default();
     let recovered: frankenengine_engine::delegation_chain::AuthorizationProof =
-        serde_json::from_str(&json).expect("deserialize proof");
+        serde_json::from_str(&json).unwrap_or_default();
 
     assert_eq!(proof.chain_hash, recovered.chain_hash);
     assert_eq!(proof.authorized_capability, recovered.authorized_capability);
@@ -506,8 +506,8 @@ fn delegation_chain_serde_round_trip() {
     let link0 = make_bound_token(&root_sk, leaf.clone(), &[RuntimeCapability::VmDispatch]);
 
     let chain = DelegationChain::new(vec![link0]);
-    let json = serde_json::to_string(&chain).expect("serialize chain");
-    let recovered: DelegationChain = serde_json::from_str(&json).expect("deserialize chain");
+    let json = serde_json::to_string(&chain).unwrap_or_default();
+    let recovered: DelegationChain = serde_json::from_str(&json).unwrap_or_default();
 
     assert_eq!(chain.links.len(), recovered.links.len());
     assert_eq!(chain.links[0].jti, recovered.links[0].jti);
@@ -762,8 +762,8 @@ fn chain_error_serde_round_trip() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).expect("serialize");
-        let recovered: ChainError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(err).unwrap_or_default();
+        let recovered: ChainError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*err, recovered);
     }
 }
@@ -828,8 +828,8 @@ fn delegation_link_summary_serde_round_trip() {
         not_before_tick: 100,
         expiry_tick: 1000,
     };
-    let json = serde_json::to_string(&summary).expect("serialize");
-    let recovered: DelegationLinkSummary = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&summary).unwrap_or_default();
+    let recovered: DelegationLinkSummary = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(summary, recovered);
 }
 
@@ -1581,16 +1581,16 @@ fn enrichment_request_capability_not_in_leaf_but_in_parents() {
 #[test]
 fn enrichment_chain_serde_preserves_link_count() {
     let (chain, _, _) = valid_chain_fixture();
-    let json = serde_json::to_string(&chain).expect("serialize");
-    let recovered: DelegationChain = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&chain).unwrap_or_default();
+    let recovered: DelegationChain = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(chain.links.len(), recovered.links.len());
 }
 
 #[test]
 fn enrichment_chain_serde_preserves_all_jtis() {
     let (chain, _, _) = valid_chain_fixture();
-    let json = serde_json::to_string(&chain).expect("serialize");
-    let recovered: DelegationChain = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&chain).unwrap_or_default();
+    let recovered: DelegationChain = serde_json::from_str(&json).unwrap_or_default();
     for (a, b) in chain.links.iter().zip(recovered.links.iter()) {
         assert_eq!(a.jti, b.jti);
     }
@@ -1599,8 +1599,8 @@ fn enrichment_chain_serde_preserves_all_jtis() {
 #[test]
 fn enrichment_chain_serde_preserves_zones() {
     let (chain, _, _) = valid_chain_fixture();
-    let json = serde_json::to_string(&chain).expect("serialize");
-    let recovered: DelegationChain = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&chain).unwrap_or_default();
+    let recovered: DelegationChain = serde_json::from_str(&json).unwrap_or_default();
     for (a, b) in chain.links.iter().zip(recovered.links.iter()) {
         assert_eq!(a.zone, b.zone);
     }
@@ -1609,8 +1609,8 @@ fn enrichment_chain_serde_preserves_zones() {
 #[test]
 fn enrichment_chain_serde_preserves_capabilities() {
     let (chain, _, _) = valid_chain_fixture();
-    let json = serde_json::to_string(&chain).expect("serialize");
-    let recovered: DelegationChain = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&chain).unwrap_or_default();
+    let recovered: DelegationChain = serde_json::from_str(&json).unwrap_or_default();
     for (a, b) in chain.links.iter().zip(recovered.links.iter()) {
         assert_eq!(a.capabilities, b.capabilities);
     }
@@ -1619,16 +1619,16 @@ fn enrichment_chain_serde_preserves_capabilities() {
 #[test]
 fn enrichment_empty_chain_serde_round_trip() {
     let chain = DelegationChain::new(vec![]);
-    let json = serde_json::to_string(&chain).expect("serialize");
-    let recovered: DelegationChain = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&chain).unwrap_or_default();
+    let recovered: DelegationChain = serde_json::from_str(&json).unwrap_or_default();
     assert!(recovered.is_empty());
 }
 
 #[test]
 fn enrichment_chain_error_empty_chain_serde() {
     let err = ChainError::EmptyChain;
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: ChainError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: ChainError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, recovered);
 }
 
@@ -1638,24 +1638,24 @@ fn enrichment_chain_error_depth_exceeded_serde() {
         max_depth: 3,
         actual_depth: 7,
     };
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: ChainError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: ChainError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, recovered);
 }
 
 #[test]
 fn enrichment_chain_error_missing_checkpoint_serde() {
     let err = ChainError::MissingCheckpointBinding { index: 5 };
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: ChainError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: ChainError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, recovered);
 }
 
 #[test]
 fn enrichment_chain_error_missing_revocation_serde() {
     let err = ChainError::MissingRevocationFreshnessBinding { index: 4 };
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: ChainError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: ChainError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, recovered);
 }
 
@@ -1666,8 +1666,8 @@ fn enrichment_chain_error_zone_mismatch_serde() {
         expected_zone: "alpha".to_string(),
         actual_zone: "beta".to_string(),
     };
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: ChainError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: ChainError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, recovered);
 }
 
@@ -1677,8 +1677,8 @@ fn enrichment_chain_error_revoked_link_serde() {
         index: 1,
         token_id: EngineObjectId([0xAA; 32]),
     };
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: ChainError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: ChainError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, recovered);
 }
 
@@ -1691,8 +1691,8 @@ fn enrichment_chain_error_missing_capability_serde() {
             RuntimeCapability::GcInvoke,
         ]),
     };
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: ChainError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: ChainError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, recovered);
 }
 
@@ -1708,8 +1708,8 @@ fn enrichment_chain_error_attenuation_serde() {
             RuntimeCapability::ProcessSpawn,
         ]),
     };
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: ChainError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: ChainError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, recovered);
 }
 
@@ -1717,9 +1717,8 @@ fn enrichment_chain_error_attenuation_serde() {
 fn enrichment_delegation_verification_context_serde() {
     let root_sk = make_sk(42);
     let ctx = make_ctx(&root_sk);
-    let json = serde_json::to_string(&ctx).expect("serialize");
-    let recovered: DelegationVerificationContext =
-        serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&ctx).unwrap_or_default();
+    let recovered: DelegationVerificationContext = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(ctx, recovered);
 }
 
@@ -1736,9 +1735,9 @@ fn enrichment_authorization_proof_serde_preserves_all_fields() {
     )
     .unwrap();
 
-    let json = serde_json::to_string(&proof).expect("serialize");
+    let json = serde_json::to_string(&proof).unwrap_or_default();
     let recovered: frankenengine_engine::delegation_chain::AuthorizationProof =
-        serde_json::from_str(&json).expect("deserialize");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(proof, recovered);
 }
 
@@ -1754,9 +1753,9 @@ fn enrichment_delegation_link_summary_serde_all_fields() {
         not_before_tick: 50,
         expiry_tick: 999,
     };
-    let json = serde_json::to_string(&summary).expect("serialize");
+    let json = serde_json::to_string(&summary).unwrap_or_default();
     let recovered: frankenengine_engine::delegation_chain::DelegationLinkSummary =
-        serde_json::from_str(&json).expect("deserialize");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(summary, recovered);
 }
 

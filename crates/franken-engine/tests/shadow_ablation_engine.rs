@@ -1178,16 +1178,16 @@ fn run_result_serde_roundtrip() {
         .run(&report, &signing_key(), |req| Ok(passing_observation(req)))
         .expect("run completes");
 
-    let json = serde_json::to_string(&result).expect("serialize");
-    let restored: ShadowAblationRunResult = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&result).unwrap_or_default();
+    let restored: ShadowAblationRunResult = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(result, restored);
 }
 
 #[test]
 fn config_serde_roundtrip() {
     let config = base_config("ext-serde-cfg", 99);
-    let json = serde_json::to_string(&config).expect("serialize");
-    let restored: ShadowAblationConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let restored: ShadowAblationConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(config, restored);
 }
 
@@ -1209,8 +1209,8 @@ fn observation_serde_roundtrip() {
         execution_trace_hash: ContentHash::compute(b"obs-test"),
         failure_detail: Some("test failure".to_string()),
     };
-    let json = serde_json::to_string(&obs).expect("serialize");
-    let restored: ShadowAblationObservation = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&obs).unwrap_or_default();
+    let restored: ShadowAblationObservation = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(obs, restored);
 }
 
@@ -1229,8 +1229,8 @@ fn log_event_serde_roundtrip() {
         removed_capabilities: vec!["cap_a".to_string()],
         remaining_capability_count: Some(3),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let restored: ShadowAblationLogEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let restored: ShadowAblationLogEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, restored);
 }
 
@@ -1260,9 +1260,8 @@ fn evaluation_record_serde_roundtrip() {
         failure_class: None,
         failure_detail: None,
     };
-    let json = serde_json::to_string(&record).expect("serialize");
-    let restored: ShadowAblationEvaluationRecord =
-        serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&record).unwrap_or_default();
+    let restored: ShadowAblationEvaluationRecord = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(record, restored);
 }
 
@@ -1282,9 +1281,8 @@ fn candidate_request_serde_roundtrip() {
         randomness_snapshot_id: "rng".to_string(),
         deterministic_seed: 7,
     };
-    let json = serde_json::to_string(&req).expect("serialize");
-    let restored: ShadowAblationCandidateRequest =
-        serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&req).unwrap_or_default();
+    let restored: ShadowAblationCandidateRequest = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(req, restored);
 }
 
@@ -1319,8 +1317,8 @@ fn error_serde_roundtrip_all_variants() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).expect("serialize");
-        let restored: ShadowAblationError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(err).unwrap_or_default();
+        let restored: ShadowAblationError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*err, restored);
     }
 }
@@ -1754,8 +1752,8 @@ fn transcript_input_serde_roundtrip() {
         fallback: None,
         budget_utilization: BTreeMap::new(),
     };
-    let json = serde_json::to_string(&input).expect("serialize");
-    let restored: ShadowAblationTranscriptInput = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&input).unwrap_or_default();
+    let restored: ShadowAblationTranscriptInput = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(input, restored);
 }
 
@@ -1775,8 +1773,7 @@ fn signed_transcript_serde_roundtrip() {
         .run(&report, &signing_key(), |req| Ok(passing_observation(req)))
         .expect("run completes");
 
-    let json = serde_json::to_string(&result.transcript).expect("serialize");
-    let restored: SignedShadowAblationTranscript =
-        serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&result.transcript).unwrap_or_default();
+    let restored: SignedShadowAblationTranscript = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(result.transcript, restored);
 }

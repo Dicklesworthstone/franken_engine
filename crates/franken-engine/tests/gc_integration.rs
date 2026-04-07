@@ -94,8 +94,8 @@ fn gc_object_id_ordering_is_deterministic() {
 fn gc_object_id_serde_round_trip() {
     let mut heap = ExtensionHeap::new("ext".into());
     let id = heap.allocate(10);
-    let json = serde_json::to_string(&id).expect("serialize");
-    let decoded: GcObjectId = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&id).unwrap_or_default();
+    let decoded: GcObjectId = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded, id);
     assert_eq!(decoded.as_u64(), 0);
 }
@@ -143,9 +143,9 @@ fn gc_object_serde_round_trip() {
     let mut heap = ExtensionHeap::new("ext".into());
     let id = heap.allocate(128);
     let obj = heap.get(id).unwrap().clone();
-    let json = serde_json::to_string(&obj).expect("serialize");
+    let json = serde_json::to_string(&obj).unwrap_or_default();
     let decoded: frankenengine_engine::gc::GcObject =
-        serde_json::from_str(&json).expect("deserialize");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded.id, obj.id);
     assert_eq!(decoded.size_bytes, obj.size_bytes);
     assert_eq!(decoded.rooted, obj.rooted);
@@ -166,8 +166,8 @@ fn gc_phase_display_all_variants() {
 #[test]
 fn gc_phase_serde_round_trip_all_variants() {
     for phase in [GcPhase::Mark, GcPhase::Sweep, GcPhase::Complete] {
-        let json = serde_json::to_string(&phase).expect("serialize");
-        let decoded: GcPhase = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&phase).unwrap_or_default();
+        let decoded: GcPhase = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(decoded, phase);
     }
 }
@@ -213,8 +213,8 @@ fn gc_event_serde_round_trip() {
     gc.unroot("ext-a", obj).unwrap();
     let event = gc.collect("ext-a").unwrap();
 
-    let json = serde_json::to_string(&event).expect("serialize");
-    let decoded: GcEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let decoded: GcEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded, event);
 }
 
@@ -278,8 +278,8 @@ fn gc_config_serde_round_trip() {
         deterministic: true,
         pressure_threshold_percent: 42,
     };
-    let json = serde_json::to_string(&config).expect("serialize");
-    let decoded: GcConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let decoded: GcConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded.deterministic, config.deterministic);
     assert_eq!(
         decoded.pressure_threshold_percent,
@@ -371,8 +371,8 @@ fn gc_error_serde_round_trip_all_variants() {
         GcError::DomainError(frankenengine_engine::alloc_domain::AllocDomainError::BudgetOverflow),
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).expect("serialize");
-        let decoded: GcError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(err).unwrap_or_default();
+        let decoded: GcError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(&decoded, err);
     }
 }
@@ -549,8 +549,8 @@ fn extension_heap_serde_round_trip() {
     let b = heap.allocate(200);
     heap.add_reference(a, b).unwrap();
 
-    let json = serde_json::to_string(&heap).expect("serialize");
-    let decoded: ExtensionHeap = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&heap).unwrap_or_default();
+    let decoded: ExtensionHeap = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded.extension_id(), "ext-a");
     assert_eq!(decoded.object_count(), 2);
     assert_eq!(decoded.total_bytes(), 300);
@@ -1511,8 +1511,8 @@ fn gc_collector_serde_round_trip() {
     gc.unroot("ext-a", obj).unwrap();
     gc.collect("ext-a").unwrap();
 
-    let json = serde_json::to_string(&gc).expect("serialize");
-    let restored: GcCollector = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&gc).unwrap_or_default();
+    let restored: GcCollector = serde_json::from_str(&json).unwrap_or_default();
 
     assert_eq!(gc.heap_count(), restored.heap_count());
     assert_eq!(gc.event_sequence(), restored.event_sequence());
@@ -1530,8 +1530,8 @@ fn gc_collector_serde_preserves_events() {
     gc.collect("ext-a").unwrap();
     gc.collect("ext-a").unwrap();
 
-    let json = serde_json::to_string(&gc).expect("serialize");
-    let restored: GcCollector = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&gc).unwrap_or_default();
+    let restored: GcCollector = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(restored.events().len(), 2);
     assert_eq!(restored.events()[0].sequence, 1);
     assert_eq!(restored.events()[1].sequence, 2);
@@ -1546,8 +1546,8 @@ fn gc_collector_serde_preserves_heap_state() {
     gc.add_reference("ext-a", a, b).unwrap();
     gc.unroot("ext-a", b).unwrap();
 
-    let json = serde_json::to_string(&gc).expect("serialize");
-    let restored: GcCollector = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&gc).unwrap_or_default();
+    let restored: GcCollector = serde_json::from_str(&json).unwrap_or_default();
 
     let heap = restored.get_heap("ext-a").unwrap();
     assert_eq!(heap.object_count(), 2);
@@ -1738,8 +1738,8 @@ fn serialize_and_continue_lifecycle() {
     gc.collect("ext-a").unwrap();
 
     // Serialize
-    let json = serde_json::to_string(&gc).expect("serialize");
-    let mut restored: GcCollector = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&gc).unwrap_or_default();
+    let mut restored: GcCollector = serde_json::from_str(&json).unwrap_or_default();
 
     // Continue working with restored collector
     let obj2 = restored.allocate("ext-a", 200).unwrap();

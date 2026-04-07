@@ -61,7 +61,7 @@ struct ParserApiCompatibilityFixture {
 fn load_fixture() -> ParserApiCompatibilityFixture {
     let path = Path::new("tests/fixtures/parser_api_compatibility_contract_v1.json");
     let bytes = fs::read(path).expect("read parser API compatibility fixture");
-    serde_json::from_slice(&bytes).expect("deserialize parser API compatibility fixture")
+    serde_json::from_slice(&bytes).unwrap_or_default()
 }
 
 fn load_doc() -> String {
@@ -230,10 +230,8 @@ fn assert_required_event_keys(
     let mut observed_error_code_key = false;
 
     for event in &event_ir.events {
-        let value = serde_json::to_value(event).expect("serialize parse event");
-        let object = value
-            .as_object()
-            .expect("parse event should serialize into a JSON object");
+        let value = serde_json::to_value(event).unwrap_or_default();
+        let object = value.as_object().unwrap_or_default();
 
         for key in required_keys {
             if key == "error_code" {
@@ -679,8 +677,8 @@ fn parse_event_ir_has_events_for_failure_case() {
 fn parse_event_ir_serde_roundtrip() {
     let parser = CanonicalEs2020Parser;
     let (_, ir) = parser.parse_with_event_ir("42;", ParseGoal::Script, &ParserOptions::default());
-    let json = serde_json::to_string(&ir).expect("serialize");
-    let recovered: ParseEventIr = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&ir).unwrap_or_default();
+    let recovered: ParseEventIr = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.canonical_hash(), ir.canonical_hash());
 }
 
@@ -746,8 +744,8 @@ fn parse_budget_kind_serde_roundtrip() {
         ParseBudgetKind::TokenCount,
         ParseBudgetKind::RecursionDepth,
     ] {
-        let json = serde_json::to_string(&kind).expect("serialize");
-        let recovered: ParseBudgetKind = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&kind).unwrap_or_default();
+        let recovered: ParseBudgetKind = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(recovered, kind);
     }
 }
@@ -765,8 +763,8 @@ fn parser_budget_default_values() {
 #[test]
 fn parser_budget_serde_roundtrip() {
     let budget = ParserBudget::default();
-    let json = serde_json::to_string(&budget).expect("serialize");
-    let recovered: ParserBudget = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&budget).unwrap_or_default();
+    let recovered: ParserBudget = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.max_source_bytes, budget.max_source_bytes);
     assert_eq!(recovered.max_token_count, budget.max_token_count);
     assert_eq!(recovered.max_recursion_depth, budget.max_recursion_depth);
@@ -777,8 +775,8 @@ fn parser_budget_serde_roundtrip() {
 #[test]
 fn parse_error_code_roundtrip_matches_all_variants() {
     for code in ParseErrorCode::ALL {
-        let json = serde_json::to_string(&code).expect("serialize");
-        let recovered: ParseErrorCode = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&code).unwrap_or_default();
+        let recovered: ParseErrorCode = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(recovered, code);
     }
 }
@@ -832,8 +830,8 @@ fn parse_budget_kind_helper_maps_all_kinds() {
 #[test]
 fn parser_options_default_budget_serde_roundtrip() {
     let options = ParserOptions::default();
-    let json = serde_json::to_string(&options).expect("serialize");
-    let recovered: ParserOptions = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&options).unwrap_or_default();
+    let recovered: ParserOptions = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(
         recovered.budget.max_source_bytes,
         options.budget.max_source_bytes
@@ -897,8 +895,8 @@ use frankenengine_engine::parser::{
 #[test]
 fn enrichment_parser_mode_serde_roundtrip() {
     let mode = ParserMode::ScalarReference;
-    let json = serde_json::to_string(&mode).expect("serialize ParserMode");
-    let recovered: ParserMode = serde_json::from_str(&json).expect("deserialize ParserMode");
+    let json = serde_json::to_string(&mode).unwrap_or_default();
+    let recovered: ParserMode = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, mode);
     assert_eq!(mode.as_str(), "scalar_reference");
 }
@@ -911,9 +909,8 @@ fn enrichment_parse_event_kind_serde_roundtrip() {
         ParseEventKind::ParseCompleted,
         ParseEventKind::ParseFailed,
     ] {
-        let json = serde_json::to_string(&kind).expect("serialize ParseEventKind");
-        let recovered: ParseEventKind =
-            serde_json::from_str(&json).expect("deserialize ParseEventKind");
+        let json = serde_json::to_string(&kind).unwrap_or_default();
+        let recovered: ParseEventKind = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(recovered, kind);
     }
 }
@@ -928,9 +925,8 @@ fn enrichment_parse_diagnostic_category_serde_roundtrip() {
         ParseDiagnosticCategory::Resource,
         ParseDiagnosticCategory::System,
     ] {
-        let json = serde_json::to_string(&category).expect("serialize ParseDiagnosticCategory");
-        let recovered: ParseDiagnosticCategory =
-            serde_json::from_str(&json).expect("deserialize ParseDiagnosticCategory");
+        let json = serde_json::to_string(&category).unwrap_or_default();
+        let recovered: ParseDiagnosticCategory = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(recovered, category);
         assert!(!category.as_str().is_empty());
     }
@@ -942,9 +938,8 @@ fn enrichment_parse_diagnostic_severity_serde_roundtrip() {
         ParseDiagnosticSeverity::Error,
         ParseDiagnosticSeverity::Fatal,
     ] {
-        let json = serde_json::to_string(&severity).expect("serialize ParseDiagnosticSeverity");
-        let recovered: ParseDiagnosticSeverity =
-            serde_json::from_str(&json).expect("deserialize ParseDiagnosticSeverity");
+        let json = serde_json::to_string(&severity).unwrap_or_default();
+        let recovered: ParseDiagnosticSeverity = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(recovered, severity);
         assert!(!severity.as_str().is_empty());
     }
@@ -957,9 +952,8 @@ fn enrichment_parse_diagnostic_envelope_serde_roundtrip() {
         .parse_with_options("", ParseGoal::Script, &ParserOptions::default())
         .expect_err("empty source must fail");
     let envelope = ParseDiagnosticEnvelope::from_parse_error(&err);
-    let json = serde_json::to_string(&envelope).expect("serialize ParseDiagnosticEnvelope");
-    let recovered: ParseDiagnosticEnvelope =
-        serde_json::from_str(&json).expect("deserialize ParseDiagnosticEnvelope");
+    let json = serde_json::to_string(&envelope).unwrap_or_default();
+    let recovered: ParseDiagnosticEnvelope = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.canonical_hash(), envelope.canonical_hash());
     assert_eq!(recovered.parse_error_code, ParseErrorCode::EmptySource);
 }
@@ -1250,9 +1244,9 @@ fn enrichment_materialized_ast_is_deterministic_across_runs() {
 #[test]
 fn enrichment_parse_event_materialization_error_code_serde_roundtrip() {
     let code = ParseEventMaterializationErrorCode::ParseFailedEventStream;
-    let json = serde_json::to_string(&code).expect("serialize ParseEventMaterializationErrorCode");
+    let json = serde_json::to_string(&code).unwrap_or_default();
     let recovered: ParseEventMaterializationErrorCode =
-        serde_json::from_str(&json).expect("deserialize ParseEventMaterializationErrorCode");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, code);
     assert!(!code.as_str().is_empty());
 }

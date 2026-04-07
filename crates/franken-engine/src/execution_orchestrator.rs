@@ -14,13 +14,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
 use crate::ast::ParseGoal;
 use crate::baseline_interpreter::{
-    ExecutionResult, InterpreterConfig, InterpreterError, LaneChoice, LaneReason, LaneRouter,
-    RoutedResult,
+    ExecutionResult, HookAction, InterpreterConfig, InterpreterError, InterpreterHook, LaneChoice,
+    LaneReason, LaneRouter, RoutedResult,
 };
 use crate::bayesian_posterior::{
     BayesianPosteriorUpdater, Evidence, Posterior, RiskState, UpdateResult,
@@ -41,6 +42,9 @@ use crate::expected_loss_selector::{
     ActionDecision, ContainmentAction, ExpectedLossSelector, LossMatrix,
 };
 use crate::flow_lattice::{Clearance, DeclassificationObligation, Ir2FlowLattice, LabelClass};
+use crate::guardplane_adapter::{
+    GuardplaneAdapter, GuardplaneExecutionSummary, GuardplaneExtensionContext,
+};
 use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::{DeclassificationReceipt, Label};
 use crate::ir_contract::{Ir0Module, Ir3Module};
@@ -256,6 +260,7 @@ struct EvidenceRecordInput<'a> {
     ir3_schedule_cost: Option<TropicalWeight>,
     adaptive_router_summary: Option<&'a RouterSummary>,
     optimal_stopping_certificate: Option<&'a OptimalStoppingCertificate>,
+    guardplane_summary: Option<&'a GuardplaneExecutionSummary>,
 }
 
 #[derive(Debug, Clone)]
@@ -580,7 +585,8 @@ impl ExecutionOrchestrator {
         let ir3_schedule_cost = Self::estimate_ir3_schedule_cost(&lowering_output.ir3);
 
         // Step 6: Execute IR3.
-        let routed = self.phase_execute(package, &lowering_output.ir3, &trace_id)?;
+        let (routed, guardplane_summary) =
+            self.phase_execute(package, &lowering_output.ir3, &trace_id)?;
         let lane = routed.lane;
         let lane_reason = routed.reason;
         let exec_result = routed.result;
@@ -605,6 +611,12 @@ impl ExecutionOrchestrator {
         {
             containment_action = ContainmentAction::Sandbox;
         }
+        if let Some(requested) = exec_result.requested_hook_action.as_ref() {
+            containment_action = more_severe_containment_action(
+                containment_action,
+                containment_action_for_hook(requested),
+            );
+        }
 
         // Step 9: Record evidence.
         let (entry, evidence_compression_certificate) =
@@ -619,6 +631,7 @@ impl ExecutionOrchestrator {
                 ir3_schedule_cost,
                 adaptive_router_summary: adaptive_router_summary.as_ref(),
                 optimal_stopping_certificate: optimal_stopping_certificate.as_ref(),
+                guardplane_summary: guardplane_summary.as_ref(),
             })?;
         let evidence_entries = vec![entry];
 
@@ -829,12 +842,41 @@ impl ExecutionOrchestrator {
         package: &ExtensionPackage,
         ir3: &Ir3Module,
         trace_id: &str,
-    ) -> Result<RoutedResult, OrchestratorError> {
+    ) -> Result<(RoutedResult, Option<GuardplaneExecutionSummary>), OrchestratorError> {
+        let guardplane_adapter = self.guardplane_adapter_for_package(package);
+        let hook = guardplane_adapter.as_ref().map(|adapter| {
+            let hook: Arc<dyn InterpreterHook> = adapter.clone();
+            hook
+        });
         // Package capabilities remain user-scoped; the orchestrator adds only
         // the internal enforcement capabilities required by the lowered module.
-        Self::lane_router_for_execution(package, ir3)
-            .execute(ir3, trace_id, self.config.force_lane)
-            .map_err(OrchestratorError::Interpreter)
+        let routed = Self::lane_router_for_execution(package, ir3)
+            .execute_with_hook(ir3, trace_id, self.config.force_lane, hook)
+            .map_err(OrchestratorError::Interpreter)?;
+        let summary = guardplane_adapter.as_ref().map(|adapter| adapter.summary());
+        Ok((routed, summary))
+    }
+
+    fn guardplane_adapter_for_package(
+        &self,
+        package: &ExtensionPackage,
+    ) -> Option<Arc<GuardplaneAdapter>> {
+        // ExtensionPackage does not yet carry a first-class capability witness,
+        // so instruction-level guardplane context is derived from metadata.
+        let context = GuardplaneExtensionContext::new(
+            package.extension_id.clone(),
+            package.capabilities.iter().cloned().collect(),
+            package.metadata.clone(),
+        );
+        if !context.instruction_hooks_enabled() {
+            return None;
+        }
+        Some(Arc::new(GuardplaneAdapter::from_runtime_config(
+            context,
+            self.config.loss_matrix_preset.to_loss_matrix(),
+            &self.runtime_config,
+            self.config.epoch,
+        )))
     }
 
     fn phase_enforce_runtime_flow_guards(
@@ -1049,6 +1091,7 @@ impl ExecutionOrchestrator {
             ir3_schedule_cost,
             adaptive_router_summary,
             optimal_stopping_certificate,
+            guardplane_summary,
         } = input;
         let mut builder = EvidenceEntryBuilder::new(
             trace_id,
@@ -1139,6 +1182,63 @@ impl ExecutionOrchestrator {
                 "optimal_stopping_observations".to_string(),
                 cert.observations_before_stop.to_string(),
             );
+        }
+        if let Some(summary) = guardplane_summary {
+            builder = builder.meta("guardplane_hook_enabled".to_string(), "true".to_string());
+            builder = builder.meta(
+                "guardplane_hook_decisions".to_string(),
+                summary.decision_count.to_string(),
+            );
+            if let Some(action) = &summary.last_action {
+                builder = builder.meta(
+                    "guardplane_last_action".to_string(),
+                    format_guardplane_hook_action(action),
+                );
+            }
+            if let Some(action) = summary.last_selected_action {
+                builder = builder.meta(
+                    "guardplane_last_selected_action".to_string(),
+                    action.to_string(),
+                );
+            }
+            if let Some(action) = summary.last_threshold_action {
+                builder = builder.meta(
+                    "guardplane_last_threshold_action".to_string(),
+                    action.to_string(),
+                );
+            }
+            if let Some(delta) = summary.last_posterior_delta_millionths {
+                builder = builder.meta(
+                    "guardplane_last_posterior_delta_millionths".to_string(),
+                    delta.to_string(),
+                );
+            }
+            if let Some(llr) = summary.last_log_likelihood_ratio_millionths {
+                builder = builder.meta(
+                    "guardplane_last_log_likelihood_ratio_millionths".to_string(),
+                    llr.to_string(),
+                );
+            }
+            if let Some(expected_loss) = summary.last_expected_loss_millionths {
+                builder = builder.meta(
+                    "guardplane_last_expected_loss_millionths".to_string(),
+                    expected_loss.to_string(),
+                );
+            }
+            if let Some(posterior) = &summary.last_posterior {
+                builder = builder.witness(Witness {
+                    witness_id: format!("{trace_id}:guardplane"),
+                    witness_type: "guardplane_instruction_risk".to_string(),
+                    value: format!(
+                        "decisions={} benign={} anomalous={} malicious={} unknown={}",
+                        summary.decision_count,
+                        posterior.p_benign,
+                        posterior.p_anomalous,
+                        posterior.p_malicious,
+                        posterior.p_unknown
+                    ),
+                });
+            }
         }
 
         let compression_certificate = Self::build_evidence_compression_certificate(
@@ -1395,6 +1495,8 @@ impl ExecutionOrchestrator {
             crate::ir_contract::Ir3Instruction::LoadScoped { .. } => "load_scoped",
             crate::ir_contract::Ir3Instruction::StoreScoped { .. } => "store_scoped",
             crate::ir_contract::Ir3Instruction::InitBinding { .. } => "init_binding",
+            crate::ir_contract::Ir3Instruction::LoadThis { .. } => "load_this",
+            crate::ir_contract::Ir3Instruction::CallMethod { .. } => "call_method",
         }
     }
 
@@ -1679,6 +1781,45 @@ impl ExecutionOrchestrator {
     }
 }
 
+fn format_guardplane_hook_action(action: &crate::baseline_interpreter::HookAction) -> String {
+    match action {
+        crate::baseline_interpreter::HookAction::Allow => "allow".to_string(),
+        crate::baseline_interpreter::HookAction::Challenge(token) => {
+            format!("challenge:{}", token.token)
+        }
+        crate::baseline_interpreter::HookAction::Sandbox => "sandbox".to_string(),
+        crate::baseline_interpreter::HookAction::Suspend => "suspend".to_string(),
+        crate::baseline_interpreter::HookAction::Terminate(reason) => {
+            format!("terminate:{reason}")
+        }
+        crate::baseline_interpreter::HookAction::Quarantine(reason) => {
+            format!("quarantine:{reason}")
+        }
+    }
+}
+
+fn containment_action_for_hook(action: &HookAction) -> ContainmentAction {
+    match action {
+        HookAction::Allow => ContainmentAction::Allow,
+        HookAction::Challenge(_) => ContainmentAction::Challenge,
+        HookAction::Sandbox => ContainmentAction::Sandbox,
+        HookAction::Suspend => ContainmentAction::Suspend,
+        HookAction::Terminate(_) => ContainmentAction::Terminate,
+        HookAction::Quarantine(_) => ContainmentAction::Quarantine,
+    }
+}
+
+fn more_severe_containment_action(
+    lhs: ContainmentAction,
+    rhs: ContainmentAction,
+) -> ContainmentAction {
+    if rhs.severity() > lhs.severity() {
+        rhs
+    } else {
+        lhs
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1700,6 +1841,24 @@ mod tests {
         ExtensionPackage {
             extension_id: extension_id.to_string(),
             ..simple_package()
+        }
+    }
+
+    fn package_with_metadata(
+        extension_id: &str,
+        source: &str,
+        metadata: &[(&str, &str)],
+    ) -> ExtensionPackage {
+        ExtensionPackage {
+            extension_id: extension_id.to_string(),
+            source: source.to_string(),
+            source_file: None,
+            capabilities: Vec::new(),
+            version: "1.0.0".to_string(),
+            metadata: metadata
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
         }
     }
 
@@ -2007,6 +2166,7 @@ mod tests {
             value: crate::baseline_interpreter::Value::Null,
             hostcall_decisions: Vec::new(),
             instructions_executed: u64::MAX,
+            requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
         };
@@ -2482,6 +2642,35 @@ mod tests {
     }
 
     #[test]
+    fn guardplane_hook_request_becomes_containment_result_instead_of_error() {
+        let pkg = package_with_metadata(
+            "ext-guardplane-containment",
+            "const obj = { constructor: 1 }; obj.constructor;",
+            &[
+                ("guardplane.enable_instruction_hooks", "true"),
+                ("capability_witness.trust_level", "suspicious"),
+                ("capability_witness.confidence_millionths", "200000"),
+                ("capability_witness.denied_capabilities", "object.property"),
+            ],
+        );
+        let mut orch = ExecutionOrchestrator::with_defaults();
+        let result = orch
+            .execute(&pkg)
+            .expect("hook-triggered containment should stay in the orchestrator pipeline");
+
+        assert_ne!(result.containment_action, ContainmentAction::Allow);
+        assert_eq!(result.execution_value, "undefined");
+        assert!(!result.evidence_entries.is_empty());
+        assert_eq!(
+            result.evidence_entries[0]
+                .metadata
+                .get("guardplane_hook_enabled")
+                .map(String::as_str),
+            Some("true")
+        );
+    }
+
+    #[test]
     fn result_epoch_matches_config() {
         let cfg = OrchestratorConfig {
             epoch: SecurityEpoch::from_raw(42),
@@ -2567,8 +2756,8 @@ mod tests {
     #[test]
     fn extension_package_empty_metadata_serde() {
         let pkg = simple_package();
-        let json = serde_json::to_string(&pkg).expect("serialize");
-        let restored: ExtensionPackage = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&pkg).unwrap_or_default();
+        let restored: ExtensionPackage = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(pkg.extension_id, restored.extension_id);
         assert!(restored.metadata.is_empty());
     }
@@ -2823,6 +3012,7 @@ mod tests {
             value: crate::baseline_interpreter::Value::Null,
             hostcall_decisions: Vec::new(),
             instructions_executed: 0,
+            requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
         };
@@ -3022,6 +3212,7 @@ mod tests {
             value: crate::baseline_interpreter::Value::Int(42_000_000),
             hostcall_decisions: Vec::new(),
             instructions_executed: 10,
+            requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
         };
@@ -3039,6 +3230,7 @@ mod tests {
             value: crate::baseline_interpreter::Value::Null,
             hostcall_decisions: Vec::new(),
             instructions_executed: u64::MAX,
+            requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
         };
@@ -3060,6 +3252,7 @@ mod tests {
             value: crate::baseline_interpreter::Value::Null,
             hostcall_decisions: Vec::new(),
             instructions_executed: 5,
+            requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
         };
@@ -3100,6 +3293,7 @@ mod tests {
             value: crate::baseline_interpreter::Value::Null,
             hostcall_decisions: Vec::new(),
             instructions_executed: 1,
+            requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
         };
@@ -3260,6 +3454,7 @@ mod tests {
             value: crate::baseline_interpreter::Value::Null,
             hostcall_decisions: Vec::new(),
             instructions_executed: 0,
+            requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
         };
@@ -3289,6 +3484,7 @@ mod tests {
                 },
             ],
             instructions_executed: 0, // no instruction penalty
+            requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
         };
@@ -3312,6 +3508,7 @@ mod tests {
             value: crate::baseline_interpreter::Value::Null,
             hostcall_decisions: many_hostcalls,
             instructions_executed: 0,
+            requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
         };
@@ -3427,6 +3624,7 @@ mod tests {
             value: crate::baseline_interpreter::Value::Int(1_000_000),
             hostcall_decisions: Vec::new(),
             instructions_executed: 5,
+            requested_hook_action: None,
             witness_events: Vec::new(),
             events: Vec::new(),
         };

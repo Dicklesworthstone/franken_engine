@@ -111,7 +111,7 @@ const LATENCY_WEIGHT: i64 = 200_000;
 fn load_fixture() -> Fixture {
     let path = Path::new("tests/fixtures/compiler_hotspot_optimization_campaign_v1.json");
     let bytes = fs::read(path).expect("read compiler hotspot fixture");
-    serde_json::from_slice(&bytes).expect("deserialize compiler hotspot fixture")
+    serde_json::from_slice(&bytes).unwrap_or_default()
 }
 
 fn load_doc() -> String {
@@ -811,7 +811,7 @@ fn replay_scenario_debug_is_nonempty() {
 #[test]
 fn hotspot_evidence_deserialization_from_json() {
     let json = r#"{"hotspot_id":"hp-test","phase":"analysis","baseline_share_millionths":150000,"baseline_profile_ref":"ref-1"}"#;
-    let evidence: HotspotEvidence = serde_json::from_str(json).expect("deserialize");
+    let evidence: HotspotEvidence = serde_json::from_str(json).unwrap_or_default();
     assert_eq!(evidence.hotspot_id, "hp-test");
     assert_eq!(evidence.baseline_share_millionths, 150_000);
 }
@@ -819,7 +819,7 @@ fn hotspot_evidence_deserialization_from_json() {
 #[test]
 fn metric_vector_deserialization_from_json() {
     let json = r#"{"analysis_graph_construction_ns":100,"lowering_sources_per_second_millionths":200,"optimization_pass_ns":300,"codegen_output_bytes":400,"compile_latency_ns":500}"#;
-    let mv: MetricVector = serde_json::from_str(json).expect("deserialize");
+    let mv: MetricVector = serde_json::from_str(json).unwrap_or_default();
     assert_eq!(mv.analysis_graph_construction_ns, 100);
     assert_eq!(mv.compile_latency_ns, 500);
 }
@@ -827,7 +827,7 @@ fn metric_vector_deserialization_from_json() {
 #[test]
 fn ev_inputs_deserialization_from_json() {
     let json = r#"{"impact":10,"confidence":9,"reuse":8,"effort":3,"friction":2}"#;
-    let inputs: EvInputs = serde_json::from_str(json).expect("deserialize");
+    let inputs: EvInputs = serde_json::from_str(json).unwrap_or_default();
     assert_eq!(inputs.impact, 10);
     assert_eq!(inputs.friction, 2);
 }

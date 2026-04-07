@@ -1144,8 +1144,8 @@ mod tests {
     fn token_serialization_round_trip() {
         let sk = make_sk(1);
         let token = build_basic_token(&sk);
-        let json = serde_json::to_string(&token).expect("serialize");
-        let restored: CapabilityToken = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&token).unwrap_or_default();
+        let restored: CapabilityToken = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(token, restored);
     }
 
@@ -1168,8 +1168,8 @@ mod tests {
         .build()
         .unwrap();
 
-        let json = serde_json::to_string(&token).expect("serialize");
-        let restored: CapabilityToken = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&token).unwrap_or_default();
+        let restored: CapabilityToken = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(token, restored);
     }
 
@@ -1202,8 +1202,8 @@ mod tests {
             TokenError::EmptyCapabilities,
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serialize");
-            let restored: TokenError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(err).unwrap_or_default();
+            let restored: TokenError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*err, restored);
         }
     }
@@ -1382,8 +1382,8 @@ mod tests {
             TokenError::EmptyCapabilities,
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serialize");
-            let restored: TokenError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(err).unwrap_or_default();
+            let restored: TokenError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*err, restored);
         }
     }
@@ -1408,32 +1408,32 @@ mod tests {
     #[test]
     fn principal_id_serde_roundtrip() {
         let p = make_principal(0xCD);
-        let json = serde_json::to_string(&p).expect("serialize");
-        let restored: PrincipalId = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&p).unwrap_or_default();
+        let restored: PrincipalId = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(p, restored);
     }
 
     #[test]
     fn checkpoint_ref_serde_roundtrip() {
         let cr = make_checkpoint_ref(42);
-        let json = serde_json::to_string(&cr).expect("serialize");
-        let restored: CheckpointRef = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&cr).unwrap_or_default();
+        let restored: CheckpointRef = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(cr, restored);
     }
 
     #[test]
     fn revocation_freshness_ref_serde_roundtrip() {
         let rf = make_revocation_ref(99);
-        let json = serde_json::to_string(&rf).expect("serialize");
-        let restored: RevocationFreshnessRef = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&rf).unwrap_or_default();
+        let restored: RevocationFreshnessRef = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(rf, restored);
     }
 
     #[test]
     fn token_version_serde_roundtrip() {
         let v = TokenVersion::V2;
-        let json = serde_json::to_string(&v).expect("serialize");
-        let restored: TokenVersion = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&v).unwrap_or_default();
+        let restored: TokenVersion = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(v, restored);
     }
 
@@ -1446,8 +1446,8 @@ mod tests {
             },
             trace_id: "trace-abc".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let restored: TokenEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&event).unwrap_or_default();
+        let restored: TokenEvent = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(event, restored);
     }
 

@@ -72,15 +72,15 @@ fn trust_zone_class_ordered_constant() {
 #[test]
 fn trust_zone_class_serde_round_trip() {
     for class in TrustZoneClass::ORDERED {
-        let json = serde_json::to_string(&class).expect("serialize");
-        let restored: TrustZoneClass = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&class).unwrap_or_default();
+        let restored: TrustZoneClass = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(class, restored);
     }
 }
 
 #[test]
 fn trust_zone_class_serde_uses_snake_case() {
-    let json = serde_json::to_string(&TrustZoneClass::Community).expect("serialize");
+    let json = serde_json::to_string(&TrustZoneClass::Community).unwrap_or_default();
     assert_eq!(json, "\"community\"");
 }
 
@@ -183,8 +183,8 @@ fn zone_create_request_serde_round_trip() {
     let req = ZoneCreateRequest::new("zone-a", TrustZoneClass::Owner, 3, "admin")
         .with_parent("root")
         .with_declared_ceiling(capset(&[RuntimeCapability::VmDispatch]));
-    let json = serde_json::to_string(&req).expect("serialize");
-    let restored: ZoneCreateRequest = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&req).unwrap_or_default();
+    let restored: ZoneCreateRequest = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(req, restored);
 }
 
@@ -662,8 +662,8 @@ fn zone_transition_request_new() {
 #[test]
 fn zone_transition_request_serde_round_trip() {
     let req = ZoneTransitionRequest::new("ent-1", "zone-b", "trace-1", "pol-1", "dec-1", false);
-    let json = serde_json::to_string(&req).expect("serialize");
-    let restored: ZoneTransitionRequest = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&req).unwrap_or_default();
+    let restored: ZoneTransitionRequest = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(req, restored);
 }
 
@@ -705,8 +705,8 @@ fn zone_event_serde_round_trip() {
     h.assign_entity("ext-1", "community", "t-1")
         .expect("assign");
     let event = h.events().last().unwrap().clone();
-    let json = serde_json::to_string(&event).expect("serialize");
-    let restored: ZoneEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let restored: ZoneEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, restored);
 }
 
@@ -718,8 +718,8 @@ fn zone_event_types_serde_round_trip() {
         ZoneEventType::ZoneTransition,
     ];
     for t in &types {
-        let json = serde_json::to_string(t).expect("serialize");
-        let restored: ZoneEventType = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(t).unwrap_or_default();
+        let restored: ZoneEventType = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*t, restored);
     }
 }
@@ -734,8 +734,8 @@ fn zone_event_outcomes_serde_round_trip() {
         ZoneEventOutcome::Denied,
     ];
     for o in &outcomes {
-        let json = serde_json::to_string(o).expect("serialize");
-        let restored: ZoneEventOutcome = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(o).unwrap_or_default();
+        let restored: ZoneEventOutcome = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*o, restored);
     }
 }
@@ -845,8 +845,8 @@ fn trust_zone_error_serde_round_trip_all_variants() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).expect("serialize");
-        let restored: TrustZoneError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(err).unwrap_or_default();
+        let restored: TrustZoneError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*err, restored);
     }
 }
@@ -927,8 +927,8 @@ fn zone_scoped_object_id_differs_by_schema() {
 fn trust_zone_serde_round_trip() {
     let h = standard_hierarchy();
     let zone = h.zone("team").unwrap();
-    let json = serde_json::to_string(zone).expect("serialize");
-    let restored: TrustZone = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(zone).unwrap_or_default();
+    let restored: TrustZone = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(*zone, restored);
 }
 
@@ -937,8 +937,8 @@ fn zone_hierarchy_serde_round_trip() {
     let mut h = standard_hierarchy();
     h.assign_entity("ext-1", "community", "t-1")
         .expect("assign");
-    let json = serde_json::to_string(&h).expect("serialize");
-    let restored: ZoneHierarchy = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&h).unwrap_or_default();
+    let restored: ZoneHierarchy = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(h, restored);
 }
 

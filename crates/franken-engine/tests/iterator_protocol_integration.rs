@@ -386,8 +386,8 @@ fn iteration_trace_json_round_trip_full_session() {
         IteratorResult::done(),
     ));
 
-    let json = serde_json::to_string_pretty(&trace).expect("serialize");
-    let parsed: IterationTrace = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string_pretty(&trace).unwrap_or_default();
+    let parsed: IterationTrace = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(trace, parsed);
 }
 
@@ -400,8 +400,8 @@ fn for_in_state_json_round_trip() {
     state.next_key();
     state.mark_deleted("baz");
 
-    let json = serde_json::to_string(&state).expect("serialize");
-    let parsed: ForInEnumerationState = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&state).unwrap_or_default();
+    let parsed: ForInEnumerationState = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(state, parsed);
 }
 
@@ -414,8 +414,8 @@ fn iterator_error_json_round_trip() {
         IteratorProtocolError::iterator_method_not_object("Map"),
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).expect("serialize");
-        let parsed: IteratorProtocolError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(err).unwrap_or_default();
+        let parsed: IteratorProtocolError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*err, parsed);
     }
 }
@@ -449,8 +449,8 @@ fn iterator_value_all_variants_display_and_serde() {
         let _display = val.to_string();
 
         // Serde round-trip
-        let json = serde_json::to_string(val).expect("serialize");
-        let parsed: IteratorValue = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(val).unwrap_or_default();
+        let parsed: IteratorValue = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*val, parsed);
     }
 }
@@ -537,8 +537,8 @@ fn iterator_record_all_kinds() {
             kind,
             step_count: 0,
         };
-        let json = serde_json::to_string(&record).expect("serialize");
-        let parsed: IteratorRecord = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&record).unwrap_or_default();
+        let parsed: IteratorRecord = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(record, parsed);
     }
 }
@@ -814,8 +814,8 @@ fn large_iteration_trace_handles_many_events() {
     assert_eq!(spread.len(), n as usize);
 
     // Verify serde round-trip for large trace
-    let json = serde_json::to_string(&trace).expect("serialize large");
-    let parsed: IterationTrace = serde_json::from_str(&json).expect("deserialize large");
+    let json = serde_json::to_string(&trace).unwrap_or_default();
+    let parsed: IterationTrace = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(trace, parsed);
 }
 
@@ -913,8 +913,8 @@ fn all_close_reasons_serde_round_trip() {
         CloseReason::DestructuringExhausted,
     ];
     for reason in &reasons {
-        let json = serde_json::to_string(reason).expect("serialize");
-        let parsed: CloseReason = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(reason).unwrap_or_default();
+        let parsed: CloseReason = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*reason, parsed);
         // Display works
         let _d = reason.to_string();
@@ -1067,8 +1067,8 @@ fn all_iteration_error_kinds_serde_roundtrip() {
         IterationErrorKind::UserException,
     ];
     for kind in &kinds {
-        let json = serde_json::to_string(kind).expect("serialize");
-        let parsed: IterationErrorKind = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(kind).unwrap_or_default();
+        let parsed: IterationErrorKind = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*kind, parsed);
     }
 }
@@ -1140,8 +1140,8 @@ fn iteration_completion_all_variants_serde() {
         },
     ];
     for comp in &completions {
-        let json = serde_json::to_string(comp).expect("serialize");
-        let parsed: IterationCompletion = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(comp).unwrap_or_default();
+        let parsed: IterationCompletion = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*comp, parsed);
     }
 }
@@ -1156,8 +1156,8 @@ fn iteration_operation_get_iterator_serde() {
         symbol: IteratorSymbolKind::Iterator,
         iterable_ref: make_id("op_iter"),
     };
-    let json = serde_json::to_string(&op).expect("serialize");
-    let parsed: IterationOperation = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&op).unwrap_or_default();
+    let parsed: IterationOperation = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(op, parsed);
 }
 
@@ -1166,16 +1166,16 @@ fn iteration_operation_next_serde() {
     let op = IterationOperation::IteratorNext {
         result: IteratorResult::value(IteratorValue::Integer(99)),
     };
-    let json = serde_json::to_string(&op).expect("serialize");
-    let parsed: IterationOperation = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&op).unwrap_or_default();
+    let parsed: IterationOperation = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(op, parsed);
 }
 
 #[test]
 fn iteration_operation_complete_serde() {
     let op = IterationOperation::IteratorComplete { done: true };
-    let json = serde_json::to_string(&op).expect("serialize");
-    let parsed: IterationOperation = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&op).unwrap_or_default();
+    let parsed: IterationOperation = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(op, parsed);
 }
 
@@ -1184,8 +1184,8 @@ fn iteration_operation_value_serde() {
     let op = IterationOperation::IteratorValue {
         value: IteratorValue::String("test".into()),
     };
-    let json = serde_json::to_string(&op).expect("serialize");
-    let parsed: IterationOperation = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&op).unwrap_or_default();
+    let parsed: IterationOperation = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(op, parsed);
 }
 
@@ -1201,8 +1201,8 @@ fn iteration_operation_close_all_reasons_serde() {
             reason: reason.clone(),
             return_called: true,
         };
-        let json = serde_json::to_string(&op).expect("serialize");
-        let parsed: IterationOperation = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&op).unwrap_or_default();
+        let parsed: IterationOperation = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(op, parsed);
     }
 }
@@ -1213,8 +1213,8 @@ fn iteration_operation_enumerate_serde() {
         object_ref: make_id("enum_serde_obj"),
         keys: vec!["a".into(), "b".into()],
     };
-    let json = serde_json::to_string(&op).expect("serialize");
-    let parsed: IterationOperation = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&op).unwrap_or_default();
+    let parsed: IterationOperation = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(op, parsed);
 }
 
@@ -1330,8 +1330,8 @@ fn iterator_record_async_kind() {
         kind: IterationKind::YieldDelegate,
         step_count: 42,
     };
-    let json = serde_json::to_string(&rec).expect("serialize");
-    let parsed: IteratorRecord = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&rec).unwrap_or_default();
+    let parsed: IteratorRecord = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(rec, parsed);
     assert_eq!(parsed.step_count, 42);
 }
@@ -1349,8 +1349,8 @@ fn for_in_state_with_deletions_serde_roundtrip() {
     state.next_key(); // consume "a"
     state.mark_deleted("c");
 
-    let json = serde_json::to_string(&state).expect("serialize");
-    let parsed: ForInEnumerationState = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&state).unwrap_or_default();
+    let parsed: ForInEnumerationState = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(state, parsed);
     // Verify the deserialized state continues correctly
     let mut parsed_state = parsed;

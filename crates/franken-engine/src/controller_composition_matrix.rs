@@ -456,7 +456,7 @@ fn metadata_gaps_for_controller(contract: &ControllerContract) -> Vec<Controller
 }
 
 fn registry_id_from_contracts(controllers: &[ControllerContract]) -> String {
-    let json = serde_json::to_vec(controllers).expect("serialization failed");
+    let json = serde_json::to_vec(controllers).unwrap_or_default();
     format!("registry-{}", to_hex(&hash_bytes(&json)[..12]))
 }
 
@@ -623,7 +623,7 @@ fn coupling_score_millionths(
 }
 
 fn graph_id_from_edges(controller_names: &[String], edges: &[ControllerInteractionEdge]) -> String {
-    let json = serde_json::to_vec(&(controller_names, edges)).expect("serialization failed");
+    let json = serde_json::to_vec(&(controller_names, edges)).unwrap_or_default();
     format!("graph-{}", to_hex(&hash_bytes(&json)[..12]))
 }
 

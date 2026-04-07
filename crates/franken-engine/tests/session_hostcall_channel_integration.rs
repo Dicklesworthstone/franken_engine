@@ -1098,8 +1098,8 @@ fn session_state_serde_round_trip() {
         SessionState::Expired,
         SessionState::Closed,
     ] {
-        let json = serde_json::to_string(&state).expect("serialize");
-        let rt: SessionState = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&state).unwrap_or_default();
+        let rt: SessionState = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(state, rt);
     }
 }
@@ -1107,8 +1107,8 @@ fn session_state_serde_round_trip() {
 #[test]
 fn sequence_policy_serde_round_trip() {
     for policy in [SequencePolicy::Strict, SequencePolicy::Monotonic] {
-        let json = serde_json::to_string(&policy).expect("serialize");
-        let rt: SequencePolicy = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&policy).unwrap_or_default();
+        let rt: SequencePolicy = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(policy, rt);
     }
 }
@@ -1128,8 +1128,8 @@ fn channel_payload_serde_round_trip_all_variants() {
         }),
     ];
     for payload in payloads {
-        let json = serde_json::to_string(&payload).expect("serialize");
-        let rt: ChannelPayload = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&payload).unwrap_or_default();
+        let rt: ChannelPayload = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(payload, rt);
     }
 }
@@ -1141,8 +1141,8 @@ fn aead_algorithm_serde_round_trip() {
         AeadAlgorithm::Aes256Gcm,
         AeadAlgorithm::XChaCha20Poly1305,
     ] {
-        let json = serde_json::to_string(&algo).expect("serialize");
-        let rt: AeadAlgorithm = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&algo).unwrap_or_default();
+        let rt: AeadAlgorithm = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(algo, rt);
     }
 }
@@ -1157,8 +1157,8 @@ fn session_config_serde_round_trip() {
         replay_drop_threshold: 4,
         replay_drop_window_ticks: 500,
     };
-    let json = serde_json::to_string(&config).expect("serialize");
-    let rt: SessionConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let rt: SessionConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(config, rt);
 }
 

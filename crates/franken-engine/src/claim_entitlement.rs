@@ -950,6 +950,20 @@ pub fn lattice_has_cycle(lattice: &SideConstraintLattice) -> bool {
 mod tests {
     use super::*;
 
+    fn from_json<T>(json: &str) -> T
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        serde_json::from_str(json).expect("deserialize claim entitlement test json")
+    }
+
+    fn to_json<T>(value: &T) -> String
+    where
+        T: serde::Serialize,
+    {
+        serde_json::to_string(value).expect("serialize claim entitlement test json")
+    }
+
     fn minimal_contract() -> ClaimEntitlementContract {
         ClaimEntitlementContract {
             schema_version: CLAIM_ENTITLEMENT_SCHEMA_VERSION.to_string(),
@@ -1587,8 +1601,8 @@ mod tests {
             ClaimDomain::Ga,
             ClaimDomain::SupportSurface,
         ] {
-            let json = serde_json::to_string(&domain).expect("serialize");
-            let restored: ClaimDomain = serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(&domain);
+            let restored: ClaimDomain = from_json(&json);
             assert_eq!(restored, domain);
         }
     }
@@ -1601,8 +1615,8 @@ mod tests {
             ClaimTier::FrontierAmbition,
             ClaimTier::UnsupportedSurface,
         ] {
-            let json = serde_json::to_string(&tier).expect("serialize");
-            let restored: ClaimTier = serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(&tier);
+            let restored: ClaimTier = from_json(&json);
             assert_eq!(restored, tier);
         }
     }
@@ -1614,8 +1628,8 @@ mod tests {
             MorphismEffect::Constrains,
             MorphismEffect::Disqualifies,
         ] {
-            let json = serde_json::to_string(&effect).expect("serialize");
-            let restored: MorphismEffect = serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(&effect);
+            let restored: MorphismEffect = from_json(&json);
             assert_eq!(restored, effect);
         }
     }
@@ -1628,8 +1642,8 @@ mod tests {
             DisqualifierVerdict::DowngradeToTarget,
             DisqualifierVerdict::RequireOperatorGuidance,
         ] {
-            let json = serde_json::to_string(&verdict).expect("serialize");
-            let restored: DisqualifierVerdict = serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(&verdict);
+            let restored: DisqualifierVerdict = from_json(&json);
             assert_eq!(restored, verdict);
         }
     }
@@ -1637,8 +1651,8 @@ mod tests {
     #[test]
     fn evidence_state_serde_round_trip() {
         for state in [EvidenceState::Fresh, EvidenceState::Stale] {
-            let json = serde_json::to_string(&state).expect("serialize");
-            let restored: EvidenceState = serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(&state);
+            let restored: EvidenceState = from_json(&json);
             assert_eq!(restored, state);
         }
     }
@@ -1651,8 +1665,8 @@ mod tests {
             ClaimVerdictState::BlockedByMissingEvidence,
             ClaimVerdictState::CurrentlyFalseUnderActiveCounterexample,
         ] {
-            let json = serde_json::to_string(&state).expect("serialize");
-            let restored: ClaimVerdictState = serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(&state);
+            let restored: ClaimVerdictState = from_json(&json);
             assert_eq!(restored, state);
         }
     }
@@ -1660,8 +1674,8 @@ mod tests {
     #[test]
     fn contract_serde_round_trip() {
         let contract = minimal_contract();
-        let json = serde_json::to_string(&contract).expect("serialize");
-        let restored: ClaimEntitlementContract = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&contract);
+        let restored: ClaimEntitlementContract = from_json(&json);
         assert_eq!(restored, contract);
     }
 
@@ -1672,8 +1686,8 @@ mod tests {
         let outputs = contract
             .evaluate_scenarios(&scenarios)
             .expect("should succeed");
-        let json = serde_json::to_string(&outputs).expect("serialize");
-        let restored: ClaimEvaluationOutputs = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&outputs);
+        let restored: ClaimEvaluationOutputs = from_json(&json);
         assert_eq!(restored, outputs);
     }
 
@@ -2497,9 +2511,8 @@ mod tests {
     #[test]
     fn scenario_set_serde_round_trip() {
         let scenarios = minimal_scenario_set();
-        let json = serde_json::to_string(&scenarios).expect("serialize");
-        let restored: ClaimEvaluationScenarioSet =
-            serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&scenarios);
+        let restored: ClaimEvaluationScenarioSet = from_json(&json);
         assert_eq!(restored, scenarios);
     }
 

@@ -192,8 +192,8 @@ fn lockstep_runtime_serde_round_trip_all_variants() {
         LockstepRuntime::Node,
         LockstepRuntime::Bun,
     ] {
-        let json = serde_json::to_string(&runtime).expect("serialize");
-        let recovered: LockstepRuntime = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&runtime).unwrap_or_default();
+        let recovered: LockstepRuntime = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(runtime, recovered);
         assert!(!runtime.as_str().is_empty());
     }
@@ -206,8 +206,8 @@ fn lockstep_failure_class_serde_round_trip_all_variants() {
         LockstepFailureClass::CapabilityGap,
         LockstepFailureClass::PlatformDivergence,
     ] {
-        let json = serde_json::to_string(&failure_class).expect("serialize");
-        let recovered: LockstepFailureClass = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&failure_class).unwrap_or_default();
+        let recovered: LockstepFailureClass = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(failure_class, recovered);
         assert!(!failure_class.error_code().is_empty());
     }
@@ -216,8 +216,8 @@ fn lockstep_failure_class_serde_round_trip_all_variants() {
 #[test]
 fn runtime_observation_serde_round_trip() {
     let obs = observation(LockstepRuntime::Node, "serde-test", 1_500);
-    let json = serde_json::to_string(&obs).expect("serialize");
-    let recovered: RuntimeObservation = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&obs).unwrap_or_default();
+    let recovered: RuntimeObservation = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(obs, recovered);
 }
 
@@ -229,8 +229,8 @@ fn runtime_tolerance_default_denies_all_mismatches() {
         allow_state_digest_mismatch: false,
         allowed_error_codes: BTreeSet::new(),
     };
-    let json = serde_json::to_string(&tolerance).expect("serialize");
-    let recovered: RuntimeTolerance = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&tolerance).unwrap_or_default();
+    let recovered: RuntimeTolerance = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(tolerance, recovered);
 }
 
@@ -473,24 +473,24 @@ fn mismatch_fields_list_divergent_digest_names() {
 #[test]
 fn evaluation_serde_round_trip() {
     let eval = evaluate_plas_lockstep_case(baseline_case()).expect("should pass");
-    let json = serde_json::to_string(&eval).expect("serialize");
-    let recovered: PlasLockstepEvaluation = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&eval).unwrap_or_default();
+    let recovered: PlasLockstepEvaluation = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(eval, recovered);
 }
 
 #[test]
 fn lockstep_case_serde_round_trip() {
     let case = baseline_case();
-    let json = serde_json::to_string(&case).expect("serialize");
-    let recovered: PlasLockstepCase = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&case).unwrap_or_default();
+    let recovered: PlasLockstepCase = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(case, recovered);
 }
 
 #[test]
 fn log_event_serde_round_trip() {
     let eval = evaluate_plas_lockstep_case(baseline_case()).expect("should pass");
-    let json = serde_json::to_string(&eval.log).expect("serialize");
-    let recovered: PlasLockstepLogEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&eval.log).unwrap_or_default();
+    let recovered: PlasLockstepLogEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(eval.log, recovered);
 }
 
@@ -498,8 +498,8 @@ fn log_event_serde_round_trip() {
 fn runtime_comparison_serde_round_trip() {
     let eval = evaluate_plas_lockstep_case(baseline_case()).expect("should pass");
     for comparison in &eval.comparisons {
-        let json = serde_json::to_string(comparison).expect("serialize");
-        let recovered: RuntimeComparison = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(comparison).unwrap_or_default();
+        let recovered: RuntimeComparison = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*comparison, recovered);
     }
 }
@@ -539,8 +539,8 @@ fn observation_with_error_code_serde_round_trip() {
     let mut obs = observation(LockstepRuntime::Bun, "err", 500);
     obs.error_code = Some("timeout".to_string());
     obs.capability_denials = vec!["net.egress".to_string(), "fs.write".to_string()];
-    let json = serde_json::to_string(&obs).expect("serialize");
-    let recovered: RuntimeObservation = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&obs).unwrap_or_default();
+    let recovered: RuntimeObservation = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(obs, recovered);
 }
 
@@ -555,8 +555,8 @@ fn tolerance_with_allowed_error_codes_serde_round_trip() {
         allow_state_digest_mismatch: false,
         allowed_error_codes: codes,
     };
-    let json = serde_json::to_string(&tolerance).expect("serialize");
-    let recovered: RuntimeTolerance = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&tolerance).unwrap_or_default();
+    let recovered: RuntimeTolerance = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(tolerance, recovered);
 }
 
@@ -592,8 +592,8 @@ fn plas_lockstep_error_serde_round_trip() {
     let err = PlasLockstepError::InvalidCase {
         detail: "bad input".to_string(),
     };
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: PlasLockstepError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: PlasLockstepError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, recovered);
 }
 

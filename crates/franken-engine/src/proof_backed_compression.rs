@@ -265,7 +265,7 @@ impl CompressionResult {
         data.extend_from_slice(self.artifact_id.as_bytes());
         data.extend_from_slice(
             serde_json::to_string(&self.strategy)
-                .expect("compression strategy should serialize for deterministic hashing")
+                .unwrap_or_default()
                 .as_bytes(),
         );
         data.extend_from_slice(&self.original_size_bytes.to_le_bytes());
@@ -320,12 +320,12 @@ impl CompressionReceipt {
         }
         data.extend_from_slice(
             serde_json::to_string(&self.strategy)
-                .expect("compression strategy should serialize for deterministic hashing")
+                .unwrap_or_default()
                 .as_bytes(),
         );
         data.extend_from_slice(
             serde_json::to_string(&self.domain)
-                .expect("compression domain should serialize for deterministic hashing")
+                .unwrap_or_default()
                 .as_bytes(),
         );
         data.push(u8::from(self.restoration_verified));

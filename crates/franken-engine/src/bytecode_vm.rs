@@ -796,7 +796,7 @@ impl BytecodeVm {
         };
 
         let payload = serde_json::to_vec(&envelope)
-            .expect("vm state envelope should serialize for deterministic hashing");
+            .expect("VM hash envelope should serialize for deterministic hashing");
         let digest = Sha256::digest(payload);
         hex::encode(digest)
     }

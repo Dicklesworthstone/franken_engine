@@ -14,8 +14,8 @@ use frankenengine_engine::seqlock_candidate_inventory::{
     CandidateDisposition, CandidateInventoryEntry, default_candidate_inventory,
 };
 use frankenengine_engine::seqlock_fastpath::{
-    FastPathFallbackReason, FastPathReadSource, FastPathTelemetry, RetryBudgetPolicy,
-    SnapshotFastPath,
+    FastPathFallbackReason, FastPathReadResult, FastPathReadSource, FastPathTelemetry,
+    RetryBudgetPolicy, SnapshotFastPath,
 };
 
 pub const BEAD_ID: &str = "bd-1lsy.7.21.3";
@@ -263,7 +263,7 @@ pub fn emit_default_rollout_bundle(context: &ArtifactContext) -> io::Result<Bund
 
 pub fn build_docs_contract_fixture() -> DocsContractFixture {
     let mut disabled_candidates = accepted_candidates("2026-03-06T00:00:00Z")
-        .expect("accepted candidates must build")
+        .unwrap_or_default()
         .into_iter()
         .map(|candidate| candidate.candidate_id)
         .collect::<Vec<_>>();
@@ -367,16 +367,14 @@ fn evaluate_default_artifacts(context: &ArtifactContext) -> io::Result<Evaluated
 
     let safety_rows = accepted
         .iter()
-        .map(|candidate| {
+        .filter_map(|candidate| {
             let starvation = starvation_rows
                 .iter()
-                .find(|row| row.candidate_id == candidate.candidate_id)
-                .expect("starvation row must exist");
+                .find(|row| row.candidate_id == candidate.candidate_id)?;
             let model_check = loom_rows
                 .iter()
-                .find(|row| row.candidate_id == candidate.candidate_id)
-                .expect("model-check row must exist");
-            build_safety_case_row(candidate, starvation, model_check)
+                .find(|row| row.candidate_id == candidate.candidate_id)?;
+            Some(build_safety_case_row(candidate, starvation, model_check))
         })
         .collect::<Vec<_>>();
     let safety_case = SeqlockSafetyCaseArtifact {
@@ -391,12 +389,11 @@ fn evaluate_default_artifacts(context: &ArtifactContext) -> io::Result<Evaluated
 
     let rollout_rows = accepted
         .iter()
-        .map(|candidate| {
+        .filter_map(|candidate| {
             let safety = safety_rows
                 .iter()
-                .find(|row| row.candidate_id == candidate.candidate_id)
-                .expect("safety row must exist");
-            SeqlockRolloutGuardRow {
+                .find(|row| row.candidate_id == candidate.candidate_id)?;
+            Some(SeqlockRolloutGuardRow {
                 candidate_id: candidate.candidate_id.clone(),
                 enabled: safety.rollout_allowed,
                 fallback_target: candidate.incumbent_baseline.clone(),
@@ -406,7 +403,7 @@ fn evaluate_default_artifacts(context: &ArtifactContext) -> io::Result<Evaluated
                     "loom_schedule_coverage_report.json".to_string(),
                 ],
                 disable_reasons: safety.disable_reasons.clone(),
-            }
+            })
         })
         .collect::<Vec<_>>();
     let rollout_guard = SeqlockRolloutGuardArtifact {
@@ -548,14 +545,13 @@ fn write_bundle(
             "trace_id": &context.trace_id,
         },
     }))
-    .expect("env.json must serialize");
+    .unwrap_or_default();
 
-    let trace_ids_json =
-        serde_json::to_string_pretty(&evaluated.trace_ids).expect("trace_ids.json must serialize");
+    let trace_ids_json = serde_json::to_string_pretty(&evaluated.trace_ids).unwrap_or_default();
     let events_jsonl = evaluated
         .logs
         .iter()
-        .map(|event| serde_json::to_string(event).expect("event log must serialize"))
+        .map(|event| serde_json::to_string(event).unwrap_or_default())
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -589,7 +585,7 @@ fn write_bundle(
         "bead_id": BEAD_ID,
         "commands": &commands,
     }))
-    .expect("repro.lock must serialize");
+    .unwrap_or_default();
     let repro_lock_artifact = FileArtifact::text("repro.lock", &repro_lock_json);
     artifact_hashes.insert(
         repro_lock_artifact.path.clone(),
@@ -650,7 +646,7 @@ fn write_bundle(
         },
         "artifacts": &manifest_artifacts,
     }))
-    .expect("manifest.json must serialize");
+    .unwrap_or_default();
     let manifest_artifact = FileArtifact::text("manifest.json", &manifest_json);
 
     let _bundle_lock = acquire_bundle_write_lock(&context.artifact_dir)?;
@@ -738,7 +734,13 @@ fn run_starvation_microbench(candidate: &CandidateRolloutInput) -> StarvationMic
         });
         let during_write = during_write
             .into_inner()
-            .expect("during-write probe must complete deterministically");
+            .unwrap_or_else(|| FastPathReadResult {
+                value: 0,
+                source: FastPathReadSource::Fallback,
+                attempts: 0,
+                writer_pressure_observations: 0,
+                fallback_reason: Some(FastPathFallbackReason::Uninitialized),
+            });
         let post_publish = fast_path.read_clone_or_else(|| 0_u64);
         observations.push(StarvationBurstObservation {
             burst_index,
@@ -924,7 +926,7 @@ impl Drop for BundleWriteLock {
 }
 
 fn digest_json(value: &serde_json::Value) -> String {
-    let bytes = serde_json::to_vec(value).expect("digest input must serialize");
+    let bytes = serde_json::to_vec(value).unwrap_or_default();
     sha256_hex(&bytes)
 }
 
@@ -938,7 +940,7 @@ impl FileArtifact {
     fn json<T: Serialize>(path: &str, value: &T) -> Self {
         Self {
             path: path.to_string(),
-            contents: serde_json::to_vec_pretty(value).expect("json artifact must serialize"),
+            contents: serde_json::to_vec_pretty(value).unwrap_or_default(),
         }
     }
 

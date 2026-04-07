@@ -145,9 +145,7 @@ label_sha256 = "{malicious_hash}"
     ];
     let mut observations_text = String::new();
     for observation in observations {
-        observations_text.push_str(
-            &serde_json::to_string(&observation).expect("serialize security observation"),
-        );
+        observations_text.push_str(&serde_json::to_string(&observation).unwrap_or_default());
         observations_text.push('\n');
     }
     write_file(&observations_jsonl, &observations_text);

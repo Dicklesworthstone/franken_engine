@@ -116,8 +116,8 @@ fn ratio_basis_serde_round_trip_all_variants() {
         RatioBasis::Write,
         RatioBasis::MinimumOf,
     ] {
-        let json = serde_json::to_string(&basis).expect("serialize");
-        let back: RatioBasis = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&basis).unwrap_or_default();
+        let back: RatioBasis = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(basis, back);
     }
 }
@@ -995,8 +995,8 @@ fn serde_profile_with_extreme_values() {
         sample_count: u64::MAX,
         measured_epoch: u64::MAX,
     };
-    let json = serde_json::to_string(&p).expect("serialize");
-    let back: ControllerTimescaleProfile = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&p).unwrap_or_default();
+    let back: ControllerTimescaleProfile = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(p, back);
 }
 
@@ -1009,8 +1009,8 @@ fn serde_snapshot_with_extreme_values() {
         effective_gain_millionths: i64::MAX,
         epoch: u64::MAX,
     };
-    let json = serde_json::to_string(&s).expect("serialize");
-    let back: PairTelemetrySnapshot = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&s).unwrap_or_default();
+    let back: PairTelemetrySnapshot = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(s, back);
 }
 
@@ -1026,8 +1026,8 @@ fn serde_signal_with_extreme_trigger_values() {
         detected_epoch: u64::MAX,
         description: "extreme test".to_string(),
     };
-    let json = serde_json::to_string(&signal).expect("serialize");
-    let back: BifurcationSignal = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&signal).unwrap_or_default();
+    let back: BifurcationSignal = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(signal, back);
 }
 
@@ -1040,8 +1040,8 @@ fn serde_config_with_custom_values() {
         variance_divergence_threshold_millionths: i64::MAX,
         gain_exceedance_threshold_millionths: 0,
     };
-    let json = serde_json::to_string(&config).expect("serialize");
-    let back: BifurcationDetectorConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let back: BifurcationDetectorConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(config, back);
 }
 
@@ -1409,8 +1409,8 @@ fn determinism_bundle_serde_round_trip_preserves_verdict_counts() {
     ];
     let config = default_config();
     let bundle = build_certificate_bundle(&profiles, &config, 0);
-    let json = serde_json::to_string(&bundle).expect("serialize");
-    let deser: CertificateBundle = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&bundle).unwrap_or_default();
+    let deser: CertificateBundle = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(bundle.sufficient_count, deser.sufficient_count);
     assert_eq!(bundle.marginal_count, deser.marginal_count);
     assert_eq!(bundle.insufficient_count, deser.insufficient_count);

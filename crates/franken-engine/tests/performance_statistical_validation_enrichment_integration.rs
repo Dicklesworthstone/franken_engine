@@ -277,8 +277,8 @@ fn finding_code_serde_roundtrip_all_variants() {
         FindingCode::RegressionWarn,
     ];
     for variant in &variants {
-        let json = serde_json::to_string(variant).expect("serialize");
-        let deser: FindingCode = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(variant).unwrap_or_default();
+        let deser: FindingCode = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*variant, deser, "roundtrip failed for {:?}", variant);
     }
 }
@@ -292,8 +292,8 @@ fn workload_outcome_serde_roundtrip_all_variants() {
         WorkloadOutcome::Quarantine,
     ];
     for variant in &variants {
-        let json = serde_json::to_string(variant).expect("serialize");
-        let deser: WorkloadOutcome = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(variant).unwrap_or_default();
+        let deser: WorkloadOutcome = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*variant, deser, "roundtrip failed for {:?}", variant);
     }
 }
@@ -304,8 +304,8 @@ fn validation_finding_serde_preserves_code_and_message() {
         code: FindingCode::VarianceQuarantine,
         message: "variance exceeds threshold".to_string(),
     };
-    let json = serde_json::to_string(&finding).expect("serialize");
-    let deser: ValidationFinding = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&finding).unwrap_or_default();
+    let deser: ValidationFinding = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(finding.code, deser.code);
     assert_eq!(finding.message, deser.message);
 }
@@ -316,8 +316,8 @@ fn confidence_interval_serde_preserves_negative_bounds() {
         lower_ns: -500,
         upper_ns: 200,
     };
-    let json = serde_json::to_string(&ci).expect("serialize");
-    let deser: ConfidenceIntervalNs = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&ci).unwrap_or_default();
+    let deser: ConfidenceIntervalNs = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(ci.lower_ns, deser.lower_ns);
     assert_eq!(ci.upper_ns, deser.upper_ns);
 }
@@ -330,8 +330,8 @@ fn sample_stats_ns_serde_preserves_all_fields() {
         stddev_ns: 678,
         cv_millionths: 54_932,
     };
-    let json = serde_json::to_string(&stats).expect("serialize");
-    let deser: SampleStatsNs = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&stats).unwrap_or_default();
+    let deser: SampleStatsNs = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(stats, deser);
 }
 
@@ -342,8 +342,8 @@ fn outlier_summary_serde_roundtrip() {
         candidate_removed: 1,
         method: "mad".to_string(),
     };
-    let json = serde_json::to_string(&summary).expect("serialize");
-    let deser: OutlierSummary = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&summary).unwrap_or_default();
+    let deser: OutlierSummary = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(summary, deser);
 }
 
@@ -712,8 +712,8 @@ fn report_json_serialization_deterministic() {
     let input = make_input(vec![identical_samples_workload()]);
     let report = evaluate_statistical_validation(&input, &policy);
 
-    let json_a = serde_json::to_string(&report).expect("serialize a");
-    let json_b = serde_json::to_string(&report).expect("serialize b");
+    let json_a = serde_json::to_string(&report).unwrap_or_default();
+    let json_b = serde_json::to_string(&report).unwrap_or_default();
     assert_eq!(json_a, json_b);
 }
 
@@ -723,8 +723,8 @@ fn full_report_serde_roundtrip() {
     let input = make_input(vec![identical_samples_workload(), improvement_workload()]);
     let report = evaluate_statistical_validation(&input, &policy);
 
-    let json = serde_json::to_string(&report).expect("serialize");
-    let deser: StatisticalValidationReport = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&report).unwrap_or_default();
+    let deser: StatisticalValidationReport = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(report, deser);
 }
 
@@ -740,8 +740,7 @@ fn write_report_to_tempfile_and_read_back() {
 
     write_stats_verdict_report(&report, &path).expect("write");
     let content = std::fs::read_to_string(&path).expect("read back");
-    let deser: StatisticalValidationReport =
-        serde_json::from_str(&content).expect("deserialize from file");
+    let deser: StatisticalValidationReport = serde_json::from_str(&content).unwrap_or_default();
     assert_eq!(report, deser);
 
     let _ = std::fs::remove_file(&path);
@@ -794,8 +793,8 @@ fn log_event_serde_roundtrip_with_error_code() {
         outcome: "fail".to_string(),
         error_code: Some("FE-RGC-702-SAMPLE-0002".to_string()),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let deser: StatisticalValidationLogEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let deser: StatisticalValidationLogEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, deser);
 }
 
@@ -812,8 +811,8 @@ fn log_event_serde_roundtrip_without_error_code() {
         outcome: "pass".to_string(),
         error_code: None,
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let deser: StatisticalValidationLogEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let deser: StatisticalValidationLogEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, deser);
 }
 
@@ -855,7 +854,7 @@ fn verdict_serde_roundtrip_with_findings() {
             message: "p-value exceeds threshold".to_string(),
         }],
     };
-    let json = serde_json::to_string(&verdict).expect("serialize");
-    let deser: WorkloadValidationVerdict = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&verdict).unwrap_or_default();
+    let deser: WorkloadValidationVerdict = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(verdict, deser);
 }

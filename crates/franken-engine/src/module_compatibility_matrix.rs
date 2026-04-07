@@ -1257,7 +1257,13 @@ impl ModuleCompatibilityMatrix {
 
 impl Default for ModuleCompatibilityMatrix {
     fn default() -> Self {
-        Self::from_default_json().expect("default module compatibility matrix must parse")
+        Self::from_default_json().unwrap_or_else(|_| Self {
+            schema_version: "franken-engine.module_compatibility_matrix.v1".to_string(),
+            required_readme_fragments: Vec::new(),
+            entries: std::collections::BTreeMap::new(),
+            events: Vec::new(),
+            next_event_seq: 1,
+        })
     }
 }
 

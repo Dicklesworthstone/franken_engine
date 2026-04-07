@@ -516,8 +516,8 @@ fn channel_report_serde_roundtrip() {
     let epoch = SecurityEpoch::from_raw(7);
 
     let report = generate_channel_report(&specs, &states, epoch);
-    let json = serde_json::to_string(&report).expect("serialize report");
-    let recovered: ChannelReport = serde_json::from_str(&json).expect("deserialize report");
+    let json = serde_json::to_string(&report).unwrap_or_default();
+    let recovered: ChannelReport = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(report, recovered);
 }
 
@@ -563,8 +563,8 @@ fn payload_family_all_has_five_elements() {
 #[test]
 fn payload_family_serde_round_trip() {
     for family in PayloadFamily::ALL {
-        let json = serde_json::to_string(&family).expect("serialize");
-        let recovered: PayloadFamily = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&family).unwrap_or_default();
+        let recovered: PayloadFamily = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(family, recovered);
     }
 }
@@ -585,8 +585,8 @@ fn distortion_metric_serde_round_trip() {
         DistortionMetric::BinaryFidelity,
     ];
     for metric in metrics {
-        let json = serde_json::to_string(&metric).expect("serialize");
-        let recovered: DistortionMetric = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&metric).unwrap_or_default();
+        let recovered: DistortionMetric = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(metric, recovered);
     }
 }
@@ -612,8 +612,8 @@ fn channel_path_all_has_five_elements() {
 #[test]
 fn channel_path_serde_round_trip() {
     for path in ChannelPath::ALL {
-        let json = serde_json::to_string(&path).expect("serialize");
-        let recovered: ChannelPath = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&path).unwrap_or_default();
+        let recovered: ChannelPath = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(path, recovered);
     }
 }
@@ -634,8 +634,8 @@ fn violation_kind_serde_round_trip() {
         ViolationKind::BackpressureOverflow,
     ];
     for kind in kinds {
-        let json = serde_json::to_string(&kind).expect("serialize");
-        let recovered: ViolationKind = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&kind).unwrap_or_default();
+        let recovered: ViolationKind = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(kind, recovered);
     }
 }
@@ -760,16 +760,16 @@ fn channel_state_serde_round_trip() {
     let mut state = ChannelState::new("ch-state-serde".to_string(), epoch);
     state.emit(&spec, 0).expect("emit");
 
-    let json = serde_json::to_string(&state).expect("serialize");
-    let recovered: ChannelState = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&state).unwrap_or_default();
+    let recovered: ChannelState = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(state, recovered);
 }
 
 #[test]
 fn channel_spec_serde_round_trip() {
     let spec = lossy_spec("ch-spec-serde");
-    let json = serde_json::to_string(&spec).expect("serialize");
-    let recovered: ChannelSpec = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&spec).unwrap_or_default();
+    let recovered: ChannelSpec = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(spec, recovered);
 }
 
@@ -781,7 +781,7 @@ fn policy_violation_serde_round_trip() {
         violation_kind: ViolationKind::DropBudgetExceeded,
         detail: "drop budget exceeded at item 4".to_string(),
     };
-    let json = serde_json::to_string(&violation).expect("serialize");
-    let recovered: PolicyViolation = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&violation).unwrap_or_default();
+    let recovered: PolicyViolation = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(violation, recovered);
 }

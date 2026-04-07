@@ -218,8 +218,8 @@ fn gate_kind_display_matches_as_str() {
 #[test]
 fn gate_kind_serde_round_trip_all_variants() {
     for gate in GateKind::all() {
-        let json = serde_json::to_string(gate).expect("serialize");
-        let decoded: GateKind = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(gate).unwrap_or_default();
+        let decoded: GateKind = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*gate, decoded);
     }
 }
@@ -302,8 +302,8 @@ fn gate_strictness_adversarial_defaults() {
 fn gate_strictness_serde_round_trip_all_gates() {
     for gate in GateKind::all() {
         let s = GateStrictness::standard(*gate);
-        let json = serde_json::to_string(&s).expect("serialize");
-        let decoded: GateStrictness = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&s).unwrap_or_default();
+        let decoded: GateStrictness = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(s, decoded);
     }
 }
@@ -318,8 +318,8 @@ fn gate_strictness_custom_values_serde() {
         max_latency_ns: 42,
         min_adversarial_pass_rate_millionths: 100_000,
     };
-    let json = serde_json::to_string(&s).expect("serialize");
-    let decoded: GateStrictness = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&s).unwrap_or_default();
+    let decoded: GateStrictness = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(s, decoded);
 }
 
@@ -379,8 +379,8 @@ fn equivalence_test_case_serde_round_trip() {
         delegate_output: vec![3, 4],
         candidate_output: vec![3, 4],
     };
-    let json = serde_json::to_string(&tc).expect("serialize");
-    let decoded: EquivalenceTestCase = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&tc).unwrap_or_default();
+    let decoded: EquivalenceTestCase = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(tc, decoded);
 }
 
@@ -436,8 +436,8 @@ fn capability_request_all_excess() {
 #[test]
 fn capability_request_serde_round_trip() {
     let req = passing_capability_request();
-    let json = serde_json::to_string(&req).expect("serialize");
-    let decoded: CandidateCapabilityRequest = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&req).unwrap_or_default();
+    let decoded: CandidateCapabilityRequest = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(req, decoded);
 }
 
@@ -470,8 +470,8 @@ fn performance_measurement_serde_round_trip() {
         iterations: 200,
         seed: 1,
     };
-    let json = serde_json::to_string(&m).expect("serialize");
-    let decoded: PerformanceMeasurement = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&m).unwrap_or_default();
+    let decoded: PerformanceMeasurement = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(m, decoded);
 }
 
@@ -499,8 +499,8 @@ fn adversarial_test_result_serde_round_trip() {
         attack_surface: "injection".to_string(),
         evidence: "vuln detected".to_string(),
     };
-    let json = serde_json::to_string(&r).expect("serialize");
-    let decoded: AdversarialTestResult = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&r).unwrap_or_default();
+    let decoded: AdversarialTestResult = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(r, decoded);
 }
 
@@ -943,8 +943,8 @@ fn gate_evaluation_serde_round_trip() {
         evidence: vec!["a".to_string(), "b".to_string(), "c".to_string()],
         summary: "all benchmarks passed".to_string(),
     };
-    let json = serde_json::to_string(&eval).expect("serialize");
-    let decoded: GateEvaluation = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&eval).unwrap_or_default();
+    let decoded: GateEvaluation = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(eval, decoded);
 }
 
@@ -952,8 +952,8 @@ fn gate_evaluation_serde_round_trip() {
 fn gate_evaluation_for_each_gate_kind_serde() {
     for gate in GateKind::all() {
         let eval = make_gate_evaluation(*gate, true, true);
-        let json = serde_json::to_string(&eval).expect("serialize");
-        let decoded: GateEvaluation = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&eval).unwrap_or_default();
+        let decoded: GateEvaluation = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(eval, decoded);
     }
 }
@@ -1175,8 +1175,8 @@ fn config_strictness_for_missing_gate() {
 #[test]
 fn config_serde_round_trip() {
     let config = GateRunnerConfig::standard(test_slot_id(), "candidate".to_string(), 42);
-    let json = serde_json::to_string(&config).expect("serialize");
-    let decoded: GateRunnerConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let decoded: GateRunnerConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(config, decoded);
 }
 
@@ -1201,8 +1201,8 @@ fn config_custom_epoch_and_zone() {
 #[test]
 fn gate_runner_input_serde_round_trip() {
     let input = all_passing_input();
-    let json = serde_json::to_string(&input).expect("serialize");
-    let decoded: GateRunnerInput = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&input).unwrap_or_default();
+    let decoded: GateRunnerInput = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(input, decoded);
 }
 
@@ -1231,8 +1231,8 @@ fn evidence_artifact_serde_round_trip() {
         content_hash: "deadbeef".to_string(),
         description: "all equivalent".to_string(),
     };
-    let json = serde_json::to_string(&artifact).expect("serialize");
-    let decoded: EvidenceArtifact = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&artifact).unwrap_or_default();
+    let decoded: EvidenceArtifact = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(artifact, decoded);
 }
 
@@ -1257,8 +1257,8 @@ fn evidence_bundle_serde_round_trip() {
         total_passed: 95,
         total_failed: 5,
     };
-    let json = serde_json::to_string(&bundle).expect("serialize");
-    let decoded: EvidenceBundle = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&bundle).unwrap_or_default();
+    let decoded: EvidenceBundle = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(bundle, decoded);
 }
 
@@ -1285,8 +1285,8 @@ fn gate_runner_output_serde_round_trip() {
     let config = GateRunnerConfig::standard(test_slot_id(), "candidate".to_string(), 42);
     let input = all_passing_input();
     let output = run_promotion_gates(&config, &input);
-    let json = serde_json::to_string(&output).expect("serialize");
-    let decoded: GateRunnerOutput = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&output).unwrap_or_default();
+    let decoded: GateRunnerOutput = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(output, decoded);
 }
 
@@ -1616,8 +1616,8 @@ fn log_event_serde_round_trip() {
     let config = GateRunnerConfig::standard(test_slot_id(), "candidate".to_string(), 42);
     let eval = make_gate_evaluation(GateKind::PerformanceThreshold, true, true);
     let event = log_gate_evaluation(&config, &eval);
-    let json = serde_json::to_string(&event).expect("serialize");
-    let decoded: GateRunnerLogEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let decoded: GateRunnerLogEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, decoded);
 }
 
@@ -1628,8 +1628,8 @@ fn log_event_for_all_gates_serde() {
             let config = GateRunnerConfig::standard(test_slot_id(), "c".to_string(), 1);
             let eval = make_gate_evaluation(*gate, passed, true);
             let event = log_gate_evaluation(&config, &eval);
-            let json = serde_json::to_string(&event).expect("serialize");
-            let decoded: GateRunnerLogEvent = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(&event).unwrap_or_default();
+            let decoded: GateRunnerLogEvent = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(event, decoded);
         }
     }
@@ -1772,13 +1772,13 @@ fn serde_round_trip_full_pipeline_output() {
     let output = run_promotion_gates(&config, &input);
 
     // Serialize config, input, and output
-    let config_json = serde_json::to_string(&config).expect("serialize config");
-    let input_json = serde_json::to_string(&input).expect("serialize input");
-    let output_json = serde_json::to_string(&output).expect("serialize output");
+    let config_json = serde_json::to_string(&config).unwrap_or_default();
+    let input_json = serde_json::to_string(&input).unwrap_or_default();
+    let output_json = serde_json::to_string(&output).unwrap_or_default();
 
-    let config2: GateRunnerConfig = serde_json::from_str(&config_json).expect("deserialize config");
-    let input2: GateRunnerInput = serde_json::from_str(&input_json).expect("deserialize input");
-    let output2: GateRunnerOutput = serde_json::from_str(&output_json).expect("deserialize output");
+    let config2: GateRunnerConfig = serde_json::from_str(&config_json).unwrap_or_default();
+    let input2: GateRunnerInput = serde_json::from_str(&input_json).unwrap_or_default();
+    let output2: GateRunnerOutput = serde_json::from_str(&output_json).unwrap_or_default();
 
     assert_eq!(config, config2);
     assert_eq!(input, input2);

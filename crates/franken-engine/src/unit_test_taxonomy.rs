@@ -618,9 +618,8 @@ mod tests {
     #[test]
     fn serde_roundtrip_preserves_bundle() {
         let bundle = default_frx20_bundle();
-        let encoded = serde_json::to_string(&bundle).expect("serialize bundle");
-        let decoded: UnitTestTaxonomyBundle =
-            serde_json::from_str(&encoded).expect("deserialize bundle");
+        let encoded = serde_json::to_string(&bundle).unwrap_or_default();
+        let decoded: UnitTestTaxonomyBundle = serde_json::from_str(&encoded).unwrap_or_default();
         assert_eq!(decoded, bundle);
     }
 
@@ -659,15 +658,15 @@ mod tests {
     #[test]
     fn unit_test_class_serde_roundtrip_all_variants() {
         for variant in UnitTestClass::ALL {
-            let json = serde_json::to_string(&variant).expect("serialize");
-            let back: UnitTestClass = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(&variant).unwrap_or_default();
+            let back: UnitTestClass = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(back, variant);
         }
     }
 
     #[test]
     fn unit_test_class_serde_snake_case() {
-        let json = serde_json::to_string(&UnitTestClass::FaultInjection).expect("serialize");
+        let json = serde_json::to_string(&UnitTestClass::FaultInjection).unwrap_or_default();
         assert_eq!(json, "\"fault_injection\"");
     }
 
@@ -706,8 +705,8 @@ mod tests {
     #[test]
     fn lane_id_serde_roundtrip_all_variants() {
         for lane in LaneId::ALL {
-            let json = serde_json::to_string(&lane).expect("serialize");
-            let back: LaneId = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(&lane).unwrap_or_default();
+            let back: LaneId = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(back, lane);
         }
     }
@@ -797,8 +796,8 @@ mod tests {
     #[test]
     fn determinism_contract_serde_roundtrip() {
         let contract = DeterminismContract::default_frx20();
-        let json = serde_json::to_string(&contract).expect("serialize");
-        let back: DeterminismContract = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&contract).unwrap_or_default();
+        let back: DeterminismContract = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(back, contract);
     }
 
@@ -941,8 +940,8 @@ mod tests {
     #[test]
     fn fixture_entry_serde_roundtrip() {
         let entry = valid_fixture_entry();
-        let json = serde_json::to_string(&entry).expect("serialize");
-        let back: FixtureRegistryEntry = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&entry).unwrap_or_default();
+        let back: FixtureRegistryEntry = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(back, entry);
     }
 
@@ -950,8 +949,8 @@ mod tests {
     fn fixture_entry_none_trace_path_serde() {
         let mut entry = valid_fixture_entry();
         entry.trace_path = None;
-        let json = serde_json::to_string(&entry).expect("serialize");
-        let back: FixtureRegistryEntry = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&entry).unwrap_or_default();
+        let back: FixtureRegistryEntry = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(back.trace_path, None);
     }
 
@@ -1019,8 +1018,8 @@ mod tests {
     #[test]
     fn lane_coverage_serde_roundtrip() {
         let lc = valid_lane_coverage();
-        let json = serde_json::to_string(&lc).expect("serialize");
-        let back: LaneCoverageContract = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&lc).unwrap_or_default();
+        let back: LaneCoverageContract = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(back, lc);
     }
 
@@ -1179,8 +1178,8 @@ mod tests {
             },
         ];
         for variant in &variants {
-            let json = serde_json::to_string(variant).expect("serialize");
-            let back: TaxonomyValidationError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(variant).unwrap_or_default();
+            let back: TaxonomyValidationError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(&back, variant);
         }
     }

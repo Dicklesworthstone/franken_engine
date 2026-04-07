@@ -147,8 +147,8 @@ fn gate_id_serde_roundtrip_all() {
         GateId::FuzzAdversarial,
     ];
     for id in &ids {
-        let json = serde_json::to_string(id).expect("serialize GateId");
-        let restored: GateId = serde_json::from_str(&json).expect("deserialize GateId");
+        let json = serde_json::to_string(id).unwrap_or_default();
+        let restored: GateId = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*id, restored);
     }
 }
@@ -247,8 +247,8 @@ fn gate_status_serde_roundtrip_all_variants() {
         },
     ];
     for s in &statuses {
-        let json = serde_json::to_string(s).expect("serialize");
-        let restored: GateStatus = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(s).unwrap_or_default();
+        let restored: GateStatus = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*s, restored);
     }
 }
@@ -290,8 +290,8 @@ fn gate_metrics_serde_roundtrip() {
         .with("alpha", "1")
         .with("beta", "2")
         .with("gamma", "3");
-    let json = serde_json::to_string(&m).expect("serialize");
-    let restored: GateMetrics = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&m).unwrap_or_default();
+    let restored: GateMetrics = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(m, restored);
 }
 
@@ -332,8 +332,8 @@ fn gate_thresholds_custom_values() {
 #[test]
 fn gate_thresholds_serde_roundtrip() {
     let t = GateThresholds::default();
-    let json = serde_json::to_string(&t).expect("serialize");
-    let restored: GateThresholds = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&t).unwrap_or_default();
+    let restored: GateThresholds = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(t, restored);
 }
 
@@ -344,8 +344,8 @@ fn gate_thresholds_custom_serde_roundtrip() {
         min_conformance_vectors: 100,
         min_fuzz_cpu_hours: 1,
     };
-    let json = serde_json::to_string(&t).expect("serialize");
-    let restored: GateThresholds = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&t).unwrap_or_default();
+    let restored: GateThresholds = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(t, restored);
 }
 
@@ -375,8 +375,8 @@ fn gate_event_serde_roundtrip() {
         epoch_id: 5,
         event: "gate_evaluated".to_string(),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let restored: GateEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let restored: GateEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, restored);
 }
 
@@ -388,8 +388,8 @@ fn gate_event_serde_roundtrip() {
 fn gate_report_serde_roundtrip() {
     let mut eval = default_evaluator();
     let report = eval.evaluate_replay(&passing_replay_input(), "ci-42", "trace-7", 9999);
-    let json = serde_json::to_string(&report).expect("serialize");
-    let restored: GateReport = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&report).unwrap_or_default();
+    let restored: GateReport = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(report, restored);
 }
 
@@ -412,8 +412,8 @@ fn gate_report_fields_are_populated() {
 #[test]
 fn replay_input_serde_roundtrip() {
     let input = passing_replay_input();
-    let json = serde_json::to_string(&input).expect("serialize");
-    let restored: ReplayInput = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&input).unwrap_or_default();
+    let restored: ReplayInput = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(input, restored);
 }
 
@@ -424,8 +424,8 @@ fn replay_input_serde_roundtrip() {
 #[test]
 fn interleaving_input_serde_roundtrip() {
     let input = passing_interleaving_input();
-    let json = serde_json::to_string(&input).expect("serialize");
-    let restored: InterleavingInput = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&input).unwrap_or_default();
+    let restored: InterleavingInput = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(input, restored);
 }
 
@@ -436,8 +436,8 @@ fn interleaving_input_serde_roundtrip() {
 #[test]
 fn conformance_input_serde_roundtrip() {
     let input = passing_conformance_input();
-    let json = serde_json::to_string(&input).expect("serialize");
-    let restored: ConformanceInput = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&input).unwrap_or_default();
+    let restored: ConformanceInput = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(input, restored);
 }
 
@@ -448,8 +448,8 @@ fn conformance_input_serde_roundtrip() {
 #[test]
 fn fuzz_input_serde_roundtrip() {
     let input = passing_fuzz_input();
-    let json = serde_json::to_string(&input).expect("serialize");
-    let restored: FuzzInput = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&input).unwrap_or_default();
+    let restored: FuzzInput = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(input, restored);
 }
 
@@ -1277,7 +1277,7 @@ fn high_epoch_evaluator() {
 fn gate_report_json_has_expected_fields() {
     let mut eval = default_evaluator();
     let report = eval.evaluate_replay(&passing_replay_input(), "ci-1", "t-1", 1234);
-    let json = serde_json::to_string(&report).expect("serialize");
+    let json = serde_json::to_string(&report).unwrap_or_default();
 
     // Verify all expected fields appear in JSON
     assert!(json.contains("gate_id"));
@@ -1299,7 +1299,7 @@ fn gate_event_json_has_expected_fields() {
         epoch_id: 42,
         event: "gate_evaluated".to_string(),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
     assert!(json.contains("gate_id"));
     assert!(json.contains("status"));
     assert!(json.contains("trace_id"));

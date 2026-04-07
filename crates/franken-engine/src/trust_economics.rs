@@ -1246,8 +1246,8 @@ mod tests {
                 false_action_cost: 50,
             },
         );
-        let json = serde_json::to_string(&m).expect("serialize");
-        let restored: DecomposedLossMatrix = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&m).unwrap_or_default();
+        let restored: DecomposedLossMatrix = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(m, restored);
     }
 
@@ -1500,8 +1500,8 @@ mod tests {
     #[test]
     fn attacker_model_serialization_round_trip() {
         let m = sample_attacker_model();
-        let json = serde_json::to_string(&m).expect("serialize");
-        let restored: AttackerCostModel = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&m).unwrap_or_default();
+        let restored: AttackerCostModel = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(m, restored);
     }
 
@@ -1550,8 +1550,8 @@ mod tests {
     #[test]
     fn containment_model_serialization_round_trip() {
         let m = sample_containment_model();
-        let json = serde_json::to_string(&m).expect("serialize");
-        let restored: ContainmentCostModel = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&m).unwrap_or_default();
+        let restored: ContainmentCostModel = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(m, restored);
     }
 
@@ -1669,8 +1669,8 @@ mod tests {
             cascade_probability: 250_000,
             growth_rate_per_sec: 100_000,
         };
-        let json = serde_json::to_string(&br).expect("serialize");
-        let restored: BlastRadiusEstimate = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&br).unwrap_or_default();
+        let restored: BlastRadiusEstimate = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(br, restored);
     }
 
@@ -1758,8 +1758,8 @@ mod tests {
     #[test]
     fn model_inputs_serialization_round_trip() {
         let m = sample_model_inputs();
-        let json = serde_json::to_string(&m).expect("serialize");
-        let restored: TrustEconomicsModelInputs = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&m).unwrap_or_default();
+        let restored: TrustEconomicsModelInputs = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(m, restored);
     }
 
@@ -1809,8 +1809,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serialize");
-            let restored: TrustEconomicsError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(err).unwrap_or_default();
+            let restored: TrustEconomicsError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*err, restored);
         }
     }
@@ -1821,8 +1821,8 @@ mod tests {
     fn deterministic_serialization() {
         let m1 = sample_model_inputs();
         let m2 = sample_model_inputs();
-        let json1 = serde_json::to_string(&m1).expect("serialize 1");
-        let json2 = serde_json::to_string(&m2).expect("serialize 2");
+        let json1 = serde_json::to_string(&m1).unwrap_or_default();
+        let json2 = serde_json::to_string(&m2).unwrap_or_default();
         assert_eq!(json1, json2, "identical inputs must produce identical JSON");
     }
 

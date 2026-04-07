@@ -165,6 +165,7 @@ pub mod golden_vectors;
 pub mod governance_hooks;
 pub mod governance_mechanism;
 pub mod governance_scorecard;
+pub mod guardplane_adapter;
 pub mod guardplane_calibration;
 pub mod hardware_board_claim_gate;
 pub mod hardware_code_layout_gate;
@@ -1639,9 +1640,10 @@ mod tests {
         assert!(event.location.is_none());
         assert!(event.stack_frames.is_empty());
 
-        let encoded = serde_json::to_string(&event).expect("serialize event");
+        let encoded =
+            serde_json::to_string(&event).expect("exception transition event should serialize");
         let decoded: ExceptionTransitionEvent =
-            serde_json::from_str(&encoded).expect("deserialize event");
+            serde_json::from_str(&encoded).expect("exception transition event should deserialize");
         assert_eq!(decoded, event);
     }
 
@@ -1791,8 +1793,10 @@ mod tests {
             EvalErrorClass::Invariant,
         ];
         for class in &classes {
-            let json = serde_json::to_string(class).expect("serialize");
-            let decoded: EvalErrorClass = serde_json::from_str(&json).expect("deserialize");
+            let json =
+                serde_json::to_string(class).expect("eval error class should serialize to JSON");
+            let decoded: EvalErrorClass =
+                serde_json::from_str(&json).expect("eval error class should deserialize");
             assert_eq!(&decoded, class);
         }
     }
@@ -1810,8 +1814,10 @@ mod tests {
             EvalErrorCode::InvariantViolation,
         ];
         for code in &codes {
-            let json = serde_json::to_string(code).expect("serialize");
-            let decoded: EvalErrorCode = serde_json::from_str(&json).expect("deserialize");
+            let json =
+                serde_json::to_string(code).expect("eval error code should serialize to JSON");
+            let decoded: EvalErrorCode =
+                serde_json::from_str(&json).expect("eval error code should deserialize");
             assert_eq!(&decoded, code);
         }
     }
@@ -1823,22 +1829,23 @@ mod tests {
             EngineKind::V8InspiredNative,
             EngineKind::Hybrid,
         ] {
-            let json = serde_json::to_string(kind).expect("serialize");
+            let json = serde_json::to_string(kind).expect("engine kind should serialize to JSON");
             let expected = match kind {
                 EngineKind::QuickJsInspiredNative => DETERMINISTIC_PROFILE_LABEL,
                 EngineKind::V8InspiredNative => THROUGHPUT_PROFILE_LABEL,
                 EngineKind::Hybrid => ADAPTIVE_PROFILE_ROUTER_LABEL,
             };
             assert_eq!(json, format!("\"{expected}\""));
-            let decoded: EngineKind = serde_json::from_str(&json).expect("deserialize");
+            let decoded: EngineKind =
+                serde_json::from_str(&json).expect("engine kind should deserialize");
             assert_eq!(&decoded, kind);
         }
     }
 
     #[test]
     fn engine_kind_deserialize_accepts_legacy_lineage_labels() {
-        let decoded: EngineKind =
-            serde_json::from_str("\"quickjs_inspired_native\"").expect("deserialize");
+        let decoded: EngineKind = serde_json::from_str("\"quickjs_inspired_native\"")
+            .expect("legacy engine kind label should deserialize");
         assert_eq!(decoded, EngineKind::QuickJsInspiredNative);
     }
 
@@ -1851,7 +1858,8 @@ mod tests {
             RouteReason::DefaultQuickJsPath,
         ];
         for reason in &reasons {
-            let json = serde_json::to_string(reason).expect("serialize");
+            let json =
+                serde_json::to_string(reason).expect("route reason should serialize to JSON");
             let expected = match reason {
                 RouteReason::DirectEngineInvocation => "direct_profile_invocation",
                 RouteReason::ContainsImportKeyword => "contains_import_keyword",
@@ -1859,23 +1867,25 @@ mod tests {
                 RouteReason::DefaultQuickJsPath => "default_deterministic_profile",
             };
             assert_eq!(json, format!("\"{expected}\""));
-            let decoded: RouteReason = serde_json::from_str(&json).expect("deserialize");
+            let decoded: RouteReason =
+                serde_json::from_str(&json).expect("route reason should deserialize");
             assert_eq!(&decoded, reason);
         }
     }
 
     #[test]
     fn route_reason_deserialize_accepts_legacy_labels() {
-        let decoded: RouteReason =
-            serde_json::from_str("\"DefaultQuickJsPath\"").expect("deserialize");
+        let decoded: RouteReason = serde_json::from_str("\"DefaultQuickJsPath\"")
+            .expect("legacy route reason label should deserialize");
         assert_eq!(decoded, RouteReason::DefaultQuickJsPath);
     }
 
     #[test]
     fn eval_error_serde_round_trip() {
         let err = EvalError::policy_denied("extension blocked");
-        let json = serde_json::to_string(&err).expect("serialize");
-        let decoded: EvalError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&err).expect("eval error should serialize to JSON");
+        let decoded: EvalError =
+            serde_json::from_str(&json).expect("eval error should deserialize");
         assert_eq!(decoded, err);
     }
 
@@ -1887,8 +1897,9 @@ mod tests {
             route_reason: RouteReason::ContainsAwaitKeyword,
             source_ingestion: SourceIngestionSummary::default(),
         };
-        let json = serde_json::to_string(&outcome).expect("serialize");
-        let decoded: EvalOutcome = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&outcome).expect("eval outcome should serialize to JSON");
+        let decoded: EvalOutcome =
+            serde_json::from_str(&json).expect("eval outcome should deserialize");
         assert_eq!(decoded, outcome);
     }
 
@@ -1956,8 +1967,10 @@ mod tests {
             ExceptionBoundary::AsyncJob,
             ExceptionBoundary::Hostcall,
         ] {
-            let json = serde_json::to_string(boundary).expect("serialize");
-            let decoded: ExceptionBoundary = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(boundary)
+                .expect("exception boundary should serialize to JSON");
+            let decoded: ExceptionBoundary =
+                serde_json::from_str(&json).expect("exception boundary should deserialize");
             assert_eq!(&decoded, boundary);
         }
     }

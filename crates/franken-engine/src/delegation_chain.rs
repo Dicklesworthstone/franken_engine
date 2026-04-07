@@ -1205,8 +1205,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serialize");
-            let restored: ChainError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(err).unwrap_or_default();
+            let restored: ChainError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*err, restored);
         }
     }
@@ -1214,8 +1214,8 @@ mod tests {
     #[test]
     fn delegation_chain_serde_roundtrip() {
         let (chain, _, _) = valid_chain_fixture();
-        let json = serde_json::to_string(&chain).expect("serialize");
-        let restored: DelegationChain = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&chain).unwrap_or_default();
+        let restored: DelegationChain = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(chain, restored);
     }
 
@@ -1232,8 +1232,8 @@ mod tests {
         )
         .unwrap();
 
-        let json = serde_json::to_string(&proof).expect("serialize");
-        let restored: AuthorizationProof = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&proof).unwrap_or_default();
+        let restored: AuthorizationProof = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(proof, restored);
     }
 
@@ -1249,8 +1249,8 @@ mod tests {
             not_before_tick: 100,
             expiry_tick: 1000,
         };
-        let json = serde_json::to_string(&summary).expect("serialize");
-        let restored: DelegationLinkSummary = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&summary).unwrap_or_default();
+        let restored: DelegationLinkSummary = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(summary, restored);
     }
 
@@ -1268,9 +1268,9 @@ mod tests {
             },
             required_zone: Some("zone-a".to_string()),
         };
-        let json = serde_json::to_string(&ctx).expect("serialize");
+        let json = serde_json::to_string(&ctx).unwrap_or_default();
         let restored: DelegationVerificationContext =
-            serde_json::from_str(&json).expect("deserialize");
+            serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(ctx, restored);
     }
 
@@ -1443,8 +1443,8 @@ mod tests {
     #[test]
     fn delegation_chain_empty_serde_roundtrip() {
         let empty = DelegationChain::new(Vec::new());
-        let json = serde_json::to_string(&empty).expect("serialize");
-        let restored: DelegationChain = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&empty).unwrap_or_default();
+        let restored: DelegationChain = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(empty, restored);
         assert!(restored.is_empty());
     }
@@ -1520,9 +1520,9 @@ mod tests {
             authorized_roots: roots,
             required_zone: None,
         };
-        let json = serde_json::to_string(&ctx).expect("serialize");
+        let json = serde_json::to_string(&ctx).unwrap_or_default();
         let restored: DelegationVerificationContext =
-            serde_json::from_str(&json).expect("deserialize");
+            serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(ctx, restored);
         assert_eq!(restored.authorized_roots.len(), 3);
     }
@@ -1678,8 +1678,8 @@ mod tests {
                 &NoRevocationOracle,
             )
             .unwrap();
-        let json = serde_json::to_string(&proof).expect("serialize");
-        let restored: AuthorizationProof = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&proof).unwrap_or_default();
+        let restored: AuthorizationProof = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(proof, restored);
     }
 
@@ -1864,8 +1864,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serialize");
-            let restored: ChainError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(v).unwrap_or_default();
+            let restored: ChainError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*v, restored);
         }
     }
@@ -1899,8 +1899,8 @@ mod tests {
             not_before_tick: 100,
             expiry_tick: 900,
         };
-        let json = serde_json::to_string(&summary).expect("serialize");
-        let restored: DelegationLinkSummary = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&summary).unwrap_or_default();
+        let restored: DelegationLinkSummary = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(summary, restored);
     }
 

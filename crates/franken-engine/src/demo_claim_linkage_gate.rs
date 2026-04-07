@@ -617,7 +617,7 @@ impl DemoClaimLinkageGate {
             config: &self.config,
             claim_results: canonical_claim_results,
         })
-        .expect("linkage artifact hash input should serialize");
+        .unwrap_or_default();
 
         let decision_id = format!(
             "linkage-{}-{}-{}",

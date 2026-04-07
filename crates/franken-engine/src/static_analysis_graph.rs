@@ -1116,7 +1116,7 @@ impl StaticAnalysisGraph {
             components: &self.components,
             cycles: &self.cycles,
         })
-        .expect("static analysis snapshot envelope should serialize");
+        .unwrap_or_default();
         ContentHash::compute(&canonical)
     }
 

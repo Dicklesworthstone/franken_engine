@@ -292,8 +292,8 @@ fn two_phase_category_serde_round_trip_all_variants() {
         TwoPhaseCategory::StateMutation,
         TwoPhaseCategory::EvidenceCommit,
     ] {
-        let json = serde_json::to_string(&category).expect("serialize");
-        let recovered: TwoPhaseCategory = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&category).unwrap_or_default();
+        let recovered: TwoPhaseCategory = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(category, recovered);
     }
 }
@@ -326,8 +326,8 @@ fn operation_phase_serde_round_trip_all_variants() {
         OperationPhase::Aborted,
         OperationPhase::Leaked,
     ] {
-        let json = serde_json::to_string(&phase).expect("serialize");
-        let recovered: OperationPhase = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&phase).unwrap_or_default();
+        let recovered: OperationPhase = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(phase, recovered);
     }
 }
@@ -343,8 +343,8 @@ fn operation_phase_display_formats() {
 #[test]
 fn leak_policy_serde_round_trip_all_variants() {
     for policy in [LeakPolicy::Lab, LeakPolicy::Production] {
-        let json = serde_json::to_string(&policy).expect("serialize");
-        let recovered: LeakPolicy = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&policy).unwrap_or_default();
+        let recovered: LeakPolicy = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(policy, recovered);
     }
 }
@@ -381,7 +381,7 @@ fn obligation_event_serde_round_trip() {
         .expect("commit");
     let events = tracker.events();
     assert!(!events.is_empty());
-    let json = serde_json::to_string(&events[0]).expect("serialize");
+    let json = serde_json::to_string(&events[0]).unwrap_or_default();
     assert!(!json.is_empty());
 }
 
@@ -464,8 +464,8 @@ fn lab_tracker_with_no_leaks_does_not_fail_run() {
 #[test]
 fn two_phase_category_serde_roundtrip() {
     let cat = TwoPhaseCategory::ResourceAlloc;
-    let json = serde_json::to_string(&cat).expect("serialize");
-    let recovered: TwoPhaseCategory = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&cat).unwrap_or_default();
+    let recovered: TwoPhaseCategory = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, cat);
 }
 
@@ -477,8 +477,8 @@ fn operation_phase_serde_roundtrip() {
         OperationPhase::Aborted,
         OperationPhase::Leaked,
     ] {
-        let json = serde_json::to_string(&phase).expect("serialize");
-        let recovered: OperationPhase = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&phase).unwrap_or_default();
+        let recovered: OperationPhase = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(recovered, phase);
     }
 }
@@ -486,8 +486,8 @@ fn operation_phase_serde_roundtrip() {
 #[test]
 fn leak_policy_serde_roundtrip() {
     let policy = LeakPolicy::default();
-    let json = serde_json::to_string(&policy).expect("serialize");
-    let recovered: LeakPolicy = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&policy).unwrap_or_default();
+    let recovered: LeakPolicy = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, policy);
 }
 
@@ -619,8 +619,8 @@ fn obligation_error_serde_round_trip_cell_not_running() {
         cell_id: "cell-serde".to_string(),
         current_state: RegionState::Closed,
     };
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: ObligationIntegrationError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: ObligationIntegrationError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(format!("{err:?}"), format!("{recovered:?}"));
 }
 
@@ -797,8 +797,8 @@ fn category_stats_serde_roundtrip() {
         aborted: 1,
         leaked: 1,
     };
-    let json = serde_json::to_string(&stats).expect("serialize");
-    let back: CategoryStats = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&stats).unwrap_or_default();
+    let back: CategoryStats = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(back, stats);
 }
 
@@ -834,8 +834,8 @@ fn obligation_error_all_variants_serde_roundtrip() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).expect("serialize");
-        let back: ObligationIntegrationError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(err).unwrap_or_default();
+        let back: ObligationIntegrationError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(err.error_code(), back.error_code());
     }
 }

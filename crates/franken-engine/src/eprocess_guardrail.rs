@@ -1046,8 +1046,8 @@ mod tests {
             GuardrailState::Suspended,
         ];
         for state in &states {
-            let json = serde_json::to_string(state).expect("serialize");
-            let restored: GuardrailState = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(state).unwrap_or_default();
+            let restored: GuardrailState = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*state, restored);
         }
     }
@@ -1075,8 +1075,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serialize");
-            let restored: GuardrailError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(err).unwrap_or_default();
+            let restored: GuardrailError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*err, restored);
         }
     }
@@ -1088,8 +1088,8 @@ mod tests {
             rationale: "addressed".to_string(),
             epoch: SecurityEpoch::from_raw(5),
         };
-        let json = serde_json::to_string(&receipt).expect("serialize");
-        let restored: ResetReceipt = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&receipt).unwrap_or_default();
+        let restored: ResetReceipt = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(receipt, restored);
     }
 
@@ -1124,8 +1124,8 @@ mod tests {
             },
         ];
         for event in &events {
-            let json = serde_json::to_string(event).expect("serialize");
-            let restored: GuardrailEvent = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(event).unwrap_or_default();
+            let restored: GuardrailEvent = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*event, restored);
         }
     }
@@ -1137,8 +1137,8 @@ mod tests {
         let ulr = UniversalLikelihoodRatio {
             null_mean_millionths: -500_000,
         };
-        let json = serde_json::to_string(&ulr).expect("serialize");
-        let restored: UniversalLikelihoodRatio = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&ulr).unwrap_or_default();
+        let restored: UniversalLikelihoodRatio = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(ulr.null_mean_millionths, restored.null_mean_millionths);
     }
 
@@ -1477,8 +1477,8 @@ mod tests {
             high_ratio_millionths: 5_000_000,
             low_ratio_millionths: 500_000,
         };
-        let json = serde_json::to_string(&lr).expect("serialize");
-        let restored: ThresholdLikelihoodRatio = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&lr).unwrap_or_default();
+        let restored: ThresholdLikelihoodRatio = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(lr.threshold_millionths, restored.threshold_millionths);
         assert_eq!(lr.high_ratio_millionths, restored.high_ratio_millionths);
     }

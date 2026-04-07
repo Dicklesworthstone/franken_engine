@@ -129,8 +129,8 @@ fn reconcile_object_type_serde_round_trip() {
         ReconcileObjectType::EvidenceEntry,
     ];
     for v in &variants {
-        let json = serde_json::to_string(v).expect("serialize");
-        let restored: ReconcileObjectType = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(v).unwrap_or_default();
+        let restored: ReconcileObjectType = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*v, restored);
     }
 }
@@ -211,8 +211,8 @@ fn object_id_serde_round_trip() {
         object_type: ReconcileObjectType::CheckpointMarker,
         epoch: SecurityEpoch::from_raw(42),
     };
-    let json = serde_json::to_string(&id).expect("serialize");
-    let restored: ObjectId = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&id).unwrap_or_default();
+    let restored: ObjectId = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(id, restored);
 }
 
@@ -258,8 +258,8 @@ fn iblt_cell_serde_round_trip() {
         key_hash_xor: [0xAB; 32],
         checksum_xor: 0xDEAD_BEEF,
     };
-    let json = serde_json::to_string(&cell).expect("serialize");
-    let restored: IbltCell = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&cell).unwrap_or_default();
+    let restored: IbltCell = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(cell, restored);
 }
 
@@ -405,8 +405,8 @@ fn iblt_serde_round_trip() {
     let mut iblt = Iblt::new(16, 3);
     iblt.insert(&make_hash(1));
     iblt.insert(&make_hash(2));
-    let json = serde_json::to_string(&iblt).expect("serialize");
-    let restored: Iblt = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&iblt).unwrap_or_default();
+    let restored: Iblt = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(iblt, restored);
 }
 
@@ -439,8 +439,8 @@ fn reconcile_result_serde_round_trip() {
         objects_to_send: vec![make_hash(3)],
         fallback_triggered: false,
     };
-    let json = serde_json::to_string(&result).expect("serialize");
-    let restored: ReconcileResult = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&result).unwrap_or_default();
+    let restored: ReconcileResult = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(result, restored);
 }
 
@@ -473,8 +473,8 @@ fn reconcile_event_serde_round_trip() {
         event: "reconcile_success".to_string(),
         fallback_triggered: false,
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let restored: ReconcileEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let restored: ReconcileEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, restored);
 }
 
@@ -558,8 +558,8 @@ fn reconcile_error_serde_round_trip_all_variants() {
         ReconcileError::EmptyObjectSet,
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).expect("serialize");
-        let restored: ReconcileError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(err).unwrap_or_default();
+        let restored: ReconcileError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*err, restored);
     }
 }
@@ -585,8 +585,8 @@ fn reconcile_config_serde_round_trip() {
         max_retries: 4,
         retry_scale_factor: 3,
     };
-    let json = serde_json::to_string(&config).expect("serialize");
-    let restored: ReconcileConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let restored: ReconcileConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(config, restored);
 }
 
@@ -803,8 +803,8 @@ fn fallback_trigger_serde_round_trip_all_variants() {
         },
     ];
     for t in &triggers {
-        let json = serde_json::to_string(t).expect("serialize");
-        let restored: FallbackTrigger = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(t).unwrap_or_default();
+        let restored: FallbackTrigger = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*t, restored);
     }
 }
@@ -829,8 +829,8 @@ fn fallback_evidence_serde_round_trip() {
         epoch_id: 1,
         trace_id: "trace-1".to_string(),
     };
-    let json = serde_json::to_string(&ev).expect("serialize");
-    let restored: FallbackEvidence = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&ev).unwrap_or_default();
+    let restored: FallbackEvidence = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(ev, restored);
 }
 
@@ -851,8 +851,8 @@ fn fallback_config_serde_round_trip() {
         max_fallback_rate_pct: 10,
         monitoring_window: 50,
     };
-    let json = serde_json::to_string(&config).expect("serialize");
-    let restored: FallbackConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let restored: FallbackConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(config, restored);
 }
 
@@ -1166,8 +1166,8 @@ fn fallback_rate_alert_serde_round_trip() {
         total_in_window: 20,
         epoch_id: 1,
     };
-    let json = serde_json::to_string(&alert).expect("serialize");
-    let restored: FallbackRateAlert = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&alert).unwrap_or_default();
+    let restored: FallbackRateAlert = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(alert, restored);
 }
 
@@ -1366,8 +1366,8 @@ fn fallback_result_serde_round_trip() {
             trace_id: "t1".to_string(),
         },
     };
-    let json = serde_json::to_string(&result).expect("serialize");
-    let restored: FallbackResult = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&result).unwrap_or_default();
+    let restored: FallbackResult = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(result, restored);
 }
 

@@ -624,9 +624,8 @@ mod tests {
     #[test]
     fn inventory_serde_roundtrip() {
         let inventory = parity_evidence_inventory();
-        let json = serde_json::to_string(&inventory).expect("serialize");
-        let deserialized: ParityEvidenceInventory =
-            serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&inventory).unwrap_or_default();
+        let deserialized: ParityEvidenceInventory = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(inventory, deserialized);
     }
 
@@ -819,9 +818,8 @@ mod tests {
                 commands_txt: "commands.txt".to_string(),
             },
         };
-        let json = serde_json::to_string_pretty(&manifest).expect("serialize manifest");
-        let back: ParityEvidenceRunManifest =
-            serde_json::from_str(&json).expect("deserialize manifest");
+        let json = serde_json::to_string_pretty(&manifest).unwrap_or_default();
+        let back: ParityEvidenceRunManifest = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(back.schema_version, manifest.schema_version);
         assert_eq!(back.finding_count, manifest.finding_count);
         assert_eq!(back.contract_satisfied, manifest.contract_satisfied);

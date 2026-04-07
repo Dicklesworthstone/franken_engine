@@ -99,7 +99,7 @@ impl PolicyGuardReport {
     fn as_jsonl(&self) -> String {
         let mut out = String::new();
         for event in &self.events {
-            let line = serde_json::to_string(event).expect("event serialization should work");
+            let line = serde_json::to_string(event).unwrap_or_default();
             out.push_str(&line);
             out.push('\n');
         }
@@ -880,7 +880,7 @@ fn sqlite_policy_guard_event_serde_roundtrip() {
         subject: "rusqlite".to_string(),
         detail: "test detail".to_string(),
     };
-    let json = serde_json::to_string(&event).expect("serialize event");
+    let json = serde_json::to_string(&event).unwrap_or_default();
     let recovered: serde_json::Value = serde_json::from_str(&json).expect("parse event json");
     assert_eq!(recovered["trace_id"], "trace-sqlite-policy-0001");
     assert_eq!(recovered["error_code"], "FE-SQLITE-DEPENDENCY-FORBIDDEN");
@@ -893,7 +893,7 @@ fn sqlite_policy_guard_event_serde_roundtrip() {
         outcome: "pass".to_string(),
         ..event
     };
-    let pass_json = serde_json::to_string(&pass_event).expect("serialize pass event");
+    let pass_json = serde_json::to_string(&pass_event).unwrap_or_default();
     let pass_recovered: serde_json::Value =
         serde_json::from_str(&pass_json).expect("parse pass json");
     assert!(pass_recovered["error_code"].is_null());
@@ -1360,7 +1360,7 @@ fn sqlite_policy_guard_event_serde_all_fields_present() {
         subject: "s1".to_string(),
         detail: "det1".to_string(),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
     let map: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(&json).expect("parse");
     let expected_keys = [

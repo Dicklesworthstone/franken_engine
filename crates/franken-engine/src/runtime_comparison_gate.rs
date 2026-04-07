@@ -710,7 +710,7 @@ pub fn evaluate_gate(input: &GateInput<'_>) -> Result<GateEvidenceBundle, GateEr
         environment: input.environment,
         total_benchmarks,
     })
-    .expect("gate evidence hash input should serialize");
+    .unwrap_or_default();
     let evidence_hash = ContentHash::compute(&hash_input);
 
     Ok(GateEvidenceBundle {

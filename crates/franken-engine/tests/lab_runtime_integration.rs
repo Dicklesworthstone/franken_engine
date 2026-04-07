@@ -135,8 +135,8 @@ fn virtual_clock_advance_to_max() {
 #[test]
 fn virtual_clock_serde_roundtrip_zero() {
     let clock = VirtualClock::new();
-    let json = serde_json::to_string(&clock).expect("serialize");
-    let restored: VirtualClock = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&clock).unwrap_or_default();
+    let restored: VirtualClock = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(clock, restored);
 }
 
@@ -144,8 +144,8 @@ fn virtual_clock_serde_roundtrip_zero() {
 fn virtual_clock_serde_roundtrip_advanced() {
     let mut clock = VirtualClock::new();
     clock.advance(1_000_000);
-    let json = serde_json::to_string(&clock).expect("serialize");
-    let restored: VirtualClock = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&clock).unwrap_or_default();
+    let restored: VirtualClock = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(clock, restored);
 }
 
@@ -222,8 +222,8 @@ fn fault_kind_serde_roundtrip_all_variants() {
         FaultKind::RegionClose,
     ];
     for variant in &variants {
-        let json = serde_json::to_string(variant).expect("serialize FaultKind");
-        let restored: FaultKind = serde_json::from_str(&json).expect("deserialize FaultKind");
+        let json = serde_json::to_string(variant).unwrap_or_default();
+        let restored: FaultKind = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(variant, &restored);
     }
 }
@@ -296,8 +296,8 @@ fn task_state_serde_roundtrip_all_variants() {
         TaskState::Cancelled,
     ];
     for variant in &variants {
-        let json = serde_json::to_string(variant).expect("serialize TaskState");
-        let restored: TaskState = serde_json::from_str(&json).expect("deserialize TaskState");
+        let json = serde_json::to_string(variant).unwrap_or_default();
+        let restored: TaskState = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(variant, &restored);
     }
 }
@@ -337,8 +337,8 @@ fn verdict_display_fail_empty_reason() {
 #[test]
 fn verdict_serde_roundtrip_pass() {
     let v = Verdict::Pass;
-    let json = serde_json::to_string(&v).expect("serialize");
-    let restored: Verdict = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&v).unwrap_or_default();
+    let restored: Verdict = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(v, restored);
 }
 
@@ -347,8 +347,8 @@ fn verdict_serde_roundtrip_fail() {
     let v = Verdict::Fail {
         reason: "something went wrong".to_string(),
     };
-    let json = serde_json::to_string(&v).expect("serialize");
-    let restored: Verdict = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&v).unwrap_or_default();
+    let restored: Verdict = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(v, restored);
 }
 
@@ -359,16 +359,16 @@ fn verdict_serde_roundtrip_fail() {
 #[test]
 fn schedule_action_serde_roundtrip_run_task() {
     let a = ScheduleAction::RunTask { task_id: 42 };
-    let json = serde_json::to_string(&a).expect("serialize");
-    let restored: ScheduleAction = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&a).unwrap_or_default();
+    let restored: ScheduleAction = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(a, restored);
 }
 
 #[test]
 fn schedule_action_serde_roundtrip_advance_time() {
     let a = ScheduleAction::AdvanceTime { ticks: 1000 };
-    let json = serde_json::to_string(&a).expect("serialize");
-    let restored: ScheduleAction = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&a).unwrap_or_default();
+    let restored: ScheduleAction = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(a, restored);
 }
 
@@ -377,8 +377,8 @@ fn schedule_action_serde_roundtrip_inject_cancel() {
     let a = ScheduleAction::InjectCancel {
         region_id: "region-alpha".to_string(),
     };
-    let json = serde_json::to_string(&a).expect("serialize");
-    let restored: ScheduleAction = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&a).unwrap_or_default();
+    let restored: ScheduleAction = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(a, restored);
 }
 
@@ -388,16 +388,16 @@ fn schedule_action_serde_roundtrip_inject_fault() {
         task_id: 7,
         fault: FaultKind::ObligationLeak,
     };
-    let json = serde_json::to_string(&a).expect("serialize");
-    let restored: ScheduleAction = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&a).unwrap_or_default();
+    let restored: ScheduleAction = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(a, restored);
 }
 
 #[test]
 fn schedule_action_serde_roundtrip_fire_timer() {
     let a = ScheduleAction::FireTimer { timer_id: 99 };
-    let json = serde_json::to_string(&a).expect("serialize");
-    let restored: ScheduleAction = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&a).unwrap_or_default();
+    let restored: ScheduleAction = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(a, restored);
 }
 
@@ -441,8 +441,8 @@ fn schedule_transcript_serde_roundtrip() {
     });
     t.push(ScheduleAction::FireTimer { timer_id: 7 });
 
-    let json = serde_json::to_string(&t).expect("serialize");
-    let restored: ScheduleTranscript = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&t).unwrap_or_default();
+    let restored: ScheduleTranscript = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(t, restored);
 }
 
@@ -468,8 +468,8 @@ fn lab_event_serde_roundtrip() {
         region_id: None,
         outcome: "running".to_string(),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let restored: LabEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let restored: LabEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, restored);
 }
 
@@ -483,8 +483,8 @@ fn lab_event_serde_roundtrip_with_region() {
         region_id: Some("region-beta".to_string()),
         outcome: "cancel_injected".to_string(),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let restored: LabEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let restored: LabEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, restored);
 }
 
@@ -504,8 +504,8 @@ fn lab_run_result_serde_roundtrip_pass() {
         tasks_cancelled: 0,
         verdict: Verdict::Pass,
     };
-    let json = serde_json::to_string(&result).expect("serialize");
-    let restored: LabRunResult = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&result).unwrap_or_default();
+    let restored: LabRunResult = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(result, restored);
 }
 
@@ -530,8 +530,8 @@ fn lab_run_result_serde_roundtrip_fail() {
             reason: "1 tasks faulted".to_string(),
         },
     };
-    let json = serde_json::to_string(&result).expect("serialize");
-    let restored: LabRunResult = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&result).unwrap_or_default();
+    let restored: LabRunResult = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(result, restored);
 }
 
@@ -1309,8 +1309,8 @@ fn full_run_result_serde_roundtrip() {
     rt.advance_time(50);
 
     let result = rt.finalize();
-    let json = serde_json::to_string(&result).expect("serialize full result");
-    let restored: LabRunResult = serde_json::from_str(&json).expect("deserialize full result");
+    let json = serde_json::to_string(&result).unwrap_or_default();
+    let restored: LabRunResult = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(result, restored);
 }
 

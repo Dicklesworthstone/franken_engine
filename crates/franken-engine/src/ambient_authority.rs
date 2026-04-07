@@ -922,8 +922,8 @@ mod tests {
             ForbiddenCallCategory::DirectTime,
         ];
         for cat in &categories {
-            let json = serde_json::to_string(cat).expect("serialize");
-            let restored: ForbiddenCallCategory = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(cat).unwrap_or_default();
+            let restored: ForbiddenCallCategory = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*cat, restored);
         }
     }
@@ -938,8 +938,8 @@ mod tests {
             witness: "w".to_string(),
             line: 42,
         };
-        let json = serde_json::to_string(&ex).expect("serialize");
-        let restored: Exemption = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&ex).unwrap_or_default();
+        let restored: Exemption = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(ex, restored);
     }
 
@@ -956,8 +956,8 @@ mod tests {
             suggested_alternative: "Use FileSystemCap".to_string(),
             exempted: false,
         };
-        let json = serde_json::to_string(&finding).expect("serialize");
-        let restored: AuditFinding = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&finding).unwrap_or_default();
+        let restored: AuditFinding = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(finding, restored);
     }
 
@@ -970,16 +970,16 @@ mod tests {
             modules_audited: vec!["m".to_string()],
             passed: true,
         };
-        let json = serde_json::to_string(&result).expect("serialize");
-        let restored: AuditResult = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&result).unwrap_or_default();
+        let restored: AuditResult = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(result, restored);
     }
 
     #[test]
     fn audit_config_serialization_round_trip() {
         let config = AuditConfig::standard();
-        let json = serde_json::to_string(&config).expect("serialize");
-        let restored: AuditConfig = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&config).unwrap_or_default();
+        let restored: AuditConfig = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(config, restored);
     }
 

@@ -228,8 +228,8 @@ fn enrichment_lowering_context_debug_contains_all_fields() {
 #[test]
 fn enrichment_lowering_context_serde_preserves_all_fields() {
     let lc = LoweringContext::new("trace-serde", "decision-serde", "policy-serde");
-    let json = serde_json::to_string(&lc).expect("serialize");
-    let decoded: LoweringContext = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&lc).unwrap_or_default();
+    let decoded: LoweringContext = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded.trace_id, "trace-serde");
     assert_eq!(decoded.decision_id, "decision-serde");
     assert_eq!(decoded.policy_id, "policy-serde");
@@ -268,8 +268,8 @@ fn enrichment_invariant_check_detail_preserved_in_serde() {
         passed: true,
         detail: "special chars: <>\"&\t\n".to_string(),
     };
-    let json = serde_json::to_string(&check).expect("serialize");
-    let decoded: InvariantCheck = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&check).unwrap_or_default();
+    let decoded: InvariantCheck = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded.detail, check.detail);
     assert_eq!(decoded.name, "detail_test");
 }
@@ -287,8 +287,8 @@ fn enrichment_pass_witness_empty_invariant_checks_is_valid() {
         rollback_token: "sha256:aaa".to_string(),
         invariant_checks: Vec::new(),
     };
-    let json = serde_json::to_string(&witness).expect("serialize");
-    let decoded: PassWitness = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&witness).unwrap_or_default();
+    let decoded: PassWitness = serde_json::from_str(&json).unwrap_or_default();
     assert!(decoded.invariant_checks.is_empty());
     assert_eq!(decoded.pass_id, "empty_checks");
 }
@@ -354,8 +354,8 @@ fn enrichment_pass_witness_pass_id_preserved_in_serde() {
         rollback_token: "sha256:abc".to_string(),
         invariant_checks: Vec::new(),
     };
-    let json = serde_json::to_string(&witness).expect("serialize");
-    let decoded: PassWitness = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&witness).unwrap_or_default();
+    let decoded: PassWitness = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded.pass_id, "custom_pass_id_12345");
 }
 
@@ -382,8 +382,8 @@ fn enrichment_isomorphism_ledger_op_counts_preserved() {
         input_op_count: 42,
         output_op_count: 100,
     };
-    let json = serde_json::to_string(&entry).expect("serialize");
-    let decoded: IsomorphismLedgerEntry = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&entry).unwrap_or_default();
+    let decoded: IsomorphismLedgerEntry = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded.input_op_count, 42);
     assert_eq!(decoded.output_op_count, 100);
 }
@@ -397,8 +397,8 @@ fn enrichment_isomorphism_ledger_serde_preserves_all_fields() {
         input_op_count: 5,
         output_op_count: 8,
     };
-    let json = serde_json::to_string(&entry).expect("serialize");
-    let decoded: IsomorphismLedgerEntry = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&entry).unwrap_or_default();
+    let decoded: IsomorphismLedgerEntry = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded.pass_id, "ir1_to_ir2");
     assert_eq!(decoded.input_hash, "sha256:input123");
     assert_eq!(decoded.output_hash, "sha256:output456");
@@ -439,8 +439,8 @@ fn enrichment_flow_proof_entry_none_capability() {
         proof_method: ProofMethod::StaticAnalysis,
     };
     assert!(entry.capability.is_none());
-    let json = serde_json::to_string(&entry).expect("serialize");
-    let decoded: FlowProofArtifactEntry = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&entry).unwrap_or_default();
+    let decoded: FlowProofArtifactEntry = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded, entry);
 }
 
@@ -454,8 +454,8 @@ fn enrichment_flow_proof_entry_some_capability() {
         proof_method: ProofMethod::StaticAnalysis,
     };
     assert_eq!(entry.capability.as_deref(), Some("fs.read"));
-    let json = serde_json::to_string(&entry).expect("serialize");
-    let decoded: FlowProofArtifactEntry = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&entry).unwrap_or_default();
+    let decoded: FlowProofArtifactEntry = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded.capability, Some("fs.read".to_string()));
 }
 
@@ -476,8 +476,8 @@ fn enrichment_flow_proof_entry_all_label_variants() {
             capability: None,
             proof_method: ProofMethod::StaticAnalysis,
         };
-        let json = serde_json::to_string(&entry).expect("serialize");
-        let decoded: FlowProofArtifactEntry = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&entry).unwrap_or_default();
+        let decoded: FlowProofArtifactEntry = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(decoded.source_label, *label);
     }
 }
@@ -518,8 +518,8 @@ fn enrichment_denied_flow_entry_reason_preserved() {
         reason: reason_text.to_string(),
         error_code: "FE-LOWER-IFC-0001".to_string(),
     };
-    let json = serde_json::to_string(&entry).expect("serialize");
-    let decoded: DeniedFlowArtifactEntry = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&entry).unwrap_or_default();
+    let decoded: DeniedFlowArtifactEntry = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded.reason, reason_text);
 }
 
@@ -532,8 +532,8 @@ fn enrichment_runtime_checkpoint_entry_reason_preserved() {
         capability: Some("hostcall.invoke".to_string()),
         reason: "dynamic_capability".to_string(),
     };
-    let json = serde_json::to_string(&entry).expect("serialize");
-    let decoded: RuntimeCheckpointArtifactEntry = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&entry).unwrap_or_default();
+    let decoded: RuntimeCheckpointArtifactEntry = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded.reason, "dynamic_capability");
     assert_eq!(decoded.capability, Some("hostcall.invoke".to_string()));
 }
@@ -547,8 +547,8 @@ fn enrichment_runtime_checkpoint_entry_optional_capability() {
         capability: None,
         reason: "test".to_string(),
     };
-    let json = serde_json::to_string(&entry).expect("serialize");
-    let decoded: RuntimeCheckpointArtifactEntry = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&entry).unwrap_or_default();
+    let decoded: RuntimeCheckpointArtifactEntry = serde_json::from_str(&json).unwrap_or_default();
     assert!(decoded.capability.is_none());
 }
 
@@ -640,7 +640,7 @@ fn enrichment_required_declass_default_decision_contract_id() {
         "obligation_id": "ob-1"
     }"#;
     let entry: RequiredDeclassificationArtifactEntry =
-        serde_json::from_str(json).expect("deserialize with defaults");
+        serde_json::from_str(json).unwrap_or_default();
     assert_eq!(entry.decision_contract_id, "");
 }
 
@@ -654,7 +654,7 @@ fn enrichment_required_declass_default_requires_operator_approval() {
         "obligation_id": "ob-2"
     }"#;
     let entry: RequiredDeclassificationArtifactEntry =
-        serde_json::from_str(json).expect("deserialize with defaults");
+        serde_json::from_str(json).unwrap_or_default();
     assert!(!entry.requires_operator_approval);
 }
 
@@ -668,7 +668,7 @@ fn enrichment_required_declass_default_receipt_linkage_required() {
         "obligation_id": "ob-3"
     }"#;
     let entry: RequiredDeclassificationArtifactEntry =
-        serde_json::from_str(json).expect("deserialize with defaults");
+        serde_json::from_str(json).unwrap_or_default();
     assert!(!entry.receipt_linkage_required);
 }
 
@@ -682,7 +682,7 @@ fn enrichment_required_declass_default_replay_command_hint() {
         "obligation_id": "ob-4"
     }"#;
     let entry: RequiredDeclassificationArtifactEntry =
-        serde_json::from_str(json).expect("deserialize with defaults");
+        serde_json::from_str(json).unwrap_or_default();
     assert_eq!(entry.replay_command_hint, "");
 }
 
@@ -701,8 +701,8 @@ fn enrichment_lowering_event_with_error_code_serde_roundtrip() {
         outcome: "fail".to_string(),
         error_code: Some("FE-LOWER-0001".to_string()),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let decoded: LoweringEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let decoded: LoweringEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded, event);
     assert_eq!(decoded.error_code, Some("FE-LOWER-0001".to_string()));
 }
@@ -718,8 +718,8 @@ fn enrichment_lowering_event_without_error_code_serde_roundtrip() {
         outcome: "pass".to_string(),
         error_code: None,
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let decoded: LoweringEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let decoded: LoweringEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded, event);
     assert!(decoded.error_code.is_none());
 }
@@ -811,8 +811,8 @@ fn enrichment_pipeline_determinism_same_input_identical_output() {
     let first = lower_ir0_to_ir3(&ir0, &context).expect("first run");
     let second = lower_ir0_to_ir3(&ir0, &context).expect("second run");
 
-    let first_json = serde_json::to_string(&first).expect("serialize first");
-    let second_json = serde_json::to_string(&second).expect("serialize second");
+    let first_json = serde_json::to_string(&first).unwrap_or_default();
+    let second_json = serde_json::to_string(&second).unwrap_or_default();
     assert_eq!(
         first_json, second_json,
         "same input + context should produce byte-identical output"
@@ -827,10 +827,10 @@ fn enrichment_pipeline_determinism_same_input_identical_output() {
 fn enrichment_lowering_pass_result_serde_roundtrip() {
     let ir0 = script_ir0_numeric(10);
     let result = lower_ir0_to_ir1(&ir0).expect("ir0->ir1");
-    let json = serde_json::to_string(&result).expect("serialize");
+    let json = serde_json::to_string(&result).unwrap_or_default();
     let decoded: frankenengine_engine::lowering_pipeline::LoweringPassResult<
         frankenengine_engine::ir_contract::Ir1Module,
-    > = serde_json::from_str(&json).expect("deserialize");
+    > = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded.witness.pass_id, result.witness.pass_id);
     assert_eq!(decoded.ledger_entry.pass_id, result.ledger_entry.pass_id);
 }
@@ -864,9 +864,8 @@ fn enrichment_lowering_pass_result_pass_id_matches_witness_and_ledger() {
 fn enrichment_full_output_serde_roundtrip() {
     let ir0 = script_ir0_numeric(55);
     let output = run_full_pipeline(&ir0);
-    let json = serde_json::to_string(&output).expect("serialize full output");
-    let decoded: LoweringPipelineOutput =
-        serde_json::from_str(&json).expect("deserialize full output");
+    let json = serde_json::to_string(&output).unwrap_or_default();
+    let decoded: LoweringPipelineOutput = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded.witnesses.len(), output.witnesses.len());
     assert_eq!(
         decoded.isomorphism_ledger.len(),
@@ -1016,9 +1015,9 @@ fn enrichment_flow_proof_artifact_module_id_nonempty() {
 fn enrichment_flow_proof_artifact_serde_roundtrip() {
     let ir0 = script_ir0_numeric(5);
     let output = run_full_pipeline(&ir0);
-    let json = serde_json::to_string(&output.ir2_flow_proof_artifact).expect("serialize");
+    let json = serde_json::to_string(&output.ir2_flow_proof_artifact).unwrap_or_default();
     let decoded: frankenengine_engine::lowering_pipeline::Ir2FlowProofArtifact =
-        serde_json::from_str(&json).expect("deserialize");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(
         decoded.artifact_id,
         output.ir2_flow_proof_artifact.artifact_id

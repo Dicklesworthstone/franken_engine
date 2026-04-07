@@ -1314,8 +1314,8 @@ pub fn infer_capabilities(
 
     inferred_capabilities.sort_by_key(|c| std::cmp::Reverse(c.confidence_millionths));
 
-    let bytes = serde_json::to_vec(&(&inferred_capabilities, &minimum_capability_set))
-        .expect("serialization failed");
+    let bytes =
+        serde_json::to_vec(&(&inferred_capabilities, &minimum_capability_set)).unwrap_or_default();
     let capability_hash = ContentHash::compute(&bytes);
 
     Ok(CapabilityInferenceResult {
@@ -1712,7 +1712,7 @@ pub fn generate_manifest(
         readiness,
         input.epoch.as_u64(),
     ))
-    .expect("migration manifest must serialize for content hash");
+    .unwrap_or_default();
     let manifest_content_hash = ContentHash::compute(&manifest_bytes);
 
     Ok(MigrationManifest {

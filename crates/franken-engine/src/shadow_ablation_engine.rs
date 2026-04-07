@@ -2600,8 +2600,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serialize");
-            let restored: ShadowAblationError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(err).unwrap_or_default();
+            let restored: ShadowAblationError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*err, restored);
         }
     }
@@ -2624,9 +2624,9 @@ mod tests {
             fallback: None,
             budget_utilization: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&input).expect("serialize");
+        let json = serde_json::to_string(&input).unwrap_or_default();
         let restored: ShadowAblationTranscriptInput =
-            serde_json::from_str(&json).expect("deserialize");
+            serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(input, restored);
     }
 

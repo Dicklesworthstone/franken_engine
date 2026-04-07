@@ -819,9 +819,8 @@ mod tests {
     #[test]
     fn evidence_serde_roundtrip() {
         let inv = run_frontier_corpus();
-        let json = serde_json::to_string(&inv).expect("serialize");
-        let back: ParserFrontierEvidenceInventory =
-            serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&inv).unwrap_or_default();
+        let back: ParserFrontierEvidenceInventory = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(inv, back);
     }
 

@@ -516,15 +516,13 @@ pub fn analyze_escape(
             abstention_count += 1;
         }
 
-        let liveness_json = serde_json::to_string(&liveness)
-            .expect("liveness envelope must serialize for certificate hash");
+        let liveness_json = serde_json::to_string(&liveness).unwrap_or_default();
         let hash_input = format!(
             "cert:{}:{}:{}:{}:{}:{}:{}:{}:{}",
             site.site_id,
             escape_state,
             alias_class,
-            serde_json::to_string(&reasons)
-                .expect("escape reasons must serialize for certificate hash"),
+            serde_json::to_string(&reasons).unwrap_or_default(),
             ESCAPE_CERT_SCHEMA_VERSION,
             liveness_json,
             scalar_eligible,

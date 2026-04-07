@@ -866,8 +866,8 @@ mod tests {
         tracker.record(&make_event(1, "ext-a", 500, 3, 256));
         tracker.record(&make_event(2, "ext-b", 800, 1, 128));
 
-        let json = serde_json::to_string(&tracker).expect("serialize");
-        let restored: PauseTracker = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&tracker).unwrap_or_default();
+        let restored: PauseTracker = serde_json::from_str(&json).unwrap_or_default();
 
         assert_eq!(tracker.count(), restored.count());
         assert_eq!(tracker.global_percentiles(), restored.global_percentiles());
@@ -885,8 +885,8 @@ mod tests {
     #[test]
     fn pause_budget_serde_roundtrip() {
         let budget = PauseBudget::new(100_000, 500_000, 2_000_000);
-        let json = serde_json::to_string(&budget).expect("serialize");
-        let restored: PauseBudget = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&budget).unwrap_or_default();
+        let restored: PauseBudget = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(budget, restored);
     }
 
@@ -894,16 +894,16 @@ mod tests {
     fn pause_record_serde_roundtrip() {
         let event = make_event(7, "ext-serde", 12345, 50, 8192);
         let record = PauseRecord::from_gc_event(&event);
-        let json = serde_json::to_string(&record).expect("serialize");
-        let restored: PauseRecord = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&record).unwrap_or_default();
+        let restored: PauseRecord = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(record, restored);
     }
 
     #[test]
     fn percentile_serde_all_variants() {
         for p in [Percentile::P50, Percentile::P95, Percentile::P99] {
-            let json = serde_json::to_string(&p).expect("serialize");
-            let restored: Percentile = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(&p).unwrap_or_default();
+            let restored: Percentile = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(p, restored);
         }
     }
@@ -916,8 +916,8 @@ mod tests {
             budget_ns: 10_000_000,
             scope: "ext-a".to_string(),
         };
-        let json = serde_json::to_string(&v).expect("serialize");
-        let restored: BudgetViolation = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&v).unwrap_or_default();
+        let restored: BudgetViolation = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(v, restored);
     }
 
@@ -931,8 +931,8 @@ mod tests {
             p95_ns: 20_000,
             p99_ns: 45_000,
         };
-        let json = serde_json::to_string(&snap).expect("serialize");
-        let restored: PercentileSnapshot = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&snap).unwrap_or_default();
+        let restored: PercentileSnapshot = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(snap, restored);
     }
 

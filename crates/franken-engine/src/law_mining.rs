@@ -75,7 +75,8 @@ impl LawProvenanceSource {
         let mut data = Vec::new();
         push_string_len(
             &mut data,
-            &serde_json::to_string(&self.source_kind).expect("source_kind must serialize for hash"),
+            &serde_json::to_string(&self.source_kind)
+                .expect("law provenance source kind should serialize for hashing"),
         );
         push_string_len(&mut data, &self.source_id);
         push_strings(&mut data, &self.policy_ids);
@@ -157,7 +158,8 @@ impl LawCandidate {
         push_string_len(&mut data, &self.candidate_id);
         push_string_len(
             &mut data,
-            &serde_json::to_string(&self.kind).expect("law kind must serialize for hash"),
+            &serde_json::to_string(&self.kind)
+                .expect("law candidate kind should serialize for hashing"),
         );
         push_string_len(&mut data, &self.statement);
         data.extend_from_slice(&self.rank_millionths.to_le_bytes());
@@ -265,7 +267,7 @@ impl LawMiningCatalog {
             scope.recompute_hash();
 
             let kind_tag = serde_json::to_string(&accumulator.kind)
-                .expect("law kind must serialize for candidate ID");
+                .expect("candidate accumulator kind should serialize for stable IDs");
             let candidate_id = hashed_id("law", &[&kind_tag, &accumulator.statement]);
             let provenance_id = hashed_id("prov", &[&candidate_id]);
             let supporting_source_ids = accumulator

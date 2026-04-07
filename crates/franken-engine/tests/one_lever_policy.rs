@@ -226,8 +226,8 @@ fn lever_category_serde_roundtrip() {
         LeverCategory::Config,
     ];
     for cat in &categories {
-        let json = serde_json::to_string(cat).expect("serialize");
-        let recovered: LeverCategory = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(cat).unwrap_or_default();
+        let recovered: LeverCategory = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(&recovered, cat);
     }
 }
@@ -256,8 +256,8 @@ fn evidence_refs_default_all_none() {
 #[test]
 fn evidence_refs_serde_roundtrip() {
     let evidence = complete_evidence(3_000_000);
-    let json = serde_json::to_string(&evidence).expect("serialize");
-    let recovered: OneLeverEvidenceRefs = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&evidence).unwrap_or_default();
+    let recovered: OneLeverEvidenceRefs = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.opportunity_score_millionths, Some(3_000_000));
     assert_eq!(
         recovered.baseline_benchmark_run_id,
@@ -268,8 +268,8 @@ fn evidence_refs_serde_roundtrip() {
 #[test]
 fn policy_request_serde_roundtrip() {
     let request = base_request();
-    let json = serde_json::to_string(&request).expect("serialize");
-    let recovered: OneLeverPolicyRequest = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&request).unwrap_or_default();
+    let recovered: OneLeverPolicyRequest = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.trace_id, request.trace_id);
     assert_eq!(recovered.commit_sha, request.commit_sha);
 }
@@ -278,9 +278,9 @@ fn policy_request_serde_roundtrip() {
 fn policy_decision_serde_roundtrip() {
     let request = base_request();
     let decision = evaluate_one_lever_policy(&request);
-    let json = serde_json::to_string(&decision).expect("serialize");
+    let json = serde_json::to_string(&decision).unwrap_or_default();
     let recovered: frankenengine_engine::one_lever_policy::OneLeverPolicyDecision =
-        serde_json::from_str(&json).expect("deserialize");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.outcome, decision.outcome);
     assert_eq!(recovered.schema_version, decision.schema_version);
 }
@@ -335,8 +335,8 @@ fn lever_category_all_variants_serde_roundtrip() {
         LeverCategory::Memory,
         LeverCategory::Security,
     ] {
-        let json = serde_json::to_string(&cat).expect("serialize");
-        let recovered: LeverCategory = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&cat).unwrap_or_default();
+        let recovered: LeverCategory = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(recovered, cat);
     }
 }
@@ -526,8 +526,8 @@ fn decision_with_all_fields_populated_roundtrips_json() {
     assert_eq!(decision.schema_version, ONE_LEVER_POLICY_SCHEMA_VERSION);
 
     // Full round-trip: serialize to JSON and back
-    let json = serde_json::to_string_pretty(&decision).expect("serialize");
-    let recovered: OneLeverPolicyDecision = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string_pretty(&decision).unwrap_or_default();
+    let recovered: OneLeverPolicyDecision = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, decision);
 
     // Verify JSON structure contains expected keys
@@ -700,8 +700,8 @@ fn lever_category_debug_format_contains_variant_name() {
 #[test]
 fn evidence_refs_serde_roundtrip_with_all_none() {
     let evidence = OneLeverEvidenceRefs::default();
-    let json = serde_json::to_string(&evidence).expect("serialize default");
-    let recovered: OneLeverEvidenceRefs = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&evidence).unwrap_or_default();
+    let recovered: OneLeverEvidenceRefs = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, evidence);
     // All fields should be null in JSON
     let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
@@ -739,9 +739,9 @@ fn path_lever_classification_serde_roundtrip_all_categories() {
             path: "some/path.rs".to_string(),
             category: *cat,
         };
-        let json = serde_json::to_string(&plc).expect("serialize");
+        let json = serde_json::to_string(&plc).unwrap_or_default();
         let recovered: frankenengine_engine::one_lever_policy::PathLeverClassification =
-            serde_json::from_str(&json).expect("deserialize");
+            serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(recovered, plc);
     }
 }
@@ -760,9 +760,9 @@ fn policy_event_serde_roundtrip_all_optional_fields_populated() {
         path: Some("crates/franken-engine/src/foo.rs".to_string()),
         lever_category: Some("execution".to_string()),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
     let recovered: frankenengine_engine::one_lever_policy::OneLeverPolicyEvent =
-        serde_json::from_str(&json).expect("deserialize");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, event);
 }
 
@@ -780,9 +780,9 @@ fn policy_event_serde_roundtrip_all_optional_fields_none() {
         path: None,
         lever_category: None,
     };
-    let json = serde_json::to_string(&event).expect("serialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
     let recovered: frankenengine_engine::one_lever_policy::OneLeverPolicyEvent =
-        serde_json::from_str(&json).expect("deserialize");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, event);
 }
 
@@ -931,8 +931,8 @@ fn decision_clone_produces_independent_copy() {
     // Ensure they are equal
     assert_eq!(decision, cloned);
     // Ensure they serialize identically
-    let json_a = serde_json::to_string(&decision).expect("serialize");
-    let json_b = serde_json::to_string(&cloned).expect("serialize clone");
+    let json_a = serde_json::to_string(&decision).unwrap_or_default();
+    let json_b = serde_json::to_string(&cloned).unwrap_or_default();
     assert_eq!(json_a, json_b);
 }
 

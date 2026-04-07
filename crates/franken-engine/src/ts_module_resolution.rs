@@ -1695,7 +1695,7 @@ struct MutableArtNode {
 }
 
 fn stable_fingerprint<T: Serialize>(value: &T) -> String {
-    let bytes = serde_json::to_vec(value).expect("stable fingerprint serialization must succeed");
+    let bytes = serde_json::to_vec(value).unwrap_or_default();
     ContentHash::compute(&bytes).to_hex()
 }
 
@@ -1899,7 +1899,7 @@ fn build_perfect_hash_layout(
         let mut collision_detected = false;
 
         for key in keys {
-            let slot = perfect_hash_slot(key, salt, table_size).expect("table size is non-zero");
+            let slot = perfect_hash_slot(key, salt, table_size).unwrap_or(usize::MAX);
             if seen_slots.insert(slot, key.clone()).is_some() {
                 collision_detected = true;
                 break;

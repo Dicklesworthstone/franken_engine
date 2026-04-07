@@ -360,8 +360,10 @@ fn write_events_jsonl(
 ) -> std::io::Result<()> {
     let mut payload = String::new();
     for event in events {
-        payload
-            .push_str(&serde_json::to_string(event).expect("event serialization should succeed"));
+        let line = serde_json::to_string(event).map_err(|error| {
+            std::io::Error::other(format!("failed to serialize relation log event: {error}"))
+        })?;
+        payload.push_str(&line);
         payload.push('\n');
     }
 

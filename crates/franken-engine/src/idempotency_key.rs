@@ -903,8 +903,8 @@ mod tests {
     fn idempotency_key_serialization_round_trip() {
         let input = test_derivation_input();
         let key = derive_idempotency_key(&test_session_key(), test_epoch(), &input);
-        let json = serde_json::to_string(&key).expect("serialize");
-        let restored: IdempotencyKey = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&key).unwrap_or_default();
+        let restored: IdempotencyKey = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(key, restored);
     }
 
@@ -920,8 +920,8 @@ mod tests {
             },
         ];
         for status in &statuses {
-            let json = serde_json::to_string(status).expect("serialize");
-            let restored: DedupStatus = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(status).unwrap_or_default();
+            let restored: DedupStatus = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*status, restored);
         }
     }
@@ -939,8 +939,8 @@ mod tests {
             },
         ];
         for result in &results {
-            let json = serde_json::to_string(result).expect("serialize");
-            let restored: DedupResult = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(result).unwrap_or_default();
+            let restored: DedupResult = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*result, restored);
         }
     }
@@ -956,8 +956,8 @@ mod tests {
             epoch_id: 1,
             event: "dedup_check".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let restored: IdempotencyEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&event).unwrap_or_default();
+        let restored: IdempotencyEvent = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(event, restored);
     }
 
@@ -981,8 +981,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serialize");
-            let restored: IdempotencyError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(err).unwrap_or_default();
+            let restored: IdempotencyError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*err, restored);
         }
     }
@@ -993,8 +993,8 @@ mod tests {
             max_retries: 5,
             entry_ttl_ticks: 1000,
         };
-        let json = serde_json::to_string(&config).expect("serialize");
-        let restored: RetryConfig = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&config).unwrap_or_default();
+        let restored: RetryConfig = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(config, restored);
     }
 

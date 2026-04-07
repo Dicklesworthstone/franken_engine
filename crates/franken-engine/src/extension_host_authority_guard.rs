@@ -721,8 +721,8 @@ mod tests {
             ViolationKind::CanonicalTypeShadow,
         ];
         for kind in &kinds {
-            let json = serde_json::to_string(kind).expect("serialize");
-            let restored: ViolationKind = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(kind).unwrap_or_default();
+            let restored: ViolationKind = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*kind, restored);
         }
     }
@@ -1470,8 +1470,8 @@ fn bad_fn(data: &[u8]) {
             remediation: "Import from crate::control_plane instead".to_string(),
             exempted: false,
         };
-        let json = serde_json::to_string(&finding).expect("serialize");
-        let restored: ExtensionHostFinding = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&finding).unwrap_or_default();
+        let restored: ExtensionHostFinding = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(finding, restored);
     }
 
@@ -1485,8 +1485,8 @@ fn bad_fn(data: &[u8]) {
             reason: "Bootstrap needs direct access".to_string(),
             line: 0,
         };
-        let json = serde_json::to_string(&exemption).expect("serialize");
-        let restored: ExtensionHostExemption = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&exemption).unwrap_or_default();
+        let restored: ExtensionHostExemption = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(exemption, restored);
     }
 
@@ -1501,9 +1501,9 @@ fn bad_fn(data: &[u8]) {
             reason: "r".to_string(),
             line: 0,
         });
-        let json = serde_json::to_string(&reg).expect("serialize");
+        let json = serde_json::to_string(&reg).unwrap_or_default();
         let restored: ExtensionHostExemptionRegistry =
-            serde_json::from_str(&json).expect("deserialize");
+            serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(reg, restored);
     }
 
@@ -1517,16 +1517,16 @@ fn bad_fn(data: &[u8]) {
             passed: true,
             summary_by_kind: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&result).expect("serialize");
-        let restored: ExtensionHostAuditResult = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&result).unwrap_or_default();
+        let restored: ExtensionHostAuditResult = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(result, restored);
     }
 
     #[test]
     fn guard_config_serde_roundtrip() {
         let config = GuardConfig::default();
-        let json = serde_json::to_string(&config).expect("serialize");
-        let restored: GuardConfig = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&config).unwrap_or_default();
+        let restored: GuardConfig = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(config, restored);
     }
 

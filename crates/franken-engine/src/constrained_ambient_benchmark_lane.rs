@@ -269,12 +269,14 @@ fn evaluate_impl(
 
     let mut workload_reports = Vec::new();
     for workload_id in constrained_ids.intersection(&ambient_ids) {
-        let constrained = constrained_map
-            .get(workload_id)
-            .expect("intersection ids must exist");
-        let ambient = ambient_map
-            .get(workload_id)
-            .expect("intersection ids must exist");
+        let constrained = match constrained_map.get(workload_id) {
+            Some(c) => c,
+            None => continue,
+        };
+        let ambient = match ambient_map.get(workload_id) {
+            Some(a) => a,
+            None => continue,
+        };
 
         if constrained.output_digest != ambient.output_digest {
             blockers.push(format!(

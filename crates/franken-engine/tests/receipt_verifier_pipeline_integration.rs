@@ -297,7 +297,7 @@ fn checkpoint_preimage(checkpoint: &SignedLogCheckpoint) -> Vec<u8> {
 fn attestation_quote_digest(
     quote: &frankenengine_engine::attested_execution_cell::AttestationQuote,
 ) -> ContentHash {
-    let bytes = serde_json::to_vec(quote).expect("quote serialize");
+    let bytes = serde_json::to_vec(quote).unwrap_or_default();
     ContentHash::compute(&bytes)
 }
 

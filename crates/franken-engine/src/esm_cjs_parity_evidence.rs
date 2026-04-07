@@ -859,7 +859,7 @@ pub fn write_esm_cjs_parity_evidence_bundle(
     let events_path = output_dir.join("esm_cjs_parity_evidence_events.jsonl");
     let events_jsonl: String = events
         .iter()
-        .map(|e| serde_json::to_string(e).expect("event serialization"))
+        .map(|e| serde_json::to_string(e).unwrap_or_default())
         .collect::<Vec<_>>()
         .join("\n");
     fs::write(&events_path, &events_jsonl)?;

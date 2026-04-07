@@ -34,6 +34,21 @@ const GA_EVIDENCE_PACKAGE_SCHEMA_VERSION: &str =
     "franken-engine.runtime-diagnostics.ga-evidence-package.v1";
 const GA_EVIDENCE_PACKAGE_FAILURE_CODE: &str = "FE-RUNTIME-DIAGNOSTICS-GA-0001";
 
+#[track_caller]
+fn serialize_json_value<T: ?Sized + Serialize>(value: &T, context: &str) -> Value {
+    serde_json::to_value(value).unwrap_or_else(|error| panic!("{context}: {error}"))
+}
+
+#[track_caller]
+fn serialize_json_string<T: ?Sized + Serialize>(value: &T, context: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|error| panic!("{context}: {error}"))
+}
+
+#[track_caller]
+fn serialize_pretty_json_string<T: ?Sized + Serialize>(value: &T, context: &str) -> String {
+    serde_json::to_string_pretty(value).unwrap_or_else(|error| panic!("{context}: {error}"))
+}
+
 /// Stable log envelope required by plan acceptance criteria.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StructuredLogEvent {
@@ -926,7 +941,7 @@ pub fn export_evidence_bundle(
             timestamp_ns: entry.timestamp_ns,
             severity: severity_from_evidence_entry(entry),
             decision_type: Some(entry.decision_type),
-            payload: serde_json::to_value(entry).expect("evidence entry must serialize"),
+            payload: serialize_json_value(entry, "evidence entry should serialize for export"),
         };
 
         if matches_export_filter(&filter, &record) {
@@ -944,8 +959,10 @@ pub fn export_evidence_bundle(
             timestamp_ns: envelope.record.timestamp_ns,
             severity: severity_from_hostcall(&envelope.record.result_status),
             decision_type: None,
-            payload: serde_json::to_value(&envelope.record)
-                .expect("hostcall record must serialize"),
+            payload: serialize_json_value(
+                &envelope.record,
+                "hostcall telemetry record should serialize for export",
+            ),
         };
 
         if matches_export_filter(&filter, &record) {
@@ -963,8 +980,10 @@ pub fn export_evidence_bundle(
             timestamp_ns: envelope.receipt.timestamp_ns,
             severity: severity_from_containment_action(envelope.receipt.action),
             decision_type: Some(DecisionType::SecurityAction),
-            payload: serde_json::to_value(&envelope.receipt)
-                .expect("containment receipt must serialize"),
+            payload: serialize_json_value(
+                &envelope.receipt,
+                "containment receipt should serialize for export",
+            ),
         };
 
         if matches_export_filter(&filter, &record) {
@@ -982,7 +1001,7 @@ pub fn export_evidence_bundle(
             timestamp_ns: artifact.timestamp_ns,
             severity: EvidenceSeverity::Info,
             decision_type: None,
-            payload: serde_json::to_value(artifact).expect("replay artifact must serialize"),
+            payload: serialize_json_value(artifact, "replay artifact should serialize for export"),
         };
 
         if matches_export_filter(&filter, &record) {
@@ -1134,7 +1153,10 @@ pub fn export_support_bundle(
     let mut files = vec![
         make_support_bundle_file(
             "support_bundle/run_manifest.json",
-            serde_json::to_string_pretty(&run_manifest).expect("run manifest must serialize"),
+            serialize_pretty_json_string(
+                &run_manifest,
+                "support bundle run manifest should serialize",
+            ),
         ),
         make_support_bundle_file(
             "support_bundle/events.jsonl",
@@ -1146,8 +1168,10 @@ pub fn export_support_bundle(
         ),
         make_support_bundle_file(
             "support_bundle/runtime_diagnostics.json",
-            serde_json::to_string_pretty(&diagnostics)
-                .expect("runtime diagnostics output must serialize"),
+            serialize_pretty_json_string(
+                &diagnostics,
+                "runtime diagnostics should serialize for support bundle",
+            ),
         ),
         make_support_bundle_file(
             "support_bundle/evidence_records.jsonl",
@@ -1181,7 +1205,7 @@ pub fn export_support_bundle(
 
     files.push(make_support_bundle_file(
         "support_bundle/index.json",
-        serde_json::to_string_pretty(&index).expect("support bundle index must serialize"),
+        serialize_pretty_json_string(&index, "support bundle index should serialize"),
     ));
     files.sort_by(|left, right| left.path.cmp(&right.path));
 
@@ -2139,28 +2163,38 @@ pub fn build_ga_evidence_package(input: &GaEvidencePackageInput) -> GaEvidencePa
     let mut files = vec![
         make_support_bundle_file(
             "ga_evidence_package/support_bundle_index.json",
-            serde_json::to_string_pretty(&input.support_bundle.index)
-                .expect("support bundle index must serialize"),
+            serialize_pretty_json_string(
+                &input.support_bundle.index,
+                "GA evidence support bundle index should serialize",
+            ),
         ),
         make_support_bundle_file(
             "ga_evidence_package/onboarding_scorecard.json",
-            serde_json::to_string_pretty(&input.onboarding_scorecard)
-                .expect("onboarding scorecard must serialize"),
+            serialize_pretty_json_string(
+                &input.onboarding_scorecard,
+                "onboarding scorecard should serialize for GA evidence package",
+            ),
         ),
         make_support_bundle_file(
             "ga_evidence_package/rollout_decision_artifact.json",
-            serde_json::to_string_pretty(&input.rollout_decision_artifact)
-                .expect("rollout decision artifact must serialize"),
+            serialize_pretty_json_string(
+                &input.rollout_decision_artifact,
+                "rollout decision artifact should serialize for GA evidence package",
+            ),
         ),
         make_support_bundle_file(
             "ga_evidence_package/risk_disposition.json",
-            serde_json::to_string_pretty(&risk_disposition)
-                .expect("risk disposition must serialize"),
+            serialize_pretty_json_string(
+                &risk_disposition,
+                "risk disposition should serialize for GA evidence package",
+            ),
         ),
         make_support_bundle_file(
             "ga_evidence_package/external_evidence_links.json",
-            serde_json::to_string_pretty(&external_evidence_links)
-                .expect("external evidence links must serialize"),
+            serialize_pretty_json_string(
+                &external_evidence_links,
+                "external evidence links should serialize for GA evidence package",
+            ),
         ),
         make_support_bundle_file(
             "ga_evidence_package/third_party_replay_commands.txt",
@@ -2210,7 +2244,7 @@ pub fn build_ga_evidence_package(input: &GaEvidencePackageInput) -> GaEvidencePa
 
     files.push(make_support_bundle_file(
         "ga_evidence_package/index.json",
-        serde_json::to_string_pretty(&index).expect("ga evidence package index must serialize"),
+        serialize_pretty_json_string(&index, "GA evidence package index should serialize"),
     ));
 
     GaEvidencePackageOutput {
@@ -2791,9 +2825,10 @@ fn validate_preflight_mandatory_fields(
 fn render_evidence_records_jsonl(records: &[EvidenceExportRecord]) -> String {
     let mut lines = Vec::new();
     for record in records {
-        lines.push(
-            serde_json::to_string(record).expect("support bundle evidence record must serialize"),
-        );
+        lines.push(serialize_json_string(
+            record,
+            "evidence export record should serialize to JSONL",
+        ));
     }
     lines.join("\n")
 }
@@ -2801,7 +2836,10 @@ fn render_evidence_records_jsonl(records: &[EvidenceExportRecord]) -> String {
 fn render_support_bundle_events_jsonl(events: &[StructuredLogEvent]) -> String {
     let mut lines = Vec::new();
     for event in events {
-        lines.push(serde_json::to_string(event).expect("support bundle event must serialize"));
+        lines.push(serialize_json_string(
+            event,
+            "support bundle event should serialize to JSONL",
+        ));
     }
     lines.join("\n")
 }

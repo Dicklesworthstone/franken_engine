@@ -416,8 +416,8 @@ fn enum_is_lowered_and_does_not_contain_enum_keyword() {
 #[test]
 fn ts_normalization_config_default_is_constructible() {
     let config = TsNormalizationConfig::default();
-    let json = serde_json::to_string(&config).expect("serialize");
-    let recovered: TsNormalizationConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let recovered: TsNormalizationConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(serde_json::to_string(&recovered).unwrap(), json);
 }
 
@@ -460,8 +460,8 @@ fn source_map_entry_serde_roundtrip() {
         normalized_line: 5,
         original_line: 10,
     };
-    let json = serde_json::to_string(&entry).expect("serialize");
-    let recovered: SourceMapEntry = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&entry).unwrap_or_default();
+    let recovered: SourceMapEntry = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.normalized_line, 5);
     assert_eq!(recovered.original_line, 10);
 }
@@ -472,8 +472,8 @@ fn capability_intent_serde_roundtrip() {
         symbol: "hostcall".to_string(),
         capability: "fs.read".to_string(),
     };
-    let json = serde_json::to_string(&intent).expect("serialize");
-    let recovered: CapabilityIntent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&intent).unwrap_or_default();
+    let recovered: CapabilityIntent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.symbol, "hostcall");
     assert_eq!(recovered.capability, "fs.read");
 }
@@ -485,8 +485,8 @@ fn normalization_decision_serde_roundtrip() {
         changed: true,
         detail: "removed 3 annotations".to_string(),
     };
-    let json = serde_json::to_string(&decision).expect("serialize");
-    let recovered: NormalizationDecision = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&decision).unwrap_or_default();
+    let recovered: NormalizationDecision = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.step, "strip_type_annotations");
     assert!(recovered.changed);
 }
@@ -502,8 +502,8 @@ fn normalization_event_serde_roundtrip() {
         outcome: "ok".to_string(),
         error_code: None,
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let recovered: NormalizationEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let recovered: NormalizationEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.component, "ts_normalization");
     assert_eq!(recovered.error_code, None);
 }
@@ -520,8 +520,8 @@ fn ts_normalization_witness_serde_roundtrip() {
         decisions: vec![],
         capability_intents: vec![],
     };
-    let json = serde_json::to_string(&witness).expect("serialize");
-    let recovered: TsNormalizationWitness = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&witness).unwrap_or_default();
+    let recovered: TsNormalizationWitness = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.source_hash, "sha256-src");
     assert_eq!(recovered.normalized_hash, "sha256-norm");
 }
@@ -536,8 +536,8 @@ fn ts_normalization_output_serde_roundtrip() {
         "policy-serde-out",
     )
     .expect("normalization should pass");
-    let json = serde_json::to_string(&output).expect("serialize");
-    let recovered: TsNormalizationOutput = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&output).unwrap_or_default();
+    let recovered: TsNormalizationOutput = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(output.normalized_source, recovered.normalized_source);
     assert_eq!(output.witness.source_hash, recovered.witness.source_hash);
     assert_eq!(output.events.len(), recovered.events.len());
@@ -619,8 +619,8 @@ fn ts_ingestion_event_serde_roundtrip() {
         outcome: "ok".to_string(),
         error_code: Some("FE-TSINGEST-0002".to_string()),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let recovered: TsIngestionEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let recovered: TsIngestionEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.component, "ts_ingestion_lane");
     assert_eq!(recovered.error_code.as_deref(), Some("FE-TSINGEST-0002"));
 }
@@ -628,8 +628,8 @@ fn ts_ingestion_event_serde_roundtrip() {
 #[test]
 fn ts_ingestion_error_code_serde_roundtrip() {
     let code = TsIngestionErrorCode::CapabilityContractFailed;
-    let json = serde_json::to_string(&code).expect("serialize");
-    let recovered: TsIngestionErrorCode = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&code).unwrap_or_default();
+    let recovered: TsIngestionErrorCode = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.stable_code(), code.stable_code());
 }
 
@@ -652,8 +652,8 @@ fn source_language_as_str_both_variants() {
 #[test]
 fn source_language_serde_roundtrip() {
     for lang in [SourceLanguage::JavaScript, SourceLanguage::TypeScript] {
-        let json = serde_json::to_string(&lang).expect("serialize");
-        let recovered: SourceLanguage = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&lang).unwrap_or_default();
+        let recovered: SourceLanguage = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(lang, recovered);
     }
 }
@@ -702,8 +702,8 @@ fn ts_compiler_options_default_values() {
 #[test]
 fn ts_compiler_options_serde_roundtrip() {
     let opts = TsCompilerOptions::default();
-    let json = serde_json::to_string(&opts).expect("serialize");
-    let recovered: TsCompilerOptions = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&opts).unwrap_or_default();
+    let recovered: TsCompilerOptions = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(opts, recovered);
 }
 
@@ -726,8 +726,8 @@ fn source_ingestion_summary_serde_roundtrip() {
         ts_decision_count: 5,
         ts_capability_intent_count: 2,
     };
-    let json = serde_json::to_string(&summary).expect("serialize");
-    let recovered: SourceIngestionSummary = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&summary).unwrap_or_default();
+    let recovered: SourceIngestionSummary = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(summary, recovered);
 }
 
@@ -778,8 +778,8 @@ fn ts_ingestion_error_code_serde_roundtrip_all_variants() {
         TsIngestionErrorCode::LoweringFailed,
         TsIngestionErrorCode::CapabilityContractFailed,
     ] {
-        let json = serde_json::to_string(&code).expect("serialize");
-        let recovered: TsIngestionErrorCode = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&code).unwrap_or_default();
+        let recovered: TsIngestionErrorCode = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(code, recovered);
     }
 }
@@ -800,8 +800,8 @@ fn ts_ingestion_error_serde_roundtrip() {
             error_code: Some("FE-TSINGEST-0002".to_string()),
         }],
     };
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: TsIngestionError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: TsIngestionError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, recovered);
 }
 

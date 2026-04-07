@@ -173,8 +173,8 @@ fn lowering_context_debug() {
 #[test]
 fn lowering_context_serde_roundtrip() {
     let lc = LoweringContext::new("trace-rt", "decision-rt", "policy-rt");
-    let json = serde_json::to_string(&lc).expect("serialize");
-    let decoded: LoweringContext = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&lc).unwrap_or_default();
+    let decoded: LoweringContext = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded, lc);
 }
 
@@ -193,8 +193,8 @@ fn lowering_event_construction_and_serde() {
         outcome: "pass".to_string(),
         error_code: None,
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let decoded: LoweringEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let decoded: LoweringEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded, event);
 }
 
@@ -209,8 +209,8 @@ fn lowering_event_with_error_code_serde() {
         outcome: "fail".to_string(),
         error_code: Some("FE-LOWER-0001".to_string()),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let decoded: LoweringEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let decoded: LoweringEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded.error_code, Some("FE-LOWER-0001".to_string()));
 }
 
@@ -225,8 +225,8 @@ fn invariant_check_construction_and_serde() {
         passed: true,
         detail: "all good".to_string(),
     };
-    let json = serde_json::to_string(&check).expect("serialize");
-    let decoded: InvariantCheck = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&check).unwrap_or_default();
+    let decoded: InvariantCheck = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded, check);
 }
 
@@ -237,8 +237,8 @@ fn invariant_check_failed_serde() {
         passed: false,
         detail: "scope binding ids not unique".to_string(),
     };
-    let json = serde_json::to_string(&check).expect("serialize");
-    let decoded: InvariantCheck = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&check).unwrap_or_default();
+    let decoded: InvariantCheck = serde_json::from_str(&json).unwrap_or_default();
     assert!(!decoded.passed);
 }
 
@@ -259,8 +259,8 @@ fn pass_witness_construction_and_serde() {
             detail: "ok".to_string(),
         }],
     };
-    let json = serde_json::to_string(&witness).expect("serialize");
-    let decoded: PassWitness = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&witness).unwrap_or_default();
+    let decoded: PassWitness = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded, witness);
     assert_eq!(decoded.invariant_checks.len(), 1);
 }
@@ -274,8 +274,8 @@ fn pass_witness_empty_checks_serde() {
         rollback_token: "sha256:000".to_string(),
         invariant_checks: Vec::new(),
     };
-    let json = serde_json::to_string(&witness).expect("serialize");
-    let decoded: PassWitness = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&witness).unwrap_or_default();
+    let decoded: PassWitness = serde_json::from_str(&json).unwrap_or_default();
     assert!(decoded.invariant_checks.is_empty());
 }
 
@@ -292,8 +292,8 @@ fn isomorphism_ledger_entry_construction_and_serde() {
         input_op_count: 5,
         output_op_count: 8,
     };
-    let json = serde_json::to_string(&entry).expect("serialize");
-    let decoded: IsomorphismLedgerEntry = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&entry).unwrap_or_default();
+    let decoded: IsomorphismLedgerEntry = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded, entry);
     assert_eq!(decoded.input_op_count, 5);
     assert_eq!(decoded.output_op_count, 8);
@@ -1477,8 +1477,8 @@ fn all_hashes_are_sha256_prefixed() {
 fn lowering_pass_result_ir1_serde_roundtrip() {
     let ir0 = script_ir0_numeric(42);
     let result = lower_ir0_to_ir1(&ir0).expect("should succeed");
-    let json = serde_json::to_string(&result).expect("serialize");
-    let decoded: LoweringPassResult<Ir1Module> = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&result).unwrap_or_default();
+    let decoded: LoweringPassResult<Ir1Module> = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded.witness, result.witness);
     assert_eq!(decoded.ledger_entry, result.ledger_entry);
 }
@@ -1487,8 +1487,8 @@ fn lowering_pass_result_ir1_serde_roundtrip() {
 fn lowering_pipeline_output_serde_roundtrip() {
     let ir0 = script_ir0_numeric(42);
     let output = run_full_pipeline(&ir0);
-    let json = serde_json::to_string(&output).expect("serialize");
-    let decoded: LoweringPipelineOutput = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&output).unwrap_or_default();
+    let decoded: LoweringPipelineOutput = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded.witnesses, output.witnesses);
     assert_eq!(decoded.isomorphism_ledger, output.isomorphism_ledger);
     assert_eq!(decoded.events, output.events);

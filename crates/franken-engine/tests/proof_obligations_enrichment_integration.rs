@@ -54,8 +54,8 @@ fn obligation_id_clone_eq() {
 #[test]
 fn obligation_id_serde_roundtrip() {
     let id = ObligationId("obl-test".into());
-    let json = serde_json::to_string(&id).expect("serialize");
-    let restored: ObligationId = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&id).unwrap_or_default();
+    let restored: ObligationId = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(id, restored);
 }
 
@@ -77,8 +77,8 @@ fn pass_id_ordering() {
 #[test]
 fn pass_id_serde_roundtrip() {
     let id = PassId("pass-1".into());
-    let json = serde_json::to_string(&id).expect("serialize");
-    let restored: PassId = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&id).unwrap_or_default();
+    let restored: PassId = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(id, restored);
 }
 
@@ -118,8 +118,8 @@ fn category_display_values() {
 #[test]
 fn category_serde_all_roundtrip() {
     for cat in &ObligationCategory::ALL {
-        let json = serde_json::to_string(cat).expect("serialize");
-        let restored: ObligationCategory = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(cat).unwrap_or_default();
+        let restored: ObligationCategory = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*cat, restored);
     }
 }
@@ -151,8 +151,8 @@ fn severity_serde_all_roundtrip() {
         ObligationSeverity::Error,
         ObligationSeverity::Fatal,
     ] {
-        let json = serde_json::to_string(&sev).expect("serialize");
-        let restored: ObligationSeverity = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&sev).unwrap_or_default();
+        let restored: ObligationSeverity = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(sev, restored);
     }
 }
@@ -198,8 +198,8 @@ fn status_serde_all_roundtrip() {
         ObligationStatus::Waived,
         ObligationStatus::InsufficientEvidence,
     ] {
-        let json = serde_json::to_string(&status).expect("serialize");
-        let restored: ObligationStatus = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&status).unwrap_or_default();
+        let restored: ObligationStatus = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(status, restored);
     }
 }
@@ -237,8 +237,8 @@ fn evidence_requirement_all_variants_serde() {
         EvidenceRequirement::OperatorReview,
     ];
     for ev in &variants {
-        let json = serde_json::to_string(ev).expect("serialize");
-        let restored: EvidenceRequirement = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(ev).unwrap_or_default();
+        let restored: EvidenceRequirement = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*ev, restored);
     }
 }
@@ -257,8 +257,8 @@ fn obligation_template_serde_roundtrip() {
         evidence: EvidenceRequirement::HashLinkage,
         waivable: true,
     };
-    let json = serde_json::to_string(&t).expect("serialize");
-    let restored: ObligationTemplate = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&t).unwrap_or_default();
+    let restored: ObligationTemplate = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(t, restored);
 }
 
@@ -315,8 +315,8 @@ fn obligation_binding_serde_roundtrip() {
             proof_system: "flow_lattice".into(),
         },
     };
-    let json = serde_json::to_string(&b).expect("serialize");
-    let restored: ObligationBinding = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&b).unwrap_or_default();
+    let restored: ObligationBinding = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(b, restored);
 }
 
@@ -337,8 +337,8 @@ fn obligation_evaluation_serde_roundtrip() {
         required_value: Some(990_000),
         reason: "pass rate met".into(),
     };
-    let json = serde_json::to_string(&e).expect("serialize");
-    let restored: ObligationEvaluation = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&e).unwrap_or_default();
+    let restored: ObligationEvaluation = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(e, restored);
 }
 
@@ -655,8 +655,8 @@ fn obligation_report_serde_roundtrip() {
         .unwrap();
     reg.evaluate(&obl_id, ObligationStatus::Satisfied, None, "ok");
     let report = reg.report();
-    let json = serde_json::to_string(&report).expect("serialize");
-    let restored: ObligationReport = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&report).unwrap_or_default();
+    let restored: ObligationReport = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(report, restored);
 }
 

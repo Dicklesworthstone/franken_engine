@@ -16,6 +16,7 @@ use std::fs;
 use std::path::Path;
 
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct CiRunRecord {
@@ -109,10 +110,18 @@ struct GateEvaluation {
     blockers: Vec<String>,
 }
 
+fn parse_json_slice<T: DeserializeOwned>(bytes: &[u8], context: &str) -> T {
+    serde_json::from_slice(bytes).unwrap_or_else(|error| panic!("{context}: {error}"))
+}
+
+fn parse_json_str<T: DeserializeOwned>(json: &str, context: &str) -> T {
+    serde_json::from_str(json).unwrap_or_else(|error| panic!("{context}: {error}"))
+}
+
 fn load_fixture() -> ParserCiQualityGatesFixture {
     let path = Path::new("tests/fixtures/parser_ci_quality_gates_v1.json");
     let bytes = fs::read(path).expect("read parser ci quality gates fixture");
-    serde_json::from_slice(&bytes).expect("deserialize parser ci quality gates fixture")
+    parse_json_slice(&bytes, "parse parser ci quality gates fixture")
 }
 
 fn load_doc() -> String {
@@ -886,7 +895,7 @@ fn enrichment_ci_run_record_serde_roundtrip() {
         "artifact_bundle_id": "bundle-serde-001",
         "created_at_utc": "2026-03-13T00:00:00Z"
     }"#;
-    let decoded: CiRunRecord = serde_json::from_str(json).expect("deserialize CiRunRecord");
+    let decoded: CiRunRecord = parse_json_str(json, "parse ci run record fixture");
     assert_eq!(decoded.run_id, "run-serde-001");
     assert_eq!(decoded.epoch, 7);
     assert_eq!(decoded.suite_kind, "unit");
@@ -896,7 +905,7 @@ fn enrichment_ci_run_record_serde_roundtrip() {
     assert_eq!(decoded.artifact_bundle_id, "bundle-serde-001");
 
     // Decode again from same source — must produce identical value.
-    let decoded2: CiRunRecord = serde_json::from_str(json).expect("deserialize CiRunRecord again");
+    let decoded2: CiRunRecord = parse_json_str(json, "re-parse ci run record fixture");
     assert_eq!(
         decoded, decoded2,
         "CiRunRecord deserialization must be deterministic"
@@ -912,7 +921,7 @@ fn enrichment_retention_bundle_serde_roundtrip() {
         "ttl_days": 90,
         "searchable_tokens": ["tok-a", "tok-b"]
     }"#;
-    let decoded: RetentionBundle = serde_json::from_str(json).expect("deserialize RetentionBundle");
+    let decoded: RetentionBundle = parse_json_str(json, "parse retention bundle fixture");
     assert_eq!(decoded.bundle_id, "bundle-rt-001");
     assert_eq!(decoded.run_id, "run-rt-001");
     assert_eq!(decoded.ttl_days, 90);
@@ -922,8 +931,7 @@ fn enrichment_retention_bundle_serde_roundtrip() {
         "timestamp must be UTC"
     );
 
-    let decoded2: RetentionBundle =
-        serde_json::from_str(json).expect("deserialize RetentionBundle again");
+    let decoded2: RetentionBundle = parse_json_str(json, "re-parse retention bundle fixture");
     assert_eq!(
         decoded, decoded2,
         "RetentionBundle deserialization must be deterministic"
@@ -941,7 +949,7 @@ fn enrichment_expected_flake_serde_roundtrip() {
         "dominant_error_signature": "sig-dominant",
         "replay_command": "./scripts/e2e/parser_ci_quality_gates_replay.sh case-flake-rt"
     }"#;
-    let decoded: ExpectedFlake = serde_json::from_str(json).expect("deserialize ExpectedFlake");
+    let decoded: ExpectedFlake = parse_json_str(json, "parse expected flake fixture");
     assert_eq!(decoded.case_id, "case-flake-rt");
     assert_eq!(decoded.suite_kind, "e2e");
     assert_eq!(decoded.flake_rate_millionths, 300_000);
@@ -949,8 +957,7 @@ fn enrichment_expected_flake_serde_roundtrip() {
     assert_eq!(decoded.quarantine_action, "quarantine-immediate");
     assert_eq!(decoded.dominant_error_signature, "sig-dominant");
 
-    let decoded2: ExpectedFlake =
-        serde_json::from_str(json).expect("deserialize ExpectedFlake again");
+    let decoded2: ExpectedFlake = parse_json_str(json, "re-parse expected flake fixture");
     assert_eq!(
         decoded, decoded2,
         "ExpectedFlake deserialization must be deterministic"

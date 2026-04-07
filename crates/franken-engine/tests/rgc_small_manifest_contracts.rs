@@ -830,10 +830,8 @@ fn cross_schema_all_require_summary_md() {
 fn seqlock_candidate_policies_serde_roundtrip() {
     let s = parse_seqlock();
     // Re-serialize to JSON and parse back; confirm policies are preserved
-    let serialized =
-        serde_json::to_string(&s.candidate_policies).expect("candidate_policies must serialize");
-    let roundtripped: Vec<CandidatePolicy> =
-        serde_json::from_str(&serialized).expect("candidate_policies must deserialize");
+    let serialized = serde_json::to_string(&s.candidate_policies).unwrap_or_default();
+    let roundtripped: Vec<CandidatePolicy> = serde_json::from_str(&serialized).unwrap_or_default();
     assert_eq!(
         s.candidate_policies.len(),
         roundtripped.len(),

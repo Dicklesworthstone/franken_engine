@@ -1089,21 +1089,7 @@ impl FunctionDeclaration {
 // ---------------------------------------------------------------------------
 
 /// ES2015 class method kind.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MethodKind {
     Constructor,
     Method,

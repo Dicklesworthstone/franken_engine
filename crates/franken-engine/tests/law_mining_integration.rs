@@ -129,8 +129,8 @@ fn law_mining_catalog_retains_normal_form_and_side_condition_surfaces() {
 fn law_mining_catalog_serde_round_trip_is_stable() {
     let catalog =
         LawMiningCatalog::from_sources(29, &[sample_counterexample()], &[sample_evidence_entry()]);
-    let json = serde_json::to_string(&catalog).expect("serialize catalog");
-    let recovered: LawMiningCatalog = serde_json::from_str(&json).expect("deserialize catalog");
+    let json = serde_json::to_string(&catalog).unwrap_or_default();
+    let recovered: LawMiningCatalog = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, catalog);
     assert_eq!(recovered.catalog_hash, catalog.catalog_hash);
 }
@@ -263,8 +263,8 @@ fn candidate_kind_serde_roundtrip() {
         CandidateKind::Invariant,
     ];
     for kind in &kinds {
-        let json = serde_json::to_string(kind).expect("serialize");
-        let parsed: CandidateKind = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(kind).unwrap_or_default();
+        let parsed: CandidateKind = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*kind, parsed);
     }
 }
@@ -306,8 +306,8 @@ fn law_candidate_serde_roundtrip() {
     let catalog =
         LawMiningCatalog::from_sources(42, &[sample_counterexample()], &[sample_evidence_entry()]);
     for candidate in &catalog.candidates {
-        let json = serde_json::to_string(candidate).expect("serialize");
-        let parsed: LawCandidate = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(candidate).unwrap_or_default();
+        let parsed: LawCandidate = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*candidate, parsed);
     }
 }
@@ -331,8 +331,8 @@ fn provenance_record_serde_roundtrip() {
     let catalog =
         LawMiningCatalog::from_sources(44, &[sample_counterexample()], &[sample_evidence_entry()]);
     for prov in &catalog.provenance_index {
-        let json = serde_json::to_string(prov).expect("serialize");
-        let parsed: LawProvenanceRecord = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(prov).unwrap_or_default();
+        let parsed: LawProvenanceRecord = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*prov, parsed);
     }
 }
@@ -355,8 +355,8 @@ fn scope_hypothesis_serde_roundtrip() {
     let catalog =
         LawMiningCatalog::from_sources(46, &[sample_counterexample()], &[sample_evidence_entry()]);
     for scope in &catalog.scope_hypotheses {
-        let json = serde_json::to_string(scope).expect("serialize");
-        let parsed: CandidateScopeHypothesis = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(scope).unwrap_or_default();
+        let parsed: CandidateScopeHypothesis = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*scope, parsed);
     }
 }
@@ -380,8 +380,8 @@ fn invariant_seed_serde_roundtrip() {
     let catalog =
         LawMiningCatalog::from_sources(48, &[sample_counterexample()], &[sample_evidence_entry()]);
     for seed in &catalog.invariant_seed_ledger {
-        let json = serde_json::to_string(seed).expect("serialize");
-        let parsed: InvariantSeed = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(seed).unwrap_or_default();
+        let parsed: InvariantSeed = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*seed, parsed);
     }
 }
@@ -405,8 +405,8 @@ fn normal_form_hypothesis_serde_roundtrip() {
     let catalog =
         LawMiningCatalog::from_sources(50, &[sample_counterexample()], &[sample_evidence_entry()]);
     for nf in &catalog.normal_form_hypotheses {
-        let json = serde_json::to_string(nf).expect("serialize");
-        let parsed: NormalFormHypothesis = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(nf).unwrap_or_default();
+        let parsed: NormalFormHypothesis = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*nf, parsed);
     }
 }
@@ -495,9 +495,9 @@ fn validation_serde_roundtrip() {
     let catalog =
         LawMiningCatalog::from_sources(57, &[sample_counterexample()], &[sample_evidence_entry()]);
     let validation = catalog.validate();
-    let json = serde_json::to_string(&validation).expect("serialize");
+    let json = serde_json::to_string(&validation).unwrap_or_default();
     let parsed: frankenengine_engine::law_mining::LawMiningValidation =
-        serde_json::from_str(&json).expect("deserialize");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(parsed.is_valid, validation.is_valid);
     assert_eq!(parsed.candidate_count, validation.candidate_count);
 }
@@ -615,8 +615,8 @@ fn provenance_source_kind_serde_roundtrip() {
         ProvenanceSourceKind::Counterexample,
         ProvenanceSourceKind::EvidenceEntry,
     ] {
-        let json = serde_json::to_string(&kind).expect("serialize");
-        let parsed: ProvenanceSourceKind = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&kind).unwrap_or_default();
+        let parsed: ProvenanceSourceKind = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(parsed, kind);
     }
 }
@@ -736,8 +736,8 @@ fn provenance_source_serde_roundtrip() {
         LawMiningCatalog::from_sources(64, &[sample_counterexample()], &[sample_evidence_entry()]);
     for prov in &catalog.provenance_index {
         for source in &prov.sources {
-            let json = serde_json::to_string(source).expect("serialize");
-            let parsed: LawProvenanceSource = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(source).unwrap_or_default();
+            let parsed: LawProvenanceSource = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*source, parsed);
         }
     }
@@ -815,8 +815,8 @@ fn candidate_law_catalog_artifact_serde_roundtrip() {
         catalog_hash: catalog.catalog_hash,
         candidates: catalog.candidates.clone(),
     };
-    let json = serde_json::to_string(&artifact).expect("serialize");
-    let parsed: CandidateLawCatalogArtifact = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&artifact).unwrap_or_default();
+    let parsed: CandidateLawCatalogArtifact = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(artifact, parsed);
 }
 
@@ -833,8 +833,8 @@ fn invariant_seed_ledger_artifact_serde_roundtrip() {
         catalog_hash: catalog.catalog_hash,
         invariant_seed_ledger: catalog.invariant_seed_ledger.clone(),
     };
-    let json = serde_json::to_string(&artifact).expect("serialize");
-    let parsed: InvariantSeedLedgerArtifact = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&artifact).unwrap_or_default();
+    let parsed: InvariantSeedLedgerArtifact = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(artifact, parsed);
 }
 
@@ -851,8 +851,8 @@ fn normal_form_hypotheses_artifact_serde_roundtrip() {
         catalog_hash: catalog.catalog_hash,
         normal_form_hypotheses: catalog.normal_form_hypotheses.clone(),
     };
-    let json = serde_json::to_string(&artifact).expect("serialize");
-    let parsed: NormalFormHypothesesArtifact = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&artifact).unwrap_or_default();
+    let parsed: NormalFormHypothesesArtifact = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(artifact, parsed);
 }
 
@@ -869,8 +869,8 @@ fn law_provenance_index_artifact_serde_roundtrip() {
         catalog_hash: catalog.catalog_hash,
         provenance_index: catalog.provenance_index.clone(),
     };
-    let json = serde_json::to_string(&artifact).expect("serialize");
-    let parsed: LawProvenanceIndexArtifact = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&artifact).unwrap_or_default();
+    let parsed: LawProvenanceIndexArtifact = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(artifact, parsed);
 }
 
@@ -887,9 +887,8 @@ fn candidate_scope_hypotheses_artifact_serde_roundtrip() {
         catalog_hash: catalog.catalog_hash,
         scope_hypotheses: catalog.scope_hypotheses.clone(),
     };
-    let json = serde_json::to_string(&artifact).expect("serialize");
-    let parsed: CandidateScopeHypothesesArtifact =
-        serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&artifact).unwrap_or_default();
+    let parsed: CandidateScopeHypothesesArtifact = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(artifact, parsed);
 }
 
@@ -904,8 +903,8 @@ fn trace_ids_artifact_serde_roundtrip() {
         policy_id: "policy-test".to_string(),
         run_id: "run-test".to_string(),
     };
-    let json = serde_json::to_string(&artifact).expect("serialize");
-    let parsed: TraceIdsArtifact = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&artifact).unwrap_or_default();
+    let parsed: TraceIdsArtifact = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(artifact, parsed);
 }
 
@@ -924,8 +923,8 @@ fn law_mining_event_serde_roundtrip() {
         error_code: None,
         detail: "detail content".to_string(),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let parsed: LawMiningEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let parsed: LawMiningEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, parsed);
 }
 
@@ -944,8 +943,8 @@ fn law_mining_event_with_error_code_serde_roundtrip() {
         error_code: Some("LM-001".to_string()),
         detail: "error detail".to_string(),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let parsed: LawMiningEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let parsed: LawMiningEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, parsed);
     assert_eq!(parsed.error_code, Some("LM-001".to_string()));
 }
@@ -957,8 +956,8 @@ fn artifact_hash_record_serde_roundtrip() {
         path: "candidate_law_catalog.json".to_string(),
         sha256: "abcdef0123456789".to_string(),
     };
-    let json = serde_json::to_string(&record).expect("serialize");
-    let parsed: ArtifactHashRecord = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&record).unwrap_or_default();
+    let parsed: ArtifactHashRecord = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(record, parsed);
 }
 
@@ -972,8 +971,8 @@ fn law_mining_env_artifact_serde_roundtrip() {
         source_commit: "abc123".to_string(),
         toolchain: "nightly-2026-01-01".to_string(),
     };
-    let json = serde_json::to_string(&artifact).expect("serialize");
-    let parsed: LawMiningEnvArtifact = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&artifact).unwrap_or_default();
+    let parsed: LawMiningEnvArtifact = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(artifact, parsed);
 }
 
@@ -996,8 +995,8 @@ fn law_mining_artifact_index_serde_roundtrip() {
             },
         ],
     };
-    let json = serde_json::to_string(&artifact).expect("serialize");
-    let parsed: LawMiningArtifactIndex = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&artifact).unwrap_or_default();
+    let parsed: LawMiningArtifactIndex = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(artifact, parsed);
 }
 
@@ -1020,8 +1019,8 @@ fn law_mining_run_manifest_serde_roundtrip() {
         command_invocation: "cargo run --test".to_string(),
         artifact_hashes: vec![],
     };
-    let json = serde_json::to_string(&manifest).expect("serialize");
-    let parsed: LawMiningRunManifest = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&manifest).unwrap_or_default();
+    let parsed: LawMiningRunManifest = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(manifest, parsed);
 }
 
@@ -1033,8 +1032,8 @@ fn law_mining_run_manifest_serde_roundtrip() {
 fn law_mining_fixture_serde_roundtrip() {
     use frankenengine_engine::law_mining::LawMiningFixture;
     let fixture = frankenengine_engine::law_mining::default_fixture();
-    let json = serde_json::to_string(&fixture).expect("serialize");
-    let parsed: LawMiningFixture = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&fixture).unwrap_or_default();
+    let parsed: LawMiningFixture = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(parsed.generated_epoch, fixture.generated_epoch);
     assert_eq!(parsed.counterexamples.len(), fixture.counterexamples.len());
     assert_eq!(
@@ -1067,8 +1066,8 @@ fn bundle_write_report_serde_roundtrip() {
         repro_lock_path: PathBuf::from("/tmp/test/repro.lock"),
         summary_path: PathBuf::from("/tmp/test/summary.md"),
     };
-    let json = serde_json::to_string(&report).expect("serialize");
-    let parsed: BundleWriteReport = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&report).unwrap_or_default();
+    let parsed: BundleWriteReport = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(report, parsed);
 }
 

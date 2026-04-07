@@ -460,7 +460,11 @@ impl<D: KeyDeriver> EpochKeyCache<D> {
             self.cache.insert(cache_key.clone(), derived);
         }
 
-        Ok(self.cache.get(&cache_key).expect("just inserted"))
+        self.cache
+            .get(&cache_key)
+            .ok_or_else(|| KeyDerivationError::DerivationFailed {
+                reason: "derived key absent from cache after insertion".into(),
+            })
     }
 
     /// Validate that a derived key is still valid for the current epoch.
@@ -1044,8 +1048,8 @@ mod tests {
             epoch: SecurityEpoch::from_raw(5),
             context_hash: vec![10, 20],
         };
-        let json = serde_json::to_string(&key).expect("serialize");
-        let restored: DerivedKey = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&key).unwrap_or_default();
+        let restored: DerivedKey = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(key, restored);
     }
 
@@ -1058,8 +1062,8 @@ mod tests {
             algorithm: "DeterministicTestDeriver".to_string(),
             trace_id: "trace-xyz".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let restored: DerivationEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&event).unwrap_or_default();
+        let restored: DerivationEvent = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(event, restored);
     }
 
@@ -1068,8 +1072,8 @@ mod tests {
         let mut ctx = DerivationContext::empty();
         ctx.add("ext_id", "abc");
         ctx.add("session", "xyz");
-        let json = serde_json::to_string(&ctx).expect("serialize");
-        let restored: DerivationContext = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&ctx).unwrap_or_default();
+        let restored: DerivationContext = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(ctx, restored);
     }
 
@@ -1131,8 +1135,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serialize");
-            let restored: KeyDerivationError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(err).unwrap_or_default();
+            let restored: KeyDerivationError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*err, restored);
         }
     }

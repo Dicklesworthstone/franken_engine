@@ -184,8 +184,7 @@ impl ApiStabilityManifest {
                 m.insert(
                     "evolution_rule".into(),
                     CanonicalValue::String(
-                        serde_json::to_string(&e.evolution_rule)
-                            .expect("evolution_rule must serialize for canonical hash"),
+                        serde_json::to_string(&e.evolution_rule).unwrap_or_default(),
                     ),
                 );
                 m.insert(
@@ -284,10 +283,7 @@ impl CompatibilityReport {
                 m.insert("detail".into(), CanonicalValue::String(r.detail.clone()));
                 m.insert(
                     "verdict".into(),
-                    CanonicalValue::String(
-                        serde_json::to_string(&r.verdict)
-                            .expect("verdict must serialize for canonical hash"),
-                    ),
+                    CanonicalValue::String(serde_json::to_string(&r.verdict).unwrap_or_default()),
                 );
                 CanonicalValue::Map(m)
             })
@@ -848,10 +844,7 @@ impl IntegrationLogEntry {
         );
         map.insert(
             "outcome".into(),
-            CanonicalValue::String(
-                serde_json::to_string(&self.outcome)
-                    .expect("outcome must serialize for canonical hash"),
-            ),
+            CanonicalValue::String(serde_json::to_string(&self.outcome).unwrap_or_default()),
         );
         map.insert(
             "source_label".into(),

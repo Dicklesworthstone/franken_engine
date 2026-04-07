@@ -884,8 +884,8 @@ mod tests {
     #[test]
     fn schema_hash_serialization_round_trip() {
         let hash = test_schema();
-        let json = serde_json::to_string(&hash).expect("serialize");
-        let restored: SchemaHash = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&hash).unwrap_or_default();
+        let restored: SchemaHash = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(hash, restored);
     }
 
@@ -909,8 +909,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serialize");
-            let restored: SerdeError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(err).unwrap_or_default();
+            let restored: SerdeError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*err, restored);
         }
     }

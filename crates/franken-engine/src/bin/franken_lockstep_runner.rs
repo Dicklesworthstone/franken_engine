@@ -972,7 +972,9 @@ fn lockstep_environment_fingerprint(report: &MultiEngineHarnessReport) -> String
         std::env::var("RUSTUP_TOOLCHAIN").unwrap_or_else(|_| "unknown".to_string()),
     );
     kv.insert("timezone", report.timezone.clone());
-    sha256_prefixed(&serde_json::to_vec(&kv).expect("serialization failed"))
+    let payload =
+        serde_json::to_vec(&kv).expect("lockstep environment fingerprint inputs should serialize");
+    sha256_prefixed(&payload)
 }
 
 fn sha256_prefixed(bytes: &[u8]) -> String {

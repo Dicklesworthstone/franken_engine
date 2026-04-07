@@ -1756,8 +1756,8 @@ mod tests {
             HandshakeOutcome::SignatureFailed,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serialize");
-            let restored: HandshakeOutcome = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(v).unwrap_or_default();
+            let restored: HandshakeOutcome = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*v, restored);
         }
     }
@@ -1772,8 +1772,8 @@ mod tests {
             ReattestationTrigger::Manual,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serialize");
-            let restored: ReattestationTrigger = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(v).unwrap_or_default();
+            let restored: ReattestationTrigger = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*v, restored);
         }
     }

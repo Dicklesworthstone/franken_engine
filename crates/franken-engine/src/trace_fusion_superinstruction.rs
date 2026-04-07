@@ -120,7 +120,7 @@ impl FusionCandidate {
             data.extend_from_slice(seg.id.as_bytes());
             data.extend_from_slice(
                 serde_json::to_string(&seg.motif)
-                    .expect("fusion segment motif should serialize for deterministic hashing")
+                    .unwrap_or_default()
                     .as_bytes(),
             );
             data.extend_from_slice(&seg.instruction_count.to_le_bytes());
@@ -577,7 +577,7 @@ pub fn certify_fusion(
     cert_data.extend_from_slice(candidate.fusion_hash.as_bytes());
     cert_data.extend_from_slice(
         serde_json::to_string(&decision)
-            .expect("fusion decision should serialize for deterministic hashing")
+            .unwrap_or_default()
             .as_bytes(),
     );
     if let Some(ref p) = proof {

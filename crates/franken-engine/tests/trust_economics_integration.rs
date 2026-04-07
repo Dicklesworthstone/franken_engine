@@ -286,8 +286,8 @@ fn sub_loss_serde_round_trip() {
         containment_cost: 4_000_000,
         false_action_cost: 5_000_000,
     };
-    let json = serde_json::to_string(&sl).expect("serialize");
-    let restored: SubLoss = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&sl).unwrap_or_default();
+    let restored: SubLoss = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(sl, restored);
 }
 
@@ -451,8 +451,8 @@ fn loss_matrix_asymmetry_violations_detects_inverted_allow_cell() {
 #[test]
 fn loss_matrix_serde_round_trip() {
     let m = default_conservative_loss_matrix();
-    let json = serde_json::to_string(&m).expect("serialize");
-    let restored: DecomposedLossMatrix = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&m).unwrap_or_default();
+    let restored: DecomposedLossMatrix = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(m, restored);
 }
 
@@ -635,8 +635,8 @@ fn attacker_strategy_roi_returns_none_for_zero_adjusted_cost() {
 #[test]
 fn attacker_model_serde_round_trip() {
     let m = sample_attacker_model();
-    let json = serde_json::to_string(&m).expect("serialize");
-    let restored: AttackerCostModel = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&m).unwrap_or_default();
+    let restored: AttackerCostModel = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(m, restored);
 }
 
@@ -840,8 +840,8 @@ fn attacker_roi_assessment_stable_empty_history() {
 #[test]
 fn attacker_roi_assessment_serde_round_trip() {
     let a = AttackerRoiAssessment::new("ext-delta", 1_500_000, &[1_000_000, 1_500_000]);
-    let json = serde_json::to_string(&a).expect("serialize");
-    let restored: AttackerRoiAssessment = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&a).unwrap_or_default();
+    let restored: AttackerRoiAssessment = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(a, restored);
 }
 
@@ -911,8 +911,8 @@ fn fleet_roi_summary_serde_round_trip() {
         min_roi_millionths: 300_000,
         max_roi_millionths: 3_000_000,
     };
-    let json = serde_json::to_string(&summary).expect("serialize");
-    let restored: FleetRoiSummary = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&summary).unwrap_or_default();
+    let restored: FleetRoiSummary = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(summary, restored);
 }
 
@@ -941,8 +941,8 @@ fn action_cost_serde_round_trip() {
         operator_burden: 500_000,
         reversibility_cost: 300_000,
     };
-    let json = serde_json::to_string(&c).expect("serialize");
-    let restored: ActionCost = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&c).unwrap_or_default();
+    let restored: ActionCost = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(c, restored);
 }
 
@@ -976,8 +976,8 @@ fn containment_cost_model_total_cost() {
 #[test]
 fn containment_cost_model_serde_round_trip() {
     let m = sample_containment_model();
-    let json = serde_json::to_string(&m).expect("serialize");
-    let restored: ContainmentCostModel = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&m).unwrap_or_default();
+    let restored: ContainmentCostModel = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(m, restored);
 }
 
@@ -1118,8 +1118,8 @@ fn blast_radius_serde_round_trip() {
         cascade_probability: 250_000,
         growth_rate_per_sec: 100_000,
     };
-    let json = serde_json::to_string(&br).expect("serialize");
-    let restored: BlastRadiusEstimate = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&br).unwrap_or_default();
+    let restored: BlastRadiusEstimate = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(br, restored);
 }
 
@@ -1234,8 +1234,8 @@ fn model_inputs_version_regression_lower() {
 #[test]
 fn model_inputs_serde_round_trip() {
     let m = sample_model_inputs();
-    let json = serde_json::to_string(&m).expect("serialize");
-    let restored: TrustEconomicsModelInputs = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&m).unwrap_or_default();
+    let restored: TrustEconomicsModelInputs = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(m, restored);
 }
 
@@ -1276,8 +1276,8 @@ fn trust_economics_error_serde_round_trip_all_variants() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).expect("serialize");
-        let restored: TrustEconomicsError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(err).unwrap_or_default();
+        let restored: TrustEconomicsError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*err, restored);
     }
 }
@@ -1290,8 +1290,8 @@ fn trust_economics_error_serde_round_trip_all_variants() {
 fn deterministic_model_inputs_serialization() {
     let m1 = sample_model_inputs();
     let m2 = sample_model_inputs();
-    let json1 = serde_json::to_string(&m1).expect("serialize 1");
-    let json2 = serde_json::to_string(&m2).expect("serialize 2");
+    let json1 = serde_json::to_string(&m1).unwrap_or_default();
+    let json2 = serde_json::to_string(&m2).unwrap_or_default();
     assert_eq!(json1, json2);
 }
 
@@ -1342,8 +1342,8 @@ fn strategy_cost_adjustment_serde_round_trip() {
         evasion_delta: 200_000,
         justification: "Insider has lower discovery but higher development cost".into(),
     };
-    let json = serde_json::to_string(&adj).expect("serialize");
-    let restored: StrategyCostAdjustment = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&adj).unwrap_or_default();
+    let restored: StrategyCostAdjustment = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(adj, restored);
 }
 

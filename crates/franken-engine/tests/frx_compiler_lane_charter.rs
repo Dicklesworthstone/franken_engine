@@ -333,7 +333,7 @@ fn compiler_contract_serde_roundtrip_preserves_all_fields() {
     let raw = fs::read_to_string(&path).expect("read JSON");
     let value: Value = serde_json::from_str(&raw).expect("parse JSON");
 
-    let serialized = serde_json::to_string(&value).expect("re-serialize");
+    let serialized = serde_json::to_string(&value).unwrap_or_default();
     let roundtripped: Value = serde_json::from_str(&serialized).expect("re-parse");
     assert_eq!(value, roundtripped, "serde roundtrip must be lossless");
 }

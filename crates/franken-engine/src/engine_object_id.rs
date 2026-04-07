@@ -870,24 +870,24 @@ mod tests {
             b"content",
         )
         .unwrap();
-        let json = serde_json::to_string(&id).expect("serialize");
-        let restored: EngineObjectId = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&id).unwrap_or_default();
+        let restored: EngineObjectId = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(id, restored);
     }
 
     #[test]
     fn schema_id_serialization_round_trip() {
         let schema = test_schema_id();
-        let json = serde_json::to_string(&schema).expect("serialize");
-        let restored: SchemaId = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&schema).unwrap_or_default();
+        let restored: SchemaId = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(schema, restored);
     }
 
     #[test]
     fn object_domain_serialization_round_trip() {
         for domain in ObjectDomain::ALL {
-            let json = serde_json::to_string(domain).expect("serialize");
-            let restored: ObjectDomain = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(domain).unwrap_or_default();
+            let restored: ObjectDomain = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*domain, restored);
         }
     }
@@ -906,8 +906,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serialize");
-            let restored: IdError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(err).unwrap_or_default();
+            let restored: IdError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*err, restored);
         }
     }

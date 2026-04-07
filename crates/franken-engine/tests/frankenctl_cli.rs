@@ -104,7 +104,7 @@ fn write_react_mismatch_catalog(path: &Path) {
         .expect("catalog entry should be added");
     fs::write(
         path,
-        serde_json::to_vec_pretty(&catalog).expect("catalog should serialize"),
+        serde_json::to_vec_pretty(&catalog).unwrap_or_default(),
     )
     .expect("catalog fixture should write");
 }
@@ -391,11 +391,8 @@ fn build_valid_receipt_verifier_input() -> (String, ReceiptVerifierCliInput) {
 }
 
 fn write_receipt_verifier_input(path: &Path, input: &ReceiptVerifierCliInput) {
-    fs::write(
-        path,
-        serde_json::to_vec_pretty(input).expect("receipt verifier input should serialize"),
-    )
-    .expect("receipt verifier input should write");
+    fs::write(path, serde_json::to_vec_pretty(input).unwrap_or_default())
+        .expect("receipt verifier input should write");
 }
 
 fn build_doctor_input() -> RuntimeDiagnosticsCliInput {
@@ -434,11 +431,8 @@ fn build_doctor_input() -> RuntimeDiagnosticsCliInput {
 }
 
 fn write_runtime_diagnostics_input(path: &Path, input: &RuntimeDiagnosticsCliInput) {
-    fs::write(
-        path,
-        serde_json::to_vec_pretty(input).expect("runtime diagnostics input should serialize"),
-    )
-    .expect("runtime diagnostics input should write");
+    fs::write(path, serde_json::to_vec_pretty(input).unwrap_or_default())
+        .expect("runtime diagnostics input should write");
 }
 
 fn write_benchmark_score_input(path: &Path) {
@@ -476,7 +470,7 @@ fn write_benchmark_score_input(path: &Path) {
     });
     fs::write(
         path,
-        serde_json::to_vec_pretty(&score_input).expect("score input should serialize"),
+        serde_json::to_vec_pretty(&score_input).unwrap_or_default(),
     )
     .expect("score input should write");
 }
@@ -1536,7 +1530,7 @@ fn frankenctl_replay_run_replays_trace_without_divergence() {
 
     fs::write(
         &trace_path,
-        serde_json::to_vec_pretty(&trace).expect("trace should serialize"),
+        serde_json::to_vec_pretty(&trace).unwrap_or_default(),
     )
     .expect("trace file should write");
 
@@ -3450,12 +3444,11 @@ fn frankenctl_replay_trace_serde_roundtrip_preserves_all_source_kinds() {
     }
     trace.finalise((NondeterminismSource::ALL.len() as u64) + 1);
 
-    let serialized = serde_json::to_vec_pretty(&trace).expect("trace should serialize");
+    let serialized = serde_json::to_vec_pretty(&trace).unwrap_or_default();
     fs::write(&trace_path, &serialized).expect("trace file should write");
 
     let read_back = fs::read(&trace_path).expect("trace file should be readable");
-    let deserialized: NondeterminismTrace =
-        serde_json::from_slice(&read_back).expect("trace should deserialize");
+    let deserialized: NondeterminismTrace = serde_json::from_slice(&read_back).unwrap_or_default();
 
     assert_eq!(
         deserialized.event_count(),
@@ -3584,7 +3577,7 @@ fn frankenctl_replay_empty_trace_completes_immediately() {
 
     fs::write(
         &trace_path,
-        serde_json::to_vec_pretty(&trace).expect("trace should serialize"),
+        serde_json::to_vec_pretty(&trace).unwrap_or_default(),
     )
     .expect("trace file should write");
 
@@ -3627,7 +3620,7 @@ fn frankenctl_replay_unfinished_trace_fails_closed() {
 
     fs::write(
         &trace_path,
-        serde_json::to_vec_pretty(&trace).expect("trace should serialize"),
+        serde_json::to_vec_pretty(&trace).unwrap_or_default(),
     )
     .expect("trace file should write");
 

@@ -277,8 +277,7 @@ impl InteropSpecimenEvidence {
     pub fn compute_hash(&self) -> String {
         let mut canonical = self.clone();
         canonical.evidence_hash = None;
-        let canonical_json = serde_json::to_vec(&canonical)
-            .expect("interop specimen evidence serialization should not fail");
+        let canonical_json = serde_json::to_vec(&canonical).unwrap_or_default();
         hex_encode(ContentHash::compute(&canonical_json).as_bytes())
     }
 

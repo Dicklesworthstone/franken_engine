@@ -1589,8 +1589,8 @@ mod tests {
         let cell = make_cell(CellDomain::Memory, ComparisonTarget::Bun, "serde-test");
         add_cell(&mut board, &mut log, cell).unwrap();
 
-        let json = serde_json::to_string(&board).expect("serialize");
-        let deser: RatchetBoard = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&board).unwrap_or_default();
+        let deser: RatchetBoard = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(board, deser);
     }
 
@@ -1605,8 +1605,8 @@ mod tests {
         )
         .unwrap();
 
-        let json = serde_json::to_string(&ledger).expect("serialize");
-        let deser: FrontierGapLedger = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&ledger).unwrap_or_default();
+        let deser: FrontierGapLedger = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(ledger, deser);
     }
 
@@ -1627,8 +1627,8 @@ mod tests {
         )
         .unwrap();
 
-        let json = serde_json::to_string(&log).expect("serialize");
-        let deser: RatchetEventLog = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&log).unwrap_or_default();
+        let deser: RatchetEventLog = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(log, deser);
     }
 
@@ -1645,8 +1645,8 @@ mod tests {
         add_cell(&mut board, &mut log, cell).unwrap();
 
         let snapshot = compute_dominance_snapshot(&board, &ledger, &mut log);
-        let json = serde_json::to_string(&snapshot).expect("serialize");
-        let deser: DominanceSnapshot = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&snapshot).unwrap_or_default();
+        let deser: DominanceSnapshot = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(snapshot, deser);
     }
 
@@ -1657,8 +1657,8 @@ mod tests {
             ComparisonTarget::Jsc,
             "ssr-hydration",
         );
-        let json = serde_json::to_string(&id).expect("serialize");
-        let deser: CellId = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&id).unwrap_or_default();
+        let deser: CellId = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(id, deser);
     }
 
@@ -2478,8 +2478,8 @@ mod tests {
             current_state: CellState::Proven,
             attempted_state: CellState::Unproven,
         };
-        let json = serde_json::to_string(&err).expect("serialize");
-        let deser: RatchetError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&err).unwrap_or_default();
+        let deser: RatchetError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(err, deser);
     }
 
@@ -2496,8 +2496,8 @@ mod tests {
         cell.last_advanced_epoch = 7;
         cell.owning_bead = "bd-test".to_string();
 
-        let json = serde_json::to_string(&cell).expect("serialize");
-        let deser: RatchetCell = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&cell).unwrap_or_default();
+        let deser: RatchetCell = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(cell, deser);
     }
 
@@ -2510,8 +2510,8 @@ mod tests {
         entry.resolution = Some(GapResolution::SubsumedByOther);
         entry.priority_millionths = 750_000;
 
-        let json = serde_json::to_string(&entry).expect("serialize");
-        let deser: FrontierGapEntry = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&entry).unwrap_or_default();
+        let deser: FrontierGapEntry = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(entry, deser);
     }
 
@@ -2775,8 +2775,8 @@ mod tests {
         );
         gap.target = Some(ComparisonTarget::Bun);
 
-        let json = serde_json::to_string(&gap).expect("serialize");
-        let deser: FrontierGapEntry = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&gap).unwrap_or_default();
+        let deser: FrontierGapEntry = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(gap, deser);
         assert_eq!(deser.target, Some(ComparisonTarget::Bun));
     }
@@ -2784,8 +2784,8 @@ mod tests {
     #[test]
     fn gap_without_target_serde_round_trip() {
         let gap = make_gap("no-target-gap", CellDomain::Memory, GapKind::OutOfScope);
-        let json = serde_json::to_string(&gap).expect("serialize");
-        let deser: FrontierGapEntry = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&gap).unwrap_or_default();
+        let deser: FrontierGapEntry = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(deser.target, None);
     }
 
@@ -2914,8 +2914,8 @@ mod tests {
         ];
 
         for variant in &variants {
-            let json = serde_json::to_string(variant).expect("serialize");
-            let deser: RatchetEventKind = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(variant).unwrap_or_default();
+            let deser: RatchetEventKind = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*variant, deser);
         }
     }

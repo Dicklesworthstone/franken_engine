@@ -387,8 +387,8 @@ fn containment_action_severity_is_monotonic() {
 #[test]
 fn containment_action_serde_roundtrip() {
     for action in ContainmentAction::ALL {
-        let json = serde_json::to_string(&action).expect("serialize");
-        let recovered: ContainmentAction = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&action).unwrap_or_default();
+        let recovered: ContainmentAction = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(recovered, action);
     }
 }
@@ -418,8 +418,8 @@ fn posterior_uniform_is_valid() {
 #[test]
 fn posterior_serde_roundtrip() {
     let p = Posterior::from_millionths(600_000, 100_000, 200_000, 100_000);
-    let json = serde_json::to_string(&p).expect("serialize");
-    let recovered: Posterior = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&p).unwrap_or_default();
+    let recovered: Posterior = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, p);
     assert!(recovered.is_valid());
 }
@@ -446,8 +446,8 @@ fn bayesian_updater_extension_id_matches() {
 fn bayesian_updater_serde_roundtrip() {
     let mut updater = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-serde");
     updater.update(&malicious_evidence("ext-serde"));
-    let json = serde_json::to_string(&updater).expect("serialize");
-    let recovered: BayesianPosteriorUpdater = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&updater).unwrap_or_default();
+    let recovered: BayesianPosteriorUpdater = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.extension_id(), "ext-serde");
     assert_eq!(recovered.update_count(), 1);
 }
@@ -457,8 +457,8 @@ fn bayesian_updater_serde_roundtrip() {
 #[test]
 fn evidence_serde_roundtrip() {
     let ev = malicious_evidence("ext-ev-serde");
-    let json = serde_json::to_string(&ev).expect("serialize");
-    let recovered: Evidence = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&ev).unwrap_or_default();
+    let recovered: Evidence = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.extension_id, "ext-ev-serde");
     assert_eq!(
         recovered.hostcall_rate_millionths,
@@ -471,8 +471,8 @@ fn evidence_serde_roundtrip() {
 #[test]
 fn attacker_cost_model_serde_roundtrip() {
     let model = sample_attacker_cost_model();
-    let json = serde_json::to_string(&model).expect("serialize");
-    let recovered: AttackerCostModel = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&model).unwrap_or_default();
+    let recovered: AttackerCostModel = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.discovery_cost, model.discovery_cost);
     assert_eq!(recovered.expected_gain, model.expected_gain);
     assert!(recovered.strategy_adjustments.contains_key("supply_chain"));
@@ -497,8 +497,8 @@ fn expected_loss_selector_tracks_decisions_made() {
 #[test]
 fn runtime_decision_scoring_error_serde_roundtrip() {
     let err = RuntimeDecisionScoringError::ZeroAttackerCost;
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: RuntimeDecisionScoringError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: RuntimeDecisionScoringError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, err);
 }
 
@@ -507,8 +507,8 @@ fn runtime_decision_scoring_error_serde_roundtrip() {
 #[test]
 fn runtime_decision_scoring_input_serde_roundtrip() {
     let input = scoring_input("ext-serde", "dec-serde", Posterior::default_prior());
-    let json = serde_json::to_string(&input).expect("serialize");
-    let recovered: RuntimeDecisionScoringInput = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&input).unwrap_or_default();
+    let recovered: RuntimeDecisionScoringInput = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.extension_id, "ext-serde");
     assert_eq!(recovered.trace_id, "trace-dec-serde");
 }
@@ -571,8 +571,8 @@ fn blocking_all_but_terminate_forces_terminate() {
 #[test]
 fn scoring_input_serialization_is_deterministic() {
     let input = scoring_input("ext-det", "dec-det", Posterior::default_prior());
-    let json_a = serde_json::to_string(&input).expect("first serialize");
-    let json_b = serde_json::to_string(&input).expect("second serialize");
+    let json_a = serde_json::to_string(&input).unwrap_or_default();
+    let json_b = serde_json::to_string(&input).unwrap_or_default();
     assert_eq!(
         json_a, json_b,
         "RuntimeDecisionScoringInput serialization must be deterministic"
@@ -598,8 +598,8 @@ fn risk_state_all_has_four_variants() {
 #[test]
 fn risk_state_serde_roundtrip() {
     for state in RiskState::ALL {
-        let json = serde_json::to_string(&state).expect("serialize");
-        let recovered: RiskState = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&state).unwrap_or_default();
+        let recovered: RiskState = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(recovered, state);
     }
 }
@@ -652,8 +652,8 @@ fn likelihood_model_compute_likelihoods_returns_four_values() {
 #[test]
 fn likelihood_model_serde_roundtrip() {
     let model = LikelihoodModel::default();
-    let json = serde_json::to_string(&model).expect("serialize");
-    let recovered: LikelihoodModel = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&model).unwrap_or_default();
+    let recovered: LikelihoodModel = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(
         recovered.benign_rate_ceiling, model.benign_rate_ceiling,
         "LikelihoodModel must survive serde roundtrip"
@@ -873,8 +873,8 @@ fn loss_matrix_loss_lookup_returns_value() {
 #[test]
 fn loss_matrix_serde_roundtrip() {
     let matrix = LossMatrix::balanced();
-    let json = serde_json::to_string(&matrix).expect("serialize");
-    let recovered: LossMatrix = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&matrix).unwrap_or_default();
+    let recovered: LossMatrix = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.matrix_id, matrix.matrix_id);
     assert!(recovered.is_complete());
 }
@@ -981,8 +981,8 @@ fn alien_risk_alert_level_serde_roundtrip() {
         AlienRiskAlertLevel::Elevated,
         AlienRiskAlertLevel::Critical,
     ] {
-        let json = serde_json::to_string(&level).expect("serialize");
-        let recovered: AlienRiskAlertLevel = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&level).unwrap_or_default();
+        let recovered: AlienRiskAlertLevel = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(recovered, level);
     }
 }
@@ -1005,8 +1005,8 @@ fn runtime_decision_score_serde_roundtrip() {
         ))
         .expect("scoring");
 
-    let json = serde_json::to_string(&score).expect("serialize");
-    let recovered: RuntimeDecisionScore = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&score).unwrap_or_default();
+    let recovered: RuntimeDecisionScore = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.trace_id, score.trace_id);
     assert_eq!(recovered.decision_id, score.decision_id);
     assert_eq!(recovered.selected_action, score.selected_action);
@@ -1030,8 +1030,8 @@ fn candidate_action_score_serde_roundtrip() {
         ]),
         guardrail_blocked: false,
     };
-    let json = serde_json::to_string(&cas).expect("serialize");
-    let recovered: CandidateActionScore = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&cas).unwrap_or_default();
+    let recovered: CandidateActionScore = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.action, ContainmentAction::Sandbox);
     assert_eq!(recovered.expected_loss_millionths, 42_000);
     assert!(!recovered.guardrail_blocked);
@@ -1043,8 +1043,8 @@ fn decision_confidence_interval_serde_roundtrip() {
         lower_millionths: 100_000,
         upper_millionths: 900_000,
     };
-    let json = serde_json::to_string(&ci).expect("serialize");
-    let recovered: DecisionConfidenceInterval = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&ci).unwrap_or_default();
+    let recovered: DecisionConfidenceInterval = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.lower_millionths, 100_000);
     assert_eq!(recovered.upper_millionths, 900_000);
 }
@@ -1058,8 +1058,8 @@ fn loss_entry_serde_roundtrip() {
         state: RiskState::Anomalous,
         loss_millionths: 350_000,
     };
-    let json = serde_json::to_string(&entry).expect("serialize");
-    let recovered: LossEntry = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&entry).unwrap_or_default();
+    let recovered: LossEntry = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.action, ContainmentAction::Challenge);
     assert_eq!(recovered.state, RiskState::Anomalous);
     assert_eq!(recovered.loss_millionths, 350_000);

@@ -102,7 +102,7 @@ struct BisectOutcome {
 fn load_fixture() -> ParserRegressionScoreboardFixture {
     let path = Path::new("tests/fixtures/parser_regression_bisector_scoreboard_v1.json");
     let bytes = fs::read(path).expect("read parser regression fixture");
-    serde_json::from_slice(&bytes).expect("deserialize parser regression fixture")
+    serde_json::from_slice(&bytes).expect("parse parser regression fixture")
 }
 
 fn load_doc() -> String {
@@ -811,14 +811,14 @@ fn incident_replay_drill_ids_are_unique() {
 #[test]
 fn metric_direction_higher_is_better_deserializes() {
     let recovered: MetricDirection =
-        serde_json::from_str("\"higher_is_better\"").expect("deserialize");
+        serde_json::from_str("\"higher_is_better\"").expect("deserialize higher_is_better");
     assert_eq!(recovered, MetricDirection::HigherIsBetter);
 }
 
 #[test]
 fn metric_direction_lower_is_better_deserializes() {
     let recovered: MetricDirection =
-        serde_json::from_str("\"lower_is_better\"").expect("deserialize");
+        serde_json::from_str("\"lower_is_better\"").expect("deserialize lower_is_better");
     assert_eq!(recovered, MetricDirection::LowerIsBetter);
 }
 

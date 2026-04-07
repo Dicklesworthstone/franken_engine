@@ -535,7 +535,7 @@ impl TrustCardGenerator {
     /// Format a trust card in the specified format.
     pub fn format_card(card: &TrustCard, format: CardFormat) -> String {
         match format {
-            CardFormat::Json => serde_json::to_string_pretty(card).expect("serialization failed"),
+            CardFormat::Json => serde_json::to_string_pretty(card).unwrap_or_default(),
             CardFormat::Text => card.to_string(),
             CardFormat::Compact => format!(
                 "{} v{} | {} | risk:{}/100 ({}) | {}",

@@ -845,8 +845,8 @@ mod tests {
             ExecutionStage::Custom,
         ];
         for stage in &stages {
-            let json = serde_json::to_string(stage).expect("serialize");
-            let deser: ExecutionStage = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(stage).unwrap_or_default();
+            let deser: ExecutionStage = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*stage, deser);
         }
     }
@@ -889,8 +889,8 @@ mod tests {
             EnvelopeVerdict::Violated,
             EnvelopeVerdict::InsufficientData,
         ] {
-            let json = serde_json::to_string(v).expect("serialize");
-            let deser: EnvelopeVerdict = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(v).unwrap_or_default();
+            let deser: EnvelopeVerdict = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*v, deser);
         }
     }
@@ -974,8 +974,8 @@ mod tests {
         let env = default_envelope(ExecutionStage::GcPause);
         let obs = compliant_observation(ExecutionStage::GcPause);
         let cert = issue_stage_certificate(&env, &obs, "serde-cert", 42, vec!["ev-1".to_string()]);
-        let json = serde_json::to_string(&cert).expect("serialize");
-        let deser: StageEnvelopeCertificate = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&cert).unwrap_or_default();
+        let deser: StageEnvelopeCertificate = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(cert, deser);
     }
 
@@ -1024,8 +1024,8 @@ mod tests {
         let envelopes = vec![default_envelope(ExecutionStage::Parse)];
         let observations = vec![compliant_observation(ExecutionStage::Parse)];
         let bundle = build_envelope_bundle(&envelopes, &observations, 0);
-        let json = serde_json::to_string(&bundle).expect("serialize");
-        let deser: EnvelopeBundle = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&bundle).unwrap_or_default();
+        let deser: EnvelopeBundle = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(bundle, deser);
     }
 
@@ -1057,8 +1057,8 @@ mod tests {
         let obs = violating_observation(ExecutionStage::GcPause);
         let cert = issue_stage_certificate(&env, &obs, "v-cert", 0, vec![]);
         let report = generate_violation_report(&cert, "rpt-serde").unwrap();
-        let json = serde_json::to_string(&report).expect("serialize");
-        let deser: ViolationReport = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&report).unwrap_or_default();
+        let deser: ViolationReport = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(report, deser);
     }
 
@@ -1150,8 +1150,8 @@ mod tests {
     #[test]
     fn envelope_serde_round_trip() {
         let env = default_envelope(ExecutionStage::Parse);
-        let json = serde_json::to_string(&env).expect("serialize");
-        let deser: StageLatencyEnvelope = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&env).unwrap_or_default();
+        let deser: StageLatencyEnvelope = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(env, deser);
     }
 

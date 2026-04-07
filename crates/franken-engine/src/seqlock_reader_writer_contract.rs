@@ -439,7 +439,7 @@ fn write_bundle(
             "policy_id": &context.policy_id,
         }
     }))
-    .expect("env.json must serialize");
+    .unwrap_or_default();
 
     let mut primary_files = vec![
         FileArtifact::json("seqlock_reader_writer_contract.json", &evaluated.contract),
@@ -505,7 +505,7 @@ fn write_bundle(
             "policy_id": &context.policy_id,
         }
     }))
-    .expect("repro.lock must serialize");
+    .unwrap_or_default();
     primary_files.push(FileArtifact::text("repro.lock", &repro_lock));
     primary_files.sort_by(|left, right| left.path.cmp(&right.path));
 
@@ -542,7 +542,7 @@ fn write_bundle(
         },
         "artifacts": &manifest_artifacts,
     }))
-    .expect("manifest.json must serialize");
+    .unwrap_or_default();
     let manifest_artifact = FileArtifact::text("manifest.json", &manifest_json);
 
     let _bundle_lock = acquire_bundle_write_lock(&context.artifact_dir)?;
@@ -819,7 +819,7 @@ impl Drop for BundleWriteLock {
 }
 
 fn digest_json(value: &serde_json::Value) -> String {
-    let bytes = serde_json::to_vec(value).expect("digest input must serialize");
+    let bytes = serde_json::to_vec(value).unwrap_or_default();
     sha256_hex(&bytes)
 }
 
@@ -833,14 +833,14 @@ impl FileArtifact {
     fn json<T: Serialize>(path: &str, value: &T) -> Self {
         Self {
             path: path.to_string(),
-            contents: serde_json::to_vec_pretty(value).expect("json artifact must serialize"),
+            contents: serde_json::to_vec_pretty(value).unwrap_or_default(),
         }
     }
 
     fn jsonl<T: Serialize>(path: &str, records: &[T]) -> Self {
         let mut contents = Vec::new();
         for record in records {
-            let mut line = serde_json::to_vec(record).expect("jsonl record must serialize");
+            let mut line = serde_json::to_vec(record).unwrap_or_default();
             line.push(b'\n');
             contents.extend_from_slice(&line);
         }

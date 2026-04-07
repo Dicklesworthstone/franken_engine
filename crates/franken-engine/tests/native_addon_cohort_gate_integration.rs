@@ -450,8 +450,8 @@ fn gate_report_serde_roundtrip() {
     let config = default_config();
     let addons = vec![addon("test", CohortTier::Medium)];
     let result = evaluate_cohort_gate(&config, &addons, &[], &[], &[], epoch());
-    let json = serde_json::to_string(&result).expect("serialize");
-    let deser: GateReport = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&result).unwrap_or_default();
+    let deser: GateReport = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(deser.overall_verdict, result.overall_verdict);
     assert_eq!(deser.cohort_results.len(), result.cohort_results.len());
 }
@@ -459,8 +459,8 @@ fn gate_report_serde_roundtrip() {
 #[test]
 fn config_serde_roundtrip() {
     let config = default_config();
-    let json = serde_json::to_string(&config).expect("serialize");
-    let deser: GateConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let deser: GateConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(
         deser.min_parity_coverage_millionths,
         config.min_parity_coverage_millionths

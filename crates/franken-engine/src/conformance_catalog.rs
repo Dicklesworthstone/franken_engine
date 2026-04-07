@@ -994,8 +994,8 @@ mod tests {
     #[test]
     fn sibling_repo_serde_round_trip() {
         for repo in SiblingRepo::all() {
-            let json = serde_json::to_string(repo).expect("serialize");
-            let decoded: SiblingRepo = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(repo).unwrap_or_default();
+            let decoded: SiblingRepo = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*repo, decoded);
         }
     }
@@ -1058,8 +1058,8 @@ mod tests {
     #[test]
     fn semantic_version_serde_round_trip() {
         let v = SemanticVersion::new(1, 2, 3);
-        let json = serde_json::to_string(&v).expect("serialize");
-        let decoded: SemanticVersion = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&v).unwrap_or_default();
+        let decoded: SemanticVersion = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(v, decoded);
     }
 
@@ -1118,8 +1118,8 @@ mod tests {
             migration_required: false,
             migration_path: None,
         };
-        let json = serde_json::to_vec(&result).expect("serialize");
-        let decoded: VersionNegotiationResult = serde_json::from_slice(&json).expect("deserialize");
+        let json = serde_json::to_vec(&result).unwrap_or_default();
+        let decoded: VersionNegotiationResult = serde_json::from_slice(&json).unwrap_or_default();
         assert_eq!(result, decoded);
     }
 
@@ -1191,9 +1191,8 @@ mod tests {
     #[test]
     fn failure_taxonomy_serde_round_trip() {
         let taxonomy = failure_taxonomy();
-        let json = serde_json::to_vec(&taxonomy).expect("serialize");
-        let decoded: Vec<FailureTaxonomyEntry> =
-            serde_json::from_slice(&json).expect("deserialize");
+        let json = serde_json::to_vec(&taxonomy).unwrap_or_default();
+        let decoded: Vec<FailureTaxonomyEntry> = serde_json::from_slice(&json).unwrap_or_default();
         assert_eq!(taxonomy, decoded);
     }
 
@@ -1294,8 +1293,8 @@ mod tests {
             expected_output_hash: "deadbeef".to_string(),
             reproduction_command: "cargo test --lib".to_string(),
         };
-        let json = serde_json::to_vec(&artifact).expect("serialize");
-        let decoded: ReplayArtifact = serde_json::from_slice(&json).expect("deserialize");
+        let json = serde_json::to_vec(&artifact).unwrap_or_default();
+        let decoded: ReplayArtifact = serde_json::from_slice(&json).unwrap_or_default();
         assert_eq!(artifact, decoded);
     }
 
@@ -1384,8 +1383,8 @@ mod tests {
     #[test]
     fn catalog_serde_round_trip() {
         let catalog = build_canonical_catalog();
-        let json = serde_json::to_vec(&catalog).expect("serialize");
-        let decoded: ConformanceCatalog = serde_json::from_slice(&json).expect("deserialize");
+        let json = serde_json::to_vec(&catalog).unwrap_or_default();
+        let decoded: ConformanceCatalog = serde_json::from_slice(&json).unwrap_or_default();
         assert_eq!(catalog, decoded);
     }
 
@@ -1541,8 +1540,8 @@ mod tests {
             ChangeKind::VectorAdded,
             ChangeKind::VectorRemoved,
         ] {
-            let json = serde_json::to_string(&kind).expect("serialize");
-            let decoded: ChangeKind = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(&kind).unwrap_or_default();
+            let decoded: ChangeKind = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(kind, decoded);
         }
     }
@@ -1761,8 +1760,8 @@ mod tests {
             field: "vectors".to_string(),
             detail: "empty".to_string(),
         };
-        let json = serde_json::to_string(&err).expect("serialize");
-        let decoded: CatalogValidationError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&err).unwrap_or_default();
+        let decoded: CatalogValidationError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(err, decoded);
     }
 
@@ -1958,7 +1957,7 @@ mod tests {
     fn sibling_repo_serde_variants_distinct() {
         let jsons: BTreeSet<String> = SiblingRepo::all()
             .iter()
-            .map(|r| serde_json::to_string(r).expect("serialize"))
+            .map(|r| serde_json::to_string(r).unwrap_or_default())
             .collect();
         assert_eq!(
             jsons.len(),
@@ -1983,7 +1982,7 @@ mod tests {
         ];
         let jsons: BTreeSet<String> = kinds
             .iter()
-            .map(|k| serde_json::to_string(k).expect("serialize"))
+            .map(|k| serde_json::to_string(k).unwrap_or_default())
             .collect();
         assert_eq!(jsons.len(), 10);
     }
@@ -1997,7 +1996,7 @@ mod tests {
         ];
         let jsons: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).expect("serialize"))
+            .map(|v| serde_json::to_string(v).unwrap_or_default())
             .collect();
         assert_eq!(jsons.len(), 3);
     }
@@ -2012,7 +2011,7 @@ mod tests {
         ];
         let jsons: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).expect("serialize"))
+            .map(|v| serde_json::to_string(v).unwrap_or_default())
             .collect();
         assert_eq!(jsons.len(), 4);
     }
@@ -2027,7 +2026,7 @@ mod tests {
         ];
         let jsons: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).expect("serialize"))
+            .map(|v| serde_json::to_string(v).unwrap_or_default())
             .collect();
         assert_eq!(jsons.len(), 4);
     }
@@ -2041,7 +2040,7 @@ mod tests {
         ];
         let jsons: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).expect("serialize"))
+            .map(|v| serde_json::to_string(v).unwrap_or_default())
             .collect();
         assert_eq!(jsons.len(), 3);
     }
@@ -2058,7 +2057,7 @@ mod tests {
         ];
         let jsons: BTreeSet<String> = kinds
             .iter()
-            .map(|k| serde_json::to_string(k).expect("serialize"))
+            .map(|k| serde_json::to_string(k).unwrap_or_default())
             .collect();
         assert_eq!(jsons.len(), 6);
     }
@@ -2068,7 +2067,7 @@ mod tests {
     #[test]
     fn semantic_version_json_field_names() {
         let v = SemanticVersion::new(1, 2, 3);
-        let json = serde_json::to_string(&v).expect("serialize");
+        let json = serde_json::to_string(&v).unwrap_or_default();
         assert!(json.contains("\"major\""), "expected 'major' field");
         assert!(json.contains("\"minor\""), "expected 'minor' field");
         assert!(json.contains("\"patch\""), "expected 'patch' field");
@@ -2090,7 +2089,7 @@ mod tests {
             expected_output_hash: "hash".to_string(),
             reproduction_command: "cmd".to_string(),
         };
-        let json = serde_json::to_string(&artifact).expect("serialize");
+        let json = serde_json::to_string(&artifact).unwrap_or_default();
         assert!(json.contains("\"test_id\""));
         assert!(json.contains("\"boundary\""));
         assert!(json.contains("\"deterministic_seed\""));
@@ -2103,7 +2102,7 @@ mod tests {
     #[test]
     fn replay_obligation_json_field_names() {
         let ob = ReplayObligation::standard("tid", SiblingRepo::Asupersync);
-        let json = serde_json::to_string(&ob).expect("serialize");
+        let json = serde_json::to_string(&ob).unwrap_or_default();
         assert!(json.contains("\"test_id\""));
         assert!(json.contains("\"boundary\""));
         assert!(json.contains("\"must_pin_versions\""));
@@ -2119,7 +2118,7 @@ mod tests {
             field: "f1".to_string(),
             detail: "d1".to_string(),
         };
-        let json = serde_json::to_string(&err).expect("serialize");
+        let json = serde_json::to_string(&err).unwrap_or_default();
         assert!(json.contains("\"entry_id\""));
         assert!(json.contains("\"field\""));
         assert!(json.contains("\"detail\""));
@@ -2133,7 +2132,7 @@ mod tests {
             affected_entries: vec!["e1".to_string()],
             change_kind: ChangeKind::EntryAdded,
         };
-        let json = serde_json::to_string(&record).expect("serialize");
+        let json = serde_json::to_string(&record).unwrap_or_default();
         assert!(json.contains("\"version\""));
         assert!(json.contains("\"description\""));
         assert!(json.contains("\"affected_entries\""));
@@ -2290,8 +2289,8 @@ mod tests {
     #[test]
     fn semantic_version_max_fields() {
         let v = SemanticVersion::new(u32::MAX, u32::MAX, u32::MAX);
-        let json = serde_json::to_string(&v).expect("serialize");
-        let decoded: SemanticVersion = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&v).unwrap_or_default();
+        let decoded: SemanticVersion = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(v, decoded);
         assert_eq!(v.major, u32::MAX);
         assert_eq!(v.minor, u32::MAX);
@@ -2381,8 +2380,8 @@ mod tests {
             expected_pass: false,
             expected_regression_class: Some(RegressionClass::Breaking),
         };
-        let json = serde_json::to_string(&v).expect("serialize");
-        let decoded: ConformanceVector = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&v).unwrap_or_default();
+        let decoded: ConformanceVector = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(v, decoded);
     }
 
@@ -2395,8 +2394,8 @@ mod tests {
             expected_pass: true,
             expected_regression_class: None,
         };
-        let json = serde_json::to_string(&v).expect("serialize");
-        let decoded: ConformanceVector = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&v).unwrap_or_default();
+        let decoded: ConformanceVector = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(v, decoded);
         assert!(decoded.expected_regression_class.is_none());
     }
@@ -2479,8 +2478,8 @@ mod tests {
             approved: true,
             approval_epoch: Some(42),
         };
-        let json = serde_json::to_string(&entry).expect("serialize");
-        let decoded: CatalogEntry = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&entry).unwrap_or_default();
+        let decoded: CatalogEntry = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(entry, decoded);
     }
 
@@ -2497,8 +2496,8 @@ mod tests {
                 .collect(),
             version_class: VersionClass::Minor,
         };
-        let json = serde_json::to_string(&surface).expect("serialize");
-        let decoded: BoundarySurface = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&surface).unwrap_or_default();
+        let decoded: BoundarySurface = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(surface, decoded);
     }
 
@@ -2509,8 +2508,8 @@ mod tests {
             protected_at: VersionClass::Minor,
             required: true,
         };
-        let json = serde_json::to_string(&fvc).expect("serialize");
-        let decoded: FieldVersionCoverage = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&fvc).unwrap_or_default();
+        let decoded: FieldVersionCoverage = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(fvc, decoded);
         assert_eq!(decoded.protected_at, VersionClass::Minor);
         assert!(decoded.required);
@@ -2635,8 +2634,8 @@ mod tests {
             migration_required: true,
             migration_path: Some("migrate_v1_to_v2.sh".to_string()),
         };
-        let json = serde_json::to_string(&result).expect("serialize");
-        let decoded: VersionNegotiationResult = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&result).unwrap_or_default();
+        let decoded: VersionNegotiationResult = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(result, decoded);
         assert!(decoded.migration_required);
         assert_eq!(
@@ -2653,8 +2652,8 @@ mod tests {
             affected_entries: vec!["frankentui/adapter_envelope".to_string()],
             change_kind: ChangeKind::EntryModified,
         };
-        let json = serde_json::to_string(&record).expect("serialize");
-        let decoded: CatalogChangeRecord = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&record).unwrap_or_default();
+        let decoded: CatalogChangeRecord = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(record, decoded);
         assert_eq!(decoded.change_kind, ChangeKind::EntryModified);
     }

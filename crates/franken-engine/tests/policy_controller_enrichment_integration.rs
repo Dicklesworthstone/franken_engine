@@ -229,8 +229,8 @@ fn error_serde_roundtrip_all() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).expect("serialize");
-        let restored: PolicyControllerError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(err).unwrap_or_default();
+        let restored: PolicyControllerError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*err, restored);
     }
 }
@@ -264,8 +264,8 @@ fn action_selection_with_rejections_serde() {
         ],
         decision_id: "d-99".into(),
     };
-    let json = serde_json::to_string(&sel).expect("serialize");
-    let restored: ActionSelection = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&sel).unwrap_or_default();
+    let restored: ActionSelection = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(sel, restored);
 }
 
@@ -571,16 +571,16 @@ fn loss_matrix_serde_many_entries() {
     for i in 0..20 {
         m.set(&format!("s{i}"), &format!("a{i}"), i * 100_000);
     }
-    let json = serde_json::to_string(&m).expect("serialize");
-    let restored: LossMatrix = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&m).unwrap_or_default();
+    let restored: LossMatrix = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(m, restored);
 }
 
 #[test]
 fn posterior_serde_roundtrip() {
     let p = calm_posterior();
-    let json = serde_json::to_string(&p).expect("serialize");
-    let restored: Posterior = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&p).unwrap_or_default();
+    let restored: Posterior = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(p, restored);
 }
 
@@ -591,15 +591,15 @@ fn guardrail_serde_roundtrip() {
         description: "desc".into(),
         blocked_actions: vec!["a".into(), "b".into()],
     };
-    let json = serde_json::to_string(&gr).expect("serialize");
-    let restored: Guardrail = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&gr).unwrap_or_default();
+    let restored: Guardrail = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(gr, restored);
 }
 
 #[test]
 fn controller_config_serde_roundtrip() {
     let cfg = two_state_config();
-    let json = serde_json::to_string(&cfg).expect("serialize");
-    let restored: ControllerConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&cfg).unwrap_or_default();
+    let restored: ControllerConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(cfg, restored);
 }

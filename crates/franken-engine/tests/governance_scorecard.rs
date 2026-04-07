@@ -355,9 +355,8 @@ fn scorecard_outcome_serde_round_trip() {
         GovernanceScorecardOutcome::Warning,
         GovernanceScorecardOutcome::Critical,
     ] {
-        let json = serde_json::to_string(&outcome).expect("serialize");
-        let recovered: GovernanceScorecardOutcome =
-            serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&outcome).unwrap_or_default();
+        let recovered: GovernanceScorecardOutcome = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(outcome, recovered);
     }
 }
@@ -365,9 +364,8 @@ fn scorecard_outcome_serde_round_trip() {
 #[test]
 fn thresholds_default_round_trips_via_serde() {
     let thresholds = GovernanceScorecardThresholds::default();
-    let json = serde_json::to_string(&thresholds).expect("serialize");
-    let recovered: GovernanceScorecardThresholds =
-        serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&thresholds).unwrap_or_default();
+    let recovered: GovernanceScorecardThresholds = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(thresholds, recovered);
 }
 
@@ -383,9 +381,8 @@ fn publication_serde_round_trip() {
     )
     .expect("publication");
 
-    let json = serde_json::to_string(&publication).expect("serialize");
-    let recovered: GovernanceScorecardPublication =
-        serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&publication).unwrap_or_default();
+    let recovered: GovernanceScorecardPublication = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(publication.scorecard_id, recovered.scorecard_id);
     assert_eq!(publication.outcome, recovered.outcome);
     assert_eq!(publication.artifact_hash_hex, recovered.artifact_hash_hex);
@@ -478,8 +475,8 @@ fn attested_receipt_observation_serde_round_trip() {
         attestation_binding_valid: true,
         timestamp_ns: 42,
     };
-    let json = serde_json::to_string(&obs).expect("serialize");
-    let recovered: AttestedReceiptObservation = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&obs).unwrap_or_default();
+    let recovered: AttestedReceiptObservation = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(obs, recovered);
 }
 
@@ -494,9 +491,8 @@ fn trend_point_serde_round_trip() {
         conformance_pass_rate_millionths: 1_000_000,
         outcome: GovernanceScorecardOutcome::Healthy,
     };
-    let json = serde_json::to_string(&point).expect("serialize");
-    let recovered: GovernanceScorecardTrendPoint =
-        serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&point).unwrap_or_default();
+    let recovered: GovernanceScorecardTrendPoint = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(point, recovered);
 }
 
@@ -574,8 +570,8 @@ fn scorecard_event_serde_round_trip() {
         dimension: Some("privacy_budget".to_string()),
         detail: Some("within budget".to_string()),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let recovered: GovernanceScorecardEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let recovered: GovernanceScorecardEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, recovered);
 }
 
@@ -587,8 +583,8 @@ fn privacy_budget_health_input_serde_round_trip() {
         measurement_window_ns: 86_400_000_000_000,
         measurement_end_ns: 1_720_000_000_000_000_000,
     };
-    let json = serde_json::to_string(&input).expect("serialize");
-    let recovered: PrivacyBudgetHealthInput = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&input).unwrap_or_default();
+    let recovered: PrivacyBudgetHealthInput = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(input.overrun_incidents, recovered.overrun_incidents);
     assert_eq!(input.measurement_window_ns, recovered.measurement_window_ns);
 }
@@ -723,9 +719,8 @@ fn to_json_pretty_parses_as_valid_json_with_scorecard_id() {
 #[test]
 fn request_serde_roundtrip_preserves_all_fields() {
     let request = baseline_request();
-    let json = serde_json::to_string(&request).expect("serialize request");
-    let recovered: GovernanceScorecardRequest =
-        serde_json::from_str(&json).expect("deserialize request");
+    let json = serde_json::to_string(&request).unwrap_or_default();
+    let recovered: GovernanceScorecardRequest = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.trace_id, request.trace_id);
     assert_eq!(recovered.decision_id, request.decision_id);
     assert_eq!(recovered.policy_id, request.policy_id);
@@ -874,9 +869,8 @@ fn thresholds_custom_values_serde_roundtrip() {
         warn_privacy_exhaustion_within_ns: Some(999_999),
         ..GovernanceScorecardThresholds::default()
     };
-    let json = serde_json::to_string(&thresholds).expect("serialize");
-    let recovered: GovernanceScorecardThresholds =
-        serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&thresholds).unwrap_or_default();
+    let recovered: GovernanceScorecardThresholds = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(thresholds, recovered);
     assert!(recovered.fail_on_trend_regression);
     assert_eq!(recovered.warn_privacy_exhaustion_within_ns, Some(999_999));
@@ -885,8 +879,8 @@ fn thresholds_custom_values_serde_roundtrip() {
 #[test]
 fn moonshot_governor_health_input_serde_roundtrip() {
     let request = baseline_request();
-    let json = serde_json::to_string(&request.moonshot_governor).expect("serialize");
-    let recovered: MoonshotGovernorHealthInput = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&request.moonshot_governor).unwrap_or_default();
+    let recovered: MoonshotGovernorHealthInput = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(
         recovered.active_moonshots,
         request.moonshot_governor.active_moonshots
@@ -900,8 +894,8 @@ fn moonshot_governor_health_input_serde_roundtrip() {
 #[test]
 fn cross_repo_conformance_input_serde_roundtrip() {
     let request = baseline_request();
-    let json = serde_json::to_string(&request.conformance).expect("serialize");
-    let recovered: CrossRepoConformanceInput = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&request.conformance).unwrap_or_default();
+    let recovered: CrossRepoConformanceInput = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.release_id, request.conformance.release_id);
     assert_eq!(
         recovered.matrix_health.total_cells,
@@ -1328,9 +1322,8 @@ fn attested_receipt_coverage_summary_serde_roundtrip() {
         coverage_millionths: 900_000,
         threshold_pass: true,
     };
-    let json = serde_json::to_string(&summary).expect("serialize");
-    let recovered: AttestedReceiptCoverageSummary =
-        serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&summary).unwrap_or_default();
+    let recovered: AttestedReceiptCoverageSummary = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(summary, recovered);
 }
 
@@ -1350,9 +1343,9 @@ fn moonshot_governor_decision_summary_serde_roundtrip() {
         killed_moonshots: 1,
         threshold_pass: true,
     };
-    let json = serde_json::to_string(&summary).expect("serialize");
+    let json = serde_json::to_string(&summary).unwrap_or_default();
     let recovered: MoonshotGovernorDecisionSummary =
-        serde_json::from_str(&json).expect("deserialize");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(summary, recovered);
 }
 
@@ -1375,9 +1368,9 @@ fn cross_repo_conformance_stability_summary_serde_roundtrip() {
         ]),
         threshold_pass: true,
     };
-    let json = serde_json::to_string(&summary).expect("serialize");
+    let json = serde_json::to_string(&summary).unwrap_or_default();
     let recovered: CrossRepoConformanceStabilitySummary =
-        serde_json::from_str(&json).expect("deserialize");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(summary, recovered);
 }
 

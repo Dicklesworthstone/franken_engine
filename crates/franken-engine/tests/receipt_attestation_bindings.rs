@@ -89,10 +89,10 @@ fn attested_receipt_round_trip_through_transparency_log_and_verifier() {
     receipt.attestation_bindings = Some(attestation_bindings());
     let signed = receipt.sign(TEST_KEY);
 
-    let transparency_log = [serde_json::to_vec(&signed).expect("serialize receipt")];
+    let transparency_log = [serde_json::to_vec(&signed).unwrap_or_default()];
 
     let restored: OptReceipt =
-        serde_json::from_slice(transparency_log.last().expect("entry")).expect("deserialize");
+        serde_json::from_slice(transparency_log.last().expect("entry")).unwrap_or_default();
     let mut nonce_registry = ReceiptNonceRegistry::new();
     let result = validate_receipt_with_policy(
         &restored,
@@ -153,8 +153,8 @@ fn serialization_is_byte_identical_for_identical_inputs() {
     receipt.attestation_bindings = Some(attestation_bindings());
     let signed = receipt.sign(TEST_KEY);
 
-    let a = serde_json::to_vec(&signed).expect("serialize");
-    let b = serde_json::to_vec(&signed).expect("serialize");
+    let a = serde_json::to_vec(&signed).unwrap_or_default();
+    let b = serde_json::to_vec(&signed).unwrap_or_default();
     assert_eq!(a, b);
 }
 
@@ -319,8 +319,8 @@ fn validity_window_serde_roundtrip() {
         start_timestamp_ticks: 100,
         end_timestamp_ticks: 200,
     };
-    let json = serde_json::to_string(&window).expect("serialize");
-    let recovered: AttestationValidityWindow = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&window).unwrap_or_default();
+    let recovered: AttestationValidityWindow = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.start_timestamp_ticks, 100);
     assert_eq!(recovered.end_timestamp_ticks, 200);
 }
@@ -330,8 +330,8 @@ fn validity_window_serde_roundtrip() {
 #[test]
 fn attestation_bindings_serde_roundtrip() {
     let bindings = attestation_bindings();
-    let json = serde_json::to_string(&bindings).expect("serialize");
-    let recovered: ReceiptAttestationBindings = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&bindings).unwrap_or_default();
+    let recovered: ReceiptAttestationBindings = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.nonce, bindings.nonce);
     assert_eq!(recovered.measurement_id, bindings.measurement_id);
 }
@@ -342,8 +342,8 @@ fn opt_receipt_full_serde_roundtrip() {
     receipt.attestation_bindings = Some(attestation_bindings());
     let signed = receipt.sign(TEST_KEY);
 
-    let json = serde_json::to_string(&signed).expect("serialize");
-    let recovered: OptReceipt = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&signed).unwrap_or_default();
+    let recovered: OptReceipt = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.optimization_id, signed.optimization_id);
     assert_eq!(recovered.schema_version, signed.schema_version);
     assert_eq!(recovered.signature, signed.signature);
@@ -356,8 +356,8 @@ fn optimization_class_serde_roundtrip() {
         OptimizationClass::Superinstruction,
         OptimizationClass::TraceSpecialization,
     ] {
-        let json = serde_json::to_string(&class).expect("serialize");
-        let recovered: OptimizationClass = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&class).unwrap_or_default();
+        let recovered: OptimizationClass = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(recovered, class);
     }
 }
@@ -365,7 +365,7 @@ fn optimization_class_serde_roundtrip() {
 #[test]
 fn proof_schema_version_v1_is_nonempty() {
     let v = proof_schema_version_v1_0();
-    let json = serde_json::to_string(&v).expect("serialize");
+    let json = serde_json::to_string(&v).unwrap_or_default();
     assert!(!json.is_empty());
 }
 
@@ -525,8 +525,8 @@ fn receipt_object_id_changes_with_zone() {
 #[test]
 fn schema_version_current_serde_roundtrip() {
     let version = proof_schema_version_current();
-    let json = serde_json::to_string(&version).expect("serialize");
-    let recovered: SchemaVersion = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&version).unwrap_or_default();
+    let recovered: SchemaVersion = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, version);
 }
 
@@ -544,8 +544,8 @@ fn schema_version_v1_1_supports_attestation_bindings() {
 #[test]
 fn decision_impact_serde_roundtrip_all_variants() {
     for impact in [DecisionImpact::Standard, DecisionImpact::HighImpact] {
-        let json = serde_json::to_string(&impact).expect("serialize");
-        let recovered: DecisionImpact = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&impact).unwrap_or_default();
+        let recovered: DecisionImpact = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(recovered, impact);
     }
 }

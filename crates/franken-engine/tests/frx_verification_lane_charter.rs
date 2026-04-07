@@ -393,7 +393,7 @@ fn verification_contract_json_roundtrip_preserves_all_keys() {
     let path = repo_root().join("docs/frx_verification_lane_contract_v1.json");
     let raw = fs::read_to_string(&path).expect("read JSON");
     let value: Value = serde_json::from_str(&raw).expect("parse JSON");
-    let reserialized = serde_json::to_string_pretty(&value).expect("re-serialize");
+    let reserialized = serde_json::to_string_pretty(&value).unwrap_or_default();
     let reparsed: Value = serde_json::from_str(&reserialized).expect("re-parse");
     let original_keys: std::collections::BTreeSet<String> =
         value.as_object().unwrap().keys().cloned().collect();

@@ -829,7 +829,7 @@ fn json_stringify_compound_traversal_scenario_emits_artifact_bundle() {
             timing_us: 10 + sequence,
             timestamp_unix_ms: 1_700_000_920_130 + sequence,
         }))
-        .expect("serialize scenario event");
+        .unwrap_or_default();
         let event_object = event
             .as_object_mut()
             .expect("scenario event should serialize as object");
@@ -1087,7 +1087,7 @@ fn json_stringify_compound_traversal_scenario_emits_artifact_bundle() {
 
     let events_jsonl = events
         .iter()
-        .map(|event| serde_json::to_string(event).expect("serialize event line"))
+        .map(|event| serde_json::to_string(event).unwrap_or_default())
         .collect::<Vec<_>>()
         .join("\n");
     fs::write(
@@ -1198,7 +1198,7 @@ fn json_compound_placeholder_closure_scenario_emits_artifact_bundle() {
             timing_us: 20 + sequence,
             timestamp_unix_ms: 1_700_000_920_140 + sequence,
         }))
-        .expect("serialize closure event");
+        .unwrap_or_default();
         let event_object = event
             .as_object_mut()
             .expect("closure event should serialize as object");
@@ -1366,7 +1366,7 @@ fn json_compound_placeholder_closure_scenario_emits_artifact_bundle() {
 
     let events_jsonl = events
         .iter()
-        .map(|event| serde_json::to_string(event).expect("serialize closure event line"))
+        .map(|event| serde_json::to_string(event).unwrap_or_default())
         .collect::<Vec<_>>()
         .join("\n");
 

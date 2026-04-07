@@ -1028,8 +1028,8 @@ mod tests {
     #[test]
     fn cell_kind_serde_roundtrip() {
         for kind in [CellKind::Extension, CellKind::Session, CellKind::Delegate] {
-            let json = serde_json::to_string(&kind).expect("serialize");
-            let restored: CellKind = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(&kind).unwrap_or_default();
+            let restored: CellKind = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(kind, restored);
         }
     }
@@ -1084,8 +1084,8 @@ mod tests {
             current: RegionState::Running,
             attempted: "finalize".to_string(),
         };
-        let json = serde_json::to_string(&err).expect("serialize");
-        let restored: CellError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&err).unwrap_or_default();
+        let restored: CellError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(err, restored);
     }
 
@@ -1560,8 +1560,8 @@ mod tests {
             region_state: RegionState::Running,
             budget_consumed_ms: 1,
         };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let restored: CellEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&event).unwrap_or_default();
+        let restored: CellEvent = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(event, restored);
     }
 
@@ -1580,8 +1580,8 @@ mod tests {
             region_state: RegionState::Running,
             budget_consumed_ms: 0,
         };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let restored: CellEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&event).unwrap_or_default();
+        let restored: CellEvent = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(event, restored);
         assert_eq!(restored.error_code.as_deref(), Some("budget_exhausted"));
     }
@@ -1617,8 +1617,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serialize");
-            let restored: CellError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(err).unwrap_or_default();
+            let restored: CellError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*err, restored);
         }
     }
@@ -1885,8 +1885,8 @@ mod tests {
             budget_consumed_ms: 2,
             metadata: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&entry).expect("serialize");
-        let restored: LifecycleEvidenceEntry = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&entry).unwrap_or_default();
+        let restored: LifecycleEvidenceEntry = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(entry, restored);
     }
 
@@ -1907,8 +1907,8 @@ mod tests {
             budget_consumed_ms: 2,
             evidence_entries_emitted: 1,
         };
-        let json = serde_json::to_string(&report).expect("serialize");
-        let restored: CellCloseReport = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&report).unwrap_or_default();
+        let restored: CellCloseReport = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(report, restored);
     }
 

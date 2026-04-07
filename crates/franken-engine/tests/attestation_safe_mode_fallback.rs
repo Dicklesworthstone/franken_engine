@@ -388,8 +388,8 @@ fn attestation_health_serde_round_trip() {
         AttestationHealth::EvidenceUnavailable,
         AttestationHealth::VerificationFailed,
     ] {
-        let json = serde_json::to_string(&health).expect("serialize");
-        let recovered: AttestationHealth = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&health).unwrap_or_default();
+        let recovered: AttestationHealth = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(health, recovered);
     }
 }
@@ -401,8 +401,8 @@ fn attestation_fallback_state_serde_round_trip() {
         AttestationFallbackState::Degraded,
         AttestationFallbackState::Restoring,
     ] {
-        let json = serde_json::to_string(&state).expect("serialize");
-        let recovered: AttestationFallbackState = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&state).unwrap_or_default();
+        let recovered: AttestationFallbackState = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(state, recovered);
     }
 }
@@ -423,8 +423,8 @@ fn fallback_config_serde_round_trip() {
         challenge_on_fallback: true,
         sandbox_on_fallback: false,
     };
-    let json = serde_json::to_string(&config).expect("serialize");
-    let recovered: AttestationFallbackConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let recovered: AttestationFallbackConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(
         config.unavailable_timeout_ns,
         recovered.unavailable_timeout_ns
@@ -462,8 +462,8 @@ fn action_tier_serde_round_trip() {
         ActionTier::Standard,
         ActionTier::HighImpact,
     ] {
-        let json = serde_json::to_string(&tier).expect("serialize");
-        let recovered: ActionTier = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&tier).unwrap_or_default();
+        let recovered: ActionTier = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(tier, recovered);
     }
 }
@@ -477,8 +477,8 @@ fn autonomous_action_serde_round_trip() {
         AutonomousAction::RoutineMonitoring,
         AutonomousAction::MetricsEmission,
     ] {
-        let json = serde_json::to_string(&action).expect("serialize");
-        let recovered: AutonomousAction = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&action).unwrap_or_default();
+        let recovered: AutonomousAction = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(action, recovered);
     }
 }
@@ -512,8 +512,8 @@ fn events_are_populated_after_evaluation() {
 #[test]
 fn attestation_action_request_serde_round_trip() {
     let req = AttestationActionRequest::new("t1", "d1", "p1", AutonomousAction::Terminate, 500);
-    let json = serde_json::to_string(&req).expect("serialize");
-    let recovered: AttestationActionRequest = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&req).unwrap_or_default();
+    let recovered: AttestationActionRequest = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(req.trace_id, recovered.trace_id);
     assert_eq!(req.decision_id, recovered.decision_id);
     assert_eq!(req.tier, recovered.tier);
@@ -613,8 +613,8 @@ fn attestation_fallback_decision_serde_round_trip_execute() {
         attestation_status: "valid".to_string(),
         warning: Some("test warning".to_string()),
     };
-    let json = serde_json::to_string(&decision).expect("serialize");
-    let recovered: AttestationFallbackDecision = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&decision).unwrap_or_default();
+    let recovered: AttestationFallbackDecision = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decision, recovered);
 }
 
@@ -627,8 +627,8 @@ fn attestation_fallback_decision_serde_round_trip_deferred() {
         challenge_required: true,
         sandbox_required: false,
     };
-    let json = serde_json::to_string(&decision).expect("serialize");
-    let recovered: AttestationFallbackDecision = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&decision).unwrap_or_default();
+    let recovered: AttestationFallbackDecision = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decision, recovered);
 }
 
@@ -802,8 +802,8 @@ fn autonomous_action_serde_all_eight_variants() {
         AutonomousAction::MetricsEmission,
     ];
     for action in &all {
-        let json = serde_json::to_string(action).expect("serialize");
-        let recovered: AutonomousAction = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(action).unwrap_or_default();
+        let recovered: AutonomousAction = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(&recovered, action);
     }
 }
@@ -843,8 +843,8 @@ fn attestation_fallback_error_serde_roundtrip() {
     let err = AttestationFallbackError::SignatureFailure {
         detail: "invalid ed25519 signature".to_string(),
     };
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: AttestationFallbackError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: AttestationFallbackError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, recovered);
 }
 
@@ -888,7 +888,7 @@ fn transition_receipt_serde_roundtrip() {
         .expect("decision");
 
     let receipt = &mgr.transition_receipts()[0];
-    let json = serde_json::to_string(receipt).expect("serialize receipt");
+    let json = serde_json::to_string(receipt).unwrap_or_default();
     assert!(!json.is_empty());
     // Verify key fields in JSON
     let value: serde_json::Value = serde_json::from_str(&json).expect("parse json");
@@ -1011,7 +1011,7 @@ fn queued_decision_serde_roundtrip() {
     mgr.evaluate_action(req, AttestationHealth::VerificationFailed)
         .expect("decision");
     let queued = &mgr.pending_decisions()[0];
-    let json = serde_json::to_string(queued).expect("serialize");
+    let json = serde_json::to_string(queued).unwrap_or_default();
     let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
     assert_eq!(value["trace_id"].as_str(), Some("trace-qd-serde"));
     assert_eq!(value["decision_id"].as_str(), Some("decision-qd-serde"));

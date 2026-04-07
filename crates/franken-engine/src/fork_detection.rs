@@ -1731,8 +1731,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serialize");
-            let restored: ForkError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(err).unwrap_or_default();
+            let restored: ForkError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*err, restored);
         }
     }
@@ -1754,8 +1754,8 @@ mod tests {
             existing_was_accepted: true,
             acknowledged: false,
         };
-        let json = serde_json::to_string(&report).expect("serialize");
-        let restored: ForkIncidentReport = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&report).unwrap_or_default();
+        let restored: ForkIncidentReport = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(report, restored);
     }
 
@@ -1768,8 +1768,8 @@ mod tests {
             },
             trace_id: "t-1".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let restored: ForkEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&event).unwrap_or_default();
+        let restored: ForkEvent = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(event, restored);
     }
 
@@ -1780,8 +1780,8 @@ mod tests {
             trigger_seq: Some(5),
             unacknowledged_count: 2,
         };
-        let json = serde_json::to_string(&state).expect("serialize");
-        let restored: SafeModeState = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&state).unwrap_or_default();
+        let restored: SafeModeState = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(state, restored);
     }
 

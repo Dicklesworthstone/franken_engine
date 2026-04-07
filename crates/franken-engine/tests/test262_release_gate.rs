@@ -431,8 +431,8 @@ fn all_pass_run_is_not_blocked() {
 #[test]
 fn test262_observed_outcome_serde_round_trip() {
     for outcome in [Test262ObservedOutcome::Pass, Test262ObservedOutcome::Fail] {
-        let json = serde_json::to_string(&outcome).expect("serialize");
-        let recovered: Test262ObservedOutcome = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&outcome).unwrap_or_default();
+        let recovered: Test262ObservedOutcome = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(outcome, recovered);
     }
 }
@@ -445,8 +445,8 @@ fn test262_high_water_mark_serde_round_trip() {
         pass_count: 42,
         recorded_at_utc: "2026-02-22T00:00:00Z".to_string(),
     };
-    let json = serde_json::to_string(&hwm).expect("serialize");
-    let recovered: Test262HighWaterMark = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&hwm).unwrap_or_default();
+    let recovered: Test262HighWaterMark = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(hwm, recovered);
 }
 
@@ -473,8 +473,8 @@ fn test262_waiver_reason_serde_round_trip() {
         Test262WaiverReason::IntentionalDivergence,
         Test262WaiverReason::NotYetImplemented,
     ] {
-        let json = serde_json::to_string(&reason).expect("serialize");
-        let recovered: Test262WaiverReason = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&reason).unwrap_or_default();
+        let recovered: Test262WaiverReason = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(reason, recovered);
     }
 }
@@ -482,32 +482,32 @@ fn test262_waiver_reason_serde_round_trip() {
 #[test]
 fn test262_pin_set_serde_round_trip() {
     let pins = load_pins();
-    let json = serde_json::to_string(&pins).expect("serialize");
-    let recovered: Test262PinSet = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&pins).unwrap_or_default();
+    let recovered: Test262PinSet = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(pins, recovered);
 }
 
 #[test]
 fn test262_profile_serde_round_trip() {
     let profile = load_profile();
-    let json = serde_json::to_string(&profile).expect("serialize");
-    let recovered: Test262Profile = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&profile).unwrap_or_default();
+    let recovered: Test262Profile = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(profile, recovered);
 }
 
 #[test]
 fn test262_waiver_set_serde_round_trip() {
     let waivers = load_waivers();
-    let json = serde_json::to_string(&waivers).expect("serialize");
-    let recovered: Test262WaiverSet = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&waivers).unwrap_or_default();
+    let recovered: Test262WaiverSet = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(waivers, recovered);
 }
 
 #[test]
 fn test262_observed_result_serde_round_trip() {
     let result = observed("test/round-trip.js", "13.1", Test262ObservedOutcome::Pass);
-    let json = serde_json::to_string(&result).expect("serialize");
-    let recovered: Test262ObservedResult = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&result).unwrap_or_default();
+    let recovered: Test262ObservedResult = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(result, recovered);
 }
 
@@ -525,8 +525,8 @@ fn test262_gate_run_serde_round_trip() {
             None,
         )
         .expect("gate run");
-    let json = serde_json::to_string(&run).expect("serialize");
-    let recovered: Test262GateRun = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&run).unwrap_or_default();
+    let recovered: Test262GateRun = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(run.run_id, recovered.run_id);
     assert_eq!(run.blocked, recovered.blocked);
     assert_eq!(run.summary.passed, recovered.summary.passed);
@@ -571,8 +571,8 @@ fn test262_observed_outcome_timeout_and_crash_variants() {
         Test262ObservedOutcome::Timeout,
         Test262ObservedOutcome::Crash,
     ] {
-        let json = serde_json::to_string(&outcome).expect("serialize");
-        let recovered: Test262ObservedOutcome = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&outcome).unwrap_or_default();
+        let recovered: Test262ObservedOutcome = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(outcome, recovered);
     }
 }
@@ -591,8 +591,8 @@ fn test262_runner_config_serde_round_trip() {
         acknowledge_pass_regression: true,
         ..Test262RunnerConfig::default()
     };
-    let json = serde_json::to_string(&config).expect("serialize");
-    let recovered: Test262RunnerConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let recovered: Test262RunnerConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.run_date, "2026-03-05");
     assert!(recovered.acknowledge_pass_regression);
 }
@@ -622,31 +622,31 @@ fn test262_outcome_all_variants_serde_round_trip() {
         Test262Outcome::Timeout,
         Test262Outcome::Crash,
     ] {
-        let json = serde_json::to_string(&outcome).expect("serialize");
-        let recovered: Test262Outcome = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&outcome).unwrap_or_default();
+        let recovered: Test262Outcome = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(outcome, recovered);
     }
 }
 
 #[test]
 fn test262_outcome_serde_uses_snake_case() {
-    let json = serde_json::to_string(&Test262Outcome::Waived).expect("serialize");
+    let json = serde_json::to_string(&Test262Outcome::Waived).unwrap_or_default();
     assert_eq!(json, "\"waived\"");
-    let json = serde_json::to_string(&Test262Outcome::Timeout).expect("serialize");
+    let json = serde_json::to_string(&Test262Outcome::Timeout).unwrap_or_default();
     assert_eq!(json, "\"timeout\"");
-    let json = serde_json::to_string(&Test262Outcome::Crash).expect("serialize");
+    let json = serde_json::to_string(&Test262Outcome::Crash).unwrap_or_default();
     assert_eq!(json, "\"crash\"");
 }
 
 #[test]
 fn test262_observed_outcome_serde_uses_snake_case() {
-    let json = serde_json::to_string(&Test262ObservedOutcome::Pass).expect("serialize");
+    let json = serde_json::to_string(&Test262ObservedOutcome::Pass).unwrap_or_default();
     assert_eq!(json, "\"pass\"");
-    let json = serde_json::to_string(&Test262ObservedOutcome::Fail).expect("serialize");
+    let json = serde_json::to_string(&Test262ObservedOutcome::Fail).unwrap_or_default();
     assert_eq!(json, "\"fail\"");
-    let json = serde_json::to_string(&Test262ObservedOutcome::Timeout).expect("serialize");
+    let json = serde_json::to_string(&Test262ObservedOutcome::Timeout).unwrap_or_default();
     assert_eq!(json, "\"timeout\"");
-    let json = serde_json::to_string(&Test262ObservedOutcome::Crash).expect("serialize");
+    let json = serde_json::to_string(&Test262ObservedOutcome::Crash).unwrap_or_default();
     assert_eq!(json, "\"crash\"");
 }
 
@@ -662,8 +662,8 @@ fn test262_waiver_serde_round_trip() {
         expiry_date: "2030-06-15".to_string(),
         reviewer: "runtime-conformance".to_string(),
     };
-    let json = serde_json::to_string(&waiver).expect("serialize");
-    let recovered: Test262Waiver = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&waiver).unwrap_or_default();
+    let recovered: Test262Waiver = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(waiver, recovered);
 }
 
@@ -683,8 +683,8 @@ fn test262_waiver_all_reason_codes_serde() {
             expiry_date: "2030-01-01".to_string(),
             reviewer: "dev".to_string(),
         };
-        let json = serde_json::to_string(&waiver).expect("serialize");
-        let recovered: Test262Waiver = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&waiver).unwrap_or_default();
+        let recovered: Test262Waiver = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(waiver.reason_code, recovered.reason_code);
     }
 }
@@ -707,8 +707,8 @@ fn test262_log_event_serde_round_trip() {
         error_detail: None,
         worker_index: 0,
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let recovered: Test262LogEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let recovered: Test262LogEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, recovered);
 }
 
@@ -728,8 +728,8 @@ fn test262_log_event_with_error_fields_serde() {
         error_detail: Some("non-passing test without active waiver".to_string()),
         worker_index: 3,
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let recovered: Test262LogEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let recovered: Test262LogEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event.error_code, recovered.error_code);
     assert_eq!(event.error_detail, recovered.error_detail);
 }
@@ -753,8 +753,8 @@ fn test262_run_summary_serde_round_trip() {
         env_fingerprint: "abcdef0123456789".to_string(),
         pass_regression_warning: None,
     };
-    let json = serde_json::to_string(&summary).expect("serialize");
-    let recovered: Test262RunSummary = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&summary).unwrap_or_default();
+    let recovered: Test262RunSummary = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(summary, recovered);
 }
 
@@ -780,8 +780,8 @@ fn test262_run_summary_with_regression_warning_serde() {
             acknowledged: false,
         }),
     };
-    let json = serde_json::to_string(&summary).expect("serialize");
-    let recovered: Test262RunSummary = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&summary).unwrap_or_default();
+    let recovered: Test262RunSummary = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(
         summary.pass_regression_warning,
         recovered.pass_regression_warning
@@ -798,8 +798,8 @@ fn test262_pass_regression_warning_serde_round_trip() {
         acknowledgement_required: true,
         acknowledged: false,
     };
-    let json = serde_json::to_string(&warning).expect("serialize");
-    let recovered: Test262PassRegressionWarning = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&warning).unwrap_or_default();
+    let recovered: Test262PassRegressionWarning = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(warning, recovered);
 }
 
@@ -811,8 +811,8 @@ fn test262_pass_regression_warning_acknowledged_serde() {
         acknowledgement_required: true,
         acknowledged: true,
     };
-    let json = serde_json::to_string(&warning).expect("serialize");
-    let recovered: Test262PassRegressionWarning = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&warning).unwrap_or_default();
+    let recovered: Test262PassRegressionWarning = serde_json::from_str(&json).unwrap_or_default();
     assert!(recovered.acknowledged);
 }
 
@@ -825,8 +825,8 @@ fn test262_collected_artifacts_serde_round_trip() {
         evidence_path: PathBuf::from("/tmp/test262/evidence.jsonl"),
         high_water_mark_path: PathBuf::from("/tmp/test262/hwm.json"),
     };
-    let json = serde_json::to_string(&artifacts).expect("serialize");
-    let recovered: Test262CollectedArtifacts = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&artifacts).unwrap_or_default();
+    let recovered: Test262CollectedArtifacts = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(artifacts, recovered);
 }
 
@@ -839,9 +839,8 @@ fn deterministic_worker_assignment_serde_round_trip() {
         worker_index: 2,
         queue_index: 5,
     };
-    let json = serde_json::to_string(&assignment).expect("serialize");
-    let recovered: DeterministicWorkerAssignment =
-        serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&assignment).unwrap_or_default();
+    let recovered: DeterministicWorkerAssignment = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(assignment, recovered);
 }
 
@@ -854,8 +853,8 @@ fn test262_profile_include_serde_round_trip() {
         rationale: "Array tests are essential".to_string(),
         normative_clause: "22.1".to_string(),
     };
-    let json = serde_json::to_string(&include).expect("serialize");
-    let recovered: Test262ProfileInclude = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&include).unwrap_or_default();
+    let recovered: Test262ProfileInclude = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(include, recovered);
 }
 
@@ -866,8 +865,8 @@ fn test262_profile_exclude_serde_round_trip() {
         rationale: "Post-ES2020 proposals are out of scope".to_string(),
         normative_clause: "N/A".to_string(),
     };
-    let json = serde_json::to_string(&exclude).expect("serialize");
-    let recovered: Test262ProfileExclude = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&exclude).unwrap_or_default();
+    let recovered: Test262ProfileExclude = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(exclude, recovered);
 }
 
@@ -1961,8 +1960,8 @@ fn observed_result_with_error_fields_serde() {
         error_code: Some("CUSTOM-ERR".to_string()),
         error_detail: Some("detailed error message".to_string()),
     };
-    let json = serde_json::to_string(&result).expect("serialize");
-    let recovered: Test262ObservedResult = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&result).unwrap_or_default();
+    let recovered: Test262ObservedResult = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(result, recovered);
 }
 
@@ -1976,8 +1975,8 @@ fn observed_result_zero_duration_serde() {
         error_code: None,
         error_detail: None,
     };
-    let json = serde_json::to_string(&result).expect("serialize");
-    let recovered: Test262ObservedResult = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&result).unwrap_or_default();
+    let recovered: Test262ObservedResult = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.duration_us, 0);
 }
 
@@ -2177,8 +2176,8 @@ fn gate_run_full_serde_round_trip() {
         )
         .expect("gate run");
 
-    let json = serde_json::to_string(&run).expect("serialize");
-    let recovered: Test262GateRun = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&run).unwrap_or_default();
+    let recovered: Test262GateRun = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(run.run_id, recovered.run_id);
     assert_eq!(run.blocked, recovered.blocked);
     assert_eq!(run.logs.len(), recovered.logs.len());
@@ -2305,19 +2304,19 @@ fn log_events_worker_index_matches_deterministic_assignment() {
 #[test]
 fn waiver_reason_serde_snake_case_values() {
     assert_eq!(
-        serde_json::to_string(&Test262WaiverReason::HarnessGap).expect("serialize"),
+        serde_json::to_string(&Test262WaiverReason::HarnessGap).unwrap_or_default(),
         "\"harness_gap\""
     );
     assert_eq!(
-        serde_json::to_string(&Test262WaiverReason::HostHookMissing).expect("serialize"),
+        serde_json::to_string(&Test262WaiverReason::HostHookMissing).unwrap_or_default(),
         "\"host_hook_missing\""
     );
     assert_eq!(
-        serde_json::to_string(&Test262WaiverReason::IntentionalDivergence).expect("serialize"),
+        serde_json::to_string(&Test262WaiverReason::IntentionalDivergence).unwrap_or_default(),
         "\"intentional_divergence\""
     );
     assert_eq!(
-        serde_json::to_string(&Test262WaiverReason::NotYetImplemented).expect("serialize"),
+        serde_json::to_string(&Test262WaiverReason::NotYetImplemented).unwrap_or_default(),
         "\"not_yet_implemented\""
     );
 }

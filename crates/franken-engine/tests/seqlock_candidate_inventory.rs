@@ -362,7 +362,46 @@ fn simulated_seqlock_budget_exhausted_falls_back() {
         outcome.fallback_reason,
         Some(FallbackReason::RetryBudgetExhausted)
     );
+    assert_eq!(outcome.write_pressure_violations, 2);
     assert_eq!(seqlock.fallback_reads(), 1);
+}
+
+#[test]
+fn simulated_seqlock_fallback_reports_current_read_violations_only() {
+    let mut seqlock = SimulatedSeqlock::new(42u64);
+    let accepted_policy = RetryBudgetPolicyRow {
+        candidate_id: "test".to_string(),
+        disposition: CandidateDisposition::Accept,
+        max_retries: 1,
+        fallback_target: "incumbent".to_string(),
+        fallback_reason: FallbackReason::RetryBudgetExhausted,
+        write_pressure_limit: WriteProfile::Moderate,
+        policy_rationale: vec![],
+    };
+    let rejected_policy = RetryBudgetPolicyRow {
+        candidate_id: "test".to_string(),
+        disposition: CandidateDisposition::Reject,
+        max_retries: 0,
+        fallback_target: "incumbent".to_string(),
+        fallback_reason: FallbackReason::UnsupportedCandidate,
+        write_pressure_limit: WriteProfile::Rare,
+        policy_rationale: vec![],
+    };
+
+    let first = seqlock.read_with_interference(
+        &accepted_policy,
+        &[
+            ReadInterference::WriterActive,
+            ReadInterference::WriterActive,
+        ],
+    );
+    assert_eq!(first.write_pressure_violations, 2);
+    assert_eq!(seqlock.write_pressure_violations(), 2);
+
+    let second = seqlock.read_with_interference(&rejected_policy, &[ReadInterference::Stable]);
+    assert_eq!(second.resolution, ReadResolution::IncumbentFallback);
+    assert_eq!(second.write_pressure_violations, 0);
+    assert_eq!(seqlock.write_pressure_violations(), 2);
 }
 
 #[test]

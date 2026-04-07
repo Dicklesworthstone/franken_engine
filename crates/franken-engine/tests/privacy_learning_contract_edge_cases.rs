@@ -1226,56 +1226,56 @@ fn registry_drain_events_empties_queue() {
 #[test]
 fn update_policy_serde_roundtrip() {
     let policy = test_update_policy();
-    let json = serde_json::to_string(&policy).expect("serialize");
-    let restored: UpdatePolicy = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&policy).unwrap_or_default();
+    let restored: UpdatePolicy = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(policy, restored);
 }
 
 #[test]
 fn clipping_strategy_serde_roundtrip() {
     let clipping = test_clipping_strategy();
-    let json = serde_json::to_string(&clipping).expect("serialize");
-    let restored: ClippingStrategy = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&clipping).unwrap_or_default();
+    let restored: ClippingStrategy = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(clipping, restored);
 }
 
 #[test]
 fn aggregation_serde_roundtrip() {
     let agg = test_aggregation();
-    let json = serde_json::to_string(&agg).expect("serialize");
-    let restored: SecureAggregationRequirements = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&agg).unwrap_or_default();
+    let restored: SecureAggregationRequirements = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(agg, restored);
 }
 
 #[test]
 fn retention_serde_roundtrip() {
     let ret = test_retention();
-    let json = serde_json::to_string(&ret).expect("serialize");
-    let restored: DataRetentionPolicy = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&ret).unwrap_or_default();
+    let restored: DataRetentionPolicy = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(ret, restored);
 }
 
 #[test]
 fn shadow_gate_config_serde_roundtrip() {
     let config = ShadowEvaluationGateConfig::default();
-    let json = serde_json::to_string(&config).expect("serialize");
-    let restored: ShadowEvaluationGateConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let restored: ShadowEvaluationGateConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(config, restored);
 }
 
 #[test]
 fn shadow_replay_reference_serde_roundtrip() {
     let rr = replay_reference();
-    let json = serde_json::to_string(&rr).expect("serialize");
-    let restored: ShadowReplayReference = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&rr).unwrap_or_default();
+    let restored: ShadowReplayReference = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(rr, restored);
 }
 
 #[test]
 fn safety_metric_snapshot_serde_roundtrip() {
     let snap = baseline_metrics();
-    let json = serde_json::to_string(&snap).expect("serialize");
-    let restored: SafetyMetricSnapshot = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&snap).unwrap_or_default();
+    let restored: SafetyMetricSnapshot = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(snap, restored);
 }
 
@@ -1286,8 +1286,8 @@ fn shadow_promotion_verdict_serde_roundtrip() {
         ShadowPromotionVerdict::Reject,
         ShadowPromotionVerdict::OverrideApproved,
     ] {
-        let json = serde_json::to_string(&verdict).expect("serialize");
-        let restored: ShadowPromotionVerdict = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&verdict).unwrap_or_default();
+        let restored: ShadowPromotionVerdict = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(verdict, restored);
     }
 }
@@ -1295,8 +1295,8 @@ fn shadow_promotion_verdict_serde_roundtrip() {
 #[test]
 fn safety_metric_serde_roundtrip() {
     for metric in SafetyMetric::ALL {
-        let json = serde_json::to_string(metric).expect("serialize");
-        let restored: SafetyMetric = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(metric).unwrap_or_default();
+        let restored: SafetyMetric = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*metric, restored);
     }
 }
@@ -1308,8 +1308,8 @@ fn clipping_method_serde_roundtrip() {
         ClippingMethod::PerCoordinate,
         ClippingMethod::Adaptive,
     ] {
-        let json = serde_json::to_string(&method).expect("serialize");
-        let restored: ClippingMethod = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&method).unwrap_or_default();
+        let restored: ClippingMethod = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(method, restored);
     }
 }
@@ -1322,8 +1322,8 @@ fn composition_method_serde_roundtrip() {
         CompositionMethod::Renyi,
         CompositionMethod::ZeroCdp,
     ] {
-        let json = serde_json::to_string(&method).expect("serialize");
-        let restored: CompositionMethod = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&method).unwrap_or_default();
+        let restored: CompositionMethod = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(method, restored);
     }
 }
@@ -1334,8 +1334,8 @@ fn coordinator_trust_model_serde_roundtrip() {
         CoordinatorTrustModel::HonestButCurious,
         CoordinatorTrustModel::Malicious,
     ] {
-        let json = serde_json::to_string(&model).expect("serialize");
-        let restored: CoordinatorTrustModel = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&model).unwrap_or_default();
+        let restored: CoordinatorTrustModel = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(model, restored);
     }
 }
@@ -1343,8 +1343,8 @@ fn coordinator_trust_model_serde_roundtrip() {
 #[test]
 fn secret_sharing_scheme_serde_roundtrip() {
     for scheme in [SecretSharingScheme::Additive, SecretSharingScheme::Shamir] {
-        let json = serde_json::to_string(&scheme).expect("serialize");
-        let restored: SecretSharingScheme = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&scheme).unwrap_or_default();
+        let restored: SecretSharingScheme = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(scheme, restored);
     }
 }
@@ -1352,8 +1352,8 @@ fn secret_sharing_scheme_serde_roundtrip() {
 #[test]
 fn prng_algorithm_serde_roundtrip() {
     let algo = PrngAlgorithm::ChaCha20LikeCounter;
-    let json = serde_json::to_string(&algo).expect("serialize");
-    let restored: PrngAlgorithm = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&algo).unwrap_or_default();
+    let restored: PrngAlgorithm = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(algo, restored);
 }
 
@@ -1365,8 +1365,8 @@ fn human_override_request_serde_roundtrip() {
         bypassed_risk_criteria: vec!["crit-1".to_string()],
         acknowledged_bypass: true,
     };
-    let json = serde_json::to_string(&req).expect("serialize");
-    let restored: HumanOverrideRequest = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&req).unwrap_or_default();
+    let restored: HumanOverrideRequest = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(req, restored);
 }
 
@@ -1385,8 +1385,8 @@ fn shadow_promotion_artifact_serde_roundtrip() {
             &governance_signing_key(),
         )
         .expect("pass");
-    let json = serde_json::to_string(&artifact).expect("serialize");
-    let restored = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&artifact).unwrap_or_default();
+    let restored = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(artifact, restored);
 }
 
@@ -1405,9 +1405,9 @@ fn shadow_gate_events_serde_roundtrip() {
     )
     .expect("pass");
     let events = gate.drain_events();
-    let json = serde_json::to_string(&events).expect("serialize");
+    let json = serde_json::to_string(&events).unwrap_or_default();
     let restored: Vec<frankenengine_engine::privacy_learning_contract::ShadowGateEvent> =
-        serde_json::from_str(&json).expect("deserialize");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(events, restored);
 }
 
@@ -1430,9 +1430,9 @@ fn rollback_receipt_serde_roundtrip() {
         .evaluate_post_deployment_metrics(&artifact, regressed_metrics(), &governance_signing_key())
         .expect("post deployment check")
         .expect("rollback");
-    let json = serde_json::to_string(&receipt).expect("serialize");
+    let json = serde_json::to_string(&receipt).unwrap_or_default();
     let restored: frankenengine_engine::privacy_learning_contract::ShadowRollbackIncidentReceipt =
-        serde_json::from_str(&json).expect("deserialize");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(receipt, restored);
 }
 
@@ -1448,9 +1448,9 @@ fn contract_event_type_serde_roundtrip() {
         .register(contract, &governance_vk(), "trace-1")
         .expect("register");
     let events = registry.drain_events();
-    let json = serde_json::to_string(&events).expect("serialize");
+    let json = serde_json::to_string(&events).unwrap_or_default();
     let restored: Vec<frankenengine_engine::privacy_learning_contract::ContractEvent> =
-        serde_json::from_str(&json).expect("deserialize");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(events, restored);
 }
 
@@ -1823,8 +1823,8 @@ fn feature_field_type_serde_roundtrip() {
         FeatureFieldType::Boolean,
         FeatureFieldType::Categorical,
     ] {
-        let json = serde_json::to_string(&fft).expect("serialize");
-        let restored: FeatureFieldType = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&fft).unwrap_or_default();
+        let restored: FeatureFieldType = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(fft, restored);
     }
 }

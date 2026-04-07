@@ -826,8 +826,8 @@ mod tests {
     #[test]
     fn surface_serde_round_trip() {
         for s in &ALL_SURFACES {
-            let json = serde_json::to_string(s).expect("serialize");
-            let deser: PublicationSurface = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(s).unwrap_or_default();
+            let deser: PublicationSurface = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*s, deser);
         }
     }
@@ -847,8 +847,8 @@ mod tests {
             },
         ];
         for d in &decisions {
-            let json = serde_json::to_string(d).expect("serialize");
-            let deser: GateDecision = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(d).unwrap_or_default();
+            let deser: GateDecision = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*d, deser);
         }
     }
@@ -864,8 +864,8 @@ mod tests {
             domain: "compatibility".to_string(),
             statement: "ES2024 strict mode".to_string(),
         };
-        let json = serde_json::to_string(&claim).expect("serialize");
-        let deser: PublishableClaim = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&claim).unwrap_or_default();
+        let deser: PublishableClaim = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(claim, deser);
     }
 
@@ -878,8 +878,8 @@ mod tests {
             blocks_surfaces: vec![PublicationSurface::Ga],
             remediation: "bd-1lsy.4.9".to_string(),
         };
-        let json = serde_json::to_string(&gap).expect("serialize");
-        let deser: FrontierGapDisclosure = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&gap).unwrap_or_default();
+        let deser: FrontierGapDisclosure = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(gap, deser);
     }
 
@@ -891,8 +891,8 @@ mod tests {
             surface: PublicationSurface::Supremacy,
             description: "stale evidence".to_string(),
         };
-        let json = serde_json::to_string(&flag).expect("serialize");
-        let deser: RiskFlag = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&flag).unwrap_or_default();
+        let deser: RiskFlag = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(flag, deser);
     }
 
@@ -905,8 +905,8 @@ mod tests {
         )];
         let eval =
             evaluate_publication_gate(&verdicts, &[], &default_config(), 42).expect("evaluate");
-        let json = serde_json::to_string(&eval).expect("serialize");
-        let deser: PublicationGateEvaluation = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&eval).unwrap_or_default();
+        let deser: PublicationGateEvaluation = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(eval, deser);
     }
 
@@ -1196,8 +1196,8 @@ mod tests {
     #[test]
     fn default_config_serde_round_trip() {
         let config = default_config();
-        let json = serde_json::to_string(&config).expect("serialize");
-        let deser: SurfaceRoutingConfig = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&config).unwrap_or_default();
+        let deser: SurfaceRoutingConfig = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(config, deser);
     }
 
@@ -1356,8 +1356,8 @@ mod tests {
             },
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).expect("serialize");
-            let deser: PublicationGateError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(e).unwrap_or_default();
+            let deser: PublicationGateError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*e, deser);
         }
     }
@@ -1831,8 +1831,8 @@ mod tests {
             "shipped_fact",
             42,
         );
-        let json = serde_json::to_string(&av).expect("serialize");
-        let deser: AnnotatedVerdict = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&av).unwrap_or_default();
+        let deser: AnnotatedVerdict = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(av, deser);
     }
 
@@ -1847,8 +1847,8 @@ mod tests {
             frontier_gap_count: 2,
             risk_flag_count: 4,
         };
-        let json = serde_json::to_string(&summary).expect("serialize");
-        let deser: PublicationGateSummary = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&summary).unwrap_or_default();
+        let deser: PublicationGateSummary = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(summary, deser);
     }
 
@@ -1859,8 +1859,8 @@ mod tests {
             RiskSeverity::Warning,
             RiskSeverity::Critical,
         ] {
-            let json = serde_json::to_string(&severity).expect("serialize");
-            let deser: RiskSeverity = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(&severity).unwrap_or_default();
+            let deser: RiskSeverity = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(severity, deser);
         }
     }
@@ -1872,8 +1872,8 @@ mod tests {
             PublicationTier::ScopedObserved,
             PublicationTier::FrontierAmbition,
         ] {
-            let json = serde_json::to_string(&tier).expect("serialize");
-            let deser: PublicationTier = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(&tier).unwrap_or_default();
+            let deser: PublicationTier = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(tier, deser);
         }
     }

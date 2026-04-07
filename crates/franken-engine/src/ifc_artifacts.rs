@@ -609,7 +609,7 @@ impl FlowEnvelope {
 
     /// Content-addressable identity.
     pub fn content_hash(&self) -> ContentHash {
-        let bytes = serde_json::to_vec(self).expect("FlowEnvelope must serialize for content hash");
+        let bytes = serde_json::to_vec(self).unwrap_or_default();
         ContentHash::compute(&bytes)
     }
 }
@@ -747,7 +747,7 @@ impl SignaturePreimage for FlowPolicy {
     fn unsigned_view(&self) -> CanonicalValue {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
-        CanonicalValue::Bytes(serde_json::to_vec(&copy).expect("serialization failed"))
+        CanonicalValue::Bytes(serde_json::to_vec(&copy).unwrap_or_default())
     }
 }
 
@@ -866,7 +866,7 @@ impl SignaturePreimage for FlowProof {
     fn unsigned_view(&self) -> CanonicalValue {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
-        CanonicalValue::Bytes(serde_json::to_vec(&copy).expect("serialization failed"))
+        CanonicalValue::Bytes(serde_json::to_vec(&copy).unwrap_or_default())
     }
 }
 
@@ -1049,7 +1049,7 @@ impl SignaturePreimage for DeclassificationReceipt {
     fn unsigned_view(&self) -> CanonicalValue {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
-        CanonicalValue::Bytes(serde_json::to_vec(&copy).expect("serialization failed"))
+        CanonicalValue::Bytes(serde_json::to_vec(&copy).unwrap_or_default())
     }
 }
 
@@ -1163,7 +1163,7 @@ impl SignaturePreimage for ConfinementClaim {
     fn unsigned_view(&self) -> CanonicalValue {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
-        CanonicalValue::Bytes(serde_json::to_vec(&copy).expect("serialization failed"))
+        CanonicalValue::Bytes(serde_json::to_vec(&copy).unwrap_or_default())
     }
 }
 

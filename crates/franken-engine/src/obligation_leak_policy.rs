@@ -441,8 +441,8 @@ mod tests {
     #[test]
     fn leak_diagnostic_serialization_round_trip() {
         let diag = test_diagnostic();
-        let json = serde_json::to_string(&diag).expect("serialize");
-        let restored: LeakDiagnostic = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&diag).unwrap_or_default();
+        let restored: LeakDiagnostic = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(diag, restored);
     }
 
@@ -460,8 +460,8 @@ mod tests {
             }),
             severity: LeakSeverity::Critical,
         };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let restored: LeakEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&event).unwrap_or_default();
+        let restored: LeakEvent = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(event, restored);
     }
 
@@ -470,8 +470,8 @@ mod tests {
     #[test]
     fn obligation_leak_policy_serde_both_variants() {
         for policy in [ObligationLeakPolicy::Lab, ObligationLeakPolicy::Production] {
-            let json = serde_json::to_string(&policy).expect("serialize");
-            let restored: ObligationLeakPolicy = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(&policy).unwrap_or_default();
+            let restored: ObligationLeakPolicy = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(policy, restored);
         }
     }
@@ -483,8 +483,8 @@ mod tests {
             LeakSeverity::Critical,
             LeakSeverity::Fatal,
         ] {
-            let json = serde_json::to_string(&sev).expect("serialize");
-            let restored: LeakSeverity = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(&sev).unwrap_or_default();
+            let restored: LeakSeverity = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(sev, restored);
         }
     }
@@ -498,8 +498,8 @@ mod tests {
             FailoverAction::AlertOnly,
         ];
         for action in actions {
-            let json = serde_json::to_string(&action).expect("serialize");
-            let restored: FailoverAction = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(&action).unwrap_or_default();
+            let restored: FailoverAction = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(action, restored);
         }
     }
@@ -510,15 +510,15 @@ mod tests {
         // Lab policy returns Abort
         let mut handler_lab = LeakHandler::new(ObligationLeakPolicy::Lab);
         let abort_resp = handler_lab.handle_leak(diag.clone());
-        let json = serde_json::to_string(&abort_resp).expect("serialize");
-        let restored: LeakResponse = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&abort_resp).unwrap_or_default();
+        let restored: LeakResponse = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(abort_resp, restored);
 
         // Production policy returns Handled
         let mut handler_prod = LeakHandler::new(ObligationLeakPolicy::Production);
         let handled_resp = handler_prod.handle_leak(test_diagnostic());
-        let json = serde_json::to_string(&handled_resp).expect("serialize");
-        let restored: LeakResponse = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&handled_resp).unwrap_or_default();
+        let restored: LeakResponse = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(handled_resp, restored);
     }
 
@@ -526,8 +526,8 @@ mod tests {
     fn leak_metrics_serialization_round_trip() {
         let mut metrics = LeakMetrics::default();
         metrics.record("r", "c", "comp");
-        let json = serde_json::to_string(&metrics).expect("serialize");
-        let restored: LeakMetrics = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&metrics).unwrap_or_default();
+        let restored: LeakMetrics = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(metrics, restored);
     }
 

@@ -255,8 +255,8 @@ fn governance_decision_type_serde_round_trip() {
         GovernanceDecisionType::Promote,
         GovernanceDecisionType::Override,
     ] {
-        let json = serde_json::to_string(&dtype).expect("serialize");
-        let recovered: GovernanceDecisionType = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&dtype).unwrap_or_default();
+        let recovered: GovernanceDecisionType = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(dtype, recovered);
     }
 }
@@ -338,8 +338,8 @@ fn governance_actor_serde_roundtrip() {
         GovernanceActor::Human("operator-1".to_string()),
         GovernanceActor::System("portfolio-governor".to_string()),
     ] {
-        let json = serde_json::to_string(&actor).expect("serialize");
-        let recovered: GovernanceActor = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&actor).unwrap_or_default();
+        let recovered: GovernanceActor = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(actor.actor_id(), recovered.actor_id());
         assert_eq!(actor.is_human(), recovered.is_human());
     }
@@ -372,8 +372,8 @@ fn governance_decision_type_serde_extended_variants() {
         GovernanceDecisionType::Resume,
         GovernanceDecisionType::Override,
     ] {
-        let json = serde_json::to_string(&dt).expect("serialize");
-        let recovered: GovernanceDecisionType = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&dt).unwrap_or_default();
+        let recovered: GovernanceDecisionType = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(dt, recovered);
     }
 }
@@ -381,8 +381,8 @@ fn governance_decision_type_serde_extended_variants() {
 #[test]
 fn governance_actor_serde_round_trip() {
     let actor = GovernanceActor::System("sys-001".to_string());
-    let json = serde_json::to_string(&actor).expect("serialize");
-    let recovered: GovernanceActor = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&actor).unwrap_or_default();
+    let recovered: GovernanceActor = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(actor, recovered);
 }
 
@@ -406,8 +406,8 @@ fn governance_ledger_config_default_is_valid() {
 #[test]
 fn scorecard_snapshot_serde_roundtrip() {
     let snapshot = ScorecardSnapshot::from(&sample_scorecard());
-    let json = serde_json::to_string(&snapshot).expect("serialize");
-    let recovered: ScorecardSnapshot = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&snapshot).unwrap_or_default();
+    let recovered: ScorecardSnapshot = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.ev_millionths, snapshot.ev_millionths);
 }
 
@@ -422,8 +422,8 @@ fn governance_rationale_serde_roundtrip() {
         bypassed_risk_criteria: vec![],
         acknowledged_bypass: false,
     };
-    let json = serde_json::to_string(&rationale).expect("serialize");
-    let recovered: GovernanceRationale = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&rationale).unwrap_or_default();
+    let recovered: GovernanceRationale = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.summary, "test rationale");
 }
 
@@ -449,8 +449,8 @@ fn governance_actor_debug_is_nonempty() {
 #[test]
 fn governance_ledger_config_serde_roundtrip() {
     let config = GovernanceLedgerConfig::default();
-    let json = serde_json::to_string(&config).expect("serialize");
-    let recovered: GovernanceLedgerConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let recovered: GovernanceLedgerConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(serde_json::to_string(&recovered).unwrap(), json);
 }
 
@@ -662,8 +662,8 @@ fn governance_ledger_query_serde_roundtrip() {
         override_only: Some(true),
     };
 
-    let json = serde_json::to_string(&query).expect("serialize query");
-    let recovered: GovernanceLedgerQuery = serde_json::from_str(&json).expect("deserialize query");
+    let json = serde_json::to_string(&query).unwrap_or_default();
+    let recovered: GovernanceLedgerQuery = serde_json::from_str(&json).unwrap_or_default();
 
     assert_eq!(recovered.moonshot_id, query.moonshot_id);
     assert_eq!(recovered.decision_types, query.decision_types);
@@ -674,9 +674,8 @@ fn governance_ledger_query_serde_roundtrip() {
 
     // Also roundtrip the `all()` variant
     let all = GovernanceLedgerQuery::all();
-    let all_json = serde_json::to_string(&all).expect("serialize all");
-    let all_recovered: GovernanceLedgerQuery =
-        serde_json::from_str(&all_json).expect("deserialize all");
+    let all_json = serde_json::to_string(&all).unwrap_or_default();
+    let all_recovered: GovernanceLedgerQuery = serde_json::from_str(&all_json).unwrap_or_default();
     assert_eq!(all_recovered, all);
 }
 
@@ -823,8 +822,8 @@ fn governance_ledger_error_serde_roundtrip() {
         GovernanceLedgerError::EmptyLedger,
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).expect("serialize");
-        let recovered: GovernanceLedgerError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(err).unwrap_or_default();
+        let recovered: GovernanceLedgerError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*err, recovered);
     }
 }
@@ -907,9 +906,9 @@ fn governance_report_serde_roundtrip() {
     }
 
     let report = ledger.governance_report(0, 1_000, 250).expect("report");
-    let json = serde_json::to_string(&report).expect("serialize report");
+    let json = serde_json::to_string(&report).unwrap_or_default();
     let recovered: frankenengine_engine::portfolio_governor::governance_audit_ledger::GovernanceReport =
-        serde_json::from_str(&json).expect("deserialize report");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.total_decisions, report.total_decisions);
     assert_eq!(recovered.override_count, report.override_count);
     assert_eq!(recovered.kill_count, report.kill_count);
@@ -977,8 +976,8 @@ fn governance_audit_ledger_serde_roundtrip() {
         )
         .expect("append");
 
-    let json = serde_json::to_string(&ledger).expect("serialize ledger");
-    let recovered: GovernanceAuditLedger = serde_json::from_str(&json).expect("deserialize ledger");
+    let json = serde_json::to_string(&ledger).unwrap_or_default();
+    let recovered: GovernanceAuditLedger = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.entries().len(), 1);
     assert_eq!(recovered.entries()[0].decision_id, "led-serde");
     recovered

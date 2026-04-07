@@ -399,6 +399,10 @@ struct CallFrame {
     /// Function table index (reserved for frame-level diagnostics).
     #[allow(dead_code)]
     function_index: Option<u32>,
+    /// The `this` value for this call frame.  Set to the receiver for method
+    /// calls, `undefined` for plain calls, or the newly allocated object for
+    /// constructor calls.  Arrow functions inherit from the defining frame.
+    this_value: Value,
     /// For constructor calls (`new`): the `this` object allocated before
     /// entering the constructor body. If the constructor returns a non-object,
     /// this value is used as the result instead (ES2020 §9.2.2 step 13).
@@ -708,6 +712,8 @@ pub struct ExecutionResult {
     pub value: Value,
     /// Number of instructions executed.
     pub instructions_executed: u64,
+    /// Optional containment action requested by an interpreter hook.
+    pub requested_hook_action: Option<HookAction>,
     /// Witness events collected during execution.
     pub witness_events: Vec<WitnessEvent>,
     /// Hostcall decisions recorded.
@@ -826,6 +832,21 @@ impl InterpreterCore {
         self.hook = None;
     }
 
+    fn take_execution_result(
+        &mut self,
+        value: Value,
+        requested_hook_action: Option<HookAction>,
+    ) -> ExecutionResult {
+        ExecutionResult {
+            value,
+            instructions_executed: self.instructions_executed,
+            requested_hook_action,
+            witness_events: std::mem::take(&mut self.witness_events),
+            hostcall_decisions: std::mem::take(&mut self.hostcall_decisions),
+            events: std::mem::take(&mut self.events),
+        }
+    }
+
     /// Execute an IR3 module and return the result.
     pub fn execute(&mut self, module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
         let current_seed = self.capture_execution_seed();
@@ -849,6 +870,16 @@ impl InterpreterCore {
             Err(InterpreterError::Halted) => {
                 self.push_event("execution_halted", "ok", None);
             }
+            Err(InterpreterError::ContainmentActionRequested { action, reason }) => {
+                self.push_event(
+                    "execution_contained",
+                    "contained",
+                    Some(&format_requested_hook_action(
+                        action.as_str(),
+                        reason.as_deref(),
+                    )),
+                );
+            }
             Err(e) => {
                 self.push_event("execution_failed", "fail", Some(&format!("{e}")));
             }
@@ -858,27 +889,13 @@ impl InterpreterCore {
         match result {
             Ok(v) => {
                 self.emit_witness(WitnessEventKind::ExecutionCompleted, None);
-
-                Ok(ExecutionResult {
-                    value: v,
-                    instructions_executed: self.instructions_executed,
-                    witness_events: std::mem::take(&mut self.witness_events),
-                    hostcall_decisions: std::mem::take(&mut self.hostcall_decisions),
-                    events: std::mem::take(&mut self.events),
-                })
+                Ok(self.take_execution_result(v, None))
             }
             Err(InterpreterError::Halted) => {
                 // Halt is normal termination; return whatever is in r0.
                 let final_value = self.read_reg(0).unwrap_or(Value::Undefined);
                 self.emit_witness(WitnessEventKind::ExecutionCompleted, None);
-
-                Ok(ExecutionResult {
-                    value: final_value,
-                    instructions_executed: self.instructions_executed,
-                    witness_events: std::mem::take(&mut self.witness_events),
-                    hostcall_decisions: std::mem::take(&mut self.hostcall_decisions),
-                    events: std::mem::take(&mut self.events),
-                })
+                Ok(self.take_execution_result(final_value, None))
             }
             Err(e) => Err(e),
         }
@@ -1387,11 +1404,25 @@ impl InterpreterCore {
                             } else {
                                 None
                             };
+                            // For plain calls, this_value is undefined.
+                            // Method calls set this via the CallMethod instruction (TODO).
+                            let frame_this = self
+                                .call_stack
+                                .last()
+                                .map_or(Value::Undefined, |f| f.this_value.clone());
+                            // Arrow closures inherit `this` from the defining frame.
+                            let call_this = if captured_env.is_some() {
+                                frame_this
+                            } else {
+                                Value::Undefined
+                            };
+
                             self.call_stack.push(CallFrame {
                                 return_ip: self.ip + 1,
                                 return_reg: dst,
                                 register_base: self.register_base,
                                 function_index: Some(func_idx),
+                                this_value: call_this,
                                 construct_this: None,
                                 saved_pending_exception: self.pending_exception.take(),
                                 saved_pending_return: self.pending_return.take(),
@@ -1438,6 +1469,107 @@ impl InterpreterCore {
                             });
                         }
                     }
+                }
+                Ir3Instruction::CallMethod {
+                    receiver,
+                    callee,
+                    args,
+                    dst,
+                } => {
+                    let receiver_val = self.read_reg(receiver)?;
+                    let callee_val = self.read_reg(callee)?;
+
+                    let (func_idx, captured_env) = match &callee_val {
+                        Value::Function(idx) => (*idx, None),
+                        Value::Closure(closure_id) => {
+                            let closure =
+                                self.closures.get(*closure_id as usize).ok_or_else(|| {
+                                    InterpreterError::TypeError {
+                                        expected: "valid closure".to_string(),
+                                        got: format!("closure#{closure_id} not found"),
+                                    }
+                                })?;
+                            (closure.function_index, Some(closure.captured_env.clone()))
+                        }
+                        _ => {
+                            return Err(InterpreterError::TypeError {
+                                expected: "function".to_string(),
+                                got: callee_val.type_name().to_string(),
+                            });
+                        }
+                    };
+
+                    let func = module.function_table.get(func_idx as usize).ok_or(
+                        InterpreterError::FunctionNotFound {
+                            index: func_idx,
+                            table_size: module.function_table.len() as u32,
+                        },
+                    )?;
+
+                    if self.call_stack.len() >= self.config.max_call_depth {
+                        return Err(InterpreterError::StackOverflow {
+                            depth: self.call_stack.len(),
+                            max: self.config.max_call_depth,
+                        });
+                    }
+
+                    let mut arg_vals = Vec::new();
+                    for i in 0..args.count.min(func.arity) {
+                        let reg = args.start.checked_add(i).ok_or(
+                            InterpreterError::RegisterOutOfBounds {
+                                register: args.start,
+                                max: self.config.max_registers,
+                            },
+                        )?;
+                        arg_vals.push(self.read_reg(reg)?);
+                    }
+
+                    self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
+
+                    let scope_depth = self.scope_chain.depth();
+                    let saved_chain = if captured_env.is_some() {
+                        Some(self.scope_chain.snapshot())
+                    } else {
+                        None
+                    };
+                    self.call_stack.push(CallFrame {
+                        return_ip: self.ip + 1,
+                        return_reg: dst,
+                        register_base: self.register_base,
+                        function_index: Some(func_idx),
+                        this_value: receiver_val,
+                        construct_this: None,
+                        saved_pending_exception: self.pending_exception.take(),
+                        saved_pending_return: self.pending_return.take(),
+                        saved_suspended_abrupt_depth: self
+                            .suspended_abrupt_completions
+                            .len(),
+                        saved_finally_mode_depth: self.finally_modes.len(),
+                        saved_scope_depth: scope_depth,
+                        saved_scope_chain: saved_chain,
+                    });
+
+                    if let Some(env) = captured_env {
+                        self.scope_chain.frames = env;
+                    }
+                    self.scope_chain.push();
+
+                    self.register_base += self.config.max_registers as usize;
+                    let req_len = self.register_base + self.config.max_registers as usize;
+                    if req_len > self.registers.len() {
+                        self.registers.resize(req_len, Value::Undefined);
+                    } else {
+                        self.registers[self.register_base..req_len].fill(Value::Undefined);
+                    }
+
+                    for (i, val) in arg_vals.into_iter().enumerate() {
+                        let reg = i as u32;
+                        if reg < self.config.max_registers {
+                            self.write_reg(reg, val)?;
+                        }
+                    }
+
+                    self.ip = func.entry as usize;
                 }
                 Ir3Instruction::Return { value } => {
                     let return_val = self.read_reg(value)?;
@@ -1772,6 +1904,7 @@ impl InterpreterCore {
                                 return_reg: dst,
                                 register_base: self.register_base,
                                 function_index: Some(func_idx),
+                                this_value: this_val.clone(),
                                 construct_this: Some(this_val.clone()),
                                 saved_pending_exception: self.pending_exception.take(),
                                 saved_pending_return: self.pending_return.take(),
@@ -1844,6 +1977,14 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::Halt => {
                     return Err(InterpreterError::Halted);
+                }
+                Ir3Instruction::LoadThis { dst } => {
+                    let this_val = self
+                        .call_stack
+                        .last()
+                        .map_or(Value::Undefined, |f| f.this_value.clone());
+                    self.write_reg(dst, this_val)?;
+                    self.ip += 1;
                 }
                 // ---------------------------------------------------------
                 // Exception handling — real unwinding semantics (RGC-313B).
@@ -2836,8 +2977,29 @@ impl QuickJsLane {
         module: &Ir3Module,
         trace_id: &str,
     ) -> Result<ExecutionResult, InterpreterError> {
+        self.execute_with_hook(module, trace_id, None)
+    }
+
+    pub fn execute_with_hook(
+        &self,
+        module: &Ir3Module,
+        trace_id: &str,
+        hook: Option<Arc<dyn InterpreterHook>>,
+    ) -> Result<ExecutionResult, InterpreterError> {
         let mut core = InterpreterCore::new(self.config.clone(), trace_id);
-        core.execute(module)
+        if let Some(hook) = hook {
+            core.set_hook(hook);
+        }
+        match core.execute(module) {
+            Ok(result) => Ok(result),
+            Err(InterpreterError::ContainmentActionRequested { action, reason }) => {
+                let requested_hook_action =
+                    requested_hook_action_from_error(action.as_str(), reason.clone())
+                        .ok_or(InterpreterError::ContainmentActionRequested { action, reason })?;
+                Ok(core.take_execution_result(Value::Undefined, Some(requested_hook_action)))
+            }
+            Err(err) => Err(err),
+        }
     }
 }
 
@@ -2868,8 +3030,49 @@ impl V8Lane {
         module: &Ir3Module,
         trace_id: &str,
     ) -> Result<ExecutionResult, InterpreterError> {
+        self.execute_with_hook(module, trace_id, None)
+    }
+
+    pub fn execute_with_hook(
+        &self,
+        module: &Ir3Module,
+        trace_id: &str,
+        hook: Option<Arc<dyn InterpreterHook>>,
+    ) -> Result<ExecutionResult, InterpreterError> {
         let mut core = InterpreterCore::new(self.config.clone(), trace_id);
-        core.execute(module)
+        if let Some(hook) = hook {
+            core.set_hook(hook);
+        }
+        match core.execute(module) {
+            Ok(result) => Ok(result),
+            Err(InterpreterError::ContainmentActionRequested { action, reason }) => {
+                let requested_hook_action =
+                    requested_hook_action_from_error(action.as_str(), reason.clone())
+                        .ok_or(InterpreterError::ContainmentActionRequested { action, reason })?;
+                Ok(core.take_execution_result(Value::Undefined, Some(requested_hook_action)))
+            }
+            Err(err) => Err(err),
+        }
+    }
+}
+
+fn format_requested_hook_action(action: &str, reason: Option<&str>) -> String {
+    match reason {
+        Some(reason) if !reason.is_empty() => format!("{action} ({reason})"),
+        _ => action.to_string(),
+    }
+}
+
+fn requested_hook_action_from_error(action: &str, reason: Option<String>) -> Option<HookAction> {
+    match action {
+        "challenge" => Some(HookAction::Challenge(ChallengeToken {
+            token: reason.unwrap_or_default(),
+        })),
+        "sandbox" => Some(HookAction::Sandbox),
+        "suspend" => Some(HookAction::Suspend),
+        "terminate" => Some(HookAction::Terminate(reason.unwrap_or_default())),
+        "quarantine" => Some(HookAction::Quarantine(reason.unwrap_or_default())),
+        _ => None,
     }
 }
 
@@ -3044,6 +3247,16 @@ impl LaneRouter {
         trace_id: &str,
         force_lane: Option<LaneChoice>,
     ) -> Result<RoutedResult, InterpreterError> {
+        self.execute_with_hook(module, trace_id, force_lane, None)
+    }
+
+    pub fn execute_with_hook(
+        &self,
+        module: &Ir3Module,
+        trace_id: &str,
+        force_lane: Option<LaneChoice>,
+        hook: Option<Arc<dyn InterpreterHook>>,
+    ) -> Result<RoutedResult, InterpreterError> {
         let (lane, reason) = if let Some(forced) = force_lane {
             (forced, LaneReason::PolicyDirective)
         } else {
@@ -3051,8 +3264,8 @@ impl LaneRouter {
         };
 
         let result = match lane {
-            LaneChoice::QuickJs => self.quickjs.execute(module, trace_id)?,
-            LaneChoice::V8 => self.v8.execute(module, trace_id)?,
+            LaneChoice::QuickJs => self.quickjs.execute_with_hook(module, trace_id, hook)?,
+            LaneChoice::V8 => self.v8.execute_with_hook(module, trace_id, hook)?,
         };
 
         Ok(RoutedResult {
@@ -3447,6 +3660,30 @@ mod tests {
             }
         );
         assert_eq!(hook.records().len(), 1);
+    }
+
+    #[test]
+    fn lane_execute_with_hook_preserves_requested_containment_in_result() {
+        let hook = Arc::new(RecordingHook::with_allocation_action(
+            HookAction::Terminate("policy denied object allocation".to_string()),
+        ));
+        let lane = QuickJsLane::new();
+        let result = lane
+            .execute_with_hook(
+                &test_module(vec![Ir3Instruction::NewObject { dst: 0 }]),
+                "test-trace",
+                Some(hook),
+            )
+            .expect("lane should surface containment as structured output");
+
+        assert_eq!(
+            result.requested_hook_action,
+            Some(HookAction::Terminate(
+                "policy denied object allocation".to_string()
+            ))
+        );
+        assert_eq!(result.value, Value::Undefined);
+        assert_eq!(result.instructions_executed, 1);
     }
 
     #[test]

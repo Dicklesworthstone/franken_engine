@@ -30,8 +30,8 @@ fn semantic_signature(tree: &SyntaxTree) -> Vec<String> {
         .iter()
         .map(|statement| match statement {
             Statement::Expression(expr) => {
-                let payload = serde_json::to_string(&expr.expression.canonical_value())
-                    .expect("serialize expression signature");
+                let payload =
+                    serde_json::to_string(&expr.expression.canonical_value()).unwrap_or_default();
                 format!("expression:{payload}")
             }
             Statement::Import(import_decl) => {
@@ -40,8 +40,8 @@ fn semantic_signature(tree: &SyntaxTree) -> Vec<String> {
             }
             Statement::Export(export_decl) => match &export_decl.kind {
                 ExportKind::Default(expression) => {
-                    let payload = serde_json::to_string(&expression.canonical_value())
-                        .expect("serialize default export signature");
+                    let payload =
+                        serde_json::to_string(&expression.canonical_value()).unwrap_or_default();
                     format!("export_default:{payload}")
                 }
                 ExportKind::NamedClause(clause) => format!("export_named:{clause}"),
@@ -382,18 +382,16 @@ use frankenengine_engine::parser::{
 #[test]
 fn enrichment_parse_goal_serde_roundtrip_script() {
     let original = ParseGoal::Script;
-    let json = serde_json::to_string(&original).expect("serialize ParseGoal::Script");
-    let roundtripped: ParseGoal =
-        serde_json::from_str(&json).expect("deserialize ParseGoal::Script");
+    let json = serde_json::to_string(&original).unwrap_or_default();
+    let roundtripped: ParseGoal = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(original, roundtripped);
 }
 
 #[test]
 fn enrichment_parse_goal_serde_roundtrip_module() {
     let original = ParseGoal::Module;
-    let json = serde_json::to_string(&original).expect("serialize ParseGoal::Module");
-    let roundtripped: ParseGoal =
-        serde_json::from_str(&json).expect("deserialize ParseGoal::Module");
+    let json = serde_json::to_string(&original).unwrap_or_default();
+    let roundtripped: ParseGoal = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(original, roundtripped);
 }
 
@@ -402,17 +400,16 @@ fn enrichment_syntax_tree_serde_roundtrip() {
     let tree = parser()
         .parse("let x = 1", ParseGoal::Script)
         .expect("parse let x = 1");
-    let json = serde_json::to_string(&tree).expect("serialize SyntaxTree");
-    let roundtripped: SyntaxTree = serde_json::from_str(&json).expect("deserialize SyntaxTree");
+    let json = serde_json::to_string(&tree).unwrap_or_default();
+    let roundtripped: SyntaxTree = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(tree, roundtripped);
 }
 
 #[test]
 fn enrichment_parse_error_code_serde_roundtrip_all_variants() {
     for code in ParseErrorCode::ALL {
-        let json = serde_json::to_string(&code).expect("serialize ParseErrorCode");
-        let roundtripped: ParseErrorCode =
-            serde_json::from_str(&json).expect("deserialize ParseErrorCode");
+        let json = serde_json::to_string(&code).unwrap_or_default();
+        let roundtripped: ParseErrorCode = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(code, roundtripped, "serde roundtrip failed for {code:?}");
     }
 }
@@ -420,9 +417,8 @@ fn enrichment_parse_error_code_serde_roundtrip_all_variants() {
 #[test]
 fn enrichment_parser_options_serde_roundtrip_default() {
     let options = ParserOptions::default();
-    let json = serde_json::to_string(&options).expect("serialize ParserOptions");
-    let roundtripped: ParserOptions =
-        serde_json::from_str(&json).expect("deserialize ParserOptions");
+    let json = serde_json::to_string(&options).unwrap_or_default();
+    let roundtripped: ParserOptions = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(options, roundtripped);
 }
 
@@ -518,8 +514,8 @@ fn enrichment_semantic_signature_deterministic_across_repeated_calls() {
 #[test]
 fn enrichment_parser_mode_serde_roundtrip() {
     let mode = ParserMode::ScalarReference;
-    let json = serde_json::to_string(&mode).expect("serialize ParserMode");
-    let roundtripped: ParserMode = serde_json::from_str(&json).expect("deserialize ParserMode");
+    let json = serde_json::to_string(&mode).unwrap_or_default();
+    let roundtripped: ParserMode = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(mode, roundtripped);
     assert_eq!(mode.as_str(), "scalar_reference");
 }

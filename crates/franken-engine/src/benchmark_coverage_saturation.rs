@@ -405,7 +405,10 @@ impl FamilyCoverage {
         }
 
         let entry_count = entries.len() as u64;
-        let total_complexity: u64 = entries.iter().map(|e| e.complexity_score).sum();
+        let total_complexity: u64 = entries
+            .iter()
+            .map(|e| e.complexity_score)
+            .fold(0, |acc, x| acc.saturating_add(x));
         let min_complexity = entries
             .iter()
             .map(|e| e.complexity_score)

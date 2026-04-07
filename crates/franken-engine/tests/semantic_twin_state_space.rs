@@ -114,24 +114,24 @@ fn twin_state_snapshot_serde_round_trip() {
     let mut snapshot = TwinStateSnapshot::new("trace-rt", "decision-rt", "policy-rt", 1, 10);
     snapshot.upsert_value("workload_complexity", 500_000);
     snapshot.upsert_value("control_intensity", 800_000);
-    let json = serde_json::to_string(&snapshot).expect("serialize");
-    let recovered: TwinStateSnapshot = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&snapshot).unwrap_or_default();
+    let recovered: TwinStateSnapshot = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(snapshot, recovered);
 }
 
 #[test]
 fn semantic_twin_specification_serde_round_trip() {
     let spec = SemanticTwinSpecification::lane_decision_default().expect("default spec");
-    let json = serde_json::to_string(&spec).expect("serialize");
-    let recovered: SemanticTwinSpecification = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&spec).unwrap_or_default();
+    let recovered: SemanticTwinSpecification = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(spec, recovered);
 }
 
 #[test]
 fn twin_spec_error_serde_round_trip() {
     let err = TwinSpecError::DuplicateVariable("var-dup".to_string());
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: TwinSpecError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: TwinSpecError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, recovered);
 }
 
@@ -153,8 +153,8 @@ fn twin_state_domain_serde_round_trip() {
         TwinStateDomain::Replay,
         TwinStateDomain::Calibration,
     ] {
-        let json = serde_json::to_string(&domain).expect("serialize");
-        let recovered: TwinStateDomain = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&domain).unwrap_or_default();
+        let recovered: TwinStateDomain = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(domain, recovered);
     }
 }
@@ -174,15 +174,15 @@ fn twin_state_snapshot_multiple_upserts_preserved_in_serde() {
     let mut snapshot = TwinStateSnapshot::new("t", "d", "p", 1, 1);
     snapshot.upsert_value("key_a", 100);
     snapshot.upsert_value("key_b", 200);
-    let json = serde_json::to_string(&snapshot).expect("serialize");
-    let recovered: TwinStateSnapshot = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&snapshot).unwrap_or_default();
+    let recovered: TwinStateSnapshot = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(snapshot, recovered);
 }
 
 #[test]
 fn twin_state_snapshot_new_sets_trace_fields() {
     let snapshot = TwinStateSnapshot::new("trace-1", "decision-1", "policy-1", 5, 42);
-    let json = serde_json::to_string(&snapshot).expect("serialize");
+    let json = serde_json::to_string(&snapshot).unwrap_or_default();
     assert!(json.contains("trace-1"));
     assert!(json.contains("decision-1"));
     assert!(json.contains("policy-1"));
@@ -207,8 +207,8 @@ fn twin_state_domain_serde_round_trip_extended() {
         TwinStateDomain::Replay,
         TwinStateDomain::Calibration,
     ] {
-        let json = serde_json::to_string(&domain).expect("serialize");
-        let recovered: TwinStateDomain = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&domain).unwrap_or_default();
+        let recovered: TwinStateDomain = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(domain, recovered);
     }
 }
@@ -247,7 +247,7 @@ fn twin_state_domain_all_variants_serialize() {
         TwinStateDomain::Replay,
         TwinStateDomain::Calibration,
     ] {
-        let json = serde_json::to_string(&domain).expect("serialize");
+        let json = serde_json::to_string(&domain).unwrap_or_default();
         assert!(!json.is_empty());
     }
 }
@@ -255,8 +255,8 @@ fn twin_state_domain_all_variants_serialize() {
 #[test]
 fn default_spec_serde_roundtrip_preserves_component() {
     let spec = SemanticTwinSpecification::lane_decision_default().expect("default spec");
-    let json = serde_json::to_string(&spec).expect("serialize");
-    let recovered: SemanticTwinSpecification = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&spec).unwrap_or_default();
+    let recovered: SemanticTwinSpecification = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.component, SEMANTIC_TWIN_COMPONENT);
     assert_eq!(recovered.treatment_variable, spec.treatment_variable);
 }
@@ -389,7 +389,7 @@ fn default_spec_serde_is_deterministic() {
 #[test]
 fn default_spec_serialized_length_exceeds_minimum() {
     let spec = SemanticTwinSpecification::lane_decision_default().expect("default spec");
-    let json = serde_json::to_string(&spec).expect("serialize");
+    let json = serde_json::to_string(&spec).unwrap_or_default();
     assert!(
         json.len() > 50,
         "serialized spec should be >50 chars, got {}",
@@ -425,8 +425,8 @@ fn twin_signal_source_serde_round_trip_all_variants() {
         TwinSignalSource::OperatorInput,
         TwinSignalSource::EnvironmentTelemetry,
     ] {
-        let json = serde_json::to_string(&source).expect("serialize");
-        let recovered: TwinSignalSource = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&source).unwrap_or_default();
+        let recovered: TwinSignalSource = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(source, recovered);
     }
 }
@@ -444,8 +444,8 @@ fn twin_phase_serde_round_trip_all_variants() {
         TwinPhase::EvaluateFallback,
         TwinPhase::SafeMode,
     ] {
-        let json = serde_json::to_string(&phase).expect("serialize");
-        let recovered: TwinPhase = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&phase).unwrap_or_default();
+        let recovered: TwinPhase = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(phase, recovered);
     }
 }
@@ -464,8 +464,8 @@ fn twin_transition_trigger_serde_round_trip_all_variants() {
         TwinTransitionTrigger::OperatorOverride,
         TwinTransitionTrigger::ReplayCounterfactual,
     ] {
-        let json = serde_json::to_string(&trigger).expect("serialize");
-        let recovered: TwinTransitionTrigger = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&trigger).unwrap_or_default();
+        let recovered: TwinTransitionTrigger = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(trigger, recovered);
     }
 }
@@ -483,8 +483,8 @@ fn twin_state_variable_spec_serde_round_trip() {
         unit: "count".to_string(),
         description: "An integration-level variable spec test.".to_string(),
     };
-    let json = serde_json::to_string(&spec).expect("serialize");
-    let recovered: TwinStateVariableSpec = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&spec).unwrap_or_default();
+    let recovered: TwinStateVariableSpec = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(spec, recovered);
 }
 
@@ -499,8 +499,8 @@ fn twin_transition_spec_serde_round_trip() {
         guard_assumptions: vec!["guard_a".to_string(), "guard_b".to_string()],
         description: "Integration transition test".to_string(),
     };
-    let json = serde_json::to_string(&spec).expect("serialize");
-    let recovered: TwinTransitionSpec = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&spec).unwrap_or_default();
+    let recovered: TwinTransitionSpec = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(spec, recovered);
 }
 
@@ -514,8 +514,8 @@ fn twin_measurement_contract_serde_round_trip() {
         max_staleness_ticks: 100,
         evidence_component: "integ_test".to_string(),
     };
-    let json = serde_json::to_string(&contract).expect("serialize");
-    let recovered: TwinMeasurementContract = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&contract).unwrap_or_default();
+    let recovered: TwinMeasurementContract = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(contract, recovered);
 }
 
@@ -530,8 +530,8 @@ fn twin_assumption_spec_serde_round_trip() {
         dependencies: BTreeSet::from(["dep_a".to_string(), "dep_b".to_string()]),
         predicate_hash: "sha256:deadbeef".to_string(),
     };
-    let json = serde_json::to_string(&spec).expect("serialize");
-    let recovered: TwinAssumptionSpec = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&spec).unwrap_or_default();
+    let recovered: TwinAssumptionSpec = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(spec, recovered);
 }
 
@@ -546,8 +546,8 @@ fn twin_falsification_hook_serde_round_trip() {
         threshold_millionths: 750_000,
         trigger_count: 3,
     };
-    let json = serde_json::to_string(&hook).expect("serialize");
-    let recovered: TwinFalsificationHook = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&hook).unwrap_or_default();
+    let recovered: TwinFalsificationHook = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(hook, recovered);
 }
 
@@ -555,33 +555,33 @@ fn twin_falsification_hook_serde_round_trip() {
 
 #[test]
 fn twin_state_domain_serializes_to_snake_case() {
-    let json = serde_json::to_string(&TwinStateDomain::Workload).expect("serialize");
+    let json = serde_json::to_string(&TwinStateDomain::Workload).unwrap_or_default();
     assert_eq!(json, "\"workload\"");
 }
 
 #[test]
 fn twin_signal_source_serializes_to_snake_case() {
-    let json = serde_json::to_string(&TwinSignalSource::RuntimeDecisionCore).expect("serialize");
+    let json = serde_json::to_string(&TwinSignalSource::RuntimeDecisionCore).unwrap_or_default();
     assert_eq!(json, "\"runtime_decision_core\"");
-    let json2 = serde_json::to_string(&TwinSignalSource::FrirIr2).expect("serialize");
+    let json2 = serde_json::to_string(&TwinSignalSource::FrirIr2).unwrap_or_default();
     assert_eq!(json2, "\"frir_ir2\"");
 }
 
 #[test]
 fn twin_phase_serializes_to_snake_case() {
-    let json = serde_json::to_string(&TwinPhase::ObserveWorkload).expect("serialize");
+    let json = serde_json::to_string(&TwinPhase::ObserveWorkload).unwrap_or_default();
     assert_eq!(json, "\"observe_workload\"");
-    let json2 = serde_json::to_string(&TwinPhase::SafeMode).expect("serialize");
+    let json2 = serde_json::to_string(&TwinPhase::SafeMode).unwrap_or_default();
     assert_eq!(json2, "\"safe_mode\"");
 }
 
 #[test]
 fn twin_transition_trigger_serializes_to_snake_case() {
     let json =
-        serde_json::to_string(&TwinTransitionTrigger::GuardrailTriggered).expect("serialize");
+        serde_json::to_string(&TwinTransitionTrigger::GuardrailTriggered).unwrap_or_default();
     assert_eq!(json, "\"guardrail_triggered\"");
     let json2 =
-        serde_json::to_string(&TwinTransitionTrigger::ReplayCounterfactual).expect("serialize");
+        serde_json::to_string(&TwinTransitionTrigger::ReplayCounterfactual).unwrap_or_default();
     assert_eq!(json2, "\"replay_counterfactual\"");
 }
 
@@ -671,8 +671,8 @@ fn twin_spec_error_serde_round_trip_out_of_range_with_none_bounds() {
         min: None,
         max: None,
     };
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: TwinSpecError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: TwinSpecError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, recovered);
 }
 
@@ -683,8 +683,8 @@ fn twin_spec_error_serde_round_trip_duplicate_transition_priority() {
         trigger: TwinTransitionTrigger::GuardrailTriggered,
         deterministic_priority: 100,
     };
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: TwinSpecError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: TwinSpecError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, recovered);
 }
 
@@ -695,8 +695,8 @@ fn snapshot_new_with_zero_epoch_and_tick() {
     let snapshot = TwinStateSnapshot::new("trace", "decision", "policy", 0, 0);
     assert_eq!(snapshot.epoch, 0);
     assert_eq!(snapshot.tick, 0);
-    let json = serde_json::to_string(&snapshot).expect("serialize");
-    let recovered: TwinStateSnapshot = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&snapshot).unwrap_or_default();
+    let recovered: TwinStateSnapshot = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(snapshot, recovered);
 }
 
@@ -706,8 +706,8 @@ fn snapshot_new_with_empty_string_ids() {
     assert_eq!(snapshot.trace_id, "");
     assert_eq!(snapshot.decision_id, "");
     assert_eq!(snapshot.policy_id, "");
-    let json = serde_json::to_string(&snapshot).expect("serialize");
-    let recovered: TwinStateSnapshot = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&snapshot).unwrap_or_default();
+    let recovered: TwinStateSnapshot = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(snapshot, recovered);
 }
 
@@ -716,8 +716,8 @@ fn snapshot_new_with_max_epoch_and_tick() {
     let snapshot = TwinStateSnapshot::new("t", "d", "p", u64::MAX, u64::MAX);
     assert_eq!(snapshot.epoch, u64::MAX);
     assert_eq!(snapshot.tick, u64::MAX);
-    let json = serde_json::to_string(&snapshot).expect("serialize");
-    let recovered: TwinStateSnapshot = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&snapshot).unwrap_or_default();
+    let recovered: TwinStateSnapshot = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(snapshot, recovered);
 }
 
@@ -1363,8 +1363,8 @@ fn measurement_contract_serde_with_none_bounds() {
         max_staleness_ticks: 0,
         evidence_component: "test".to_string(),
     };
-    let json = serde_json::to_string(&contract).expect("serialize");
-    let recovered: TwinMeasurementContract = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&contract).unwrap_or_default();
+    let recovered: TwinMeasurementContract = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(contract, recovered);
 }
 

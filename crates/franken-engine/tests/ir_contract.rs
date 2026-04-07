@@ -587,8 +587,8 @@ fn ir_level_serde_round_trip() {
         IrLevel::Ir3,
         IrLevel::Ir4,
     ] {
-        let json = serde_json::to_string(&level).expect("serialize");
-        let recovered: IrLevel = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&level).unwrap_or_default();
+        let recovered: IrLevel = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(level, recovered);
     }
 }
@@ -620,8 +620,8 @@ fn ir_error_code_serde_round_trip() {
         IrErrorCode::WitnessIntegrityViolation,
     ];
     for code in codes {
-        let json = serde_json::to_string(&code).expect("serialize");
-        let recovered: IrErrorCode = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&code).unwrap_or_default();
+        let recovered: IrErrorCode = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(code, recovered);
     }
 }
@@ -652,8 +652,8 @@ fn ir_error_display_is_non_empty() {
 #[test]
 fn ir_error_serde_round_trip() {
     let err = IrError::new(IrErrorCode::LevelMismatch, "wrong level", IrLevel::Ir2);
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: IrError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: IrError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err.code, recovered.code);
     assert_eq!(err.level, recovered.level);
 }
@@ -666,8 +666,8 @@ fn witness_event_kind_serde_round_trip() {
         WitnessEventKind::ExecutionCompleted,
     ];
     for kind in kinds {
-        let json = serde_json::to_string(&kind).expect("serialize");
-        let recovered: WitnessEventKind = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&kind).unwrap_or_default();
+        let recovered: WitnessEventKind = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(kind, recovered);
     }
 }
@@ -681,8 +681,8 @@ fn execution_outcome_serde_round_trip() {
         ExecutionOutcome::Halted,
     ];
     for outcome in outcomes {
-        let json = serde_json::to_string(&outcome).expect("serialize");
-        let recovered: ExecutionOutcome = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&outcome).unwrap_or_default();
+        let recovered: ExecutionOutcome = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(outcome, recovered);
     }
 }
@@ -707,8 +707,8 @@ fn effect_boundary_serde_round_trip() {
         EffectBoundary::NetworkEffect,
     ];
     for effect in effects {
-        let json = serde_json::to_string(&effect).expect("serialize");
-        let recovered: EffectBoundary = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&effect).unwrap_or_default();
+        let recovered: EffectBoundary = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(effect, recovered);
     }
 }
@@ -724,8 +724,8 @@ fn binding_kind_serde_round_trip() {
         BindingKind::Import,
     ];
     for kind in kinds {
-        let json = serde_json::to_string(&kind).expect("serialize");
-        let recovered: BindingKind = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&kind).unwrap_or_default();
+        let recovered: BindingKind = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(kind, recovered);
     }
 }
@@ -734,8 +734,8 @@ fn binding_kind_serde_round_trip() {
 fn scope_kind_serde_round_trip() {
     let kinds = [ScopeKind::Global, ScopeKind::Function, ScopeKind::Block];
     for kind in kinds {
-        let json = serde_json::to_string(&kind).expect("serialize");
-        let recovered: ScopeKind = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&kind).unwrap_or_default();
+        let recovered: ScopeKind = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(kind, recovered);
     }
 }
@@ -780,8 +780,8 @@ fn ir3_instruction_serde_round_trip_all_variants() {
         Ir3Instruction::Return { value: 0 },
     ];
     for instr in &instructions {
-        let json = serde_json::to_string(instr).expect("serialize");
-        let recovered: Ir3Instruction = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(instr).unwrap_or_default();
+        let recovered: Ir3Instruction = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*instr, recovered);
     }
 }

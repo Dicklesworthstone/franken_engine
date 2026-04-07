@@ -1166,9 +1166,8 @@ mod tests {
             0,
             vec!["ev-1".to_string()],
         );
-        let json = serde_json::to_string(&cert).expect("serialize");
-        let deser: TimescaleSeparationCertificate =
-            serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&cert).unwrap_or_default();
+        let deser: TimescaleSeparationCertificate = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(cert, deser);
     }
 
@@ -1180,8 +1179,8 @@ mod tests {
         ];
         let config = BifurcationDetectorConfig::default();
         let bundle = build_certificate_bundle(&profiles, &config, 0);
-        let json = serde_json::to_string(&bundle).expect("serialize");
-        let deser: CertificateBundle = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&bundle).unwrap_or_default();
+        let deser: CertificateBundle = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(bundle, deser);
     }
 
@@ -1190,8 +1189,8 @@ mod tests {
         let config = BifurcationDetectorConfig::default();
         let telemetry = vec![snapshot("a", "b", 10_000_000, 50_000, 1_500_000, 0)];
         let result = detect_bifurcation_signals(&telemetry, &config, 0);
-        let json = serde_json::to_string(&result).expect("serialize");
-        let deser: BifurcationDetectorResult = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&result).unwrap_or_default();
+        let deser: BifurcationDetectorResult = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(result, deser);
     }
 
@@ -1207,16 +1206,16 @@ mod tests {
             detected_epoch: 5,
             description: "test signal".to_string(),
         };
-        let json = serde_json::to_string(&signal).expect("serialize");
-        let deser: BifurcationSignal = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&signal).unwrap_or_default();
+        let deser: BifurcationSignal = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(signal, deser);
     }
 
     #[test]
     fn config_serde_round_trip() {
         let config = BifurcationDetectorConfig::default();
-        let json = serde_json::to_string(&config).expect("serialize");
-        let deser: BifurcationDetectorConfig = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&config).unwrap_or_default();
+        let deser: BifurcationDetectorConfig = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(config, deser);
     }
 

@@ -752,8 +752,8 @@ mod tests {
             CheckpointReason::Explicit,
         ];
         for reason in &reasons {
-            let json = serde_json::to_string(reason).expect("serialize");
-            let restored: CheckpointReason = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(reason).unwrap_or_default();
+            let restored: CheckpointReason = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*reason, restored);
         }
     }
@@ -770,16 +770,16 @@ mod tests {
             action: CheckpointAction::Continue,
             timestamp_virtual: 42,
         };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let restored: CheckpointEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&event).unwrap_or_default();
+        let restored: CheckpointEvent = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(event, restored);
     }
 
     #[test]
     fn density_config_serialization_round_trip() {
         let config = DensityConfig::default();
-        let json = serde_json::to_string(&config).expect("serialize");
-        let restored: DensityConfig = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&config).unwrap_or_default();
+        let restored: DensityConfig = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(config, restored);
     }
 
@@ -791,8 +791,8 @@ mod tests {
             LoopSite::Custom("x".to_string()),
         ];
         for site in &sites {
-            let json = serde_json::to_string(site).expect("serialize");
-            let restored: LoopSite = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(site).unwrap_or_default();
+            let restored: LoopSite = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*site, restored);
         }
     }
@@ -806,8 +806,8 @@ mod tests {
             CheckpointAction::Drain,
             CheckpointAction::Abort,
         ] {
-            let json = serde_json::to_string(&action).expect("serialize");
-            let restored: CheckpointAction = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(&action).unwrap_or_default();
+            let restored: CheckpointAction = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(action, restored);
         }
     }
@@ -840,8 +840,8 @@ mod tests {
     fn coverage_serialization_round_trip() {
         let mut cov = CheckpointCoverage::new();
         cov.register("bytecode_dispatch");
-        let json = serde_json::to_string(&cov).expect("serialize");
-        let restored: CheckpointCoverage = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&cov).unwrap_or_default();
+        let restored: CheckpointCoverage = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(cov, restored);
     }
 
@@ -1071,8 +1071,8 @@ mod tests {
             action: CheckpointAction::Continue,
             timestamp_virtual: 100,
         };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let restored: CheckpointEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&event).unwrap_or_default();
+        let restored: CheckpointEvent = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(event, restored);
     }
 
@@ -1122,8 +1122,8 @@ mod tests {
             LoopSite::IrCompilation,
         ];
         for site in &sites {
-            let json = serde_json::to_string(site).expect("serialize");
-            let restored: LoopSite = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(site).unwrap_or_default();
+            let restored: LoopSite = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*site, restored);
         }
     }

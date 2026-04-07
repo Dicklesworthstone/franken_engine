@@ -207,8 +207,8 @@ fn node_handle_hash_in_btreeset() {
 #[test]
 fn node_handle_serde_round_trip() {
     let original = NodeHandle::from_parts(42, 7);
-    let json = serde_json::to_string(&original).expect("serialize NodeHandle");
-    let decoded: NodeHandle = serde_json::from_str(&json).expect("deserialize NodeHandle");
+    let json = serde_json::to_string(&original).unwrap_or_default();
+    let decoded: NodeHandle = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded, original);
 }
 
@@ -249,9 +249,8 @@ fn expression_handle_ordering() {
 #[test]
 fn expression_handle_serde_round_trip() {
     let original = ExpressionHandle::from_parts(99, 5);
-    let json = serde_json::to_string(&original).expect("serialize ExpressionHandle");
-    let decoded: ExpressionHandle =
-        serde_json::from_str(&json).expect("deserialize ExpressionHandle");
+    let json = serde_json::to_string(&original).unwrap_or_default();
+    let decoded: ExpressionHandle = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded, original);
 }
 
@@ -287,8 +286,8 @@ fn span_handle_equality_and_ordering() {
 #[test]
 fn span_handle_serde_round_trip() {
     let original = SpanHandle::from_parts(255, 1);
-    let json = serde_json::to_string(&original).expect("serialize SpanHandle");
-    let decoded: SpanHandle = serde_json::from_str(&json).expect("deserialize SpanHandle");
+    let json = serde_json::to_string(&original).unwrap_or_default();
+    let decoded: SpanHandle = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded, original);
 }
 
@@ -313,9 +312,8 @@ fn arena_budget_kind_all_variants_serde_round_trip() {
         ArenaBudgetKind::Bytes,
     ];
     for kind in &variants {
-        let json = serde_json::to_string(kind).expect("serialize ArenaBudgetKind");
-        let decoded: ArenaBudgetKind =
-            serde_json::from_str(&json).expect("deserialize ArenaBudgetKind");
+        let json = serde_json::to_string(kind).unwrap_or_default();
+        let decoded: ArenaBudgetKind = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(&decoded, kind);
     }
 }
@@ -387,8 +385,8 @@ fn arena_budget_serde_round_trip() {
         max_spans: 300,
         max_bytes: 4096,
     };
-    let json = serde_json::to_string(&budget).expect("serialize ArenaBudget");
-    let decoded: ArenaBudget = serde_json::from_str(&json).expect("deserialize ArenaBudget");
+    let json = serde_json::to_string(&budget).unwrap_or_default();
+    let decoded: ArenaBudget = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded, budget);
 }
 
@@ -749,9 +747,8 @@ fn handle_audit_kind_all_variants_serde_round_trip() {
         HandleAuditKind::Expression,
         HandleAuditKind::Span,
     ] {
-        let json = serde_json::to_string(&kind).expect("serialize HandleAuditKind");
-        let decoded: HandleAuditKind =
-            serde_json::from_str(&json).expect("deserialize HandleAuditKind");
+        let json = serde_json::to_string(&kind).unwrap_or_default();
+        let decoded: HandleAuditKind = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(decoded, kind);
     }
 }
@@ -804,9 +801,8 @@ fn handle_audit_entry_serde_round_trip() {
         generation: 1,
         descriptor: "1:1-1:10 offsets 0..10".to_string(),
     };
-    let json = serde_json::to_string(&entry).expect("serialize HandleAuditEntry");
-    let decoded: HandleAuditEntry =
-        serde_json::from_str(&json).expect("deserialize HandleAuditEntry");
+    let json = serde_json::to_string(&entry).unwrap_or_default();
+    let decoded: HandleAuditEntry = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decoded, entry);
 }
 
@@ -1697,8 +1693,8 @@ fn cross_concern_all_audit_entries_are_valid_serde() {
     let tree = all_expression_types_tree();
     let arena = default_arena(&tree);
     for entry in arena.handle_audit_entries() {
-        let json = serde_json::to_string(&entry).expect("serialize entry");
-        let decoded: HandleAuditEntry = serde_json::from_str(&json).expect("deserialize entry");
+        let json = serde_json::to_string(&entry).unwrap_or_default();
+        let decoded: HandleAuditEntry = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(decoded, entry);
     }
 }

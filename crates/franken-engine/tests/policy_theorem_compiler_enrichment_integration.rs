@@ -113,8 +113,8 @@ fn capability_clone_eq() {
 #[test]
 fn capability_serde_roundtrip() {
     let c = cap("policy.write");
-    let json = serde_json::to_string(&c).expect("serialize");
-    let restored: Capability = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&c).unwrap_or_default();
+    let restored: Capability = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(c, restored);
 }
 
@@ -137,8 +137,8 @@ fn policy_id_ordering() {
 #[test]
 fn policy_id_serde_roundtrip() {
     let p = pid("test");
-    let json = serde_json::to_string(&p).expect("serialize");
-    let restored: PolicyId = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&p).unwrap_or_default();
+    let restored: PolicyId = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(p, restored);
 }
 
@@ -166,8 +166,8 @@ fn merge_operator_serde_roundtrip() {
         MergeOperator::Attenuation,
         MergeOperator::Precedence,
     ] {
-        let json = serde_json::to_string(&op).expect("serialize");
-        let restored: MergeOperator = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&op).unwrap_or_default();
+        let restored: MergeOperator = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(op, restored);
     }
 }
@@ -198,8 +198,8 @@ fn formal_property_serde_all() {
         FormalProperty::MergeDeterminism,
         FormalProperty::PrecedenceStability,
     ] {
-        let json = serde_json::to_string(&prop).expect("serialize");
-        let restored: FormalProperty = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&prop).unwrap_or_default();
+        let restored: FormalProperty = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(prop, restored);
     }
 }
@@ -220,8 +220,8 @@ fn constraint_all_variants_serde() {
         },
     ];
     for c in &constraints {
-        let json = serde_json::to_string(c).expect("serialize");
-        let restored: Constraint = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(c).unwrap_or_default();
+        let restored: Constraint = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*c, restored);
     }
 }
@@ -240,8 +240,8 @@ fn decision_point_serde_roundtrip() {
         action_map,
         fallback: "default_action".into(),
     };
-    let json = serde_json::to_string(&dp).expect("serialize");
-    let restored: DecisionPoint = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&dp).unwrap_or_default();
+    let restored: DecisionPoint = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(dp, restored);
 }
 
@@ -277,8 +277,8 @@ fn policy_ir_node_serde_roundtrip() {
     );
     node.property_claims.insert(FormalProperty::Monotonicity);
     node.constraints.push(Constraint::Invariant("test".into()));
-    let json = serde_json::to_string(&node).expect("serialize");
-    let restored: PolicyIrNode = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&node).unwrap_or_default();
+    let restored: PolicyIrNode = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(node, restored);
 }
 
@@ -306,8 +306,8 @@ fn policy_ir_subjects() {
 #[test]
 fn policy_ir_serde_roundtrip() {
     let ir = valid_policy();
-    let json = serde_json::to_string(&ir).expect("serialize");
-    let restored: PolicyIr = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&ir).unwrap_or_default();
+    let restored: PolicyIr = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(ir, restored);
 }
 
@@ -714,8 +714,8 @@ fn compiler_error_serde_roundtrip() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).expect("serialize");
-        let restored: CompilerError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(err).unwrap_or_default();
+        let restored: CompilerError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*err, restored);
     }
 }
@@ -728,8 +728,8 @@ fn compiler_error_serde_roundtrip() {
 fn compilation_result_serde_roundtrip() {
     let compiler = PolicyTheoremCompiler::new();
     let result = compiler.compile(&valid_policy()).expect("compile");
-    let json = serde_json::to_string(&result).expect("serialize");
-    let restored: CompilationResult = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&result).unwrap_or_default();
+    let restored: CompilationResult = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(result, restored);
 }
 

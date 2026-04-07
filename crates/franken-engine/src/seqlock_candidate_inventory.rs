@@ -411,7 +411,7 @@ impl<T: Clone + Eq> SimulatedSeqlock<T> {
         plan: &[ReadInterference<T>],
     ) -> ReadOutcome<T> {
         if policy.max_retries == 0 || !matches!(policy.disposition, CandidateDisposition::Accept) {
-            return self.fallback_outcome(policy.fallback_reason, 0);
+            return self.fallback_outcome(policy.fallback_reason, 0, 0);
         }
 
         let mut retries = 0u32;
@@ -426,8 +426,11 @@ impl<T: Clone + Eq> SimulatedSeqlock<T> {
                     if retries >= policy.max_retries {
                         self.write_pressure_violations =
                             self.write_pressure_violations.saturating_add(violations);
-                        return self
-                            .fallback_outcome(FallbackReason::RetryBudgetExhausted, retries);
+                        return self.fallback_outcome(
+                            FallbackReason::RetryBudgetExhausted,
+                            retries,
+                            violations,
+                        );
                     }
                     retries = retries.saturating_add(1);
                     continue;
@@ -453,7 +456,11 @@ impl<T: Clone + Eq> SimulatedSeqlock<T> {
             if retries >= policy.max_retries {
                 self.write_pressure_violations =
                     self.write_pressure_violations.saturating_add(violations);
-                return self.fallback_outcome(FallbackReason::RetryBudgetExhausted, retries);
+                return self.fallback_outcome(
+                    FallbackReason::RetryBudgetExhausted,
+                    retries,
+                    violations,
+                );
             }
             retries = retries.saturating_add(1);
         }
@@ -476,14 +483,19 @@ impl<T: Clone + Eq> SimulatedSeqlock<T> {
         self.write_pressure_violations
     }
 
-    fn fallback_outcome(&mut self, reason: FallbackReason, retries: u32) -> ReadOutcome<T> {
+    fn fallback_outcome(
+        &mut self,
+        reason: FallbackReason,
+        retries: u32,
+        violations: u64,
+    ) -> ReadOutcome<T> {
         self.fallback_reads = self.fallback_reads.saturating_add(1);
         ReadOutcome {
             value: self.current_value.clone(),
             resolution: ReadResolution::IncumbentFallback,
             retries,
             fallback_reason: Some(reason),
-            write_pressure_violations: self.write_pressure_violations,
+            write_pressure_violations: violations,
         }
     }
 }
@@ -930,8 +942,7 @@ fn build_incumbent_fallback_matrix_artifact(
         .candidates
         .iter()
         .filter_map(|candidate| {
-            let policy = policy_by_candidate
-                .get(candidate.candidate_id.as_str())?;
+            let policy = policy_by_candidate.get(candidate.candidate_id.as_str())?;
             Some(build_incumbent_fallback_matrix_row(candidate, policy))
         })
         .collect::<Vec<_>>();
@@ -1153,49 +1164,51 @@ fn write_bundle(
         format!("cat {}/run_manifest.json", artifact_dir_display),
     ];
 
-    let env_json = serde_json::to_string_pretty(&serde_json::json!({
-        "schema_version": "franken-engine.env.v1",
-        "captured_at_utc": &context.generated_at_utc,
-        "project": {
-            "name": "franken_engine",
-            "repo_url": "https://github.com/Dicklesworthstone/franken_engine",
-            "commit": &context.source_commit,
-            "bead_id": BEAD_ID,
-        },
-        "host": {
-            "os": std::env::consts::OS,
-            "arch": std::env::consts::ARCH,
-        },
-        "toolchain": {
-            "rustup_toolchain": &context.toolchain,
-        },
-        "runtime": {
-            "component": COMPONENT,
-            "trace_id": &context.trace_id,
-        },
-        "policy": {
-            "policy_id": &context.policy_id,
-        }
-    }))
-    .unwrap_or_default();
+    let env_json = serialize_json_pretty_string(
+        &serde_json::json!({
+            "schema_version": "franken-engine.env.v1",
+            "captured_at_utc": &context.generated_at_utc,
+            "project": {
+                "name": "franken_engine",
+                "repo_url": "https://github.com/Dicklesworthstone/franken_engine",
+                "commit": &context.source_commit,
+                "bead_id": BEAD_ID,
+            },
+            "host": {
+                "os": std::env::consts::OS,
+                "arch": std::env::consts::ARCH,
+            },
+            "toolchain": {
+                "rustup_toolchain": &context.toolchain,
+            },
+            "runtime": {
+                "component": COMPONENT,
+                "trace_id": &context.trace_id,
+            },
+            "policy": {
+                "policy_id": &context.policy_id,
+            }
+        }),
+        "serialize seqlock candidate inventory env.json",
+    )?;
 
     let mut primary_files = vec![
-        FileArtifact::json("seqlock_candidate_inventory.json", &evaluated.inventory),
-        FileArtifact::json("retry_safety_matrix.json", &evaluated.retry_safety),
+        FileArtifact::json("seqlock_candidate_inventory.json", &evaluated.inventory)?,
+        FileArtifact::json("retry_safety_matrix.json", &evaluated.retry_safety)?,
         FileArtifact::json(
             "snapshot_baseline_comparator.json",
             &evaluated.baseline_comparator,
-        ),
+        )?,
         FileArtifact::json(
             "seqlock_reader_writer_contract.json",
             &evaluated.reader_writer_contract,
-        ),
-        FileArtifact::json("retry_budget_policy.json", &evaluated.retry_budget_policy),
+        )?,
+        FileArtifact::json("retry_budget_policy.json", &evaluated.retry_budget_policy)?,
         FileArtifact::json(
             "incumbent_fallback_matrix.json",
             &evaluated.incumbent_fallback_matrix,
-        ),
-        FileArtifact::json("trace_ids.json", &evaluated.trace_ids),
+        )?,
+        FileArtifact::json("trace_ids.json", &evaluated.trace_ids)?,
         FileArtifact::json(
             "run_manifest.json",
             &serde_json::json!({
@@ -1218,8 +1231,8 @@ fn write_bundle(
                 "artifacts": required_artifact_names(),
                 "operator_verification": commands.clone(),
             }),
-        ),
-        FileArtifact::jsonl("events.jsonl", &evaluated.logs),
+        )?,
+        FileArtifact::jsonl("events.jsonl", &evaluated.logs)?,
         FileArtifact::text("commands.txt", &commands.join("\n")),
         FileArtifact::text("summary.md", &summary_md),
         FileArtifact::text("env.json", &env_json),
@@ -1237,30 +1250,32 @@ fn write_bundle(
         })
         .collect::<BTreeMap<_, _>>();
 
-    let repro_lock = serde_json::to_string_pretty(&serde_json::json!({
-        "schema_version": "franken-engine.repro-lock.v1",
-        "generated_at_utc": &context.generated_at_utc,
-        "lock_id": format!("{}-{}", COMPONENT, context.run_id),
-        "source_commit": &context.source_commit,
-        "determinism": {
-            "allow_network": false,
-            "allow_wall_clock": false,
-            "allow_randomness": false,
-        },
-        "commands": commands.clone(),
-        "expected_outputs": primary_hashes.iter().map(|(path, sha256)| {
-            serde_json::json!({
-                "path": path,
-                "sha256": sha256,
-            })
-        }).collect::<Vec<_>>(),
-        "replay": {
-            "trace_id": &context.trace_id,
-            "decision_id": &context.decision_id,
-            "policy_id": &context.policy_id,
-        }
-    }))
-    .unwrap_or_default();
+    let repro_lock = serialize_json_pretty_string(
+        &serde_json::json!({
+            "schema_version": "franken-engine.repro-lock.v1",
+            "generated_at_utc": &context.generated_at_utc,
+            "lock_id": format!("{}-{}", COMPONENT, context.run_id),
+            "source_commit": &context.source_commit,
+            "determinism": {
+                "allow_network": false,
+                "allow_wall_clock": false,
+                "allow_randomness": false,
+            },
+            "commands": commands.clone(),
+            "expected_outputs": primary_hashes.iter().map(|(path, sha256)| {
+                serde_json::json!({
+                    "path": path,
+                    "sha256": sha256,
+                })
+            }).collect::<Vec<_>>(),
+            "replay": {
+                "trace_id": &context.trace_id,
+                "decision_id": &context.decision_id,
+                "policy_id": &context.policy_id,
+            }
+        }),
+        "serialize seqlock candidate inventory repro.lock",
+    )?;
     primary_files.push(FileArtifact::text("repro.lock", &repro_lock));
     primary_files.sort_by(|left, right| left.path.cmp(&right.path));
 
@@ -1272,32 +1287,34 @@ fn write_bundle(
         })
         .collect::<Vec<_>>();
 
-    let manifest_json = serde_json::to_string_pretty(&serde_json::json!({
-        "schema_version": "franken-engine.manifest.v1",
-        "manifest_id": format!("{}-{}", COMPONENT, context.run_id),
-        "generated_at_utc": &context.generated_at_utc,
-        "claim": {
-            "claim_id": BEAD_ID,
-            "class": "reader_writer_contract",
-            "statement": "Deterministic seqlock reader/writer contracts, retry budgets, and incumbent fallback rules for candidate snapshot surfaces.",
-            "status": "observed",
-            "bundle_root": &artifact_dir_display,
-        },
-        "source_revision": {
-            "repo": "franken_engine",
-            "branch": "main",
-            "commit": &context.source_commit,
-        },
-        "provenance": {
-            "trace_id": &context.trace_id,
-            "decision_id": &context.decision_id,
-            "policy_id": &context.policy_id,
-            "replay_pointer": format!("file://{artifact_dir_display}/commands.txt"),
-            "evidence_pointer": format!("file://{artifact_dir_display}/seqlock_reader_writer_contract.json"),
-        },
-        "artifacts": &manifest_artifacts,
-    }))
-    .unwrap_or_default();
+    let manifest_json = serialize_json_pretty_string(
+        &serde_json::json!({
+            "schema_version": "franken-engine.manifest.v1",
+            "manifest_id": format!("{}-{}", COMPONENT, context.run_id),
+            "generated_at_utc": &context.generated_at_utc,
+            "claim": {
+                "claim_id": BEAD_ID,
+                "class": "reader_writer_contract",
+                "statement": "Deterministic seqlock reader/writer contracts, retry budgets, and incumbent fallback rules for candidate snapshot surfaces.",
+                "status": "observed",
+                "bundle_root": &artifact_dir_display,
+            },
+            "source_revision": {
+                "repo": "franken_engine",
+                "branch": "main",
+                "commit": &context.source_commit,
+            },
+            "provenance": {
+                "trace_id": &context.trace_id,
+                "decision_id": &context.decision_id,
+                "policy_id": &context.policy_id,
+                "replay_pointer": format!("file://{artifact_dir_display}/commands.txt"),
+                "evidence_pointer": format!("file://{artifact_dir_display}/seqlock_reader_writer_contract.json"),
+            },
+            "artifacts": &manifest_artifacts,
+        }),
+        "serialize seqlock candidate inventory manifest.json",
+    )?;
     let manifest_artifact = FileArtifact::text("manifest.json", &manifest_json);
 
     let _bundle_lock = acquire_bundle_write_lock(&context.artifact_dir)?;
@@ -1547,8 +1564,24 @@ impl Drop for BundleWriteLock {
 }
 
 fn digest_json(value: &serde_json::Value) -> String {
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    let bytes = serde_json::to_vec(value).expect("serialize seqlock digest input");
     sha256_hex(&bytes)
+}
+
+fn invalid_json_artifact_error(context: &str, error: serde_json::Error) -> io::Error {
+    io::Error::new(ErrorKind::InvalidData, format!("{context}: {error}"))
+}
+
+fn serialize_json_pretty_string<T: Serialize>(value: &T, context: &str) -> io::Result<String> {
+    serde_json::to_string_pretty(value).map_err(|error| invalid_json_artifact_error(context, error))
+}
+
+fn serialize_json_pretty_bytes<T: Serialize>(value: &T, context: &str) -> io::Result<Vec<u8>> {
+    serde_json::to_vec_pretty(value).map_err(|error| invalid_json_artifact_error(context, error))
+}
+
+fn serialize_json_bytes<T: Serialize>(value: &T, context: &str) -> io::Result<Vec<u8>> {
+    serde_json::to_vec(value).map_err(|error| invalid_json_artifact_error(context, error))
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -1558,24 +1591,30 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 impl FileArtifact {
-    fn json<T: Serialize>(path: &str, value: &T) -> Self {
-        Self {
+    fn json<T: Serialize>(path: &str, value: &T) -> io::Result<Self> {
+        Ok(Self {
             path: path.to_string(),
-            contents: serde_json::to_vec_pretty(value).unwrap_or_default(),
-        }
+            contents: serialize_json_pretty_bytes(
+                value,
+                &format!("serialize JSON artifact `{path}`"),
+            )?,
+        })
     }
 
-    fn jsonl<T: Serialize>(path: &str, records: &[T]) -> Self {
+    fn jsonl<T: Serialize>(path: &str, records: &[T]) -> io::Result<Self> {
         let mut contents = Vec::new();
-        for record in records {
-            let mut line = serde_json::to_vec(record).unwrap_or_default();
+        for (index, record) in records.iter().enumerate() {
+            let mut line = serialize_json_bytes(
+                record,
+                &format!("serialize JSONL artifact `{path}` entry #{index}"),
+            )?;
             line.push(b'\n');
             contents.extend_from_slice(&line);
         }
-        Self {
+        Ok(Self {
             path: path.to_string(),
             contents,
-        }
+        })
     }
 
     fn text(path: &str, contents: &str) -> Self {

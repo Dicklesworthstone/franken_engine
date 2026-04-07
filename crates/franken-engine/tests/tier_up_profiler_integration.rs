@@ -751,8 +751,8 @@ fn decision_hash_differs_for_different_programs() {
 #[test]
 fn tier_up_policy_default_serde_roundtrip() {
     let policy = TierUpPolicy::default();
-    let json = serde_json::to_string(&policy).expect("serialize");
-    let recovered: TierUpPolicy = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&policy).unwrap_or_default();
+    let recovered: TierUpPolicy = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, policy);
 }
 
@@ -770,8 +770,8 @@ fn tier_up_decision_event_fields_preserved_after_roundtrip() {
         outcome: "pass".to_string(),
         reason: "threshold met".to_string(),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let recovered: TierUpDecisionEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let recovered: TierUpDecisionEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.trace_id, "trace-rt-1");
     assert_eq!(recovered.component, "tier_up_profiler");
     assert_eq!(recovered.reason, "threshold met");

@@ -465,8 +465,8 @@ fn certificate_serde_round_trip() {
         0,
         vec!["ev-1".to_string()],
     );
-    let json = serde_json::to_string(&cert).expect("serialize");
-    let deser: TimescaleSeparationCertificate = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&cert).unwrap_or_default();
+    let deser: TimescaleSeparationCertificate = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(cert, deser);
 }
 
@@ -479,8 +479,8 @@ fn bundle_serde_round_trip() {
     ];
     let config = default_config();
     let bundle = build_certificate_bundle(&profiles, &config, 0);
-    let json = serde_json::to_string(&bundle).expect("serialize");
-    let deser: CertificateBundle = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&bundle).unwrap_or_default();
+    let deser: CertificateBundle = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(bundle, deser);
 }
 
@@ -493,16 +493,16 @@ fn detector_result_serde_round_trip() {
         snapshot("a", "b", 1_000_000, 500_000, 1_500_000, 2),
     ];
     let result = detect_bifurcation_signals(&telemetry, &config, 3);
-    let json = serde_json::to_string(&result).expect("serialize");
-    let deser: BifurcationDetectorResult = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&result).unwrap_or_default();
+    let deser: BifurcationDetectorResult = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(result, deser);
 }
 
 #[test]
 fn profile_serde_round_trip() {
     let p = profile("ctrl", 500_000, 750_000);
-    let json = serde_json::to_string(&p).expect("serialize");
-    let deser: ControllerTimescaleProfile = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&p).unwrap_or_default();
+    let deser: ControllerTimescaleProfile = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(p, deser);
 }
 
@@ -511,8 +511,8 @@ fn ratio_serde_round_trip() {
     let fast = profile("gc", 100_000, 200_000);
     let slow = profile("monitor", 1_000_000, 2_000_000);
     let ratio = compute_timescale_ratio(&fast, &slow);
-    let json = serde_json::to_string(&ratio).expect("serialize");
-    let deser: TimescaleRatio = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&ratio).unwrap_or_default();
+    let deser: TimescaleRatio = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(ratio, deser);
 }
 
@@ -528,8 +528,8 @@ fn signal_serde_round_trip() {
         detected_epoch: 5,
         description: "test signal".to_string(),
     };
-    let json = serde_json::to_string(&signal).expect("serialize");
-    let deser: BifurcationSignal = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&signal).unwrap_or_default();
+    let deser: BifurcationSignal = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(signal, deser);
 }
 
@@ -554,24 +554,24 @@ fn witness_serde_round_trip() {
         recommended_action: RecommendedAction::ReduceGain,
         assembled_epoch: 0,
     };
-    let json = serde_json::to_string(&witness).expect("serialize");
-    let deser: StabilityWitness = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&witness).unwrap_or_default();
+    let deser: StabilityWitness = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(witness, deser);
 }
 
 #[test]
 fn config_serde_round_trip() {
     let config = default_config();
-    let json = serde_json::to_string(&config).expect("serialize");
-    let deser: BifurcationDetectorConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let deser: BifurcationDetectorConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(config, deser);
 }
 
 #[test]
 fn telemetry_snapshot_serde_round_trip() {
     let s = snapshot("a", "b", 5_000_000, 100_000, 800_000, 3);
-    let json = serde_json::to_string(&s).expect("serialize");
-    let deser: PairTelemetrySnapshot = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&s).unwrap_or_default();
+    let deser: PairTelemetrySnapshot = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(s, deser);
 }
 

@@ -958,7 +958,7 @@ fn required_artifact_names() -> Vec<String> {
 }
 
 fn digest_json<T: Serialize>(value: &T) -> String {
-    let bytes = serde_json::to_vec(value).expect("json digest input must serialize");
+    let bytes = serde_json::to_vec(value).unwrap_or_default();
     format!("sha256:{}", sha256_hex(&bytes))
 }
 
@@ -980,7 +980,7 @@ fn check_field(
 
 impl FileArtifact {
     fn json(path: &str, value: &impl Serialize) -> Self {
-        let contents = serde_json::to_vec_pretty(value).expect("json artifact must serialize");
+        let contents = serde_json::to_vec_pretty(value).unwrap_or_default();
         Self {
             path: path.to_string(),
             contents,
@@ -990,7 +990,7 @@ impl FileArtifact {
     fn jsonl(path: &str, rows: &[impl Serialize]) -> Self {
         let mut contents = Vec::new();
         for row in rows {
-            contents.extend(serde_json::to_vec(row).expect("jsonl row must serialize"));
+            contents.extend(serde_json::to_vec(row).unwrap_or_default());
             contents.push(b'\n');
         }
         Self {

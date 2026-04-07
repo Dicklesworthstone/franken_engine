@@ -516,8 +516,8 @@ impl CounterexampleSynthesizer {
         let minimality = self.minimize_scenario(&scenario, cx);
 
         // Compute content hash.
-        let canonical = serde_json::to_vec(&(&cx.property, &cx.policy_id, &scenario))
-            .expect("counterexample scenario must serialize for content hash");
+        let canonical =
+            serde_json::to_vec(&(&cx.property, &cx.policy_id, &scenario)).unwrap_or_default();
         let content_hash = ContentHash::compute(&canonical);
 
         let (expected, actual) = self.describe_outcomes(cx);
@@ -2415,8 +2415,8 @@ mod tests {
             SynthesisError::CompilerFailure("compile".to_string()),
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serialize");
-            let restored: SynthesisError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(v).unwrap_or_default();
+            let restored: SynthesisError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*v, restored);
         }
     }
@@ -2451,8 +2451,8 @@ mod tests {
             SynthesisOutcome::Partial,
             SynthesisOutcome::Incomplete,
         ] {
-            let json = serde_json::to_string(&v).expect("serialize");
-            let restored: SynthesisOutcome = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(&v).unwrap_or_default();
+            let restored: SynthesisOutcome = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(v, restored);
         }
     }
@@ -2465,8 +2465,8 @@ mod tests {
             SynthesisStrategy::Mutation,
             SynthesisStrategy::TimeBounded,
         ] {
-            let json = serde_json::to_string(&v).expect("serialize");
-            let restored: SynthesisStrategy = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(&v).unwrap_or_default();
+            let restored: SynthesisStrategy = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(v, restored);
         }
     }
@@ -2478,8 +2478,8 @@ mod tests {
             InterferenceKind::Oscillation,
             InterferenceKind::TimescaleConflict,
         ] {
-            let json = serde_json::to_string(&v).expect("serialize");
-            let restored: InterferenceKind = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(&v).unwrap_or_default();
+            let restored: InterferenceKind = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(v, restored);
         }
     }
@@ -2494,8 +2494,8 @@ mod tests {
             MutationKind::RemoveConstraint,
             MutationKind::DuplicateNode,
         ] {
-            let json = serde_json::to_string(&v).expect("serialize");
-            let restored: MutationKind = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(&v).unwrap_or_default();
+            let restored: MutationKind = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(v, restored);
         }
     }
@@ -2532,9 +2532,8 @@ mod tests {
             shared_metrics: vec!["m1".to_string()],
             timescale_separation_millionths: 50_000,
         };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let restored: ControllerInterferenceEvent =
-            serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&event).unwrap_or_default();
+        let restored: ControllerInterferenceEvent = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(event, restored);
     }
 

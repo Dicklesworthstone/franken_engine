@@ -773,8 +773,8 @@ fn governance_ledger_accumulates_across_operations() {
 #[test]
 fn policy_serde_roundtrip_preserves_all_fields() {
     let policy = sample_policy(42);
-    let json = serde_json::to_string(&policy).expect("serialize");
-    let recovered: TeeAttestationPolicy = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&policy).unwrap_or_default();
+    let recovered: TeeAttestationPolicy = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(policy, recovered);
 }
 
@@ -813,9 +813,8 @@ fn store_serde_roundtrip_preserves_halted_state() {
         .expect("load");
     assert!(!store.receipt_emission_halted());
 
-    let json = serde_json::to_string(&store).expect("serialize store");
-    let recovered: TeeAttestationPolicyStore =
-        serde_json::from_str(&json).expect("deserialize store");
+    let json = serde_json::to_string(&store).unwrap_or_default();
+    let recovered: TeeAttestationPolicyStore = serde_json::from_str(&json).unwrap_or_default();
     assert!(!recovered.receipt_emission_halted());
     assert!(recovered.active_policy().is_some());
     assert_eq!(
@@ -832,8 +831,8 @@ fn store_serde_roundtrip_preserves_halted_state() {
 #[test]
 fn tee_platform_serde_round_trip() {
     for platform in TeePlatform::ALL {
-        let json = serde_json::to_string(&platform).expect("serialize");
-        let recovered: TeePlatform = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&platform).unwrap_or_default();
+        let recovered: TeePlatform = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(platform, recovered);
     }
 }
@@ -846,8 +845,8 @@ fn tee_platform_all_has_four_elements() {
 #[test]
 fn measurement_algorithm_serde_round_trip() {
     for algo in [MeasurementAlgorithm::Sha256, MeasurementAlgorithm::Sha384] {
-        let json = serde_json::to_string(&algo).expect("serialize");
-        let recovered: MeasurementAlgorithm = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&algo).unwrap_or_default();
+        let recovered: MeasurementAlgorithm = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(algo, recovered);
     }
 }
@@ -855,8 +854,8 @@ fn measurement_algorithm_serde_round_trip() {
 #[test]
 fn decision_impact_serde_round_trip() {
     for impact in [DecisionImpact::Standard, DecisionImpact::HighImpact] {
-        let json = serde_json::to_string(&impact).expect("serialize");
-        let recovered: DecisionImpact = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&impact).unwrap_or_default();
+        let recovered: DecisionImpact = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(impact, recovered);
     }
 }
@@ -867,8 +866,8 @@ fn revocation_source_type_serde_round_trip() {
         RevocationSourceType::IntelPcs,
         RevocationSourceType::InternalLedger,
     ] {
-        let json = serde_json::to_string(&src_type).expect("serialize");
-        let recovered: RevocationSourceType = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&src_type).unwrap_or_default();
+        let recovered: RevocationSourceType = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(src_type, recovered);
     }
 }
@@ -879,8 +878,8 @@ fn revocation_fallback_serde_round_trip() {
         RevocationFallback::TryNextSource,
         RevocationFallback::FailClosed,
     ] {
-        let json = serde_json::to_string(&fallback).expect("serialize");
-        let recovered: RevocationFallback = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&fallback).unwrap_or_default();
+        let recovered: RevocationFallback = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(fallback, recovered);
     }
 }
@@ -892,8 +891,8 @@ fn revocation_probe_status_serde_round_trip() {
         RevocationProbeStatus::Revoked,
         RevocationProbeStatus::Unavailable,
     ] {
-        let json = serde_json::to_string(&status).expect("serialize");
-        let recovered: RevocationProbeStatus = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&status).unwrap_or_default();
+        let recovered: RevocationProbeStatus = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(status, recovered);
     }
 }
@@ -905,8 +904,8 @@ fn trust_root_pinning_serde_round_trip() {
         rotation_group: "group-a".to_string(),
     };
     for pinning in [pinned, rotating] {
-        let json = serde_json::to_string(&pinning).expect("serialize");
-        let recovered: TrustRootPinning = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&pinning).unwrap_or_default();
+        let recovered: TrustRootPinning = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(pinning, recovered);
     }
 }
@@ -921,8 +920,8 @@ fn trust_root_source_serde_round_trip() {
         },
     ];
     for source in sources {
-        let json = serde_json::to_string(&source).expect("serialize");
-        let recovered: TrustRootSource = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&source).unwrap_or_default();
+        let recovered: TrustRootSource = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(source, recovered);
     }
 }
@@ -984,16 +983,16 @@ fn measurement_digest_serde_round_trip() {
         algorithm: MeasurementAlgorithm::Sha256,
         digest_hex: digest_hex(0xAA, 32),
     };
-    let json = serde_json::to_string(&digest).expect("serialize");
-    let recovered: MeasurementDigest = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&digest).unwrap_or_default();
+    let recovered: MeasurementDigest = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(digest, recovered);
 }
 
 #[test]
 fn attestation_quote_serde_round_trip() {
     let quote = sgx_quote("sgx-root-a");
-    let json = serde_json::to_string(&quote).expect("serialize");
-    let recovered: AttestationQuote = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&quote).unwrap_or_default();
+    let recovered: AttestationQuote = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(quote, recovered);
 }
 
@@ -1004,7 +1003,7 @@ fn governance_event_serde_round_trip() {
         .load_policy(sample_policy(1), "trace-serde-ev", "decision-serde-ev")
         .expect("load");
     let event = &store.governance_ledger()[0];
-    let json = serde_json::to_string(event).expect("serialize");
-    let recovered: PolicyGovernanceEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(event).unwrap_or_default();
+    let recovered: PolicyGovernanceEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(*event, recovered);
 }

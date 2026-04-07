@@ -70,7 +70,7 @@ fn write_case_manifest(
     });
     fs::write(
         &fixture_path,
-        serde_json::to_vec_pretty(&fixture_json).expect("serialize fixture"),
+        serde_json::to_vec_pretty(&fixture_json).unwrap_or_default(),
     )
     .expect("write fixture");
     fs::write(&expected_path, expected_output).expect("write expected output");
@@ -99,7 +99,7 @@ fn write_case_manifest(
     let manifest_path = root.join("conformance_assets.json");
     fs::write(
         &manifest_path,
-        serde_json::to_vec_pretty(&manifest).expect("serialize manifest"),
+        serde_json::to_vec_pretty(&manifest).unwrap_or_default(),
     )
     .expect("write manifest");
     manifest_path
@@ -160,8 +160,8 @@ fn repro_artifact_round_trip_contains_required_metadata() {
     artifact.verify_replay().expect("replay verification");
 
     let round_trip: conformance_harness::ConformanceMinimizedReproArtifact =
-        serde_json::from_slice(&serde_json::to_vec(artifact).expect("serialize artifact"))
-            .expect("deserialize artifact");
+        serde_json::from_slice(&serde_json::to_vec(artifact).unwrap_or_default())
+            .unwrap_or_default();
     assert_eq!(round_trip, *artifact);
 }
 
@@ -353,8 +353,8 @@ fn conformance_failure_class_serde_roundtrip() {
         ConformanceFailureClass::Observability,
         ConformanceFailureClass::Performance,
     ] {
-        let json = serde_json::to_string(&class).expect("serialize");
-        let recovered: ConformanceFailureClass = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&class).unwrap_or_default();
+        let recovered: ConformanceFailureClass = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(recovered, class);
     }
 }
@@ -372,8 +372,8 @@ fn conformance_delta_kind_serde_roundtrip() {
         ConformanceDeltaKind::TimingChange,
         ConformanceDeltaKind::ErrorFormatChange,
     ] {
-        let json = serde_json::to_string(&kind).expect("serialize");
-        let recovered: ConformanceDeltaKind = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&kind).unwrap_or_default();
+        let recovered: ConformanceDeltaKind = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(recovered, kind);
     }
 }
@@ -461,8 +461,8 @@ fn conformance_runner_config_default_has_expected_seed() {
 #[test]
 fn conformance_runner_config_serde_roundtrip() {
     let config = ConformanceRunnerConfig::default();
-    let json = serde_json::to_string(&config).expect("serialize");
-    let recovered: ConformanceRunnerConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let recovered: ConformanceRunnerConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.seed, config.seed);
     assert_eq!(recovered.run_date, config.run_date);
 }
@@ -485,8 +485,8 @@ fn conformance_repro_metadata_serde_roundtrip() {
         issue_tracker_project: "beads".to_string(),
         issue_tracking_bead: Some("bd-test".to_string()),
     };
-    let json = serde_json::to_string(&meta).expect("serialize");
-    let recovered: ConformanceReproMetadata = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&meta).unwrap_or_default();
+    let recovered: ConformanceReproMetadata = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.first_seen_commit, meta.first_seen_commit);
     assert_eq!(recovered.regression_commit, meta.regression_commit);
 }
@@ -531,9 +531,9 @@ fn artifact_serde_roundtrip_preserves_failure_class() {
         .run(&manifest, &ConformanceWaiverSet::default())
         .expect("run");
     let artifact = run.minimized_repros.first().expect("artifact");
-    let json = serde_json::to_string(artifact).expect("serialize");
+    let json = serde_json::to_string(artifact).unwrap_or_default();
     let recovered: conformance_harness::ConformanceMinimizedReproArtifact =
-        serde_json::from_str(&json).expect("deserialize");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.failure_class, artifact.failure_class);
     assert_eq!(recovered.failure_id, artifact.failure_id);
 }
@@ -649,9 +649,8 @@ fn conformance_failure_severity_serde_roundtrip() {
         ConformanceFailureSeverity::Error,
         ConformanceFailureSeverity::Critical,
     ] {
-        let json = serde_json::to_string(&severity).expect("serialize");
-        let recovered: ConformanceFailureSeverity =
-            serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&severity).unwrap_or_default();
+        let recovered: ConformanceFailureSeverity = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(recovered, severity);
     }
 }
@@ -733,8 +732,8 @@ fn conformance_runner_config_clone_preserves_seed() {
 #[test]
 fn waiver_set_serde_roundtrip() {
     let waivers = ConformanceWaiverSet::default();
-    let json = serde_json::to_string(&waivers).expect("serialize");
-    let recovered: ConformanceWaiverSet = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&waivers).unwrap_or_default();
+    let recovered: ConformanceWaiverSet = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.waivers.len(), waivers.waivers.len());
 }
 

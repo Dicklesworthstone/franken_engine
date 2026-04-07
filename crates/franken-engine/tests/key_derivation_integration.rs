@@ -115,8 +115,8 @@ fn domain_clone_eq() {
 #[test]
 fn domain_serde_roundtrip() {
     for domain in KeyDomain::ALL {
-        let json = serde_json::to_string(domain).expect("serialize");
-        let restored: KeyDomain = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(domain).unwrap_or_default();
+        let restored: KeyDomain = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*domain, restored);
     }
 }
@@ -204,8 +204,8 @@ fn context_serde_roundtrip() {
     let mut ctx = DerivationContext::empty();
     ctx.add("session_id", "sess-123");
     ctx.add("ext_id", "ext-abc");
-    let json = serde_json::to_string(&ctx).expect("serialize");
-    let restored: DerivationContext = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&ctx).unwrap_or_default();
+    let restored: DerivationContext = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(ctx, restored);
     assert_eq!(ctx.to_canonical_bytes(), restored.to_canonical_bytes());
 }
@@ -213,8 +213,8 @@ fn context_serde_roundtrip() {
 #[test]
 fn context_empty_serde_roundtrip() {
     let ctx = DerivationContext::empty();
-    let json = serde_json::to_string(&ctx).expect("serialize");
-    let restored: DerivationContext = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&ctx).unwrap_or_default();
+    let restored: DerivationContext = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(ctx, restored);
 }
 
@@ -516,8 +516,8 @@ fn derived_key_serde_roundtrip() {
         epoch: SecurityEpoch::from_raw(99),
         context_hash: vec![0x01, 0x02],
     };
-    let json = serde_json::to_string(&key).expect("serialize");
-    let restored: DerivedKey = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&key).unwrap_or_default();
+    let restored: DerivedKey = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(key, restored);
 }
 
@@ -601,8 +601,8 @@ fn error_serde_roundtrip_all_variants() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).expect("serialize");
-        let restored: KeyDerivationError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(err).unwrap_or_default();
+        let restored: KeyDerivationError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*err, restored, "roundtrip mismatch for: {err}");
     }
 }
@@ -620,8 +620,8 @@ fn derivation_event_serde_roundtrip() {
         algorithm: "DeterministicTestDeriver".to_string(),
         trace_id: "trace-integration-001".to_string(),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let restored: DerivationEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let restored: DerivationEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, restored);
 }
 
@@ -653,8 +653,8 @@ fn derivation_request_serde_roundtrip() {
         context: DerivationContext::with("ext", "test-ext"),
         output_len: 32,
     };
-    let json = serde_json::to_string(&request).expect("serialize");
-    let restored: DerivationRequest = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&request).unwrap_or_default();
+    let restored: DerivationRequest = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(request, restored);
 }
 

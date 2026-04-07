@@ -393,6 +393,9 @@ pub enum Ir1Op {
     StoreBinding { binding_id: BindingId },
     /// Call a function value.
     Call { arg_count: u32 },
+    /// Call a method on an object: the receiver (below callee on the value
+    /// stack) becomes the `this` value in the callee frame.
+    CallMethod { arg_count: u32 },
     /// Return from current function.
     Return,
     /// Import a module by specifier.
@@ -532,6 +535,16 @@ impl Ir1Op {
             }
             Self::Call { arg_count } => {
                 map.insert("op".to_string(), CanonicalValue::String("call".to_string()));
+                map.insert(
+                    "arg_count".to_string(),
+                    CanonicalValue::U64(u64::from(*arg_count)),
+                );
+            }
+            Self::CallMethod { arg_count } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("call_method".to_string()),
+                );
                 map.insert(
                     "arg_count".to_string(),
                     CanonicalValue::U64(u64::from(*arg_count)),
@@ -1309,6 +1322,14 @@ pub enum Ir3Instruction {
         args: RegRange,
         dst: Reg,
     },
+    /// Call a method on a receiver object.  The `receiver` register holds the
+    /// object that becomes `this` in the callee frame.
+    CallMethod {
+        receiver: Reg,
+        callee: Reg,
+        args: RegRange,
+        dst: Reg,
+    },
     /// Return a value from the current frame.
     Return { value: Reg },
     /// Capability-checked hostcall.
@@ -1571,6 +1592,27 @@ impl Ir3Instruction {
                     CanonicalValue::U64(u64::from(*callee)),
                 );
                 map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+            }
+            Self::CallMethod {
+                receiver,
+                callee,
+                args,
+                dst,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("call_method".to_string()),
+                );
+                map.insert("args".to_string(), args.canonical_value());
+                map.insert(
+                    "callee".to_string(),
+                    CanonicalValue::U64(u64::from(*callee)),
+                );
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert(
+                    "receiver".to_string(),
+                    CanonicalValue::U64(u64::from(*receiver)),
+                );
             }
             Self::Return { value } => {
                 map.insert(

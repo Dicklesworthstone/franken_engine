@@ -8,13 +8,13 @@ use std::{
 };
 
 use frankenengine_extension_host::{
-    allowed_lifecycle_transitions, compute_content_hash, lifecycle_target_state, validate_manifest,
-    validate_manifest_with_context, with_computed_content_hash, BudgetExhaustionPolicy,
-    CancellationConfig, Capability, CapabilityEscrowGateway, DelegateCellFactory,
+    BudgetExhaustionPolicy, CURRENT_ENGINE_VERSION, CancellationConfig, Capability,
+    CapabilityEscrowGateway, DEFAULT_TERMINATION_GRACE_PERIOD_NS, DelegateCellFactory,
     ExtensionHostConfig, ExtensionLifecycleManager, ExtensionManifest, ExtensionState, FlowLabel,
-    HostcallDispatcher, HostcallSinkPolicy, LifecycleTransition, ManifestValidationContext,
-    ResourceBudget, CURRENT_ENGINE_VERSION, DEFAULT_TERMINATION_GRACE_PERIOD_NS,
-    MAX_DELEGATE_LIFETIME_NS, MAX_NAME_LEN,
+    HostcallDispatcher, HostcallSinkPolicy, LifecycleTransition, MAX_DELEGATE_LIFETIME_NS,
+    MAX_NAME_LEN, ManifestValidationContext, ResourceBudget, allowed_lifecycle_transitions,
+    compute_content_hash, lifecycle_target_state, validate_manifest,
+    validate_manifest_with_context, with_computed_content_hash,
 };
 use serde::{Deserialize, Serialize};
 
@@ -150,11 +150,7 @@ fn identifier_prefix(token: &str) -> Option<String> {
         .chars()
         .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
         .collect();
-    if ident.is_empty() {
-        None
-    } else {
-        Some(ident)
-    }
+    if ident.is_empty() { None } else { Some(ident) }
 }
 
 fn public_root_inventory() -> Vec<String> {
@@ -276,17 +272,20 @@ fn write_contract_artifacts(contract: &ExtensionHostRootContract, inventory: &[S
 
     fs::write(
         dir.join("extension_host_root_contract.json"),
-        serde_json::to_vec_pretty(contract).expect("serialize contract"),
+        serde_json::to_vec_pretty(contract)
+            .expect("root contract should serialize for artifact output"),
     )
     .expect("write extension_host_root_contract.json");
     fs::write(
         dir.join("extension_host_root_contract_validation_report.json"),
-        serde_json::to_vec_pretty(&validation_report).expect("serialize validation report"),
+        serde_json::to_vec_pretty(&validation_report)
+            .expect("validation report should serialize for artifact output"),
     )
     .expect("write extension_host_root_contract_validation_report.json");
     fs::write(
         dir.join("extension_host_root_surface_report.json"),
-        serde_json::to_vec_pretty(&surface_report).expect("serialize surface report"),
+        serde_json::to_vec_pretty(&surface_report)
+            .expect("surface report should serialize for artifact output"),
     )
     .expect("write extension_host_root_surface_report.json");
 }

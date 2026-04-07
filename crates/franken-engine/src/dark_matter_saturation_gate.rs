@@ -488,13 +488,12 @@ impl BurndownTracker {
     /// Time span (in seconds) covered by the observation window.
     #[must_use]
     pub fn time_span_secs(&self) -> u64 {
-        if self.observations.len() < 2 {
-            return 0;
+        if let (Some(first), Some(last)) = (self.observations.first(), self.observations.last()) {
+            last.timestamp_epoch_secs
+                .saturating_sub(first.timestamp_epoch_secs)
+        } else {
+            0
         }
-        let first = self.observations.first().unwrap();
-        let last = self.observations.last().unwrap();
-        last.timestamp_epoch_secs
-            .saturating_sub(first.timestamp_epoch_secs)
     }
 
     /// Content hash of the entire tracker state.
@@ -525,7 +524,10 @@ impl BurndownTracker {
         }
         let start_idx = self.observations.len().saturating_sub(effective_window);
         let start = &self.observations[start_idx];
-        let end = self.observations.last().unwrap();
+        let end = match self.observations.last() {
+            Some(obs) => obs,
+            None => return 0,
+        };
         let dt = end
             .timestamp_epoch_secs
             .saturating_sub(start.timestamp_epoch_secs);

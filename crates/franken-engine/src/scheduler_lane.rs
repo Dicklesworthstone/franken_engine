@@ -949,8 +949,8 @@ mod tests {
     #[test]
     fn task_label_serialization_round_trip() {
         let label = cancel_label("trace-1");
-        let json = serde_json::to_string(&label).expect("serialize");
-        let restored: TaskLabel = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&label).unwrap_or_default();
+        let restored: TaskLabel = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(label, restored);
     }
 
@@ -963,8 +963,8 @@ mod tests {
             submitted_at: 0,
             payload_id: "p1".to_string(),
         };
-        let json = serde_json::to_string(&task).expect("serialize");
-        let restored: ScheduledTask = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&task).unwrap_or_default();
+        let restored: ScheduledTask = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(task, restored);
     }
 
@@ -978,8 +978,8 @@ mod tests {
             tasks_completed: 7,
             tasks_timed_out: 1,
         };
-        let json = serde_json::to_string(&m).expect("serialize");
-        let restored: LaneMetrics = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&m).unwrap_or_default();
+        let restored: LaneMetrics = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(m, restored);
     }
 
@@ -999,8 +999,8 @@ mod tests {
             LaneError::EmptyTraceId,
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serialize");
-            let restored: LaneError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(err).unwrap_or_default();
+            let restored: LaneError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*err, restored);
         }
     }
@@ -1015,8 +1015,8 @@ mod tests {
             queue_position: 0,
             event: "submit".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let restored: SchedulerEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&event).unwrap_or_default();
+        let restored: SchedulerEvent = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(event, restored);
     }
 

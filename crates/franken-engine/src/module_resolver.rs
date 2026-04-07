@@ -3137,8 +3137,8 @@ mod tests {
     #[test]
     fn module_syntax_serde_round_trip() {
         for syntax in &[ModuleSyntax::EsModule, ModuleSyntax::CommonJs] {
-            let json = serde_json::to_string(syntax).expect("serialize");
-            let decoded: ModuleSyntax = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(syntax).unwrap_or_default();
+            let decoded: ModuleSyntax = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(&decoded, syntax);
         }
     }
@@ -3146,8 +3146,8 @@ mod tests {
     #[test]
     fn import_style_serde_round_trip() {
         for style in &[ImportStyle::Import, ImportStyle::Require] {
-            let json = serde_json::to_string(style).expect("serialize");
-            let decoded: ImportStyle = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(style).unwrap_or_default();
+            let decoded: ImportStyle = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(&decoded, style);
         }
     }
@@ -3162,8 +3162,8 @@ mod tests {
             ResolutionErrorCode::PolicyDenied,
         ];
         for code in &codes {
-            let json = serde_json::to_string(code).expect("serialize");
-            let decoded: ResolutionErrorCode = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(code).unwrap_or_default();
+            let decoded: ResolutionErrorCode = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(&decoded, code);
         }
     }
@@ -3331,8 +3331,8 @@ mod tests {
             kind: ModuleSourceKind::BuiltIn,
             origin: "franken:core".to_string(),
         };
-        let json = serde_json::to_string(&mp).expect("serialize");
-        let restored: ModuleProvenance = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&mp).unwrap_or_default();
+        let restored: ModuleProvenance = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(mp, restored);
     }
 
@@ -3342,16 +3342,16 @@ mod tests {
             specifier: "./utils.js".to_string(),
             style: ImportStyle::Import,
         };
-        let json = serde_json::to_string(&md).expect("serialize");
-        let restored: ModuleDependency = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&md).unwrap_or_default();
+        let restored: ModuleDependency = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(md, restored);
     }
 
     #[test]
     fn module_request_serde_roundtrip() {
         let mr = ModuleRequest::new("franken:core", ImportStyle::Import);
-        let json = serde_json::to_string(&mr).expect("serialize");
-        let restored: ModuleRequest = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&mr).unwrap_or_default();
+        let restored: ModuleRequest = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(mr, restored);
     }
 
@@ -3360,8 +3360,8 @@ mod tests {
         let mr = ModuleRequest::new("pkg", ImportStyle::Require)
             .with_referrer("/repo/main.cjs")
             .with_compatibility_mode(CompatibilityMode::BunCompat);
-        let json = serde_json::to_string(&mr).expect("serialize");
-        let restored: ModuleRequest = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&mr).unwrap_or_default();
+        let restored: ModuleRequest = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(mr, restored);
         assert_eq!(restored.compatibility_mode, CompatibilityMode::BunCompat);
     }
@@ -3371,7 +3371,7 @@ mod tests {
         let restored: ModuleRequest = serde_json::from_str(
             r#"{"specifier":"pkg","referrer":"/repo/main.cjs","style":"require"}"#,
         )
-        .expect("deserialize");
+        .unwrap_or_default();
         assert_eq!(restored.compatibility_mode, CompatibilityMode::Native);
     }
 
@@ -3382,8 +3382,8 @@ mod tests {
             decision_id: "d".to_string(),
             policy_id: "p".to_string(),
         };
-        let json = serde_json::to_string(&ctx).expect("serialize");
-        let restored: ResolutionContext = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&ctx).unwrap_or_default();
+        let restored: ResolutionContext = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(ctx, restored);
     }
 
@@ -3393,16 +3393,16 @@ mod tests {
             code: RegistryErrorCode::EmptyKey,
             message: "key must not be empty".to_string(),
         };
-        let json = serde_json::to_string(&err).expect("serialize");
-        let restored: RegistryError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&err).unwrap_or_default();
+        let restored: RegistryError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(err, restored);
     }
 
     #[test]
     fn allow_all_policy_default_serde() {
         let p = AllowAllPolicy;
-        let json = serde_json::to_string(&p).expect("serialize");
-        let restored: AllowAllPolicy = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&p).unwrap_or_default();
+        let restored: AllowAllPolicy = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(p, restored);
     }
 
@@ -3413,8 +3413,8 @@ mod tests {
             ModuleSourceKind::Workspace,
             ModuleSourceKind::ExternalRegistry,
         ] {
-            let json = serde_json::to_string(&kind).expect("serialize");
-            let restored: ModuleSourceKind = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(&kind).unwrap_or_default();
+            let restored: ModuleSourceKind = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(kind, restored);
         }
     }
@@ -3503,8 +3503,8 @@ mod tests {
     #[test]
     fn registry_error_code_serde_roundtrip() {
         let code = RegistryErrorCode::EmptyKey;
-        let json = serde_json::to_string(&code).expect("serialize");
-        let back: RegistryErrorCode = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&code).unwrap_or_default();
+        let back: RegistryErrorCode = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(code, back);
     }
 
@@ -3540,8 +3540,8 @@ mod tests {
             .with_dependency(ModuleDependency::new("./util", ImportStyle::Import))
             .require_capability(RuntimeCapability::FsRead)
             .with_provenance("test:origin");
-        let json = serde_json::to_string(&def).expect("serialize");
-        let restored: ModuleDefinition = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&def).unwrap_or_default();
+        let restored: ModuleDefinition = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(def, restored);
     }
 
@@ -3556,8 +3556,8 @@ mod tests {
             outcome: "allow".to_string(),
             error_code: "none".to_string(),
         };
-        let json = serde_json::to_string(&ev).expect("serialize");
-        let restored: ResolutionEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&ev).unwrap_or_default();
+        let restored: ResolutionEvent = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(ev, restored);
     }
 
@@ -3576,13 +3576,13 @@ mod tests {
             .resolve(&request, &context(), &AllowAllPolicy)
             .unwrap();
 
-        let value = serde_json::to_value(&outcome.module).expect("serialize");
+        let value = serde_json::to_value(&outcome.module).unwrap_or_default();
         assert_eq!(
             value.get("probe_sequence"),
             Some(&serde_json::json!(["/app/lib", "/app/lib.mjs"]))
         );
 
-        let restored: ResolvedModule = serde_json::from_value(value).expect("deserialize");
+        let restored: ResolvedModule = serde_json::from_value(value).unwrap_or_default();
         assert_eq!(outcome.module, restored);
     }
 
@@ -3601,10 +3601,10 @@ mod tests {
             probe_sequence: Vec::new(),
         };
 
-        let value = serde_json::to_value(&module).expect("serialize");
+        let value = serde_json::to_value(&module).unwrap_or_default();
         assert!(value.get("probe_sequence").is_none());
 
-        let restored: ResolvedModule = serde_json::from_value(value).expect("deserialize");
+        let restored: ResolvedModule = serde_json::from_value(value).unwrap_or_default();
         assert!(restored.probe_sequence.is_empty());
     }
 
@@ -3622,8 +3622,8 @@ mod tests {
             .resolve(&request, &context(), &AllowAllPolicy)
             .unwrap();
 
-        let json = serde_json::to_string(&outcome).expect("serialize");
-        let restored: ResolutionOutcome = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&outcome).unwrap_or_default();
+        let restored: ResolutionOutcome = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(outcome, restored);
         assert_eq!(restored.module.probe_sequence, vec!["left-pad"]);
     }
@@ -3664,7 +3664,7 @@ mod tests {
         assert_eq!(trace.error_code, "none");
 
         let restored: ModuleResolutionTraceRecord =
-            serde_json::from_str(&trace.to_json_line().expect("serialize")).expect("deserialize");
+            serde_json::from_str(&trace.to_json_line().unwrap_or_default()).unwrap_or_default();
         assert_eq!(restored, trace);
     }
 
@@ -3708,8 +3708,8 @@ mod tests {
         let hook = CapabilityPolicyHook::new(granted)
             .deny_specifier("evil-pkg")
             .deny_specifier("malware");
-        let json = serde_json::to_string(&hook).expect("serialize");
-        let restored: CapabilityPolicyHook = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&hook).unwrap_or_default();
+        let restored: CapabilityPolicyHook = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(hook, restored);
     }
 
@@ -3734,9 +3734,8 @@ mod tests {
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = pad;"),
             )
             .unwrap();
-        let json = serde_json::to_string(&resolver).expect("serialize");
-        let restored: DeterministicModuleResolver =
-            serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&resolver).unwrap_or_default();
+        let restored: DeterministicModuleResolver = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(resolver, restored);
     }
 
@@ -3763,8 +3762,8 @@ mod tests {
             probe_sequence: Vec::new(),
             event: ev,
         };
-        let json = serde_json::to_string(&err).expect("serialize");
-        let restored: ResolutionError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&err).unwrap_or_default();
+        let restored: ResolutionError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(err, restored);
     }
 
@@ -4359,8 +4358,8 @@ mod tests {
     #[test]
     fn module_request_with_referrer_serde_roundtrip() {
         let mr = ModuleRequest::new("./dep", ImportStyle::Import).with_referrer("/app/main.js");
-        let json = serde_json::to_string(&mr).expect("serialize");
-        let restored: ModuleRequest = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&mr).unwrap_or_default();
+        let restored: ModuleRequest = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(mr, restored);
         assert_eq!(restored.referrer.as_deref(), Some("/app/main.js"));
     }

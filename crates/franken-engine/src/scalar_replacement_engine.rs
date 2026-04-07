@@ -481,6 +481,8 @@ pub enum TransformDenialReason {
     BudgetExhausted,
     /// The allocation kind is not eligible.
     KindNotEligible,
+    /// Layout was not provided.
+    LayoutMissing,
 }
 
 impl TransformDenialReason {
@@ -496,6 +498,7 @@ impl TransformDenialReason {
             Self::SideEffectBarrier => "side_effect_barrier",
             Self::BudgetExhausted => "budget_exhausted",
             Self::KindNotEligible => "kind_not_eligible",
+            Self::LayoutMissing => "layout_missing",
         }
     }
 }
@@ -990,8 +993,7 @@ pub fn build_deopt_witness(
     };
 
     let witness_id = format!("dw_{}_{}", cert.site.site_id, transform_kind);
-    let triggers_str = serde_json::to_string(&triggers)
-        .unwrap_or_default();
+    let triggers_str = serde_json::to_string(&triggers).unwrap_or_default();
     let hash_input = format!(
         "witness:{}:{}:{}:{}",
         witness_id, transform_kind, triggers_str, cert.certificate_hash
@@ -1075,7 +1077,23 @@ pub fn execute_transforms(
 
         let outcome = match kind {
             TransformKind::ScalarReplacement => {
-                let layout = layouts.get(&cert.site.site_id).unwrap(); // Safe: select_transform checks.
+                let layout = match layouts.get(&cert.site.site_id) {
+                    Some(l) => l,
+                    None => {
+                        outcomes.push(TransformOutcome {
+                            site_id: cert.site.site_id.clone(),
+                            transform_kind: TransformKind::NoTransform,
+                            scalar_plan: None,
+                            region_plan: None,
+                            sinking_plan: None,
+                            deopt_witness: None,
+                            validation_receipt: None,
+                            denial_reason: Some(TransformDenialReason::LayoutMissing),
+                            estimated_bytes_saved: 0,
+                        });
+                        continue;
+                    }
+                };
                 match build_scalar_plan(cert, layout, config) {
                     Ok(plan) => {
                         let witness = build_deopt_witness(cert, kind, &plan.fields, epoch);

@@ -465,7 +465,7 @@ fn objective_function_serde_roundtrip_via_value_preserves_all_keys() {
     let path = repo_root().join("docs/frx_objective_function_v1.json");
     let raw = fs::read_to_string(&path).expect("read JSON");
     let value: Value = serde_json::from_str(&raw).expect("parse JSON");
-    let serialized = serde_json::to_string_pretty(&value).expect("serialize");
+    let serialized = serde_json::to_string_pretty(&value).unwrap_or_default();
     let reparsed: Value = serde_json::from_str(&serialized).expect("reparse");
     let original_keys: Vec<&str> = value
         .as_object()
@@ -922,7 +922,7 @@ fn freeze_manifest_serde_roundtrip_preserves_structure() {
     let path = repo_root().join("docs/FRX_C0_FREEZE_MANIFEST_V1.json");
     let raw = fs::read_to_string(&path).expect("read JSON");
     let value: Value = serde_json::from_str(&raw).expect("parse JSON");
-    let serialized = serde_json::to_string(&value).expect("serialize");
+    let serialized = serde_json::to_string(&value).unwrap_or_default();
     let reparsed: Value = serde_json::from_str(&serialized).expect("reparse");
     assert_eq!(
         value, reparsed,

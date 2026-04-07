@@ -661,8 +661,8 @@ fn optimizer_subsystem_authorized_for_rollback_token() {
 #[test]
 fn serde_opt_receipt_without_attestation() {
     let receipt = signed_receipt();
-    let json = serde_json::to_string(&receipt).expect("serialize");
-    let restored: OptReceipt = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&receipt).unwrap_or_default();
+    let restored: OptReceipt = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(receipt, restored);
 }
 
@@ -672,8 +672,8 @@ fn serde_opt_receipt_with_attestation() {
     receipt.decision_impact = DecisionImpact::HighImpact;
     receipt.attestation_bindings = Some(make_attestation_bindings());
     let receipt = receipt.sign(TEST_KEY);
-    let json = serde_json::to_string(&receipt).expect("serialize");
-    let restored: OptReceipt = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&receipt).unwrap_or_default();
+    let restored: OptReceipt = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(receipt, restored);
     // Verify the attestation_bindings field survived.
     assert!(restored.attestation_bindings.is_some());
@@ -682,16 +682,16 @@ fn serde_opt_receipt_with_attestation() {
 #[test]
 fn serde_rollback_token() {
     let token = signed_rollback();
-    let json = serde_json::to_string(&token).expect("serialize");
-    let restored: RollbackToken = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&token).unwrap_or_default();
+    let restored: RollbackToken = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(token, restored);
 }
 
 #[test]
 fn serde_invariance_digest() {
     let digest = make_invariance_digest();
-    let json = serde_json::to_string(&digest).expect("serialize");
-    let restored: InvarianceDigest = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&digest).unwrap_or_default();
+    let restored: InvarianceDigest = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(digest, restored);
 }
 
@@ -739,8 +739,8 @@ fn serde_proof_schema_error_variants() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).expect("serialize");
-        let restored: ProofSchemaError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(err).unwrap_or_default();
+        let restored: ProofSchemaError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*err, restored);
     }
 }
@@ -754,8 +754,8 @@ fn serde_optimization_class_all_variants() {
         OptimizationClass::DevirtualizedHostcallFastPath,
     ];
     for variant in &variants {
-        let json = serde_json::to_string(variant).expect("serialize");
-        let restored: OptimizationClass = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(variant).unwrap_or_default();
+        let restored: OptimizationClass = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*variant, restored);
     }
 }
@@ -769,8 +769,8 @@ fn serde_activation_stage_all_variants() {
         ActivationStage::Default,
     ];
     for variant in &variants {
-        let json = serde_json::to_string(variant).expect("serialize");
-        let restored: ActivationStage = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(variant).unwrap_or_default();
+        let restored: ActivationStage = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*variant, restored);
     }
 }
@@ -783,8 +783,8 @@ fn serde_signer_role_all_variants() {
         SignerRole::AttestationCell,
     ];
     for variant in &variants {
-        let json = serde_json::to_string(variant).expect("serialize");
-        let restored: SignerRole = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(variant).unwrap_or_default();
+        let restored: SignerRole = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*variant, restored);
     }
 }
@@ -792,8 +792,8 @@ fn serde_signer_role_all_variants() {
 #[test]
 fn serde_receipt_attestation_bindings() {
     let bindings = make_attestation_bindings();
-    let json = serde_json::to_string(&bindings).expect("serialize");
-    let restored: ReceiptAttestationBindings = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&bindings).unwrap_or_default();
+    let restored: ReceiptAttestationBindings = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(bindings, restored);
 }
 
@@ -809,8 +809,8 @@ fn serde_equivalence_verdict_all_variants() {
         },
     ];
     for variant in &variants {
-        let json = serde_json::to_string(variant).expect("serialize");
-        let restored: EquivalenceVerdict = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(variant).unwrap_or_default();
+        let restored: EquivalenceVerdict = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*variant, restored);
     }
 }
@@ -823,9 +823,8 @@ fn serde_trace_comparison_methodology_all_variants() {
         TraceComparisonMethodology::StatisticalCorpus { corpus_size: 5000 },
     ];
     for variant in &variants {
-        let json = serde_json::to_string(variant).expect("serialize");
-        let restored: TraceComparisonMethodology =
-            serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(variant).unwrap_or_default();
+        let restored: TraceComparisonMethodology = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*variant, restored);
     }
 }

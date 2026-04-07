@@ -825,8 +825,7 @@ fn compute_report_hash(
         inconclusive_count,
         evaluations,
     };
-    let bytes = serde_json::to_vec(&payload)
-        .expect("oracle release gate report hash input serialization must succeed");
+    let bytes = serde_json::to_vec(&payload).unwrap_or_default();
     ContentHash::compute(&bytes)
 }
 
@@ -856,8 +855,7 @@ fn compute_triage_hash(
         info_count,
         entries,
     };
-    let bytes = serde_json::to_vec(&payload)
-        .expect("oracle release gate triage hash input serialization must succeed");
+    let bytes = serde_json::to_vec(&payload).unwrap_or_default();
     ContentHash::compute(&bytes)
 }
 

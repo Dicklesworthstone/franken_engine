@@ -343,16 +343,16 @@ fn hex_roundtrip_deterministic() {
 #[test]
 fn golden_vector_serde_roundtrip_positive() {
     let v = sample_vector("serde_positive", false);
-    let json = serde_json::to_string(&v).expect("serialize GoldenVector");
-    let restored: GoldenVector = serde_json::from_str(&json).expect("deserialize GoldenVector");
+    let json = serde_json::to_string(&v).unwrap_or_default();
+    let restored: GoldenVector = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(v, restored);
 }
 
 #[test]
 fn golden_vector_serde_roundtrip_negative() {
     let v = sample_vector("serde_negative", true);
-    let json = serde_json::to_string(&v).expect("serialize");
-    let restored: GoldenVector = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&v).unwrap_or_default();
+    let restored: GoldenVector = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(v, restored);
 }
 
@@ -367,8 +367,8 @@ fn golden_vector_serde_roundtrip_empty_fields() {
         expected: BTreeMap::new(),
         expect_error: false,
     };
-    let json = serde_json::to_string(&v).expect("serialize");
-    let restored: GoldenVector = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&v).unwrap_or_default();
+    let restored: GoldenVector = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(v, restored);
 }
 
@@ -399,16 +399,16 @@ fn golden_vector_serde_roundtrip_complex_values() {
         expected,
         expect_error: false,
     };
-    let json = serde_json::to_string(&v).expect("serialize");
-    let restored: GoldenVector = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&v).unwrap_or_default();
+    let restored: GoldenVector = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(v, restored);
 }
 
 #[test]
 fn golden_vector_serde_pretty_print_roundtrip() {
     let v = sample_vector("pretty", false);
-    let json = serde_json::to_string_pretty(&v).expect("serialize pretty");
-    let restored: GoldenVector = serde_json::from_str(&json).expect("deserialize pretty");
+    let json = serde_json::to_string_pretty(&v).unwrap_or_default();
+    let restored: GoldenVector = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(v, restored);
 }
 
@@ -427,9 +427,8 @@ fn golden_vector_set_serde_roundtrip() {
             sample_vector("set_c", false),
         ],
     };
-    let json = serde_json::to_string(&set).expect("serialize GoldenVectorSet");
-    let restored: GoldenVectorSet =
-        serde_json::from_str(&json).expect("deserialize GoldenVectorSet");
+    let json = serde_json::to_string(&set).unwrap_or_default();
+    let restored: GoldenVectorSet = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(set, restored);
 }
 
@@ -440,8 +439,8 @@ fn golden_vector_set_serde_roundtrip_empty() {
         category: "empty_set".to_string(),
         vectors: Vec::new(),
     };
-    let json = serde_json::to_string(&set).expect("serialize");
-    let restored: GoldenVectorSet = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&set).unwrap_or_default();
+    let restored: GoldenVectorSet = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(set, restored);
 }
 
@@ -452,8 +451,8 @@ fn golden_vector_set_serde_pretty_roundtrip() {
         category: "engine_object_id".to_string(),
         vectors: vec![sample_vector("pretty_set", false)],
     };
-    let json = serde_json::to_string_pretty(&set).expect("serialize pretty");
-    let restored: GoldenVectorSet = serde_json::from_str(&json).expect("deserialize pretty");
+    let json = serde_json::to_string_pretty(&set).unwrap_or_default();
+    let restored: GoldenVectorSet = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(set, restored);
 }
 

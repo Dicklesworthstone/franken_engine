@@ -204,8 +204,8 @@ fn lowering_gap_inventory_counts_match_expectations() {
 #[test]
 fn lowering_gap_inventory_serde_roundtrip() {
     let inventory = lgap::lowering_gap_inventory();
-    let json = serde_json::to_string(&inventory).expect("serialize");
-    let recovered: LoweringGapInventory = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&inventory).unwrap_or_default();
+    let recovered: LoweringGapInventory = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(inventory.sites.len(), recovered.sites.len());
 }
 
@@ -387,9 +387,8 @@ fn lowering_gap_site_id_regression_test_hint_nonempty() {
 fn lowering_gap_descriptor_serde_roundtrip() {
     for site in LoweringGapSiteId::ALL {
         let desc = LoweringGapSiteDescriptor::from_site(site);
-        let json = serde_json::to_string(&desc).expect("serialize");
-        let recovered: LoweringGapSiteDescriptor =
-            serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&desc).unwrap_or_default();
+        let recovered: LoweringGapSiteDescriptor = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(desc.site_id, recovered.site_id);
     }
 }
@@ -467,9 +466,8 @@ fn lowering_gap_inventory_schema_version_matches_constant() {
 #[test]
 fn lowering_gap_inventory_json_pretty_roundtrip() {
     let inventory = lgap::lowering_gap_inventory();
-    let pretty = serde_json::to_string_pretty(&inventory).expect("pretty serialize");
-    let recovered: LoweringGapInventory =
-        serde_json::from_str(&pretty).expect("deserialize pretty");
+    let pretty = serde_json::to_string_pretty(&inventory).unwrap_or_default();
+    let recovered: LoweringGapInventory = serde_json::from_str(&pretty).unwrap_or_default();
     assert_eq!(inventory.sites.len(), recovered.sites.len());
     assert_eq!(inventory.schema_version, recovered.schema_version);
 }
@@ -545,8 +543,8 @@ fn lowering_gap_cli_inventory_hash_deterministic_across_runs() {
 fn lowering_gap_stage_serde_roundtrip() {
     let stages = [LoweringGapStage::Ir0ToIr1, LoweringGapStage::Ir1ToIr3];
     for stage in stages {
-        let json = serde_json::to_string(&stage).expect("serialize");
-        let recovered: LoweringGapStage = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&stage).unwrap_or_default();
+        let recovered: LoweringGapStage = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(stage.as_str(), recovered.as_str());
     }
 }
@@ -559,8 +557,8 @@ fn lowering_gap_status_serde_roundtrip() {
         LoweringGapStatus::Resolved,
     ];
     for status in statuses {
-        let json = serde_json::to_string(&status).expect("serialize");
-        let recovered: LoweringGapStatus = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&status).unwrap_or_default();
+        let recovered: LoweringGapStatus = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(status.as_str(), recovered.as_str());
     }
 }

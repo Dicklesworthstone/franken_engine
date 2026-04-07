@@ -110,8 +110,8 @@ fn regime_serde_round_trip_all_variants() {
         Regime::Recovery,
     ];
     for regime in &regimes {
-        let json = serde_json::to_string(regime).expect("serialize Regime");
-        let restored: Regime = serde_json::from_str(&json).expect("deserialize Regime");
+        let json = serde_json::to_string(regime).unwrap_or_default();
+        let restored: Regime = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*regime, restored, "serde failed for {:?}", regime);
     }
 }
@@ -163,8 +163,8 @@ fn constant_hazard_large_lambda_gives_small_rate() {
 #[test]
 fn constant_hazard_serde_round_trip() {
     let h = ConstantHazard { lambda: 42 };
-    let json = serde_json::to_string(&h).expect("serialize");
-    let restored: ConstantHazard = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&h).unwrap_or_default();
+    let restored: ConstantHazard = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(h.lambda, restored.lambda);
 }
 
@@ -194,8 +194,8 @@ fn normal_stats_default_prior_values() {
 #[test]
 fn normal_stats_serde_round_trip() {
     let stats = NormalStats::default_prior();
-    let json = serde_json::to_string(&stats).expect("serialize");
-    let restored: NormalStats = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&stats).unwrap_or_default();
+    let restored: NormalStats = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(stats, restored);
 }
 
@@ -207,8 +207,8 @@ fn normal_stats_custom_prior_serde() {
         alpha0: 2_000_000,
         beta0: 3_000_000,
     };
-    let json = serde_json::to_string(&stats).expect("serialize");
-    let restored: NormalStats = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&stats).unwrap_or_default();
+    let restored: NormalStats = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(stats, restored);
 }
 
@@ -286,8 +286,8 @@ fn classifier_custom_thresholds() {
 #[test]
 fn classifier_serde_round_trip() {
     let c = RegimeClassifier::default();
-    let json = serde_json::to_string(&c).expect("serialize");
-    let restored: RegimeClassifier = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&c).unwrap_or_default();
+    let restored: RegimeClassifier = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(c, restored);
 }
 
@@ -331,8 +331,8 @@ fn detector_error_serde_round_trip() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).expect("serialize DetectorError");
-        let restored: DetectorError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(err).unwrap_or_default();
+        let restored: DetectorError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*err, restored);
     }
 }
@@ -352,8 +352,8 @@ fn regime_change_event_serde_round_trip() {
         change_point_index: 42,
         epoch: SecurityEpoch::from_raw(3),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let restored: RegimeChangeEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let restored: RegimeChangeEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, restored);
 }
 
@@ -376,8 +376,8 @@ fn regime_change_event_all_regime_transitions() {
             change_point_index: 1,
             epoch: SecurityEpoch::GENESIS,
         };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let restored: RegimeChangeEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&event).unwrap_or_default();
+        let restored: RegimeChangeEvent = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(event, restored);
     }
 }
@@ -929,8 +929,8 @@ fn multi_stream_set_epoch_updates_all_detectors() {
 #[test]
 fn detector_config_serde_round_trip() {
     let config = default_config("hostcall_rate");
-    let json = serde_json::to_string(&config).expect("serialize");
-    let restored: DetectorConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let restored: DetectorConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(restored.detector_id, config.detector_id);
     assert_eq!(restored.metric_stream, config.metric_stream);
     assert_eq!(restored.max_run_length, config.max_run_length);

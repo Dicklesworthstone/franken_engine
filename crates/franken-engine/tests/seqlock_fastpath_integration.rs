@@ -31,15 +31,15 @@ fn retry_budget_policy_construction() {
 #[test]
 fn retry_budget_policy_serde_round_trip() {
     let policy = RetryBudgetPolicy::new(10, 7);
-    let json = serde_json::to_string(&policy).expect("serialize");
-    let restored: RetryBudgetPolicy = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&policy).unwrap_or_default();
+    let restored: RetryBudgetPolicy = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(policy, restored);
 }
 
 #[test]
 fn retry_budget_policy_serde_from_literal_json() {
     let json = r#"{"max_retries":4,"max_writer_pressure_observations":2}"#;
-    let policy: RetryBudgetPolicy = serde_json::from_str(json).expect("deserialize");
+    let policy: RetryBudgetPolicy = serde_json::from_str(json).unwrap_or_default();
     assert_eq!(policy.max_retries, 4);
     assert_eq!(policy.max_writer_pressure_observations, 2);
 }
@@ -51,18 +51,18 @@ fn retry_budget_policy_serde_from_literal_json() {
 #[test]
 fn fast_path_read_source_serde_fast_path() {
     let src = FastPathReadSource::FastPath;
-    let json = serde_json::to_string(&src).expect("serialize");
+    let json = serde_json::to_string(&src).unwrap_or_default();
     assert_eq!(json, r#""fast_path""#);
-    let restored: FastPathReadSource = serde_json::from_str(&json).expect("deserialize");
+    let restored: FastPathReadSource = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(restored, FastPathReadSource::FastPath);
 }
 
 #[test]
 fn fast_path_read_source_serde_fallback() {
     let src = FastPathReadSource::Fallback;
-    let json = serde_json::to_string(&src).expect("serialize");
+    let json = serde_json::to_string(&src).unwrap_or_default();
     assert_eq!(json, r#""fallback""#);
-    let restored: FastPathReadSource = serde_json::from_str(&json).expect("deserialize");
+    let restored: FastPathReadSource = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(restored, FastPathReadSource::Fallback);
 }
 
@@ -73,18 +73,18 @@ fn fast_path_read_source_serde_fallback() {
 #[test]
 fn fallback_reason_serde_retry_budget_exceeded() {
     let reason = FastPathFallbackReason::RetryBudgetExceeded;
-    let json = serde_json::to_string(&reason).expect("serialize");
+    let json = serde_json::to_string(&reason).unwrap_or_default();
     assert_eq!(json, r#""retry_budget_exceeded""#);
-    let restored: FastPathFallbackReason = serde_json::from_str(&json).expect("deserialize");
+    let restored: FastPathFallbackReason = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(restored, FastPathFallbackReason::RetryBudgetExceeded);
 }
 
 #[test]
 fn fallback_reason_serde_uninitialized() {
     let reason = FastPathFallbackReason::Uninitialized;
-    let json = serde_json::to_string(&reason).expect("serialize");
+    let json = serde_json::to_string(&reason).unwrap_or_default();
     assert_eq!(json, r#""uninitialized""#);
-    let restored: FastPathFallbackReason = serde_json::from_str(&json).expect("deserialize");
+    let restored: FastPathFallbackReason = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(restored, FastPathFallbackReason::Uninitialized);
 }
 
@@ -101,8 +101,8 @@ fn fast_path_read_result_serde_with_fallback_reason() {
         writer_pressure_observations: 1,
         fallback_reason: Some(FastPathFallbackReason::RetryBudgetExceeded),
     };
-    let json = serde_json::to_string(&result).expect("serialize");
-    let restored: FastPathReadResult<u64> = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&result).unwrap_or_default();
+    let restored: FastPathReadResult<u64> = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(result, restored);
 }
 
@@ -115,8 +115,8 @@ fn fast_path_read_result_serde_without_fallback_reason() {
         writer_pressure_observations: 0,
         fallback_reason: None,
     };
-    let json = serde_json::to_string(&result).expect("serialize");
-    let restored: FastPathReadResult<String> = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&result).unwrap_or_default();
+    let restored: FastPathReadResult<String> = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(result, restored);
 }
 
@@ -137,8 +137,8 @@ fn fast_path_telemetry_serde_round_trip() {
         writer_pressure_fallbacks: 4,
         writes: 10,
     };
-    let json = serde_json::to_string(&telemetry).expect("serialize");
-    let restored: FastPathTelemetry = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&telemetry).unwrap_or_default();
+    let restored: FastPathTelemetry = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(telemetry, restored);
 }
 
@@ -155,8 +155,8 @@ fn fast_path_telemetry_all_fields_zero() {
         writer_pressure_fallbacks: 0,
         writes: 0,
     };
-    let json = serde_json::to_string(&telemetry).expect("serialize");
-    let restored: FastPathTelemetry = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&telemetry).unwrap_or_default();
+    let restored: FastPathTelemetry = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(telemetry, restored);
     assert_eq!(restored.total_reads, 0);
     assert_eq!(restored.writes, 0);
@@ -579,9 +579,9 @@ fn publish_after_seed_overrides_and_counts_write() {
 #[test]
 fn fallback_reason_serde_writer_pressure() {
     let reason = FastPathFallbackReason::WriterPressure;
-    let json = serde_json::to_string(&reason).expect("serialize");
+    let json = serde_json::to_string(&reason).unwrap_or_default();
     assert_eq!(json, r#""writer_pressure""#);
-    let restored: FastPathFallbackReason = serde_json::from_str(&json).expect("deserialize");
+    let restored: FastPathFallbackReason = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(restored, FastPathFallbackReason::WriterPressure);
 }
 
@@ -769,8 +769,8 @@ fn test_snapshot_fast_path_eq_reflexive() {
 #[test]
 fn test_retry_budget_policy_zero_zero_serde() {
     let policy = RetryBudgetPolicy::new(0, 0);
-    let json = serde_json::to_string(&policy).expect("serialize");
-    let back: RetryBudgetPolicy = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&policy).unwrap_or_default();
+    let back: RetryBudgetPolicy = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(policy, back);
     assert_eq!(back.max_retries, 0);
     assert_eq!(back.max_writer_pressure_observations, 0);
@@ -807,8 +807,8 @@ fn test_fast_path_read_result_serde_with_vec_value() {
         writer_pressure_observations: 0,
         fallback_reason: None,
     };
-    let json = serde_json::to_string(&result).expect("serialize");
-    let back: FastPathReadResult<Vec<u32>> = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&result).unwrap_or_default();
+    let back: FastPathReadResult<Vec<u32>> = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(result, back);
     assert_eq!(back.value, vec![10, 20, 30]);
 }

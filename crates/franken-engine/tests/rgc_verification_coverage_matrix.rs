@@ -19,6 +19,7 @@ use std::{
     process::Command,
 };
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 const MATRIX_SCHEMA_VERSION: &str = "rgc.verification-coverage-matrix.v1";
@@ -98,6 +99,22 @@ fn parse_matrix() -> VerificationCoverageMatrix {
     serde_json::from_str(MATRIX_JSON).expect("RGC verification coverage matrix JSON must parse")
 }
 
+fn parse_json_slice<T: DeserializeOwned>(bytes: &[u8], context: &str) -> T {
+    serde_json::from_slice(bytes).unwrap_or_else(|error| panic!("{context}: {error}"))
+}
+
+fn parse_json_str<T: DeserializeOwned>(json: &str, context: &str) -> T {
+    serde_json::from_str(json).unwrap_or_else(|error| panic!("{context}: {error}"))
+}
+
+fn to_json_string<T: Serialize>(value: &T, context: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|error| panic!("{context}: {error}"))
+}
+
+fn to_pretty_json_string<T: Serialize>(value: &T, context: &str) -> String {
+    serde_json::to_string_pretty(value).unwrap_or_else(|error| panic!("{context}: {error}"))
+}
+
 fn selector_matches(selector: &str, bead_id: &str) -> bool {
     if let Some(prefix) = selector.strip_suffix(".*") {
         bead_id == prefix || bead_id.starts_with(&format!("{prefix}."))
@@ -135,8 +152,7 @@ fn load_live_open_rgc_beads() -> Option<Vec<String>> {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let issues: Vec<LiveIssue> = serde_json::from_slice(&output.stdout)
-        .expect("`br list --json` output must deserialize as issue array");
+    let issues: Vec<LiveIssue> = parse_json_slice(&output.stdout, "parse `br list --json` output");
 
     let mut beads: Vec<String> = issues
         .into_iter()
@@ -484,9 +500,9 @@ fn rgc_051_row_ids_are_unique() {
 #[test]
 fn rgc_051_serde_roundtrip_preserves_matrix() {
     let matrix = parse_matrix();
-    let serialized = serde_json::to_string(&matrix).expect("serialize");
+    let serialized = to_json_string(&matrix, "serialize coverage matrix");
     let deserialized: VerificationCoverageMatrix =
-        serde_json::from_str(&serialized).expect("deserialize");
+        parse_json_str(&serialized, "deserialize coverage matrix");
     assert_eq!(matrix, deserialized);
 }
 
@@ -637,8 +653,8 @@ fn rgc_051_matrix_track_serde_roundtrip() {
         id: "RGC-051".to_string(),
         name: "Test".to_string(),
     };
-    let json = serde_json::to_string(&track).expect("serialize");
-    let recovered: MatrixTrack = serde_json::from_str(&json).expect("deserialize");
+    let json = to_json_string(&track, "serialize matrix track");
+    let recovered: MatrixTrack = parse_json_str(&json, "deserialize matrix track");
     assert_eq!(track, recovered);
 }
 
@@ -650,8 +666,8 @@ fn rgc_051_matrix_scope_serde_roundtrip() {
         snapshot_generated_at_utc: "2026-01-01T00:00:00Z".to_string(),
         open_bead_ids: vec!["bd-1lsy.1".to_string()],
     };
-    let json = serde_json::to_string(&scope).expect("serialize");
-    let recovered: MatrixScope = serde_json::from_str(&json).expect("deserialize");
+    let json = to_json_string(&scope, "serialize matrix scope");
+    let recovered: MatrixScope = parse_json_str(&json, "deserialize matrix scope");
     assert_eq!(scope, recovered);
 }
 
@@ -663,8 +679,8 @@ fn rgc_051_milestone_target_serde_roundtrip() {
         required_beads: vec!["bd-1lsy.1".to_string()],
         stop_go_rule: "all_pass".to_string(),
     };
-    let json = serde_json::to_string(&target).expect("serialize");
-    let recovered: MilestoneTarget = serde_json::from_str(&json).expect("deserialize");
+    let json = to_json_string(&target, "serialize milestone target");
+    let recovered: MilestoneTarget = parse_json_str(&json, "deserialize milestone target");
     assert_eq!(target, recovered);
 }
 
@@ -682,8 +698,8 @@ fn rgc_051_coverage_row_serde_roundtrip() {
         gate_owner: "team-a".to_string(),
         pass_fail_interpretation: "strict".to_string(),
     };
-    let json = serde_json::to_string(&row).expect("serialize");
-    let recovered: CoverageRow = serde_json::from_str(&json).expect("deserialize");
+    let json = to_json_string(&row, "serialize coverage row");
+    let recovered: CoverageRow = parse_json_str(&json, "deserialize coverage row");
     assert_eq!(row, recovered);
 }
 
@@ -695,8 +711,8 @@ fn rgc_051_waiver_governance_serde_roundtrip() {
         fail_closed_on_expired_waiver: true,
         fail_closed_on_missing_signature: true,
     };
-    let json = serde_json::to_string(&waiver).expect("serialize");
-    let recovered: WaiverGovernance = serde_json::from_str(&json).expect("deserialize");
+    let json = to_json_string(&waiver, "serialize waiver governance");
+    let recovered: WaiverGovernance = parse_json_str(&json, "deserialize waiver governance");
     assert_eq!(waiver, recovered);
 }
 
@@ -794,9 +810,9 @@ fn rgc_051_milestone_required_beads_are_unique_per_milestone() {
 #[test]
 fn rgc_051_pretty_json_roundtrip_preserves_equality() {
     let matrix = parse_matrix();
-    let pretty = serde_json::to_string_pretty(&matrix).expect("pretty serialize");
+    let pretty = to_pretty_json_string(&matrix, "serialize pretty coverage matrix");
     let recovered: VerificationCoverageMatrix =
-        serde_json::from_str(&pretty).expect("pretty deserialize");
+        parse_json_str(&pretty, "deserialize pretty coverage matrix");
     assert_eq!(matrix, recovered);
 }
 

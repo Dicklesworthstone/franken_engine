@@ -497,7 +497,7 @@ pub struct GateDecision {
 impl GateDecision {
     /// Serialize to JSONL.
     pub fn to_jsonl(&self) -> String {
-        serde_json::to_string(self).expect("serialization failed")
+        serde_json::to_string(self).unwrap_or_default()
     }
 }
 

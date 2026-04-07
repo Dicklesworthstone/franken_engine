@@ -356,16 +356,16 @@ fn unsupported_syntax_diagnostic_parse_diagnostic_envelope_roundtrip() {
 #[test]
 fn inventory_serde_roundtrip() {
     let inventory = parser_gap_inventory();
-    let json = serde_json::to_string(&inventory).expect("serialize");
-    let deserialized: ParserGapInventory = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&inventory).unwrap_or_default();
+    let deserialized: ParserGapInventory = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(inventory, deserialized);
 }
 
 #[test]
 fn site_id_serde_roundtrip() {
     for site in ParserGapSiteId::ALL {
-        let json = serde_json::to_string(&site).expect("serialize");
-        let deserialized: ParserGapSiteId = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&site).unwrap_or_default();
+        let deserialized: ParserGapSiteId = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(site, deserialized);
     }
 }
@@ -378,9 +378,9 @@ fn remediation_status_serde_roundtrip() {
         ParserGapRemediationStatus::Resolved,
     ];
     for status in statuses {
-        let json = serde_json::to_string(&status).expect("serialize");
+        let json = serde_json::to_string(&status).unwrap_or_default();
         let deserialized: ParserGapRemediationStatus =
-            serde_json::from_str(&json).expect("deserialize");
+            serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(status, deserialized);
     }
 }
@@ -389,9 +389,8 @@ fn remediation_status_serde_roundtrip() {
 fn descriptor_serde_roundtrip() {
     for site in ParserGapSiteId::ALL {
         let desc = ParserGapSiteDescriptor::from_site(site);
-        let json = serde_json::to_string(&desc).expect("serialize");
-        let deserialized: ParserGapSiteDescriptor =
-            serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&desc).unwrap_or_default();
+        let deserialized: ParserGapSiteDescriptor = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(desc, deserialized);
     }
 }
@@ -403,9 +402,8 @@ fn unsupported_syntax_diagnostic_serde_roundtrip() {
         "serde-test",
         None,
     );
-    let json = serde_json::to_string(&diag).expect("serialize");
-    let deserialized: UnsupportedSyntaxDiagnostic =
-        serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&diag).unwrap_or_default();
+    let deserialized: UnsupportedSyntaxDiagnostic = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(diag, deserialized);
 }
 

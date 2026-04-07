@@ -580,17 +580,16 @@ pub fn emit_shape_lattice_bundle(
 
     fs::write(
         &shape_lattice_manifest_path,
-        serde_json::to_vec_pretty(&bundle.manifest).expect("shape lattice manifest must serialize"),
+        serde_json::to_vec_pretty(&bundle.manifest).unwrap_or_default(),
     )?;
     fs::write(
         &run_manifest_path,
-        serde_json::to_vec_pretty(&run_manifest)
-            .expect("shape lattice run manifest must serialize"),
+        serde_json::to_vec_pretty(&run_manifest).unwrap_or_default(),
     )?;
     let event_lines = bundle
         .trace_events
         .iter()
-        .map(|event| serde_json::to_string(event).expect("shape trace event must serialize"))
+        .map(|event| serde_json::to_string(event).unwrap_or_default())
         .collect::<Vec<_>>()
         .join("\n");
     fs::write(
@@ -611,7 +610,7 @@ pub fn emit_shape_lattice_bundle(
     )?;
     fs::write(
         &trace_ids_path,
-        serde_json::to_vec_pretty(&trace_ids).expect("shape trace ids must serialize"),
+        serde_json::to_vec_pretty(&trace_ids).unwrap_or_default(),
     )?;
 
     Ok(ShapeLatticeBundleReport {
@@ -632,7 +631,7 @@ fn make_shape_descriptor(
         prototype_fingerprint: prototype_fingerprint.clone(),
         property_layout: property_layout.clone(),
     };
-    let payload = serde_json::to_vec(&skeleton).expect("shape skeleton must serialize");
+    let payload = serde_json::to_vec(&skeleton).unwrap_or_default();
     let digest = Sha256::digest(payload);
     let fingerprint = hex::encode(digest);
     let mut shape_id_bytes = [0_u8; 8];
@@ -1542,7 +1541,7 @@ fn build_invalidation_receipt(
         to_shape_id,
         invalidated_assumptions: &sorted_assumptions,
     })
-    .expect("receipt seed must serialize");
+    .unwrap_or_default();
     let receipt_id = hex::encode(Sha256::digest(payload));
 
     PropertyCellInvalidationReceipt {

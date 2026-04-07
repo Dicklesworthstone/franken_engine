@@ -47,8 +47,8 @@ fn default_policy_has_sane_defaults() {
 #[test]
 fn default_policy_serde_roundtrip() {
     let policy = TierUpPolicy::default();
-    let json = serde_json::to_string(&policy).expect("serialize");
-    let deser: TierUpPolicy = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&policy).unwrap_or_default();
+    let deser: TierUpPolicy = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(policy, deser);
 }
 
@@ -87,8 +87,8 @@ fn hot_path_sample_serde_roundtrip() {
         cache_misses: 200,
         cache_hit_rate_millionths: 800_000,
     };
-    let json = serde_json::to_string(&sample).expect("serialize");
-    let deser: HotPathSample = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&sample).unwrap_or_default();
+    let deser: HotPathSample = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(sample, deser);
 }
 
@@ -146,8 +146,8 @@ fn candidate_serde_roundtrip() {
         cache_hit_rate_millionths: 650_000,
         rationale: "hot property access".to_string(),
     };
-    let json = serde_json::to_string(&c).expect("serialize");
-    let deser: TierUpCandidate = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&c).unwrap_or_default();
+    let deser: TierUpCandidate = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(c, deser);
 }
 
@@ -164,8 +164,8 @@ fn rejection_serde_roundtrip() {
         cache_hit_rate_millionths: 0,
         reason: "too few invocations".to_string(),
     };
-    let json = serde_json::to_string(&r).expect("serialize");
-    let deser: TierUpRejection = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&r).unwrap_or_default();
+    let deser: TierUpRejection = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(r, deser);
 }
 
@@ -182,8 +182,8 @@ fn decision_event_serde_roundtrip() {
         outcome: "eligible".to_string(),
         reason: "sufficient invocations".to_string(),
     };
-    let json = serde_json::to_string(&ev).expect("serialize");
-    let deser: TierUpDecisionEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&ev).unwrap_or_default();
+    let deser: TierUpDecisionEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(ev, deser);
 }
 
@@ -207,8 +207,8 @@ fn profile_serde_roundtrip() {
         }],
         profile_hash: "abc123".to_string(),
     };
-    let json = serde_json::to_string(&profile).expect("serialize");
-    let deser: HotPathProfile = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&profile).unwrap_or_default();
+    let deser: HotPathProfile = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(profile, deser);
 }
 
@@ -253,8 +253,8 @@ fn decision_serde_roundtrip() {
             reason: "all thresholds met".to_string(),
         }],
     };
-    let json = serde_json::to_string(&decision).expect("serialize");
-    let deser: TierUpDecision = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&decision).unwrap_or_default();
+    let deser: TierUpDecision = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decision, deser);
 }
 

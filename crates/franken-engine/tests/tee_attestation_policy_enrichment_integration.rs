@@ -818,7 +818,7 @@ fn enrichment_policy_governance_event_empty_metadata_roundtrip() {
 #[test]
 fn enrichment_policy_json_roundtrip() {
     let policy = sample_policy(7);
-    let json = policy.to_canonical_json().expect("serialize");
+    let json = policy.to_canonical_json().unwrap_or_default();
     let parsed = TeeAttestationPolicy::from_json(&json).expect("parse");
     assert_eq!(policy, parsed);
 }

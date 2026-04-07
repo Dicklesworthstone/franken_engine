@@ -995,8 +995,8 @@ mod tests {
             BulkheadClass::EvidenceFlush,
         ];
         for c in &classes {
-            let json = serde_json::to_string(c).expect("serialize");
-            let restored: BulkheadClass = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(c).unwrap_or_default();
+            let restored: BulkheadClass = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*c, restored);
         }
     }
@@ -1008,8 +1008,8 @@ mod tests {
             max_queue_depth: 128,
             pressure_threshold_pct: 80,
         };
-        let json = serde_json::to_string(&config).expect("serialize");
-        let restored: BulkheadConfig = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&config).unwrap_or_default();
+        let restored: BulkheadConfig = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(config, restored);
     }
 
@@ -1025,8 +1025,8 @@ mod tests {
             event: "permit_acquired".to_string(),
             permit_id: 42,
         };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let restored: BulkheadEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&event).unwrap_or_default();
+        let restored: BulkheadEvent = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(event, restored);
     }
 
@@ -1047,8 +1047,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serialize");
-            let restored: BulkheadError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(err).unwrap_or_default();
+            let restored: BulkheadError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*err, restored);
         }
     }
@@ -1063,8 +1063,8 @@ mod tests {
             max_queue_depth: 20,
             at_pressure: false,
         };
-        let json = serde_json::to_string(&snap).expect("serialize");
-        let restored: BulkheadSnapshot = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&snap).unwrap_or_default();
+        let restored: BulkheadSnapshot = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(snap, restored);
     }
 

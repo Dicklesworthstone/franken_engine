@@ -1383,7 +1383,7 @@ fn is_keyword(token: &str) -> bool {
 }
 
 fn serialize_expression(expr: &Expression) -> String {
-    serde_json::to_string(expr).expect("expression serialization should succeed")
+    serde_json::to_string(expr).expect("expression should serialize for relation comparison")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1409,7 +1409,7 @@ struct ExecutionResult {
 
 impl ExecutionResult {
     fn observable_signature(&self) -> String {
-        serde_json::to_string(self).expect("execution result serialization should succeed")
+        serde_json::to_string(self).expect("execution result should serialize for observability")
     }
 }
 
@@ -1686,7 +1686,7 @@ fn derive_capabilities(program: &Program) -> BTreeSet<String> {
 }
 
 fn canonical_program_signature(program: &Program) -> String {
-    serde_json::to_string(program).expect("program serialization should succeed")
+    serde_json::to_string(program).expect("program should serialize for canonical signatures")
 }
 
 fn stable_hash(value: &str) -> String {
@@ -1719,7 +1719,8 @@ mod tests {
     fn tokenizer_decodes_unicode_identifier_escapes() {
         let parsed = parse_program("let \\u0061lpha = 1 + 2; return \\u0061lpha;")
             .expect("unicode identifier program should parse");
-        let serialized = serde_json::to_string(&parsed).expect("serialization should work");
+        let serialized =
+            serde_json::to_string(&parsed).expect("parsed program should serialize to JSON");
         assert!(serialized.contains("alpha"));
     }
 

@@ -1061,8 +1061,8 @@ mod tests {
             SignalNamespace::AssumptionsLedger,
         ];
         for variant in variants {
-            let json = serde_json::to_string(&variant).expect("serialize");
-            let back: SignalNamespace = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(&variant).unwrap_or_default();
+            let back: SignalNamespace = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(back, variant);
         }
     }
@@ -1122,8 +1122,8 @@ mod tests {
             deterministic: false,
             required: false,
         };
-        let json = serde_json::to_string(&tcr).expect("serialize");
-        let back: TelemetryContractRef = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&tcr).unwrap_or_default();
+        let back: TelemetryContractRef = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(back, tcr);
     }
 
@@ -1429,8 +1429,8 @@ mod tests {
                 required: true,
             },
         };
-        let json = serde_json::to_string(&variable).expect("serialize");
-        let back: TwinStateVariable = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&variable).unwrap_or_default();
+        let back: TwinStateVariable = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(back, variable);
     }
 
@@ -1445,8 +1445,8 @@ mod tests {
             blocked_confounding_paths: vec![vec!["a".to_string(), "b".to_string()]],
             strategy_note: "test note".to_string(),
         };
-        let json = serde_json::to_string(&strategy).expect("serialize");
-        let back: CausalAdjustmentStrategy = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&strategy).unwrap_or_default();
+        let back: CausalAdjustmentStrategy = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(back, strategy);
     }
 
@@ -1467,16 +1467,16 @@ mod tests {
             monitor_id: None,
             action: None,
         };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let back: SemanticTwinLogEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&event).unwrap_or_default();
+        let back: SemanticTwinLogEvent = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(back, event);
     }
 
     #[test]
     fn semantic_twin_specification_serde_roundtrip() {
         let spec = SemanticTwinSpecification::frx_19_1_default().expect("spec");
-        let json = serde_json::to_string(&spec).expect("serialize");
-        let back: SemanticTwinSpecification = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&spec).unwrap_or_default();
+        let back: SemanticTwinSpecification = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(back, spec);
     }
 

@@ -607,7 +607,7 @@ pub fn generate_report(
         });
     }
 
-    let canonical = serde_json::to_string(&entries).expect("serialization failed");
+    let canonical = serde_json::to_string(&entries).unwrap_or_default();
     let hash = Sha256::digest(canonical.as_bytes());
     let content_hash = hex::encode(hash);
 

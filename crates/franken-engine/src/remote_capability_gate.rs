@@ -728,8 +728,8 @@ mod tests {
             required_capabilities: vec![RuntimeCapability::NetworkEgress],
             trace_id: "trace-1".to_string(),
         };
-        let json = serde_json::to_string(&denied).expect("serialize");
-        let restored: RemoteCapabilityDenied = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&denied).unwrap_or_default();
+        let restored: RemoteCapabilityDenied = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(denied, restored);
     }
 
@@ -745,8 +745,8 @@ mod tests {
             outcome: "permitted".to_string(),
             held_profile: "RemoteCaps".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let restored: RemoteGateEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&event).unwrap_or_default();
+        let restored: RemoteGateEvent = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(event, restored);
     }
 
@@ -763,8 +763,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serialize");
-            let restored: RemoteTransportError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(err).unwrap_or_default();
+            let restored: RemoteTransportError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*err, restored);
         }
     }
@@ -799,8 +799,8 @@ mod tests {
             RemoteOperationType::RemoteIpc,
         ];
         for op in &all {
-            let json = serde_json::to_string(op).expect("serialize");
-            let restored: RemoteOperationType = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(op).unwrap_or_default();
+            let restored: RemoteOperationType = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*op, restored);
         }
     }

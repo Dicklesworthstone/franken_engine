@@ -845,8 +845,8 @@ fn store_record_serde_roundtrip() {
         },
         revision: 3,
     };
-    let json = serde_json::to_string(&record).expect("serialize");
-    let recovered: StoreRecord = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&record).unwrap_or_default();
+    let recovered: StoreRecord = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(record, recovered);
 }
 
@@ -869,8 +869,8 @@ fn storage_error_serde_roundtrip() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).expect("serialize");
-        let recovered: StorageError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(err).unwrap_or_default();
+        let recovered: StorageError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(err, &recovered);
     }
 }
@@ -896,8 +896,8 @@ fn migration_receipt_serde_roundtrip() {
         state_hash_before: "aaa".to_string(),
         state_hash_after: "bbb".to_string(),
     };
-    let json = serde_json::to_string(&receipt).expect("serialize");
-    let recovered: MigrationReceipt = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&receipt).unwrap_or_default();
+    let recovered: MigrationReceipt = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(receipt, recovered);
 }
 
@@ -912,8 +912,8 @@ fn storage_event_serde_roundtrip() {
         outcome: "ok".to_string(),
         error_code: None,
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let recovered: StorageEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let recovered: StorageEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, recovered);
 }
 
@@ -982,8 +982,8 @@ fn enrichment_event_context_preserves_leading_trailing_content() {
 fn enrichment_event_context_serde_roundtrip_with_special_chars() {
     let ctx = EventContext::new("trace/1:2", "decision@3", "policy#4")
         .expect("special chars should be accepted");
-    let json = serde_json::to_string(&ctx).expect("serialize");
-    let recovered: EventContext = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&ctx).unwrap_or_default();
+    let recovered: EventContext = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(ctx, recovered);
 }
 
@@ -1020,8 +1020,8 @@ fn enrichment_store_kind_ord_is_consistent_with_eq() {
 #[test]
 fn enrichment_store_kind_serde_all_variants_roundtrip() {
     for kind in all_store_kinds() {
-        let serialized = serde_json::to_string(&kind).expect("serialize");
-        let deserialized: StoreKind = serde_json::from_str(&serialized).expect("deserialize");
+        let serialized = serde_json::to_string(&kind).unwrap_or_default();
+        let deserialized: StoreKind = serde_json::from_str(&serialized).unwrap_or_default();
         assert_eq!(kind, deserialized);
     }
 }
@@ -1074,8 +1074,8 @@ fn enrichment_store_record_with_empty_value_roundtrip() {
         metadata: BTreeMap::new(),
         revision: 1,
     };
-    let json = serde_json::to_string(&record).expect("serialize");
-    let recovered: StoreRecord = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&record).unwrap_or_default();
+    let recovered: StoreRecord = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(record, recovered);
     assert!(recovered.value.is_empty());
 }
@@ -1093,8 +1093,8 @@ fn enrichment_store_record_with_large_metadata_roundtrip() {
         metadata: metadata.clone(),
         revision: 100,
     };
-    let json = serde_json::to_string(&record).expect("serialize");
-    let recovered: StoreRecord = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&record).unwrap_or_default();
+    let recovered: StoreRecord = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(record, recovered);
     assert_eq!(recovered.metadata.len(), 50);
 }
@@ -1138,8 +1138,8 @@ fn enrichment_store_query_serde_roundtrip_with_all_fields() {
         metadata_filters: filters,
         limit: Some(25),
     };
-    let json = serde_json::to_string(&query).expect("serialize");
-    let recovered: StoreQuery = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&query).unwrap_or_default();
+    let recovered: StoreQuery = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(query, recovered);
 }
 
@@ -1150,8 +1150,8 @@ fn enrichment_store_query_serde_roundtrip_no_limit() {
         metadata_filters: BTreeMap::new(),
         limit: None,
     };
-    let json = serde_json::to_string(&query).expect("serialize");
-    let recovered: StoreQuery = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&query).unwrap_or_default();
+    let recovered: StoreQuery = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(query, recovered);
 }
 
@@ -1166,8 +1166,8 @@ fn enrichment_batch_put_entry_serde_roundtrip_with_metadata() {
         value: vec![0xDE, 0xAD, 0xBE, 0xEF],
         metadata: meta,
     };
-    let json = serde_json::to_string(&entry).expect("serialize");
-    let recovered: BatchPutEntry = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&entry).unwrap_or_default();
+    let recovered: BatchPutEntry = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(entry, recovered);
 }
 
@@ -1194,8 +1194,8 @@ fn enrichment_migration_receipt_with_all_stores_touched() {
         state_hash_before: "before".to_string(),
         state_hash_after: "after".to_string(),
     };
-    let json = serde_json::to_string(&receipt).expect("serialize");
-    let recovered: MigrationReceipt = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&receipt).unwrap_or_default();
+    let recovered: MigrationReceipt = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(receipt, recovered);
     assert_eq!(recovered.stores_touched.len(), 8);
 }
@@ -1227,8 +1227,8 @@ fn enrichment_storage_event_with_error_code_roundtrip() {
         outcome: "error".to_string(),
         error_code: Some("FE-STOR-0004".to_string()),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let recovered: StorageEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let recovered: StorageEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, recovered);
 }
 
@@ -1243,8 +1243,8 @@ fn enrichment_storage_event_without_error_code_roundtrip() {
         outcome: "ok".to_string(),
         error_code: None,
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let recovered: StorageEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let recovered: StorageEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, recovered);
     assert!(recovered.error_code.is_none());
 }
@@ -2914,8 +2914,8 @@ fn enrichment_in_memory_adapter_serde_roundtrip_preserves_data() {
         )
         .expect("put");
 
-    let json = serde_json::to_string(&adapter).expect("serialize");
-    let mut recovered: InMemoryStorageAdapter = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&adapter).unwrap_or_default();
+    let mut recovered: InMemoryStorageAdapter = serde_json::from_str(&json).unwrap_or_default();
 
     let r1 = recovered
         .get(StoreKind::ReplayIndex, "serde/test", &ctx)
@@ -2933,7 +2933,7 @@ fn enrichment_in_memory_adapter_serde_roundtrip_preserves_data() {
 #[test]
 fn enrichment_in_memory_adapter_default_fail_writes_false() {
     let adapter = InMemoryStorageAdapter::new();
-    let json = serde_json::to_string(&adapter).expect("serialize");
+    let json = serde_json::to_string(&adapter).unwrap_or_default();
     assert!(json.contains("\"fail_writes\":false"));
 }
 

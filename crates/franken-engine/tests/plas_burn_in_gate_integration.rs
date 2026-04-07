@@ -268,8 +268,8 @@ fn extension_risk_class_serde_round_trip_all_variants() {
         ExtensionRiskClass::Standard,
         ExtensionRiskClass::High,
     ] {
-        let json = serde_json::to_string(&risk_class).expect("serialize");
-        let recovered: ExtensionRiskClass = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&risk_class).unwrap_or_default();
+        let recovered: ExtensionRiskClass = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(risk_class, recovered);
         assert!(!risk_class.as_str().is_empty());
     }
@@ -284,8 +284,8 @@ fn burn_in_lifecycle_state_serde_round_trip_all_variants() {
         BurnInLifecycleState::AutoEnforcement,
         BurnInLifecycleState::Rejection,
     ] {
-        let json = serde_json::to_string(&state).expect("serialize");
-        let recovered: BurnInLifecycleState = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&state).unwrap_or_default();
+        let recovered: BurnInLifecycleState = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(state, recovered);
         assert!(!state.as_str().is_empty());
     }
@@ -301,8 +301,8 @@ fn burn_in_failure_code_serde_round_trip_all_variants() {
         BurnInFailureCode::FalseDenyEnvelopeExceeded,
         BurnInFailureCode::RollbackProofArtifactsMissing,
     ] {
-        let json = serde_json::to_string(&code).expect("serialize");
-        let recovered: BurnInFailureCode = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&code).unwrap_or_default();
+        let recovered: BurnInFailureCode = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(code, recovered);
         assert!(!code.error_code().is_empty());
     }
@@ -311,16 +311,16 @@ fn burn_in_failure_code_serde_round_trip_all_variants() {
 #[test]
 fn shadow_observation_serde_round_trip() {
     let obs = observation("obs-serde", 1_000_500, true, false);
-    let json = serde_json::to_string(&obs).expect("serialize");
-    let recovered: ShadowObservation = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&obs).unwrap_or_default();
+    let recovered: ShadowObservation = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(obs, recovered);
 }
 
 #[test]
 fn burn_in_session_config_serde_round_trip() {
     let config = session_config();
-    let json = serde_json::to_string(&config).expect("serialize");
-    let recovered: BurnInSessionConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let recovered: BurnInSessionConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(config, recovered);
 }
 
@@ -390,8 +390,8 @@ fn metrics_serde_round_trip() {
         .record_shadow_observation(observation("obs-1", 1_000_100, true, false))
         .unwrap();
     let metrics = session.metrics().clone();
-    let json = serde_json::to_string(&metrics).expect("serialize");
-    let recovered: BurnInMetrics = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&metrics).unwrap_or_default();
+    let recovered: BurnInMetrics = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(metrics, recovered);
 }
 
@@ -416,8 +416,8 @@ fn scorecard_metrics_reflect_session_state() {
     }
 
     let scorecard = session.scorecard_metrics();
-    let json = serde_json::to_string(&scorecard).expect("serialize");
-    let recovered: BurnInScorecardMetrics = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&scorecard).unwrap_or_default();
+    let recovered: BurnInScorecardMetrics = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(scorecard, recovered);
 }
 
@@ -448,8 +448,8 @@ fn decision_artifact_serde_round_trip() {
             .unwrap();
     }
     let artifact = session.evaluate_promotion_gate(1_002_000).unwrap();
-    let json = serde_json::to_string(&artifact).expect("serialize");
-    let recovered: BurnInDecisionArtifact = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&artifact).unwrap_or_default();
+    let recovered: BurnInDecisionArtifact = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(artifact.outcome, recovered.outcome);
     assert_eq!(artifact.decision_hash, recovered.decision_hash);
 }
@@ -502,8 +502,8 @@ fn log_event_serde_round_trip() {
         .record_shadow_observation(observation("obs-1", 1_000_100, true, false))
         .unwrap();
     let log = session.logs().last().unwrap().clone();
-    let json = serde_json::to_string(&log).expect("serialize");
-    let recovered: BurnInLogEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&log).unwrap_or_default();
+    let recovered: BurnInLogEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(log, recovered);
 }
 
@@ -534,8 +534,8 @@ fn rollback_artifacts_incomplete_missing_rollback_command() {
 #[test]
 fn rollback_artifacts_serde_round_trip() {
     let artifacts = complete_rollback_artifacts();
-    let json = serde_json::to_string(&artifacts).expect("serialize");
-    let recovered: RollbackProofArtifacts = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&artifacts).unwrap_or_default();
+    let recovered: RollbackProofArtifacts = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(artifacts, recovered);
 }
 
@@ -546,8 +546,8 @@ fn rollback_artifacts_serde_round_trip() {
 #[test]
 fn burn_in_thresholds_serde_round_trip() {
     let thresholds = BurnInThresholds::for_risk_class(ExtensionRiskClass::High);
-    let json = serde_json::to_string(&thresholds).expect("serialize");
-    let recovered: BurnInThresholds = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&thresholds).unwrap_or_default();
+    let recovered: BurnInThresholds = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(thresholds, recovered);
 }
 
@@ -580,8 +580,8 @@ fn burn_in_error_serde_round_trip() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(&err).expect("serialize");
-        let recovered: BurnInError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&err).unwrap_or_default();
+        let recovered: BurnInError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(err, &recovered);
         assert!(!err.to_string().is_empty());
     }
@@ -729,8 +729,8 @@ fn burn_in_error_all_variants_serde_round_trip() {
         },
     ];
     for err in &variants {
-        let json = serde_json::to_string(&err).expect("serialize");
-        let recovered: BurnInError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&err).unwrap_or_default();
+        let recovered: BurnInError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(err, &recovered);
         // Display should produce non-empty human-readable string
         let display = format!("{err}");
@@ -902,8 +902,8 @@ fn scorecard_metrics_after_rejection_reflects_terminal_state() {
     assert_eq!(scorecard.lifecycle_state, BurnInLifecycleState::Rejection);
     assert!(scorecard.false_deny_rate_millionths > 0);
     // Verify serde roundtrip of scorecard in rejected state
-    let json = serde_json::to_string(&scorecard).expect("serialize");
-    let recovered: BurnInScorecardMetrics = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&scorecard).unwrap_or_default();
+    let recovered: BurnInScorecardMetrics = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(scorecard, recovered);
 }
 

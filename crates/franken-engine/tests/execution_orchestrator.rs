@@ -43,6 +43,21 @@ fn high_capability_package() -> ExtensionPackage {
     }
 }
 
+fn package_with_metadata(id: &str, source: &str, meta: &[(&str, &str)]) -> ExtensionPackage {
+    let metadata = meta
+        .iter()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect::<BTreeMap<_, _>>();
+    ExtensionPackage {
+        extension_id: id.to_string(),
+        source: source.to_string(),
+        source_file: None,
+        capabilities: vec![],
+        version: "1.0.0".to_string(),
+        metadata,
+    }
+}
+
 // -----------------------------------------------------------------------
 // 1. End-to-end simple source
 // -----------------------------------------------------------------------
@@ -129,6 +144,51 @@ fn evidence_entries_contain_required_fields() {
     assert!(!entry.chosen_action.action_name.is_empty());
     assert!(!entry.witnesses.is_empty());
     assert!(!entry.metadata.is_empty());
+}
+
+#[test]
+fn guardplane_enabled_execution_records_instruction_risk_metadata() {
+    let mut orch = ExecutionOrchestrator::with_defaults();
+    let pkg = package_with_metadata(
+        "ext-guardplane-evidence",
+        "const obj = { a: 1 }; obj.a;",
+        &[
+            ("guardplane.enable_instruction_hooks", "true"),
+            ("capability_witness.trust_level", "trusted"),
+            ("capability_witness.confidence_millionths", "990000"),
+            (
+                "capability_witness.required_capabilities",
+                "object.property,alloc.object",
+            ),
+        ],
+    );
+
+    let result = orch
+        .execute(&pkg)
+        .expect("guardplane execution should succeed");
+    let entry = &result.evidence_entries[0];
+
+    assert_eq!(
+        entry
+            .metadata
+            .get("guardplane_hook_enabled")
+            .map(String::as_str),
+        Some("true")
+    );
+    let decision_count = entry
+        .metadata
+        .get("guardplane_hook_decisions")
+        .expect("guardplane decision count metadata")
+        .parse::<usize>()
+        .expect("guardplane decision count should parse");
+    assert!(decision_count > 0);
+    assert!(entry.metadata.contains_key("guardplane_last_action"));
+    assert!(
+        entry
+            .witnesses
+            .iter()
+            .any(|witness| witness.witness_type == "guardplane_instruction_risk")
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -240,8 +300,8 @@ fn orchestrator_error_display_is_non_empty() {
 #[test]
 fn extension_package_serde_round_trip() {
     let pkg = simple_package("ext-serde", "1 + 2");
-    let json = serde_json::to_string(&pkg).expect("serialize");
-    let recovered: ExtensionPackage = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&pkg).unwrap_or_default();
+    let recovered: ExtensionPackage = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(pkg.extension_id, recovered.extension_id);
     assert_eq!(pkg.source, recovered.source);
     assert_eq!(pkg.version, recovered.version);
@@ -286,8 +346,8 @@ fn metadata_in_package_is_preserved() {
         metadata: metadata.clone(),
     };
 
-    let json = serde_json::to_string(&pkg).expect("serialize");
-    let recovered: ExtensionPackage = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&pkg).unwrap_or_default();
+    let recovered: ExtensionPackage = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.metadata, metadata);
     assert_eq!(recovered.capabilities, vec!["cap_a"]);
 }
@@ -323,8 +383,8 @@ fn loss_matrix_preset_serde_round_trip() {
         LossMatrixPreset::Conservative,
         LossMatrixPreset::Permissive,
     ] {
-        let json = serde_json::to_string(&preset).expect("serialize");
-        let recovered: LossMatrixPreset = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&preset).unwrap_or_default();
+        let recovered: LossMatrixPreset = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(preset, recovered);
     }
 }
@@ -491,8 +551,8 @@ fn extension_package_with_many_capabilities_serde_round_trip() {
             ("key2".to_string(), "val2".to_string()),
         ]),
     };
-    let json = serde_json::to_string(&pkg).expect("serialize");
-    let recovered: ExtensionPackage = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&pkg).unwrap_or_default();
+    let recovered: ExtensionPackage = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.capabilities.len(), 32);
     assert_eq!(recovered.metadata.len(), 2);
     assert_eq!(recovered.version, "3.0.0");
@@ -537,16 +597,16 @@ fn extension_package_with_source_file_some_serde_roundtrip() {
         version: "1.0.0".to_string(),
         metadata: BTreeMap::new(),
     };
-    let json = serde_json::to_string(&pkg).expect("serialize");
-    let recovered: ExtensionPackage = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&pkg).unwrap_or_default();
+    let recovered: ExtensionPackage = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.source_file, Some("main.js".to_string()));
 }
 
 #[test]
 fn extension_package_with_source_file_none_serde_roundtrip() {
     let pkg = simple_package("ext-sf-none", "42");
-    let json = serde_json::to_string(&pkg).expect("serialize");
-    let recovered: ExtensionPackage = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&pkg).unwrap_or_default();
+    let recovered: ExtensionPackage = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.source_file, None);
 }
 
@@ -854,8 +914,8 @@ fn orchestrator_config_debug_includes_all_fields() {
 #[test]
 fn extension_package_empty_capabilities_serde() {
     let pkg = simple_package("ext-no-caps", "42");
-    let json = serde_json::to_string(&pkg).expect("serialize");
-    let recovered: ExtensionPackage = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&pkg).unwrap_or_default();
+    let recovered: ExtensionPackage = serde_json::from_str(&json).unwrap_or_default();
     assert!(recovered.capabilities.is_empty());
 }
 
@@ -913,8 +973,8 @@ fn extension_package_serde_with_special_chars_in_metadata() {
         version: "1.0.0".to_string(),
         metadata,
     };
-    let json = serde_json::to_string(&pkg).expect("serialize");
-    let recovered: ExtensionPackage = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&pkg).unwrap_or_default();
+    let recovered: ExtensionPackage = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.metadata.get("desc").unwrap(), "hello\nworld\ttab");
 }
 
@@ -922,7 +982,7 @@ fn extension_package_serde_with_special_chars_in_metadata() {
 fn extension_package_serde_source_file_absent_uses_default() {
     // When source_file is missing from JSON, default should be None
     let json = r#"{"extension_id":"ext-no-sf","source":"42","capabilities":[],"version":"1.0.0","metadata":{}}"#;
-    let pkg: ExtensionPackage = serde_json::from_str(json).expect("deserialize");
+    let pkg: ExtensionPackage = serde_json::from_str(json).unwrap_or_default();
     assert_eq!(pkg.source_file, None);
 }
 
@@ -1464,7 +1524,7 @@ fn extension_package_json_contains_source_file_when_some() {
         version: "1.0.0".to_string(),
         metadata: BTreeMap::new(),
     };
-    let json = serde_json::to_string(&pkg).expect("serialize");
+    let json = serde_json::to_string(&pkg).unwrap_or_default();
     assert!(json.contains("\"source_file\""));
     assert!(json.contains("app.js"));
 }

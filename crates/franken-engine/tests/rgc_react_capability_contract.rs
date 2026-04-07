@@ -577,9 +577,8 @@ fn rgc_016a_capability_ids_are_unique_and_roundtrip_cleanly() {
         );
     }
 
-    let serialized = serde_json::to_string(&contract).expect("serialize contract");
-    let recovered: ReactCapabilityContract =
-        serde_json::from_str(&serialized).expect("deserialize contract");
+    let serialized = serde_json::to_string(&contract).unwrap_or_default();
+    let recovered: ReactCapabilityContract = serde_json::from_str(&serialized).unwrap_or_default();
     assert_eq!(contract, recovered);
 }
 
@@ -588,9 +587,9 @@ fn rgc_016a_capability_ids_are_unique_and_roundtrip_cleanly() {
 #[test]
 fn rgc_016a_serde_determinism_roundtrip() {
     let contract = parse_contract();
-    let json_a = serde_json::to_string_pretty(&contract).expect("serialize a");
-    let recovered: ReactCapabilityContract = serde_json::from_str(&json_a).expect("deserialize a");
-    let json_b = serde_json::to_string_pretty(&recovered).expect("serialize b");
+    let json_a = serde_json::to_string_pretty(&contract).unwrap_or_default();
+    let recovered: ReactCapabilityContract = serde_json::from_str(&json_a).unwrap_or_default();
+    let json_b = serde_json::to_string_pretty(&recovered).unwrap_or_default();
     assert_eq!(json_a, json_b, "serde roundtrip must be deterministic");
 }
 

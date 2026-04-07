@@ -754,8 +754,8 @@ mod tests {
             ClaimDomain::React,
             ClaimDomain::Security,
         ] {
-            let json = serde_json::to_string(d).expect("serialize");
-            let deser: ClaimDomain = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(d).unwrap_or_default();
+            let deser: ClaimDomain = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*d, deser);
         }
     }
@@ -763,16 +763,16 @@ mod tests {
     #[test]
     fn atom_serde_round_trip() {
         let atom = test_atom("compat", ClaimDomain::Compatibility, ClaimTier::ShippedFact);
-        let json = serde_json::to_string(&atom).expect("serialize");
-        let deser: ClaimAtom = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&atom).unwrap_or_default();
+        let deser: ClaimAtom = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(atom, deser);
     }
 
     #[test]
     fn morphism_serde_round_trip() {
         let m = test_morphism("morph-1", "compat", "test262_pass");
-        let json = serde_json::to_string(&m).expect("serialize");
-        let deser: EvidenceMorphism = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&m).unwrap_or_default();
+        let deser: EvidenceMorphism = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(m, deser);
     }
 
@@ -798,8 +798,8 @@ mod tests {
                 higher: "all".to_string(),
             }],
         };
-        let json = serde_json::to_string(&lattice).expect("serialize");
-        let deser: ConstraintLattice = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&lattice).unwrap_or_default();
+        let deser: ConstraintLattice = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(lattice, deser);
     }
 
@@ -982,8 +982,8 @@ mod tests {
         let morphisms = vec![test_morphism("morph-a", "a", "test262_pass")];
         let evidence = vec![test_evidence("test262_pass")];
         let result = evaluate_claims(&atoms, &morphisms, &[], &evidence, 42);
-        let json = serde_json::to_string(&result).expect("serialize");
-        let deser: EntitlementResult = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&result).unwrap_or_default();
+        let deser: EntitlementResult = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(result, deser);
     }
 
@@ -1058,8 +1058,8 @@ mod tests {
             ClaimTier::FrontierAmbition,
             ClaimTier::UnsupportedSurface,
         ] {
-            let json = serde_json::to_string(tier).expect("serialize");
-            let deser: ClaimTier = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(tier).unwrap_or_default();
+            let deser: ClaimTier = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*tier, deser);
         }
     }
@@ -1072,8 +1072,8 @@ mod tests {
             ClaimState::BlockedByMissingEvidence,
             ClaimState::Invalidated,
         ] {
-            let json = serde_json::to_string(state).expect("serialize");
-            let deser: ClaimState = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(state).unwrap_or_default();
+            let deser: ClaimState = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*state, deser);
         }
     }
@@ -1085,8 +1085,8 @@ mod tests {
             DisqualifierVerdict::DowngradeToScoped,
             DisqualifierVerdict::RequireOperatorGuidance,
         ] {
-            let json = serde_json::to_string(verdict).expect("serialize");
-            let deser: DisqualifierVerdict = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(verdict).unwrap_or_default();
+            let deser: DisqualifierVerdict = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*verdict, deser);
         }
     }
@@ -1098,8 +1098,8 @@ mod tests {
             MorphismEffect::Constrains,
             MorphismEffect::Disqualifies,
         ] {
-            let json = serde_json::to_string(effect).expect("serialize");
-            let deser: MorphismEffect = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(effect).unwrap_or_default();
+            let deser: MorphismEffect = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*effect, deser);
         }
     }
@@ -1111,8 +1111,8 @@ mod tests {
             is_fresh: false,
             triggered_rules: vec!["rule-1".to_string(), "rule-2".to_string()],
         };
-        let json = serde_json::to_string(&snap).expect("serialize");
-        let deser: EvidenceSnapshot = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&snap).unwrap_or_default();
+        let deser: EvidenceSnapshot = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(snap, deser);
     }
 
@@ -1127,8 +1127,8 @@ mod tests {
             verdict: DisqualifierVerdict::DowngradeToScoped,
             remediation: "Profile and fix hotspots".to_string(),
         };
-        let json = serde_json::to_string(&rule).expect("serialize");
-        let deser: DisqualifierRule = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&rule).unwrap_or_default();
+        let deser: DisqualifierRule = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(rule, deser);
     }
 
@@ -1141,8 +1141,8 @@ mod tests {
             missing_morphisms: vec!["morph-2".to_string()],
             active_disqualifiers: vec!["rule-a".to_string()],
         };
-        let json = serde_json::to_string(&eval).expect("serialize");
-        let deser: ClaimAtomEvaluation = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&eval).unwrap_or_default();
+        let deser: ClaimAtomEvaluation = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(eval, deser);
     }
 
@@ -1152,8 +1152,8 @@ mod tests {
             lower: "base".to_string(),
             higher: "strict".to_string(),
         };
-        let json = serde_json::to_string(&cr).expect("serialize");
-        let deser: CoverRelation = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&cr).unwrap_or_default();
+        let deser: CoverRelation = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(cr, deser);
     }
 

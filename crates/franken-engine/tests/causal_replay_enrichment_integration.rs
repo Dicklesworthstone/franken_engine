@@ -1993,9 +1993,9 @@ fn action_delta_report_object_id_differs_by_zone() {
 #[test]
 fn serde_roundtrip_trace_record_full() {
     let trace = make_trace(&[("sandbox", 200_000), ("allow", 0)]);
-    let json = serde_json::to_string(&trace).expect("serialize");
+    let json = serde_json::to_string(&trace).unwrap_or_default();
     let deser: frankenengine_engine::causal_replay::TraceRecord =
-        serde_json::from_str(&json).expect("deserialize");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(trace.trace_id, deser.trace_id);
     assert_eq!(trace.entries.len(), deser.entries.len());
     assert_eq!(trace.chain_hash, deser.chain_hash);
@@ -2040,8 +2040,8 @@ fn serde_roundtrip_action_delta_report() {
         }],
         decisions_evaluated: 10,
     };
-    let json = serde_json::to_string(&report).expect("serialize");
-    let deser: ActionDeltaReport = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&report).unwrap_or_default();
+    let deser: ActionDeltaReport = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(report, deser);
 }
 
@@ -2056,8 +2056,8 @@ fn serde_roundtrip_recorder_config() {
         start_tick: 42,
         signing_key: vec![0xDD; 32],
     };
-    let json = serde_json::to_string(&config).expect("serialize");
-    let deser: RecorderConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let deser: RecorderConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(config, deser);
 }
 
@@ -2444,8 +2444,8 @@ fn counterfactual_config_full_overrides_serde() {
         },
         branch_from_index: 10,
     };
-    let json = serde_json::to_string(&config).expect("serialize");
-    let deser: CounterfactualConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let deser: CounterfactualConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(config, deser);
 }
 

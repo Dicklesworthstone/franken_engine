@@ -341,11 +341,7 @@ fn write_input_file(input: &ReceiptVerifierCliInput) -> PathBuf {
         std::process::id(),
         nonce
     ));
-    fs::write(
-        &path,
-        serde_json::to_vec_pretty(input).expect("input serialization"),
-    )
-    .expect("input write");
+    fs::write(&path, serde_json::to_vec_pretty(input).unwrap_or_default()).expect("input write");
     path
 }
 

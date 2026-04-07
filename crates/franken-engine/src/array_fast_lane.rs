@@ -579,17 +579,17 @@ impl TransitionReceipt {
         data.push(b'|');
         data.extend_from_slice(
             serde_json::to_string(&transition.from)
-                .expect("serialize from")
+                .unwrap_or_default()
                 .as_bytes(),
         );
         data.extend_from_slice(
             serde_json::to_string(&transition.to)
-                .expect("serialize to")
+                .unwrap_or_default()
                 .as_bytes(),
         );
         data.extend_from_slice(
             serde_json::to_string(&transition.reason)
-                .expect("serialize reason")
+                .unwrap_or_default()
                 .as_bytes(),
         );
         data.extend_from_slice(&transition.trigger_offset.to_le_bytes());

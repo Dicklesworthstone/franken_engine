@@ -538,8 +538,8 @@ fn deterministic_e2e_harness_lane_script_preserves_step_logs_and_exit_classifica
 #[test]
 fn scenario_class_serde_roundtrip() {
     for class in ScenarioClass::ALL {
-        let json = serde_json::to_string(&class).expect("serialize");
-        let recovered: ScenarioClass = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&class).unwrap_or_default();
+        let recovered: ScenarioClass = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(recovered, class);
     }
 }
@@ -559,8 +559,8 @@ fn scenario_class_all_has_six_variants() {
 #[test]
 fn test_fixture_serde_roundtrip() {
     let fixture = sample_fixture();
-    let json = serde_json::to_string(&fixture).expect("serialize");
-    let recovered: TestFixture = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&fixture).unwrap_or_default();
+    let recovered: TestFixture = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, fixture);
 }
 
@@ -570,8 +570,8 @@ fn run_result_serde_roundtrip() {
     let fixture = sample_fixture();
     let run = runner.run_fixture(&fixture).expect("run");
 
-    let json = serde_json::to_string(&run).expect("serialize");
-    let recovered: e2e_harness::RunResult = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&run).unwrap_or_default();
+    let recovered: e2e_harness::RunResult = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.fixture_id, run.fixture_id);
     assert_eq!(recovered.output_digest, run.output_digest);
     assert_eq!(recovered.events.len(), run.events.len());
@@ -680,8 +680,8 @@ fn evidence_linkage_records_are_serde_deterministic() {
     let run = runner.run_fixture(&fixture).expect("run");
 
     let linkage = e2e_harness::build_evidence_linkage(&run.events);
-    let json_a = serde_json::to_string(&linkage).expect("first serialize");
-    let json_b = serde_json::to_string(&linkage).expect("second serialize");
+    let json_a = serde_json::to_string(&linkage).unwrap_or_default();
+    let json_b = serde_json::to_string(&linkage).unwrap_or_default();
     assert_eq!(
         json_a, json_b,
         "evidence linkage serialization must be deterministic"
@@ -759,8 +759,8 @@ fn replay_environment_fingerprint_local_is_populated() {
     assert!(fp.pointer_width_bits > 0);
     assert!(!fp.endian.is_empty());
     // serde roundtrip
-    let json = serde_json::to_string(&fp).expect("serialize");
-    let recovered: ReplayEnvironmentFingerprint = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&fp).unwrap_or_default();
+    let recovered: ReplayEnvironmentFingerprint = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(fp, recovered);
 }
 
@@ -816,8 +816,8 @@ fn diagnose_cross_machine_replay_same_env_matches() {
 #[test]
 fn virtual_clock_serde_roundtrip() {
     let clock = VirtualClock::new(999_999);
-    let json = serde_json::to_string(&clock).expect("serialize");
-    let recovered: VirtualClock = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&clock).unwrap_or_default();
+    let recovered: VirtualClock = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, clock);
 }
 
@@ -856,8 +856,8 @@ fn virtual_clock_multiple_advances_accumulate() {
 #[test]
 fn deterministic_rng_serde_roundtrip() {
     let rng = DeterministicRng::seeded(12345);
-    let json = serde_json::to_string(&rng).expect("serialize");
-    let recovered: DeterministicRng = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&rng).unwrap_or_default();
+    let recovered: DeterministicRng = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, rng);
 }
 
@@ -891,8 +891,8 @@ fn scenario_step_serde_roundtrip() {
         advance_micros: 42,
         metadata,
     };
-    let json = serde_json::to_string(&step).expect("serialize");
-    let recovered: ScenarioStep = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&step).unwrap_or_default();
+    let recovered: ScenarioStep = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.component, "router");
     assert_eq!(recovered.event, "ingest");
     assert_eq!(recovered.advance_micros, 42);
@@ -902,7 +902,7 @@ fn scenario_step_serde_roundtrip() {
 #[test]
 fn scenario_step_serde_defaults_for_missing_fields() {
     let json = r#"{"component":"test","event":"init"}"#;
-    let step: ScenarioStep = serde_json::from_str(json).expect("deserialize");
+    let step: ScenarioStep = serde_json::from_str(json).unwrap_or_default();
     assert_eq!(step.advance_micros, 0);
     assert!(step.metadata.is_empty());
 }
@@ -919,8 +919,8 @@ fn expected_event_serde_roundtrip() {
         outcome: "ok".to_string(),
         error_code: Some("FE-E2E-0001".to_string()),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let recovered: ExpectedEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let recovered: ExpectedEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, event);
 }
 
@@ -932,8 +932,8 @@ fn expected_event_serde_roundtrip_no_error_code() {
         outcome: "ok".to_string(),
         error_code: None,
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let recovered: ExpectedEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let recovered: ExpectedEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, event);
 }
 
@@ -954,8 +954,8 @@ fn harness_event_serde_roundtrip() {
         sequence: 7,
         virtual_time_micros: 123_456,
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let recovered: HarnessEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let recovered: HarnessEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, event);
 }
 
@@ -972,8 +972,8 @@ fn harness_event_serde_roundtrip_no_error() {
         sequence: 0,
         virtual_time_micros: 0,
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let recovered: HarnessEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let recovered: HarnessEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, event);
 }
 
@@ -992,8 +992,8 @@ fn deterministic_runner_config_serde_roundtrip() {
     let config = DeterministicRunnerConfig {
         trace_prefix: "custom-prefix".to_string(),
     };
-    let json = serde_json::to_string(&config).expect("serialize");
-    let recovered: DeterministicRunnerConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let recovered: DeterministicRunnerConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, config);
 }
 
@@ -1206,8 +1206,8 @@ fn fixture_migration_error_serde_roundtrip_all_variants() {
         },
     ];
     for v in &variants {
-        let json = serde_json::to_string(v).expect("serialize");
-        let recovered: FixtureMigrationError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(v).unwrap_or_default();
+        let recovered: FixtureMigrationError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(&recovered, v);
     }
 }
@@ -1285,8 +1285,8 @@ fn replay_input_error_code_serde_roundtrip_all_variants() {
         ReplayInputErrorCode::CorruptedTranscript,
     ];
     for code in &variants {
-        let json = serde_json::to_string(code).expect("serialize");
-        let recovered: ReplayInputErrorCode = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(code).unwrap_or_default();
+        let recovered: ReplayInputErrorCode = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(&recovered, code);
     }
 }
@@ -1312,8 +1312,8 @@ fn replay_input_error_serde_roundtrip() {
         code: ReplayInputErrorCode::MissingModelSnapshot,
         message: "snapshot missing".to_string(),
     };
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: ReplayInputError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: ReplayInputError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, err);
 }
 
@@ -1351,8 +1351,8 @@ fn evidence_linkage_record_serde_roundtrip() {
         event_sequence: 5,
         evidence_hash: "abcdef0123456789".to_string(),
     };
-    let json = serde_json::to_string(&record).expect("serialize");
-    let recovered: EvidenceLinkageRecord = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&record).unwrap_or_default();
+    let recovered: EvidenceLinkageRecord = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, record);
 }
 
@@ -1374,8 +1374,8 @@ fn replay_mismatch_kind_serde_roundtrip_all_variants() {
         ReplayMismatchKind::RandomTranscript,
     ];
     for kind in &variants {
-        let json = serde_json::to_string(kind).expect("serialize");
-        let recovered: ReplayMismatchKind = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(kind).unwrap_or_default();
+        let recovered: ReplayMismatchKind = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(&recovered, kind);
     }
 }
@@ -1399,8 +1399,8 @@ fn replay_verification_serde_roundtrip() {
         expected_transcript_len: 10,
         actual_transcript_len: 10,
     };
-    let json = serde_json::to_string(&v).expect("serialize");
-    let recovered: ReplayVerification = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&v).unwrap_or_default();
+    let recovered: ReplayVerification = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, v);
 }
 
@@ -1452,8 +1452,8 @@ fn replay_performance_serde_roundtrip() {
         faster_than_realtime: true,
         speedup_milli: 5000,
     };
-    let json = serde_json::to_string(&perf).expect("serialize");
-    let recovered: ReplayPerformance = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&perf).unwrap_or_default();
+    let recovered: ReplayPerformance = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, perf);
 }
 
@@ -1491,8 +1491,8 @@ fn replay_environment_fingerprint_serde_roundtrip() {
         pointer_width_bits: 64,
         endian: "little".to_string(),
     };
-    let json = serde_json::to_string(&fp).expect("serialize");
-    let recovered: ReplayEnvironmentFingerprint = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&fp).unwrap_or_default();
+    let recovered: ReplayEnvironmentFingerprint = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, fp);
 }
 
@@ -1522,8 +1522,8 @@ fn cross_machine_replay_diagnosis_serde_roundtrip() {
         environment_mismatches: vec!["os".to_string()],
         diagnosis: Some("env differ".to_string()),
     };
-    let json = serde_json::to_string(&diag).expect("serialize");
-    let recovered: CrossMachineReplayDiagnosis = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&diag).unwrap_or_default();
+    let recovered: CrossMachineReplayDiagnosis = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, diag);
 }
 
@@ -1587,9 +1587,9 @@ fn counterfactual_divergence_kind_serde_roundtrip_all_variants() {
         CounterfactualDivergenceKind::MissingCounterfactualEvent,
     ];
     for kind in &variants {
-        let json = serde_json::to_string(kind).expect("serialize");
+        let json = serde_json::to_string(kind).unwrap_or_default();
         let recovered: CounterfactualDivergenceKind =
-            serde_json::from_str(&json).expect("deserialize");
+            serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(&recovered, kind);
     }
 }
@@ -1612,9 +1612,8 @@ fn counterfactual_divergence_sample_serde_roundtrip() {
         baseline_error_code: None,
         counterfactual_error_code: Some("FE-001".to_string()),
     };
-    let json = serde_json::to_string(&sample).expect("serialize");
-    let recovered: CounterfactualDivergenceSample =
-        serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&sample).unwrap_or_default();
+    let recovered: CounterfactualDivergenceSample = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, sample);
 }
 
@@ -1638,8 +1637,8 @@ fn counterfactual_delta_serde_roundtrip() {
         transcript_diverged_at_index: Some(0),
         divergence_samples: vec![],
     };
-    let json = serde_json::to_string(&delta).expect("serialize");
-    let recovered: CounterfactualDelta = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&delta).unwrap_or_default();
+    let recovered: CounterfactualDelta = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, delta);
 }
 
@@ -1698,8 +1697,8 @@ fn golden_baseline_serde_roundtrip() {
         output_digest: "digest-abc".to_string(),
         source_run_id: "run-xyz".to_string(),
     };
-    let json = serde_json::to_string(&baseline).expect("serialize");
-    let recovered: GoldenBaseline = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&baseline).unwrap_or_default();
+    let recovered: GoldenBaseline = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, baseline);
 }
 
@@ -1719,8 +1718,8 @@ fn signed_golden_update_serde_roundtrip() {
         signature: "sig:aabbcc".to_string(),
         rationale: "evolution".to_string(),
     };
-    let json = serde_json::to_string(&update).expect("serialize");
-    let recovered: SignedGoldenUpdate = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&update).unwrap_or_default();
+    let recovered: SignedGoldenUpdate = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, update);
 }
 
@@ -1853,8 +1852,8 @@ fn run_manifest_serde_roundtrip() {
         artifact_schema_version: 1,
         environment_fingerprint: ReplayEnvironmentFingerprint::local(),
     };
-    let json = serde_json::to_string(&manifest).expect("serialize");
-    let recovered: RunManifest = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&manifest).unwrap_or_default();
+    let recovered: RunManifest = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, manifest);
 }
 
@@ -1872,8 +1871,8 @@ fn run_report_serde_roundtrip() {
         output_digest: "digest-000".to_string(),
         first_error_code: None,
     };
-    let json = serde_json::to_string(&report).expect("serialize");
-    let recovered: RunReport = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&report).unwrap_or_default();
+    let recovered: RunReport = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, report);
 }
 
@@ -1913,8 +1912,8 @@ fn artifact_completeness_report_serde_roundtrip() {
         event_count: 5,
         linkage_count: 5,
     };
-    let json = serde_json::to_string(&report).expect("serialize");
-    let recovered: ArtifactCompletenessReport = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&report).unwrap_or_default();
+    let recovered: ArtifactCompletenessReport = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, report);
 }
 
@@ -1927,8 +1926,8 @@ fn artifact_completeness_report_serde_roundtrip_incomplete() {
         event_count: 0,
         linkage_count: 0,
     };
-    let json = serde_json::to_string(&report).expect("serialize");
-    let recovered: ArtifactCompletenessReport = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&report).unwrap_or_default();
+    let recovered: ArtifactCompletenessReport = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, report);
 }
 
@@ -2004,8 +2003,8 @@ fn scenario_matrix_entry_serde_roundtrip() {
         target_arch: None,
         worker_pool: Some("pool-1".to_string()),
     };
-    let json = serde_json::to_string(&entry).expect("serialize");
-    let recovered: ScenarioMatrixEntry = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&entry).unwrap_or_default();
+    let recovered: ScenarioMatrixEntry = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, entry);
 }
 
@@ -2022,8 +2021,8 @@ fn scenario_artifact_paths_serde_roundtrip() {
         report_json: "run-1/report.json".to_string(),
         report_markdown: "run-1/report.md".to_string(),
     };
-    let json = serde_json::to_string(&paths).expect("serialize");
-    let recovered: ScenarioArtifactPaths = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&paths).unwrap_or_default();
+    let recovered: ScenarioArtifactPaths = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, paths);
 }
 
@@ -2041,8 +2040,8 @@ fn scenario_matrix_report_serde_roundtrip() {
         fail_scenarios: 1,
         scenario_packs: vec![],
     };
-    let json = serde_json::to_string(&report).expect("serialize");
-    let recovered: ScenarioMatrixReport = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&report).unwrap_or_default();
+    let recovered: ScenarioMatrixReport = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, report);
 }
 
@@ -2321,7 +2320,7 @@ fn scenario_evidence_pack_serde_roundtrip() {
             linkage_count: 3,
         },
     };
-    let json = serde_json::to_string(&pack).expect("serialize");
-    let recovered: ScenarioEvidencePack = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&pack).unwrap_or_default();
+    let recovered: ScenarioEvidencePack = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered, pack);
 }

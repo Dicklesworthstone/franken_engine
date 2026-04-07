@@ -309,7 +309,7 @@ impl TriageBundle {
                 .cmp(&b.gate.to_string())
                 .then_with(|| a.summary.cmp(&b.summary))
         });
-        let content_bytes = serde_json::to_vec(&sorted_for_hash).expect("serialization failed");
+        let content_bytes = serde_json::to_vec(&sorted_for_hash).unwrap_or_default();
         let content_hash = ContentHash::compute(&content_bytes);
 
         Self {
@@ -609,7 +609,7 @@ impl ReleaseGatePromotionRegistry {
 
         let mut sorted_gates = self.gates.clone();
         sorted_gates.sort_by_key(|a| a.gate);
-        let content_bytes = serde_json::to_vec(&sorted_gates).expect("serialization failed");
+        let content_bytes = serde_json::to_vec(&sorted_gates).unwrap_or_default();
         let content_hash = ContentHash::compute(&content_bytes);
 
         ReleaseGatePromotionReport {

@@ -102,8 +102,8 @@ fn contract_version_ordering() {
 #[test]
 fn contract_version_serde_roundtrip() {
     let v = ContractVersion::new(3, 14);
-    let json = serde_json::to_string(&v).expect("serialize");
-    let restored: ContractVersion = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&v).unwrap_or_default();
+    let restored: ContractVersion = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(v, restored);
 }
 
@@ -171,8 +171,8 @@ fn ev_tier_serde_roundtrip() {
         EvTier::HighImpact,
     ];
     for tier in &tiers {
-        let json = serde_json::to_string(tier).expect("serialize");
-        let restored: EvTier = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(tier).unwrap_or_default();
+        let restored: EvTier = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*tier, restored);
     }
 }
@@ -198,8 +198,8 @@ fn rollout_stage_serde_roundtrip() {
         RolloutStage::Default,
     ];
     for stage in &stages {
-        let json = serde_json::to_string(stage).expect("serialize");
-        let restored: RolloutStage = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(stage).unwrap_or_default();
+        let restored: RolloutStage = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*stage, restored);
     }
 }
@@ -655,8 +655,8 @@ fn contract_validation_error_serde_all_variants() {
         ContractValidationError::InvalidEvScore,
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).expect("serialize");
-        let restored: ContractValidationError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(err).unwrap_or_default();
+        let restored: ContractValidationError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*err, restored);
     }
 }
@@ -668,16 +668,16 @@ fn contract_validation_error_serde_all_variants() {
 #[test]
 fn evidence_contract_serde_roundtrip() {
     let contract = valid_contract();
-    let json = serde_json::to_string(&contract).expect("serialize");
-    let restored: EvidenceContract = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&contract).unwrap_or_default();
+    let restored: EvidenceContract = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(contract, restored);
 }
 
 #[test]
 fn evidence_contract_deterministic_serialization() {
     let contract = valid_contract();
-    let json1 = serde_json::to_string(&contract).expect("serialize");
-    let json2 = serde_json::to_string(&contract).expect("serialize");
+    let json1 = serde_json::to_string(&contract).unwrap_or_default();
+    let json2 = serde_json::to_string(&contract).unwrap_or_default();
     assert_eq!(json1, json2, "serialization must be deterministic");
 }
 

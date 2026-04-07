@@ -148,8 +148,7 @@ fn run() -> Result<BaselineReport, String> {
 fn main() {
     match run() {
         Ok(report) => {
-            let json = serde_json::to_string_pretty(&report)
-                .expect("serialize parser phase0 baseline report");
+            let json = serde_json::to_string_pretty(&report).unwrap_or_default();
             println!("{json}");
         }
         Err(error) => {

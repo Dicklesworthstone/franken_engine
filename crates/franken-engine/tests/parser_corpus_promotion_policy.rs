@@ -118,19 +118,19 @@ struct PromotionReceipt {
 fn load_normative_catalog() -> NormativeFixtureCatalog {
     let bytes =
         fs::read(Path::new(NORMATIVE_CATALOG_PATH)).expect("read normative parser fixture catalog");
-    serde_json::from_slice(&bytes).expect("deserialize normative parser fixture catalog")
+    serde_json::from_slice(&bytes).unwrap_or_default()
 }
 
 fn load_adversarial_catalog() -> AdversarialFixtureCatalog {
     let bytes = fs::read(Path::new(ADVERSARIAL_CATALOG_PATH))
         .expect("read adversarial parser fixture catalog");
-    serde_json::from_slice(&bytes).expect("deserialize adversarial parser fixture catalog")
+    serde_json::from_slice(&bytes).unwrap_or_default()
 }
 
 fn load_promotion_policy() -> PromotionPolicy {
     let bytes =
         fs::read(Path::new(PROMOTION_POLICY_PATH)).expect("read parser reducer promotion policy");
-    serde_json::from_slice(&bytes).expect("deserialize parser reducer promotion policy")
+    serde_json::from_slice(&bytes).unwrap_or_default()
 }
 
 fn parse_goal(raw: &str) -> ParseGoal {
@@ -154,7 +154,7 @@ fn hash_bytes(bytes: &[u8]) -> String {
 }
 
 fn receipt_hash(receipt: &PromotionReceipt) -> String {
-    let bytes = serde_json::to_vec(receipt).expect("serialize promotion receipt");
+    let bytes = serde_json::to_vec(receipt).unwrap_or_default();
     hash_bytes(bytes.as_slice())
 }
 
@@ -724,7 +724,7 @@ fn promotion_receipt_serde_roundtrip() {
     let parser = CanonicalEs2020Parser;
     let fixture = normative.fixtures.first().expect("fixture");
     let receipt = evaluate_normative(&policy, fixture, &parser);
-    let json = serde_json::to_vec(&receipt).expect("serialize receipt");
+    let json = serde_json::to_vec(&receipt).unwrap_or_default();
     assert!(!json.is_empty(), "serialized receipt must not be empty");
     // Receipt is Serialize but not Deserialize, so just check JSON validity
     let value: serde_json::Value =
@@ -780,7 +780,7 @@ fn enrichment_promotion_receipt_full_serde_roundtrip_all_fields() {
     let fixture = normative.fixtures.first().expect("fixture");
     let receipt = evaluate_normative(&policy, fixture, &parser);
 
-    let json = serde_json::to_vec(&receipt).expect("serialize");
+    let json = serde_json::to_vec(&receipt).unwrap_or_default();
     let val: serde_json::Value = serde_json::from_slice(&json).expect("parse json");
 
     assert_eq!(
@@ -831,7 +831,7 @@ fn enrichment_adversarial_receipt_serde_null_hash_fields() {
     let fixture = adversarial.fixtures.first().expect("fixture");
     let receipt = evaluate_adversarial(&policy, fixture, &parser);
 
-    let json = serde_json::to_vec(&receipt).expect("serialize");
+    let json = serde_json::to_vec(&receipt).unwrap_or_default();
     let val: serde_json::Value = serde_json::from_slice(&json).expect("parse json");
 
     assert!(

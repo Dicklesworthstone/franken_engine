@@ -437,16 +437,15 @@ impl BudgetMonitor {
                 None => 0,
             };
             self.exhausted = true;
-            self.exhaustion_reason = Some(ExhaustionReason {
+            let reason = ExhaustionReason {
                 exceeded_dimensions: exceeded,
                 phase,
                 global_limit_hit: false,
                 consumption: pc.clone(),
                 limit_value,
-            });
-            return Err(BudgetError::Exhausted(
-                self.exhaustion_reason.clone().unwrap(),
-            ));
+            };
+            self.exhaustion_reason = Some(reason.clone());
+            return Err(BudgetError::Exhausted(reason));
         }
 
         // Check global budget.
@@ -468,16 +467,15 @@ impl BudgetMonitor {
                 None => 0,
             };
             self.exhausted = true;
-            self.exhaustion_reason = Some(ExhaustionReason {
+            let reason = ExhaustionReason {
                 exceeded_dimensions: exceeded,
                 phase,
                 global_limit_hit: true,
                 consumption: self.total_consumption.clone(),
                 limit_value,
-            });
-            return Err(BudgetError::Exhausted(
-                self.exhaustion_reason.clone().unwrap(),
-            ));
+            };
+            self.exhaustion_reason = Some(reason.clone());
+            return Err(BudgetError::Exhausted(reason));
         }
 
         Ok(())

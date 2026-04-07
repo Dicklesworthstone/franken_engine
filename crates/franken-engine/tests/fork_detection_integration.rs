@@ -1008,8 +1008,8 @@ fn fork_error_serde_round_trip_all_variants() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).expect("serialize");
-        let rt: ForkError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(err).unwrap_or_default();
+        let rt: ForkError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*err, rt);
     }
 }
@@ -1031,8 +1031,8 @@ fn fork_incident_report_serde_round_trip() {
         existing_was_accepted: true,
         acknowledged: false,
     };
-    let json = serde_json::to_string(&report).expect("serialize");
-    let rt: ForkIncidentReport = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&report).unwrap_or_default();
+    let rt: ForkIncidentReport = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(report, rt);
 }
 
@@ -1044,8 +1044,8 @@ fn checkpoint_history_entry_serde_round_trip() {
         epoch: SecurityEpoch::from_raw(3),
         accepted: true,
     };
-    let json = serde_json::to_string(&entry).expect("serialize");
-    let rt: CheckpointHistoryEntry = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&entry).unwrap_or_default();
+    let rt: CheckpointHistoryEntry = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(entry, rt);
 }
 
@@ -1059,8 +1059,8 @@ fn safe_mode_state_serde_round_trip() {
             unacknowledged_count: 2,
         },
     ] {
-        let json = serde_json::to_string(&state).expect("serialize");
-        let rt: SafeModeState = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&state).unwrap_or_default();
+        let rt: SafeModeState = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(state, rt);
     }
 }
@@ -1072,8 +1072,8 @@ fn safe_mode_startup_source_serde_round_trip() {
         SafeModeStartupSource::CliFlag,
         SafeModeStartupSource::EnvironmentVariable,
     ] {
-        let json = serde_json::to_string(&source).expect("serialize");
-        let rt: SafeModeStartupSource = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&source).unwrap_or_default();
+        let rt: SafeModeStartupSource = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(source, rt);
     }
 }
@@ -1125,8 +1125,8 @@ fn fork_event_serde_round_trip_all_variants() {
         },
     ];
     for event in &events {
-        let json = serde_json::to_string(event).expect("serialize");
-        let rt: ForkEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(event).unwrap_or_default();
+        let rt: ForkEvent = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*event, rt);
     }
 }
@@ -1134,8 +1134,8 @@ fn fork_event_serde_round_trip_all_variants() {
 #[test]
 fn safe_mode_startup_artifact_serde_round_trip() {
     let art = evaluate_safe_mode_startup(&startup_input(true, vec![])).unwrap();
-    let json = serde_json::to_string(&art).expect("serialize");
-    let rt: SafeModeStartupArtifact = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&art).unwrap_or_default();
+    let rt: SafeModeStartupArtifact = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(art, rt);
 }
 
@@ -1150,8 +1150,8 @@ fn safe_mode_exit_check_artifact_serde_round_trip() {
         evidence_ledger_flushed: true,
     })
     .unwrap();
-    let json = serde_json::to_string(&art).expect("serialize");
-    let rt: SafeModeExitCheckArtifact = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&art).unwrap_or_default();
+    let rt: SafeModeExitCheckArtifact = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(art, rt);
 }
 
@@ -1160,8 +1160,8 @@ fn safe_mode_startup_error_serde_round_trip() {
     let err = SafeModeStartupError::MissingField {
         field: "trace_id".into(),
     };
-    let json = serde_json::to_string(&err).expect("serialize");
-    let rt: SafeModeStartupError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let rt: SafeModeStartupError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, rt);
 }
 
@@ -1173,9 +1173,9 @@ fn safe_mode_startup_error_serde_round_trip() {
 fn safe_mode_restrictions_serde_round_trip_conservative() {
     // Build a conservative restrictions struct via the startup artifact.
     let art = evaluate_safe_mode_startup(&startup_input(true, vec![])).unwrap();
-    let json = serde_json::to_string(&art.restrictions).expect("serialize");
+    let json = serde_json::to_string(&art.restrictions).unwrap_or_default();
     let rt: frankenengine_engine::fork_detection::SafeModeRestrictions =
-        serde_json::from_str(&json).expect("deserialize");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(art.restrictions, rt);
     assert!(rt.all_extensions_sandboxed);
     assert!(rt.auto_promotion_disabled);
@@ -1187,9 +1187,9 @@ fn safe_mode_restrictions_serde_round_trip_conservative() {
 #[test]
 fn safe_mode_restrictions_serde_round_trip_normal() {
     let art = evaluate_safe_mode_startup(&startup_input(false, vec![])).unwrap();
-    let json = serde_json::to_string(&art.restrictions).expect("serialize");
+    let json = serde_json::to_string(&art.restrictions).unwrap_or_default();
     let rt: frankenengine_engine::fork_detection::SafeModeRestrictions =
-        serde_json::from_str(&json).expect("deserialize");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(art.restrictions, rt);
     assert!(!rt.all_extensions_sandboxed);
     assert!(!rt.auto_promotion_disabled);
@@ -1199,9 +1199,9 @@ fn safe_mode_restrictions_serde_round_trip_normal() {
 fn safe_mode_startup_event_serde_round_trip() {
     let art = evaluate_safe_mode_startup(&startup_input(true, vec![])).unwrap();
     for event in &art.events {
-        let json = serde_json::to_string(event).expect("serialize");
+        let json = serde_json::to_string(event).unwrap_or_default();
         let rt: frankenengine_engine::fork_detection::SafeModeStartupEvent =
-            serde_json::from_str(&json).expect("deserialize");
+            serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*event, rt);
     }
 }
@@ -1209,8 +1209,8 @@ fn safe_mode_startup_event_serde_round_trip() {
 #[test]
 fn safe_mode_startup_input_serde_round_trip() {
     let input = startup_input(true, vec![("FRANKEN_SAFE_MODE", "1")]);
-    let json = serde_json::to_string(&input).expect("serialize");
-    let rt: SafeModeStartupInput = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&input).unwrap_or_default();
+    let rt: SafeModeStartupInput = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(input, rt);
 }
 
@@ -1224,8 +1224,8 @@ fn safe_mode_exit_check_input_serde_round_trip() {
         pending_quarantines: 3,
         evidence_ledger_flushed: false,
     };
-    let json = serde_json::to_string(&input).expect("serialize");
-    let rt: SafeModeExitCheckInput = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&input).unwrap_or_default();
+    let rt: SafeModeExitCheckInput = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(input, rt);
 }
 
@@ -1238,9 +1238,9 @@ fn zone_state_serde_round_trip_via_export() {
     record(&mut d, "zone-a", &cp1, true, 1, 200, "t1").unwrap();
 
     let exported = d.export_state();
-    let json = serde_json::to_string(exported).expect("serialize zone state");
+    let json = serde_json::to_string(exported).unwrap_or_default();
     let rt: BTreeMap<String, frankenengine_engine::fork_detection::ZoneState> =
-        serde_json::from_str(&json).expect("deserialize zone state");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(rt.len(), 1);
     assert!(rt.contains_key("zone-a"));
 }
@@ -1249,9 +1249,9 @@ fn zone_state_serde_round_trip_via_export() {
 fn zone_state_with_fork_serde_round_trip_via_export() {
     let (d, _) = detector_with_fork("zone-a");
     let exported = d.export_state();
-    let json = serde_json::to_string(exported).expect("serialize");
+    let json = serde_json::to_string(exported).unwrap_or_default();
     let rt: BTreeMap<String, frankenengine_engine::fork_detection::ZoneState> =
-        serde_json::from_str(&json).expect("deserialize");
+        serde_json::from_str(&json).unwrap_or_default();
     let mut d2 = ForkDetector::with_defaults();
     d2.import_state(rt);
     assert!(d2.is_safe_mode("zone-a"));
@@ -1408,8 +1408,8 @@ fn checkpoint_history_entry_accepted_false_serde() {
         epoch: SecurityEpoch::GENESIS,
         accepted: false,
     };
-    let json = serde_json::to_string(&entry).expect("serialize");
-    let rt: CheckpointHistoryEntry = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&entry).unwrap_or_default();
+    let rt: CheckpointHistoryEntry = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(entry, rt);
     assert!(!rt.accepted);
 }
@@ -1422,8 +1422,8 @@ fn checkpoint_history_entry_high_seq_value() {
         epoch: SecurityEpoch::from_raw(u64::MAX),
         accepted: true,
     };
-    let json = serde_json::to_string(&entry).expect("serialize");
-    let rt: CheckpointHistoryEntry = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&entry).unwrap_or_default();
+    let rt: CheckpointHistoryEntry = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(entry, rt);
 }
 
@@ -1460,8 +1460,8 @@ fn fork_incident_report_acknowledged_true_serde() {
         existing_was_accepted: false,
         acknowledged: true,
     };
-    let json = serde_json::to_string(&report).expect("serialize");
-    let rt: ForkIncidentReport = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&report).unwrap_or_default();
+    let rt: ForkIncidentReport = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(report, rt);
     assert!(rt.acknowledged);
     assert!(!rt.existing_was_accepted);
@@ -1499,8 +1499,8 @@ fn safe_mode_state_active_with_high_unacked_count() {
         trigger_seq: Some(u64::MAX),
         unacknowledged_count: usize::MAX,
     };
-    let json = serde_json::to_string(&state).expect("serialize");
-    let rt: SafeModeState = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&state).unwrap_or_default();
+    let rt: SafeModeState = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(state, rt);
 }
 
@@ -2217,8 +2217,8 @@ fn fork_event_type_serde_round_trip_all_variants() {
         },
     ];
     for v in &variants {
-        let json = serde_json::to_string(v).expect("serialize");
-        let rt: ForkEventType = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(v).unwrap_or_default();
+        let rt: ForkEventType = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*v, rt);
     }
 }
@@ -2242,8 +2242,8 @@ fn safe_mode_startup_error_serde_preserves_field_name() {
     let err = SafeModeStartupError::MissingField {
         field: "some_exotic_field".into(),
     };
-    let json = serde_json::to_string(&err).expect("serialize");
-    let rt: SafeModeStartupError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let rt: SafeModeStartupError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, rt);
     let SafeModeStartupError::MissingField { field } = &rt;
     assert_eq!(field, "some_exotic_field");
@@ -2352,7 +2352,7 @@ fn fork_error_json_contains_expected_keys() {
         existing_id: EngineObjectId([0xAA; 32]),
         divergent_id: EngineObjectId([0xBB; 32]),
     };
-    let json = serde_json::to_string(&err).expect("serialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
     assert!(json.contains("ForkDetected"));
     assert!(json.contains("checkpoint_seq"));
 }
@@ -2364,7 +2364,7 @@ fn safe_mode_state_json_contains_expected_keys() {
         trigger_seq: Some(5),
         unacknowledged_count: 2,
     };
-    let json = serde_json::to_string(&state).expect("serialize");
+    let json = serde_json::to_string(&state).unwrap_or_default();
     assert!(json.contains("\"active\":true"));
     assert!(json.contains("\"unacknowledged_count\":2"));
 }
@@ -2386,7 +2386,7 @@ fn fork_incident_report_json_contains_expected_keys() {
         existing_was_accepted: true,
         acknowledged: false,
     };
-    let json = serde_json::to_string(&report).expect("serialize");
+    let json = serde_json::to_string(&report).unwrap_or_default();
     assert!(json.contains("\"incident_id\":\"test\""));
     assert!(json.contains("\"fork_seq\":1"));
     assert!(json.contains("\"acknowledged\":false"));

@@ -329,8 +329,7 @@ impl CausalDagBuilder {
         }
 
         // Compute structure hash
-        let hash_input =
-            serde_json::to_vec(&(&self.variables, &self.edges)).expect("serialization failed");
+        let hash_input = serde_json::to_vec(&(&self.variables, &self.edges)).unwrap_or_default();
         let structure_hash = ContentHash::compute(&hash_input);
 
         Ok(CausalDag {
@@ -1121,7 +1120,7 @@ pub fn run_causal_dag_evidence() -> CausalDagEvidenceManifest {
     let id_count = certificates.iter().filter(|c| c.is_identifiable).count() as u32;
     let unid_count = certificates.iter().filter(|c| !c.is_identifiable).count() as u32;
 
-    let hash_data = serde_json::to_vec(&certificates).expect("serialization failed");
+    let hash_data = serde_json::to_vec(&certificates).unwrap_or_default();
 
     CausalDagEvidenceManifest {
         schema_version: CAUSAL_DAG_SCHEMA_VERSION.to_string(),

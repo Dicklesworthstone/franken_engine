@@ -31,6 +31,20 @@ use claim_entitlement::{
     ClaimEntitlementContract, ClaimEvaluationOutputs, ClaimEvaluationScenarioSet, ClaimTier,
 };
 
+fn from_json<T>(json: &str) -> T
+where
+    T: serde::de::DeserializeOwned,
+{
+    serde_json::from_str(json).expect("deserialize claim entitlement integration test json")
+}
+
+fn to_json<T>(value: &T) -> String
+where
+    T: serde::Serialize,
+{
+    serde_json::to_string(value).expect("serialize claim entitlement integration test json")
+}
+
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -580,8 +594,8 @@ fn serde_round_trip_claim_domain_all_variants() {
         ClaimDomain::SupportSurface,
     ];
     for variant in &variants {
-        let json = serde_json::to_string(variant).expect("serialize ClaimDomain");
-        let back: ClaimDomain = serde_json::from_str(&json).expect("deserialize ClaimDomain");
+        let json = to_json(variant);
+        let back: ClaimDomain = from_json(&json);
         assert_eq!(*variant, back);
     }
 }
@@ -613,8 +627,8 @@ fn serde_round_trip_claim_tier_all_variants() {
         ClaimTier::UnsupportedSurface,
     ];
     for variant in &variants {
-        let json = serde_json::to_string(variant).expect("serialize ClaimTier");
-        let back: ClaimTier = serde_json::from_str(&json).expect("deserialize ClaimTier");
+        let json = to_json(variant);
+        let back: ClaimTier = from_json(&json);
         assert_eq!(*variant, back);
     }
 }
@@ -641,8 +655,8 @@ fn serde_round_trip_morphism_effect_all_variants() {
         MorphismEffect::Disqualifies,
     ];
     for variant in &variants {
-        let json = serde_json::to_string(variant).expect("serialize MorphismEffect");
-        let back: MorphismEffect = serde_json::from_str(&json).expect("deserialize MorphismEffect");
+        let json = to_json(variant);
+        let back: MorphismEffect = from_json(&json);
         assert_eq!(*variant, back);
     }
 }
@@ -657,9 +671,8 @@ fn serde_round_trip_disqualifier_verdict_all_variants() {
         DisqualifierVerdict::RequireOperatorGuidance,
     ];
     for variant in &variants {
-        let json = serde_json::to_string(variant).expect("serialize DisqualifierVerdict");
-        let back: DisqualifierVerdict =
-            serde_json::from_str(&json).expect("deserialize DisqualifierVerdict");
+        let json = to_json(variant);
+        let back: DisqualifierVerdict = from_json(&json);
         assert_eq!(*variant, back);
     }
 }
@@ -669,8 +682,8 @@ fn serde_round_trip_evidence_state_all_variants() {
     use claim_entitlement::EvidenceState;
     let variants = [EvidenceState::Fresh, EvidenceState::Stale];
     for variant in &variants {
-        let json = serde_json::to_string(variant).expect("serialize EvidenceState");
-        let back: EvidenceState = serde_json::from_str(&json).expect("deserialize EvidenceState");
+        let json = to_json(variant);
+        let back: EvidenceState = from_json(&json);
         assert_eq!(*variant, back);
     }
 }
@@ -685,9 +698,8 @@ fn serde_round_trip_claim_verdict_state_all_variants() {
         ClaimVerdictState::CurrentlyFalseUnderActiveCounterexample,
     ];
     for variant in &variants {
-        let json = serde_json::to_string(variant).expect("serialize ClaimVerdictState");
-        let back: ClaimVerdictState =
-            serde_json::from_str(&json).expect("deserialize ClaimVerdictState");
+        let json = to_json(variant);
+        let back: ClaimVerdictState = from_json(&json);
         assert_eq!(*variant, back);
     }
 }

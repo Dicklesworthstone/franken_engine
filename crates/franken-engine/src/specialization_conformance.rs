@@ -158,7 +158,7 @@ pub struct WorkloadOutcome {
 impl WorkloadOutcome {
     /// Compute a content hash over the deterministic canonical form.
     pub fn content_hash(&self) -> ContentHash {
-        let canonical = serde_json::to_vec(self).expect("serialization failed");
+        let canonical = serde_json::to_vec(self).unwrap_or_default();
         ContentHash::compute(&canonical)
     }
 }
@@ -530,7 +530,7 @@ impl ConformanceEvidenceArtifact {
 
     /// Serialize to deterministic JSONL.
     pub fn to_jsonl(&self) -> String {
-        serde_json::to_string(self).expect("serialization failed")
+        serde_json::to_string(self).unwrap_or_default()
     }
 }
 

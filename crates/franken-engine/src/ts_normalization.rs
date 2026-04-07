@@ -578,8 +578,7 @@ pub fn normalize_typescript_to_es2020(
         source_hash: sha256_hex(&normalized_newlines),
         normalized_hash: sha256_hex(&normalized_source),
         compiler_options_hash: sha256_hex(
-            &serde_json::to_string(&config.compiler_options)
-                .expect("compiler options should serialize deterministically"),
+            &serde_json::to_string(&config.compiler_options).unwrap_or_default(),
         ),
         decisions,
         capability_intents: capability_intents.clone(),

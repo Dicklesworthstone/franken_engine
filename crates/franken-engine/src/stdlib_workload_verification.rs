@@ -48,6 +48,10 @@ pub const COMPONENT: &str = "stdlib_workload_verification";
 /// Fixed-point millionths unit.
 const MILLIONTHS: u64 = 1_000_000;
 
+fn serialize_for_identity<T: Serialize>(value: &T, context: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|error| panic!("{context}: {error}"))
+}
+
 /// Minimum passing verification rate to consider a workload suite healthy.
 pub const MIN_PASS_RATE_MILLIONTHS: u64 = 950_000;
 
@@ -204,20 +208,17 @@ impl WorkloadScenario {
     pub fn content_hash(&self) -> ContentHash {
         let mut h = Sha256::new();
         h.update(self.scenario_id.as_bytes());
+        h.update(serialize_for_identity(&self.method, "serialize workload method").as_bytes());
         h.update(
-            serde_json::to_string(&self.method)
-                .unwrap_or_default()
+            serialize_for_identity(&self.callback_kind, "serialize workload callback kind")
                 .as_bytes(),
         );
         h.update(
-            serde_json::to_string(&self.callback_kind)
-                .unwrap_or_default()
-                .as_bytes(),
-        );
-        h.update(
-            serde_json::to_string(&self.mutation_contract)
-                .unwrap_or_default()
-                .as_bytes(),
+            serialize_for_identity(
+                &self.mutation_contract,
+                "serialize workload mutation contract",
+            )
+            .as_bytes(),
         );
         h.update(self.collection_size.to_le_bytes());
         ContentHash::compute(&h.finalize())
@@ -268,15 +269,9 @@ impl ScenarioResult {
     pub fn seal(&mut self) {
         let mut h = Sha256::new();
         h.update(self.scenario_id.as_bytes());
+        h.update(serialize_for_identity(&self.outcome, "serialize scenario outcome").as_bytes());
         h.update(
-            serde_json::to_string(&self.outcome)
-                .unwrap_or_default()
-                .as_bytes(),
-        );
-        h.update(
-            serde_json::to_string(&self.actual_strategy)
-                .unwrap_or_default()
-                .as_bytes(),
+            serialize_for_identity(&self.actual_strategy, "serialize dispatch strategy").as_bytes(),
         );
         h.update(if self.mutation_honored {
             &[1u8]
@@ -726,8 +721,12 @@ pub fn suite_coverage_millionths(suite: &WorkloadSuite) -> u64 {
     let mut seen = std::collections::BTreeSet::new();
     for s in &suite.scenarios {
         seen.insert((
-            serde_json::to_string(&s.method).unwrap_or_default(),
-            serde_json::to_string(&s.callback_kind).unwrap_or_default(),        ));
+            serialize_for_identity(&s.method, "serialize workload method for coverage"),
+            serialize_for_identity(
+                &s.callback_kind,
+                "serialize workload callback kind for coverage",
+            ),
+        ));
     }
 
     let covered = seen.len() as u64;

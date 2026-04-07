@@ -1780,6 +1780,81 @@ fn lower_statement_to_ir1_with_flow(
                 free_vars: Vec::new(),
             });
             ops.push(Ir1Op::Pop);
+
+            // Attach non-constructor methods to the constructor's prototype.
+            // Static methods go on the constructor itself.
+            for method in cls.body.iter().filter(|m| m.kind != MethodKind::Constructor) {
+                let method_name = match &method.key {
+                    Expression::Identifier(name) => name.clone(),
+                    Expression::StringLiteral(s) => s.clone(),
+                    _ => "anonymous_method".to_string(),
+                };
+
+                // Lower method body with its own scope.
+                let m_param_names: Vec<String> = method
+                    .params
+                    .iter()
+                    .filter_map(|p| p.name().map(String::from))
+                    .collect();
+                let mut m_body_ops = Vec::new();
+                let mut m_bindings = Vec::new();
+                let mut m_lookup = BTreeMap::new();
+                let mut m_binding_index: BindingId = 0;
+                let m_scope = ScopeId { depth: 0, index: 0 };
+                let mut m_label_counter: u32 = 0;
+                for pname in &m_param_names {
+                    let _ = alloc_binding(
+                        &mut m_bindings,
+                        &mut m_lookup,
+                        &mut m_binding_index,
+                        m_scope,
+                        pname,
+                        BindingKind::Parameter,
+                    )
+                    .map_err(LoweringPipelineError::SemanticViolation)?;
+                }
+                for stmt in &method.body.body {
+                    lower_statement_to_ir1(
+                        stmt,
+                        &mut m_body_ops,
+                        &mut m_bindings,
+                        &mut m_lookup,
+                        &mut m_binding_index,
+                        m_scope,
+                        &mut m_label_counter,
+                    )?;
+                }
+                if !matches!(m_body_ops.last(), Some(Ir1Op::Return)) {
+                    m_body_ops.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Undefined,
+                    });
+                    m_body_ops.push(Ir1Op::Return);
+                }
+
+                // Push target object: prototype for instance methods,
+                // constructor for static methods.
+                ops.push(Ir1Op::LoadBinding { binding_id: bid });
+                if !method.is_static {
+                    ops.push(Ir1Op::GetProperty {
+                        key: Ir1PropertyKey::Static("prototype".to_string()),
+                    });
+                }
+
+                // Push the method function value.
+                ops.push(Ir1Op::CreateFunction {
+                    name: Some(method_name.clone()),
+                    param_names: m_param_names,
+                    body_ops: m_body_ops,
+                    free_vars: Vec::new(),
+                });
+
+                // SetProperty pops value (top), then object (next).
+                // Stack is now: [target_obj, method_fn]
+                ops.push(Ir1Op::SetProperty {
+                    key: Ir1PropertyKey::Static(method_name),
+                });
+                ops.push(Ir1Op::Pop);
+            }
         }
         Statement::Import(_) | Statement::Export(_) => {
             // Handled at top level only.
@@ -2229,6 +2304,37 @@ pub fn lower_ir2_to_ir3(
 
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions.push(Ir3Instruction::Call {
+                    callee,
+                    args: RegRange {
+                        start: start_reg,
+                        count: *arg_count,
+                    },
+                    dst,
+                });
+                value_stack.push(dst);
+            }
+            Ir1Op::CallMethod { arg_count } => {
+                let count = *arg_count as usize;
+                // Stack layout: [..., callee, receiver, arg0, arg1, ...]
+                // Pop args first, then receiver, then callee.
+                let mut args = Vec::with_capacity(count);
+                for _ in 0..count {
+                    args.push(value_stack.pop().unwrap_or(0));
+                }
+                args.reverse();
+                let receiver = value_stack.pop().unwrap_or(0);
+                let callee = value_stack.pop().unwrap_or(0);
+
+                let start_reg = register_cursor;
+                for arg_reg in args {
+                    let dst = alloc_register(&mut register_cursor);
+                    ir3.instructions
+                        .push(Ir3Instruction::Move { dst, src: arg_reg });
+                }
+
+                let dst = alloc_register(&mut register_cursor);
+                ir3.instructions.push(Ir3Instruction::CallMethod {
+                    receiver,
                     callee,
                     args: RegRange {
                         start: start_reg,
@@ -3368,6 +3474,33 @@ pub fn lower_ir2_to_ir3(
                     }
                     let dst = alloc_register(&mut fn_reg);
                     ir3.instructions.push(Ir3Instruction::Call {
+                        callee,
+                        args: RegRange {
+                            start: start_reg,
+                            count: count as u32,
+                        },
+                        dst,
+                    });
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::CallMethod { arg_count } => {
+                    let count = *arg_count as usize;
+                    let mut args = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        args.push(fn_value_stack.pop().unwrap_or(0));
+                    }
+                    args.reverse();
+                    let receiver = fn_value_stack.pop().unwrap_or(0);
+                    let callee = fn_value_stack.pop().unwrap_or(0);
+                    let start_reg = fn_reg;
+                    for arg_reg in &args {
+                        let dst = alloc_register(&mut fn_reg);
+                        ir3.instructions
+                            .push(Ir3Instruction::Move { dst, src: *arg_reg });
+                    }
+                    let dst = alloc_register(&mut fn_reg);
+                    ir3.instructions.push(Ir3Instruction::CallMethod {
+                        receiver,
                         callee,
                         args: RegRange {
                             start: start_reg,
@@ -4652,18 +4785,76 @@ fn lower_expression_to_ir1(
             });
         }
         Expression::Call { callee, arguments } => {
-            lower_expression_to_ir1(
-                callee,
-                ops,
-                bindings,
-                binding_lookup,
-                binding_index,
-                root_scope_id,
-                label_counter,
-            )?;
-            for arg in arguments {
+            // Detect method calls: obj.method(args) → CallMethod with receiver
+            let is_method = matches!(
+                callee.as_ref(),
+                Expression::Member { computed: false, .. }
+            );
+            if is_method {
+                if let Expression::Member {
+                    object, property, ..
+                } = callee.as_ref()
+                {
+                    // Push receiver (object) first
+                    lower_expression_to_ir1(
+                        object,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    // Push the method (GetProperty on the object)
+                    // We need to duplicate the object ref for GetProperty
+                    // Store object in a temp binding
+                    let receiver_binding = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        "method_receiver",
+                    )?;
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: receiver_binding,
+                    });
+                    // Object is still on stack from StoreBinding (it pushes back)
+                    // GetProperty pops object and pushes property value
+                    let key = lower_member_property_key_to_ir1(
+                        property,
+                        false,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    ops.push(Ir1Op::GetProperty { key });
+                    // Now stack has: [... receiver_binding_val, method_val]
+                    // Push receiver again for CallMethod
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: receiver_binding,
+                    });
+                    // Push args
+                    for arg in arguments {
+                        lower_expression_to_ir1(
+                            arg,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                        )?;
+                    }
+                    ops.push(Ir1Op::CallMethod {
+                        arg_count: arguments.len() as u32,
+                    });
+                }
+            } else {
                 lower_expression_to_ir1(
-                    arg,
+                    callee,
                     ops,
                     bindings,
                     binding_lookup,
@@ -4671,10 +4862,21 @@ fn lower_expression_to_ir1(
                     root_scope_id,
                     label_counter,
                 )?;
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::Call {
+                    arg_count: arguments.len() as u32,
+                });
             }
-            ops.push(Ir1Op::Call {
-                arg_count: arguments.len() as u32,
-            });
         }
         Expression::Member {
             object,
@@ -5175,7 +5377,7 @@ fn classify_ir1_op(
                 declassification_required: false,
             }),
         ),
-        Ir1Op::Call { .. } => (
+        Ir1Op::Call { .. } | Ir1Op::CallMethod { .. } => (
             // User-defined function calls are pure; they must reach the
             // regular Ir1Op::Call → Ir3Instruction::Call lowering path
             // so the interpreter can set up a call frame and execute the

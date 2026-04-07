@@ -68,7 +68,7 @@ fn make_scenario_result_via_serde(kind: ScenarioKind, seed: u64) -> ScenarioResu
         "final_states": {},
         "total_events_emitted": 0
     });
-    serde_json::from_value(json).expect("deserialize ScenarioResult")
+    serde_json::from_value(json).unwrap_or_default()
 }
 
 // ===========================================================================

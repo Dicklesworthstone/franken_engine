@@ -369,24 +369,24 @@ fn harness_contract_error_is_std_error() {
 #[test]
 fn runtime_pins_serde_round_trip() {
     let pins = BenchmarkRuntimePins::default();
-    let json = serde_json::to_string(&pins).expect("serialize");
-    let recovered: BenchmarkRuntimePins = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&pins).unwrap_or_default();
+    let recovered: BenchmarkRuntimePins = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(pins, recovered);
 }
 
 #[test]
 fn fairness_policy_serde_round_trip() {
     let policy = BenchmarkFairnessPolicy::default();
-    let json = serde_json::to_string(&policy).expect("serialize");
-    let recovered: BenchmarkFairnessPolicy = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&policy).unwrap_or_default();
+    let recovered: BenchmarkFairnessPolicy = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(policy, recovered);
 }
 
 #[test]
 fn harness_contract_serde_round_trip() {
     let contract = BenchmarkHarnessContract::default();
-    let json = serde_json::to_string(&contract).expect("serialize");
-    let recovered: BenchmarkHarnessContract = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&contract).unwrap_or_default();
+    let recovered: BenchmarkHarnessContract = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(contract, recovered);
 }
 

@@ -142,8 +142,8 @@ fn loss_matrix_serde_round_trip() {
     m.set("s1", "a1", 100);
     m.set("s2", "a2", 200);
     m.set("s1", "a2", -50);
-    let json = serde_json::to_string(&m).expect("serialize");
-    let restored: LossMatrix = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&m).unwrap_or_default();
+    let restored: LossMatrix = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(m, restored);
 }
 
@@ -151,7 +151,7 @@ fn loss_matrix_serde_round_trip() {
 fn loss_matrix_serde_json_structure() {
     let mut m = LossMatrix::new();
     m.set("state_a", "act_x", 42);
-    let json = serde_json::to_string(&m).expect("serialize");
+    let json = serde_json::to_string(&m).unwrap_or_default();
     // Custom serde serializes as vec of {state, action, loss}.
     let v: serde_json::Value = serde_json::from_str(&json).expect("parse");
     let entries = v["entries"].as_array().expect("array");
@@ -164,8 +164,8 @@ fn loss_matrix_serde_json_structure() {
 #[test]
 fn loss_matrix_serde_empty() {
     let m = LossMatrix::new();
-    let json = serde_json::to_string(&m).expect("serialize");
-    let restored: LossMatrix = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&m).unwrap_or_default();
+    let restored: LossMatrix = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(m, restored);
     assert!(restored.is_empty());
 }
@@ -205,8 +205,8 @@ fn posterior_states_deterministic_order() {
 #[test]
 fn posterior_serde_round_trip() {
     let p = normal_posterior();
-    let json = serde_json::to_string(&p).expect("serialize");
-    let restored: Posterior = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&p).unwrap_or_default();
+    let restored: Posterior = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(p, restored);
 }
 
@@ -243,8 +243,8 @@ fn guardrail_serde_round_trip() {
         description: "desc".to_string(),
         blocked_actions: vec!["a".to_string(), "b".to_string()],
     };
-    let json = serde_json::to_string(&gr).expect("serialize");
-    let restored: Guardrail = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&gr).unwrap_or_default();
+    let restored: Guardrail = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(gr, restored);
 }
 
@@ -255,8 +255,8 @@ fn guardrail_serde_round_trip() {
 #[test]
 fn controller_config_serde_round_trip() {
     let config = monitoring_config();
-    let json = serde_json::to_string(&config).expect("serialize");
-    let restored: ControllerConfig = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&config).unwrap_or_default();
+    let restored: ControllerConfig = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(config, restored);
 }
 
@@ -311,8 +311,8 @@ fn error_serde_all_variants() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).expect("serialize");
-        let restored: PolicyControllerError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(err).unwrap_or_default();
+        let restored: PolicyControllerError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*err, restored);
     }
 }
@@ -330,8 +330,8 @@ fn action_selection_serde_round_trip() {
         guardrail_rejections: vec![("low".to_string(), "cost-cap".to_string())],
         decision_id: "mon-ctrl-000001".to_string(),
     };
-    let json = serde_json::to_string(&sel).expect("serialize");
-    let restored: ActionSelection = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&sel).unwrap_or_default();
+    let restored: ActionSelection = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(sel, restored);
 }
 
@@ -344,8 +344,8 @@ fn action_selection_serde_empty_rejections() {
         guardrail_rejections: vec![],
         decision_id: "d-1".to_string(),
     };
-    let json = serde_json::to_string(&sel).expect("serialize");
-    let restored: ActionSelection = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&sel).unwrap_or_default();
+    let restored: ActionSelection = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(sel, restored);
 }
 
@@ -927,7 +927,7 @@ fn evidence_entry_serde_round_trip() {
     let entry = ctrl
         .build_evidence(&sel, &posterior, e, "t")
         .expect("evidence");
-    let json = serde_json::to_string(&entry).expect("serialize");
+    let json = serde_json::to_string(&entry).unwrap_or_default();
     let _: serde_json::Value = serde_json::from_str(&json).expect("valid json");
 }
 

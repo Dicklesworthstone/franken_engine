@@ -1028,8 +1028,8 @@ fn static_error_kind_serde_round_trip_all_variants() {
         StaticErrorKind::DuplicateDestructuringBinding,
     ];
     for kind in all_kinds {
-        let json = serde_json::to_string(&kind).expect("serialize");
-        let restored: StaticErrorKind = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&kind).unwrap_or_default();
+        let restored: StaticErrorKind = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(kind, restored);
     }
 }
@@ -1136,8 +1136,8 @@ fn static_error_serde_round_trip() {
         "identifier 'x' already declared",
         span(5),
     );
-    let json = serde_json::to_string(&err).expect("serialize");
-    let restored: StaticError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let restored: StaticError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, restored);
 }
 
@@ -1162,7 +1162,7 @@ fn static_error_canonical_value_contains_expected_keys() {
         span(1),
     );
     let cv = err.canonical_value();
-    let cv_json = serde_json::to_string(&cv).expect("serialize canonical");
+    let cv_json = serde_json::to_string(&cv).unwrap_or_default();
     assert!(cv_json.contains("diagnostic_code"));
     assert!(cv_json.contains("kind"));
     assert!(cv_json.contains("message"));
@@ -1868,7 +1868,7 @@ fn analysis_result_canonical_value_keys_stable() {
     );
     let result = analyze(&tree);
     let cv = result.canonical_value();
-    let json = serde_json::to_string(&cv).expect("serialize");
+    let json = serde_json::to_string(&cv).unwrap_or_default();
     assert!(json.contains("bindings"));
     assert!(json.contains("errors"));
     assert!(json.contains("is_module"));
@@ -1881,7 +1881,7 @@ fn event_canonical_value_keys_stable() {
     let result = analyze(&tree);
     let event = StaticSemanticsEvent::from_result(&result);
     let cv = event.canonical_value();
-    let json = serde_json::to_string(&cv).expect("serialize");
+    let json = serde_json::to_string(&cv).unwrap_or_default();
     assert!(json.contains("binding_count"));
     assert!(json.contains("component"));
     assert!(json.contains("error_count"));

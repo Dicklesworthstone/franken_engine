@@ -236,6 +236,16 @@ pub enum BuiltinId {
     GlobalDecodeURI,
     GlobalEncodeURIComponent,
     GlobalDecodeURIComponent,
+
+    // -- Function.prototype --
+    FunctionPrototypeCall,
+    FunctionPrototypeApply,
+    FunctionPrototypeBind,
+
+    // -- Console --
+    ConsoleLog,
+    ConsoleError,
+    ConsoleWarn,
 }
 
 impl BuiltinId {
@@ -402,6 +412,12 @@ impl BuiltinId {
             Self::GlobalDecodeURI => "decodeURI",
             Self::GlobalEncodeURIComponent => "encodeURIComponent",
             Self::GlobalDecodeURIComponent => "decodeURIComponent",
+            Self::FunctionPrototypeCall => "Function.prototype.call",
+            Self::FunctionPrototypeApply => "Function.prototype.apply",
+            Self::FunctionPrototypeBind => "Function.prototype.bind",
+            Self::ConsoleLog => "console.log",
+            Self::ConsoleError => "console.error",
+            Self::ConsoleWarn => "console.warn",
         }
     }
 }
@@ -2107,8 +2123,7 @@ fn build_collection_trace(
     mutated_keys: Vec<String>,
     events: Vec<CollectionMutationEvent>,
 ) -> CollectionMutationTrace {
-    let seed = serde_json::to_string(&events)
-        .expect("collection mutation events should serialize for deterministic hashing");
+    let seed = serde_json::to_string(&events).unwrap_or_default();
     let digest = hex::encode(Sha256::digest(
         format!(
             "{}|{}|{}|{}|{}|{}",
@@ -3424,10 +3439,8 @@ fn build_string_representation_receipt(
             segment_count,
             flatten_required,
             flatten_budget_exhausted,
-            serde_json::to_string(&kind)
-                .expect("string representation kind should serialize for deterministic hashing"),
-            serde_json::to_string(&observation_mode)
-                .expect("string observation mode should serialize for deterministic hashing"),
+            serde_json::to_string(&kind).unwrap_or_default(),
+            serde_json::to_string(&observation_mode).unwrap_or_default(),
             view_eligible
         )
         .as_bytes(),
@@ -6414,10 +6427,9 @@ mod tests {
         let eligibility =
             require_string_fast_path_eligibility(StringFastPathConsumer::Cache, Some(receipt_a))
                 .unwrap();
-        let serialized =
-            serde_json::to_string(&eligibility).expect("serialize string fast-path eligibility");
+        let serialized = serde_json::to_string(&eligibility).unwrap_or_default();
         let round_trip: StringFastPathEligibility =
-            serde_json::from_str(&serialized).expect("deserialize string fast-path eligibility");
+            serde_json::from_str(&serialized).unwrap_or_default();
         assert_eq!(round_trip, eligibility);
     }
 

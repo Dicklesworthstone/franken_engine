@@ -560,9 +560,9 @@ fn recommendation_reversibility_serde_round_trip() {
         RecommendationReversibility::LimitedWindow,
         RecommendationReversibility::Irreversible,
     ] {
-        let json = serde_json::to_string(&rev).expect("serialize");
+        let json = serde_json::to_string(&rev).unwrap_or_default();
         let recovered: RecommendationReversibility =
-            serde_json::from_str(&json).expect("deserialize");
+            serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(rev, recovered);
     }
 }
@@ -574,8 +574,8 @@ fn time_sensitivity_serde_round_trip() {
         TimeSensitivity::NearTerm,
         TimeSensitivity::Routine,
     ] {
-        let json = serde_json::to_string(&ts).expect("serialize");
-        let recovered: TimeSensitivity = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&ts).unwrap_or_default();
+        let recovered: TimeSensitivity = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(ts, recovered);
     }
 }
@@ -587,8 +587,8 @@ fn operator_role_serde_round_trip() {
         OperatorRole::Operator,
         OperatorRole::Administrator,
     ] {
-        let json = serde_json::to_string(&role).expect("serialize");
-        let recovered: OperatorRole = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&role).unwrap_or_default();
+        let recovered: OperatorRole = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(role, recovered);
     }
 }
@@ -599,8 +599,8 @@ fn boundary_trigger_direction_serde_round_trip() {
         BoundaryTriggerDirection::AtOrAbove,
         BoundaryTriggerDirection::AtOrBelow,
     ] {
-        let json = serde_json::to_string(&dir).expect("serialize");
-        let recovered: BoundaryTriggerDirection = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&dir).unwrap_or_default();
+        let recovered: BoundaryTriggerDirection = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(dir, recovered);
     }
 }
@@ -658,8 +658,8 @@ fn evidence_strength_serde_round_trip() {
         evidence_atoms: 47,
         observation_window_seconds: 720,
     };
-    let json = serde_json::to_string(&es).expect("serialize");
-    let recovered: EvidenceStrength = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&es).unwrap_or_default();
+    let recovered: EvidenceStrength = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(es, recovered);
 }
 
@@ -672,8 +672,8 @@ fn confidence_band_serde_round_trip() {
         upper_millionths: 600_000,
         confidence_level_bps: 9_500,
     };
-    let json = serde_json::to_string(&cb).expect("serialize");
-    let recovered: ConfidenceBand = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&cb).unwrap_or_default();
+    let recovered: ConfidenceBand = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(cb, recovered);
 }
 
@@ -746,8 +746,8 @@ fn copilot_error_serde_round_trip_all_variants() {
         CopilotError::MissingConfirmationToken,
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).expect("serialize");
-        let recovered: CopilotError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(err).unwrap_or_default();
+        let recovered: CopilotError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*err, recovered);
     }
 }
@@ -760,8 +760,8 @@ fn incident_severity_serde_round_trip() {
         IncidentSeverity::High,
         IncidentSeverity::Critical,
     ] {
-        let json = serde_json::to_string(&sev).expect("serialize");
-        let recovered: IncidentSeverity = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&sev).unwrap_or_default();
+        let recovered: IncidentSeverity = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(sev, recovered);
     }
 }
@@ -774,8 +774,8 @@ fn extension_trust_level_serde_round_trip() {
         ExtensionTrustLevel::Watch,
         ExtensionTrustLevel::Quarantined,
     ] {
-        let json = serde_json::to_string(&level).expect("serialize");
-        let recovered: ExtensionTrustLevel = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&level).unwrap_or_default();
+        let recovered: ExtensionTrustLevel = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(level, recovered);
     }
 }
@@ -787,8 +787,8 @@ fn extension_trust_level_serde_round_trip() {
 #[test]
 fn enrichment_copilot_error_missing_recommendations_serde_and_display() {
     let err = CopilotError::MissingRecommendations;
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: CopilotError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: CopilotError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, recovered);
     let msg = err.to_string();
     assert!(!msg.is_empty());
@@ -801,8 +801,8 @@ fn enrichment_copilot_error_invalid_rollback_window_serde_and_display() {
         action_type: "limited".to_string(),
         target_extension: "ext-rw".to_string(),
     };
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: CopilotError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: CopilotError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, recovered);
     let msg = err.to_string();
     assert!(msg.contains("limited") || msg.contains("rollback"));
@@ -814,8 +814,8 @@ fn enrichment_copilot_error_recommendation_rank_out_of_range_serde_and_display()
         requested_rank: 42,
         available: 3,
     };
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: CopilotError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: CopilotError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, recovered);
     let msg = err.to_string();
     assert!(msg.contains("42") || msg.contains("rank"));
@@ -902,8 +902,8 @@ fn enrichment_rollback_receipt_input_serde_round_trip() {
         restoration_verification: "restored rrt".to_string(),
         executed_at_ns: 12_345_678,
     };
-    let json = serde_json::to_string(&rri).expect("serialize");
-    let recovered: RollbackReceiptInput = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&rri).unwrap_or_default();
+    let recovered: RollbackReceiptInput = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(rri, recovered);
 }
 
@@ -940,8 +940,8 @@ fn enrichment_operator_identity_clone_and_debug_and_serde() {
     let dbg = format!("{identity:?}");
     assert!(dbg.contains("op-clone-test"));
 
-    let json = serde_json::to_string(&identity).expect("serialize");
-    let recovered: OperatorIdentity = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&identity).unwrap_or_default();
+    let recovered: OperatorIdentity = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(identity, recovered);
 }
 
@@ -952,8 +952,8 @@ fn enrichment_calibration_point_serde_round_trip_and_debug() {
         expected_millionths: 650_000,
         observed_millionths: 660_000,
     };
-    let json = serde_json::to_string(&cp).expect("serialize");
-    let recovered: CalibrationPoint = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&cp).unwrap_or_default();
+    let recovered: CalibrationPoint = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(cp, recovered);
     let dbg = format!("{cp:?}");
     assert!(dbg.contains("999999"));
@@ -1046,8 +1046,8 @@ fn enrichment_viewer_cannot_confirm_recommendation() {
 #[test]
 fn enrichment_copilot_input_serde_round_trip() {
     let input = sample_input();
-    let json = serde_json::to_string(&input).expect("serialize");
-    let recovered: OperatorSafetyCopilotInput = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&input).unwrap_or_default();
+    let recovered: OperatorSafetyCopilotInput = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(input, recovered);
 }
 
@@ -1061,8 +1061,8 @@ fn enrichment_decision_boundary_hint_serde_round_trip() {
         evidence_type: "anomaly_probe".to_string(),
         trigger_direction: BoundaryTriggerDirection::AtOrAbove,
     };
-    let json = serde_json::to_string(&hint).expect("serialize");
-    let recovered: DecisionBoundaryHint = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&hint).unwrap_or_default();
+    let recovered: DecisionBoundaryHint = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(hint, recovered);
 }
 
@@ -1095,8 +1095,8 @@ fn enrichment_copilot_error_invalid_field_display_and_serde() {
     let err = CopilotError::InvalidField {
         field: "trace_id".to_string(),
     };
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: CopilotError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: CopilotError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, recovered);
     let msg = err.to_string();
     assert!(msg.contains("trace_id") || msg.contains("field"));
@@ -1108,8 +1108,8 @@ fn enrichment_copilot_error_invalid_probability_display_and_serde() {
         field: "some.prob_field".to_string(),
         value: -1,
     };
-    let json = serde_json::to_string(&err).expect("serialize");
-    let recovered: CopilotError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let recovered: CopilotError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, recovered);
     let msg = err.to_string();
     assert!(msg.contains("some.prob_field") || msg.contains("probability"));

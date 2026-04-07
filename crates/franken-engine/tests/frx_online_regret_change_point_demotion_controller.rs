@@ -22,6 +22,7 @@ use frankenengine_engine::runtime_decision_core::{
     FallbackReason, LaneId, RegimeEstimate, RoutingDecisionInput, RuntimeDecisionCore,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
 fn repo_root() -> PathBuf {
@@ -67,6 +68,14 @@ fn neutral_observation(lane: LaneChoice) -> LaneObservation {
         safe_mode_entered: false,
         compatibility_errors: 0,
     }
+}
+
+fn serde_round_trip<T>(value: &T) -> T
+where
+    T: Serialize + DeserializeOwned,
+{
+    let json = serde_json::to_string(value).expect("serialize round-trip value");
+    serde_json::from_str(&json).expect("deserialize round-trip value")
 }
 
 #[test]
@@ -442,8 +451,7 @@ fn neutral_observation_wasm_sets_lane() {
 #[test]
 fn lane_choice_serde_roundtrip() {
     for lane in [LaneChoice::Js, LaneChoice::Wasm] {
-        let json = serde_json::to_string(&lane).expect("serialize");
-        let recovered: LaneChoice = serde_json::from_str(&json).expect("deserialize");
+        let recovered: LaneChoice = serde_round_trip(&lane);
         assert_eq!(recovered, lane);
     }
 }
@@ -453,8 +461,7 @@ fn lane_choice_serde_roundtrip() {
 #[test]
 fn routing_policy_serde_roundtrip() {
     for policy in [RoutingPolicy::Conservative, RoutingPolicy::Adaptive] {
-        let json = serde_json::to_string(&policy).expect("serialize");
-        let recovered: RoutingPolicy = serde_json::from_str(&json).expect("deserialize");
+        let recovered: RoutingPolicy = serde_round_trip(&policy);
         assert_eq!(recovered, policy);
     }
 }
@@ -467,8 +474,7 @@ fn demotion_reason_regret_serde_roundtrip() {
         realized_millionths: 100,
         bound_millionths: 50,
     };
-    let json = serde_json::to_string(&reason).expect("serialize");
-    let recovered: DemotionReason = serde_json::from_str(&json).expect("deserialize");
+    let recovered: DemotionReason = serde_round_trip(&reason);
     assert_eq!(recovered, reason);
 }
 
@@ -478,8 +484,7 @@ fn demotion_reason_change_point_serde_roundtrip() {
         cusum_stat_millionths: 200,
         threshold_millionths: 100,
     };
-    let json = serde_json::to_string(&reason).expect("serialize");
-    let recovered: DemotionReason = serde_json::from_str(&json).expect("deserialize");
+    let recovered: DemotionReason = serde_round_trip(&reason);
     assert_eq!(recovered, reason);
 }
 
@@ -553,8 +558,7 @@ fn change_point_monitor_serde_roundtrip() {
         drift_millionths: 50_000,
         min_observations: 10,
     });
-    let json = serde_json::to_string(&monitor).expect("serialize");
-    let recovered: ChangePointMonitor = serde_json::from_str(&json).expect("deserialize");
+    let recovered: ChangePointMonitor = serde_round_trip(&monitor);
     assert_eq!(recovered.observation_count, 0);
 }
 
@@ -567,8 +571,7 @@ fn conformal_state_serde_roundtrip() {
         min_observations: 50,
         window_size: 100,
     });
-    let json = serde_json::to_string(&state).expect("serialize");
-    let recovered: ConformalState = serde_json::from_str(&json).expect("deserialize");
+    let recovered: ConformalState = serde_round_trip(&state);
     assert_eq!(recovered.config.target_coverage_millionths, 900_000);
 }
 
@@ -581,8 +584,7 @@ fn risk_budget_serde_roundtrip() {
         compatibility_error_budget: 10,
         regret_budget_millionths: 100_000,
     };
-    let json = serde_json::to_string(&budget).expect("serialize");
-    let recovered: RiskBudget = serde_json::from_str(&json).expect("deserialize");
+    let recovered: RiskBudget = serde_round_trip(&budget);
     assert_eq!(recovered.tail_latency_budget_us, 5_000);
     assert_eq!(recovered.regret_budget_millionths, 100_000);
 }
@@ -592,8 +594,7 @@ fn risk_budget_serde_roundtrip() {
 #[test]
 fn routing_decision_input_serde_roundtrip() {
     let input = make_input(1_000, true, 99);
-    let json = serde_json::to_string(&input).expect("serialize");
-    let recovered: RoutingDecisionInput = serde_json::from_str(&json).expect("deserialize");
+    let recovered: RoutingDecisionInput = serde_round_trip(&input);
     assert_eq!(recovered.observed_latency_us, 1_000);
     assert_eq!(recovered.timestamp_ns, 99);
 }
@@ -603,8 +604,7 @@ fn routing_decision_input_serde_roundtrip() {
 #[test]
 fn lane_observation_serde_roundtrip() {
     let obs = neutral_observation(LaneChoice::Wasm);
-    let json = serde_json::to_string(&obs).expect("serialize");
-    let recovered: LaneObservation = serde_json::from_str(&json).expect("deserialize");
+    let recovered: LaneObservation = serde_round_trip(&obs);
     assert_eq!(recovered.lane, LaneChoice::Wasm);
     assert!(recovered.success);
 }
@@ -664,8 +664,7 @@ fn change_point_config_serde_roundtrip() {
         drift_millionths: 25_000,
         min_observations: 42,
     };
-    let json = serde_json::to_string(&config).expect("serialize");
-    let recovered: ChangePointConfig = serde_json::from_str(&json).expect("deserialize");
+    let recovered: ChangePointConfig = serde_round_trip(&config);
     assert_eq!(recovered.threshold_millionths, 750_000);
     assert_eq!(recovered.drift_millionths, 25_000);
     assert_eq!(recovered.min_observations, 42);
@@ -680,8 +679,7 @@ fn conformal_config_serde_roundtrip() {
         min_observations: 100,
         window_size: 50,
     };
-    let json = serde_json::to_string(&config).expect("serialize");
-    let recovered: ConformalConfig = serde_json::from_str(&json).expect("deserialize");
+    let recovered: ConformalConfig = serde_round_trip(&config);
     assert_eq!(recovered.target_coverage_millionths, 800_000);
     assert_eq!(recovered.min_observations, 100);
     assert_eq!(recovered.window_size, 50);
@@ -692,8 +690,7 @@ fn conformal_config_serde_roundtrip() {
 #[test]
 fn router_config_default_serde_roundtrip() {
     let config = RouterConfig::default_config();
-    let json = serde_json::to_string(&config).expect("serialize");
-    let recovered: RouterConfig = serde_json::from_str(&json).expect("deserialize");
+    let recovered: RouterConfig = serde_round_trip(&config);
     assert_eq!(
         recovered.risk_budget.tail_latency_budget_us,
         config.risk_budget.tail_latency_budget_us
@@ -744,8 +741,7 @@ fn enrichment_demotion_reason_conformal_serde_roundtrip() {
         coverage_millionths: 800_000,
         target_millionths: 900_000,
     };
-    let json = serde_json::to_string(&reason).expect("serialize");
-    let recovered: DemotionReason = serde_json::from_str(&json).expect("deserialize");
+    let recovered: DemotionReason = serde_round_trip(&reason);
     assert_eq!(recovered, reason);
 }
 

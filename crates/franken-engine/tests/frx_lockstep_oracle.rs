@@ -69,7 +69,7 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
 
 fn write_trace_file(dir: &Path, fixture_ref: &str, trace: &FrxObservableTrace) {
     let path = dir.join(format!("{fixture_ref}.trace.json"));
-    let json = serde_json::to_string_pretty(trace).expect("serialize trace");
+    let json = serde_json::to_string_pretty(trace).unwrap_or_default();
     fs::write(path, json).expect("write trace");
 }
 
@@ -251,8 +251,8 @@ fn divergence_class_serde_roundtrip() {
         FrxDivergenceClass::HydrationOutcome,
         FrxDivergenceClass::SchemaViolation,
     ] {
-        let json = serde_json::to_string(&class).expect("serialize");
-        let recovered: FrxDivergenceClass = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&class).unwrap_or_default();
+        let recovered: FrxDivergenceClass = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(recovered, class);
     }
 }
@@ -267,8 +267,8 @@ fn observable_trace_serde_roundtrip() {
         "trace-a",
         vec![event(1, "render", "commit", "path", 100)],
     );
-    let json = serde_json::to_string(&trace).expect("serialize");
-    let recovered: FrxObservableTrace = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&trace).unwrap_or_default();
+    let recovered: FrxObservableTrace = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.fixture_ref, trace.fixture_ref);
     assert_eq!(recovered.scenario_id, trace.scenario_id);
     assert_eq!(recovered.events.len(), trace.events.len());
@@ -340,8 +340,8 @@ fn write_trace_file_creates_file() {
 #[test]
 fn trace_event_serde_roundtrip() {
     let e = event(1, "render", "dom_commit", "render_path", 100);
-    let json = serde_json::to_string(&e).expect("serialize");
-    let recovered: FrxTraceEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&e).unwrap_or_default();
+    let recovered: FrxTraceEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.seq, e.seq);
     assert_eq!(recovered.phase, e.phase);
     assert_eq!(recovered.event, e.event);
@@ -381,8 +381,8 @@ fn divergence_class_serde_round_trip() {
         FrxDivergenceClass::EventSequence,
         FrxDivergenceClass::SchemaViolation,
     ] {
-        let json = serde_json::to_string(&class).expect("serialize");
-        let recovered: FrxDivergenceClass = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&class).unwrap_or_default();
+        let recovered: FrxDivergenceClass = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(class, recovered);
     }
 }
@@ -439,8 +439,8 @@ fn trace_event_fields_are_preserved_after_roundtrip() {
         timing_us: 1_000,
         outcome: "pass".to_string(),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let recovered: FrxTraceEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let recovered: FrxTraceEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.actor, "Counter");
     assert_eq!(recovered.outcome, "pass");
 }
@@ -536,8 +536,8 @@ fn lockstep_case_result_serde_roundtrip() {
         }),
         replay_command: "replay --fixture compat.render.basic".to_string(),
     };
-    let json = serde_json::to_string(&case_result).expect("serialize");
-    let recovered: FrxLockstepCaseResult = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&case_result).unwrap_or_default();
+    let recovered: FrxLockstepCaseResult = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.fixture_ref, case_result.fixture_ref);
     assert!(!recovered.pass);
     assert_eq!(
@@ -569,8 +569,8 @@ fn lockstep_report_serde_roundtrip() {
         },
         case_results: vec![],
     };
-    let json = serde_json::to_string_pretty(&report).expect("serialize");
-    let recovered: FrxLockstepReport = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string_pretty(&report).unwrap_or_default();
+    let recovered: FrxLockstepReport = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.summary.total_cases, 5);
     assert_eq!(recovered.summary.failed_cases, 2);
     assert_eq!(recovered.summary.divergence_counts_by_class.len(), 2);

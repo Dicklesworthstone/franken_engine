@@ -2689,8 +2689,8 @@ mod tests {
             ReplacementKind::RePromotion,
         ];
         for kind in &kinds {
-            let json = serde_json::to_string(kind).expect("serialize");
-            let decoded: ReplacementKind = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(kind).unwrap_or_default();
+            let decoded: ReplacementKind = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*kind, decoded);
         }
     }
@@ -2704,8 +2704,8 @@ mod tests {
         log.append(r, ReplacementKind::DelegateToNative, 1000)
             .unwrap();
         let entry = &log.entries()[0];
-        let json = serde_json::to_vec(entry).expect("serialize");
-        let decoded: LineageLogEntry = serde_json::from_slice(&json).expect("deserialize");
+        let json = serde_json::to_vec(entry).unwrap_or_default();
+        let decoded: LineageLogEntry = serde_json::from_slice(&json).unwrap_or_default();
         assert_eq!(*entry, decoded);
     }
 
@@ -2718,8 +2718,8 @@ mod tests {
         log.create_checkpoint(1000, SecurityEpoch::from_raw(1))
             .unwrap();
         let cp = &log.checkpoints()[0];
-        let json = serde_json::to_vec(cp).expect("serialize");
-        let decoded: LogCheckpoint = serde_json::from_slice(&json).expect("deserialize");
+        let json = serde_json::to_vec(cp).unwrap_or_default();
+        let decoded: LogCheckpoint = serde_json::from_slice(&json).unwrap_or_default();
         assert_eq!(*cp, decoded);
     }
 
@@ -2732,8 +2732,8 @@ mod tests {
                 .unwrap();
         }
         let proof = log.inclusion_proof(2).expect("proof exists");
-        let json = serde_json::to_vec(&proof).expect("serialize");
-        let decoded: InclusionProof = serde_json::from_slice(&json).expect("deserialize");
+        let json = serde_json::to_vec(&proof).unwrap_or_default();
+        let decoded: InclusionProof = serde_json::from_slice(&json).unwrap_or_default();
         assert_eq!(proof, decoded);
         assert!(verify_inclusion_proof(&decoded));
     }
@@ -2752,8 +2752,8 @@ mod tests {
         }
 
         let proof = log.consistency_proof(0, 1).expect("proof");
-        let json = serde_json::to_vec(&proof).expect("serialize");
-        let decoded: ConsistencyProof = serde_json::from_slice(&json).expect("deserialize");
+        let json = serde_json::to_vec(&proof).unwrap_or_default();
+        let decoded: ConsistencyProof = serde_json::from_slice(&json).unwrap_or_default();
         assert_eq!(proof, decoded);
         assert!(verify_consistency_proof(&decoded));
     }
@@ -2768,8 +2768,8 @@ mod tests {
         }
         log.create_checkpoint(300, SecurityEpoch::from_raw(1))
             .unwrap();
-        let json = serde_json::to_vec(&log).expect("serialize");
-        let decoded: ReplacementLineageLog = serde_json::from_slice(&json).expect("deserialize");
+        let json = serde_json::to_vec(&log).unwrap_or_default();
+        let decoded: ReplacementLineageLog = serde_json::from_slice(&json).unwrap_or_default();
         assert_eq!(log.len(), decoded.len());
         assert_eq!(log.merkle_root(), decoded.merkle_root());
     }
@@ -2856,8 +2856,8 @@ mod tests {
             checkpoint_interval: 50,
             max_entries_in_memory: 1000,
         };
-        let json = serde_json::to_vec(&config).expect("serialize");
-        let decoded: LineageLogConfig = serde_json::from_slice(&json).expect("deserialize");
+        let json = serde_json::to_vec(&config).unwrap_or_default();
+        let decoded: LineageLogConfig = serde_json::from_slice(&json).unwrap_or_default();
         assert_eq!(config, decoded);
     }
 
@@ -2878,8 +2878,8 @@ mod tests {
             min_timestamp_ns: Some(100),
             max_timestamp_ns: Some(500),
         };
-        let json = serde_json::to_vec(&query).expect("serialize");
-        let decoded: LineageQuery = serde_json::from_slice(&json).expect("deserialize");
+        let json = serde_json::to_vec(&query).unwrap_or_default();
+        let decoded: LineageQuery = serde_json::from_slice(&json).unwrap_or_default();
         assert_eq!(query, decoded);
     }
 
@@ -2894,8 +2894,8 @@ mod tests {
         log.create_checkpoint(1000, SecurityEpoch::from_raw(1))
             .unwrap();
         let audit = log.audit();
-        let json = serde_json::to_vec(&audit).expect("serialize");
-        let decoded: AuditResult = serde_json::from_slice(&json).expect("deserialize");
+        let json = serde_json::to_vec(&audit).unwrap_or_default();
+        let decoded: AuditResult = serde_json::from_slice(&json).unwrap_or_default();
         assert_eq!(audit, decoded);
     }
 

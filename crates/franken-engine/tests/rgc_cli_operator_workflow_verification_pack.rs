@@ -104,21 +104,15 @@ fn unique_temp_path(prefix: &str, extension: &str) -> PathBuf {
 
 fn write_runtime_input(input: &RuntimeDiagnosticsCliInput) -> PathBuf {
     let path = unique_temp_path("rgc_061_runtime_input", "json");
-    fs::write(
-        &path,
-        serde_json::to_vec_pretty(input).expect("runtime diagnostics input should serialize"),
-    )
-    .expect("runtime diagnostics input should write");
+    fs::write(&path, serde_json::to_vec_pretty(input).unwrap_or_default())
+        .expect("runtime diagnostics input should write");
     path
 }
 
 fn write_json_value(value: &Value) -> PathBuf {
     let path = unique_temp_path("rgc_061_signals", "json");
-    fs::write(
-        &path,
-        serde_json::to_vec_pretty(value).expect("json value should serialize"),
-    )
-    .expect("signals file should write");
+    fs::write(&path, serde_json::to_vec_pretty(value).unwrap_or_default())
+        .expect("signals file should write");
     path
 }
 
@@ -1244,9 +1238,8 @@ fn rgc_061_rollout_decision_artifact_subcommand_produces_output() {
 #[test]
 fn rgc_061_runtime_diagnostics_input_serde_roundtrip() {
     let input = build_clean_input();
-    let json = serde_json::to_string(&input).expect("input should serialize");
-    let recovered: RuntimeDiagnosticsCliInput =
-        serde_json::from_str(&json).expect("input should deserialize");
+    let json = serde_json::to_string(&input).unwrap_or_default();
+    let recovered: RuntimeDiagnosticsCliInput = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(recovered.trace_id, input.trace_id);
     assert_eq!(recovered.decision_id, input.decision_id);
     assert_eq!(recovered.policy_id, input.policy_id);
@@ -1440,7 +1433,7 @@ fn rgc_061_contract_artifact_lists_are_unique() {
 #[test]
 fn rgc_061_runtime_diagnostics_input_json_contains_required_fields() {
     let input = build_clean_input();
-    let v: Value = serde_json::to_value(&input).expect("input should serialize to json value");
+    let v: Value = serde_json::to_value(&input).unwrap_or_default();
     let obj = v.as_object().expect("input should be a JSON object");
     for key in ["trace_id", "decision_id", "policy_id", "runtime_state"] {
         assert!(

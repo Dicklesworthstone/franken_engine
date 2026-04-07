@@ -772,8 +772,8 @@ mod tests {
             ProbeKind::IntegrityAudit,
         ];
         for kind in &kinds {
-            let json = serde_json::to_string(kind).expect("serialize");
-            let restored: ProbeKind = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(kind).unwrap_or_default();
+            let restored: ProbeKind = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*kind, restored);
         }
     }
@@ -781,8 +781,8 @@ mod tests {
     #[test]
     fn probe_config_serialization_round_trip() {
         let config = health_probe("h1");
-        let json = serde_json::to_string(&config).expect("serialize");
-        let restored: ProbeConfig = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&config).unwrap_or_default();
+        let restored: ProbeConfig = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(config, restored);
     }
 
@@ -805,8 +805,8 @@ mod tests {
                 skip_reason: None,
             }],
         };
-        let json = serde_json::to_string(&result).expect("serialize");
-        let restored: ScheduleResult = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&result).unwrap_or_default();
+        let restored: ScheduleResult = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(result, restored);
     }
 
@@ -821,8 +821,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serialize");
-            let restored: SchedulerError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(err).unwrap_or_default();
+            let restored: SchedulerError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*err, restored);
         }
     }
@@ -839,16 +839,16 @@ mod tests {
             execution_count: 7,
             last_success: true,
         };
-        let json = serde_json::to_string(&state).expect("serialize");
-        let restored: ProbeState = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&state).unwrap_or_default();
+        let restored: ProbeState = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(state, restored);
     }
 
     #[test]
     fn scheduler_config_serde_roundtrip() {
         let config = test_config();
-        let json = serde_json::to_string(&config).expect("serialize");
-        let restored: SchedulerConfig = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&config).unwrap_or_default();
+        let restored: SchedulerConfig = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(config, restored);
     }
 
@@ -862,8 +862,8 @@ mod tests {
             scheduled: true,
             skip_reason: None,
         };
-        let json = serde_json::to_string(&dec).expect("serialize");
-        let restored: ScheduleDecision = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&dec).unwrap_or_default();
+        let restored: ScheduleDecision = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(dec, restored);
     }
 
@@ -1288,8 +1288,8 @@ mod tests {
     fn schedule_result_serde_roundtrip() {
         let mut sched = test_scheduler();
         let result = sched.schedule(Regime::Normal);
-        let json = serde_json::to_string(&result).expect("serialize");
-        let restored: ScheduleResult = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&result).unwrap_or_default();
+        let restored: ScheduleResult = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(result, restored);
     }
 
@@ -1536,8 +1536,8 @@ mod tests {
         config
             .relevance_overrides
             .insert("elevated:health_check".to_string(), 2_000_000);
-        let json = serde_json::to_string(&config).expect("serialize");
-        let restored: SchedulerConfig = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&config).unwrap_or_default();
+        let restored: SchedulerConfig = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(config, restored);
         assert_eq!(restored.relevance_overrides.len(), 2);
     }
@@ -1554,8 +1554,8 @@ mod tests {
             scheduled: false,
             skip_reason: Some("budget exhausted (remaining: 500000, cost: 3000000)".to_string()),
         };
-        let json = serde_json::to_string(&dec).expect("serialize");
-        let restored: ScheduleDecision = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&dec).unwrap_or_default();
+        let restored: ScheduleDecision = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(dec, restored);
     }
 

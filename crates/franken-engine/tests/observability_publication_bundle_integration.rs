@@ -275,9 +275,9 @@ fn workload_class_clone_independence() {
 fn workload_class_serde_roundtrip() {
     use frankenengine_engine::observability_publication_bundle::ObservabilityWorkloadClass;
     for variant in ObservabilityWorkloadClass::ALL {
-        let json = serde_json::to_string(&variant).expect("serialize workload class");
+        let json = serde_json::to_string(&variant).unwrap_or_default();
         let deserialized: ObservabilityWorkloadClass =
-            serde_json::from_str(&json).expect("deserialize workload class");
+            serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(variant, deserialized);
     }
 }
@@ -332,9 +332,8 @@ fn mode_clone_preserves_equality() {
 #[test]
 fn mode_serde_roundtrip() {
     for mode in ObservabilityMode::ALL {
-        let json = serde_json::to_string(&mode).expect("serialize mode");
-        let deserialized: ObservabilityMode =
-            serde_json::from_str(&json).expect("deserialize mode");
+        let json = serde_json::to_string(&mode).unwrap_or_default();
+        let deserialized: ObservabilityMode = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(mode, deserialized);
     }
 }

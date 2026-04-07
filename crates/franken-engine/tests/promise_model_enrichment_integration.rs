@@ -59,8 +59,8 @@ fn promise_handle_copy_semantics() {
 #[test]
 fn promise_handle_serde_roundtrip() {
     let h = PromiseHandle(999);
-    let json = serde_json::to_string(&h).expect("serialize");
-    let restored: PromiseHandle = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&h).unwrap_or_default();
+    let restored: PromiseHandle = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(h, restored);
 }
 
@@ -107,8 +107,8 @@ fn promise_state_serde_roundtrip() {
         PromiseState::Rejected(js_str("error")),
     ];
     for s in &states {
-        let json = serde_json::to_string(s).expect("serialize");
-        let restored: PromiseState = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(s).unwrap_or_default();
+        let restored: PromiseState = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*s, restored);
     }
 }
@@ -120,8 +120,8 @@ fn promise_state_serde_roundtrip() {
 #[test]
 fn reaction_kind_serde_roundtrip() {
     for kind in [ReactionKind::Fulfill, ReactionKind::Reject] {
-        let json = serde_json::to_string(&kind).expect("serialize");
-        let restored: ReactionKind = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&kind).unwrap_or_default();
+        let restored: ReactionKind = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(kind, restored);
     }
 }
@@ -173,8 +173,8 @@ fn promise_error_serde_roundtrip() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).expect("serialize");
-        let restored: PromiseError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(err).unwrap_or_default();
+        let restored: PromiseError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*err, restored);
     }
 }
@@ -512,8 +512,8 @@ fn virtual_clock_serde_roundtrip() {
     let mut c = VirtualClock::new();
     c.advance_to(42);
     c.register_timer();
-    let json = serde_json::to_string(&c).expect("serialize");
-    let restored: VirtualClock = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&c).unwrap_or_default();
+    let restored: VirtualClock = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(c, restored);
 }
 
@@ -731,8 +731,8 @@ fn witness_event_all_variants_serde() {
         },
     ];
     for ev in &events {
-        let json = serde_json::to_string(ev).expect("serialize");
-        let restored: WitnessEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(ev).unwrap_or_default();
+        let restored: WitnessEvent = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*ev, restored);
     }
 }

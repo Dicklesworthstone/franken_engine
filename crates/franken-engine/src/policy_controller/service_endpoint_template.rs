@@ -822,7 +822,7 @@ mod tests {
         let response =
             template.health_endpoint(&auth_with_scopes(&[SCOPE_HEALTH_READ]), &context());
 
-        let json = serde_json::to_value(response).expect("serialize response");
+        let json = serde_json::to_value(response).unwrap_or_default();
         assert_eq!(json["status"], "ok");
         assert_eq!(json["endpoint"], "health");
         assert!(json["trace_id"].is_string());

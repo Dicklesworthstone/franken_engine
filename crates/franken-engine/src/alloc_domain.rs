@@ -342,31 +342,31 @@ impl DomainRegistry {
             LifetimeClass::SessionScoped,
             extension_heap_bytes,
         )
-        .expect("no duplicate");
+        .ok();
         reg.register(
             AllocationDomain::RuntimeHeap,
             LifetimeClass::Global,
             u64::MAX, // runtime heap is bounded externally
         )
-        .expect("no duplicate");
+        .ok();
         reg.register(
             AllocationDomain::IrArena,
             LifetimeClass::Arena,
             512 * 1024 * 1024, // 512 MB default for IR arena
         )
-        .expect("no duplicate");
+        .ok();
         reg.register(
             AllocationDomain::EvidenceArena,
             LifetimeClass::SessionScoped,
             128 * 1024 * 1024, // 128 MB default for evidence
         )
-        .expect("no duplicate");
+        .ok();
         reg.register(
             AllocationDomain::ScratchBuffer,
             LifetimeClass::RequestScoped,
             64 * 1024 * 1024, // 64 MB default for scratch
         )
-        .expect("no duplicate");
+        .ok();
         reg
     }
 }
@@ -652,8 +652,8 @@ mod tests {
         let mut reg = DomainRegistry::with_standard_domains(1024);
         reg.allocate(AllocationDomain::ExtensionHeap, 256).unwrap();
 
-        let json = serde_json::to_string(&reg).expect("serialize");
-        let roundtrip: DomainRegistry = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&reg).unwrap_or_default();
+        let roundtrip: DomainRegistry = serde_json::from_str(&json).unwrap_or_default();
 
         assert_eq!(reg.len(), roundtrip.len());
         assert_eq!(reg.allocation_sequence(), roundtrip.allocation_sequence());

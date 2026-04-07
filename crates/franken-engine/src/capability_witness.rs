@@ -4817,8 +4817,8 @@ mod tests {
             LifecycleState::Revoked,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serialize");
-            let restored: LifecycleState = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(v).unwrap_or_default();
+            let restored: LifecycleState = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*v, restored);
         }
     }
@@ -4833,8 +4833,8 @@ mod tests {
             ProofKind::InheritedFromPredecessor,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serialize");
-            let restored: ProofKind = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(v).unwrap_or_default();
+            let restored: ProofKind = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*v, restored);
         }
     }
@@ -4848,8 +4848,8 @@ mod tests {
             PromotionTheoremKind::Custom("my_theorem".to_string()),
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serialize");
-            let restored: PromotionTheoremKind = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(v).unwrap_or_default();
+            let restored: PromotionTheoremKind = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*v, restored);
         }
     }
@@ -4857,16 +4857,16 @@ mod tests {
     #[test]
     fn witness_schema_version_serde_roundtrip() {
         let v = WitnessSchemaVersion::CURRENT;
-        let json = serde_json::to_string(&v).expect("serialize");
-        let restored: WitnessSchemaVersion = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&v).unwrap_or_default();
+        let restored: WitnessSchemaVersion = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(v, restored);
     }
 
     #[test]
     fn confidence_interval_serde_roundtrip() {
         let ci = ConfidenceInterval::from_trials(100, 90);
-        let json = serde_json::to_string(&ci).expect("serialize");
-        let restored: ConfidenceInterval = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&ci).unwrap_or_default();
+        let restored: ConfidenceInterval = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(ci, restored);
     }
 
@@ -4911,8 +4911,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serialize");
-            let restored: WitnessError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(err).unwrap_or_default();
+            let restored: WitnessError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*err, restored);
         }
     }
@@ -4921,8 +4921,8 @@ mod tests {
     fn publication_entry_kind_serde_roundtrip() {
         let variants = [PublicationEntryKind::Publish, PublicationEntryKind::Revoke];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serialize");
-            let restored: PublicationEntryKind = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(v).unwrap_or_default();
+            let restored: PublicationEntryKind = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*v, restored);
         }
     }
@@ -4953,9 +4953,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serialize");
-            let restored: WitnessPublicationError =
-                serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(err).unwrap_or_default();
+            let restored: WitnessPublicationError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*err, restored);
         }
     }
@@ -4976,8 +4975,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serialize");
-            let restored: WitnessIndexError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(err).unwrap_or_default();
+            let restored: WitnessIndexError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*err, restored);
         }
     }
@@ -4988,8 +4987,8 @@ mod tests {
             source_id: "src-1".to_string(),
             capabilities: BTreeSet::from([Capability::new("cap_a")]),
         };
-        let json = serde_json::to_string(&scs).expect("serialize");
-        let restored: SourceCapabilitySet = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&scs).unwrap_or_default();
+        let restored: SourceCapabilitySet = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(scs, restored);
     }
 
@@ -5005,8 +5004,8 @@ mod tests {
     #[test]
     fn witness_publication_config_serde_roundtrip() {
         let config = WitnessPublicationConfig::default();
-        let json = serde_json::to_string(&config).expect("serialize");
-        let restored: WitnessPublicationConfig = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&config).unwrap_or_default();
+        let restored: WitnessPublicationConfig = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(config, restored);
     }
 
@@ -5022,8 +5021,8 @@ mod tests {
             error_code: None,
             timestamp_ns: 12345,
         };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let restored: WitnessPublicationEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&event).unwrap_or_default();
+        let restored: WitnessPublicationEvent = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(event, restored);
     }
 

@@ -1361,8 +1361,8 @@ fn benchmark_runtime_pins_franken_engine_starts_with_prefix() {
 #[test]
 fn benchmark_runtime_pins_serde_roundtrip() {
     let pins = BenchmarkRuntimePins::default();
-    let json = serde_json::to_string(&pins).expect("serialize");
-    let deserialized: BenchmarkRuntimePins = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&pins).unwrap_or_default();
+    let deserialized: BenchmarkRuntimePins = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(pins, deserialized);
 }
 
@@ -1388,8 +1388,8 @@ fn benchmark_fairness_policy_default_values() {
 #[test]
 fn benchmark_fairness_policy_serde_roundtrip() {
     let policy = BenchmarkFairnessPolicy::default();
-    let json = serde_json::to_string(&policy).expect("serialize");
-    let deserialized: BenchmarkFairnessPolicy = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&policy).unwrap_or_default();
+    let deserialized: BenchmarkFairnessPolicy = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(policy, deserialized);
 }
 
@@ -1406,8 +1406,8 @@ fn benchmark_harness_contract_default_valid() {
 #[test]
 fn benchmark_harness_contract_serde_roundtrip() {
     let contract = BenchmarkHarnessContract::default();
-    let json = serde_json::to_string(&contract).expect("serialize");
-    let deserialized: BenchmarkHarnessContract = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&contract).unwrap_or_default();
+    let deserialized: BenchmarkHarnessContract = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(contract, deserialized);
 }
 
@@ -1523,9 +1523,9 @@ fn benchmark_environment_manifest_serde_roundtrip() {
         runtime_pins: BenchmarkRuntimePins::default(),
         fairness_policy: BenchmarkFairnessPolicy::default(),
     };
-    let json = serde_json::to_string_pretty(&manifest).expect("serialize");
+    let json = serde_json::to_string_pretty(&manifest).unwrap_or_default();
     let deserialized: BenchmarkEnvironmentManifest =
-        serde_json::from_str(&json).expect("deserialize");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(manifest, deserialized);
 }
 

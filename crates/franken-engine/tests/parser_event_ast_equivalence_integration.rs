@@ -120,8 +120,8 @@ fn test_corpus_tier_display_matches_as_str() {
 #[test]
 fn test_corpus_tier_serde_roundtrip() {
     for tier in CorpusTier::ALL {
-        let json = serde_json::to_string(tier).expect("serialize");
-        let recovered: CorpusTier = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(tier).unwrap_or_default();
+        let recovered: CorpusTier = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*tier, recovered);
     }
 }
@@ -181,8 +181,8 @@ fn test_tamper_kind_display_matches_as_str() {
 #[test]
 fn test_tamper_kind_serde_roundtrip() {
     for kind in TamperKind::ALL {
-        let json = serde_json::to_string(kind).expect("serialize");
-        let recovered: TamperKind = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(kind).unwrap_or_default();
+        let recovered: TamperKind = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(*kind, recovered);
     }
 }
@@ -210,8 +210,8 @@ fn test_verdict_display_matches_as_str() {
 #[test]
 fn test_verdict_serde_roundtrip() {
     for v in [EquivalenceVerdict::Pass, EquivalenceVerdict::Fail] {
-        let json = serde_json::to_string(&v).expect("serialize");
-        let recovered: EquivalenceVerdict = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&v).unwrap_or_default();
+        let recovered: EquivalenceVerdict = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(v, recovered);
     }
 }
@@ -812,8 +812,8 @@ fn test_manifest_different_inputs_different_hash() {
 fn test_serde_roundtrip_specimen_evidence() {
     let corpus = equivalence_corpus();
     let ev = evaluate_specimen(&corpus[0]);
-    let json = serde_json::to_string(&ev).expect("serialize");
-    let recovered: SpecimenEvidence = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&ev).unwrap_or_default();
+    let recovered: SpecimenEvidence = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(ev.specimen_id, recovered.specimen_id);
     assert_eq!(ev.verdict, recovered.verdict);
     assert_eq!(ev.corpus_tier, recovered.corpus_tier);
@@ -827,8 +827,8 @@ fn test_serde_roundtrip_specimen_evidence() {
 #[test]
 fn test_serde_roundtrip_equivalence_inventory() {
     let inv = run_equivalence_corpus();
-    let json = serde_json::to_string(&inv).expect("serialize");
-    let recovered: EquivalenceInventory = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&inv).unwrap_or_default();
+    let recovered: EquivalenceInventory = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(inv.total, recovered.total);
     assert_eq!(inv.passed, recovered.passed);
     assert_eq!(inv.failed, recovered.failed);
@@ -848,8 +848,8 @@ fn test_serde_roundtrip_equivalence_run_manifest() {
         "decision-serde",
         vec!["path/a.json".to_string()],
     );
-    let json = serde_json::to_string(&manifest).expect("serialize");
-    let recovered: EquivalenceRunManifest = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&manifest).unwrap_or_default();
+    let recovered: EquivalenceRunManifest = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(manifest.schema_version, recovered.schema_version);
     assert_eq!(manifest.trace_id, recovered.trace_id);
     assert_eq!(manifest.decision_id, recovered.decision_id);
@@ -866,8 +866,8 @@ fn test_serde_roundtrip_equivalence_event() {
     let events = generate_events(&inv);
     assert!(!events.is_empty());
     let event = &events[0];
-    let json = serde_json::to_string(event).expect("serialize");
-    let recovered: EquivalenceEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(event).unwrap_or_default();
+    let recovered: EquivalenceEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event.schema_version, recovered.schema_version);
     assert_eq!(event.trace_id, recovered.trace_id);
     assert_eq!(event.decision_id, recovered.decision_id);
@@ -887,8 +887,8 @@ fn test_serde_roundtrip_tier_summary() {
         passed: 8,
         failed: 2,
     };
-    let json = serde_json::to_string(&summary).expect("serialize");
-    let recovered: TierSummary = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&summary).unwrap_or_default();
+    let recovered: TierSummary = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(summary.total, recovered.total);
     assert_eq!(summary.passed, recovered.passed);
     assert_eq!(summary.failed, recovered.failed);

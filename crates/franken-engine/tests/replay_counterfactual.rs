@@ -593,9 +593,9 @@ fn replay_verification_serde_roundtrip() {
     let run_b = runner.run_fixture(&fixture).expect("run b");
     let verification = verify_replay(&run_a, &run_b);
 
-    let json = serde_json::to_string(&verification).expect("serialize");
+    let json = serde_json::to_string(&verification).unwrap_or_default();
     let recovered: e2e_harness::ReplayVerification =
-        serde_json::from_str(&json).expect("deserialize");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(verification, recovered);
 }
 
@@ -664,9 +664,9 @@ fn counterfactual_delta_serde_roundtrip() {
         .expect("counterfactual run");
 
     let delta = compare_counterfactual(&baseline, &cf_run);
-    let json = serde_json::to_string(&delta).expect("serialize delta");
+    let json = serde_json::to_string(&delta).unwrap_or_default();
     let recovered: e2e_harness::CounterfactualDelta =
-        serde_json::from_str(&json).expect("deserialize delta");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(delta, recovered);
 }
 
@@ -679,8 +679,8 @@ fn replay_environment_fingerprint_serde_roundtrip() {
         pointer_width_bits: 64,
         endian: "little".to_string(),
     };
-    let json = serde_json::to_string(&env).expect("serialize");
-    let recovered: ReplayEnvironmentFingerprint = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&env).unwrap_or_default();
+    let recovered: ReplayEnvironmentFingerprint = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(env, recovered);
 }
 

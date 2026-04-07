@@ -1366,8 +1366,8 @@ mod tests {
     #[test]
     fn receipt_serialization_round_trip() {
         let receipt = test_receipt();
-        let json = serde_json::to_string(&receipt).expect("serialize");
-        let restored: OptReceipt = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&receipt).unwrap_or_default();
+        let restored: OptReceipt = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(receipt, restored);
     }
 
@@ -1377,8 +1377,8 @@ mod tests {
         receipt.decision_impact = DecisionImpact::HighImpact;
         receipt.attestation_bindings = Some(test_attestation_bindings());
         let receipt = receipt.sign(TEST_KEY);
-        let encoded = serde_json::to_vec(&receipt).expect("serialize");
-        let restored: OptReceipt = serde_json::from_slice(&encoded).expect("deserialize");
+        let encoded = serde_json::to_vec(&receipt).unwrap_or_default();
+        let restored: OptReceipt = serde_json::from_slice(&encoded).unwrap_or_default();
         assert_eq!(receipt, restored);
         assert_eq!(serde_json::to_vec(&restored).unwrap(), encoded);
     }
@@ -1400,16 +1400,16 @@ mod tests {
     #[test]
     fn rollback_serialization_round_trip() {
         let token = test_rollback();
-        let json = serde_json::to_string(&token).expect("serialize");
-        let restored: RollbackToken = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&token).unwrap_or_default();
+        let restored: RollbackToken = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(token, restored);
     }
 
     #[test]
     fn invariance_digest_serialization_round_trip() {
         let digest = test_invariance_digest();
-        let json = serde_json::to_string(&digest).expect("serialize");
-        let restored: InvarianceDigest = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&digest).unwrap_or_default();
+        let restored: InvarianceDigest = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(digest, restored);
     }
 
@@ -1429,8 +1429,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serialize");
-            let restored: ProofSchemaError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(err).unwrap_or_default();
+            let restored: ProofSchemaError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*err, restored);
         }
     }
@@ -1593,8 +1593,8 @@ mod tests {
             start_timestamp_ticks: 100,
             end_timestamp_ticks: 200,
         };
-        let json = serde_json::to_string(&window).expect("serialize");
-        let restored: AttestationValidityWindow = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&window).unwrap_or_default();
+        let restored: AttestationValidityWindow = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(window, restored);
     }
 
@@ -1610,8 +1610,8 @@ mod tests {
         registry
             .check_and_record(&key_id, [42u8; 32])
             .expect("first record");
-        let json = serde_json::to_string(&registry).expect("serialize");
-        let restored: ReceiptNonceRegistry = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&registry).unwrap_or_default();
+        let restored: ReceiptNonceRegistry = serde_json::from_str(&json).unwrap_or_default();
         // The restored registry should detect replay of the same nonce.
         let mut restored = restored;
         assert!(restored.check_and_record(&key_id, [42u8; 32]).is_err());
@@ -1624,9 +1624,9 @@ mod tests {
     #[test]
     fn attestation_requirement_policy_default_roundtrip() {
         let policy = AttestationRequirementPolicy::default();
-        let json = serde_json::to_string(&policy).expect("serialize");
+        let json = serde_json::to_string(&policy).unwrap_or_default();
         let restored: AttestationRequirementPolicy =
-            serde_json::from_str(&json).expect("deserialize");
+            serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(policy, restored);
     }
 

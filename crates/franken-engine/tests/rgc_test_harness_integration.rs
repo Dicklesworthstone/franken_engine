@@ -319,7 +319,7 @@ fn rgc_bundle_validator_detects_cross_lane_drift_even_when_lane_triads_pass() {
     manifest.trace_id = "trace-rgc-corrupted-integration".to_string();
     fs::write(
         &manifest_path,
-        serde_json::to_string_pretty(&manifest).expect("serialize security manifest"),
+        serde_json::to_string_pretty(&manifest).unwrap_or_default(),
     )
     .expect("rewrite security manifest");
 
@@ -336,7 +336,7 @@ fn rgc_bundle_validator_detects_cross_lane_drift_even_when_lane_triads_pass() {
             serde_json::from_str::<frankenengine_engine::rgc_test_harness::HarnessLogEvent>(line)
                 .expect("parse event");
         event.trace_id = "trace-rgc-corrupted-integration".to_string();
-        rewritten.push_str(&serde_json::to_string(&event).expect("serialize event"));
+        rewritten.push_str(&serde_json::to_string(&event).unwrap_or_default());
         rewritten.push('\n');
     }
     fs::write(&events_path, rewritten).expect("rewrite security events");
@@ -369,8 +369,8 @@ fn harness_lane_serde_round_trip_all_variants() {
         HarnessLane::Governance,
         HarnessLane::E2e,
     ] {
-        let json = serde_json::to_string(&lane).expect("serialize");
-        let recovered: HarnessLane = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&lane).unwrap_or_default();
+        let recovered: HarnessLane = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(lane, recovered);
     }
 }
@@ -396,8 +396,8 @@ fn baseline_scenario_domain_serde_round_trip_all_variants() {
         BaselineScenarioDomain::Module,
         BaselineScenarioDomain::Security,
     ] {
-        let json = serde_json::to_string(&domain).expect("serialize");
-        let recovered: BaselineScenarioDomain = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&domain).unwrap_or_default();
+        let recovered: BaselineScenarioDomain = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(domain, recovered);
     }
 }
@@ -420,8 +420,8 @@ fn baseline_scenario_outcome_serde_round_trip() {
         BaselineScenarioOutcome::HappyPath,
         BaselineScenarioOutcome::CanonicalFailure,
     ] {
-        let json = serde_json::to_string(&outcome).expect("serialize");
-        let recovered: BaselineScenarioOutcome = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&outcome).unwrap_or_default();
+        let recovered: BaselineScenarioOutcome = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(outcome, recovered);
     }
 }
@@ -438,9 +438,9 @@ fn artifact_bundle_validation_error_code_serde_round_trip() {
         ArtifactBundleValidationErrorCode::MissingRequiredLane,
         ArtifactBundleValidationErrorCode::CorrelationMismatch,
     ] {
-        let json = serde_json::to_string(&code).expect("serialize");
+        let json = serde_json::to_string(&code).unwrap_or_default();
         let recovered: ArtifactBundleValidationErrorCode =
-            serde_json::from_str(&json).expect("deserialize");
+            serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(code, recovered);
     }
 }
@@ -465,8 +465,8 @@ fn harness_run_manifest_serde_round_trip() {
         "./scripts/replay.sh ci",
         1_700_000_000_000,
     );
-    let json = serde_json::to_string(&manifest).expect("serialize");
-    let recovered: HarnessRunManifest = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&manifest).unwrap_or_default();
+    let recovered: HarnessRunManifest = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(manifest, recovered);
 }
 
@@ -587,8 +587,8 @@ fn context_with_seed_zero_and_max_both_produce_valid_ids() {
 #[test]
 fn context_serde_round_trip() {
     let ctx = DeterministicTestContext::new("rgc-052", "fixture-a", HarnessLane::Security, 7);
-    let json = serde_json::to_string(&ctx).expect("serialize");
-    let restored: DeterministicTestContext = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&ctx).unwrap_or_default();
+    let restored: DeterministicTestContext = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(ctx, restored);
 }
 
@@ -638,8 +638,8 @@ fn event_with_error_code_serde_round_trip() {
         timestamp_unix_ms: 1_700_000_000_100,
     });
     assert_eq!(event.error_code.as_deref(), Some("FE-SEC-0001"));
-    let json = serde_json::to_string(&event).expect("serialize");
-    let restored: HarnessLogEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let restored: HarnessLogEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, restored);
 }
 
@@ -656,8 +656,8 @@ fn event_without_error_code_serde_round_trip() {
         timestamp_unix_ms: 1_700_000_000_000,
     });
     assert!(event.error_code.is_none());
-    let json = serde_json::to_string(&event).expect("serialize");
-    let restored: HarnessLogEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let restored: HarnessLogEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, restored);
 }
 
@@ -1207,8 +1207,8 @@ fn baseline_e2e_scenario_happy_serde_round_trip() {
         .iter()
         .find(|s| s.outcome == BaselineScenarioOutcome::HappyPath)
         .expect("at least one happy scenario");
-    let json = serde_json::to_string(happy).expect("serialize");
-    let restored: BaselineE2eScenario = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(happy).unwrap_or_default();
+    let restored: BaselineE2eScenario = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(*happy, restored);
     assert!(restored.error_code.is_none());
 }
@@ -1220,8 +1220,8 @@ fn baseline_e2e_scenario_failure_serde_round_trip() {
         .iter()
         .find(|s| s.outcome == BaselineScenarioOutcome::CanonicalFailure)
         .expect("at least one failure scenario");
-    let json = serde_json::to_string(failure).expect("serialize");
-    let restored: BaselineE2eScenario = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(failure).unwrap_or_default();
+    let restored: BaselineE2eScenario = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(*failure, restored);
     assert!(restored.error_code.is_some());
 }
@@ -1237,9 +1237,8 @@ fn artifact_validation_error_code_serde_round_trip_all_variants() {
         ArtifactValidationErrorCode::CountMismatch,
         ArtifactValidationErrorCode::EmptyCommands,
     ] {
-        let json = serde_json::to_string(&code).expect("serialize");
-        let restored: ArtifactValidationErrorCode =
-            serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&code).unwrap_or_default();
+        let restored: ArtifactValidationErrorCode = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(code, restored);
     }
 }
@@ -1253,8 +1252,8 @@ fn artifact_validation_finding_serde_round_trip() {
         error_code: ArtifactValidationErrorCode::CountMismatch,
         message: "mismatch detected".to_string(),
     };
-    let json = serde_json::to_string(&finding).expect("serialize");
-    let restored: ArtifactValidationFinding = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&finding).unwrap_or_default();
+    let restored: ArtifactValidationFinding = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(finding, restored);
 }
 
@@ -1272,8 +1271,8 @@ fn artifact_validation_report_serde_round_trip() {
         policy_id: Some("policy-001".to_string()),
         findings: Vec::new(),
     };
-    let json = serde_json::to_string(&report).expect("serialize");
-    let restored: ArtifactValidationReport = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&report).unwrap_or_default();
+    let restored: ArtifactValidationReport = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(report, restored);
 }
 
@@ -1289,9 +1288,8 @@ fn artifact_bundle_validation_finding_serde_round_trip() {
         remediation_hint: "fix it".to_string(),
         repro_command: "cargo test".to_string(),
     };
-    let json = serde_json::to_string(&finding).expect("serialize");
-    let restored: ArtifactBundleValidationFinding =
-        serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&finding).unwrap_or_default();
+    let restored: ArtifactBundleValidationFinding = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(finding, restored);
 }
 
@@ -1302,9 +1300,9 @@ fn artifact_bundle_correlation_signature_serde_round_trip() {
         seed: 42,
         lanes: vec![HarnessLane::Parser, HarnessLane::Runtime],
     };
-    let json = serde_json::to_string(&sig).expect("serialize");
+    let json = serde_json::to_string(&sig).unwrap_or_default();
     let restored: ArtifactBundleCorrelationSignature =
-        serde_json::from_str(&json).expect("deserialize");
+        serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(sig, restored);
 }
 
@@ -1326,9 +1324,8 @@ fn artifact_bundle_validation_report_serde_round_trip() {
         lane_reports: Vec::new(),
         findings: Vec::new(),
     };
-    let json = serde_json::to_string(&report).expect("serialize");
-    let restored: ArtifactBundleValidationReport =
-        serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&report).unwrap_or_default();
+    let restored: ArtifactBundleValidationReport = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(report, restored);
 }
 

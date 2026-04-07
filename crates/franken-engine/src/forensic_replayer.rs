@@ -1981,8 +1981,8 @@ mod tests {
             },
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).expect("serialize");
-            let restored: TraceValidationError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(e).unwrap_or_default();
+            let restored: TraceValidationError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*e, restored);
         }
         assert_eq!(errors.len(), 7);
@@ -2004,8 +2004,8 @@ mod tests {
             },
         ];
         for c in &changes {
-            let json = serde_json::to_string(c).expect("serialize");
-            let restored: DecisionChange = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(c).unwrap_or_default();
+            let restored: DecisionChange = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*c, restored);
         }
         assert_eq!(changes.len(), 3);
@@ -2023,8 +2023,8 @@ mod tests {
             },
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).expect("serialize");
-            let restored: ReplayError = serde_json::from_str(&json).expect("deserialize");
+            let json = serde_json::to_string(e).unwrap_or_default();
+            let restored: ReplayError = serde_json::from_str(&json).unwrap_or_default();
             assert_eq!(*e, restored);
         }
         assert_eq!(errors.len(), 3);

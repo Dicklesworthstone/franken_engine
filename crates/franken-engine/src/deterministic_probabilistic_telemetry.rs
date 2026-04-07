@@ -1165,11 +1165,17 @@ impl TelemetryPlane {
             if windows.len() >= MAX_WINDOWS {
                 windows.remove(0);
             }
-            let window = EventWindow::new(timestamp_ns, budget);
+            let window = EventWindow::new(timestamp_ns, budget.clone());
             windows.push(window);
         }
 
-        windows.last_mut().expect("just pushed")
+        if windows.is_empty() {
+            // Structurally impossible due to logic above, but prevents panic on .expect().
+            windows.push(EventWindow::new(timestamp_ns, budget));
+        }
+
+        let len = windows.len();
+        &mut windows[len - 1]
     }
 
     /// Record a telemetry event. Returns `true` if accepted, `false` if

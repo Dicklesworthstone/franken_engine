@@ -546,7 +546,7 @@ impl SecretarySelector {
     pub fn new(total_items: usize) -> Self {
         // ⌊n/e⌋ in integer arithmetic: n * INV_E / MILLION.
         let exploration_length = if total_items > 0 {
-            ((total_items as i64 * INV_E_MILLIONTHS) / MILLION) as usize
+            ((total_items as u128 * INV_E_MILLIONTHS as u128) / (MILLION as u128)) as usize
         } else {
             0
         };

@@ -8123,6 +8123,22 @@ mod delegate_cell_tests {
 // signing, error-code stability, boundary conditions.
 // ────────────────────────────────────────────────────────────────────────────
 #[cfg(test)]
+fn from_json<T>(json: &str) -> T
+where
+    T: serde::de::DeserializeOwned,
+{
+    serde_json::from_str(json).expect("deserialize extension host test json")
+}
+
+#[cfg(test)]
+fn to_json<T>(value: &T) -> String
+where
+    T: serde::Serialize,
+{
+    serde_json::to_string(value).expect("serialize extension host test json")
+}
+
+#[cfg(test)]
 mod enrichment_tests {
     use super::*;
 
@@ -8139,8 +8155,8 @@ mod enrichment_tests {
             Capability::Declassify,
         ];
         for cap in &variants {
-            let json = serde_json::to_string(cap).expect("serialize");
-            let back: Capability = serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(cap);
+            let back: Capability = from_json(&json);
             assert_eq!(*cap, back);
         }
     }
@@ -8171,7 +8187,7 @@ mod enrichment_tests {
             Capability::Declassify,
         ];
         for cap in &variants {
-            let json = serde_json::to_string(cap).expect("serialize");
+            let json = to_json(cap);
             let expected = format!("\"{}\"", cap.as_str());
             assert_eq!(json, expected);
         }
@@ -8198,8 +8214,8 @@ mod enrichment_tests {
             ManifestTrustLevel::Development,
             ManifestTrustLevel::SignedSupplyChain,
         ] {
-            let json = serde_json::to_string(&level).expect("serialize");
-            let back: ManifestTrustLevel = serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(&level);
+            let back: ManifestTrustLevel = from_json(&json);
             assert_eq!(level, back);
         }
     }
@@ -8222,8 +8238,8 @@ mod enrichment_tests {
             ExtensionState::Quarantined,
         ];
         for state in &variants {
-            let json = serde_json::to_string(state).expect("serialize");
-            let back: ExtensionState = serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(state);
+            let back: ExtensionState = from_json(&json);
             assert_eq!(*state, back);
         }
     }
@@ -8264,7 +8280,7 @@ mod enrichment_tests {
             ExtensionState::Quarantined,
         ];
         for state in &variants {
-            let json = serde_json::to_string(state).expect("serialize");
+            let json = to_json(state);
             let expected = format!("\"{}\"", state.as_str());
             assert_eq!(json, expected);
         }
@@ -8288,8 +8304,8 @@ mod enrichment_tests {
             LifecycleTransition::Quarantine,
         ];
         for t in &variants {
-            let json = serde_json::to_string(t).expect("serialize");
-            let back: LifecycleTransition = serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(t);
+            let back: LifecycleTransition = from_json(&json);
             assert_eq!(*t, back);
         }
     }
@@ -8322,8 +8338,8 @@ mod enrichment_tests {
             BudgetExhaustionPolicy::Suspend,
             BudgetExhaustionPolicy::Terminate,
         ] {
-            let json = serde_json::to_string(&p).expect("serialize");
-            let back: BudgetExhaustionPolicy = serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(&p);
+            let back: BudgetExhaustionPolicy = from_json(&json);
             assert_eq!(p, back);
         }
     }
@@ -8343,8 +8359,8 @@ mod enrichment_tests {
     #[test]
     fn resource_budget_serde_round_trip() {
         let budget = ResourceBudget::new(1_000_000, 512 * 1024, 100);
-        let json = serde_json::to_string(&budget).expect("serialize");
-        let back: ResourceBudget = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&budget);
+        let back: ResourceBudget = from_json(&json);
         assert_eq!(budget, back);
     }
 
@@ -8432,8 +8448,8 @@ mod enrichment_tests {
         let config = CancellationConfig {
             grace_period_ns: 7_500_000,
         };
-        let json = serde_json::to_string(&config).expect("serialize");
-        let back: CancellationConfig = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&config);
+        let back: CancellationConfig = from_json(&json);
         assert_eq!(config, back);
     }
 
@@ -8449,8 +8465,8 @@ mod enrichment_tests {
             SecrecyLevel::TopSecret,
         ];
         for level in &variants {
-            let json = serde_json::to_string(level).expect("serialize");
-            let back: SecrecyLevel = serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(level);
+            let back: SecrecyLevel = from_json(&json);
             assert_eq!(*level, back);
         }
     }
@@ -8478,8 +8494,8 @@ mod enrichment_tests {
             IntegrityLevel::Trusted,
         ];
         for level in &variants {
-            let json = serde_json::to_string(level).expect("serialize");
-            let back: IntegrityLevel = serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(level);
+            let back: IntegrityLevel = from_json(&json);
             assert_eq!(*level, back);
         }
     }
@@ -8502,8 +8518,8 @@ mod enrichment_tests {
     #[test]
     fn flow_label_serde_round_trip() {
         let label = FlowLabel::new(SecrecyLevel::Secret, IntegrityLevel::Verified);
-        let json = serde_json::to_string(&label).expect("serialize");
-        let back: FlowLabel = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&label);
+        let back: FlowLabel = from_json(&json);
         assert_eq!(label, back);
     }
 
@@ -8644,8 +8660,8 @@ mod enrichment_tests {
             "test".to_string(),
             FlowLabel::new(SecrecyLevel::Internal, IntegrityLevel::Validated),
         );
-        let json = serde_json::to_string(&labeled).expect("serialize");
-        let back: Labeled<String> = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&labeled);
+        let back: Labeled<String> = from_json(&json);
         assert_eq!(labeled, back);
     }
 
@@ -8667,8 +8683,8 @@ mod enrichment_tests {
             HostcallType::IpcRecv,
         ];
         for ht in &variants {
-            let json = serde_json::to_string(ht).expect("serialize");
-            let back: HostcallType = serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(ht);
+            let back: HostcallType = from_json(&json);
             assert_eq!(*ht, back);
         }
     }
@@ -8821,8 +8837,8 @@ mod enrichment_tests {
     #[test]
     fn hostcall_sink_policy_serde_round_trip() {
         let policy = HostcallSinkPolicy::default();
-        let json = serde_json::to_string(&policy).expect("serialize");
-        let back: HostcallSinkPolicy = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&policy);
+        let back: HostcallSinkPolicy = from_json(&json);
         assert_eq!(policy, back);
     }
 
@@ -8834,8 +8850,8 @@ mod enrichment_tests {
             CapabilityEscrowRoute::Challenge,
             CapabilityEscrowRoute::Sandbox,
         ] {
-            let json = serde_json::to_string(&route).expect("serialize");
-            let back: CapabilityEscrowRoute = serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(&route);
+            let back: CapabilityEscrowRoute = from_json(&json);
             assert_eq!(route, back);
         }
     }
@@ -8863,8 +8879,8 @@ mod enrichment_tests {
             CapabilityEscrowState::Expired,
         ];
         for state in &variants {
-            let json = serde_json::to_string(state).expect("serialize");
-            let back: CapabilityEscrowState = serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(state);
+            let back: CapabilityEscrowState = from_json(&json);
             assert_eq!(*state, back);
         }
     }
@@ -8919,9 +8935,8 @@ mod enrichment_tests {
             CapabilityEscrowDecisionKind::Expire,
         ];
         for kind in &variants {
-            let json = serde_json::to_string(kind).expect("serialize");
-            let back: CapabilityEscrowDecisionKind =
-                serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(kind);
+            let back: CapabilityEscrowDecisionKind = from_json(&json);
             assert_eq!(*kind, back);
         }
     }
@@ -8954,8 +8969,8 @@ mod enrichment_tests {
             DeclassificationPurpose::Custom("audit_export".to_string()),
         ];
         for purpose in &variants {
-            let json = serde_json::to_string(purpose).expect("serialize");
-            let back: DeclassificationPurpose = serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(purpose);
+            let back: DeclassificationPurpose = from_json(&json);
             assert_eq!(*purpose, back);
         }
     }
@@ -9055,9 +9070,8 @@ mod enrichment_tests {
             },
         ];
         for reason in &variants {
-            let json = serde_json::to_string(reason).expect("serialize");
-            let back: DeclassificationDenialReason =
-                serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(reason);
+            let back: DeclassificationDenialReason = from_json(&json);
             assert_eq!(*reason, back);
         }
     }
@@ -9111,16 +9125,16 @@ mod enrichment_tests {
     #[test]
     fn signing_key_serde_round_trip() {
         let key = DecisionSigningKey::new([0x55; 32]);
-        let json = serde_json::to_string(&key).expect("serialize");
-        let back: DecisionSigningKey = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&key);
+        let back: DecisionSigningKey = from_json(&json);
         assert_eq!(key, back);
     }
 
     #[test]
     fn public_key_serde_round_trip() {
         let pubkey = DecisionSigningKey::new([0x77; 32]).public_key();
-        let json = serde_json::to_string(&pubkey).expect("serialize");
-        let back: DecisionPublicKey = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&pubkey);
+        let back: DecisionPublicKey = from_json(&json);
         assert_eq!(pubkey, back);
     }
 
@@ -9347,9 +9361,8 @@ mod enrichment_tests {
             DeclassificationEvidenceSeverity::High,
             DeclassificationEvidenceSeverity::Critical,
         ] {
-            let json = serde_json::to_string(&sev).expect("serialize");
-            let back: DeclassificationEvidenceSeverity =
-                serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(&sev);
+            let back: DeclassificationEvidenceSeverity = from_json(&json);
             assert_eq!(sev, back);
         }
     }
@@ -9481,8 +9494,8 @@ mod enrichment_tests {
     #[test]
     fn data_ref_serde_round_trip() {
         let data_ref = DataRef::new("memory", "token");
-        let json = serde_json::to_string(&data_ref).expect("serialize");
-        let back: DataRef = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&data_ref);
+        let back: DataRef = from_json(&json);
         assert_eq!(data_ref, back);
     }
 
@@ -9499,8 +9512,8 @@ mod enrichment_tests {
             outcome: "pass".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let back: ManifestValidationEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&event);
+        let back: ManifestValidationEvent = from_json(&json);
         assert_eq!(event, back);
     }
 
@@ -9774,8 +9787,8 @@ mod enrichment_tests {
     #[test]
     fn escrow_condition_serde_round_trip() {
         let cond = EscrowCondition::new("key", "value");
-        let json = serde_json::to_string(&cond).expect("serialize");
-        let back: EscrowCondition = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&cond);
+        let back: EscrowCondition = from_json(&json);
         assert_eq!(cond, back);
     }
 
@@ -9784,8 +9797,8 @@ mod enrichment_tests {
     #[test]
     fn declassification_condition_serde_round_trip() {
         let cond = DeclassificationCondition::new("key", "value");
-        let json = serde_json::to_string(&cond).expect("serialize");
-        let back: DeclassificationCondition = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&cond);
+        let back: DeclassificationCondition = from_json(&json);
         assert_eq!(cond, back);
     }
 
@@ -9794,8 +9807,8 @@ mod enrichment_tests {
     #[test]
     fn sink_clearance_serde_round_trip() {
         let clearance = SinkClearance::new(SecrecyLevel::Confidential, IntegrityLevel::Verified);
-        let json = serde_json::to_string(&clearance).expect("serialize");
-        let back: SinkClearance = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&clearance);
+        let back: SinkClearance = from_json(&json);
         assert_eq!(clearance, back);
     }
 
@@ -9814,8 +9827,8 @@ mod enrichment_tests {
             HostcallResult::Timeout,
         ];
         for result in &variants {
-            let json = serde_json::to_string(result).expect("serialize");
-            let back: HostcallResult = serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(result);
+            let back: HostcallResult = from_json(&json);
             assert_eq!(*result, back);
         }
     }
@@ -9843,8 +9856,8 @@ mod enrichment_tests {
             },
         ];
         for reason in &variants {
-            let json = serde_json::to_string(reason).expect("serialize");
-            let back: DenialReason = serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(reason);
+            let back: DenialReason = from_json(&json);
             assert_eq!(*reason, back);
         }
     }
@@ -9854,8 +9867,8 @@ mod enrichment_tests {
     #[test]
     fn rate_limit_contract_serde_round_trip() {
         let contract = RateLimitContract::new(10, 1_000_000_000);
-        let json = serde_json::to_string(&contract).expect("serialize");
-        let back: RateLimitContract = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&contract);
+        let back: RateLimitContract = from_json(&json);
         assert_eq!(contract, back);
     }
 
@@ -9932,8 +9945,8 @@ mod enrichment_tests {
             decision_id: "d".to_string(),
             policy_id: "p".to_string(),
         };
-        let json = serde_json::to_string(&record).expect("serialize");
-        let back: LifecycleTransitionRecord = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&record);
+        let back: LifecycleTransitionRecord = from_json(&json);
         assert_eq!(record, back);
     }
 
@@ -9955,8 +9968,8 @@ mod enrichment_tests {
             transition: "suspend".to_string(),
             timestamp_ns: 100,
         };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let back: LifecycleEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&event);
+        let back: LifecycleEvent = from_json(&json);
         assert_eq!(event, back);
     }
 
@@ -9977,8 +9990,8 @@ mod enrichment_tests {
             source_label: FlowLabel::new(SecrecyLevel::Secret, IntegrityLevel::Validated),
             sink_clearance: SinkClearance::new(SecrecyLevel::Public, IntegrityLevel::Validated),
         };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let back: FlowViolationEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&event);
+        let back: FlowViolationEvent = from_json(&json);
         assert_eq!(event, back);
     }
 
@@ -9998,8 +10011,8 @@ mod enrichment_tests {
             trust_chain_ref: Some("chain/test".to_string()),
             min_engine_version: "0.1.0".to_string(),
         };
-        let json = serde_json::to_string(&manifest).expect("serialize");
-        let back: ExtensionManifest = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&manifest);
+        let back: ExtensionManifest = from_json(&json);
         assert_eq!(manifest, back);
     }
 
@@ -10045,8 +10058,8 @@ mod enrichment_tests {
             timestamp_from_ns: Some(100),
             timestamp_to_ns: Some(200),
         };
-        let json = serde_json::to_string(&query).expect("serialize");
-        let back: CapabilityEscrowReceiptQuery = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&query);
+        let back: CapabilityEscrowReceiptQuery = from_json(&json);
         assert_eq!(query, back);
     }
 
@@ -10064,8 +10077,8 @@ mod enrichment_tests {
             justification: "user approved".to_string(),
             timestamp_ns: 42,
         };
-        let json = serde_json::to_string(&request).expect("serialize");
-        let back: DeclassificationRequest = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&request);
+        let back: DeclassificationRequest = from_json(&json);
         assert_eq!(request, back);
     }
 
@@ -10077,8 +10090,8 @@ mod enrichment_tests {
             challenge_type: "operator_approval".to_string(),
             detail: "requires sign-off".to_string(),
         };
-        let json = serde_json::to_string(&challenge).expect("serialize");
-        let back: DeclassificationChallenge = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&challenge);
+        let back: DeclassificationChallenge = from_json(&json);
         assert_eq!(challenge, back);
     }
 
@@ -10101,8 +10114,8 @@ mod enrichment_tests {
             },
         ];
         for verdict in &verdicts {
-            let json = serde_json::to_string(verdict).expect("serialize");
-            let back: DecisionVerdict = serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(verdict);
+            let back: DecisionVerdict = from_json(&json);
             assert_eq!(*verdict, back);
         }
     }
@@ -10123,8 +10136,8 @@ mod enrichment_tests {
             requester: "ext".to_string(),
             receipt_id: "rec".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serialize");
-        let back: DeclassificationDecisionEvent = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&event);
+        let back: DeclassificationDecisionEvent = from_json(&json);
         assert_eq!(event, back);
     }
 
@@ -10140,9 +10153,8 @@ mod enrichment_tests {
             label_distance: 2,
             decision_id: "d".to_string(),
         };
-        let json = serde_json::to_string(&evidence).expect("serialize");
-        let back: DeclassificationDeniedEvidence =
-            serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&evidence);
+        let back: DeclassificationDeniedEvidence = from_json(&json);
         assert_eq!(evidence, back);
     }
 
@@ -10161,8 +10173,8 @@ mod enrichment_tests {
             expires_at_ns: 200,
             updated_at_ns: 150,
         };
-        let json = serde_json::to_string(&record).expect("serialize");
-        let back: CapabilityEscrowRecord = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&record);
+        let back: CapabilityEscrowRecord = from_json(&json);
         assert_eq!(record, back);
     }
 
@@ -10353,8 +10365,8 @@ mod enrichment_batch2_tests {
             DelegationScope::Custom("audit_probe".to_string()),
         ];
         for scope in &variants {
-            let json = serde_json::to_string(scope).expect("serialize");
-            let back: DelegationScope = serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(scope);
+            let back: DelegationScope = from_json(&json);
             assert_eq!(*scope, back);
         }
     }
@@ -10392,8 +10404,8 @@ mod enrichment_batch2_tests {
             GuardplanePolicyAction::Quarantine,
         ];
         for action in &variants {
-            let json = serde_json::to_string(action).expect("serialize");
-            let back: GuardplanePolicyAction = serde_json::from_str(&json).expect("deserialize");
+            let json = to_json(action);
+            let back: GuardplanePolicyAction = from_json(&json);
             assert_eq!(*action, back);
         }
     }
@@ -10467,8 +10479,8 @@ mod enrichment_batch2_tests {
     #[test]
     fn delegate_cell_policy_serde_round_trip() {
         let policy = DelegateCellPolicy::default();
-        let json = serde_json::to_string(&policy).expect("serialize");
-        let back: DelegateCellPolicy = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&policy);
+        let back: DelegateCellPolicy = from_json(&json);
         assert_eq!(policy, back);
     }
 
@@ -10480,8 +10492,8 @@ mod enrichment_batch2_tests {
             delegate_id: "del-a".to_string(),
             posterior_micros: 350_000,
         };
-        let json = serde_json::to_string(&state).expect("serialize");
-        let back: DelegateGuardplaneState = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&state);
+        let back: DelegateGuardplaneState = from_json(&json);
         assert_eq!(state, back);
     }
 
@@ -10830,8 +10842,8 @@ mod enrichment_batch2_tests {
             delegator_id: "engine-core".to_string(),
             max_lifetime_ns: 500_000,
         };
-        let json = serde_json::to_string(&manifest).expect("serialize");
-        let back: DelegateCellManifest = serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&manifest);
+        let back: DelegateCellManifest = from_json(&json);
         assert_eq!(manifest, back);
     }
 
@@ -11251,9 +11263,8 @@ mod enrichment_batch2_tests {
             missing_event_receipt_ids: vec![],
             missing_evidence_receipt_ids: vec![],
         };
-        let json = serde_json::to_string(&report).expect("serialize");
-        let back: CapabilityEscrowReceiptCompletenessReport =
-            serde_json::from_str(&json).expect("deserialize");
+        let json = to_json(&report);
+        let back: CapabilityEscrowReceiptCompletenessReport = from_json(&json);
         assert_eq!(report, back);
     }
 

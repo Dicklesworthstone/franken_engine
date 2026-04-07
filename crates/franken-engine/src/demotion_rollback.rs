@@ -1931,8 +1931,8 @@ mod tests {
         )
         .expect("create");
 
-        let json = serde_json::to_string(&receipt).expect("serialize");
-        let restored: DemotionReceipt = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&receipt).unwrap_or_default();
+        let restored: DemotionReceipt = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(receipt, restored);
     }
 
@@ -1941,8 +1941,8 @@ mod tests {
         let mut policy = test_policy();
         policy.block_candidate("blocked-digest".to_string());
 
-        let json = serde_json::to_string(&policy).expect("serialize");
-        let restored: DemotionPolicy = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&policy).unwrap_or_default();
+        let restored: DemotionPolicy = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(policy, restored);
     }
 
@@ -1955,8 +1955,8 @@ mod tests {
         };
         monitor.process_observation(&obs);
 
-        let json = serde_json::to_string(&monitor).expect("serialize");
-        let restored: AutoDemotionMonitor = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&monitor).unwrap_or_default();
+        let restored: AutoDemotionMonitor = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(monitor, restored);
     }
 

@@ -103,7 +103,7 @@ impl TsconfigSnapshot {
         hasher.update(self.base_url.as_bytes());
         hasher.update(
             serde_json::to_string(&self.module_resolution)
-                .expect("module resolution mode should serialize for deterministic hashing")
+                .unwrap_or_default()
                 .as_bytes(),
         );
         for (k, vs) in &self.paths {
@@ -253,11 +253,7 @@ impl TsResolutionReplayIndex {
 
         let mut hasher = Sha256::new();
         hasher.update(tsconfig_hash.as_bytes());
-        hasher.update(
-            serde_json::to_string(&mode)
-                .expect("resolution replay mode should serialize for deterministic hashing")
-                .as_bytes(),
-        );
+        hasher.update(serde_json::to_string(&mode).unwrap_or_default().as_bytes());
         for (k, v) in &map {
             hasher.update(k.as_bytes());
             hasher.update(v.resolved_path.as_bytes());

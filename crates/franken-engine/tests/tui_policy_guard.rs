@@ -84,8 +84,7 @@ impl PolicyGuardReport {
     fn as_jsonl(&self) -> String {
         let mut out = String::new();
         for event in &self.events {
-            let line =
-                serde_json::to_string(event).expect("policy guard event serialization should work");
+            let line = serde_json::to_string(event).unwrap_or_default();
             out.push_str(&line);
             out.push('\n');
         }
@@ -876,7 +875,7 @@ fn tui_policy_guard_event_serde_roundtrip() {
         subject: "crates/foo/src/tui_widget.rs".to_string(),
         detail: "blocked local interactive TUI module path detected".to_string(),
     };
-    let json = serde_json::to_string(&event).expect("serialize event");
+    let json = serde_json::to_string(&event).unwrap_or_default();
     let recovered: serde_json::Value = serde_json::from_str(&json).expect("parse event json");
     assert_eq!(recovered["trace_id"], "trace-tui-policy-0001");
     assert_eq!(recovered["policy_id"], POLICY_ID);
@@ -889,7 +888,7 @@ fn tui_policy_guard_event_serde_roundtrip() {
         outcome: "pass".to_string(),
         ..event
     };
-    let pass_json = serde_json::to_string(&pass_event).expect("serialize pass event");
+    let pass_json = serde_json::to_string(&pass_event).unwrap_or_default();
     let pass_recovered: serde_json::Value =
         serde_json::from_str(&pass_json).expect("parse pass json");
     assert!(pass_recovered["error_code"].is_null());

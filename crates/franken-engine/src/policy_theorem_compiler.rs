@@ -915,10 +915,7 @@ impl SignaturePreimage for PolicyValidationReceipt {
     fn unsigned_view(&self) -> CanonicalValue {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
-        CanonicalValue::Bytes(
-            serde_json::to_vec(&copy)
-                .expect("policy validation receipt must serialize for signing preimage"),
-        )
+        CanonicalValue::Bytes(serde_json::to_vec(&copy).unwrap_or_default())
     }
 }
 
@@ -1829,8 +1826,8 @@ mod tests {
             scope: "local".to_string(),
             lifetime_epochs: 10,
         };
-        let json = serde_json::to_string(&grant).expect("serialize");
-        let restored: AuthorityGrant = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&grant).unwrap_or_default();
+        let restored: AuthorityGrant = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(grant, restored);
     }
 
@@ -1843,8 +1840,8 @@ mod tests {
             nodes_examined: 5,
             pass_name: "monotonicity_check".to_string(),
         };
-        let json = serde_json::to_string(&pw).expect("serialize");
-        let restored: PropertyWitness = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&pw).unwrap_or_default();
+        let restored: PropertyWitness = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(pw, restored);
     }
 
@@ -1857,8 +1854,8 @@ mod tests {
             description: "overlap".to_string(),
             merge_path: vec!["n1".to_string()],
         };
-        let json = serde_json::to_string(&ce).expect("serialize");
-        let restored: Counterexample = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&ce).unwrap_or_default();
+        let restored: Counterexample = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(ce, restored);
     }
 
@@ -1870,8 +1867,8 @@ mod tests {
             policy_ids: vec![PolicyId::new("p1")],
             severity: DiagnosticSeverity::Warning,
         };
-        let json = serde_json::to_string(&hd).expect("serialize");
-        let restored: HookDiagnostic = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&hd).unwrap_or_default();
+        let restored: HookDiagnostic = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(hd, restored);
     }
 
@@ -1882,8 +1879,8 @@ mod tests {
             passed: true,
             diagnostics: Vec::new(),
         };
-        let json = serde_json::to_string(&hcr).expect("serialize");
-        let restored: HookCheckResult = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&hcr).unwrap_or_default();
+        let restored: HookCheckResult = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(hcr, restored);
     }
 

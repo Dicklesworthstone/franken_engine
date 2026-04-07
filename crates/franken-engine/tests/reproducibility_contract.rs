@@ -75,7 +75,7 @@ fn canonicalize_json(value: &Value) -> String {
             }
         }
         Value::Number(number) => number.to_string(),
-        Value::String(text) => serde_json::to_string(text).expect("json string serialization"),
+        Value::String(text) => serde_json::to_string(text).unwrap_or_default(),
         Value::Array(items) => {
             let canonical_items: Vec<String> = items.iter().map(canonicalize_json).collect();
             format!("[{}]", canonical_items.join(","))
@@ -86,7 +86,7 @@ fn canonicalize_json(value: &Value) -> String {
 
             let mut parts = Vec::with_capacity(keys.len());
             for key in keys {
-                let key_json = serde_json::to_string(key).expect("json key serialization");
+                let key_json = serde_json::to_string(key).unwrap_or_default();
                 let value_json = canonicalize_json(map.get(key).expect("key from map.keys exists"));
                 parts.push(format!("{key_json}:{value_json}"));
             }

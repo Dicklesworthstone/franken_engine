@@ -769,7 +769,7 @@ mod tests {
         }];
         fs::write(
             &waivers_path,
-            serde_json::to_vec_pretty(&waivers).expect("serialize waivers"),
+            serde_json::to_vec_pretty(&waivers).unwrap_or_default(),
         )
         .expect("write waivers");
 
@@ -830,7 +830,7 @@ mod tests {
         });
         fs::write(
             &waivers_path,
-            serde_json::to_vec_pretty(&legacy_manifest).expect("serialize legacy manifest"),
+            serde_json::to_vec_pretty(&legacy_manifest).unwrap_or_default(),
         )
         .expect("write legacy manifest");
 

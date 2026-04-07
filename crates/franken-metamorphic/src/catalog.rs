@@ -32,8 +32,8 @@ impl RelationCatalog {
     }
 
     pub fn content_hash(&self) -> String {
-        let canonical_json =
-            serde_json::to_vec(self).expect("catalog serialization should succeed");
+        let canonical_json = serde_json::to_vec(self)
+            .expect("relation catalog should serialize for content hashing");
         let digest = Sha256::digest(canonical_json);
         format!("sha256:{}", hex::encode(digest))
     }

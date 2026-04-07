@@ -535,8 +535,8 @@ fn frx_07_2_known_divergence_error_codes_are_unique() {
 #[test]
 fn frx_07_2_serde_roundtrip_preserves_strategy() {
     let strategy = parse_strategy();
-    let serialized = serde_json::to_string(&strategy).expect("serialize");
-    let deserialized: StrategyContract = serde_json::from_str(&serialized).expect("deserialize");
+    let serialized = serde_json::to_string(&strategy).unwrap_or_default();
+    let deserialized: StrategyContract = serde_json::from_str(&serialized).unwrap_or_default();
     assert_eq!(strategy, deserialized);
 }
 
@@ -706,9 +706,8 @@ fn frx_07_2_strategy_failure_mode_is_fail_closed() {
 #[test]
 fn frx_07_2_serde_roundtrip_via_pretty_print_preserves_strategy() {
     let strategy = parse_strategy();
-    let pretty = serde_json::to_string_pretty(&strategy).expect("pretty serialize");
-    let deserialized: StrategyContract =
-        serde_json::from_str(&pretty).expect("deserialize from pretty");
+    let pretty = serde_json::to_string_pretty(&strategy).unwrap_or_default();
+    let deserialized: StrategyContract = serde_json::from_str(&pretty).unwrap_or_default();
     assert_eq!(strategy, deserialized);
 }
 

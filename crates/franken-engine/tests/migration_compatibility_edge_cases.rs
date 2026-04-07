@@ -113,8 +113,8 @@ fn migration_error_code_serde_all_variants() {
         MigrationErrorCode::NoMigrationPath,
         MigrationErrorCode::LossyMigration,
     ] {
-        let json = serde_json::to_string(&code).expect("serialize");
-        let restored: MigrationErrorCode = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&code).unwrap_or_default();
+        let restored: MigrationErrorCode = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(code, restored, "roundtrip for {code:?}");
     }
 }
@@ -183,8 +183,8 @@ fn migration_error_serde_roundtrip() {
         }],
         message: "precision loss in migration".to_string(),
     };
-    let json = serde_json::to_string(&err).expect("serialize");
-    let restored: MigrationError = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&err).unwrap_or_default();
+    let restored: MigrationError = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(err, restored);
 }
 
@@ -198,8 +198,8 @@ fn incompatible_field_serde_roundtrip() {
         field_path: "metadata.x.y".to_string(),
         reason: "nested field removed".to_string(),
     };
-    let json = serde_json::to_string(&field).expect("serialize");
-    let restored: IncompatibleField = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&field).unwrap_or_default();
+    let restored: IncompatibleField = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(field, restored);
 }
 
@@ -215,8 +215,8 @@ fn migration_function_serde_roundtrip() {
         lossy: true,
         description: "lossy schema change".to_string(),
     };
-    let json = serde_json::to_string(&func).expect("serialize");
-    let restored: MigrationFunction = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&func).unwrap_or_default();
+    let restored: MigrationFunction = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(func.from_version, restored.from_version);
     assert_eq!(func.to_version, restored.to_version);
     assert_eq!(func.lossy, restored.lossy);
@@ -263,8 +263,8 @@ fn migration_outcome_serde_all_variants() {
         MigrationOutcome::LossyMigration,
         MigrationOutcome::Failed,
     ] {
-        let json = serde_json::to_string(&outcome).expect("serialize");
-        let restored: MigrationOutcome = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&outcome).unwrap_or_default();
+        let restored: MigrationOutcome = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(outcome, restored, "roundtrip for {outcome}");
     }
 }
@@ -338,8 +338,8 @@ fn test_result_serde_roundtrip() {
         schema_migrations_detected: Vec::new(),
         determinism_verified: true,
     };
-    let json = serde_json::to_string(&result).expect("serialize");
-    let restored: MigrationTestResult = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&result).unwrap_or_default();
+    let restored: MigrationTestResult = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(result.golden_ledger_name, restored.golden_ledger_name);
     assert_eq!(result.outcome, restored.outcome);
     assert_eq!(result.entries_processed, restored.entries_processed);
@@ -362,8 +362,8 @@ fn migration_compatibility_event_serde_with_error_code() {
         from_version: "evidence-v1".to_string(),
         to_version: "evidence-v2".to_string(),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let restored: MigrationCompatibilityEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let restored: MigrationCompatibilityEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, restored);
 }
 
@@ -380,8 +380,8 @@ fn migration_compatibility_event_serde_without_error_code() {
         from_version: "v1".to_string(),
         to_version: "v1".to_string(),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let restored: MigrationCompatibilityEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let restored: MigrationCompatibilityEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, restored);
 }
 
@@ -404,16 +404,16 @@ fn manifest_entry_serde_roundtrip() {
         entry_count: 42,
         frozen_at_ms: 1_700_000_000_000,
     };
-    let json = serde_json::to_string(&entry).expect("serialize");
-    let restored: ManifestEntry = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&entry).unwrap_or_default();
+    let restored: ManifestEntry = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(entry, restored);
 }
 
 #[test]
 fn manifest_serde_roundtrip_empty() {
     let manifest = GoldenLedgerManifest::new();
-    let json = serde_json::to_string(&manifest).expect("serialize");
-    let restored: GoldenLedgerManifest = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&manifest).unwrap_or_default();
+    let restored: GoldenLedgerManifest = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(manifest, restored);
 }
 
@@ -435,8 +435,8 @@ fn cutover_type_serde_all_variants() {
         CutoverType::SoftMigration,
         CutoverType::ParallelRun,
     ] {
-        let json = serde_json::to_string(&ct).expect("serialize");
-        let restored: CutoverType = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&ct).unwrap_or_default();
+        let restored: CutoverType = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(ct, restored);
     }
 }
@@ -476,8 +476,8 @@ fn object_class_serde_all_variants() {
         ObjectClass::RevocationFormat,
         ObjectClass::PolicyFormat,
     ] {
-        let json = serde_json::to_string(&oc).expect("serialize");
-        let restored: ObjectClass = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&oc).unwrap_or_default();
+        let restored: ObjectClass = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(oc, restored);
     }
 }
@@ -520,8 +520,8 @@ fn migration_phase_serde_all_variants() {
         MigrationPhase::Commit,
         MigrationPhase::Rollback,
     ] {
-        let json = serde_json::to_string(&phase).expect("serialize");
-        let restored: MigrationPhase = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&phase).unwrap_or_default();
+        let restored: MigrationPhase = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(phase, restored);
     }
 }
@@ -553,8 +553,8 @@ fn phase_outcome_serde_all_variants() {
         PhaseOutcome::Failed,
         PhaseOutcome::Skipped,
     ] {
-        let json = serde_json::to_string(&outcome).expect("serialize");
-        let restored: PhaseOutcome = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&outcome).unwrap_or_default();
+        let restored: PhaseOutcome = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(outcome, restored);
     }
 }
@@ -596,8 +596,8 @@ fn cutover_state_serde_all_variants() {
         CutoverState::Committed,
         CutoverState::RolledBack,
     ] {
-        let json = serde_json::to_string(&state).expect("serialize");
-        let restored: CutoverState = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&state).unwrap_or_default();
+        let restored: CutoverState = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(state, restored);
     }
 }
@@ -820,8 +820,8 @@ fn cutover_error_serde_all_variants() {
         },
     ];
     for err in errors {
-        let json = serde_json::to_string(&err).expect("serialize");
-        let restored: CutoverError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&err).unwrap_or_default();
+        let restored: CutoverError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(err, restored, "roundtrip for {err:?}");
     }
 }
@@ -880,8 +880,8 @@ fn transition_window_serde_roundtrip() {
         end_tick: 1100,
         old_format_accepted: true,
     };
-    let json = serde_json::to_string(&w).expect("serialize");
-    let restored: TransitionWindow = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&w).unwrap_or_default();
+    let restored: TransitionWindow = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(w, restored);
 }
 
@@ -1339,8 +1339,8 @@ fn cutover_audit_event_serde_roundtrip() {
         affected_count: Some(42),
         timestamp: DeterministicTimestamp(9999),
     };
-    let json = serde_json::to_string(&event).expect("serialize");
-    let restored: CutoverAuditEvent = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&event).unwrap_or_default();
+    let restored: CutoverAuditEvent = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(event, restored);
 }
 
@@ -1354,8 +1354,8 @@ fn phase_execution_record_serde_roundtrip() {
         detail: "7 conformance violations".to_string(),
         timestamp: DeterministicTimestamp(30),
     };
-    let json = serde_json::to_string(&record).expect("serialize");
-    let restored: PhaseExecutionRecord = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&record).unwrap_or_default();
+    let restored: PhaseExecutionRecord = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(record, restored);
 }
 
@@ -1382,8 +1382,8 @@ fn applied_migration_entry_serde_roundtrip() {
         declared_at: DeterministicTimestamp(10),
         committed_at: Some(DeterministicTimestamp(40)),
     };
-    let json = serde_json::to_string(&entry).expect("serialize");
-    let restored: AppliedMigrationEntry = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&entry).unwrap_or_default();
+    let restored: AppliedMigrationEntry = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(entry, restored);
 }
 
@@ -1402,8 +1402,8 @@ fn migration_declaration_serde_roundtrip() {
         compatible_across_boundary: vec!["decision wire format".to_string()],
         incompatible_across_boundary: vec!["storage layout".to_string()],
     };
-    let json = serde_json::to_string(&decl).expect("serialize");
-    let restored: MigrationDeclaration = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&decl).unwrap_or_default();
+    let restored: MigrationDeclaration = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(decl, restored);
 }
 

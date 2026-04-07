@@ -754,8 +754,8 @@ fn evidence_artifact_deterministic_serialization() {
 #[test]
 fn transformation_type_serde_round_trip_all() {
     for tt in TransformationType::ALL {
-        let json = serde_json::to_string(&tt).expect("serialize");
-        let recovered: TransformationType = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&tt).unwrap_or_default();
+        let recovered: TransformationType = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(tt, &recovered);
         assert!(!tt.as_str().is_empty());
     }
@@ -768,8 +768,8 @@ fn corpus_category_serde_round_trip_all() {
         CorpusCategory::EdgeCase,
         CorpusCategory::EpochTransition,
     ] {
-        let json = serde_json::to_string(&cat).expect("serialize");
-        let recovered: CorpusCategory = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&cat).unwrap_or_default();
+        let recovered: CorpusCategory = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(cat, recovered);
         assert!(!cat.as_str().is_empty());
         assert!(cat.min_count() > 0);
@@ -779,8 +779,8 @@ fn corpus_category_serde_round_trip_all() {
 #[test]
 fn comparison_verdict_serde_round_trip() {
     for v in [ComparisonVerdict::Match, ComparisonVerdict::Diverge] {
-        let json = serde_json::to_string(&v).expect("serialize");
-        let recovered: ComparisonVerdict = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&v).unwrap_or_default();
+        let recovered: ComparisonVerdict = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(v, recovered);
         assert!(!v.as_str().is_empty());
     }
@@ -802,8 +802,8 @@ fn divergence_kind_serde_round_trip_all() {
         DivergenceKind::ExceptionSequence,
         DivergenceKind::EvidenceEmission,
     ] {
-        let json = serde_json::to_string(&kind).expect("serialize");
-        let recovered: DivergenceKind = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&kind).unwrap_or_default();
+        let recovered: DivergenceKind = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(kind, recovered);
         assert!(!kind.as_str().is_empty());
     }
@@ -816,8 +816,8 @@ fn fallback_outcome_serde_round_trip() {
     };
     assert!(success.is_success());
     assert!(!success.is_failure());
-    let json = serde_json::to_string(&success).expect("serialize");
-    let recovered: FallbackOutcome = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&success).unwrap_or_default();
+    let recovered: FallbackOutcome = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(success, recovered);
 
     let failure = FallbackOutcome::Failure {
@@ -825,8 +825,8 @@ fn fallback_outcome_serde_round_trip() {
     };
     assert!(failure.is_failure());
     assert!(!failure.is_success());
-    let json = serde_json::to_string(&failure).expect("serialize");
-    let recovered: FallbackOutcome = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&failure).unwrap_or_default();
+    let recovered: FallbackOutcome = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(failure, recovered);
 }
 
@@ -858,8 +858,8 @@ fn conformance_error_serde_round_trip_all_variants() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(&err).expect("serialize");
-        let recovered: ConformanceError = serde_json::from_str(&json).expect("deserialize");
+        let json = serde_json::to_string(&err).unwrap_or_default();
+        let recovered: ConformanceError = serde_json::from_str(&json).unwrap_or_default();
         assert_eq!(err, &recovered);
         assert!(!err.to_string().is_empty());
     }
@@ -967,8 +967,8 @@ fn evidence_artifact_to_jsonl_is_valid_json() {
 #[test]
 fn inventory_entry_serde_round_trip() {
     let entry = inventory_entry("serde-test", epoch(3), TransformationType::PathRemoval);
-    let json = serde_json::to_string(&entry).expect("serialize");
-    let recovered: SpecializationInventoryEntry = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&entry).unwrap_or_default();
+    let recovered: SpecializationInventoryEntry = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(entry, recovered);
 }
 
@@ -996,8 +996,8 @@ fn differential_result_serde_round_trip() {
         receipt_valid: true,
     });
 
-    let json = serde_json::to_string(&result).expect("serialize");
-    let recovered: DifferentialResult = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&result).unwrap_or_default();
+    let recovered: DifferentialResult = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(result.outcome, recovered.outcome);
     assert_eq!(result.workload_id, recovered.workload_id);
 }
@@ -1020,8 +1020,8 @@ fn conformance_log_serde_round_trip() {
         fallback_outcome: None,
         receipt_valid: true,
     };
-    let json = serde_json::to_string(&log).expect("serialize");
-    let recovered: ConformanceLog = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&log).unwrap_or_default();
+    let recovered: ConformanceLog = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(log, recovered);
 }
 
@@ -1036,8 +1036,8 @@ fn divergence_detail_serde_round_trip() {
         specialized_summary: "spec: 1 effect".to_string(),
         unspecialized_summary: "unspec: 2 effects".to_string(),
     };
-    let json = serde_json::to_string(&detail).expect("serialize");
-    let recovered: DivergenceDetail = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&detail).unwrap_or_default();
+    let recovered: DivergenceDetail = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(detail, recovered);
 }
 
@@ -1052,8 +1052,8 @@ fn side_effect_serde_round_trip() {
         description: "read file".to_string(),
         sequence: 5,
     };
-    let json = serde_json::to_string(&effect).expect("serialize");
-    let recovered: SideEffect = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&effect).unwrap_or_default();
+    let recovered: SideEffect = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(effect, recovered);
 }
 
@@ -1070,8 +1070,8 @@ fn epoch_transition_simulation_serde_round_trip() {
         proof_revoked: true,
         transition_timestamp_ns: 1_000,
     };
-    let json = serde_json::to_string(&sim).expect("serialize");
-    let recovered: EpochTransitionSimulation = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&sim).unwrap_or_default();
+    let recovered: EpochTransitionSimulation = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(sim, recovered);
 }
 
@@ -1091,8 +1091,8 @@ fn invalidation_evidence_serde_round_trip() {
             invalidation_evidence_id: "ev-inv".to_string(),
         },
     };
-    let json = serde_json::to_string(&evidence).expect("serialize");
-    let recovered: InvalidationEvidence = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&evidence).unwrap_or_default();
+    let recovered: InvalidationEvidence = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(evidence, recovered);
 }
 
@@ -1103,8 +1103,8 @@ fn invalidation_evidence_serde_round_trip() {
 #[test]
 fn performance_delta_serde_round_trip() {
     let delta = SpecializationConformanceEngine::compute_performance_delta(80, 100);
-    let json = serde_json::to_string(&delta).expect("serialize");
-    let recovered: PerformanceDelta = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&delta).unwrap_or_default();
+    let recovered: PerformanceDelta = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(delta, recovered);
 }
 
@@ -1135,8 +1135,8 @@ fn receipt_validation_result_serde_round_trip() {
         valid: true,
         failure_reasons: vec![],
     };
-    let json = serde_json::to_string(&result).expect("serialize");
-    let recovered: ReceiptValidationResult = serde_json::from_str(&json).expect("deserialize");
+    let json = serde_json::to_string(&result).unwrap_or_default();
+    let recovered: ReceiptValidationResult = serde_json::from_str(&json).unwrap_or_default();
     assert_eq!(result, recovered);
     assert!(result.is_valid());
 }

@@ -2398,7 +2398,7 @@ fn starts_with_keyword(text: &str, kw: &str) -> bool {
         && text
             .as_bytes()
             .get(kw.len())
-            .map_or(true, |b| !b.is_ascii_alphanumeric() && *b != b'_')
+            .is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_')
 }
 
 fn push_segment<'a>(
@@ -3501,6 +3501,11 @@ fn parse_primary_expression(
 
     if let Some(value) = parse_quoted_string(expression) {
         return Ok(Expression::StringLiteral(value));
+    }
+
+    // Regex literal: /pattern/flags
+    if let Some((pattern, flags)) = parse_regexp_literal(expression) {
+        return Ok(Expression::RegExpLiteral { pattern, flags });
     }
 
     if let Some(value) = parse_i64_numeric_literal(expression) {
@@ -4961,7 +4966,8 @@ fn contains_optional_chain(expression: &Expression) -> bool {
         | Expression::UndefinedLiteral
         | Expression::This
         | Expression::Function { .. }
-        | Expression::Raw(_) => false,
+        | Expression::Raw(_)
+        | Expression::RegExpLiteral { .. } => false,
     }
 }
 
@@ -5292,8 +5298,7 @@ fn parse_object_literal(
         }
         // Spread property: `{ ...expr }` — parse the inner expression.
         if let Some(rest) = p.strip_prefix("...") {
-            let inner =
-                parse_expression(rest.trim_start(), span, context, recursion_depth + 1)?;
+            let inner = parse_expression(rest.trim_start(), span, context, recursion_depth + 1)?;
             let spread = Expression::SpreadElement(Box::new(inner));
             properties.push(ObjectProperty {
                 key: spread.clone(),
@@ -5498,6 +5503,60 @@ fn parse_quoted_string(input: &str) -> Option<String> {
         }
         return Some(inner.to_string());
     }
+    None
+}
+
+/// Parse a regex literal: `/pattern/flags`.
+///
+/// The pattern may contain escaped slashes (`\/`) or character classes with
+/// slashes (`[/]`). Flags are the standard ECMAScript regex flags: g, i, m, s, u, y.
+fn parse_regexp_literal(input: &str) -> Option<(String, String)> {
+    let input = input.trim();
+    if !input.starts_with('/') {
+        return None;
+    }
+
+    // Find the closing slash, handling escapes and character classes
+    let bytes = input.as_bytes();
+    let mut i = 1; // Start after opening slash
+    let mut in_char_class = false;
+    let mut prev_escape = false;
+
+    while i < bytes.len() {
+        let c = bytes[i];
+        if prev_escape {
+            prev_escape = false;
+            i += 1;
+            continue;
+        }
+        if c == b'\\' {
+            prev_escape = true;
+            i += 1;
+            continue;
+        }
+        if c == b'[' && !in_char_class {
+            in_char_class = true;
+        } else if c == b']' && in_char_class {
+            in_char_class = false;
+        } else if c == b'/' && !in_char_class {
+            // Found closing slash
+            let pattern = &input[1..i];
+            let rest = &input[i + 1..];
+            // Parse flags (g, i, m, s, u, y, d)
+            let mut flags = String::new();
+            for fc in rest.chars() {
+                if matches!(fc, 'g' | 'i' | 'm' | 's' | 'u' | 'y' | 'd') {
+                    flags.push(fc);
+                } else {
+                    // Stop at non-flag character (could be operator or whitespace)
+                    break;
+                }
+            }
+            return Some((pattern.to_string(), flags));
+        }
+        i += 1;
+    }
+
     None
 }
 
@@ -7256,9 +7315,7 @@ fn parse_class_declaration(
         .trim_start();
 
     // Parse optional class name and optional `extends` clause.
-    let (name, rest) = if rest.starts_with('{') {
-        (None, rest)
-    } else if rest.starts_with("extends ") {
+    let (name, rest) = if rest.starts_with('{') || rest.starts_with("extends ") {
         (None, rest)
     } else {
         // Name is everything up to `{` or `extends`.
@@ -11704,9 +11761,7 @@ mod tests {
                 ));
                 match elements[1].as_ref().unwrap() {
                     Expression::SpreadElement(inner) => {
-                        assert!(
-                            matches!(inner.as_ref(), Expression::Identifier(n) if n == "arr")
-                        );
+                        assert!(matches!(inner.as_ref(), Expression::Identifier(n) if n == "arr"));
                     }
                     other => panic!("expected SpreadElement, got {other:?}"),
                 }
@@ -11743,9 +11798,7 @@ mod tests {
                 assert!(matches!(&arguments[0], Expression::NumericLiteral(1)));
                 match &arguments[1] {
                     Expression::SpreadElement(inner) => {
-                        assert!(
-                            matches!(inner.as_ref(), Expression::Identifier(n) if n == "args")
-                        );
+                        assert!(matches!(inner.as_ref(), Expression::Identifier(n) if n == "args"));
                     }
                     other => panic!("expected SpreadElement, got {other:?}"),
                 }
@@ -11764,10 +11817,7 @@ mod tests {
                 assert!(!properties[0].shorthand);
                 // Second property: spread
                 assert!(properties[1].shorthand);
-                assert!(matches!(
-                    &properties[1].value,
-                    Expression::SpreadElement(_)
-                ));
+                assert!(matches!(&properties[1].value, Expression::SpreadElement(_)));
             }
             other => panic!("expected ObjectLiteral, got {other:?}"),
         }

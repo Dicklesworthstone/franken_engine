@@ -120,7 +120,7 @@ struct FlowInferenceMetrics {
 impl FlowInferenceMetrics {
     fn static_coverage_millionths(self) -> u64 {
         if self.total_flow_ops == 0 {
-            return 1_000_000;
+            return 0;
         }
         (self.static_proven_ops.saturating_mul(1_000_000)) / self.total_flow_ops
     }
@@ -6124,6 +6124,22 @@ mod tests {
     }
 
     #[test]
+    fn lower_ir1_to_ir2_zero_flow_ops_reports_zero_static_coverage() {
+        let ir1 = Ir1Module::new(ContentHash::compute(b"zero-flow-ir0"), "zero_flow.js");
+        let result = lower_ir1_to_ir2(&ir1).expect("IR1->IR2 should succeed");
+        let coverage = result
+            .witness
+            .invariant_checks
+            .iter()
+            .find(|check| check.name == "ir2_static_flow_coverage_ratio")
+            .expect("coverage check should be present");
+
+        assert!(coverage.passed);
+        assert!(coverage.detail.contains("static_coverage_millionths=0"));
+        assert!(coverage.detail.contains("total_flow_ops=0"));
+    }
+
+    #[test]
     fn lower_ir2_to_ir3_produces_exec_instructions() {
         let ir0 = script_ir0();
         let ir1 = lower_ir0_to_ir1(&ir0)
@@ -6765,13 +6781,13 @@ mod tests {
     // -- FlowInferenceMetrics --
 
     #[test]
-    fn flow_inference_metrics_zero_ops_returns_million() {
+    fn flow_inference_metrics_zero_ops_returns_zero() {
         let metrics = FlowInferenceMetrics {
             total_flow_ops: 0,
             static_proven_ops: 0,
             runtime_check_ops: 0,
         };
-        assert_eq!(metrics.static_coverage_millionths(), 1_000_000);
+        assert_eq!(metrics.static_coverage_millionths(), 0);
     }
 
     #[test]
@@ -6792,6 +6808,16 @@ mod tests {
             runtime_check_ops: 5,
         };
         assert_eq!(metrics.static_coverage_millionths(), 500_000);
+    }
+
+    #[test]
+    fn flow_inference_metrics_one_of_many_static() {
+        let metrics = FlowInferenceMetrics {
+            total_flow_ops: 8,
+            static_proven_ops: 1,
+            runtime_check_ops: 7,
+        };
+        assert_eq!(metrics.static_coverage_millionths(), 125_000);
     }
 
     #[test]

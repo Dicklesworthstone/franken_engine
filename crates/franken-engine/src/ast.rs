@@ -1431,6 +1431,11 @@ pub enum Expression {
     /// Spread element: `...expr` in array literals, object literals, or
     /// function call arguments.
     SpreadElement(Box<Expression>),
+    /// Regular expression literal: `/pattern/flags`.
+    RegExpLiteral {
+        pattern: String,
+        flags: String,
+    },
 }
 
 impl Expression {
@@ -1730,6 +1735,17 @@ impl Expression {
                 );
                 map.insert("argument".to_string(), inner.canonical_value());
             }
+            Self::RegExpLiteral { pattern, flags } => {
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String("regexp".to_string()),
+                );
+                map.insert(
+                    "pattern".to_string(),
+                    CanonicalValue::String(pattern.clone()),
+                );
+                map.insert("flags".to_string(), CanonicalValue::String(flags.clone()));
+            }
         }
         CanonicalValue::Map(map)
     }
@@ -1746,6 +1762,7 @@ impl std::fmt::Display for Expression {
             Self::UndefinedLiteral => write!(f, "undefined"),
             Self::This => write!(f, "this"),
             Self::Raw(value) => write!(f, "{value}"),
+            Self::RegExpLiteral { pattern, flags } => write!(f, "/{pattern}/{flags}"),
             _ => write!(f, "{self:?}"),
         }
     }

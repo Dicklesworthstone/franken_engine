@@ -260,5 +260,5 @@ if [[ "${mode}" == "test" || "${mode}" == "replay" || "${mode}" == "ci" ]]; then
 
   printf 'json compound placeholder closure artifacts: %s\n' "${run_dir}"
 else
-  printf 'json compound placeholder closure %s completed via rch\n' "${mode}"
+  echo "json compound placeholder closure ${mode} completed via rch"
 fi

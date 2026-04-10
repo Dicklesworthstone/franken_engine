@@ -3,9 +3,19 @@ set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 mode="${1:-replay}"
-artifact_root="${RGC_JSON_COMPOUND_PLACEHOLDER_CLOSURE_ARTIFACT_ROOT:-artifacts/rgc_json_compound_placeholder_closure}"
-explicit_run_dir="${RGC_JSON_COMPOUND_PLACEHOLDER_CLOSURE_REPLAY_RUN_DIR:-}"
+artifact_root="${RGC_JSON_COMPOUND_PLACEHOLDER_CLOSURE_ARTIFACT_ROOT:-${root_dir}/artifacts/rgc_json_compound_placeholder_closure}"
+explicit_run_dir_input="${RGC_JSON_COMPOUND_PLACEHOLDER_CLOSURE_REPLAY_RUN_DIR:-}"
 main_exit=0
+
+if [[ "${artifact_root}" != /* ]]; then
+  artifact_root="${root_dir}/${artifact_root}"
+fi
+
+if [[ -n "${explicit_run_dir_input}" && "${explicit_run_dir_input}" != /* ]]; then
+  explicit_run_dir="${root_dir}/${explicit_run_dir_input}"
+else
+  explicit_run_dir="${explicit_run_dir_input}"
+fi
 
 run_dir_is_complete() {
   local candidate="${1:-}"

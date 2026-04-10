@@ -516,8 +516,7 @@ pub fn lower_ir0_to_ir1(
                     )?;
                     let binding_name =
                         make_internal_binding_name("default_export", synthetic_export_index);
-                    synthetic_export_index =
-                        synthetic_export_index.checked_add(1).unwrap_or(u32::MAX);
+                    synthetic_export_index = synthetic_export_index.saturating_add(1);
                     let binding_id = alloc_binding(
                         &mut bindings,
                         &mut binding_lookup,
@@ -2189,11 +2188,17 @@ pub fn lower_ir2_to_ir3(
     let mut iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
     let mut pending_jumps = Vec::<PendingJump>::new();
     let mut catch_entry_labels = BTreeSet::<u32>::new();
-    // Deferred function bodies: (body_ir1_ops, param_names, name, free_vars).
+    // Deferred function bodies: (body_ir1_ops, param_names, name, free_vars, is_generator).
     // After the main code + Halt, each body is lowered into the instruction
     // stream and registered in function_table.  Index 0 is reserved for main.
-    let mut deferred_functions: Vec<(Vec<Ir1Op>, Vec<String>, Option<String>, Vec<String>, bool)> =
-        Vec::new();
+    #[allow(clippy::type_complexity)]
+    let mut deferred_functions: Vec<(
+        Vec<Ir1Op>,
+        Vec<String>,
+        Option<String>,
+        Vec<String>,
+        bool,
+    )> = Vec::new();
 
     // Build name→BindingId lookup from the module's scope tree so the
     // IR3 lowering can resolve free-variable names to register indices.
@@ -2808,7 +2813,7 @@ pub fn lower_ir2_to_ir3(
                 let cnt = *count as usize;
                 if cnt
                     .checked_mul(2)
-                    .map_or(true, |needed| needed > value_stack.len())
+                    .is_none_or(|needed| needed > value_stack.len())
                 {
                     return Err(LoweringPipelineError::InvariantViolation {
                         detail: "Value stack underflow in NewObject",
@@ -2833,6 +2838,30 @@ pub fn lower_ir2_to_ir3(
                     });
                 }
                 value_stack.push(dst);
+            }
+            Ir1Op::ArrayPush => {
+                // Stack: [..., array, element] -> [..., array]
+                let element = value_stack.pop().unwrap_or(0);
+                let array = value_stack.pop().unwrap_or(0);
+                ir3.instructions
+                    .push(Ir3Instruction::ArrayPush { array, element });
+                value_stack.push(array);
+            }
+            Ir1Op::SpreadIntoArray => {
+                // Stack: [..., array, iterable] -> [..., array]
+                let iterable = value_stack.pop().unwrap_or(0);
+                let array = value_stack.pop().unwrap_or(0);
+                ir3.instructions
+                    .push(Ir3Instruction::SpreadIntoArray { array, iterable });
+                value_stack.push(array);
+            }
+            Ir1Op::SpreadIntoObject => {
+                // Stack: [..., target, source] -> [..., target]
+                let source = value_stack.pop().unwrap_or(0);
+                let target = value_stack.pop().unwrap_or(0);
+                ir3.instructions
+                    .push(Ir3Instruction::SpreadIntoObject { target, source });
+                value_stack.push(target);
             }
             Ir1Op::Throw => {
                 let value = value_stack.pop().unwrap_or(0);
@@ -3044,7 +3073,7 @@ pub fn lower_ir2_to_ir3(
                 // We need `count` args + 1 callee.
                 if count
                     .checked_add(1)
-                    .map_or(true, |needed| needed > value_stack.len())
+                    .is_none_or(|needed| needed > value_stack.len())
                 {
                     return Err(LoweringPipelineError::InvariantViolation {
                         detail: "Value stack underflow in Construct",
@@ -3335,12 +3364,11 @@ pub fn lower_ir2_to_ir3(
                 // in order of first appearance.  Match them up.
                 let mut seen_ids = Vec::new();
                 for bop in body_ops.iter() {
-                    if let Ir1Op::LoadBinding { binding_id } = bop {
-                        if free_var_binding_ids.contains(binding_id)
-                            && !seen_ids.contains(binding_id)
-                        {
-                            seen_ids.push(*binding_id);
-                        }
+                    if let Ir1Op::LoadBinding { binding_id } = bop
+                        && free_var_binding_ids.contains(binding_id)
+                        && !seen_ids.contains(binding_id)
+                    {
+                        seen_ids.push(*binding_id);
                     }
                 }
                 for (idx, bid) in seen_ids.iter().enumerate() {
@@ -3710,6 +3738,30 @@ pub fn lower_ir2_to_ir3(
                         });
                     }
                     fn_value_stack.push(dst);
+                }
+                Ir1Op::ArrayPush => {
+                    // Stack: [..., array, element] -> [..., array]
+                    let element = fn_value_stack.pop().unwrap_or(0);
+                    let array = fn_value_stack.pop().unwrap_or(0);
+                    ir3.instructions
+                        .push(Ir3Instruction::ArrayPush { array, element });
+                    fn_value_stack.push(array);
+                }
+                Ir1Op::SpreadIntoArray => {
+                    // Stack: [..., array, iterable] -> [..., array]
+                    let iterable = fn_value_stack.pop().unwrap_or(0);
+                    let array = fn_value_stack.pop().unwrap_or(0);
+                    ir3.instructions
+                        .push(Ir3Instruction::SpreadIntoArray { array, iterable });
+                    fn_value_stack.push(array);
+                }
+                Ir1Op::SpreadIntoObject => {
+                    // Stack: [..., target, source] -> [..., target]
+                    let source = fn_value_stack.pop().unwrap_or(0);
+                    let target = fn_value_stack.pop().unwrap_or(0);
+                    ir3.instructions
+                        .push(Ir3Instruction::SpreadIntoObject { target, source });
+                    fn_value_stack.push(target);
                 }
                 Ir1Op::Throw => {
                     let value = fn_value_stack.pop().unwrap_or(0);
@@ -5207,32 +5259,164 @@ fn lower_expression_to_ir1(
             ops.push(Ir1Op::LoadThis);
         }
         Expression::ArrayLiteral(elements) => {
-            for elem in elements {
-                if let Some(expr) = elem {
-                    lower_expression_to_ir1(
-                        expr,
-                        ops,
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        root_scope_id,
-                        label_counter,
-                    )?;
-                } else {
-                    ops.push(Ir1Op::LoadLiteral {
-                        value: Ir1Literal::Undefined,
-                    });
+            // Check if any element is a spread
+            let has_spread = elements
+                .iter()
+                .any(|elem| matches!(elem, Some(Expression::SpreadElement(_))));
+
+            if has_spread {
+                // With spreads, use incremental approach:
+                // 1. Create empty array
+                // 2. For each element: ArrayPush or SpreadIntoArray
+                ops.push(Ir1Op::NewArray { count: 0 });
+                for elem in elements {
+                    match elem {
+                        Some(Expression::SpreadElement(inner)) => {
+                            // Lower the iterable
+                            lower_expression_to_ir1(
+                                inner,
+                                ops,
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                root_scope_id,
+                                label_counter,
+                            )?;
+                            ops.push(Ir1Op::SpreadIntoArray);
+                        }
+                        Some(expr) => {
+                            // Lower normal element
+                            lower_expression_to_ir1(
+                                expr,
+                                ops,
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                root_scope_id,
+                                label_counter,
+                            )?;
+                            ops.push(Ir1Op::ArrayPush);
+                        }
+                        None => {
+                            // Hole - push undefined
+                            ops.push(Ir1Op::LoadLiteral {
+                                value: Ir1Literal::Undefined,
+                            });
+                            ops.push(Ir1Op::ArrayPush);
+                        }
+                    }
                 }
+            } else {
+                // No spreads - use original efficient batch approach
+                for elem in elements {
+                    if let Some(expr) = elem {
+                        lower_expression_to_ir1(
+                            expr,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                        )?;
+                    } else {
+                        ops.push(Ir1Op::LoadLiteral {
+                            value: Ir1Literal::Undefined,
+                        });
+                    }
+                }
+                ops.push(Ir1Op::NewArray {
+                    count: elements.len() as u32,
+                });
             }
-            ops.push(Ir1Op::NewArray {
-                count: elements.len() as u32,
-            });
         }
         Expression::ObjectLiteral(properties) => {
-            for prop in properties {
-                if prop.computed {
+            // Check if any property is a spread ({...obj})
+            let has_spread = properties
+                .iter()
+                .any(|prop| matches!(&prop.value, Expression::SpreadElement(_)));
+
+            if has_spread {
+                // With spreads, use incremental approach:
+                // 1. Create empty object
+                // 2. For each property: SetProperty or SpreadIntoObject
+                ops.push(Ir1Op::NewObject { count: 0 });
+                for prop in properties {
+                    if let Expression::SpreadElement(inner) = &prop.value {
+                        // Spread property - lower the source object and spread
+                        lower_expression_to_ir1(
+                            inner,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                        )?;
+                        ops.push(Ir1Op::SpreadIntoObject);
+                    } else {
+                        // Normal property - emit key and value, then set
+                        if prop.computed {
+                            lower_expression_to_ir1(
+                                &prop.key,
+                                ops,
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                root_scope_id,
+                                label_counter,
+                            )?;
+                        } else {
+                            let key_str = match &prop.key {
+                                Expression::Identifier(name) => name.clone(),
+                                Expression::StringLiteral(s) => s.clone(),
+                                Expression::NumericLiteral(n) => n.to_string(),
+                                other => format!("{other:?}"),
+                            };
+                            ops.push(Ir1Op::LoadLiteral {
+                                value: Ir1Literal::String(key_str),
+                            });
+                        }
+                        lower_expression_to_ir1(
+                            &prop.value,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                        )?;
+                        ops.push(Ir1Op::SetProperty {
+                            key: Ir1PropertyKey::Dynamic,
+                        });
+                    }
+                }
+            } else {
+                // No spreads - use original batch approach
+                for prop in properties {
+                    if prop.computed {
+                        lower_expression_to_ir1(
+                            &prop.key,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                        )?;
+                    } else {
+                        let key_str = match &prop.key {
+                            Expression::Identifier(name) => name.clone(),
+                            Expression::StringLiteral(s) => s.clone(),
+                            Expression::NumericLiteral(n) => n.to_string(),
+                            other => format!("{other:?}"),
+                        };
+                        ops.push(Ir1Op::LoadLiteral {
+                            value: Ir1Literal::String(key_str),
+                        });
+                    }
                     lower_expression_to_ir1(
-                        &prop.key,
+                        &prop.value,
                         ops,
                         bindings,
                         binding_lookup,
@@ -5240,30 +5424,11 @@ fn lower_expression_to_ir1(
                         root_scope_id,
                         label_counter,
                     )?;
-                } else {
-                    let key_str = match &prop.key {
-                        Expression::Identifier(name) => name.clone(),
-                        Expression::StringLiteral(s) => s.clone(),
-                        Expression::NumericLiteral(n) => n.to_string(),
-                        other => format!("{other:?}"),
-                    };
-                    ops.push(Ir1Op::LoadLiteral {
-                        value: Ir1Literal::String(key_str),
-                    });
                 }
-                lower_expression_to_ir1(
-                    &prop.value,
-                    ops,
-                    bindings,
-                    binding_lookup,
-                    binding_index,
-                    root_scope_id,
-                    label_counter,
-                )?;
+                ops.push(Ir1Op::NewObject {
+                    count: properties.len() as u32,
+                });
             }
-            ops.push(Ir1Op::NewObject {
-                count: properties.len() as u32,
-            });
         }
         Expression::ArrowFunction { params, body, .. } => {
             // Lower arrow function body with its own fresh scope.

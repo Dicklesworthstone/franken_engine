@@ -56,11 +56,35 @@ const DEFAULT_QUICKJS_MAX_REGISTERS: u32 = 256;
 
 /// Default register file size for the throughput profile.
 const DEFAULT_V8_MAX_REGISTERS: u32 = 4096;
+/// Default heap object budget for the deterministic profile.
+const DEFAULT_QUICKJS_MAX_HEAP_OBJECTS: u32 = 100_000;
+/// Default heap object budget for the throughput profile.
+const DEFAULT_V8_MAX_HEAP_OBJECTS: u32 = 1_000_000;
+/// Default total memory budget for the deterministic profile.
+const DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES: u64 = 64 * 1024 * 1024;
+/// Default total memory budget for the throughput profile.
+const DEFAULT_V8_MAX_TOTAL_MEMORY_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Maximum call-stack depth.
 const MAX_CALL_DEPTH: usize = 256;
 /// Deterministic bound for baseline prototype-chain walks.
 const MAX_PROTOTYPE_CHAIN_DEPTH: u32 = 64;
+/// Approximate per-string heap footprint used for fail-closed budgeting.
+const MEMORY_ESTIMATE_STRING_BASE_BYTES: u64 = 24;
+/// Approximate per-heap-object base footprint.
+const MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES: u64 = 64;
+/// Approximate per-map-entry footprint.
+const MEMORY_ESTIMATE_MAP_ENTRY_BYTES: u64 = 48;
+/// Approximate per-scope-frame base footprint.
+const MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES: u64 = 32;
+/// Approximate per-scope-binding base footprint.
+const MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES: u64 = 24;
+/// Approximate per-closure base footprint.
+const MEMORY_ESTIMATE_CLOSURE_BASE_BYTES: u64 = 32;
+/// Approximate per-iterator base footprint.
+const MEMORY_ESTIMATE_ITERATOR_BASE_BYTES: u64 = 32;
+/// Approximate per-generator base footprint.
+const MEMORY_ESTIMATE_GENERATOR_BASE_BYTES: u64 = 48;
 
 /// Canonical operator-facing label for the deterministic execution profile.
 pub const DETERMINISTIC_PROFILE_LABEL: &str = "baseline_deterministic_profile";
@@ -587,6 +611,13 @@ pub enum InterpreterError {
     ConstAssignment { name: String },
     /// String allocation size exceeded.
     StringLimitExceeded { length: usize, max: usize },
+    /// Heap object count or estimated live memory exceeded configured limits.
+    MemoryBudgetExceeded {
+        requested_bytes: u64,
+        max_bytes: u64,
+        requested_heap_objects: u32,
+        max_heap_objects: u32,
+    },
     /// Guardplane containment hook requested a fail-closed action.
     ContainmentActionRequested {
         action: String,
@@ -660,6 +691,16 @@ impl fmt::Display for InterpreterError {
                     length, max
                 )
             }
+            Self::MemoryBudgetExceeded {
+                requested_bytes,
+                max_bytes,
+                requested_heap_objects,
+                max_heap_objects,
+            } => write!(
+                f,
+                "memory budget exceeded: requested {} heap objects / {} bytes, limits {} heap objects / {} bytes",
+                requested_heap_objects, requested_bytes, max_heap_objects, max_bytes
+            ),
             Self::ContainmentActionRequested { action, reason } => {
                 if let Some(reason) = reason {
                     write!(f, "containment action requested: {action} ({reason})")
@@ -686,6 +727,10 @@ pub struct InterpreterConfig {
     pub max_call_depth: usize,
     /// Maximum string allocation size (bytes).
     pub max_string_size: usize,
+    /// Maximum heap objects the interpreter may allocate before failing closed.
+    pub max_heap_objects: u32,
+    /// Maximum estimated live memory before failing closed.
+    pub max_total_memory_bytes: u64,
     /// Set of capabilities granted to this execution context.
     pub granted_capabilities: Vec<String>,
 }
@@ -698,6 +743,8 @@ impl InterpreterConfig {
             max_registers: DEFAULT_QUICKJS_MAX_REGISTERS,
             max_call_depth: MAX_CALL_DEPTH,
             max_string_size: 33_554_432,
+            max_heap_objects: DEFAULT_QUICKJS_MAX_HEAP_OBJECTS,
+            max_total_memory_bytes: DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES,
             granted_capabilities: Vec::new(),
         }
     }
@@ -709,6 +756,8 @@ impl InterpreterConfig {
             max_registers: DEFAULT_V8_MAX_REGISTERS,
             max_call_depth: MAX_CALL_DEPTH,
             max_string_size: 268_435_456,
+            max_heap_objects: DEFAULT_V8_MAX_HEAP_OBJECTS,
+            max_total_memory_bytes: DEFAULT_V8_MAX_TOTAL_MEMORY_BYTES,
             granted_capabilities: Vec::new(),
         }
     }
@@ -720,6 +769,8 @@ impl InterpreterConfig {
             max_registers: config.deterministic_max_registers,
             max_call_depth: config.max_call_depth,
             max_string_size: 33_554_432,
+            max_heap_objects: DEFAULT_QUICKJS_MAX_HEAP_OBJECTS,
+            max_total_memory_bytes: DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES,
             granted_capabilities: Vec::new(),
         }
     }
@@ -731,6 +782,8 @@ impl InterpreterConfig {
             max_registers: config.throughput_max_registers,
             max_call_depth: config.max_call_depth,
             max_string_size: 268_435_456,
+            max_heap_objects: DEFAULT_V8_MAX_HEAP_OBJECTS,
+            max_total_memory_bytes: DEFAULT_V8_MAX_TOTAL_MEMORY_BYTES,
             granted_capabilities: Vec::new(),
         }
     }
@@ -792,6 +845,8 @@ pub struct InterpreterCore {
     call_stack: Vec<CallFrame>,
     /// Object heap.
     heap: Vec<HeapObject>,
+    /// Approximate live memory tracked for fail-closed budget enforcement.
+    estimated_memory_bytes: u64,
     /// Dedicated iterator runtime state used by iterator-specific IR3 ops.
     iterators: Vec<RuntimeIteratorState>,
     /// Lazily allocated prototype objects for constructor functions.
@@ -856,6 +911,7 @@ impl InterpreterCore {
             registers: vec![Value::Undefined; max_regs],
             call_stack: Vec::new(),
             heap: Vec::new(),
+            estimated_memory_bytes: 0,
             iterators: Vec::new(),
             function_prototypes: BTreeMap::new(),
             ip: 0,
@@ -918,6 +974,7 @@ impl InterpreterCore {
         };
         self.last_pre_run_seed = Some(seed.clone());
         self.reset_execution_state_from_seed(&seed);
+        self.sync_estimated_memory_bytes()?;
 
         self.push_event("execution_started", "ok", None);
 
@@ -993,6 +1050,7 @@ impl InterpreterCore {
         self.pending_return = None;
         self.suspended_abrupt_completions.clear();
         self.finally_modes.clear();
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
     }
 
     fn complete_return(&mut self, return_val: Value) -> Result<Option<Value>, InterpreterError> {
@@ -1273,11 +1331,10 @@ impl InterpreterCore {
 
         match gobj.phase {
             GeneratorPhase::Completed => {
-                let result_id = self.alloc_object();
+                let result_id = self.alloc_object_with_prototype(None)?;
                 {
-                    let obj = &mut self.heap[result_id.0 as usize];
-                    obj.properties.insert("value".to_string(), Value::Undefined);
-                    obj.properties.insert("done".to_string(), Value::Bool(true));
+                    self.set_object_property(result_id, "value".to_string(), Value::Undefined)?;
+                    self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
                 }
                 return Ok(Value::Object(result_id));
             }
@@ -1369,11 +1426,10 @@ impl InterpreterCore {
                 self.register_base = caller_register_base;
                 self.scope_chain.frames = caller_scope;
 
-                let result_id = self.alloc_object();
+                let result_id = self.alloc_object_with_prototype(None)?;
                 {
-                    let obj = &mut self.heap[result_id.0 as usize];
-                    obj.properties.insert("value".to_string(), Value::Undefined);
-                    obj.properties.insert("done".to_string(), Value::Bool(true));
+                    self.set_object_property(result_id, "value".to_string(), Value::Undefined)?;
+                    self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
                 }
                 Ok(Value::Object(result_id))
             }
@@ -1899,11 +1955,7 @@ impl InterpreterCore {
                     match obj_val {
                         Value::Object(oid) => {
                             self.run_pre_property_access_hook(module, oid, &key_str)?;
-                            let heap_obj = self
-                                .heap
-                                .get_mut(oid.0 as usize)
-                                .ok_or(InterpreterError::ObjectNotFound { id: oid.0 })?;
-                            heap_obj.properties.insert(key_str, set_val);
+                            self.set_object_property(oid, key_str, set_val)?;
                         }
                         _ => {
                             return Err(InterpreterError::TypeError {
@@ -1922,11 +1974,7 @@ impl InterpreterCore {
                     match obj_val {
                         Value::Object(oid) => {
                             self.run_pre_property_access_hook(module, oid, &key_str)?;
-                            self.heap
-                                .get_mut(oid.0 as usize)
-                                .ok_or(InterpreterError::ObjectNotFound { id: oid.0 })?
-                                .properties
-                                .remove(&key_str);
+                            self.remove_object_property(oid, &key_str)?;
                             self.mark_deleted_for_in_iterators(oid, &key_str);
                             self.write_reg(dst, Value::Bool(true))?;
                         }
@@ -1941,14 +1989,101 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::NewObject { dst } => {
                     self.run_pre_allocation_hook(module, AllocKind::Object, 0)?;
-                    let id = self.alloc_object();
+                    let id = self.alloc_object_with_prototype(None)?;
                     self.write_reg(dst, Value::Object(id))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::NewArray { dst } => {
                     self.run_pre_allocation_hook(module, AllocKind::Array, 0)?;
-                    let id = self.alloc_object();
+                    let id = self.alloc_object_with_prototype(None)?;
                     self.write_reg(dst, Value::Object(id))?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::ArrayPush { array, element } => {
+                    // Push a single element onto an array
+                    let arr_val = self.read_reg(array)?;
+                    let elem_val = self.read_reg(element)?;
+                    if let Value::Object(arr_id) = arr_val {
+                        let next_idx = self
+                            .heap
+                            .get(arr_id.0 as usize)
+                            .map(|obj| {
+                                obj.properties.keys().fold(0u32, |current, key| {
+                                    key.parse::<u32>()
+                                        .ok()
+                                        .map_or(current, |n| current.max(n + 1))
+                                })
+                            })
+                            .unwrap_or(0);
+                        self.set_object_property(arr_id, next_idx.to_string(), elem_val)?;
+                    }
+                    self.ip += 1;
+                }
+                Ir3Instruction::SpreadIntoArray { array, iterable } => {
+                    // Spread iterable elements into an array
+                    let arr_val = self.read_reg(array)?;
+                    let iter_val = self.read_reg(iterable)?;
+                    if let (Value::Object(arr_id), Value::Object(iter_id)) = (arr_val, iter_val) {
+                        // Get elements from iterable (assume it's array-like)
+                        let elements: Vec<Value> = {
+                            if let Some(obj) = self.heap.get(iter_id.0 as usize) {
+                                let mut elems = Vec::new();
+                                let mut idx = 0u32;
+                                while let Some(val) = obj.properties.get(&idx.to_string()) {
+                                    elems.push(val.clone());
+                                    idx += 1;
+                                }
+                                elems
+                            } else {
+                                Vec::new()
+                            }
+                        };
+                        // Push elements to target array
+                        if self.heap.get(arr_id.0 as usize).is_some() {
+                            let mut next_idx = self
+                                .heap
+                                .get(arr_id.0 as usize)
+                                .map(|obj| {
+                                    obj.properties.keys().fold(0u32, |current, key| {
+                                        key.parse::<u32>()
+                                            .ok()
+                                            .map_or(current, |n| current.max(n + 1))
+                                    })
+                                })
+                                .unwrap_or(0);
+                            for elem in elements {
+                                self.set_object_property(arr_id, next_idx.to_string(), elem)?;
+                                next_idx += 1;
+                            }
+                        }
+                    }
+                    self.ip += 1;
+                }
+                Ir3Instruction::SpreadIntoObject { target, source } => {
+                    // Spread source object properties into target
+                    let target_val = self.read_reg(target)?;
+                    let source_val = self.read_reg(source)?;
+                    if let (Value::Object(target_id), Value::Object(source_id)) =
+                        (target_val, source_val)
+                    {
+                        // Collect source properties
+                        let properties: Vec<(String, Value)> = {
+                            if let Some(obj) = self.heap.get(source_id.0 as usize) {
+                                obj.properties
+                                    .iter()
+                                    .map(|(k, v)| (k.clone(), v.clone()))
+                                    .collect()
+                            } else {
+                                Vec::new()
+                            }
+                        };
+                        // Copy to target
+                        if self.heap.get(target_id.0 as usize).is_some() {
+                            for (key, val) in properties {
+                                self.set_object_property(target_id, key, val)?;
+                            }
+                        }
+                    }
                     self.ip += 1;
                 }
                 Ir3Instruction::Mod { dst, lhs, rhs } => {
@@ -2112,7 +2247,7 @@ impl InterpreterCore {
                             }
 
                             // Allocate the `this` object for the constructor.
-                            let prototype = self.ensure_function_prototype(func_idx);
+                            let prototype = self.ensure_function_prototype(func_idx)?;
                             let this_id = self.alloc_object_with_prototype(Some(prototype))?;
                             if let Some(this_obj) = self.heap.get_mut(this_id.0 as usize) {
                                 this_obj.constructor_function = Some(func_idx);
@@ -2370,6 +2505,11 @@ impl InterpreterCore {
                         function_index,
                         captured_env,
                     });
+                    if let Err(err) = self.sync_estimated_memory_bytes() {
+                        self.closures.pop();
+                        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                        return Err(err);
+                    }
                     self.pending_captures.clear();
                     // Store the closure ID (not function_index) so Call can
                     // look up the correct closure instance.
@@ -2397,6 +2537,11 @@ impl InterpreterCore {
                         function_index,
                         captured_env,
                     });
+                    if let Err(err) = self.sync_estimated_memory_bytes() {
+                        self.closures.pop();
+                        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                        return Err(err);
+                    }
                     self.pending_captures.clear();
                     self.write_reg(dst, Value::GeneratorFunction(closure_id))?;
                     self.ip += 1;
@@ -2407,12 +2552,14 @@ impl InterpreterCore {
                     resume_dst,
                 } => {
                     let yielded = self.read_reg(value)?;
-                    let result_id = self.alloc_object();
+                    let result_id = self.alloc_object_with_prototype(None)?;
                     {
-                        let obj = &mut self.heap[result_id.0 as usize];
-                        obj.properties.insert("value".to_string(), yielded);
-                        obj.properties
-                            .insert("done".to_string(), Value::Bool(false));
+                        self.set_object_property(result_id, "value".to_string(), yielded)?;
+                        self.set_object_property(
+                            result_id,
+                            "done".to_string(),
+                            Value::Bool(false),
+                        )?;
                     }
                     self.ip += 1;
                     self.write_reg(resume_dst, Value::Undefined)?;
@@ -2776,7 +2923,7 @@ impl InterpreterCore {
             return Ok(Value::Bool(false));
         };
 
-        let prototype = self.ensure_function_prototype(func_idx);
+        let prototype = self.ensure_function_prototype(func_idx)?;
         Ok(Value::Bool(
             self.prototype_chain_contains(object_id, prototype)?,
         ))
@@ -3075,11 +3222,9 @@ impl InterpreterCore {
                     _ => {
                         // Promise.resolve(value) — create a pre-resolved promise.
                         let js_val = Self::value_to_js_value(&arg0);
-                        let handle = self.promise_store.resolve(
-                            js_val,
-                            label,
-                            &mut self.microtask_queue,
-                        );
+                        let handle =
+                            self.promise_store
+                                .resolve(js_val, label, &mut self.microtask_queue);
                         Ok(Value::Promise(handle.0))
                     }
                 }
@@ -3358,11 +3503,152 @@ impl InterpreterCore {
         if actual_reg >= self.registers.len() {
             self.registers.resize(actual_reg + 1, Value::Undefined);
         }
+        let previous = self.registers[actual_reg].clone();
         self.registers[actual_reg] = value;
+        if let Err(err) = self.sync_estimated_memory_bytes() {
+            self.registers[actual_reg] = previous;
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(err);
+        }
         Ok(())
     }
 
     // -- Heap operations ---------------------------------------------------
+
+    fn estimate_string_bytes(text: &str) -> u64 {
+        MEMORY_ESTIMATE_STRING_BASE_BYTES.saturating_add(text.len() as u64)
+    }
+
+    fn estimate_value_bytes(value: &Value) -> u64 {
+        match value {
+            Value::Str(text) => Self::estimate_string_bytes(text),
+            _ => 0,
+        }
+    }
+
+    fn estimate_scope_frame_bytes(frame: &ScopeFrame) -> u64 {
+        let bindings = frame
+            .bindings
+            .iter()
+            .map(|(name, binding)| {
+                MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES
+                    .saturating_add(Self::estimate_string_bytes(name))
+                    .saturating_add(Self::estimate_value_bytes(&binding.value))
+            })
+            .sum::<u64>();
+        MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES.saturating_add(bindings)
+    }
+
+    fn estimate_scope_chain_bytes(frames: &[ScopeFrame]) -> u64 {
+        frames
+            .iter()
+            .map(Self::estimate_scope_frame_bytes)
+            .sum::<u64>()
+    }
+
+    fn estimate_heap_object_bytes(object: &HeapObject) -> u64 {
+        let properties = object
+            .properties
+            .iter()
+            .map(|(key, value)| {
+                MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                    .saturating_add(Self::estimate_string_bytes(key))
+                    .saturating_add(Self::estimate_value_bytes(value))
+            })
+            .sum::<u64>();
+        MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES.saturating_add(properties)
+    }
+
+    fn estimate_iterator_bytes(iterator: &RuntimeIteratorState) -> u64 {
+        match iterator {
+            RuntimeIteratorState::ForIn(state) => {
+                let keys = state
+                    .keys
+                    .iter()
+                    .map(|key| Self::estimate_string_bytes(key))
+                    .sum::<u64>();
+                MEMORY_ESTIMATE_ITERATOR_BASE_BYTES.saturating_add(keys)
+            }
+            RuntimeIteratorState::ForOf(state) => {
+                let values = state
+                    .values
+                    .iter()
+                    .map(Self::estimate_value_bytes)
+                    .sum::<u64>();
+                MEMORY_ESTIMATE_ITERATOR_BASE_BYTES.saturating_add(values)
+            }
+        }
+    }
+
+    fn estimate_generator_bytes(generator: &GeneratorObject) -> u64 {
+        let registers = generator
+            .saved_registers
+            .iter()
+            .map(Self::estimate_value_bytes)
+            .sum::<u64>();
+        MEMORY_ESTIMATE_GENERATOR_BASE_BYTES.saturating_add(registers)
+    }
+
+    fn heap_object_count_u32(&self) -> u32 {
+        u32::try_from(self.heap.len()).unwrap_or(u32::MAX)
+    }
+
+    fn memory_budget_error(
+        &self,
+        requested_bytes: u64,
+        requested_heap_objects: u32,
+    ) -> InterpreterError {
+        InterpreterError::MemoryBudgetExceeded {
+            requested_bytes,
+            max_bytes: self.config.max_total_memory_bytes,
+            requested_heap_objects,
+            max_heap_objects: self.config.max_heap_objects,
+        }
+    }
+
+    fn recompute_estimated_memory_bytes(&self) -> u64 {
+        self.heap
+            .iter()
+            .map(Self::estimate_heap_object_bytes)
+            .sum::<u64>()
+            .saturating_add(
+                self.registers
+                    .iter()
+                    .map(Self::estimate_value_bytes)
+                    .sum::<u64>(),
+            )
+            .saturating_add(Self::estimate_scope_chain_bytes(&self.scope_chain.frames))
+            .saturating_add(
+                self.closures
+                    .iter()
+                    .map(|closure| {
+                        MEMORY_ESTIMATE_CLOSURE_BASE_BYTES
+                            .saturating_add(Self::estimate_scope_chain_bytes(&closure.captured_env))
+                    })
+                    .sum::<u64>(),
+            )
+            .saturating_add(
+                self.iterators
+                    .iter()
+                    .map(Self::estimate_iterator_bytes)
+                    .sum::<u64>(),
+            )
+            .saturating_add(
+                self.generators
+                    .iter()
+                    .map(Self::estimate_generator_bytes)
+                    .sum::<u64>(),
+            )
+    }
+
+    fn sync_estimated_memory_bytes(&mut self) -> Result<u64, InterpreterError> {
+        let requested_bytes = self.recompute_estimated_memory_bytes();
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+        self.estimated_memory_bytes = requested_bytes;
+        Ok(requested_bytes)
+    }
 
     /// Allocate a new object with an explicit prototype link.
     ///
@@ -3372,6 +3658,12 @@ impl InterpreterCore {
         &mut self,
         prototype: Option<ObjectId>,
     ) -> Result<ObjectId, InterpreterError> {
+        let requested_heap_objects = self.heap_object_count_u32().saturating_add(1);
+        if requested_heap_objects > self.config.max_heap_objects {
+            return Err(
+                self.memory_budget_error(self.estimated_memory_bytes, requested_heap_objects)
+            );
+        }
         let id =
             ObjectId(
                 u32::try_from(self.heap.len()).map_err(|_| InterpreterError::TypeError {
@@ -3381,7 +3673,14 @@ impl InterpreterCore {
             );
         let mut object = HeapObject::new();
         object.prototype = prototype;
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_add(Self::estimate_heap_object_bytes(&object));
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(requested_bytes, requested_heap_objects));
+        }
         self.heap.push(object);
+        self.estimated_memory_bytes = requested_bytes;
         Ok(id)
     }
 
@@ -3392,7 +3691,7 @@ impl InterpreterCore {
     /// `alloc_object_with_prototype` directly.
     pub fn alloc_object(&mut self) -> ObjectId {
         self.alloc_object_with_prototype(None)
-            .expect("heap object capacity exceeded")
+            .expect("heap object allocation failed")
     }
 
     fn alloc_iterator(&mut self, iterator: RuntimeIteratorState) -> u32 {
@@ -3489,19 +3788,68 @@ impl InterpreterCore {
         }
     }
 
-    fn ensure_function_prototype(&mut self, func_idx: u32) -> ObjectId {
+    fn set_object_property(
+        &mut self,
+        object_id: ObjectId,
+        key: String,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
+        let previous = {
+            let object = self
+                .heap
+                .get_mut(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            object.properties.insert(key.clone(), value)
+        };
+        if let Err(err) = self.sync_estimated_memory_bytes() {
+            let object = self
+                .heap
+                .get_mut(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+            if let Some(previous) = previous {
+                object.properties.insert(key, previous);
+            } else {
+                object.properties.remove(&key);
+            }
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    fn remove_object_property(
+        &mut self,
+        object_id: ObjectId,
+        key: &str,
+    ) -> Result<bool, InterpreterError> {
+        let removed = self
+            .heap
+            .get_mut(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
+            .properties
+            .remove(key);
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+        Ok(removed.is_some())
+    }
+
+    fn ensure_function_prototype(&mut self, func_idx: u32) -> Result<ObjectId, InterpreterError> {
         if let Some(existing) = self.function_prototypes.get(&func_idx) {
-            *existing
+            Ok(*existing)
         } else {
-            let prototype = self.alloc_object();
+            let prototype = self.alloc_object_with_prototype(None)?;
             self.function_prototypes.insert(func_idx, prototype);
-            prototype
+            Ok(prototype)
         }
     }
 
     /// Get the number of objects on the heap.
     pub fn heap_size(&self) -> usize {
         self.heap.len()
+    }
+
+    /// Return the current live-memory estimate used by the interpreter.
+    pub fn estimated_memory_bytes(&self) -> u64 {
+        self.estimated_memory_bytes
     }
 
     // -- Witness emission --------------------------------------------------
@@ -5487,6 +5835,8 @@ mod tests {
         assert_eq!(c.instruction_budget, 100_000);
         assert_eq!(c.max_registers, 256);
         assert_eq!(c.max_call_depth, 256);
+        assert_eq!(c.max_heap_objects, 100_000);
+        assert_eq!(c.max_total_memory_bytes, 64 * 1024 * 1024);
         assert!(c.granted_capabilities.is_empty());
     }
 
@@ -5496,6 +5846,8 @@ mod tests {
         assert_eq!(c.instruction_budget, 1_000_000);
         assert_eq!(c.max_registers, 4096);
         assert_eq!(c.max_call_depth, 256);
+        assert_eq!(c.max_heap_objects, 1_000_000);
+        assert_eq!(c.max_total_memory_bytes, 512 * 1024 * 1024);
         assert!(c.granted_capabilities.is_empty());
     }
 
@@ -5518,12 +5870,87 @@ mod tests {
         let config = InterpreterConfig::quickjs_defaults();
         let mut core = InterpreterCore::new(config, "test");
         assert_eq!(core.heap_size(), 0);
+        assert_eq!(core.estimated_memory_bytes(), 0);
         let id = core.alloc_object();
         assert_eq!(id, ObjectId(0));
         assert_eq!(core.heap_size(), 1);
         let id2 = core.alloc_object();
         assert_eq!(id2, ObjectId(1));
         assert_eq!(core.heap_size(), 2);
+        assert!(core.estimated_memory_bytes() > 0);
+    }
+
+    #[test]
+    fn alloc_object_with_prototype_respects_heap_budget() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.max_heap_objects = 2;
+        let mut core = InterpreterCore::new(config, "heap-budget");
+        assert_eq!(core.alloc_object_with_prototype(None).unwrap(), ObjectId(0));
+        assert_eq!(core.alloc_object_with_prototype(None).unwrap(), ObjectId(1));
+        let err = core.alloc_object_with_prototype(None).unwrap_err();
+        assert!(matches!(
+            err,
+            InterpreterError::MemoryBudgetExceeded {
+                requested_heap_objects: 3,
+                max_heap_objects: 2,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn estimated_memory_bytes_tracks_property_growth() {
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "memory-estimate");
+        let oid = core.alloc_object();
+        let before = core.estimated_memory_bytes();
+        core.heap[oid.0 as usize]
+            .properties
+            .insert("payload".to_string(), Value::Str("hello world".to_string()));
+        core.sync_estimated_memory_bytes().unwrap();
+        assert!(core.estimated_memory_bytes() > before);
+    }
+
+    #[test]
+    fn new_object_instruction_returns_memory_budget_exceeded() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.max_heap_objects = 0;
+        let mut core = InterpreterCore::new(config, "budget");
+        let module = test_module(vec![
+            Ir3Instruction::NewObject { dst: 0 },
+            Ir3Instruction::Halt,
+        ]);
+        let err = core.execute(&module).unwrap_err();
+        assert!(matches!(
+            err,
+            InterpreterError::MemoryBudgetExceeded {
+                requested_heap_objects: 1,
+                max_heap_objects: 0,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn load_str_instruction_returns_memory_budget_exceeded() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.max_total_memory_bytes = 1;
+        let mut core = InterpreterCore::new(config, "string-budget");
+        let module = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec!["hello".to_string()],
+        );
+        let err = core.execute(&module).unwrap_err();
+        assert!(matches!(
+            err,
+            InterpreterError::MemoryBudgetExceeded { max_bytes: 1, .. }
+        ));
     }
 
     #[test]
@@ -5602,6 +6029,12 @@ mod tests {
                 length: 1024,
                 max: 512,
             },
+            InterpreterError::MemoryBudgetExceeded {
+                requested_bytes: 4096,
+                max_bytes: 2048,
+                requested_heap_objects: 12,
+                max_heap_objects: 10,
+            },
             InterpreterError::ContainmentActionRequested {
                 action: "terminate".to_string(),
                 reason: Some("policy".to_string()),
@@ -5614,8 +6047,8 @@ mod tests {
         }
         assert_eq!(
             variants.len(),
-            20,
-            "all 20 InterpreterError variants covered"
+            21,
+            "all 21 InterpreterError variants covered"
         );
     }
 

@@ -214,10 +214,10 @@ fn dependency_isolation_contract_documents_standalone_and_full_integration_modes
             .as_str(),
         Some("franken-engine.standalone-build-gate.v1")
     );
-    let build_gate_artifacts = contract["verification_surfaces"]["standalone_build_gate"]
-        ["artifacts"]
-        .as_array()
-        .expect("standalone build gate artifacts should be an array");
+    let build_gate_artifacts =
+        contract["verification_surfaces"]["standalone_build_gate"]["artifacts"]
+            .as_array()
+            .expect("standalone build gate artifacts should be an array");
     for artifact in [
         "<timestamp>/manifest.json",
         "<timestamp>/events.jsonl",

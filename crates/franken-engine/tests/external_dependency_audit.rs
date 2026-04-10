@@ -224,7 +224,9 @@ fn dependency_isolation_contract_documents_the_asupersync_tripod() {
         .expect("dependency audit artifacts should be an array");
     for artifact in ["manifest.json", "commands.txt", "logs/"] {
         assert!(
-            audit_artifacts.iter().any(|entry| entry.as_str() == Some(artifact)),
+            audit_artifacts
+                .iter()
+                .any(|entry| entry.as_str() == Some(artifact)),
             "dependency audit contract should list artifact {artifact}"
         );
     }

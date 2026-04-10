@@ -8559,4 +8559,170 @@ mod tests {
         let result = quickjs_execute(&m).unwrap();
         assert_eq!(result.value, Value::Int(77));
     }
+
+    // -----------------------------------------------------------------------
+    // Float64 and Value::Float tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn float64_total_ordering_nan_equal() {
+        // NaN == NaN in Float64's total ordering
+        let a = Float64::new(f64::NAN);
+        let b = Float64::new(f64::NAN);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn float64_total_ordering_negative_zero() {
+        // -0.0 < +0.0 in total ordering
+        let neg_zero = Float64::new(-0.0);
+        let pos_zero = Float64::new(0.0);
+        assert!(neg_zero < pos_zero);
+        assert_ne!(neg_zero, pos_zero);
+    }
+
+    #[test]
+    fn float64_display_nan() {
+        assert_eq!(Float64::new(f64::NAN).to_string(), "NaN");
+    }
+
+    #[test]
+    fn float64_display_infinity() {
+        assert_eq!(Float64::new(f64::INFINITY).to_string(), "Infinity");
+        assert_eq!(Float64::new(f64::NEG_INFINITY).to_string(), "-Infinity");
+    }
+
+    #[test]
+    fn float64_display_negative_zero() {
+        // -0.0 displays as "0" per JS semantics
+        assert_eq!(Float64::new(-0.0).to_string(), "0");
+    }
+
+    #[test]
+    fn float64_display_regular() {
+        assert_eq!(Float64::new(3.14).to_string(), "3.14");
+        assert_eq!(Float64::new(42.0).to_string(), "42");
+    }
+
+    #[test]
+    fn value_float_is_truthy_positive() {
+        assert!(Value::Float(Float64::new(1.5)).is_truthy());
+        assert!(Value::Float(Float64::new(-1.0)).is_truthy());
+        assert!(Value::Float(Float64::new(f64::INFINITY)).is_truthy());
+    }
+
+    #[test]
+    fn value_float_is_falsy_zero() {
+        assert!(!Value::Float(Float64::new(0.0)).is_truthy());
+        assert!(!Value::Float(Float64::new(-0.0)).is_truthy());
+    }
+
+    #[test]
+    fn value_float_is_falsy_nan() {
+        assert!(!Value::Float(Float64::new(f64::NAN)).is_truthy());
+    }
+
+    #[test]
+    fn value_float_typeof_is_number() {
+        assert_eq!(Value::Float(Float64::new(3.14)).typeof_name(), "number");
+        assert_eq!(Value::Float(Float64::new(f64::NAN)).typeof_name(), "number");
+    }
+
+    #[test]
+    fn value_float_type_name_is_number() {
+        assert_eq!(Value::Float(Float64::new(3.14)).type_name(), "number");
+    }
+
+    #[test]
+    fn value_float_display() {
+        assert_eq!(Value::Float(Float64::new(3.14)).to_string(), "3.14");
+        assert_eq!(Value::Float(Float64::new(f64::NAN)).to_string(), "NaN");
+        assert_eq!(
+            Value::Float(Float64::new(f64::INFINITY)).to_string(),
+            "Infinity"
+        );
+    }
+
+    #[test]
+    fn abstract_eq_int_float_same_value() {
+        // Int(1) == Float(1.0) should be true
+        assert!(InterpreterCore::abstract_eq_values(
+            &Value::Int(1),
+            &Value::Float(Float64::new(1.0))
+        ));
+        assert!(InterpreterCore::abstract_eq_values(
+            &Value::Float(Float64::new(1.0)),
+            &Value::Int(1)
+        ));
+    }
+
+    #[test]
+    fn abstract_eq_float_nan_not_equal() {
+        // NaN !== NaN in abstract equality
+        assert!(!InterpreterCore::abstract_eq_values(
+            &Value::Float(Float64::new(f64::NAN)),
+            &Value::Float(Float64::new(f64::NAN))
+        ));
+    }
+
+    #[test]
+    fn abstract_eq_float_negative_zero_equals_positive_zero() {
+        // -0 == +0 in abstract equality
+        assert!(InterpreterCore::abstract_eq_values(
+            &Value::Float(Float64::new(-0.0)),
+            &Value::Float(Float64::new(0.0))
+        ));
+    }
+
+    #[test]
+    fn coerce_to_float_from_int() {
+        assert_eq!(InterpreterCore::coerce_to_float(&Value::Int(42)), Some(42.0));
+    }
+
+    #[test]
+    fn coerce_to_float_from_float() {
+        assert_eq!(
+            InterpreterCore::coerce_to_float(&Value::Float(Float64::new(3.14))),
+            Some(3.14)
+        );
+    }
+
+    #[test]
+    fn coerce_to_float_from_bool() {
+        assert_eq!(InterpreterCore::coerce_to_float(&Value::Bool(true)), Some(1.0));
+        assert_eq!(InterpreterCore::coerce_to_float(&Value::Bool(false)), Some(0.0));
+    }
+
+    #[test]
+    fn coerce_to_float_from_undefined_is_nan() {
+        let result = InterpreterCore::coerce_to_float(&Value::Undefined);
+        assert!(result.is_some());
+        assert!(result.unwrap().is_nan());
+    }
+
+    #[test]
+    fn coerce_to_number_from_float_whole() {
+        // Float(5.0) should coerce to Int 5
+        assert_eq!(
+            InterpreterCore::coerce_to_number(&Value::Float(Float64::new(5.0))),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn coerce_to_number_from_float_fractional_is_none() {
+        // Float(3.14) cannot be coerced to integer
+        assert_eq!(
+            InterpreterCore::coerce_to_number(&Value::Float(Float64::new(3.14))),
+            None
+        );
+    }
+
+    #[test]
+    fn coerce_to_number_from_float_nan_is_none() {
+        assert_eq!(
+            InterpreterCore::coerce_to_number(&Value::Float(Float64::new(f64::NAN))),
+            None
+        );
+    }
 }

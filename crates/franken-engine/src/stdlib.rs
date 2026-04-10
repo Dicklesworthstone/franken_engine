@@ -242,6 +242,16 @@ pub enum BuiltinId {
     FunctionPrototypeApply,
     FunctionPrototypeBind,
 
+    // -- Promise --
+    PromiseConstructor,
+    PromiseResolve,
+    PromiseReject,
+    PromiseThen,
+    PromiseCatch,
+    PromiseFinally,
+    PromiseAll,
+    PromiseRace,
+
     // -- Console --
     ConsoleLog,
     ConsoleError,
@@ -415,6 +425,14 @@ impl BuiltinId {
             Self::FunctionPrototypeCall => "Function.prototype.call",
             Self::FunctionPrototypeApply => "Function.prototype.apply",
             Self::FunctionPrototypeBind => "Function.prototype.bind",
+            Self::PromiseConstructor => "Promise",
+            Self::PromiseResolve => "Promise.resolve",
+            Self::PromiseReject => "Promise.reject",
+            Self::PromiseThen => "Promise.prototype.then",
+            Self::PromiseCatch => "Promise.prototype.catch",
+            Self::PromiseFinally => "Promise.prototype.finally",
+            Self::PromiseAll => "Promise.all",
+            Self::PromiseRace => "Promise.race",
             Self::ConsoleLog => "console.log",
             Self::ConsoleError => "console.error",
             Self::ConsoleWarn => "console.warn",
@@ -2123,7 +2141,7 @@ fn build_collection_trace(
     mutated_keys: Vec<String>,
     events: Vec<CollectionMutationEvent>,
 ) -> CollectionMutationTrace {
-    let seed = serde_json::to_string(&events).unwrap_or_default();
+    let seed = serde_json::to_string(&events).unwrap();
     let digest = hex::encode(Sha256::digest(
         format!(
             "{}|{}|{}|{}|{}|{}",
@@ -2711,14 +2729,21 @@ enum JsonNode {
     Object(Vec<(String, JsonNode)>),
 }
 
+const MAX_JSON_DEPTH: usize = 256;
+
 struct JsonParser<'a> {
     input: &'a str,
     pos: usize,
+    depth: usize,
 }
 
 impl<'a> JsonParser<'a> {
     fn new(input: &'a str) -> Self {
-        Self { input, pos: 0 }
+        Self {
+            input,
+            pos: 0,
+            depth: 0,
+        }
     }
 
     fn parse(mut self) -> Result<JsonNode, StdlibError> {
@@ -2732,8 +2757,12 @@ impl<'a> JsonParser<'a> {
     }
 
     fn parse_value(&mut self) -> Result<JsonNode, StdlibError> {
+        if self.depth >= MAX_JSON_DEPTH {
+            return Err(self.error("JSON recursion depth budget exceeded"));
+        }
+        self.depth += 1;
         self.skip_whitespace();
-        match self.peek_byte() {
+        let result = match self.peek_byte() {
             Some(b'n') => self.consume_literal("null", JsonNode::Null),
             Some(b't') => self.consume_literal("true", JsonNode::Bool(true)),
             Some(b'f') => self.consume_literal("false", JsonNode::Bool(false)),
@@ -2743,7 +2772,9 @@ impl<'a> JsonParser<'a> {
             Some(b'-' | b'0'..=b'9') => self.parse_number().map(JsonNode::Number),
             Some(_) => Err(self.unexpected_token()),
             None => Err(self.error("unexpected end of input")),
-        }
+        };
+        self.depth -= 1;
+        result
     }
 
     fn consume_literal(&mut self, literal: &str, value: JsonNode) -> Result<JsonNode, StdlibError> {
@@ -3010,6 +3041,8 @@ enum JsonStringifyPosition {
     ObjectProperty,
 }
 
+const MAX_JSON_STRINGIFY_DEPTH: usize = 256;
+
 /// Deterministic JSON.stringify baseline.
 ///
 /// Compound traversal, omission rules, and fail-closed unsupported edges are
@@ -3017,7 +3050,7 @@ enum JsonStringifyPosition {
 /// derive output from live `heap` state via their `ObjectHandle`s.
 pub fn json_stringify(heap: &ObjectHeap, value: &JsValue) -> Result<JsValue, StdlibError> {
     let mut active = BTreeSet::new();
-    match stringify_json_value(heap, value, JsonStringifyPosition::TopLevel, &mut active)? {
+    match stringify_json_value(heap, value, JsonStringifyPosition::TopLevel, &mut active, 0)? {
         Some(serialized) => Ok(JsValue::Str(serialized)),
         None => Ok(JsValue::Undefined),
     }
@@ -3028,7 +3061,13 @@ fn stringify_json_value(
     value: &JsValue,
     position: JsonStringifyPosition,
     active: &mut BTreeSet<ObjectHandle>,
+    depth: usize,
 ) -> Result<Option<String>, StdlibError> {
+    if depth >= MAX_JSON_STRINGIFY_DEPTH {
+        return Err(StdlibError::JsonStringifyError(
+            "JSON stringify recursion depth budget exceeded".into(),
+        ));
+    }
     match value {
         JsValue::Undefined | JsValue::Symbol(_) | JsValue::Function(_) => Ok(match position {
             JsonStringifyPosition::TopLevel | JsonStringifyPosition::ObjectProperty => None,
@@ -3038,7 +3077,7 @@ fn stringify_json_value(
         JsValue::Bool(value) => Ok(Some(if *value { "true" } else { "false" }.to_string())),
         JsValue::Int(value) => Ok(Some(format_json_number(*value))),
         JsValue::Str(value) => Ok(Some(format!("\"{}\"", escape_json_string(value)))),
-        JsValue::Object(handle) => stringify_json_object(heap, *handle, active).map(Some),
+        JsValue::Object(handle) => stringify_json_object(heap, *handle, active, depth).map(Some),
     }
 }
 
@@ -3046,6 +3085,7 @@ fn stringify_json_object(
     heap: &ObjectHeap,
     handle: ObjectHandle,
     active: &mut BTreeSet<ObjectHandle>,
+    depth: usize,
 ) -> Result<String, StdlibError> {
     if !active.insert(handle) {
         return Err(StdlibError::JsonStringifyError(
@@ -3068,8 +3108,8 @@ fn stringify_json_object(
         }
 
         match ordinary.class_tag.as_deref() {
-            Some("Array") => stringify_json_array(heap, handle, active),
-            Some("Object") | None => stringify_json_plain_object(heap, ordinary, active),
+            Some("Array") => stringify_json_array(heap, handle, active, depth),
+            Some("Object") | None => stringify_json_plain_object(heap, ordinary, active, depth),
             Some(tag) => Err(StdlibError::JsonStringifyError(format!(
                 "unsupported object class `{tag}`"
             ))),
@@ -3084,6 +3124,7 @@ fn stringify_json_array(
     heap: &ObjectHeap,
     handle: ObjectHandle,
     active: &mut BTreeSet<ObjectHandle>,
+    depth: usize,
 ) -> Result<String, StdlibError> {
     let elements = read_array_elements(heap, handle).map_err(|_| {
         StdlibError::JsonStringifyError(
@@ -3093,8 +3134,14 @@ fn stringify_json_array(
     let mut serialized = Vec::with_capacity(elements.len());
     for value in &elements {
         serialized.push(
-            stringify_json_value(heap, value, JsonStringifyPosition::ArrayElement, active)?
-                .unwrap_or_else(|| "null".to_string()),
+            stringify_json_value(
+                heap,
+                value,
+                JsonStringifyPosition::ArrayElement,
+                active,
+                depth + 1,
+            )?
+            .unwrap_or_else(|| "null".to_string()),
         );
     }
     Ok(format!("[{}]", serialized.join(",")))
@@ -3104,6 +3151,7 @@ fn stringify_json_plain_object(
     heap: &ObjectHeap,
     ordinary: &crate::object_model::OrdinaryObject,
     active: &mut BTreeSet<ObjectHandle>,
+    depth: usize,
 ) -> Result<String, StdlibError> {
     let mut serialized = Vec::new();
     for key in ordinary.own_property_keys() {
@@ -3123,6 +3171,7 @@ fn stringify_json_plain_object(
                     value,
                     JsonStringifyPosition::ObjectProperty,
                     active,
+                    depth + 1,
                 )? {
                     serialized.push(format!(
                         "\"{}\":{}",
@@ -3439,8 +3488,8 @@ fn build_string_representation_receipt(
             segment_count,
             flatten_required,
             flatten_budget_exhausted,
-            serde_json::to_string(&kind).unwrap_or_default(),
-            serde_json::to_string(&observation_mode).unwrap_or_default(),
+            serde_json::to_string(&kind).unwrap(),
+            serde_json::to_string(&observation_mode).unwrap(),
             view_eligible
         )
         .as_bytes(),
@@ -6427,9 +6476,9 @@ mod tests {
         let eligibility =
             require_string_fast_path_eligibility(StringFastPathConsumer::Cache, Some(receipt_a))
                 .unwrap();
-        let serialized = serde_json::to_string(&eligibility).unwrap_or_default();
+        let serialized = serde_json::to_string(&eligibility).unwrap();
         let round_trip: StringFastPathEligibility =
-            serde_json::from_str(&serialized).unwrap_or_default();
+            serde_json::from_str(&serialized).unwrap();
         assert_eq!(round_trip, eligibility);
     }
 

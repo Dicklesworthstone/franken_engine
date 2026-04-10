@@ -2722,7 +2722,7 @@ fn is_named_import_clause(clause: &str) -> bool {
         }
 
         let mut parts = specifier.split_whitespace();
-        let first = parts.next().unwrap_or_default();
+        let first = parts.next().unwrap();
         let second = parts.next();
         let third = parts.next();
         let fourth = parts.next();
@@ -2846,7 +2846,7 @@ fn validate_named_export_specifiers(
         }
 
         let mut parts = specifier.split_whitespace();
-        let local = parts.next().unwrap_or_default();
+        let local = parts.next().unwrap();
         let second = parts.next();
         let third = parts.next();
         let fourth = parts.next();
@@ -3253,7 +3253,7 @@ fn parse_variable_declaration(
     let body = statement
         .strip_prefix(keyword)
         .map(str::trim_start)
-        .unwrap_or_default();
+        .unwrap();
     if body.is_empty() {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
@@ -3535,6 +3535,44 @@ fn parse_primary_expression(
     {
         let nested = parse_expression(rest.trim_start(), span, context, recursion_depth + 1)?;
         return Ok(Expression::Await(Box::new(nested)));
+    }
+
+    // yield expression: `yield expr` or `yield* expr` (delegation)
+    if let Some(rest) = expression.strip_prefix("yield")
+        && (rest.starts_with(' ')
+            || rest.starts_with('*')
+            || rest.is_empty()
+            || rest.starts_with(';')
+            || rest.starts_with(')')
+            || rest.starts_with('}'))
+    {
+        let rest = rest.trim_start();
+        let (delegate, rest) = if let Some(after_star) = rest.strip_prefix('*') {
+            (true, after_star.trim_start())
+        } else {
+            (false, rest)
+        };
+        let argument = if rest.is_empty()
+            || rest.starts_with(';')
+            || rest.starts_with(')')
+            || rest.starts_with('}')
+        {
+            None
+        } else {
+            Some(Box::new(parse_expression(
+                rest,
+                span,
+                context,
+                recursion_depth + 1,
+            )?))
+        };
+        return Ok(Expression::Yield { argument, delegate });
+    }
+
+    // spread element: `...expr`
+    if let Some(rest) = expression.strip_prefix("...") {
+        let inner = parse_expression(rest.trim_start(), span, context, recursion_depth + 1)?;
+        return Ok(Expression::SpreadElement(Box::new(inner)));
     }
 
     // new expression: `new Foo(args)`
@@ -4876,6 +4914,10 @@ fn contains_optional_chain(expression: &Expression) -> bool {
     match expression {
         Expression::OptionalCall { .. } | Expression::OptionalMember { .. } => true,
         Expression::Await(inner) => contains_optional_chain(inner),
+        Expression::Yield { argument, .. } => argument
+            .as_ref()
+            .is_some_and(|a| contains_optional_chain(a)),
+        Expression::SpreadElement(inner) => contains_optional_chain(inner),
         Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
             contains_optional_chain(left) || contains_optional_chain(right)
         }
@@ -5248,8 +5290,19 @@ fn parse_object_literal(
         if p.is_empty() {
             continue;
         }
-        // Split on first top-level colon for key:value.
-        if let Some(colon_idx) = find_top_level_colon(p) {
+        // Spread property: `{ ...expr }` — parse the inner expression.
+        if let Some(rest) = p.strip_prefix("...") {
+            let inner =
+                parse_expression(rest.trim_start(), span, context, recursion_depth + 1)?;
+            let spread = Expression::SpreadElement(Box::new(inner));
+            properties.push(ObjectProperty {
+                key: spread.clone(),
+                value: spread,
+                computed: false,
+                shorthand: true,
+            });
+        } else if let Some(colon_idx) = find_top_level_colon(p) {
+            // Split on first top-level colon for key:value.
             let key_src = p[..colon_idx].trim();
             let value_src = p[colon_idx + 1..].trim();
             let key = parse_expression(key_src, span, context, recursion_depth + 1)?;
@@ -8668,8 +8721,8 @@ mod tests {
             "<inline>",
             None,
         );
-        let json = serde_json::to_string(&err).unwrap_or_default();
-        let decoded: ParseError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&err).unwrap();
+        let decoded: ParseError = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, err);
     }
 
@@ -9211,8 +9264,8 @@ mod tests {
         };
         let left = normalize_parse_error(&err);
         let right = normalize_parse_error(&err);
-        let json = serde_json::to_string(&left).unwrap_or_default();
-        let restored: ParseDiagnosticEnvelope = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&left).unwrap();
+        let restored: ParseDiagnosticEnvelope = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, left);
         assert_eq!(left.canonical_hash(), right.canonical_hash());
         assert!(
@@ -11633,5 +11686,158 @@ mod tests {
             .parse("const s = `value: ${name`", ParseGoal::Script)
             .expect_err("unbalanced interpolation should fail");
         assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    }
+
+    // -----------------------------------------------------------------------
+    // Spread operator (`...expr`) parsing
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn spread_in_array_literal() {
+        let tree = parse_script("[1, ...arr, 3]");
+        match first_expr(&tree) {
+            Expression::ArrayLiteral(elements) => {
+                assert_eq!(elements.len(), 3);
+                assert!(matches!(
+                    elements[0].as_ref().unwrap(),
+                    Expression::NumericLiteral(1)
+                ));
+                match elements[1].as_ref().unwrap() {
+                    Expression::SpreadElement(inner) => {
+                        assert!(
+                            matches!(inner.as_ref(), Expression::Identifier(n) if n == "arr")
+                        );
+                    }
+                    other => panic!("expected SpreadElement, got {other:?}"),
+                }
+                assert!(matches!(
+                    elements[2].as_ref().unwrap(),
+                    Expression::NumericLiteral(3)
+                ));
+            }
+            other => panic!("expected ArrayLiteral, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn spread_in_array_literal_only() {
+        let tree = parse_script("[...items]");
+        match first_expr(&tree) {
+            Expression::ArrayLiteral(elements) => {
+                assert_eq!(elements.len(), 1);
+                assert!(matches!(
+                    elements[0].as_ref().unwrap(),
+                    Expression::SpreadElement(_)
+                ));
+            }
+            other => panic!("expected ArrayLiteral, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn spread_in_function_call() {
+        let tree = parse_script("foo(1, ...args)");
+        match first_expr(&tree) {
+            Expression::Call { arguments, .. } => {
+                assert_eq!(arguments.len(), 2);
+                assert!(matches!(&arguments[0], Expression::NumericLiteral(1)));
+                match &arguments[1] {
+                    Expression::SpreadElement(inner) => {
+                        assert!(
+                            matches!(inner.as_ref(), Expression::Identifier(n) if n == "args")
+                        );
+                    }
+                    other => panic!("expected SpreadElement, got {other:?}"),
+                }
+            }
+            other => panic!("expected Call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn spread_in_object_literal() {
+        let tree = parse_script("({a: 1, ...obj})");
+        match first_expr(&tree) {
+            Expression::ObjectLiteral(properties) => {
+                assert_eq!(properties.len(), 2);
+                // First property: a: 1
+                assert!(!properties[0].shorthand);
+                // Second property: spread
+                assert!(properties[1].shorthand);
+                assert!(matches!(
+                    &properties[1].value,
+                    Expression::SpreadElement(_)
+                ));
+            }
+            other => panic!("expected ObjectLiteral, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn spread_only_object_literal() {
+        let tree = parse_script("({...defaults})");
+        match first_expr(&tree) {
+            Expression::ObjectLiteral(properties) => {
+                assert_eq!(properties.len(), 1);
+                match &properties[0].value {
+                    Expression::SpreadElement(inner) => {
+                        assert!(
+                            matches!(inner.as_ref(), Expression::Identifier(n) if n == "defaults")
+                        );
+                    }
+                    other => panic!("expected SpreadElement, got {other:?}"),
+                }
+            }
+            other => panic!("expected ObjectLiteral, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn spread_element_standalone() {
+        let tree = parse_script("...x");
+        match first_expr(&tree) {
+            Expression::SpreadElement(inner) => {
+                assert!(matches!(inner.as_ref(), Expression::Identifier(n) if n == "x"));
+            }
+            other => panic!("expected SpreadElement, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn spread_in_new_expression() {
+        let tree = parse_script("new Foo(...args)");
+        match first_expr(&tree) {
+            Expression::New { arguments, .. } => {
+                assert_eq!(arguments.len(), 1);
+                assert!(matches!(&arguments[0], Expression::SpreadElement(_)));
+            }
+            other => panic!("expected New, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn spread_multiple_in_array() {
+        let tree = parse_script("[...a, ...b]");
+        match first_expr(&tree) {
+            Expression::ArrayLiteral(elements) => {
+                assert_eq!(elements.len(), 2);
+                assert!(matches!(
+                    elements[0].as_ref().unwrap(),
+                    Expression::SpreadElement(_)
+                ));
+                assert!(matches!(
+                    elements[1].as_ref().unwrap(),
+                    Expression::SpreadElement(_)
+                ));
+            }
+            other => panic!("expected ArrayLiteral, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn spread_canonical_hash_stability() {
+        let tree1 = parse_script("[...x]");
+        let tree2 = parse_script("[...x]");
+        assert_eq!(tree1.canonical_hash(), tree2.canonical_hash());
     }
 }

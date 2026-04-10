@@ -1359,6 +1359,12 @@ pub enum Expression {
     NullLiteral,
     UndefinedLiteral,
     Await(Box<Expression>),
+    /// Yield expression: `yield expr` or `yield* expr` (delegation).
+    /// Only valid inside generator functions.
+    Yield {
+        argument: Option<Box<Expression>>,
+        delegate: bool,
+    },
     Binary {
         operator: BinaryOperator,
         left: Box<Expression>,
@@ -1422,6 +1428,9 @@ pub enum Expression {
         is_generator: bool,
     },
     Raw(String),
+    /// Spread element: `...expr` in array literals, object literals, or
+    /// function call arguments.
+    SpreadElement(Box<Expression>),
 }
 
 impl Expression {
@@ -1476,6 +1485,20 @@ impl Expression {
                     CanonicalValue::String("await".to_string()),
                 );
                 map.insert("value".to_string(), value.canonical_value());
+            }
+            Self::Yield { argument, delegate } => {
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String("yield".to_string()),
+                );
+                map.insert(
+                    "argument".to_string(),
+                    argument
+                        .as_ref()
+                        .map(|a| a.canonical_value())
+                        .unwrap_or(CanonicalValue::Null),
+                );
+                map.insert("delegate".to_string(), CanonicalValue::Bool(*delegate));
             }
             Self::Binary {
                 operator,
@@ -1700,6 +1723,13 @@ impl Expression {
                 );
                 map.insert("value".to_string(), CanonicalValue::String(value.clone()));
             }
+            Self::SpreadElement(inner) => {
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String("spread".to_string()),
+                );
+                map.insert("argument".to_string(), inner.canonical_value());
+            }
         }
         CanonicalValue::Map(map)
     }
@@ -1745,8 +1775,8 @@ mod tests {
     #[test]
     fn parse_goal_round_trips_through_serde() {
         for goal in [ParseGoal::Script, ParseGoal::Module] {
-            let json = serde_json::to_string(&goal).unwrap_or_default();
-            let decoded: ParseGoal = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&goal).unwrap();
+            let decoded: ParseGoal = serde_json::from_str(&json).unwrap();
             assert_eq!(decoded, goal);
         }
     }
@@ -1831,8 +1861,8 @@ mod tests {
     #[test]
     fn source_span_round_trips_through_serde() {
         let span = SourceSpan::new(7, 99, 3, 8, 10, 1);
-        let json = serde_json::to_string(&span).unwrap_or_default();
-        let decoded: SourceSpan = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&span).unwrap();
+        let decoded: SourceSpan = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, span);
     }
 
@@ -1984,8 +2014,8 @@ mod tests {
             ],
             span: make_span(),
         };
-        let json = serde_json::to_string(&tree).unwrap_or_default();
-        let decoded: SyntaxTree = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&tree).unwrap();
+        let decoded: SyntaxTree = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, tree);
     }
 
@@ -2365,8 +2395,8 @@ mod tests {
             Expression::Raw("a + b".to_string()),
         ];
         for expr in expressions {
-            let json = serde_json::to_string(&expr).unwrap_or_default();
-            let decoded: Expression = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&expr).unwrap();
+            let decoded: Expression = serde_json::from_str(&json).unwrap();
             assert_eq!(decoded, expr);
         }
     }
@@ -2470,8 +2500,8 @@ mod tests {
             source: "side-effect-module".to_string(),
             span: make_span(),
         });
-        let json = serde_json::to_string(&stmt).unwrap_or_default();
-        let restored: Statement = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&stmt).unwrap();
+        let restored: Statement = serde_json::from_str(&json).unwrap();
         assert_eq!(stmt, restored);
     }
 
@@ -2522,8 +2552,8 @@ mod tests {
         let expr = Expression::Await(Box::new(Expression::Await(Box::new(
             Expression::StringLiteral("deep".to_string()),
         ))));
-        let json = serde_json::to_string(&expr).unwrap_or_default();
-        let restored: Expression = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&expr).unwrap();
+        let restored: Expression = serde_json::from_str(&json).unwrap();
         assert_eq!(expr, restored);
     }
 
@@ -2591,7 +2621,7 @@ mod tests {
     #[test]
     fn source_span_json_field_presence() {
         let span = SourceSpan::new(1, 2, 3, 4, 5, 6);
-        let json = serde_json::to_string(&span).unwrap_or_default();
+        let json = serde_json::to_string(&span).unwrap();
         assert!(json.contains("\"start_offset\""));
         assert!(json.contains("\"end_offset\""));
         assert!(json.contains("\"start_line\""));
@@ -2607,7 +2637,7 @@ mod tests {
             source: "mod".to_string(),
             span: make_span(),
         };
-        let json = serde_json::to_string(&import).unwrap_or_default();
+        let json = serde_json::to_string(&import).unwrap();
         assert!(json.contains("\"binding\""));
         assert!(json.contains("\"source\""));
         assert!(json.contains("\"span\""));
@@ -2619,7 +2649,7 @@ mod tests {
             kind: ExportKind::NamedClause("foo".to_string()),
             span: make_span(),
         };
-        let json = serde_json::to_string(&export).unwrap_or_default();
+        let json = serde_json::to_string(&export).unwrap();
         assert!(json.contains("\"kind\""));
         assert!(json.contains("\"span\""));
     }
@@ -2630,8 +2660,8 @@ mod tests {
             kind: ExportKind::Default(Expression::StringLiteral("value".to_string())),
             span: SourceSpan::new(0, 25, 1, 1, 1, 26),
         };
-        let json = serde_json::to_string(&export).unwrap_or_default();
-        let restored: ExportDeclaration = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&export).unwrap();
+        let restored: ExportDeclaration = serde_json::from_str(&json).unwrap();
         assert_eq!(export, restored);
     }
 
@@ -2666,8 +2696,8 @@ mod tests {
     #[test]
     fn source_span_max_offsets_boundary() {
         let span = SourceSpan::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX);
-        let json = serde_json::to_string(&span).unwrap_or_default();
-        let restored: SourceSpan = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&span).unwrap();
+        let restored: SourceSpan = serde_json::from_str(&json).unwrap();
         assert_eq!(span, restored);
     }
 
@@ -2706,8 +2736,8 @@ mod tests {
             UnaryOperator::UnaryPlus,
         ];
         for op in ops {
-            let json = serde_json::to_string(&op).unwrap_or_default();
-            let restored: UnaryOperator = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&op).unwrap();
+            let restored: UnaryOperator = serde_json::from_str(&json).unwrap();
             assert_eq!(restored, op);
         }
     }
@@ -2761,8 +2791,8 @@ mod tests {
             AssignmentOperator::NullishCoalescingAssign,
         ];
         for op in ops {
-            let json = serde_json::to_string(&op).unwrap_or_default();
-            let restored: AssignmentOperator = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&op).unwrap();
+            let restored: AssignmentOperator = serde_json::from_str(&json).unwrap();
             assert_eq!(restored, op);
         }
     }
@@ -3266,8 +3296,8 @@ mod tests {
             },
         ];
         for expr in expressions {
-            let json = serde_json::to_string(&expr).unwrap_or_default();
-            let restored: Expression = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&expr).unwrap();
+            let restored: Expression = serde_json::from_str(&json).unwrap();
             assert_eq!(restored, expr);
         }
     }
@@ -3919,8 +3949,8 @@ mod tests {
             VariableDeclarationKind::Let,
             VariableDeclarationKind::Const,
         ] {
-            let json = serde_json::to_string(&kind).unwrap_or_default();
-            let restored: VariableDeclarationKind = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&kind).unwrap();
+            let restored: VariableDeclarationKind = serde_json::from_str(&json).unwrap();
             assert_eq!(restored, kind);
         }
     }
@@ -3979,8 +4009,8 @@ mod tests {
             BinaryOperator::In,
         ];
         for op in ops {
-            let json = serde_json::to_string(&op).unwrap_or_default();
-            let restored: BinaryOperator = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&op).unwrap();
+            let restored: BinaryOperator = serde_json::from_str(&json).unwrap();
             assert_eq!(restored, op);
         }
     }
@@ -4165,8 +4195,8 @@ mod tests {
             })),
             is_async: true,
         };
-        let json = serde_json::to_string(&expr).unwrap_or_default();
-        let restored: Expression = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&expr).unwrap();
+        let restored: Expression = serde_json::from_str(&json).unwrap();
         assert_eq!(expr, restored);
     }
 
@@ -4183,8 +4213,8 @@ mod tests {
             }),
             is_async: false,
         };
-        let json = serde_json::to_string(&expr).unwrap_or_default();
-        let restored: Expression = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&expr).unwrap();
+        let restored: Expression = serde_json::from_str(&json).unwrap();
         assert_eq!(expr, restored);
     }
 
@@ -4401,8 +4431,8 @@ mod tests {
             }),
         ];
         for stmt in stmts {
-            let json = serde_json::to_string(&stmt).unwrap_or_default();
-            let restored: Statement = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&stmt).unwrap();
+            let restored: Statement = serde_json::from_str(&json).unwrap();
             assert_eq!(restored, stmt);
         }
     }
@@ -4586,8 +4616,8 @@ mod tests {
             },
             span: make_span(),
         };
-        let json = serde_json::to_string(&clause).unwrap_or_default();
-        let restored: CatchClause = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&clause).unwrap();
+        let restored: CatchClause = serde_json::from_str(&json).unwrap();
         assert_eq!(clause, restored);
     }
 
@@ -4605,8 +4635,8 @@ mod tests {
             computed: true,
             shorthand: false,
         };
-        let json = serde_json::to_string(&prop).unwrap_or_default();
-        let restored: ObjectProperty = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&prop).unwrap();
+        let restored: ObjectProperty = serde_json::from_str(&json).unwrap();
         assert_eq!(prop, restored);
     }
 
@@ -4616,8 +4646,8 @@ mod tests {
             pattern: BindingPattern::Identifier("arg".to_string()),
             span: SourceSpan::new(5, 8, 1, 6, 1, 9),
         };
-        let json = serde_json::to_string(&param).unwrap_or_default();
-        let restored: FunctionParam = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&param).unwrap();
+        let restored: FunctionParam = serde_json::from_str(&json).unwrap();
         assert_eq!(param, restored);
     }
 
@@ -4628,8 +4658,8 @@ mod tests {
             left: Box::new(Expression::NumericLiteral(1)),
             right: Box::new(Expression::NumericLiteral(2)),
         }));
-        let json = serde_json::to_string(&body).unwrap_or_default();
-        let restored: ArrowBody = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&body).unwrap();
+        let restored: ArrowBody = serde_json::from_str(&json).unwrap();
         assert_eq!(body, restored);
     }
 
@@ -4642,8 +4672,8 @@ mod tests {
             })],
             span: make_span(),
         });
-        let json = serde_json::to_string(&body).unwrap_or_default();
-        let restored: ArrowBody = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&body).unwrap();
+        let restored: ArrowBody = serde_json::from_str(&json).unwrap();
         assert_eq!(body, restored);
     }
 
@@ -4660,21 +4690,21 @@ mod tests {
             ],
             span: make_span(),
         };
-        let json = serde_json::to_string(&case).unwrap_or_default();
-        let restored: SwitchCase = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&case).unwrap();
+        let restored: SwitchCase = serde_json::from_str(&json).unwrap();
         assert_eq!(case, restored);
     }
 
     #[test]
     fn export_kind_serde_roundtrip_both_variants() {
         let default = ExportKind::Default(Expression::Identifier("main".to_string()));
-        let json_d = serde_json::to_string(&default).unwrap_or_default();
-        let restored_d: ExportKind = serde_json::from_str(&json_d).unwrap_or_default();
+        let json_d = serde_json::to_string(&default).unwrap();
+        let restored_d: ExportKind = serde_json::from_str(&json_d).unwrap();
         assert_eq!(default, restored_d);
 
         let named = ExportKind::NamedClause("{ foo, bar }".to_string());
-        let json_n = serde_json::to_string(&named).unwrap_or_default();
-        let restored_n: ExportKind = serde_json::from_str(&json_n).unwrap_or_default();
+        let json_n = serde_json::to_string(&named).unwrap();
+        let restored_n: ExportKind = serde_json::from_str(&json_n).unwrap();
         assert_eq!(named, restored_n);
     }
 
@@ -4685,8 +4715,8 @@ mod tests {
             source: "react".to_string(),
             span: SourceSpan::new(0, 25, 1, 1, 1, 26),
         };
-        let json = serde_json::to_string(&import).unwrap_or_default();
-        let restored: ImportDeclaration = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&import).unwrap();
+        let restored: ImportDeclaration = serde_json::from_str(&json).unwrap();
         assert_eq!(import, restored);
     }
 

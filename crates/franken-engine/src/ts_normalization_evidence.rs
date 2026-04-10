@@ -814,8 +814,7 @@ mod tests {
     fn evidence_serde_roundtrip() {
         let inv = run_diagnostic_corpus();
         let json = serde_json::to_string(&inv).unwrap();
-        let back: TsNormalizationEvidenceInventory =
-            serde_json::from_str(&json).unwrap();
+        let back: TsNormalizationEvidenceInventory = serde_json::from_str(&json).unwrap();
         assert_eq!(inv, back);
     }
 

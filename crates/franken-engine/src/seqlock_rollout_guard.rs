@@ -732,15 +732,13 @@ fn run_starvation_microbench(candidate: &CandidateRolloutInput) -> StarvationMic
             let result = fast_path.read_clone_or_else(|| previous_value);
             *during_write.borrow_mut() = Some(result);
         });
-        let during_write = during_write
-            .into_inner()
-            .unwrap_or_else(|| FastPathReadResult {
-                value: 0,
-                source: FastPathReadSource::Fallback,
-                attempts: 0,
-                writer_pressure_observations: 0,
-                fallback_reason: Some(FastPathFallbackReason::Uninitialized),
-            });
+        let during_write = during_write.into_inner().unwrap_or(FastPathReadResult {
+            value: 0,
+            source: FastPathReadSource::Fallback,
+            attempts: 0,
+            writer_pressure_observations: 0,
+            fallback_reason: Some(FastPathFallbackReason::Uninitialized),
+        });
         let post_publish = fast_path.read_clone_or_else(|| 0_u64);
         observations.push(StarvationBurstObservation {
             burst_index,

@@ -580,11 +580,7 @@ impl MigrationCompatibilityChecker {
         let run = |entries: &[CanonicalEvidenceEntry]| -> Vec<Vec<u8>> {
             entries
                 .iter()
-                .filter_map(|e| {
-                    transform(e)
-                        .ok()
-                        .map(|m| serde_json::to_vec(&m).unwrap())
-                })
+                .filter_map(|e| transform(e).ok().map(|m| serde_json::to_vec(&m).unwrap()))
                 .collect()
         };
 

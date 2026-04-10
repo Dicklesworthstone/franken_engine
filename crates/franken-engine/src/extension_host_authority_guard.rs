@@ -1502,8 +1502,7 @@ fn bad_fn(data: &[u8]) {
             line: 0,
         });
         let json = serde_json::to_string(&reg).unwrap();
-        let restored: ExtensionHostExemptionRegistry =
-            serde_json::from_str(&json).unwrap();
+        let restored: ExtensionHostExemptionRegistry = serde_json::from_str(&json).unwrap();
         assert_eq!(reg, restored);
     }
 

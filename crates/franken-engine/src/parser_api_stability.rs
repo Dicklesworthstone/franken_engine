@@ -183,9 +183,7 @@ impl ApiStabilityManifest {
                 );
                 m.insert(
                     "evolution_rule".into(),
-                    CanonicalValue::String(
-                        serde_json::to_string(&e.evolution_rule).unwrap(),
-                    ),
+                    CanonicalValue::String(serde_json::to_string(&e.evolution_rule).unwrap()),
                 );
                 m.insert(
                     "minimum_compatible_version".into(),

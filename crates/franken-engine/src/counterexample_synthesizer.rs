@@ -516,8 +516,7 @@ impl CounterexampleSynthesizer {
         let minimality = self.minimize_scenario(&scenario, cx);
 
         // Compute content hash.
-        let canonical =
-            serde_json::to_vec(&(&cx.property, &cx.policy_id, &scenario)).unwrap();
+        let canonical = serde_json::to_vec(&(&cx.property, &cx.policy_id, &scenario)).unwrap();
         let content_hash = ContentHash::compute(&canonical);
 
         let (expected, actual) = self.describe_outcomes(cx);

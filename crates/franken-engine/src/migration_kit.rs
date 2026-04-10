@@ -1314,8 +1314,7 @@ pub fn infer_capabilities(
 
     inferred_capabilities.sort_by_key(|c| std::cmp::Reverse(c.confidence_millionths));
 
-    let bytes =
-        serde_json::to_vec(&(&inferred_capabilities, &minimum_capability_set)).unwrap();
+    let bytes = serde_json::to_vec(&(&inferred_capabilities, &minimum_capability_set)).unwrap();
     let capability_hash = ContentHash::compute(&bytes);
 
     Ok(CapabilityInferenceResult {

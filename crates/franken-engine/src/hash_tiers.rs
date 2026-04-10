@@ -15,6 +15,7 @@
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 // ---------------------------------------------------------------------------
 // Tier 1 — IntegrityHash (hot-path, non-cryptographic)
@@ -74,8 +75,7 @@ impl ContentHash {
 
     /// Compute a content hash over the given bytes.
     ///
-    /// Uses a SipHash-inspired Merkle-Damgard construction (same as
-    /// EngineObjectId's deterministic hash) for collision resistance.
+    /// Uses SHA-256 for deterministic, collision-resistant content identity.
     pub fn compute(data: &[u8]) -> Self {
         Self(collision_resistant_hash(data))
     }
@@ -122,8 +122,9 @@ impl AuthenticityHash {
         Self(keyed_hash(key, data))
     }
 
-    /// Compute an unkeyed authenticity hash (for contexts where the key
-    /// is applied externally, e.g., HKDF expand).
+    /// Compute an unkeyed authenticity hash using the same SHA-256 content
+    /// hash path (for contexts where the key is applied externally, e.g.,
+    /// HKDF expand).
     pub fn compute(data: &[u8]) -> Self {
         Self(collision_resistant_hash(data))
     }
@@ -188,11 +189,15 @@ impl fmt::Display for HashTier {
 // ---------------------------------------------------------------------------
 
 /// Hash algorithm identifiers used within each tier.
+///
+/// Note: `SipInspiredCr` is a legacy stable identifier retained for
+/// serialized/event compatibility even though Tier 2 content hashing is now
+/// backed by SHA-256.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum HashAlgorithm {
     /// Tier 1: wyhash-inspired fast hash.
     WyhashInspired,
-    /// Tier 2: SipHash-inspired collision-resistant hash.
+    /// Tier 2: legacy content-hash identifier for the SHA-256-backed path.
     SipInspiredCr,
     /// Tier 3: SipHash-inspired keyed hash.
     SipInspiredKeyed,
@@ -281,35 +286,15 @@ fn wymix(a: u64, b: u64) -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// Tier 2/3: collision-resistant hash (SipHash-inspired)
+// Tier 2/3: shared unkeyed content hash + keyed authenticity hash
 // ---------------------------------------------------------------------------
 
-/// Collision-resistant hash producing 32 bytes.
-///
-/// Same construction as engine_object_id::deterministic_hash for
-/// consistency across the codebase.
+/// Collision-resistant hash producing 32 bytes via SHA-256.
 fn collision_resistant_hash(input: &[u8]) -> [u8; 32] {
-    let mut state: [u64; 4] = [
-        0x736f_6d65_7073_6575,
-        0x646f_7261_6e64_6f6d,
-        0x6c79_6765_6e65_7261,
-        0x7465_6462_7974_6573,
-    ];
-
-    state[0] ^= input.len() as u64;
-
-    for chunk in input.chunks(8) {
-        let mut block = [0u8; 8];
-        block[..chunk.len()].copy_from_slice(chunk);
-        let word = u64::from_le_bytes(block);
-
-        state[3] ^= word;
-        sip_round(&mut state);
-        sip_round(&mut state);
-        state[0] ^= word;
-    }
-
-    finalize_state(&mut state)
+    let digest = Sha256::digest(input);
+    let mut output = [0u8; 32];
+    output.copy_from_slice(&digest);
+    output
 }
 
 /// Keyed hash: mixes key before and after data processing.
@@ -514,6 +499,24 @@ mod tests {
     }
 
     #[test]
+    fn content_hash_empty_matches_sha256_known_vector() {
+        let h = ContentHash::compute(b"");
+        assert_eq!(
+            h.to_hex(),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn content_hash_hello_matches_sha256_known_vector() {
+        let h = ContentHash::compute(b"hello");
+        assert_eq!(
+            h.to_hex(),
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+    }
+
+    #[test]
     fn content_hash_avalanche() {
         let a = ContentHash::compute(b"test input A");
         let b = ContentHash::compute(b"test input B");
@@ -560,6 +563,16 @@ mod tests {
         let auth = AuthenticityHash::compute(b"test data");
         let content = ContentHash::compute(b"test data");
         assert_eq!(auth.as_bytes(), content.as_bytes());
+    }
+
+    #[test]
+    fn content_hash_large_input_matches_sha256_digest() {
+        let data = vec![0u8; 1024 * 1024];
+        let expected = Sha256::digest(&data);
+        let mut expected_bytes = [0u8; 32];
+        expected_bytes.copy_from_slice(&expected);
+        let hash = ContentHash::compute(&data);
+        assert_eq!(hash.as_bytes(), &expected_bytes);
     }
 
     #[test]

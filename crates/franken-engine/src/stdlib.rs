@@ -6477,8 +6477,7 @@ mod tests {
             require_string_fast_path_eligibility(StringFastPathConsumer::Cache, Some(receipt_a))
                 .unwrap();
         let serialized = serde_json::to_string(&eligibility).unwrap();
-        let round_trip: StringFastPathEligibility =
-            serde_json::from_str(&serialized).unwrap();
+        let round_trip: StringFastPathEligibility = serde_json::from_str(&serialized).unwrap();
         assert_eq!(round_trip, eligibility);
     }
 

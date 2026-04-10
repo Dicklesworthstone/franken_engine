@@ -257,11 +257,7 @@ impl AcceptedLaw {
         data.extend_from_slice(self.law_id.as_bytes());
         data.extend_from_slice(self.candidate_id.as_bytes());
         data.extend_from_slice(self.statement.as_bytes());
-        data.extend_from_slice(
-            serde_json::to_string(&self.strength)
-                .unwrap()
-                .as_bytes(),
-        );
+        data.extend_from_slice(serde_json::to_string(&self.strength).unwrap().as_bytes());
         let mut sorted_tags = self.scope_tags.clone();
         sorted_tags.sort();
         for tag in &sorted_tags {

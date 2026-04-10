@@ -263,11 +263,7 @@ impl CompressionResult {
     fn recompute_hash(&mut self) {
         let mut data = Vec::new();
         data.extend_from_slice(self.artifact_id.as_bytes());
-        data.extend_from_slice(
-            serde_json::to_string(&self.strategy)
-                .unwrap()
-                .as_bytes(),
-        );
+        data.extend_from_slice(serde_json::to_string(&self.strategy).unwrap().as_bytes());
         data.extend_from_slice(&self.original_size_bytes.to_le_bytes());
         data.extend_from_slice(&self.compressed_size_bytes.to_le_bytes());
         data.extend_from_slice(&self.ratio_millionths.to_le_bytes());
@@ -318,16 +314,8 @@ impl CompressionReceipt {
         if let Some(ref canonical) = self.canonical_id {
             data.extend_from_slice(canonical.as_bytes());
         }
-        data.extend_from_slice(
-            serde_json::to_string(&self.strategy)
-                .unwrap()
-                .as_bytes(),
-        );
-        data.extend_from_slice(
-            serde_json::to_string(&self.domain)
-                .unwrap()
-                .as_bytes(),
-        );
+        data.extend_from_slice(serde_json::to_string(&self.strategy).unwrap().as_bytes());
+        data.extend_from_slice(serde_json::to_string(&self.domain).unwrap().as_bytes());
         data.push(u8::from(self.restoration_verified));
         data.extend_from_slice(&self.receipt_epoch.as_u64().to_le_bytes());
         self.receipt_hash = ContentHash::compute(&data);

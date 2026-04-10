@@ -334,11 +334,7 @@ impl HookSemanticContract {
 
     pub fn contract_hash(&self) -> ContentHash {
         let mut data = Vec::new();
-        data.extend_from_slice(
-            serde_json::to_string(&self.hook_kind)
-                .unwrap()
-                .as_bytes(),
-        );
+        data.extend_from_slice(serde_json::to_string(&self.hook_kind).unwrap().as_bytes());
         for rule in &self.invocation_rules {
             data.extend_from_slice(serde_json::to_string(rule).unwrap().as_bytes());
         }
@@ -430,16 +426,8 @@ impl EffectSemanticContract {
 
     pub fn contract_hash(&self) -> ContentHash {
         let mut data = Vec::new();
-        data.extend_from_slice(
-            serde_json::to_string(&self.effect_kind)
-                .unwrap()
-                .as_bytes(),
-        );
-        data.extend_from_slice(
-            serde_json::to_string(&self.timing)
-                .unwrap()
-                .as_bytes(),
-        );
+        data.extend_from_slice(serde_json::to_string(&self.effect_kind).unwrap().as_bytes());
+        data.extend_from_slice(serde_json::to_string(&self.timing).unwrap().as_bytes());
         data.extend_from_slice(&(self.capability_requirements.len() as u64).to_le_bytes());
         for cap in &self.capability_requirements {
             data.extend_from_slice(&(cap.len() as u64).to_le_bytes());
@@ -502,17 +490,9 @@ impl AdjudicationRule {
     pub fn rule_hash(&self) -> ContentHash {
         let mut data = Vec::new();
         data.extend_from_slice(self.name.as_bytes());
-        data.extend_from_slice(
-            serde_json::to_string(&self.category)
-                .unwrap()
-                .as_bytes(),
-        );
+        data.extend_from_slice(serde_json::to_string(&self.category).unwrap().as_bytes());
         data.extend_from_slice(self.condition.as_bytes());
-        data.extend_from_slice(
-            serde_json::to_string(&self.resolution)
-                .unwrap()
-                .as_bytes(),
-        );
+        data.extend_from_slice(serde_json::to_string(&self.resolution).unwrap().as_bytes());
         ContentHash::compute(&data)
     }
 }

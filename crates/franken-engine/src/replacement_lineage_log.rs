@@ -1805,17 +1805,10 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
                     })
                     .cloned();
 
-                let mut joined_evidence = evidence
-                    .get(&replacement.receipt_id)
-                    .cloned()
-                    .unwrap();
+                let mut joined_evidence = evidence.get(&replacement.receipt_id).cloned().unwrap();
                 if let Some(ref demotion_record) = demotion {
-                    joined_evidence.extend(
-                        evidence
-                            .get(&demotion_record.receipt_id)
-                            .cloned()
-                            .unwrap(),
-                    );
+                    joined_evidence
+                        .extend(evidence.get(&demotion_record.receipt_id).cloned().unwrap());
                 }
                 joined_evidence.sort_by(|a, b| {
                     a.category

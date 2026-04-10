@@ -1853,8 +1853,7 @@ mod tests {
             ArtifactValidationErrorCode::EmptyCommands,
         ] {
             let json = serde_json::to_string(&code).unwrap();
-            let restored: ArtifactValidationErrorCode =
-                serde_json::from_str(&json).unwrap();
+            let restored: ArtifactValidationErrorCode = serde_json::from_str(&json).unwrap();
             assert_eq!(code, restored);
         }
     }
@@ -1874,8 +1873,7 @@ mod tests {
             ArtifactBundleValidationErrorCode::CorrelationMismatch,
         ] {
             let json = serde_json::to_string(&code).unwrap();
-            let restored: ArtifactBundleValidationErrorCode =
-                serde_json::from_str(&json).unwrap();
+            let restored: ArtifactBundleValidationErrorCode = serde_json::from_str(&json).unwrap();
             assert_eq!(code, restored);
         }
     }
@@ -2290,8 +2288,7 @@ mod tests {
             findings: Vec::new(),
         };
         let json = serde_json::to_string(&report).unwrap();
-        let restored: ArtifactBundleValidationReport =
-            serde_json::from_str(&json).unwrap();
+        let restored: ArtifactBundleValidationReport = serde_json::from_str(&json).unwrap();
         assert_eq!(report, restored);
     }
 
@@ -2518,8 +2515,7 @@ mod tests {
             repro_command: "cargo test".to_string(),
         };
         let json = serde_json::to_string(&finding).unwrap();
-        let restored: ArtifactBundleValidationFinding =
-            serde_json::from_str(&json).unwrap();
+        let restored: ArtifactBundleValidationFinding = serde_json::from_str(&json).unwrap();
         assert_eq!(finding, restored);
     }
 
@@ -2531,8 +2527,7 @@ mod tests {
             lanes: vec![HarnessLane::Parser, HarnessLane::Runtime],
         };
         let json = serde_json::to_string(&sig).unwrap();
-        let restored: ArtifactBundleCorrelationSignature =
-            serde_json::from_str(&json).unwrap();
+        let restored: ArtifactBundleCorrelationSignature = serde_json::from_str(&json).unwrap();
         assert_eq!(sig, restored);
     }
 

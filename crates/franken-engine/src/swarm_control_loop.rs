@@ -881,8 +881,8 @@ impl SwarmControlLoop {
             .count() as u64;
 
         // Compute artifact hash.
-        let hash_input = serde_json::to_vec(&(&queue, &signals, &bottlenecks, &self.risk_budget))
-            .unwrap();
+        let hash_input =
+            serde_json::to_vec(&(&queue, &signals, &bottlenecks, &self.risk_budget)).unwrap();
         let artifact_hash = ContentHash::compute(&hash_input);
 
         // Save current queue for next iteration's delta computation.

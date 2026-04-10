@@ -5253,8 +5253,7 @@ mod tests {
     fn aggregation_serde_roundtrip() {
         let agg = test_aggregation();
         let json = serde_json::to_string(&agg).unwrap();
-        let restored: SecureAggregationRequirements =
-            serde_json::from_str(&json).unwrap();
+        let restored: SecureAggregationRequirements = serde_json::from_str(&json).unwrap();
         assert_eq!(agg, restored);
     }
 
@@ -6194,8 +6193,7 @@ mod tests {
             .evaluate_candidate(&contract, valid_candidate(), &governance_signing_key())
             .expect("evaluate");
         let json = serde_json::to_string(&artifact).unwrap();
-        let restored: ShadowPromotionDecisionArtifact =
-            serde_json::from_str(&json).unwrap();
+        let restored: ShadowPromotionDecisionArtifact = serde_json::from_str(&json).unwrap();
         assert_eq!(artifact, restored);
     }
 
@@ -6219,8 +6217,7 @@ mod tests {
             .expect("post check")
             .expect("rollback receipt");
         let json = serde_json::to_string(&receipt).unwrap();
-        let restored: ShadowRollbackIncidentReceipt =
-            serde_json::from_str(&json).unwrap();
+        let restored: ShadowRollbackIncidentReceipt = serde_json::from_str(&json).unwrap();
         assert_eq!(receipt, restored);
     }
 
@@ -6446,8 +6443,7 @@ mod tests {
     fn shadow_rollback_readiness_serde_roundtrip() {
         let r = rollback_readiness();
         let json = serde_json::to_string(&r).unwrap();
-        let restored: ShadowRollbackReadinessArtifacts =
-            serde_json::from_str(&json).unwrap();
+        let restored: ShadowRollbackReadinessArtifacts = serde_json::from_str(&json).unwrap();
         assert_eq!(r, restored);
     }
 

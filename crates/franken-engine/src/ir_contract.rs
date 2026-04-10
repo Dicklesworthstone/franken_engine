@@ -284,10 +284,19 @@ pub struct ScopeNode {
 impl ScopeNode {
     pub fn canonical_value(&self) -> CanonicalValue {
         let mut map = BTreeMap::new();
+        let mut bindings = self.bindings.clone();
+        bindings.sort_by(|left, right| {
+            left.binding_id
+                .cmp(&right.binding_id)
+                .then_with(|| left.name.cmp(&right.name))
+                .then_with(|| left.scope.depth.cmp(&right.scope.depth))
+                .then_with(|| left.scope.index.cmp(&right.scope.index))
+                .then_with(|| left.kind.as_str().cmp(right.kind.as_str()))
+        });
         map.insert(
             "bindings".to_string(),
             CanonicalValue::Array(
-                self.bindings
+                bindings
                     .iter()
                     .map(ResolvedBinding::canonical_value)
                     .collect(),
@@ -958,7 +967,10 @@ impl Ir1Op {
                     CanonicalValue::U64(u64::from(*quasi_count)),
                 );
             }
-            Self::HostCall { capability, arg_count } => {
+            Self::HostCall {
+                capability,
+                arg_count,
+            } => {
                 map.insert(
                     "op".to_string(),
                     CanonicalValue::String("host_call".to_string()),
@@ -5337,6 +5349,141 @@ mod tests {
         } else {
             panic!("expected Map from ResolvedBinding::canonical_value");
         }
+    }
+
+    #[test]
+    fn scope_node_canonical_value_sorts_bindings_by_binding_id() {
+        let make_scope = |bindings: Vec<ResolvedBinding>| ScopeNode {
+            scope_id: ScopeId { depth: 1, index: 2 },
+            parent: Some(ScopeId { depth: 0, index: 0 }),
+            kind: ScopeKind::Function,
+            bindings,
+        };
+        let low = ResolvedBinding {
+            name: "alpha".to_string(),
+            binding_id: 1,
+            scope: ScopeId { depth: 1, index: 2 },
+            kind: BindingKind::Const,
+        };
+        let high = ResolvedBinding {
+            name: "beta".to_string(),
+            binding_id: 7,
+            scope: ScopeId { depth: 1, index: 2 },
+            kind: BindingKind::Let,
+        };
+
+        let first = make_scope(vec![high.clone(), low.clone()]).canonical_value();
+        let second = make_scope(vec![low.clone(), high.clone()]).canonical_value();
+
+        assert_eq!(first, second);
+        assert_eq!(
+            deterministic_serde::encode_value(&first),
+            deterministic_serde::encode_value(&second)
+        );
+    }
+
+    #[test]
+    fn scope_node_canonical_value_distinguishes_different_bindings() {
+        let base = ScopeNode {
+            scope_id: ScopeId { depth: 1, index: 2 },
+            parent: Some(ScopeId { depth: 0, index: 0 }),
+            kind: ScopeKind::Function,
+            bindings: vec![ResolvedBinding {
+                name: "alpha".to_string(),
+                binding_id: 1,
+                scope: ScopeId { depth: 1, index: 2 },
+                kind: BindingKind::Const,
+            }],
+        };
+        let changed = ScopeNode {
+            bindings: vec![ResolvedBinding {
+                name: "beta".to_string(),
+                ..base.bindings[0].clone()
+            }],
+            ..base.clone()
+        };
+
+        assert_ne!(
+            deterministic_serde::encode_value(&base.canonical_value()),
+            deterministic_serde::encode_value(&changed.canonical_value())
+        );
+    }
+
+    #[test]
+    fn scope_node_canonical_value_empty_bindings_is_stable() {
+        let node = ScopeNode {
+            scope_id: ScopeId { depth: 0, index: 0 },
+            parent: None,
+            kind: ScopeKind::Global,
+            bindings: Vec::new(),
+        };
+
+        assert_eq!(node.canonical_value(), node.canonical_value());
+    }
+
+    #[test]
+    fn scope_node_canonical_value_single_binding_is_stable() {
+        let node = ScopeNode {
+            scope_id: ScopeId { depth: 0, index: 0 },
+            parent: None,
+            kind: ScopeKind::Global,
+            bindings: vec![ResolvedBinding {
+                name: "counter".to_string(),
+                binding_id: 42,
+                scope: ScopeId { depth: 0, index: 0 },
+                kind: BindingKind::Var,
+            }],
+        };
+
+        assert_eq!(
+            deterministic_serde::encode_value(&node.canonical_value()),
+            deterministic_serde::encode_value(&node.canonical_value())
+        );
+    }
+
+    #[test]
+    fn scope_node_canonical_value_tiebreaks_duplicate_binding_ids_deterministically() {
+        let node = ScopeNode {
+            scope_id: ScopeId { depth: 1, index: 2 },
+            parent: Some(ScopeId { depth: 0, index: 0 }),
+            kind: ScopeKind::Function,
+            bindings: vec![
+                ResolvedBinding {
+                    name: "zeta".to_string(),
+                    binding_id: 3,
+                    scope: ScopeId { depth: 1, index: 2 },
+                    kind: BindingKind::Let,
+                },
+                ResolvedBinding {
+                    name: "alpha".to_string(),
+                    binding_id: 3,
+                    scope: ScopeId { depth: 1, index: 1 },
+                    kind: BindingKind::Const,
+                },
+            ],
+        };
+
+        let canonical = node.canonical_value();
+        let CanonicalValue::Map(map) = canonical else {
+            panic!("expected Map from ScopeNode::canonical_value");
+        };
+        let Some(CanonicalValue::Array(bindings)) = map.get("bindings") else {
+            panic!("expected bindings array in ScopeNode canonical value");
+        };
+        let names: Vec<_> = bindings
+            .iter()
+            .map(|binding| match binding {
+                CanonicalValue::Map(fields) => fields.get("name").cloned(),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                Some(CanonicalValue::String("alpha".to_string())),
+                Some(CanonicalValue::String("zeta".to_string()))
+            ]
+        );
     }
 
     #[test]

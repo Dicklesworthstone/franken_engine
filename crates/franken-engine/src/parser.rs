@@ -11890,4 +11890,85 @@ mod tests {
         let tree2 = parse_script("[...x]");
         assert_eq!(tree1.canonical_hash(), tree2.canonical_hash());
     }
+
+    // -- RegExp literal parsing tests --
+
+    #[test]
+    fn parse_regexp_literal_simple_pattern() {
+        assert_eq!(
+            parse_regexp_literal("/hello/"),
+            Some(("hello".to_string(), String::new()))
+        );
+    }
+
+    #[test]
+    fn parse_regexp_literal_with_flags() {
+        assert_eq!(
+            parse_regexp_literal("/hello/gi"),
+            Some(("hello".to_string(), "gi".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_regexp_literal_with_all_flags() {
+        assert_eq!(
+            parse_regexp_literal("/test/gimsuy"),
+            Some(("test".to_string(), "gimsuy".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_regexp_literal_escaped_slash() {
+        assert_eq!(
+            parse_regexp_literal(r"/a\/b/"),
+            Some((r"a\/b".to_string(), String::new()))
+        );
+    }
+
+    #[test]
+    fn parse_regexp_literal_char_class_with_slash() {
+        assert_eq!(
+            parse_regexp_literal("/[/]/"),
+            Some(("[/]".to_string(), String::new()))
+        );
+    }
+
+    #[test]
+    fn parse_regexp_literal_complex_pattern() {
+        assert_eq!(
+            parse_regexp_literal(r"/^[\w.+-]+@[\w-]+\.[\w.]+$/i"),
+            Some((r"^[\w.+-]+@[\w-]+\.[\w.]+$".to_string(), "i".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_regexp_literal_not_regex() {
+        assert_eq!(parse_regexp_literal("hello"), None);
+        assert_eq!(parse_regexp_literal("42"), None);
+        assert_eq!(parse_regexp_literal(""), None);
+    }
+
+    #[test]
+    fn parse_regexp_literal_unclosed() {
+        assert_eq!(parse_regexp_literal("/hello"), None);
+    }
+
+    #[test]
+    fn regexp_literal_parses_as_expression() {
+        let tree = parse_script("/test/gi;");
+        match first_expr(&tree) {
+            Expression::RegExpLiteral { pattern, flags } => {
+                assert_eq!(pattern, "test");
+                assert_eq!(flags, "gi");
+            }
+            other => panic!("expected RegExpLiteral, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn regexp_literal_canonical_hash_stability() {
+        let tree1 = parse_script("/test/gi;");
+        let tree2 = parse_script("/test/gi;");
+        assert_eq!(tree1.canonical_hash(), tree2.canonical_hash());
+    }
 }

@@ -585,11 +585,7 @@ impl EvidenceBundle {
         for h in &verdict_hashes {
             hasher.update(h.as_bytes());
         }
-        hasher.update(
-            serde_json::to_string(&self.status)
-                .unwrap()
-                .as_bytes(),
-        );
+        hasher.update(serde_json::to_string(&self.status).unwrap().as_bytes());
         if let Some(ref env) = self.reference_environment {
             hasher.update(env.snapshot_hash.as_bytes());
         }

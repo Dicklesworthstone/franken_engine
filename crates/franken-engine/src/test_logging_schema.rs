@@ -588,8 +588,7 @@ pub fn apply_redaction_with_audit(
         audit_entries: &audit_entries,
         detected_secret_patterns: &detected_secret_patterns,
     };
-    let report_hash =
-        stable_sensitive_hash(&serde_json::to_string(&hash_input).unwrap());
+    let report_hash = stable_sensitive_hash(&serde_json::to_string(&hash_input).unwrap());
 
     RedactionAuditReport {
         schema_version: RGC_SECRET_REDACTION_AUDIT_SCHEMA_VERSION.to_string(),
@@ -1492,10 +1491,8 @@ mod tests {
         let baseline_report = apply_redaction_with_audit(&record, &baseline_spec);
         let reordered_report = apply_redaction_with_audit(&record, &reordered_spec);
 
-        let baseline_serialized =
-            serialize_redaction_audit_report(&baseline_report).unwrap();
-        let reordered_serialized =
-            serialize_redaction_audit_report(&reordered_report).unwrap();
+        let baseline_serialized = serialize_redaction_audit_report(&baseline_report).unwrap();
+        let reordered_serialized = serialize_redaction_audit_report(&reordered_report).unwrap();
 
         assert_eq!(baseline_serialized, reordered_serialized);
     }

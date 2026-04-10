@@ -3150,7 +3150,10 @@ pub fn lower_ir2_to_ir3(
                 }
                 value_stack.push(dst);
             }
-            Ir1Op::HostCall { capability, arg_count } => {
+            Ir1Op::HostCall {
+                capability,
+                arg_count,
+            } => {
                 let count = *arg_count as usize;
                 if count > value_stack.len() {
                     return Err(LoweringPipelineError::InvariantViolation {

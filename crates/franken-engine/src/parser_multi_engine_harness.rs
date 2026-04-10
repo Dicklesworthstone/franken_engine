@@ -919,11 +919,7 @@ fn derive_run_id(
     for engine in &sorted_engines {
         hasher.update(engine.engine_id.as_bytes());
         hasher.update(engine.version_pin.as_bytes());
-        hasher.update(
-            serde_json::to_string(&engine.kind)
-                .unwrap()
-                .as_bytes(),
-        );
+        hasher.update(serde_json::to_string(&engine.kind).unwrap().as_bytes());
         if let Some(command) = engine.command.as_ref() {
             hasher.update(command.as_bytes());
         }

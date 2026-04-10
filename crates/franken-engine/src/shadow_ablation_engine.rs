@@ -2625,8 +2625,7 @@ mod tests {
             budget_utilization: BTreeMap::new(),
         };
         let json = serde_json::to_string(&input).unwrap();
-        let restored: ShadowAblationTranscriptInput =
-            serde_json::from_str(&json).unwrap();
+        let restored: ShadowAblationTranscriptInput = serde_json::from_str(&json).unwrap();
         assert_eq!(input, restored);
     }
 

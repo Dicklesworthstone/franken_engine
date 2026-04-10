@@ -454,11 +454,7 @@ pub fn evaluate_controller_interference(
         }
 
         let snapshot_key = format!("{}:{}", read.controller_id, read.metric);
-        let snapshot_value = scenario
-            .initial_metrics
-            .get(&read.metric)
-            .copied()
-            .unwrap();
+        let snapshot_value = scenario.initial_metrics.get(&read.metric).copied().unwrap();
         read_snapshots.insert(snapshot_key, snapshot_value);
 
         logs.push(InterferenceLogEvent {

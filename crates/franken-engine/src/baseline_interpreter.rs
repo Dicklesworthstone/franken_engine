@@ -96,6 +96,116 @@ pub const LEGACY_QUICKJS_PROFILE_LABEL: &str = "quickjs_inspired_native";
 pub const LEGACY_V8_PROFILE_LABEL: &str = "v8_inspired_native";
 
 // ---------------------------------------------------------------------------
+// Float64 — Deterministic f64 wrapper with total ordering
+// ---------------------------------------------------------------------------
+
+/// Wrapper around f64 that provides Eq/Ord using total_cmp for determinism.
+/// NaN values are equal to each other and greater than all other values.
+/// -0.0 is less than +0.0 in the total ordering.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Float64(pub f64);
+
+impl Float64 {
+    /// Create a new Float64 from an f64.
+    pub fn new(v: f64) -> Self {
+        Self(v)
+    }
+
+    /// Check if this is NaN.
+    pub fn is_nan(&self) -> bool {
+        self.0.is_nan()
+    }
+
+    /// Check if this is positive or negative infinity.
+    pub fn is_infinite(&self) -> bool {
+        self.0.is_infinite()
+    }
+
+    /// Check if this is negative zero.
+    pub fn is_negative_zero(&self) -> bool {
+        self.0 == 0.0 && self.0.is_sign_negative()
+    }
+
+    /// Get the inner f64 value.
+    pub fn inner(&self) -> f64 {
+        self.0
+    }
+}
+
+impl PartialEq for Float64 {
+    fn eq(&self, other: &Self) -> bool {
+        // Use total_cmp for bitwise equality (NaN == NaN, -0 != +0)
+        self.0.total_cmp(&other.0) == Ordering::Equal
+    }
+}
+
+impl Eq for Float64 {}
+
+impl PartialOrd for Float64 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Float64 {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
+impl std::hash::Hash for Float64 {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.to_bits().hash(state);
+    }
+}
+
+impl fmt::Display for Float64 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0.is_nan() {
+            write!(f, "NaN")
+        } else if self.0.is_infinite() {
+            if self.0.is_sign_positive() {
+                write!(f, "Infinity")
+            } else {
+                write!(f, "-Infinity")
+            }
+        } else if self.is_negative_zero() {
+            write!(f, "0")
+        } else {
+            // Format like JavaScript: no trailing zeros, but show decimal for floats
+            let s = format!("{}", self.0);
+            write!(f, "{s}")
+        }
+    }
+}
+
+impl Serialize for Float64 {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // Serialize as f64 bits for exact round-trip of NaN/special values
+        serializer.serialize_u64(self.0.to_bits())
+    }
+}
+
+impl<'de> Deserialize<'de> for Float64 {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let bits = u64::deserialize(deserializer)?;
+        Ok(Self(f64::from_bits(bits)))
+    }
+}
+
+impl From<f64> for Float64 {
+    fn from(v: f64) -> Self {
+        Self(v)
+    }
+}
+
+impl From<i64> for Float64 {
+    fn from(v: i64) -> Self {
+        Self(v as f64)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Value — JS runtime value representation
 // ---------------------------------------------------------------------------
 
@@ -111,6 +221,9 @@ pub enum Value {
     /// Integer (i64). Fixed-point integers avoid floating-point
     /// non-determinism; fractional values use millionths when needed.
     Int(i64),
+    /// IEEE 754 floating-point (f64). Used for fractional values, NaN,
+    /// Infinity, and -0. Wrapped in Float64 for deterministic ordering.
+    Float(Float64),
     /// String.
     Str(String),
     /// Object reference (heap index).
@@ -131,12 +244,13 @@ pub enum Value {
 }
 
 impl Value {
-    /// Truthiness: Undefined, Null, Bool(false), Int(0), Str("") are falsy.
+    /// Truthiness: Undefined, Null, Bool(false), Int(0), Float(0.0/-0.0/NaN), Str("") are falsy.
     pub fn is_truthy(&self) -> bool {
         match self {
             Self::Undefined | Self::Null => false,
             Self::Bool(b) => *b,
             Self::Int(n) => *n != 0,
+            Self::Float(f) => !f.is_nan() && f.inner() != 0.0,
             Self::Str(s) => !s.is_empty(),
             Self::Object(_)
             | Self::Function(_)
@@ -158,7 +272,7 @@ impl Value {
             Self::Undefined => "undefined",
             Self::Null => "null",
             Self::Bool(_) => "boolean",
-            Self::Int(_) => "number",
+            Self::Int(_) | Self::Float(_) => "number",
             Self::Str(_) => "string",
             Self::Object(_) => "object",
             Self::Function(_) | Self::Closure(_) | Self::GeneratorFunction(_) => "function",
@@ -171,7 +285,7 @@ impl Value {
             Self::Undefined => "undefined",
             Self::Null | Self::Object(_) => "object",
             Self::Bool(_) => "boolean",
-            Self::Int(_) => "number",
+            Self::Int(_) | Self::Float(_) => "number",
             Self::Str(_) => "string",
             Self::Function(_) | Self::Closure(_) | Self::GeneratorFunction(_) => "function",
             Self::Iterator(_) | Self::Generator(_) | Self::Promise(_) => "object",
@@ -186,6 +300,7 @@ impl fmt::Display for Value {
             Self::Null => write!(f, "null"),
             Self::Bool(b) => write!(f, "{b}"),
             Self::Int(n) => write!(f, "{n}"),
+            Self::Float(fv) => write!(f, "{fv}"),
             Self::Str(s) => write!(f, "{s}"),
             Self::Object(id) => write!(f, "[object#{}]", id.0),
             Self::Function(idx) => write!(f, "[function#{idx}]"),
@@ -2338,6 +2453,7 @@ impl InterpreterCore {
                         let part_str = match val {
                             Value::Str(s) => s,
                             Value::Int(n) => n.to_string(),
+                            Value::Float(f) => f.to_string(),
                             Value::Bool(b) => (if b { "true" } else { "false" }).to_string(),
                             Value::Null => "null".to_string(),
                             Value::Undefined => "undefined".to_string(),
@@ -3428,6 +3544,16 @@ impl InterpreterCore {
     fn coerce_to_number(value: &Value) -> Option<i64> {
         match value {
             Value::Int(n) => Some(*n),
+            Value::Float(f) => {
+                let v = f.inner();
+                if v.is_nan() || v.is_infinite() {
+                    None
+                } else if v.fract() == 0.0 && v >= i64::MIN as f64 && v <= i64::MAX as f64 {
+                    Some(v as i64)
+                } else {
+                    None
+                }
+            }
             Value::Bool(b) => Some(i64::from(*b)),
             Value::Null => Some(0),
             Value::Str(s) => {
@@ -3449,6 +3575,38 @@ impl InterpreterCore {
         }
     }
 
+    /// Coerce a value to f64 for floating-point operations.
+    fn coerce_to_float(value: &Value) -> Option<f64> {
+        match value {
+            Value::Int(n) => Some(*n as f64),
+            Value::Float(f) => Some(f.inner()),
+            Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+            Value::Null => Some(0.0),
+            Value::Str(s) => {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    Some(0.0)
+                } else if trimmed.eq_ignore_ascii_case("infinity") {
+                    Some(f64::INFINITY)
+                } else if trimmed.eq_ignore_ascii_case("-infinity") {
+                    Some(f64::NEG_INFINITY)
+                } else if trimmed.eq_ignore_ascii_case("nan") {
+                    Some(f64::NAN)
+                } else {
+                    trimmed.parse::<f64>().ok()
+                }
+            }
+            Value::Undefined => Some(f64::NAN),
+            Value::Object(_)
+            | Value::Function(_)
+            | Value::Closure(_)
+            | Value::Iterator(_)
+            | Value::GeneratorFunction(_)
+            | Value::Generator(_)
+            | Value::Promise(_) => Some(f64::NAN),
+        }
+    }
+
     fn abstract_eq_values(a: &Value, b: &Value) -> bool {
         match (a, b) {
             (Value::Undefined, Value::Undefined)
@@ -3463,13 +3621,34 @@ impl InterpreterCore {
             | (Value::GeneratorFunction(_), Value::GeneratorFunction(_))
             | (Value::Generator(_), Value::Generator(_))
             | (Value::Promise(_), Value::Promise(_)) => a == b,
+            // Float == Float: NaN !== NaN, but -0 == +0
+            (Value::Float(fa), Value::Float(fb)) => {
+                let va = fa.inner();
+                let vb = fb.inner();
+                if va.is_nan() || vb.is_nan() {
+                    false
+                } else {
+                    va == vb
+                }
+            }
+            // Int == Float or Float == Int: numeric comparison
+            (Value::Int(n), Value::Float(f)) | (Value::Float(f), Value::Int(n)) => {
+                let fv = f.inner();
+                if fv.is_nan() { false } else { *n as f64 == fv }
+            }
             (Value::Null, Value::Undefined) | (Value::Undefined, Value::Null) => true,
             // ES2020 §7.2.14: null/undefined are only == to each other, never
             // to numbers, strings, or booleans via numeric coercion.
             (Value::Null, _) | (_, Value::Null) => false,
             (Value::Undefined, _) | (_, Value::Undefined) => false,
-            _ => match (Self::coerce_to_number(a), Self::coerce_to_number(b)) {
-                (Some(lhs), Some(rhs)) => lhs == rhs,
+            _ => match (Self::coerce_to_float(a), Self::coerce_to_float(b)) {
+                (Some(lhs), Some(rhs)) => {
+                    if lhs.is_nan() || rhs.is_nan() {
+                        false
+                    } else {
+                        lhs == rhs
+                    }
+                }
                 _ => false,
             },
         }
@@ -5899,6 +6078,28 @@ mod tests {
     }
 
     #[test]
+    fn custom_heap_budget_allows_limit_then_fails() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.max_heap_objects = 10;
+        let mut core = InterpreterCore::new(config, "custom-heap-budget");
+        for expected in 0_u32..10 {
+            assert_eq!(
+                core.alloc_object_with_prototype(None).unwrap(),
+                ObjectId(expected)
+            );
+        }
+        let err = core.alloc_object_with_prototype(None).unwrap_err();
+        assert!(matches!(
+            err,
+            InterpreterError::MemoryBudgetExceeded {
+                requested_heap_objects: 11,
+                max_heap_objects: 10,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn estimated_memory_bytes_tracks_property_growth() {
         let config = InterpreterConfig::quickjs_defaults();
         let mut core = InterpreterCore::new(config, "memory-estimate");
@@ -5951,6 +6152,62 @@ mod tests {
             err,
             InterpreterError::MemoryBudgetExceeded { max_bytes: 1, .. }
         ));
+    }
+
+    #[test]
+    fn instruction_budget_and_memory_budget_are_independent() {
+        let budget_module = test_module(vec![Ir3Instruction::Jump { target: 0 }]);
+        let mut budget_config = InterpreterConfig::quickjs_defaults();
+        budget_config.instruction_budget = 5;
+        budget_config.max_total_memory_bytes = u64::MAX;
+        let budget_lane = QuickJsLane::with_config(budget_config);
+        let budget_err = budget_lane
+            .execute(&budget_module, "budget-first")
+            .unwrap_err();
+        assert!(matches!(
+            budget_err,
+            InterpreterError::BudgetExhausted {
+                executed: 5,
+                budget: 5,
+            }
+        ));
+
+        let memory_module = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec!["hello".to_string()],
+        );
+        let mut memory_config = InterpreterConfig::quickjs_defaults();
+        memory_config.instruction_budget = 10_000;
+        memory_config.max_total_memory_bytes = 1;
+        let memory_lane = QuickJsLane::with_config(memory_config);
+        let memory_err = memory_lane
+            .execute(&memory_module, "memory-first")
+            .unwrap_err();
+        assert!(matches!(
+            memory_err,
+            InterpreterError::MemoryBudgetExceeded { max_bytes: 1, .. }
+        ));
+    }
+
+    #[test]
+    fn memory_budget_exceeded_display_includes_requested_and_limits() {
+        let err = InterpreterError::MemoryBudgetExceeded {
+            requested_bytes: 4096,
+            max_bytes: 2048,
+            requested_heap_objects: 12,
+            max_heap_objects: 10,
+        };
+        let display = err.to_string();
+        assert!(display.contains("12 heap objects"));
+        assert!(display.contains("4096 bytes"));
+        assert!(display.contains("10 heap objects"));
+        assert!(display.contains("2048 bytes"));
     }
 
     #[test]

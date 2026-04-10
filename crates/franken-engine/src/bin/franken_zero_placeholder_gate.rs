@@ -767,11 +767,8 @@ mod tests {
             status: WaiverStatus::Active,
             created_epoch: 40,
         }];
-        fs::write(
-            &waivers_path,
-            serde_json::to_vec_pretty(&waivers).unwrap(),
-        )
-        .expect("write waivers");
+        fs::write(&waivers_path, serde_json::to_vec_pretty(&waivers).unwrap())
+            .expect("write waivers");
 
         write_zero_placeholder_gate_bundle(
             &out_dir,

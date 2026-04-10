@@ -1210,10 +1210,7 @@ fn comparison_workload_category(category: BenchmarkCategory) -> WorkloadCategory
     }
 }
 
-fn comparison_runtime_version_pin<'a>(
-    pins: &'a BenchmarkRuntimePins,
-    runtime: RuntimeId,
-) -> &'a str {
+fn comparison_runtime_version_pin(pins: &BenchmarkRuntimePins, runtime: RuntimeId) -> &str {
     match runtime {
         RuntimeId::FrankenEngine => &pins.franken_engine,
         RuntimeId::NodeLts => &pins.node_lts,

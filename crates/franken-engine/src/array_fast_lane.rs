@@ -577,16 +577,8 @@ impl TransitionReceipt {
         let mut data = Vec::new();
         data.extend_from_slice(array_id.as_bytes());
         data.push(b'|');
-        data.extend_from_slice(
-            serde_json::to_string(&transition.from)
-                .unwrap()
-                .as_bytes(),
-        );
-        data.extend_from_slice(
-            serde_json::to_string(&transition.to)
-                .unwrap()
-                .as_bytes(),
-        );
+        data.extend_from_slice(serde_json::to_string(&transition.from).unwrap().as_bytes());
+        data.extend_from_slice(serde_json::to_string(&transition.to).unwrap().as_bytes());
         data.extend_from_slice(
             serde_json::to_string(&transition.reason)
                 .unwrap()

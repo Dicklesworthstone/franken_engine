@@ -1040,11 +1040,7 @@ impl WorkloadCorpusGate {
     fn compute_family_summaries(&self, corpus: &WorkloadCorpus) -> Vec<FamilySummary> {
         let mut summaries = Vec::new();
         for family in WorkloadFamily::ALL {
-            let specimen_ids = corpus
-                .family_coverage
-                .get(family)
-                .cloned()
-                .unwrap();
+            let specimen_ids = corpus.family_coverage.get(family).cloned().unwrap();
             let specimen_count = specimen_ids.len();
 
             let family_results: Vec<&EquivalenceResult> = corpus

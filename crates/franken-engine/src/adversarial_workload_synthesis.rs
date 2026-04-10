@@ -1057,11 +1057,7 @@ impl SynthesisEngine {
 
         for domain in &config.domains {
             let domain_key = domain.as_str().to_string();
-            let seeds = self
-                .inputs_by_domain
-                .get(&domain_key)
-                .cloned()
-                .unwrap();
+            let seeds = self.inputs_by_domain.get(&domain_key).cloned().unwrap();
 
             for strategy in &config.strategies {
                 for seed in &seeds {

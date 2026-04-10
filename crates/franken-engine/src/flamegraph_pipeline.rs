@@ -1048,12 +1048,7 @@ fn build_svg(
         };
 
         let color = if kind.is_diff() {
-            match diff_by_stack
-                .get(&sample.stack)
-                .copied()
-                .unwrap()
-                .cmp(&0)
-            {
+            match diff_by_stack.get(&sample.stack).copied().unwrap().cmp(&0) {
                 std::cmp::Ordering::Greater => "#d9534f",
                 std::cmp::Ordering::Less => "#0275d8",
                 std::cmp::Ordering::Equal => "#7f8c8d",

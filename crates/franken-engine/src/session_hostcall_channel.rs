@@ -2115,8 +2115,7 @@ mod tests {
             timestamp_ticks: 12,
         };
         let encoded_event = serde_json::to_string(&event).unwrap();
-        let decoded_event: SessionChannelEvent =
-            serde_json::from_str(&encoded_event).unwrap();
+        let decoded_event: SessionChannelEvent = serde_json::from_str(&encoded_event).unwrap();
         assert_eq!(event, decoded_event);
     }
 

@@ -562,8 +562,8 @@ pub fn detect_shift(
                 config.abstention_sample_floor
             ),
         };
-        let cert_bytes = serde_json::to_vec(&(&benchmark.window_hash, &live.window_hash, &verdict))
-            .unwrap();
+        let cert_bytes =
+            serde_json::to_vec(&(&benchmark.window_hash, &live.window_hash, &verdict)).unwrap();
         return ShiftCertificate {
             schema_version: SHIFT_MONITOR_SCHEMA_VERSION.to_string(),
             benchmark_window: benchmark.clone(),
@@ -584,8 +584,8 @@ pub fn detect_shift(
             available,
             required: config.window.min_samples,
         };
-        let cert_bytes = serde_json::to_vec(&(&benchmark.window_hash, &live.window_hash, &verdict))
-            .unwrap();
+        let cert_bytes =
+            serde_json::to_vec(&(&benchmark.window_hash, &live.window_hash, &verdict)).unwrap();
         return ShiftCertificate {
             schema_version: SHIFT_MONITOR_SCHEMA_VERSION.to_string(),
             benchmark_window: benchmark.clone(),
@@ -632,8 +632,7 @@ pub fn detect_shift(
                 reason: "MMD computation failed".to_string(),
             };
             let cert_bytes =
-                serde_json::to_vec(&(&benchmark.window_hash, &live.window_hash, &verdict))
-                    .unwrap();
+                serde_json::to_vec(&(&benchmark.window_hash, &live.window_hash, &verdict)).unwrap();
             ShiftCertificate {
                 schema_version: SHIFT_MONITOR_SCHEMA_VERSION.to_string(),
                 benchmark_window: benchmark.clone(),

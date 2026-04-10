@@ -1269,8 +1269,7 @@ mod tests {
             required_zone: Some("zone-a".to_string()),
         };
         let json = serde_json::to_string(&ctx).unwrap();
-        let restored: DelegationVerificationContext =
-            serde_json::from_str(&json).unwrap();
+        let restored: DelegationVerificationContext = serde_json::from_str(&json).unwrap();
         assert_eq!(ctx, restored);
     }
 
@@ -1521,8 +1520,7 @@ mod tests {
             required_zone: None,
         };
         let json = serde_json::to_string(&ctx).unwrap();
-        let restored: DelegationVerificationContext =
-            serde_json::from_str(&json).unwrap();
+        let restored: DelegationVerificationContext = serde_json::from_str(&json).unwrap();
         assert_eq!(ctx, restored);
         assert_eq!(restored.authorized_roots.len(), 3);
     }

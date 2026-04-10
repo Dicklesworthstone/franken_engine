@@ -805,8 +805,7 @@ fn verify_attestation_layer(receipt: &OptReceipt, input: &AttestationLayerInput)
             "attestation_policy_measurement_mismatch",
             format!(
                 "policy measurement ({}:{}) != expected (sha256:{})",
-                serde_json::to_string(&input.policy_quote.measurement.algorithm)
-                    .unwrap(),
+                serde_json::to_string(&input.policy_quote.measurement.algorithm).unwrap(),
                 input.policy_quote.measurement.digest_hex,
                 expected_measurement_digest
             ),

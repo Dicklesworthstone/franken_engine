@@ -141,11 +141,7 @@ impl FusionMotif {
     /// Content hash of this motif for deterministic identity.
     pub fn content_hash(&self) -> ContentHash {
         let mut data = Vec::new();
-        data.extend_from_slice(
-            serde_json::to_string(&self.kind)
-                .unwrap()
-                .as_bytes(),
-        );
+        data.extend_from_slice(serde_json::to_string(&self.kind).unwrap().as_bytes());
         for op in &self.opcode_pattern {
             data.extend_from_slice(op.as_bytes());
             data.push(b'|');

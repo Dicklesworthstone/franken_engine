@@ -2449,10 +2449,7 @@ fn run_single_specimen(specimen: &InteropSpecimen) -> InteropSpecimenEvidence {
             .get(specifier.as_str())
             .copied()
             .expect("async evaluation order should reference a registered specimen module");
-        let deps = async_dependency_map
-            .get(specifier)
-            .cloned()
-            .unwrap();
+        let deps = async_dependency_map.get(specifier).cloned().unwrap();
         let promise = if sm.has_top_level_await {
             let pid: u32 = sm.specifier.as_bytes().iter().map(|&b| b as u32).sum();
             Some(crate::promise_model::PromiseHandle(pid))

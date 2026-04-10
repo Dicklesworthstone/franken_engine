@@ -648,10 +648,7 @@ impl ManifoldTrajectory {
             total_path_length = total_path_length.saturating_add(dist);
         }
 
-        let schema_id = coordinates
-            .first()
-            .map(|c| c.schema_id.clone())
-            .unwrap();
+        let schema_id = coordinates.first().map(|c| c.schema_id.clone()).unwrap();
 
         Self {
             trajectory_id: trajectory_id.into(),

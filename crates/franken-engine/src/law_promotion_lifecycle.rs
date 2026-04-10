@@ -194,11 +194,7 @@ impl LifecycleEvent {
         let mut data = Vec::new();
         data.extend_from_slice(self.event_id.as_bytes());
         data.extend_from_slice(self.law_id.as_bytes());
-        data.extend_from_slice(
-            serde_json::to_string(&self.kind)
-                .unwrap()
-                .as_bytes(),
-        );
+        data.extend_from_slice(serde_json::to_string(&self.kind).unwrap().as_bytes());
         let mut sorted_targets = self.affected_targets.clone();
         sorted_targets.sort();
         for target in &sorted_targets {

@@ -381,7 +381,7 @@ impl ScopeChain {
             ScopeKind::Block | ScopeKind::Catch => EnvironmentKind::Declarative,
         };
         let handle = EnvironmentHandle(self.next_handle);
-        self.next_handle = self.next_handle.checked_add(1).unwrap_or(u32::MAX);
+        self.next_handle = self.next_handle.saturating_add(1);
         let env = EnvironmentRecord::new(handle, scope_id, scope_kind, env_kind);
         self.environments.push(env);
         self.chain.push(handle);

@@ -210,11 +210,7 @@ impl RefutationWitness {
         let mut data = Vec::new();
         data.extend_from_slice(self.witness_id.as_bytes());
         data.extend_from_slice(self.candidate_id.as_bytes());
-        data.extend_from_slice(
-            serde_json::to_string(&self.reason)
-                .unwrap()
-                .as_bytes(),
-        );
+        data.extend_from_slice(serde_json::to_string(&self.reason).unwrap().as_bytes());
         data.extend_from_slice(self.description.as_bytes());
         data.extend_from_slice(self.input_digest.as_bytes());
         data.extend_from_slice(self.expected_summary.as_bytes());
@@ -260,16 +256,8 @@ impl ProofAttempt {
         let mut data = Vec::new();
         data.extend_from_slice(self.attempt_id.as_bytes());
         data.extend_from_slice(self.candidate_id.as_bytes());
-        data.extend_from_slice(
-            serde_json::to_string(&self.strategy)
-                .unwrap()
-                .as_bytes(),
-        );
-        data.extend_from_slice(
-            serde_json::to_string(&self.verdict)
-                .unwrap()
-                .as_bytes(),
-        );
+        data.extend_from_slice(serde_json::to_string(&self.strategy).unwrap().as_bytes());
+        data.extend_from_slice(serde_json::to_string(&self.verdict).unwrap().as_bytes());
         data.extend_from_slice(&self.confidence_millionths.to_le_bytes());
         if let Some(ref witness_id) = self.refutation_witness_id {
             data.extend_from_slice(witness_id.as_bytes());

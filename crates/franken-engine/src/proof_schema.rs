@@ -1625,8 +1625,7 @@ mod tests {
     fn attestation_requirement_policy_default_roundtrip() {
         let policy = AttestationRequirementPolicy::default();
         let json = serde_json::to_string(&policy).unwrap();
-        let restored: AttestationRequirementPolicy =
-            serde_json::from_str(&json).unwrap();
+        let restored: AttestationRequirementPolicy = serde_json::from_str(&json).unwrap();
         assert_eq!(policy, restored);
     }
 

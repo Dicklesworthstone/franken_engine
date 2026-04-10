@@ -572,8 +572,8 @@ fn witness_publication_event_serde_roundtrip() {
         .expect("publish");
 
     let event = &pipeline.events()[0];
-    let json = serde_json::to_string(event).unwrap_or_default();
-    let recovered: WitnessPublicationEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(event).unwrap();
+    let recovered: WitnessPublicationEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.event, event.event);
     assert_eq!(recovered.outcome, event.outcome);
 }
@@ -587,8 +587,8 @@ fn witness_publication_query_serde_roundtrip() {
         content_hash: Some(ContentHash::compute(b"test-hash")),
         include_revoked: false,
     };
-    let json = serde_json::to_string(&query).unwrap_or_default();
-    let recovered: WitnessPublicationQuery = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&query).unwrap();
+    let recovered: WitnessPublicationQuery = serde_json::from_str(&json).unwrap();
     assert!(!recovered.include_revoked);
     assert!(recovered.extension_id.is_some());
     assert!(recovered.epoch.is_some());
@@ -597,8 +597,8 @@ fn witness_publication_query_serde_roundtrip() {
 #[test]
 fn publication_entry_kind_all_variants_serde_roundtrip() {
     for kind in [PublicationEntryKind::Publish, PublicationEntryKind::Revoke] {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let recovered: PublicationEntryKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let recovered: PublicationEntryKind = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, kind);
     }
 }
@@ -615,7 +615,7 @@ fn witness_publication_error_display_is_nonempty() {
 #[test]
 fn witness_publication_config_default_is_constructible() {
     let config = WitnessPublicationConfig::default();
-    let json = serde_json::to_string(&config).unwrap_or_default();
+    let json = serde_json::to_string(&config).unwrap();
     assert!(!json.is_empty());
 }
 
@@ -639,8 +639,8 @@ fn publication_entry_kind_debug_is_nonempty() {
 #[test]
 fn witness_publication_config_serde_roundtrip() {
     let config = WitnessPublicationConfig::default();
-    let json = serde_json::to_string(&config).unwrap_or_default();
-    let recovered: WitnessPublicationConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&config).unwrap();
+    let recovered: WitnessPublicationConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(serde_json::to_string(&recovered).unwrap(), json);
 }
 
@@ -795,7 +795,7 @@ fn published_witness_artifact_serde_roundtrip() {
         .expect("publish");
 
     let artifact = &pipeline.publications()[0];
-    let json = serde_json::to_string(artifact).unwrap_or_default();
+    let json = serde_json::to_string(artifact).unwrap();
     assert!(!json.is_empty());
     // Deserialize back to validate structure
     let _: serde_json::Value = serde_json::from_str(&json).expect("valid json");

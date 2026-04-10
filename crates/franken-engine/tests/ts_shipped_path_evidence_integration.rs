@@ -421,7 +421,7 @@ fn contract_not_satisfied_when_empty_corpus() {
 fn test_dir(suffix: &str) -> std::path::PathBuf {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
+        .unwrap()
         .as_nanos();
     let tid = std::thread::current().id();
     std::env::temp_dir().join(format!(

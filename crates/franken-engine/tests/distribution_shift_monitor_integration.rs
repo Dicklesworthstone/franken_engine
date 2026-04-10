@@ -144,7 +144,7 @@ fn write_json<T: Serialize>(path: impl AsRef<Path>, value: &T) {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).expect("create parent directory");
     }
-    let json = serde_json::to_vec_pretty(value).unwrap_or_default();
+    let json = serde_json::to_vec_pretty(value).unwrap();
     fs::write(path, json).expect("write json");
 }
 
@@ -156,7 +156,7 @@ fn write_jsonl<T: Serialize>(path: impl AsRef<Path>, values: &[T]) {
 
     let mut lines = String::new();
     for value in values {
-        let line = serde_json::to_string(value).unwrap_or_default();
+        let line = serde_json::to_string(value).unwrap();
         lines.push_str(&line);
         lines.push('\n');
     }
@@ -528,8 +528,8 @@ fn emit_shift_monitor_artifacts_for_replay() {
 #[test]
 fn stream_kind_serde_roundtrip() {
     for kind in [StreamKind::Benchmark, StreamKind::LiveWorkload] {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let recovered: StreamKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let recovered: StreamKind = serde_json::from_str(&json).unwrap();
         assert_eq!(kind, recovered);
     }
 }
@@ -550,8 +550,8 @@ fn kernel_kind_serde_roundtrip_all_variants() {
         },
     ];
     for kernel in &kernels {
-        let json = serde_json::to_string(kernel).unwrap_or_default();
-        let recovered: KernelKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(kernel).unwrap();
+        let recovered: KernelKind = serde_json::from_str(&json).unwrap();
         assert_eq!(*kernel, recovered);
     }
 }
@@ -570,8 +570,8 @@ fn shift_verdict_serde_roundtrip_all_variants() {
         },
     ];
     for verdict in &verdicts {
-        let json = serde_json::to_string(verdict).unwrap_or_default();
-        let recovered: ShiftVerdict = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(verdict).unwrap();
+        let recovered: ShiftVerdict = serde_json::from_str(&json).unwrap();
         assert_eq!(*verdict, recovered);
     }
 }
@@ -590,8 +590,8 @@ fn shift_error_serde_roundtrip_all_variants() {
         ShiftError::InsufficientData,
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).unwrap_or_default();
-        let recovered: ShiftError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(err).unwrap();
+        let recovered: ShiftError = serde_json::from_str(&json).unwrap();
         assert_eq!(*err, recovered);
     }
 }
@@ -629,24 +629,24 @@ fn monitor_config_default_has_sane_values() {
 #[test]
 fn monitor_config_serde_roundtrip() {
     let config = base_config();
-    let json = serde_json::to_string(&config).unwrap_or_default();
-    let recovered: MonitorConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&config).unwrap();
+    let recovered: MonitorConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(config, recovered);
 }
 
 #[test]
 fn embedding_vector_serde_roundtrip() {
     let v = emb("test", &[500_000, 600_000]);
-    let json = serde_json::to_string(&v).unwrap_or_default();
-    let recovered: EmbeddingVector = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&v).unwrap();
+    let recovered: EmbeddingVector = serde_json::from_str(&json).unwrap();
     assert_eq!(v, recovered);
 }
 
 #[test]
 fn stream_window_serde_roundtrip() {
     let window = benchmark_window();
-    let json = serde_json::to_string(&window).unwrap_or_default();
-    let recovered: StreamWindow = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&window).unwrap();
+    let recovered: StreamWindow = serde_json::from_str(&json).unwrap();
     assert_eq!(window, recovered);
     assert_eq!(window.window_hash, recovered.window_hash);
 }
@@ -712,8 +712,8 @@ fn shift_certificate_serde_roundtrip() {
         &negative_control_window(),
         &base_config(),
     );
-    let json = serde_json::to_string(&certificate).unwrap_or_default();
-    let recovered: ShiftCertificate = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&certificate).unwrap();
+    let recovered: ShiftCertificate = serde_json::from_str(&json).unwrap();
     assert_eq!(certificate, recovered);
     assert_eq!(certificate.certificate_hash, recovered.certificate_hash);
 }
@@ -736,8 +736,8 @@ fn shift_certificate_hash_is_deterministic() {
 #[test]
 fn shift_evidence_manifest_serde_roundtrip() {
     let manifest = run_shift_evidence();
-    let json = serde_json::to_string(&manifest).unwrap_or_default();
-    let recovered: ShiftEvidenceManifest = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&manifest).unwrap();
+    let recovered: ShiftEvidenceManifest = serde_json::from_str(&json).unwrap();
     assert_eq!(manifest, recovered);
 }
 
@@ -752,8 +752,8 @@ fn mmd_result_serde_roundtrip() {
         &kernel,
     )
     .expect("mmd");
-    let json = serde_json::to_string(&result).unwrap_or_default();
-    let recovered: MmdResult = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&result).unwrap();
+    let recovered: MmdResult = serde_json::from_str(&json).unwrap();
     assert_eq!(result, recovered);
 }
 
@@ -764,8 +764,8 @@ fn window_config_serde_roundtrip() {
         slide_step: 50,
         min_samples: 10,
     };
-    let json = serde_json::to_string(&config).unwrap_or_default();
-    let recovered: WindowConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&config).unwrap();
+    let recovered: WindowConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(config, recovered);
 }
 
@@ -802,8 +802,8 @@ fn monitor_state_serde_roundtrip() {
         )],
         state_hash: ContentHash::compute(b"test-state"),
     };
-    let json = serde_json::to_string(&state).unwrap_or_default();
-    let recovered: MonitorState = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&state).unwrap();
+    let recovered: MonitorState = serde_json::from_str(&json).unwrap();
     assert_eq!(state, recovered);
 }
 
@@ -905,8 +905,8 @@ fn kernel_kind_polynomial_different_degrees_ne() {
     let p2 = KernelKind::Polynomial { degree: 2 };
     let p3 = KernelKind::Polynomial { degree: 3 };
     assert_ne!(p2, p3);
-    let json2 = serde_json::to_string(&p2).unwrap_or_default();
-    let json3 = serde_json::to_string(&p3).unwrap_or_default();
+    let json2 = serde_json::to_string(&p2).unwrap();
+    let json3 = serde_json::to_string(&p3).unwrap();
     assert_ne!(json2, json3);
 }
 
@@ -1030,8 +1030,8 @@ fn embedding_vector_clone_eq() {
 fn embedding_vector_empty_dimensions() {
     let v = emb("empty-dims", &[]);
     assert!(v.dimensions.is_empty());
-    let json = serde_json::to_string(&v).unwrap_or_default();
-    let recovered: EmbeddingVector = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&v).unwrap();
+    let recovered: EmbeddingVector = serde_json::from_str(&json).unwrap();
     assert_eq!(v, recovered);
 }
 
@@ -1046,8 +1046,8 @@ fn embedding_vector_single_dimension() {
 fn embedding_vector_large_dimension_values() {
     let large = u64::MAX / 2;
     let v = emb("large", &[large, large]);
-    let json = serde_json::to_string(&v).unwrap_or_default();
-    let recovered: EmbeddingVector = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&v).unwrap();
+    let recovered: EmbeddingVector = serde_json::from_str(&json).unwrap();
     assert_eq!(v, recovered);
     assert_eq!(recovered.dimensions[0], large);
 }
@@ -1071,8 +1071,8 @@ fn build_window_empty_embeddings() {
     assert!(w.embeddings.is_empty());
     assert_eq!(w.stream_kind, StreamKind::Benchmark);
     // Serde roundtrip for empty window
-    let json = serde_json::to_string(&w).unwrap_or_default();
-    let recovered: StreamWindow = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&w).unwrap();
+    let recovered: StreamWindow = serde_json::from_str(&json).unwrap();
     assert_eq!(w, recovered);
 }
 
@@ -1123,8 +1123,8 @@ fn mmd_result_boundary_zero_values() {
         sample_count_left: 0,
         sample_count_right: 0,
     };
-    let json = serde_json::to_string(&mmd).unwrap_or_default();
-    let recovered: MmdResult = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&mmd).unwrap();
+    let recovered: MmdResult = serde_json::from_str(&json).unwrap();
     assert_eq!(mmd, recovered);
 }
 
@@ -1137,8 +1137,8 @@ fn mmd_result_boundary_max_values() {
         sample_count_left: u64::MAX,
         sample_count_right: u64::MAX,
     };
-    let json = serde_json::to_string(&mmd).unwrap_or_default();
-    let recovered: MmdResult = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&mmd).unwrap();
+    let recovered: MmdResult = serde_json::from_str(&json).unwrap();
     assert_eq!(mmd, recovered);
 }
 
@@ -1163,8 +1163,8 @@ fn window_config_zero_fields_serde_roundtrip() {
         slide_step: 0,
         min_samples: 0,
     };
-    let json = serde_json::to_string(&wc).unwrap_or_default();
-    let recovered: WindowConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&wc).unwrap();
+    let recovered: WindowConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(wc, recovered);
 }
 
@@ -1191,8 +1191,8 @@ fn monitor_config_with_linear_kernel_serde() {
         min_effect_size_millionths: 20_000,
         abstention_sample_floor: 8,
     };
-    let json = serde_json::to_string(&config).unwrap_or_default();
-    let recovered: MonitorConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&config).unwrap();
+    let recovered: MonitorConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(config, recovered);
 }
 
@@ -1209,8 +1209,8 @@ fn monitor_config_with_polynomial_kernel_serde() {
         min_effect_size_millionths: 5_000,
         abstention_sample_floor: 4,
     };
-    let json = serde_json::to_string(&config).unwrap_or_default();
-    let recovered: MonitorConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&config).unwrap();
+    let recovered: MonitorConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(config, recovered);
 }
 
@@ -1314,8 +1314,8 @@ fn monitor_state_empty_serde_roundtrip() {
         certificates: vec![],
         state_hash: ContentHash::compute(b"empty-state"),
     };
-    let json = serde_json::to_string(&state).unwrap_or_default();
-    let recovered: MonitorState = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&state).unwrap();
+    let recovered: MonitorState = serde_json::from_str(&json).unwrap();
     assert_eq!(state, recovered);
 }
 
@@ -1455,9 +1455,9 @@ fn constants_fixed_point_unit_value() {
 #[test]
 fn shift_verdict_no_shift_serde_json_stable() {
     let v = ShiftVerdict::NoShift;
-    let json = serde_json::to_string(&v).unwrap_or_default();
+    let json = serde_json::to_string(&v).unwrap();
     // snake_case rename means it serializes as a specific string
-    let recovered: ShiftVerdict = serde_json::from_str(&json).unwrap_or_default();
+    let recovered: ShiftVerdict = serde_json::from_str(&json).unwrap();
     assert_eq!(v, recovered);
     // Verify the JSON contains the expected variant name
     assert!(json.contains("no_shift"));
@@ -1468,9 +1468,9 @@ fn shift_verdict_shift_detected_carries_mmd_squared() {
     let v = ShiftVerdict::ShiftDetected {
         mmd_squared: 123_456,
     };
-    let json = serde_json::to_string(&v).unwrap_or_default();
+    let json = serde_json::to_string(&v).unwrap();
     assert!(json.contains("123456"));
-    let recovered: ShiftVerdict = serde_json::from_str(&json).unwrap_or_default();
+    let recovered: ShiftVerdict = serde_json::from_str(&json).unwrap();
     if let ShiftVerdict::ShiftDetected { mmd_squared } = recovered {
         assert_eq!(mmd_squared, 123_456);
     } else {
@@ -1528,8 +1528,8 @@ fn monitor_state_with_multiple_certificates_serde() {
         certificates: vec![cert1, cert2],
         state_hash: ContentHash::compute(b"multi-cert-state"),
     };
-    let json = serde_json::to_string(&state).unwrap_or_default();
-    let recovered: MonitorState = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&state).unwrap();
+    let recovered: MonitorState = serde_json::from_str(&json).unwrap();
     assert_eq!(state, recovered);
     assert_eq!(recovered.certificates.len(), 2);
     assert_eq!(recovered.benchmark_windows.len(), 2);
@@ -1541,7 +1541,7 @@ fn shift_evidence_manifest_no_error_field() {
     let manifest = run_shift_evidence();
     assert!(manifest.error.is_none());
     // Verify the JSON output omits error or has it as null
-    let json = serde_json::to_string(&manifest).unwrap_or_default();
+    let json = serde_json::to_string(&manifest).unwrap();
     let val: serde_json::Value = serde_json::from_str(&json).expect("parse");
     assert!(val["error"].is_null());
 }

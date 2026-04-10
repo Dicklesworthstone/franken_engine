@@ -904,8 +904,8 @@ fn enrichment_manifest_serde_roundtrip_preserves_all_fields() {
     // Verify that serializing and re-parsing the manifest produces an identical
     // JSON value — confirming no field is dropped or coerced on roundtrip.
     let original = read_json("docs/rgc_arbitrary_js_ts_workload_corpus_v1.json");
-    let serialized = serde_json::to_string(&original).unwrap_or_default();
-    let reparsed: Value = serde_json::from_str(&serialized).unwrap_or_default();
+    let serialized = serde_json::to_string(&original).unwrap();
+    let reparsed: Value = serde_json::from_str(&serialized).unwrap();
     assert_eq!(
         original, reparsed,
         "serde roundtrip must preserve all fields without loss"

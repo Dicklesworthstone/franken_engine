@@ -326,8 +326,8 @@ fn baseline_event_sets_correct_fields() {
 #[test]
 fn test_lane_serde_roundtrip() {
     for lane in [TestLane::Runtime, TestLane::Compiler, TestLane::Router] {
-        let json = serde_json::to_string(&lane).unwrap_or_default();
-        let recovered: TestLane = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&lane).unwrap();
+        let recovered: TestLane = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, lane);
     }
 }
@@ -337,8 +337,8 @@ fn test_lane_serde_roundtrip() {
 #[test]
 fn failure_taxonomy_serde_roundtrip() {
     let taxonomy = FailureTaxonomy::SchemaDrift;
-    let json = serde_json::to_string(&taxonomy).unwrap_or_default();
-    let recovered: FailureTaxonomy = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&taxonomy).unwrap();
+    let recovered: FailureTaxonomy = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, taxonomy);
 }
 
@@ -347,8 +347,8 @@ fn failure_taxonomy_serde_roundtrip() {
 #[test]
 fn test_log_event_serde_roundtrip() {
     let event = baseline_event();
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let recovered: TestLogEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let recovered: TestLogEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.trace_id, "trace-frx-20-4");
     assert_eq!(recovered.lane, TestLane::Runtime);
 }
@@ -419,7 +419,7 @@ fn validation_report_is_deterministic() {
 #[test]
 fn test_lane_all_variants_serialize() {
     for lane in [TestLane::Runtime, TestLane::Compiler, TestLane::Router] {
-        let json = serde_json::to_string(&lane).unwrap_or_default();
+        let json = serde_json::to_string(&lane).unwrap();
         assert!(!json.is_empty());
     }
 }
@@ -434,8 +434,8 @@ fn failure_taxonomy_all_variants_roundtrip() {
         FailureTaxonomy::ResourceBudget,
         FailureTaxonomy::Unknown,
     ] {
-        let json = serde_json::to_string(&taxonomy).unwrap_or_default();
-        let recovered: FailureTaxonomy = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&taxonomy).unwrap();
+        let recovered: FailureTaxonomy = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, taxonomy);
     }
 }
@@ -451,8 +451,8 @@ fn validate_events_empty_list_returns_report() {
 #[test]
 fn test_lane_all_variants_roundtrip() {
     for lane in [TestLane::Runtime, TestLane::Compiler, TestLane::Router] {
-        let json = serde_json::to_string(&lane).unwrap_or_default();
-        let recovered: TestLane = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&lane).unwrap();
+        let recovered: TestLane = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, lane);
     }
 }
@@ -518,8 +518,8 @@ fn baseline_event_has_positive_timing() {
 #[test]
 fn schema_spec_default_serde_roundtrip() {
     let spec = TestLoggingSchemaSpec::default();
-    let json = serde_json::to_string(&spec).unwrap_or_default();
-    let recovered: TestLoggingSchemaSpec = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&spec).unwrap();
+    let recovered: TestLoggingSchemaSpec = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.required_fields, spec.required_fields);
 }
 
@@ -603,7 +603,7 @@ fn frx_20_4_contract_json_is_valid_and_deterministic_on_reparse() {
     let path = repo_root().join("docs/frx_test_logging_schema_v1.json");
     let raw = read_to_string(&path);
     let first: serde_json::Value = serde_json::from_str(&raw).expect("first parse");
-    let serialized = serde_json::to_string(&first).unwrap_or_default();
+    let serialized = serde_json::to_string(&first).unwrap();
     let second: serde_json::Value = serde_json::from_str(&serialized).expect("second parse");
     assert_eq!(
         first, second,
@@ -644,8 +644,8 @@ fn validation_report_serde_roundtrip_with_failures() {
     event.trace_id.clear();
     let report = validate_events(&[event]);
     assert!(!report.valid);
-    let json = serde_json::to_string(&report).unwrap_or_default();
-    let recovered: ValidationReport = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&report).unwrap();
+    let recovered: ValidationReport = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.valid, report.valid);
     assert_eq!(recovered.outcome, report.outcome);
     assert_eq!(recovered.failures.len(), report.failures.len());

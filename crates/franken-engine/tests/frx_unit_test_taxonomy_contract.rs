@@ -573,8 +573,8 @@ fn test_class_all_has_correct_count() {
 #[test]
 fn test_class_serde_roundtrip() {
     for class in TestClass::ALL {
-        let json = serde_json::to_string(class).unwrap_or_default();
-        let recovered: TestClass = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(class).unwrap();
+        let recovered: TestClass = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, *class);
     }
 }
@@ -596,8 +596,8 @@ fn test_surface_all_has_correct_count() {
 #[test]
 fn test_surface_serde_roundtrip() {
     for surface in TestSurface::ALL {
-        let json = serde_json::to_string(surface).unwrap_or_default();
-        let recovered: TestSurface = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(surface).unwrap();
+        let recovered: TestSurface = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, *surface);
     }
 }
@@ -645,8 +645,8 @@ fn fixture_entry_serde_roundtrip() {
         origin_ref: "bd-test".to_string(),
         tags: BTreeSet::from(["core".to_string()]),
     };
-    let json = serde_json::to_string(&entry).unwrap_or_default();
-    let recovered: FixtureEntry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&entry).unwrap();
+    let recovered: FixtureEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.fixture_id, "test-fixture");
     assert_eq!(recovered.test_class, TestClass::Core);
 }
@@ -820,8 +820,8 @@ fn fixture_entry_derive_id_is_deterministic() {
         origin_ref: "bd-test".to_string(),
         tags: BTreeSet::from(["core".to_string()]),
     };
-    let id_a = entry.derive_id().unwrap_or_default();
-    let id_b = entry.derive_id().unwrap_or_default();
+    let id_a = entry.derive_id().unwrap();
+    let id_b = entry.derive_id().unwrap();
     assert_eq!(id_a, id_b);
 }
 
@@ -972,8 +972,8 @@ fn provenance_level_serde_roundtrip_all_variants() {
         ProvenanceLevel::Captured,
         ProvenanceLevel::Synthesized,
     ] {
-        let json = serde_json::to_string(&prov).unwrap_or_default();
-        let recovered: ProvenanceLevel = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&prov).unwrap();
+        let recovered: ProvenanceLevel = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, prov);
     }
 }
@@ -1022,8 +1022,8 @@ fn test_outcome_serde_roundtrip_all_variants() {
         TestOutcome::Timeout,
         TestOutcome::Flake,
     ] {
-        let json = serde_json::to_string(&outcome).unwrap_or_default();
-        let recovered: TestOutcome = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&outcome).unwrap();
+        let recovered: TestOutcome = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, outcome);
     }
 }
@@ -1049,8 +1049,8 @@ fn sample_execution_record(outcome: TestOutcome) -> TestExecutionRecord {
 #[test]
 fn test_execution_record_serde_roundtrip() {
     let record = sample_execution_record(TestOutcome::Pass);
-    let json = serde_json::to_string(&record).unwrap_or_default();
-    let recovered: TestExecutionRecord = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&record).unwrap();
+    let recovered: TestExecutionRecord = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.fixture_id, record.fixture_id);
     assert_eq!(recovered.outcome, TestOutcome::Pass);
     assert_eq!(recovered.seed, Some(42));
@@ -1062,8 +1062,8 @@ fn test_execution_record_serde_roundtrip() {
 fn test_execution_record_without_seed() {
     let mut record = sample_execution_record(TestOutcome::Fail);
     record.seed = None;
-    let json = serde_json::to_string(&record).unwrap_or_default();
-    let recovered: TestExecutionRecord = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&record).unwrap();
+    let recovered: TestExecutionRecord = serde_json::from_str(&json).unwrap();
     assert!(recovered.seed.is_none());
     assert_eq!(recovered.outcome, TestOutcome::Fail);
 }
@@ -1138,8 +1138,8 @@ fn test_suite_summary_meets_threshold() {
 fn test_suite_summary_serde_roundtrip() {
     let records = vec![sample_execution_record(TestOutcome::Pass)];
     let summary = TestSuiteSummary::from_records(&records);
-    let json = serde_json::to_string(&summary).unwrap_or_default();
-    let recovered: TestSuiteSummary = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&summary).unwrap();
+    let recovered: TestSuiteSummary = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.total, summary.total);
     assert_eq!(recovered.pass_rate_millionths, summary.pass_rate_millionths);
 }
@@ -1155,8 +1155,8 @@ fn class_breakdown_serde_roundtrip() {
         passed: 8,
         failed: 2,
     };
-    let json = serde_json::to_string(&bd).unwrap_or_default();
-    let recovered: ClassBreakdown = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&bd).unwrap();
+    let recovered: ClassBreakdown = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, bd);
 }
 
@@ -1255,8 +1255,8 @@ fn ownership_entry_serde_roundtrip() {
         owner_agent: "AgentX".to_string(),
         fixture_ids: BTreeSet::from(["f1".to_string(), "f2".to_string()]),
     };
-    let json = serde_json::to_string(&entry).unwrap_or_default();
-    let recovered: OwnershipEntry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&entry).unwrap();
+    let recovered: OwnershipEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, entry);
 }
 
@@ -1270,8 +1270,8 @@ fn contract_violation_serde_roundtrip() {
         field: "seed".to_string(),
         message: "missing seed".to_string(),
     };
-    let json = serde_json::to_string(&v).unwrap_or_default();
-    let recovered: ContractViolation = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&v).unwrap();
+    let recovered: ContractViolation = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, v);
 }
 
@@ -1294,16 +1294,16 @@ fn registry_error_display_all_three_variants() {
 #[test]
 fn registry_error_serde_roundtrip() {
     let err = RegistryError::DuplicateFixtureId("fix-dup".to_string());
-    let json = serde_json::to_string(&err).unwrap_or_default();
-    let recovered: RegistryError = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&err).unwrap();
+    let recovered: RegistryError = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, err);
 }
 
 #[test]
 fn determinism_contract_serde_roundtrip() {
     let dc = DeterminismContract::strict();
-    let json = serde_json::to_string(&dc).unwrap_or_default();
-    let recovered: DeterminismContract = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&dc).unwrap();
+    let recovered: DeterminismContract = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, dc);
 }
 

@@ -643,8 +643,8 @@ fn interference_evaluation_serde_round_trip() {
         &metrics,
     ));
 
-    let json = serde_json::to_string(&evaluation).unwrap_or_default();
-    let recovered: InterferenceEvaluation = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&evaluation).unwrap();
+    let recovered: InterferenceEvaluation = serde_json::from_str(&json).unwrap();
     assert_eq!(evaluation.pass, recovered.pass);
     assert_eq!(evaluation.decision_id, recovered.decision_id);
     assert_eq!(evaluation.final_metrics, recovered.final_metrics);
@@ -712,8 +712,8 @@ fn controller_registration_serde_round_trip() {
         200_000,
         "test registration",
     );
-    let json = serde_json::to_string(&reg).unwrap_or_default();
-    let recovered: ControllerRegistration = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&reg).unwrap();
+    let recovered: ControllerRegistration = serde_json::from_str(&json).unwrap();
     assert_eq!(reg.controller_id, recovered.controller_id);
     assert_eq!(reg.read_metrics, recovered.read_metrics);
     assert_eq!(reg.write_metrics, recovered.write_metrics);
@@ -740,8 +740,8 @@ fn interference_failure_code_serde_round_trip() {
         InterferenceFailureCode::TimescaleConflict,
     ];
     for code in codes {
-        let json = serde_json::to_string(&code).unwrap_or_default();
-        let recovered: InterferenceFailureCode = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&code).unwrap();
+        let recovered: InterferenceFailureCode = serde_json::from_str(&json).unwrap();
         assert_eq!(code, recovered);
     }
 }
@@ -767,8 +767,8 @@ fn conflict_resolution_mode_serde_round_trip() {
         ConflictResolutionMode::Serialize,
         ConflictResolutionMode::Reject,
     ] {
-        let json = serde_json::to_string(&mode).unwrap_or_default();
-        let recovered: ConflictResolutionMode = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&mode).unwrap();
+        let recovered: ConflictResolutionMode = serde_json::from_str(&json).unwrap();
         assert_eq!(mode, recovered);
     }
 }
@@ -780,8 +780,8 @@ fn timescale_separation_statement_serde_round_trip() {
         write_interval_millionths: 1_000_000,
         statement: "quarter-second observe, one-second write".to_string(),
     };
-    let json = serde_json::to_string(&stmt).unwrap_or_default();
-    let recovered: TimescaleSeparationStatement = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&stmt).unwrap();
+    let recovered: TimescaleSeparationStatement = serde_json::from_str(&json).unwrap();
     assert_eq!(stmt, recovered);
 }
 
@@ -791,8 +791,8 @@ fn metric_read_request_serde_round_trip() {
         controller_id: "ctrl-1".to_string(),
         metric: "cpu".to_string(),
     };
-    let json = serde_json::to_string(&req).unwrap_or_default();
-    let recovered: MetricReadRequest = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&req).unwrap();
+    let recovered: MetricReadRequest = serde_json::from_str(&json).unwrap();
     assert_eq!(req, recovered);
 }
 
@@ -803,8 +803,8 @@ fn metric_write_request_serde_round_trip() {
         metric: "latency".to_string(),
         value: 42,
     };
-    let json = serde_json::to_string(&req).unwrap_or_default();
-    let recovered: MetricWriteRequest = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&req).unwrap();
+    let recovered: MetricWriteRequest = serde_json::from_str(&json).unwrap();
     assert_eq!(req, recovered);
 }
 
@@ -814,8 +814,8 @@ fn metric_subscription_serde_round_trip() {
         controller_id: "watcher".to_string(),
         metric: "throughput".to_string(),
     };
-    let json = serde_json::to_string(&sub).unwrap_or_default();
-    let recovered: MetricSubscription = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&sub).unwrap();
+    let recovered: MetricSubscription = serde_json::from_str(&json).unwrap();
     assert_eq!(sub, recovered);
 }
 
@@ -825,8 +825,8 @@ fn interference_config_serde_round_trip() {
         min_timescale_separation_millionths: 500_000,
         conflict_resolution_mode: ConflictResolutionMode::Serialize,
     };
-    let json = serde_json::to_string(&config).unwrap_or_default();
-    let recovered: InterferenceConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&config).unwrap();
+    let recovered: InterferenceConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(config, recovered);
 }
 

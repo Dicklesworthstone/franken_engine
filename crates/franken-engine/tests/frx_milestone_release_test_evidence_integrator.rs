@@ -445,8 +445,8 @@ fn evidence_source_as_str_is_nonempty() {
 #[test]
 fn evidence_source_serde_roundtrip() {
     for source in EvidenceSource::REQUIRED {
-        let json = serde_json::to_string(&source).unwrap_or_default();
-        let recovered: EvidenceSource = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&source).unwrap();
+        let recovered: EvidenceSource = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, source);
     }
 }
@@ -460,8 +460,8 @@ fn signature_status_serde_roundtrip() {
         SignatureStatus::Unsigned,
         SignatureStatus::Invalid,
     ] {
-        let json = serde_json::to_string(&status).unwrap_or_default();
-        let recovered: SignatureStatus = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&status).unwrap();
+        let recovered: SignatureStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, status);
     }
 }
@@ -488,8 +488,8 @@ fn integrator_policy_thresholds_increase_with_cut_line() {
 #[test]
 fn evidence_artifact_link_serde_roundtrip() {
     let link = signed_artifact("serde-test", 2_000);
-    let json = serde_json::to_string(&link).unwrap_or_default();
-    let recovered: EvidenceArtifactLink = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&link).unwrap();
+    let recovered: EvidenceArtifactLink = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.artifact_id, link.artifact_id);
     assert_eq!(recovered.signature_status, SignatureStatus::Signed);
 }
@@ -499,8 +499,8 @@ fn evidence_artifact_link_serde_roundtrip() {
 #[test]
 fn evidence_signal_serde_roundtrip() {
     let signal = baseline_signal(EvidenceSource::EndToEndScenarioMatrix, 950_000, 3_000);
-    let json = serde_json::to_string(&signal).unwrap_or_default();
-    let recovered: EvidenceSignal = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&signal).unwrap();
+    let recovered: EvidenceSignal = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.source, EvidenceSource::EndToEndScenarioMatrix);
     assert_eq!(recovered.score_millionths, 950_000);
 }
@@ -519,8 +519,8 @@ fn milestone_quality_summary_serde_roundtrip() {
         artifact_integrity_score_millionths: 950_000,
         delta_from_previous_millionths: BTreeMap::new(),
     };
-    let json = serde_json::to_string(&summary).unwrap_or_default();
-    let recovered: MilestoneQualitySummary = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&summary).unwrap();
+    let recovered: MilestoneQualitySummary = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.aggregate_score_millionths, 900_000);
 }
 
@@ -529,8 +529,8 @@ fn milestone_quality_summary_serde_roundtrip() {
 #[test]
 fn test_evidence_integrator_input_serde_roundtrip() {
     let input = baseline_input(10_000);
-    let json = serde_json::to_string(&input).unwrap_or_default();
-    let recovered: TestEvidenceIntegratorInput = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&input).unwrap();
+    let recovered: TestEvidenceIntegratorInput = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.trace_id, "trace-frx-20-6");
     assert_eq!(recovered.signals.len(), input.signals.len());
 }
@@ -627,8 +627,8 @@ fn frx_20_6_evidence_source_release_checklist_binding_has_nonempty_id() {
 #[test]
 fn frx_20_6_integrator_policy_serde_roundtrip() {
     let policy = IntegratorPolicy::default();
-    let json = serde_json::to_string(&policy).unwrap_or_default();
-    let recovered: IntegratorPolicy = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&policy).unwrap();
+    let recovered: IntegratorPolicy = serde_json::from_str(&json).unwrap();
     assert_eq!(
         recovered.max_signal_age_ns, policy.max_signal_age_ns,
         "max_signal_age_ns should survive roundtrip"

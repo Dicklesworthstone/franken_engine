@@ -204,7 +204,7 @@ struct ReadinessEvent {
 fn load_fixture() -> ParserFinalReadinessDossierFixture {
     let path = Path::new("tests/fixtures/parser_final_readiness_dossier_v1.json");
     let bytes = fs::read(path).expect("read parser final readiness dossier fixture");
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    serde_json::from_slice(&bytes).unwrap()
 }
 
 fn load_doc() -> String {
@@ -279,7 +279,7 @@ fn compute_risk_register_hash(risks: &[ResidualRisk]) -> String {
         .collect::<Vec<_>>();
     rows.sort_by(|a, b| a.risk_id.cmp(b.risk_id));
 
-    let canonical = serde_json::to_vec(&rows).unwrap_or_default();
+    let canonical = serde_json::to_vec(&rows).unwrap();
     let digest = Sha256::digest(canonical);
     format!("sha256:{digest:x}")
 }
@@ -700,7 +700,7 @@ fn parser_final_readiness_structured_event_has_required_keys() {
     let fixture = load_fixture();
     let evaluation = evaluate_dossier(&fixture);
     let event = emit_structured_event(&fixture, &evaluation);
-    let value = serde_json::to_value(event).unwrap_or_default();
+    let value = serde_json::to_value(event).unwrap();
     let object = value.as_object().expect("event json object");
 
     for key in &fixture.required_log_keys {
@@ -719,7 +719,7 @@ fn parser_final_readiness_structured_event_has_required_keys() {
                 "error_code must be null or string"
             );
         } else {
-            let text = field.as_str().unwrap_or_default();
+            let text = field.as_str().unwrap();
             assert!(
                 !text.trim().is_empty(),
                 "required key `{key}` must be non-empty"
@@ -738,7 +738,7 @@ fn parser_final_readiness_structured_event_has_required_keys() {
         object
             .get("risk_register_hash")
             .and_then(|value| value.as_str())
-            .unwrap_or_default()
+            .unwrap()
             .starts_with("sha256:"),
         "risk register hash must be deterministic sha256 fingerprint"
     );
@@ -1177,8 +1177,8 @@ fn readiness_event_serde_roundtrip_preserves_all_fields() {
     let fixture = load_fixture();
     let evaluation = evaluate_dossier(&fixture);
     let event = emit_structured_event(&fixture, &evaluation);
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let map: BTreeMap<String, serde_json::Value> = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let map: BTreeMap<String, serde_json::Value> = serde_json::from_str(&json).unwrap();
     // Verify key fields survive roundtrip
     assert_eq!(
         map["schema_version"].as_str().unwrap(),

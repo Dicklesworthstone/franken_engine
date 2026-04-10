@@ -259,16 +259,16 @@ fn lowering_gap_status_as_str_is_deterministic() {
 #[test]
 fn inventory_serde_roundtrip() {
     let inventory = lowering_gap_inventory();
-    let json = serde_json::to_string(&inventory).unwrap_or_default();
-    let deserialized: LoweringGapInventory = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&inventory).unwrap();
+    let deserialized: LoweringGapInventory = serde_json::from_str(&json).unwrap();
     assert_eq!(inventory, deserialized);
 }
 
 #[test]
 fn site_id_serde_roundtrip() {
     for site in LoweringGapSiteId::ALL {
-        let json = serde_json::to_string(&site).unwrap_or_default();
-        let deserialized: LoweringGapSiteId = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&site).unwrap();
+        let deserialized: LoweringGapSiteId = serde_json::from_str(&json).unwrap();
         assert_eq!(site, deserialized);
     }
 }
@@ -277,8 +277,8 @@ fn site_id_serde_roundtrip() {
 fn stage_serde_roundtrip() {
     let stages = [LoweringGapStage::Ir0ToIr1, LoweringGapStage::Ir1ToIr3];
     for stage in stages {
-        let json = serde_json::to_string(&stage).unwrap_or_default();
-        let deserialized: LoweringGapStage = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&stage).unwrap();
+        let deserialized: LoweringGapStage = serde_json::from_str(&json).unwrap();
         assert_eq!(stage, deserialized);
     }
 }
@@ -291,8 +291,8 @@ fn status_serde_roundtrip() {
         LoweringGapStatus::Resolved,
     ];
     for status in statuses {
-        let json = serde_json::to_string(&status).unwrap_or_default();
-        let deserialized: LoweringGapStatus = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&status).unwrap();
+        let deserialized: LoweringGapStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(status, deserialized);
     }
 }
@@ -301,9 +301,9 @@ fn status_serde_roundtrip() {
 fn descriptor_serde_roundtrip() {
     for site in LoweringGapSiteId::ALL {
         let desc = LoweringGapSiteDescriptor::from_site(site);
-        let json = serde_json::to_string(&desc).unwrap_or_default();
+        let json = serde_json::to_string(&desc).unwrap();
         let deserialized: LoweringGapSiteDescriptor =
-            serde_json::from_str(&json).unwrap_or_default();
+            serde_json::from_str(&json).unwrap();
         assert_eq!(desc, deserialized);
     }
 }

@@ -300,8 +300,8 @@ fn orchestrator_error_display_is_non_empty() {
 #[test]
 fn extension_package_serde_round_trip() {
     let pkg = simple_package("ext-serde", "1 + 2");
-    let json = serde_json::to_string(&pkg).unwrap_or_default();
-    let recovered: ExtensionPackage = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&pkg).unwrap();
+    let recovered: ExtensionPackage = serde_json::from_str(&json).unwrap();
     assert_eq!(pkg.extension_id, recovered.extension_id);
     assert_eq!(pkg.source, recovered.source);
     assert_eq!(pkg.version, recovered.version);
@@ -346,8 +346,8 @@ fn metadata_in_package_is_preserved() {
         metadata: metadata.clone(),
     };
 
-    let json = serde_json::to_string(&pkg).unwrap_or_default();
-    let recovered: ExtensionPackage = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&pkg).unwrap();
+    let recovered: ExtensionPackage = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.metadata, metadata);
     assert_eq!(recovered.capabilities, vec!["cap_a"]);
 }
@@ -383,8 +383,8 @@ fn loss_matrix_preset_serde_round_trip() {
         LossMatrixPreset::Conservative,
         LossMatrixPreset::Permissive,
     ] {
-        let json = serde_json::to_string(&preset).unwrap_or_default();
-        let recovered: LossMatrixPreset = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&preset).unwrap();
+        let recovered: LossMatrixPreset = serde_json::from_str(&json).unwrap();
         assert_eq!(preset, recovered);
     }
 }
@@ -551,8 +551,8 @@ fn extension_package_with_many_capabilities_serde_round_trip() {
             ("key2".to_string(), "val2".to_string()),
         ]),
     };
-    let json = serde_json::to_string(&pkg).unwrap_or_default();
-    let recovered: ExtensionPackage = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&pkg).unwrap();
+    let recovered: ExtensionPackage = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.capabilities.len(), 32);
     assert_eq!(recovered.metadata.len(), 2);
     assert_eq!(recovered.version, "3.0.0");
@@ -597,16 +597,16 @@ fn extension_package_with_source_file_some_serde_roundtrip() {
         version: "1.0.0".to_string(),
         metadata: BTreeMap::new(),
     };
-    let json = serde_json::to_string(&pkg).unwrap_or_default();
-    let recovered: ExtensionPackage = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&pkg).unwrap();
+    let recovered: ExtensionPackage = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.source_file, Some("main.js".to_string()));
 }
 
 #[test]
 fn extension_package_with_source_file_none_serde_roundtrip() {
     let pkg = simple_package("ext-sf-none", "42");
-    let json = serde_json::to_string(&pkg).unwrap_or_default();
-    let recovered: ExtensionPackage = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&pkg).unwrap();
+    let recovered: ExtensionPackage = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.source_file, None);
 }
 
@@ -914,8 +914,8 @@ fn orchestrator_config_debug_includes_all_fields() {
 #[test]
 fn extension_package_empty_capabilities_serde() {
     let pkg = simple_package("ext-no-caps", "42");
-    let json = serde_json::to_string(&pkg).unwrap_or_default();
-    let recovered: ExtensionPackage = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&pkg).unwrap();
+    let recovered: ExtensionPackage = serde_json::from_str(&json).unwrap();
     assert!(recovered.capabilities.is_empty());
 }
 
@@ -973,8 +973,8 @@ fn extension_package_serde_with_special_chars_in_metadata() {
         version: "1.0.0".to_string(),
         metadata,
     };
-    let json = serde_json::to_string(&pkg).unwrap_or_default();
-    let recovered: ExtensionPackage = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&pkg).unwrap();
+    let recovered: ExtensionPackage = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.metadata.get("desc").unwrap(), "hello\nworld\ttab");
 }
 
@@ -982,7 +982,7 @@ fn extension_package_serde_with_special_chars_in_metadata() {
 fn extension_package_serde_source_file_absent_uses_default() {
     // When source_file is missing from JSON, default should be None
     let json = r#"{"extension_id":"ext-no-sf","source":"42","capabilities":[],"version":"1.0.0","metadata":{}}"#;
-    let pkg: ExtensionPackage = serde_json::from_str(json).unwrap_or_default();
+    let pkg: ExtensionPackage = serde_json::from_str(json).unwrap();
     assert_eq!(pkg.source_file, None);
 }
 
@@ -1524,7 +1524,7 @@ fn extension_package_json_contains_source_file_when_some() {
         version: "1.0.0".to_string(),
         metadata: BTreeMap::new(),
     };
-    let json = serde_json::to_string(&pkg).unwrap_or_default();
+    let json = serde_json::to_string(&pkg).unwrap();
     assert!(json.contains("\"source_file\""));
     assert!(json.contains("app.js"));
 }

@@ -709,8 +709,8 @@ fn run_handshake_program_exercises_all_opcodes() {
 fn build_token_serde_roundtrip_when_present() {
     let data: Vec<u8> = (0..64).collect();
     if let Some(token) = build_token(&data) {
-        let json = serde_json::to_string(&token).unwrap_or_default();
-        let recovered: CapabilityToken = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&token).unwrap();
+        let recovered: CapabilityToken = serde_json::from_str(&json).unwrap();
         assert_eq!(token.zone, recovered.zone);
         assert_eq!(token.nbf, recovered.nbf);
         assert_eq!(token.expiry, recovered.expiry);
@@ -928,8 +928,8 @@ fn session_config_serde_roundtrip() {
         replay_drop_threshold: 5,
         replay_drop_window_ticks: 200,
     };
-    let json = serde_json::to_string(&config).unwrap_or_default();
-    let recovered: SessionConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&config).unwrap();
+    let recovered: SessionConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(config, recovered);
 }
 
@@ -1024,8 +1024,8 @@ fn session_handshake_serde_roundtrip() {
         timestamp_ticks: 999,
         trace_id: "trace-001".to_string(),
     };
-    let json = serde_json::to_string(&handshake).unwrap_or_default();
-    let recovered: SessionHandshake = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&handshake).unwrap();
+    let recovered: SessionHandshake = serde_json::from_str(&json).unwrap();
     assert_eq!(handshake, recovered);
 }
 

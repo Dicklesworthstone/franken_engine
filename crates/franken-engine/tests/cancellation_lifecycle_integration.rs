@@ -76,8 +76,8 @@ fn lifecycle_event_display_is_lowercase() {
 #[test]
 fn lifecycle_event_serde_roundtrip_all_variants() {
     for event in ALL_EVENTS {
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: LifecycleEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: LifecycleEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored, "serde roundtrip failed for {event:?}");
     }
 }
@@ -218,8 +218,8 @@ fn cancellation_mode_for_revocation_defaults() {
 fn cancellation_mode_serde_roundtrip_all_events() {
     for event in ALL_EVENTS {
         let mode = CancellationMode::for_event(event);
-        let json = serde_json::to_string(&mode).unwrap_or_default();
-        let restored: CancellationMode = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&mode).unwrap();
+        let restored: CancellationMode = serde_json::from_str(&json).unwrap();
         assert_eq!(mode, restored, "serde roundtrip failed for {event:?} mode");
     }
 }
@@ -357,8 +357,8 @@ fn cancellation_error_serde_roundtrip_all_variants() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).unwrap_or_default();
-        let restored: CancellationError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(err).unwrap();
+        let restored: CancellationError = serde_json::from_str(&json).unwrap();
         assert_eq!(*err, restored);
     }
 }
@@ -422,8 +422,8 @@ fn cancellation_event_serde_roundtrip() {
         obligations_pending: 3,
         budget_consumed_ms: 10,
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let restored: CancellationEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let restored: CancellationEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, restored);
 }
 
@@ -472,8 +472,8 @@ fn cancellation_outcome_serde_roundtrip() {
         children_cancelled: 0,
         was_idempotent: false,
     };
-    let json = serde_json::to_string(&outcome).unwrap_or_default();
-    let restored: CancellationOutcome = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&outcome).unwrap();
+    let restored: CancellationOutcome = serde_json::from_str(&json).unwrap();
     assert_eq!(outcome, restored);
 }
 
@@ -494,8 +494,8 @@ fn cancellation_outcome_serde_roundtrip_with_timeout_escalation() {
         children_cancelled: 0,
         was_idempotent: false,
     };
-    let json = serde_json::to_string(&outcome).unwrap_or_default();
-    let restored: CancellationOutcome = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&outcome).unwrap();
+    let restored: CancellationOutcome = serde_json::from_str(&json).unwrap();
     assert_eq!(outcome, restored);
 }
 
@@ -516,8 +516,8 @@ fn cancellation_outcome_serde_roundtrip_idempotent() {
         children_cancelled: 0,
         was_idempotent: true,
     };
-    let json = serde_json::to_string(&outcome).unwrap_or_default();
-    let restored: CancellationOutcome = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&outcome).unwrap();
+    let restored: CancellationOutcome = serde_json::from_str(&json).unwrap();
     assert_eq!(outcome, restored);
     assert!(restored.was_idempotent);
 }

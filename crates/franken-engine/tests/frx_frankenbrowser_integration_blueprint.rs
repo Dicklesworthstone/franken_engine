@@ -599,7 +599,7 @@ fn frx_09_3_blueprint_has_at_least_one_migration_phase() {
 #[test]
 fn frx_09_3_blueprint_json_value_roundtrip_preserves_all_keys() {
     let value: serde_json::Value = serde_json::from_str(BLUEPRINT_JSON).expect("parse as Value");
-    let serialized = serde_json::to_string(&value).unwrap_or_default();
+    let serialized = serde_json::to_string(&value).unwrap();
     let roundtripped: serde_json::Value = serde_json::from_str(&serialized).expect("re-parse");
     assert_eq!(
         value, roundtripped,

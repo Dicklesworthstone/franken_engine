@@ -1977,7 +1977,7 @@ fn enrichment_property_utilization_in_range() {
     for (max, used) in test_cases {
         let mut budget = DomainBudget::new(max);
         if used > 0 && max > 0 {
-            budget.try_reserve(used).unwrap_or_default();
+            budget.try_reserve(used).unwrap();
             // Force used_bytes for edge cases that might not fit.
             budget.used_bytes = used;
         }

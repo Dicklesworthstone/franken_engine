@@ -642,8 +642,8 @@ fn benchmark_split_serde_round_trip_all_variants() {
         BenchmarkSplit::EvidenceEmission,
         BenchmarkSplit::FullIntegration,
     ] {
-        let json = serde_json::to_string(&split).unwrap_or_default();
-        let recovered: BenchmarkSplit = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&split).unwrap();
+        let recovered: BenchmarkSplit = serde_json::from_str(&json).unwrap();
         assert_eq!(split, recovered);
     }
 }
@@ -674,8 +674,8 @@ fn benchmark_split_failure_code_serde_round_trip() {
         BenchmarkSplitFailureCode::MemoryOverheadExceeded,
         BenchmarkSplitFailureCode::PreviousRunRegressionExceeded,
     ] {
-        let json = serde_json::to_string(&code).unwrap_or_default();
-        let recovered: BenchmarkSplitFailureCode = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&code).unwrap();
+        let recovered: BenchmarkSplitFailureCode = serde_json::from_str(&json).unwrap();
         assert_eq!(code, recovered);
         assert!(!code.to_string().is_empty());
     }
@@ -688,40 +688,40 @@ fn latency_stats_ns_serde_round_trip() {
         p95_ns: 1_000_000,
         p99_ns: 1_050_000,
     };
-    let json = serde_json::to_string(&stats).unwrap_or_default();
-    let recovered: LatencyStatsNs = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&stats).unwrap();
+    let recovered: LatencyStatsNs = serde_json::from_str(&json).unwrap();
     assert_eq!(stats, recovered);
 }
 
 #[test]
 fn split_benchmark_metrics_serde_round_trip() {
     let m = metrics(1_000_000, 950_000, 1_000_000, 1_050_000, 0);
-    let json = serde_json::to_string(&m).unwrap_or_default();
-    let recovered: SplitBenchmarkMetrics = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&m).unwrap();
+    let recovered: SplitBenchmarkMetrics = serde_json::from_str(&json).unwrap();
     assert_eq!(m, recovered);
 }
 
 #[test]
 fn benchmark_split_snapshot_serde_round_trip() {
     let snapshot = previous_snapshot();
-    let json = serde_json::to_string(&snapshot).unwrap_or_default();
-    let recovered: BenchmarkSplitSnapshot = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&snapshot).unwrap();
+    let recovered: BenchmarkSplitSnapshot = serde_json::from_str(&json).unwrap();
     assert_eq!(snapshot, recovered);
 }
 
 #[test]
 fn benchmark_split_thresholds_default_has_entries_for_all_splits() {
     let thresholds = BenchmarkSplitThresholds::default();
-    let json = serde_json::to_string(&thresholds).unwrap_or_default();
-    let recovered: BenchmarkSplitThresholds = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&thresholds).unwrap();
+    let recovered: BenchmarkSplitThresholds = serde_json::from_str(&json).unwrap();
     assert_eq!(thresholds, recovered);
 }
 
 #[test]
 fn gate_input_serde_round_trip() {
     let gate_input = input(previous_snapshot(), candidate_snapshot(0, true));
-    let json = serde_json::to_string(&gate_input).unwrap_or_default();
-    let recovered: BenchmarkSplitGateInput = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&gate_input).unwrap();
+    let recovered: BenchmarkSplitGateInput = serde_json::from_str(&json).unwrap();
     assert_eq!(gate_input.trace_id, recovered.trace_id);
     assert_eq!(gate_input.policy_id, recovered.policy_id);
 }
@@ -813,8 +813,8 @@ fn stable_baseline_runs_have_ten_entries() {
 #[test]
 fn benchmark_split_thresholds_default_is_constructible() {
     let thresholds = BenchmarkSplitThresholds::default();
-    let json = serde_json::to_string(&thresholds).unwrap_or_default();
-    let recovered: BenchmarkSplitThresholds = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&thresholds).unwrap();
+    let recovered: BenchmarkSplitThresholds = serde_json::from_str(&json).unwrap();
     assert_eq!(serde_json::to_string(&recovered).unwrap(), json);
 }
 
@@ -827,8 +827,8 @@ fn benchmark_split_serde_roundtrip() {
         BenchmarkSplit::EvidenceEmission,
         BenchmarkSplit::FullIntegration,
     ] {
-        let json = serde_json::to_string(&split).unwrap_or_default();
-        let recovered: BenchmarkSplit = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&split).unwrap();
+        let recovered: BenchmarkSplit = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, split);
     }
 }
@@ -836,8 +836,8 @@ fn benchmark_split_serde_roundtrip() {
 #[test]
 fn benchmark_split_failure_code_serde_roundtrip() {
     let code = BenchmarkSplitFailureCode::ThroughputRegressionExceeded;
-    let json = serde_json::to_string(&code).unwrap_or_default();
-    let recovered: BenchmarkSplitFailureCode = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&code).unwrap();
+    let recovered: BenchmarkSplitFailureCode = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, code);
 }
 
@@ -955,8 +955,8 @@ fn benchmark_split_log_event_serde_round_trip() {
         split: Some("Baseline".to_string()),
         metric: Some("throughput_ops_per_sec".to_string()),
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let recovered: BenchmarkSplitLogEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let recovered: BenchmarkSplitLogEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, recovered);
 }
 
@@ -970,8 +970,8 @@ fn benchmark_split_finding_serde_round_trip() {
         observed_millionths: Some(75_000),
         threshold_millionths: Some(50_000),
     };
-    let json = serde_json::to_string(&finding).unwrap_or_default();
-    let recovered: BenchmarkSplitFinding = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&finding).unwrap();
+    let recovered: BenchmarkSplitFinding = serde_json::from_str(&json).unwrap();
     assert_eq!(finding, recovered);
 }
 
@@ -1081,8 +1081,8 @@ fn split_benchmark_evaluation_serde_roundtrip() {
         latency_p99_regression_vs_previous_millionths: 9_524,
         pass: true,
     };
-    let json = serde_json::to_string(&eval).unwrap_or_default();
-    let recovered: SplitBenchmarkEvaluation = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&eval).unwrap();
+    let recovered: SplitBenchmarkEvaluation = serde_json::from_str(&json).unwrap();
     assert_eq!(eval, recovered);
 }
 
@@ -1092,8 +1092,8 @@ fn benchmark_split_gate_decision_serde_roundtrip() {
         &input(previous_snapshot(), candidate_snapshot(0, true)),
         &BenchmarkSplitThresholds::default(),
     );
-    let json = serde_json::to_string(&decision).unwrap_or_default();
-    let recovered: BenchmarkSplitGateDecision = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&decision).unwrap();
+    let recovered: BenchmarkSplitGateDecision = serde_json::from_str(&json).unwrap();
     assert_eq!(decision, recovered);
 }
 

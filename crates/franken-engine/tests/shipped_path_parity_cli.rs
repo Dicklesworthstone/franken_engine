@@ -168,7 +168,7 @@ fn shipped_path_parity_binary_emits_artifacts_and_zero_mismatches() {
             .iter()
             .any(|line| line
                 .as_str()
-                .unwrap_or_default()
+                .unwrap()
                 .contains("no shipped-path mismatches detected")),
         "operator summary should include the zero-mismatch operator verdict"
     );

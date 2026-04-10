@@ -1048,7 +1048,7 @@ fn health_ok_response_json_schema_stable() {
     let resp = kit
         .template
         .health_endpoint(&auth(&[SCOPE_HEALTH_READ]), &ctx());
-    let json = serde_json::to_value(&resp).unwrap_or_default();
+    let json = serde_json::to_value(&resp).unwrap();
     assert_eq!(json["status"], "ok");
     assert_eq!(json["endpoint"], "health");
     assert!(json["trace_id"].is_string());
@@ -1066,7 +1066,7 @@ fn health_ok_response_json_schema_stable() {
 fn error_response_json_schema_stable() {
     let kit = build_template();
     let resp = kit.template.health_endpoint(&auth(&[]), &ctx());
-    let json = serde_json::to_value(&resp).unwrap_or_default();
+    let json = serde_json::to_value(&resp).unwrap();
     assert_eq!(json["status"], "error");
     assert!(json["data"].is_null());
     assert!(json["error"]["error_code"].is_string());
@@ -1084,7 +1084,7 @@ fn control_action_ok_response_json_schema() {
         &ctx(),
         &control_req("ext-x", ControlAction::Quarantine, "test"),
     );
-    let json = serde_json::to_value(&resp).unwrap_or_default();
+    let json = serde_json::to_value(&resp).unwrap();
     assert_eq!(json["data"]["extension_id"], "ext-x");
     assert_eq!(json["data"]["action"], "Quarantine");
     assert_eq!(json["data"]["accepted"], true);
@@ -1099,7 +1099,7 @@ fn evidence_export_ok_response_json_schema() {
         &ctx(),
         &evidence_req(0, None, 2),
     );
-    let json = serde_json::to_value(&resp).unwrap_or_default();
+    let json = serde_json::to_value(&resp).unwrap();
     assert!(json["data"]["records"].is_array());
     assert_eq!(json["data"]["records"].as_array().unwrap().len(), 2);
     let rec = &json["data"]["records"][0];
@@ -1116,7 +1116,7 @@ fn replay_ok_response_json_schema() {
         &ctx(),
         &replay_start_req("trace-json"),
     );
-    let json = serde_json::to_value(&resp).unwrap_or_default();
+    let json = serde_json::to_value(&resp).unwrap();
     assert!(json["data"]["session_id"].is_string());
     assert!(json["data"]["state"].is_string());
     assert!(json["data"]["note"].is_string());

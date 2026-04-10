@@ -817,8 +817,8 @@ fn guardrail_state_serde_roundtrip() {
         GuardrailState::Suspended,
     ];
     for state in &states {
-        let json = serde_json::to_string(state).unwrap_or_default();
-        let restored: GuardrailState = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(state).unwrap();
+        let restored: GuardrailState = serde_json::from_str(&json).unwrap();
         assert_eq!(*state, restored);
     }
 }
@@ -846,8 +846,8 @@ fn guardrail_error_serde_roundtrip() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).unwrap_or_default();
-        let restored: GuardrailError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(err).unwrap();
+        let restored: GuardrailError = serde_json::from_str(&json).unwrap();
         assert_eq!(*err, restored);
     }
 }
@@ -859,8 +859,8 @@ fn reset_receipt_serde_roundtrip() {
         rationale: "epoch transition".to_string(),
         epoch: SecurityEpoch::from_raw(7),
     };
-    let json = serde_json::to_string(&receipt).unwrap_or_default();
-    let restored: ResetReceipt = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&receipt).unwrap();
+    let restored: ResetReceipt = serde_json::from_str(&json).unwrap();
     assert_eq!(receipt, restored);
 }
 
@@ -895,8 +895,8 @@ fn guardrail_event_serde_roundtrip_all_variants() {
         },
     ];
     for event in &events {
-        let json = serde_json::to_string(event).unwrap_or_default();
-        let restored: GuardrailEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(event).unwrap();
+        let restored: GuardrailEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(*event, restored);
     }
 }
@@ -908,8 +908,8 @@ fn threshold_lr_serde_roundtrip() {
         high_ratio_millionths: 5_000_000,
         low_ratio_millionths: 500_000,
     };
-    let json = serde_json::to_string(&lr).unwrap_or_default();
-    let restored: ThresholdLikelihoodRatio = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&lr).unwrap();
+    let restored: ThresholdLikelihoodRatio = serde_json::from_str(&json).unwrap();
     assert_eq!(lr.threshold_millionths, restored.threshold_millionths);
     assert_eq!(lr.high_ratio_millionths, restored.high_ratio_millionths);
     assert_eq!(lr.low_ratio_millionths, restored.low_ratio_millionths);
@@ -920,8 +920,8 @@ fn universal_lr_serde_roundtrip() {
     let lr = UniversalLikelihoodRatio {
         null_mean_millionths: 500_000,
     };
-    let json = serde_json::to_string(&lr).unwrap_or_default();
-    let restored: UniversalLikelihoodRatio = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&lr).unwrap();
+    let restored: UniversalLikelihoodRatio = serde_json::from_str(&json).unwrap();
     assert_eq!(lr.null_mean_millionths, restored.null_mean_millionths);
 }
 

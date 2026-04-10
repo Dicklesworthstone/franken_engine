@@ -610,8 +610,8 @@ fn full_evaluator_reports_serde_roundtrip() {
     let mut eval = default_eval();
     pass_all_gates(&mut eval);
     for report in eval.export_reports() {
-        let json = serde_json::to_string(report).unwrap_or_default();
-        let restored: GateReport = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(report).unwrap();
+        let restored: GateReport = serde_json::from_str(&json).unwrap();
         assert_eq!(*report, restored);
     }
 }
@@ -621,8 +621,8 @@ fn gate_event_vec_serde_roundtrip() {
     let mut eval = default_eval();
     pass_all_gates(&mut eval);
     let events = eval.drain_events();
-    let json = serde_json::to_string(&events).unwrap_or_default();
-    let restored: Vec<GateEvent> = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&events).unwrap();
+    let restored: Vec<GateEvent> = serde_json::from_str(&json).unwrap();
     assert_eq!(events, restored);
 }
 
@@ -633,8 +633,8 @@ fn replay_input_with_zero_events_serde() {
         replayed_hash: ContentHash::compute(b""),
         event_count: 0,
     };
-    let json = serde_json::to_string(&ri).unwrap_or_default();
-    let restored: ReplayInput = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&ri).unwrap();
+    let restored: ReplayInput = serde_json::from_str(&json).unwrap();
     assert_eq!(ri, restored);
 }
 
@@ -647,8 +647,8 @@ fn fuzz_input_no_targets_serde() {
         bypasses: 0,
         targets: vec![],
     };
-    let json = serde_json::to_string(&fi).unwrap_or_default();
-    let restored: FuzzInput = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&fi).unwrap();
+    let restored: FuzzInput = serde_json::from_str(&json).unwrap();
     assert_eq!(fi, restored);
 }
 

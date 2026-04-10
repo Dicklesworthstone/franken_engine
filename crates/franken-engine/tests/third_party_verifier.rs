@@ -51,7 +51,7 @@ fn temp_json_path(prefix: &str) -> PathBuf {
 
 fn write_json<T: serde::Serialize>(prefix: &str, value: &T) -> PathBuf {
     let path = temp_json_path(prefix);
-    fs::write(&path, serde_json::to_vec_pretty(value).unwrap_or_default())
+    fs::write(&path, serde_json::to_vec_pretty(value).unwrap())
         .expect("json write should succeed");
     path
 }
@@ -86,7 +86,7 @@ fn write_benchmark_verifier_bundle(prefix: &str, claim: &BenchmarkClaimBundle) -
     });
     fs::write(
         dir.join("manifest.json"),
-        serde_json::to_vec_pretty(&manifest).unwrap_or_default(),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
     )
     .expect("manifest write should succeed");
 
@@ -97,7 +97,7 @@ fn write_benchmark_verifier_bundle(prefix: &str, claim: &BenchmarkClaimBundle) -
     });
     fs::write(
         dir.join("env.json"),
-        serde_json::to_vec_pretty(&env).unwrap_or_default(),
+        serde_json::to_vec_pretty(&env).unwrap(),
     )
     .expect("env write should succeed");
 
@@ -108,7 +108,7 @@ fn write_benchmark_verifier_bundle(prefix: &str, claim: &BenchmarkClaimBundle) -
     });
     fs::write(
         dir.join("repro.lock"),
-        serde_json::to_vec_pretty(&repro_lock).unwrap_or_default(),
+        serde_json::to_vec_pretty(&repro_lock).unwrap(),
     )
     .expect("repro lock write should succeed");
 
@@ -120,7 +120,7 @@ fn write_benchmark_verifier_bundle(prefix: &str, claim: &BenchmarkClaimBundle) -
 
     fs::write(
         dir.join("results.json"),
-        serde_json::to_vec_pretty(claim).unwrap_or_default(),
+        serde_json::to_vec_pretty(claim).unwrap(),
     )
     .expect("results write should succeed");
 
@@ -573,7 +573,7 @@ fn franken_verify_benchmark_verify_bundle_fails_when_manifest_context_mismatches
     manifest["policy_id"] = serde_json::Value::String("policy-mismatch".to_string());
     fs::write(
         bundle_dir.join("manifest.json"),
-        serde_json::to_vec_pretty(&manifest).unwrap_or_default(),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
     )
     .expect("manifest rewrite should succeed");
 
@@ -865,8 +865,8 @@ fn verification_verdict_serde_round_trip() {
         VerificationVerdict::Failed,
         VerificationVerdict::Inconclusive,
     ] {
-        let json = serde_json::to_string(&verdict).unwrap_or_default();
-        let recovered: VerificationVerdict = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&verdict).unwrap();
+        let recovered: VerificationVerdict = serde_json::from_str(&json).unwrap();
         assert_eq!(verdict, recovered);
     }
 }
@@ -902,8 +902,8 @@ fn constants_are_stable() {
 fn report_serde_round_trip() {
     let bundle = make_benchmark_claim_bundle();
     let report = verify_benchmark_claim(&bundle);
-    let json = serde_json::to_string(&report).unwrap_or_default();
-    let recovered: ThirdPartyVerificationReport = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&report).unwrap();
+    let recovered: ThirdPartyVerificationReport = serde_json::from_str(&json).unwrap();
     assert_eq!(report.verdict, recovered.verdict);
     assert_eq!(report.checks.len(), recovered.checks.len());
     assert_eq!(report.claim_type, recovered.claim_type);
@@ -917,8 +917,8 @@ fn check_result_serde_round_trip() {
         detail: "all good".to_string(),
         error_code: None,
     };
-    let json = serde_json::to_string(&check).unwrap_or_default();
-    let recovered: VerificationCheckResult = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&check).unwrap();
+    let recovered: VerificationCheckResult = serde_json::from_str(&json).unwrap();
     assert_eq!(check, recovered);
 }
 
@@ -933,8 +933,8 @@ fn verifier_event_serde_round_trip() {
         outcome: "pass".to_string(),
         error_code: None,
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let recovered: VerifierEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let recovered: VerifierEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, recovered);
 }
 
@@ -1011,8 +1011,8 @@ fn containment_claim_with_passed_scenario_missing_criteria_fails() {
 #[test]
 fn benchmark_claim_bundle_serde_round_trip() {
     let bundle = make_benchmark_claim_bundle();
-    let json = serde_json::to_string(&bundle).unwrap_or_default();
-    let recovered: BenchmarkClaimBundle = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&bundle).unwrap();
+    let recovered: BenchmarkClaimBundle = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.trace_id, bundle.trace_id);
     assert_eq!(recovered.decision_id, bundle.decision_id);
     assert_eq!(recovered.policy_id, bundle.policy_id);
@@ -1025,8 +1025,8 @@ fn benchmark_claim_bundle_serde_round_trip() {
 #[test]
 fn replay_claim_bundle_serde_round_trip() {
     let bundle = make_replay_claim_bundle();
-    let json = serde_json::to_string(&bundle).unwrap_or_default();
-    let recovered: ReplayClaimBundle = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&bundle).unwrap();
+    let recovered: ReplayClaimBundle = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.trace_id, bundle.trace_id);
     assert_eq!(recovered.current_epoch, bundle.current_epoch);
     assert_eq!(
@@ -1038,8 +1038,8 @@ fn replay_claim_bundle_serde_round_trip() {
 #[test]
 fn containment_claim_bundle_serde_round_trip() {
     let bundle = make_containment_claim_bundle();
-    let json = serde_json::to_string(&bundle).unwrap_or_default();
-    let recovered: ContainmentClaimBundle = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&bundle).unwrap();
+    let recovered: ContainmentClaimBundle = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.trace_id, bundle.trace_id);
     assert_eq!(
         recovered.detection_latency_sla_ns,
@@ -1052,8 +1052,8 @@ fn containment_claim_bundle_serde_round_trip() {
 fn verification_attestation_serde_round_trip() {
     let input = make_attestation_input(true);
     let attestation = generate_attestation(&input).expect("create");
-    let json = serde_json::to_string(&attestation).unwrap_or_default();
-    let recovered: VerificationAttestation = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&attestation).unwrap();
+    let recovered: VerificationAttestation = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.verifier_name, attestation.verifier_name);
     assert_eq!(recovered.verifier_version, attestation.verifier_version);
     assert_eq!(recovered.signature_hex, attestation.signature_hex);

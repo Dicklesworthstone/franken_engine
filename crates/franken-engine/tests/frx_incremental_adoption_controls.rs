@@ -365,9 +365,9 @@ fn frx_07_4_policy_toggle_defaults_are_consistent() {
 #[test]
 fn frx_07_4_serde_roundtrip_preserves_contract() {
     let contract = parse_contract();
-    let serialized = serde_json::to_string(&contract).unwrap_or_default();
+    let serialized = serde_json::to_string(&contract).unwrap();
     let deserialized: AdoptionControlsContract =
-        serde_json::from_str(&serialized).unwrap_or_default();
+        serde_json::from_str(&serialized).unwrap();
     assert_eq!(contract, deserialized);
 }
 
@@ -596,8 +596,8 @@ fn frx_07_4_migration_diagnostics_owner_lanes_are_nonempty_strings() {
 #[test]
 fn frx_07_4_serde_roundtrip_via_pretty_print_preserves_contract() {
     let contract = parse_contract();
-    let pretty = serde_json::to_string_pretty(&contract).unwrap_or_default();
-    let recovered: AdoptionControlsContract = serde_json::from_str(&pretty).unwrap_or_default();
+    let pretty = serde_json::to_string_pretty(&contract).unwrap();
+    let recovered: AdoptionControlsContract = serde_json::from_str(&pretty).unwrap();
     assert_eq!(contract, recovered);
 }
 

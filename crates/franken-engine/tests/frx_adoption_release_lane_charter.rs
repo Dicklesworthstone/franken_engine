@@ -336,7 +336,7 @@ fn adoption_contract_serde_roundtrip_preserves_all_top_level_keys() {
     let raw = fs::read_to_string(&path).expect("read JSON");
     let value: Value = serde_json::from_str(&raw).expect("parse JSON");
 
-    let serialized = serde_json::to_string_pretty(&value).unwrap_or_default();
+    let serialized = serde_json::to_string_pretty(&value).unwrap();
     let roundtripped: Value = serde_json::from_str(&serialized).expect("re-parse");
 
     let orig_keys: Vec<&str> = value
@@ -439,7 +439,7 @@ fn enrichment_contract_serde_roundtrip_is_lossless_via_to_string() {
     let path = repo_root().join("docs/frx_adoption_release_lane_contract_v1.json");
     let raw = fs::read_to_string(&path).expect("read JSON");
     let v1: Value = serde_json::from_str(&raw).expect("parse v1");
-    let serialized = serde_json::to_string(&v1).unwrap_or_default();
+    let serialized = serde_json::to_string(&v1).unwrap();
     let v2: Value = serde_json::from_str(&serialized).expect("parse v2");
     assert_eq!(v1, v2, "serde roundtrip via to_string must be lossless");
 }
@@ -449,7 +449,7 @@ fn enrichment_contract_serde_roundtrip_via_to_vec_is_lossless() {
     let path = repo_root().join("docs/frx_adoption_release_lane_contract_v1.json");
     let raw = fs::read_to_string(&path).expect("read JSON");
     let v1: Value = serde_json::from_str(&raw).expect("parse v1");
-    let bytes = serde_json::to_vec(&v1).unwrap_or_default();
+    let bytes = serde_json::to_vec(&v1).unwrap();
     let v2: Value = serde_json::from_slice(&bytes).expect("parse from slice");
     assert_eq!(v1, v2, "serde roundtrip via to_vec must be lossless");
 }

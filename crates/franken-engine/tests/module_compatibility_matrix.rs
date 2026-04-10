@@ -443,8 +443,8 @@ fn default_matrix_round_trip_preserves_required_readme_fragments() {
     let matrix = ModuleCompatibilityMatrix::from_default_json().expect("load default matrix");
     let expected_fragments = matrix.required_readme_fragments().to_vec();
 
-    let serialized = matrix.to_json_pretty().unwrap_or_default();
-    let reparsed = ModuleCompatibilityMatrix::from_json_str(&serialized).unwrap_or_default();
+    let serialized = matrix.to_json_pretty().unwrap();
+    let reparsed = ModuleCompatibilityMatrix::from_json_str(&serialized).unwrap();
 
     assert_eq!(
         reparsed.required_readme_fragments(),
@@ -523,8 +523,8 @@ fn module_feature_serde_roundtrip() {
         ModuleFeature::ConditionalExports,
         ModuleFeature::PackageJsonFields,
     ] {
-        let json = serde_json::to_string(&feature).unwrap_or_default();
-        let recovered: ModuleFeature = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&feature).unwrap();
+        let recovered: ModuleFeature = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, feature);
     }
 }
@@ -551,8 +551,8 @@ fn compatibility_runtime_serde_roundtrip() {
         CompatibilityRuntime::Node,
         CompatibilityRuntime::Bun,
     ] {
-        let json = serde_json::to_string(&runtime).unwrap_or_default();
-        let recovered: CompatibilityRuntime = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&runtime).unwrap();
+        let recovered: CompatibilityRuntime = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, runtime);
     }
 }
@@ -577,8 +577,8 @@ fn compatibility_mode_serde_roundtrip() {
         CompatibilityMode::NodeCompat,
         CompatibilityMode::BunCompat,
     ] {
-        let json = serde_json::to_string(&mode).unwrap_or_default();
-        let recovered: CompatibilityMode = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&mode).unwrap();
+        let recovered: CompatibilityMode = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, mode);
     }
 }
@@ -670,7 +670,7 @@ fn matrix_entry_lookup_missing_returns_none() {
 #[test]
 fn matrix_to_json_pretty_roundtrips() {
     let matrix = ModuleCompatibilityMatrix::from_default_json().expect("load matrix");
-    let json = matrix.to_json_pretty().unwrap_or_default();
+    let json = matrix.to_json_pretty().unwrap();
     assert!(json.contains("schema_version"));
     assert!(!json.is_empty());
 }
@@ -721,8 +721,8 @@ fn waiver_record_serde_roundtrip() {
         lockstep_exemptions: Vec::new(),
         sealed: false,
     };
-    let json = serde_json::to_string(&waiver).unwrap_or_default();
-    let recovered: WaiverRecord = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&waiver).unwrap();
+    let recovered: WaiverRecord = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.waiver_id, "waiver-test");
     assert_eq!(recovered.valid_until_ns, Some(200));
 }
@@ -753,9 +753,9 @@ fn error_code_serde_roundtrip() {
         CompatibilityMatrixErrorCode::InvalidMatrix,
         CompatibilityMatrixErrorCode::ObservationMismatch,
     ] {
-        let json = serde_json::to_string(&code).unwrap_or_default();
+        let json = serde_json::to_string(&code).unwrap();
         let recovered: CompatibilityMatrixErrorCode =
-            serde_json::from_str(&json).unwrap_or_default();
+            serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, code);
     }
 }
@@ -779,8 +779,8 @@ fn matrix_entries_all_have_nonempty_case_id() {
 fn matrix_canonical_hash_is_stable() {
     let a = ModuleCompatibilityMatrix::from_default_json().expect("load a");
     let b = ModuleCompatibilityMatrix::from_default_json().expect("load b");
-    let hash_a = serde_json::to_string(&a.canonical_hash()).unwrap_or_default();
-    let hash_b = serde_json::to_string(&b.canonical_hash()).unwrap_or_default();
+    let hash_a = serde_json::to_string(&a.canonical_hash()).unwrap();
+    let hash_b = serde_json::to_string(&b.canonical_hash()).unwrap();
     assert_eq!(hash_a, hash_b, "canonical_hash must be stable across loads");
     assert!(!hash_a.is_empty());
 }
@@ -790,8 +790,8 @@ fn matrix_canonical_hash_is_stable() {
 #[test]
 fn compatibility_context_serde_roundtrip() {
     let ctx = CompatibilityContext::new("trace-1", "decision-1", "policy-1");
-    let json = serde_json::to_string(&ctx).unwrap_or_default();
-    let recovered: CompatibilityContext = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&ctx).unwrap();
+    let recovered: CompatibilityContext = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.trace_id, "trace-1");
     assert_eq!(recovered.decision_id, "decision-1");
     assert_eq!(recovered.policy_id, "policy-1");
@@ -891,8 +891,8 @@ fn valid_shim_integ(mode: CompatibilityMode) -> ExplicitShim {
 #[test]
 fn reference_runtime_serde_roundtrip() {
     for variant in [ReferenceRuntime::Node, ReferenceRuntime::Bun] {
-        let json = serde_json::to_string(&variant).unwrap_or_default();
-        let recovered: ReferenceRuntime = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&variant).unwrap();
+        let recovered: ReferenceRuntime = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, variant);
     }
 }
@@ -930,8 +930,8 @@ fn divergence_category_serde_roundtrip() {
         DivergenceCategory::EcosystemAmbiguity,
         DivergenceCategory::ReferenceRuntimeBug,
     ] {
-        let json = serde_json::to_string(&variant).unwrap_or_default();
-        let recovered: DivergenceCategory = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&variant).unwrap();
+        let recovered: DivergenceCategory = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, variant);
     }
 }
@@ -993,8 +993,8 @@ fn explicit_shim_serde_roundtrip() {
         removable: true,
         test_case_ref: "test/serde-ref.js".to_string(),
     };
-    let json = serde_json::to_string(&shim).unwrap_or_default();
-    let recovered: ExplicitShim = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&shim).unwrap();
+    let recovered: ExplicitShim = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, shim);
 }
 
@@ -1006,8 +1006,8 @@ fn explicit_shim_serde_all_modes() {
         CompatibilityMode::BunCompat,
     ] {
         let shim = valid_shim_integ(mode);
-        let json = serde_json::to_string(&shim).unwrap_or_default();
-        let recovered: ExplicitShim = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&shim).unwrap();
+        let recovered: ExplicitShim = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered.mode, mode);
     }
 }
@@ -1023,8 +1023,8 @@ fn divergence_policy_serde_roundtrip() {
         waiver_id: "w-policy".to_string(),
         migration_guidance: "use compat shim".to_string(),
     };
-    let json = serde_json::to_string(&policy).unwrap_or_default();
-    let recovered: DivergencePolicy = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&policy).unwrap();
+    let recovered: DivergencePolicy = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, policy);
 }
 
@@ -1037,8 +1037,8 @@ fn divergence_policy_with_single_runtime() {
         waiver_id: "w-bun".to_string(),
         migration_guidance: "no action needed".to_string(),
     };
-    let json = serde_json::to_string(&policy).unwrap_or_default();
-    let recovered: DivergencePolicy = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&policy).unwrap();
+    let recovered: DivergencePolicy = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.diverges_from.len(), 1);
     assert_eq!(recovered.diverges_from[0], ReferenceRuntime::Bun);
 }
@@ -1048,8 +1048,8 @@ fn divergence_policy_with_single_runtime() {
 #[test]
 fn compatibility_matrix_entry_serde_roundtrip() {
     let entry = valid_entry_integ("case-serde-integ");
-    let json = serde_json::to_string(&entry).unwrap_or_default();
-    let recovered: CompatibilityMatrixEntry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&entry).unwrap();
+    let recovered: CompatibilityMatrixEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, entry);
 }
 
@@ -1060,8 +1060,8 @@ fn compatibility_matrix_entry_with_shims_serde_roundtrip() {
         valid_shim_integ(CompatibilityMode::NodeCompat),
         valid_shim_integ(CompatibilityMode::BunCompat),
     ];
-    let json = serde_json::to_string(&entry).unwrap_or_default();
-    let recovered: CompatibilityMatrixEntry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&entry).unwrap();
+    let recovered: CompatibilityMatrixEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.explicit_shims.len(), 2);
 }
 
@@ -1075,8 +1075,8 @@ fn compatibility_matrix_entry_with_divergence_serde_roundtrip() {
         waiver_id: "w-test".to_string(),
         migration_guidance: "test guidance".to_string(),
     });
-    let json = serde_json::to_string(&entry).unwrap_or_default();
-    let recovered: CompatibilityMatrixEntry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&entry).unwrap();
+    let recovered: CompatibilityMatrixEntry = serde_json::from_str(&json).unwrap();
     assert!(recovered.divergence.is_some());
 }
 
@@ -1098,8 +1098,8 @@ fn compatibility_event_serde_roundtrip() {
         mode: "native".to_string(),
         detail: "test detail".to_string(),
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let recovered: CompatibilityEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let recovered: CompatibilityEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, event);
     assert_eq!(recovered.seq, 42);
 }
@@ -1132,8 +1132,8 @@ fn compatibility_matrix_error_serde_roundtrip_without_event() {
         message: "case missing".to_string(),
         event: None,
     };
-    let json = serde_json::to_string(&err).unwrap_or_default();
-    let recovered: CompatibilityMatrixError = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&err).unwrap();
+    let recovered: CompatibilityMatrixError = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, err);
     assert!(recovered.event.is_none());
 }
@@ -1158,8 +1158,8 @@ fn compatibility_matrix_error_serde_roundtrip_with_event() {
             detail: "mismatch detail".to_string(),
         }),
     };
-    let json = serde_json::to_string(&err).unwrap_or_default();
-    let recovered: CompatibilityMatrixError = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&err).unwrap();
+    let recovered: CompatibilityMatrixError = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, err);
     assert!(recovered.event.is_some());
 }
@@ -1225,8 +1225,8 @@ fn compatibility_observation_serde_roundtrip() {
         CompatibilityMode::BunCompat,
         "expected-bun",
     );
-    let json = serde_json::to_string(&obs).unwrap_or_default();
-    let recovered: CompatibilityObservation = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&obs).unwrap();
+    let recovered: CompatibilityObservation = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.case_id, "case-obs-serde");
     assert_eq!(recovered.runtime, CompatibilityRuntime::Bun);
     assert_eq!(recovered.mode, CompatibilityMode::BunCompat);
@@ -1262,9 +1262,9 @@ fn compatibility_observation_outcome_serde_roundtrip() {
             detail: "matched".to_string(),
         },
     };
-    let json = serde_json::to_string(&outcome).unwrap_or_default();
+    let json = serde_json::to_string(&outcome).unwrap();
     let recovered: CompatibilityObservationOutcome =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.case_id, "case-outcome");
     assert!(recovered.matched);
     assert!(recovered.divergence.is_none());
@@ -1303,9 +1303,9 @@ fn compatibility_observation_outcome_with_divergence_serde_roundtrip() {
             detail: "matched with divergence".to_string(),
         },
     };
-    let json = serde_json::to_string(&outcome).unwrap_or_default();
+    let json = serde_json::to_string(&outcome).unwrap();
     let recovered: CompatibilityObservationOutcome =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert!(recovered.divergence.is_some());
     assert_eq!(
         recovered.divergence_category,
@@ -1331,8 +1331,8 @@ fn compatibility_scenario_report_serde_roundtrip() {
         actionable_guidance: BTreeMap::new(),
         outcomes: Vec::new(),
     };
-    let json = serde_json::to_string(&report).unwrap_or_default();
-    let recovered: CompatibilityScenarioReport = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&report).unwrap();
+    let recovered: CompatibilityScenarioReport = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.scenario_id, "scenario-serde");
     assert_eq!(recovered.total_observations, 2);
     assert_eq!(recovered.matched_observations, 2);
@@ -2188,7 +2188,7 @@ fn to_json_pretty_roundtrip_preserves_hash() {
     let matrix =
         ModuleCompatibilityMatrix::from_entries("1.0.0", vec![valid_entry_integ("case-rt")])
             .unwrap();
-    let json = matrix.to_json_pretty().unwrap_or_default();
+    let json = matrix.to_json_pretty().unwrap();
     let reparsed = ModuleCompatibilityMatrix::from_json_str(&json).expect("re-parse");
     assert_eq!(matrix.canonical_hash(), reparsed.canonical_hash());
 }

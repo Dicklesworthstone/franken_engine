@@ -94,7 +94,7 @@ struct DashboardSnapshot {
 fn load_fixture() -> UserImpactBaselineFixture {
     let path = Path::new("tests/fixtures/parser_user_impact_baseline_dashboard_v1.json");
     let bytes = fs::read(path).expect("read user-impact baseline dashboard fixture");
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    serde_json::from_slice(&bytes).unwrap()
 }
 
 fn load_doc() -> String {
@@ -151,8 +151,8 @@ fn assert_required_log_keys(events: &[HarnessEvent], required_keys: &[String], s
     );
 
     for event in events {
-        let value = serde_json::to_value(event).unwrap_or_default();
-        let object = value.as_object().unwrap_or_default();
+        let value = serde_json::to_value(event).unwrap();
+        let object = value.as_object().unwrap();
 
         for key in required_keys {
             assert!(
@@ -805,7 +805,7 @@ fn fixture_max_allowed_regression_is_positive() {
 #[test]
 fn metric_definition_serde_round_trip() {
     let json = r#"{"metric_id":"diag","description":"d","unit":"score_millionths","direction":"higher_is_better","weight_millionths":500000}"#;
-    let def: MetricDefinition = serde_json::from_str(json).unwrap_or_default();
+    let def: MetricDefinition = serde_json::from_str(json).unwrap();
     assert_eq!(def.metric_id, "diag");
     assert_eq!(def.weight_millionths, 500_000);
     assert_eq!(def.unit, "score_millionths");
@@ -815,7 +815,7 @@ fn metric_definition_serde_round_trip() {
 #[test]
 fn budget_override_serde_round_trip() {
     let json = r#"{"max_source_bytes":1024,"max_token_count":256,"max_recursion_depth":16}"#;
-    let bo: BudgetOverride = serde_json::from_str(json).unwrap_or_default();
+    let bo: BudgetOverride = serde_json::from_str(json).unwrap();
     assert_eq!(bo.max_source_bytes, 1024);
     assert_eq!(bo.max_token_count, 256);
     assert_eq!(bo.max_recursion_depth, 16);
@@ -828,7 +828,7 @@ fn diagnostic_sample_serde_round_trip_with_budget_override() {
         "expected_diagnostic_code":"E-PARSE-001","expected_budget_kind":"source_bytes",
         "budget_override":{"max_source_bytes":0,"max_token_count":0,"max_recursion_depth":0}
     }"#;
-    let sample: DiagnosticSample = serde_json::from_str(json).unwrap_or_default();
+    let sample: DiagnosticSample = serde_json::from_str(json).unwrap();
     assert_eq!(sample.sample_id, "s1");
     assert!(sample.budget_override.is_some());
     assert_eq!(sample.expected_budget_kind.as_deref(), Some("source_bytes"));
@@ -840,7 +840,7 @@ fn diagnostic_sample_serde_round_trip_without_budget_override() {
         "sample_id":"s2","goal":"module","source":"y","expected_error_code":"invalid_goal",
         "expected_diagnostic_code":"E-PARSE-002","expected_budget_kind":null,"budget_override":null
     }"#;
-    let sample: DiagnosticSample = serde_json::from_str(json).unwrap_or_default();
+    let sample: DiagnosticSample = serde_json::from_str(json).unwrap();
     assert_eq!(sample.sample_id, "s2");
     assert!(sample.budget_override.is_none());
     assert!(sample.expected_budget_kind.is_none());
@@ -849,7 +849,7 @@ fn diagnostic_sample_serde_round_trip_without_budget_override() {
 #[test]
 fn integration_sample_serde_round_trip() {
     let json = r#"{"sample_id":"is1","goal":"script","source":"var x=1;","expect_ok":true}"#;
-    let sample: IntegrationSample = serde_json::from_str(json).unwrap_or_default();
+    let sample: IntegrationSample = serde_json::from_str(json).unwrap();
     assert_eq!(sample.sample_id, "is1");
     assert!(sample.expect_ok);
     assert_eq!(sample.goal, "script");

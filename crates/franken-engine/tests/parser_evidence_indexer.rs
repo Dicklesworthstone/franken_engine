@@ -264,8 +264,8 @@ fn parser_run_artifact_ref_serde_round_trip() {
         generated_at_utc: Some("2026-02-25T00:00:00Z".to_string()),
         outcome: Some("pass".to_string()),
     };
-    let json = serde_json::to_string(&artifact).unwrap_or_default();
-    let recovered: ParserRunArtifactRef = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&artifact).unwrap();
+    let recovered: ParserRunArtifactRef = serde_json::from_str(&json).unwrap();
     assert_eq!(artifact, recovered);
 }
 
@@ -285,8 +285,8 @@ fn indexed_parser_event_serde_round_trip() {
         replay_command: Some("./scripts/replay.sh".to_string()),
         scenario_id: Some("fixture-foo".to_string()),
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let recovered: IndexedParserEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let recovered: IndexedParserEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, recovered);
 }
 
@@ -316,8 +316,8 @@ fn schema_migration_step_serde_round_trip() {
         from_schema: "franken-engine.parser-log-event.v1".to_string(),
         to_schema: "franken-engine.parser-log-event.v2".to_string(),
     };
-    let json = serde_json::to_string(&step).unwrap_or_default();
-    let recovered: SchemaMigrationStep = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&step).unwrap();
+    let recovered: SchemaMigrationStep = serde_json::from_str(&json).unwrap();
     assert_eq!(step, recovered);
 }
 
@@ -388,8 +388,8 @@ fn correlation_key_serde_roundtrip() {
         error_code: Some("FE-PARSER-DRIFT-0001".to_string()),
         outcome: "fail".to_string(),
     };
-    let json = serde_json::to_string(&key).unwrap_or_default();
-    let recovered: CorrelationKey = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&key).unwrap();
+    let recovered: CorrelationKey = serde_json::from_str(&json).unwrap();
     assert_eq!(key, recovered);
 }
 
@@ -442,8 +442,8 @@ fn correlation_key_serde_round_trip() {
         error_code: None,
         outcome: "pass".to_string(),
     };
-    let json = serde_json::to_string(&key).unwrap_or_default();
-    let recovered: CorrelationKey = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&key).unwrap();
+    let recovered: CorrelationKey = serde_json::from_str(&json).unwrap();
     assert_eq!(key, recovered);
 }
 
@@ -469,8 +469,8 @@ fn indexed_parser_event_serde_roundtrip() {
         replay_command: None,
         scenario_id: Some("s1".to_string()),
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let recovered: IndexedParserEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let recovered: IndexedParserEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.run_id, "run-1");
 }
 
@@ -486,8 +486,8 @@ fn parser_run_artifact_ref_serde_roundtrip() {
         generated_at_utc: Some("2026-02-25T00:00:00Z".to_string()),
         outcome: Some("pass".to_string()),
     };
-    let json = serde_json::to_string(&ref_).unwrap_or_default();
-    let recovered: ParserRunArtifactRef = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&ref_).unwrap();
+    let recovered: ParserRunArtifactRef = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.run_id, "run-1");
 }
 
@@ -554,8 +554,8 @@ fn correlation_key_with_none_fields_round_trips() {
         error_code: None,
         outcome: "pass".to_string(),
     };
-    let json = serde_json::to_string(&key).unwrap_or_default();
-    let recovered: CorrelationKey = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&key).unwrap();
+    let recovered: CorrelationKey = serde_json::from_str(&json).unwrap();
     assert_eq!(key, recovered);
     assert!(recovered.scenario_id.is_none());
     assert!(recovered.error_code.is_none());
@@ -635,8 +635,8 @@ fn parser_run_artifact_ref_optional_fields_none_serde() {
         generated_at_utc: None,
         outcome: None,
     };
-    let json = serde_json::to_string(&ref_).unwrap_or_default();
-    let recovered: ParserRunArtifactRef = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&ref_).unwrap();
+    let recovered: ParserRunArtifactRef = serde_json::from_str(&json).unwrap();
     assert!(recovered.generated_at_utc.is_none());
     assert!(recovered.outcome.is_none());
 }
@@ -732,8 +732,8 @@ fn schema_version_tag_parse_non_numeric_major_is_error() {
 #[test]
 fn schema_version_tag_serde_roundtrip() {
     let tag = SchemaVersionTag::parse("franken-engine.parser-evidence-index.v1").unwrap();
-    let json = serde_json::to_string(&tag).unwrap_or_default();
-    let recovered: SchemaVersionTag = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&tag).unwrap();
+    let recovered: SchemaVersionTag = serde_json::from_str(&json).unwrap();
     assert_eq!(tag, recovered);
 }
 
@@ -754,8 +754,8 @@ fn applied_schema_migration_serde_roundtrip() {
         to_schema: "family.v2".to_string(),
         affected_records: 42,
     };
-    let json = serde_json::to_string(&migration).unwrap_or_default();
-    let recovered: AppliedSchemaMigration = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&migration).unwrap();
+    let recovered: AppliedSchemaMigration = serde_json::from_str(&json).unwrap();
     assert_eq!(migration, recovered);
 }
 
@@ -769,8 +769,8 @@ fn schema_migration_boundary_serde_roundtrip() {
         from_schema: "family.v1".to_string(),
         to_schema: "family.v2".to_string(),
     };
-    let json = serde_json::to_string(&boundary).unwrap_or_default();
-    let recovered: SchemaMigrationBoundary = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&boundary).unwrap();
+    let recovered: SchemaMigrationBoundary = serde_json::from_str(&json).unwrap();
     assert_eq!(boundary, recovered);
 }
 
@@ -797,8 +797,8 @@ fn correlated_regression_serde_roundtrip() {
         replay_commands: vec!["./replay_a.sh".to_string()],
         severity: "high".to_string(),
     };
-    let json = serde_json::to_string(&regression).unwrap_or_default();
-    let recovered: CorrelatedRegression = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&regression).unwrap();
+    let recovered: CorrelatedRegression = serde_json::from_str(&json).unwrap();
     assert_eq!(regression, recovered);
 }
 

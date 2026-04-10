@@ -145,7 +145,7 @@ label_sha256 = "{malicious_hash}"
     ];
     let mut observations_text = String::new();
     for observation in observations {
-        observations_text.push_str(&serde_json::to_string(&observation).unwrap_or_default());
+        observations_text.push_str(&serde_json::to_string(&observation).unwrap());
         observations_text.push('\n');
     }
     write_file(&observations_jsonl, &observations_text);
@@ -273,7 +273,7 @@ fn runner_writes_summary_and_workload_evidence_lines() {
             .as_array()
             .expect("summary gate_failure_reasons array")
             .iter()
-            .any(|reason| reason.as_str().unwrap_or_default().contains("TPR")),
+            .any(|reason| reason.as_str().unwrap().contains("TPR")),
         "expected TPR-related gate failure in tiny-corpus run: {:?}",
         summary["gate_failure_reasons"]
     );
@@ -354,7 +354,7 @@ fn runner_can_fail_closed_after_emitting_red_evidence() {
             .as_array()
             .expect("gate failure reasons array")
             .iter()
-            .any(|reason| reason.as_str().unwrap_or_default().contains("TPR")),
+            .any(|reason| reason.as_str().unwrap().contains("TPR")),
         "expected TPR-related failure reasons in summary: {:?}",
         summary["gate_failure_reasons"]
     );

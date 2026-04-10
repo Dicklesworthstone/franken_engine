@@ -534,8 +534,8 @@ fn donor_harness_adapter_multiple_occurrences() {
 fn deterministic_rng_serde_preserves_state() {
     let mut rng = DeterministicRng::seeded(42);
     rng.next_u64(); // Advance state.
-    let json = serde_json::to_string(&rng).unwrap_or_default();
-    let restored: DeterministicRng = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&rng).unwrap();
+    let restored: DeterministicRng = serde_json::from_str(&json).unwrap();
     assert_eq!(rng, restored);
 }
 
@@ -558,8 +558,8 @@ fn conformance_asset_record_serde_roundtrip() {
         expected_outcome: Some("allow".to_string()),
         expected_evidence_type: Some("none".to_string()),
     };
-    let json = serde_json::to_string(&rec).unwrap_or_default();
-    let restored: ConformanceAssetRecord = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&rec).unwrap();
+    let restored: ConformanceAssetRecord = serde_json::from_str(&json).unwrap();
     assert_eq!(rec, restored);
 }
 
@@ -586,8 +586,8 @@ fn conformance_asset_manifest_serde_roundtrip() {
             expected_evidence_type: None,
         }],
     };
-    let json = serde_json::to_string(&manifest).unwrap_or_default();
-    let restored: ConformanceAssetManifest = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&manifest).unwrap();
+    let restored: ConformanceAssetManifest = serde_json::from_str(&json).unwrap();
     assert_eq!(manifest, restored);
 }
 
@@ -599,8 +599,8 @@ fn conformance_waiver_serde_roundtrip() {
         tracking_bead: "bd-99".to_string(),
         expiry_date: "2030-12-31".to_string(),
     };
-    let json = serde_json::to_string(&waiver).unwrap_or_default();
-    let restored: ConformanceWaiver = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&waiver).unwrap();
+    let restored: ConformanceWaiver = serde_json::from_str(&json).unwrap();
     assert_eq!(waiver, restored);
 }
 
@@ -614,24 +614,24 @@ fn conformance_waiver_set_serde_roundtrip() {
             expiry_date: "2030-01-01".to_string(),
         }],
     };
-    let json = serde_json::to_string(&set).unwrap_or_default();
-    let restored: ConformanceWaiverSet = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&set).unwrap();
+    let restored: ConformanceWaiverSet = serde_json::from_str(&json).unwrap();
     assert_eq!(set, restored);
 }
 
 #[test]
 fn conformance_repro_metadata_serde_roundtrip() {
     let meta = ConformanceReproMetadata::default();
-    let json = serde_json::to_string(&meta).unwrap_or_default();
-    let restored: ConformanceReproMetadata = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&meta).unwrap();
+    let restored: ConformanceReproMetadata = serde_json::from_str(&json).unwrap();
     assert_eq!(meta, restored);
 }
 
 #[test]
 fn conformance_runner_config_serde_roundtrip() {
     let config = ConformanceRunnerConfig::default();
-    let json = serde_json::to_string(&config).unwrap_or_default();
-    let restored: ConformanceRunnerConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&config).unwrap();
+    let restored: ConformanceRunnerConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(config, restored);
 }
 
@@ -659,8 +659,8 @@ fn conformance_log_event_serde_roundtrip() {
         duration_us: 100,
         error_detail: None,
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let restored: ConformanceLogEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let restored: ConformanceLogEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, restored);
 }
 
@@ -676,8 +676,8 @@ fn conformance_run_summary_serde_roundtrip() {
         errored: 0,
         env_fingerprint: "fp".to_string(),
     };
-    let json = serde_json::to_string(&summary).unwrap_or_default();
-    let restored: ConformanceRunSummary = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&summary).unwrap();
+    let restored: ConformanceRunSummary = serde_json::from_str(&json).unwrap();
     assert_eq!(summary, restored);
 }
 
@@ -699,8 +699,8 @@ fn conformance_run_result_serde_roundtrip() {
         },
         minimized_repros: vec![],
     };
-    let json = serde_json::to_string(&result).unwrap_or_default();
-    let restored: ConformanceRunResult = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&result).unwrap();
+    let restored: ConformanceRunResult = serde_json::from_str(&json).unwrap();
     assert_eq!(result, restored);
 }
 
@@ -713,8 +713,8 @@ fn conformance_delta_classification_serde_roundtrip() {
         actual: Some("false".to_string()),
         detail: "semantic shift".to_string(),
     };
-    let json = serde_json::to_string(&delta).unwrap_or_default();
-    let restored: ConformanceDeltaClassification = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&delta).unwrap();
+    let restored: ConformanceDeltaClassification = serde_json::from_str(&json).unwrap();
     assert_eq!(delta, restored);
 }
 
@@ -728,8 +728,8 @@ fn conformance_repro_environment_serde_roundtrip() {
         os: "linux".to_string(),
         arch: "x86_64".to_string(),
     };
-    let json = serde_json::to_string(&env).unwrap_or_default();
-    let restored: ConformanceReproEnvironment = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&env).unwrap();
+    let restored: ConformanceReproEnvironment = serde_json::from_str(&json).unwrap();
     assert_eq!(env, restored);
 }
 
@@ -741,8 +741,8 @@ fn conformance_replay_contract_serde_roundtrip() {
         verification_command: "verify".to_string(),
         verification_digest: "digest".to_string(),
     };
-    let json = serde_json::to_string(&replay).unwrap_or_default();
-    let restored: ConformanceReplayContract = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&replay).unwrap();
+    let restored: ConformanceReplayContract = serde_json::from_str(&json).unwrap();
     assert_eq!(replay, restored);
 }
 
@@ -752,8 +752,8 @@ fn conformance_issue_link_serde_roundtrip() {
         tracker: "beads".to_string(),
         issue_id: "bd-42".to_string(),
     };
-    let json = serde_json::to_string(&link).unwrap_or_default();
-    let restored: ConformanceIssueLink = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&link).unwrap();
+    let restored: ConformanceIssueLink = serde_json::from_str(&json).unwrap();
     assert_eq!(link, restored);
 }
 
@@ -765,8 +765,8 @@ fn conformance_run_linkage_serde_roundtrip() {
         decision_id: "dec-1".to_string(),
         ci_run_id: Some("ci-1".to_string()),
     };
-    let json = serde_json::to_string(&linkage).unwrap_or_default();
-    let restored: ConformanceRunLinkage = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&linkage).unwrap();
+    let restored: ConformanceRunLinkage = serde_json::from_str(&json).unwrap();
     assert_eq!(linkage, restored);
 }
 
@@ -784,9 +784,9 @@ fn conformance_minimized_failing_vector_serde_roundtrip() {
         },
         expected_output: "expected".to_string(),
     };
-    let json = serde_json::to_string(&vector).unwrap_or_default();
+    let json = serde_json::to_string(&vector).unwrap();
     let restored: ConformanceMinimizedFailingVector =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(vector, restored);
 }
 
@@ -802,8 +802,8 @@ fn conformance_minimization_summary_serde_roundtrip() {
         minimized_actual_lines: 2,
         preserved_failure_class: true,
     };
-    let json = serde_json::to_string(&summary).unwrap_or_default();
-    let restored: ConformanceMinimizationSummary = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&summary).unwrap();
+    let restored: ConformanceMinimizationSummary = serde_json::from_str(&json).unwrap();
     assert_eq!(summary, restored);
 }
 
@@ -814,8 +814,8 @@ fn donor_fixture_serde_roundtrip() {
         source: "var x = 1;".to_string(),
         observed_output: "1\n".to_string(),
     };
-    let json = serde_json::to_string(&fixture).unwrap_or_default();
-    let restored: DonorFixture = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&fixture).unwrap();
+    let restored: DonorFixture = serde_json::from_str(&json).unwrap();
     assert_eq!(fixture, restored);
 }
 
@@ -831,8 +831,8 @@ fn waiver_reason_code_serde_all_variants() {
         WaiverReasonCode::IntentionalDivergence,
         WaiverReasonCode::NotYetImplemented,
     ] {
-        let json = serde_json::to_string(&code).unwrap_or_default();
-        let restored: WaiverReasonCode = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&code).unwrap();
+        let restored: WaiverReasonCode = serde_json::from_str(&json).unwrap();
         assert_eq!(code, restored);
     }
 }
@@ -849,8 +849,8 @@ fn failure_class_serde_all_variants() {
         ConformanceFailureClass::Observability,
         ConformanceFailureClass::Performance,
     ] {
-        let json = serde_json::to_string(&class).unwrap_or_default();
-        let restored: ConformanceFailureClass = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&class).unwrap();
+        let restored: ConformanceFailureClass = serde_json::from_str(&json).unwrap();
         assert_eq!(class, restored);
     }
 }
@@ -867,8 +867,8 @@ fn failure_severity_serde_all_variants() {
         ConformanceFailureSeverity::Error,
         ConformanceFailureSeverity::Critical,
     ] {
-        let json = serde_json::to_string(&sev).unwrap_or_default();
-        let restored: ConformanceFailureSeverity = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&sev).unwrap();
+        let restored: ConformanceFailureSeverity = serde_json::from_str(&json).unwrap();
         assert_eq!(sev, restored);
     }
 }
@@ -887,8 +887,8 @@ fn delta_kind_serde_all_variants() {
         ConformanceDeltaKind::TimingChange,
         ConformanceDeltaKind::ErrorFormatChange,
     ] {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let restored: ConformanceDeltaKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let restored: ConformanceDeltaKind = serde_json::from_str(&json).unwrap();
         assert_eq!(kind, restored);
     }
 }
@@ -999,9 +999,9 @@ fn verify_replay_fails_on_wrong_digest() {
 #[test]
 fn repro_artifact_serde_roundtrip() {
     let artifact = build_test_repro_artifact("result: true", "result: false");
-    let json = serde_json::to_string(&artifact).unwrap_or_default();
+    let json = serde_json::to_string(&artifact).unwrap();
     let restored: ConformanceMinimizedReproArtifact =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(artifact, restored);
 }
 

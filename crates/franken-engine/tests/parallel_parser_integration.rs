@@ -78,8 +78,8 @@ fn serde_roundtrip<
 >(
     value: &T,
 ) {
-    let json = serde_json::to_string(value).unwrap_or_default();
-    let back: T = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(value).unwrap();
+    let back: T = serde_json::from_str(&json).unwrap();
     assert_eq!(*value, back);
 }
 

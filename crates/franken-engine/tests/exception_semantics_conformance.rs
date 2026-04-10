@@ -80,6 +80,7 @@ fn test_module(instructions: Vec<Ir3Instruction>) -> Ir3Module {
         arity: 0,
         frame_size: 16,
         name: Some("main".to_string()),
+        is_generator: false,
     });
     m
 }

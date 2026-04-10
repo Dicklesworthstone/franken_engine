@@ -200,8 +200,8 @@ fn delegation_chain_clone_equality() {
 #[test]
 fn delegation_chain_serde_round_trip() {
     let (chain, _, _) = valid_chain_fixture();
-    let json = serde_json::to_string(&chain).unwrap_or_default();
-    let restored: DelegationChain = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&chain).unwrap();
+    let restored: DelegationChain = serde_json::from_str(&json).unwrap();
     assert_eq!(chain, restored);
 }
 
@@ -233,8 +233,8 @@ fn verification_context_with_authorized_root() {
 fn verification_context_serde_round_trip() {
     let root_sk = make_sk(1);
     let ctx = make_ctx(&root_sk);
-    let json = serde_json::to_string(&ctx).unwrap_or_default();
-    let restored: DelegationVerificationContext = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&ctx).unwrap();
+    let restored: DelegationVerificationContext = serde_json::from_str(&json).unwrap();
     assert_eq!(ctx, restored);
 }
 
@@ -402,8 +402,8 @@ fn chain_error_is_std_error() {
 #[test]
 fn chain_error_serde_round_trip_empty_chain() {
     let err = ChainError::EmptyChain;
-    let json = serde_json::to_string(&err).unwrap_or_default();
-    let restored: ChainError = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&err).unwrap();
+    let restored: ChainError = serde_json::from_str(&json).unwrap();
     assert_eq!(err, restored);
 }
 
@@ -413,8 +413,8 @@ fn chain_error_serde_round_trip_depth_exceeded() {
         max_depth: 8,
         actual_depth: 12,
     };
-    let json = serde_json::to_string(&err).unwrap_or_default();
-    let restored: ChainError = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&err).unwrap();
+    let restored: ChainError = serde_json::from_str(&json).unwrap();
     assert_eq!(err, restored);
 }
 
@@ -429,8 +429,8 @@ fn chain_error_serde_round_trip_attenuation_violation() {
         child_capability_count: 3,
         amplified_capabilities: amplified,
     };
-    let json = serde_json::to_string(&err).unwrap_or_default();
-    let restored: ChainError = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&err).unwrap();
+    let restored: ChainError = serde_json::from_str(&json).unwrap();
     assert_eq!(err, restored);
 }
 
@@ -888,8 +888,8 @@ fn authorization_proof_serde_round_trip() {
     )
     .unwrap();
 
-    let json = serde_json::to_string(&proof).unwrap_or_default();
-    let restored: AuthorizationProof = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&proof).unwrap();
+    let restored: AuthorizationProof = serde_json::from_str(&json).unwrap();
     assert_eq!(proof, restored);
 }
 
@@ -993,8 +993,8 @@ fn link_summary_serde_round_trip() {
         not_before_tick: 100,
         expiry_tick: 1000,
     };
-    let json = serde_json::to_string(&summary).unwrap_or_default();
-    let restored: DelegationLinkSummary = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&summary).unwrap();
+    let restored: DelegationLinkSummary = serde_json::from_str(&json).unwrap();
     assert_eq!(summary, restored);
 }
 

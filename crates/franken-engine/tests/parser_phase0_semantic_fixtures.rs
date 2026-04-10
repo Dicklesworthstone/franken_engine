@@ -53,7 +53,7 @@ fn parse_goal(raw: &str) -> ParseGoal {
 fn parser_phase0_semantic_fixtures_match_expected_hashes() {
     let path = Path::new("tests/fixtures/parser_phase0_semantic_fixtures.json");
     let bytes = fs::read(path).expect("read parser phase0 fixture catalog");
-    let catalog: FixtureCatalog = serde_json::from_slice(&bytes).unwrap_or_default();
+    let catalog: FixtureCatalog = serde_json::from_slice(&bytes).unwrap();
 
     assert_eq!(
         catalog.schema_version,
@@ -101,7 +101,7 @@ fn parser_phase0_semantic_fixtures_match_expected_hashes() {
 fn print_parser_phase0_fixture_hashes() {
     let path = Path::new("tests/fixtures/parser_phase0_semantic_fixtures.json");
     let bytes = fs::read(path).expect("read parser phase0 fixture catalog");
-    let catalog: FixtureCatalog = serde_json::from_slice(&bytes).unwrap_or_default();
+    let catalog: FixtureCatalog = serde_json::from_slice(&bytes).unwrap();
     let parser = CanonicalEs2020Parser;
     let options = ParserOptions::default();
     for fixture in &catalog.fixtures {
@@ -226,7 +226,7 @@ fn parse_diagnostic_envelope_schema_and_taxonomy_versions() {
 fn fixture_catalog_has_at_least_one_script_and_one_module_fixture() {
     let path = Path::new("tests/fixtures/parser_phase0_semantic_fixtures.json");
     let bytes = fs::read(path).expect("read fixture catalog");
-    let catalog: FixtureCatalog = serde_json::from_slice(&bytes).unwrap_or_default();
+    let catalog: FixtureCatalog = serde_json::from_slice(&bytes).unwrap();
 
     let has_script = catalog.fixtures.iter().any(|f| f.goal == "script");
     let has_module = catalog.fixtures.iter().any(|f| f.goal == "module");
@@ -244,7 +244,7 @@ fn fixture_catalog_has_at_least_one_script_and_one_module_fixture() {
 fn fixture_ids_are_unique() {
     let path = Path::new("tests/fixtures/parser_phase0_semantic_fixtures.json");
     let bytes = fs::read(path).expect("read fixture catalog");
-    let catalog: FixtureCatalog = serde_json::from_slice(&bytes).unwrap_or_default();
+    let catalog: FixtureCatalog = serde_json::from_slice(&bytes).unwrap();
 
     let mut seen = std::collections::BTreeSet::new();
     for fixture in &catalog.fixtures {
@@ -260,7 +260,7 @@ fn fixture_ids_are_unique() {
 fn fixture_family_ids_are_nonempty() {
     let path = Path::new("tests/fixtures/parser_phase0_semantic_fixtures.json");
     let bytes = fs::read(path).expect("read fixture catalog");
-    let catalog: FixtureCatalog = serde_json::from_slice(&bytes).unwrap_or_default();
+    let catalog: FixtureCatalog = serde_json::from_slice(&bytes).unwrap();
 
     for fixture in &catalog.fixtures {
         assert!(
@@ -315,8 +315,8 @@ fn parser_mode_debug_is_nonempty() {
 #[test]
 fn parser_options_default_serde_roundtrip() {
     let options = ParserOptions::default();
-    let json = serde_json::to_string(&options).unwrap_or_default();
-    let recovered: ParserOptions = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&options).unwrap();
+    let recovered: ParserOptions = serde_json::from_str(&json).unwrap();
     assert_eq!(serde_json::to_string(&recovered).unwrap(), json);
 }
 
@@ -338,7 +338,7 @@ fn parse_goal_script_and_module_are_distinct() {
 fn fixture_catalog_schema_version_is_stable() {
     let path = Path::new("tests/fixtures/parser_phase0_semantic_fixtures.json");
     let bytes = fs::read(path).expect("read fixture catalog");
-    let catalog: FixtureCatalog = serde_json::from_slice(&bytes).unwrap_or_default();
+    let catalog: FixtureCatalog = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(
         catalog.schema_version,
         "franken-engine.parser-phase0.semantic-fixtures.v1"
@@ -349,7 +349,7 @@ fn fixture_catalog_schema_version_is_stable() {
 fn all_fixture_hashes_start_with_sha256_prefix() {
     let path = Path::new("tests/fixtures/parser_phase0_semantic_fixtures.json");
     let bytes = fs::read(path).expect("read fixture catalog");
-    let catalog: FixtureCatalog = serde_json::from_slice(&bytes).unwrap_or_default();
+    let catalog: FixtureCatalog = serde_json::from_slice(&bytes).unwrap();
     for fixture in &catalog.fixtures {
         assert!(
             fixture.expected_hash.starts_with("sha256:"),
@@ -363,7 +363,7 @@ fn all_fixture_hashes_start_with_sha256_prefix() {
 fn all_fixture_sources_are_nonempty() {
     let path = Path::new("tests/fixtures/parser_phase0_semantic_fixtures.json");
     let bytes = fs::read(path).expect("read fixture catalog");
-    let catalog: FixtureCatalog = serde_json::from_slice(&bytes).unwrap_or_default();
+    let catalog: FixtureCatalog = serde_json::from_slice(&bytes).unwrap();
     for fixture in &catalog.fixtures {
         assert!(
             !fixture.source.trim().is_empty(),
@@ -377,7 +377,7 @@ fn all_fixture_sources_are_nonempty() {
 fn fixture_goals_are_valid_values() {
     let path = Path::new("tests/fixtures/parser_phase0_semantic_fixtures.json");
     let bytes = fs::read(path).expect("read fixture catalog");
-    let catalog: FixtureCatalog = serde_json::from_slice(&bytes).unwrap_or_default();
+    let catalog: FixtureCatalog = serde_json::from_slice(&bytes).unwrap();
     for fixture in &catalog.fixtures {
         assert!(
             matches!(fixture.goal.as_str(), "script" | "module"),
@@ -446,8 +446,8 @@ fn parse_budget_kind_serde_roundtrip() {
         ParseBudgetKind::TokenCount,
         ParseBudgetKind::RecursionDepth,
     ] {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let recovered: ParseBudgetKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let recovered: ParseBudgetKind = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, kind);
     }
 }
@@ -465,8 +465,8 @@ fn parser_budget_default_has_positive_limits() {
 #[test]
 fn parser_budget_serde_roundtrip() {
     let budget = ParserBudget::default();
-    let json = serde_json::to_string(&budget).unwrap_or_default();
-    let recovered: ParserBudget = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&budget).unwrap();
+    let recovered: ParserBudget = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.max_source_bytes, budget.max_source_bytes);
     assert_eq!(recovered.max_token_count, budget.max_token_count);
     assert_eq!(recovered.max_recursion_depth, budget.max_recursion_depth);
@@ -498,8 +498,8 @@ fn parse_diagnostic_category_serde_roundtrip() {
         ParseDiagnosticCategory::Resource,
         ParseDiagnosticCategory::System,
     ] {
-        let json = serde_json::to_string(&cat).unwrap_or_default();
-        let recovered: ParseDiagnosticCategory = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&cat).unwrap();
+        let recovered: ParseDiagnosticCategory = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, cat);
     }
 }
@@ -522,8 +522,8 @@ fn parse_diagnostic_severity_serde_roundtrip() {
         ParseDiagnosticSeverity::Error,
         ParseDiagnosticSeverity::Fatal,
     ] {
-        let json = serde_json::to_string(&sev).unwrap_or_default();
-        let recovered: ParseDiagnosticSeverity = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&sev).unwrap();
+        let recovered: ParseDiagnosticSeverity = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, sev);
     }
 }
@@ -579,8 +579,8 @@ fn parse_error_code_diagnostic_message_template_is_nonempty() {
 #[test]
 fn parse_error_code_serde_roundtrip() {
     for code in ParseErrorCode::ALL {
-        let json = serde_json::to_string(&code).unwrap_or_default();
-        let recovered: ParseErrorCode = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&code).unwrap();
+        let recovered: ParseErrorCode = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, code);
     }
 }
@@ -620,8 +620,8 @@ fn semantic_error_code_stable_diagnostic_code_is_nonempty() {
 #[test]
 fn semantic_error_code_serde_roundtrip() {
     for code in SemanticErrorCode::ALL {
-        let json = serde_json::to_string(&code).unwrap_or_default();
-        let recovered: SemanticErrorCode = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&code).unwrap();
+        let recovered: SemanticErrorCode = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, code);
     }
 }
@@ -656,8 +656,8 @@ fn semantic_validation_result_new_is_valid() {
 #[test]
 fn semantic_validation_result_serde_roundtrip() {
     let result = SemanticValidationResult::new();
-    let json = serde_json::to_string(&result).unwrap_or_default();
-    let recovered: SemanticValidationResult = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&result).unwrap();
+    let recovered: SemanticValidationResult = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.taxonomy_version, result.taxonomy_version);
     assert!(recovered.is_valid());
 }
@@ -667,7 +667,7 @@ fn semantic_validation_result_serde_roundtrip() {
 #[test]
 fn parser_mode_serde_roundtrip() {
     let mode = ParserMode::ScalarReference;
-    let json = serde_json::to_string(&mode).unwrap_or_default();
-    let recovered: ParserMode = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&mode).unwrap();
+    let recovered: ParserMode = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, mode);
 }

@@ -1134,8 +1134,8 @@ fn drain_events_clears_buffer() {
 #[test]
 fn threshold_scope_serde_roundtrip() {
     for scope in ThresholdScope::ALL {
-        let json = serde_json::to_string(scope).unwrap_or_default();
-        let restored: ThresholdScope = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(scope).unwrap();
+        let restored: ThresholdScope = serde_json::from_str(&json).unwrap();
         assert_eq!(*scope, restored);
     }
 }
@@ -1144,8 +1144,8 @@ fn threshold_scope_serde_roundtrip() {
 fn share_holder_id_serde_roundtrip() {
     let sk = SigningKey::from_bytes([0x42; 32]);
     let holder = ShareHolderId::from_verification_key(&sk.verification_key());
-    let json = serde_json::to_string(&holder).unwrap_or_default();
-    let restored: ShareHolderId = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&holder).unwrap();
+    let restored: ShareHolderId = serde_json::from_str(&json).unwrap();
     assert_eq!(holder, restored);
 }
 
@@ -1153,8 +1153,8 @@ fn share_holder_id_serde_roundtrip() {
 fn policy_serde_roundtrip() {
     let keys = make_share_keys(3);
     let policy = create_test_policy(2, &keys);
-    let json = serde_json::to_string(&policy).unwrap_or_default();
-    let restored: ThresholdSigningPolicy = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&policy).unwrap();
+    let restored: ThresholdSigningPolicy = serde_json::from_str(&json).unwrap();
     assert_eq!(policy, restored);
 }
 
@@ -1177,8 +1177,8 @@ fn result_serde_roundtrip() {
         .unwrap();
     let result = ceremony.finalize(TEST_PREIMAGE).unwrap();
 
-    let json = serde_json::to_string(&result).unwrap_or_default();
-    let restored: ThresholdResult = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&result).unwrap();
+    let restored: ThresholdResult = serde_json::from_str(&json).unwrap();
     assert_eq!(result, restored);
 }
 
@@ -1198,8 +1198,8 @@ fn ceremony_serde_roundtrip_empty() {
     )
     .unwrap();
 
-    let json = serde_json::to_string(&ceremony).unwrap_or_default();
-    let restored: ThresholdCeremony = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&ceremony).unwrap();
+    let restored: ThresholdCeremony = serde_json::from_str(&json).unwrap();
     assert_eq!(ceremony.ceremony_id, restored.ceremony_id);
     assert_eq!(
         ceremony.signatures_collected(),
@@ -1270,8 +1270,8 @@ fn error_serde_roundtrip() {
         ThresholdError::NoScopedOperations,
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).unwrap_or_default();
-        let restored: ThresholdError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(err).unwrap();
+        let restored: ThresholdError = serde_json::from_str(&json).unwrap();
         assert_eq!(*err, restored);
     }
 }
@@ -1319,8 +1319,8 @@ fn threshold_event_serde_roundtrip() {
     ];
 
     for event in &events {
-        let json = serde_json::to_string(event).unwrap_or_default();
-        let restored: ThresholdEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(event).unwrap();
+        let restored: ThresholdEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(*event, restored);
     }
 }
@@ -1337,8 +1337,8 @@ fn share_refresh_result_serde_roundtrip() {
     let (_, refresh_result) =
         refresh_shares(&policy, &new_vks, SecurityEpoch::from_raw(2)).unwrap();
 
-    let json = serde_json::to_string(&refresh_result).unwrap_or_default();
-    let restored: ShareRefreshResult = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&refresh_result).unwrap();
+    let restored: ShareRefreshResult = serde_json::from_str(&json).unwrap();
     assert_eq!(refresh_result, restored);
 }
 

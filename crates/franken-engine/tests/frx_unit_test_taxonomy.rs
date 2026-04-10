@@ -251,8 +251,8 @@ fn unit_test_class_as_str_is_nonempty() {
 #[test]
 fn unit_test_class_serde_roundtrip() {
     for class in UnitTestClass::ALL {
-        let json = serde_json::to_string(&class).unwrap_or_default();
-        let recovered: UnitTestClass = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&class).unwrap();
+        let recovered: UnitTestClass = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, class);
     }
 }
@@ -274,8 +274,8 @@ fn lane_id_as_str_is_nonempty() {
 #[test]
 fn lane_id_serde_roundtrip() {
     for lane in LaneId::ALL {
-        let json = serde_json::to_string(&lane).unwrap_or_default();
-        let recovered: LaneId = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&lane).unwrap();
+        let recovered: LaneId = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, lane);
     }
 }
@@ -319,8 +319,8 @@ fn lane_id_all_variants_roundtrip() {
         LaneId::HybridRouter,
         LaneId::Verification,
     ] {
-        let json = serde_json::to_string(&lane).unwrap_or_default();
-        let recovered: LaneId = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&lane).unwrap();
+        let recovered: LaneId = serde_json::from_str(&json).unwrap();
         assert_eq!(lane, recovered);
     }
 }
@@ -334,8 +334,8 @@ fn unit_test_class_all_variants_roundtrip() {
         UnitTestClass::Regression,
         UnitTestClass::FaultInjection,
     ] {
-        let json = serde_json::to_string(&class).unwrap_or_default();
-        let recovered: UnitTestClass = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&class).unwrap();
+        let recovered: UnitTestClass = serde_json::from_str(&json).unwrap();
         assert_eq!(class, recovered);
     }
 }
@@ -502,8 +502,8 @@ fn default_bundle_fixture_registry_entries_have_nonempty_e2e_families() {
 #[test]
 fn default_bundle_serde_roundtrip_preserves_bundle() {
     let bundle = default_frx20_bundle();
-    let json = serde_json::to_string(&bundle).unwrap_or_default();
+    let json = serde_json::to_string(&bundle).unwrap();
     let recovered: unit_test_taxonomy::UnitTestTaxonomyBundle =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(bundle, recovered, "serde roundtrip must preserve bundle");
 }

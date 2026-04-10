@@ -1065,8 +1065,8 @@ fn outcome_serde_roundtrip() {
         GovernanceScorecardOutcome::Warning,
         GovernanceScorecardOutcome::Critical,
     ] {
-        let json = serde_json::to_string(&outcome).unwrap_or_default();
-        let back: GovernanceScorecardOutcome = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&outcome).unwrap();
+        let back: GovernanceScorecardOutcome = serde_json::from_str(&json).unwrap();
         assert_eq!(back, outcome);
     }
 }
@@ -1149,25 +1149,25 @@ fn multiple_dimension_failures_all_appear_in_blockers() {
 #[test]
 fn attested_receipt_observation_serde() {
     let obs = high_impact_receipt("serde-1", true);
-    let json = serde_json::to_string(&obs).unwrap_or_default();
-    let back: AttestedReceiptObservation = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&obs).unwrap();
+    let back: AttestedReceiptObservation = serde_json::from_str(&json).unwrap();
     assert_eq!(back, obs);
 }
 
 #[test]
 fn governance_scorecard_thresholds_serde() {
     let t = GovernanceScorecardThresholds::default();
-    let json = serde_json::to_string(&t).unwrap_or_default();
-    let back: GovernanceScorecardThresholds = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&t).unwrap();
+    let back: GovernanceScorecardThresholds = serde_json::from_str(&json).unwrap();
     assert_eq!(back, t);
 }
 
 #[test]
 fn full_publication_serde_roundtrip() {
     let p = publish(&baseline_request());
-    let json = serde_json::to_string(&p).unwrap_or_default();
+    let json = serde_json::to_string(&p).unwrap();
     let back: frankenengine_engine::governance_scorecard::GovernanceScorecardPublication =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(back.scorecard_id, p.scorecard_id);
     assert_eq!(back.outcome, p.outcome);
     assert_eq!(back.artifact_hash_hex, p.artifact_hash_hex);
@@ -1809,8 +1809,8 @@ fn enrichment_json_pretty_contains_all_top_level_fields() {
 #[test]
 fn enrichment_publication_serde_roundtrip_full() {
     let p = publish(&baseline_request());
-    let json = serde_json::to_string(&p).unwrap_or_default();
-    let recovered: GovernanceScorecardPublication = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&p).unwrap();
+    let recovered: GovernanceScorecardPublication = serde_json::from_str(&json).unwrap();
     assert_eq!(p.scorecard_id, recovered.scorecard_id);
     assert_eq!(p.outcome, recovered.outcome);
     assert_eq!(p.generated_at_ns, recovered.generated_at_ns);
@@ -2090,8 +2090,8 @@ fn enrichment_event_serde_roundtrip_with_all_fields() {
         dimension: Some("privacy_budget_health".to_string()),
         detail: Some("within budget".to_string()),
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let recovered: GovernanceScorecardEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let recovered: GovernanceScorecardEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, recovered);
 }
 
@@ -2108,8 +2108,8 @@ fn enrichment_event_serde_roundtrip_with_none_fields() {
         dimension: None,
         detail: None,
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let recovered: GovernanceScorecardEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let recovered: GovernanceScorecardEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, recovered);
 }
 
@@ -2122,8 +2122,8 @@ fn enrichment_attested_receipt_coverage_summary_serde_roundtrip() {
         coverage_millionths: 600_000,
         threshold_pass: false,
     };
-    let json = serde_json::to_string(&summary).unwrap_or_default();
-    let recovered: AttestedReceiptCoverageSummary = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&summary).unwrap();
+    let recovered: AttestedReceiptCoverageSummary = serde_json::from_str(&json).unwrap();
     assert_eq!(summary, recovered);
 }
 
@@ -2147,8 +2147,8 @@ fn enrichment_privacy_budget_health_summary_serde_roundtrip() {
         threshold_pass: true,
         near_term_exhaustion_warning: false,
     };
-    let json = serde_json::to_string(&summary).unwrap_or_default();
-    let recovered: PrivacyBudgetHealthSummary = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&summary).unwrap();
+    let recovered: PrivacyBudgetHealthSummary = serde_json::from_str(&json).unwrap();
     assert_eq!(summary, recovered);
 }
 
@@ -2166,9 +2166,9 @@ fn enrichment_moonshot_governor_decision_summary_serde_roundtrip() {
         killed_moonshots: 3,
         threshold_pass: true,
     };
-    let json = serde_json::to_string(&summary).unwrap_or_default();
+    let json = serde_json::to_string(&summary).unwrap();
     let recovered: MoonshotGovernorDecisionSummary =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(summary, recovered);
 }
 
@@ -2189,9 +2189,9 @@ fn enrichment_cross_repo_conformance_stability_summary_serde_roundtrip() {
         ]),
         threshold_pass: true,
     };
-    let json = serde_json::to_string(&summary).unwrap_or_default();
+    let json = serde_json::to_string(&summary).unwrap();
     let recovered: CrossRepoConformanceStabilitySummary =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(summary, recovered);
 }
 
@@ -2211,8 +2211,8 @@ fn enrichment_thresholds_serde_roundtrip_all_custom_values() {
         max_outstanding_exemptions: 5,
         fail_on_trend_regression: true,
     };
-    let json = serde_json::to_string(&thresholds).unwrap_or_default();
-    let recovered: GovernanceScorecardThresholds = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&thresholds).unwrap();
+    let recovered: GovernanceScorecardThresholds = serde_json::from_str(&json).unwrap();
     assert_eq!(thresholds, recovered);
 }
 
@@ -2223,8 +2223,8 @@ fn enrichment_request_serde_roundtrip_with_thresholds() {
         fail_on_trend_regression: true,
         ..GovernanceScorecardThresholds::default()
     });
-    let json = serde_json::to_string(&req).unwrap_or_default();
-    let recovered: GovernanceScorecardRequest = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&req).unwrap();
+    let recovered: GovernanceScorecardRequest = serde_json::from_str(&json).unwrap();
     assert!(recovered.thresholds.is_some());
     assert!(recovered.thresholds.unwrap().fail_on_trend_regression);
 }
@@ -2241,8 +2241,8 @@ fn enrichment_request_serde_roundtrip_with_historical() {
         conformance_pass_rate_millionths: 980_000,
         outcome: GovernanceScorecardOutcome::Healthy,
     });
-    let json = serde_json::to_string(&req).unwrap_or_default();
-    let recovered: GovernanceScorecardRequest = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&req).unwrap();
+    let recovered: GovernanceScorecardRequest = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.historical.len(), 1);
     assert_eq!(recovered.historical[0].scorecard_id, "hist-1");
 }

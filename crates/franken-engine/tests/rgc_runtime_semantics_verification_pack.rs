@@ -569,16 +569,16 @@ fn rgc_057_all_vectors_have_nonempty_minimal_repro_pointer() {
 #[test]
 fn rgc_057_contract_json_serde_roundtrip() {
     let contract = parse_contract();
-    let json = serde_json::to_string(&contract).unwrap_or_default();
-    let recovered: RuntimeSemanticsPackContract = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&contract).unwrap();
+    let recovered: RuntimeSemanticsPackContract = serde_json::from_str(&json).unwrap();
     assert_eq!(contract, recovered);
 }
 
 #[test]
 fn rgc_057_vectors_json_serde_roundtrip() {
     let vectors = parse_vectors();
-    let json = serde_json::to_string(&vectors).unwrap_or_default();
-    let recovered: RuntimeSemanticsVectors = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&vectors).unwrap();
+    let recovered: RuntimeSemanticsVectors = serde_json::from_str(&json).unwrap();
     assert_eq!(vectors, recovered);
 }
 
@@ -649,8 +649,8 @@ fn rgc_057_operator_verification_entries_are_nonempty() {
 #[test]
 fn rgc_057_contract_pretty_json_serde_roundtrip_preserves_equality() {
     let contract = parse_contract();
-    let pretty = serde_json::to_string_pretty(&contract).unwrap_or_default();
-    let recovered: RuntimeSemanticsPackContract = serde_json::from_str(&pretty).unwrap_or_default();
+    let pretty = serde_json::to_string_pretty(&contract).unwrap();
+    let recovered: RuntimeSemanticsPackContract = serde_json::from_str(&pretty).unwrap();
     assert_eq!(contract, recovered);
 }
 
@@ -754,8 +754,8 @@ fn rgc_057_failure_scenario_serde_roundtrip() {
         expected_error_code: "FE-RGC-057-TEST-0001".to_string(),
         expected_message_fragment: "test failure".to_string(),
     };
-    let json = serde_json::to_string(&scenario).unwrap_or_default();
-    let recovered: FailureScenario = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&scenario).unwrap();
+    let recovered: FailureScenario = serde_json::from_str(&json).unwrap();
     assert_eq!(scenario, recovered);
 }
 
@@ -767,8 +767,8 @@ fn rgc_057_gate_runner_serde_roundtrip() {
         strict_mode: "rch_only_no_local_fallback".to_string(),
         manifest_schema_version: "v1".to_string(),
     };
-    let json = serde_json::to_string(&gate_runner).unwrap_or_default();
-    let recovered: GateRunner = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&gate_runner).unwrap();
+    let recovered: GateRunner = serde_json::from_str(&json).unwrap();
     assert_eq!(gate_runner, recovered);
 }
 
@@ -786,8 +786,8 @@ fn rgc_057_runtime_semantics_vector_serde_roundtrip() {
         minimal_repro_pointer: "tests/foo.rs".to_string(),
         requires_replay: true,
     };
-    let json = serde_json::to_string(&vector).unwrap_or_default();
-    let recovered: RuntimeSemanticsVector = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&vector).unwrap();
+    let recovered: RuntimeSemanticsVector = serde_json::from_str(&json).unwrap();
     assert_eq!(vector, recovered);
 }
 

@@ -687,9 +687,9 @@ fn campaign_error_serde_roundtrip_all_variants() {
         },
     ];
     for variant in &variants {
-        let json = serde_json::to_string(variant).unwrap_or_default();
+        let json = serde_json::to_string(variant).unwrap();
         let roundtripped: adversarial_campaign::CampaignError =
-            serde_json::from_str(&json).unwrap_or_default();
+            serde_json::from_str(&json).unwrap();
         assert_eq!(*variant, roundtripped);
     }
 }
@@ -701,8 +701,8 @@ fn campaign_complexity_serde_roundtrip_all_variants() {
         CampaignComplexity::MultiStage,
         CampaignComplexity::Apt,
     ] {
-        let json = serde_json::to_string(&complexity).unwrap_or_default();
-        let roundtripped: CampaignComplexity = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&complexity).unwrap();
+        let roundtripped: CampaignComplexity = serde_json::from_str(&json).unwrap();
         assert_eq!(complexity, roundtripped);
     }
 }
@@ -717,9 +717,9 @@ fn attack_dimension_serde_roundtrip_all_variants() {
         adversarial_campaign::AttackDimension::Exfiltration,
     ];
     for dim in &dimensions {
-        let json = serde_json::to_string(dim).unwrap_or_default();
+        let json = serde_json::to_string(dim).unwrap();
         let roundtripped: adversarial_campaign::AttackDimension =
-            serde_json::from_str(&json).unwrap_or_default();
+            serde_json::from_str(&json).unwrap();
         assert_eq!(*dim, roundtripped);
     }
 }
@@ -732,8 +732,8 @@ fn containment_difficulty_serde_roundtrip_all_variants() {
         ContainmentDifficulty::Hard,
         ContainmentDifficulty::Critical,
     ] {
-        let json = serde_json::to_string(&diff).unwrap_or_default();
-        let roundtripped: ContainmentDifficulty = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&diff).unwrap();
+        let roundtripped: ContainmentDifficulty = serde_json::from_str(&json).unwrap();
         assert_eq!(diff, roundtripped);
     }
 }
@@ -747,8 +747,8 @@ fn mutation_operator_serde_roundtrip_all_variants() {
         MutationOperator::Deletion,
         MutationOperator::TemporalShift,
     ] {
-        let json = serde_json::to_string(&op).unwrap_or_default();
-        let roundtripped: MutationOperator = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&op).unwrap();
+        let roundtripped: MutationOperator = serde_json::from_str(&json).unwrap();
         assert_eq!(op, roundtripped);
     }
 }
@@ -760,8 +760,8 @@ fn campaign_runtime_serde_roundtrip_all_variants() {
         CampaignRuntime::NodeLts,
         CampaignRuntime::BunStable,
     ] {
-        let json = serde_json::to_string(&rt).unwrap_or_default();
-        let roundtripped: CampaignRuntime = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&rt).unwrap();
+        let roundtripped: CampaignRuntime = serde_json::from_str(&json).unwrap();
         assert_eq!(rt, roundtripped);
     }
 }
@@ -769,9 +769,9 @@ fn campaign_runtime_serde_roundtrip_all_variants() {
 #[test]
 fn campaign_attack_category_serde_roundtrip_all_variants() {
     for cat in adversarial_campaign::CampaignAttackCategory::ALL {
-        let json = serde_json::to_string(&cat).unwrap_or_default();
+        let json = serde_json::to_string(&cat).unwrap();
         let roundtripped: adversarial_campaign::CampaignAttackCategory =
-            serde_json::from_str(&json).unwrap_or_default();
+            serde_json::from_str(&json).unwrap();
         assert_eq!(cat, roundtripped);
     }
 }
@@ -787,9 +787,9 @@ fn adversarial_campaign_serde_roundtrip() {
     let campaign = generator
         .generate_campaign(CampaignComplexity::MultiStage)
         .expect("campaign");
-    let json = serde_json::to_string(&campaign).unwrap_or_default();
+    let json = serde_json::to_string(&campaign).unwrap();
     let roundtripped: adversarial_campaign::AdversarialCampaign =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(campaign, roundtripped);
 }
 
@@ -803,8 +803,8 @@ fn campaign_execution_result_serde_roundtrip() {
         evidence_atoms_before_detection: 20,
         novel_technique: false,
     };
-    let json = serde_json::to_string(&result).unwrap_or_default();
-    let roundtripped: CampaignExecutionResult = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&result).unwrap();
+    let roundtripped: CampaignExecutionResult = serde_json::from_str(&json).unwrap();
     assert_eq!(result, roundtripped);
 }
 
@@ -819,8 +819,8 @@ fn exploit_objective_score_serde_roundtrip() {
         novel_technique: false,
     };
     let score = ExploitObjectiveScore::from_result(&result).expect("score");
-    let json = serde_json::to_string(&score).unwrap_or_default();
-    let roundtripped: ExploitObjectiveScore = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&score).unwrap();
+    let roundtripped: ExploitObjectiveScore = serde_json::from_str(&json).unwrap();
     assert_eq!(score, roundtripped);
 }
 
@@ -1384,8 +1384,8 @@ fn campaign_generator_config_serde_roundtrip() {
         max_backpressure_queue: 100,
         promotion_threshold_millionths: 800_000,
     };
-    let json = serde_json::to_string(&config).unwrap_or_default();
-    let roundtripped: CampaignGeneratorConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&config).unwrap();
+    let roundtripped: CampaignGeneratorConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(config, roundtripped);
 }
 
@@ -1394,8 +1394,8 @@ fn campaign_generator_config_serde_roundtrip() {
 #[test]
 fn suppression_gate_config_serde_roundtrip() {
     let config = SuppressionGateConfig::default();
-    let json = serde_json::to_string(&config).unwrap_or_default();
-    let roundtripped: SuppressionGateConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&config).unwrap();
+    let roundtripped: SuppressionGateConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(config, roundtripped);
 }
 

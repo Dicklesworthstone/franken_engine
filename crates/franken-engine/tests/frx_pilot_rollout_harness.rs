@@ -665,9 +665,9 @@ fn frx_09_1_promote_confidence_is_above_ninety_percent() {
 #[test]
 fn frx_09_1_serde_roundtrip_preserves_contract() {
     let contract = parse_contract();
-    let serialized = serde_json::to_string(&contract).unwrap_or_default();
+    let serialized = serde_json::to_string(&contract).unwrap();
     let deserialized: PilotRolloutHarnessContract =
-        serde_json::from_str(&serialized).unwrap_or_default();
+        serde_json::from_str(&serialized).unwrap();
     assert_eq!(contract, deserialized);
 }
 
@@ -835,8 +835,8 @@ fn frx_09_1_strata_target_shares_are_all_positive() {
 #[test]
 fn frx_09_1_serde_roundtrip_via_pretty_print_preserves_contract() {
     let contract = parse_contract();
-    let pretty = serde_json::to_string_pretty(&contract).unwrap_or_default();
-    let recovered: PilotRolloutHarnessContract = serde_json::from_str(&pretty).unwrap_or_default();
+    let pretty = serde_json::to_string_pretty(&contract).unwrap();
+    let recovered: PilotRolloutHarnessContract = serde_json::from_str(&pretty).unwrap();
     assert_eq!(contract, recovered);
 }
 

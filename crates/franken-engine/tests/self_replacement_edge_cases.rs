@@ -789,8 +789,8 @@ fn self_replacement_error_display_all_tested_variants() {
 #[test]
 fn delegate_cell_manifest_serde_roundtrip() {
     let manifest = create_test_manifest();
-    let json = serde_json::to_string(&manifest).unwrap_or_default();
-    let recovered: DelegateCellManifest = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&manifest).unwrap();
+    let recovered: DelegateCellManifest = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.delegate_type, manifest.delegate_type);
     assert_eq!(recovered.slot_id, manifest.slot_id);
     assert_eq!(recovered.zone, manifest.zone);
@@ -803,8 +803,8 @@ fn delegate_cell_manifest_serde_roundtrip() {
 #[test]
 fn replacement_receipt_serde_roundtrip() {
     let receipt = create_valid_receipt(&test_slot_id(), 1000, 1);
-    let json = serde_json::to_string(&receipt).unwrap_or_default();
-    let recovered: ReplacementReceipt = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&receipt).unwrap();
+    let recovered: ReplacementReceipt = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.slot_id, receipt.slot_id);
     assert_eq!(recovered.old_cell_digest, receipt.old_cell_digest);
     assert_eq!(recovered.new_cell_digest, receipt.new_cell_digest);
@@ -831,8 +831,8 @@ fn promotion_decision_serde_roundtrip() {
         required_signatures: 0,
     })
     .unwrap();
-    let json = serde_json::to_string(&decision).unwrap_or_default();
-    let recovered: PromotionDecision = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&decision).unwrap();
+    let recovered: PromotionDecision = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.verdict, decision.verdict);
     assert_eq!(recovered.risk_level, decision.risk_level);
     assert_eq!(
@@ -857,8 +857,8 @@ fn lifecycle_new_starts_at_research() {
 fn lifecycle_serde_roundtrip() {
     let manifest = create_test_manifest();
     let lifecycle = ReplacementLifecycle::new(test_slot_id(), manifest);
-    let json = serde_json::to_string(&lifecycle).unwrap_or_default();
-    let recovered: ReplacementLifecycle = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&lifecycle).unwrap();
+    let recovered: ReplacementLifecycle = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.is_production(), lifecycle.is_production());
     assert_eq!(recovered.completed_stages(), lifecycle.completed_stages());
 }
@@ -902,8 +902,8 @@ fn delegate_type_serde_roundtrip_all_variants() {
         DelegateType::WasmBacked,
         DelegateType::ExternalProcess,
     ] {
-        let json = serde_json::to_string(&dt).unwrap_or_default();
-        let recovered: DelegateType = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&dt).unwrap();
+        let recovered: DelegateType = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, dt);
     }
 }
@@ -915,8 +915,8 @@ fn gate_verdict_serde_roundtrip_all_variants() {
         GateVerdict::Denied,
         GateVerdict::Inconclusive,
     ] {
-        let json = serde_json::to_string(&gv).unwrap_or_default();
-        let recovered: GateVerdict = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&gv).unwrap();
+        let recovered: GateVerdict = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, gv);
     }
 }
@@ -929,8 +929,8 @@ fn risk_level_serde_roundtrip_all_variants() {
         RiskLevel::High,
         RiskLevel::Critical,
     ] {
-        let json = serde_json::to_string(&rl).unwrap_or_default();
-        let recovered: RiskLevel = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&rl).unwrap();
+        let recovered: RiskLevel = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, rl);
     }
 }
@@ -943,8 +943,8 @@ fn replacement_stage_serde_roundtrip_all_variants() {
         ReplacementStage::Canary,
         ReplacementStage::Production,
     ] {
-        let json = serde_json::to_string(&stage).unwrap_or_default();
-        let recovered: ReplacementStage = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&stage).unwrap();
+        let recovered: ReplacementStage = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, stage);
     }
 }

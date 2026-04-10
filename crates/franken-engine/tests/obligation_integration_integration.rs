@@ -1361,8 +1361,8 @@ fn serde_two_phase_category_all_variants() {
         TwoPhaseCategory::EvidenceCommit,
     ];
     for variant in &variants {
-        let json = serde_json::to_string(variant).unwrap_or_default();
-        let restored: TwoPhaseCategory = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(variant).unwrap();
+        let restored: TwoPhaseCategory = serde_json::from_str(&json).unwrap();
         assert_eq!(*variant, restored);
     }
 }
@@ -1376,8 +1376,8 @@ fn serde_operation_phase_all_variants() {
         OperationPhase::Leaked,
     ];
     for variant in &variants {
-        let json = serde_json::to_string(variant).unwrap_or_default();
-        let restored: OperationPhase = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(variant).unwrap();
+        let restored: OperationPhase = serde_json::from_str(&json).unwrap();
         assert_eq!(*variant, restored);
     }
 }
@@ -1392,8 +1392,8 @@ fn serde_two_phase_operation() {
         trace_id: "trace-serde".to_string(),
         phase: OperationPhase::Committed,
     };
-    let json = serde_json::to_string(&op).unwrap_or_default();
-    let restored: TwoPhaseOperation = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&op).unwrap();
+    let restored: TwoPhaseOperation = serde_json::from_str(&json).unwrap();
     assert_eq!(op, restored);
 }
 
@@ -1410,8 +1410,8 @@ fn serde_obligation_event() {
         component: "obligation_integration".to_string(),
         phase: OperationPhase::Committed,
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let restored: ObligationEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let restored: ObligationEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, restored);
 }
 
@@ -1424,8 +1424,8 @@ fn serde_leak_record() {
         trace_id: "leaked-trace".to_string(),
         description: "evidence that leaked".to_string(),
     };
-    let json = serde_json::to_string(&leak).unwrap_or_default();
-    let restored: LeakRecord = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&leak).unwrap();
+    let restored: LeakRecord = serde_json::from_str(&json).unwrap();
     assert_eq!(leak, restored);
 }
 
@@ -1437,16 +1437,16 @@ fn serde_category_stats() {
         aborted: 2,
         leaked: 1,
     };
-    let json = serde_json::to_string(&stats).unwrap_or_default();
-    let restored: CategoryStats = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&stats).unwrap();
+    let restored: CategoryStats = serde_json::from_str(&json).unwrap();
     assert_eq!(stats, restored);
 }
 
 #[test]
 fn serde_leak_policy_both_variants() {
     for policy in [LeakPolicy::Lab, LeakPolicy::Production] {
-        let json = serde_json::to_string(&policy).unwrap_or_default();
-        let restored: LeakPolicy = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&policy).unwrap();
+        let restored: LeakPolicy = serde_json::from_str(&json).unwrap();
         assert_eq!(policy, restored);
     }
 }
@@ -1474,8 +1474,8 @@ fn serde_obligation_integration_error_all_variants() {
     ];
 
     for err in &errors {
-        let json = serde_json::to_string(err).unwrap_or_default();
-        let restored: ObligationIntegrationError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(err).unwrap();
+        let restored: ObligationIntegrationError = serde_json::from_str(&json).unwrap();
         assert_eq!(err, &restored);
     }
 }

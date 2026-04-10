@@ -73,7 +73,7 @@ fn binary_emits_expected_artifact_bundle() {
     let contract: BoundaryPolicyMappingContract = serde_json::from_slice(
         &fs::read(out_dir.join("boundary_policy_mapping_contract.json")).expect("read contract"),
     )
-    .unwrap_or_default();
+    .unwrap();
     assert!(contract.verify_integrity());
     assert_eq!(contract.coverage_count(), InternalFailureKind::all().len());
 
@@ -81,14 +81,14 @@ fn binary_emits_expected_artifact_bundle() {
         &fs::read(out_dir.join("control_plane_policy_diagnostics_report.json"))
             .expect("read report"),
     )
-    .unwrap_or_default();
+    .unwrap();
     assert_eq!(report.total_diagnostics, 8);
     assert!(report.release_blocked);
 
     let manifest: serde_json::Value = serde_json::from_slice(
         &fs::read(out_dir.join("run_manifest.json")).expect("read manifest"),
     )
-    .unwrap_or_default();
+    .unwrap();
     assert_eq!(manifest["operator_mapping_count"].as_u64(), Some(9));
     assert_eq!(manifest["operator_diagnostic_count"].as_u64(), Some(9));
     assert_eq!(manifest["control_plane_diagnostic_count"].as_u64(), Some(8));
@@ -105,7 +105,7 @@ fn binary_emits_expected_artifact_bundle() {
         &fs::read(out_dir.join("user_error_translation_matrix.json"))
             .expect("read translation matrix"),
     )
-    .unwrap_or_default();
+    .unwrap();
     assert_eq!(
         translation_matrix["operator_rows"]
             .as_array()
@@ -125,7 +125,7 @@ fn binary_emits_expected_artifact_bundle() {
         &fs::read(out_dir.join("remediation_linkage_index.json"))
             .expect("read remediation linkage index"),
     )
-    .unwrap_or_default();
+    .unwrap();
     let replay_links: Vec<&serde_json::Value> = remediation_index["operator_links"]
         .as_array()
         .expect("operator_links must be an array")
@@ -188,19 +188,19 @@ fn binary_honors_custom_epoch() {
     let contract: BoundaryPolicyMappingContract = serde_json::from_slice(
         &fs::read(out_dir.join("boundary_policy_mapping_contract.json")).expect("read contract"),
     )
-    .unwrap_or_default();
+    .unwrap();
     assert_eq!(contract.epoch.as_u64(), 42);
 
     let report: DiagnosticReport = serde_json::from_slice(
         &fs::read(out_dir.join("control_plane_policy_diagnostics_report.json"))
             .expect("read report"),
     )
-    .unwrap_or_default();
+    .unwrap();
     assert_eq!(report.epoch.as_u64(), 42);
 
     let trace_ids: serde_json::Value =
         serde_json::from_slice(&fs::read(out_dir.join("trace_ids.json")).expect("read trace ids"))
-            .unwrap_or_default();
+            .unwrap();
     assert_eq!(trace_ids["epoch_raw"].as_u64(), Some(42));
 }
 
@@ -253,7 +253,7 @@ fn binary_records_shell_command_and_rch_replay_contract() {
 
     let repro_lock: serde_json::Value =
         serde_json::from_slice(&fs::read(out_dir.join("repro.lock")).expect("read repro.lock"))
-            .unwrap_or_default();
+            .unwrap();
     let replay_command = repro_lock["replay_command"]
         .as_str()
         .expect("repro.lock replay_command must be a string");

@@ -341,27 +341,27 @@ fn all_schema_version_constants_are_pairwise_distinct() {
 #[test]
 fn guard_evidence_verdict_pass_serde_roundtrip() {
     let v = GuardEvidenceVerdict::Pass;
-    let json = serde_json::to_string(&v).unwrap_or_default();
+    let json = serde_json::to_string(&v).unwrap();
     assert_eq!(json, "\"pass\"");
-    let back: GuardEvidenceVerdict = serde_json::from_str(&json).unwrap_or_default();
+    let back: GuardEvidenceVerdict = serde_json::from_str(&json).unwrap();
     assert_eq!(v, back);
 }
 
 #[test]
 fn guard_evidence_verdict_missing_serde_roundtrip() {
     let v = GuardEvidenceVerdict::Missing;
-    let json = serde_json::to_string(&v).unwrap_or_default();
+    let json = serde_json::to_string(&v).unwrap();
     assert_eq!(json, "\"missing\"");
-    let back: GuardEvidenceVerdict = serde_json::from_str(&json).unwrap_or_default();
+    let back: GuardEvidenceVerdict = serde_json::from_str(&json).unwrap();
     assert_eq!(v, back);
 }
 
 #[test]
 fn guard_evidence_verdict_fail_serde_roundtrip() {
     let v = GuardEvidenceVerdict::Fail;
-    let json = serde_json::to_string(&v).unwrap_or_default();
+    let json = serde_json::to_string(&v).unwrap();
     assert_eq!(json, "\"fail\"");
-    let back: GuardEvidenceVerdict = serde_json::from_str(&json).unwrap_or_default();
+    let back: GuardEvidenceVerdict = serde_json::from_str(&json).unwrap();
     assert_eq!(v, back);
 }
 
@@ -372,8 +372,8 @@ fn guard_evidence_verdict_all_variants_roundtrip() {
         GuardEvidenceVerdict::Missing,
         GuardEvidenceVerdict::Fail,
     ] {
-        let json = serde_json::to_string(&v).unwrap_or_default();
-        let back: GuardEvidenceVerdict = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&v).unwrap();
+        let back: GuardEvidenceVerdict = serde_json::from_str(&json).unwrap();
         assert_eq!(v, back);
     }
 }
@@ -428,8 +428,8 @@ fn candidate_rollout_input_serde_roundtrip() {
         disposition: CandidateDisposition::Accept,
         retry_budget_policy: RetryBudgetPolicy::new(2, 2),
     };
-    let json = serde_json::to_string(&input).unwrap_or_default();
-    let back: CandidateRolloutInput = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&input).unwrap();
+    let back: CandidateRolloutInput = serde_json::from_str(&json).unwrap();
     assert_eq!(input, back);
 }
 
@@ -466,8 +466,8 @@ fn starvation_burst_observation_construction() {
 #[test]
 fn starvation_burst_observation_serde_roundtrip() {
     let obs = make_burst_obs(1, 100);
-    let json = serde_json::to_string_pretty(&obs).unwrap_or_default();
-    let back: StarvationBurstObservation = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&obs).unwrap();
+    let back: StarvationBurstObservation = serde_json::from_str(&json).unwrap();
     assert_eq!(obs, back);
 }
 
@@ -482,8 +482,8 @@ fn starvation_burst_observation_with_no_fallback_reason() {
         post_publish_source: FastPathReadSource::FastPath,
         post_publish_value: 7,
     };
-    let json = serde_json::to_string(&obs).unwrap_or_default();
-    let back: StarvationBurstObservation = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&obs).unwrap();
+    let back: StarvationBurstObservation = serde_json::from_str(&json).unwrap();
     assert_eq!(obs, back);
     assert!(back.during_write_fallback_reason.is_none());
 }
@@ -503,16 +503,16 @@ fn starvation_microbench_row_construction() {
 #[test]
 fn starvation_microbench_row_serde_roundtrip() {
     let row = make_passing_starvation_row("module-cache-snapshot");
-    let json = serde_json::to_string_pretty(&row).unwrap_or_default();
-    let back: StarvationMicrobenchRow = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&row).unwrap();
+    let back: StarvationMicrobenchRow = serde_json::from_str(&json).unwrap();
     assert_eq!(row, back);
 }
 
 #[test]
 fn starvation_microbench_row_fail_serde_roundtrip() {
     let row = make_failing_starvation_row("guardplane-calibration-snapshot");
-    let json = serde_json::to_string(&row).unwrap_or_default();
-    let back: StarvationMicrobenchRow = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&row).unwrap();
+    let back: StarvationMicrobenchRow = serde_json::from_str(&json).unwrap();
     assert_eq!(row, back);
     assert_eq!(back.verdict, GuardEvidenceVerdict::Fail);
 }
@@ -550,8 +550,8 @@ fn starvation_report_artifact_serde_roundtrip() {
             make_failing_starvation_row("guardplane-calibration-snapshot"),
         ],
     };
-    let json = serde_json::to_string_pretty(&artifact).unwrap_or_default();
-    let back: StarvationMicrobenchReportArtifact = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&artifact).unwrap();
+    let back: StarvationMicrobenchReportArtifact = serde_json::from_str(&json).unwrap();
     assert_eq!(artifact, back);
 }
 
@@ -578,16 +578,16 @@ fn loom_schedule_coverage_row_pass_construction() {
 #[test]
 fn loom_schedule_coverage_row_serde_roundtrip() {
     let row = make_missing_loom_row("module-cache-snapshot");
-    let json = serde_json::to_string_pretty(&row).unwrap_or_default();
-    let back: LoomScheduleCoverageRow = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&row).unwrap();
+    let back: LoomScheduleCoverageRow = serde_json::from_str(&json).unwrap();
     assert_eq!(row, back);
 }
 
 #[test]
 fn loom_schedule_coverage_row_pass_serde_roundtrip() {
     let row = make_passing_loom_row("governance-ledger-head-view");
-    let json = serde_json::to_string(&row).unwrap_or_default();
-    let back: LoomScheduleCoverageRow = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&row).unwrap();
+    let back: LoomScheduleCoverageRow = serde_json::from_str(&json).unwrap();
     assert_eq!(row, back);
 }
 
@@ -628,8 +628,8 @@ fn loom_coverage_report_artifact_serde_roundtrip() {
         report_hash: "loom_hash_xyz".to_string(),
         rows: vec![make_missing_loom_row("guardplane-calibration-snapshot")],
     };
-    let json = serde_json::to_string_pretty(&artifact).unwrap_or_default();
-    let back: LoomScheduleCoverageReportArtifact = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&artifact).unwrap();
+    let back: LoomScheduleCoverageReportArtifact = serde_json::from_str(&json).unwrap();
     assert_eq!(artifact, back);
 }
 
@@ -659,8 +659,8 @@ fn seqlock_safety_case_row_enabled_construction() {
 #[test]
 fn seqlock_safety_case_row_serde_roundtrip() {
     let row = make_safety_case_row_disabled("governance-ledger-head-view");
-    let json = serde_json::to_string_pretty(&row).unwrap_or_default();
-    let back: SeqlockSafetyCaseRow = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&row).unwrap();
+    let back: SeqlockSafetyCaseRow = serde_json::from_str(&json).unwrap();
     assert_eq!(row, back);
 }
 
@@ -679,8 +679,8 @@ fn seqlock_safety_case_artifact_construction() {
 #[test]
 fn seqlock_safety_case_artifact_serde_roundtrip() {
     let artifact = make_all_disabled_safety_artifact();
-    let json = serde_json::to_string_pretty(&artifact).unwrap_or_default();
-    let back: SeqlockSafetyCaseArtifact = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&artifact).unwrap();
+    let back: SeqlockSafetyCaseArtifact = serde_json::from_str(&json).unwrap();
     assert_eq!(artifact, back);
 }
 
@@ -712,8 +712,8 @@ fn seqlock_rollout_guard_row_serde_roundtrip() {
         ],
         disable_reasons: vec![],
     };
-    let json = serde_json::to_string_pretty(&row).unwrap_or_default();
-    let back: SeqlockRolloutGuardRow = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&row).unwrap();
+    let back: SeqlockRolloutGuardRow = serde_json::from_str(&json).unwrap();
     assert_eq!(row, back);
 }
 
@@ -730,8 +730,8 @@ fn seqlock_rollout_guard_artifact_all_disabled_construction() {
 #[test]
 fn seqlock_rollout_guard_artifact_serde_roundtrip() {
     let artifact = make_guard_artifact_all_disabled();
-    let json = serde_json::to_string_pretty(&artifact).unwrap_or_default();
-    let back: SeqlockRolloutGuardArtifact = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&artifact).unwrap();
+    let back: SeqlockRolloutGuardArtifact = serde_json::from_str(&json).unwrap();
     assert_eq!(artifact, back);
 }
 
@@ -739,8 +739,8 @@ fn seqlock_rollout_guard_artifact_serde_roundtrip() {
 fn seqlock_rollout_guard_artifact_one_enabled_serde_roundtrip() {
     let artifact = make_guard_artifact_one_enabled();
     assert!(!artifact.all_candidates_disabled);
-    let json = serde_json::to_string_pretty(&artifact).unwrap_or_default();
-    let back: SeqlockRolloutGuardArtifact = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&artifact).unwrap();
+    let back: SeqlockRolloutGuardArtifact = serde_json::from_str(&json).unwrap();
     assert_eq!(artifact, back);
 }
 
@@ -768,8 +768,8 @@ fn trace_ids_artifact_serde_roundtrip() {
         decision_id: "dec-1".to_string(),
         policy_id: "pol-1".to_string(),
     };
-    let json = serde_json::to_string_pretty(&artifact).unwrap_or_default();
-    let back: TraceIdsArtifact = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&artifact).unwrap();
+    let back: TraceIdsArtifact = serde_json::from_str(&json).unwrap();
     assert_eq!(artifact, back);
 }
 
@@ -781,8 +781,8 @@ fn trace_ids_artifact_with_single_trace() {
         decision_id: "decision.rgc.621c".to_string(),
         policy_id: "policy.rgc.621c".to_string(),
     };
-    let json = serde_json::to_string(&artifact).unwrap_or_default();
-    let back: TraceIdsArtifact = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&artifact).unwrap();
+    let back: TraceIdsArtifact = serde_json::from_str(&json).unwrap();
     assert_eq!(artifact, back);
 }
 
@@ -820,8 +820,8 @@ fn structured_log_event_serde_roundtrip_with_error_code() {
         candidate_id: Some("module-cache-snapshot".to_string()),
         detail: "no loom coverage wired".to_string(),
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let back: StructuredLogEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let back: StructuredLogEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, back);
     assert_eq!(back.error_code.as_deref(), Some("FE-SEQLOCK-ROLL-0001"));
 }
@@ -839,8 +839,8 @@ fn structured_log_event_serde_roundtrip_no_optional_fields() {
         candidate_id: None,
         detail: "candidate_count=3 all_candidates_disabled=true".to_string(),
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let back: StructuredLogEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let back: StructuredLogEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, back);
     assert!(back.error_code.is_none());
     assert!(back.candidate_id.is_none());
@@ -945,8 +945,8 @@ fn manifest_artifact_reference_serde_roundtrip() {
         path: "summary.md".to_string(),
         sha256: "sha256:0011223344556677".to_string(),
     };
-    let json = serde_json::to_string(&reference).unwrap_or_default();
-    let back: ManifestArtifactReference = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&reference).unwrap();
+    let back: ManifestArtifactReference = serde_json::from_str(&json).unwrap();
     assert_eq!(reference, back);
 }
 
@@ -986,8 +986,8 @@ fn docs_contract_fixture_serde_roundtrip() {
         ],
         required_artifacts: required_artifact_names(),
     };
-    let json = serde_json::to_string_pretty(&fixture).unwrap_or_default();
-    let back: DocsContractFixture = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&fixture).unwrap();
+    let back: DocsContractFixture = serde_json::from_str(&json).unwrap();
     assert_eq!(fixture, back);
 }
 

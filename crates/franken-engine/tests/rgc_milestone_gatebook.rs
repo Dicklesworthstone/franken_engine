@@ -359,8 +359,8 @@ fn rgc_012_operator_verification_commands_are_present() {
 #[test]
 fn rgc_012_serde_roundtrip_preserves_gatebook() {
     let gatebook = parse_gatebook();
-    let serialized = serde_json::to_string(&gatebook).unwrap_or_default();
-    let deserialized: MilestoneGatebook = serde_json::from_str(&serialized).unwrap_or_default();
+    let serialized = serde_json::to_string(&gatebook).unwrap();
+    let deserialized: MilestoneGatebook = serde_json::from_str(&serialized).unwrap();
     assert_eq!(gatebook, deserialized);
 }
 
@@ -645,8 +645,8 @@ fn rgc_012_all_rollback_trigger_ids_globally_unique() {
 fn rgc_012_serde_roundtrip_gate_track() {
     let gatebook = parse_gatebook();
     let track = gatebook.track.clone();
-    let json = serde_json::to_string(&track).unwrap_or_default();
-    let recovered: GateTrack = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&track).unwrap();
+    let recovered: GateTrack = serde_json::from_str(&json).unwrap();
     assert_eq!(track, recovered);
 }
 
@@ -654,8 +654,8 @@ fn rgc_012_serde_roundtrip_gate_track() {
 fn rgc_012_serde_roundtrip_automation_contract() {
     let gatebook = parse_gatebook();
     let auto = gatebook.automation.clone();
-    let json = serde_json::to_string(&auto).unwrap_or_default();
-    let recovered: AutomationContract = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&auto).unwrap();
+    let recovered: AutomationContract = serde_json::from_str(&json).unwrap();
     assert_eq!(auto, recovered);
 }
 
@@ -663,8 +663,8 @@ fn rgc_012_serde_roundtrip_automation_contract() {
 fn rgc_012_serde_roundtrip_blocker_class() {
     let gatebook = parse_gatebook();
     let class = gatebook.blocker_classes.first().unwrap().clone();
-    let json = serde_json::to_string(&class).unwrap_or_default();
-    let recovered: BlockerClass = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&class).unwrap();
+    let recovered: BlockerClass = serde_json::from_str(&json).unwrap();
     assert_eq!(class, recovered);
 }
 
@@ -672,8 +672,8 @@ fn rgc_012_serde_roundtrip_blocker_class() {
 fn rgc_012_serde_roundtrip_milestone_gate() {
     let gatebook = parse_gatebook();
     let gate = gatebook.milestones.first().unwrap().clone();
-    let json = serde_json::to_string(&gate).unwrap_or_default();
-    let recovered: MilestoneGate = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&gate).unwrap();
+    let recovered: MilestoneGate = serde_json::from_str(&json).unwrap();
     assert_eq!(gate, recovered);
 }
 
@@ -686,8 +686,8 @@ fn rgc_012_serde_roundtrip_transition_rule() {
         .first()
         .unwrap()
         .clone();
-    let json = serde_json::to_string(&rule).unwrap_or_default();
-    let recovered: TransitionRule = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&rule).unwrap();
+    let recovered: TransitionRule = serde_json::from_str(&json).unwrap();
     assert_eq!(rule, recovered);
 }
 

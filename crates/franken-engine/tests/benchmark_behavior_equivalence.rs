@@ -359,9 +359,9 @@ fn report_serde_roundtrip_preserves_all_fields() {
     ];
 
     let report = build_report("trace-serde", "decision-serde", "RGC-704B", &observations);
-    let json = serde_json::to_string(&report).unwrap_or_default();
+    let json = serde_json::to_string(&report).unwrap();
     let restored: frankenengine_engine::benchmark_behavior_equivalence::BehaviorEquivalenceReport =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
 
     assert_eq!(report.schema_version, restored.schema_version);
     assert_eq!(report.trace_id, restored.trace_id);
@@ -612,8 +612,8 @@ fn docs_contract_owner_hint_routes_correctly() {
 #[test]
 fn evidence_surface_serde_roundtrip_shipped_path() {
     let val = EvidenceSurface::ShippedPath;
-    let json = serde_json::to_string(&val).unwrap_or_default();
-    let back: EvidenceSurface = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&val).unwrap();
+    let back: EvidenceSurface = serde_json::from_str(&json).unwrap();
     assert_eq!(val, back);
     assert_eq!(json, "\"shipped_path\"");
 }
@@ -621,8 +621,8 @@ fn evidence_surface_serde_roundtrip_shipped_path() {
 #[test]
 fn evidence_surface_serde_roundtrip_library_only() {
     let val = EvidenceSurface::LibraryOnly;
-    let json = serde_json::to_string(&val).unwrap_or_default();
-    let back: EvidenceSurface = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&val).unwrap();
+    let back: EvidenceSurface = serde_json::from_str(&json).unwrap();
     assert_eq!(val, back);
     assert_eq!(json, "\"library_only\"");
 }
@@ -638,8 +638,8 @@ fn behavior_equivalence_class_serde_roundtrip_all_variants() {
         BehaviorEquivalenceClass::ShippedPathDrift,
     ];
     for variant in &variants {
-        let json = serde_json::to_string(variant).unwrap_or_default();
-        let back: BehaviorEquivalenceClass = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(variant).unwrap();
+        let back: BehaviorEquivalenceClass = serde_json::from_str(&json).unwrap();
         assert_eq!(*variant, back);
     }
 }
@@ -652,8 +652,8 @@ fn publication_disposition_serde_roundtrip_all_variants() {
         PublicationDisposition::Blocked,
     ];
     for variant in &variants {
-        let json = serde_json::to_string(variant).unwrap_or_default();
-        let back: PublicationDisposition = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(variant).unwrap();
+        let back: PublicationDisposition = serde_json::from_str(&json).unwrap();
         assert_eq!(*variant, back);
     }
 }
@@ -670,8 +670,8 @@ fn owner_route_hint_serde_roundtrip_all_variants() {
         OwnerRouteHint::DocsContract,
     ];
     for variant in &variants {
-        let json = serde_json::to_string(variant).unwrap_or_default();
-        let back: OwnerRouteHint = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(variant).unwrap();
+        let back: OwnerRouteHint = serde_json::from_str(&json).unwrap();
         assert_eq!(*variant, back);
     }
 }

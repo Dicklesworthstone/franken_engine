@@ -87,13 +87,13 @@ fn event_jsonl_full(
 ) -> String {
     let ec = error_code
         .map(|e| format!(r#","error_code":"{e}""#))
-        .unwrap_or_default();
+        .unwrap();
     let rc = replay
         .map(|r| format!(r#","replay_command":"{r}""#))
-        .unwrap_or_default();
+        .unwrap();
     let sc = scenario_id
         .map(|s| format!(r#","scenario_id":"{s}""#))
-        .unwrap_or_default();
+        .unwrap();
     format!(
         r#"{{"schema_version":"{schema}","trace_id":"{trace}","decision_id":"d-{trace}","policy_id":"pol","component":"{component}","event":"{event}","outcome":"{outcome}"{ec}{rc}{sc}}}"#,
     )

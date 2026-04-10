@@ -376,9 +376,9 @@ fn deterministic_double_parse() {
 #[test]
 fn serde_roundtrip_preserves_contract() {
     let original = parse_contract();
-    let serialized = serde_json::to_string(&original).unwrap_or_default();
+    let serialized = serde_json::to_string(&original).unwrap();
     let deserialized: ExecutionProfileContract =
-        serde_json::from_str(&serialized).unwrap_or_default();
+        serde_json::from_str(&serialized).unwrap();
     assert_eq!(original, deserialized);
 }
 

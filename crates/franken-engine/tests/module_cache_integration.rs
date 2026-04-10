@@ -112,7 +112,7 @@ fn load_s3fifo_contract_fixture() -> S3FifoBaselineComparatorContractFixture {
         ))
         .expect("read S3-FIFO baseline contract fixture"),
     )
-    .unwrap_or_default()
+    .unwrap()
 }
 
 fn load_s3fifo_runner_script() -> String {

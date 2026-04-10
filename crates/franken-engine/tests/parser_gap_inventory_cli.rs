@@ -190,8 +190,8 @@ fn parser_gap_inventory_counts_match() {
 #[test]
 fn parser_gap_inventory_serde_roundtrip() {
     let inventory = pgap::parser_gap_inventory();
-    let json = serde_json::to_string(&inventory).unwrap_or_default();
-    let recovered: ParserGapInventory = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&inventory).unwrap();
+    let recovered: ParserGapInventory = serde_json::from_str(&json).unwrap();
     assert_eq!(inventory.sites.len(), recovered.sites.len());
 }
 
@@ -362,8 +362,8 @@ fn parser_gap_site_id_source_reference_nonempty() {
 fn parser_gap_descriptor_serde_roundtrip() {
     for site in ParserGapSiteId::ALL {
         let desc = ParserGapSiteDescriptor::from_site(site);
-        let json = serde_json::to_string(&desc).unwrap_or_default();
-        let recovered: ParserGapSiteDescriptor = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&desc).unwrap();
+        let recovered: ParserGapSiteDescriptor = serde_json::from_str(&json).unwrap();
         assert_eq!(desc.site_id, recovered.site_id);
     }
 }
@@ -441,8 +441,8 @@ fn parser_gap_inventory_diagnostic_codes_all_start_with_fe() {
 #[test]
 fn parser_gap_inventory_json_pretty_roundtrip() {
     let inventory = pgap::parser_gap_inventory();
-    let pretty = serde_json::to_string_pretty(&inventory).unwrap_or_default();
-    let recovered: ParserGapInventory = serde_json::from_str(&pretty).unwrap_or_default();
+    let pretty = serde_json::to_string_pretty(&inventory).unwrap();
+    let recovered: ParserGapInventory = serde_json::from_str(&pretty).unwrap();
     assert_eq!(inventory.sites.len(), recovered.sites.len());
     assert_eq!(inventory.schema_version, recovered.schema_version);
 }
@@ -483,8 +483,8 @@ fn parser_gap_inventory_fail_closed_plus_open_plus_resolved_equals_total() {
 fn parser_gap_stage_serde_roundtrip() {
     let stages = [ParserGapStage::Ir0ToIr1, ParserGapStage::Ir1ToIr3];
     for stage in stages {
-        let json = serde_json::to_string(&stage).unwrap_or_default();
-        let recovered: ParserGapStage = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&stage).unwrap();
+        let recovered: ParserGapStage = serde_json::from_str(&json).unwrap();
         assert_eq!(stage.as_str(), recovered.as_str());
     }
 }
@@ -497,8 +497,8 @@ fn parser_gap_remediation_status_serde_roundtrip() {
         ParserGapRemediationStatus::Resolved,
     ];
     for status in statuses {
-        let json = serde_json::to_string(&status).unwrap_or_default();
-        let recovered: ParserGapRemediationStatus = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&status).unwrap();
+        let recovered: ParserGapRemediationStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(status.as_str(), recovered.as_str());
     }
 }

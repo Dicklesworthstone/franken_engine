@@ -214,8 +214,8 @@ fn regression_gate_input_serde_roundtrip() {
         )],
         Vec::new(),
     );
-    let json = serde_json::to_string(&input).unwrap_or_default();
-    let recovered: RegressionGateInput = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&input).unwrap();
+    let recovered: RegressionGateInput = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.trace_id, "trace-1");
     assert_eq!(recovered.observations.len(), 1);
 }
@@ -249,8 +249,8 @@ fn regression_observation_serde_roundtrip() {
         30_000,
         None,
     );
-    let json = serde_json::to_string(&obs).unwrap_or_default();
-    let recovered: RegressionObservation = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&obs).unwrap();
+    let recovered: RegressionObservation = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.workload_id, "workload-a");
     assert_eq!(recovered.baseline_ns, 50_000);
     assert!(recovered.commit_id.is_none());
@@ -267,8 +267,8 @@ fn regression_waiver_serde_roundtrip() {
         1_800_000_000,
         "host jitter",
     );
-    let json = serde_json::to_string(&waiver).unwrap_or_default();
-    let recovered: RegressionWaiver = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&waiver).unwrap();
+    let recovered: RegressionWaiver = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.waiver_id, "waiver-1");
     assert_eq!(recovered.owner, "oncall-alice");
 }
@@ -288,8 +288,8 @@ fn regression_gate_policy_default_values() {
 #[test]
 fn regression_gate_policy_serde_roundtrip() {
     let policy = RegressionGatePolicy::default();
-    let json = serde_json::to_string(&policy).unwrap_or_default();
-    let recovered: RegressionGatePolicy = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&policy).unwrap();
+    let recovered: RegressionGatePolicy = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, policy);
 }
 
@@ -521,8 +521,8 @@ fn regression_gate_policy_custom_thresholds_roundtrip() {
         max_p_value_millionths: 25_000,
         max_culprits: 3,
     };
-    let json = serde_json::to_string(&policy).unwrap_or_default();
-    let recovered: RegressionGatePolicy = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&policy).unwrap();
+    let recovered: RegressionGatePolicy = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, policy);
 }
 
@@ -551,8 +551,8 @@ fn regression_observation_all_fields_serde_roundtrip() {
         p_value_millionths: 50_000,
         commit_id: None,
     };
-    let json = serde_json::to_string(&obs).unwrap_or_default();
-    let recovered: RegressionObservation = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&obs).unwrap();
+    let recovered: RegressionObservation = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.workload_id, "w1");
 }
 
@@ -622,7 +622,7 @@ fn gate_report_serde_roundtrip() {
         Vec::new(),
     );
     let report = evaluate_performance_regression_gate(&input, &RegressionGatePolicy::default());
-    let json = serde_json::to_string(&report).unwrap_or_default();
+    let json = serde_json::to_string(&report).unwrap();
     let value: serde_json::Value = serde_json::from_str(&json).expect("parse as value");
     assert!(value.is_object());
     assert!(value.get("schema_version").is_some());
@@ -713,8 +713,8 @@ fn regression_waiver_fields_preserved_in_serde() {
         1_900_000_000,
         "approved perf hit for new feature",
     );
-    let json = serde_json::to_string(&waiver).unwrap_or_default();
-    let recovered: RegressionWaiver = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&waiver).unwrap();
+    let recovered: RegressionWaiver = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.workload_id, "workload-fc");
     assert_eq!(recovered.expires_at_unix_seconds, 1_900_000_000);
     assert_eq!(recovered.reason, "approved perf hit for new feature");
@@ -811,8 +811,8 @@ fn regression_severity_serde_roundtrip_all_variants() {
         RegressionSeverity::High,
         RegressionSeverity::Critical,
     ] {
-        let json = serde_json::to_string(&severity).unwrap_or_default();
-        let recovered: RegressionSeverity = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&severity).unwrap();
+        let recovered: RegressionSeverity = serde_json::from_str(&json).unwrap();
         assert_eq!(severity, recovered);
     }
 }
@@ -845,8 +845,8 @@ fn regression_status_display_matches_as_str() {
 #[test]
 fn regression_status_serde_roundtrip() {
     for status in [RegressionStatus::Active, RegressionStatus::Waived] {
-        let json = serde_json::to_string(&status).unwrap_or_default();
-        let recovered: RegressionStatus = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&status).unwrap();
+        let recovered: RegressionStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(status, recovered);
     }
 }
@@ -978,7 +978,7 @@ fn regression_finding_serde_roundtrip() {
     );
     let report = evaluate_performance_regression_gate(&input, &RegressionGatePolicy::default());
     let finding = &report.regressions[0];
-    let json = serde_json::to_string(finding).unwrap_or_default();
+    let json = serde_json::to_string(finding).unwrap();
     let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
     assert!(value.get("workload_id").is_some());
     assert!(value.get("severity").is_some());
@@ -1008,7 +1008,7 @@ fn culprit_candidate_serde_roundtrip() {
     let report = evaluate_performance_regression_gate(&input, &RegressionGatePolicy::default());
     assert!(!report.culprit_ranking.is_empty());
     let culprit = &report.culprit_ranking[0];
-    let json = serde_json::to_string(culprit).unwrap_or_default();
+    let json = serde_json::to_string(culprit).unwrap();
     let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
     assert!(value.get("rank").is_some());
     assert!(value.get("workload_id").is_some());

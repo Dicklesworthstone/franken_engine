@@ -328,8 +328,8 @@ fn sample_workload_has_correct_id() {
 #[test]
 fn sample_workload_serde_roundtrip() {
     let workload = sample_workload();
-    let json = serde_json::to_string(&workload).unwrap_or_default();
-    let recovered: WorkloadSamples = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&workload).unwrap();
+    let recovered: WorkloadSamples = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.workload_id, workload.workload_id);
 }
 
@@ -345,8 +345,8 @@ fn statistical_validation_policy_default_has_thresholds() {
 #[test]
 fn statistical_validation_policy_serde_roundtrip() {
     let policy = StatisticalValidationPolicy::default();
-    let json = serde_json::to_string(&policy).unwrap_or_default();
-    let recovered: StatisticalValidationPolicy = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&policy).unwrap();
+    let recovered: StatisticalValidationPolicy = serde_json::from_str(&json).unwrap();
     assert_eq!(
         recovered.thresholds.fail_regression_millionths,
         policy.thresholds.fail_regression_millionths
@@ -675,8 +675,8 @@ fn workload_outcome_serde_roundtrip_all_variants() {
         WorkloadOutcome::Fail,
         WorkloadOutcome::Quarantine,
     ] {
-        let json = serde_json::to_string(&outcome).unwrap_or_default();
-        let recovered: WorkloadOutcome = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&outcome).unwrap();
+        let recovered: WorkloadOutcome = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, outcome);
     }
 }
@@ -738,8 +738,8 @@ fn finding_code_serde_roundtrip_all_variants() {
         FindingCode::RegressionFail,
         FindingCode::RegressionWarn,
     ] {
-        let json = serde_json::to_string(&code).unwrap_or_default();
-        let recovered: FindingCode = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&code).unwrap();
+        let recovered: FindingCode = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, code);
     }
 }
@@ -754,8 +754,8 @@ fn validation_finding_serde_roundtrip() {
         code: FindingCode::RegressionFail,
         message: "regression exceeds threshold".to_string(),
     };
-    let json = serde_json::to_string(&finding).unwrap_or_default();
-    let recovered: ValidationFinding = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&finding).unwrap();
+    let recovered: ValidationFinding = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, finding);
 }
 
@@ -767,8 +767,8 @@ fn sample_stats_ns_serde_roundtrip() {
         stddev_ns: 50,
         cv_millionths: 10_000,
     };
-    let json = serde_json::to_string(&stats).unwrap_or_default();
-    let recovered: SampleStatsNs = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&stats).unwrap();
+    let recovered: SampleStatsNs = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, stats);
 }
 
@@ -778,8 +778,8 @@ fn confidence_interval_ns_serde_roundtrip() {
         lower_ns: -50,
         upper_ns: 150,
     };
-    let json = serde_json::to_string(&ci).unwrap_or_default();
-    let recovered: ConfidenceIntervalNs = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&ci).unwrap();
+    let recovered: ConfidenceIntervalNs = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, ci);
 }
 
@@ -790,8 +790,8 @@ fn outlier_summary_serde_roundtrip() {
         candidate_removed: 3,
         method: "mad".to_string(),
     };
-    let json = serde_json::to_string(&summary).unwrap_or_default();
-    let recovered: OutlierSummary = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&summary).unwrap();
+    let recovered: OutlierSummary = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, summary);
 }
 
@@ -809,8 +809,8 @@ fn outlier_policy_default_values() {
 #[test]
 fn outlier_policy_serde_roundtrip() {
     let policy = OutlierPolicy::default();
-    let json = serde_json::to_string(&policy).unwrap_or_default();
-    let recovered: OutlierPolicy = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&policy).unwrap();
+    let recovered: OutlierPolicy = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, policy);
 }
 
@@ -828,8 +828,8 @@ fn statistical_thresholds_default_values() {
 #[test]
 fn statistical_thresholds_serde_roundtrip() {
     let t = StatisticalThresholds::default();
-    let json = serde_json::to_string(&t).unwrap_or_default();
-    let recovered: StatisticalThresholds = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&t).unwrap();
+    let recovered: StatisticalThresholds = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, t);
 }
 
@@ -920,8 +920,8 @@ fn pipeline_report_serde_roundtrip() {
         vec![sample_workload()],
     );
     let report = evaluate_statistical_validation(&input, &policy);
-    let json = serde_json::to_string(&report).unwrap_or_default();
-    let recovered: StatisticalValidationReport = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&report).unwrap();
+    let recovered: StatisticalValidationReport = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.trace_id, report.trace_id);
     assert_eq!(recovered.promote_allowed, report.promote_allowed);
     assert_eq!(recovered.verdicts.len(), report.verdicts.len());
@@ -964,8 +964,8 @@ fn statistical_validation_log_event_serde_roundtrip() {
         outcome: "fail".to_string(),
         error_code: Some("FE-RGC-702-REGRESSION-0004".to_string()),
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let recovered: StatisticalValidationLogEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let recovered: StatisticalValidationLogEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, event);
 }
 
@@ -1003,8 +1003,8 @@ fn workload_validation_verdict_serde_roundtrip() {
             message: "regression".to_string(),
         }],
     };
-    let json = serde_json::to_string(&verdict).unwrap_or_default();
-    let recovered: WorkloadValidationVerdict = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&verdict).unwrap();
+    let recovered: WorkloadValidationVerdict = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.workload_id, verdict.workload_id);
     assert_eq!(recovered.outcome, WorkloadOutcome::Fail);
     assert_eq!(recovered.findings.len(), 1);

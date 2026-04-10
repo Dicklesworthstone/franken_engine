@@ -75,7 +75,7 @@ fn latest_run_dir(artifact_root: &Path) -> PathBuf {
 }
 
 fn write_json_fixture(path: &Path, value: &serde_json::Value) {
-    fs::write(path, serde_json::to_vec_pretty(value).unwrap_or_default())
+    fs::write(path, serde_json::to_vec_pretty(value).unwrap())
         .unwrap_or_else(|err| panic!("failed to write {}: {err}", path.display()));
 }
 
@@ -249,8 +249,8 @@ fn docs_contract_fixture_matches_checked_in_fixture() {
 #[test]
 fn docs_contract_fixture_serde_round_trip() {
     let fixture = build_docs_contract_fixture();
-    let json = serde_json::to_string_pretty(&fixture).unwrap_or_default();
-    let deserialized: DocsContractFixture = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&fixture).unwrap();
+    let deserialized: DocsContractFixture = serde_json::from_str(&json).unwrap();
     assert_eq!(fixture, deserialized);
 }
 
@@ -322,8 +322,8 @@ fn artifact_context_default_fields_are_populated() {
 fn artifact_context_serde_round_trip() {
     let dir = temp_dir("ctx-serde");
     let context = ArtifactContext::new(&dir);
-    let json = serde_json::to_string(&context).unwrap_or_default();
-    let deser: ArtifactContext = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&context).unwrap();
+    let deser: ArtifactContext = serde_json::from_str(&json).unwrap();
     assert_eq!(context.run_id, deser.run_id);
     assert_eq!(context.trace_id, deser.trace_id);
     assert_eq!(context.decision_id, deser.decision_id);
@@ -791,19 +791,19 @@ fn guard_evidence_verdict_serde_round_trip() {
         GuardEvidenceVerdict::Missing,
         GuardEvidenceVerdict::Fail,
     ] {
-        let json = serde_json::to_string(&verdict).unwrap_or_default();
-        let deser: GuardEvidenceVerdict = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&verdict).unwrap();
+        let deser: GuardEvidenceVerdict = serde_json::from_str(&json).unwrap();
         assert_eq!(verdict, deser);
     }
 }
 
 #[test]
 fn guard_evidence_verdict_serde_uses_snake_case() {
-    let pass_json = serde_json::to_string(&GuardEvidenceVerdict::Pass).unwrap_or_default();
+    let pass_json = serde_json::to_string(&GuardEvidenceVerdict::Pass).unwrap();
     assert_eq!(pass_json, "\"pass\"");
-    let missing_json = serde_json::to_string(&GuardEvidenceVerdict::Missing).unwrap_or_default();
+    let missing_json = serde_json::to_string(&GuardEvidenceVerdict::Missing).unwrap();
     assert_eq!(missing_json, "\"missing\"");
-    let fail_json = serde_json::to_string(&GuardEvidenceVerdict::Fail).unwrap_or_default();
+    let fail_json = serde_json::to_string(&GuardEvidenceVerdict::Fail).unwrap();
     assert_eq!(fail_json, "\"fail\"");
 }
 
@@ -827,8 +827,8 @@ fn required_artifact_names_count() {
 #[test]
 fn bundle_report_serde_round_trip() {
     let (dir, bundle) = emit_bundle("bundle-serde");
-    let json = serde_json::to_string(&bundle).unwrap_or_default();
-    let deser: BundleWriteReport = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&bundle).unwrap();
+    let deser: BundleWriteReport = serde_json::from_str(&json).unwrap();
     assert_eq!(
         bundle.rollout_guard.guard_hash,
         deser.rollout_guard.guard_hash
@@ -844,8 +844,8 @@ fn bundle_report_serde_round_trip() {
 #[test]
 fn rollout_guard_artifact_serde_round_trip() {
     let (dir, bundle) = emit_bundle("guard-serde");
-    let json = serde_json::to_string_pretty(&bundle.rollout_guard).unwrap_or_default();
-    let deser: SeqlockRolloutGuardArtifact = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&bundle.rollout_guard).unwrap();
+    let deser: SeqlockRolloutGuardArtifact = serde_json::from_str(&json).unwrap();
     assert_eq!(bundle.rollout_guard, deser);
     let _ = fs::remove_dir_all(&dir);
 }
@@ -853,8 +853,8 @@ fn rollout_guard_artifact_serde_round_trip() {
 #[test]
 fn safety_case_artifact_serde_round_trip() {
     let (dir, bundle) = emit_bundle("sc-serde");
-    let json = serde_json::to_string_pretty(&bundle.safety_case).unwrap_or_default();
-    let deser: SeqlockSafetyCaseArtifact = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&bundle.safety_case).unwrap();
+    let deser: SeqlockSafetyCaseArtifact = serde_json::from_str(&json).unwrap();
     assert_eq!(bundle.safety_case, deser);
     let _ = fs::remove_dir_all(&dir);
 }
@@ -862,8 +862,8 @@ fn safety_case_artifact_serde_round_trip() {
 #[test]
 fn starvation_report_serde_round_trip() {
     let (dir, bundle) = emit_bundle("sr-serde");
-    let json = serde_json::to_string_pretty(&bundle.starvation_report).unwrap_or_default();
-    let deser: StarvationMicrobenchReportArtifact = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&bundle.starvation_report).unwrap();
+    let deser: StarvationMicrobenchReportArtifact = serde_json::from_str(&json).unwrap();
     assert_eq!(bundle.starvation_report, deser);
     let _ = fs::remove_dir_all(&dir);
 }
@@ -871,8 +871,8 @@ fn starvation_report_serde_round_trip() {
 #[test]
 fn loom_coverage_serde_round_trip() {
     let (dir, bundle) = emit_bundle("lc-serde");
-    let json = serde_json::to_string_pretty(&bundle.loom_coverage).unwrap_or_default();
-    let deser: LoomScheduleCoverageReportArtifact = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&bundle.loom_coverage).unwrap();
+    let deser: LoomScheduleCoverageReportArtifact = serde_json::from_str(&json).unwrap();
     assert_eq!(bundle.loom_coverage, deser);
     let _ = fs::remove_dir_all(&dir);
 }
@@ -999,8 +999,8 @@ fn manifest_artifact_reference_serde_round_trip() {
         path: "seqlock_rollout_guard.json".to_string(),
         sha256: "sha256:abc123".to_string(),
     };
-    let json = serde_json::to_string(&reference).unwrap_or_default();
-    let deser: ManifestArtifactReference = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&reference).unwrap();
+    let deser: ManifestArtifactReference = serde_json::from_str(&json).unwrap();
     assert_eq!(reference, deser);
 }
 

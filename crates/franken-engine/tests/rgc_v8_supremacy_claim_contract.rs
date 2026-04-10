@@ -194,7 +194,7 @@ struct GateEvent {
 fn load_fixture() -> ContractFixture {
     let path = Path::new("tests/fixtures/rgc_v8_supremacy_claim_contract_v1.json");
     let bytes = fs::read(path).expect("read V8 supremacy contract fixture");
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    serde_json::from_slice(&bytes).unwrap()
 }
 
 fn load_doc() -> String {
@@ -993,7 +993,7 @@ fn gate_event_serde_roundtrip() {
         phrase_class: "target".to_string(),
         replay_command: "./run.sh ci".to_string(),
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse json");
     assert_eq!(parsed["outcome"], "forbid");
     assert_eq!(parsed["error_code"], "ERR-001");

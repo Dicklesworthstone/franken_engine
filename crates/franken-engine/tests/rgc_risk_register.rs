@@ -261,8 +261,8 @@ fn rgc_013_operator_verification_commands_are_present() {
 #[test]
 fn rgc_013_serde_roundtrip_preserves_register() {
     let register = parse_risk_register();
-    let serialized = serde_json::to_string(&register).unwrap_or_default();
-    let deserialized: RiskRegister = serde_json::from_str(&serialized).unwrap_or_default();
+    let serialized = serde_json::to_string(&register).unwrap();
+    let deserialized: RiskRegister = serde_json::from_str(&serialized).unwrap();
     assert_eq!(register, deserialized);
 }
 
@@ -593,8 +593,8 @@ fn rgc_013_debug_format_contains_schema_version() {
 fn rgc_013_serde_roundtrip_preserves_risk_entry() {
     let register = parse_risk_register();
     for risk in &register.risks {
-        let serialized = serde_json::to_string(risk).unwrap_or_default();
-        let deserialized: RiskEntry = serde_json::from_str(&serialized).unwrap_or_default();
+        let serialized = serde_json::to_string(risk).unwrap();
+        let deserialized: RiskEntry = serde_json::from_str(&serialized).unwrap();
         assert_eq!(risk, &deserialized);
     }
 }
@@ -602,8 +602,8 @@ fn rgc_013_serde_roundtrip_preserves_risk_entry() {
 #[test]
 fn rgc_013_serde_roundtrip_preserves_review_policy() {
     let register = parse_risk_register();
-    let serialized = serde_json::to_string(&register.review_policy).unwrap_or_default();
-    let deserialized: ReviewPolicy = serde_json::from_str(&serialized).unwrap_or_default();
+    let serialized = serde_json::to_string(&register.review_policy).unwrap();
+    let deserialized: ReviewPolicy = serde_json::from_str(&serialized).unwrap();
     assert_eq!(register.review_policy, deserialized);
 }
 
@@ -611,8 +611,8 @@ fn rgc_013_serde_roundtrip_preserves_review_policy() {
 fn rgc_013_serde_roundtrip_preserves_milestone_review() {
     let register = parse_risk_register();
     for review in &register.review_policy.milestone_reviews {
-        let serialized = serde_json::to_string(review).unwrap_or_default();
-        let deserialized: MilestoneReview = serde_json::from_str(&serialized).unwrap_or_default();
+        let serialized = serde_json::to_string(review).unwrap();
+        let deserialized: MilestoneReview = serde_json::from_str(&serialized).unwrap();
         assert_eq!(review, &deserialized);
     }
 }
@@ -792,7 +792,7 @@ fn rgc_013_clone_risk_track_preserves_fields() {
 #[test]
 fn rgc_013_serialized_json_contains_all_top_level_keys() {
     let register = parse_risk_register();
-    let serialized = serde_json::to_string(&register).unwrap_or_default();
+    let serialized = serde_json::to_string(&register).unwrap();
     let value: serde_json::Value = serde_json::from_str(&serialized).expect("parse as value");
     let obj = value.as_object().expect("should be object");
     let required_keys = [

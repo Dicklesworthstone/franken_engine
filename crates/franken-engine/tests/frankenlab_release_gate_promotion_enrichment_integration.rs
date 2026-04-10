@@ -96,8 +96,8 @@ fn promoted_gate_kind_original_and_correction_mutually_exclusive() {
 #[test]
 fn promoted_gate_kind_serde_roundtrip_all() {
     for kind in &PromotedGateKind::ALL {
-        let json = serde_json::to_string(kind).unwrap_or_default();
-        let deser: PromotedGateKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(kind).unwrap();
+        let deser: PromotedGateKind = serde_json::from_str(&json).unwrap();
         assert_eq!(*kind, deser, "roundtrip failed for {:?}", kind);
     }
 }
@@ -149,8 +149,8 @@ fn promotion_status_serde_roundtrip_all() {
         PromotionStatus::FullyPromoted,
     ];
     for s in &statuses {
-        let json = serde_json::to_string(s).unwrap_or_default();
-        let deser: PromotionStatus = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(s).unwrap();
+        let deser: PromotionStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(*s, deser, "roundtrip failed for {:?}", s);
     }
 }
@@ -199,8 +199,8 @@ fn with_rationale_sets_rationale() {
 fn blocker_threshold_serde_roundtrip() {
     let t = BlockerThreshold::strict(PromotedGateKind::BudgetPropagation)
         .with_rationale("budget must propagate");
-    let json = serde_json::to_string(&t).unwrap_or_default();
-    let deser: BlockerThreshold = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&t).unwrap();
+    let deser: BlockerThreshold = serde_json::from_str(&json).unwrap();
     assert_eq!(t.gate, deser.gate);
     assert_eq!(t.max_failures, deser.max_failures);
     assert_eq!(t.rationale, deser.rationale);
@@ -259,8 +259,8 @@ fn triage_severity_serde_roundtrip_all() {
         TriageSeverity::Critical,
     ];
     for s in &severities {
-        let json = serde_json::to_string(s).unwrap_or_default();
-        let deser: TriageSeverity = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(s).unwrap();
+        let deser: TriageSeverity = serde_json::from_str(&json).unwrap();
         assert_eq!(*s, deser, "roundtrip failed for {:?}", s);
     }
 }
@@ -471,8 +471,8 @@ fn gate_promotion_entry_serde_roundtrip() {
     entry.passing_runs = 48;
     entry.cross_validated = true;
 
-    let json = serde_json::to_string(&entry).unwrap_or_default();
-    let deser: GatePromotionEntry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&entry).unwrap();
+    let deser: GatePromotionEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(entry.gate, deser.gate);
     assert_eq!(entry.status, deser.status);
     assert_eq!(entry.oracle_invariants, deser.oracle_invariants);

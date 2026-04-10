@@ -256,8 +256,8 @@ fn slot_kind_serde_round_trip_all_variants() {
         SlotKind::HostcallDispatch,
         SlotKind::Builtins,
     ] {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let recovered: SlotKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let recovered: SlotKind = serde_json::from_str(&json).unwrap();
         assert_eq!(kind, recovered);
     }
 }
@@ -274,8 +274,8 @@ fn slot_capability_serde_round_trip_all_variants() {
         SlotCapability::TriggerGc,
         SlotCapability::EmitEvidence,
     ] {
-        let json = serde_json::to_string(&cap).unwrap_or_default();
-        let recovered: SlotCapability = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&cap).unwrap();
+        let recovered: SlotCapability = serde_json::from_str(&json).unwrap();
         assert_eq!(cap, recovered);
     }
 }
@@ -325,8 +325,8 @@ fn authority_envelope_serde_round_trip() {
         required: vec![SlotCapability::ReadSource],
         permitted: vec![SlotCapability::ReadSource, SlotCapability::EmitIr],
     };
-    let json = serde_json::to_string(&envelope).unwrap_or_default();
-    let recovered: AuthorityEnvelope = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&envelope).unwrap();
+    let recovered: AuthorityEnvelope = serde_json::from_str(&json).unwrap();
     assert_eq!(envelope, recovered);
 }
 
@@ -347,8 +347,8 @@ fn promotion_status_serde_round_trip_all_variants() {
         },
     ];
     for status in variants {
-        let json = serde_json::to_string(&status).unwrap_or_default();
-        let recovered: PromotionStatus = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&status).unwrap();
+        let recovered: PromotionStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(status, recovered);
     }
 }
@@ -356,8 +356,8 @@ fn promotion_status_serde_round_trip_all_variants() {
 #[test]
 fn ga_release_guard_verdict_serde_round_trip() {
     for verdict in [GaReleaseGuardVerdict::Pass, GaReleaseGuardVerdict::Blocked] {
-        let json = serde_json::to_string(&verdict).unwrap_or_default();
-        let recovered: GaReleaseGuardVerdict = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&verdict).unwrap();
+        let recovered: GaReleaseGuardVerdict = serde_json::from_str(&json).unwrap();
         assert_eq!(verdict, recovered);
     }
 }
@@ -380,8 +380,8 @@ fn duplicate_slot_registration_returns_error() {
 fn ga_signed_lineage_artifact_serde_round_trip() {
     let parser_id = SlotId::new("parser").expect("valid");
     let artifact = lineage_artifact(&parser_id, "sha256:old", "sha256:new");
-    let json = serde_json::to_string(&artifact).unwrap_or_default();
-    let recovered: GaSignedLineageArtifact = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&artifact).unwrap();
+    let recovered: GaSignedLineageArtifact = serde_json::from_str(&json).unwrap();
     assert_eq!(artifact.slot_id, recovered.slot_id);
     assert_eq!(
         artifact.former_delegate_digest,
@@ -403,17 +403,17 @@ fn ga_release_guard_config_serde_round_trip() {
         non_core_delegate_limit: Some(5),
         lineage_dashboard_ref: "frankentui://test".to_string(),
     };
-    let json = serde_json::to_string(&config).unwrap_or_default();
-    let recovered: GaReleaseGuardConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&config).unwrap();
+    let recovered: GaReleaseGuardConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(config, recovered);
 }
 
 #[test]
 fn slot_registry_new_is_empty() {
     let registry = SlotRegistry::new();
-    let json = serde_json::to_string(&registry).unwrap_or_default();
-    let recovered: SlotRegistry = serde_json::from_str(&json).unwrap_or_default();
-    assert_eq!(json, serde_json::to_string(&recovered).unwrap_or_default());
+    let json = serde_json::to_string(&registry).unwrap();
+    let recovered: SlotRegistry = serde_json::from_str(&json).unwrap();
+    assert_eq!(json, serde_json::to_string(&recovered).unwrap());
 }
 
 #[test]
@@ -441,8 +441,8 @@ fn narrower_authority_permitted_is_subset_of_test_authority() {
 #[test]
 fn slot_id_serde_round_trip() {
     let id = SlotId::new("parser").expect("valid");
-    let json = serde_json::to_string(&id).unwrap_or_default();
-    let recovered: SlotId = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&id).unwrap();
+    let recovered: SlotId = serde_json::from_str(&json).unwrap();
     assert_eq!(id, recovered);
     assert_eq!(id.as_str(), recovered.as_str());
 }
@@ -454,8 +454,8 @@ fn slot_kind_serde_roundtrip() {
         SlotKind::IrLowering,
         SlotKind::Interpreter,
     ] {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let recovered: SlotKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let recovered: SlotKind = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, kind);
     }
 }
@@ -463,8 +463,8 @@ fn slot_kind_serde_roundtrip() {
 #[test]
 fn promotion_status_delegate_serde_roundtrip() {
     let status = PromotionStatus::Delegate;
-    let json = serde_json::to_string(&status).unwrap_or_default();
-    let recovered: PromotionStatus = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&status).unwrap();
+    let recovered: PromotionStatus = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, status);
 }
 
@@ -581,8 +581,8 @@ fn ga_release_guard_input_serde_round_trip() {
         SlotId::new("interpreter").expect("valid"),
     ]);
     let input = pipeline_input(core_slots, Some(3));
-    let json = serde_json::to_string(&input).unwrap_or_default();
-    let recovered: GaReleaseGuardInput = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&input).unwrap();
+    let recovered: GaReleaseGuardInput = serde_json::from_str(&json).unwrap();
     assert_eq!(input.trace_id, recovered.trace_id);
     assert_eq!(input.decision_id, recovered.decision_id);
     assert_eq!(input.policy_id, recovered.policy_id);
@@ -741,8 +741,8 @@ fn promotion_transition_serde_roundtrip_all_variants() {
         PromotionTransition::DemotedToDelegate,
         PromotionTransition::RolledBack,
     ] {
-        let json = serde_json::to_string(&transition).unwrap_or_default();
-        let recovered: PromotionTransition = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&transition).unwrap();
+        let recovered: PromotionTransition = serde_json::from_str(&json).unwrap();
         assert_eq!(transition, recovered);
     }
 }
@@ -755,8 +755,8 @@ fn lineage_event_serde_roundtrip() {
         timestamp: "2026-03-14T00:00:00Z".to_string(),
         receipt_id: Some("receipt-001".to_string()),
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let recovered: LineageEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let recovered: LineageEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, recovered);
 
     let event_no_receipt = LineageEvent {
@@ -765,8 +765,8 @@ fn lineage_event_serde_roundtrip() {
         timestamp: "2026-03-14T00:00:00Z".to_string(),
         receipt_id: None,
     };
-    let json2 = serde_json::to_string(&event_no_receipt).unwrap_or_default();
-    let recovered2: LineageEvent = serde_json::from_str(&json2).unwrap_or_default();
+    let json2 = serde_json::to_string(&event_no_receipt).unwrap();
+    let recovered2: LineageEvent = serde_json::from_str(&json2).unwrap();
     assert_eq!(event_no_receipt, recovered2);
 }
 
@@ -775,8 +775,8 @@ fn slot_entry_serde_roundtrip() {
     let mut registry = SlotRegistry::new();
     let parser_id = register_slot(&mut registry, "parser", SlotKind::Parser, "sha256:d-p");
     let entry = registry.get(&parser_id).expect("slot should exist").clone();
-    let json = serde_json::to_string(&entry).unwrap_or_default();
-    let recovered: SlotEntry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&entry).unwrap();
+    let recovered: SlotEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(entry, recovered);
 }
 
@@ -786,8 +786,8 @@ fn release_slot_class_display_and_serde() {
     assert_eq!(ReleaseSlotClass::NonCore.to_string(), "non-core");
 
     for class in [ReleaseSlotClass::Core, ReleaseSlotClass::NonCore] {
-        let json = serde_json::to_string(&class).unwrap_or_default();
-        let recovered: ReleaseSlotClass = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&class).unwrap();
+        let recovered: ReleaseSlotClass = serde_json::from_str(&json).unwrap();
         assert_eq!(class, recovered);
     }
 }
@@ -835,8 +835,8 @@ fn slot_registry_error_serde_roundtrip() {
         from: "delegate".to_string(),
         to: "promoted".to_string(),
     };
-    let json = serde_json::to_string(&err).unwrap_or_default();
-    let recovered: SlotRegistryError = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&err).unwrap();
+    let recovered: SlotRegistryError = serde_json::from_str(&json).unwrap();
     assert_eq!(err, recovered);
 }
 
@@ -876,8 +876,8 @@ fn ga_release_guard_error_serde_roundtrip() {
     let err = GaReleaseGuardError::UnknownCoreSlot {
         slot_id: "parser".to_string(),
     };
-    let json = serde_json::to_string(&err).unwrap_or_default();
-    let recovered: GaReleaseGuardError = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&err).unwrap();
+    let recovered: GaReleaseGuardError = serde_json::from_str(&json).unwrap();
     assert_eq!(err, recovered);
 }
 
@@ -896,8 +896,8 @@ fn slot_replacement_signal_serde_roundtrip() {
         throughput_uplift_millionths: 200_000,
         security_risk_reduction_millionths: -100_000,
     };
-    let json = serde_json::to_string(&signal).unwrap_or_default();
-    let recovered: SlotReplacementSignal = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&signal).unwrap();
+    let recovered: SlotReplacementSignal = serde_json::from_str(&json).unwrap();
     assert_eq!(signal, recovered);
 }
 
@@ -928,8 +928,8 @@ fn replacement_progress_error_serde_roundtrip() {
         slot_id: "parser".to_string(),
         detail: "weight is zero".to_string(),
     };
-    let json = serde_json::to_string(&err).unwrap_or_default();
-    let recovered: ReplacementProgressError = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&err).unwrap();
+    let recovered: ReplacementProgressError = serde_json::from_str(&json).unwrap();
     assert_eq!(err, recovered);
 }
 
@@ -1014,8 +1014,8 @@ fn core_slot_exemption_serde_roundtrip() {
         remediation_deadline_epoch: 200,
         expires_at_epoch: 150,
     };
-    let json = serde_json::to_string(&exemption).unwrap_or_default();
-    let recovered: CoreSlotExemption = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&exemption).unwrap();
+    let recovered: CoreSlotExemption = serde_json::from_str(&json).unwrap();
     assert_eq!(exemption, recovered);
 }
 
@@ -1030,9 +1030,9 @@ fn ga_release_guard_artifact_serde_roundtrip() {
     let artifact = registry
         .evaluate_ga_release_guard(&input)
         .expect("guard evaluation");
-    let json = serde_json::to_string(&artifact).unwrap_or_default();
+    let json = serde_json::to_string(&artifact).unwrap();
     let recovered: frankenengine_engine::slot_registry::GaReleaseGuardArtifact =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(artifact, recovered);
 }
 
@@ -1046,8 +1046,8 @@ fn slot_registry_serde_roundtrip_with_data() {
         SlotKind::Interpreter,
         "sha256:d-i",
     );
-    let json = serde_json::to_string(&registry).unwrap_or_default();
-    let recovered: SlotRegistry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&registry).unwrap();
+    let recovered: SlotRegistry = serde_json::from_str(&json).unwrap();
     assert_eq!(registry.len(), recovered.len());
     assert_eq!(registry.native_count(), recovered.native_count());
     assert_eq!(registry.delegate_count(), recovered.delegate_count());

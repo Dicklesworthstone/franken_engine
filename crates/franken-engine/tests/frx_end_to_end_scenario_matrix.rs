@@ -574,8 +574,8 @@ fn parse_scenario_class_panics_on_unknown() {
 #[test]
 fn scenario_class_serde_roundtrip() {
     for class in ScenarioClass::ALL {
-        let json = serde_json::to_string(&class).unwrap_or_default();
-        let recovered: ScenarioClass = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&class).unwrap();
+        let recovered: ScenarioClass = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, class);
     }
 }
@@ -876,8 +876,8 @@ fn scenario_class_all_has_six_variants() {
 #[test]
 fn deterministic_runner_config_serde_roundtrip() {
     let config = DeterministicRunnerConfig::default();
-    let json = serde_json::to_string(&config).unwrap_or_default();
-    let recovered: DeterministicRunnerConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&config).unwrap();
+    let recovered: DeterministicRunnerConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(config, recovered);
     assert_eq!(recovered.trace_prefix, "trace");
 }
@@ -885,7 +885,7 @@ fn deterministic_runner_config_serde_roundtrip() {
 #[test]
 fn deterministic_runner_config_custom_prefix() {
     let json = r#"{"trace_prefix":"custom-prefix"}"#;
-    let config: DeterministicRunnerConfig = serde_json::from_str(json).unwrap_or_default();
+    let config: DeterministicRunnerConfig = serde_json::from_str(json).unwrap();
     assert_eq!(config.trace_prefix, "custom-prefix");
 }
 
@@ -1072,8 +1072,8 @@ fn replay_environment_fingerprint_local_serde_roundtrip() {
         env_fp.endian == "little" || env_fp.endian == "big",
         "endian should be little or big"
     );
-    let json = serde_json::to_string(&env_fp).unwrap_or_default();
-    let recovered: ReplayEnvironmentFingerprint = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&env_fp).unwrap();
+    let recovered: ReplayEnvironmentFingerprint = serde_json::from_str(&json).unwrap();
     assert_eq!(env_fp, recovered);
 }
 

@@ -267,8 +267,8 @@ fn metric_label_sets_are_bounded_enums() {
 #[test]
 fn security_event_context_serde_round_trip() {
     let ctx = context(42, "test_component");
-    let json = serde_json::to_string(&ctx).unwrap_or_default();
-    let recovered: SecurityEventContext = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&ctx).unwrap();
+    let recovered: SecurityEventContext = serde_json::from_str(&json).unwrap();
     assert_eq!(ctx.timestamp_ns, recovered.timestamp_ns);
     assert_eq!(ctx.component, recovered.component);
     assert_eq!(ctx.trace_id, recovered.trace_id);
@@ -277,8 +277,8 @@ fn security_event_context_serde_round_trip() {
 #[test]
 fn auth_failure_type_serde_round_trip() {
     for failure_type in AuthFailureType::ALL {
-        let json = serde_json::to_string(&failure_type).unwrap_or_default();
-        let recovered: AuthFailureType = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&failure_type).unwrap();
+        let recovered: AuthFailureType = serde_json::from_str(&json).unwrap();
         assert_eq!(failure_type, recovered);
     }
 }
@@ -473,8 +473,8 @@ fn structured_security_log_event_serde_roundtrip() {
         zone_id: "zone-core".to_string(),
         metadata,
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let recovered: StructuredSecurityLogEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let recovered: StructuredSecurityLogEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, recovered);
 }
 
@@ -489,8 +489,8 @@ fn runtime_security_observability_serde_roundtrip() {
         7,
     );
 
-    let json = serde_json::to_string(&observability).unwrap_or_default();
-    let recovered: RuntimeSecurityObservability = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&observability).unwrap();
+    let recovered: RuntimeSecurityObservability = serde_json::from_str(&json).unwrap();
     assert_eq!(observability.logs().len(), recovered.logs().len());
     assert_eq!(observability.logs(), recovered.logs());
 }
@@ -823,8 +823,8 @@ fn runtime_security_metrics_serde_roundtrip() {
     );
 
     let metrics = observability.metrics();
-    let json = serde_json::to_string(&metrics).unwrap_or_default();
-    let recovered: RuntimeSecurityMetrics = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&metrics).unwrap();
+    let recovered: RuntimeSecurityMetrics = serde_json::from_str(&json).unwrap();
     assert_eq!(
         recovered.auth_failure_total[&AuthFailureType::KeyRevoked],
         1
@@ -847,8 +847,8 @@ fn security_event_type_serde_roundtrip() {
         SecurityEventType::CrossZoneReference,
     ];
     for event_type in types {
-        let json = serde_json::to_string(&event_type).unwrap_or_default();
-        let recovered: SecurityEventType = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event_type).unwrap();
+        let recovered: SecurityEventType = serde_json::from_str(&json).unwrap();
         assert_eq!(event_type, recovered);
     }
 }
@@ -864,8 +864,8 @@ fn security_outcome_serde_roundtrip() {
         SecurityOutcome::Degraded,
     ];
     for outcome in outcomes {
-        let json = serde_json::to_string(&outcome).unwrap_or_default();
-        let recovered: SecurityOutcome = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&outcome).unwrap();
+        let recovered: SecurityOutcome = serde_json::from_str(&json).unwrap();
         assert_eq!(outcome, recovered);
     }
 }
@@ -873,8 +873,8 @@ fn security_outcome_serde_roundtrip() {
 #[test]
 fn capability_denial_reason_serde_roundtrip() {
     for reason in CapabilityDenialReason::ALL {
-        let json = serde_json::to_string(&reason).unwrap_or_default();
-        let recovered: CapabilityDenialReason = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&reason).unwrap();
+        let recovered: CapabilityDenialReason = serde_json::from_str(&json).unwrap();
         assert_eq!(reason, recovered);
     }
 }
@@ -882,8 +882,8 @@ fn capability_denial_reason_serde_roundtrip() {
 #[test]
 fn replay_drop_reason_serde_roundtrip() {
     for reason in ReplayDropReason::ALL {
-        let json = serde_json::to_string(&reason).unwrap_or_default();
-        let recovered: ReplayDropReason = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&reason).unwrap();
+        let recovered: ReplayDropReason = serde_json::from_str(&json).unwrap();
         assert_eq!(reason, recovered);
     }
 }
@@ -891,8 +891,8 @@ fn replay_drop_reason_serde_roundtrip() {
 #[test]
 fn checkpoint_violation_type_serde_roundtrip() {
     for vt in CheckpointViolationType::ALL {
-        let json = serde_json::to_string(&vt).unwrap_or_default();
-        let recovered: CheckpointViolationType = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&vt).unwrap();
+        let recovered: CheckpointViolationType = serde_json::from_str(&json).unwrap();
         assert_eq!(vt, recovered);
     }
 }
@@ -900,8 +900,8 @@ fn checkpoint_violation_type_serde_roundtrip() {
 #[test]
 fn revocation_check_outcome_serde_roundtrip() {
     for outcome in RevocationCheckOutcome::ALL {
-        let json = serde_json::to_string(&outcome).unwrap_or_default();
-        let recovered: RevocationCheckOutcome = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&outcome).unwrap();
+        let recovered: RevocationCheckOutcome = serde_json::from_str(&json).unwrap();
         assert_eq!(outcome, recovered);
     }
 }
@@ -909,8 +909,8 @@ fn revocation_check_outcome_serde_roundtrip() {
 #[test]
 fn cross_zone_reference_type_serde_roundtrip() {
     for rt in CrossZoneReferenceType::ALL {
-        let json = serde_json::to_string(&rt).unwrap_or_default();
-        let recovered: CrossZoneReferenceType = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&rt).unwrap();
+        let recovered: CrossZoneReferenceType = serde_json::from_str(&json).unwrap();
         assert_eq!(rt, recovered);
     }
 }

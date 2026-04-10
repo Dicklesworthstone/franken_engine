@@ -751,10 +751,10 @@ fn calibration_state_accessible_and_non_empty_after_cycle() {
     engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
 
     let state = engine.calibration_state();
-    let json = serde_json::to_string(state).unwrap_or_default();
+    let json = serde_json::to_string(state).unwrap();
     assert!(!json.is_empty());
     // State should be parseable back
-    let _: serde_json::Value = serde_json::from_str(&json).unwrap_or_default();
+    let _: serde_json::Value = serde_json::from_str(&json).unwrap();
 }
 
 #[test]

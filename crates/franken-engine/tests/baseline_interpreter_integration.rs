@@ -810,6 +810,7 @@ fn simple_function_call_add_ten() {
             arity: 1,
             frame_size: 3,
             name: Some("add_ten".into()),
+            is_generator: false,
         }],
     );
 
@@ -1167,12 +1168,14 @@ fn router_with_custom_configs() {
         instruction_budget: 50,
         max_registers: 64,
         max_call_depth: 16,
+        max_string_size: 33_554_432,
         granted_capabilities: Vec::new(),
     };
     let v8_cfg = InterpreterConfig {
         instruction_budget: 500,
         max_registers: 128,
         max_call_depth: 32,
+        max_string_size: 33_554_432,
         granted_capabilities: Vec::new(),
     };
     let router = LaneRouter::with_configs(qjs_cfg, v8_cfg);
@@ -1774,6 +1777,7 @@ fn instanceof_returns_false_for_primitive_lhs_across_lanes() {
             entry: 3,
             arity: 0,
             frame_size: 4,
+            is_generator: false,
         }],
     );
 
@@ -1804,6 +1808,7 @@ fn constructed_object_is_instanceof_constructor_across_lanes() {
             entry: 3,
             arity: 1,
             frame_size: 8,
+            is_generator: false,
         }],
     );
 

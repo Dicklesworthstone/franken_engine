@@ -982,8 +982,8 @@ fn lattice_records_check_flow_event() {
 #[test]
 fn declassification_request_serde_roundtrip() {
     let req = make_request();
-    let json = serde_json::to_string(&req).unwrap_or_default();
-    let recovered: DeclassificationRequest = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&req).unwrap();
+    let recovered: DeclassificationRequest = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.request_id, req.request_id);
     assert_eq!(recovered.source_label, req.source_label);
 }
@@ -991,8 +991,8 @@ fn declassification_request_serde_roundtrip() {
 #[test]
 fn loss_assessment_serde_roundtrip() {
     let loss = low_loss();
-    let json = serde_json::to_string(&loss).unwrap_or_default();
-    let recovered: LossAssessment = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&loss).unwrap();
+    let recovered: LossAssessment = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.expected_loss_milli, loss.expected_loss_milli);
 }
 
@@ -1001,8 +1001,8 @@ fn loss_assessment_serde_roundtrip() {
 #[test]
 fn label_serde_roundtrip_all_builtin() {
     for label in Label::all_builtin() {
-        let json = serde_json::to_string(&label).unwrap_or_default();
-        let recovered: Label = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&label).unwrap();
+        let recovered: Label = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, label);
     }
 }
@@ -1013,8 +1013,8 @@ fn label_custom_serde_roundtrip() {
         name: "PII".to_string(),
         level: 2,
     };
-    let json = serde_json::to_string(&label).unwrap_or_default();
-    let recovered: Label = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&label).unwrap();
+    let recovered: Label = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, label);
 }
 
@@ -1047,8 +1047,8 @@ fn label_join_all_and_meet_all() {
 fn clearance_serde_roundtrip() {
     let variants = [Clearance::OpenSink, Clearance::NeverSink];
     for c in &variants {
-        let json = serde_json::to_string(c).unwrap_or_default();
-        let recovered: Clearance = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(c).unwrap();
+        let recovered: Clearance = serde_json::from_str(&json).unwrap();
         assert_eq!(&recovered, c);
     }
 }
@@ -1077,8 +1077,8 @@ fn label_class_serde_roundtrip() {
         LabelClass::TopSecret,
     ];
     for lc in &classes {
-        let json = serde_json::to_string(lc).unwrap_or_default();
-        let recovered: LabelClass = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(lc).unwrap();
+        let recovered: LabelClass = serde_json::from_str(&json).unwrap();
         assert_eq!(&recovered, lc);
     }
 }
@@ -1098,8 +1098,8 @@ fn flow_check_result_serde_roundtrip() {
         },
     ];
     for r in &results {
-        let json = serde_json::to_string(r).unwrap_or_default();
-        let recovered: FlowCheckResult = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(r).unwrap();
+        let recovered: FlowCheckResult = serde_json::from_str(&json).unwrap();
         assert_eq!(&recovered, r);
     }
 }
@@ -1151,8 +1151,8 @@ fn flow_lattice_error_is_std_error() {
 #[test]
 fn pipeline_config_serde_roundtrip() {
     let config = PipelineConfig::default();
-    let json = serde_json::to_string(&config).unwrap_or_default();
-    let recovered: PipelineConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&config).unwrap();
+    let recovered: PipelineConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, config);
 }
 
@@ -1172,8 +1172,8 @@ fn declassification_route_serde_roundtrip() {
         target_clearance: Label::Internal,
         conditions: vec!["audit".to_string()],
     };
-    let json = serde_json::to_string(&route).unwrap_or_default();
-    let recovered: DeclassificationRoute = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&route).unwrap();
+    let recovered: DeclassificationRoute = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.route_id, route.route_id);
     assert_eq!(recovered.source_label, route.source_label);
 }
@@ -1202,8 +1202,8 @@ fn ifc_schema_version_compatibility() {
 #[test]
 fn ifc_schema_version_serde_roundtrip() {
     let v = IfcSchemaVersion::CURRENT;
-    let json = serde_json::to_string(&v).unwrap_or_default();
-    let recovered: IfcSchemaVersion = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&v).unwrap();
+    let recovered: IfcSchemaVersion = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, v);
 }
 
@@ -1212,8 +1212,8 @@ fn ifc_schema_version_serde_roundtrip() {
 #[test]
 fn flow_policy_serde_roundtrip() {
     let policy = make_policy();
-    let json = serde_json::to_string(&policy).unwrap_or_default();
-    let recovered: FlowPolicy = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&policy).unwrap();
+    let recovered: FlowPolicy = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.policy_id, policy.policy_id);
     assert_eq!(recovered.epoch_id, policy.epoch_id);
     assert_eq!(recovered.declassification_routes.len(), 1);

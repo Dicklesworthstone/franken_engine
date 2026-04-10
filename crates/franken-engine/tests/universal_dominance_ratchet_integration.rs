@@ -98,8 +98,8 @@ fn cell_domain_serde_all_variants() {
         CellDomain::ExtensionIsolation,
     ];
     for domain in &domains {
-        let json = serde_json::to_string(domain).unwrap_or_default();
-        let deser: CellDomain = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(domain).unwrap();
+        let deser: CellDomain = serde_json::from_str(&json).unwrap();
         assert_eq!(*domain, deser);
     }
 }
@@ -117,8 +117,8 @@ fn comparison_target_serde_all_variants() {
         ComparisonTarget::Jsc,
     ];
     for target in &targets {
-        let json = serde_json::to_string(target).unwrap_or_default();
-        let deser: ComparisonTarget = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(target).unwrap();
+        let deser: ComparisonTarget = serde_json::from_str(&json).unwrap();
         assert_eq!(*target, deser);
     }
 }
@@ -750,8 +750,8 @@ fn event_log_sequence_integrity() {
 #[test]
 fn cell_state_serde_all_variants() {
     for state in [CellState::Unproven, CellState::Claimed, CellState::Proven] {
-        let json = serde_json::to_string(&state).unwrap_or_default();
-        let deser: CellState = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&state).unwrap();
+        let deser: CellState = serde_json::from_str(&json).unwrap();
         assert_eq!(state, deser);
     }
 }
@@ -764,8 +764,8 @@ fn gap_kind_serde_all_variants() {
         GapKind::KnownDeficient,
         GapKind::OutOfScope,
     ] {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let deser: GapKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let deser: GapKind = serde_json::from_str(&json).unwrap();
         assert_eq!(kind, deser);
     }
 }
@@ -778,8 +778,8 @@ fn gap_resolution_serde_all_variants() {
         GapResolution::SubsumedByOther,
         GapResolution::DimensionInvalidated,
     ] {
-        let json = serde_json::to_string(&res).unwrap_or_default();
-        let deser: GapResolution = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&res).unwrap();
+        let deser: GapResolution = serde_json::from_str(&json).unwrap();
         assert_eq!(res, deser);
     }
 }
@@ -817,8 +817,8 @@ fn ratchet_error_serde_all_variants() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).unwrap_or_default();
-        let deser: RatchetError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(err).unwrap();
+        let deser: RatchetError = serde_json::from_str(&json).unwrap();
         assert_eq!(*err, deser);
     }
 }
@@ -865,8 +865,8 @@ fn ratchet_event_kind_serde_all_variants() {
             epoch: 0,
             kind: kind.clone(),
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let deser: RatchetEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let deser: RatchetEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, deser);
     }
 }
@@ -899,8 +899,8 @@ fn full_board_serde_round_trip() {
     )
     .unwrap();
 
-    let json = serde_json::to_string_pretty(&board).unwrap_or_default();
-    let deser: RatchetBoard = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&board).unwrap();
+    let deser: RatchetBoard = serde_json::from_str(&json).unwrap();
     assert_eq!(board, deser);
 }
 
@@ -931,8 +931,8 @@ fn full_ledger_serde_round_trip() {
     )
     .unwrap();
 
-    let json = serde_json::to_string_pretty(&ledger).unwrap_or_default();
-    let deser: FrontierGapLedger = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&ledger).unwrap();
+    let deser: FrontierGapLedger = serde_json::from_str(&json).unwrap();
     assert_eq!(ledger, deser);
 }
 
@@ -946,8 +946,8 @@ fn dominance_snapshot_serde() {
     add_cell(&mut board, &mut log, cell).unwrap();
 
     let snap = compute_dominance_snapshot(&board, &ledger, &mut log);
-    let json = serde_json::to_string_pretty(&snap).unwrap_or_default();
-    let deser: DominanceSnapshot = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&snap).unwrap();
+    let deser: DominanceSnapshot = serde_json::from_str(&json).unwrap();
     assert_eq!(snap, deser);
 }
 
@@ -1419,8 +1419,8 @@ fn test_ratchet_cell_serde_round_trip() {
     cell.margin_millionths = -50_000;
     cell.evidence_ids = vec!["ev-a".to_string(), "ev-b".to_string()];
     cell.last_advanced_epoch = 7;
-    let json = serde_json::to_string(&cell).unwrap_or_default();
-    let deser: RatchetCell = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&cell).unwrap();
+    let deser: RatchetCell = serde_json::from_str(&json).unwrap();
     assert_eq!(cell, deser);
 }
 
@@ -1436,16 +1436,16 @@ fn test_frontier_gap_entry_serde_round_trip_with_target() {
     entry.closed_epoch = Some(5);
     entry.resolution = Some(GapResolution::SubsumedByOther);
     entry.state = GapState::Closed;
-    let json = serde_json::to_string(&entry).unwrap_or_default();
-    let deser: FrontierGapEntry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&entry).unwrap();
+    let deser: FrontierGapEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(entry, deser);
 }
 
 #[test]
 fn test_gap_state_serde_round_trip() {
     for state in [GapState::Open, GapState::Closed] {
-        let json = serde_json::to_string(&state).unwrap_or_default();
-        let deser: GapState = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&state).unwrap();
+        let deser: GapState = serde_json::from_str(&json).unwrap();
         assert_eq!(state, deser);
     }
 }
@@ -1457,8 +1457,8 @@ fn test_domain_proven_count_serde_round_trip() {
         proven: 10,
         total: 20,
     };
-    let json = serde_json::to_string(&dpc).unwrap_or_default();
-    let deser: DomainProvenCount = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&dpc).unwrap();
+    let deser: DomainProvenCount = serde_json::from_str(&json).unwrap();
     assert_eq!(dpc, deser);
 }
 
@@ -1469,8 +1469,8 @@ fn test_target_proven_count_serde_round_trip() {
         proven: 5,
         total: 8,
     };
-    let json = serde_json::to_string(&tpc).unwrap_or_default();
-    let deser: TargetProvenCount = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&tpc).unwrap();
+    let deser: TargetProvenCount = serde_json::from_str(&json).unwrap();
     assert_eq!(tpc, deser);
 }
 
@@ -2015,8 +2015,8 @@ fn test_ratchet_error_margin_regression_serde_values() {
         current_margin: 999_999,
         attempted_margin: -1,
     };
-    let json = serde_json::to_string(&err).unwrap_or_default();
-    let deser: RatchetError = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&err).unwrap();
+    let deser: RatchetError = serde_json::from_str(&json).unwrap();
     match deser {
         RatchetError::MarginRegressionRejected {
             cell_id: dcid,

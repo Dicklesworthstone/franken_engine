@@ -109,7 +109,7 @@ struct GuardrailGate {
 fn load_fixture() -> UserImpactRegressionAlarmsFixture {
     let path = Path::new("tests/fixtures/parser_user_impact_regression_alarms_v1.json");
     let bytes = fs::read(path).expect("read parser user-impact regression alarms fixture");
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    serde_json::from_slice(&bytes).unwrap()
 }
 
 fn load_doc() -> String {

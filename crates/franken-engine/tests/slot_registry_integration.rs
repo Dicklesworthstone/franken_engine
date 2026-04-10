@@ -1761,8 +1761,8 @@ fn slot_registry_serde_round_trip_with_mixed_states() {
         .unwrap();
     // builtins: delegate (unchanged)
 
-    let json = serde_json::to_string(&registry).unwrap_or_default();
-    let roundtrip: SlotRegistry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&registry).unwrap();
+    let roundtrip: SlotRegistry = serde_json::from_str(&json).unwrap();
 
     assert_eq!(registry.len(), roundtrip.len());
     assert_eq!(registry.native_count(), roundtrip.native_count());
@@ -1786,16 +1786,16 @@ fn slot_registry_serde_round_trip_with_mixed_states() {
 #[test]
 fn slot_id_serde_round_trip() {
     let id = SlotId::new("my-slot").unwrap();
-    let json = serde_json::to_string(&id).unwrap_or_default();
-    let roundtrip: SlotId = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&id).unwrap();
+    let roundtrip: SlotId = serde_json::from_str(&json).unwrap();
     assert_eq!(id, roundtrip);
 }
 
 #[test]
 fn slot_kind_serde_round_trip_all_variants() {
     for (_, kind) in all_slot_kinds() {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let roundtrip: SlotKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let roundtrip: SlotKind = serde_json::from_str(&json).unwrap();
         assert_eq!(kind, roundtrip);
     }
 }
@@ -1813,8 +1813,8 @@ fn slot_capability_serde_round_trip_all_variants() {
         SlotCapability::EmitEvidence,
     ];
     for cap in caps {
-        let json = serde_json::to_string(&cap).unwrap_or_default();
-        let roundtrip: SlotCapability = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&cap).unwrap();
+        let roundtrip: SlotCapability = serde_json::from_str(&json).unwrap();
         assert_eq!(cap, roundtrip);
     }
 }
@@ -1836,8 +1836,8 @@ fn promotion_status_serde_round_trip_all_variants() {
         },
     ];
     for status in statuses {
-        let json = serde_json::to_string(&status).unwrap_or_default();
-        let roundtrip: PromotionStatus = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&status).unwrap();
+        let roundtrip: PromotionStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(status, roundtrip);
     }
 }
@@ -1860,9 +1860,9 @@ fn ga_release_guard_artifact_serde_round_trip() {
         .evaluate_ga_release_guard(&input)
         .expect("guard should pass");
 
-    let json = serde_json::to_string(&artifact).unwrap_or_default();
+    let json = serde_json::to_string(&artifact).unwrap();
     let roundtrip: frankenengine_engine::slot_registry::GaReleaseGuardArtifact =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(artifact.verdict, roundtrip.verdict);
     assert_eq!(artifact.total_slots, roundtrip.total_slots);
     assert_eq!(
@@ -1888,9 +1888,9 @@ fn replacement_progress_snapshot_serde_round_trip() {
         .snapshot_replacement_progress("trace", "decision", "policy", &BTreeMap::new())
         .expect("snapshot");
 
-    let json = serde_json::to_string(&snapshot).unwrap_or_default();
+    let json = serde_json::to_string(&snapshot).unwrap();
     let roundtrip: frankenengine_engine::slot_registry::ReplacementProgressSnapshot =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(snapshot.total_slots, roundtrip.total_slots);
     assert_eq!(snapshot.native_slots, roundtrip.native_slots);
     assert_eq!(snapshot.delegate_slots, roundtrip.delegate_slots);

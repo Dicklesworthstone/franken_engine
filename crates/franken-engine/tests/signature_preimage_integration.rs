@@ -155,8 +155,8 @@ fn different_signing_keys_produce_different_verification_keys() {
 #[test]
 fn signing_key_serde_roundtrip() {
     let sk = test_signing_key();
-    let json = serde_json::to_string(&sk).unwrap_or_default();
-    let restored: SigningKey = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&sk).unwrap();
+    let restored: SigningKey = serde_json::from_str(&json).unwrap();
     assert_eq!(sk, restored);
 }
 
@@ -195,8 +195,8 @@ fn verification_key_display_matches_hex() {
 #[test]
 fn verification_key_serde_roundtrip() {
     let vk = test_signing_key().verification_key();
-    let json = serde_json::to_string(&vk).unwrap_or_default();
-    let restored: VerificationKey = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&vk).unwrap();
+    let restored: VerificationKey = serde_json::from_str(&json).unwrap();
     assert_eq!(vk, restored);
 }
 
@@ -259,8 +259,8 @@ fn signature_display_contains_hex_and_ellipsis() {
 #[test]
 fn signature_serde_roundtrip() {
     let sig = Signature::from_bytes([0xCD; SIGNATURE_LEN]);
-    let json = serde_json::to_string(&sig).unwrap_or_default();
-    let restored: Signature = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&sig).unwrap();
+    let restored: Signature = serde_json::from_str(&json).unwrap();
     assert_eq!(sig, restored);
 }
 
@@ -359,8 +359,8 @@ fn error_serde_roundtrip_all_variants() {
         SignatureError::InvalidVerificationKey,
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).unwrap_or_default();
-        let restored: SignatureError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(err).unwrap();
+        let restored: SignatureError = serde_json::from_str(&json).unwrap();
         assert_eq!(*err, restored, "roundtrip mismatch for: {err}");
     }
 }
@@ -933,8 +933,8 @@ fn signature_event_serde_roundtrip() {
         domain: ObjectDomain::PolicyObject,
         trace_id: "t-serde".to_string(),
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let restored: SignatureEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let restored: SignatureEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, restored);
 }
 
@@ -946,8 +946,8 @@ fn signature_event_type_verified_serde_roundtrip() {
         domain: ObjectDomain::EvidenceRecord,
         trace_id: "t-verified".to_string(),
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let restored: SignatureEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let restored: SignatureEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, restored);
 }
 
@@ -962,8 +962,8 @@ fn signature_event_type_verification_failed_serde_roundtrip() {
         domain: ObjectDomain::Revocation,
         trace_id: "t-fail".to_string(),
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let restored: SignatureEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let restored: SignatureEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, restored);
 }
 
@@ -976,8 +976,8 @@ fn signature_event_type_canonicality_failed_serde_roundtrip() {
         domain: ObjectDomain::Attestation,
         trace_id: "t-canon".to_string(),
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let restored: SignatureEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let restored: SignatureEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, restored);
 }
 

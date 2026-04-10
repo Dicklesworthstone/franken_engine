@@ -41,7 +41,7 @@ fn write_fixture_catalog(fixtures: serde_json::Value) -> std::path::PathBuf {
     });
     fs::write(
         &path,
-        serde_json::to_vec_pretty(&payload).unwrap_or_default(),
+        serde_json::to_vec_pretty(&payload).unwrap(),
     )
     .expect("write fixture catalog");
     path
@@ -469,8 +469,8 @@ fn oracle_report_serde_roundtrip_preserves_all_fields() {
     config.policy_id = "policy-serde-rt".to_string();
     let report = run_parser_oracle(&config).expect("oracle");
 
-    let json_bytes = serde_json::to_vec(&report).unwrap_or_default();
-    let recovered: serde_json::Value = serde_json::from_slice(&json_bytes).unwrap_or_default();
+    let json_bytes = serde_json::to_vec(&report).unwrap();
+    let recovered: serde_json::Value = serde_json::from_slice(&json_bytes).unwrap();
     let obj = recovered.as_object().expect("report should be an object");
 
     assert!(obj.contains_key("schema_version"));
@@ -591,8 +591,8 @@ fn drift_class_serde_roundtrip_all_variants() {
         DriftClass::HarnessNondeterminism,
         DriftClass::ArtifactIntegrityFailure,
     ] {
-        let json = serde_json::to_string(&class).unwrap_or_default();
-        let recovered: DriftClass = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&class).unwrap();
+        let recovered: DriftClass = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, class, "serde roundtrip must preserve DriftClass");
     }
 }
@@ -601,8 +601,8 @@ fn drift_class_serde_roundtrip_all_variants() {
 fn gate_action_serde_roundtrip() {
     use frankenengine_engine::parser_oracle::GateAction;
     for action in [GateAction::Promote, GateAction::Reject, GateAction::Hold] {
-        let json = serde_json::to_string(&action).unwrap_or_default();
-        let recovered: GateAction = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&action).unwrap();
+        let recovered: GateAction = serde_json::from_str(&json).unwrap();
         assert_eq!(
             recovered, action,
             "serde roundtrip must preserve GateAction"
@@ -789,7 +789,7 @@ fn enrichment_oracle_report_serde_for_clean_run() {
     config.decision_id = "decision-serde".to_string();
     config.policy_id = "policy-serde".to_string();
     let report = run_parser_oracle(&config).expect("oracle");
-    let json_str = serde_json::to_string(&report).unwrap_or_default();
+    let json_str = serde_json::to_string(&report).unwrap();
     let _: serde_json::Value = serde_json::from_str(&json_str).expect("reparse report");
     let _ = fs::remove_file(path);
 }

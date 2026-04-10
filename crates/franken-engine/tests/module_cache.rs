@@ -312,17 +312,17 @@ fn cache_serde_round_trip_via_snapshot() {
         .unwrap();
 
     let snapshot = cache.snapshot();
-    let json = serde_json::to_string(&snapshot).unwrap_or_default();
+    let json = serde_json::to_string(&snapshot).unwrap();
     let recovered: frankenengine_engine::module_cache::CacheSnapshot =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(snapshot.entries.len(), recovered.entries.len());
 }
 
 #[test]
 fn module_version_fingerprint_serde_round_trip() {
     let v = ModuleVersionFingerprint::new(ContentHash::compute(b"fp"), 5, 3);
-    let json = serde_json::to_string(&v).unwrap_or_default();
-    let recovered: ModuleVersionFingerprint = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&v).unwrap();
+    let recovered: ModuleVersionFingerprint = serde_json::from_str(&json).unwrap();
     assert_eq!(v, recovered);
 }
 
@@ -400,8 +400,8 @@ fn cache_error_serde_roundtrip() {
         .unwrap_err();
     assert_eq!(err.code, CacheErrorCode::ModuleRevoked);
 
-    let json = serde_json::to_string(&err).unwrap_or_default();
-    let recovered: CacheError = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&err).unwrap();
+    let recovered: CacheError = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.code, CacheErrorCode::ModuleRevoked);
 }
 
@@ -442,8 +442,8 @@ fn cache_error_is_std_error() {
 #[test]
 fn cache_context_serde_roundtrip() {
     let ctx = cache_context();
-    let json = serde_json::to_string(&ctx).unwrap_or_default();
-    let recovered: CacheContext = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&ctx).unwrap();
+    let recovered: CacheContext = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.trace_id, "trace-cache");
 }
 
@@ -455,8 +455,8 @@ fn cache_insert_request_serde_roundtrip() {
         ContentHash::compute(b"art"),
         "/app/serde-req.mjs",
     );
-    let json = serde_json::to_string(&req).unwrap_or_default();
-    let recovered: CacheInsertRequest = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&req).unwrap();
+    let recovered: CacheInsertRequest = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.module_id, "mod:serde-req");
 }
 
@@ -471,16 +471,16 @@ fn snapshot_empty_cache_has_no_entries() {
 #[test]
 fn module_version_fingerprint_serde_roundtrip() {
     let fp = ModuleVersionFingerprint::new(ContentHash::compute(b"test"), 1, 2);
-    let json = serde_json::to_string(&fp).unwrap_or_default();
-    let recovered: ModuleVersionFingerprint = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&fp).unwrap();
+    let recovered: ModuleVersionFingerprint = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.source_hash, fp.source_hash);
 }
 
 #[test]
 fn cache_error_code_serde_roundtrip() {
     let code = CacheErrorCode::ModuleRevoked;
-    let json = serde_json::to_string(&code).unwrap_or_default();
-    let recovered: CacheErrorCode = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&code).unwrap();
+    let recovered: CacheErrorCode = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, code);
 }
 
@@ -863,8 +863,8 @@ fn module_cache_key_serde_roundtrip_and_ord() {
     );
 
     // Serde roundtrip
-    let json_a = serde_json::to_string(&key_a).unwrap_or_default();
-    let recovered_a: ModuleCacheKey = serde_json::from_str(&json_a).unwrap_or_default();
+    let json_a = serde_json::to_string(&key_a).unwrap();
+    let recovered_a: ModuleCacheKey = serde_json::from_str(&json_a).unwrap();
     assert_eq!(key_a, recovered_a);
 
     // Ord: keys are orderable (BTreeMap requirement)
@@ -896,8 +896,8 @@ fn module_cache_entry_serde_roundtrip() {
         .unwrap();
 
     let entry = cache.get("mod:entry-serde", &v).expect("entry must exist");
-    let json = serde_json::to_string(entry).unwrap_or_default();
-    let recovered: ModuleCacheEntry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(entry).unwrap();
+    let recovered: ModuleCacheEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.key.module_id, "mod:entry-serde");
     assert_eq!(recovered.resolved_specifier, "/app/entry-serde.mjs");
     assert_eq!(
@@ -927,8 +927,8 @@ fn cache_snapshot_full_serde_roundtrip() {
     cache.invalidate_trust_revocation("mod:some-revoked", 2, &cache_context());
 
     let snapshot = cache.snapshot();
-    let json = serde_json::to_string(&snapshot).unwrap_or_default();
-    let recovered: CacheSnapshot = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&snapshot).unwrap();
+    let recovered: CacheSnapshot = serde_json::from_str(&json).unwrap();
 
     assert_eq!(recovered.entries.len(), snapshot.entries.len());
     assert_eq!(
@@ -970,9 +970,9 @@ fn cache_event_fields_populated_correctly() {
     assert!(!event.detail.is_empty());
 
     // Serde roundtrip for CacheEvent
-    let json = serde_json::to_string(event).unwrap_or_default();
+    let json = serde_json::to_string(event).unwrap();
     let recovered: frankenengine_engine::module_cache::CacheEvent =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.seq, event.seq);
     assert_eq!(recovered.trace_id, event.trace_id);
     assert_eq!(recovered.module_id, event.module_id);
@@ -1017,8 +1017,8 @@ fn cache_workload_class_serde_roundtrip_all_variants() {
         CacheWorkloadClass::ScanHeavy,
     ];
     for v in &variants {
-        let json = serde_json::to_string(v).unwrap_or_default();
-        let recovered: CacheWorkloadClass = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(v).unwrap();
+        let recovered: CacheWorkloadClass = serde_json::from_str(&json).unwrap();
         assert_eq!(&recovered, v);
     }
 }
@@ -1075,8 +1075,8 @@ fn cache_locality_class_serde_roundtrip_all_variants() {
         CacheLocalityClass::Scan,
     ];
     for v in &variants {
-        let json = serde_json::to_string(v).unwrap_or_default();
-        let recovered: CacheLocalityClass = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(v).unwrap();
+        let recovered: CacheLocalityClass = serde_json::from_str(&json).unwrap();
         assert_eq!(&recovered, v);
     }
 }
@@ -1110,8 +1110,8 @@ fn cache_policy_kind_as_str_all_variants() {
 fn cache_policy_kind_serde_roundtrip_all_variants() {
     let variants = [CachePolicyKind::SingleQueueFifo, CachePolicyKind::S3Fifo];
     for v in &variants {
-        let json = serde_json::to_string(v).unwrap_or_default();
-        let recovered: CachePolicyKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(v).unwrap();
+        let recovered: CachePolicyKind = serde_json::from_str(&json).unwrap();
         assert_eq!(&recovered, v);
     }
 }
@@ -1139,8 +1139,8 @@ fn cache_trace_access_serde_roundtrip() {
         key: make_trace_key("mod:trace-access", "seed-ta", 3, 7),
         locality: CacheLocalityClass::Hot,
     };
-    let json = serde_json::to_string(&access).unwrap_or_default();
-    let recovered: CacheTraceAccess = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&access).unwrap();
+    let recovered: CacheTraceAccess = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.sequence, 42);
     assert_eq!(recovered.key.module_id, "mod:trace-access");
     assert_eq!(recovered.locality, CacheLocalityClass::Hot);
@@ -1150,7 +1150,7 @@ fn cache_trace_access_serde_roundtrip() {
 fn cache_trace_access_default_locality_is_warm() {
     // The serde(default) on locality means missing field defaults to Warm
     let json = r#"{"sequence":1,"key":{"module_id":"m","version":{"source_hash":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"policy_version":1,"trust_revision":1}}}"#;
-    let access: CacheTraceAccess = serde_json::from_str(json).unwrap_or_default();
+    let access: CacheTraceAccess = serde_json::from_str(json).unwrap();
     assert_eq!(access.locality, CacheLocalityClass::Warm);
 }
 
@@ -1169,8 +1169,8 @@ fn cache_trace_case_serde_roundtrip() {
             locality: CacheLocalityClass::Warm,
         }],
     };
-    let json = serde_json::to_string(&case).unwrap_or_default();
-    let recovered: CacheTraceCase = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&case).unwrap();
+    let recovered: CacheTraceCase = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.trace_id, "trace-case-serde");
     assert_eq!(recovered.workload_class, CacheWorkloadClass::ReactApp);
     assert_eq!(recovered.accesses.len(), 1);
@@ -1352,8 +1352,8 @@ fn corpus_manifest_serde_roundtrip() {
         }],
     };
     let manifest = CacheTraceCorpusManifest::new("corpus.serde", vec![case]).unwrap();
-    let json = serde_json::to_string(&manifest).unwrap_or_default();
-    let recovered: CacheTraceCorpusManifest = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&manifest).unwrap();
+    let recovered: CacheTraceCorpusManifest = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.corpus_id, manifest.corpus_id);
     assert_eq!(recovered.corpus_hash, manifest.corpus_hash);
     assert_eq!(recovered.cases.len(), 1);
@@ -1374,8 +1374,8 @@ fn single_queue_fifo_config_serde_roundtrip() {
     let cfg = SingleQueueFifoConfig {
         capacity_entries: 16,
     };
-    let json = serde_json::to_string(&cfg).unwrap_or_default();
-    let recovered: SingleQueueFifoConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&cfg).unwrap();
+    let recovered: SingleQueueFifoConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.capacity_entries, 16);
 }
 
@@ -1414,8 +1414,8 @@ fn s3fifo_config_serde_roundtrip() {
         small_queue_entries: 3,
         ghost_queue_entries: 6,
     };
-    let json = serde_json::to_string(&cfg).unwrap_or_default();
-    let recovered: S3FifoConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&cfg).unwrap();
+    let recovered: S3FifoConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, cfg);
 }
 
@@ -1432,8 +1432,8 @@ fn adoption_wedge_default_validates() {
 #[test]
 fn adoption_wedge_serde_roundtrip() {
     let wedge = S3FifoAdoptionWedgeContract::default();
-    let json = serde_json::to_string(&wedge).unwrap_or_default();
-    let recovered: S3FifoAdoptionWedgeContract = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&wedge).unwrap();
+    let recovered: S3FifoAdoptionWedgeContract = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, wedge);
 }
 
@@ -1584,9 +1584,9 @@ fn cache_policy_report_error_serde_roundtrip_simple_variants() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).unwrap_or_default();
+        let json = serde_json::to_string(err).unwrap();
         // Verify JSON is non-empty and parseable
-        let value: serde_json::Value = serde_json::from_str(&json).unwrap_or_default();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert!(value.is_object() || value.is_string());
     }
 }
@@ -1611,8 +1611,8 @@ fn cache_policy_metrics_serde_roundtrip() {
         scan_pollution_millionths: 100_000,
         final_resident_keys: vec!["k1".to_string(), "k2".to_string()],
     };
-    let json = serde_json::to_string(&metrics).unwrap_or_default();
-    let recovered: CachePolicyMetrics = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&metrics).unwrap();
+    let recovered: CachePolicyMetrics = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, metrics);
 }
 
@@ -1624,8 +1624,8 @@ fn cache_policy_aggregate_summary_serde_roundtrip() {
         improved_hot_retention_cases: 2,
         reduced_scan_pollution_cases: 4,
     };
-    let json = serde_json::to_string(&agg).unwrap_or_default();
-    let recovered: CachePolicyAggregateSummary = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&agg).unwrap();
+    let recovered: CachePolicyAggregateSummary = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, agg);
 }
 
@@ -1668,8 +1668,8 @@ fn cache_policy_case_report_serde_roundtrip() {
         hot_retention_delta_millionths: 300_000,
         scan_pollution_delta_millionths: -100_000,
     };
-    let json = serde_json::to_string(&report).unwrap_or_default();
-    let recovered: CachePolicyCaseReport = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&report).unwrap();
+    let recovered: CachePolicyCaseReport = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.trace_id, "trace-cr");
     assert_eq!(recovered.hit_rate_delta_millionths, 200_000);
 }
@@ -1823,8 +1823,8 @@ fn adaptive_split_config_serde_roundtrip() {
         max_step_per_epoch: 2,
         epoch_length: 32,
     };
-    let json = serde_json::to_string(&cfg).unwrap_or_default();
-    let recovered: AdaptiveSplitConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&cfg).unwrap();
+    let recovered: AdaptiveSplitConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, cfg);
 }
 
@@ -1843,8 +1843,8 @@ fn value_admission_config_serde_roundtrip() {
         alpha_millionths: 500_000,
         floor_value_millionths: 50_000,
     };
-    let json = serde_json::to_string(&cfg).unwrap_or_default();
-    let recovered: ValueAdmissionConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&cfg).unwrap();
+    let recovered: ValueAdmissionConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, cfg);
 }
 
@@ -1860,8 +1860,8 @@ fn s3fifo_adaptive_config_default_validates() {
 #[test]
 fn s3fifo_adaptive_config_serde_roundtrip() {
     let cfg = S3FifoAdaptiveConfig::default();
-    let json = serde_json::to_string(&cfg).unwrap_or_default();
-    let recovered: S3FifoAdaptiveConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&cfg).unwrap();
+    let recovered: S3FifoAdaptiveConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, cfg);
 }
 
@@ -1925,8 +1925,8 @@ fn admission_verdict_serde_roundtrip() {
         threshold_millionths: 400_000,
         admitted: true,
     };
-    let json = serde_json::to_string(&verdict).unwrap_or_default();
-    let recovered: AdmissionVerdict = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&verdict).unwrap();
+    let recovered: AdmissionVerdict = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, verdict);
 }
 
@@ -1939,8 +1939,8 @@ fn admission_verdict_denied() {
         threshold_millionths: 500_000,
         admitted: false,
     };
-    let json = serde_json::to_string(&verdict).unwrap_or_default();
-    let recovered: AdmissionVerdict = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&verdict).unwrap();
+    let recovered: AdmissionVerdict = serde_json::from_str(&json).unwrap();
     assert!(!recovered.admitted);
     assert_eq!(recovered.value_millionths, 50_000);
 }
@@ -1953,8 +1953,8 @@ fn value_annotated_trace_access_serde_roundtrip() {
         locality: CacheLocalityClass::Scan,
         value_millionths: 200_000,
     };
-    let json = serde_json::to_string(&access).unwrap_or_default();
-    let recovered: ValueAnnotatedTraceAccess = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&access).unwrap();
+    let recovered: ValueAnnotatedTraceAccess = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.sequence, 7);
     assert_eq!(recovered.value_millionths, 200_000);
     assert_eq!(recovered.locality, CacheLocalityClass::Scan);
@@ -1972,8 +1972,8 @@ fn value_annotated_trace_case_serde_roundtrip() {
             value_millionths: 900_000,
         }],
     };
-    let json = serde_json::to_string(&case).unwrap_or_default();
-    let recovered: ValueAnnotatedTraceCase = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&case).unwrap();
+    let recovered: ValueAnnotatedTraceCase = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.trace_id, "serde-vatc");
     assert_eq!(recovered.accesses.len(), 1);
 }
@@ -2071,8 +2071,8 @@ fn simulate_adaptive_metrics_serde_roundtrip() {
         )],
     };
     let metrics = simulate_s3fifo_adaptive(&case, &S3FifoAdaptiveConfig::default());
-    let json = serde_json::to_string(&metrics).unwrap_or_default();
-    let recovered: S3FifoAdaptiveMetrics = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&metrics).unwrap();
+    let recovered: S3FifoAdaptiveMetrics = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.base.total_accesses, metrics.base.total_accesses);
     assert_eq!(recovered.final_small_capacity, metrics.final_small_capacity);
 }
@@ -2123,9 +2123,9 @@ fn s3fifo_baseline_contract_fixture_serde_roundtrip() {
         S3FifoBaselineComparatorContractFixture, default_s3fifo_baseline_contract_fixture,
     };
     let fixture = default_s3fifo_baseline_contract_fixture();
-    let json = serde_json::to_string(&fixture).unwrap_or_default();
+    let json = serde_json::to_string(&fixture).unwrap();
     let recovered: S3FifoBaselineComparatorContractFixture =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, fixture);
 }
 
@@ -2151,8 +2151,8 @@ fn cache_policy_baseline_report_serde_roundtrip() {
         CachePolicyBaselineReport, default_s3fifo_baseline_report,
     };
     let report = default_s3fifo_baseline_report().unwrap();
-    let json = serde_json::to_string(&report).unwrap_or_default();
-    let recovered: CachePolicyBaselineReport = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&report).unwrap();
+    let recovered: CachePolicyBaselineReport = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.corpus_id, report.corpus_id);
     assert_eq!(recovered.corpus_hash, report.corpus_hash);
     assert_eq!(recovered.cases.len(), report.cases.len());
@@ -2279,8 +2279,8 @@ fn module_cache_serde_roundtrip_excludes_fastpath() {
             &ctx,
         )
         .unwrap();
-    let json = serde_json::to_string(&cache).unwrap_or_default();
-    let recovered: ModuleCache = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&cache).unwrap();
+    let recovered: ModuleCache = serde_json::from_str(&json).unwrap();
     // State hash should match after deserialization
     assert_eq!(cache.state_hash(), recovered.state_hash());
 }

@@ -851,8 +851,8 @@ fn remote_operation_type_serde_round_trip() {
         RemoteOperationType::RemoteIpc,
     ];
     for op in &ops {
-        let json = serde_json::to_string(op).unwrap_or_default();
-        let restored: RemoteOperationType = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(op).unwrap();
+        let restored: RemoteOperationType = serde_json::from_str(&json).unwrap();
         assert_eq!(*op, restored);
     }
 }
@@ -869,8 +869,8 @@ fn remote_capability_denied_serde_round_trip() {
         ],
         trace_id: "trace-serde-1".to_string(),
     };
-    let json = serde_json::to_string(&denied).unwrap_or_default();
-    let restored: RemoteCapabilityDenied = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&denied).unwrap();
+    let restored: RemoteCapabilityDenied = serde_json::from_str(&json).unwrap();
     assert_eq!(denied, restored);
 }
 
@@ -886,8 +886,8 @@ fn remote_gate_event_serde_round_trip() {
         outcome: "permitted".to_string(),
         held_profile: "RemoteCaps".to_string(),
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let restored: RemoteGateEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let restored: RemoteGateEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, restored);
 }
 
@@ -917,8 +917,8 @@ fn remote_transport_error_all_variants_serde_round_trip() {
     ];
 
     for err in &errors {
-        let json = serde_json::to_string(err).unwrap_or_default();
-        let restored: RemoteTransportError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(err).unwrap();
+        let restored: RemoteTransportError = serde_json::from_str(&json).unwrap();
         assert_eq!(*err, restored);
     }
 }

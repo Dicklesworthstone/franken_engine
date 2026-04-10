@@ -511,7 +511,7 @@ fn parser_ci_quality_retention_bundles_are_searchable_and_policy_compliant() {
         let actual_bundle_ids = search_index
             .get(&expected_hit.query)
             .cloned()
-            .unwrap_or_default()
+            .unwrap()
             .into_iter()
             .collect::<Vec<_>>();
         assert_eq!(

@@ -225,8 +225,8 @@ fn decision_type_serde_roundtrip_all_variants() {
         DecisionType::RemoteAuthorization,
     ];
     for dt in &variants {
-        let json = serde_json::to_string(dt).unwrap_or_default();
-        let restored: DecisionType = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(dt).unwrap();
+        let restored: DecisionType = serde_json::from_str(&json).unwrap();
         assert_eq!(*dt, restored);
     }
 }
@@ -256,16 +256,16 @@ fn candidate_action_filtered_constructor() {
 #[test]
 fn candidate_action_serde_roundtrip_unfiltered() {
     let c = CandidateAction::new("sandbox", 200_000);
-    let json = serde_json::to_string(&c).unwrap_or_default();
-    let restored: CandidateAction = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&c).unwrap();
+    let restored: CandidateAction = serde_json::from_str(&json).unwrap();
     assert_eq!(c, restored);
 }
 
 #[test]
 fn candidate_action_serde_roundtrip_filtered() {
     let c = CandidateAction::filtered("quarantine", 750_000, "exceeds threshold");
-    let json = serde_json::to_string(&c).unwrap_or_default();
-    let restored: CandidateAction = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&c).unwrap();
+    let restored: CandidateAction = serde_json::from_str(&json).unwrap();
     assert_eq!(c, restored);
 }
 
@@ -299,8 +299,8 @@ fn constraint_construction() {
 #[test]
 fn constraint_serde_roundtrip() {
     let c = sample_constraint();
-    let json = serde_json::to_string(&c).unwrap_or_default();
-    let restored: Constraint = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&c).unwrap();
+    let restored: Constraint = serde_json::from_str(&json).unwrap();
     assert_eq!(c, restored);
 }
 
@@ -322,8 +322,8 @@ fn witness_construction() {
 #[test]
 fn witness_serde_roundtrip() {
     let w = sample_witness();
-    let json = serde_json::to_string(&w).unwrap_or_default();
-    let restored: Witness = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&w).unwrap();
+    let restored: Witness = serde_json::from_str(&json).unwrap();
     assert_eq!(w, restored);
 }
 
@@ -342,8 +342,8 @@ fn chosen_action_construction() {
 #[test]
 fn chosen_action_serde_roundtrip() {
     let ca = sample_chosen();
-    let json = serde_json::to_string(&ca).unwrap_or_default();
-    let restored: ChosenAction = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&ca).unwrap();
+    let restored: ChosenAction = serde_json::from_str(&json).unwrap();
     assert_eq!(ca, restored);
 }
 
@@ -362,9 +362,9 @@ fn current_schema_version_is_1_0_0() {
 #[test]
 fn schema_version_serde_roundtrip() {
     let v = current_schema_version();
-    let json = serde_json::to_string(&v).unwrap_or_default();
+    let json = serde_json::to_string(&v).unwrap();
     let restored: frankenengine_engine::control_plane::SchemaVersion =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(v, restored);
 }
 
@@ -668,24 +668,24 @@ fn changing_decision_type_changes_hash() {
 #[test]
 fn evidence_entry_serde_roundtrip() {
     let entry = sample_entry();
-    let json = serde_json::to_string(&entry).unwrap_or_default();
-    let restored: EvidenceEntry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&entry).unwrap();
+    let restored: EvidenceEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(entry, restored);
 }
 
 #[test]
 fn evidence_entry_deterministic_serialization() {
     let entry = sample_entry();
-    let json1 = serde_json::to_string(&entry).unwrap_or_default();
-    let json2 = serde_json::to_string(&entry).unwrap_or_default();
+    let json1 = serde_json::to_string(&entry).unwrap();
+    let json2 = serde_json::to_string(&entry).unwrap();
     assert_eq!(json1, json2);
 }
 
 #[test]
 fn evidence_entry_pretty_json_roundtrip() {
     let entry = sample_entry();
-    let json = serde_json::to_string_pretty(&entry).unwrap_or_default();
-    let restored: EvidenceEntry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&entry).unwrap();
+    let restored: EvidenceEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(entry, restored);
 }
 
@@ -750,8 +750,8 @@ fn ledger_error_serde_roundtrip_all_variants() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).unwrap_or_default();
-        let restored: LedgerError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(err).unwrap();
+        let restored: LedgerError = serde_json::from_str(&json).unwrap();
         assert_eq!(*err, restored);
     }
 }
@@ -1267,8 +1267,8 @@ fn serde_roundtrip_fully_populated_entry() {
     .build()
     .expect("build fully populated entry");
 
-    let json = serde_json::to_string(&entry).unwrap_or_default();
-    let restored: EvidenceEntry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&entry).unwrap();
+    let restored: EvidenceEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(entry, restored);
     assert_eq!(restored.candidates.len(), 2);
     assert_eq!(restored.constraints.len(), 2);

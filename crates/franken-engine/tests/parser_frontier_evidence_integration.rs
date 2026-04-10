@@ -28,7 +28,7 @@ use std::path::PathBuf;
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
+        .unwrap()
         .as_nanos();
     let tid = std::thread::current().id();
     std::env::temp_dir().join(format!("{prefix}-int-{ts}-{tid:?}"))

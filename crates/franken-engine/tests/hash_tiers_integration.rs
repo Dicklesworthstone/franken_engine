@@ -244,8 +244,8 @@ fn hash_tier_serde_round_trip_all_variants() {
         HashTier::Content,
         HashTier::Authenticity,
     ] {
-        let json = serde_json::to_string(&tier).unwrap_or_default();
-        let recovered: HashTier = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&tier).unwrap();
+        let recovered: HashTier = serde_json::from_str(&json).unwrap();
         assert_eq!(tier, recovered);
     }
 }
@@ -285,8 +285,8 @@ fn hash_algorithm_serde_round_trip_all_variants() {
         HashAlgorithm::SipInspiredCr,
         HashAlgorithm::SipInspiredKeyed,
     ] {
-        let json = serde_json::to_string(&algo).unwrap_or_default();
-        let recovered: HashAlgorithm = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&algo).unwrap();
+        let recovered: HashAlgorithm = serde_json::from_str(&json).unwrap();
         assert_eq!(algo, recovered);
     }
 }
@@ -325,8 +325,8 @@ fn hash_event_serde_round_trip() {
         component: "capability_witness".to_string(),
         trace_id: "trace-001".to_string(),
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let recovered: HashEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let recovered: HashEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, recovered);
 }
 
@@ -344,8 +344,8 @@ fn hash_event_serde_round_trip_all_tiers() {
             component: "test".to_string(),
             trace_id: "t-1".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let recovered: HashEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let recovered: HashEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, recovered);
     }
 }

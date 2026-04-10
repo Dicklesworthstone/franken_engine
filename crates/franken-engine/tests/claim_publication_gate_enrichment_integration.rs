@@ -182,17 +182,17 @@ fn enrichment_publication_surface_display_supremacy() {
 #[test]
 fn enrichment_publication_surface_serde_roundtrip_each() {
     for s in &ALL_SURFACES {
-        let json = serde_json::to_string(s).unwrap_or_default();
-        let back: PublicationSurface = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(s).unwrap();
+        let back: PublicationSurface = serde_json::from_str(&json).unwrap();
         assert_eq!(*s, back);
     }
 }
 
 #[test]
 fn enrichment_publication_surface_serde_rename_snake_case() {
-    let json = serde_json::to_string(&PublicationSurface::Docs).unwrap_or_default();
+    let json = serde_json::to_string(&PublicationSurface::Docs).unwrap();
     assert_eq!(json, "\"docs\"");
-    let json = serde_json::to_string(&PublicationSurface::Supremacy).unwrap_or_default();
+    let json = serde_json::to_string(&PublicationSurface::Supremacy).unwrap();
     assert_eq!(json, "\"supremacy\"");
 }
 
@@ -264,8 +264,8 @@ fn enrichment_gate_decision_display_all_unique() {
 #[test]
 fn enrichment_gate_decision_serde_roundtrip_approved() {
     let d = GateDecision::Approved;
-    let json = serde_json::to_string(&d).unwrap_or_default();
-    let back: GateDecision = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&d).unwrap();
+    let back: GateDecision = serde_json::from_str(&json).unwrap();
     assert_eq!(d, back);
 }
 
@@ -274,8 +274,8 @@ fn enrichment_gate_decision_serde_roundtrip_approved_with_caveats() {
     let d = GateDecision::ApprovedWithCaveats {
         caveat_ids: vec!["caveat-1".into(), "caveat-2".into()],
     };
-    let json = serde_json::to_string(&d).unwrap_or_default();
-    let back: GateDecision = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&d).unwrap();
+    let back: GateDecision = serde_json::from_str(&json).unwrap();
     assert_eq!(d, back);
 }
 
@@ -284,8 +284,8 @@ fn enrichment_gate_decision_serde_roundtrip_require_guidance() {
     let d = GateDecision::RequireOperatorGuidance {
         reason: "gap in react".into(),
     };
-    let json = serde_json::to_string(&d).unwrap_or_default();
-    let back: GateDecision = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&d).unwrap();
+    let back: GateDecision = serde_json::from_str(&json).unwrap();
     assert_eq!(d, back);
 }
 
@@ -294,8 +294,8 @@ fn enrichment_gate_decision_serde_roundtrip_rejected() {
     let d = GateDecision::Rejected {
         reason: "critical failure".into(),
     };
-    let json = serde_json::to_string(&d).unwrap_or_default();
-    let back: GateDecision = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&d).unwrap();
+    let back: GateDecision = serde_json::from_str(&json).unwrap();
     assert_eq!(d, back);
 }
 
@@ -306,8 +306,8 @@ fn enrichment_gate_decision_approved_with_empty_caveats() {
     };
     let s = d.to_string();
     assert!(s.contains("0"));
-    let json = serde_json::to_string(&d).unwrap_or_default();
-    let back: GateDecision = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&d).unwrap();
+    let back: GateDecision = serde_json::from_str(&json).unwrap();
     assert_eq!(d, back);
 }
 
@@ -358,8 +358,8 @@ fn enrichment_publication_tier_serde_roundtrip() {
         PublicationTier::FrontierAmbition,
     ];
     for t in &tiers {
-        let json = serde_json::to_string(t).unwrap_or_default();
-        let back: PublicationTier = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(t).unwrap();
+        let back: PublicationTier = serde_json::from_str(&json).unwrap();
         assert_eq!(*t, back);
     }
 }
@@ -406,8 +406,8 @@ fn enrichment_risk_severity_serde_roundtrip() {
         RiskSeverity::Critical,
     ];
     for s in &sevs {
-        let json = serde_json::to_string(s).unwrap_or_default();
-        let back: RiskSeverity = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(s).unwrap();
+        let back: RiskSeverity = serde_json::from_str(&json).unwrap();
         assert_eq!(*s, back);
     }
 }
@@ -470,8 +470,8 @@ fn enrichment_publishable_claim_serde_roundtrip() {
         domain: "compatibility".into(),
         statement: "ES2024 arrow".into(),
     };
-    let json = serde_json::to_string(&claim).unwrap_or_default();
-    let back: PublishableClaim = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&claim).unwrap();
+    let back: PublishableClaim = serde_json::from_str(&json).unwrap();
     assert_eq!(claim, back);
 }
 
@@ -488,8 +488,8 @@ fn enrichment_publishable_claim_with_empty_morphisms_and_certs() {
     };
     assert!(claim.supporting_morphisms.is_empty());
     assert!(claim.impossibility_certificates.is_empty());
-    let json = serde_json::to_string(&claim).unwrap_or_default();
-    let back: PublishableClaim = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&claim).unwrap();
+    let back: PublishableClaim = serde_json::from_str(&json).unwrap();
     assert_eq!(claim, back);
 }
 
@@ -517,8 +517,8 @@ fn enrichment_frontier_gap_disclosure_serde_roundtrip() {
         blocks_surfaces: vec![PublicationSurface::Ga, PublicationSurface::Rollout],
         remediation: "bd-1lsy.4.9".into(),
     };
-    let json = serde_json::to_string(&gap).unwrap_or_default();
-    let back: FrontierGapDisclosure = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&gap).unwrap();
+    let back: FrontierGapDisclosure = serde_json::from_str(&json).unwrap();
     assert_eq!(gap, back);
 }
 
@@ -574,8 +574,8 @@ fn enrichment_risk_flag_serde_roundtrip() {
         surface: PublicationSurface::Docs,
         description: "informational note".into(),
     };
-    let json = serde_json::to_string(&flag).unwrap_or_default();
-    let back: RiskFlag = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&flag).unwrap();
+    let back: RiskFlag = serde_json::from_str(&json).unwrap();
     assert_eq!(flag, back);
 }
 
@@ -656,8 +656,8 @@ fn enrichment_surface_routing_config_default_max_staleness() {
 #[test]
 fn enrichment_surface_routing_config_serde_roundtrip() {
     let config = default_config();
-    let json = serde_json::to_string(&config).unwrap_or_default();
-    let back: SurfaceRoutingConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&config).unwrap();
+    let back: SurfaceRoutingConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(config, back);
 }
 
@@ -677,8 +677,8 @@ fn enrichment_surface_routing_config_custom_config_serde_roundtrip() {
         min_tier_for_surface,
         max_staleness_hours,
     };
-    let json = serde_json::to_string(&config).unwrap_or_default();
-    let back: SurfaceRoutingConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&config).unwrap();
+    let back: SurfaceRoutingConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(config, back);
 }
 
@@ -699,8 +699,8 @@ fn enrichment_annotated_verdict_construction() {
 #[test]
 fn enrichment_annotated_verdict_serde_roundtrip() {
     let av = make_annotated(entitled_verdict("a1"), "react", "scoped_observed");
-    let json = serde_json::to_string(&av).unwrap_or_default();
-    let back: AnnotatedVerdict = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&av).unwrap();
+    let back: AnnotatedVerdict = serde_json::from_str(&json).unwrap();
     assert_eq!(av, back);
 }
 
@@ -776,8 +776,8 @@ fn enrichment_error_serde_roundtrip_all_variants() {
         },
     ];
     for e in &errors {
-        let json = serde_json::to_string(e).unwrap_or_default();
-        let back: PublicationGateError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(e).unwrap();
+        let back: PublicationGateError = serde_json::from_str(&json).unwrap();
         assert_eq!(*e, back);
     }
 }
@@ -797,8 +797,8 @@ fn enrichment_publication_gate_summary_serde_roundtrip() {
         frontier_gap_count: 2,
         risk_flag_count: 4,
     };
-    let json = serde_json::to_string(&summary).unwrap_or_default();
-    let back: PublicationGateSummary = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&summary).unwrap();
+    let back: PublicationGateSummary = serde_json::from_str(&json).unwrap();
     assert_eq!(summary, back);
 }
 
@@ -813,8 +813,8 @@ fn enrichment_publication_gate_summary_zero_values() {
         frontier_gap_count: 0,
         risk_flag_count: 0,
     };
-    let json = serde_json::to_string(&summary).unwrap_or_default();
-    let back: PublicationGateSummary = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&summary).unwrap();
+    let back: PublicationGateSummary = serde_json::from_str(&json).unwrap();
     assert_eq!(summary, back);
 }
 
@@ -843,8 +843,8 @@ fn enrichment_evaluation_serde_roundtrip_simple() {
         "shipped_fact",
     )];
     let eval = evaluate_publication_gate(&verdicts, &[], &default_config(), 10).expect("evaluate");
-    let json = serde_json::to_string(&eval).unwrap_or_default();
-    let back: PublicationGateEvaluation = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&eval).unwrap();
+    let back: PublicationGateEvaluation = serde_json::from_str(&json).unwrap();
     assert_eq!(eval, back);
 }
 
@@ -1594,8 +1594,8 @@ fn enrichment_serde_roundtrip_full_evaluation_with_gaps_and_flags() {
     let gaps = vec![make_gap("g1", "compat", vec![PublicationSurface::Ga])];
     let eval =
         evaluate_publication_gate(&verdicts, &gaps, &default_config(), 99).expect("evaluate");
-    let json = serde_json::to_string(&eval).unwrap_or_default();
-    let back: PublicationGateEvaluation = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&eval).unwrap();
+    let back: PublicationGateEvaluation = serde_json::from_str(&json).unwrap();
     assert_eq!(eval, back);
 }
 

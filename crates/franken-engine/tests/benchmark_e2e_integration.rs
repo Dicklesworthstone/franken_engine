@@ -33,18 +33,27 @@
 )]
 
 use std::collections::BTreeSet;
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 
 use frankenengine_engine::benchmark_e2e::{
-    BENCHMARK_E2E_COMPONENT, BENCHMARK_E2E_SCHEMA_VERSION, BENCHMARK_ENV_SCHEMA_VERSION,
+    BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION, BENCHMARK_E2E_COMPONENT,
+    BENCHMARK_E2E_SCHEMA_VERSION, BENCHMARK_ENV_SCHEMA_VERSION, BenchmarkComparisonCase,
+    BenchmarkComparisonManifest, BenchmarkComparisonRuntimeCommands, BenchmarkComparisonSample,
     BenchmarkEnvironmentManifest, BenchmarkFairnessPolicy, BenchmarkFamily,
     BenchmarkHarnessContract, BenchmarkHarnessContractError, BenchmarkMeasurement,
     BenchmarkRuntimePins, BenchmarkSuiteConfig, LatencyDistribution, MIN_START_BUDGET_MILLIONTHS,
     RegressionThresholds, ScaleProfile, Xorshift64, detect_regression, measurements_to_cases,
-    run_adversarial_noise_under_load, run_benchmark, run_benchmark_suite,
-    run_benchmark_suite_with_regression, run_boot_storm, run_capability_churn,
-    run_mixed_cpu_io_agent_mesh, run_reload_revoke_churn, validate_harness_contract,
-    write_evidence_artifacts,
+    run_adversarial_noise_under_load, run_benchmark, run_benchmark_comparison_suite,
+    run_benchmark_suite, run_benchmark_suite_with_regression, run_boot_storm, run_capability_churn,
+    run_mixed_cpu_io_agent_mesh, run_reload_revoke_churn, summarize_benchmark_comparison_samples,
+    validate_benchmark_comparison_manifest, validate_harness_contract,
+    write_benchmark_comparison_artifacts, write_evidence_artifacts,
 };
+use frankenengine_engine::benchmark_evidence_bundle::{BundleStatus, ParityTarget};
+use frankenengine_engine::runtime_comparison_gate::{BenchmarkCategory, RuntimeId};
 
 // ---------------------------------------------------------------------------
 // Helper
@@ -1361,8 +1370,9 @@ fn benchmark_runtime_pins_franken_engine_starts_with_prefix() {
 #[test]
 fn benchmark_runtime_pins_serde_roundtrip() {
     let pins = BenchmarkRuntimePins::default();
-    let json = serde_json::to_string(&pins).unwrap_or_default();
-    let deserialized: BenchmarkRuntimePins = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&pins).expect("pins should serialize");
+    let deserialized: BenchmarkRuntimePins =
+        serde_json::from_str(&json).expect("pins should deserialize");
     assert_eq!(pins, deserialized);
 }
 
@@ -1388,8 +1398,9 @@ fn benchmark_fairness_policy_default_values() {
 #[test]
 fn benchmark_fairness_policy_serde_roundtrip() {
     let policy = BenchmarkFairnessPolicy::default();
-    let json = serde_json::to_string(&policy).unwrap_or_default();
-    let deserialized: BenchmarkFairnessPolicy = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&policy).expect("fairness policy should serialize");
+    let deserialized: BenchmarkFairnessPolicy =
+        serde_json::from_str(&json).expect("fairness policy should deserialize");
     assert_eq!(policy, deserialized);
 }
 
@@ -1406,8 +1417,9 @@ fn benchmark_harness_contract_default_valid() {
 #[test]
 fn benchmark_harness_contract_serde_roundtrip() {
     let contract = BenchmarkHarnessContract::default();
-    let json = serde_json::to_string(&contract).unwrap_or_default();
-    let deserialized: BenchmarkHarnessContract = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&contract).expect("contract should serialize");
+    let deserialized: BenchmarkHarnessContract =
+        serde_json::from_str(&json).expect("contract should deserialize");
     assert_eq!(contract, deserialized);
 }
 
@@ -1523,9 +1535,9 @@ fn benchmark_environment_manifest_serde_roundtrip() {
         runtime_pins: BenchmarkRuntimePins::default(),
         fairness_policy: BenchmarkFairnessPolicy::default(),
     };
-    let json = serde_json::to_string_pretty(&manifest).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&manifest).expect("manifest should serialize");
     let deserialized: BenchmarkEnvironmentManifest =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).expect("manifest should deserialize");
     assert_eq!(manifest, deserialized);
 }
 
@@ -2138,5 +2150,129 @@ fn measurements_to_cases_weight_uses_family_weight_divided_by_three() {
         (cases[0].weight.unwrap() - expected_weight).abs() < 1e-12,
         "expected weight {expected_weight}, got {:?}",
         cases[0].weight
+    );
+}
+
+#[test]
+fn benchmark_comparison_sample_summary_reports_quantiles_and_cv() {
+    let summary = summarize_benchmark_comparison_samples(&[
+        BenchmarkComparisonSample {
+            wall_time_ns: 10,
+            peak_rss_bytes: 1024,
+        },
+        BenchmarkComparisonSample {
+            wall_time_ns: 20,
+            peak_rss_bytes: 2048,
+        },
+        BenchmarkComparisonSample {
+            wall_time_ns: 30,
+            peak_rss_bytes: 4096,
+        },
+    ]);
+    assert_eq!(summary.sample_count, 3);
+    assert_eq!(summary.median_ns, 20);
+    assert_eq!(summary.p95_ns, 30);
+    assert_eq!(summary.p99_ns, 30);
+    assert_eq!(summary.peak_rss_bytes_max, 4096);
+    assert!(summary.cv_millionths > 0);
+}
+
+#[cfg(unix)]
+fn write_mock_runtime(path: &Path, sleep_seconds: &str) {
+    fs::write(
+        path,
+        format!("#!/usr/bin/env bash\nsleep {sleep_seconds}\n"),
+    )
+    .unwrap();
+    let mut perms = fs::metadata(path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(path, perms).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn benchmark_comparison_runner_executes_mock_runtimes_and_emits_artifacts() {
+    let root = std::env::temp_dir().join(format!("franken_bench_compare_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+
+    let program = root.join("fixture.js");
+    fs::write(&program, "console.log('benchmark');\n").unwrap();
+
+    let frankenctl = root.join("mock-frankenctl");
+    let node = root.join("mock-node");
+    let bun = root.join("mock-bun");
+    write_mock_runtime(&frankenctl, "0.01");
+    write_mock_runtime(&node, "0.02");
+    write_mock_runtime(&bun, "0.03");
+
+    let manifest = BenchmarkComparisonManifest {
+        schema_version: BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION.to_string(),
+        runtime_pins: BenchmarkRuntimePins::default(),
+        runtime_commands: BenchmarkComparisonRuntimeCommands {
+            frankenctl: frankenctl.clone(),
+            node: node.clone(),
+            bun: bun.clone(),
+        },
+        fairness_policy: BenchmarkFairnessPolicy {
+            warmup_runs: 1,
+            sample_count: 3,
+            case_timeout_ms: 5_000,
+        },
+        cases: vec![BenchmarkComparisonCase {
+            benchmark_id: "micro-1".to_string(),
+            category: BenchmarkCategory::Micro,
+            program_path: program.clone(),
+            args: vec![],
+        }],
+    };
+    validate_benchmark_comparison_manifest(&manifest).unwrap();
+
+    let result = run_benchmark_comparison_suite(&manifest, &root, "cmp-run-1", "2026-04-07")
+        .expect("comparison suite should execute");
+    assert_eq!(result.results.len(), 3);
+    let runtimes: BTreeSet<RuntimeId> = result.results.iter().map(|entry| entry.runtime).collect();
+    assert_eq!(
+        runtimes,
+        BTreeSet::from([
+            RuntimeId::FrankenEngine,
+            RuntimeId::NodeLts,
+            RuntimeId::BunStable
+        ])
+    );
+
+    let artifact_dir = root.join("artifacts");
+    let artifacts = write_benchmark_comparison_artifacts(&result, &artifact_dir).unwrap();
+    assert!(artifacts.run_manifest_path.exists());
+    assert!(artifacts.evidence_path.exists());
+    assert!(artifacts.events_path.exists());
+    assert!(artifacts.commands_path.exists());
+    assert!(artifacts.benchmark_env_manifest_path.exists());
+    assert!(artifacts.raw_results_archive_path.exists());
+    assert!(artifacts.summary_path.exists());
+    assert_eq!(
+        artifacts
+            .comparison_bundle_path
+            .as_ref()
+            .map(|path| path.exists()),
+        Some(true)
+    );
+
+    let raw_results: serde_json::Value =
+        serde_json::from_slice(&fs::read(&artifacts.raw_results_archive_path).unwrap()).unwrap();
+    assert_eq!(raw_results["results"].as_array().map(Vec::len), Some(3));
+    assert_eq!(result.evidence_bundle.status, BundleStatus::Sealed);
+    assert_eq!(result.evidence_bundle.provenances.len(), 1);
+    assert_eq!(result.evidence_bundle.runs.len(), 9);
+    assert_eq!(result.evidence_bundle.parity_verdicts.len(), 2);
+    let parity_targets: BTreeSet<ParityTarget> = result
+        .evidence_bundle
+        .parity_verdicts
+        .iter()
+        .map(|verdict| verdict.target)
+        .collect();
+    assert_eq!(
+        parity_targets,
+        BTreeSet::from([ParityTarget::NodeJs, ParityTarget::Bun])
     );
 }

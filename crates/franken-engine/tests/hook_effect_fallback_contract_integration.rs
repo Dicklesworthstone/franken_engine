@@ -205,9 +205,9 @@ fn unsupported_semantics_trigger_serde_round_trip_all_variants() {
         UnsupportedSemanticsTrigger::UnsupportedHookPrimitive,
         UnsupportedSemanticsTrigger::TransformationProofMissing,
     ] {
-        let json = serde_json::to_string(&trigger).unwrap_or_default();
+        let json = serde_json::to_string(&trigger).unwrap();
         let recovered: UnsupportedSemanticsTrigger =
-            serde_json::from_str(&json).unwrap_or_default();
+            serde_json::from_str(&json).unwrap();
         assert_eq!(trigger, recovered);
     }
 }
@@ -254,8 +254,8 @@ fn fallback_execution_route_serde_round_trip_all_variants() {
         FallbackExecutionRoute::BaselineInterpreterLane,
         FallbackExecutionRoute::DeterministicSafeModeLane,
     ] {
-        let json = serde_json::to_string(&route).unwrap_or_default();
-        let recovered: FallbackExecutionRoute = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&route).unwrap();
+        let recovered: FallbackExecutionRoute = serde_json::from_str(&json).unwrap();
         assert_eq!(route, recovered);
     }
 }
@@ -268,9 +268,9 @@ fn unsupported_semantics_diagnostic_serde_round_trip() {
         "trace-serde-rt",
         "decision-serde-rt",
     );
-    let json = serde_json::to_string(&diagnostic).unwrap_or_default();
+    let json = serde_json::to_string(&diagnostic).unwrap();
     let recovered: frankenengine_engine::hook_effect_contract::UnsupportedSemanticsDiagnostic =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(diagnostic, recovered);
 }
 
@@ -334,8 +334,8 @@ fn scenario_log_event_serde_round_trip() {
         error_code: Some("FE-HOOK-UNSUPPORTED-0002"),
         hardening_guidance: "test guidance",
     });
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let recovered: ScenarioLogEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let recovered: ScenarioLogEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, recovered);
 }
 
@@ -370,8 +370,8 @@ fn make_slot_populates_fields() {
 #[test]
 fn hook_kind_serde_round_trip_all_variants() {
     for kind in [HookKind::State, HookKind::Effect, HookKind::Memo] {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let recovered: HookKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let recovered: HookKind = serde_json::from_str(&json).unwrap();
         assert_eq!(kind, recovered);
     }
 }
@@ -379,8 +379,8 @@ fn hook_kind_serde_round_trip_all_variants() {
 #[test]
 fn render_phase_serde_round_trip() {
     let phase = RenderPhase::Idle;
-    let json = serde_json::to_string(&phase).unwrap_or_default();
-    let recovered: RenderPhase = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&phase).unwrap();
+    let recovered: RenderPhase = serde_json::from_str(&json).unwrap();
     assert_eq!(phase, recovered);
 }
 
@@ -421,8 +421,8 @@ fn hook_kind_serde_roundtrip() {
         HookKind::Memo,
         HookKind::Reducer,
     ] {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let recovered: HookKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let recovered: HookKind = serde_json::from_str(&json).unwrap();
         assert_eq!(kind, recovered);
     }
 }
@@ -434,8 +434,8 @@ fn render_phase_serde_roundtrip() {
         RenderPhase::PaintPending,
         RenderPhase::PassiveEffectsPending,
     ] {
-        let json = serde_json::to_string(&phase).unwrap_or_default();
-        let recovered: RenderPhase = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&phase).unwrap();
+        let recovered: RenderPhase = serde_json::from_str(&json).unwrap();
         assert_eq!(phase, recovered);
     }
 }
@@ -447,8 +447,8 @@ fn fallback_execution_route_serde_roundtrip() {
         FallbackExecutionRoute::BaselineInterpreterLane,
         FallbackExecutionRoute::DeterministicSafeModeLane,
     ] {
-        let json = serde_json::to_string(&route).unwrap_or_default();
-        let recovered: FallbackExecutionRoute = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&route).unwrap();
+        let recovered: FallbackExecutionRoute = serde_json::from_str(&json).unwrap();
         assert_eq!(route, recovered);
     }
 }
@@ -544,8 +544,8 @@ fn hook_manifest_serde_roundtrip() {
         "SerdeTest",
         vec![make_slot(0, HookKind::State), make_slot(1, HookKind::Memo)],
     );
-    let json = serde_json::to_string(&manifest).unwrap_or_default();
-    let recovered: HookManifest = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&manifest).unwrap();
+    let recovered: HookManifest = serde_json::from_str(&json).unwrap();
     assert_eq!(manifest.component_name, recovered.component_name);
     assert_eq!(manifest.slots.len(), recovered.slots.len());
 }
@@ -597,8 +597,8 @@ fn hook_kind_all_has_expected_count() {
 #[test]
 fn hook_kind_all_serde_roundtrip() {
     for kind in HookKind::ALL {
-        let json = serde_json::to_string(kind).unwrap_or_default();
-        let recovered: HookKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(kind).unwrap();
+        let recovered: HookKind = serde_json::from_str(&json).unwrap();
         assert_eq!(*kind, recovered);
     }
 }
@@ -754,8 +754,8 @@ fn hook_manifest_error_serde_roundtrip() {
         HookManifestError::DuplicateIndex(HookSlotIndex(1)),
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).unwrap_or_default();
-        let recovered: HookManifestError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(err).unwrap();
+        let recovered: HookManifestError = serde_json::from_str(&json).unwrap();
         assert_eq!(*err, recovered);
     }
 }
@@ -808,8 +808,8 @@ fn effect_timing_serde_roundtrip() {
         EffectTiming::Layout,
         EffectTiming::Passive,
     ] {
-        let json = serde_json::to_string(&timing).unwrap_or_default();
-        let recovered: EffectTiming = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&timing).unwrap();
+        let recovered: EffectTiming = serde_json::from_str(&json).unwrap();
         assert_eq!(timing, recovered);
     }
 }
@@ -843,8 +843,8 @@ fn effect_timing_execution_phase_matches_lifecycle() {
 #[test]
 fn dep_token_serde_roundtrip() {
     let token = DepToken(42);
-    let json = serde_json::to_string(&token).unwrap_or_default();
-    let recovered: DepToken = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&token).unwrap();
+    let recovered: DepToken = serde_json::from_str(&json).unwrap();
     assert_eq!(token, recovered);
 }
 
@@ -855,8 +855,8 @@ fn hook_slot_with_deps_serde_roundtrip() {
         kind: HookKind::Effect,
         deps: Some(vec![DepToken(1), DepToken(2), DepToken(3)]),
     };
-    let json = serde_json::to_string(&slot).unwrap_or_default();
-    let recovered: HookSlot = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&slot).unwrap();
+    let recovered: HookSlot = serde_json::from_str(&json).unwrap();
     assert_eq!(slot, recovered);
 }
 

@@ -473,8 +473,8 @@ fn plas_activation_mode_serde_round_trip_all_variants() {
         PlasActivationMode::AuditOnly,
         PlasActivationMode::Disabled,
     ] {
-        let json = serde_json::to_string(&mode).unwrap_or_default();
-        let recovered: PlasActivationMode = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&mode).unwrap();
+        let recovered: PlasActivationMode = serde_json::from_str(&json).unwrap();
         assert_eq!(mode, recovered);
         assert!(!mode.as_str().is_empty());
     }
@@ -493,8 +493,8 @@ fn plas_release_gate_failure_code_serde_round_trip_all_variants() {
         PlasReleaseGateFailureCode::RevocationEscrowEventMissing,
         PlasReleaseGateFailureCode::AmbientAuthorityDetected,
     ] {
-        let json = serde_json::to_string(&code).unwrap_or_default();
-        let recovered: PlasReleaseGateFailureCode = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&code).unwrap();
+        let recovered: PlasReleaseGateFailureCode = serde_json::from_str(&json).unwrap();
         assert_eq!(code, recovered);
         assert!(!code.error_code().is_empty());
     }
@@ -510,8 +510,8 @@ fn plas_escrow_replay_evidence_serde_round_trip() {
         deterministic_replay: true,
         replay_trace_id: "replay-trace-serde".to_string(),
     };
-    let json = serde_json::to_string(&evidence).unwrap_or_default();
-    let recovered: PlasEscrowReplayEvidence = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&evidence).unwrap();
+    let recovered: PlasEscrowReplayEvidence = serde_json::from_str(&json).unwrap();
     assert_eq!(evidence, recovered);
 }
 
@@ -584,9 +584,9 @@ fn decision_artifact_hash_is_non_empty() {
 fn decision_artifact_serde_round_trip() {
     let (input, trust_anchors) = base_gate_fixture();
     let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
-    let json = serde_json::to_string_pretty(&artifact).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&artifact).unwrap();
     let recovered: PlasReleaseGateDecisionArtifact =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(artifact.pass, recovered.pass);
     assert_eq!(artifact.decision_id, recovered.decision_id);
     assert_eq!(artifact.findings, recovered.findings);
@@ -637,8 +637,8 @@ fn plas_release_gate_error_serde_round_trip() {
             detail: "bad serial".to_string(),
         },
     ] {
-        let json = serde_json::to_string(&err).unwrap_or_default();
-        let recovered: PlasReleaseGateError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&err).unwrap();
+        let recovered: PlasReleaseGateError = serde_json::from_str(&json).unwrap();
         assert_eq!(err, recovered);
     }
 }
@@ -823,8 +823,8 @@ fn plas_finding_serde_round_trip() {
         receipt_id: Some("receipt-1".to_string()),
         detail: "ambient authority found".to_string(),
     };
-    let json = serde_json::to_string(&finding).unwrap_or_default();
-    let recovered: PlasReleaseGateFinding = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&finding).unwrap();
+    let recovered: PlasReleaseGateFinding = serde_json::from_str(&json).unwrap();
     assert_eq!(finding, recovered);
 }
 
@@ -842,8 +842,8 @@ fn plas_log_event_serde_round_trip() {
         receipt_id: None,
         capability: Some("fs.read".to_string()),
     };
-    let json = serde_json::to_string(&log).unwrap_or_default();
-    let recovered: PlasReleaseGateLogEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&log).unwrap();
+    let recovered: PlasReleaseGateLogEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(log, recovered);
 }
 
@@ -854,8 +854,8 @@ fn plas_log_event_serde_round_trip() {
 #[test]
 fn trust_anchors_serde_round_trip() {
     let (_, trust_anchors) = base_gate_fixture();
-    let json = serde_json::to_string(&trust_anchors).unwrap_or_default();
-    let recovered: PlasReleaseGateTrustAnchors = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&trust_anchors).unwrap();
+    let recovered: PlasReleaseGateTrustAnchors = serde_json::from_str(&json).unwrap();
     assert_eq!(trust_anchors, recovered);
 }
 
@@ -867,8 +867,8 @@ fn trust_anchors_serde_round_trip() {
 fn plas_cohort_extension_serde_round_trip() {
     let (input, _) = base_gate_fixture();
     let ext = &input.extensions[0];
-    let json = serde_json::to_string(ext).unwrap_or_default();
-    let recovered: PlasCohortExtension = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(ext).unwrap();
+    let recovered: PlasCohortExtension = serde_json::from_str(&json).unwrap();
     assert_eq!(ext.extension_id, recovered.extension_id);
     assert_eq!(ext.activation_mode, recovered.activation_mode);
     assert_eq!(ext.manifest_capabilities, recovered.manifest_capabilities);
@@ -877,8 +877,8 @@ fn plas_cohort_extension_serde_round_trip() {
 #[test]
 fn plas_release_gate_input_serde_round_trip() {
     let (input, _) = base_gate_fixture();
-    let json = serde_json::to_string(&input).unwrap_or_default();
-    let recovered: PlasReleaseGateInput = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&input).unwrap();
+    let recovered: PlasReleaseGateInput = serde_json::from_str(&json).unwrap();
     assert_eq!(input.trace_id, recovered.trace_id);
     assert_eq!(input.decision_id, recovered.decision_id);
     assert_eq!(input.extensions.len(), recovered.extensions.len());
@@ -1044,9 +1044,9 @@ fn test_decision_artifact_pass_true_serde_round_trip() {
     let (input, trust_anchors) = base_gate_fixture();
     let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
     assert!(artifact.pass, "base fixture must pass for this test");
-    let json = serde_json::to_string(&artifact).unwrap_or_default();
+    let json = serde_json::to_string(&artifact).unwrap();
     let recovered: PlasReleaseGateDecisionArtifact =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(artifact, recovered);
     assert!(recovered.pass);
     assert!(recovered.findings.is_empty());
@@ -1118,8 +1118,8 @@ fn test_plas_log_event_serde_round_trip_all_none_options() {
         receipt_id: None,
         capability: None,
     };
-    let json = serde_json::to_string(&log).unwrap_or_default();
-    let recovered: PlasReleaseGateLogEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&log).unwrap();
+    let recovered: PlasReleaseGateLogEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(log, recovered);
     assert!(recovered.error_code.is_none());
     assert!(recovered.extension_id.is_none());

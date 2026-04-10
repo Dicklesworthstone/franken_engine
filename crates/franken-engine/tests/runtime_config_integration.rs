@@ -268,8 +268,8 @@ fn guardplane_config_json_serde_roundtrip() {
 #[test]
 fn runtime_config_toml_roundtrip() {
     let original = RuntimeConfig::default();
-    let toml_str = toml::to_string(&original).unwrap_or_default();
-    let roundtripped = RuntimeConfig::from_toml(&toml_str).unwrap_or_default();
+    let toml_str = toml::to_string(&original).unwrap();
+    let roundtripped = RuntimeConfig::from_toml(&toml_str).unwrap();
     assert_eq!(original, roundtripped);
 }
 

@@ -938,8 +938,8 @@ fn signer_signature_serde_round_trip() {
     let obj = test_obj();
     let ss = SignerSignature::new(vk1, sign_with(&sk1, &obj));
 
-    let json = serde_json::to_string(&ss).unwrap_or_default();
-    let restored: SignerSignature = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&ss).unwrap();
+    let restored: SignerSignature = serde_json::from_str(&json).unwrap();
     assert_eq!(ss, restored);
 }
 
@@ -955,8 +955,8 @@ fn sorted_signature_array_serde_round_trip() {
     ];
     let arr = SortedSignatureArray::from_unsorted(entries).unwrap();
 
-    let json = serde_json::to_string(&arr).unwrap_or_default();
-    let restored: SortedSignatureArray = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&arr).unwrap();
+    let restored: SortedSignatureArray = serde_json::from_str(&json).unwrap();
     assert_eq!(arr, restored);
 
     // Verify still sorted after deserialization.
@@ -994,8 +994,8 @@ fn multisig_error_all_variants_serde_round_trip() {
     ];
 
     for err in &errors {
-        let json = serde_json::to_string(err).unwrap_or_default();
-        let restored: MultiSigError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(err).unwrap();
+        let restored: MultiSigError = serde_json::from_str(&json).unwrap();
         assert_eq!(*err, restored);
     }
 }
@@ -1013,8 +1013,8 @@ fn quorum_result_serde_round_trip() {
         invalid_signers: vec![(vk1.clone(), "bad".to_string())],
         unauthorized_signers: vec![vk1],
     };
-    let json = serde_json::to_string(&result).unwrap_or_default();
-    let restored: QuorumResult = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&result).unwrap();
+    let restored: QuorumResult = serde_json::from_str(&json).unwrap();
     assert_eq!(result, restored);
 }
 
@@ -1062,8 +1062,8 @@ fn multisig_event_serde_round_trip() {
     ];
 
     for event in &events {
-        let json = serde_json::to_string(event).unwrap_or_default();
-        let restored: MultiSigEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(event).unwrap();
+        let restored: MultiSigEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(*event, restored);
     }
 }

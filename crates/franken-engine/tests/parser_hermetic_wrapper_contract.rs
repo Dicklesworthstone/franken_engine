@@ -32,7 +32,7 @@ struct HermeticWrapperFixture {
 fn load_fixture() -> HermeticWrapperFixture {
     let fixture_path = Path::new("tests/fixtures/parser_hermetic_env_manifest_v1.json");
     let bytes = fs::read(fixture_path).expect("read parser hermetic env fixture");
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    serde_json::from_slice(&bytes).unwrap()
 }
 
 fn load_env_contract_doc() -> String {
@@ -439,7 +439,7 @@ fn fixture_required_modes_are_nonempty_strings() {
 fn fixture_deserializes_from_raw_json_bytes() {
     let fixture_path = Path::new("tests/fixtures/parser_hermetic_env_manifest_v1.json");
     let bytes = fs::read(fixture_path).expect("read fixture");
-    let fixture: HermeticWrapperFixture = serde_json::from_slice(&bytes).unwrap_or_default();
+    let fixture: HermeticWrapperFixture = serde_json::from_slice(&bytes).unwrap();
     assert!(!fixture.wrapper_id.is_empty());
 }
 
@@ -447,7 +447,7 @@ fn fixture_deserializes_from_raw_json_bytes() {
 fn fixture_deserializes_from_string() {
     let fixture_path = Path::new("tests/fixtures/parser_hermetic_env_manifest_v1.json");
     let text = fs::read_to_string(fixture_path).expect("read fixture as string");
-    let fixture: HermeticWrapperFixture = serde_json::from_str(&text).unwrap_or_default();
+    let fixture: HermeticWrapperFixture = serde_json::from_str(&text).unwrap();
     assert_eq!(fixture.wrapper_id, "parser_benchmark_protocol_gate");
 }
 

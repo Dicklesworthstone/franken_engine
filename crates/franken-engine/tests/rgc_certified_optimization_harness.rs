@@ -140,7 +140,7 @@ fn hash(bytes: &[u8]) -> ContentHash {
 }
 
 fn write_json_file<T: Serialize>(path: &Path, value: &T) {
-    fs::write(path, serde_json::to_vec_pretty(value).unwrap_or_default())
+    fs::write(path, serde_json::to_vec_pretty(value).unwrap())
         .unwrap_or_else(|err| panic!("failed to write {}: {err}", path.display()));
 }
 
@@ -444,7 +444,7 @@ fn build_demo_index() -> (RewriteProofIndex, CertifiedOptimizationTraceIds) {
                     .applied_rules
                     .first()
                     .map(|rule| rule.pack_id.clone())
-                    .unwrap_or_default(),
+                    .unwrap(),
                 receipt_hash: receipt.content_hash,
                 verdict: receipt_verdict_name(receipt).to_string(),
                 rule_ids: receipt

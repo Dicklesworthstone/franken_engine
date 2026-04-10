@@ -94,7 +94,7 @@ fn v1_to_v2_migration(
         .metadata
         .insert("migrated_from".to_string(), "evidence-v1".to_string());
     // Recompute artifact hash to cover the updated metadata.
-    let mut hash_input = serde_json::to_vec(&migrated.ledger_entry).unwrap_or_default();
+    let mut hash_input = serde_json::to_vec(&migrated.ledger_entry).unwrap();
     if let Ok(meta_bytes) = serde_json::to_vec(&migrated.metadata) {
         hash_input.extend_from_slice(&meta_bytes);
     }

@@ -422,8 +422,8 @@ fn scorecard_schema_version_matches_source_contract() {
 #[test]
 fn category_shift_capability_serde_roundtrip() {
     for cap in CategoryShiftCapability::ALL {
-        let json = serde_json::to_string(&cap).unwrap_or_default();
-        let recovered: CategoryShiftCapability = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&cap).unwrap();
+        let recovered: CategoryShiftCapability = serde_json::from_str(&json).unwrap();
         assert_eq!(cap, recovered);
     }
 }
@@ -618,9 +618,9 @@ fn build_report_fails_when_missing_required_capability() {
 #[test]
 fn report_serde_roundtrip() {
     let report = build_category_shift_report(report_input(passing_scorecard())).expect("report");
-    let json = serde_json::to_string(&report).unwrap_or_default();
+    let json = serde_json::to_string(&report).unwrap();
     let recovered: frankenengine_engine::category_shift_report::CategoryShiftReport =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(report, recovered);
     assert_eq!(report.publication_hash, recovered.publication_hash);
 }
@@ -682,24 +682,24 @@ fn peer_review_signoff_serde_roundtrip() {
         approved: true,
         notes: "all good".to_string(),
     };
-    let json = serde_json::to_string(&pr).unwrap_or_default();
-    let recovered: PeerReviewSignoff = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&pr).unwrap();
+    let recovered: PeerReviewSignoff = serde_json::from_str(&json).unwrap();
     assert_eq!(pr, recovered);
 }
 
 #[test]
 fn methodology_section_serde_roundtrip() {
     let m = methodology();
-    let json = serde_json::to_string(&m).unwrap_or_default();
-    let recovered: MethodologySection = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&m).unwrap();
+    let recovered: MethodologySection = serde_json::from_str(&json).unwrap();
     assert_eq!(m, recovered);
 }
 
 #[test]
 fn claim_serde_roundtrip() {
     let c = claim(CategoryShiftCapability::PlasSignedWitnesses);
-    let json = serde_json::to_string(&c).unwrap_or_default();
-    let recovered: CategoryShiftClaim = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&c).unwrap();
+    let recovered: CategoryShiftClaim = serde_json::from_str(&json).unwrap();
     assert_eq!(c, recovered);
 }
 
@@ -709,9 +709,9 @@ fn log_entry_serde_roundtrip() {
     let logs = generate_log_entries("trace-serde-test", &report);
     assert!(!logs.is_empty());
     for log in &logs {
-        let json = serde_json::to_string(log).unwrap_or_default();
+        let json = serde_json::to_string(log).unwrap();
         let recovered: CategoryShiftReportLogEntry =
-            serde_json::from_str(&json).unwrap_or_default();
+            serde_json::from_str(&json).unwrap();
         assert_eq!(*log, recovered);
     }
 }
@@ -748,16 +748,16 @@ fn dimension_publication_summary_serde_roundtrip() {
         meets_floor: true,
         meets_target: true,
     };
-    let json = serde_json::to_string(&summary).unwrap_or_default();
-    let recovered: DimensionPublicationSummary = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&summary).unwrap();
+    let recovered: DimensionPublicationSummary = serde_json::from_str(&json).unwrap();
     assert_eq!(summary, recovered);
 }
 
 #[test]
 fn report_input_serde_roundtrip() {
     let input = report_input(passing_scorecard());
-    let json = serde_json::to_string(&input).unwrap_or_default();
-    let recovered: CategoryShiftReportInput = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&input).unwrap();
+    let recovered: CategoryShiftReportInput = serde_json::from_str(&json).unwrap();
     assert_eq!(input, recovered);
 }
 
@@ -809,12 +809,12 @@ fn capability_ord_is_consistent() {
 #[test]
 fn capability_serde_rename_all_snake_case() {
     let json = serde_json::to_string(&CategoryShiftCapability::ProofCarryingOptimization)
-        .unwrap_or_default();
+        .unwrap();
     assert_eq!(json, "\"proof_carrying_optimization\"");
 
     let json2 =
         serde_json::to_string(&CategoryShiftCapability::AdversarialCompromiseRateSuppression)
-            .unwrap_or_default();
+            .unwrap();
     assert_eq!(json2, "\"adversarial_compromise_rate_suppression\"");
 }
 
@@ -1319,8 +1319,8 @@ fn dimension_publication_summary_boundary_zero_scores() {
         meets_floor: true,
         meets_target: true,
     };
-    let json = serde_json::to_string(&s).unwrap_or_default();
-    let recovered: DimensionPublicationSummary = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&s).unwrap();
+    let recovered: DimensionPublicationSummary = serde_json::from_str(&json).unwrap();
     assert_eq!(s, recovered);
     assert_eq!(recovered.raw_score_millionths, 0);
 }
@@ -1334,8 +1334,8 @@ fn dimension_publication_summary_boundary_max_scores() {
         meets_floor: true,
         meets_target: true,
     };
-    let json = serde_json::to_string(&s).unwrap_or_default();
-    let recovered: DimensionPublicationSummary = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&s).unwrap();
+    let recovered: DimensionPublicationSummary = serde_json::from_str(&json).unwrap();
     assert_eq!(s, recovered);
 }
 

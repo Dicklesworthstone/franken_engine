@@ -283,8 +283,8 @@ fn arena_budget_serde_roundtrip() {
         max_spans: 200,
         max_bytes: 8192,
     };
-    let json = serde_json::to_string(&budget).unwrap_or_default();
-    let recovered: ArenaBudget = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&budget).unwrap();
+    let recovered: ArenaBudget = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.max_nodes, 100);
     assert_eq!(recovered.max_expressions, 50);
 }
@@ -299,8 +299,8 @@ fn arena_budget_kind_serde_roundtrip() {
         ArenaBudgetKind::Spans,
         ArenaBudgetKind::Bytes,
     ] {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let recovered: ArenaBudgetKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let recovered: ArenaBudgetKind = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, kind);
     }
 }
@@ -327,8 +327,8 @@ fn handle_audit_kind_serde_roundtrip() {
         HandleAuditKind::Expression,
         HandleAuditKind::Span,
     ] {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let recovered: HandleAuditKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let recovered: HandleAuditKind = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, kind);
     }
 }
@@ -474,8 +474,8 @@ fn handle_audit_entry_serde_roundtrip() {
     let entries = arena.handle_audit_entries();
     assert!(!entries.is_empty());
     let entry = &entries[0];
-    let json = serde_json::to_string(entry).unwrap_or_default();
-    let recovered: HandleAuditEntry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(entry).unwrap();
+    let recovered: HandleAuditEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(*entry, recovered);
 }
 
@@ -580,8 +580,8 @@ fn arena_error_handle_audit_serialization_display() {
 #[test]
 fn node_handle_serde_roundtrip() {
     let handle = NodeHandle::from_parts(10, 3);
-    let json = serde_json::to_string(&handle).unwrap_or_default();
-    let recovered: NodeHandle = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&handle).unwrap();
+    let recovered: NodeHandle = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.index(), 10);
     assert_eq!(recovered.generation(), 3);
 }
@@ -589,8 +589,8 @@ fn node_handle_serde_roundtrip() {
 #[test]
 fn expression_handle_serde_roundtrip() {
     let handle = ExpressionHandle::from_parts(25, 4);
-    let json = serde_json::to_string(&handle).unwrap_or_default();
-    let recovered: ExpressionHandle = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&handle).unwrap();
+    let recovered: ExpressionHandle = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.index(), 25);
     assert_eq!(recovered.generation(), 4);
 }
@@ -598,8 +598,8 @@ fn expression_handle_serde_roundtrip() {
 #[test]
 fn span_handle_serde_roundtrip() {
     let handle = SpanHandle::from_parts(88, 2);
-    let json = serde_json::to_string(&handle).unwrap_or_default();
-    let recovered: SpanHandle = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&handle).unwrap();
+    let recovered: SpanHandle = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.index(), 88);
     assert_eq!(recovered.generation(), 2);
 }

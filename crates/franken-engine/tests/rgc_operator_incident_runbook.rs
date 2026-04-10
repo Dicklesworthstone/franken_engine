@@ -44,7 +44,7 @@ struct RgcOperatorIncidentRunbookFixture {
 fn load_fixture() -> RgcOperatorIncidentRunbookFixture {
     let path = Path::new("tests/fixtures/rgc_operator_incident_runbook_v1.json");
     let bytes = fs::read(path).expect("read rgc operator incident runbook fixture");
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    serde_json::from_slice(&bytes).unwrap()
 }
 
 fn load_doc() -> String {

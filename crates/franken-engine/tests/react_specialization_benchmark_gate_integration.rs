@@ -619,8 +619,8 @@ fn gate_result_serde_roundtrip() {
         50,
     )];
     let result = evaluate_benchmark_matrix(&config, &samples, &[], epoch());
-    let json = serde_json::to_string(&result).unwrap_or_default();
-    let deser: GateResult = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&result).unwrap();
+    let deser: GateResult = serde_json::from_str(&json).unwrap();
     assert_eq!(deser.overall_verdict, result.overall_verdict);
     assert_eq!(deser.cells.len(), result.cells.len());
 }
@@ -628,8 +628,8 @@ fn gate_result_serde_roundtrip() {
 #[test]
 fn receipt_serde_roundtrip() {
     let receipt = compute_receipt(hash(b"test"), &GateVerdict::Pass, epoch());
-    let json = serde_json::to_string(&receipt).unwrap_or_default();
-    let deser: DecisionReceipt = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&receipt).unwrap();
+    let deser: DecisionReceipt = serde_json::from_str(&json).unwrap();
     assert_eq!(deser.schema_version, receipt.schema_version);
     assert_eq!(deser.verdict_hash, receipt.verdict_hash);
 }
@@ -644,8 +644,8 @@ fn parity_report_serde_roundtrip() {
         100,
     )];
     let report = build_parity_report(&findings);
-    let json = serde_json::to_string(&report).unwrap_or_default();
-    let deser: ParityReport = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&report).unwrap();
+    let deser: ParityReport = serde_json::from_str(&json).unwrap();
     assert_eq!(
         deser.overall_parity_achieved,
         report.overall_parity_achieved

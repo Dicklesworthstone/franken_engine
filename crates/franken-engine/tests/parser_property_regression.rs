@@ -124,7 +124,7 @@ fn semantic_signature(tree: &SyntaxTree) -> Vec<String> {
         .map(|statement| match statement {
             Statement::Expression(expr) => {
                 let payload =
-                    serde_json::to_string(&expr.expression.canonical_value()).unwrap_or_default();
+                    serde_json::to_string(&expr.expression.canonical_value()).unwrap();
                 format!("expression:{payload}")
             }
             Statement::Import(import_decl) => {
@@ -134,7 +134,7 @@ fn semantic_signature(tree: &SyntaxTree) -> Vec<String> {
             Statement::Export(export_decl) => match &export_decl.kind {
                 ExportKind::Default(expression) => {
                     let payload =
-                        serde_json::to_string(&expression.canonical_value()).unwrap_or_default();
+                        serde_json::to_string(&expression.canonical_value()).unwrap();
                     format!("export_default:{payload}")
                 }
                 ExportKind::NamedClause(clause) => format!("export_named:{clause}"),
@@ -154,6 +154,7 @@ fn semantic_signature(tree: &SyntaxTree) -> Vec<String> {
             Statement::FunctionDeclaration(_) => "function_decl".to_string(),
             Statement::ForIn(_) => "for_in".to_string(),
             Statement::ForOf(_) => "for_of".to_string(),
+            Statement::ClassDeclaration(_) => "class_decl".to_string(),
         })
         .collect()
 }
@@ -629,8 +630,8 @@ fn generate_case_all_nine_variants_reachable() {
 fn parse_error_code_serde_roundtrip_all_variants() {
     use frankenengine_engine::parser::ParseErrorCode;
     for code in ParseErrorCode::ALL {
-        let json = serde_json::to_string(&code).unwrap_or_default();
-        let back: ParseErrorCode = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&code).unwrap();
+        let back: ParseErrorCode = serde_json::from_str(&json).unwrap();
         assert_eq!(code, back, "roundtrip failed for {:?}", code);
     }
 }
@@ -645,8 +646,8 @@ fn parse_budget_kind_serde_roundtrip_all_variants() {
         ParseBudgetKind::RecursionDepth,
     ];
     for kind in variants {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let back: ParseBudgetKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let back: ParseBudgetKind = serde_json::from_str(&json).unwrap();
         assert_eq!(kind, back, "roundtrip failed for {:?}", kind);
     }
 }
@@ -656,8 +657,8 @@ fn parse_budget_kind_serde_roundtrip_all_variants() {
 #[test]
 fn parser_mode_serde_roundtrip() {
     let mode = ParserMode::ScalarReference;
-    let json = serde_json::to_string(&mode).unwrap_or_default();
-    let back: ParserMode = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&mode).unwrap();
+    let back: ParserMode = serde_json::from_str(&json).unwrap();
     assert_eq!(mode, back);
 }
 
@@ -670,8 +671,8 @@ fn parser_budget_serde_roundtrip() {
         max_token_count: 1234,
         max_recursion_depth: 55,
     };
-    let json = serde_json::to_string(&budget).unwrap_or_default();
-    let back: ParserBudget = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&budget).unwrap();
+    let back: ParserBudget = serde_json::from_str(&json).unwrap();
     assert_eq!(budget, back);
 }
 
@@ -687,8 +688,8 @@ fn parser_options_serde_roundtrip() {
             max_recursion_depth: 10,
         },
     };
-    let json = serde_json::to_string(&opts).unwrap_or_default();
-    let back: ParserOptions = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&opts).unwrap();
+    let back: ParserOptions = serde_json::from_str(&json).unwrap();
     assert_eq!(opts, back);
 }
 
@@ -897,9 +898,9 @@ fn parse_diagnostic_envelope_serde_roundtrip() {
         .parse("", ParseGoal::Script)
         .expect_err("empty source should fail");
     let envelope = error.normalized_diagnostic();
-    let json = serde_json::to_string(&envelope).unwrap_or_default();
+    let json = serde_json::to_string(&envelope).unwrap();
     let back: frankenengine_engine::parser::ParseDiagnosticEnvelope =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(envelope, back);
 }
 
@@ -927,8 +928,8 @@ fn parse_diagnostic_taxonomy_v1_covers_all_error_codes() {
 fn parse_diagnostic_taxonomy_serde_roundtrip() {
     use frankenengine_engine::parser::ParseDiagnosticTaxonomy;
     let taxonomy = ParseDiagnosticTaxonomy::v1();
-    let json = serde_json::to_string(&taxonomy).unwrap_or_default();
-    let back: ParseDiagnosticTaxonomy = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&taxonomy).unwrap();
+    let back: ParseDiagnosticTaxonomy = serde_json::from_str(&json).unwrap();
     assert_eq!(taxonomy, back);
 }
 
@@ -938,8 +939,8 @@ fn parse_diagnostic_taxonomy_serde_roundtrip() {
 fn grammar_completeness_matrix_serde_roundtrip() {
     use frankenengine_engine::parser::GrammarCompletenessMatrix;
     let matrix = GrammarCompletenessMatrix::scalar_reference_es2020();
-    let json = serde_json::to_string(&matrix).unwrap_or_default();
-    let back: GrammarCompletenessMatrix = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&matrix).unwrap();
+    let back: GrammarCompletenessMatrix = serde_json::from_str(&json).unwrap();
     assert_eq!(matrix, back);
 }
 
@@ -991,8 +992,8 @@ fn parse_error_serde_roundtrip_without_witness() {
     let error = parser
         .parse("", ParseGoal::Script)
         .expect_err("should fail");
-    let json = serde_json::to_string(&error).unwrap_or_default();
-    let back: ParseError = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&error).unwrap();
+    let back: ParseError = serde_json::from_str(&json).unwrap();
     assert_eq!(error.code, back.code);
     assert_eq!(error.message, back.message);
 }
@@ -1013,8 +1014,8 @@ fn parse_error_serde_roundtrip_with_witness() {
         .parse_with_options("var x = 1;", ParseGoal::Script, &options)
         .expect_err("should fail");
     assert!(error.witness.is_some());
-    let json = serde_json::to_string(&error).unwrap_or_default();
-    let back: ParseError = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&error).unwrap();
+    let back: ParseError = serde_json::from_str(&json).unwrap();
     assert_eq!(error, back);
 }
 
@@ -1045,8 +1046,8 @@ fn parse_event_kind_serde_roundtrip() {
         ParseEventKind::ParseFailed,
     ];
     for kind in kinds {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let back: ParseEventKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let back: ParseEventKind = serde_json::from_str(&json).unwrap();
         assert_eq!(kind, back, "roundtrip failed for {:?}", kind);
     }
 }
@@ -1084,8 +1085,8 @@ fn parse_failure_witness_serde_roundtrip() {
         max_token_count: 65_536,
         max_recursion_depth: 256,
     };
-    let json = serde_json::to_string(&witness).unwrap_or_default();
-    let back: ParseFailureWitness = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&witness).unwrap();
+    let back: ParseFailureWitness = serde_json::from_str(&json).unwrap();
     assert_eq!(witness, back);
 }
 
@@ -1101,8 +1102,8 @@ fn grammar_coverage_status_serde_roundtrip_all_variants() {
         GrammarCoverageStatus::NotApplicable,
     ];
     for status in variants {
-        let json = serde_json::to_string(&status).unwrap_or_default();
-        let back: GrammarCoverageStatus = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&status).unwrap();
+        let back: GrammarCoverageStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(status, back, "roundtrip failed for {:?}", status);
     }
 }

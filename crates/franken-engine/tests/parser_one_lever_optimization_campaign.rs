@@ -89,7 +89,7 @@ const ALLOCS_PER_TOKEN_WEIGHT: i64 = 100_000;
 fn load_fixture() -> Fixture {
     let path = Path::new("tests/fixtures/parser_one_lever_optimization_campaign_v1.json");
     let bytes = fs::read(path).expect("read parser one-lever fixture");
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    serde_json::from_slice(&bytes).unwrap()
 }
 
 fn load_doc() -> String {

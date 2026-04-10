@@ -352,7 +352,7 @@ fn optimization_contract_serde_roundtrip_via_value() {
     let path = repo_root().join("docs/frx_optimization_lane_contract_v1.json");
     let raw = fs::read_to_string(&path).expect("read JSON");
     let value: Value = serde_json::from_str(&raw).expect("parse JSON");
-    let reserialized = serde_json::to_string_pretty(&value).unwrap_or_default();
+    let reserialized = serde_json::to_string_pretty(&value).unwrap();
     let reparsed: Value = serde_json::from_str(&reserialized).expect("re-parse");
     assert_eq!(value, reparsed, "serde roundtrip must preserve all data");
 }

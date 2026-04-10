@@ -122,7 +122,7 @@ struct RemediationAction {
 fn load_fixture() -> DifferentialNightlyGovernanceFixture {
     let path = Path::new("tests/fixtures/parser_differential_nightly_governance_v1.json");
     let bytes = fs::read(path).expect("read parser differential nightly governance fixture");
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    serde_json::from_slice(&bytes).unwrap()
 }
 
 fn fnv1a64(input: &[u8]) -> u64 {
@@ -874,9 +874,9 @@ fn evaluate_gate_deterministic() {
 #[test]
 fn fixture_serde_roundtrip_preserves_all_fields() {
     let fixture = load_fixture();
-    let serialized = serde_json::to_string(&fixture).unwrap_or_default();
+    let serialized = serde_json::to_string(&fixture).unwrap();
     let deserialized: DifferentialNightlyGovernanceFixture =
-        serde_json::from_str(&serialized).unwrap_or_default();
+        serde_json::from_str(&serialized).unwrap();
     assert_eq!(fixture, deserialized);
 }
 

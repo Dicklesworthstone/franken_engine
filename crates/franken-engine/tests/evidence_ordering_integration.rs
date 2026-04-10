@@ -96,16 +96,16 @@ fn size_bounds_serde_roundtrip() {
         max_witnesses: 20,
         max_constraints: 5,
     };
-    let json = serde_json::to_string(&bounds).unwrap_or_default();
-    let restored: SizeBounds = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&bounds).unwrap();
+    let restored: SizeBounds = serde_json::from_str(&json).unwrap();
     assert_eq!(bounds, restored);
 }
 
 #[test]
 fn size_bounds_default_serde_roundtrip() {
     let bounds = SizeBounds::default();
-    let json = serde_json::to_string(&bounds).unwrap_or_default();
-    let restored: SizeBounds = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&bounds).unwrap();
+    let restored: SizeBounds = serde_json::from_str(&json).unwrap();
     assert_eq!(bounds, restored);
 }
 
@@ -135,8 +135,8 @@ fn truncation_marker_serde_roundtrip() {
         retained_count: 64,
         policy: "top-K by action_name".to_string(),
     };
-    let json = serde_json::to_string(&marker).unwrap_or_default();
-    let restored: TruncationMarker = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&marker).unwrap();
+    let restored: TruncationMarker = serde_json::from_str(&json).unwrap();
     assert_eq!(marker, restored);
 }
 
@@ -227,8 +227,8 @@ fn ordering_violation_serde_all_variants() {
         OrderingViolation::ConstraintsExceedBound { count: 40, max: 32 },
     ];
     for v in &violations {
-        let json = serde_json::to_string(v).unwrap_or_default();
-        let restored: OrderingViolation = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(v).unwrap();
+        let restored: OrderingViolation = serde_json::from_str(&json).unwrap();
         assert_eq!(*v, restored);
     }
 }
@@ -805,8 +805,8 @@ fn normalized_entry_serde_roundtrip() {
     );
     normalize_entry(&mut entry, &SizeBounds::default());
 
-    let json = serde_json::to_string(&entry).unwrap_or_default();
-    let restored: EvidenceEntry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&entry).unwrap();
+    let restored: EvidenceEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(entry, restored);
 }
 
@@ -822,7 +822,7 @@ fn normalized_entry_deterministic_serialization() {
     );
     normalize_entry(&mut entry, &SizeBounds::default());
 
-    let json1 = serde_json::to_string(&entry).unwrap_or_default();
-    let json2 = serde_json::to_string(&entry).unwrap_or_default();
+    let json1 = serde_json::to_string(&entry).unwrap();
+    let json2 = serde_json::to_string(&entry).unwrap();
     assert_eq!(json1, json2, "serialization must be deterministic");
 }

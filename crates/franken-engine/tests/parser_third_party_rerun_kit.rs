@@ -36,7 +36,7 @@ struct ParserThirdPartyRerunKitFixture {
 fn load_fixture() -> ParserThirdPartyRerunKitFixture {
     let path = Path::new("tests/fixtures/parser_third_party_rerun_kit_v1.json");
     let bytes = fs::read(path).expect("read parser third-party rerun kit fixture");
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    serde_json::from_slice(&bytes).unwrap()
 }
 
 fn load_doc() -> String {

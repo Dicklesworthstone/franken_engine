@@ -219,7 +219,7 @@ fn write_input_file(input: &RuntimeDiagnosticsCliInput) -> PathBuf {
         nonce
     ));
 
-    fs::write(&path, serde_json::to_vec_pretty(input).unwrap_or_default())
+    fs::write(&path, serde_json::to_vec_pretty(input).unwrap())
         .expect("input file should be written");
 
     path

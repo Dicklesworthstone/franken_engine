@@ -417,7 +417,7 @@ fn capability_profile_serialized_length_exceeds_minimum() {
         CapabilityProfile::remote(),
         CapabilityProfile::compute_only(),
     ] {
-        let json = serde_json::to_string(&profile).unwrap_or_default();
+        let json = serde_json::to_string(&profile).unwrap();
         assert!(
             json.len() > 20,
             "serialized profile should be >20 chars, got {}",

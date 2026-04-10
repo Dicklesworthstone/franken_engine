@@ -47,7 +47,7 @@ fn load_docs_fixture() -> DocsContractFixture {
         ))
         .expect("read persistent cache docs fixture"),
     )
-    .unwrap_or_default()
+    .unwrap()
 }
 
 fn load_doc_markdown() -> String {
@@ -93,7 +93,7 @@ fn emitted_bundle_writes_required_contract_artifacts() {
 
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(&report.run_manifest_path).expect("read run manifest"))
-            .unwrap_or_default();
+            .unwrap();
     assert_eq!(
         manifest["schema_version"].as_str(),
         Some("franken-engine.rgc-persistent-cache-run-manifest.v1")
@@ -130,8 +130,8 @@ fn runner_script_is_rch_backed_and_verifies_bundle() {
 #[test]
 fn docs_fixture_serde_round_trip() {
     let fixture = build_docs_contract_fixture();
-    let json = serde_json::to_vec_pretty(&fixture).unwrap_or_default();
-    let deserialized: DocsContractFixture = serde_json::from_slice(&json).unwrap_or_default();
+    let json = serde_json::to_vec_pretty(&fixture).unwrap();
+    let deserialized: DocsContractFixture = serde_json::from_slice(&json).unwrap();
     assert_eq!(fixture, deserialized);
 }
 
@@ -251,8 +251,8 @@ fn artifact_context_artifact_dir_is_preserved() {
 #[test]
 fn artifact_context_serde_round_trip() {
     let ctx = ArtifactContext::new("/tmp/test-serde");
-    let json = serde_json::to_vec_pretty(&ctx).unwrap_or_default();
-    let deserialized: ArtifactContext = serde_json::from_slice(&json).unwrap_or_default();
+    let json = serde_json::to_vec_pretty(&ctx).unwrap();
+    let deserialized: ArtifactContext = serde_json::from_slice(&json).unwrap();
     assert_eq!(ctx, deserialized);
 }
 

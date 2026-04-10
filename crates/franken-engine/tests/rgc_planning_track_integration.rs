@@ -364,7 +364,7 @@ fn bundle_generated_at_utc_is_well_formed_iso8601() {
 fn bundle_serializes_to_valid_json() {
     let bundle =
         build_rgc_planning_track_bundle_with_generated_at(1_772_467_200_000).expect("build");
-    let json = serde_json::to_string(&bundle).unwrap_or_default();
+    let json = serde_json::to_string(&bundle).unwrap();
     let parsed: Value = serde_json::from_str(&json).expect("parse");
     assert_eq!(parsed["schema_version"], SCHEMA_VERSION);
     assert_eq!(parsed["bead_id"], BEAD_ID);
@@ -485,7 +485,7 @@ fn enrichment_scope_contract_snapshot_serde_roundtrip() {
     let bundle =
         build_rgc_planning_track_bundle_with_generated_at(1_772_467_200_000).expect("build");
     let scope = &bundle.scope_contract_snapshot;
-    let json = serde_json::to_string(scope).unwrap_or_default();
+    let json = serde_json::to_string(scope).unwrap();
     let restored: serde_json::Value = serde_json::from_str(&json).expect("parse scope json");
     assert_eq!(
         restored["schema_version"].as_str().unwrap(),
@@ -502,7 +502,7 @@ fn enrichment_risk_acceptance_ledger_serde_roundtrip() {
     let bundle =
         build_rgc_planning_track_bundle_with_generated_at(1_772_467_200_000).expect("build");
     let ledger = &bundle.risk_acceptance_ledger;
-    let json = serde_json::to_string(ledger).unwrap_or_default();
+    let json = serde_json::to_string(ledger).unwrap();
     let restored: serde_json::Value = serde_json::from_str(&json).expect("parse ledger json");
     assert_eq!(
         restored["schema_version"].as_str().unwrap(),
@@ -519,7 +519,7 @@ fn enrichment_milestone_gatebook_serde_roundtrip() {
     let bundle =
         build_rgc_planning_track_bundle_with_generated_at(1_772_467_200_000).expect("build");
     let gatebook = &bundle.milestone_gatebook;
-    let json = serde_json::to_string(gatebook).unwrap_or_default();
+    let json = serde_json::to_string(gatebook).unwrap();
     let restored: serde_json::Value = serde_json::from_str(&json).expect("parse gatebook json");
     assert_eq!(
         restored["schema_version"].as_str().unwrap(),
@@ -693,7 +693,7 @@ fn enrichment_wave_handoff_serde_roundtrip() {
     let bundle =
         build_rgc_planning_track_bundle_with_generated_at(1_772_467_200_000).expect("build");
     let whm = &bundle.wave_handoff_matrix;
-    let json = serde_json::to_string(whm).unwrap_or_default();
+    let json = serde_json::to_string(whm).unwrap();
     let restored: Value = serde_json::from_str(&json).expect("parse whm json");
     assert_eq!(
         restored["schema_version"].as_str().unwrap(),

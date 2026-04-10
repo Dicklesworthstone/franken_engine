@@ -98,8 +98,8 @@ fn risk_state_all_has_four_variants() {
 #[test]
 fn risk_state_serde_roundtrip_all_variants() {
     for state in &RiskState::ALL {
-        let json = serde_json::to_string(state).unwrap_or_default();
-        let restored: RiskState = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(state).unwrap();
+        let restored: RiskState = serde_json::from_str(&json).unwrap();
         assert_eq!(*state, restored);
     }
 }
@@ -233,16 +233,16 @@ fn posterior_display_format_stable_across_calls() {
 #[test]
 fn posterior_serde_roundtrip() {
     let p = Posterior::default_prior();
-    let json = serde_json::to_string(&p).unwrap_or_default();
-    let restored: Posterior = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&p).unwrap();
+    let restored: Posterior = serde_json::from_str(&json).unwrap();
     assert_eq!(p, restored);
 }
 
 #[test]
 fn posterior_serde_roundtrip_uniform() {
     let p = Posterior::uniform();
-    let json = serde_json::to_string(&p).unwrap_or_default();
-    let restored: Posterior = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&p).unwrap();
+    let restored: Posterior = serde_json::from_str(&json).unwrap();
     assert_eq!(p, restored);
 }
 
@@ -253,16 +253,16 @@ fn posterior_serde_roundtrip_uniform() {
 #[test]
 fn evidence_serde_roundtrip() {
     let ev = benign_evidence();
-    let json = serde_json::to_string(&ev).unwrap_or_default();
-    let restored: Evidence = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&ev).unwrap();
+    let restored: Evidence = serde_json::from_str(&json).unwrap();
     assert_eq!(ev, restored);
 }
 
 #[test]
 fn evidence_serde_roundtrip_malicious() {
     let ev = malicious_evidence();
-    let json = serde_json::to_string(&ev).unwrap_or_default();
-    let restored: Evidence = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&ev).unwrap();
+    let restored: Evidence = serde_json::from_str(&json).unwrap();
     assert_eq!(ev, restored);
 }
 
@@ -346,8 +346,8 @@ fn likelihood_model_unknown_is_always_million() {
 #[test]
 fn likelihood_model_serde_roundtrip() {
     let model = LikelihoodModel::default();
-    let json = serde_json::to_string(&model).unwrap_or_default();
-    let restored: LikelihoodModel = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&model).unwrap();
+    let restored: LikelihoodModel = serde_json::from_str(&json).unwrap();
     assert_eq!(model, restored);
 }
 
@@ -420,8 +420,8 @@ fn change_detector_reset_restores_initial_state() {
 fn change_detector_serde_roundtrip() {
     let mut det = ChangePointDetector::new(50_000, 50);
     det.update(MILLION, MILLION);
-    let json = serde_json::to_string(&det).unwrap_or_default();
-    let restored: ChangePointDetector = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&det).unwrap();
+    let restored: ChangePointDetector = serde_json::from_str(&json).unwrap();
     assert_eq!(det, restored);
 }
 
@@ -652,8 +652,8 @@ fn updater_serde_roundtrip() {
     let mut updater = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-001");
     updater.update(&benign_evidence());
     updater.update(&malicious_evidence());
-    let json = serde_json::to_string(&updater).unwrap_or_default();
-    let restored: BayesianPosteriorUpdater = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&updater).unwrap();
+    let restored: BayesianPosteriorUpdater = serde_json::from_str(&json).unwrap();
     assert_eq!(updater.posterior(), restored.posterior());
     assert_eq!(updater.update_count(), restored.update_count());
     assert_eq!(
@@ -688,8 +688,8 @@ fn updater_posterior_always_valid_after_updates() {
 fn update_result_serde_roundtrip() {
     let mut updater = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-001");
     let result = updater.update(&benign_evidence());
-    let json = serde_json::to_string(&result).unwrap_or_default();
-    let restored: UpdateResult = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&result).unwrap();
+    let restored: UpdateResult = serde_json::from_str(&json).unwrap();
     assert_eq!(result, restored);
 }
 
@@ -754,8 +754,8 @@ fn calibration_check_all_ground_truths() {
 fn calibration_result_serde_roundtrip() {
     let updater = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-001");
     let cal = updater.calibration_check(RiskState::Benign);
-    let json = serde_json::to_string(&cal).unwrap_or_default();
-    let restored: CalibrationResult = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&cal).unwrap();
+    let restored: CalibrationResult = serde_json::from_str(&json).unwrap();
     assert_eq!(cal, restored);
 }
 
@@ -860,8 +860,8 @@ fn store_serde_roundtrip() {
     let mut store = UpdaterStore::new();
     store.get_or_create("ext-001");
     store.get_or_create("ext-002");
-    let json = serde_json::to_string(&store).unwrap_or_default();
-    let restored: UpdaterStore = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&store).unwrap();
+    let restored: UpdaterStore = serde_json::from_str(&json).unwrap();
     assert_eq!(store.len(), restored.len());
     assert!(restored.get("ext-001").is_some());
     assert!(restored.get("ext-002").is_some());
@@ -990,8 +990,8 @@ fn updater_serde_preserves_determinism() {
     updater.update(&benign_evidence());
     updater.update(&malicious_evidence());
 
-    let json = serde_json::to_string(&updater).unwrap_or_default();
-    let mut restored: BayesianPosteriorUpdater = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&updater).unwrap();
+    let mut restored: BayesianPosteriorUpdater = serde_json::from_str(&json).unwrap();
 
     // Both should produce the same result for the same next evidence.
     let ev = anomalous_evidence();

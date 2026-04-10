@@ -356,8 +356,8 @@ fn boundary_class_all_contains_nine_variants() {
 #[test]
 fn boundary_class_serde_roundtrip_for_each_variant() {
     for variant in BoundaryClass::ALL {
-        let json = serde_json::to_string(&variant).unwrap_or_default();
-        let back: BoundaryClass = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&variant).unwrap();
+        let back: BoundaryClass = serde_json::from_str(&json).unwrap();
         assert_eq!(back, variant, "roundtrip failed for {variant}");
     }
 }

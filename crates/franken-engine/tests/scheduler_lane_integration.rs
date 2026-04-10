@@ -147,8 +147,8 @@ fn scheduler_lane_serde_round_trip_all_variants() {
         SchedulerLane::Timed,
         SchedulerLane::Ready,
     ] {
-        let json = serde_json::to_string(lane).unwrap_or_default();
-        let restored: SchedulerLane = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(lane).unwrap();
+        let restored: SchedulerLane = serde_json::from_str(&json).unwrap();
         assert_eq!(*lane, restored);
     }
 }
@@ -287,8 +287,8 @@ fn task_type_serde_round_trip_all_variants() {
         TaskType::SagaStepExec,
     ];
     for tt in &variants {
-        let json = serde_json::to_string(tt).unwrap_or_default();
-        let restored: TaskType = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(tt).unwrap();
+        let restored: TaskType = serde_json::from_str(&json).unwrap();
         assert_eq!(*tt, restored);
     }
 }
@@ -325,8 +325,8 @@ fn task_label_serde_round_trip() {
         trace_id: "tr-999".to_string(),
         priority_sub_band: 7,
     };
-    let json = serde_json::to_string(&label).unwrap_or_default();
-    let restored: TaskLabel = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&label).unwrap();
+    let restored: TaskLabel = serde_json::from_str(&json).unwrap();
     assert_eq!(label, restored);
 }
 
@@ -357,8 +357,8 @@ fn task_id_display() {
 #[test]
 fn task_id_serde_round_trip() {
     let id = TaskId(12345);
-    let json = serde_json::to_string(&id).unwrap_or_default();
-    let restored: TaskId = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&id).unwrap();
+    let restored: TaskId = serde_json::from_str(&json).unwrap();
     assert_eq!(id, restored);
 }
 
@@ -404,8 +404,8 @@ fn scheduled_task_serde_round_trip() {
         submitted_at: 50,
         payload_id: "p-serde".to_string(),
     };
-    let json = serde_json::to_string(&task).unwrap_or_default();
-    let restored: ScheduledTask = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&task).unwrap();
+    let restored: ScheduledTask = serde_json::from_str(&json).unwrap();
     assert_eq!(task, restored);
 }
 
@@ -452,8 +452,8 @@ fn lane_metrics_serde_round_trip() {
         tasks_completed: 90,
         tasks_timed_out: 5,
     };
-    let json = serde_json::to_string(&m).unwrap_or_default();
-    let restored: LaneMetrics = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&m).unwrap();
+    let restored: LaneMetrics = serde_json::from_str(&json).unwrap();
     assert_eq!(m, restored);
 }
 
@@ -492,8 +492,8 @@ fn lane_config_serde_round_trip() {
         ready_max_depth: 32,
         ready_min_throughput: 3,
     };
-    let json = serde_json::to_string(&cfg).unwrap_or_default();
-    let restored: LaneConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&cfg).unwrap();
+    let restored: LaneConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(cfg, restored);
 }
 
@@ -536,8 +536,8 @@ fn scheduler_event_serde_round_trip() {
         queue_position: 5,
         event: "schedule".to_string(),
     };
-    let json = serde_json::to_string(&ev).unwrap_or_default();
-    let restored: SchedulerEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&ev).unwrap();
+    let restored: SchedulerEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(ev, restored);
 }
 
@@ -607,8 +607,8 @@ fn lane_error_serde_round_trip_all_variants() {
         LaneError::EmptyTraceId,
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).unwrap_or_default();
-        let restored: LaneError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(err).unwrap();
+        let restored: LaneError = serde_json::from_str(&json).unwrap();
         assert_eq!(*err, restored);
     }
 }
@@ -1844,8 +1844,8 @@ fn serde_round_trip_of_scheduled_task_from_batch() {
     let batch = sched.schedule_batch(10, 50);
     let task = &batch[0];
 
-    let json = serde_json::to_string(task).unwrap_or_default();
-    let restored: ScheduledTask = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(task).unwrap();
+    let restored: ScheduledTask = serde_json::from_str(&json).unwrap();
     assert_eq!(*task, restored);
     assert_eq!(restored.label.trace_id, "serde-trace");
     assert_eq!(restored.payload_id, "serde-payload");

@@ -375,8 +375,8 @@ fn serialized_roundtrip_preserves_query_and_audit_results() {
     let before_count = log.query(&query).len();
     let before_audit = log.audit();
 
-    let encoded = serde_json::to_vec(&log).unwrap_or_default();
-    let decoded: ReplacementLineageLog = serde_json::from_slice(&encoded).unwrap_or_default();
+    let encoded = serde_json::to_vec(&log).unwrap();
+    let decoded: ReplacementLineageLog = serde_json::from_slice(&encoded).unwrap();
 
     assert_eq!(before_count, decoded.query(&query).len());
     assert_eq!(before_audit, decoded.audit());
@@ -855,8 +855,8 @@ fn replacement_kind_serde_roundtrip() {
         ReplacementKind::RePromotion,
         ReplacementKind::Rollback,
     ] {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let recovered: ReplacementKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let recovered: ReplacementKind = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, kind);
     }
 }
@@ -1002,9 +1002,9 @@ fn log_inclusion_proof_detects_tamper() {
 #[test]
 fn lineage_log_config_default_serde_roundtrip() {
     let config = LineageLogConfig::default();
-    let json = serde_json::to_string(&config).unwrap_or_default();
-    let recovered: LineageLogConfig = serde_json::from_str(&json).unwrap_or_default();
-    assert_eq!(serde_json::to_string(&recovered).unwrap_or_default(), json);
+    let json = serde_json::to_string(&config).unwrap();
+    let recovered: LineageLogConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(serde_json::to_string(&recovered).unwrap(), json);
 }
 
 // ---------- EvidenceCategory ----------
@@ -1017,8 +1017,8 @@ fn evidence_category_serde_roundtrip() {
         EvidenceCategory::DifferentialExecutionLog,
         EvidenceCategory::Additional,
     ] {
-        let json = serde_json::to_string(&category).unwrap_or_default();
-        let recovered: EvidenceCategory = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&category).unwrap();
+        let recovered: EvidenceCategory = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, category);
     }
 }
@@ -1141,8 +1141,8 @@ fn log_serde_roundtrip_preserves_len_and_merkle_root() {
     let root_before = log.merkle_root();
     let len_before = log.len();
 
-    let encoded = serde_json::to_vec(&log).unwrap_or_default();
-    let decoded: ReplacementLineageLog = serde_json::from_slice(&encoded).unwrap_or_default();
+    let encoded = serde_json::to_vec(&log).unwrap();
+    let decoded: ReplacementLineageLog = serde_json::from_slice(&encoded).unwrap();
     assert_eq!(decoded.len(), len_before);
     assert_eq!(decoded.merkle_root(), root_before);
 }
@@ -1375,8 +1375,8 @@ fn log_json_roundtrip_preserves_entries_count() {
         .expect("append");
     }
 
-    let json = serde_json::to_string(&log).unwrap_or_default();
-    let decoded: ReplacementLineageLog = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&log).unwrap();
+    let decoded: ReplacementLineageLog = serde_json::from_str(&json).unwrap();
     assert_eq!(decoded.len(), 5);
     assert_eq!(decoded.entries().len(), 5);
 }

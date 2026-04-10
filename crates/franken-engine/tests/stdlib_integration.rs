@@ -72,6 +72,30 @@ fn stringify_json_with_heap(heap: &ObjectHeap, value: &JsValue) -> Result<JsValu
     json_stringify(heap, value)
 }
 
+fn nested_json_array_string(array_depth: usize) -> String {
+    let mut json = String::with_capacity(array_depth * 2 + 1);
+    for _ in 0..array_depth {
+        json.push('[');
+    }
+    json.push('0');
+    for _ in 0..array_depth {
+        json.push(']');
+    }
+    json
+}
+
+fn nested_heap_array_value(array_depth: usize) -> (ObjectHeap, JsValue) {
+    let mut heap = ObjectHeap::new();
+    let env = install_stdlib(&mut heap);
+    let mut current = JsValue::Int(0);
+    for _ in 0..array_depth {
+        let handle =
+            alloc_array_instance(&mut heap, env.prototypes.array_prototype, &[current]).unwrap();
+        current = JsValue::Object(handle);
+    }
+    (heap, current)
+}
+
 // ---------------------------------------------------------------------------
 // install_stdlib smoke tests
 // ---------------------------------------------------------------------------
@@ -740,6 +764,22 @@ fn json_stringify_rejects_circular_objects() {
 }
 
 #[test]
+fn json_stringify_accepts_value_at_recursion_limit() {
+    let (heap, value) = nested_heap_array_value(255);
+    assert!(stringify_json_with_heap(&heap, &value).is_ok());
+}
+
+#[test]
+fn json_stringify_rejects_value_beyond_recursion_limit() {
+    let (heap, value) = nested_heap_array_value(256);
+    let err = stringify_json_with_heap(&heap, &value).unwrap_err();
+    assert!(
+        matches!(err, StdlibError::JsonStringifyError(ref message) if message.contains("depth budget exceeded")),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn json_stringify_rejects_enumerable_accessor_properties() {
     let (mut heap, _env, value) = parse_json_with_heap("{}");
     let JsValue::Object(handle) = value else {
@@ -829,7 +869,7 @@ fn json_stringify_compound_traversal_scenario_emits_artifact_bundle() {
             timing_us: 10 + sequence,
             timestamp_unix_ms: 1_700_000_920_130 + sequence,
         }))
-        .unwrap_or_default();
+        .unwrap();
         let event_object = event
             .as_object_mut()
             .expect("scenario event should serialize as object");
@@ -1087,7 +1127,7 @@ fn json_stringify_compound_traversal_scenario_emits_artifact_bundle() {
 
     let events_jsonl = events
         .iter()
-        .map(|event| serde_json::to_string(event).unwrap_or_default())
+        .map(|event| serde_json::to_string(event).unwrap())
         .collect::<Vec<_>>()
         .join("\n");
     fs::write(
@@ -1198,7 +1238,7 @@ fn json_compound_placeholder_closure_scenario_emits_artifact_bundle() {
             timing_us: 20 + sequence,
             timestamp_unix_ms: 1_700_000_920_140 + sequence,
         }))
-        .unwrap_or_default();
+        .unwrap();
         let event_object = event
             .as_object_mut()
             .expect("closure event should serialize as object");
@@ -1366,7 +1406,7 @@ fn json_compound_placeholder_closure_scenario_emits_artifact_bundle() {
 
     let events_jsonl = events
         .iter()
-        .map(|event| serde_json::to_string(event).unwrap_or_default())
+        .map(|event| serde_json::to_string(event).unwrap())
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -1486,6 +1526,22 @@ fn json_parse_compound_materializes_array() {
 fn json_parse_invalid_returns_error() {
     let result = parse_json_value("not_valid_json");
     assert!(result.is_err());
+}
+
+#[test]
+fn json_parse_accepts_input_at_recursion_limit() {
+    let input = nested_json_array_string(255);
+    assert!(parse_json_value(&input).is_ok());
+}
+
+#[test]
+fn json_parse_rejects_input_beyond_recursion_limit() {
+    let input = nested_json_array_string(256);
+    let err = parse_json_value(&input).unwrap_err();
+    assert!(
+        matches!(err, StdlibError::JsonParseError(ref message) if message.contains("depth budget exceeded")),
+        "unexpected error: {err}"
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -72,7 +72,7 @@ fn bundle_allows_publication_when_thresholds_pass_for_all_cohorts() {
     assert!(decision.overall_summary.required_cohorts_present);
     assert_eq!(decision.trend.len(), 1);
 
-    let json = decision.to_json_pretty().unwrap_or_default();
+    let json = decision.to_json_pretty().unwrap();
     assert!(json.contains("plas-bundle-"));
 
     let markdown = decision.to_markdown_report();
@@ -226,8 +226,8 @@ fn plas_benchmark_cohort_serde_roundtrip() {
         PlasBenchmarkCohort::HighRisk,
         PlasBenchmarkCohort::Boundary,
     ] {
-        let json = serde_json::to_string(&cohort).unwrap_or_default();
-        let recovered: PlasBenchmarkCohort = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&cohort).unwrap();
+        let recovered: PlasBenchmarkCohort = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, cohort);
     }
 }
@@ -237,8 +237,8 @@ fn plas_benchmark_cohort_serde_roundtrip() {
 #[test]
 fn extension_sample_serde_roundtrip() {
     let s = base_sample("ext-serde", PlasBenchmarkCohort::Complex);
-    let json = serde_json::to_string(&s).unwrap_or_default();
-    let recovered: PlasBenchmarkExtensionSample = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&s).unwrap();
+    let recovered: PlasBenchmarkExtensionSample = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.extension_id, "ext-serde");
     assert_eq!(recovered.cohort, PlasBenchmarkCohort::Complex);
 }
@@ -248,8 +248,8 @@ fn extension_sample_serde_roundtrip() {
 #[test]
 fn request_serde_roundtrip() {
     let req = request_with_samples(representative_samples());
-    let json = serde_json::to_string(&req).unwrap_or_default();
-    let recovered: PlasBenchmarkBundleRequest = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&req).unwrap();
+    let recovered: PlasBenchmarkBundleRequest = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.trace_id, "trace-plas-benchmark");
     assert_eq!(recovered.samples.len(), 4);
 }
@@ -307,8 +307,8 @@ fn trend_point_serde_roundtrip() {
         mean_escrow_event_rate_per_hour_millionths: 2_000_000,
         witness_coverage_millionths: 1_000_000,
     };
-    let json = serde_json::to_string(&point).unwrap_or_default();
-    let recovered: PlasBenchmarkTrendPoint = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&point).unwrap();
+    let recovered: PlasBenchmarkTrendPoint = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.benchmark_run_id, "run-serde");
 }
 
@@ -462,8 +462,8 @@ fn cohort_summary_serde_roundtrip() {
     let request = request_with_samples(representative_samples());
     let decision = build_plas_benchmark_bundle(&request).expect("bundle");
     for summary in &decision.cohort_summaries {
-        let json = serde_json::to_string(summary).unwrap_or_default();
-        let recovered: PlasBenchmarkCohortSummary = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(summary).unwrap();
+        let recovered: PlasBenchmarkCohortSummary = serde_json::from_str(&json).unwrap();
         assert_eq!(*summary, recovered);
     }
 }
@@ -640,9 +640,9 @@ fn extension_result_serde_roundtrip() {
     let req = request_with_samples(representative_samples());
     let decision = build_plas_benchmark_bundle(&req).expect("build");
     for result in &decision.extension_results {
-        let json = serde_json::to_string(result).unwrap_or_default();
+        let json = serde_json::to_string(result).unwrap();
         let recovered: PlasBenchmarkExtensionResult =
-            serde_json::from_str(&json).unwrap_or_default();
+            serde_json::from_str(&json).unwrap();
         assert_eq!(*result, recovered);
     }
 }
@@ -651,8 +651,8 @@ fn extension_result_serde_roundtrip() {
 fn overall_summary_serde_roundtrip() {
     let req = request_with_samples(representative_samples());
     let decision = build_plas_benchmark_bundle(&req).expect("build");
-    let json = serde_json::to_string(&decision.overall_summary).unwrap_or_default();
-    let recovered: PlasBenchmarkOverallSummary = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&decision.overall_summary).unwrap();
+    let recovered: PlasBenchmarkOverallSummary = serde_json::from_str(&json).unwrap();
     assert_eq!(decision.overall_summary, recovered);
 }
 
@@ -660,8 +660,8 @@ fn overall_summary_serde_roundtrip() {
 fn bundle_decision_serde_roundtrip() {
     let req = request_with_samples(representative_samples());
     let decision = build_plas_benchmark_bundle(&req).expect("build");
-    let json = serde_json::to_string(&decision).unwrap_or_default();
-    let recovered: PlasBenchmarkBundleDecision = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&decision).unwrap();
+    let recovered: PlasBenchmarkBundleDecision = serde_json::from_str(&json).unwrap();
     assert_eq!(decision, recovered);
 }
 
@@ -671,8 +671,8 @@ fn bundle_event_serde_roundtrip() {
     let decision = build_plas_benchmark_bundle(&req).expect("build");
     assert!(!decision.events.is_empty());
     for event in &decision.events {
-        let json = serde_json::to_string(event).unwrap_or_default();
-        let recovered: PlasBenchmarkBundleEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(event).unwrap();
+        let recovered: PlasBenchmarkBundleEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(*event, recovered);
     }
 }
@@ -757,7 +757,7 @@ fn decision_serialization_is_deterministic() {
     let req = request_with_samples(representative_samples());
     let a = build_plas_benchmark_bundle(&req).expect("build a");
     let b = build_plas_benchmark_bundle(&req).expect("build b");
-    let json_a = serde_json::to_string(&a).unwrap_or_default();
-    let json_b = serde_json::to_string(&b).unwrap_or_default();
+    let json_a = serde_json::to_string(&a).unwrap();
+    let json_b = serde_json::to_string(&b).unwrap();
     assert_eq!(json_a, json_b);
 }

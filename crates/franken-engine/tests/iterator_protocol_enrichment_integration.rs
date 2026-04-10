@@ -33,7 +33,7 @@ fn make_id(label: &str) -> EngineObjectId {
         &test_schema(),
         label.as_bytes(),
     )
-    .unwrap_or_default()
+    .unwrap()
 }
 
 // ===========================================================================

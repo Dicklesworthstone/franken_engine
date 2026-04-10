@@ -808,14 +808,14 @@ fn authorization_tampering_is_rejected() {
     let client = test_client("cell-001");
     do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).expect("handshake");
 
-    let mut verifier_json = serde_json::to_value(&verifier).unwrap_or_default();
+    let mut verifier_json = serde_json::to_value(&verifier).unwrap();
     verifier_json["active_authorizations"]["cell-001"]["authorized_operations"]
         .as_array_mut()
         .expect("authorization operations array")
         .push(serde_json::Value::String("admin_override".to_string()));
 
     let tampered_verifier: PolicyPlaneVerifier =
-        serde_json::from_value(verifier_json).unwrap_or_default();
+        serde_json::from_value(verifier_json).unwrap();
     let err = tampered_verifier
         .check_authorization("cell-001", "admin_override", 2000)
         .expect_err("tampered authorization should be rejected");
@@ -890,8 +890,8 @@ fn handshake_event_success_serde_roundtrip() {
     do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
 
     let event = &verifier.events()[0];
-    let json = serde_json::to_string(event).unwrap_or_default();
-    let recovered: HandshakeEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(event).unwrap();
+    let recovered: HandshakeEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(*event, recovered);
     assert_eq!(event.outcome, HandshakeOutcome::Authorized);
 }
@@ -910,8 +910,8 @@ fn verifier_serde_roundtrip() {
     let client = test_client("cell-001");
     do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
 
-    let json = serde_json::to_string(&verifier).unwrap_or_default();
-    let recovered: PolicyPlaneVerifier = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&verifier).unwrap();
+    let recovered: PolicyPlaneVerifier = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.authorization_count(), 1);
     assert_eq!(recovered.policy_version(), verifier.policy_version());
 }

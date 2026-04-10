@@ -78,8 +78,8 @@ fn sim_event_kind_display_matches_as_str() {
 #[test]
 fn sim_event_kind_serde_roundtrip_preserves_all() {
     for kind in &SimEventKind::ALL {
-        let json = serde_json::to_string(kind).unwrap_or_default();
-        let deser: SimEventKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(kind).unwrap();
+        let deser: SimEventKind = serde_json::from_str(&json).unwrap();
         assert_eq!(*kind, deser, "roundtrip failed for {:?}", kind);
     }
 }
@@ -144,8 +144,8 @@ fn sim_specimen_family_serde_roundtrip_all() {
         SimSpecimenFamily::MixedPriority,
     ];
     for f in &families {
-        let json = serde_json::to_string(f).unwrap_or_default();
-        let deser: SimSpecimenFamily = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(f).unwrap();
+        let deser: SimSpecimenFamily = serde_json::from_str(&json).unwrap();
         assert_eq!(*f, deser, "roundtrip failed for {:?}", f);
     }
 }
@@ -357,8 +357,8 @@ fn replay_log_serde_roundtrip() {
         kind: SimEventKind::HostcallInvoke,
         priority: SimPriority::HighPriority,
     });
-    let json = serde_json::to_string(&log).unwrap_or_default();
-    let deser: SimReplayLog = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&log).unwrap();
+    let deser: SimReplayLog = serde_json::from_str(&json).unwrap();
     assert_eq!(log.entries, deser.entries);
 }
 
@@ -374,8 +374,8 @@ fn tick_outcome_serde_preserves_all_fields() {
         microtasks_drained: 1,
         pending_count: 3,
     };
-    let json = serde_json::to_string(&outcome).unwrap_or_default();
-    let deser: TickOutcome = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&outcome).unwrap();
+    let deser: TickOutcome = serde_json::from_str(&json).unwrap();
     assert_eq!(outcome, deser);
 }
 
@@ -390,8 +390,8 @@ fn sim_run_summary_serde_roundtrip() {
     s.schedule(SimEventKind::GcPause, SimPriority::LowPriority, 1, "gc", 0);
     let summary = s.run_to_completion();
 
-    let json = serde_json::to_string(&summary).unwrap_or_default();
-    let deser: SimRunSummary = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&summary).unwrap();
+    let deser: SimRunSummary = serde_json::from_str(&json).unwrap();
     assert_eq!(summary.total_ticks, deser.total_ticks);
     assert_eq!(summary.total_events, deser.total_events);
     assert_eq!(summary.events_by_kind, deser.events_by_kind);
@@ -450,8 +450,8 @@ fn scheduler_serde_roundtrip_preserves_state() {
     s.schedule(SimEventKind::EventLoopTick, SimPriority::Normal, 0, "a", 0);
     s.advance_tick();
 
-    let json = serde_json::to_string(&s).unwrap_or_default();
-    let deser: SimScheduler = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&s).unwrap();
+    let deser: SimScheduler = serde_json::from_str(&json).unwrap();
     assert_eq!(s.current_tick, deser.current_tick);
     assert_eq!(s.next_event_id, deser.next_event_id);
     assert_eq!(s.dispatch_log.len(), deser.dispatch_log.len());

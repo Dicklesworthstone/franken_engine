@@ -111,7 +111,7 @@ struct CampaignDecision {
 fn load_fixture() -> Fixture {
     let path = Path::new("tests/fixtures/tail_latency_memory_hardening_regression_gate_v1.json");
     let bytes = fs::read(path).expect("read tail-memory fixture");
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    serde_json::from_slice(&bytes).unwrap()
 }
 
 fn load_doc() -> String {

@@ -104,8 +104,8 @@ fn nondeterminism_source_serde_all_variants() {
         NondeterminismSource::FleetEvidenceArrival,
     ];
     for source in sources {
-        let json = serde_json::to_string(&source).unwrap_or_default();
-        let restored: NondeterminismSource = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&source).unwrap();
+        let restored: NondeterminismSource = serde_json::from_str(&json).unwrap();
         assert_eq!(source, restored, "roundtrip for {source:?}");
     }
 }
@@ -123,8 +123,8 @@ fn nondeterminism_entry_serde_roundtrip() {
         tick: 5000,
         extension_id: Some("ext-xyz".to_string()),
     };
-    let json = serde_json::to_string(&entry).unwrap_or_default();
-    let restored: NondeterminismEntry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&entry).unwrap();
+    let restored: NondeterminismEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(entry, restored);
 }
 
@@ -137,8 +137,8 @@ fn nondeterminism_entry_serde_without_extension() {
         tick: 0,
         extension_id: None,
     };
-    let json = serde_json::to_string(&entry).unwrap_or_default();
-    let restored: NondeterminismEntry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&entry).unwrap();
+    let restored: NondeterminismEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(entry, restored);
 }
 
@@ -165,8 +165,8 @@ fn nondeterminism_log_serde_roundtrip() {
     );
     log.append(NondeterminismSource::Timestamp, vec![3, 4], 200, None);
 
-    let json = serde_json::to_string(&log).unwrap_or_default();
-    let restored: NondeterminismLog = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&log).unwrap();
+    let restored: NondeterminismLog = serde_json::from_str(&json).unwrap();
     assert_eq!(log, restored);
     assert_eq!(log.content_hash(), restored.content_hash());
 }
@@ -191,8 +191,8 @@ fn nondeterminism_log_entries_returns_all() {
 #[test]
 fn decision_snapshot_serde_roundtrip() {
     let snapshot = make_snapshot(3, "sandbox", 200_000);
-    let json = serde_json::to_string(&snapshot).unwrap_or_default();
-    let restored: DecisionSnapshot = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&snapshot).unwrap();
+    let restored: DecisionSnapshot = serde_json::from_str(&json).unwrap();
     assert_eq!(snapshot, restored);
     assert_eq!(snapshot.content_hash(), restored.content_hash());
 }
@@ -212,8 +212,8 @@ fn trace_entry_serde_roundtrip() {
         decision: snapshot,
         epoch: SecurityEpoch::from_raw(5),
     };
-    let json = serde_json::to_string(&entry).unwrap_or_default();
-    let restored: TraceEntry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&entry).unwrap();
+    let restored: TraceEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(entry, restored);
 }
 
@@ -231,8 +231,8 @@ fn recording_mode_serde_all_variants() {
         },
     ];
     for mode in modes {
-        let json = serde_json::to_string(&mode).unwrap_or_default();
-        let restored: RecordingMode = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&mode).unwrap();
+        let restored: RecordingMode = serde_json::from_str(&json).unwrap();
         assert_eq!(mode, restored, "roundtrip for {mode:?}");
     }
 }
@@ -250,8 +250,8 @@ fn recorder_config_serde_roundtrip() {
         start_tick: 42_000,
         signing_key: vec![1, 2, 3],
     };
-    let json = serde_json::to_string(&config).unwrap_or_default();
-    let restored: RecorderConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&config).unwrap();
+    let restored: RecorderConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(config.trace_id, restored.trace_id);
     assert_eq!(config.recording_mode, restored.recording_mode);
     assert_eq!(config.epoch, restored.epoch);
@@ -303,8 +303,8 @@ fn replay_decision_outcome_serde_roundtrip() {
         replayed_outcome_millionths: 800_000,
         diverged: true,
     };
-    let json = serde_json::to_string(&outcome).unwrap_or_default();
-    let restored: ReplayDecisionOutcome = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&outcome).unwrap();
+    let restored: ReplayDecisionOutcome = serde_json::from_str(&json).unwrap();
     assert_eq!(outcome, restored);
 }
 
@@ -317,8 +317,8 @@ fn replay_verdict_serde_identical() {
     let verdict = ReplayVerdict::Identical {
         decisions_replayed: 42,
     };
-    let json = serde_json::to_string(&verdict).unwrap_or_default();
-    let restored: ReplayVerdict = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&verdict).unwrap();
+    let restored: ReplayVerdict = serde_json::from_str(&json).unwrap();
     assert_eq!(verdict, restored);
 }
 
@@ -336,8 +336,8 @@ fn replay_verdict_serde_diverged() {
             diverged: true,
         }],
     };
-    let json = serde_json::to_string(&verdict).unwrap_or_default();
-    let restored: ReplayVerdict = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&verdict).unwrap();
+    let restored: ReplayVerdict = serde_json::from_str(&json).unwrap();
     assert_eq!(verdict, restored);
 }
 
@@ -346,8 +346,8 @@ fn replay_verdict_serde_tampered() {
     let verdict = ReplayVerdict::Tampered {
         detail: "hash chain broken".to_string(),
     };
-    let json = serde_json::to_string(&verdict).unwrap_or_default();
-    let restored: ReplayVerdict = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&verdict).unwrap();
+    let restored: ReplayVerdict = serde_json::from_str(&json).unwrap();
     assert_eq!(verdict, restored);
 }
 
@@ -373,8 +373,8 @@ fn counterfactual_config_serde_roundtrip() {
         evidence_weight_overrides: evidence,
         branch_from_index: 5,
     };
-    let json = serde_json::to_string(&config).unwrap_or_default();
-    let restored: CounterfactualConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&config).unwrap();
+    let restored: CounterfactualConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(config, restored);
 }
 
@@ -392,8 +392,8 @@ fn decision_delta_serde_roundtrip() {
         counterfactual_outcome_millionths: 800_000,
         diverged: true,
     };
-    let json = serde_json::to_string(&delta).unwrap_or_default();
-    let restored: DecisionDelta = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&delta).unwrap();
+    let restored: DecisionDelta = serde_json::from_str(&json).unwrap();
     assert_eq!(delta, restored);
 }
 
@@ -424,8 +424,8 @@ fn trace_query_serde_roundtrip() {
         incident_id: Some("INC-42".into()),
         has_divergence: Some(true),
     };
-    let json = serde_json::to_string(&query).unwrap_or_default();
-    let restored: TraceQuery = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&query).unwrap();
+    let restored: TraceQuery = serde_json::from_str(&json).unwrap();
     assert_eq!(query.trace_id, restored.trace_id);
     assert_eq!(query.extension_id, restored.extension_id);
     assert_eq!(query.policy_version, restored.policy_version);
@@ -457,8 +457,8 @@ fn trace_retention_policy_serde_roundtrip() {
         max_traces: 100,
         max_storage_bytes: 1_000_000,
     };
-    let json = serde_json::to_string(&policy).unwrap_or_default();
-    let restored: TraceRetentionPolicy = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&policy).unwrap();
+    let restored: TraceRetentionPolicy = serde_json::from_str(&json).unwrap();
     assert_eq!(policy, restored);
 }
 
@@ -553,8 +553,8 @@ fn replay_error_serde_all_variants() {
         ReplayError::SignatureInvalid,
     ];
     for err in errors {
-        let json = serde_json::to_string(&err).unwrap_or_default();
-        let restored: ReplayError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&err).unwrap();
+        let restored: ReplayError = serde_json::from_str(&json).unwrap();
         assert_eq!(err, restored, "roundtrip for {err:?}");
     }
 }
@@ -669,8 +669,8 @@ fn action_delta_report_serde_roundtrip() {
         }],
         decisions_evaluated: 10,
     };
-    let json = serde_json::to_string(&report).unwrap_or_default();
-    let restored: ActionDeltaReport = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&report).unwrap();
+    let restored: ActionDeltaReport = serde_json::from_str(&json).unwrap();
     assert_eq!(report, restored);
 }
 
@@ -751,8 +751,8 @@ fn trace_record_serde_preserves_chain_integrity() {
     let trace = make_trace(&[("sandbox", 200_000), ("allow", 0), ("terminate", 800_000)]);
     trace.verify_chain_integrity().expect("original valid");
 
-    let json = serde_json::to_string(&trace).unwrap_or_default();
-    let restored: TraceRecord = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&trace).unwrap();
+    let restored: TraceRecord = serde_json::from_str(&json).unwrap();
 
     restored.verify_chain_integrity().expect("restored valid");
     assert_eq!(trace.content_hash(), restored.content_hash());

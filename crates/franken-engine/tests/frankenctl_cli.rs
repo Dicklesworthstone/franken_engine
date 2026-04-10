@@ -104,7 +104,7 @@ fn write_react_mismatch_catalog(path: &Path) {
         .expect("catalog entry should be added");
     fs::write(
         path,
-        serde_json::to_vec_pretty(&catalog).unwrap_or_default(),
+        serde_json::to_vec_pretty(&catalog).unwrap(),
     )
     .expect("catalog fixture should write");
 }
@@ -391,7 +391,7 @@ fn build_valid_receipt_verifier_input() -> (String, ReceiptVerifierCliInput) {
 }
 
 fn write_receipt_verifier_input(path: &Path, input: &ReceiptVerifierCliInput) {
-    fs::write(path, serde_json::to_vec_pretty(input).unwrap_or_default())
+    fs::write(path, serde_json::to_vec_pretty(input).unwrap())
         .expect("receipt verifier input should write");
 }
 
@@ -431,7 +431,7 @@ fn build_doctor_input() -> RuntimeDiagnosticsCliInput {
 }
 
 fn write_runtime_diagnostics_input(path: &Path, input: &RuntimeDiagnosticsCliInput) {
-    fs::write(path, serde_json::to_vec_pretty(input).unwrap_or_default())
+    fs::write(path, serde_json::to_vec_pretty(input).unwrap())
         .expect("runtime diagnostics input should write");
 }
 
@@ -470,7 +470,7 @@ fn write_benchmark_score_input(path: &Path) {
     });
     fs::write(
         path,
-        serde_json::to_vec_pretty(&score_input).unwrap_or_default(),
+        serde_json::to_vec_pretty(&score_input).unwrap(),
     )
     .expect("score input should write");
 }
@@ -1509,6 +1509,68 @@ fn frankenctl_run_normalizes_inline_typescript_input() {
 }
 
 #[test]
+fn frankenctl_run_preserves_exception_completion_values() {
+    for (specimen_id, source, expected_execution_value) in [
+        (
+            "try_catch",
+            "let r; try { throw 'err'; } catch(e) { r = e; } r;\n",
+            "err",
+        ),
+        (
+            "try_finally",
+            "let x = 0; try { x = 1; } finally { x = 2; } x;\n",
+            "2",
+        ),
+    ] {
+        let source_path = temp_path(&format!("frankenctl_run_{specimen_id}_source"), "js");
+        let report_path = temp_path(&format!("frankenctl_run_{specimen_id}_report"), "json");
+        write_source(&source_path, source);
+
+        let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+            .args([
+                "run",
+                "--input",
+                source_path
+                    .to_str()
+                    .expect("source path should be valid utf8"),
+                "--extension-id",
+                &format!("ext-cli-{specimen_id}"),
+                "--out",
+                report_path
+                    .to_str()
+                    .expect("report path should be valid utf8"),
+            ])
+            .output()
+            .expect("run command should execute");
+
+        assert!(
+            output.status.success(),
+            "run failed for `{specimen_id}` with stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let stdout_json = parse_stdout_json(&output);
+        assert_eq!(
+            stdout_json["execution_value"].as_str(),
+            Some(expected_execution_value),
+            "stdout execution value mismatch for `{specimen_id}`"
+        );
+
+        let report_json: serde_json::Value =
+            serde_json::from_slice(&fs::read(&report_path).expect("run report should be written"))
+                .expect("report should parse as json");
+        assert_eq!(
+            report_json["execution_value"].as_str(),
+            Some(expected_execution_value),
+            "report execution value mismatch for `{specimen_id}`"
+        );
+
+        let _ = fs::remove_file(source_path);
+        let _ = fs::remove_file(report_path);
+    }
+}
+
+#[test]
 fn frankenctl_replay_run_replays_trace_without_divergence() {
     let trace_path = temp_path("frankenctl_replay_trace", "json");
     let replay_report_path = temp_path("frankenctl_replay_report", "json");
@@ -1530,7 +1592,7 @@ fn frankenctl_replay_run_replays_trace_without_divergence() {
 
     fs::write(
         &trace_path,
-        serde_json::to_vec_pretty(&trace).unwrap_or_default(),
+        serde_json::to_vec_pretty(&trace).unwrap(),
     )
     .expect("trace file should write");
 
@@ -3444,11 +3506,12 @@ fn frankenctl_replay_trace_serde_roundtrip_preserves_all_source_kinds() {
     }
     trace.finalise((NondeterminismSource::ALL.len() as u64) + 1);
 
-    let serialized = serde_json::to_vec_pretty(&trace).unwrap_or_default();
+    let serialized = serde_json::to_vec_pretty(&trace).unwrap();
     fs::write(&trace_path, &serialized).expect("trace file should write");
 
     let read_back = fs::read(&trace_path).expect("trace file should be readable");
-    let deserialized: NondeterminismTrace = serde_json::from_slice(&read_back).unwrap_or_default();
+    let deserialized: NondeterminismTrace =
+        serde_json::from_slice(&read_back).expect("trace should deserialize");
 
     assert_eq!(
         deserialized.event_count(),
@@ -3577,7 +3640,7 @@ fn frankenctl_replay_empty_trace_completes_immediately() {
 
     fs::write(
         &trace_path,
-        serde_json::to_vec_pretty(&trace).unwrap_or_default(),
+        serde_json::to_vec_pretty(&trace).unwrap(),
     )
     .expect("trace file should write");
 
@@ -3620,7 +3683,7 @@ fn frankenctl_replay_unfinished_trace_fails_closed() {
 
     fs::write(
         &trace_path,
-        serde_json::to_vec_pretty(&trace).unwrap_or_default(),
+        serde_json::to_vec_pretty(&trace).unwrap(),
     )
     .expect("trace file should write");
 

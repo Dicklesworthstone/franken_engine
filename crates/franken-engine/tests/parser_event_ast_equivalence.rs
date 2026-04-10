@@ -63,7 +63,7 @@ struct ParserEventAstEquivalenceFixture {
 fn load_fixture() -> ParserEventAstEquivalenceFixture {
     let path = Path::new("tests/fixtures/parser_event_ast_equivalence_v1.json");
     let bytes = fs::read(path).expect("read parser event ast equivalence fixture");
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    serde_json::from_slice(&bytes).unwrap()
 }
 
 fn load_doc() -> String {
@@ -753,8 +753,8 @@ fn parse_error_code_serde_round_trip() {
         ParseErrorCode::BudgetExceeded,
     ];
     for code in &codes {
-        let json = serde_json::to_string(code).unwrap_or_default();
-        let recovered: ParseErrorCode = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(code).unwrap();
+        let recovered: ParseErrorCode = serde_json::from_str(&json).unwrap();
         assert_eq!(*code, recovered);
     }
 }
@@ -771,9 +771,9 @@ fn materialization_error_code_serde_round_trip() {
         ParseEventMaterializationErrorCode::GoalMismatch,
     ];
     for code in &codes {
-        let json = serde_json::to_string(code).unwrap_or_default();
+        let json = serde_json::to_string(code).unwrap();
         let recovered: ParseEventMaterializationErrorCode =
-            serde_json::from_str(&json).unwrap_or_default();
+            serde_json::from_str(&json).unwrap();
         assert_eq!(*code, recovered);
     }
 }
@@ -801,11 +801,11 @@ fn parity_cases_all_have_tamper_kind_none() {
 fn corpus_tier_serde_round_trip_all_variants() {
     use frankenengine_engine::parser_event_ast_equivalence::CorpusTier;
     for tier in CorpusTier::ALL {
-        let json = serde_json::to_string(tier).unwrap_or_default();
-        let recovered: CorpusTier = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(tier).unwrap();
+        let recovered: CorpusTier = serde_json::from_str(&json).unwrap();
         assert_eq!(*tier, recovered);
         // Verify snake_case encoding
-        let raw: String = serde_json::from_str(&json).unwrap_or_default();
+        let raw: String = serde_json::from_str(&json).unwrap();
         assert_eq!(raw, tier.as_str());
     }
 }
@@ -859,10 +859,10 @@ fn corpus_tier_btreemap_key_ordering() {
 fn tamper_kind_serde_round_trip_all_variants() {
     use frankenengine_engine::parser_event_ast_equivalence::TamperKind;
     for kind in TamperKind::ALL {
-        let json = serde_json::to_string(kind).unwrap_or_default();
-        let recovered: TamperKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(kind).unwrap();
+        let recovered: TamperKind = serde_json::from_str(&json).unwrap();
         assert_eq!(*kind, recovered);
-        let raw: String = serde_json::from_str(&json).unwrap_or_default();
+        let raw: String = serde_json::from_str(&json).unwrap();
         assert_eq!(raw, kind.as_str());
     }
 }
@@ -887,8 +887,8 @@ fn tamper_kind_ordering_none_lt_statement_hash() {
 fn equivalence_verdict_serde_round_trip_all_variants() {
     use frankenengine_engine::parser_event_ast_equivalence::EquivalenceVerdict;
     for v in [EquivalenceVerdict::Pass, EquivalenceVerdict::Fail] {
-        let json = serde_json::to_string(&v).unwrap_or_default();
-        let recovered: EquivalenceVerdict = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&v).unwrap();
+        let recovered: EquivalenceVerdict = serde_json::from_str(&json).unwrap();
         assert_eq!(v, recovered);
     }
 }
@@ -907,8 +907,8 @@ fn equivalence_specimen_serde_round_trip() {
     };
     let corpus = equivalence_corpus();
     for spec in &corpus {
-        let json = serde_json::to_string(spec).unwrap_or_default();
-        let recovered: EquivalenceSpecimen = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(spec).unwrap();
+        let recovered: EquivalenceSpecimen = serde_json::from_str(&json).unwrap();
         assert_eq!(spec.specimen_id, recovered.specimen_id);
         assert_eq!(spec.goal, recovered.goal);
         assert_eq!(spec.corpus_tier, recovered.corpus_tier);
@@ -940,8 +940,8 @@ fn specimen_evidence_serde_round_trip_all_fields() {
         hash_parity: false,
         replay_stable: true,
     };
-    let json = serde_json::to_string(&ev).unwrap_or_default();
-    let recovered: SpecimenEvidence = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&ev).unwrap();
+    let recovered: SpecimenEvidence = serde_json::from_str(&json).unwrap();
     assert_eq!(ev.specimen_id, recovered.specimen_id);
     assert_eq!(ev.corpus_tier, recovered.corpus_tier);
     assert_eq!(ev.tamper_kind, recovered.tamper_kind);
@@ -1122,9 +1122,9 @@ fn equivalence_inventory_contract_not_satisfied_when_replay_unstable() {
 fn equivalence_inventory_serde_round_trip_full() {
     use frankenengine_engine::parser_event_ast_equivalence::run_equivalence_corpus;
     let inventory = run_equivalence_corpus();
-    let json = serde_json::to_string_pretty(&inventory).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&inventory).unwrap();
     let recovered: frankenengine_engine::parser_event_ast_equivalence::EquivalenceInventory =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(inventory, recovered);
 }
 
@@ -1150,9 +1150,9 @@ fn equivalence_run_manifest_serde_round_trip_full() {
         "decision-serde-test",
         vec!["path/a.json".to_string(), "path/b.json".to_string()],
     );
-    let json = serde_json::to_string(&manifest).unwrap_or_default();
+    let json = serde_json::to_string(&manifest).unwrap();
     let recovered: frankenengine_engine::parser_event_ast_equivalence::EquivalenceRunManifest =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(manifest, recovered);
 }
 
@@ -1189,8 +1189,8 @@ fn equivalence_event_serde_round_trip() {
     let inventory = run_equivalence_corpus();
     let events = generate_events(&inventory);
     for event in &events {
-        let json = serde_json::to_string(event).unwrap_or_default();
-        let recovered: EquivalenceEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(event).unwrap();
+        let recovered: EquivalenceEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event.specimen_id, recovered.specimen_id);
         assert_eq!(event.outcome, recovered.outcome);
         assert_eq!(event.error_code, recovered.error_code);
@@ -1220,8 +1220,8 @@ fn tier_summary_serde_round_trip() {
         passed: 7,
         failed: 3,
     };
-    let json = serde_json::to_string(&ts).unwrap_or_default();
-    let recovered: TierSummary = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&ts).unwrap();
+    let recovered: TierSummary = serde_json::from_str(&json).unwrap();
     assert_eq!(ts, recovered);
 }
 

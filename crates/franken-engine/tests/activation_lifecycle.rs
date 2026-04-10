@@ -431,8 +431,8 @@ fn transition_trigger_display_stable() {
 #[test]
 fn rollout_phase_serde_roundtrip() {
     for phase in RolloutPhase::ALL {
-        let json = serde_json::to_string(&phase).unwrap_or_default();
-        let recovered: RolloutPhase = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&phase).unwrap();
+        let recovered: RolloutPhase = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, phase);
     }
 }
@@ -444,8 +444,8 @@ fn transition_trigger_serde_roundtrip() {
         TransitionTrigger::Auto,
         TransitionTrigger::CrashLoop,
     ] {
-        let json = serde_json::to_string(&trigger).unwrap_or_default();
-        let recovered: TransitionTrigger = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&trigger).unwrap();
+        let recovered: TransitionTrigger = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, trigger);
     }
 }
@@ -453,8 +453,8 @@ fn transition_trigger_serde_roundtrip() {
 #[test]
 fn lifecycle_config_serde_roundtrip() {
     let config = LifecycleConfig::default();
-    let json = serde_json::to_string(&config).unwrap_or_default();
-    let recovered: LifecycleConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&config).unwrap();
+    let recovered: LifecycleConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, config);
 }
 
@@ -469,8 +469,8 @@ fn lifecycle_config_default_values() {
 #[test]
 fn component_descriptor_serde_roundtrip() {
     let desc = descriptor("ext-serde", "1.0.0");
-    let json = serde_json::to_string(&desc).unwrap_or_default();
-    let recovered: ComponentDescriptor = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&desc).unwrap();
+    let recovered: ComponentDescriptor = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.component_id, "ext-serde");
     assert_eq!(recovered.version, "1.0.0");
 }
@@ -530,8 +530,8 @@ fn pre_activation_check_serde_roundtrip() {
         passed: true,
         detail: "valid".to_string(),
     };
-    let json = serde_json::to_string(&check).unwrap_or_default();
-    let recovered: PreActivationCheck = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&check).unwrap();
+    let recovered: PreActivationCheck = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, check);
 }
 

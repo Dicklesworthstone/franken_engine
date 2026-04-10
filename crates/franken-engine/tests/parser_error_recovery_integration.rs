@@ -935,7 +935,7 @@ struct RecoveryAdversarialFixture {
 fn load_recovery_adversarial_fixture() -> RecoveryAdversarialFixture {
     let path = Path::new("tests/fixtures/parser_error_recovery_adversarial_e2e_v1.json");
     let bytes = fs::read(path).expect("read parser error recovery adversarial fixture");
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    serde_json::from_slice(&bytes).unwrap()
 }
 
 fn load_recovery_adversarial_doc() -> String {

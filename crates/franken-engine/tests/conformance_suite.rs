@@ -1423,9 +1423,9 @@ fn conformance_checkpoint_empty_policy_heads_rejected() {
 fn conformance_checkpoint_serde_round_trip() {
     let sk = test_signing_key(106);
     let cp = build_genesis_checkpoint(&sk, "serde-zone", SecurityEpoch::GENESIS);
-    let json = serde_json::to_string(&cp).unwrap_or_default();
+    let json = serde_json::to_string(&cp).unwrap();
     let restored: frankenengine_engine::policy_checkpoint::PolicyCheckpoint =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(cp.checkpoint_id, restored.checkpoint_id);
     assert_eq!(cp.checkpoint_seq, restored.checkpoint_seq);
 }
@@ -2086,8 +2086,8 @@ fn conformance_meta_id_from_hex_rejects_invalid_chars() {
 #[test]
 fn conformance_serde_security_epoch_round_trip() {
     let epoch = SecurityEpoch::from_raw(42);
-    let json = serde_json::to_string(&epoch).unwrap_or_default();
-    let restored: SecurityEpoch = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&epoch).unwrap();
+    let restored: SecurityEpoch = serde_json::from_str(&json).unwrap();
     assert_eq!(epoch, restored);
 }
 
@@ -2098,8 +2098,8 @@ fn conformance_serde_epoch_metadata_round_trip() {
         SecurityEpoch::from_raw(1),
         SecurityEpoch::from_raw(10),
     );
-    let json = serde_json::to_string(&meta).unwrap_or_default();
-    let restored: EpochMetadata = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&meta).unwrap();
+    let restored: EpochMetadata = serde_json::from_str(&json).unwrap();
     assert_eq!(meta, restored);
 }
 
@@ -2107,8 +2107,8 @@ fn conformance_serde_epoch_metadata_round_trip() {
 fn conformance_serde_engine_object_id_round_trip() {
     let schema = SchemaId::from_definition(b"serde.test.v1");
     let id = derive_id(ObjectDomain::PolicyObject, "zone", &schema, b"data").expect("derive");
-    let json = serde_json::to_string(&id).unwrap_or_default();
-    let restored: EngineObjectId = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&id).unwrap();
+    let restored: EngineObjectId = serde_json::from_str(&json).unwrap();
     assert_eq!(id, restored);
 }
 
@@ -2116,8 +2116,8 @@ fn conformance_serde_engine_object_id_round_trip() {
 fn conformance_serde_verification_key_round_trip() {
     let sk = test_signing_key(50);
     let vk = sk.verification_key();
-    let json = serde_json::to_string(&vk).unwrap_or_default();
-    let restored: VerificationKey = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&vk).unwrap();
+    let restored: VerificationKey = serde_json::from_str(&json).unwrap();
     assert_eq!(vk, restored);
 }
 
@@ -2125,8 +2125,8 @@ fn conformance_serde_verification_key_round_trip() {
 fn conformance_serde_signature_round_trip() {
     let sk = test_signing_key(51);
     let sig = sign_preimage(&sk, b"serde-test").expect("sign");
-    let json = serde_json::to_string(&sig).unwrap_or_default();
-    let restored: Signature = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&sig).unwrap();
+    let restored: Signature = serde_json::from_str(&json).unwrap();
     assert_eq!(sig, restored);
 }
 
@@ -2138,8 +2138,8 @@ fn conformance_serde_freshness_state_round_trip() {
         FreshnessState::Degraded,
         FreshnessState::Recovering,
     ] {
-        let json = serde_json::to_string(&state).unwrap_or_default();
-        let restored: FreshnessState = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&state).unwrap();
+        let restored: FreshnessState = serde_json::from_str(&json).unwrap();
         assert_eq!(state, restored);
     }
 }
@@ -2153,8 +2153,8 @@ fn conformance_serde_revocation_reason_round_trip() {
         RevocationReason::PolicyViolation,
         RevocationReason::Administrative,
     ] {
-        let json = serde_json::to_string(&reason).unwrap_or_default();
-        let restored: RevocationReason = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&reason).unwrap();
+        let restored: RevocationReason = serde_json::from_str(&json).unwrap();
         assert_eq!(reason, restored);
     }
 }
@@ -2162,8 +2162,8 @@ fn conformance_serde_revocation_reason_round_trip() {
 #[test]
 fn conformance_serde_trust_zone_class_round_trip() {
     for class in TrustZoneClass::ORDERED {
-        let json = serde_json::to_string(&class).unwrap_or_default();
-        let restored: TrustZoneClass = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&class).unwrap();
+        let restored: TrustZoneClass = serde_json::from_str(&json).unwrap();
         assert_eq!(class, restored);
     }
 }
@@ -2179,8 +2179,8 @@ fn conformance_serde_transition_reason_round_trip() {
         TransitionReason::OperatorManualBump,
     ];
     for reason in reasons {
-        let json = serde_json::to_string(&reason).unwrap_or_default();
-        let restored: TransitionReason = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&reason).unwrap();
+        let restored: TransitionReason = serde_json::from_str(&json).unwrap();
         assert_eq!(reason, restored);
     }
 }
@@ -2188,15 +2188,15 @@ fn conformance_serde_transition_reason_round_trip() {
 #[test]
 fn conformance_serde_content_hash_round_trip() {
     let h = ContentHash::compute(b"serde-hash-test");
-    let json = serde_json::to_string(&h).unwrap_or_default();
-    let restored: ContentHash = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&h).unwrap();
+    let restored: ContentHash = serde_json::from_str(&json).unwrap();
     assert_eq!(h, restored);
 }
 
 #[test]
 fn conformance_serde_schema_id_round_trip() {
     let s = SchemaId::from_definition(b"serde-schema-test");
-    let json = serde_json::to_string(&s).unwrap_or_default();
-    let restored: SchemaId = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&s).unwrap();
+    let restored: SchemaId = serde_json::from_str(&json).unwrap();
     assert_eq!(s, restored);
 }

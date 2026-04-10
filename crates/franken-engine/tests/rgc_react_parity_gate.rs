@@ -402,8 +402,8 @@ fn rgc_807_replay_wrapper_uses_latest_complete_bundle_and_prints_artifacts() {
 #[test]
 fn rgc_807_contract_roundtrip_is_deterministic() {
     let contract = parse_contract();
-    let json_a = serde_json::to_string_pretty(&contract).unwrap_or_default();
-    let recovered: ReactParityGateContract = serde_json::from_str(&json_a).unwrap_or_default();
-    let json_b = serde_json::to_string_pretty(&recovered).unwrap_or_default();
+    let json_a = serde_json::to_string_pretty(&contract).unwrap();
+    let recovered: ReactParityGateContract = serde_json::from_str(&json_a).unwrap();
+    let json_b = serde_json::to_string_pretty(&recovered).unwrap();
     assert_eq!(json_a, json_b, "serde roundtrip must be deterministic");
 }

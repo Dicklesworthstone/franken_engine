@@ -585,8 +585,8 @@ fn matrix_report_serde_roundtrip() {
         ExampleAppTier::Minimal,
     )];
     let report = evaluate_parity_matrix(&config, &cells, epoch());
-    let json = serde_json::to_string(&report).unwrap_or_default();
-    let deser: MatrixReport = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&report).unwrap();
+    let deser: MatrixReport = serde_json::from_str(&json).unwrap();
     assert_eq!(deser.overall_verdict, report.overall_verdict);
     assert_eq!(deser.cells.len(), report.cells.len());
 }
@@ -594,8 +594,8 @@ fn matrix_report_serde_roundtrip() {
 #[test]
 fn config_serde_roundtrip() {
     let config = default_config();
-    let json = serde_json::to_string(&config).unwrap_or_default();
-    let deser: MatrixConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&config).unwrap();
+    let deser: MatrixConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(
         deser.max_size_divergence_millionths,
         config.max_size_divergence_millionths

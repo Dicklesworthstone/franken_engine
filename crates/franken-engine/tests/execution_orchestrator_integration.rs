@@ -818,7 +818,7 @@ fn orchestrator_context_refactor_bundle_emits_expected_artifacts() {
 
     let manifest: OrchestratorContextRefactorRunManifest =
         serde_json::from_slice(&fs::read(&artifacts.run_manifest_path).expect("read manifest"))
-            .unwrap_or_default();
+            .unwrap();
     assert_eq!(manifest.outcome, OrchestratorContextRefactorOutcome::Pass);
     assert_eq!(
         manifest.artifact_paths.production_context_path_contract,

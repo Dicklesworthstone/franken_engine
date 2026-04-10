@@ -454,8 +454,8 @@ fn safe_mode_startup_input_serde_roundtrip() {
         cli_safe_mode: true,
         environment: BTreeMap::from([("KEY".to_string(), "VALUE".to_string())]),
     };
-    let json = serde_json::to_string(&input).unwrap_or_default();
-    let recovered: SafeModeStartupInput = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&input).unwrap();
+    let recovered: SafeModeStartupInput = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.trace_id, input.trace_id);
     assert_eq!(recovered.cli_safe_mode, input.cli_safe_mode);
 }
@@ -470,8 +470,8 @@ fn safe_mode_exit_check_input_serde_roundtrip() {
         pending_quarantines: 0,
         evidence_ledger_flushed: true,
     };
-    let json = serde_json::to_string(&input).unwrap_or_default();
-    let recovered: SafeModeExitCheckInput = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&input).unwrap();
+    let recovered: SafeModeExitCheckInput = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.trace_id, input.trace_id);
     assert_eq!(recovered.active_incidents, 0);
 }
@@ -487,8 +487,8 @@ fn safe_mode_startup_source_serde_round_trip() {
         SafeModeStartupSource::EnvironmentVariable,
         SafeModeStartupSource::NotRequested,
     ] {
-        let json = serde_json::to_string(&source).unwrap_or_default();
-        let recovered: SafeModeStartupSource = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&source).unwrap();
+        let recovered: SafeModeStartupSource = serde_json::from_str(&json).unwrap();
         assert_eq!(source, recovered);
     }
 }
@@ -503,7 +503,7 @@ fn safe_mode_startup_artifact_serde_round_trip() {
         environment: BTreeMap::new(),
     };
     let artifact = evaluate_safe_mode_startup(&input).expect("artifact");
-    let json = serde_json::to_string(&artifact).unwrap_or_default();
+    let json = serde_json::to_string(&artifact).unwrap();
     assert!(json.contains("trace-serde-art"));
 }
 
@@ -603,8 +603,8 @@ fn exit_artifact_serde_roundtrip() {
         evidence_ledger_flushed: true,
     })
     .expect("exit artifact");
-    let json = serde_json::to_string(&exit).unwrap_or_default();
-    let recovered: serde_json::Value = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&exit).unwrap();
+    let recovered: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(
         recovered["event"]["trace_id"].as_str(),
         Some("trace-exit-rt")
@@ -698,8 +698,8 @@ fn safe_mode_startup_artifact_full_serde_roundtrip() {
     };
     let artifact = evaluate_safe_mode_startup(&input).expect("artifact");
 
-    let json = serde_json::to_string(&artifact).unwrap_or_default();
-    let value: serde_json::Value = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&artifact).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
 
     // Verify key fields are present in the serialized form
     assert_eq!(value["safe_mode_active"], true);

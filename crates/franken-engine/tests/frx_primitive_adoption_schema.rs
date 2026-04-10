@@ -197,8 +197,8 @@ fn primitive_tier_serde_roundtrip() {
         PrimitiveTier::B,
         PrimitiveTier::C,
     ] {
-        let json = serde_json::to_string(&tier).unwrap_or_default();
-        let recovered: PrimitiveTier = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&tier).unwrap();
+        let recovered: PrimitiveTier = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, tier);
     }
 }
@@ -212,8 +212,8 @@ fn reuse_decision_serde_roundtrip() {
         ReuseDecision::BuildNew,
         ReuseDecision::NotApplicable,
     ] {
-        let json = serde_json::to_string(&decision).unwrap_or_default();
-        let recovered: ReuseDecision = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&decision).unwrap();
+        let recovered: ReuseDecision = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, decision);
     }
 }
@@ -223,8 +223,8 @@ fn reuse_decision_serde_roundtrip() {
 #[test]
 fn primitive_adoption_record_serde_roundtrip() {
     let record = valid_record(PrimitiveTier::S);
-    let json = serde_json::to_string(&record).unwrap_or_default();
-    let recovered: PrimitiveAdoptionRecord = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&record).unwrap();
+    let recovered: PrimitiveAdoptionRecord = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, record);
 }
 
@@ -313,8 +313,8 @@ fn ev_relevance_risk_score_serde_roundtrip() {
         relevance_millionths: 750_000,
         risk_millionths: 300_000,
     };
-    let json = serde_json::to_string(&score).unwrap_or_default();
-    let recovered: EvRelevanceRiskScore = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&score).unwrap();
+    let recovered: EvRelevanceRiskScore = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, score);
 }
 
@@ -328,8 +328,8 @@ fn verification_checklist_serde_roundtrip() {
         independent_replication_completed: false,
         verification_notes: "notes".to_string(),
     };
-    let json = serde_json::to_string(&checklist).unwrap_or_default();
-    let recovered: VerificationChecklist = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&checklist).unwrap();
+    let recovered: VerificationChecklist = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, checklist);
 }
 
@@ -344,8 +344,8 @@ fn fallback_budget_serde_roundtrip() {
         time_budget_ms: 100,
         memory_budget_mb: 256,
     };
-    let json = serde_json::to_string(&budget).unwrap_or_default();
-    let recovered: FallbackBudget = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&budget).unwrap();
+    let recovered: FallbackBudget = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, budget);
 }
 
@@ -359,8 +359,8 @@ fn reuse_scan_serde_roundtrip() {
         candidate_crates: vec!["tokio".to_string()],
         rationale: "custom requirements".to_string(),
     };
-    let json = serde_json::to_string(&scan).unwrap_or_default();
-    let recovered: ReuseScan = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&scan).unwrap();
+    let recovered: ReuseScan = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, scan);
 }
 
@@ -418,9 +418,9 @@ fn validation_error_serde_roundtrip() {
             field: "primitive_id".to_string(),
         },
     ] {
-        let json = serde_json::to_string(&err).unwrap_or_default();
+        let json = serde_json::to_string(&err).unwrap();
         let recovered: PrimitiveAdoptionValidationError =
-            serde_json::from_str(&json).unwrap_or_default();
+            serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, err);
     }
 }

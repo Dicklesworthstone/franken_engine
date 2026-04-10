@@ -145,8 +145,8 @@ fn probe_config_serde_round_trip() {
         integrity_probe("i"),
     ];
     for cfg in &configs {
-        let json = serde_json::to_string(cfg).unwrap_or_default();
-        let restored: ProbeConfig = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(cfg).unwrap();
+        let restored: ProbeConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(*cfg, restored, "round-trip failed for {}", cfg.probe_id);
     }
 }
@@ -239,8 +239,8 @@ fn probe_state_serde_round_trip() {
     state.mark_executed(false);
     state.tick_staleness();
 
-    let json = serde_json::to_string(&state).unwrap_or_default();
-    let restored: ProbeState = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&state).unwrap();
+    let restored: ProbeState = serde_json::from_str(&json).unwrap();
     assert_eq!(state, restored);
 }
 
@@ -293,8 +293,8 @@ fn scheduler_config_serde_round_trip() {
         .relevance_overrides
         .insert("elevated:deep_diagnostic".to_string(), 2_500_000);
 
-    let json = serde_json::to_string(&config).unwrap_or_default();
-    let restored: SchedulerConfig = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&config).unwrap();
+    let restored: SchedulerConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(config, restored);
 }
 
@@ -338,8 +338,8 @@ fn scheduler_error_serde_round_trip() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).unwrap_or_default();
-        let restored: SchedulerError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(err).unwrap();
+        let restored: SchedulerError = serde_json::from_str(&json).unwrap();
         assert_eq!(*err, restored);
     }
 }
@@ -921,8 +921,8 @@ fn schedule_decision_serde_round_trip() {
         scheduled: true,
         skip_reason: None,
     };
-    let json = serde_json::to_string(&decision).unwrap_or_default();
-    let restored: ScheduleDecision = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&decision).unwrap();
+    let restored: ScheduleDecision = serde_json::from_str(&json).unwrap();
     assert_eq!(decision, restored);
 }
 
@@ -936,8 +936,8 @@ fn schedule_decision_with_skip_reason_serde() {
         scheduled: false,
         skip_reason: Some("budget exhausted (remaining: 500000, cost: 2000000)".to_string()),
     };
-    let json = serde_json::to_string(&decision).unwrap_or_default();
-    let restored: ScheduleDecision = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&decision).unwrap();
+    let restored: ScheduleDecision = serde_json::from_str(&json).unwrap();
     assert_eq!(decision, restored);
 }
 
@@ -950,8 +950,8 @@ fn schedule_result_serde_round_trip() {
     let mut sched = base_scheduler();
     let result = sched.schedule(Regime::Normal);
 
-    let json = serde_json::to_string(&result).unwrap_or_default();
-    let restored: ScheduleResult = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&result).unwrap();
+    let restored: ScheduleResult = serde_json::from_str(&json).unwrap();
     assert_eq!(result, restored);
 }
 
@@ -967,8 +967,8 @@ fn schedule_result_serde_across_all_regimes() {
     for regime in &regimes {
         let mut sched = base_scheduler();
         let result = sched.schedule(*regime);
-        let json = serde_json::to_string(&result).unwrap_or_default();
-        let restored: ScheduleResult = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&result).unwrap();
+        let restored: ScheduleResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, restored, "failed for regime {}", regime);
     }
 }
@@ -986,8 +986,8 @@ fn probe_kind_serde_round_trip_all_variants() {
         ProbeKind::IntegrityAudit,
     ];
     for kind in &kinds {
-        let json = serde_json::to_string(kind).unwrap_or_default();
-        let restored: ProbeKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(kind).unwrap();
+        let restored: ProbeKind = serde_json::from_str(&json).unwrap();
         assert_eq!(*kind, restored);
     }
 }

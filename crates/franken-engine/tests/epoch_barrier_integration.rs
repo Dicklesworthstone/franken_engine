@@ -610,8 +610,8 @@ fn barrier_state_serde_roundtrip() {
         BarrierState::Finalizing,
     ];
     for state in &states {
-        let json = serde_json::to_string(state).unwrap_or_default();
-        let restored: BarrierState = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(state).unwrap();
+        let restored: BarrierState = serde_json::from_str(&json).unwrap();
         assert_eq!(*state, restored);
     }
 }
@@ -627,8 +627,8 @@ fn critical_op_kind_serde_roundtrip() {
         CriticalOpKind::RemoteOperation,
     ];
     for op in &ops {
-        let json = serde_json::to_string(op).unwrap_or_default();
-        let restored: CriticalOpKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(op).unwrap();
+        let restored: CriticalOpKind = serde_json::from_str(&json).unwrap();
         assert_eq!(*op, restored);
     }
 }
@@ -641,8 +641,8 @@ fn epoch_guard_serde_roundtrip() {
         op_kind: CriticalOpKind::RemoteOperation,
         trace_id: "trace-xyz".to_string(),
     };
-    let json = serde_json::to_string(&guard).unwrap_or_default();
-    let restored: EpochGuard = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&guard).unwrap();
+    let restored: EpochGuard = serde_json::from_str(&json).unwrap();
     assert_eq!(guard, restored);
 }
 
@@ -658,8 +658,8 @@ fn transition_evidence_serde_roundtrip() {
         duration_ms: 42,
         trace_id: "serde-test".to_string(),
     };
-    let json = serde_json::to_string(&evidence).unwrap_or_default();
-    let restored: TransitionEvidence = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&evidence).unwrap();
+    let restored: TransitionEvidence = serde_json::from_str(&json).unwrap();
     assert_eq!(evidence, restored);
 }
 
@@ -689,8 +689,8 @@ fn barrier_error_serde_roundtrip_all_variants() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).unwrap_or_default();
-        let restored: BarrierError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(err).unwrap();
+        let restored: BarrierError = serde_json::from_str(&json).unwrap();
         assert_eq!(*err, restored);
     }
 }
@@ -699,8 +699,8 @@ fn barrier_error_serde_roundtrip_all_variants() {
 fn barrier_config_serde_roundtrip() {
     let configs = [BarrierConfig::default(), BarrierConfig::deterministic()];
     for config in &configs {
-        let json = serde_json::to_string(config).unwrap_or_default();
-        let restored: BarrierConfig = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(config).unwrap();
+        let restored: BarrierConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(*config, restored);
     }
 }
@@ -767,8 +767,8 @@ fn deterministic_replay_serde_evidence_stability() {
         )
         .expect("transition");
 
-    let json1 = serde_json::to_string(barrier.evidence()).unwrap_or_default();
-    let json2 = serde_json::to_string(barrier.evidence()).unwrap_or_default();
+    let json1 = serde_json::to_string(barrier.evidence()).unwrap();
+    let json2 = serde_json::to_string(barrier.evidence()).unwrap();
     assert_eq!(json1, json2);
 }
 

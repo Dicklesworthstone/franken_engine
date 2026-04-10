@@ -388,8 +388,8 @@ fn flamegraph_kind_serde_roundtrip() {
         FlamegraphKind::DiffCpu,
         FlamegraphKind::DiffAllocation,
     ] {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let recovered: FlamegraphKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let recovered: FlamegraphKind = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, kind);
     }
 }
@@ -898,16 +898,16 @@ fn store_keys_contain_benchmark_run_id_and_artifact_id() {
 #[test]
 fn flamegraph_query_default_serde_roundtrip() {
     let query = FlamegraphQuery::default();
-    let json = serde_json::to_string(&query).unwrap_or_default();
-    let recovered: FlamegraphQuery = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&query).unwrap();
+    let recovered: FlamegraphQuery = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, query);
 }
 
 #[test]
 fn flamegraph_request_serde_roundtrip() {
     let request = request_with_diff();
-    let json = serde_json::to_string(&request).unwrap_or_default();
-    let recovered: FlamegraphPipelineRequest = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&request).unwrap();
+    let recovered: FlamegraphPipelineRequest = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, request);
 }
 
@@ -919,8 +919,8 @@ fn flamegraph_artifact_serde_roundtrip() {
     assert!(decision.is_success());
 
     for artifact in &decision.artifacts {
-        let json = serde_json::to_string(artifact).unwrap_or_default();
-        let recovered: FlamegraphArtifact = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(artifact).unwrap();
+        let recovered: FlamegraphArtifact = serde_json::from_str(&json).unwrap();
         assert_eq!(&recovered, artifact);
     }
 }

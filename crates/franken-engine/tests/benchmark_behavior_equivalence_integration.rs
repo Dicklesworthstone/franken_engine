@@ -110,8 +110,8 @@ fn test_evidence_surface_display_matches_as_str() {
 #[test]
 fn test_evidence_surface_serde_roundtrip() {
     for surface in [EvidenceSurface::ShippedPath, EvidenceSurface::LibraryOnly] {
-        let json = serde_json::to_string(&surface).unwrap_or_default();
-        let back: EvidenceSurface = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&surface).unwrap();
+        let back: EvidenceSurface = serde_json::from_str(&json).unwrap();
         assert_eq!(surface, back);
     }
 }
@@ -192,8 +192,8 @@ fn test_equivalence_class_serde_roundtrip_all_variants() {
         BehaviorEquivalenceClass::ShippedPathDrift,
     ];
     for class in all {
-        let json = serde_json::to_string(&class).unwrap_or_default();
-        let back: BehaviorEquivalenceClass = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&class).unwrap();
+        let back: BehaviorEquivalenceClass = serde_json::from_str(&json).unwrap();
         assert_eq!(class, back, "roundtrip failed for {class}");
     }
 }
@@ -230,8 +230,8 @@ fn test_publication_disposition_serde_roundtrip() {
         PublicationDisposition::NonPublicationEvidence,
         PublicationDisposition::Blocked,
     ] {
-        let json = serde_json::to_string(&disp).unwrap_or_default();
-        let back: PublicationDisposition = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&disp).unwrap();
+        let back: PublicationDisposition = serde_json::from_str(&json).unwrap();
         assert_eq!(disp, back);
     }
 }
@@ -800,16 +800,16 @@ fn test_observation_serde_roundtrip_with_all_fields() {
         .with_noise_only(true)
         .with_detail("serde-detail")
         .with_minimized_repro_command("cmd --flag");
-    let json = serde_json::to_string(&obs).unwrap_or_default();
-    let back: BehaviorEquivalenceObservation = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&obs).unwrap();
+    let back: BehaviorEquivalenceObservation = serde_json::from_str(&json).unwrap();
     assert_eq!(obs, back);
 }
 
 #[test]
 fn test_observation_serde_roundtrip_minimal() {
     let obs = shipped_obs("minimal");
-    let json = serde_json::to_string(&obs).unwrap_or_default();
-    let back: BehaviorEquivalenceObservation = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&obs).unwrap();
+    let back: BehaviorEquivalenceObservation = serde_json::from_str(&json).unwrap();
     assert_eq!(obs, back);
 }
 
@@ -817,8 +817,8 @@ fn test_observation_serde_roundtrip_minimal() {
 fn test_record_serde_roundtrip() {
     let obs = shipped_obs("rec-serde").with_output_equivalence(false);
     let record = build_record(&obs);
-    let json = serde_json::to_string(&record).unwrap_or_default();
-    let back: BenchmarkParityVerdictRecord = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&record).unwrap();
+    let back: BenchmarkParityVerdictRecord = serde_json::from_str(&json).unwrap();
     assert_eq!(record, back);
 }
 
@@ -829,8 +829,8 @@ fn test_report_serde_roundtrip() {
         shipped_obs("w2").with_output_equivalence(false),
     ];
     let report = build_report("trace-rt", "dec-rt", POLICY_ID, &observations);
-    let json = serde_json::to_string(&report).unwrap_or_default();
-    let back: BehaviorEquivalenceReport = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&report).unwrap();
+    let back: BehaviorEquivalenceReport = serde_json::from_str(&json).unwrap();
     assert_eq!(report, back);
 }
 
@@ -841,8 +841,8 @@ fn test_owner_route_serde_roundtrip() {
         OwnerRouteHint::DocsContract,
     )
     .expect("should route");
-    let json = serde_json::to_string(&route).unwrap_or_default();
-    let back: OwnerRoute = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&route).unwrap();
+    let back: OwnerRoute = serde_json::from_str(&json).unwrap();
     assert_eq!(route, back);
 }
 
@@ -851,8 +851,8 @@ fn test_divergence_owner_route_serde_roundtrip() {
     let obs = shipped_obs("div-serde").with_output_equivalence(false);
     let report = build_report("t", "d", POLICY_ID, &[obs]);
     assert!(!report.owner_routes.is_empty());
-    let json = serde_json::to_string(&report.owner_routes[0]).unwrap_or_default();
-    let back: DivergenceOwnerRoute = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&report.owner_routes[0]).unwrap();
+    let back: DivergenceOwnerRoute = serde_json::from_str(&json).unwrap();
     assert_eq!(report.owner_routes[0], back);
 }
 

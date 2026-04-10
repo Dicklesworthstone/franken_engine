@@ -300,9 +300,9 @@ fn drain_events_clears_event_list() {
 #[test]
 fn zone_hierarchy_serde_round_trip() {
     let hierarchy = ZoneHierarchy::standard("maintainer", 1).expect("hierarchy");
-    let json = serde_json::to_string(&hierarchy).unwrap_or_default();
-    let recovered: ZoneHierarchy = serde_json::from_str(&json).unwrap_or_default();
-    let json2 = serde_json::to_string(&recovered).unwrap_or_default();
+    let json = serde_json::to_string(&hierarchy).unwrap();
+    let recovered: ZoneHierarchy = serde_json::from_str(&json).unwrap();
+    let json2 = serde_json::to_string(&recovered).unwrap();
     assert_eq!(json, json2);
 }
 
@@ -316,8 +316,8 @@ fn zone_transition_request_serde_round_trip() {
         "decision-serde",
         true,
     );
-    let json = serde_json::to_string(&request).unwrap_or_default();
-    let recovered: ZoneTransitionRequest = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&request).unwrap();
+    let recovered: ZoneTransitionRequest = serde_json::from_str(&json).unwrap();
     assert_eq!(request.entity_id, recovered.entity_id);
     assert_eq!(request.to_zone_name, recovered.to_zone_name);
     assert_eq!(request.policy_gate_approved, recovered.policy_gate_approved);
@@ -394,8 +394,8 @@ fn trust_zone_class_as_str_matches_display() {
 #[test]
 fn trust_zone_class_serde_round_trip() {
     for class in TrustZoneClass::ORDERED {
-        let json = serde_json::to_string(&class).unwrap_or_default();
-        let recovered: TrustZoneClass = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&class).unwrap();
+        let recovered: TrustZoneClass = serde_json::from_str(&json).unwrap();
         assert_eq!(class, recovered);
     }
 }
@@ -430,8 +430,8 @@ fn zone_event_type_serde_round_trip() {
         ZoneEventType::CrossZoneReference,
     ];
     for t in types {
-        let json = serde_json::to_string(&t).unwrap_or_default();
-        let recovered: ZoneEventType = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&t).unwrap();
+        let recovered: ZoneEventType = serde_json::from_str(&json).unwrap();
         assert_eq!(t, recovered);
     }
 }
@@ -447,8 +447,8 @@ fn zone_event_outcome_serde_round_trip() {
         ZoneEventOutcome::Denied,
     ];
     for o in outcomes {
-        let json = serde_json::to_string(&o).unwrap_or_default();
-        let recovered: ZoneEventOutcome = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&o).unwrap();
+        let recovered: ZoneEventOutcome = serde_json::from_str(&json).unwrap();
         assert_eq!(o, recovered);
     }
 }
@@ -473,8 +473,8 @@ fn trust_zone_error_serde_round_trip() {
         },
     ];
     for err in &errors {
-        let json = serde_json::to_string(err).unwrap_or_default();
-        let recovered: TrustZoneError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(err).unwrap();
+        let recovered: TrustZoneError = serde_json::from_str(&json).unwrap();
         assert_eq!(*err, recovered);
     }
 }
@@ -561,8 +561,8 @@ fn zone_create_request_serde_round_trip() {
     let req = ZoneCreateRequest::new("myzone", TrustZoneClass::Team, 3, "admin")
         .with_parent("root")
         .with_declared_ceiling(capset(&[RuntimeCapability::VmDispatch]));
-    let json = serde_json::to_string(&req).unwrap_or_default();
-    let recovered: ZoneCreateRequest = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&req).unwrap();
+    let recovered: ZoneCreateRequest = serde_json::from_str(&json).unwrap();
     assert_eq!(req, recovered);
 }
 
@@ -691,16 +691,16 @@ fn cross_zone_reference_request_serde_round_trip() {
     )
     .with_policy_id("pol-1")
     .with_decision_id("dec-1");
-    let json = serde_json::to_string(&req).unwrap_or_default();
-    let recovered: CrossZoneReferenceRequest = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&req).unwrap();
+    let recovered: CrossZoneReferenceRequest = serde_json::from_str(&json).unwrap();
     assert_eq!(req, recovered);
 }
 
 #[test]
 fn reference_type_serde_round_trip() {
     for rt in [ReferenceType::Provenance, ReferenceType::Authority] {
-        let json = serde_json::to_string(&rt).unwrap_or_default();
-        let recovered: ReferenceType = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&rt).unwrap();
+        let recovered: ReferenceType = serde_json::from_str(&json).unwrap();
         assert_eq!(rt, recovered);
     }
 }

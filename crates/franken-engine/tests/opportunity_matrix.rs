@@ -379,8 +379,8 @@ fn opportunity_status_serde_roundtrip() {
         OpportunityStatus::RejectedSecurityClearance,
         OpportunityStatus::RejectedMissingHotspot,
     ] {
-        let json = serde_json::to_string(&status).unwrap_or_default();
-        let recovered: OpportunityStatus = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&status).unwrap();
+        let recovered: OpportunityStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, status);
     }
 }
@@ -411,9 +411,9 @@ fn decision_serde_roundtrip() {
     }];
     let request = base_request_from_hotspots(hotspots);
     let decision = run_opportunity_matrix_scoring(&request);
-    let json = serde_json::to_string(&decision).unwrap_or_default();
+    let json = serde_json::to_string(&decision).unwrap();
     let recovered: frankenengine_engine::opportunity_matrix::OpportunityMatrixDecision =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.outcome, decision.outcome);
     assert_eq!(recovered.matrix_id, decision.matrix_id);
 }
@@ -428,8 +428,8 @@ fn opportunity_matrix_request_serde_roundtrip() {
         sample_count: 100,
     }];
     let request = base_request_from_hotspots(hotspots);
-    let json = serde_json::to_string(&request).unwrap_or_default();
-    let recovered: OpportunityMatrixRequest = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&request).unwrap();
+    let recovered: OpportunityMatrixRequest = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.trace_id, request.trace_id);
     assert_eq!(recovered.candidates.len(), request.candidates.len());
 }
@@ -481,8 +481,8 @@ fn hotspot_profile_entry_serde_roundtrip() {
         function: "dispatch".to_string(),
         sample_count: 42,
     };
-    let json = serde_json::to_string(&entry).unwrap_or_default();
-    let recovered: HotspotProfileEntry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&entry).unwrap();
+    let recovered: HotspotProfileEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(entry, recovered);
 }
 
@@ -499,8 +499,8 @@ fn optimization_candidate_input_serde_roundtrip() {
         engineering_effort_hours_millionths: 4_000_000,
         hotpath_weight_override_millionths: None,
     };
-    let json = serde_json::to_string(&candidate).unwrap_or_default();
-    let recovered: OptimizationCandidateInput = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&candidate).unwrap();
+    let recovered: OptimizationCandidateInput = serde_json::from_str(&json).unwrap();
     assert_eq!(candidate, recovered);
 }
 
@@ -528,8 +528,8 @@ fn opportunity_outcome_observation_serde_roundtrip() {
         actual_gain_millionths: 420_000,
         completed_at_utc: "2026-02-22T12:00:00Z".to_string(),
     };
-    let json = serde_json::to_string(&obs).unwrap_or_default();
-    let recovered: OpportunityOutcomeObservation = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&obs).unwrap();
+    let recovered: OpportunityOutcomeObservation = serde_json::from_str(&json).unwrap();
     assert_eq!(obs, recovered);
 }
 
@@ -622,8 +622,8 @@ fn opportunity_outcome_observation_deterministic_serde() {
         actual_gain_millionths: 280_000,
         completed_at_utc: "2026-02-22T12:00:00Z".to_string(),
     };
-    let json1 = serde_json::to_string(&obs).unwrap_or_default();
-    let json2 = serde_json::to_string(&obs).unwrap_or_default();
+    let json1 = serde_json::to_string(&obs).unwrap();
+    let json2 = serde_json::to_string(&obs).unwrap();
     assert_eq!(json1, json2);
 }
 
@@ -648,8 +648,8 @@ fn enrichment_scored_opportunity_serde_roundtrip() {
         status: OpportunityStatus::Selected,
         rejection_reason: None,
     };
-    let json = serde_json::to_string(&scored).unwrap_or_default();
-    let recovered: ScoredOpportunity = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&scored).unwrap();
+    let recovered: ScoredOpportunity = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, scored);
     assert!(recovered.threshold_met);
     assert_eq!(recovered.status, OpportunityStatus::Selected);
@@ -665,8 +665,8 @@ fn enrichment_opportunity_history_record_serde_roundtrip() {
         absolute_error_millionths: 50_000,
         completed_at_utc: "2026-03-01T08:00:00Z".to_string(),
     };
-    let json = serde_json::to_string(&record).unwrap_or_default();
-    let recovered: OpportunityHistoryRecord = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&record).unwrap();
+    let recovered: OpportunityHistoryRecord = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, record);
     assert_eq!(recovered.signed_error_millionths, -50_000);
     assert_eq!(recovered.absolute_error_millionths, 50_000);
@@ -684,8 +684,8 @@ fn enrichment_opportunity_matrix_event_serde_roundtrip() {
         error_code: None,
         opportunity_id: Some("opp:vm:dispatch".to_string()),
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let recovered: OpportunityMatrixEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let recovered: OpportunityMatrixEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, event);
     assert_eq!(recovered.component, "opportunity_matrix");
 }
@@ -942,8 +942,8 @@ fn enrichment_deterministic_scoring_same_input_same_output() {
     let decision_a = run_opportunity_matrix_scoring(&request);
     let decision_b = run_opportunity_matrix_scoring(&request);
 
-    let json_a = serde_json::to_string(&decision_a).unwrap_or_default();
-    let json_b = serde_json::to_string(&decision_b).unwrap_or_default();
+    let json_a = serde_json::to_string(&decision_a).unwrap();
+    let json_b = serde_json::to_string(&decision_b).unwrap();
     assert_eq!(json_a, json_b, "scoring must be deterministic");
     assert_eq!(decision_a.matrix_id, decision_b.matrix_id);
     assert_eq!(
@@ -1008,8 +1008,8 @@ fn enrichment_decision_serde_preserves_all_ranked_opportunities() {
     let hotspots = hotspot_profile_from_flamegraphs(&artifacts);
     let request = base_request_from_hotspots(hotspots);
     let decision = run_opportunity_matrix_scoring(&request);
-    let json = serde_json::to_string(&decision).unwrap_or_default();
-    let recovered: OpportunityMatrixDecision = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&decision).unwrap();
+    let recovered: OpportunityMatrixDecision = serde_json::from_str(&json).unwrap();
     assert_eq!(
         recovered.ranked_opportunities.len(),
         decision.ranked_opportunities.len()

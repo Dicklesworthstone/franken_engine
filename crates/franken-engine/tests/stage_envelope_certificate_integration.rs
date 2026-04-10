@@ -151,8 +151,8 @@ fn stage_serde_round_trip_all_variants() {
         ExecutionStage::Custom,
     ];
     for stage in &stages {
-        let json = serde_json::to_string(stage).unwrap_or_default();
-        let deser: ExecutionStage = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(stage).unwrap();
+        let deser: ExecutionStage = serde_json::from_str(&json).unwrap();
         assert_eq!(*stage, deser);
     }
 }
@@ -191,8 +191,8 @@ fn percentile_serde_round_trip_all() {
         LatencyPercentile::P99,
         LatencyPercentile::P999,
     ] {
-        let json = serde_json::to_string(p).unwrap_or_default();
-        let deser: LatencyPercentile = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(p).unwrap();
+        let deser: LatencyPercentile = serde_json::from_str(&json).unwrap();
         assert_eq!(*p, deser);
     }
 }
@@ -227,8 +227,8 @@ fn verdict_serde_round_trip_all() {
         EnvelopeVerdict::Violated,
         EnvelopeVerdict::InsufficientData,
     ] {
-        let json = serde_json::to_string(v).unwrap_or_default();
-        let deser: EnvelopeVerdict = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(v).unwrap();
+        let deser: EnvelopeVerdict = serde_json::from_str(&json).unwrap();
         assert_eq!(*v, deser);
     }
 }
@@ -260,8 +260,8 @@ fn severity_serde_round_trip_all() {
         ViolationSeverity::Severe,
         ViolationSeverity::Catastrophic,
     ] {
-        let json = serde_json::to_string(s).unwrap_or_default();
-        let deser: ViolationSeverity = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(s).unwrap();
+        let deser: ViolationSeverity = serde_json::from_str(&json).unwrap();
         assert_eq!(*s, deser);
     }
 }
@@ -295,8 +295,8 @@ fn remediation_serde_round_trip_all() {
         RemediationAction::SplitStage,
         RemediationAction::Downgrade,
     ] {
-        let json = serde_json::to_string(a).unwrap_or_default();
-        let deser: RemediationAction = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(a).unwrap();
+        let deser: RemediationAction = serde_json::from_str(&json).unwrap();
         assert_eq!(*a, deser);
     }
 }
@@ -360,8 +360,8 @@ fn default_envelope_stage_field_correct() {
 #[test]
 fn envelope_serde_round_trip() {
     let env = default_envelope(ExecutionStage::Parse);
-    let json = serde_json::to_string(&env).unwrap_or_default();
-    let deser: StageLatencyEnvelope = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&env).unwrap();
+    let deser: StageLatencyEnvelope = serde_json::from_str(&json).unwrap();
     assert_eq!(env, deser);
 }
 
@@ -369,8 +369,8 @@ fn envelope_serde_round_trip() {
 fn envelope_with_custom_label() {
     let mut env = default_envelope(ExecutionStage::Custom);
     env.stage_label = Some("wasm_instantiate".to_string());
-    let json = serde_json::to_string(&env).unwrap_or_default();
-    let deser: StageLatencyEnvelope = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&env).unwrap();
+    let deser: StageLatencyEnvelope = serde_json::from_str(&json).unwrap();
     assert_eq!(deser.stage_label, Some("wasm_instantiate".to_string()));
 }
 
@@ -440,8 +440,8 @@ fn certificate_serde_round_trip() {
     let env = default_envelope(ExecutionStage::GcPause);
     let obs = compliant_observation(ExecutionStage::GcPause);
     let cert = issue_stage_certificate(&env, &obs, "serde-cert", 42, vec!["ev-1".to_string()]);
-    let json = serde_json::to_string(&cert).unwrap_or_default();
-    let deser: StageEnvelopeCertificate = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&cert).unwrap();
+    let deser: StageEnvelopeCertificate = serde_json::from_str(&json).unwrap();
     assert_eq!(cert, deser);
 }
 
@@ -450,8 +450,8 @@ fn certificate_violated_serde_round_trip() {
     let env = default_envelope(ExecutionStage::GcPause);
     let obs = violating_observation(ExecutionStage::GcPause);
     let cert = issue_stage_certificate(&env, &obs, "v-serde", 0, vec![]);
-    let json = serde_json::to_string(&cert).unwrap_or_default();
-    let deser: StageEnvelopeCertificate = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&cert).unwrap();
+    let deser: StageEnvelopeCertificate = serde_json::from_str(&json).unwrap();
     assert_eq!(cert, deser);
 }
 
@@ -559,8 +559,8 @@ fn violation_serde_round_trip() {
         overshoot_ns: 10_000_000,
         overshoot_fraction_millionths: 1_000_000,
     };
-    let json = serde_json::to_string(&v).unwrap_or_default();
-    let deser: PercentileViolation = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&v).unwrap();
+    let deser: PercentileViolation = serde_json::from_str(&json).unwrap();
     assert_eq!(v, deser);
 }
 
@@ -684,8 +684,8 @@ fn bundle_serde_round_trip() {
         violating_observation(ExecutionStage::GcPause),
     ];
     let bundle = build_envelope_bundle(&envelopes, &observations, 5);
-    let json = serde_json::to_string(&bundle).unwrap_or_default();
-    let deser: EnvelopeBundle = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&bundle).unwrap();
+    let deser: EnvelopeBundle = serde_json::from_str(&json).unwrap();
     assert_eq!(bundle, deser);
 }
 
@@ -773,8 +773,8 @@ fn report_serde_round_trip() {
     let obs = violating_observation(ExecutionStage::GcPause);
     let cert = issue_stage_certificate(&env, &obs, "v-cert", 0, vec![]);
     let report = generate_violation_report(&cert, "rpt-serde").unwrap();
-    let json = serde_json::to_string(&report).unwrap_or_default();
-    let deser: ViolationReport = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&report).unwrap();
+    let deser: ViolationReport = serde_json::from_str(&json).unwrap();
     assert_eq!(report, deser);
 }
 
@@ -995,7 +995,7 @@ fn zero_budget_handled_gracefully() {
 #[test]
 fn observation_serde_round_trip() {
     let obs = compliant_observation(ExecutionStage::Parse);
-    let json = serde_json::to_string(&obs).unwrap_or_default();
-    let deser: StageLatencyObservation = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&obs).unwrap();
+    let deser: StageLatencyObservation = serde_json::from_str(&json).unwrap();
     assert_eq!(obs, deser);
 }

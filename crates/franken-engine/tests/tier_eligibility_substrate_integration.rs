@@ -100,8 +100,8 @@ fn execution_tier_serde_roundtrip_all_variants() {
         ExecutionTier::Specialized,
         ExecutionTier::Deoptimized,
     ] {
-        let json = serde_json::to_string(&tier).unwrap_or_default();
-        let restored: ExecutionTier = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&tier).unwrap();
+        let restored: ExecutionTier = serde_json::from_str(&json).unwrap();
         assert_eq!(tier, restored);
     }
 }
@@ -160,8 +160,8 @@ fn transition_reason_serde_roundtrip_all_variants() {
         TierTransitionReason::PolicyOverride,
         TierTransitionReason::ManualProbe,
     ] {
-        let json = serde_json::to_string(&reason).unwrap_or_default();
-        let restored: TierTransitionReason = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&reason).unwrap();
+        let restored: TierTransitionReason = serde_json::from_str(&json).unwrap();
         assert_eq!(reason, restored);
     }
 }
@@ -206,8 +206,8 @@ fn deopt_reason_serde_roundtrip_all_variants() {
         DeoptReason::MissingFeedback,
         DeoptReason::PolicyRejection,
     ] {
-        let json = serde_json::to_string(&reason).unwrap_or_default();
-        let restored: DeoptReason = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&reason).unwrap();
+        let restored: DeoptReason = serde_json::from_str(&json).unwrap();
         assert_eq!(reason, restored);
     }
 }
@@ -248,8 +248,8 @@ fn probe_kind_serde_roundtrip_all_variants() {
         ProbeKind::CallFrequency,
         ProbeKind::InlineCacheState,
     ] {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let restored: ProbeKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let restored: ProbeKind = serde_json::from_str(&json).unwrap();
         assert_eq!(kind, restored);
     }
 }
@@ -373,8 +373,8 @@ fn policy_content_hash_deterministic() {
 #[test]
 fn policy_serde_roundtrip() {
     let policy = TierEligibilityPolicy::default();
-    let json = serde_json::to_string(&policy).unwrap_or_default();
-    let restored: TierEligibilityPolicy = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&policy).unwrap();
+    let restored: TierEligibilityPolicy = serde_json::from_str(&json).unwrap();
     assert_eq!(policy, restored);
 }
 
@@ -785,8 +785,8 @@ fn serde_roundtrip_tier_profile() {
         &SecurityEpoch::from_raw(1),
     );
 
-    let json = serde_json::to_string(&profile).unwrap_or_default();
-    let restored: TierProfile = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&profile).unwrap();
+    let restored: TierProfile = serde_json::from_str(&json).unwrap();
     assert_eq!(profile, restored);
 }
 
@@ -796,8 +796,8 @@ fn serde_roundtrip_verdict() {
     let profile = make_profile("sv", "fn_sv", ExecutionTier::Interpreted, 500, 0);
     let verdict = evaluate_eligibility(&profile, &policy);
 
-    let json = serde_json::to_string(&verdict).unwrap_or_default();
-    let restored: TierEligibilityVerdict = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&verdict).unwrap();
+    let restored: TierEligibilityVerdict = serde_json::from_str(&json).unwrap();
     assert_eq!(verdict, restored);
 }
 
@@ -811,8 +811,8 @@ fn serde_roundtrip_report() {
     ];
     let report = build_eligibility_report(&profiles, &policy, &epoch);
 
-    let json = serde_json::to_string(&report).unwrap_or_default();
-    let restored: TierEligibilityReport = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&report).unwrap();
+    let restored: TierEligibilityReport = serde_json::from_str(&json).unwrap();
     assert_eq!(report, restored);
 }
 

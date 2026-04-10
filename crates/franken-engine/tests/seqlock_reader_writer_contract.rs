@@ -245,8 +245,8 @@ fn multiple_publishes_track_writes() {
 #[test]
 fn retry_budget_policy_serde_roundtrip() {
     let policy = RetryBudgetPolicy::new(3, 2);
-    let json = serde_json::to_string(&policy).unwrap_or_default();
-    let parsed: RetryBudgetPolicy = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&policy).unwrap();
+    let parsed: RetryBudgetPolicy = serde_json::from_str(&json).unwrap();
     assert_eq!(policy, parsed);
 }
 
@@ -272,8 +272,8 @@ fn retry_budget_policy_zero_retries() {
 fn fast_path_read_source_serde_roundtrip() {
     let sources = [FastPathReadSource::FastPath, FastPathReadSource::Fallback];
     for source in &sources {
-        let json = serde_json::to_string(source).unwrap_or_default();
-        let parsed: FastPathReadSource = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(source).unwrap();
+        let parsed: FastPathReadSource = serde_json::from_str(&json).unwrap();
         assert_eq!(*source, parsed);
     }
 }
@@ -297,8 +297,8 @@ fn telemetry_serde_roundtrip() {
     fast_path.publish(43_u64);
 
     let telemetry = fast_path.telemetry();
-    let json = serde_json::to_string(&telemetry).unwrap_or_default();
-    let parsed: FastPathTelemetry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&telemetry).unwrap();
+    let parsed: FastPathTelemetry = serde_json::from_str(&json).unwrap();
     assert_eq!(telemetry, parsed);
 }
 
@@ -327,8 +327,8 @@ fn fallback_reason_serde_roundtrip() {
         FastPathFallbackReason::WriterPressure,
     ];
     for reason in &reasons {
-        let json = serde_json::to_string(reason).unwrap_or_default();
-        let parsed: FastPathFallbackReason = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(reason).unwrap();
+        let parsed: FastPathFallbackReason = serde_json::from_str(&json).unwrap();
         assert_eq!(*reason, parsed);
     }
 }
@@ -577,8 +577,8 @@ fn module_cache_telemetry_serde_roundtrip() {
         .expect("insert");
 
     let telemetry = cache.snapshot_fastpath_telemetry();
-    let json = serde_json::to_string(&telemetry).unwrap_or_default();
-    let parsed: FastPathTelemetry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&telemetry).unwrap();
+    let parsed: FastPathTelemetry = serde_json::from_str(&json).unwrap();
     assert_eq!(telemetry, parsed);
 }
 
@@ -844,8 +844,8 @@ fn module_cache_snapshot_serde_roundtrip() {
         .expect("insert");
 
     let snapshot = cache.snapshot();
-    let json = serde_json::to_string(&snapshot).unwrap_or_default();
-    let parsed: CacheSnapshot = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&snapshot).unwrap();
+    let parsed: CacheSnapshot = serde_json::from_str(&json).unwrap();
     assert_eq!(snapshot, parsed);
 }
 
@@ -858,8 +858,8 @@ fn module_cache_empty_telemetry_serde_roundtrip() {
     let cache = ModuleCache::new();
     let _ = cache.snapshot(); // triggers seed
     let telemetry = cache.snapshot_fastpath_telemetry();
-    let json = serde_json::to_string(&telemetry).unwrap_or_default();
-    let parsed: FastPathTelemetry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&telemetry).unwrap();
+    let parsed: FastPathTelemetry = serde_json::from_str(&json).unwrap();
     assert_eq!(telemetry, parsed);
 }
 
@@ -990,8 +990,8 @@ fn fast_path_read_result_serde_roundtrip_with_fallback() {
         writer_pressure_observations: 1,
         fallback_reason: Some(FastPathFallbackReason::RetryBudgetExceeded),
     };
-    let json = serde_json::to_string(&result).unwrap_or_default();
-    let parsed: FastPathReadResult<u64> = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&result).unwrap();
+    let parsed: FastPathReadResult<u64> = serde_json::from_str(&json).unwrap();
     assert_eq!(result, parsed);
 }
 
@@ -1004,8 +1004,8 @@ fn fast_path_read_result_serde_roundtrip_no_fallback() {
         writer_pressure_observations: 0,
         fallback_reason: None,
     };
-    let json = serde_json::to_string(&result).unwrap_or_default();
-    let parsed: FastPathReadResult<u64> = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&result).unwrap();
+    let parsed: FastPathReadResult<u64> = serde_json::from_str(&json).unwrap();
     assert_eq!(result, parsed);
 }
 
@@ -1019,8 +1019,8 @@ fn fallback_reason_clone_independence() {
     let cloned = original;
     assert_eq!(original, cloned);
     // Each variant independently serializes
-    let json_orig = serde_json::to_string(&original).unwrap_or_default();
-    let json_clone = serde_json::to_string(&cloned).unwrap_or_default();
+    let json_orig = serde_json::to_string(&original).unwrap();
+    let json_clone = serde_json::to_string(&cloned).unwrap();
     assert_eq!(json_orig, json_clone);
 }
 

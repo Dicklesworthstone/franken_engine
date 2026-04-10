@@ -348,8 +348,8 @@ fn subsystem_numeric_base_follows_thousand_convention() {
 #[test]
 fn serde_roundtrip_preserves_equality() {
     let registry = parse_registry();
-    let serialized = serde_json::to_string(&registry).unwrap_or_default();
-    let deserialized: ErrorCodeRegistry = serde_json::from_str(&serialized).unwrap_or_default();
+    let serialized = serde_json::to_string(&registry).unwrap();
+    let deserialized: ErrorCodeRegistry = serde_json::from_str(&serialized).unwrap();
     assert_eq!(registry, deserialized);
 }
 
@@ -767,8 +767,8 @@ fn raw_json_version_is_number() {
 fn individual_entry_serde_roundtrip() {
     let registry = parse_registry();
     for entry in &registry.entries {
-        let serialized = serde_json::to_string(entry).unwrap_or_default();
-        let deserialized: ErrorCodeEntry = serde_json::from_str(&serialized).unwrap_or_default();
+        let serialized = serde_json::to_string(entry).unwrap();
+        let deserialized: ErrorCodeEntry = serde_json::from_str(&serialized).unwrap();
         assert_eq!(
             *entry, deserialized,
             "roundtrip mismatch for {}",

@@ -912,8 +912,8 @@ fn serialize_redaction_audit_report_is_deterministic() {
     let report_a = apply_redaction_with_audit(&record, &spec_default);
     let report_b = apply_redaction_with_audit(&record, &spec_reordered);
 
-    let serialized_a = serialize_redaction_audit_report(&report_a).unwrap_or_default();
-    let serialized_b = serialize_redaction_audit_report(&report_b).unwrap_or_default();
+    let serialized_a = serialize_redaction_audit_report(&report_a).unwrap();
+    let serialized_b = serialize_redaction_audit_report(&report_b).unwrap();
 
     assert_eq!(serialized_a, serialized_b);
 }
@@ -934,8 +934,8 @@ fn serialize_redaction_audit_report_roundtrip_is_lossless() {
     let spec = TestLoggingSchemaSpec::default();
 
     let report = apply_redaction_with_audit(&record, &spec);
-    let serialized = serialize_redaction_audit_report(&report).unwrap_or_default();
-    let decoded = deserialize_redaction_audit_report(&serialized).unwrap_or_default();
+    let serialized = serialize_redaction_audit_report(&report).unwrap();
+    let decoded = deserialize_redaction_audit_report(&serialized).unwrap();
 
     assert_eq!(decoded, report);
 }

@@ -323,7 +323,7 @@ fn publication_gate_decision_json_roundtrip() {
 
     let decision = evaluate_publication_gate(&input, &context()).expect("gate should evaluate");
     let json = decision.to_json_pretty().expect("to_json_pretty");
-    let recovered: PublicationGateDecision = serde_json::from_str(&json).unwrap_or_default();
+    let recovered: PublicationGateDecision = serde_json::from_str(&json).unwrap();
     assert_eq!(decision.publish_allowed, recovered.publish_allowed);
     assert_eq!(decision.blockers, recovered.blockers);
 }
@@ -377,16 +377,16 @@ fn benchmark_error_serde_roundtrip() {
         baseline: "bun".to_string(),
         sum: 1.5,
     };
-    let json = serde_json::to_string(&err).unwrap_or_default();
-    let recovered: BenchmarkDenominatorError = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&err).unwrap();
+    let recovered: BenchmarkDenominatorError = serde_json::from_str(&json).unwrap();
     assert_eq!(err, recovered);
 }
 
 #[test]
 fn benchmark_case_serde_roundtrip() {
     let c = case("serde-wl", 3.5, Some(0.6));
-    let json = serde_json::to_string(&c).unwrap_or_default();
-    let recovered: BenchmarkCase = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&c).unwrap();
+    let recovered: BenchmarkCase = serde_json::from_str(&json).unwrap();
     assert_eq!(c.workload_id, recovered.workload_id);
     assert_eq!(c.weight, recovered.weight);
 }
@@ -425,8 +425,8 @@ fn publication_event_serde_roundtrip() {
         outcome: "allow".to_string(),
         error_code: None,
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let recovered: BenchmarkPublicationEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let recovered: BenchmarkPublicationEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, recovered);
 }
 
@@ -444,8 +444,8 @@ fn baseline_engine_as_str_values() {
 #[test]
 fn baseline_engine_serde_round_trip() {
     for engine in [BaselineEngine::Node, BaselineEngine::Bun] {
-        let json = serde_json::to_string(&engine).unwrap_or_default();
-        let recovered: BaselineEngine = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&engine).unwrap();
+        let recovered: BaselineEngine = serde_json::from_str(&json).unwrap();
         assert_eq!(engine, recovered);
     }
 }
@@ -478,8 +478,8 @@ fn score_threshold_constant_is_three() {
 #[test]
 fn publication_context_serde_round_trip() {
     let ctx = context();
-    let json = serde_json::to_string(&ctx).unwrap_or_default();
-    let recovered: PublicationContext = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&ctx).unwrap();
+    let recovered: PublicationContext = serde_json::from_str(&json).unwrap();
     assert_eq!(ctx, recovered);
 }
 
@@ -490,8 +490,8 @@ fn native_coverage_point_serde_round_trip() {
         native_slots: 90,
         total_slots: 100,
     };
-    let json = serde_json::to_string(&point).unwrap_or_default();
-    let recovered: NativeCoveragePoint = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&point).unwrap();
+    let recovered: NativeCoveragePoint = serde_json::from_str(&json).unwrap();
     assert_eq!(point, recovered);
 }
 
@@ -503,8 +503,8 @@ fn publication_gate_input_serde_round_trip() {
         native_coverage_progression: coverage(),
         replacement_lineage_ids: vec!["lineage-1".to_string()],
     };
-    let json = serde_json::to_string(&input).unwrap_or_default();
-    let recovered: PublicationGateInput = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&input).unwrap();
+    let recovered: PublicationGateInput = serde_json::from_str(&json).unwrap();
     assert_eq!(input.node_cases.len(), recovered.node_cases.len());
     assert_eq!(
         input.replacement_lineage_ids,

@@ -395,7 +395,7 @@ fn toolchain_contract_serde_roundtrip_via_value_preserves_all_keys() {
     let path = repo_root().join("docs/frx_toolchain_lane_contract_v1.json");
     let raw = fs::read_to_string(&path).expect("read JSON");
     let value: Value = serde_json::from_str(&raw).expect("parse JSON");
-    let serialized = serde_json::to_string_pretty(&value).unwrap_or_default();
+    let serialized = serde_json::to_string_pretty(&value).unwrap();
     let reparsed: Value = serde_json::from_str(&serialized).expect("reparse");
     let original_keys: Vec<&str> = value
         .as_object()

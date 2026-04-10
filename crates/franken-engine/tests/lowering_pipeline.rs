@@ -311,8 +311,8 @@ fn lowering_pipeline_output_serde_roundtrip() {
     let ctx = LoweringContext::new("trace-serde", "decision-serde", "policy-serde");
     let output = lower_ir0_to_ir3(&ir0, &ctx).expect("pipeline");
 
-    let json = serde_json::to_string(&output).unwrap_or_default();
-    let recovered: LoweringPipelineOutput = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&output).unwrap();
+    let recovered: LoweringPipelineOutput = serde_json::from_str(&json).unwrap();
     assert_eq!(output, recovered);
 }
 
@@ -329,8 +329,8 @@ fn pass_witness_serde_roundtrip() {
             detail: "ok".to_string(),
         }],
     };
-    let json = serde_json::to_string(&witness).unwrap_or_default();
-    let recovered: PassWitness = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&witness).unwrap();
+    let recovered: PassWitness = serde_json::from_str(&json).unwrap();
     assert_eq!(witness, recovered);
 }
 
@@ -343,8 +343,8 @@ fn isomorphism_ledger_entry_serde_roundtrip() {
         input_op_count: 7,
         output_op_count: 9,
     };
-    let json = serde_json::to_string(&entry).unwrap_or_default();
-    let recovered: IsomorphismLedgerEntry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&entry).unwrap();
+    let recovered: IsomorphismLedgerEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(entry, recovered);
 }
 
@@ -359,8 +359,8 @@ fn lowering_event_serde_roundtrip() {
         outcome: "success".to_string(),
         error_code: None,
     };
-    let json = serde_json::to_string(&event).unwrap_or_default();
-    let recovered: LoweringEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&event).unwrap();
+    let recovered: LoweringEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, recovered);
 }
 
@@ -372,8 +372,8 @@ fn ir2_flow_proof_artifact_serde_roundtrip() {
     let ctx = LoweringContext::new("trace-fa", "decision-fa", "policy-fa");
     let output = lower_ir0_to_ir3(&ir0, &ctx).expect("pipeline");
 
-    let json = serde_json::to_string(&output.ir2_flow_proof_artifact).unwrap_or_default();
-    let recovered: Ir2FlowProofArtifact = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&output.ir2_flow_proof_artifact).unwrap();
+    let recovered: Ir2FlowProofArtifact = serde_json::from_str(&json).unwrap();
     assert_eq!(output.ir2_flow_proof_artifact, recovered);
 }
 
@@ -1808,8 +1808,8 @@ fn enrichment_ir3_function_table_has_main() {
 #[test]
 fn enrichment_lowering_context_serde_roundtrip() {
     let ctx = LoweringContext::new("trace-serde", "decision-serde", "policy-serde");
-    let json = serde_json::to_string(&ctx).unwrap_or_default();
-    let recovered: LoweringContext = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&ctx).unwrap();
+    let recovered: LoweringContext = serde_json::from_str(&json).unwrap();
     assert_eq!(ctx, recovered);
 }
 
@@ -1822,8 +1822,8 @@ fn enrichment_invariant_check_serde_roundtrip() {
         passed: true,
         detail: "all good".to_string(),
     };
-    let json = serde_json::to_string(&check).unwrap_or_default();
-    let recovered: InvariantCheck = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&check).unwrap();
+    let recovered: InvariantCheck = serde_json::from_str(&json).unwrap();
     assert_eq!(check, recovered);
 }
 
@@ -1838,8 +1838,8 @@ fn enrichment_flow_proof_entry_serde_roundtrip() {
         capability: Some("fs.read".to_string()),
         proof_method: ProofMethod::StaticAnalysis,
     };
-    let json = serde_json::to_string(&entry).unwrap_or_default();
-    let recovered: FlowProofArtifactEntry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&entry).unwrap();
+    let recovered: FlowProofArtifactEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(entry, recovered);
 }
 
@@ -1854,8 +1854,8 @@ fn enrichment_runtime_checkpoint_entry_serde_roundtrip() {
         capability: Some("hostcall.invoke".to_string()),
         reason: "dynamic_capability".to_string(),
     };
-    let json = serde_json::to_string(&entry).unwrap_or_default();
-    let recovered: RuntimeCheckpointArtifactEntry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&entry).unwrap();
+    let recovered: RuntimeCheckpointArtifactEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(entry, recovered);
 }
 
@@ -2216,8 +2216,8 @@ fn enrichment_complex_pipeline_serde_roundtrip() {
         .expect("parse");
     let ir0 = Ir0Module::from_syntax_tree(tree, "enr_complex_serde.js");
     let output = lower_ir0_to_ir3(&ir0, &default_ctx()).expect("pipeline");
-    let json = serde_json::to_string(&output).unwrap_or_default();
-    let recovered: LoweringPipelineOutput = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&output).unwrap();
+    let recovered: LoweringPipelineOutput = serde_json::from_str(&json).unwrap();
     assert_eq!(output, recovered);
 }
 

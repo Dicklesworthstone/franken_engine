@@ -116,6 +116,7 @@ fn make_ir3(ir2_hash: ContentHash) -> Ir3Module {
         arity: 0,
         frame_size: 4,
         name: Some("main".to_string()),
+        is_generator: false,
     });
     ir3.required_capabilities
         .push(CapabilityTag("fs:read".to_string()));
@@ -587,8 +588,8 @@ fn ir_level_serde_round_trip() {
         IrLevel::Ir3,
         IrLevel::Ir4,
     ] {
-        let json = serde_json::to_string(&level).unwrap_or_default();
-        let recovered: IrLevel = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&level).unwrap();
+        let recovered: IrLevel = serde_json::from_str(&json).unwrap();
         assert_eq!(level, recovered);
     }
 }
@@ -620,8 +621,8 @@ fn ir_error_code_serde_round_trip() {
         IrErrorCode::WitnessIntegrityViolation,
     ];
     for code in codes {
-        let json = serde_json::to_string(&code).unwrap_or_default();
-        let recovered: IrErrorCode = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&code).unwrap();
+        let recovered: IrErrorCode = serde_json::from_str(&json).unwrap();
         assert_eq!(code, recovered);
     }
 }
@@ -652,8 +653,8 @@ fn ir_error_display_is_non_empty() {
 #[test]
 fn ir_error_serde_round_trip() {
     let err = IrError::new(IrErrorCode::LevelMismatch, "wrong level", IrLevel::Ir2);
-    let json = serde_json::to_string(&err).unwrap_or_default();
-    let recovered: IrError = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&err).unwrap();
+    let recovered: IrError = serde_json::from_str(&json).unwrap();
     assert_eq!(err.code, recovered.code);
     assert_eq!(err.level, recovered.level);
 }
@@ -666,8 +667,8 @@ fn witness_event_kind_serde_round_trip() {
         WitnessEventKind::ExecutionCompleted,
     ];
     for kind in kinds {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let recovered: WitnessEventKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let recovered: WitnessEventKind = serde_json::from_str(&json).unwrap();
         assert_eq!(kind, recovered);
     }
 }
@@ -681,8 +682,8 @@ fn execution_outcome_serde_round_trip() {
         ExecutionOutcome::Halted,
     ];
     for outcome in outcomes {
-        let json = serde_json::to_string(&outcome).unwrap_or_default();
-        let recovered: ExecutionOutcome = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&outcome).unwrap();
+        let recovered: ExecutionOutcome = serde_json::from_str(&json).unwrap();
         assert_eq!(outcome, recovered);
     }
 }
@@ -707,8 +708,8 @@ fn effect_boundary_serde_round_trip() {
         EffectBoundary::NetworkEffect,
     ];
     for effect in effects {
-        let json = serde_json::to_string(&effect).unwrap_or_default();
-        let recovered: EffectBoundary = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&effect).unwrap();
+        let recovered: EffectBoundary = serde_json::from_str(&json).unwrap();
         assert_eq!(effect, recovered);
     }
 }
@@ -724,8 +725,8 @@ fn binding_kind_serde_round_trip() {
         BindingKind::Import,
     ];
     for kind in kinds {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let recovered: BindingKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let recovered: BindingKind = serde_json::from_str(&json).unwrap();
         assert_eq!(kind, recovered);
     }
 }
@@ -734,8 +735,8 @@ fn binding_kind_serde_round_trip() {
 fn scope_kind_serde_round_trip() {
     let kinds = [ScopeKind::Global, ScopeKind::Function, ScopeKind::Block];
     for kind in kinds {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let recovered: ScopeKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let recovered: ScopeKind = serde_json::from_str(&json).unwrap();
         assert_eq!(kind, recovered);
     }
 }
@@ -780,8 +781,8 @@ fn ir3_instruction_serde_round_trip_all_variants() {
         Ir3Instruction::Return { value: 0 },
     ];
     for instr in &instructions {
-        let json = serde_json::to_string(instr).unwrap_or_default();
-        let recovered: Ir3Instruction = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(instr).unwrap();
+        let recovered: Ir3Instruction = serde_json::from_str(&json).unwrap();
         assert_eq!(*instr, recovered);
     }
 }
@@ -1321,6 +1322,8 @@ fn enrichment_ir1_all_ops_serde_roundtrip() {
             binding_id: 10,
             param_names: Vec::new(),
             body_ops: Vec::new(),
+            free_vars: Vec::new(),
+            is_generator: false,
         },
         Ir1Op::BeginTry {
             catch_label: 100,
@@ -1485,6 +1488,7 @@ fn enrichment_ir3_hash_changes_with_function_table() {
         arity: 1,
         frame_size: 4,
         name: Some("fn1".to_string()),
+        is_generator: false,
     });
 
     let mut m2 = Ir3Module::new(h, "test.js");
@@ -1493,6 +1497,7 @@ fn enrichment_ir3_hash_changes_with_function_table() {
         arity: 2,
         frame_size: 4,
         name: Some("fn1".to_string()),
+        is_generator: false,
     });
 
     assert_ne!(m1.content_hash(), m2.content_hash());
@@ -1937,6 +1942,7 @@ fn enrichment_ir3_function_desc_serde_roundtrip() {
         arity: 3,
         frame_size: 8,
         name: Some("myFunc".to_string()),
+        is_generator: false,
     };
     let json = serde_json::to_string(&desc).unwrap();
     let recovered: FnDesc = serde_json::from_str(&json).unwrap();
@@ -1950,6 +1956,7 @@ fn enrichment_ir3_function_desc_anonymous_serde() {
         arity: 0,
         frame_size: 2,
         name: None,
+        is_generator: false,
     };
     let json = serde_json::to_string(&desc).unwrap();
     let recovered: FnDesc = serde_json::from_str(&json).unwrap();

@@ -619,8 +619,8 @@ fn rgc_011_row_ids_are_unique() {
 #[test]
 fn rgc_011_serde_roundtrip_preserves_matrix() {
     let matrix = parse_matrix();
-    let serialized = serde_json::to_string(&matrix).unwrap_or_default();
-    let deserialized: CompatibilityMatrix = serde_json::from_str(&serialized).unwrap_or_default();
+    let serialized = serde_json::to_string(&matrix).unwrap();
+    let deserialized: CompatibilityMatrix = serde_json::from_str(&serialized).unwrap();
     assert_eq!(matrix, deserialized);
 }
 
@@ -660,8 +660,8 @@ fn matrix_schema_version_matches_constant() {
 #[test]
 fn matrix_serde_roundtrip_preserves_schema() {
     let matrix = parse_matrix();
-    let json = serde_json::to_string(&matrix).unwrap_or_default();
-    let recovered: CompatibilityMatrix = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&matrix).unwrap();
+    let recovered: CompatibilityMatrix = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.schema_version, matrix.schema_version);
 }
 
@@ -724,8 +724,8 @@ fn matched_row_ids_covers_all_open_beads_at_least_once() {
 #[test]
 fn matrix_serde_roundtrip_preserves_all_row_ids() {
     let matrix = parse_matrix();
-    let json = serde_json::to_string(&matrix).unwrap_or_default();
-    let recovered: CompatibilityMatrix = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&matrix).unwrap();
+    let recovered: CompatibilityMatrix = serde_json::from_str(&json).unwrap();
     let original_ids: Vec<&str> = matrix
         .coverage_rows
         .iter()

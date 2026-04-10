@@ -383,8 +383,8 @@ fn frx_07_3_all_entries_have_nonempty_stack_id_and_surface() {
 #[test]
 fn frx_07_3_serde_roundtrip_preserves_matrix() {
     let matrix = parse_matrix();
-    let serialized = serde_json::to_string(&matrix).unwrap_or_default();
-    let deserialized: EcosystemMatrix = serde_json::from_str(&serialized).unwrap_or_default();
+    let serialized = serde_json::to_string(&matrix).unwrap();
+    let deserialized: EcosystemMatrix = serde_json::from_str(&serialized).unwrap();
     assert_eq!(matrix, deserialized);
 }
 
@@ -486,8 +486,8 @@ fn ecosystem_matrix_schema_version_matches_constant() {
 #[test]
 fn ecosystem_matrix_serde_roundtrip() {
     let matrix = parse_matrix();
-    let json = serde_json::to_string(&matrix).unwrap_or_default();
-    let recovered: EcosystemMatrix = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&matrix).unwrap();
+    let recovered: EcosystemMatrix = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.schema_version, matrix.schema_version);
     assert_eq!(recovered.entries.len(), matrix.entries.len());
 }
@@ -605,8 +605,8 @@ fn frx_07_3_known_gap_blocking_issues_are_nonempty() {
 fn frx_07_3_compatibility_entry_serde_round_trip() {
     let matrix = parse_matrix();
     let entry = &matrix.entries[0];
-    let json = serde_json::to_string(entry).unwrap_or_default();
-    let recovered: CompatibilityEntry = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(entry).unwrap();
+    let recovered: CompatibilityEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(entry.stack_id, recovered.stack_id);
     assert_eq!(entry.category, recovered.category);
     assert_eq!(entry.surface, recovered.surface);
@@ -624,8 +624,8 @@ fn frx_07_3_compatibility_entry_serde_round_trip() {
 fn frx_07_3_known_gap_serde_round_trip_all() {
     let matrix = parse_matrix();
     for gap in &matrix.known_gaps {
-        let json = serde_json::to_string(gap).unwrap_or_default();
-        let recovered: KnownGap = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(gap).unwrap();
+        let recovered: KnownGap = serde_json::from_str(&json).unwrap();
         assert_eq!(
             gap, &recovered,
             "round-trip mismatch for gap {}",
@@ -637,8 +637,8 @@ fn frx_07_3_known_gap_serde_round_trip_all() {
 #[test]
 fn frx_07_3_matrix_track_serde_round_trip() {
     let matrix = parse_matrix();
-    let json = serde_json::to_string(&matrix.track).unwrap_or_default();
-    let recovered: MatrixTrack = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&matrix.track).unwrap();
+    let recovered: MatrixTrack = serde_json::from_str(&json).unwrap();
     assert_eq!(matrix.track, recovered);
 }
 
@@ -646,8 +646,8 @@ fn frx_07_3_matrix_track_serde_round_trip() {
 fn frx_07_3_structured_log_template_serde_round_trip() {
     let matrix = parse_matrix();
     for entry in &matrix.entries {
-        let json = serde_json::to_string(&entry.structured_log_template).unwrap_or_default();
-        let recovered: StructuredLogTemplate = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&entry.structured_log_template).unwrap();
+        let recovered: StructuredLogTemplate = serde_json::from_str(&json).unwrap();
         assert_eq!(entry.structured_log_template, recovered);
     }
 }
@@ -805,8 +805,8 @@ fn frx_07_3_categories_per_entry_match_expected_set() {
 #[test]
 fn frx_07_3_pretty_json_roundtrip_preserves_matrix() {
     let matrix = parse_matrix();
-    let pretty = serde_json::to_string_pretty(&matrix).unwrap_or_default();
-    let recovered: EcosystemMatrix = serde_json::from_str(&pretty).unwrap_or_default();
+    let pretty = serde_json::to_string_pretty(&matrix).unwrap();
+    let recovered: EcosystemMatrix = serde_json::from_str(&pretty).unwrap();
     assert_eq!(matrix, recovered);
 }
 

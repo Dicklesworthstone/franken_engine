@@ -274,7 +274,7 @@ fn tee_attestation_policy_error_serde_roundtrip() {
 #[test]
 fn policy_canonical_json_roundtrip() {
     let policy = sample_policy(7);
-    let json = policy.to_canonical_json().unwrap_or_default();
+    let json = policy.to_canonical_json().unwrap();
     let parsed = TeeAttestationPolicy::from_json(&json).expect("parse");
     assert_eq!(policy, parsed);
 }

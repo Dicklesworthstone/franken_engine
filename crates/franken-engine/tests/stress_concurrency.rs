@@ -371,7 +371,7 @@ fn stress_environment_fingerprint() -> StressEnvironmentFingerprint {
 }
 
 fn stress_sanitizer_config() -> StressSanitizerConfig {
-    let rustflags = std::env::var("RUSTFLAGS").unwrap_or_default();
+    let rustflags = std::env::var("RUSTFLAGS").unwrap();
     let tsan_enabled = rustflags.contains("sanitize=thread");
     let asan_enabled = rustflags.contains("sanitize=address");
     let profile = if tsan_enabled {

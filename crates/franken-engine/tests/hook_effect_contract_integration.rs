@@ -304,8 +304,8 @@ fn hook_effect_contract_same_seed_is_deterministic() {
 #[test]
 fn hook_kind_all_serde_round_trips() {
     for kind in HookKind::ALL {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let recovered: HookKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let recovered: HookKind = serde_json::from_str(&json).unwrap();
         assert_eq!(kind, &recovered);
     }
 }
@@ -351,8 +351,8 @@ fn effect_timing_serde_round_trip() {
         EffectTiming::Layout,
         EffectTiming::Passive,
     ] {
-        let json = serde_json::to_string(&timing).unwrap_or_default();
-        let recovered: EffectTiming = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&timing).unwrap();
+        let recovered: EffectTiming = serde_json::from_str(&json).unwrap();
         assert_eq!(timing, recovered);
     }
 }
@@ -410,8 +410,8 @@ fn hook_rule_violation_count_mismatch_serde_round_trip() {
         previous_count: 2,
         current_count: 3,
     };
-    let json = serde_json::to_string(&violation).unwrap_or_default();
-    let recovered: HookRuleViolation = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&violation).unwrap();
+    let recovered: HookRuleViolation = serde_json::from_str(&json).unwrap();
     assert_eq!(violation, recovered);
 }
 
@@ -569,8 +569,8 @@ fn render_phase_serde_round_trip_all_variants() {
         RenderPhase::Idle,
         RenderPhase::Unmounting,
     ] {
-        let json = serde_json::to_string(&phase).unwrap_or_default();
-        let recovered: RenderPhase = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&phase).unwrap();
+        let recovered: RenderPhase = serde_json::from_str(&json).unwrap();
         assert_eq!(phase, recovered);
     }
 }
@@ -627,8 +627,8 @@ fn effect_timing_scheduling_order_insertion_first() {
 #[test]
 fn legal_transformation_all_serde_round_trip() {
     for t in LegalTransformation::ALL {
-        let json = serde_json::to_string(&t).unwrap_or_default();
-        let recovered: LegalTransformation = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&t).unwrap();
+        let recovered: LegalTransformation = serde_json::from_str(&json).unwrap();
         assert_eq!(t, &recovered);
     }
 }
@@ -800,8 +800,8 @@ fn hook_effect_contract_serde_round_trip() {
         vec![make_slot(0, HookKind::State, None)],
     ));
     contract.approve_transformation(LegalTransformation::StateBatch);
-    let json = serde_json::to_string(&contract).unwrap_or_default();
-    let recovered: HookEffectContract = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&contract).unwrap();
+    let recovered: HookEffectContract = serde_json::from_str(&json).unwrap();
     assert_eq!(contract.total_hook_count(), recovered.total_hook_count());
 }
 
@@ -828,8 +828,8 @@ fn scheduling_boundary_insertion_is_synchronous() {
 #[test]
 fn scheduling_boundary_serde_round_trip() {
     for boundary in SchedulingBoundary::canonical_boundaries() {
-        let json = serde_json::to_string(&boundary).unwrap_or_default();
-        let recovered: SchedulingBoundary = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&boundary).unwrap();
+        let recovered: SchedulingBoundary = serde_json::from_str(&json).unwrap();
         assert_eq!(boundary, recovered);
     }
 }
@@ -848,9 +848,9 @@ fn unsupported_semantics_trigger_serde_round_trip() {
         UnsupportedSemanticsTrigger::UnsupportedHookPrimitive,
         UnsupportedSemanticsTrigger::TransformationProofMissing,
     ] {
-        let json = serde_json::to_string(&trigger).unwrap_or_default();
+        let json = serde_json::to_string(&trigger).unwrap();
         let recovered: UnsupportedSemanticsTrigger =
-            serde_json::from_str(&json).unwrap_or_default();
+            serde_json::from_str(&json).unwrap();
         assert_eq!(trigger, recovered);
         assert!(!trigger.stable_error_code().is_empty());
         assert!(!trigger.rejection_reason().is_empty());
@@ -885,8 +885,8 @@ fn fallback_execution_route_serde_round_trip() {
         FallbackExecutionRoute::BaselineInterpreterLane,
         FallbackExecutionRoute::DeterministicSafeModeLane,
     ] {
-        let json = serde_json::to_string(&route).unwrap_or_default();
-        let recovered: FallbackExecutionRoute = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&route).unwrap();
+        let recovered: FallbackExecutionRoute = serde_json::from_str(&json).unwrap();
         assert_eq!(route, recovered);
     }
 }
@@ -981,8 +981,8 @@ fn pending_effect_serde_round_trip() {
         tree_order: 42,
         is_cleanup: true,
     };
-    let json = serde_json::to_string(&effect).unwrap_or_default();
-    let recovered: PendingEffect = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&effect).unwrap();
+    let recovered: PendingEffect = serde_json::from_str(&json).unwrap();
     assert_eq!(effect, recovered);
 }
 
@@ -999,8 +999,8 @@ fn transformation_receipt_serde_round_trip() {
         precondition_met: true,
         reason: "constant folded memo".to_string(),
     };
-    let json = serde_json::to_string(&receipt).unwrap_or_default();
-    let recovered: TransformationReceipt = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&receipt).unwrap();
+    let recovered: TransformationReceipt = serde_json::from_str(&json).unwrap();
     assert_eq!(receipt, recovered);
 }
 
@@ -1054,8 +1054,8 @@ fn phase_transition_serde_round_trip() {
         to: RenderPhase::PassiveEffectsPending,
         sequence_number: 5,
     };
-    let json = serde_json::to_string(&transition).unwrap_or_default();
-    let recovered: PhaseTransition = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&transition).unwrap();
+    let recovered: PhaseTransition = serde_json::from_str(&json).unwrap();
     assert_eq!(transition, recovered);
 }
 
@@ -1071,8 +1071,8 @@ fn deps_change_serde_round_trip() {
         DepsChange::Unchanged,
         DepsChange::Changed,
     ] {
-        let json = serde_json::to_string(&change).unwrap_or_default();
-        let recovered: DepsChange = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&change).unwrap();
+        let recovered: DepsChange = serde_json::from_str(&json).unwrap();
         assert_eq!(change, recovered);
     }
 }
@@ -1089,8 +1089,8 @@ fn hook_rule_violation_kind_mismatch_serde_round_trip() {
         previous_kind: HookKind::State,
         current_kind: HookKind::Reducer,
     };
-    let json = serde_json::to_string(&violation).unwrap_or_default();
-    let recovered: HookRuleViolation = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&violation).unwrap();
+    let recovered: HookRuleViolation = serde_json::from_str(&json).unwrap();
     assert_eq!(violation, recovered);
 }
 
@@ -1101,8 +1101,8 @@ fn hook_rule_violation_outside_render_serde_round_trip() {
         slot: HookSlotIndex(1),
         actual_phase: RenderPhase::Idle,
     };
-    let json = serde_json::to_string(&violation).unwrap_or_default();
-    let recovered: HookRuleViolation = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&violation).unwrap();
+    let recovered: HookRuleViolation = serde_json::from_str(&json).unwrap();
     assert_eq!(violation, recovered);
 }
 
@@ -1112,8 +1112,8 @@ fn hook_rule_violation_conditional_hook_serde_round_trip() {
         component: "App".to_string(),
         slot: HookSlotIndex(2),
     };
-    let json = serde_json::to_string(&violation).unwrap_or_default();
-    let recovered: HookRuleViolation = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&violation).unwrap();
+    let recovered: HookRuleViolation = serde_json::from_str(&json).unwrap();
     assert_eq!(violation, recovered);
 }
 
@@ -1125,8 +1125,8 @@ fn hook_rule_violation_deps_length_serde_round_trip() {
         previous_len: 1,
         current_len: 3,
     };
-    let json = serde_json::to_string(&violation).unwrap_or_default();
-    let recovered: HookRuleViolation = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&violation).unwrap();
+    let recovered: HookRuleViolation = serde_json::from_str(&json).unwrap();
     assert_eq!(violation, recovered);
 }
 
@@ -1141,8 +1141,8 @@ fn phase_transition_error_serde_round_trip() {
         from: RenderPhase::Idle,
         to: RenderPhase::PaintPending,
     };
-    let json = serde_json::to_string(&err).unwrap_or_default();
-    let recovered: PhaseTransitionError = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&err).unwrap();
+    let recovered: PhaseTransitionError = serde_json::from_str(&json).unwrap();
     assert_eq!(err, recovered);
 }
 
@@ -1165,8 +1165,8 @@ fn hook_manifest_error_serde_round_trip_all_variants() {
         },
     ];
     for error in errors {
-        let json = serde_json::to_string(&error).unwrap_or_default();
-        let recovered: HookManifestError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&error).unwrap();
+        let recovered: HookManifestError = serde_json::from_str(&json).unwrap();
         assert_eq!(error, recovered);
     }
 }

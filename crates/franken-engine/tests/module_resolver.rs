@@ -465,8 +465,8 @@ fn resolver_serde_round_trip_preserves_state() {
         )
         .unwrap();
 
-    let json = serde_json::to_string(&resolver).unwrap_or_default();
-    let recovered: DeterministicModuleResolver = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&resolver).unwrap();
+    let recovered: DeterministicModuleResolver = serde_json::from_str(&json).unwrap();
 
     assert_eq!(resolver.root_dir(), recovered.root_dir());
 
@@ -608,8 +608,8 @@ fn import_style_as_str_variants() {
 #[test]
 fn module_syntax_serde_roundtrip() {
     for syntax in [ModuleSyntax::EsModule, ModuleSyntax::CommonJs] {
-        let json = serde_json::to_string(&syntax).unwrap_or_default();
-        let recovered: ModuleSyntax = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&syntax).unwrap();
+        let recovered: ModuleSyntax = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, syntax);
     }
 }
@@ -617,8 +617,8 @@ fn module_syntax_serde_roundtrip() {
 #[test]
 fn import_style_serde_roundtrip() {
     for style in [ImportStyle::Import, ImportStyle::Require] {
-        let json = serde_json::to_string(&style).unwrap_or_default();
-        let recovered: ImportStyle = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&style).unwrap();
+        let recovered: ImportStyle = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, style);
     }
 }
@@ -631,8 +631,8 @@ fn module_source_kind_serde_roundtrip() {
         ModuleSourceKind::Workspace,
         ModuleSourceKind::ExternalRegistry,
     ] {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let recovered: ModuleSourceKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let recovered: ModuleSourceKind = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, kind);
     }
 }
@@ -647,8 +647,8 @@ fn resolution_error_code_serde_roundtrip() {
         ResolutionErrorCode::PolicyDenied,
     ];
     for code in &codes {
-        let json = serde_json::to_string(code).unwrap_or_default();
-        let recovered: ResolutionErrorCode = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(code).unwrap();
+        let recovered: ResolutionErrorCode = serde_json::from_str(&json).unwrap();
         assert_eq!(&recovered, code);
     }
 }
@@ -670,8 +670,8 @@ fn resolution_error_code_stable_codes_unique() {
 fn module_definition_serde_roundtrip() {
     let def = ModuleDefinition::new(ModuleSyntax::EsModule, "export const x = 1;")
         .with_dependency(ModuleDependency::new("./util", ImportStyle::Import));
-    let json = serde_json::to_string(&def).unwrap_or_default();
-    let recovered: ModuleDefinition = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&def).unwrap();
+    let recovered: ModuleDefinition = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.syntax, def.syntax);
     assert_eq!(recovered.dependencies.len(), 1);
 }
@@ -824,8 +824,8 @@ fn host_api_error_code_serde_roundtrip() {
         HostApiErrorCode::UnsupportedOperation,
         HostApiErrorCode::PolicyDenied,
     ] {
-        let json = serde_json::to_string(&code).unwrap_or_default();
-        let recovered: HostApiErrorCode = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&code).unwrap();
+        let recovered: HostApiErrorCode = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, code);
     }
 }
@@ -835,8 +835,8 @@ fn host_api_error_code_serde_roundtrip() {
 #[test]
 fn host_api_request_serde_roundtrip() {
     let req = HostApiRequest::new("node:fs", "read_file");
-    let json = serde_json::to_string(&req).unwrap_or_default();
-    let recovered: HostApiRequest = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&req).unwrap();
+    let recovered: HostApiRequest = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, req);
     assert_eq!(recovered.module_specifier, "node:fs");
     assert_eq!(recovered.operation, "read_file");
@@ -861,8 +861,8 @@ fn host_api_permission_descriptor_serde_roundtrip() {
         required_capabilities: caps,
         remediation: "Grant fs_read capability.".to_string(),
     };
-    let json = serde_json::to_string(&desc).unwrap_or_default();
-    let recovered: HostApiPermissionDescriptor = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&desc).unwrap();
+    let recovered: HostApiPermissionDescriptor = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, desc);
 }
 
@@ -885,8 +885,8 @@ fn host_api_decision_event_serde_roundtrip() {
         required_capabilities: BTreeSet::new(),
         remediation: "Grant fs_read.".to_string(),
     };
-    let json = serde_json::to_string(&ev).unwrap_or_default();
-    let recovered: HostApiDecisionEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&ev).unwrap();
+    let recovered: HostApiDecisionEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, ev);
 }
 
@@ -902,8 +902,8 @@ fn capability_safe_host_api_surface_default_equals_standard() {
 #[test]
 fn capability_safe_host_api_surface_serde_roundtrip() {
     let surface = CapabilitySafeHostApiSurface::standard();
-    let json = serde_json::to_string(&surface).unwrap_or_default();
-    let recovered: CapabilitySafeHostApiSurface = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&surface).unwrap();
+    let recovered: CapabilitySafeHostApiSurface = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, surface);
 }
 
@@ -1060,9 +1060,9 @@ fn host_api_authorization_outcome_serde_roundtrip() {
     let policy = CapabilityPolicyHook::new(granted);
     let request = HostApiRequest::new("node:net", "connect");
     let outcome = surface.authorize(&request, &context(), &policy).unwrap();
-    let json = serde_json::to_string(&outcome).unwrap_or_default();
+    let json = serde_json::to_string(&outcome).unwrap();
     let recovered: frankenengine_engine::module_resolver::HostApiAuthorizationOutcome =
-        serde_json::from_str(&json).unwrap_or_default();
+        serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, outcome);
 }
 
@@ -1074,8 +1074,8 @@ fn host_api_authorization_error_serde_roundtrip() {
     let err = surface
         .authorize(&request, &context(), &policy)
         .expect_err("should deny");
-    let json = serde_json::to_string(&*err).unwrap_or_default();
-    let recovered: HostApiAuthorizationError = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&*err).unwrap();
+    let recovered: HostApiAuthorizationError = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, *err);
 }
 
@@ -1203,8 +1203,8 @@ fn capability_policy_hook_serde_roundtrip_with_denied_host_api_descriptors() {
     let hook = CapabilityPolicyHook::new(granted)
         .deny_specifier("evil-pkg")
         .deny_host_api_descriptor("hostapi.node-fs.read-file.v1");
-    let json = serde_json::to_string(&hook).unwrap_or_default();
-    let recovered: CapabilityPolicyHook = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&hook).unwrap();
+    let recovered: CapabilityPolicyHook = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, hook);
     assert!(
         recovered
@@ -1240,8 +1240,8 @@ fn module_provenance_serde_roundtrip_all_kinds() {
             kind,
             origin: format!("test-origin-{}", kind.as_str()),
         };
-        let json = serde_json::to_string(&prov).unwrap_or_default();
-        let recovered: ModuleProvenance = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&prov).unwrap();
+        let recovered: ModuleProvenance = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, prov);
     }
 }
@@ -1304,8 +1304,8 @@ fn module_definition_empty_source() {
 fn module_request_serde_roundtrip_with_node_compat() {
     let mr = ModuleRequest::new("pkg", ImportStyle::Require)
         .with_compatibility_mode(CompatibilityMode::NodeCompat);
-    let json = serde_json::to_string(&mr).unwrap_or_default();
-    let recovered: ModuleRequest = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&mr).unwrap();
+    let recovered: ModuleRequest = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, mr);
     assert_eq!(recovered.compatibility_mode, CompatibilityMode::NodeCompat);
 }
@@ -1313,7 +1313,7 @@ fn module_request_serde_roundtrip_with_node_compat() {
 #[test]
 fn module_request_native_mode_skips_serialization() {
     let mr = ModuleRequest::new("pkg", ImportStyle::Import);
-    let json = serde_json::to_string(&mr).unwrap_or_default();
+    let json = serde_json::to_string(&mr).unwrap();
     // Native is the default and should be skipped in serialization
     assert!(!json.contains("compatibility_mode"));
 }
@@ -1323,8 +1323,8 @@ fn module_request_native_mode_skips_serialization() {
 #[test]
 fn resolution_context_serde_roundtrip() {
     let ctx = ResolutionContext::new("trace-99", "decision-99", "policy-99");
-    let json = serde_json::to_string(&ctx).unwrap_or_default();
-    let recovered: ResolutionContext = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&ctx).unwrap();
+    let recovered: ResolutionContext = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, ctx);
 }
 
@@ -1341,8 +1341,8 @@ fn resolution_event_serde_roundtrip() {
         outcome: "allow".to_string(),
         error_code: "none".to_string(),
     };
-    let json = serde_json::to_string(&ev).unwrap_or_default();
-    let recovered: ResolutionEvent = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&ev).unwrap();
+    let recovered: ResolutionEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, ev);
 }
 
@@ -1379,8 +1379,8 @@ fn resolution_error_serde_roundtrip_all_codes() {
             probe_sequence: Vec::new(),
             event: ev,
         };
-        let json = serde_json::to_string(&err).unwrap_or_default();
-        let recovered: ResolutionError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&err).unwrap();
+        let recovered: ResolutionError = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, err);
     }
 }
@@ -1401,8 +1401,8 @@ fn registry_error_display_includes_empty_key() {
 #[test]
 fn registry_error_code_serde_roundtrip() {
     let code = RegistryErrorCode::EmptyKey;
-    let json = serde_json::to_string(&code).unwrap_or_default();
-    let recovered: RegistryErrorCode = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&code).unwrap();
+    let recovered: RegistryErrorCode = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, code);
 }
 
@@ -1412,8 +1412,8 @@ fn registry_error_serde_roundtrip() {
         code: RegistryErrorCode::EmptyKey,
         message: "module key must not be empty".to_string(),
     };
-    let json = serde_json::to_string(&err).unwrap_or_default();
-    let recovered: RegistryError = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&err).unwrap();
+    let recovered: RegistryError = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, err);
 }
 
@@ -1428,8 +1428,8 @@ fn allow_all_policy_default() {
 #[test]
 fn allow_all_policy_serde_roundtrip() {
     let policy = AllowAllPolicy;
-    let json = serde_json::to_string(&policy).unwrap_or_default();
-    let recovered: AllowAllPolicy = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&policy).unwrap();
+    let recovered: AllowAllPolicy = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, policy);
 }
 
@@ -1779,8 +1779,8 @@ fn resolution_outcome_serde_roundtrip_through_resolver() {
     let outcome = resolver
         .resolve(&request, &context(), &AllowAllPolicy)
         .unwrap();
-    let json = serde_json::to_string(&outcome).unwrap_or_default();
-    let recovered: ResolutionOutcome = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&outcome).unwrap();
+    let recovered: ResolutionOutcome = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, outcome);
 }
 

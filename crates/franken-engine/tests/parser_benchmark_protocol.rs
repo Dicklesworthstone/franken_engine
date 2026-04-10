@@ -69,7 +69,7 @@ fn parse_goal(raw: &str) -> ParseGoal {
 fn load_fixture() -> ParserBenchmarkProtocolFixture {
     let fixture_path = Path::new("tests/fixtures/parser_benchmark_protocol_v1.json");
     let bytes = fs::read(fixture_path).expect("read parser benchmark protocol fixture");
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    serde_json::from_slice(&bytes).unwrap()
 }
 
 fn load_doc() -> String {
@@ -498,8 +498,8 @@ fn benchmark_cases_family_ids_are_nonempty_and_lowercase() {
 #[test]
 fn measurement_window_serde_round_trip() {
     let fixture = load_fixture();
-    let json = serde_json::to_string(&fixture.measurement_window).unwrap_or_default();
-    let recovered: MeasurementWindow = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&fixture.measurement_window).unwrap();
+    let recovered: MeasurementWindow = serde_json::from_str(&json).unwrap();
     assert_eq!(
         recovered.warmup_iterations,
         fixture.measurement_window.warmup_iterations
@@ -539,8 +539,8 @@ fn enrichment_measurement_window_serde_roundtrip_preserves_all_fields() {
         replicates: 1,
         max_relative_stdev_millionths: 1,
     };
-    let json = serde_json::to_string(&original).unwrap_or_default();
-    let recovered: MeasurementWindow = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&original).unwrap();
+    let recovered: MeasurementWindow = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.warmup_iterations, original.warmup_iterations);
     assert_eq!(
         recovered.measurement_iterations,
@@ -564,8 +564,8 @@ fn enrichment_measurement_window_serde_roundtrip_extreme_values() {
         replicates: u32::MAX,
         max_relative_stdev_millionths: u32::MAX,
     };
-    let json = serde_json::to_string(&original).unwrap_or_default();
-    let recovered: MeasurementWindow = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&original).unwrap();
+    let recovered: MeasurementWindow = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.warmup_iterations, u32::MAX);
     assert_eq!(recovered.measurement_iterations, u32::MAX);
     assert_eq!(recovered.replicates, u32::MAX);

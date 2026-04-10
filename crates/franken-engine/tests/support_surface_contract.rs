@@ -1296,7 +1296,7 @@ fn enrichment_contract_serde_roundtrip_via_json_value() {
     // then re-parse as SupportSurfaceContract — verifies Deserialize is stable.
     let original: serde_json::Value =
         serde_json::from_str(CONTRACT_JSON).expect("contract must parse as Value");
-    let re_serialized = serde_json::to_string(&original).unwrap_or_default();
+    let re_serialized = serde_json::to_string(&original).unwrap();
     let contract: SupportSurfaceContract =
         serde_json::from_str(&re_serialized).expect("roundtrip contract must parse");
     assert_eq!(contract.schema_version, CONTRACT_SCHEMA_VERSION);
@@ -1309,7 +1309,7 @@ fn enrichment_mode_matrix_serde_roundtrip_via_json_value() {
     // Same roundtrip check for the mode matrix document.
     let original: serde_json::Value =
         serde_json::from_str(MODE_MATRIX_JSON).expect("mode matrix must parse as Value");
-    let re_serialized = serde_json::to_string(&original).unwrap_or_default();
+    let re_serialized = serde_json::to_string(&original).unwrap();
     let matrix: SupportSurfaceModeMatrix =
         serde_json::from_str(&re_serialized).expect("roundtrip mode matrix must parse");
     assert_eq!(matrix.schema_version, MODE_MATRIX_SCHEMA_VERSION);

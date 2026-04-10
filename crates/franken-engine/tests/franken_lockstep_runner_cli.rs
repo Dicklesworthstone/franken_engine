@@ -82,7 +82,7 @@ fn write_fixture_catalog(path: &Path) -> String {
 
     fs::write(
         path,
-        serde_json::to_vec_pretty(&catalog).unwrap_or_default(),
+        serde_json::to_vec_pretty(&catalog).unwrap(),
     )
     .expect("fixture catalog should be written");
 
@@ -226,7 +226,7 @@ fn expected_environment_fingerprint(locale: &str, timezone: &str) -> String {
     format!(
         "sha256:{}",
         hex::encode(Sha256::digest(
-            serde_json::to_vec(&material).unwrap_or_default()
+            serde_json::to_vec(&material).unwrap()
         ))
     )
 }
@@ -393,7 +393,7 @@ fn write_engine_specs(path: &Path) {
     ]);
     fs::write(
         path,
-        serde_json::to_vec_pretty(&payload).unwrap_or_default(),
+        serde_json::to_vec_pretty(&payload).unwrap(),
     )
     .expect("engine spec file should write");
 }
@@ -944,7 +944,7 @@ fn lockstep_runner_preflight_only_accepts_pathext_command_lookup() {
     if let Some(existing_path) = std::env::var_os("PATH") {
         combined_paths.extend(std::env::split_paths(&existing_path));
     }
-    let combined_path = std::env::join_paths(combined_paths).unwrap_or_default();
+    let combined_path = std::env::join_paths(combined_paths).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_franken_lockstep_runner"))
         .env("PATH", combined_path)
@@ -1482,7 +1482,7 @@ fn fixture_catalog_json_roundtrips_through_serde() {
     let bytes = fs::read(&path).expect("catalog should be readable");
     let parsed: serde_json::Value =
         serde_json::from_slice(&bytes).expect("catalog should parse as json");
-    let reserialized = serde_json::to_vec_pretty(&parsed).unwrap_or_default();
+    let reserialized = serde_json::to_vec_pretty(&parsed).unwrap();
     let reparsed: serde_json::Value =
         serde_json::from_slice(&reserialized).expect("re-parse should succeed");
     assert_eq!(parsed, reparsed, "serde roundtrip must be identity");
@@ -1512,7 +1512,7 @@ fn engine_specs_json_roundtrips_through_serde() {
     let bytes = fs::read(&path).expect("engine specs should be readable");
     let parsed: serde_json::Value =
         serde_json::from_slice(&bytes).expect("engine specs should parse");
-    let reserialized = serde_json::to_vec_pretty(&parsed).unwrap_or_default();
+    let reserialized = serde_json::to_vec_pretty(&parsed).unwrap();
     let reparsed: serde_json::Value =
         serde_json::from_slice(&reserialized).expect("re-parse should succeed");
     assert_eq!(parsed, reparsed, "serde roundtrip must be identity");

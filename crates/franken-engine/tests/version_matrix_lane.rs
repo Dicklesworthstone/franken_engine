@@ -283,8 +283,8 @@ fn matrix_lane_kind_serde_roundtrip() {
         MatrixLaneKind::Next,
         MatrixLaneKind::Pinned,
     ] {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let recovered: MatrixLaneKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let recovered: MatrixLaneKind = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, kind);
     }
 }
@@ -294,8 +294,8 @@ fn matrix_lane_kind_serde_roundtrip() {
 #[test]
 fn matrix_outcome_serde_roundtrip() {
     for outcome in [MatrixOutcome::Pass, MatrixOutcome::Fail] {
-        let json = serde_json::to_string(&outcome).unwrap_or_default();
-        let recovered: MatrixOutcome = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&outcome).unwrap();
+        let recovered: MatrixOutcome = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, outcome);
     }
 }
@@ -308,8 +308,8 @@ fn failure_scope_kind_serde_roundtrip() {
         FailureScopeKind::Universal,
         FailureScopeKind::VersionSpecific,
     ] {
-        let json = serde_json::to_string(&kind).unwrap_or_default();
-        let recovered: FailureScopeKind = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&kind).unwrap();
+        let recovered: FailureScopeKind = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, kind);
     }
 }
@@ -476,8 +476,8 @@ fn version_source_serde_roundtrip() {
         previous_override: None,
         next_override: None,
     };
-    let json = serde_json::to_string(&vs).unwrap_or_default();
-    let recovered: VersionSource = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&vs).unwrap();
+    let recovered: VersionSource = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.tags, vs.tags);
     assert_eq!(recovered.current_override.as_deref(), Some("2.0.0"));
 }
@@ -489,8 +489,8 @@ fn pinned_version_combination_serde_roundtrip() {
         remote_version: "2.0.0".to_string(),
         reason: "test".to_string(),
     };
-    let json = serde_json::to_string(&pvc).unwrap_or_default();
-    let recovered: PinnedVersionCombination = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&pvc).unwrap();
+    let recovered: PinnedVersionCombination = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.local_version, "1.0.0");
     assert_eq!(recovered.reason, "test");
 }
@@ -498,8 +498,8 @@ fn pinned_version_combination_serde_roundtrip() {
 #[test]
 fn boundary_matrix_spec_serde_roundtrip() {
     let spec = sample_spec();
-    let json = serde_json::to_string(&spec).unwrap_or_default();
-    let recovered: BoundaryMatrixSpec = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&spec).unwrap();
+    let recovered: BoundaryMatrixSpec = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.boundary_surface, spec.boundary_surface);
     assert_eq!(recovered.pinned_combinations.len(), 1);
 }
@@ -508,8 +508,8 @@ fn boundary_matrix_spec_serde_roundtrip() {
 fn version_matrix_cell_serde_roundtrip() {
     let plan = derive_version_matrix(&[sample_spec()]).expect("derive matrix");
     let cell = &plan.cells[0];
-    let json = serde_json::to_string(cell).unwrap_or_default();
-    let recovered: VersionMatrixCell = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(cell).unwrap();
+    let recovered: VersionMatrixCell = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.cell_id, cell.cell_id);
     assert_eq!(recovered.lane_kind, cell.lane_kind);
 }
@@ -517,8 +517,8 @@ fn version_matrix_cell_serde_roundtrip() {
 #[test]
 fn version_matrix_plan_serde_roundtrip() {
     let plan = derive_version_matrix(&[sample_spec()]).expect("derive matrix");
-    let json = serde_json::to_string(&plan).unwrap_or_default();
-    let recovered: VersionMatrixPlan = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&plan).unwrap();
+    let recovered: VersionMatrixPlan = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.cells.len(), plan.cells.len());
     assert_eq!(recovered.schema_version, plan.schema_version);
 }
@@ -527,8 +527,8 @@ fn version_matrix_plan_serde_roundtrip() {
 fn version_slots_serde_roundtrip() {
     let slots =
         derive_version_slots(&sample_spec().local_versions, "test-repo").expect("derive slots");
-    let json = serde_json::to_string(&slots).unwrap_or_default();
-    let recovered: VersionSlots = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&slots).unwrap();
+    let recovered: VersionSlots = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.current, slots.current);
     assert_eq!(recovered.previous, slots.previous);
 }
@@ -547,8 +547,8 @@ fn matrix_cell_result_serde_roundtrip() {
         failure_fingerprint: None,
         failure_class: None,
     };
-    let json = serde_json::to_string(&result).unwrap_or_default();
-    let recovered: MatrixCellResult = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&result).unwrap();
+    let recovered: MatrixCellResult = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.cell_id, "cell-1");
     assert_eq!(recovered.outcome, MatrixOutcome::Pass);
 }
@@ -561,8 +561,8 @@ fn matrix_failure_scope_serde_roundtrip() {
         scope: FailureScopeKind::Universal,
         failing_cells: vec!["cell-1".to_string(), "cell-2".to_string()],
     };
-    let json = serde_json::to_string(&scope).unwrap_or_default();
-    let recovered: MatrixFailureScope = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&scope).unwrap();
+    let recovered: MatrixFailureScope = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.scope, FailureScopeKind::Universal);
     assert_eq!(recovered.failing_cells.len(), 2);
 }
@@ -576,8 +576,8 @@ fn matrix_health_summary_serde_roundtrip() {
         universal_failures: 1,
         version_specific_failures: 2,
     };
-    let json = serde_json::to_string(&summary).unwrap_or_default();
-    let recovered: MatrixHealthSummary = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&summary).unwrap();
+    let recovered: MatrixHealthSummary = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.total_cells, 10);
     assert_eq!(recovered.universal_failures, 1);
 }
@@ -628,8 +628,8 @@ fn version_matrix_error_serde_roundtrip_missing_current() {
     let err = VersionMatrixError::MissingCurrentVersion {
         repo: "franken_core".to_string(),
     };
-    let json = serde_json::to_string(&err).unwrap_or_default();
-    let recovered: VersionMatrixError = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&err).unwrap();
+    let recovered: VersionMatrixError = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, err);
 }
 
@@ -639,8 +639,8 @@ fn version_matrix_error_serde_roundtrip_invalid_pinned() {
         boundary_surface: "api/v2".to_string(),
         reason: "remote_version is blank".to_string(),
     };
-    let json = serde_json::to_string(&err).unwrap_or_default();
-    let recovered: VersionMatrixError = serde_json::from_str(&json).unwrap_or_default();
+    let json = serde_json::to_string(&err).unwrap();
+    let recovered: VersionMatrixError = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, err);
 }
 

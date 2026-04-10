@@ -2130,6 +2130,9 @@ struct LogicalLine {
 
 /// Merge physical lines into logical lines by tracking brace/paren/bracket depth.
 /// When a line ends with unbalanced delimiters, subsequent lines are merged until balance.
+///
+/// Known limitation: this helper still does not disambiguate regex literals
+/// from division, so braces inside `/.../` patterns may still affect balance.
 fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
     let mut result = Vec::new();
     let mut current_text = String::new();
@@ -2140,6 +2143,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
     let mut paren_depth: i64 = 0;
     let mut bracket_depth: i64 = 0;
     let mut in_quote: Option<char> = None;
+    let mut in_block_comment = false;
     let mut escaped = false;
     let mut accumulating = false;
 
@@ -2160,7 +2164,15 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
         }
         current_text.push_str(line);
 
-        for ch in line.chars() {
+        let mut chars = line.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if in_block_comment {
+                if ch == '*' && matches!(chars.peek(), Some('/')) {
+                    chars.next();
+                    in_block_comment = false;
+                }
+                continue;
+            }
             if let Some(q) = in_quote {
                 if escaped {
                     escaped = false;
@@ -2176,6 +2188,14 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 continue;
             }
             match ch {
+                '/' => match chars.peek() {
+                    Some('/') => break,
+                    Some('*') => {
+                        chars.next();
+                        in_block_comment = true;
+                    }
+                    _ => {}
+                },
                 '\'' | '"' | '`' => in_quote = Some(ch),
                 '{' => brace_depth += 1,
                 '}' => brace_depth -= 1,
@@ -2189,7 +2209,12 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
 
         byte_offset = byte_offset.saturating_add(segment.len() as u64);
 
-        if brace_depth <= 0 && paren_depth <= 0 && bracket_depth <= 0 && in_quote.is_none() {
+        if brace_depth <= 0
+            && paren_depth <= 0
+            && bracket_depth <= 0
+            && in_quote.is_none()
+            && !in_block_comment
+        {
             let trimmed = current_text.trim();
             if !trimmed.is_empty() {
                 result.push(LogicalLine {
@@ -11416,6 +11441,30 @@ mod tests {
         let lines = merge_logical_lines("if (x) {\n  y;\n}");
         assert_eq!(lines.len(), 1);
         assert!(lines[0].text.contains("if (x) {"));
+    }
+
+    #[test]
+    fn merge_logical_lines_ignores_braces_in_line_comments() {
+        let lines = merge_logical_lines("if (x) { // { comment\n  y;\n}");
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].start_line, 1);
+        assert_eq!(lines[0].end_line, 3);
+    }
+
+    #[test]
+    fn merge_logical_lines_ignores_braces_in_block_comments() {
+        let lines = merge_logical_lines("if (x) {\n  /* { comment */\n  y;\n}");
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].start_line, 1);
+        assert_eq!(lines[0].end_line, 4);
+    }
+
+    #[test]
+    fn merge_logical_lines_braces_in_quotes_do_not_merge_following_statement() {
+        let lines = merge_logical_lines("var s = \"}\";\nif (x) {\n  y;\n}");
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].text, "var s = \"}\";");
+        assert!(lines[1].text.starts_with("if (x) {"));
     }
 
     // -----------------------------------------------------------------------

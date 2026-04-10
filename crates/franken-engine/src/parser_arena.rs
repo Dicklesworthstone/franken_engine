@@ -554,7 +554,8 @@ impl ParserArena {
             | Expression::TemplateLiteral { .. }
             | Expression::Function { .. }
             | Expression::Yield { .. }
-            | Expression::SpreadElement(_) => {
+            | Expression::SpreadElement(_)
+            | Expression::RegExpLiteral { .. } => {
                 return Err(ArenaError::UnsupportedExpression {
                     kind: expression_kind_name(expression),
                 });
@@ -772,6 +773,7 @@ fn expression_kind_name(expression: &Expression) -> &'static str {
         Expression::TemplateLiteral { .. } => "template_literal",
         Expression::Function { .. } => "function_expression",
         Expression::Raw(_) => "raw",
+        Expression::RegExpLiteral { .. } => "regexp_literal",
     }
 }
 

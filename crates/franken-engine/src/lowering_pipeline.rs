@@ -3150,6 +3150,37 @@ pub fn lower_ir2_to_ir3(
                 }
                 value_stack.push(dst);
             }
+            Ir1Op::HostCall { capability, arg_count } => {
+                let count = *arg_count as usize;
+                if count > value_stack.len() {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "Value stack underflow in HostCall",
+                    });
+                }
+                let mut args = Vec::with_capacity(count);
+                for _ in 0..count {
+                    args.push(value_stack.pop().unwrap_or(0));
+                }
+                args.reverse();
+                let start_reg = register_cursor;
+                for arg_reg in args {
+                    let contiguous_dst = alloc_register(&mut register_cursor);
+                    ir3.instructions.push(Ir3Instruction::Move {
+                        dst: contiguous_dst,
+                        src: arg_reg,
+                    });
+                }
+                let dst = alloc_register(&mut register_cursor);
+                ir3.instructions.push(Ir3Instruction::HostCall {
+                    capability: CapabilityTag(capability.clone()),
+                    args: RegRange {
+                        start: start_reg,
+                        count: *arg_count,
+                    },
+                    dst,
+                });
+                value_stack.push(dst);
+            }
         }
     }
 
@@ -4426,6 +4457,20 @@ fn lower_expression_to_ir1(
                 root_scope_id,
                 label_counter,
             )?;
+        }
+        Expression::RegExpLiteral { pattern, flags } => {
+            // Load pattern and flags as string literals, then create RegExp.
+            // For now, emit a hostcall to regexp:create.
+            ops.push(Ir1Op::LoadLiteral {
+                value: Ir1Literal::String(pattern.clone()),
+            });
+            ops.push(Ir1Op::LoadLiteral {
+                value: Ir1Literal::String(flags.clone()),
+            });
+            ops.push(Ir1Op::HostCall {
+                capability: "regexp:create".to_string(),
+                arg_count: 2,
+            });
         }
         Expression::Binary {
             operator,

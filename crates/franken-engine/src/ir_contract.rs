@@ -516,6 +516,9 @@ pub enum Ir1Op {
     /// Template literal: concatenate N quasis with N-1 expressions.
     /// Pops 2*N - 1 values: quasi[0], expr[0], quasi[1], ..., quasi[N-1].
     TemplateLiteral { quasi_count: u32 },
+    /// Host call: invoke a runtime capability by name, consuming arg_count
+    /// values from the stack and pushing the result.
+    HostCall { capability: String, arg_count: u32 },
 }
 
 impl Ir1Op {
@@ -953,6 +956,20 @@ impl Ir1Op {
                 map.insert(
                     "quasi_count".to_string(),
                     CanonicalValue::U64(u64::from(*quasi_count)),
+                );
+            }
+            Self::HostCall { capability, arg_count } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("host_call".to_string()),
+                );
+                map.insert(
+                    "capability".to_string(),
+                    CanonicalValue::String(capability.clone()),
+                );
+                map.insert(
+                    "arg_count".to_string(),
+                    CanonicalValue::U64(u64::from(*arg_count)),
                 );
             }
         }
@@ -1780,8 +1797,14 @@ impl Ir3Instruction {
                     "op".to_string(),
                     CanonicalValue::String("spread_into_object".to_string()),
                 );
-                map.insert("target".to_string(), CanonicalValue::U64(u64::from(*target)));
-                map.insert("source".to_string(), CanonicalValue::U64(u64::from(*source)));
+                map.insert(
+                    "target".to_string(),
+                    CanonicalValue::U64(u64::from(*target)),
+                );
+                map.insert(
+                    "source".to_string(),
+                    CanonicalValue::U64(u64::from(*source)),
+                );
             }
             Self::TemplateLiteral { parts, dst } => {
                 map.insert(

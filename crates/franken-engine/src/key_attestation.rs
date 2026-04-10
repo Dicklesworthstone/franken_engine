@@ -1406,8 +1406,8 @@ mod tests {
     #[test]
     fn attestation_serialization_round_trip() {
         let att = create_test_attestation(KeyRole::Signing, 1, 100, 200);
-        let json = serde_json::to_string(&att).unwrap_or_default();
-        let restored: KeyAttestation = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&att).unwrap();
+        let restored: KeyAttestation = serde_json::from_str(&json).unwrap();
         assert_eq!(att, restored);
     }
 
@@ -1432,8 +1432,8 @@ mod tests {
         )
         .expect("create");
 
-        let json = serde_json::to_string(&att).unwrap_or_default();
-        let restored: KeyAttestation = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&att).unwrap();
+        let restored: KeyAttestation = serde_json::from_str(&json).unwrap();
         assert_eq!(att, restored);
     }
 
@@ -1455,8 +1455,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let restored: AttestationError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let restored: AttestationError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
     }
@@ -1468,8 +1468,8 @@ mod tests {
             .check_and_record(&test_principal(), AttestationNonce::from_counter(5))
             .expect("record");
 
-        let json = serde_json::to_string(&registry).unwrap_or_default();
-        let restored: NonceRegistry = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&registry).unwrap();
+        let restored: NonceRegistry = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.high_water_for(&test_principal()), 5);
     }
 
@@ -1719,8 +1719,8 @@ mod tests {
             posture_type: "tpm2".to_string(),
             evidence: vec![0x01, 0x02, 0x03, 0xFF],
         };
-        let json = serde_json::to_string(&dp).unwrap_or_default();
-        let restored: DevicePosture = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&dp).unwrap();
+        let restored: DevicePosture = serde_json::from_str(&json).unwrap();
         assert_eq!(dp, restored);
     }
 
@@ -1743,8 +1743,8 @@ mod tests {
             zone: TEST_ZONE.to_string(),
             trace_id: "t-test".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: AttestationEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: AttestationEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 
@@ -1810,8 +1810,8 @@ mod tests {
     #[test]
     fn enrichment_attestation_nonce_serde_roundtrip() {
         let nonce = AttestationNonce::from_counter(1_000_000);
-        let json = serde_json::to_string(&nonce).unwrap_or_default();
-        let restored: AttestationNonce = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&nonce).unwrap();
+        let restored: AttestationNonce = serde_json::from_str(&json).unwrap();
         assert_eq!(nonce, restored);
         assert_eq!(restored.as_u64(), 1_000_000);
     }
@@ -2038,8 +2038,8 @@ mod tests {
             AttestationEventType::ExpiredPurged { count: 42 },
         ];
         for variant in &variants {
-            let json = serde_json::to_string(variant).unwrap_or_default();
-            let restored: AttestationEventType = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(variant).unwrap();
+            let restored: AttestationEventType = serde_json::from_str(&json).unwrap();
             assert_eq!(*variant, restored);
         }
     }

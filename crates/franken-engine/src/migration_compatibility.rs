@@ -155,7 +155,7 @@ impl GoldenLedger {
         entries: Vec<CanonicalEvidenceEntry>,
         frozen_at_ms: u64,
     ) -> Self {
-        let payload = serde_json::to_vec(&entries).unwrap_or_default();
+        let payload = serde_json::to_vec(&entries).unwrap();
         let corpus_hash = ContentHash::compute(&payload);
         Self {
             name: name.into(),
@@ -583,7 +583,7 @@ impl MigrationCompatibilityChecker {
                 .filter_map(|e| {
                     transform(e)
                         .ok()
-                        .map(|m| serde_json::to_vec(&m).unwrap_or_default())
+                        .map(|m| serde_json::to_vec(&m).unwrap())
                 })
                 .collect()
         };
@@ -1479,7 +1479,9 @@ impl CutoverMigrationRunner {
             error_code: None,
         });
 
-        let entry = self.finalize_active(CutoverState::Committed).unwrap();
+        let entry = self
+            .finalize_active(CutoverState::Committed)
+            .ok_or(CutoverError::NoMigrationInProgress)?;
         Ok(entry)
     }
 
@@ -1742,7 +1744,7 @@ mod tests {
             .metadata
             .insert("migrated_from".to_string(), "evidence-v1".to_string());
         // Recompute artifact_hash to reflect content changes (metadata added).
-        let mut payload = serde_json::to_vec(&migrated.ledger_entry).unwrap_or_default();
+        let mut payload = serde_json::to_vec(&migrated.ledger_entry).unwrap();
         if let Ok(meta_bytes) = serde_json::to_vec(&migrated.metadata) {
             payload.extend_from_slice(&meta_bytes);
         }
@@ -1805,8 +1807,8 @@ mod tests {
             MigrationErrorCode::NoMigrationPath,
             MigrationErrorCode::LossyMigration,
         ] {
-            let json = serde_json::to_string(&code).unwrap_or_default();
-            let restored: MigrationErrorCode = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&code).unwrap();
+            let restored: MigrationErrorCode = serde_json::from_str(&json).unwrap();
             assert_eq!(code, restored);
         }
     }
@@ -1851,8 +1853,8 @@ mod tests {
             ],
             message: "two fields incompatible".to_string(),
         };
-        let json = serde_json::to_string(&err).unwrap_or_default();
-        let restored: MigrationError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&err).unwrap();
+        let restored: MigrationError = serde_json::from_str(&json).unwrap();
         assert_eq!(err, restored);
     }
 
@@ -1883,8 +1885,8 @@ mod tests {
     #[test]
     fn golden_ledger_serde_roundtrip() {
         let ledger = build_golden_ledger("test-v1", "evidence-v1", 3);
-        let json = serde_json::to_string(&ledger).unwrap_or_default();
-        let restored: GoldenLedger = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&ledger).unwrap();
+        let restored: GoldenLedger = serde_json::from_str(&json).unwrap();
         assert_eq!(ledger, restored);
     }
 
@@ -1925,8 +1927,8 @@ mod tests {
             MigrationOutcome::LossyMigration,
             MigrationOutcome::Failed,
         ] {
-            let json = serde_json::to_string(&outcome).unwrap_or_default();
-            let restored: MigrationOutcome = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&outcome).unwrap();
+            let restored: MigrationOutcome = serde_json::from_str(&json).unwrap();
             assert_eq!(outcome, restored);
         }
     }
@@ -2220,8 +2222,8 @@ mod tests {
             from_version: "evidence-v1".to_string(),
             to_version: "evidence-v2".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: MigrationCompatibilityEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: MigrationCompatibilityEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 
@@ -2323,8 +2325,8 @@ mod tests {
         let mut manifest = GoldenLedgerManifest::new();
         manifest.add(&ledger);
 
-        let json = serde_json::to_string(&manifest).unwrap_or_default();
-        let restored: GoldenLedgerManifest = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&manifest).unwrap();
+        let restored: GoldenLedgerManifest = serde_json::from_str(&json).unwrap();
         assert_eq!(manifest, restored);
     }
 
@@ -2453,8 +2455,8 @@ mod tests {
             field_path: "metadata.x".to_string(),
             reason: "type changed".to_string(),
         };
-        let json = serde_json::to_string(&field).unwrap_or_default();
-        let restored: IncompatibleField = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&field).unwrap();
+        let restored: IncompatibleField = serde_json::from_str(&json).unwrap();
         assert_eq!(field, restored);
     }
 
@@ -2470,8 +2472,8 @@ mod tests {
             lossy: false,
             description: "test".to_string(),
         };
-        let json = serde_json::to_string(&func).unwrap_or_default();
-        let restored: MigrationFunction = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&func).unwrap();
+        let restored: MigrationFunction = serde_json::from_str(&json).unwrap();
         assert_eq!(func.from_version, restored.from_version);
         assert_eq!(func.to_version, restored.to_version);
         assert_eq!(func.lossy, restored.lossy);

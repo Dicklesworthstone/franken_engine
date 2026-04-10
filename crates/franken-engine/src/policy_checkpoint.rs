@@ -1010,16 +1010,16 @@ mod tests {
     fn checkpoint_serialization_round_trip() {
         let sk = make_sk(1);
         let cp = build_genesis(&[sk]);
-        let json = serde_json::to_string(&cp).unwrap_or_default();
-        let restored: PolicyCheckpoint = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&cp).unwrap();
+        let restored: PolicyCheckpoint = serde_json::from_str(&json).unwrap();
         assert_eq!(cp, restored);
     }
 
     #[test]
     fn policy_head_serialization_round_trip() {
         let head = make_policy_head(PolicyType::RuntimeExecution, 5);
-        let json = serde_json::to_string(&head).unwrap_or_default();
-        let restored: PolicyHead = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&head).unwrap();
+        let restored: PolicyHead = serde_json::from_str(&json).unwrap();
         assert_eq!(head, restored);
     }
 
@@ -1033,8 +1033,8 @@ mod tests {
             PolicyType::RevocationGovernance,
         ];
         for pt in &types {
-            let json = serde_json::to_string(pt).unwrap_or_default();
-            let restored: PolicyType = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(pt).unwrap();
+            let restored: PolicyType = serde_json::from_str(&json).unwrap();
             assert_eq!(*pt, restored);
         }
     }
@@ -1052,8 +1052,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let restored: CheckpointError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let restored: CheckpointError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
     }
@@ -1109,8 +1109,8 @@ mod tests {
             checkpoint_seq: 0,
             trace_id: "t-event".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: CheckpointEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: CheckpointEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 
@@ -1150,8 +1150,8 @@ mod tests {
     #[test]
     fn deterministic_timestamp_serde_roundtrip() {
         let ts = DeterministicTimestamp(12345);
-        let json = serde_json::to_string(&ts).unwrap_or_default();
-        let restored: DeterministicTimestamp = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&ts).unwrap();
+        let restored: DeterministicTimestamp = serde_json::from_str(&json).unwrap();
         assert_eq!(ts, restored);
     }
 
@@ -1387,8 +1387,8 @@ mod tests {
             },
         ];
         for event in &events {
-            let json = serde_json::to_string(event).unwrap_or_default();
-            let restored: CheckpointEvent = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(event).unwrap();
+            let restored: CheckpointEvent = serde_json::from_str(&json).unwrap();
             assert_eq!(*event, restored);
         }
     }
@@ -1607,8 +1607,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let restored: CheckpointError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let restored: CheckpointError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
     }
@@ -1758,8 +1758,8 @@ mod tests {
             },
         ];
         for t in &types {
-            let json = serde_json::to_string(t).unwrap_or_default();
-            let restored: CheckpointEventType = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(t).unwrap();
+            let restored: CheckpointEventType = serde_json::from_str(&json).unwrap();
             assert_eq!(*t, restored);
         }
     }

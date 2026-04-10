@@ -274,7 +274,7 @@ impl DiagnosticsEnvelope {
 
     /// Compute the canonical hash for a set of diagnostics.
     fn compute_hash(entries: &[NormalizedDiagnostic]) -> String {
-        let canonical = serde_json::to_vec(entries).unwrap_or_default();
+        let canonical = serde_json::to_vec(entries).unwrap();
         let hash = ContentHash::compute(&canonical);
         format!("sha256:{}", hash.to_hex())
     }

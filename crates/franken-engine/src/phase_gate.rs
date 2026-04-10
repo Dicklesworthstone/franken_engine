@@ -1046,8 +1046,8 @@ mod tests {
             GateId::FuzzAdversarial,
         ];
         for id in &ids {
-            let json = serde_json::to_string(id).unwrap_or_default();
-            let restored: GateId = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(id).unwrap();
+            let restored: GateId = serde_json::from_str(&json).unwrap();
             assert_eq!(*id, restored);
         }
     }
@@ -1065,8 +1065,8 @@ mod tests {
             },
         ];
         for s in &statuses {
-            let json = serde_json::to_string(s).unwrap_or_default();
-            let restored: GateStatus = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(s).unwrap();
+            let restored: GateStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(*s, restored);
         }
     }
@@ -1084,16 +1084,16 @@ mod tests {
             "t1",
             1000,
         );
-        let json = serde_json::to_string(&report).unwrap_or_default();
-        let restored: GateReport = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&report).unwrap();
+        let restored: GateReport = serde_json::from_str(&json).unwrap();
         assert_eq!(report, restored);
     }
 
     #[test]
     fn gate_thresholds_serialization_round_trip() {
         let thresholds = GateThresholds::default();
-        let json = serde_json::to_string(&thresholds).unwrap_or_default();
-        let restored: GateThresholds = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&thresholds).unwrap();
+        let restored: GateThresholds = serde_json::from_str(&json).unwrap();
         assert_eq!(thresholds, restored);
     }
 
@@ -1106,8 +1106,8 @@ mod tests {
             epoch_id: 1,
             event: "gate_evaluated".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: GateEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: GateEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 
@@ -1120,8 +1120,8 @@ mod tests {
         let m = GateMetrics::empty()
             .with("latency_p99", "42ms")
             .with("throughput", "1000rps");
-        let json = serde_json::to_string(&m).unwrap_or_default();
-        let restored: GateMetrics = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&m).unwrap();
+        let restored: GateMetrics = serde_json::from_str(&json).unwrap();
         assert_eq!(m, restored);
     }
 
@@ -1132,8 +1132,8 @@ mod tests {
             replayed_hash: ContentHash::compute(b"replayed"),
             event_count: 512,
         };
-        let json = serde_json::to_string(&ri).unwrap_or_default();
-        let restored: ReplayInput = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&ri).unwrap();
+        let restored: ReplayInput = serde_json::from_str(&json).unwrap();
         assert_eq!(ri, restored);
     }
 
@@ -1145,8 +1145,8 @@ mod tests {
             unresolved_failures: 3,
             regression_transcripts: 1,
         };
-        let json = serde_json::to_string(&ii).unwrap_or_default();
-        let restored: InterleavingInput = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&ii).unwrap();
+        let restored: InterleavingInput = serde_json::from_str(&json).unwrap();
         assert_eq!(ii, restored);
     }
 
@@ -1158,8 +1158,8 @@ mod tests {
             failed_vectors: 2,
             categories: vec!["syntax".to_string(), "semantics".to_string()],
         };
-        let json = serde_json::to_string(&ci).unwrap_or_default();
-        let restored: ConformanceInput = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&ci).unwrap();
+        let restored: ConformanceInput = serde_json::from_str(&json).unwrap();
         assert_eq!(ci, restored);
     }
 
@@ -1172,8 +1172,8 @@ mod tests {
             bypasses: 0,
             targets: vec!["parser".to_string(), "interpreter".to_string()],
         };
-        let json = serde_json::to_string(&fi).unwrap_or_default();
-        let restored: FuzzInput = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&fi).unwrap();
+        let restored: FuzzInput = serde_json::from_str(&json).unwrap();
         assert_eq!(fi, restored);
     }
 

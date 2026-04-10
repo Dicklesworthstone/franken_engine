@@ -709,7 +709,7 @@ mod tests {
     fn unique_temp_dir(prefix: &str) -> PathBuf {
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
+            .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("{}-{}", prefix, ts))
     }
@@ -819,8 +819,8 @@ mod tests {
     #[test]
     fn evidence_serde_roundtrip() {
         let inv = run_frontier_corpus();
-        let json = serde_json::to_string(&inv).unwrap_or_default();
-        let back: ParserFrontierEvidenceInventory = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&inv).unwrap();
+        let back: ParserFrontierEvidenceInventory = serde_json::from_str(&json).unwrap();
         assert_eq!(inv, back);
     }
 

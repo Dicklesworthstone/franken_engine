@@ -1275,7 +1275,7 @@ pub fn validate_capabilities(
         .find_registration(addon_id)
         .map(|r| &r.capabilities)
         .cloned()
-        .unwrap_or_default();
+        .unwrap();
     requested.difference(&granted).copied().collect()
 }
 

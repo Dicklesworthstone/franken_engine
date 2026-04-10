@@ -1487,8 +1487,8 @@ mod tests {
         append_security_marker(&mut stream, "1");
 
         let marker = &stream.markers()[0];
-        let json = serde_json::to_string(marker).unwrap_or_default();
-        let restored: DecisionMarker = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(marker).unwrap();
+        let restored: DecisionMarker = serde_json::from_str(&json).unwrap();
         assert_eq!(*marker, restored);
     }
 
@@ -1500,8 +1500,8 @@ mod tests {
             chain_length: 10,
             signed_hash: AuthenticityHash::compute_keyed(b"key", b"data"),
         };
-        let json = serde_json::to_string(&cp).unwrap_or_default();
-        let restored: IntegrityCheckpoint = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&cp).unwrap();
+        let restored: IntegrityCheckpoint = serde_json::from_str(&json).unwrap();
         assert_eq!(cp, restored);
     }
 
@@ -1515,8 +1515,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let restored: ChainIntegrityError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let restored: ChainIntegrityError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
     }
@@ -1537,8 +1537,8 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: MarkerEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: MarkerEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 

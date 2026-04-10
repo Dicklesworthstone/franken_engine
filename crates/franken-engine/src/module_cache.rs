@@ -4025,8 +4025,8 @@ mod tests {
             CacheErrorCode::EmptyModuleId,
         ];
         for code in &codes {
-            let json = serde_json::to_string(code).unwrap_or_default();
-            let decoded: CacheErrorCode = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(code).unwrap();
+            let decoded: CacheErrorCode = serde_json::from_str(&json).unwrap();
             assert_eq!(&decoded, code);
         }
     }
@@ -4034,8 +4034,8 @@ mod tests {
     #[test]
     fn module_version_fingerprint_serde_round_trip() {
         let fp = ModuleVersionFingerprint::new(source_hash("serde-test"), 42, 7);
-        let json = serde_json::to_string(&fp).unwrap_or_default();
-        let decoded: ModuleVersionFingerprint = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&fp).unwrap();
+        let decoded: ModuleVersionFingerprint = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, fp);
     }
 
@@ -4052,8 +4052,8 @@ mod tests {
             .unwrap();
 
         let snap = cache.snapshot();
-        let json = serde_json::to_string(&snap).unwrap_or_default();
-        let decoded: CacheSnapshot = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&snap).unwrap();
+        let decoded: CacheSnapshot = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, snap);
     }
 
@@ -4083,8 +4083,8 @@ mod tests {
             "mod:serde",
             ModuleVersionFingerprint::new(source_hash("k"), 3, 7),
         );
-        let json = serde_json::to_string(&key).unwrap_or_default();
-        let decoded: ModuleCacheKey = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&key).unwrap();
+        let decoded: ModuleCacheKey = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, key);
     }
 
@@ -4100,8 +4100,8 @@ mod tests {
             resolved_specifier: "/app/entry.js".to_string(),
             inserted_seq: 42,
         };
-        let json = serde_json::to_string(&entry).unwrap_or_default();
-        let decoded: ModuleCacheEntry = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&entry).unwrap();
+        let decoded: ModuleCacheEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, entry);
     }
 
@@ -4113,16 +4113,16 @@ mod tests {
             ContentHash::compute(b"art-req"),
             "/req.js",
         );
-        let json = serde_json::to_string(&req).unwrap_or_default();
-        let decoded: CacheInsertRequest = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&req).unwrap();
+        let decoded: CacheInsertRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, req);
     }
 
     #[test]
     fn cache_context_serde_round_trip() {
         let ctx = CacheContext::new("t1", "d1", "p1");
-        let json = serde_json::to_string(&ctx).unwrap_or_default();
-        let decoded: CacheContext = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&ctx).unwrap();
+        let decoded: CacheContext = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, ctx);
     }
 
@@ -4131,8 +4131,8 @@ mod tests {
         let mut cache = ModuleCache::new();
         cache.invalidate_source_update("mod:ev-serde", source_hash("x"), &context());
         let event = cache.events().last().unwrap().clone();
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let decoded: CacheEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let decoded: CacheEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, event);
     }
 
@@ -4146,8 +4146,8 @@ mod tests {
                 &context(),
             )
             .unwrap_err();
-        let json = serde_json::to_string(&*err).unwrap_or_default();
-        let decoded: CacheError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&*err).unwrap();
+        let decoded: CacheError = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, *err);
     }
 
@@ -4165,8 +4165,8 @@ mod tests {
         cache.invalidate_trust_revocation("mod:revoked", 1, &ctx);
         let snap = cache.snapshot();
         // Snapshot roundtrips through JSON (unlike ModuleCache which has non-string map keys)
-        let json = serde_json::to_string(&snap).unwrap_or_default();
-        let decoded: CacheSnapshot = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&snap).unwrap();
+        let decoded: CacheSnapshot = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, snap);
         assert_eq!(snap.entries.len(), 1);
         assert!(snap.revoked_modules.contains("mod:revoked"));

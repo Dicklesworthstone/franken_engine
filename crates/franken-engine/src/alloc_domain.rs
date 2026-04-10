@@ -652,8 +652,8 @@ mod tests {
         let mut reg = DomainRegistry::with_standard_domains(1024);
         reg.allocate(AllocationDomain::ExtensionHeap, 256).unwrap();
 
-        let json = serde_json::to_string(&reg).unwrap_or_default();
-        let roundtrip: DomainRegistry = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&reg).unwrap();
+        let roundtrip: DomainRegistry = serde_json::from_str(&json).unwrap();
 
         assert_eq!(reg.len(), roundtrip.len());
         assert_eq!(reg.allocation_sequence(), roundtrip.allocation_sequence());

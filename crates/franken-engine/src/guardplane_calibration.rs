@@ -379,7 +379,7 @@ impl GuardplaneCalibrationEngine {
         // 6. Update dimension history for trend analysis
         let effectiveness = self.integrator.technique_effectiveness();
         for (dim, eff) in &effectiveness {
-            let key = serde_json::to_string(&dim).unwrap_or_default();
+            let key = serde_json::to_string(&dim).unwrap();
             self.dimension_history
                 .entry(key)
                 .or_default()
@@ -394,7 +394,7 @@ impl GuardplaneCalibrationEngine {
         let evidence_weights: BTreeMap<String, u64> = cal_state
             .evidence_weights_millionths
             .iter()
-            .map(|(k, v)| (serde_json::to_string(&k).unwrap_or_default(), *v))
+            .map(|(k, v)| (serde_json::to_string(&k).unwrap(), *v))
             .collect();
 
         let state_digest = compute_state_digest(cal_state);
@@ -512,7 +512,7 @@ impl GuardplaneCalibrationEngine {
                 self.alerts.push(CalibrationAlert {
                     alert_id: alert_id.clone(),
                     severity: "critical".to_string(),
-                    subsystem: serde_json::to_string(&subsystem).unwrap_or_default(),
+                    subsystem: serde_json::to_string(&subsystem).unwrap(),
                     threat_category: "evasion".to_string(),
                     description: format!(
                         "evasion rate {:.1}% exceeds threshold {:.1}% for {subsystem:?}",
@@ -567,7 +567,7 @@ impl GuardplaneCalibrationEngine {
         let mut result = BTreeMap::new();
 
         for (dim, eff) in &effectiveness {
-            let key = serde_json::to_string(&dim).unwrap_or_default();
+            let key = serde_json::to_string(&dim).unwrap();
             let trend = if let Some(history) = self.dimension_history.get(&key) {
                 compute_trend(history)
             } else {
@@ -635,19 +635,19 @@ fn classify_outcomes(
         // Severity from score
         let severity = classify_severity(&o.score);
         *severity_counts
-            .entry(serde_json::to_string(&severity).unwrap_or_default())
+            .entry(serde_json::to_string(&severity).unwrap())
             .or_default() += 1;
 
         // Defense subsystem
         let subsystem = classify_defense_subsystem(o);
         *subsystem_counts
-            .entry(serde_json::to_string(&subsystem).unwrap_or_default())
+            .entry(serde_json::to_string(&subsystem).unwrap())
             .or_default() += 1;
 
         // Threat category from campaign
         let threat = classify_threat_category(o);
         *threat_counts
-            .entry(serde_json::to_string(&threat).unwrap_or_default())
+            .entry(serde_json::to_string(&threat).unwrap())
             .or_default() += 1;
     }
 
@@ -770,7 +770,7 @@ fn fnv1a64(data: &[u8]) -> u64 {
 }
 
 fn compute_state_digest(state: &GuardplaneCalibrationState) -> String {
-    let serialized = serde_json::to_vec(state).unwrap_or_default();
+    let serialized = serde_json::to_vec(state).unwrap();
     format!("{:016x}", fnv1a64(&serialized))
 }
 

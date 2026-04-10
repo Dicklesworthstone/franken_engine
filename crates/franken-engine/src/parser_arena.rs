@@ -552,7 +552,9 @@ impl ParserArena {
             | Expression::ArrowFunction { .. }
             | Expression::New { .. }
             | Expression::TemplateLiteral { .. }
-            | Expression::Function { .. } => {
+            | Expression::Function { .. }
+            | Expression::Yield { .. }
+            | Expression::SpreadElement(_) => {
                 return Err(ArenaError::UnsupportedExpression {
                     kind: expression_kind_name(expression),
                 });
@@ -752,6 +754,8 @@ fn expression_kind_name(expression: &Expression) -> &'static str {
         Expression::NullLiteral => "null",
         Expression::UndefinedLiteral => "undefined",
         Expression::Await(_) => "await",
+        Expression::Yield { .. } => "yield",
+        Expression::SpreadElement(_) => "spread",
         Expression::Binary { .. } => "binary",
         Expression::Unary { .. } => "unary",
         Expression::Assignment { .. } => "assignment",

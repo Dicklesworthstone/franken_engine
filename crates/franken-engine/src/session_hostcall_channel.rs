@@ -2092,8 +2092,8 @@ mod tests {
             trace_id: "t".to_string(),
             sent_at_tick: 10,
         };
-        let encoded = serde_json::to_string(&envelope).unwrap_or_default();
-        let decoded: HostcallEnvelope = serde_json::from_str(&encoded).unwrap_or_default();
+        let encoded = serde_json::to_string(&envelope).unwrap();
+        let decoded: HostcallEnvelope = serde_json::from_str(&encoded).unwrap();
         assert_eq!(envelope, decoded);
 
         let event = SessionChannelEvent {
@@ -2114,9 +2114,9 @@ mod tests {
             source_principal: None,
             timestamp_ticks: 12,
         };
-        let encoded_event = serde_json::to_string(&event).unwrap_or_default();
+        let encoded_event = serde_json::to_string(&event).unwrap();
         let decoded_event: SessionChannelEvent =
-            serde_json::from_str(&encoded_event).unwrap_or_default();
+            serde_json::from_str(&encoded_event).unwrap();
         assert_eq!(event, decoded_event);
     }
 
@@ -2661,8 +2661,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let restored: SessionChannelError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let restored: SessionChannelError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
     }
@@ -2869,8 +2869,8 @@ mod tests {
             DataPlaneDirection::ExtensionToHost,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap_or_default();
-            let restored: DataPlaneDirection = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(v).unwrap();
+            let restored: DataPlaneDirection = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, restored);
         }
     }
@@ -2883,8 +2883,8 @@ mod tests {
             ReplayDropReason::OutOfOrder,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap_or_default();
-            let restored: ReplayDropReason = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(v).unwrap();
+            let restored: ReplayDropReason = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, restored);
         }
     }
@@ -3495,8 +3495,8 @@ mod tests {
             reason: "bad sig".into(),
         };
         let err = SessionChannelError::SignatureFailure(sig_err);
-        let json = serde_json::to_string(&err).unwrap_or_default();
-        let restored: SessionChannelError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&err).unwrap();
+        let restored: SessionChannelError = serde_json::from_str(&json).unwrap();
         assert_eq!(err, restored);
     }
 

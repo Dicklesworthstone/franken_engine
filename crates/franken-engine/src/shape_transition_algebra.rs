@@ -580,16 +580,16 @@ pub fn emit_shape_lattice_bundle(
 
     fs::write(
         &shape_lattice_manifest_path,
-        serde_json::to_vec_pretty(&bundle.manifest).unwrap_or_default(),
+        serde_json::to_vec_pretty(&bundle.manifest).unwrap(),
     )?;
     fs::write(
         &run_manifest_path,
-        serde_json::to_vec_pretty(&run_manifest).unwrap_or_default(),
+        serde_json::to_vec_pretty(&run_manifest).unwrap(),
     )?;
     let event_lines = bundle
         .trace_events
         .iter()
-        .map(|event| serde_json::to_string(event).unwrap_or_default())
+        .map(|event| serde_json::to_string(event).unwrap())
         .collect::<Vec<_>>()
         .join("\n");
     fs::write(
@@ -610,7 +610,7 @@ pub fn emit_shape_lattice_bundle(
     )?;
     fs::write(
         &trace_ids_path,
-        serde_json::to_vec_pretty(&trace_ids).unwrap_or_default(),
+        serde_json::to_vec_pretty(&trace_ids).unwrap(),
     )?;
 
     Ok(ShapeLatticeBundleReport {
@@ -631,7 +631,7 @@ fn make_shape_descriptor(
         prototype_fingerprint: prototype_fingerprint.clone(),
         property_layout: property_layout.clone(),
     };
-    let payload = serde_json::to_vec(&skeleton).unwrap_or_default();
+    let payload = serde_json::to_vec(&skeleton).unwrap();
     let digest = Sha256::digest(payload);
     let fingerprint = hex::encode(digest);
     let mut shape_id_bytes = [0_u8; 8];
@@ -1541,7 +1541,7 @@ fn build_invalidation_receipt(
         to_shape_id,
         invalidated_assumptions: &sorted_assumptions,
     })
-    .unwrap_or_default();
+    .unwrap();
     let receipt_id = hex::encode(Sha256::digest(payload));
 
     PropertyCellInvalidationReceipt {

@@ -2393,8 +2393,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let restored: BundleError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let restored: BundleError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
     }
@@ -2474,8 +2474,8 @@ mod tests {
     #[test]
     fn bundle_format_version_serde_roundtrip() {
         let v = BundleFormatVersion { major: 3, minor: 7 };
-        let json = serde_json::to_string(&v).unwrap_or_default();
-        let restored: BundleFormatVersion = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&v).unwrap();
+        let restored: BundleFormatVersion = serde_json::from_str(&json).unwrap();
         assert_eq!(v, restored);
     }
 
@@ -2490,8 +2490,8 @@ mod tests {
             BundleArtifactKind::CounterfactualResult,
             BundleArtifactKind::PolicySnapshot,
         ] {
-            let json = serde_json::to_string(&variant).unwrap_or_default();
-            let restored: BundleArtifactKind = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&variant).unwrap();
+            let restored: BundleArtifactKind = serde_json::from_str(&json).unwrap();
             assert_eq!(variant, restored);
         }
     }
@@ -2508,8 +2508,8 @@ mod tests {
             },
         ];
         for outcome in &outcomes {
-            let json = serde_json::to_string(outcome).unwrap_or_default();
-            let restored: CheckOutcome = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(outcome).unwrap();
+            let restored: CheckOutcome = serde_json::from_str(&json).unwrap();
             assert_eq!(*outcome, restored);
         }
     }
@@ -2524,8 +2524,8 @@ mod tests {
             VerificationCategory::Counterfactual,
             VerificationCategory::Compatibility,
         ] {
-            let json = serde_json::to_string(&variant).unwrap_or_default();
-            let restored: VerificationCategory = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&variant).unwrap();
+            let restored: VerificationCategory = serde_json::from_str(&json).unwrap();
             assert_eq!(variant, restored);
         }
     }
@@ -2537,8 +2537,8 @@ mod tests {
             category: VerificationCategory::Integrity,
             outcome: CheckOutcome::Pass,
         };
-        let json = serde_json::to_string(&check).unwrap_or_default();
-        let restored: VerificationCheck = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&check).unwrap();
+        let restored: VerificationCheck = serde_json::from_str(&json).unwrap();
         assert_eq!(check, restored);
     }
 
@@ -2549,8 +2549,8 @@ mod tests {
             failed: 2,
             skipped: 1,
         };
-        let json = serde_json::to_string(&summary).unwrap_or_default();
-        let restored: CategorySummary = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&summary).unwrap();
+        let restored: CategorySummary = serde_json::from_str(&json).unwrap();
         assert_eq!(summary, restored);
     }
 
@@ -2563,8 +2563,8 @@ mod tests {
             redacted: false,
             size_bytes: 128,
         };
-        let json = serde_json::to_string(&entry).unwrap_or_default();
-        let restored: ArtifactEntry = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&entry).unwrap();
+        let restored: ArtifactEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(entry, restored);
     }
 
@@ -2711,8 +2711,8 @@ mod tests {
             ..RedactionPolicy::default()
         };
         policy.custom_redaction_keys.insert("api-key".to_string());
-        let json = serde_json::to_string(&policy).unwrap_or_default();
-        let restored: RedactionPolicy = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&policy).unwrap();
+        let restored: RedactionPolicy = serde_json::from_str(&json).unwrap();
         assert_eq!(policy, restored);
     }
 
@@ -2807,8 +2807,8 @@ mod tests {
         let bundle = build_test_bundle();
         let verifier = BundleVerifier::new();
         let inspection = verifier.inspect(&bundle);
-        let json = serde_json::to_string(&inspection).unwrap_or_default();
-        let restored: BundleInspection = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&inspection).unwrap();
+        let restored: BundleInspection = serde_json::from_str(&json).unwrap();
         assert_eq!(inspection, restored);
     }
 

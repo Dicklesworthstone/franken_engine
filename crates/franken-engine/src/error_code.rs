@@ -1368,8 +1368,8 @@ mod tests {
             ErrorSeverity::Warning,
             ErrorSeverity::Info,
         ] {
-            let json = serde_json::to_string(&severity).unwrap_or_default();
-            let decoded: ErrorSeverity = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&severity).unwrap();
+            let decoded: ErrorSeverity = serde_json::from_str(&json).unwrap();
             assert_eq!(decoded, severity);
         }
     }
@@ -1392,8 +1392,8 @@ mod tests {
             ErrorSubsystem::LifecycleMigration,
             ErrorSubsystem::Reserved,
         ] {
-            let json = serde_json::to_string(&sub).unwrap_or_default();
-            let decoded: ErrorSubsystem = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&sub).unwrap();
+            let decoded: ErrorSubsystem = serde_json::from_str(&json).unwrap();
             assert_eq!(decoded, sub);
         }
     }
@@ -1428,8 +1428,8 @@ mod tests {
     #[test]
     fn franken_error_code_serde_round_trip_all() {
         for code in ALL_ERROR_CODES {
-            let json = serde_json::to_string(code).unwrap_or_default();
-            let decoded: FrankenErrorCode = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(code).unwrap();
+            let decoded: FrankenErrorCode = serde_json::from_str(&json).unwrap();
             assert_eq!(decoded, *code, "serde round-trip failed for {code:?}");
         }
     }
@@ -1808,8 +1808,8 @@ mod tests {
     #[test]
     fn error_code_entry_serde_round_trip() {
         let entry = FrankenErrorCode::CapabilityDeniedError.to_registry_entry();
-        let json = serde_json::to_string(&entry).unwrap_or_default();
-        let decoded: ErrorCodeEntry = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&entry).unwrap();
+        let decoded: ErrorCodeEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, entry);
     }
 

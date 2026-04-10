@@ -1006,7 +1006,7 @@ impl SlotRegistry {
         let mut recommended_replacement_order = Vec::new();
 
         for (slot_id, entry) in &self.slots {
-            let signal = signals.get(slot_id).cloned().unwrap_or_default();
+            let signal = signals.get(slot_id).cloned().unwrap();
             signal.validate(slot_id)?;
 
             let weight = u128::from(signal.invocation_weight_millionths);
@@ -2646,8 +2646,8 @@ mod tests {
         )
         .unwrap();
 
-        let json = serde_json::to_string(&reg).unwrap_or_default();
-        let roundtrip: SlotRegistry = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&reg).unwrap();
+        let roundtrip: SlotRegistry = serde_json::from_str(&json).unwrap();
         assert_eq!(reg.len(), roundtrip.len());
 
         let orig_id = SlotId::new("parser").unwrap();

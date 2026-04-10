@@ -806,7 +806,7 @@ fn verify_attestation_layer(receipt: &OptReceipt, input: &AttestationLayerInput)
             format!(
                 "policy measurement ({}:{}) != expected (sha256:{})",
                 serde_json::to_string(&input.policy_quote.measurement.algorithm)
-                    .unwrap_or_default(),
+                    .unwrap(),
                 input.policy_quote.measurement.digest_hex,
                 expected_measurement_digest
             ),

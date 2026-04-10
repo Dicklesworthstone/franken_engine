@@ -618,8 +618,8 @@ mod tests {
             LifecycleEvent::Terminate,
             LifecycleEvent::Revocation,
         ] {
-            let json = serde_json::to_string(&event).unwrap_or_default();
-            let restored: LifecycleEvent = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&event).unwrap();
+            let restored: LifecycleEvent = serde_json::from_str(&json).unwrap();
             assert_eq!(event, restored);
         }
     }
@@ -689,8 +689,8 @@ mod tests {
     #[test]
     fn cancellation_mode_serde_roundtrip() {
         let mode = CancellationMode::for_event(LifecycleEvent::Quarantine);
-        let json = serde_json::to_string(&mode).unwrap_or_default();
-        let restored: CancellationMode = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&mode).unwrap();
+        let restored: CancellationMode = serde_json::from_str(&json).unwrap();
         assert_eq!(mode, restored);
     }
 
@@ -728,8 +728,8 @@ mod tests {
             cell_id: "c1".to_string(),
             event: LifecycleEvent::Terminate,
         };
-        let json = serde_json::to_string(&err).unwrap_or_default();
-        let restored: CancellationError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&err).unwrap();
+        let restored: CancellationError = serde_json::from_str(&json).unwrap();
         assert_eq!(err, restored);
     }
 
@@ -759,8 +759,8 @@ mod tests {
             obligations_pending: 2,
             budget_consumed_ms: 3,
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: CancellationEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: CancellationEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 
@@ -1204,8 +1204,8 @@ mod tests {
             children_cancelled: 0,
             was_idempotent: false,
         };
-        let json = serde_json::to_string(&outcome).unwrap_or_default();
-        let restored: CancellationOutcome = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&outcome).unwrap();
+        let restored: CancellationOutcome = serde_json::from_str(&json).unwrap();
         assert_eq!(outcome, restored);
     }
 

@@ -336,11 +336,11 @@ impl HookSemanticContract {
         let mut data = Vec::new();
         data.extend_from_slice(
             serde_json::to_string(&self.hook_kind)
-                .unwrap_or_default()
+                .unwrap()
                 .as_bytes(),
         );
         for rule in &self.invocation_rules {
-            data.extend_from_slice(serde_json::to_string(rule).unwrap_or_default().as_bytes());
+            data.extend_from_slice(serde_json::to_string(rule).unwrap().as_bytes());
         }
         data.extend_from_slice(&(self.ordering_constraints.len() as u64).to_le_bytes());
         for constraint in &self.ordering_constraints {
@@ -352,7 +352,7 @@ impl HookSemanticContract {
         }
         data.extend_from_slice(
             serde_json::to_string(&self.cleanup_semantics)
-                .unwrap_or_default()
+                .unwrap()
                 .as_bytes(),
         );
         for pat in &self.forbidden_patterns {
@@ -432,12 +432,12 @@ impl EffectSemanticContract {
         let mut data = Vec::new();
         data.extend_from_slice(
             serde_json::to_string(&self.effect_kind)
-                .unwrap_or_default()
+                .unwrap()
                 .as_bytes(),
         );
         data.extend_from_slice(
             serde_json::to_string(&self.timing)
-                .unwrap_or_default()
+                .unwrap()
                 .as_bytes(),
         );
         data.extend_from_slice(&(self.capability_requirements.len() as u64).to_le_bytes());
@@ -447,12 +447,12 @@ impl EffectSemanticContract {
         }
         data.extend_from_slice(
             serde_json::to_string(&self.side_effect_boundary)
-                .unwrap_or_default()
+                .unwrap()
                 .as_bytes(),
         );
         data.extend_from_slice(
             serde_json::to_string(&self.determinism_guarantee)
-                .unwrap_or_default()
+                .unwrap()
                 .as_bytes(),
         );
         ContentHash::compute(&data)
@@ -504,13 +504,13 @@ impl AdjudicationRule {
         data.extend_from_slice(self.name.as_bytes());
         data.extend_from_slice(
             serde_json::to_string(&self.category)
-                .unwrap_or_default()
+                .unwrap()
                 .as_bytes(),
         );
         data.extend_from_slice(self.condition.as_bytes());
         data.extend_from_slice(
             serde_json::to_string(&self.resolution)
-                .unwrap_or_default()
+                .unwrap()
                 .as_bytes(),
         );
         ContentHash::compute(&data)
@@ -1184,7 +1184,7 @@ impl DriftDetector {
             let alert = DriftAlert {
                 id: derive_drift_alert_id(&format!(
                     "effect_boundary_{}_{epoch}",
-                    serde_json::to_string(effect_kind).unwrap_or_default()
+                    serde_json::to_string(effect_kind).unwrap()
                 )),
                 kind: DriftKind::EffectBoundaryLeak,
                 severity: ViolationSeverity::Error,
@@ -1227,7 +1227,7 @@ impl DriftDetector {
             let alert = DriftAlert {
                 id: derive_drift_alert_id(&format!(
                     "hook_ordering_{}_{epoch}",
-                    serde_json::to_string(hook_kind).unwrap_or_default()
+                    serde_json::to_string(hook_kind).unwrap()
                 )),
                 kind: DriftKind::HookContractBreach,
                 severity: ViolationSeverity::Fatal,

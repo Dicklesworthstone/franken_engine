@@ -458,7 +458,7 @@ pub fn evaluate_controller_interference(
             .initial_metrics
             .get(&read.metric)
             .copied()
-            .unwrap_or_default();
+            .unwrap();
         read_snapshots.insert(snapshot_key, snapshot_value);
 
         logs.push(InterferenceLogEvent {

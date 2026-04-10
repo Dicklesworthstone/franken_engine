@@ -443,7 +443,7 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/supremacy_cell_matrix_v1.json");
         let bytes = fs::read(path).expect("read supremacy cell matrix fixture");
-        serde_json::from_slice(&bytes).unwrap_or_default()
+        serde_json::from_slice(&bytes).unwrap()
     }
 
     #[test]

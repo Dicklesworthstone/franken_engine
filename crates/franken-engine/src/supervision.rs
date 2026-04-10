@@ -755,8 +755,8 @@ mod tests {
             Severity::RootEscalation,
         ];
         for s in &severities {
-            let json = serde_json::to_string(s).unwrap_or_default();
-            let restored: Severity = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(s).unwrap();
+            let restored: Severity = serde_json::from_str(&json).unwrap();
             assert_eq!(*s, restored);
         }
     }
@@ -764,8 +764,8 @@ mod tests {
     #[test]
     fn service_config_serialization_round_trip() {
         let config = test_config("svc-1");
-        let json = serde_json::to_string(&config).unwrap_or_default();
-        let restored: ServiceConfig = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: ServiceConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, restored);
     }
 
@@ -780,8 +780,8 @@ mod tests {
             budget_remaining: 2,
             severity: Severity::Restart,
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: SupervisorEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: SupervisorEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 
@@ -797,8 +797,8 @@ mod tests {
             RestartPolicy::Temporary,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap_or_default();
-            let restored: RestartPolicy = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(v).unwrap();
+            let restored: RestartPolicy = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, restored);
         }
     }
@@ -814,8 +814,8 @@ mod tests {
             ServiceState::Terminated,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap_or_default();
-            let restored: ServiceState = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(v).unwrap();
+            let restored: ServiceState = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, restored);
         }
     }
@@ -847,8 +847,8 @@ mod tests {
             HealthStatus::Critical,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap_or_default();
-            let restored: HealthStatus = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(v).unwrap();
+            let restored: HealthStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, restored);
         }
     }
@@ -876,8 +876,8 @@ mod tests {
             SupervisorAction::Escalate,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap_or_default();
-            let restored: SupervisorAction = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(v).unwrap();
+            let restored: SupervisorAction = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, restored);
         }
     }
@@ -912,8 +912,8 @@ mod tests {
             max_restarts: 5,
             window_ticks: 200,
         };
-        let json = serde_json::to_string(&b).unwrap_or_default();
-        let restored: RestartBudget = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&b).unwrap();
+        let restored: RestartBudget = serde_json::from_str(&json).unwrap();
         assert_eq!(b, restored);
     }
 
@@ -1103,8 +1103,8 @@ mod tests {
             },
             shutdown_order: 42,
         };
-        let json = serde_json::to_string(&config).unwrap_or_default();
-        let restored: ServiceConfig = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: ServiceConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, restored);
     }
 

@@ -1029,7 +1029,7 @@ mod tests {
                 UpdateKind::Snapshot,
                 payload,
             );
-            let json = serde_json::to_value(&envelope).unwrap_or_default();
+            let json = serde_json::to_value(&envelope).unwrap();
             assert!(json["payload"].is_object(), "payload must be an object");
         }
     }
@@ -1044,7 +1044,7 @@ mod tests {
         ];
         let expected = ["running", "complete", "failed", "no_events"];
         for (status, expected_str) in statuses.iter().zip(expected.iter()) {
-            let json = serde_json::to_value(status).unwrap_or_default();
+            let json = serde_json::to_value(status).unwrap();
             assert_eq!(json.as_str().unwrap(), *expected_str);
         }
     }
@@ -1072,7 +1072,7 @@ mod tests {
             "proof_specialization_lineage_dashboard",
         ];
         for (stream, expected_str) in streams.iter().zip(expected.iter()) {
-            let json = serde_json::to_value(stream).unwrap_or_default();
+            let json = serde_json::to_value(stream).unwrap();
             assert_eq!(json.as_str().unwrap(), *expected_str);
         }
     }
@@ -1086,7 +1086,7 @@ mod tests {
         ];
         let expected = ["snapshot", "delta", "heartbeat"];
         for (kind, expected_str) in kinds.iter().zip(expected.iter()) {
-            let json = serde_json::to_value(kind).unwrap_or_default();
+            let json = serde_json::to_value(kind).unwrap();
             assert_eq!(json.as_str().unwrap(), *expected_str);
         }
     }
@@ -1161,7 +1161,7 @@ mod tests {
             (StoreKind::SpecializationIndex, "SpecializationIndex"),
         ];
         for (kind, expected_json) in &kinds {
-            let json = serde_json::to_value(kind).unwrap_or_default();
+            let json = serde_json::to_value(kind).unwrap();
             assert_eq!(json.as_str().unwrap(), *expected_json);
         }
     }
@@ -1209,7 +1209,7 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_value(&event).unwrap_or_default();
+        let json = serde_json::to_value(&event).unwrap();
         let violations = verify_structured_log(&json, "frankensqlite");
         assert!(violations.is_empty(), "violations: {violations:?}");
     }
@@ -1364,7 +1364,7 @@ mod tests {
     #[test]
     fn fastapi_endpoint_response_log_structured_compliance() {
         let response = sample_health_response();
-        let json = serde_json::to_value(&response).unwrap_or_default();
+        let json = serde_json::to_value(&response).unwrap();
         let log_json = &json["log"];
         let violations = verify_structured_log(log_json, "fastapi_rust");
         assert!(violations.is_empty(), "violations: {violations:?}");
@@ -1379,7 +1379,7 @@ mod tests {
             component: "service.api".to_string(),
             details: BTreeMap::new(),
         };
-        let json = serde_json::to_value(&error).unwrap_or_default();
+        let json = serde_json::to_value(&error).unwrap();
         let obj = json.as_object().expect("object");
         for field in ["error_code", "message", "trace_id", "component", "details"] {
             assert!(
@@ -1399,7 +1399,7 @@ mod tests {
         ];
         let expected = ["Start", "Stop", "Suspend", "Quarantine"];
         for (action, expected_str) in actions.iter().zip(expected.iter()) {
-            let json = serde_json::to_value(action).unwrap_or_default();
+            let json = serde_json::to_value(action).unwrap();
             assert_eq!(json.as_str().unwrap(), *expected_str);
         }
     }
@@ -1413,7 +1413,7 @@ mod tests {
         ];
         let expected = ["Start", "Stop", "Status"];
         for (cmd, expected_str) in commands.iter().zip(expected.iter()) {
-            let json = serde_json::to_value(cmd).unwrap_or_default();
+            let json = serde_json::to_value(cmd).unwrap();
             assert_eq!(json.as_str().unwrap(), *expected_str);
         }
     }
@@ -1695,8 +1695,8 @@ mod tests {
         };
 
         // Both should pass structured log verification
-        let storage_json = serde_json::to_value(&storage_event).unwrap_or_default();
-        let service_json = serde_json::to_value(&service_log).unwrap_or_default();
+        let storage_json = serde_json::to_value(&storage_event).unwrap();
+        let service_json = serde_json::to_value(&service_log).unwrap();
 
         let v1 = verify_structured_log(&storage_json, "frankensqlite");
         let v2 = verify_structured_log(&service_json, "fastapi_rust");

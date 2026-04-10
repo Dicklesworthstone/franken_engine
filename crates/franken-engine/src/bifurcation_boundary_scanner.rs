@@ -560,7 +560,7 @@ impl BifurcationBoundaryScanner {
                 buf.extend_from_slice(&bp.critical_value_millionths.to_le_bytes());
                 buf.extend_from_slice(
                     serde_json::to_string(&bp.bifurcation_type)
-                        .unwrap_or_default()
+                        .unwrap()
                         .as_bytes(),
                 );
             }
@@ -576,7 +576,7 @@ impl BifurcationBoundaryScanner {
                 buf.extend_from_slice(pa.parameter_id.as_bytes());
                 buf.extend_from_slice(
                     serde_json::to_string(&pa.lane_action)
-                        .unwrap_or_default()
+                        .unwrap()
                         .as_bytes(),
                 );
             }

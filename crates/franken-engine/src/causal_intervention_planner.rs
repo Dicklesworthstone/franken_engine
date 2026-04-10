@@ -541,7 +541,7 @@ impl CausalInterventionPlanner {
                         expected_effect_millionths: effect,
                         confidence_millionths: confidence,
                         identifiability: status,
-                        adjustment_set: adjustment.unwrap_or_default(),
+                        adjustment_set: adjustment.unwrap(),
                         risk_description: String::new(),
                         cost_description: String::new(),
                         tracking_bead: None,

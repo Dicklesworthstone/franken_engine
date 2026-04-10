@@ -1911,8 +1911,8 @@ mod tests {
             submitted_at_ns: 1_000_000_000,
             content_hash: "sha256:abc".to_string(),
         };
-        let json = serde_json::to_string(&ae).unwrap_or_default();
-        let restored: ArtifactEvidence = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&ae).unwrap();
+        let restored: ArtifactEvidence = serde_json::from_str(&json).unwrap();
         assert_eq!(ae, restored);
     }
 
@@ -1923,16 +1923,16 @@ mod tests {
             value_millionths: 500_000,
             observed_at_ns: 2_000_000_000,
         };
-        let json = serde_json::to_string(&mo).unwrap_or_default();
-        let restored: MetricObservation = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&mo).unwrap();
+        let restored: MetricObservation = serde_json::from_str(&json).unwrap();
         assert_eq!(mo, restored);
     }
 
     #[test]
     fn governor_config_serde_roundtrip() {
         let cfg = GovernorConfig::default();
-        let json = serde_json::to_string(&cfg).unwrap_or_default();
-        let restored: GovernorConfig = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&cfg).unwrap();
+        let restored: GovernorConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(cfg, restored);
     }
 
@@ -1953,8 +1953,8 @@ mod tests {
             },
         ];
         for s in &statuses {
-            let json = serde_json::to_string(s).unwrap_or_default();
-            let restored: MoonshotStatus = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(s).unwrap();
+            let restored: MoonshotStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(*s, restored);
         }
     }
@@ -1978,8 +1978,8 @@ mod tests {
             GovernorDecisionKind::Resume,
         ];
         for k in &kinds {
-            let json = serde_json::to_string(k).unwrap_or_default();
-            let restored: GovernorDecisionKind = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(k).unwrap();
+            let restored: GovernorDecisionKind = serde_json::from_str(&json).unwrap();
             assert_eq!(*k, restored);
         }
     }

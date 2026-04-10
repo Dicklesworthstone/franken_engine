@@ -390,7 +390,7 @@ fn prepare_gate_inputs(
     ]
     .into_iter()
     .map(|subsystem| {
-        let entries = grouped_entries.remove(&subsystem).unwrap_or_default();
+        let entries = grouped_entries.remove(&subsystem).unwrap();
         ScanResult::new(subsystem, entries, epoch)
     })
     .collect();
@@ -769,7 +769,7 @@ mod tests {
         }];
         fs::write(
             &waivers_path,
-            serde_json::to_vec_pretty(&waivers).unwrap_or_default(),
+            serde_json::to_vec_pretty(&waivers).unwrap(),
         )
         .expect("write waivers");
 
@@ -830,7 +830,7 @@ mod tests {
         });
         fs::write(
             &waivers_path,
-            serde_json::to_vec_pretty(&legacy_manifest).unwrap_or_default(),
+            serde_json::to_vec_pretty(&legacy_manifest).unwrap(),
         )
         .expect("write legacy manifest");
 

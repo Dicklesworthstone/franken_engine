@@ -1099,16 +1099,16 @@ mod tests {
     #[test]
     fn signing_key_serialization_round_trip() {
         let sk = test_signing_key();
-        let json = serde_json::to_string(&sk).unwrap_or_default();
-        let restored: SigningKey = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&sk).unwrap();
+        let restored: SigningKey = serde_json::from_str(&json).unwrap();
         assert_eq!(sk, restored);
     }
 
     #[test]
     fn verification_key_serialization_round_trip() {
         let vk = test_signing_key().verification_key();
-        let json = serde_json::to_string(&vk).unwrap_or_default();
-        let restored: VerificationKey = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&vk).unwrap();
+        let restored: VerificationKey = serde_json::from_str(&json).unwrap();
         assert_eq!(vk, restored);
     }
 
@@ -1118,8 +1118,8 @@ mod tests {
         let sig = ctx
             .sign(&test_object(), &test_signing_key(), "t-ser")
             .unwrap();
-        let json = serde_json::to_string(&sig).unwrap_or_default();
-        let restored: Signature = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&sig).unwrap();
+        let restored: Signature = serde_json::from_str(&json).unwrap();
         assert_eq!(sig, restored);
     }
 
@@ -1136,8 +1136,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let restored: SignatureError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let restored: SignatureError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
     }
@@ -1151,8 +1151,8 @@ mod tests {
             domain: ObjectDomain::PolicyObject,
             trace_id: "t-serde".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: SignatureEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: SignatureEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 

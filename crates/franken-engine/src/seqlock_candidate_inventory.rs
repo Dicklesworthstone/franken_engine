@@ -1564,7 +1564,7 @@ impl Drop for BundleWriteLock {
 }
 
 fn digest_json(value: &serde_json::Value) -> String {
-    let bytes = serde_json::to_vec(value).expect("serialize seqlock digest input");
+    let bytes = serde_json::to_vec(value).unwrap();
     sha256_hex(&bytes)
 }
 

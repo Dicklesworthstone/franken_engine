@@ -1566,7 +1566,7 @@ mod tests {
         manifest.trace_id = bad_trace.to_string();
         fs::write(
             &manifest_path,
-            serde_json::to_string_pretty(&manifest).unwrap_or_default(),
+            serde_json::to_string_pretty(&manifest).unwrap(),
         )
         .expect("write corrupted manifest");
 
@@ -1580,7 +1580,7 @@ mod tests {
             let mut event: HarnessLogEvent =
                 serde_json::from_str(line).expect("parse security event");
             event.trace_id = bad_trace.to_string();
-            rewritten.push_str(&serde_json::to_string(&event).unwrap_or_default());
+            rewritten.push_str(&serde_json::to_string(&event).unwrap());
             rewritten.push('\n');
         }
         fs::write(&events_path, rewritten).expect("write corrupted events");
@@ -1659,8 +1659,8 @@ mod tests {
             HarnessLane::Governance,
             HarnessLane::E2e,
         ] {
-            let json = serde_json::to_string(&lane).unwrap_or_default();
-            let restored: HarnessLane = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&lane).unwrap();
+            let restored: HarnessLane = serde_json::from_str(&json).unwrap();
             assert_eq!(lane, restored);
         }
     }
@@ -1692,8 +1692,8 @@ mod tests {
             BaselineScenarioDomain::Module,
             BaselineScenarioDomain::Security,
         ] {
-            let json = serde_json::to_string(&domain).unwrap_or_default();
-            let restored: BaselineScenarioDomain = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&domain).unwrap();
+            let restored: BaselineScenarioDomain = serde_json::from_str(&json).unwrap();
             assert_eq!(domain, restored);
         }
     }
@@ -1706,8 +1706,8 @@ mod tests {
             BaselineScenarioOutcome::HappyPath,
             BaselineScenarioOutcome::CanonicalFailure,
         ] {
-            let json = serde_json::to_string(&outcome).unwrap_or_default();
-            let restored: BaselineScenarioOutcome = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&outcome).unwrap();
+            let restored: BaselineScenarioOutcome = serde_json::from_str(&json).unwrap();
             assert_eq!(outcome, restored);
         }
     }
@@ -1750,8 +1750,8 @@ mod tests {
     #[test]
     fn context_serde_round_trip() {
         let ctx = DeterministicTestContext::new("rgc-052", "fixture-a", HarnessLane::Security, 7);
-        let json = serde_json::to_string(&ctx).unwrap_or_default();
-        let restored: DeterministicTestContext = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&ctx).unwrap();
+        let restored: DeterministicTestContext = serde_json::from_str(&json).unwrap();
         assert_eq!(ctx, restored);
     }
 
@@ -1769,8 +1769,8 @@ mod tests {
             timing_us: 123,
             timestamp_unix_ms: 1_700_000_000_000,
         });
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: HarnessLogEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: HarnessLogEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 
@@ -1787,8 +1787,8 @@ mod tests {
             timestamp_unix_ms: 1_700_000_000_100,
         });
         assert_eq!(event.error_code.as_deref(), Some("FE-SEC-0001"));
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: HarnessLogEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: HarnessLogEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 
@@ -1799,8 +1799,8 @@ mod tests {
         let ctx = DeterministicTestContext::new("rgc-052", "fixture-a", HarnessLane::E2e, 53);
         let manifest =
             HarnessRunManifest::from_context(&ctx, "run-001", 3, 2, "replay.sh", 1_700_000_000_000);
-        let json = serde_json::to_string(&manifest).unwrap_or_default();
-        let restored: HarnessRunManifest = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&manifest).unwrap();
+        let restored: HarnessRunManifest = serde_json::from_str(&json).unwrap();
         assert_eq!(manifest, restored);
     }
 
@@ -1852,9 +1852,9 @@ mod tests {
             ArtifactValidationErrorCode::CountMismatch,
             ArtifactValidationErrorCode::EmptyCommands,
         ] {
-            let json = serde_json::to_string(&code).unwrap_or_default();
+            let json = serde_json::to_string(&code).unwrap();
             let restored: ArtifactValidationErrorCode =
-                serde_json::from_str(&json).unwrap_or_default();
+                serde_json::from_str(&json).unwrap();
             assert_eq!(code, restored);
         }
     }
@@ -1873,9 +1873,9 @@ mod tests {
             ArtifactBundleValidationErrorCode::MissingRequiredLane,
             ArtifactBundleValidationErrorCode::CorrelationMismatch,
         ] {
-            let json = serde_json::to_string(&code).unwrap_or_default();
+            let json = serde_json::to_string(&code).unwrap();
             let restored: ArtifactBundleValidationErrorCode =
-                serde_json::from_str(&json).unwrap_or_default();
+                serde_json::from_str(&json).unwrap();
             assert_eq!(code, restored);
         }
     }
@@ -2228,8 +2228,8 @@ mod tests {
             "execute",
             None,
         );
-        let json = serde_json::to_string(&scenario).unwrap_or_default();
-        let restored: BaselineE2eScenario = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&scenario).unwrap();
+        let restored: BaselineE2eScenario = serde_json::from_str(&json).unwrap();
         assert_eq!(scenario, restored);
     }
 
@@ -2244,8 +2244,8 @@ mod tests {
             "containment",
             Some("FE-SEC-0001"),
         );
-        let json = serde_json::to_string(&scenario).unwrap_or_default();
-        let restored: BaselineE2eScenario = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&scenario).unwrap();
+        let restored: BaselineE2eScenario = serde_json::from_str(&json).unwrap();
         assert_eq!(scenario, restored);
         assert_eq!(restored.error_code.as_deref(), Some("FE-SEC-0001"));
     }
@@ -2266,8 +2266,8 @@ mod tests {
             policy_id: Some("policy-001".to_string()),
             findings: Vec::new(),
         };
-        let json = serde_json::to_string(&report).unwrap_or_default();
-        let restored: ArtifactValidationReport = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&report).unwrap();
+        let restored: ArtifactValidationReport = serde_json::from_str(&json).unwrap();
         assert_eq!(report, restored);
     }
 
@@ -2289,9 +2289,9 @@ mod tests {
             lane_reports: Vec::new(),
             findings: Vec::new(),
         };
-        let json = serde_json::to_string(&report).unwrap_or_default();
+        let json = serde_json::to_string(&report).unwrap();
         let restored: ArtifactBundleValidationReport =
-            serde_json::from_str(&json).unwrap_or_default();
+            serde_json::from_str(&json).unwrap();
         assert_eq!(report, restored);
     }
 
@@ -2500,8 +2500,8 @@ mod tests {
             error_code: ArtifactValidationErrorCode::CountMismatch,
             message: "mismatch".to_string(),
         };
-        let json = serde_json::to_string(&finding).unwrap_or_default();
-        let restored: ArtifactValidationFinding = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&finding).unwrap();
+        let restored: ArtifactValidationFinding = serde_json::from_str(&json).unwrap();
         assert_eq!(finding, restored);
     }
 
@@ -2517,9 +2517,9 @@ mod tests {
             remediation_hint: "fix it".to_string(),
             repro_command: "cargo test".to_string(),
         };
-        let json = serde_json::to_string(&finding).unwrap_or_default();
+        let json = serde_json::to_string(&finding).unwrap();
         let restored: ArtifactBundleValidationFinding =
-            serde_json::from_str(&json).unwrap_or_default();
+            serde_json::from_str(&json).unwrap();
         assert_eq!(finding, restored);
     }
 
@@ -2530,9 +2530,9 @@ mod tests {
             seed: 42,
             lanes: vec![HarnessLane::Parser, HarnessLane::Runtime],
         };
-        let json = serde_json::to_string(&sig).unwrap_or_default();
+        let json = serde_json::to_string(&sig).unwrap();
         let restored: ArtifactBundleCorrelationSignature =
-            serde_json::from_str(&json).unwrap_or_default();
+            serde_json::from_str(&json).unwrap();
         assert_eq!(sig, restored);
     }
 

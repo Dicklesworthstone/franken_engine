@@ -526,7 +526,7 @@ pub fn build_window(
     start: u64,
 ) -> StreamWindow {
     let end = start + embeddings.len() as u64;
-    let hash_data = serde_json::to_vec(&embeddings).unwrap_or_default();
+    let hash_data = serde_json::to_vec(&embeddings).unwrap();
     StreamWindow {
         stream_kind: kind,
         start_index: start,
@@ -549,7 +549,7 @@ pub fn detect_shift(
     live: &StreamWindow,
     config: &MonitorConfig,
 ) -> ShiftCertificate {
-    let config_bytes = serde_json::to_vec(config).unwrap_or_default();
+    let config_bytes = serde_json::to_vec(config).unwrap();
     let config_hash = ContentHash::compute(&config_bytes);
 
     let total_samples = benchmark.embeddings.len() as u64 + live.embeddings.len() as u64;
@@ -563,7 +563,7 @@ pub fn detect_shift(
             ),
         };
         let cert_bytes = serde_json::to_vec(&(&benchmark.window_hash, &live.window_hash, &verdict))
-            .unwrap_or_default();
+            .unwrap();
         return ShiftCertificate {
             schema_version: SHIFT_MONITOR_SCHEMA_VERSION.to_string(),
             benchmark_window: benchmark.clone(),
@@ -585,7 +585,7 @@ pub fn detect_shift(
             required: config.window.min_samples,
         };
         let cert_bytes = serde_json::to_vec(&(&benchmark.window_hash, &live.window_hash, &verdict))
-            .unwrap_or_default();
+            .unwrap();
         return ShiftCertificate {
             schema_version: SHIFT_MONITOR_SCHEMA_VERSION.to_string(),
             benchmark_window: benchmark.clone(),
@@ -616,7 +616,7 @@ pub fn detect_shift(
 
             let cert_bytes =
                 serde_json::to_vec(&(&benchmark.window_hash, &live.window_hash, &verdict, &mmd))
-                    .unwrap_or_default();
+                    .unwrap();
             ShiftCertificate {
                 schema_version: SHIFT_MONITOR_SCHEMA_VERSION.to_string(),
                 benchmark_window: benchmark.clone(),
@@ -633,7 +633,7 @@ pub fn detect_shift(
             };
             let cert_bytes =
                 serde_json::to_vec(&(&benchmark.window_hash, &live.window_hash, &verdict))
-                    .unwrap_or_default();
+                    .unwrap();
             ShiftCertificate {
                 schema_version: SHIFT_MONITOR_SCHEMA_VERSION.to_string(),
                 benchmark_window: benchmark.clone(),
@@ -709,7 +709,7 @@ pub fn run_shift_evidence() -> ShiftEvidenceManifest {
         .filter(|c| matches!(c.verdict, ShiftVerdict::Abstained { .. }))
         .count() as u32;
 
-    let hash_data = serde_json::to_vec(&certificates).unwrap_or_default();
+    let hash_data = serde_json::to_vec(&certificates).unwrap();
 
     ShiftEvidenceManifest {
         schema_version: SHIFT_MONITOR_SCHEMA_VERSION.to_string(),

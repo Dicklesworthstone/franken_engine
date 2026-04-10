@@ -651,7 +651,7 @@ impl ManifoldTrajectory {
         let schema_id = coordinates
             .first()
             .map(|c| c.schema_id.clone())
-            .unwrap_or_default();
+            .unwrap();
 
         Self {
             trajectory_id: trajectory_id.into(),

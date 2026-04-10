@@ -277,7 +277,7 @@ impl InteropSpecimenEvidence {
     pub fn compute_hash(&self) -> String {
         let mut canonical = self.clone();
         canonical.evidence_hash = None;
-        let canonical_json = serde_json::to_vec(&canonical).unwrap_or_default();
+        let canonical_json = serde_json::to_vec(&canonical).unwrap();
         hex_encode(ContentHash::compute(&canonical_json).as_bytes())
     }
 
@@ -2452,7 +2452,7 @@ fn run_single_specimen(specimen: &InteropSpecimen) -> InteropSpecimenEvidence {
         let deps = async_dependency_map
             .get(specifier)
             .cloned()
-            .unwrap_or_default();
+            .unwrap();
         let promise = if sm.has_top_level_await {
             let pid: u32 = sm.specifier.as_bytes().iter().map(|&b| b as u32).sum();
             Some(crate::promise_model::PromiseHandle(pid))

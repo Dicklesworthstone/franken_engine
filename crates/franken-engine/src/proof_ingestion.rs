@@ -1036,7 +1036,7 @@ impl ProofIngestionEngine {
                     .filter_map(|id| self.active_hypotheses.get(id))
                     .collect()
             })
-            .unwrap_or_default()
+            .unwrap()
     }
 
     /// Get all hypotheses of a specific kind.

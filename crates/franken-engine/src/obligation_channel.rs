@@ -674,8 +674,8 @@ mod tests {
             state: ObligationState::Committed,
             resolution_evidence_hash: Some("h".to_string()),
         };
-        let json = serde_json::to_string(&record).unwrap_or_default();
-        let restored: ObligationRecord = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&record).unwrap();
+        let restored: ObligationRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(record, restored);
     }
 
@@ -689,16 +689,16 @@ mod tests {
             resolution_type: Some("commit".to_string()),
             evidence_hash: Some("h".to_string()),
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: ObligationEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: ObligationEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 
     #[test]
     fn channel_config_serialization_round_trip() {
         let config = ChannelConfig::default();
-        let json = serde_json::to_string(&config).unwrap_or_default();
-        let restored: ChannelConfig = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: ChannelConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, restored);
     }
 
@@ -714,8 +714,8 @@ mod tests {
             ObligationState::Aborted,
             ObligationState::Leaked,
         ] {
-            let json = serde_json::to_string(&state).unwrap_or_default();
-            let restored: ObligationState = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&state).unwrap();
+            let restored: ObligationState = serde_json::from_str(&json).unwrap();
             assert_eq!(state, restored);
         }
     }
@@ -730,8 +730,8 @@ mod tests {
             AbortReason::Custom("custom-reason".to_string()),
         ];
         for reason in &reasons {
-            let json = serde_json::to_string(reason).unwrap_or_default();
-            let restored: AbortReason = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(reason).unwrap();
+            let restored: AbortReason = serde_json::from_str(&json).unwrap();
             assert_eq!(*reason, restored);
         }
     }
@@ -866,8 +866,8 @@ mod tests {
             ObligationError::Leaked { obligation_id: 3 },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let restored: ObligationError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let restored: ObligationError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
     }

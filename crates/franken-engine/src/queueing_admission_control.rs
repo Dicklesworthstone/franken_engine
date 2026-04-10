@@ -573,7 +573,7 @@ impl Default for AdmissionControlPolicy {
 impl AdmissionControlPolicy {
     /// Content hash for audit.
     pub fn policy_hash(&self) -> ContentHash {
-        let bytes = serde_json::to_vec(self).unwrap_or_default();
+        let bytes = serde_json::to_vec(self).unwrap();
         ContentHash::compute(&bytes)
     }
 }
@@ -995,7 +995,7 @@ impl AdmissionControlManifest {
         let mut h = Sha256::new();
         h.update(ADMISSION_SCHEMA_VERSION.as_bytes());
         h.update(ADMISSION_BEAD_ID.as_bytes());
-        let summary_bytes = serde_json::to_vec(&summary).unwrap_or_default();
+        let summary_bytes = serde_json::to_vec(&summary).unwrap();
         h.update(&summary_bytes);
         let hash_bytes: [u8; 32] = h.finalize().into();
 

@@ -1436,8 +1436,8 @@ mod tests {
     fn policy_serde_roundtrip() {
         let keys = make_share_keys(3);
         let policy = create_test_policy(2, &keys);
-        let json = serde_json::to_string(&policy).unwrap_or_default();
-        let restored: ThresholdSigningPolicy = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&policy).unwrap();
+        let restored: ThresholdSigningPolicy = serde_json::from_str(&json).unwrap();
         assert_eq!(policy, restored);
     }
 
@@ -1460,8 +1460,8 @@ mod tests {
             .unwrap();
         let result = ceremony.finalize(TEST_PREIMAGE).unwrap();
 
-        let json = serde_json::to_string(&result).unwrap_or_default();
-        let restored: ThresholdResult = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&result).unwrap();
+        let restored: ThresholdResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, restored);
     }
 
@@ -1477,8 +1477,8 @@ mod tests {
             ThresholdError::NoScopedOperations,
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let restored: ThresholdError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let restored: ThresholdError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
     }
@@ -1729,8 +1729,8 @@ mod tests {
             ThresholdEventType::UnauthorizedSubmission { signer: holder },
         ];
         for evt in &events {
-            let json = serde_json::to_string(evt).unwrap_or_default();
-            let restored: ThresholdEventType = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(evt).unwrap();
+            let restored: ThresholdEventType = serde_json::from_str(&json).unwrap();
             assert_eq!(*evt, restored);
         }
     }

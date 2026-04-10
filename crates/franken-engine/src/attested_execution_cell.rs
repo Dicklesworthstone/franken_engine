@@ -1078,7 +1078,7 @@ impl CellRegistry {
         self.function_index
             .get(&function)
             .map(|ids| ids.iter().filter_map(|id| self.cells.get(id)).collect())
-            .unwrap_or_default()
+            .unwrap()
     }
 
     /// Get all active cells.
@@ -1094,7 +1094,7 @@ impl CellRegistry {
         self.zone_index
             .get(zone)
             .map(|ids| ids.iter().filter_map(|id| self.cells.get(id)).collect())
-            .unwrap_or_default()
+            .unwrap()
     }
 
     /// Total cell count.

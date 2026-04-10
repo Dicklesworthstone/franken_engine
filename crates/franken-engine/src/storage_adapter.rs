@@ -572,7 +572,7 @@ impl StorageAdapter for InMemoryStorageAdapter {
                     detail: "write failure injected".to_string(),
                 });
             }
-            let mut staged = self.stores.get(&store).cloned().unwrap_or_default();
+            let mut staged = self.stores.get(&store).cloned().unwrap();
             let mut out = Vec::with_capacity(entries.len());
             for entry in entries {
                 Self::validate_key(&entry.key)?;
@@ -1150,7 +1150,7 @@ mod tests {
             store: StoreKind,
             entries: &[BatchPutEntry],
         ) -> Result<Vec<StoreRecord>, String> {
-            let mut staged = self.stores.get(&store).cloned().unwrap_or_default();
+            let mut staged = self.stores.get(&store).cloned().unwrap();
             let mut out = Vec::with_capacity(entries.len());
             for entry in entries {
                 out.push(staged.put(

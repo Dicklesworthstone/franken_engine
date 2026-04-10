@@ -1048,8 +1048,8 @@ mod tests {
             epoch: SecurityEpoch::from_raw(5),
             context_hash: vec![10, 20],
         };
-        let json = serde_json::to_string(&key).unwrap_or_default();
-        let restored: DerivedKey = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&key).unwrap();
+        let restored: DerivedKey = serde_json::from_str(&json).unwrap();
         assert_eq!(key, restored);
     }
 
@@ -1062,8 +1062,8 @@ mod tests {
             algorithm: "DeterministicTestDeriver".to_string(),
             trace_id: "trace-xyz".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: DerivationEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: DerivationEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 
@@ -1072,8 +1072,8 @@ mod tests {
         let mut ctx = DerivationContext::empty();
         ctx.add("ext_id", "abc");
         ctx.add("session", "xyz");
-        let json = serde_json::to_string(&ctx).unwrap_or_default();
-        let restored: DerivationContext = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&ctx).unwrap();
+        let restored: DerivationContext = serde_json::from_str(&json).unwrap();
         assert_eq!(ctx, restored);
     }
 
@@ -1135,8 +1135,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let restored: KeyDerivationError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let restored: KeyDerivationError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
     }

@@ -404,6 +404,9 @@ pub enum Ir1Op {
     ExportBinding { name: String, binding_id: BindingId },
     /// Await an expression (async context).
     Await,
+    /// Yield a value from a generator function.  When `delegate` is true the
+    /// operand is an iterable whose values are forwarded (`yield*`).
+    Yield { delegate: bool },
     /// No-op placeholder.
     Nop,
     /// Binary operation: pop two operands, push result.
@@ -440,6 +443,15 @@ pub enum Ir1Op {
     NewArray { count: u32 },
     /// Create a new object from top N key-value pairs.
     NewObject { count: u32 },
+    /// Push a single element onto an array. Stack: [..., array, element] -> [..., array].
+    /// The element is popped and appended to the array.
+    ArrayPush,
+    /// Spread an iterable into an array. Stack: [..., array, iterable] -> [..., array].
+    /// Iterates the iterable and appends each element to the array.
+    SpreadIntoArray,
+    /// Spread an object's properties into another object. Stack: [..., target, source] -> [..., target].
+    /// Copies all enumerable own properties from source to target.
+    SpreadIntoObject,
     /// Throw the value on top-of-stack.
     Throw,
     /// Load `this` binding.
@@ -455,6 +467,8 @@ pub enum Ir1Op {
         /// the function body (free variables / upvalues).  The IR3
         /// lowering uses these to emit scope-chain capture instructions.
         free_vars: Vec<String>,
+        /// True when the source function is a generator (`function*`).
+        is_generator: bool,
     },
     /// Create a function value (expression position — arrow functions and
     /// function expressions).  The resulting value is pushed onto the stack.
@@ -464,6 +478,8 @@ pub enum Ir1Op {
         body_ops: Vec<Ir1Op>,
         /// Free variables from enclosing scope (see DeclareFunction).
         free_vars: Vec<String>,
+        /// True when the source function is a generator (`function*`).
+        is_generator: bool,
     },
     /// Begin a try block; on exception, jump to catch_label.
     /// If a finally block exists, `finally_label` points to its entry.
@@ -582,6 +598,13 @@ impl Ir1Op {
                     "op".to_string(),
                     CanonicalValue::String("await".to_string()),
                 );
+            }
+            Self::Yield { delegate } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("yield".to_string()),
+                );
+                map.insert("delegate".to_string(), CanonicalValue::Bool(*delegate));
             }
             Self::Nop => {
                 map.insert("op".to_string(), CanonicalValue::String("nop".to_string()));
@@ -712,6 +735,24 @@ impl Ir1Op {
                 );
                 map.insert("count".to_string(), CanonicalValue::U64(u64::from(*count)));
             }
+            Self::ArrayPush => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("array_push".to_string()),
+                );
+            }
+            Self::SpreadIntoArray => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("spread_into_array".to_string()),
+                );
+            }
+            Self::SpreadIntoObject => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("spread_into_object".to_string()),
+                );
+            }
             Self::Throw => {
                 map.insert(
                     "op".to_string(),
@@ -730,6 +771,7 @@ impl Ir1Op {
                 param_names,
                 body_ops,
                 free_vars,
+                is_generator,
             } => {
                 map.insert(
                     "op".to_string(),
@@ -762,12 +804,17 @@ impl Ir1Op {
                             .collect(),
                     ),
                 );
+                map.insert(
+                    "is_generator".to_string(),
+                    CanonicalValue::Bool(*is_generator),
+                );
             }
             Self::CreateFunction {
                 name,
                 param_names,
                 body_ops,
                 free_vars,
+                is_generator,
             } => {
                 map.insert(
                     "op".to_string(),
@@ -799,6 +846,10 @@ impl Ir1Op {
                             .map(|s| CanonicalValue::String(s.clone()))
                             .collect(),
                     ),
+                );
+                map.insert(
+                    "is_generator".to_string(),
+                    CanonicalValue::Bool(*is_generator),
                 );
             }
             Self::BeginTry {
@@ -1348,6 +1399,12 @@ pub enum Ir3Instruction {
     NewObject { dst: Reg },
     /// Allocate a new array on the heap.
     NewArray { dst: Reg },
+    /// Push a single element onto an array: array.push(element).
+    ArrayPush { array: Reg, element: Reg },
+    /// Spread an iterable into an array: for (const x of iterable) array.push(x).
+    SpreadIntoArray { array: Reg, iterable: Reg },
+    /// Spread an object's properties into another object: Object.assign(target, source).
+    SpreadIntoObject { target: Reg, source: Reg },
     /// Template literal concatenation: dst = parts[0] + parts[1] + ... + parts[N-1].
     /// Parts are interleaved quasi strings and expressions already loaded in registers.
     TemplateLiteral { parts: RegRange, dst: Reg },
@@ -1405,6 +1462,27 @@ pub enum Ir3Instruction {
     StoreScoped { src: Reg, name_pool_index: u32 },
     /// Initialize a let/const binding (move it out of TDZ).
     InitBinding { name_pool_index: u32, src: Reg },
+
+    // ── Generator instructions ───────────────────────────────────────
+    /// Create a generator object from the current function frame.
+    /// `function_index` identifies the generator body in the function table.
+    /// `capture_count` is the number of captured variables.
+    /// The generator starts in a suspended-at-start state.
+    CreateGenerator {
+        dst: Reg,
+        function_index: u32,
+        capture_count: u32,
+    },
+    /// Yield a value from a generator.  Suspends execution and returns
+    /// `{value, done: false}` to the caller.  When resumed via `.next(v)`,
+    /// the injected value is placed in `resume_dst`.
+    /// If `delegate` is true, this is `yield*` — the runtime iterates
+    /// the value register as an iterable and forwards each element.
+    Yield {
+        value: Reg,
+        delegate: bool,
+        resume_dst: Reg,
+    },
 }
 
 impl Ir3Instruction {
@@ -1674,6 +1752,36 @@ impl Ir3Instruction {
                     CanonicalValue::String("new_array".to_string()),
                 );
                 map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+            }
+            Self::ArrayPush { array, element } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("array_push".to_string()),
+                );
+                map.insert("array".to_string(), CanonicalValue::U64(u64::from(*array)));
+                map.insert(
+                    "element".to_string(),
+                    CanonicalValue::U64(u64::from(*element)),
+                );
+            }
+            Self::SpreadIntoArray { array, iterable } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("spread_into_array".to_string()),
+                );
+                map.insert("array".to_string(), CanonicalValue::U64(u64::from(*array)));
+                map.insert(
+                    "iterable".to_string(),
+                    CanonicalValue::U64(u64::from(*iterable)),
+                );
+            }
+            Self::SpreadIntoObject { target, source } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("spread_into_object".to_string()),
+                );
+                map.insert("target".to_string(), CanonicalValue::U64(u64::from(*target)));
+                map.insert("source".to_string(), CanonicalValue::U64(u64::from(*source)));
             }
             Self::TemplateLiteral { parts, dst } => {
                 map.insert(
@@ -2031,6 +2139,41 @@ impl Ir3Instruction {
                 );
                 map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
             }
+            Self::CreateGenerator {
+                dst,
+                function_index,
+                capture_count,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("create_generator".to_string()),
+                );
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert(
+                    "function_index".to_string(),
+                    CanonicalValue::U64(u64::from(*function_index)),
+                );
+                map.insert(
+                    "capture_count".to_string(),
+                    CanonicalValue::U64(u64::from(*capture_count)),
+                );
+            }
+            Self::Yield {
+                value,
+                delegate,
+                resume_dst,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("yield".to_string()),
+                );
+                map.insert("value".to_string(), CanonicalValue::U64(u64::from(*value)));
+                map.insert("delegate".to_string(), CanonicalValue::Bool(*delegate));
+                map.insert(
+                    "resume_dst".to_string(),
+                    CanonicalValue::U64(u64::from(*resume_dst)),
+                );
+            }
         }
         CanonicalValue::Map(map)
     }
@@ -2047,6 +2190,8 @@ pub struct Ir3FunctionDesc {
     pub frame_size: u32,
     /// Human-readable name (for diagnostics).
     pub name: Option<String>,
+    /// Whether this function is a generator (function*).
+    pub is_generator: bool,
 }
 
 impl Ir3FunctionDesc {
@@ -2063,6 +2208,10 @@ impl Ir3FunctionDesc {
         map.insert(
             "frame_size".to_string(),
             CanonicalValue::U64(u64::from(self.frame_size)),
+        );
+        map.insert(
+            "is_generator".to_string(),
+            CanonicalValue::Bool(self.is_generator),
         );
         map.insert(
             "name".to_string(),
@@ -3138,6 +3287,7 @@ mod tests {
             });
             ir3.instructions.push(Ir3Instruction::Return { value: 2 });
             ir3.function_table.push(Ir3FunctionDesc {
+                is_generator: false,
                 entry: 0,
                 arity: 0,
                 frame_size: 3,
@@ -3922,6 +4072,7 @@ mod tests {
             arity: 2,
             frame_size: 8,
             name: Some("myFunc".to_string()),
+            is_generator: false,
         };
         let json = serde_json::to_string(&desc).unwrap();
         let restored: Ir3FunctionDesc = serde_json::from_str(&json).unwrap();
@@ -4649,6 +4800,7 @@ mod tests {
             arity: 2,
             frame_size: 8,
             name: Some("main".to_string()),
+            is_generator: false,
         };
         let cv = desc.canonical_value();
         if let CanonicalValue::Map(m) = cv {
@@ -4671,6 +4823,7 @@ mod tests {
             arity: 0,
             frame_size: 4,
             name: None,
+            is_generator: false,
         };
         let cv = desc.canonical_value();
         if let CanonicalValue::Map(m) = cv {
@@ -5103,6 +5256,7 @@ mod tests {
             arity: 3,
             frame_size: 8,
             name: Some("myFunc".to_string()),
+            is_generator: false,
         };
         let cv = desc.canonical_value();
         if let CanonicalValue::Map(m) = cv {
@@ -5125,6 +5279,7 @@ mod tests {
             arity: 0,
             frame_size: 1,
             name: None,
+            is_generator: false,
         };
         let cv = desc.canonical_value();
         if let CanonicalValue::Map(m) = cv {

@@ -396,7 +396,7 @@ fn normalize_limit(value: usize) -> usize {
 }
 
 fn sha256_hex<T: Serialize>(value: &T) -> String {
-    let payload = serde_json::to_vec(value).unwrap_or_default();
+    let payload = serde_json::to_vec(value).unwrap();
     let digest = Sha256::digest(payload);
     hex::encode(digest)
 }

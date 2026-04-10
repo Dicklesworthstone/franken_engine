@@ -428,7 +428,7 @@ fn validate_signal(
                 .signer
                 .as_deref()
                 .map(str::trim)
-                .unwrap_or_default()
+                .unwrap()
                 .is_empty()
             {
                 findings.push(finding(
@@ -444,7 +444,7 @@ fn validate_signal(
                 .signature_ref
                 .as_deref()
                 .map(str::trim)
-                .unwrap_or_default()
+                .unwrap()
                 .is_empty()
             {
                 findings.push(finding(
@@ -562,7 +562,7 @@ pub fn integrate_milestone_release_test_evidence(
                             .signer
                             .clone()
                             .unwrap_or_else(|| "unknown-signer".to_string()),
-                        signature_ref: artifact.signature_ref.clone().unwrap_or_default(),
+                        signature_ref: artifact.signature_ref.clone().unwrap(),
                     });
                 }
             }

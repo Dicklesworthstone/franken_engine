@@ -724,8 +724,8 @@ mod tests {
     fn virtual_clock_serialization_round_trip() {
         let mut clock = VirtualClock::new();
         clock.advance(42);
-        let json = serde_json::to_string(&clock).unwrap_or_default();
-        let restored: VirtualClock = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&clock).unwrap();
+        let restored: VirtualClock = serde_json::from_str(&json).unwrap();
         assert_eq!(clock, restored);
     }
 
@@ -737,8 +737,8 @@ mod tests {
         transcript.push(ScheduleAction::InjectCancel {
             region_id: "r".to_string(),
         });
-        let json = serde_json::to_string(&transcript).unwrap_or_default();
-        let restored: ScheduleTranscript = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&transcript).unwrap();
+        let restored: ScheduleTranscript = serde_json::from_str(&json).unwrap();
         assert_eq!(transcript, restored);
     }
 
@@ -754,8 +754,8 @@ mod tests {
             tasks_cancelled: 0,
             verdict: Verdict::Pass,
         };
-        let json = serde_json::to_string(&result).unwrap_or_default();
-        let restored: LabRunResult = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&result).unwrap();
+        let restored: LabRunResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, restored);
     }
 
@@ -795,8 +795,8 @@ mod tests {
             region_id: Some("region-1".to_string()),
             outcome: "ok".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: LabEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: LabEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 
@@ -809,8 +809,8 @@ mod tests {
             FaultKind::DeadlineExpired,
             FaultKind::RegionClose,
         ] {
-            let json = serde_json::to_string(&kind).unwrap_or_default();
-            let restored: FaultKind = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&kind).unwrap();
+            let restored: FaultKind = serde_json::from_str(&json).unwrap();
             assert_eq!(kind, restored);
         }
     }
@@ -1160,8 +1160,8 @@ mod tests {
             region_id: None,
             outcome: "ok".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: LabEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: LabEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 

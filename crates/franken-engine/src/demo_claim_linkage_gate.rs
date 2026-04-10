@@ -617,7 +617,7 @@ impl DemoClaimLinkageGate {
             config: &self.config,
             claim_results: canonical_claim_results,
         })
-        .unwrap_or_default();
+        .unwrap();
 
         let decision_id = format!(
             "linkage-{}-{}-{}",

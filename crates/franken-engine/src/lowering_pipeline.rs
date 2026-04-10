@@ -1389,6 +1389,9 @@ fn lower_statement_to_ir1_with_flow(
                     value: Ir1Literal::Undefined,
                 });
             }
+            // Keep explicit returns aligned with the module-level `Return`
+            // lowering path, which reads register 0 after control flow.
+            ops.push(Ir1Op::Pop);
             ops.push(Ir1Op::Return);
         }
         Statement::Throw(throw_stmt) => {
@@ -1711,6 +1714,7 @@ fn lower_statement_to_ir1_with_flow(
                 param_names,
                 body_ops,
                 free_vars,
+                is_generator: func.is_generator,
             });
             ops.push(Ir1Op::Pop);
         }
@@ -1726,7 +1730,7 @@ fn lower_statement_to_ir1_with_flow(
                         .filter_map(|p| p.name().map(String::from))
                         .collect()
                 })
-                .unwrap_or_default();
+                .unwrap();
             let mut body_ops = Vec::new();
             let mut body_bindings = Vec::new();
             let mut body_lookup = BTreeMap::new();
@@ -1778,12 +1782,17 @@ fn lower_statement_to_ir1_with_flow(
                 param_names,
                 body_ops,
                 free_vars: Vec::new(),
+                is_generator: false,
             });
             ops.push(Ir1Op::Pop);
 
             // Attach non-constructor methods to the constructor's prototype.
             // Static methods go on the constructor itself.
-            for method in cls.body.iter().filter(|m| m.kind != MethodKind::Constructor) {
+            for method in cls
+                .body
+                .iter()
+                .filter(|m| m.kind != MethodKind::Constructor)
+            {
                 let method_name = match &method.key {
                     Expression::Identifier(name) => name.clone(),
                     Expression::StringLiteral(s) => s.clone(),
@@ -1846,6 +1855,7 @@ fn lower_statement_to_ir1_with_flow(
                     param_names: m_param_names,
                     body_ops: m_body_ops,
                     free_vars: Vec::new(),
+                    is_generator: false,
                 });
 
                 // SetProperty pops value (top), then object (next).
@@ -2182,7 +2192,7 @@ pub fn lower_ir2_to_ir3(
     // Deferred function bodies: (body_ir1_ops, param_names, name, free_vars).
     // After the main code + Halt, each body is lowered into the instruction
     // stream and registered in function_table.  Index 0 is reserved for main.
-    let mut deferred_functions: Vec<(Vec<Ir1Op>, Vec<String>, Option<String>, Vec<String>)> =
+    let mut deferred_functions: Vec<(Vec<Ir1Op>, Vec<String>, Option<String>, Vec<String>, bool)> =
         Vec::new();
 
     // Build name→BindingId lookup from the module's scope tree so the
@@ -2366,6 +2376,16 @@ pub fn lower_ir2_to_ir3(
                 let dst = alloc_register(&mut register_cursor);
                 ir3.instructions
                     .push(Ir3Instruction::Move { dst, src: current });
+                value_stack.push(dst);
+            }
+            Ir1Op::Yield { delegate } => {
+                let value_reg = value_stack.pop().unwrap_or(0);
+                let dst = alloc_register(&mut register_cursor);
+                ir3.instructions.push(Ir3Instruction::Yield {
+                    value: value_reg,
+                    delegate: *delegate,
+                    resume_dst: dst,
+                });
                 value_stack.push(dst);
             }
             Ir1Op::Return => {
@@ -2829,6 +2849,7 @@ pub fn lower_ir2_to_ir3(
                 param_names,
                 body_ops,
                 free_vars,
+                is_generator,
             } => {
                 let dst = *binding_registers
                     .entry(*binding_id)
@@ -2867,12 +2888,21 @@ pub fn lower_ir2_to_ir3(
                         param_names.clone(),
                         Some(name.clone()),
                         free_vars.clone(),
+                        *is_generator,
                     ));
-                    ir3.instructions.push(Ir3Instruction::CreateClosure {
-                        dst,
-                        function_index,
-                        capture_count: free_vars.len() as u32,
-                    });
+                    if *is_generator {
+                        ir3.instructions.push(Ir3Instruction::CreateGenerator {
+                            dst,
+                            function_index,
+                            capture_count: free_vars.len() as u32,
+                        });
+                    } else {
+                        ir3.instructions.push(Ir3Instruction::CreateClosure {
+                            dst,
+                            function_index,
+                            capture_count: free_vars.len() as u32,
+                        });
+                    }
                     if !free_vars.is_empty() {
                         ir3.instructions.push(Ir3Instruction::PopScope);
                     }
@@ -2884,6 +2914,7 @@ pub fn lower_ir2_to_ir3(
                 param_names,
                 body_ops,
                 free_vars,
+                is_generator,
             } => {
                 let dst = alloc_register(&mut register_cursor);
                 // If the function has free variables, put them on the
@@ -2912,12 +2943,21 @@ pub fn lower_ir2_to_ir3(
                     param_names.clone(),
                     name.clone(),
                     free_vars.clone(),
+                    *is_generator,
                 ));
-                ir3.instructions.push(Ir3Instruction::CreateClosure {
-                    dst,
-                    function_index,
-                    capture_count: free_vars.len() as u32,
-                });
+                if *is_generator {
+                    ir3.instructions.push(Ir3Instruction::CreateGenerator {
+                        dst,
+                        function_index,
+                        capture_count: free_vars.len() as u32,
+                    });
+                } else {
+                    ir3.instructions.push(Ir3Instruction::CreateClosure {
+                        dst,
+                        function_index,
+                        capture_count: free_vars.len() as u32,
+                    });
+                }
                 if !free_vars.is_empty() {
                     ir3.instructions.push(Ir3Instruction::PopScope);
                 }
@@ -3211,6 +3251,7 @@ pub fn lower_ir2_to_ir3(
         arity: 0,
         frame_size: register_cursor.max(1),
         name: Some("main".to_string()),
+        is_generator: false,
     });
 
     // ── Deferred function bodies ──────────────────────────────────────
@@ -3220,7 +3261,8 @@ pub fn lower_ir2_to_ir3(
     // body can push new entries without conflicting with the borrow.
     let mut deferred_idx = 0;
     while deferred_idx < deferred_functions.len() {
-        let (body_ops, param_names, fn_name, free_vars) = deferred_functions[deferred_idx].clone();
+        let (body_ops, param_names, fn_name, free_vars, fn_is_generator) =
+            deferred_functions[deferred_idx].clone();
         deferred_idx += 1;
         let (body_ops, param_names, fn_name, free_vars) =
             (&body_ops, &param_names, &fn_name, &free_vars);
@@ -3680,6 +3722,7 @@ pub fn lower_ir2_to_ir3(
                     param_names: inner_params,
                     name: inner_name,
                     free_vars: inner_fv,
+                    is_generator: inner_gen,
                 } if !inner_body.is_empty() => {
                     let dst = *fn_binding_regs
                         .entry(*inner_bid)
@@ -3690,12 +3733,21 @@ pub fn lower_ir2_to_ir3(
                         inner_params.clone(),
                         Some(inner_name.clone()),
                         inner_fv.clone(),
+                        *inner_gen,
                     ));
-                    ir3.instructions.push(Ir3Instruction::CreateClosure {
-                        dst,
-                        function_index,
-                        capture_count: inner_fv.len() as u32,
-                    });
+                    if *inner_gen {
+                        ir3.instructions.push(Ir3Instruction::CreateGenerator {
+                            dst,
+                            function_index,
+                            capture_count: inner_fv.len() as u32,
+                        });
+                    } else {
+                        ir3.instructions.push(Ir3Instruction::CreateClosure {
+                            dst,
+                            function_index,
+                            capture_count: inner_fv.len() as u32,
+                        });
+                    }
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::CreateFunction {
@@ -3703,6 +3755,7 @@ pub fn lower_ir2_to_ir3(
                     param_names: inner_params,
                     name: inner_name,
                     free_vars: inner_fv,
+                    is_generator: inner_gen,
                 } => {
                     let dst = alloc_register(&mut fn_reg);
                     let function_index = deferred_functions.len() as u32 + 1;
@@ -3711,12 +3764,38 @@ pub fn lower_ir2_to_ir3(
                         inner_params.clone(),
                         inner_name.clone(),
                         inner_fv.clone(),
+                        *inner_gen,
                     ));
-                    ir3.instructions.push(Ir3Instruction::CreateClosure {
-                        dst,
-                        function_index,
-                        capture_count: inner_fv.len() as u32,
+                    if *inner_gen {
+                        ir3.instructions.push(Ir3Instruction::CreateGenerator {
+                            dst,
+                            function_index,
+                            capture_count: inner_fv.len() as u32,
+                        });
+                    } else {
+                        ir3.instructions.push(Ir3Instruction::CreateClosure {
+                            dst,
+                            function_index,
+                            capture_count: inner_fv.len() as u32,
+                        });
+                    }
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::Yield { delegate } => {
+                    let value_reg = fn_value_stack.pop().unwrap_or(0);
+                    let dst = alloc_register(&mut fn_reg);
+                    ir3.instructions.push(Ir3Instruction::Yield {
+                        value: value_reg,
+                        delegate: *delegate,
+                        resume_dst: dst,
                     });
+                    fn_value_stack.push(dst);
+                }
+                Ir1Op::Await => {
+                    let current = fn_value_stack.pop().unwrap_or(0);
+                    let dst = alloc_register(&mut fn_reg);
+                    ir3.instructions
+                        .push(Ir3Instruction::Move { dst, src: current });
                     fn_value_stack.push(dst);
                 }
                 // Fallthrough: unhandled ops in function bodies become nops.
@@ -3769,6 +3848,7 @@ pub fn lower_ir2_to_ir3(
             arity,
             frame_size: fn_reg.max(1),
             name: fn_name.clone(),
+            is_generator: fn_is_generator,
         });
     }
 
@@ -3994,7 +4074,7 @@ fn build_ir2_flow_proof_artifact(
 fn compute_ir2_flow_artifact_id(artifact: &Ir2FlowProofArtifact) -> String {
     let mut preimage = artifact.clone();
     preimage.artifact_id.clear();
-    let encoded = serde_json::to_vec(&preimage).unwrap_or_default();
+    let encoded = serde_json::to_vec(&preimage).unwrap();
     let hash = ContentHash::compute(&encoded);
     format!("sha256:{}", hex::encode(hash.as_bytes()))
 }
@@ -4252,6 +4332,26 @@ fn lower_expression_to_ir1(
             )?;
             ops.push(Ir1Op::Await);
         }
+        Expression::Yield { argument, delegate } => {
+            if let Some(arg) = argument {
+                lower_expression_to_ir1(
+                    arg,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+            } else {
+                ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Undefined,
+                });
+            }
+            ops.push(Ir1Op::Yield {
+                delegate: *delegate,
+            });
+        }
         Expression::Raw(raw) => {
             ops.push(Ir1Op::LoadLiteral {
                 value: Ir1Literal::String(raw.clone()),
@@ -4259,6 +4359,21 @@ fn lower_expression_to_ir1(
             if raw.contains('(') {
                 ops.push(Ir1Op::Call { arg_count: 0 });
             }
+        }
+        Expression::SpreadElement(inner) => {
+            // Spread in expression position: lower the inner expression.
+            // The actual spreading (iteration into array/object/call) is
+            // handled at the call site (array literal, object literal, call).
+            // At expression level, spread just evaluates to the inner value.
+            lower_expression_to_ir1(
+                inner,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+            )?;
         }
         Expression::Binary {
             operator,
@@ -4788,7 +4903,10 @@ fn lower_expression_to_ir1(
             // Detect method calls: obj.method(args) → CallMethod with receiver
             let is_method = matches!(
                 callee.as_ref(),
-                Expression::Member { computed: false, .. }
+                Expression::Member {
+                    computed: false,
+                    ..
+                }
             );
             if is_method {
                 if let Expression::Member {
@@ -5214,10 +5332,15 @@ fn lower_expression_to_ir1(
                 param_names,
                 body_ops,
                 free_vars: arrow_free_vars,
+                is_generator: false,
             });
         }
         Expression::Function {
-            name, params, body, ..
+            name,
+            params,
+            body,
+            is_generator,
+            ..
         } => {
             // Same as ArrowFunction but with a BlockStatement body and optional name.
             let param_names: Vec<String> = params
@@ -5271,6 +5394,7 @@ fn lower_expression_to_ir1(
                 param_names,
                 body_ops,
                 free_vars: fn_free_vars,
+                is_generator: *is_generator,
             });
         }
         Expression::New { callee, arguments } => {
@@ -5388,7 +5512,7 @@ fn classify_ir1_op(
             None,
             None,
         ),
-        Ir1Op::Await => (
+        Ir1Op::Await | Ir1Op::Yield { .. } => (
             EffectBoundary::ReadEffect,
             None,
             Some(FlowAnnotation {
@@ -5527,7 +5651,7 @@ fn infer_data_label_for_op(
             .cloned()
             .unwrap_or(Label::Internal),
         Ir1Op::StoreBinding { .. } => last_label,
-        Ir1Op::ImportModule { .. } | Ir1Op::Await => Label::Internal,
+        Ir1Op::ImportModule { .. } | Ir1Op::Await | Ir1Op::Yield { .. } => Label::Internal,
         Ir1Op::Call { .. } => last_label,
         Ir1Op::ExportBinding { .. } => last_label,
         Ir1Op::Return | Ir1Op::Nop => last_label,
@@ -6263,8 +6387,8 @@ mod tests {
         let second = build_ir2_flow_proof_artifact(&ir2, &context).expect("second");
 
         assert_eq!(first, second);
-        let first_json = serde_json::to_string(&first).unwrap_or_default();
-        let second_json = serde_json::to_string(&second).unwrap_or_default();
+        let first_json = serde_json::to_string(&first).unwrap();
+        let second_json = serde_json::to_string(&second).unwrap();
         assert_eq!(first_json, second_json);
     }
 

@@ -517,7 +517,7 @@ impl CounterexampleSynthesizer {
 
         // Compute content hash.
         let canonical =
-            serde_json::to_vec(&(&cx.property, &cx.policy_id, &scenario)).unwrap_or_default();
+            serde_json::to_vec(&(&cx.property, &cx.policy_id, &scenario)).unwrap();
         let content_hash = ContentHash::compute(&canonical);
 
         let (expected, actual) = self.describe_outcomes(cx);
@@ -988,7 +988,7 @@ impl CounterexampleSynthesizer {
                 .policy_ids
                 .first()
                 .map(|p| p.as_str().to_string())
-                .unwrap_or_default(),
+                .unwrap(),
             policy_version: 1,
             epoch: scx.epoch,
             tick: tick_base + 1,
@@ -1024,7 +1024,7 @@ impl CounterexampleSynthesizer {
             scx.policy_ids
                 .first()
                 .map(|p| p.as_str().to_string())
-                .unwrap_or_default(),
+                .unwrap(),
             scx.epoch,
             DecisionType::ContractEvaluation,
         )
@@ -2415,8 +2415,8 @@ mod tests {
             SynthesisError::CompilerFailure("compile".to_string()),
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap_or_default();
-            let restored: SynthesisError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(v).unwrap();
+            let restored: SynthesisError = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, restored);
         }
     }
@@ -2451,8 +2451,8 @@ mod tests {
             SynthesisOutcome::Partial,
             SynthesisOutcome::Incomplete,
         ] {
-            let json = serde_json::to_string(&v).unwrap_or_default();
-            let restored: SynthesisOutcome = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&v).unwrap();
+            let restored: SynthesisOutcome = serde_json::from_str(&json).unwrap();
             assert_eq!(v, restored);
         }
     }
@@ -2465,8 +2465,8 @@ mod tests {
             SynthesisStrategy::Mutation,
             SynthesisStrategy::TimeBounded,
         ] {
-            let json = serde_json::to_string(&v).unwrap_or_default();
-            let restored: SynthesisStrategy = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&v).unwrap();
+            let restored: SynthesisStrategy = serde_json::from_str(&json).unwrap();
             assert_eq!(v, restored);
         }
     }
@@ -2478,8 +2478,8 @@ mod tests {
             InterferenceKind::Oscillation,
             InterferenceKind::TimescaleConflict,
         ] {
-            let json = serde_json::to_string(&v).unwrap_or_default();
-            let restored: InterferenceKind = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&v).unwrap();
+            let restored: InterferenceKind = serde_json::from_str(&json).unwrap();
             assert_eq!(v, restored);
         }
     }
@@ -2494,8 +2494,8 @@ mod tests {
             MutationKind::RemoveConstraint,
             MutationKind::DuplicateNode,
         ] {
-            let json = serde_json::to_string(&v).unwrap_or_default();
-            let restored: MutationKind = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&v).unwrap();
+            let restored: MutationKind = serde_json::from_str(&json).unwrap();
             assert_eq!(v, restored);
         }
     }
@@ -2532,8 +2532,8 @@ mod tests {
             shared_metrics: vec!["m1".to_string()],
             timescale_separation_millionths: 50_000,
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: ControllerInterferenceEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: ControllerInterferenceEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 

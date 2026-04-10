@@ -1655,24 +1655,24 @@ mod tests {
             )
             .expect("analysis");
 
-        let json = serde_json::to_string(&report).unwrap_or_default();
-        let restored: StaticAnalysisReport = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&report).unwrap();
+        let restored: StaticAnalysisReport = serde_json::from_str(&json).unwrap();
         assert_eq!(report, restored);
     }
 
     #[test]
     fn effect_graph_serde_roundtrip() {
         let graph = branching_graph();
-        let json = serde_json::to_string(&graph).unwrap_or_default();
-        let restored: EffectGraph = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&graph).unwrap();
+        let restored: EffectGraph = serde_json::from_str(&json).unwrap();
         assert_eq!(graph, restored);
     }
 
     #[test]
     fn manifest_intents_serde_roundtrip() {
         let manifest = branching_manifest();
-        let json = serde_json::to_string(&manifest).unwrap_or_default();
-        let restored: ManifestIntents = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&manifest).unwrap();
+        let restored: ManifestIntents = serde_json::from_str(&json).unwrap();
         assert_eq!(manifest, restored);
     }
 
@@ -1696,8 +1696,8 @@ mod tests {
         };
         cache.insert(key, report);
 
-        let json = serde_json::to_string(&cache).unwrap_or_default();
-        let restored: AnalysisCache = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&cache).unwrap();
+        let restored: AnalysisCache = serde_json::from_str(&json).unwrap();
         assert_eq!(cache.len(), restored.len());
     }
 
@@ -1782,8 +1782,8 @@ mod tests {
         ];
 
         for kind in &kinds {
-            let json = serde_json::to_string(kind).unwrap_or_default();
-            let restored: EffectNodeKind = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(kind).unwrap();
+            let restored: EffectNodeKind = serde_json::from_str(&json).unwrap();
             assert_eq!(kind, &restored);
         }
     }
@@ -2060,8 +2060,8 @@ mod tests {
     #[test]
     fn empty_effect_graph_serde_roundtrip() {
         let graph = EffectGraph::new("ext-empty-serde");
-        let json = serde_json::to_string(&graph).unwrap_or_default();
-        let restored: EffectGraph = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&graph).unwrap();
+        let restored: EffectGraph = serde_json::from_str(&json).unwrap();
         assert_eq!(graph, restored);
     }
 

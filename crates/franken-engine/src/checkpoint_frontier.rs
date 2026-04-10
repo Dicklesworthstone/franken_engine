@@ -1314,8 +1314,8 @@ mod tests {
         let genesis = build_genesis(&[sk], "zone-a");
         let state = FrontierState::from_genesis("zone-a", &genesis);
 
-        let json = serde_json::to_string(&state).unwrap_or_default();
-        let restored: FrontierState = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&state).unwrap();
+        let restored: FrontierState = serde_json::from_str(&json).unwrap();
         assert_eq!(state, restored);
     }
 
@@ -1336,8 +1336,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let restored: FrontierError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let restored: FrontierError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
     }
@@ -1352,8 +1352,8 @@ mod tests {
             },
             trace_id: "t-1".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: FrontierEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: FrontierEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 

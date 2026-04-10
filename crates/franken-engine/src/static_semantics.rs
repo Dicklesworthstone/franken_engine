@@ -1288,6 +1288,14 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
             }
             walk_expression(state, inner, span);
         }
+        Expression::Yield { argument, .. } => {
+            if let Some(arg) = argument {
+                walk_expression(state, arg, span);
+            }
+        }
+        Expression::SpreadElement(inner) => {
+            walk_expression(state, inner, span);
+        }
         Expression::Binary { left, right, .. } => {
             walk_expression(state, left, span);
             walk_expression(state, right, span);
@@ -1530,6 +1538,14 @@ fn collect_identifier_refs(expr: &Expression, out: &mut Vec<String>) {
             collect_identifier_refs(property, out);
         }
         Expression::Await(inner) => {
+            collect_identifier_refs(inner, out);
+        }
+        Expression::Yield { argument, .. } => {
+            if let Some(arg) = argument {
+                collect_identifier_refs(arg, out);
+            }
+        }
+        Expression::SpreadElement(inner) => {
             collect_identifier_refs(inner, out);
         }
         Expression::ArrayLiteral(elements) => {

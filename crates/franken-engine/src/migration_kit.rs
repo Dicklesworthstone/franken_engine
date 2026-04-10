@@ -1245,7 +1245,7 @@ pub fn analyze_package(
     api_entries.sort_by(|a, b| a.api_name.cmp(&b.api_name));
     dependency_entries.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let report_bytes = serde_json::to_vec(&(&api_entries, &dependency_entries)).unwrap_or_default();
+    let report_bytes = serde_json::to_vec(&(&api_entries, &dependency_entries)).unwrap();
     let report_content_hash = ContentHash::compute(&report_bytes);
 
     Ok(CompatibilityReport {
@@ -1315,7 +1315,7 @@ pub fn infer_capabilities(
     inferred_capabilities.sort_by_key(|c| std::cmp::Reverse(c.confidence_millionths));
 
     let bytes =
-        serde_json::to_vec(&(&inferred_capabilities, &minimum_capability_set)).unwrap_or_default();
+        serde_json::to_vec(&(&inferred_capabilities, &minimum_capability_set)).unwrap();
     let capability_hash = ContentHash::compute(&bytes);
 
     Ok(CapabilityInferenceResult {
@@ -1436,7 +1436,7 @@ pub fn validate_behavior(
 
     divergences.sort_by_key(|d| d.severity);
 
-    let report_bytes = serde_json::to_vec(&(&passing_count, &divergences)).unwrap_or_default();
+    let report_bytes = serde_json::to_vec(&(&passing_count, &divergences)).unwrap();
     let report_content_hash = ContentHash::compute(&report_bytes);
 
     Ok(BehaviorValidationReport {
@@ -1712,7 +1712,7 @@ pub fn generate_manifest(
         readiness,
         input.epoch.as_u64(),
     ))
-    .unwrap_or_default();
+    .unwrap();
     let manifest_content_hash = ContentHash::compute(&manifest_bytes);
 
     Ok(MigrationManifest {

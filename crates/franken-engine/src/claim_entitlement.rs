@@ -713,7 +713,7 @@ impl ClaimEntitlementContract {
                 let atom_morphisms = target_morphisms
                     .get(atom.atom_id.as_str())
                     .cloned()
-                    .unwrap_or_default();
+                    .unwrap();
 
                 let satisfying_morphisms = atom_morphisms
                     .iter()

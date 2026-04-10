@@ -837,8 +837,8 @@ mod tests {
             ClaimEnvelopeTier::Target,
             ClaimEnvelopeTier::Hypothesis,
         ] {
-            let json = serde_json::to_string(&tier).unwrap_or_default();
-            let restored: ClaimEnvelopeTier = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&tier).unwrap();
+            let restored: ClaimEnvelopeTier = serde_json::from_str(&json).unwrap();
             assert_eq!(restored, tier);
         }
     }
@@ -852,8 +852,8 @@ mod tests {
             ClaimEnvelopeVerdict::DowngradeToHypothesis,
             ClaimEnvelopeVerdict::Forbid,
         ] {
-            let json = serde_json::to_string(&verdict).unwrap_or_default();
-            let restored: ClaimEnvelopeVerdict = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&verdict).unwrap();
+            let restored: ClaimEnvelopeVerdict = serde_json::from_str(&json).unwrap();
             assert_eq!(restored, verdict);
         }
     }
@@ -861,8 +861,8 @@ mod tests {
     #[test]
     fn contract_serde_round_trip() {
         let contract = minimal_contract();
-        let json = serde_json::to_string(&contract).unwrap_or_default();
-        let restored: ClaimEnvelopeContract = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&contract).unwrap();
+        let restored: ClaimEnvelopeContract = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, contract);
     }
 
@@ -870,8 +870,8 @@ mod tests {
     fn scenario_serde_round_trip() {
         let scenario =
             scenario_all_ready(ClaimEnvelopeTier::PublishableUniversal, "universal test");
-        let json = serde_json::to_string(&scenario).unwrap_or_default();
-        let restored: ClaimEnvelopeScenario = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&scenario).unwrap();
+        let restored: ClaimEnvelopeScenario = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, scenario);
     }
 
@@ -1404,8 +1404,8 @@ mod tests {
             contract_policy_id: Some("policy-test".to_string()),
             role: "test role".to_string(),
         };
-        let json = serde_json::to_string(&input).unwrap_or_default();
-        let restored: ContractInput = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&input).unwrap();
+        let restored: ContractInput = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, input);
     }
 
@@ -1422,8 +1422,8 @@ mod tests {
             frontier_gap_artifact: "gap.json".to_string(),
             frontier_gap_bead: "bd-gap".to_string(),
         };
-        let json = serde_json::to_string(&linkage).unwrap_or_default();
-        let restored: BoardLinkage = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&linkage).unwrap();
+        let restored: BoardLinkage = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, linkage);
     }
 
@@ -1435,8 +1435,8 @@ mod tests {
             resulting_class: ClaimEnvelopeTier::Hypothesis,
             rationale: "because".to_string(),
         };
-        let json = serde_json::to_string(&rule).unwrap_or_default();
-        let restored: DowngradeRule = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&rule).unwrap();
+        let restored: DowngradeRule = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, rule);
     }
 
@@ -1449,8 +1449,8 @@ mod tests {
             requires_artifacts: vec!["artifact.json".to_string()],
             rationale: "testing".to_string(),
         };
-        let json = serde_json::to_string(&channel).unwrap_or_default();
-        let restored: ConsumerChannel = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&channel).unwrap();
+        let restored: ConsumerChannel = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, channel);
     }
 
@@ -1464,8 +1464,8 @@ mod tests {
             required_qualifier_terms: vec!["alpha".to_string(), "beta".to_string()],
             allowed_surfaces: vec!["docs".to_string()],
         };
-        let json = serde_json::to_string(&spec).unwrap_or_default();
-        let restored: ClaimClassSpec = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&spec).unwrap();
+        let restored: ClaimClassSpec = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, spec);
     }
 
@@ -1475,8 +1475,8 @@ mod tests {
             id: "RGC-016C".to_string(),
             name: "claim envelope".to_string(),
         };
-        let json = serde_json::to_string(&track).unwrap_or_default();
-        let restored: ContractTrack = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&track).unwrap();
+        let restored: ContractTrack = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, track);
     }
 

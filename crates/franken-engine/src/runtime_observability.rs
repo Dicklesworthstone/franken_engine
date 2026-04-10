@@ -689,7 +689,7 @@ impl RuntimeSecurityObservability {
 pub fn render_security_logs_jsonl(events: &[StructuredSecurityLogEvent]) -> String {
     let mut lines = Vec::with_capacity(events.len());
     for event in events {
-        lines.push(serde_json::to_string(event).unwrap_or_default());
+        lines.push(serde_json::to_string(event).unwrap());
     }
     lines.join("\n")
 }

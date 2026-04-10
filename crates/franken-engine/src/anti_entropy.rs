@@ -1330,8 +1330,8 @@ mod tests {
             object_type: ReconcileObjectType::RevocationEvent,
             epoch: test_epoch(),
         };
-        let json = serde_json::to_string(&id).unwrap_or_default();
-        let restored: ObjectId = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&id).unwrap();
+        let restored: ObjectId = serde_json::from_str(&json).unwrap();
         assert_eq!(id, restored);
     }
 
@@ -1348,8 +1348,8 @@ mod tests {
             event: "reconcile_success".to_string(),
             fallback_triggered: false,
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: ReconcileEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: ReconcileEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 
@@ -1366,8 +1366,8 @@ mod tests {
             ReconcileError::EmptyObjectSet,
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let restored: ReconcileError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let restored: ReconcileError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
     }
@@ -1378,16 +1378,16 @@ mod tests {
         iblt.insert(&make_hash(1));
         iblt.insert(&make_hash(2));
 
-        let json = serde_json::to_string(&iblt).unwrap_or_default();
-        let restored: Iblt = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&iblt).unwrap();
+        let restored: Iblt = serde_json::from_str(&json).unwrap();
         assert_eq!(iblt, restored);
     }
 
     #[test]
     fn reconcile_config_serialization_round_trip() {
         let config = ReconcileConfig::default();
-        let json = serde_json::to_string(&config).unwrap_or_default();
-        let restored: ReconcileConfig = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: ReconcileConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, restored);
     }
 
@@ -1795,8 +1795,8 @@ mod tests {
             },
         ];
         for t in &triggers {
-            let json = serde_json::to_string(t).unwrap_or_default();
-            let restored: FallbackTrigger = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(t).unwrap();
+            let restored: FallbackTrigger = serde_json::from_str(&json).unwrap();
             assert_eq!(*t, restored);
         }
     }
@@ -1814,8 +1814,8 @@ mod tests {
             epoch_id: 1,
             trace_id: "t1".to_string(),
         };
-        let json = serde_json::to_string(&ev).unwrap_or_default();
-        let restored: FallbackEvidence = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&ev).unwrap();
+        let restored: FallbackEvidence = serde_json::from_str(&json).unwrap();
         assert_eq!(ev, restored);
     }
 
@@ -1828,16 +1828,16 @@ mod tests {
             total_in_window: 50,
             epoch_id: 1,
         };
-        let json = serde_json::to_string(&alert).unwrap_or_default();
-        let restored: FallbackRateAlert = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&alert).unwrap();
+        let restored: FallbackRateAlert = serde_json::from_str(&json).unwrap();
         assert_eq!(alert, restored);
     }
 
     #[test]
     fn fallback_config_serialization_round_trip() {
         let config = FallbackConfig::default();
-        let json = serde_json::to_string(&config).unwrap_or_default();
-        let restored: FallbackConfig = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: FallbackConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, restored);
     }
 
@@ -1882,8 +1882,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let restored: ReconcileError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let restored: ReconcileError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
     }
@@ -1915,8 +1915,8 @@ mod tests {
             ReconcileObjectType::EvidenceEntry,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap_or_default();
-            let restored: ReconcileObjectType = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(v).unwrap();
+            let restored: ReconcileObjectType = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, restored);
         }
     }
@@ -1928,8 +1928,8 @@ mod tests {
             objects_to_send: vec![make_hash(3)],
             fallback_triggered: false,
         };
-        let json = serde_json::to_string(&result).unwrap_or_default();
-        let restored: ReconcileResult = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&result).unwrap();
+        let restored: ReconcileResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, restored);
     }
 
@@ -1950,8 +1950,8 @@ mod tests {
                 trace_id: "t1".to_string(),
             },
         };
-        let json = serde_json::to_string(&result).unwrap_or_default();
-        let restored: FallbackResult = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&result).unwrap();
+        let restored: FallbackResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, restored);
     }
 
@@ -2128,8 +2128,8 @@ mod tests {
             key_hash_xor: make_hash(77),
             checksum_xor: 0xDEAD_BEEF,
         };
-        let json = serde_json::to_string(&cell).unwrap_or_default();
-        let restored: IbltCell = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&cell).unwrap();
+        let restored: IbltCell = serde_json::from_str(&json).unwrap();
         assert_eq!(cell, restored);
     }
 

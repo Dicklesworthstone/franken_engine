@@ -899,7 +899,7 @@ impl ActivationLifecycleController {
     pub fn component_version(&self, component_id: &str) -> String {
         self.find_component(component_id)
             .map(|c| c.descriptor.version.clone())
-            .unwrap_or_default()
+            .unwrap()
     }
 
     // -- Internal helpers ---------------------------------------------------

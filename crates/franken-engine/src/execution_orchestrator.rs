@@ -1497,6 +1497,8 @@ impl ExecutionOrchestrator {
             crate::ir_contract::Ir3Instruction::InitBinding { .. } => "init_binding",
             crate::ir_contract::Ir3Instruction::LoadThis { .. } => "load_this",
             crate::ir_contract::Ir3Instruction::CallMethod { .. } => "call_method",
+            &crate::ir_contract::Ir3Instruction::CreateGenerator { .. }
+            | &crate::ir_contract::Ir3Instruction::Yield { .. } => "generator_op",
         }
     }
 
@@ -2756,8 +2758,8 @@ mod tests {
     #[test]
     fn extension_package_empty_metadata_serde() {
         let pkg = simple_package();
-        let json = serde_json::to_string(&pkg).unwrap_or_default();
-        let restored: ExtensionPackage = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&pkg).unwrap();
+        let restored: ExtensionPackage = serde_json::from_str(&json).unwrap();
         assert_eq!(pkg.extension_id, restored.extension_id);
         assert!(restored.metadata.is_empty());
     }

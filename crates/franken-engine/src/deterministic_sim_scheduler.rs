@@ -463,7 +463,7 @@ impl SimScheduler {
         let tick = self.current_tick;
 
         // Take events for this tick (if any).
-        let mut events = self.event_queue.remove(&tick).unwrap_or_default();
+        let mut events = self.event_queue.remove(&tick).unwrap();
 
         // Sort deterministically: by priority rank, then by event ID.
         if self.policy.deterministic_tie_break {

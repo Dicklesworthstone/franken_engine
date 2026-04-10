@@ -823,7 +823,7 @@ impl TranslationValidationGate {
         self.tracked
             .get(optimization_id)
             .map(|t| t.promotions.iter().collect())
-            .unwrap_or_default()
+            .unwrap()
     }
 }
 

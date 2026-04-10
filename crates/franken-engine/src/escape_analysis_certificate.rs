@@ -466,7 +466,7 @@ pub fn analyze_escape(
             invalidation_map
                 .get(site.site_id.as_str())
                 .cloned()
-                .unwrap_or_default()
+                .unwrap()
         };
 
         let abstention = !reasons.is_empty();
@@ -516,13 +516,13 @@ pub fn analyze_escape(
             abstention_count += 1;
         }
 
-        let liveness_json = serde_json::to_string(&liveness).unwrap_or_default();
+        let liveness_json = serde_json::to_string(&liveness).unwrap();
         let hash_input = format!(
             "cert:{}:{}:{}:{}:{}:{}:{}:{}:{}",
             site.site_id,
             escape_state,
             alias_class,
-            serde_json::to_string(&reasons).unwrap_or_default(),
+            serde_json::to_string(&reasons).unwrap(),
             ESCAPE_CERT_SCHEMA_VERSION,
             liveness_json,
             scalar_eligible,

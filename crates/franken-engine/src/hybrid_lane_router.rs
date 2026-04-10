@@ -657,7 +657,7 @@ impl RoutingDecisionTrace {
             &router_schema(),
             canonical.as_bytes(),
         )
-        .unwrap_or_default()
+        .unwrap()
     }
 }
 
@@ -961,7 +961,7 @@ impl HybridLaneRouter {
             &router_schema(),
             canonical.as_bytes(),
         )
-        .unwrap_or_default()
+        .unwrap()
     }
 }
 
@@ -989,7 +989,7 @@ impl RouterSummary {
             &router_schema(),
             canonical.as_bytes(),
         )
-        .unwrap_or_default()
+        .unwrap()
     }
 }
 

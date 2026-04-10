@@ -681,8 +681,8 @@ mod tests {
             TwoPhaseCategory::StateMutation,
             TwoPhaseCategory::EvidenceCommit,
         ] {
-            let json = serde_json::to_string(&cat).unwrap_or_default();
-            let restored: TwoPhaseCategory = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&cat).unwrap();
+            let restored: TwoPhaseCategory = serde_json::from_str(&json).unwrap();
             assert_eq!(cat, restored);
         }
     }
@@ -714,8 +714,8 @@ mod tests {
             OperationPhase::Aborted,
             OperationPhase::Leaked,
         ] {
-            let json = serde_json::to_string(&phase).unwrap_or_default();
-            let restored: OperationPhase = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&phase).unwrap();
+            let restored: OperationPhase = serde_json::from_str(&json).unwrap();
             assert_eq!(phase, restored);
         }
     }
@@ -757,8 +757,8 @@ mod tests {
             cell_id: "c".to_string(),
             current_state: RegionState::Closed,
         };
-        let json = serde_json::to_string(&err).unwrap_or_default();
-        let restored: ObligationIntegrationError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&err).unwrap();
+        let restored: ObligationIntegrationError = serde_json::from_str(&json).unwrap();
         assert_eq!(err, restored);
     }
 
@@ -1311,8 +1311,8 @@ mod tests {
             trace_id: "t".to_string(),
             phase: OperationPhase::Phase1Active,
         };
-        let json = serde_json::to_string(&op).unwrap_or_default();
-        let restored: TwoPhaseOperation = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&op).unwrap();
+        let restored: TwoPhaseOperation = serde_json::from_str(&json).unwrap();
         assert_eq!(op, restored);
     }
 
@@ -1329,8 +1329,8 @@ mod tests {
             component: "obligation_integration".to_string(),
             phase: OperationPhase::Phase1Active,
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: ObligationEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: ObligationEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 
@@ -1343,8 +1343,8 @@ mod tests {
             trace_id: "t".to_string(),
             description: "leaked buffer".to_string(),
         };
-        let json = serde_json::to_string(&leak).unwrap_or_default();
-        let restored: LeakRecord = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&leak).unwrap();
+        let restored: LeakRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(leak, restored);
     }
 
@@ -1356,8 +1356,8 @@ mod tests {
             aborted: 1,
             leaked: 1,
         };
-        let json = serde_json::to_string(&stats).unwrap_or_default();
-        let restored: CategoryStats = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&stats).unwrap();
+        let restored: CategoryStats = serde_json::from_str(&json).unwrap();
         assert_eq!(stats, restored);
     }
 
@@ -1636,8 +1636,8 @@ mod tests {
     #[test]
     fn leak_policy_serde_roundtrip() {
         for policy in [LeakPolicy::Lab, LeakPolicy::Production] {
-            let json = serde_json::to_string(&policy).unwrap_or_default();
-            let restored: LeakPolicy = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&policy).unwrap();
+            let restored: LeakPolicy = serde_json::from_str(&json).unwrap();
             assert_eq!(policy, restored);
         }
     }

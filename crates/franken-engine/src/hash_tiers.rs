@@ -679,24 +679,24 @@ mod tests {
     #[test]
     fn integrity_hash_serialization_round_trip() {
         let h = IntegrityHash::compute(b"test");
-        let json = serde_json::to_string(&h).unwrap_or_default();
-        let restored: IntegrityHash = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&h).unwrap();
+        let restored: IntegrityHash = serde_json::from_str(&json).unwrap();
         assert_eq!(h, restored);
     }
 
     #[test]
     fn content_hash_serialization_round_trip() {
         let h = ContentHash::compute(b"test");
-        let json = serde_json::to_string(&h).unwrap_or_default();
-        let restored: ContentHash = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&h).unwrap();
+        let restored: ContentHash = serde_json::from_str(&json).unwrap();
         assert_eq!(h, restored);
     }
 
     #[test]
     fn authenticity_hash_serialization_round_trip() {
         let h = AuthenticityHash::compute_keyed(b"key", b"data");
-        let json = serde_json::to_string(&h).unwrap_or_default();
-        let restored: AuthenticityHash = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&h).unwrap();
+        let restored: AuthenticityHash = serde_json::from_str(&json).unwrap();
         assert_eq!(h, restored);
     }
 
@@ -709,8 +709,8 @@ mod tests {
             component: "evidence_ledger".to_string(),
             trace_id: "trace-123".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: HashEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: HashEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 
@@ -721,8 +721,8 @@ mod tests {
             HashTier::Content,
             HashTier::Authenticity,
         ] {
-            let json = serde_json::to_string(&tier).unwrap_or_default();
-            let restored: HashTier = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&tier).unwrap();
+            let restored: HashTier = serde_json::from_str(&json).unwrap();
             assert_eq!(tier, restored);
         }
     }
@@ -734,8 +734,8 @@ mod tests {
             HashAlgorithm::SipInspiredCr,
             HashAlgorithm::SipInspiredKeyed,
         ] {
-            let json = serde_json::to_string(&alg).unwrap_or_default();
-            let restored: HashAlgorithm = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&alg).unwrap();
+            let restored: HashAlgorithm = serde_json::from_str(&json).unwrap();
             assert_eq!(alg, restored);
         }
     }
@@ -937,7 +937,7 @@ mod tests {
             component: "test_comp".to_string(),
             trace_id: "t-001".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"tier\""), "JSON must contain 'tier' field");
     }
 
@@ -950,7 +950,7 @@ mod tests {
             component: "algo_check".to_string(),
             trace_id: "t-002".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
         assert!(
             json.contains("\"algorithm\""),
             "JSON must contain 'algorithm' field"
@@ -966,7 +966,7 @@ mod tests {
             component: "my_component".to_string(),
             trace_id: "trace-xyz".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
         assert!(
             json.contains("\"trace_id\""),
             "JSON must contain 'trace_id' field"
@@ -992,8 +992,8 @@ mod tests {
                 component: format!("roundtrip_{tier}"),
                 trace_id: "rt-000".to_string(),
             };
-            let json = serde_json::to_string(&event).unwrap_or_default();
-            let restored: HashEvent = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&event).unwrap();
+            let restored: HashEvent = serde_json::from_str(&json).unwrap();
             assert_eq!(event, restored);
         }
     }
@@ -1074,7 +1074,7 @@ mod tests {
     #[test]
     fn integrity_hash_json_format_is_number() {
         let h = IntegrityHash(42);
-        let json = serde_json::to_string(&h).unwrap_or_default();
+        let json = serde_json::to_string(&h).unwrap();
         // IntegrityHash(u64) serializes as a number.
         assert_eq!(json, "42");
     }
@@ -1188,7 +1188,7 @@ mod tests {
             component: "len_check".to_string(),
             trace_id: "t-len".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"input_len\""));
         assert!(json.contains("12345"));
     }

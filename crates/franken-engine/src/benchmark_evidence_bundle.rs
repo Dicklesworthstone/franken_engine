@@ -587,7 +587,7 @@ impl EvidenceBundle {
         }
         hasher.update(
             serde_json::to_string(&self.status)
-                .unwrap_or_default()
+                .unwrap()
                 .as_bytes(),
         );
         if let Some(ref env) = self.reference_environment {

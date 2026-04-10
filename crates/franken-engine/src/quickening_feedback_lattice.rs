@@ -244,7 +244,7 @@ impl Default for QuickeningPolicy {
 
 impl QuickeningPolicy {
     pub fn policy_hash(&self) -> String {
-        let payload = serde_json::to_vec(self).unwrap_or_default();
+        let payload = serde_json::to_vec(self).unwrap();
         let digest = Sha256::digest(payload);
         hex::encode(digest)
     }
@@ -417,7 +417,7 @@ impl SuperInstructionPattern {
     }
 
     pub fn pattern_hash(&self) -> String {
-        let payload = serde_json::to_vec(self).unwrap_or_default();
+        let payload = serde_json::to_vec(self).unwrap();
         let digest = Sha256::digest(payload);
         hex::encode(digest)
     }
@@ -461,7 +461,7 @@ impl SuperInstructionCatalog {
     }
 
     fn compute_hash(patterns: &[SuperInstructionPattern]) -> String {
-        let payload = serde_json::to_vec(patterns).unwrap_or_default();
+        let payload = serde_json::to_vec(patterns).unwrap();
         let digest = Sha256::digest(payload);
         hex::encode(digest)
     }
@@ -679,7 +679,7 @@ impl QuickeningProfile {
 
     /// Profile content hash for deterministic replay.
     pub fn profile_hash(&self) -> String {
-        let payload = serde_json::to_vec(&self).unwrap_or_default();
+        let payload = serde_json::to_vec(&self).unwrap();
         let digest = Sha256::digest(payload);
         hex::encode(digest)
     }
@@ -822,7 +822,7 @@ impl QuickeningDecision {
             summary,
             decision_hash: String::new(),
         };
-        let payload = serde_json::to_vec(&decision).unwrap_or_default();
+        let payload = serde_json::to_vec(&decision).unwrap();
         let digest = Sha256::digest(payload);
         decision.decision_hash = hex::encode(digest);
         decision

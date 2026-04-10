@@ -162,7 +162,7 @@ impl SchedulerAutomaton {
             &invariant_schema(),
             canonical.as_bytes(),
         )
-        .unwrap_or_default()
+        .unwrap()
     }
 }
 
@@ -363,7 +363,7 @@ impl VerificationResult {
             &invariant_schema(),
             canonical.as_bytes(),
         )
-        .unwrap_or_default()
+        .unwrap()
     }
 }
 
@@ -432,7 +432,7 @@ impl RegressionFixture {
             &invariant_schema(),
             canonical.as_bytes(),
         )
-        .unwrap_or_default()
+        .unwrap()
     }
 }
 
@@ -546,7 +546,7 @@ impl CompositionCheck {
             &invariant_schema(),
             canonical.as_bytes(),
         )
-        .unwrap_or_default()
+        .unwrap()
     }
 }
 
@@ -645,7 +645,7 @@ impl InvariantRegistry {
             &invariant_schema(),
             canonical.as_bytes(),
         )
-        .unwrap_or_default()
+        .unwrap()
     }
 }
 

@@ -975,8 +975,8 @@ mod tests {
         let obs = shipped_observation("serde_test")
             .with_detail("detail")
             .with_minimized_repro_command("cmd");
-        let json = serde_json::to_string(&obs).unwrap_or_default();
-        let back: BehaviorEquivalenceObservation = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&obs).unwrap();
+        let back: BehaviorEquivalenceObservation = serde_json::from_str(&json).unwrap();
         assert_eq!(obs, back);
     }
 
@@ -988,8 +988,8 @@ mod tests {
             POLICY_ID,
             &[shipped_observation("w1").with_output_equivalence(false)],
         );
-        let json = serde_json::to_string(&report).unwrap_or_default();
-        let back: BehaviorEquivalenceReport = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&report).unwrap();
+        let back: BehaviorEquivalenceReport = serde_json::from_str(&json).unwrap();
         assert_eq!(report, back);
     }
 
@@ -1241,8 +1241,8 @@ mod tests {
     #[test]
     fn evidence_surface_serde_roundtrip() {
         for surface in [EvidenceSurface::ShippedPath, EvidenceSurface::LibraryOnly] {
-            let json = serde_json::to_string(&surface).unwrap_or_default();
-            let back: EvidenceSurface = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&surface).unwrap();
+            let back: EvidenceSurface = serde_json::from_str(&json).unwrap();
             assert_eq!(surface, back);
         }
     }
@@ -1258,8 +1258,8 @@ mod tests {
             BehaviorEquivalenceClass::ShippedPathDrift,
         ];
         for variant in variants {
-            let json = serde_json::to_string(&variant).unwrap_or_default();
-            let back: BehaviorEquivalenceClass = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&variant).unwrap();
+            let back: BehaviorEquivalenceClass = serde_json::from_str(&json).unwrap();
             assert_eq!(variant, back);
         }
     }
@@ -1271,8 +1271,8 @@ mod tests {
             PublicationDisposition::NonPublicationEvidence,
             PublicationDisposition::Blocked,
         ] {
-            let json = serde_json::to_string(&disp).unwrap_or_default();
-            let back: PublicationDisposition = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&disp).unwrap();
+            let back: PublicationDisposition = serde_json::from_str(&json).unwrap();
             assert_eq!(disp, back);
         }
     }
@@ -1289,8 +1289,8 @@ mod tests {
             OwnerRouteHint::DocsContract,
         ];
         for hint in hints {
-            let json = serde_json::to_string(&hint).unwrap_or_default();
-            let back: OwnerRouteHint = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&hint).unwrap();
+            let back: OwnerRouteHint = serde_json::from_str(&json).unwrap();
             assert_eq!(hint, back);
         }
     }
@@ -1300,8 +1300,8 @@ mod tests {
         let obs = shipped_observation("w1").with_output_equivalence(false);
         let record = build_record(&obs);
         assert!(record.owner_route.is_some());
-        let json = serde_json::to_string(&record).unwrap_or_default();
-        let back: BenchmarkParityVerdictRecord = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&record).unwrap();
+        let back: BenchmarkParityVerdictRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(record, back);
     }
 
@@ -1310,16 +1310,16 @@ mod tests {
         let obs = shipped_observation("w1");
         let record = build_record(&obs);
         assert!(record.owner_route.is_none());
-        let json = serde_json::to_string(&record).unwrap_or_default();
-        let back: BenchmarkParityVerdictRecord = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&record).unwrap();
+        let back: BenchmarkParityVerdictRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(record, back);
     }
 
     #[test]
     fn observation_serde_roundtrip_without_minimized_repro() {
         let obs = shipped_observation("w1").with_detail("no repro");
-        let json = serde_json::to_string(&obs).unwrap_or_default();
-        let back: BehaviorEquivalenceObservation = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&obs).unwrap();
+        let back: BehaviorEquivalenceObservation = serde_json::from_str(&json).unwrap();
         assert_eq!(obs, back);
         assert!(back.minimized_repro_command.is_none());
     }
@@ -1338,7 +1338,7 @@ mod tests {
             "detail": "",
             "owner_hint": "runtime_semantics"
         }"#;
-        let obs: BehaviorEquivalenceObservation = serde_json::from_str(json).unwrap_or_default();
+        let obs: BehaviorEquivalenceObservation = serde_json::from_str(json).unwrap();
         assert!(obs.minimized_repro_command.is_none());
     }
 
@@ -1620,8 +1620,8 @@ mod tests {
     fn observation_with_unicode_detail() {
         let obs = shipped_observation("unicode_test").with_detail("divergence \u{1F4A5} detected");
         let record = build_record(&obs);
-        let json = serde_json::to_string(&record).unwrap_or_default();
-        let back: BenchmarkParityVerdictRecord = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&record).unwrap();
+        let back: BenchmarkParityVerdictRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(back.detail, "divergence \u{1F4A5} detected");
     }
 

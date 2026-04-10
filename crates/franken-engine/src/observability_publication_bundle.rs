@@ -1008,32 +1008,22 @@ fn build_claim_delta_report(
     let deltas = ObservabilityWorkloadClass::ALL
         .into_iter()
         .flat_map(|workload| {
-            let off = surfaces
-                .iter()
-                .find(|surface| {
-                    surface.workload_class == workload && surface.mode == ObservabilityMode::Off
-                })
-                .expect("off surface");
-            let budgeted = surfaces
-                .iter()
-                .find(|surface| {
-                    surface.workload_class == workload
-                        && surface.mode == ObservabilityMode::Budgeted
-                })
-                .expect("budgeted surface");
-            let exact_shadow = surfaces
-                .iter()
-                .find(|surface| {
-                    surface.workload_class == workload
-                        && surface.mode == ObservabilityMode::ExactShadow
-                })
-                .expect("exact-shadow surface");
+            let off = surfaces.iter().find(|surface| {
+                surface.workload_class == workload && surface.mode == ObservabilityMode::Off
+            })?;
+            let budgeted = surfaces.iter().find(|surface| {
+                surface.workload_class == workload && surface.mode == ObservabilityMode::Budgeted
+            })?;
+            let exact_shadow = surfaces.iter().find(|surface| {
+                surface.workload_class == workload && surface.mode == ObservabilityMode::ExactShadow
+            })?;
 
-            [
+            Some([
                 build_claim_delta(off, budgeted),
                 build_claim_delta(budgeted, exact_shadow),
-            ]
+            ])
         })
+        .flatten()
         .collect::<Vec<_>>();
 
     ObservabilityClaimDeltaReportArtifact {
@@ -1272,23 +1262,23 @@ fn build_support_bundle_attestation(
         quality_report_hash: artifact_hashes
             .get(OBSERVABILITY_BUDGET_SENTINEL_REPORT_FILE)
             .cloned()
-            .unwrap_or_default(),
+            .unwrap(),
         supremacy_matrix_hash: artifact_hashes
             .get(OBSERVABILITY_ON_SUPREMACY_MATRIX_FILE)
             .cloned()
-            .unwrap_or_default(),
+            .unwrap(),
         claim_delta_hash: artifact_hashes
             .get(OBSERVABILITY_CLAIM_DELTA_REPORT_FILE)
             .cloned()
-            .unwrap_or_default(),
+            .unwrap(),
         demotion_receipts_hash: artifact_hashes
             .get(TELEMETRY_DEMOTION_RECEIPTS_FILE)
             .cloned()
-            .unwrap_or_default(),
+            .unwrap(),
         publication_policy_hash: artifact_hashes
             .get(OBSERVABILITY_PUBLICATION_POLICY_FILE)
             .cloned()
-            .unwrap_or_default(),
+            .unwrap(),
         quality_overall_regime: quality_bundle.sentinel_report.overall_regime.to_string(),
         hot_path_overall_mode: hot_path_summary.overall_mode.clone(),
         suppressed_claim_count,

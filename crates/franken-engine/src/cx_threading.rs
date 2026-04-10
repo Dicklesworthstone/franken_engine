@@ -1671,8 +1671,8 @@ mod tests {
             budget_remaining_ms: 99,
             error_code: None,
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let deser: CxThreadedEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let deser: CxThreadedEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, deser);
     }
 
@@ -1685,8 +1685,8 @@ mod tests {
             budget_consumed_ms: 1,
             sequence_number: 5,
         };
-        let json = serde_json::to_string(&receipt).unwrap_or_default();
-        let deser: HostcallReceipt = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&receipt).unwrap();
+        let deser: HostcallReceipt = serde_json::from_str(&json).unwrap();
         assert_eq!(receipt, deser);
     }
 
@@ -1699,8 +1699,8 @@ mod tests {
             budget_consumed_ms: 3,
             sequence_number: 2,
         };
-        let json = serde_json::to_string(&receipt).unwrap_or_default();
-        let deser: LifecycleReceipt = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&receipt).unwrap();
+        let deser: LifecycleReceipt = serde_json::from_str(&json).unwrap();
         assert_eq!(receipt, deser);
     }
 
@@ -1717,8 +1717,8 @@ mod tests {
             final_lifecycle_phase: LifecyclePhase::Running,
             events: vec![],
         };
-        let json = serde_json::to_string(&log).unwrap_or_default();
-        let deser: EffectAuditLog = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&log).unwrap();
+        let deser: EffectAuditLog = serde_json::from_str(&json).unwrap();
         assert_eq!(log, deser);
     }
 
@@ -1752,8 +1752,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let deser: CxThreadingError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let deser: CxThreadingError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, deser);
         }
     }

@@ -479,7 +479,7 @@ pub fn build_plas_benchmark_bundle(
 ) -> Result<PlasBenchmarkBundleDecision, PlasBenchmarkBundleError> {
     request.validate()?;
 
-    let thresholds = request.thresholds.clone().unwrap_or_default();
+    let thresholds = request.thresholds.clone().unwrap();
     thresholds.validate()?;
 
     let mut events = vec![make_event(

@@ -2127,7 +2127,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
     fs::create_dir_all(parent)?;
 
-    let mut tmp_name = path.file_name().unwrap_or_default().to_owned();
+    let mut tmp_name = path.file_name().unwrap().to_owned();
     tmp_name.push(".tmp");
     let tmp = parent.join(tmp_name);
     fs::write(&tmp, bytes)?;

@@ -35,18 +35,18 @@ const GA_EVIDENCE_PACKAGE_SCHEMA_VERSION: &str =
 const GA_EVIDENCE_PACKAGE_FAILURE_CODE: &str = "FE-RUNTIME-DIAGNOSTICS-GA-0001";
 
 #[track_caller]
-fn serialize_json_value<T: ?Sized + Serialize>(value: &T, context: &str) -> Value {
-    serde_json::to_value(value).unwrap_or_else(|error| panic!("{context}: {error}"))
+fn serialize_json_value<T: ?Sized + Serialize>(value: &T, _context: &str) -> Value {
+    serde_json::to_value(value).unwrap_or(Value::Null)
 }
 
 #[track_caller]
-fn serialize_json_string<T: ?Sized + Serialize>(value: &T, context: &str) -> String {
-    serde_json::to_string(value).unwrap_or_else(|error| panic!("{context}: {error}"))
+fn serialize_json_string<T: ?Sized + Serialize>(value: &T, _context: &str) -> String {
+    serde_json::to_string(value).unwrap()
 }
 
 #[track_caller]
-fn serialize_pretty_json_string<T: ?Sized + Serialize>(value: &T, context: &str) -> String {
-    serde_json::to_string_pretty(value).unwrap_or_else(|error| panic!("{context}: {error}"))
+fn serialize_pretty_json_string<T: ?Sized + Serialize>(value: &T, _context: &str) -> String {
+    serde_json::to_string_pretty(value).unwrap()
 }
 
 /// Stable log envelope required by plan acceptance criteria.

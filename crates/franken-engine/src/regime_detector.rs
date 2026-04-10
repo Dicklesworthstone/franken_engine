@@ -863,8 +863,8 @@ mod tests {
             Regime::Recovery,
         ];
         for regime in &regimes {
-            let json = serde_json::to_string(regime).unwrap_or_default();
-            let restored: Regime = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(regime).unwrap();
+            let restored: Regime = serde_json::from_str(&json).unwrap();
             assert_eq!(*regime, restored);
         }
     }
@@ -880,8 +880,8 @@ mod tests {
             change_point_index: 42,
             epoch: SecurityEpoch::from_raw(3),
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: RegimeChangeEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: RegimeChangeEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 
@@ -896,8 +896,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let restored: DetectorError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let restored: DetectorError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
     }
@@ -905,8 +905,8 @@ mod tests {
     #[test]
     fn normal_stats_serialization_round_trip() {
         let stats = NormalStats::default_prior();
-        let json = serde_json::to_string(&stats).unwrap_or_default();
-        let restored: NormalStats = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&stats).unwrap();
+        let restored: NormalStats = serde_json::from_str(&json).unwrap();
         assert_eq!(stats, restored);
     }
 
@@ -930,8 +930,8 @@ mod tests {
     #[test]
     fn constant_hazard_serde_roundtrip() {
         let h = ConstantHazard { lambda: 42 };
-        let json = serde_json::to_string(&h).unwrap_or_default();
-        let restored: ConstantHazard = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&h).unwrap();
+        let restored: ConstantHazard = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.lambda, 42);
     }
 
@@ -969,17 +969,17 @@ mod tests {
     #[test]
     fn regime_serde_format() {
         // Verify the JSON representation uses quoted enum names
-        let json = serde_json::to_string(&Regime::Normal).unwrap_or_default();
+        let json = serde_json::to_string(&Regime::Normal).unwrap();
         assert_eq!(json, "\"Normal\"");
-        let json = serde_json::to_string(&Regime::Attack).unwrap_or_default();
+        let json = serde_json::to_string(&Regime::Attack).unwrap();
         assert_eq!(json, "\"Attack\"");
     }
 
     #[test]
     fn classifier_serialization_round_trip() {
         let c = RegimeClassifier::default();
-        let json = serde_json::to_string(&c).unwrap_or_default();
-        let restored: RegimeClassifier = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&c).unwrap();
+        let restored: RegimeClassifier = serde_json::from_str(&json).unwrap();
         assert_eq!(c, restored);
     }
 
@@ -1042,8 +1042,8 @@ mod tests {
     #[test]
     fn detector_config_serde_roundtrip() {
         let config = test_config("hostcall_rate");
-        let json = serde_json::to_string(&config).unwrap_or_default();
-        let restored: DetectorConfig = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: DetectorConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.detector_id, config.detector_id);
         assert_eq!(restored.metric_stream, config.metric_stream);
         assert_eq!(restored.max_run_length, config.max_run_length);

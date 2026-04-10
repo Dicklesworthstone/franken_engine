@@ -1128,8 +1128,8 @@ fn run_single_specimen(specimen: &SignatureSpecimen) -> SignatureSpecimenEvidenc
         "{}:{}:{}:{}",
         specimen.specimen_id,
         verdict as u8,
-        serde_json::to_string(&signature_valid).unwrap_or_default(),
-        serde_json::to_string(&classified_regime).unwrap_or_default(),
+        serde_json::to_string(&signature_valid).unwrap(),
+        serde_json::to_string(&classified_regime).unwrap(),
     );
 
     SignatureSpecimenEvidence {

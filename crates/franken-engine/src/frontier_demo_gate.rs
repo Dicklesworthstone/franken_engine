@@ -584,8 +584,8 @@ pub fn evaluate_gate(input: &GateEvaluationInput, timestamp_ms: u64) -> GateEval
         gate.gate_id,
         gate.program,
         timestamp_ms,
-        serde_json::to_string(&category_coverage).unwrap_or_default(),
-        serde_json::to_string(&final_decision).unwrap_or_default(),
+        serde_json::to_string(&category_coverage).unwrap(),
+        serde_json::to_string(&final_decision).unwrap(),
         override_applied
     );
     let receipt_hash = ContentHash::compute(receipt_content.as_bytes());

@@ -1,0 +1,148 @@
+--- crates/franken-engine/src/control_plane_mock_inventory.rs
++++ crates/franken-engine/src/control_plane_mock_inventory.rs
+@@ -582,10 +589,29 @@ pub struct ProductionMockSeamMatrix {
+     pub architectural_issues: Vec<ArchitecturalIssue>,
+ }
+ 
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
++pub struct ControlPlaneMockInventorySourceDerivationReport {
++    pub schema_version: String,
++    pub component: String,
++    pub bead_id: String,
++    pub policy_id: String,
++    pub workspace_root: String,
++    pub scan_root: String,
++    pub scanned_file_count: u64,
++    pub derived_production_occurrence_count: u64,
++    pub curated_test_only_occurrence_count: u64,
++    pub architectural_issue_count: u64,
++    pub excluded_files: Vec<String>,
++    pub production_violations: Vec<AmbientMockGuardViolation>,
++    pub derived_occurrences: Vec<SeamOccurrence>,
++    pub architectural_issues: Vec<ArchitecturalIssue>,
++}
++
+ #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+ pub struct ControlPlaneMockInventoryArtifactPaths {
+     pub asupersync_residual_mock_inventory: String,
+     pub production_mock_seam_matrix: String,
++    pub source_derivation_report: String,
+     pub trace_ids: String,
+     pub run_manifest: String,
+     pub events_jsonl: String,
+@@ -1381,6 +1549,8 @@ pub fn write_control_plane_mock_inventory_bundle_in_root(
+             asupersync_residual_mock_inventory: "asupersync_residual_mock_inventory.json"
+                 .to_string(),
+             production_mock_seam_matrix: "production_mock_seam_matrix.json".to_string(),
++            source_derivation_report:
++                "control_plane_mock_inventory_source_derivation_report.json".to_string(),
+             trace_ids: "trace_ids.json".to_string(),
+             run_manifest: "run_manifest.json".to_string(),
+             events_jsonl: "events.jsonl".to_string(),
+@@ -3886,8 +4058,8 @@ mod tests {
+     #[test]
+     fn canonical_inventory_has_must_fix() {
+         let inv = build_canonical_inventory();
+-        assert!(inv.has_must_fix());
+-        assert!(inv.summary.must_fix_count >= 5);
++        assert!(!inv.has_must_fix());
++        assert_eq!(inv.summary.must_fix_count, 0);
+     }
+ 
+     #[test]
+@@ -3899,19 +4071,14 @@ mod tests {
+     #[test]
+     fn canonical_inventory_has_architectural_issues() {
+         let inv = build_canonical_inventory();
+-        assert_eq!(inv.summary.architectural_issue_count, 2);
++        assert_eq!(inv.summary.architectural_issue_count, 1);
+     }
+ 
+     #[test]
+     fn canonical_inventory_orchestrator_must_fix() {
+         let inv = build_canonical_inventory();
+         let orch_items = inv.for_file("crates/franken-engine/src/execution_orchestrator.rs");
+-        assert!(!orch_items.is_empty());
+-        assert!(
+-            orch_items
+-                .iter()
+-                .all(|o| o.classification == SeamClassification::MustFixProduction)
+-        );
++        assert!(orch_items.is_empty());
+     }
+ 
+     #[test]
+@@ -3969,7 +4136,7 @@ mod tests {
+ 
+     #[test]
+     fn write_control_plane_mock_inventory_bundle_emits_expected_artifacts() {
+-        let root = unique_temp_dir("control-plane-mock-inventory-bundle-root");
++        let root = repo_root();
+         let out_dir = unique_temp_dir("control-plane-mock-inventory-bundle-out");
+         let commands = vec![
+             "rch exec -- cargo run -p frankenengine-engine --bin franken_control_plane_mock_inventory -- --out-dir /tmp/out"
+@@ -3986,6 +4153,7 @@ mod tests {
+         );
+         assert!(artifacts.inventory_path.exists());
+         assert!(artifacts.production_mock_seam_matrix_path.exists());
++        assert!(artifacts.source_derivation_report_path.exists());
+         assert!(artifacts.trace_ids_path.exists());
+         assert!(artifacts.run_manifest_path.exists());
+         assert!(artifacts.events_path.exists());
+@@ -4120,21 +4306,51 @@ mod tests {
+     fn inventory_by_kind_breakdown() {
+         let inv = build_canonical_inventory();
+         assert!(inv.count_by_kind(SeamKind::MockContext) > 0);
+-        assert!(inv.count_by_kind(SeamKind::MockBudget) > 0);
++        assert_eq!(inv.count_by_kind(SeamKind::MockBudget), 0);
++        assert_eq!(
++            inv.count_by_kind(SeamKind::MockContext),
++            inv.summary.total_occurrences
++        );
+     }
+ 
+     #[test]
+     fn inventory_affected_files_count() {
+         let inv = build_canonical_inventory();
+-        // At least 14 distinct files (1 production + 13 test)
+-        assert!(inv.summary.affected_files >= 14);
++        // Curated test-only occurrences currently span 13 source files.
++        assert!(inv.summary.affected_files >= 13);
+     }
+ 
+     #[test]
+     fn inventory_must_fix_files_count() {
+         let inv = build_canonical_inventory();
+-        // Only execution_orchestrator.rs has must-fix items
+-        assert_eq!(inv.summary.must_fix_files, 1);
++        assert_eq!(inv.summary.must_fix_files, 0);
++    }
++
++    #[test]
++    fn source_derivation_report_matches_inventory_counts() {
++        let derivation =
++            derive_inventory_state_in_root(&repo_root()).expect("derivation should succeed");
++
++        assert_eq!(
++            derivation
++                .source_derivation_report
++                .derived_production_occurrence_count,
++            derivation.inventory.summary.must_fix_count as u64
++        );
++        assert_eq!(
++            derivation
++                .source_derivation_report
++                .curated_test_only_occurrence_count,
++            derivation.inventory.summary.test_only_count as u64
++        );
++        assert_eq!(
++            derivation.source_derivation_report.architectural_issue_count,
++            derivation.inventory.summary.architectural_issue_count as u64
++        );
++        assert_eq!(
++            derivation.source_derivation_report.excluded_files,
++            vec!["crates/franken-engine/src/control_plane_mock_inventory.rs".to_string()]
++        );
+     }
+ 
+     #[test]

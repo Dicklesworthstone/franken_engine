@@ -413,7 +413,7 @@ fn validate_bundle_contract(
     if env_path.is_file() {
         match load_json_path::<serde_json::Value>(&env_path, "benchmark bundle env.json") {
             Ok(value) => {
-                let env_obj = value.as_object().cloned().unwrap_or_default();
+                let env_obj = value.as_object().cloned().unwrap();
                 let env_ok = !env_obj.is_empty()
                     && env_obj.contains_key("toolchain")
                     && env_obj.contains_key("os")

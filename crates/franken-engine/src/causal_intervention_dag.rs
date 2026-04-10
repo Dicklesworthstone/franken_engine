@@ -329,7 +329,7 @@ impl CausalDagBuilder {
         }
 
         // Compute structure hash
-        let hash_input = serde_json::to_vec(&(&self.variables, &self.edges)).unwrap_or_default();
+        let hash_input = serde_json::to_vec(&(&self.variables, &self.edges)).unwrap();
         let structure_hash = ContentHash::compute(&hash_input);
 
         Ok(CausalDag {
@@ -542,7 +542,7 @@ impl CausalDag {
     #[allow(clippy::collapsible_if)]
     pub fn backdoor_adjustment(&self, treatment: VariableId, outcome: VariableId) -> AdjustmentSet {
         // Get parents of treatment (potential confounders)
-        let treatment_parents = self.parents.get(&treatment).cloned().unwrap_or_default();
+        let treatment_parents = self.parents.get(&treatment).cloned().unwrap();
 
         // Get descendants of treatment (cannot be in adjustment set)
         let treatment_descendants = self.descendants(treatment);
@@ -610,7 +610,7 @@ impl CausalDag {
         treatment: VariableId,
         outcome: VariableId,
     ) -> Option<VariableId> {
-        let treatment_children = self.children.get(&treatment).cloned().unwrap_or_default();
+        let treatment_children = self.children.get(&treatment).cloned().unwrap();
 
         for &candidate in &treatment_children {
             // Must be on the path to outcome
@@ -631,7 +631,7 @@ impl CausalDag {
             }
 
             // No direct path from confounders to M that bypasses T
-            let m_parents = self.parents.get(&candidate).cloned().unwrap_or_default();
+            let m_parents = self.parents.get(&candidate).cloned().unwrap();
             let all_m_parents_from_treatment = m_parents
                 .iter()
                 .all(|&p| p == treatment || self.has_path(treatment, p));
@@ -786,7 +786,7 @@ impl CausalDag {
             front_door_mediator,
             instrument,
         ))
-        .unwrap_or_default();
+        .unwrap();
 
         IdentifiabilityCertificate {
             schema_version: CAUSAL_DAG_SCHEMA_VERSION.to_string(),
@@ -809,7 +809,7 @@ impl CausalDag {
         outcome: VariableId,
         reasons: Vec<UnidentifiableReason>,
     ) -> IdentifiabilityCertificate {
-        let cert_data = serde_json::to_vec(&(treatment, outcome, &reasons)).unwrap_or_default();
+        let cert_data = serde_json::to_vec(&(treatment, outcome, &reasons)).unwrap();
 
         IdentifiabilityCertificate {
             schema_version: CAUSAL_DAG_SCHEMA_VERSION.to_string(),
@@ -1120,7 +1120,7 @@ pub fn run_causal_dag_evidence() -> CausalDagEvidenceManifest {
     let id_count = certificates.iter().filter(|c| c.is_identifiable).count() as u32;
     let unid_count = certificates.iter().filter(|c| !c.is_identifiable).count() as u32;
 
-    let hash_data = serde_json::to_vec(&certificates).unwrap_or_default();
+    let hash_data = serde_json::to_vec(&certificates).unwrap();
 
     CausalDagEvidenceManifest {
         schema_version: CAUSAL_DAG_SCHEMA_VERSION.to_string(),

@@ -748,7 +748,7 @@ fn canonical_event_signature(event: &FrxTraceEvent) -> FrxTraceEventSignature {
 
 fn canonicalize_token(value: &str) -> String {
     let trimmed = value.trim().to_ascii_lowercase();
-    let first_segment = trimmed.split(':').next().unwrap_or_default();
+    let first_segment = trimmed.split(':').next().unwrap();
 
     let mut normalized = String::with_capacity(first_segment.len());
     let mut previous_underscore = false;

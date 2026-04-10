@@ -518,7 +518,7 @@ pub fn build_asupersync_contract_matrix_with_generated_at(
         .find(|release| release.surface == AsupersyncSurface::KernelContext)
         .map(|release| release.release_id.clone())
         .or_else(|| releases.first().map(|release| release.release_id.clone()))
-        .unwrap_or_default();
+        .unwrap();
     let release_index = release_index(&releases);
 
     let compatibility_cells = vec![

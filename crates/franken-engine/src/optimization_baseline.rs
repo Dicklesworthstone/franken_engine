@@ -73,7 +73,7 @@ impl BenchmarkEnvironment {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .unwrap_or_default()
+        .unwrap()
     }
 }
 
@@ -162,7 +162,7 @@ impl PercentileStats {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .unwrap_or_default()
+        .unwrap()
     }
 }
 
@@ -347,7 +347,7 @@ impl ProfileArtifact {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .unwrap_or_default()
+        .unwrap()
     }
 }
 
@@ -407,7 +407,7 @@ impl BenchmarkResult {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .unwrap_or_default()
+        .unwrap()
     }
 }
 
@@ -554,7 +554,7 @@ impl BaselineComparison {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .unwrap_or_default()
+        .unwrap()
     }
 }
 
@@ -624,7 +624,7 @@ impl OptimizationOpportunity {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .unwrap_or_default()
+        .unwrap()
     }
 }
 
@@ -684,7 +684,7 @@ impl OpportunityMatrix {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .unwrap_or_default()
+        .unwrap()
     }
 }
 
@@ -786,7 +786,7 @@ impl BaselineRegistry {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .unwrap_or_default()
+        .unwrap()
     }
 }
 

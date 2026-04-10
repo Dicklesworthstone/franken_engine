@@ -67,7 +67,7 @@ impl Default for SuperblockPolicy {
 
 impl SuperblockPolicy {
     pub fn policy_hash(&self) -> String {
-        let payload = serde_json::to_vec(self).unwrap_or_default();
+        let payload = serde_json::to_vec(self).unwrap();
         let digest = Sha256::digest(payload);
         hex::encode(digest)
     }
@@ -191,7 +191,7 @@ impl SideExit {
         let mut hasher = Sha256::new();
         hasher.update(resume_offset.to_le_bytes());
         hasher.update(guard_position.to_le_bytes());
-        let reason_bytes = serde_json::to_vec(reason).unwrap_or_default();
+        let reason_bytes = serde_json::to_vec(reason).unwrap();
         hasher.update(&reason_bytes);
         let digest = hasher.finalize();
         format!("exit-{}", &hex::encode(digest)[..16])
@@ -314,7 +314,7 @@ impl DeoptContinuation {
                 reason: &exit.reason,
                 factored: guard.factored,
             })
-            .unwrap_or_default(),
+            .unwrap(),
         );
 
         Self {
@@ -385,7 +385,7 @@ impl OptimizedCompilationUnit {
                 backend: OptimizedTierBackend::Cranelift,
                 stage: ExecutionStage::CompileOptimized,
             })
-            .unwrap_or_default(),
+            .unwrap(),
         );
 
         Self {
@@ -1150,7 +1150,7 @@ impl FormationDecision {
             trace_tree_summary: trace_tree.map(|t| t.summary()),
             decision_hash: String::new(),
         };
-        let payload = serde_json::to_vec(&decision).unwrap_or_default();
+        let payload = serde_json::to_vec(&decision).unwrap();
         let digest = Sha256::digest(payload);
         decision.decision_hash = hex::encode(digest);
         decision
@@ -1205,7 +1205,7 @@ fn compute_optimized_tier_plan_hash(plan: &OptimizedTierCompilationPlan) -> Stri
             rejected_candidates: &plan.rejected_candidates,
             requires_differential_equivalence: plan.requires_differential_equivalence,
         })
-        .unwrap_or_default(),
+        .unwrap(),
     );
     hex::encode(digest)
 }

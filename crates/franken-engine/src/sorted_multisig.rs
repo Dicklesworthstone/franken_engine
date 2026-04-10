@@ -890,8 +890,8 @@ mod tests {
         ];
         let arr = SortedSignatureArray::from_unsorted(entries).unwrap();
 
-        let json = serde_json::to_string(&arr).unwrap_or_default();
-        let restored: SortedSignatureArray = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&arr).unwrap();
+        let restored: SortedSignatureArray = serde_json::from_str(&json).unwrap();
 
         assert_eq!(arr, restored);
         // Verify still sorted.
@@ -1036,8 +1036,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let restored: MultiSigError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let restored: MultiSigError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
     }
@@ -1054,8 +1054,8 @@ mod tests {
             invalid_signers: vec![],
             unauthorized_signers: vec![],
         };
-        let json = serde_json::to_string(&result).unwrap_or_default();
-        let restored: QuorumResult = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&result).unwrap();
+        let restored: QuorumResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, restored);
     }
 
@@ -1069,8 +1069,8 @@ mod tests {
             },
             trace_id: "t-ser".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: MultiSigEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: MultiSigEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 
@@ -1092,8 +1092,8 @@ mod tests {
         let obj = test_obj();
         let sig = sign_with(&sk, &obj);
         let ss = SignerSignature::new(vk, sig);
-        let json = serde_json::to_string(&ss).unwrap_or_default();
-        let restored: SignerSignature = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&ss).unwrap();
+        let restored: SignerSignature = serde_json::from_str(&json).unwrap();
         assert_eq!(ss, restored);
     }
 
@@ -1122,8 +1122,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap_or_default();
-            let restored: MultiSigEventType = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(v).unwrap();
+            let restored: MultiSigEventType = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, restored);
         }
     }

@@ -263,7 +263,7 @@ pub fn emit_default_rollout_bundle(context: &ArtifactContext) -> io::Result<Bund
 
 pub fn build_docs_contract_fixture() -> DocsContractFixture {
     let mut disabled_candidates = accepted_candidates("2026-03-06T00:00:00Z")
-        .unwrap_or_default()
+        .unwrap()
         .into_iter()
         .map(|candidate| candidate.candidate_id)
         .collect::<Vec<_>>();
@@ -545,13 +545,13 @@ fn write_bundle(
             "trace_id": &context.trace_id,
         },
     }))
-    .unwrap_or_default();
+    .unwrap();
 
-    let trace_ids_json = serde_json::to_string_pretty(&evaluated.trace_ids).unwrap_or_default();
+    let trace_ids_json = serde_json::to_string_pretty(&evaluated.trace_ids).unwrap();
     let events_jsonl = evaluated
         .logs
         .iter()
-        .map(|event| serde_json::to_string(event).unwrap_or_default())
+        .map(|event| serde_json::to_string(event).unwrap())
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -585,7 +585,7 @@ fn write_bundle(
         "bead_id": BEAD_ID,
         "commands": &commands,
     }))
-    .unwrap_or_default();
+    .unwrap();
     let repro_lock_artifact = FileArtifact::text("repro.lock", &repro_lock_json);
     artifact_hashes.insert(
         repro_lock_artifact.path.clone(),
@@ -646,7 +646,7 @@ fn write_bundle(
         },
         "artifacts": &manifest_artifacts,
     }))
-    .unwrap_or_default();
+    .unwrap();
     let manifest_artifact = FileArtifact::text("manifest.json", &manifest_json);
 
     let _bundle_lock = acquire_bundle_write_lock(&context.artifact_dir)?;
@@ -926,7 +926,7 @@ impl Drop for BundleWriteLock {
 }
 
 fn digest_json(value: &serde_json::Value) -> String {
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    let bytes = serde_json::to_vec(value).unwrap();
     sha256_hex(&bytes)
 }
 
@@ -940,7 +940,7 @@ impl FileArtifact {
     fn json<T: Serialize>(path: &str, value: &T) -> Self {
         Self {
             path: path.to_string(),
-            contents: serde_json::to_vec_pretty(value).unwrap_or_default(),
+            contents: serde_json::to_vec_pretty(value).unwrap(),
         }
     }
 

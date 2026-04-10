@@ -585,7 +585,7 @@ impl AsyncModuleEvaluator {
                     if rejected_dependency.is_none() {
                         rejected_dependency = Some((
                             dep.clone(),
-                            dep_state.rejection_reason_hash.clone().unwrap_or_default(),
+                            dep_state.rejection_reason_hash.clone().unwrap(),
                             dep_state.rejection_reason_description.clone(),
                         ));
                     }
@@ -1035,7 +1035,7 @@ pub fn compute_async_evaluation_order(
     let mut order = Vec::new();
     while let Some(spec) = queue.pop() {
         order.push(spec.to_string());
-        let successors: Vec<&str> = adjacency.get(spec).cloned().unwrap_or_default();
+        let successors: Vec<&str> = adjacency.get(spec).cloned().unwrap();
         for succ in successors {
             if let Some(deg) = in_degree.get_mut(succ) {
                 *deg = deg.saturating_sub(1);

@@ -855,11 +855,11 @@ pub fn write_cache_oblivious_evidence_bundle(
 
     std::fs::write(
         &inventory_path,
-        serde_json::to_string_pretty(&inventory).unwrap_or_default(),
+        serde_json::to_string_pretty(&inventory).unwrap(),
     )?;
     std::fs::write(
         &manifest_path,
-        serde_json::to_string_pretty(&manifest).unwrap_or_default(),
+        serde_json::to_string_pretty(&manifest).unwrap(),
     )?;
 
     let mut events_content = String::new();
@@ -871,7 +871,7 @@ pub fn write_cache_oblivious_evidence_bundle(
             specimen_id: evidence.specimen_id.clone(),
             verdict: evidence.verdict,
         };
-        events_content.push_str(&serde_json::to_string(&event).unwrap_or_default());
+        events_content.push_str(&serde_json::to_string(&event).unwrap());
         events_content.push('\n');
     }
     std::fs::write(&events_path, events_content)?;

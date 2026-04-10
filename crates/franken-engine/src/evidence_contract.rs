@@ -659,8 +659,8 @@ mod tests {
     #[test]
     fn evidence_contract_serialization_round_trip() {
         let contract = valid_contract();
-        let json = serde_json::to_string(&contract).unwrap_or_default();
-        let restored: EvidenceContract = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&contract).unwrap();
+        let restored: EvidenceContract = serde_json::from_str(&json).unwrap();
         assert_eq!(contract, restored);
     }
 
@@ -692,8 +692,8 @@ mod tests {
             ContractValidationError::InvalidEvScore,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap_or_default();
-            let restored: ContractValidationError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(v).unwrap();
+            let restored: ContractValidationError = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, restored);
         }
     }
@@ -713,8 +713,8 @@ mod tests {
             EvTier::Positive,
             EvTier::HighImpact,
         ] {
-            let json = serde_json::to_string(&tier).unwrap_or_default();
-            let restored: EvTier = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&tier).unwrap();
+            let restored: EvTier = serde_json::from_str(&json).unwrap();
             assert_eq!(tier, restored);
         }
     }
@@ -727,8 +727,8 @@ mod tests {
             RolloutStage::Ramp,
             RolloutStage::Default,
         ] {
-            let json = serde_json::to_string(&stage).unwrap_or_default();
-            let restored: RolloutStage = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&stage).unwrap();
+            let restored: RolloutStage = serde_json::from_str(&json).unwrap();
             assert_eq!(stage, restored);
         }
     }
@@ -745,8 +745,8 @@ mod tests {
     #[test]
     fn contract_version_serialization() {
         let v = ContractVersion::CURRENT;
-        let json = serde_json::to_string(&v).unwrap_or_default();
-        let restored: ContractVersion = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&v).unwrap();
+        let restored: ContractVersion = serde_json::from_str(&json).unwrap();
         assert_eq!(v, restored);
     }
 

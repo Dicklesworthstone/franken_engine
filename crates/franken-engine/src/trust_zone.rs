@@ -835,8 +835,8 @@ mod tests {
     fn hierarchy_serialization_is_deterministic_for_same_inputs() {
         let a = ZoneHierarchy::standard("maintainer", 5).expect("hierarchy A");
         let b = ZoneHierarchy::standard("maintainer", 5).expect("hierarchy B");
-        let json_a = serde_json::to_string(&a).unwrap_or_default();
-        let json_b = serde_json::to_string(&b).unwrap_or_default();
+        let json_a = serde_json::to_string(&a).unwrap();
+        let json_b = serde_json::to_string(&b).unwrap();
         assert_eq!(json_a, json_b);
     }
 

@@ -2987,7 +2987,7 @@ mod tests {
         let json = serde_json::to_string(receipt).unwrap();
         let parsed: AttestationTransitionReceipt = serde_json::from_str(&json).unwrap();
         assert_eq!(receipt, &parsed);
-        parsed.verify().unwrap_or_default();
+        parsed.verify().unwrap();
     }
 
     // -- attestation_health_from_verdict --

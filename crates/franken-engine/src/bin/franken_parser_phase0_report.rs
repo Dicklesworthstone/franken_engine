@@ -148,7 +148,7 @@ fn run() -> Result<BaselineReport, String> {
 fn main() {
     match run() {
         Ok(report) => {
-            let json = serde_json::to_string_pretty(&report).unwrap_or_default();
+            let json = serde_json::to_string_pretty(&report).unwrap();
             println!("{json}");
         }
         Err(error) => {

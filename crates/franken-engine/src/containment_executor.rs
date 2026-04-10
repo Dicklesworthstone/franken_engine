@@ -495,7 +495,7 @@ impl ContainmentExecutor {
             .iter()
             .find(|e| e.extension_id == extension_id)
             .map(|e| e.receipts.iter().collect())
-            .unwrap_or_default()
+            .unwrap()
     }
 
     /// Get the forensic snapshot for a quarantined extension.

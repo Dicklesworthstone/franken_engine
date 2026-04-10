@@ -509,8 +509,8 @@ impl PolicyTheoremCompiler {
         for node in &ir.nodes {
             for constraint in &node.constraints {
                 if let Constraint::NonInterferenceClaim { domain_a, domain_b } = constraint {
-                    let subs_a = domain_caps.get(domain_a).cloned().unwrap_or_default();
-                    let subs_b = domain_caps.get(domain_b).cloned().unwrap_or_default();
+                    let subs_a = domain_caps.get(domain_a).cloned().unwrap();
+                    let subs_b = domain_caps.get(domain_b).cloned().unwrap();
                     let overlap: BTreeSet<_> = subs_a.intersection(&subs_b).cloned().collect();
                     if !overlap.is_empty() {
                         violations.push(node.node_id.clone());
@@ -915,7 +915,7 @@ impl SignaturePreimage for PolicyValidationReceipt {
     fn unsigned_view(&self) -> CanonicalValue {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
-        CanonicalValue::Bytes(serde_json::to_vec(&copy).unwrap_or_default())
+        CanonicalValue::Bytes(serde_json::to_vec(&copy).unwrap())
     }
 }
 
@@ -1826,8 +1826,8 @@ mod tests {
             scope: "local".to_string(),
             lifetime_epochs: 10,
         };
-        let json = serde_json::to_string(&grant).unwrap_or_default();
-        let restored: AuthorityGrant = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&grant).unwrap();
+        let restored: AuthorityGrant = serde_json::from_str(&json).unwrap();
         assert_eq!(grant, restored);
     }
 
@@ -1840,8 +1840,8 @@ mod tests {
             nodes_examined: 5,
             pass_name: "monotonicity_check".to_string(),
         };
-        let json = serde_json::to_string(&pw).unwrap_or_default();
-        let restored: PropertyWitness = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&pw).unwrap();
+        let restored: PropertyWitness = serde_json::from_str(&json).unwrap();
         assert_eq!(pw, restored);
     }
 
@@ -1854,8 +1854,8 @@ mod tests {
             description: "overlap".to_string(),
             merge_path: vec!["n1".to_string()],
         };
-        let json = serde_json::to_string(&ce).unwrap_or_default();
-        let restored: Counterexample = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&ce).unwrap();
+        let restored: Counterexample = serde_json::from_str(&json).unwrap();
         assert_eq!(ce, restored);
     }
 
@@ -1867,8 +1867,8 @@ mod tests {
             policy_ids: vec![PolicyId::new("p1")],
             severity: DiagnosticSeverity::Warning,
         };
-        let json = serde_json::to_string(&hd).unwrap_or_default();
-        let restored: HookDiagnostic = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&hd).unwrap();
+        let restored: HookDiagnostic = serde_json::from_str(&json).unwrap();
         assert_eq!(hd, restored);
     }
 
@@ -1879,8 +1879,8 @@ mod tests {
             passed: true,
             diagnostics: Vec::new(),
         };
-        let json = serde_json::to_string(&hcr).unwrap_or_default();
-        let restored: HookCheckResult = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&hcr).unwrap();
+        let restored: HookCheckResult = serde_json::from_str(&json).unwrap();
         assert_eq!(hcr, restored);
     }
 

@@ -85,7 +85,7 @@ impl TraceEvent {
             &replay_schema(),
             canonical.as_bytes(),
         )
-        .unwrap_or_default()
+        .unwrap()
     }
 }
 
@@ -162,7 +162,7 @@ impl NondeterminismTrace {
             &replay_schema(),
             canonical.as_bytes(),
         )
-        .unwrap_or_default()
+        .unwrap()
     }
 }
 
@@ -373,7 +373,7 @@ impl ReplayEngine {
             &replay_schema(),
             canonical.as_bytes(),
         )
-        .unwrap_or_default()
+        .unwrap()
     }
 }
 
@@ -454,7 +454,7 @@ impl FailoverRecord {
             &replay_schema(),
             canonical.as_bytes(),
         )
-        .unwrap_or_default()
+        .unwrap()
     }
 }
 
@@ -563,7 +563,7 @@ impl FailoverController {
             &replay_schema(),
             canonical.as_bytes(),
         )
-        .unwrap_or_default()
+        .unwrap()
     }
 }
 
@@ -668,7 +668,7 @@ impl IncidentArtifact {
             &replay_schema(),
             canonical.as_bytes(),
         )
-        .unwrap_or_default()
+        .unwrap()
     }
 }
 
@@ -752,7 +752,7 @@ impl IncidentBundle {
             &replay_schema(),
             canonical.as_bytes(),
         )
-        .unwrap_or_default()
+        .unwrap()
     }
 }
 
@@ -833,7 +833,7 @@ impl IncidentBundleBuilder {
         if self.include_trace
             && let Some(t) = trace
         {
-            let data = serde_json::to_vec(t).unwrap_or_default();
+            let data = serde_json::to_vec(t).unwrap();
             bundle.add_artifact(IncidentArtifact::new(
                 "nondeterminism_trace",
                 ArtifactKind::NondeterminismTrace,
@@ -844,7 +844,7 @@ impl IncidentBundleBuilder {
         if self.include_failovers
             && let Some(fc) = failover
         {
-            let data = serde_json::to_vec(&fc.records).unwrap_or_default();
+            let data = serde_json::to_vec(&fc.records).unwrap();
             bundle.add_artifact(IncidentArtifact::new(
                 "failover_log",
                 ArtifactKind::FailoverLog,
@@ -856,7 +856,7 @@ impl IncidentBundleBuilder {
             && let Some(re) = replay
             && !re.divergences.is_empty()
         {
-            let data = serde_json::to_vec(&re.divergences).unwrap_or_default();
+            let data = serde_json::to_vec(&re.divergences).unwrap();
             bundle.add_artifact(IncidentArtifact::new(
                 "divergence_report",
                 ArtifactKind::DivergenceReport,

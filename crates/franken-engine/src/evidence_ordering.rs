@@ -673,8 +673,8 @@ mod tests {
     #[test]
     fn size_bounds_serialization_round_trip() {
         let bounds = SizeBounds::default();
-        let json = serde_json::to_string(&bounds).unwrap_or_default();
-        let restored: SizeBounds = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&bounds).unwrap();
+        let restored: SizeBounds = serde_json::from_str(&json).unwrap();
         assert_eq!(bounds, restored);
     }
 
@@ -686,8 +686,8 @@ mod tests {
             retained_count: 256,
             policy: "top-K by witness_id".to_string(),
         };
-        let json = serde_json::to_string(&marker).unwrap_or_default();
-        let restored: TruncationMarker = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&marker).unwrap();
+        let restored: TruncationMarker = serde_json::from_str(&json).unwrap();
         assert_eq!(marker, restored);
     }
 
@@ -759,8 +759,8 @@ mod tests {
             },
         ];
         for v in &violations {
-            let json = serde_json::to_string(v).unwrap_or_default();
-            let restored: OrderingViolation = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(v).unwrap();
+            let restored: OrderingViolation = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, restored);
         }
     }

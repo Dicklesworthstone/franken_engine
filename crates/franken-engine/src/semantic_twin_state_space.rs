@@ -179,7 +179,7 @@ impl TwinStateSnapshot {
     }
 
     pub fn deterministic_digest(&self) -> String {
-        let payload = serde_json::to_vec(self).unwrap_or_default();
+        let payload = serde_json::to_vec(self).unwrap();
         let digest = Sha256::digest(payload);
         format!("sha256:{}", hex::encode(digest))
     }
@@ -673,7 +673,7 @@ impl SemanticTwinSpecification {
 
     /// Deterministic digest for reproducibility and witness linkage.
     pub fn deterministic_digest(&self) -> String {
-        let payload = serde_json::to_vec(self).unwrap_or_default();
+        let payload = serde_json::to_vec(self).unwrap();
         let digest = Sha256::digest(payload);
         format!("sha256:{}", hex::encode(digest))
     }
@@ -1129,8 +1129,8 @@ mod tests {
         ];
         assert_eq!(variants.len(), 9);
         for variant in variants {
-            let json = serde_json::to_string(&variant).unwrap_or_default();
-            let back: TwinStateDomain = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&variant).unwrap();
+            let back: TwinStateDomain = serde_json::from_str(&json).unwrap();
             assert_eq!(back, variant);
         }
     }
@@ -1151,8 +1151,8 @@ mod tests {
         ];
         assert_eq!(variants.len(), 9);
         for variant in variants {
-            let json = serde_json::to_string(&variant).unwrap_or_default();
-            let back: TwinSignalSource = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&variant).unwrap();
+            let back: TwinSignalSource = serde_json::from_str(&json).unwrap();
             assert_eq!(back, variant);
         }
     }
@@ -1171,8 +1171,8 @@ mod tests {
         ];
         assert_eq!(variants.len(), 7);
         for variant in variants {
-            let json = serde_json::to_string(&variant).unwrap_or_default();
-            let back: TwinPhase = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&variant).unwrap();
+            let back: TwinPhase = serde_json::from_str(&json).unwrap();
             assert_eq!(back, variant);
         }
     }
@@ -1192,8 +1192,8 @@ mod tests {
         ];
         assert_eq!(variants.len(), 8);
         for variant in variants {
-            let json = serde_json::to_string(&variant).unwrap_or_default();
-            let back: TwinTransitionTrigger = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&variant).unwrap();
+            let back: TwinTransitionTrigger = serde_json::from_str(&json).unwrap();
             assert_eq!(back, variant);
         }
     }
@@ -1212,8 +1212,8 @@ mod tests {
             unit: "millionths".to_string(),
             description: "A test variable".to_string(),
         };
-        let json = serde_json::to_string(&spec).unwrap_or_default();
-        let back: TwinStateVariableSpec = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&spec).unwrap();
+        let back: TwinStateVariableSpec = serde_json::from_str(&json).unwrap();
         assert_eq!(back, spec);
     }
 
@@ -1229,8 +1229,8 @@ mod tests {
             guard_assumptions: vec!["asm_1".to_string()],
             description: "test transition".to_string(),
         };
-        let json = serde_json::to_string(&spec).unwrap_or_default();
-        let back: TwinTransitionSpec = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&spec).unwrap();
+        let back: TwinTransitionSpec = serde_json::from_str(&json).unwrap();
         assert_eq!(back, spec);
     }
 
@@ -1244,8 +1244,8 @@ mod tests {
             max_staleness_ticks: 5,
             evidence_component: "runtime".to_string(),
         };
-        let json = serde_json::to_string(&contract).unwrap_or_default();
-        let back: TwinMeasurementContract = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&contract).unwrap();
+        let back: TwinMeasurementContract = serde_json::from_str(&json).unwrap();
         assert_eq!(back, contract);
     }
 
@@ -1261,8 +1261,8 @@ mod tests {
             dependencies: BTreeSet::from(["regime".to_string()]),
             predicate_hash: "sha256:abc".to_string(),
         };
-        let json = serde_json::to_string(&spec).unwrap_or_default();
-        let back: TwinAssumptionSpec = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&spec).unwrap();
+        let back: TwinAssumptionSpec = serde_json::from_str(&json).unwrap();
         assert_eq!(back, spec);
     }
 
@@ -1279,8 +1279,8 @@ mod tests {
             threshold_millionths: 500_000,
             trigger_count: 2,
         };
-        let json = serde_json::to_string(&hook).unwrap_or_default();
-        let back: TwinFalsificationHook = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&hook).unwrap();
+        let back: TwinFalsificationHook = serde_json::from_str(&json).unwrap();
         assert_eq!(back, hook);
     }
 
@@ -1289,8 +1289,8 @@ mod tests {
         let mut snapshot = TwinStateSnapshot::new("trace-1", "decision-1", "policy-1", 5, 10);
         snapshot.upsert_value("risk_belief", 400_000);
         snapshot.upsert_value("latency_outcome", 200_000);
-        let json = serde_json::to_string(&snapshot).unwrap_or_default();
-        let back: TwinStateSnapshot = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&snapshot).unwrap();
+        let back: TwinStateSnapshot = serde_json::from_str(&json).unwrap();
         assert_eq!(back, snapshot);
     }
 
@@ -1722,8 +1722,8 @@ mod tests {
     #[test]
     fn default_spec_serde_roundtrip() {
         let spec = SemanticTwinSpecification::lane_decision_default().expect("spec");
-        let json = serde_json::to_string(&spec).unwrap_or_default();
-        let back: SemanticTwinSpecification = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&spec).unwrap();
+        let back: SemanticTwinSpecification = serde_json::from_str(&json).unwrap();
         assert_eq!(back, spec);
     }
 
@@ -1780,8 +1780,8 @@ mod tests {
             },
         ];
         for variant in &variants {
-            let json = serde_json::to_string(variant).unwrap_or_default();
-            let back: TwinSpecError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(variant).unwrap();
+            let back: TwinSpecError = serde_json::from_str(&json).unwrap();
             assert_eq!(&back, variant);
         }
     }

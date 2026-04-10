@@ -833,8 +833,8 @@ mod tests {
             SecurityEpoch::from_raw(1),
             SecurityEpoch::from_raw(10),
         );
-        let json = serde_json::to_string(&meta).unwrap_or_default();
-        let restored: EpochMetadata = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&meta).unwrap();
+        let restored: EpochMetadata = serde_json::from_str(&json).unwrap();
         assert_eq!(meta, restored);
     }
 
@@ -848,8 +848,8 @@ mod tests {
             .advance(TransitionReason::GuardrailConfigChange, "t2")
             .unwrap();
 
-        let json = serde_json::to_string(&tracker).unwrap_or_default();
-        let restored: EpochTracker = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&tracker).unwrap();
+        let restored: EpochTracker = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.current().as_u64(), 2);
         assert_eq!(restored.transition_count(), 2);
         assert_eq!(restored.transition_counts()["policy_key_rotation"], 1);
@@ -861,8 +861,8 @@ mod tests {
             current_epoch: SecurityEpoch::from_raw(3),
             artifact_epoch: SecurityEpoch::from_raw(7),
         };
-        let json = serde_json::to_string(&err).unwrap_or_default();
-        let restored: EpochValidationError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&err).unwrap();
+        let restored: EpochValidationError = serde_json::from_str(&json).unwrap();
         assert_eq!(err, restored);
     }
 
@@ -887,8 +887,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let restored: EpochValidationError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let restored: EpochValidationError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
     }
@@ -899,8 +899,8 @@ mod tests {
         tracker
             .advance(TransitionReason::PolicyKeyRotation, "t1")
             .unwrap();
-        let json1 = serde_json::to_string(&tracker).unwrap_or_default();
-        let json2 = serde_json::to_string(&tracker).unwrap_or_default();
+        let json1 = serde_json::to_string(&tracker).unwrap();
+        let json2 = serde_json::to_string(&tracker).unwrap();
         assert_eq!(json1, json2);
     }
 

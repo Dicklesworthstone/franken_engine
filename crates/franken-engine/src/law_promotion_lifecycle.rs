@@ -196,13 +196,13 @@ impl LifecycleEvent {
         data.extend_from_slice(self.law_id.as_bytes());
         data.extend_from_slice(
             serde_json::to_string(&self.kind)
-                .unwrap_or_default()
+                .unwrap()
                 .as_bytes(),
         );
         let mut sorted_targets = self.affected_targets.clone();
         sorted_targets.sort();
         for target in &sorted_targets {
-            data.extend_from_slice(serde_json::to_string(target).unwrap_or_default().as_bytes());
+            data.extend_from_slice(serde_json::to_string(target).unwrap().as_bytes());
         }
         data.extend_from_slice(self.rationale.as_bytes());
         if let Some(ref sid) = self.superseding_law_id {
@@ -285,13 +285,13 @@ impl RoutingDecision {
         data.extend_from_slice(self.law_id.as_bytes());
         data.extend_from_slice(
             serde_json::to_string(&self.candidate_kind)
-                .unwrap_or_default()
+                .unwrap()
                 .as_bytes(),
         );
         let mut sorted_selected = self.selected_targets.clone();
         sorted_selected.sort();
         for target in &sorted_selected {
-            data.extend_from_slice(serde_json::to_string(target).unwrap_or_default().as_bytes());
+            data.extend_from_slice(serde_json::to_string(target).unwrap().as_bytes());
         }
         data.extend_from_slice(&self.priority_millionths.to_le_bytes());
         self.decision_hash = ContentHash::compute(&data);

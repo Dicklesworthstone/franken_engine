@@ -1525,8 +1525,8 @@ mod tests {
             )
             .unwrap();
 
-        let json = serde_json::to_string(&graph).unwrap_or_default();
-        let restored: ReputationGraph = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&graph).unwrap();
+        let restored: ReputationGraph = serde_json::from_str(&json).unwrap();
 
         assert_eq!(restored.extension_count(), 1);
         assert_eq!(restored.evidence_count(), 1);
@@ -1547,8 +1547,8 @@ mod tests {
             timestamp_ns: 5_000_000_000,
             epoch: SecurityEpoch::from_raw(2),
         };
-        let json = serde_json::to_string(&tt).unwrap_or_default();
-        let restored: TrustTransition = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&tt).unwrap();
+        let restored: TrustTransition = serde_json::from_str(&json).unwrap();
         assert_eq!(tt, restored);
     }
 
@@ -1578,8 +1578,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let restored: ReputationGraphError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let restored: ReputationGraphError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
     }

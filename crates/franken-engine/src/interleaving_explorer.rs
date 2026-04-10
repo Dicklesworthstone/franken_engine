@@ -1240,8 +1240,8 @@ mod tests {
     #[test]
     fn race_surface_catalog_serialization_round_trip() {
         let catalog = RaceSurfaceCatalog::default_catalog();
-        let json = serde_json::to_string(&catalog).unwrap_or_default();
-        let restored: RaceSurfaceCatalog = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&catalog).unwrap();
+        let restored: RaceSurfaceCatalog = serde_json::from_str(&json).unwrap();
         assert_eq!(catalog, restored);
     }
 
@@ -1259,8 +1259,8 @@ mod tests {
             race_surfaces_total: 5,
             regression_transcripts: vec![],
         };
-        let json = serde_json::to_string(&report).unwrap_or_default();
-        let restored: ExplorationReport = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&report).unwrap();
+        let restored: ExplorationReport = serde_json::from_str(&json).unwrap();
         assert_eq!(report, restored);
     }
 
@@ -1272,8 +1272,8 @@ mod tests {
             minimized_transcript: None,
             related_race_ids: vec!["race-1".to_string()],
         };
-        let json = serde_json::to_string(&failure).unwrap_or_default();
-        let restored: ExplorationFailure = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&failure).unwrap();
+        let restored: ExplorationFailure = serde_json::from_str(&json).unwrap();
         assert_eq!(failure, restored);
     }
 
@@ -1283,8 +1283,8 @@ mod tests {
             action: "test".to_string(),
             outcome: "fail".to_string(),
         };
-        let json = serde_json::to_string(&checker).unwrap_or_default();
-        let restored: InvariantChecker = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&checker).unwrap();
+        let restored: InvariantChecker = serde_json::from_str(&json).unwrap();
         assert_eq!(checker, restored);
     }
 

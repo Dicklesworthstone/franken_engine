@@ -10,17 +10,25 @@
 //!   4. reload-revoke-churn — unregister/re-register cycles simulating hot-reload
 //!   5. adversarial-noise-under-load — budget exhaustion injection during sustained load
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Instant;
 
 use crate::benchmark_denominator::BenchmarkCase;
+use crate::benchmark_evidence_bundle::{
+    BenchmarkRun as EvidenceBenchmarkRun, EnvironmentSnapshot, EvidenceBundle, ParityTarget,
+    ParityVerdict, WorkloadCategory, WorkloadProvenance,
+};
 use crate::extension_lifecycle_manager::{
     CancellationConfig, ExtensionLifecycleManager, ExtensionState, LifecycleTransition,
     ResourceBudget,
 };
+use crate::hash_tiers::ContentHash;
+use crate::runtime_comparison_gate::{BenchmarkCategory, BenchmarkResult, RuntimeId};
+use crate::security_epoch::SecurityEpoch;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -30,6 +38,10 @@ use serde::{Deserialize, Serialize};
 pub const BENCHMARK_E2E_COMPONENT: &str = "benchmark_e2e";
 pub const BENCHMARK_E2E_SCHEMA_VERSION: &str = "franken-engine.benchmark-e2e.v1";
 pub const BENCHMARK_ENV_SCHEMA_VERSION: &str = "franken-engine.benchmark-env-manifest.v1";
+pub const BENCHMARK_COMPARISON_COMPONENT: &str = "benchmark_comparison";
+pub const BENCHMARK_COMPARISON_SCHEMA_VERSION: &str = "franken-engine.benchmark-comparison.v1";
+pub const BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION: &str =
+    "franken-engine.benchmark-comparison-manifest.v1";
 pub const MIN_START_BUDGET_MILLIONTHS: u64 = 1_000;
 
 const MIN_WARMUP_RUNS: u32 = 1;
@@ -899,6 +911,714 @@ pub fn validate_harness_contract(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// External runtime comparison runner
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BenchmarkComparisonRuntimeCommands {
+    pub frankenctl: PathBuf,
+    pub node: PathBuf,
+    pub bun: PathBuf,
+}
+
+impl Default for BenchmarkComparisonRuntimeCommands {
+    fn default() -> Self {
+        Self {
+            frankenctl: PathBuf::from("frankenctl"),
+            node: PathBuf::from("node"),
+            bun: PathBuf::from("bun"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BenchmarkComparisonCase {
+    pub benchmark_id: String,
+    #[serde(with = "benchmark_category_wire")]
+    pub category: BenchmarkCategory,
+    pub program_path: PathBuf,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BenchmarkComparisonManifest {
+    pub schema_version: String,
+    #[serde(default)]
+    pub runtime_pins: BenchmarkRuntimePins,
+    #[serde(default)]
+    pub runtime_commands: BenchmarkComparisonRuntimeCommands,
+    #[serde(default)]
+    pub fairness_policy: BenchmarkFairnessPolicy,
+    #[serde(default)]
+    pub cases: Vec<BenchmarkComparisonCase>,
+}
+
+impl Default for BenchmarkComparisonManifest {
+    fn default() -> Self {
+        Self {
+            schema_version: BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION.to_string(),
+            runtime_pins: BenchmarkRuntimePins::default(),
+            runtime_commands: BenchmarkComparisonRuntimeCommands::default(),
+            fairness_policy: BenchmarkFairnessPolicy::default(),
+            cases: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BenchmarkComparisonSample {
+    pub wall_time_ns: u64,
+    pub peak_rss_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BenchmarkComparisonStatistics {
+    pub sample_count: u64,
+    pub mean_ns: u64,
+    pub median_ns: u64,
+    pub p95_ns: u64,
+    pub p99_ns: u64,
+    pub min_ns: u64,
+    pub max_ns: u64,
+    pub stddev_ns: u64,
+    pub ci95_lower_ns: u64,
+    pub ci95_upper_ns: u64,
+    pub peak_rss_bytes_max: u64,
+    pub cv_millionths: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BenchmarkComparisonRuntimeResult {
+    pub benchmark_id: String,
+    pub category: BenchmarkCategory,
+    pub runtime: RuntimeId,
+    pub statistics: BenchmarkComparisonStatistics,
+    pub raw_samples: Vec<BenchmarkComparisonSample>,
+    pub benchmark_result: BenchmarkResult,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BenchmarkComparisonEvent {
+    pub benchmark_id: String,
+    pub category: BenchmarkCategory,
+    pub runtime: RuntimeId,
+    pub event: String,
+    pub outcome: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BenchmarkComparisonSuiteResult {
+    pub schema_version: String,
+    pub run_id: String,
+    pub run_date: String,
+    pub manifest: BenchmarkComparisonManifest,
+    pub results: Vec<BenchmarkComparisonRuntimeResult>,
+    pub events: Vec<BenchmarkComparisonEvent>,
+    pub commands: Vec<String>,
+    pub evidence_bundle: EvidenceBundle,
+}
+
+mod benchmark_category_wire {
+    use super::BenchmarkCategory;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &BenchmarkCategory, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(value.as_str())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<BenchmarkCategory, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match String::deserialize(deserializer)?.as_str() {
+            "micro" => Ok(BenchmarkCategory::Micro),
+            "macro" => Ok(BenchmarkCategory::Macro),
+            "startup" => Ok(BenchmarkCategory::Startup),
+            "throughput" => Ok(BenchmarkCategory::Throughput),
+            "memory" => Ok(BenchmarkCategory::Memory),
+            other => Err(serde::de::Error::custom(format!(
+                "unknown benchmark category `{other}`"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BenchmarkComparisonError {
+    InvalidSchemaVersion {
+        expected: &'static str,
+        actual: String,
+    },
+    EmptyCases,
+    EmptyBenchmarkId,
+    MissingProgramPath {
+        benchmark_id: String,
+    },
+    InvalidHarnessContract(String),
+    Io(String),
+    CommandFailed {
+        benchmark_id: String,
+        runtime: RuntimeId,
+        detail: String,
+    },
+    TimingParse {
+        benchmark_id: String,
+        runtime: RuntimeId,
+        detail: String,
+    },
+    EvidenceBundle(String),
+}
+
+impl std::fmt::Display for BenchmarkComparisonError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidSchemaVersion { expected, actual } => {
+                write!(
+                    f,
+                    "benchmark comparison manifest schema must be `{expected}`, got `{actual}`"
+                )
+            }
+            Self::EmptyCases => f.write_str("benchmark comparison manifest must contain cases"),
+            Self::EmptyBenchmarkId => {
+                f.write_str("benchmark comparison cases must have non-empty benchmark_id values")
+            }
+            Self::MissingProgramPath { benchmark_id } => {
+                write!(
+                    f,
+                    "benchmark comparison case `{benchmark_id}` must define a program_path"
+                )
+            }
+            Self::InvalidHarnessContract(detail) => {
+                write!(f, "benchmark comparison harness contract invalid: {detail}")
+            }
+            Self::Io(detail) => f.write_str(detail),
+            Self::CommandFailed {
+                benchmark_id,
+                runtime,
+                detail,
+            } => write!(
+                f,
+                "benchmark comparison case `{benchmark_id}` failed for runtime `{runtime}`: {detail}"
+            ),
+            Self::TimingParse {
+                benchmark_id,
+                runtime,
+                detail,
+            } => write!(
+                f,
+                "benchmark comparison timing parse failed for `{benchmark_id}` runtime `{runtime}`: {detail}"
+            ),
+            Self::EvidenceBundle(detail) => {
+                write!(f, "benchmark comparison evidence bundle invalid: {detail}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for BenchmarkComparisonError {}
+
+pub fn validate_benchmark_comparison_manifest(
+    manifest: &BenchmarkComparisonManifest,
+) -> Result<(), BenchmarkComparisonError> {
+    if manifest.schema_version != BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION {
+        return Err(BenchmarkComparisonError::InvalidSchemaVersion {
+            expected: BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION,
+            actual: manifest.schema_version.clone(),
+        });
+    }
+    if manifest.cases.is_empty() {
+        return Err(BenchmarkComparisonError::EmptyCases);
+    }
+    validate_harness_contract(&BenchmarkHarnessContract {
+        runtime_pins: manifest.runtime_pins.clone(),
+        fairness_policy: manifest.fairness_policy,
+    })
+    .map_err(|error| BenchmarkComparisonError::InvalidHarnessContract(error.to_string()))?;
+    for case in &manifest.cases {
+        if case.benchmark_id.trim().is_empty() {
+            return Err(BenchmarkComparisonError::EmptyBenchmarkId);
+        }
+        if case.program_path.as_os_str().is_empty() {
+            return Err(BenchmarkComparisonError::MissingProgramPath {
+                benchmark_id: case.benchmark_id.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+pub fn summarize_benchmark_comparison_samples(
+    samples: &[BenchmarkComparisonSample],
+) -> BenchmarkComparisonStatistics {
+    assert!(
+        !samples.is_empty(),
+        "cannot compute comparison statistics from empty samples"
+    );
+    let mut wall_times: Vec<u64> = samples.iter().map(|sample| sample.wall_time_ns).collect();
+    wall_times.sort_unstable();
+    let sample_count = wall_times.len() as u64;
+    let sum: f64 = wall_times.iter().map(|value| *value as f64).sum();
+    let mean = sum / wall_times.len() as f64;
+    let variance = wall_times
+        .iter()
+        .map(|value| {
+            let delta = *value as f64 - mean;
+            delta * delta
+        })
+        .sum::<f64>()
+        / wall_times.len() as f64;
+    let stddev = variance.sqrt();
+    let ci_half_width = 1.96 * stddev / (wall_times.len() as f64).sqrt();
+    let cv_millionths = if mean > 0.0 {
+        ((stddev / mean) * 1_000_000.0).round() as u64
+    } else {
+        0
+    };
+    let peak_rss_bytes_max = samples
+        .iter()
+        .map(|sample| sample.peak_rss_bytes)
+        .max()
+        .unwrap_or(0);
+    BenchmarkComparisonStatistics {
+        sample_count,
+        mean_ns: mean.round() as u64,
+        median_ns: wall_times[wall_times.len() / 2],
+        p95_ns: wall_times[((wall_times.len() * 95) / 100).min(wall_times.len() - 1)],
+        p99_ns: wall_times[((wall_times.len() * 99) / 100).min(wall_times.len() - 1)],
+        min_ns: wall_times[0],
+        max_ns: wall_times[wall_times.len() - 1],
+        stddev_ns: stddev.round() as u64,
+        ci95_lower_ns: mean.max(ci_half_width).round() as u64 - ci_half_width.round() as u64,
+        ci95_upper_ns: (mean + ci_half_width).round() as u64,
+        peak_rss_bytes_max,
+        cv_millionths,
+    }
+}
+
+fn comparison_workload_category(category: BenchmarkCategory) -> WorkloadCategory {
+    match category {
+        BenchmarkCategory::Micro => WorkloadCategory::Micro,
+        BenchmarkCategory::Macro => WorkloadCategory::Application,
+        BenchmarkCategory::Startup => WorkloadCategory::ColdStart,
+        BenchmarkCategory::Throughput => WorkloadCategory::IoThroughput,
+        BenchmarkCategory::Memory => WorkloadCategory::Memory,
+    }
+}
+
+fn comparison_runtime_version_pin<'a>(
+    pins: &'a BenchmarkRuntimePins,
+    runtime: RuntimeId,
+) -> &'a str {
+    match runtime {
+        RuntimeId::FrankenEngine => &pins.franken_engine,
+        RuntimeId::NodeLts => &pins.node_lts,
+        RuntimeId::BunStable => &pins.bun_stable,
+    }
+}
+
+fn comparison_environment_snapshot(
+    pins: &BenchmarkRuntimePins,
+    runtime: RuntimeId,
+) -> EnvironmentSnapshot {
+    let mut extra = BTreeMap::new();
+    extra.insert("runtime_target".to_string(), runtime.as_str().to_string());
+    extra.insert(
+        "runtime_version_pin".to_string(),
+        comparison_runtime_version_pin(pins, runtime).to_string(),
+    );
+    EnvironmentSnapshot::new(
+        env::consts::OS.to_string(),
+        env::consts::ARCH.to_string(),
+        std::thread::available_parallelism()
+            .map(|parallelism| parallelism.get() as u32)
+            .unwrap_or(1),
+        0,
+        "benchmark-comparison-suite".to_string(),
+        pins.franken_engine.clone(),
+        extra,
+    )
+}
+
+fn comparison_parity_target(runtime: RuntimeId) -> Option<ParityTarget> {
+    match runtime {
+        RuntimeId::FrankenEngine => None,
+        RuntimeId::NodeLts => Some(ParityTarget::NodeJs),
+        RuntimeId::BunStable => Some(ParityTarget::Bun),
+    }
+}
+
+fn build_benchmark_comparison_evidence_bundle(
+    manifest: &BenchmarkComparisonManifest,
+    resolved_programs: &BTreeMap<String, PathBuf>,
+    run_id: &str,
+    results: &[BenchmarkComparisonRuntimeResult],
+) -> Result<EvidenceBundle, BenchmarkComparisonError> {
+    let run_epoch = SecurityEpoch::from_raw(1);
+    let mut bundle = EvidenceBundle::new(format!("{run_id}-comparison"), run_epoch);
+
+    for case in &manifest.cases {
+        let resolved_program = resolved_programs.get(&case.benchmark_id).ok_or_else(|| {
+            BenchmarkComparisonError::EvidenceBundle(format!(
+                "missing resolved program path for benchmark `{}`",
+                case.benchmark_id
+            ))
+        })?;
+        let program_bytes = fs::read(resolved_program)
+            .unwrap_or_else(|_| resolved_program.display().to_string().into_bytes());
+        let mut tags = BTreeSet::new();
+        tags.insert("benchmark_comparison".to_string());
+        tags.insert(case.category.as_str().to_string());
+        bundle
+            .add_provenance(WorkloadProvenance {
+                workload_id: case.benchmark_id.clone(),
+                name: case.benchmark_id.clone(),
+                category: comparison_workload_category(case.category),
+                source: resolved_program.display().to_string(),
+                pinned_version: ContentHash::compute(&program_bytes).to_hex(),
+                content_hash: ContentHash::compute(&program_bytes),
+                provenance_epoch: run_epoch,
+                tags,
+            })
+            .map_err(|error| BenchmarkComparisonError::EvidenceBundle(error.to_string()))?;
+    }
+
+    let franken_medians: BTreeMap<&str, u64> = results
+        .iter()
+        .filter(|entry| entry.runtime == RuntimeId::FrankenEngine)
+        .map(|entry| (entry.benchmark_id.as_str(), entry.statistics.median_ns))
+        .collect();
+
+    for entry in results {
+        let environment = comparison_environment_snapshot(&manifest.runtime_pins, entry.runtime);
+        for (iteration, sample) in entry.raw_samples.iter().enumerate() {
+            bundle
+                .add_run(EvidenceBenchmarkRun {
+                    run_id: format!(
+                        "{run_id}-{}-{}-{iteration}",
+                        entry.benchmark_id,
+                        entry.runtime.as_str()
+                    ),
+                    workload_id: entry.benchmark_id.clone(),
+                    duration_us: sample.wall_time_ns / 1_000,
+                    peak_memory_bytes: sample.peak_rss_bytes,
+                    gc_pause_us: 0,
+                    is_warmup: false,
+                    iteration: iteration as u32,
+                    environment: environment.clone(),
+                    run_epoch,
+                })
+                .map_err(|error| BenchmarkComparisonError::EvidenceBundle(error.to_string()))?;
+        }
+
+        if let Some(target) = comparison_parity_target(entry.runtime) {
+            let baseline_median = franken_medians
+                .get(entry.benchmark_id.as_str())
+                .copied()
+                .ok_or_else(|| {
+                    BenchmarkComparisonError::EvidenceBundle(format!(
+                        "missing FrankenEngine baseline for benchmark `{}`",
+                        entry.benchmark_id
+                    ))
+                })?;
+            let performance_ratio_millionths = if baseline_median == 0 {
+                0
+            } else {
+                ((entry.statistics.median_ns as u128)
+                    .saturating_mul(1_000_000)
+                    .checked_div(baseline_median as u128)
+                    .unwrap_or(u128::from(u64::MAX)))
+                .min(u128::from(u64::MAX)) as u64
+            };
+            let evidence_hash = ContentHash::compute(
+                format!(
+                    "{}:{}:{}:{}",
+                    entry.benchmark_id,
+                    target.as_str(),
+                    performance_ratio_millionths,
+                    entry.statistics.median_ns
+                )
+                .as_bytes(),
+            );
+            bundle
+                .add_parity_verdict(ParityVerdict {
+                    workload_id: entry.benchmark_id.clone(),
+                    target,
+                    output_equivalent: true,
+                    performance_ratio_millionths,
+                    behavioral_differences: 0,
+                    difference_details: Vec::new(),
+                    evidence_hash,
+                })
+                .map_err(|error| BenchmarkComparisonError::EvidenceBundle(error.to_string()))?;
+        }
+    }
+
+    bundle
+        .seal()
+        .map_err(|error| BenchmarkComparisonError::EvidenceBundle(error.to_string()))?;
+    Ok(bundle)
+}
+
+pub fn run_benchmark_comparison_suite(
+    manifest: &BenchmarkComparisonManifest,
+    manifest_root: &Path,
+    run_id: impl Into<String>,
+    run_date: impl Into<String>,
+) -> Result<BenchmarkComparisonSuiteResult, BenchmarkComparisonError> {
+    validate_benchmark_comparison_manifest(manifest)?;
+
+    let mut results = Vec::new();
+    let mut events = Vec::new();
+    let mut commands = Vec::new();
+    let mut resolved_programs = BTreeMap::new();
+    let run_id = run_id.into();
+    let run_date = run_date.into();
+
+    for case in &manifest.cases {
+        let resolved_program = if case.program_path.is_absolute() {
+            case.program_path.clone()
+        } else {
+            manifest_root.join(&case.program_path)
+        };
+        resolved_programs.insert(case.benchmark_id.clone(), resolved_program.clone());
+
+        let runtime_specs = [
+            (
+                RuntimeId::FrankenEngine,
+                manifest.runtime_commands.frankenctl.clone(),
+            ),
+            (RuntimeId::NodeLts, manifest.runtime_commands.node.clone()),
+            (RuntimeId::BunStable, manifest.runtime_commands.bun.clone()),
+        ];
+
+        for (runtime, runtime_bin) in runtime_specs {
+            let mut raw_samples = Vec::new();
+            let mut runtime_args = match runtime {
+                RuntimeId::FrankenEngine => {
+                    let comparison_report = env::temp_dir().join(format!(
+                        "franken-benchmark-compare-{}-{}-{}.json",
+                        case.benchmark_id,
+                        runtime.as_str(),
+                        current_unix_timestamp_ns(),
+                    ));
+                    vec![
+                        "run".to_string(),
+                        "--input".to_string(),
+                        resolved_program.display().to_string(),
+                        "--extension-id".to_string(),
+                        format!("bench-{}-{}", case.benchmark_id, runtime.as_str()),
+                        "--out".to_string(),
+                        comparison_report.display().to_string(),
+                    ]
+                }
+                RuntimeId::NodeLts | RuntimeId::BunStable => {
+                    let mut args = vec![resolved_program.display().to_string()];
+                    args.extend(case.args.iter().cloned());
+                    args
+                }
+            };
+
+            commands.push(render_benchmark_comparison_command(
+                &runtime_bin,
+                &runtime_args,
+                manifest.fairness_policy.case_timeout_ms,
+            ));
+
+            for _ in 0..manifest.fairness_policy.warmup_runs {
+                let _ = run_single_benchmark_comparison_sample(
+                    case,
+                    runtime,
+                    &runtime_bin,
+                    &runtime_args,
+                    manifest.fairness_policy.case_timeout_ms,
+                )?;
+            }
+
+            for _ in 0..manifest.fairness_policy.sample_count {
+                raw_samples.push(run_single_benchmark_comparison_sample(
+                    case,
+                    runtime,
+                    &runtime_bin,
+                    &runtime_args,
+                    manifest.fairness_policy.case_timeout_ms,
+                )?);
+            }
+
+            let statistics = summarize_benchmark_comparison_samples(&raw_samples);
+            let benchmark_result = BenchmarkResult {
+                benchmark_id: case.benchmark_id.clone(),
+                category: case.category,
+                runtime,
+                wall_time_ns: statistics.median_ns,
+                memory_peak_bytes: statistics.peak_rss_bytes_max,
+                run_count: statistics.sample_count,
+                cv_millionths: statistics.cv_millionths,
+            };
+            results.push(BenchmarkComparisonRuntimeResult {
+                benchmark_id: case.benchmark_id.clone(),
+                category: case.category,
+                runtime,
+                statistics,
+                raw_samples,
+                benchmark_result,
+            });
+            events.push(BenchmarkComparisonEvent {
+                benchmark_id: case.benchmark_id.clone(),
+                category: case.category,
+                runtime,
+                event: "benchmark_case_completed".to_string(),
+                outcome: "pass".to_string(),
+            });
+
+            runtime_args.clear();
+        }
+    }
+
+    let evidence_bundle = build_benchmark_comparison_evidence_bundle(
+        manifest,
+        &resolved_programs,
+        &run_id,
+        &results,
+    )?;
+
+    Ok(BenchmarkComparisonSuiteResult {
+        schema_version: BENCHMARK_COMPARISON_SCHEMA_VERSION.to_string(),
+        run_id,
+        run_date,
+        manifest: manifest.clone(),
+        results,
+        events,
+        commands,
+        evidence_bundle,
+    })
+}
+
+fn render_benchmark_comparison_command(
+    runtime_bin: &Path,
+    runtime_args: &[String],
+    case_timeout_ms: u64,
+) -> String {
+    let timeout_secs = case_timeout_ms.div_ceil(1000).max(1);
+    let joined_args = runtime_args
+        .iter()
+        .map(|arg| shell_quote(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "/usr/bin/time -o <timing-file> -f %e\\t%M timeout {}s {} {}",
+        timeout_secs,
+        shell_quote(runtime_bin.to_string_lossy().as_ref()),
+        joined_args
+    )
+}
+
+fn run_single_benchmark_comparison_sample(
+    case: &BenchmarkComparisonCase,
+    runtime: RuntimeId,
+    runtime_bin: &Path,
+    runtime_args: &[String],
+    case_timeout_ms: u64,
+) -> Result<BenchmarkComparisonSample, BenchmarkComparisonError> {
+    let timing_output = env::temp_dir().join(format!(
+        "franken-benchmark-comparison-time-{}-{}-{}.txt",
+        case.benchmark_id,
+        runtime.as_str(),
+        current_unix_timestamp_ns(),
+    ));
+    let timeout_secs = case_timeout_ms.div_ceil(1000).max(1);
+    let output = Command::new("/usr/bin/time")
+        .arg("-o")
+        .arg(&timing_output)
+        .arg("-f")
+        .arg("%e\t%M")
+        .arg("timeout")
+        .arg(format!("{timeout_secs}s"))
+        .arg(runtime_bin)
+        .args(runtime_args)
+        .output()
+        .map_err(|error| BenchmarkComparisonError::Io(error.to_string()))?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !output.status.success() {
+        let _ = fs::remove_file(&timing_output);
+        return Err(BenchmarkComparisonError::CommandFailed {
+            benchmark_id: case.benchmark_id.clone(),
+            runtime,
+            detail: format!(
+                "exit_code={:?} stdout=`{}` stderr=`{}`",
+                output.status.code(),
+                stdout.trim(),
+                stderr.trim()
+            ),
+        });
+    }
+
+    let timing_raw = fs::read_to_string(&timing_output)
+        .map_err(|error| BenchmarkComparisonError::Io(error.to_string()))?;
+    let _ = fs::remove_file(&timing_output);
+    let mut parts = timing_raw.trim().split('\t');
+    let elapsed_seconds = parts
+        .next()
+        .ok_or_else(|| BenchmarkComparisonError::TimingParse {
+            benchmark_id: case.benchmark_id.clone(),
+            runtime,
+            detail: format!("missing elapsed seconds in `{}`", timing_raw.trim()),
+        })?;
+    let peak_rss_kib = parts
+        .next()
+        .ok_or_else(|| BenchmarkComparisonError::TimingParse {
+            benchmark_id: case.benchmark_id.clone(),
+            runtime,
+            detail: format!("missing peak rss in `{}`", timing_raw.trim()),
+        })?;
+    let elapsed_ns =
+        (elapsed_seconds
+            .parse::<f64>()
+            .map_err(|error| BenchmarkComparisonError::TimingParse {
+                benchmark_id: case.benchmark_id.clone(),
+                runtime,
+                detail: error.to_string(),
+            })?
+            * 1_000_000_000.0)
+            .round() as u64;
+    let peak_rss_bytes = peak_rss_kib
+        .parse::<u64>()
+        .map_err(|error| BenchmarkComparisonError::TimingParse {
+            benchmark_id: case.benchmark_id.clone(),
+            runtime,
+            detail: error.to_string(),
+        })?
+        .saturating_mul(1024);
+    Ok(BenchmarkComparisonSample {
+        wall_time_ns: elapsed_ns,
+        peak_rss_bytes,
+    })
+}
+
+fn current_unix_timestamp_ns() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0)
+}
+
+fn shell_quote(input: &str) -> String {
+    if input
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | ':'))
+    {
+        input.to_string()
+    } else {
+        format!("'{}'", input.replace('\'', "'\"'\"'"))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BenchmarkSuiteConfig {
     pub seed: u64,
@@ -1072,6 +1792,7 @@ pub struct BenchmarkEvidenceArtifacts {
     pub benchmark_env_manifest_path: PathBuf,
     pub raw_results_archive_path: PathBuf,
     pub summary_path: PathBuf,
+    pub comparison_bundle_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1342,6 +2063,165 @@ pub fn write_evidence_artifacts(
         benchmark_env_manifest_path: env_manifest_path,
         raw_results_archive_path,
         summary_path,
+        comparison_bundle_path: None,
+    })
+}
+
+pub fn write_benchmark_comparison_artifacts(
+    result: &BenchmarkComparisonSuiteResult,
+    output_dir: &Path,
+) -> std::io::Result<BenchmarkEvidenceArtifacts> {
+    fs::create_dir_all(output_dir)?;
+
+    let commands_path = output_dir.join("commands.txt");
+    let events_path = output_dir.join("events.jsonl");
+    let env_manifest_path = output_dir.join("benchmark_env_manifest.json");
+    let raw_results_archive_path = output_dir.join("raw_results_archive.json");
+    let summary_path = output_dir.join("benchmark_summary.json");
+    let evidence_path = output_dir.join("benchmark_evidence.jsonl");
+    let run_manifest_path = output_dir.join("run_manifest.json");
+    let comparison_bundle_path = output_dir.join("comparison_evidence_bundle.json");
+
+    fs::write(&commands_path, result.commands.join("\n") + "\n")?;
+
+    let contract = BenchmarkHarnessContract {
+        runtime_pins: result.manifest.runtime_pins.clone(),
+        fairness_policy: result.manifest.fairness_policy,
+    };
+    let env_manifest = BenchmarkEnvironmentManifest {
+        schema_version: BENCHMARK_ENV_SCHEMA_VERSION.to_string(),
+        run_id: result.run_id.clone(),
+        run_date: result.run_date.clone(),
+        seed: 0,
+        locale: env::var("LC_ALL")
+            .or_else(|_| env::var("LANG"))
+            .unwrap_or_else(|_| "C".to_string()),
+        timezone: env::var("TZ").unwrap_or_else(|_| "UTC".to_string()),
+        os: env::consts::OS.to_string(),
+        arch: env::consts::ARCH.to_string(),
+        runtime_pins: contract.runtime_pins,
+        fairness_policy: contract.fairness_policy,
+    };
+    fs::write(
+        &env_manifest_path,
+        serde_json::to_string_pretty(&env_manifest).unwrap(),
+    )?;
+
+    let raw_results = serde_json::json!({
+        "schema_version": "franken-engine.benchmark-comparison.raw-results.v1",
+        "run_id": &result.run_id,
+        "run_date": &result.run_date,
+        "cases": result.manifest.cases.iter().map(|case| {
+            serde_json::json!({
+                "benchmark_id": &case.benchmark_id,
+                "category": case.category.as_str(),
+                "program_path": case.program_path.display().to_string(),
+                "args": &case.args,
+            })
+        }).collect::<Vec<_>>(),
+        "results": result.results.iter().map(|entry| {
+            serde_json::json!({
+                "benchmark_id": &entry.benchmark_id,
+                "category": entry.category.as_str(),
+                "runtime": entry.runtime.as_str(),
+                "statistics": &entry.statistics,
+                "raw_samples": &entry.raw_samples,
+                "benchmark_result": &entry.benchmark_result,
+            })
+        }).collect::<Vec<_>>(),
+    });
+    fs::write(
+        &raw_results_archive_path,
+        serde_json::to_string_pretty(&raw_results).unwrap(),
+    )?;
+    fs::write(
+        &comparison_bundle_path,
+        serde_json::to_string_pretty(&result.evidence_bundle).unwrap(),
+    )?;
+
+    let evidence_lines = result
+        .results
+        .iter()
+        .map(|entry| {
+            serde_json::json!({
+                "event": "benchmark_comparison_runtime_completed",
+                "benchmark_id": &entry.benchmark_id,
+                "category": entry.category.as_str(),
+                "runtime": entry.runtime.as_str(),
+                "median_ns": entry.statistics.median_ns,
+                "mean_ns": entry.statistics.mean_ns,
+                "p95_ns": entry.statistics.p95_ns,
+                "p99_ns": entry.statistics.p99_ns,
+                "peak_rss_bytes_max": entry.statistics.peak_rss_bytes_max,
+                "cv_millionths": entry.statistics.cv_millionths,
+            })
+        })
+        .map(|line| serde_json::to_string(&line).unwrap())
+        .collect::<Vec<_>>();
+    fs::write(&evidence_path, evidence_lines.join("\n") + "\n")?;
+
+    let event_lines = result
+        .events
+        .iter()
+        .map(|event| {
+            serde_json::json!({
+                "benchmark_id": &event.benchmark_id,
+                "category": event.category.as_str(),
+                "runtime": event.runtime.as_str(),
+                "event": &event.event,
+                "outcome": &event.outcome,
+                "component": BENCHMARK_COMPARISON_COMPONENT,
+            })
+        })
+        .map(|line| serde_json::to_string(&line).unwrap())
+        .collect::<Vec<_>>();
+    fs::write(&events_path, event_lines.join("\n") + "\n")?;
+
+    let summary = serde_json::json!({
+        "schema_version": BENCHMARK_COMPARISON_SCHEMA_VERSION,
+        "run_id": &result.run_id,
+        "run_date": &result.run_date,
+        "benchmark_count": result.manifest.cases.len(),
+        "runtime_result_count": result.results.len(),
+        "runtimes": ["franken_engine", "node_lts", "bun_stable"],
+        "evidence_bundle_status": result.evidence_bundle.status.to_string(),
+    });
+    fs::write(
+        &summary_path,
+        serde_json::to_string_pretty(&summary).unwrap(),
+    )?;
+
+    let manifest = serde_json::json!({
+        "schema_version": BENCHMARK_COMPARISON_SCHEMA_VERSION,
+        "run_id": &result.run_id,
+        "run_date": &result.run_date,
+        "fairness_policy": result.manifest.fairness_policy,
+        "runtime_pins": &result.manifest.runtime_pins,
+        "artifacts": {
+            "manifest": run_manifest_path,
+            "benchmark_evidence": evidence_path,
+            "events": events_path,
+            "commands": commands_path,
+            "benchmark_env_manifest": env_manifest_path,
+            "raw_results_archive": raw_results_archive_path,
+            "summary": summary_path,
+            "comparison_bundle": comparison_bundle_path,
+        },
+    });
+    fs::write(
+        &run_manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )?;
+
+    Ok(BenchmarkEvidenceArtifacts {
+        run_manifest_path,
+        evidence_path,
+        events_path,
+        commands_path,
+        benchmark_env_manifest_path: env_manifest_path,
+        raw_results_archive_path,
+        summary_path,
+        comparison_bundle_path: Some(comparison_bundle_path),
     })
 }
 

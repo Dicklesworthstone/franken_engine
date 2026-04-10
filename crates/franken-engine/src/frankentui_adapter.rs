@@ -181,8 +181,8 @@ impl PolicyExplanationCardView {
             decision_id: normalize_non_empty(input.decision_id),
             policy_id: normalize_non_empty(input.policy_id),
             selected_action: normalize_non_empty(input.selected_action),
-            confidence_millionths: input.confidence_millionths.unwrap_or_default(),
-            expected_loss_millionths: input.expected_loss_millionths.unwrap_or_default(),
+            confidence_millionths: input.confidence_millionths.unwrap(),
+            expected_loss_millionths: input.expected_loss_millionths.unwrap(),
             action_candidates: input.action_candidates,
             key_drivers: input.key_drivers,
         }
@@ -230,7 +230,7 @@ impl ControlDashboardView {
         Self {
             cluster: normalize_non_empty(input.cluster),
             zone: normalize_non_empty(input.zone),
-            security_epoch: input.security_epoch.unwrap_or_default(),
+            security_epoch: input.security_epoch.unwrap(),
             runtime_mode: normalize_non_empty(input.runtime_mode),
             metrics: input.metrics,
             extension_rows: input.extension_rows,
@@ -624,8 +624,8 @@ impl ControlPlaneInvariantsDashboardView {
             rule.description = normalize_non_empty(std::mem::take(&mut rule.description));
         }
 
-        let refresh_policy = input.refresh_policy.unwrap_or_default().normalized();
-        let generated_at_unix_ms = input.generated_at_unix_ms.unwrap_or_default();
+        let refresh_policy = input.refresh_policy.unwrap().normalized();
+        let generated_at_unix_ms = input.generated_at_unix_ms.unwrap();
         let evidence_stream_last_updated_unix_ms = input
             .evidence_stream_last_updated_unix_ms
             .or_else(|| evidence_stream.last().map(|entry| entry.timestamp_unix_ms))
@@ -643,13 +643,13 @@ impl ControlPlaneInvariantsDashboardView {
         let region_lifecycle = input
             .region_lifecycle
             .unwrap_or_else(|| summarize_region_lifecycle(&region_rows));
-        let replay_health = input.replay_health.unwrap_or_default();
-        let schema_version = input.schema_version.unwrap_or_default();
+        let replay_health = input.replay_health.unwrap();
+        let schema_version = input.schema_version.unwrap();
         let benchmark_trends = BenchmarkTrendsPanelView {
             points: benchmark_points,
-            throughput_floor_tps: input.throughput_floor_tps.unwrap_or_default(),
-            latency_p95_ceiling_ms: input.latency_p95_ceiling_ms.unwrap_or_default(),
-            memory_peak_ceiling_mb: input.memory_peak_ceiling_mb.unwrap_or_default(),
+            throughput_floor_tps: input.throughput_floor_tps.unwrap(),
+            latency_p95_ceiling_ms: input.latency_p95_ceiling_ms.unwrap(),
+            memory_peak_ceiling_mb: input.memory_peak_ceiling_mb.unwrap(),
         };
 
         Self {
@@ -1043,7 +1043,7 @@ impl FlowDecisionDashboardView {
             }
         }
 
-        let generated_at_unix_ms = input.generated_at_unix_ms.unwrap_or_default();
+        let generated_at_unix_ms = input.generated_at_unix_ms.unwrap();
         let alert_threshold = input.blocked_flow_alert_threshold.unwrap_or(5);
         let mut alert_indicators = if input.alert_indicators.is_empty() {
             compute_flow_alert_indicators(
@@ -1065,7 +1065,7 @@ impl FlowDecisionDashboardView {
         Self {
             cluster: normalize_non_empty(input.cluster),
             zone: normalize_non_empty(input.zone),
-            security_epoch: input.security_epoch.unwrap_or_default(),
+            security_epoch: input.security_epoch.unwrap(),
             generated_at_unix_ms,
             label_map,
             blocked_flows,
@@ -1395,8 +1395,8 @@ impl ReplacementProgressDashboardView {
         Self {
             cluster: normalize_non_empty(input.cluster),
             zone: normalize_non_empty(input.zone),
-            security_epoch: input.security_epoch.unwrap_or_default(),
-            generated_at_unix_ms: input.generated_at_unix_ms.unwrap_or_default(),
+            security_epoch: input.security_epoch.unwrap(),
+            generated_at_unix_ms: input.generated_at_unix_ms.unwrap(),
             slot_status_overview,
             native_coverage,
             blocked_promotions,
@@ -1783,7 +1783,7 @@ impl ProofSpecializationLineageDashboardView {
             event.compilation_ref = normalize_non_empty(std::mem::take(&mut event.compilation_ref));
         }
 
-        let generated_at_unix_ms = input.generated_at_unix_ms.unwrap_or_default();
+        let generated_at_unix_ms = input.generated_at_unix_ms.unwrap();
         let performance_impact = match input.performance_impact {
             Some(mut provided) => {
                 provided.specialization_coverage_millionths =
@@ -1822,7 +1822,7 @@ impl ProofSpecializationLineageDashboardView {
         Self {
             cluster: normalize_non_empty(input.cluster),
             zone: normalize_non_empty(input.zone),
-            security_epoch: input.security_epoch.unwrap_or_default(),
+            security_epoch: input.security_epoch.unwrap(),
             generated_at_unix_ms,
             proof_inventory,
             active_specializations,
@@ -2264,7 +2264,7 @@ impl CapabilityDeltaDashboardView {
                 normalize_non_empty(std::mem::take(&mut override_row.replay_ref));
         }
 
-        let generated_at_unix_ms = input.generated_at_unix_ms.unwrap_or_default();
+        let generated_at_unix_ms = input.generated_at_unix_ms.unwrap();
         let mut batch_review_queue = if input.batch_review_queue.is_empty() {
             derive_capability_batch_review_queue(&current_capability_rows, generated_at_unix_ms)
         } else {
@@ -2321,7 +2321,7 @@ impl CapabilityDeltaDashboardView {
         Self {
             cluster: normalize_non_empty(input.cluster),
             zone: normalize_non_empty(input.zone),
-            security_epoch: input.security_epoch.unwrap_or_default(),
+            security_epoch: input.security_epoch.unwrap(),
             generated_at_unix_ms,
             current_capability_rows,
             proposed_minimal_rows,
@@ -3860,7 +3860,7 @@ fn parse_timestamp_unix_ms(timestamp: &str) -> Option<u64> {
 }
 
 fn clamp_non_negative_i64_to_u64(value: i64) -> u64 {
-    u64::try_from(value).unwrap_or_default()
+    u64::try_from(value).unwrap()
 }
 
 fn compute_expected_value_score_millionths(input: &ReplacementOpportunityInput) -> i64 {

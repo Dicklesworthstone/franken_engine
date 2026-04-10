@@ -1104,8 +1104,8 @@ mod tests {
         gc.unroot("ext-a", obj).unwrap();
         gc.collect("ext-a").unwrap();
 
-        let json = serde_json::to_string(&gc).unwrap_or_default();
-        let restored: GcCollector = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&gc).unwrap();
+        let restored: GcCollector = serde_json::from_str(&json).unwrap();
 
         assert_eq!(gc.heap_count(), restored.heap_count());
         assert_eq!(gc.event_sequence(), restored.event_sequence());
@@ -1184,8 +1184,8 @@ mod tests {
     #[test]
     fn gc_phase_serde_round_trip() {
         for phase in &[GcPhase::Mark, GcPhase::Sweep, GcPhase::Complete] {
-            let json = serde_json::to_string(phase).unwrap_or_default();
-            let decoded: GcPhase = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(phase).unwrap();
+            let decoded: GcPhase = serde_json::from_str(&json).unwrap();
             assert_eq!(&decoded, phase);
         }
     }
@@ -1205,8 +1205,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let decoded: GcError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let decoded: GcError = serde_json::from_str(&json).unwrap();
             assert_eq!(&decoded, err);
         }
     }
@@ -1344,8 +1344,8 @@ mod tests {
         gc.allocate("ext-a", 50).unwrap();
         let event = gc.collect("ext-a").unwrap();
 
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let decoded: GcEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let decoded: GcEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, event);
     }
 
@@ -1441,8 +1441,8 @@ mod tests {
             },
         ];
         for config in &configs {
-            let json = serde_json::to_string(config).unwrap_or_default();
-            let back: GcConfig = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(config).unwrap();
+            let back: GcConfig = serde_json::from_str(&json).unwrap();
             assert_eq!(config.deterministic, back.deterministic);
             assert_eq!(
                 config.pressure_threshold_percent,
@@ -1499,8 +1499,8 @@ mod tests {
             remaining: 100,
             domain: Some(AllocationDomain::ExtensionHeap),
         });
-        let json = serde_json::to_string(&err).unwrap_or_default();
-        let decoded: GcError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&err).unwrap();
+        let decoded: GcError = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, err);
     }
 

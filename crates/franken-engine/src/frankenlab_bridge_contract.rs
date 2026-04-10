@@ -989,7 +989,7 @@ impl BridgeContractValidator {
             &self.replay_verdicts,
             &self.oracle_results,
         ))
-        .unwrap_or_default();
+        .unwrap();
         let content_hash = ContentHash::compute(&content_bytes);
 
         BridgeContractReport {

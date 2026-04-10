@@ -631,7 +631,7 @@ impl WorkloadCorpus {
         self.family_coverage
             .get(&family)
             .map(|ids| ids.iter().filter_map(|id| self.specimens.get(id)).collect())
-            .unwrap_or_default()
+            .unwrap()
     }
 
     /// All specimens with unpublishable licenses.
@@ -1044,7 +1044,7 @@ impl WorkloadCorpusGate {
                 .family_coverage
                 .get(family)
                 .cloned()
-                .unwrap_or_default();
+                .unwrap();
             let specimen_count = specimen_ids.len();
 
             let family_results: Vec<&EquivalenceResult> = corpus

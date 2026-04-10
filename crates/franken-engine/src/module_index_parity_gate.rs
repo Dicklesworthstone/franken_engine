@@ -932,7 +932,8 @@ impl ModuleIndexParityGate {
 
         let record = RollbackRecord::new(record_id, self.epoch, reason, timestamp_ns);
         self.rollback_history.push(record);
-        self.rollback_history.last().unwrap()
+        let len = self.rollback_history.len();
+        &self.rollback_history[len - 1]
     }
 
     /// Reset rollback counter (e.g. after a successful evaluation).

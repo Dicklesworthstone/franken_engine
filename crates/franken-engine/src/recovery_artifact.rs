@@ -917,8 +917,8 @@ mod tests {
         assert_eq!(exported.len(), 1);
 
         // Verify exported artifact can be serialized.
-        let json = serde_json::to_string(exported[0]).unwrap_or_default();
-        let restored: RecoveryArtifact = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(exported[0]).unwrap();
+        let restored: RecoveryArtifact = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.artifact_type, ArtifactType::ForcedReconciliation);
     }
 
@@ -961,8 +961,8 @@ mod tests {
             ArtifactType::FailedAttestation,
         ];
         for t in &types {
-            let json = serde_json::to_string(t).unwrap_or_default();
-            let restored: ArtifactType = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(t).unwrap();
+            let restored: ArtifactType = serde_json::from_str(&json).unwrap();
             assert_eq!(*t, restored);
         }
     }
@@ -993,8 +993,8 @@ mod tests {
             },
         ];
         for t in &triggers {
-            let json = serde_json::to_string(t).unwrap_or_default();
-            let restored: RecoveryTrigger = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(t).unwrap();
+            let restored: RecoveryTrigger = serde_json::from_str(&json).unwrap();
             assert_eq!(*t, restored);
         }
     }
@@ -1024,8 +1024,8 @@ mod tests {
             },
         ];
         for e in &elements {
-            let json = serde_json::to_string(e).unwrap_or_default();
-            let restored: ProofElement = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(e).unwrap();
+            let restored: ProofElement = serde_json::from_str(&json).unwrap();
             assert_eq!(*e, restored);
         }
     }
@@ -1033,8 +1033,8 @@ mod tests {
     #[test]
     fn recovery_artifact_serialization_round_trip() {
         let artifact = build_valid_artifact();
-        let json = serde_json::to_string(&artifact).unwrap_or_default();
-        let restored: RecoveryArtifact = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&artifact).unwrap();
+        let restored: RecoveryArtifact = serde_json::from_str(&json).unwrap();
         assert_eq!(artifact, restored);
     }
 
@@ -1050,8 +1050,8 @@ mod tests {
             },
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).unwrap_or_default();
-            let restored: VerificationError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(e).unwrap();
+            let restored: VerificationError = serde_json::from_str(&json).unwrap();
             assert_eq!(*e, restored);
         }
     }
@@ -1065,8 +1065,8 @@ mod tests {
             },
         ];
         for v in &verdicts {
-            let json = serde_json::to_string(v).unwrap_or_default();
-            let restored: RecoveryVerdict = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(v).unwrap();
+            let restored: RecoveryVerdict = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, restored);
         }
     }
@@ -1152,8 +1152,8 @@ mod tests {
             authorization_hash: AuthenticityHash::compute_keyed(b"auth", b"key"),
             timestamp_ticks: 42_000,
         };
-        let json = serde_json::to_string(&action).unwrap_or_default();
-        let restored: OperatorAction = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&action).unwrap();
+        let restored: OperatorAction = serde_json::from_str(&json).unwrap();
         assert_eq!(action, restored);
     }
 
@@ -1168,8 +1168,8 @@ mod tests {
             epoch_id: 1,
             event: "artifact_created".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: RecoveryEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: RecoveryEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 
@@ -1179,8 +1179,8 @@ mod tests {
             expected: ContentHash::compute(b"expected"),
             computed: ContentHash::compute(b"computed"),
         };
-        let json = serde_json::to_string(&err).unwrap_or_default();
-        let restored: VerificationError = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&err).unwrap();
+        let restored: VerificationError = serde_json::from_str(&json).unwrap();
         assert_eq!(err, restored);
     }
 

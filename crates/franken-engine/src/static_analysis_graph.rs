@@ -822,7 +822,7 @@ impl StaticAnalysisGraph {
         self.forward_adj
             .get(&node_id.0)
             .map(|ids| ids.iter().map(|s| AnalysisEdgeId(s.clone())).collect())
-            .unwrap_or_default()
+            .unwrap()
     }
 
     /// Get incoming edge IDs for a node.
@@ -830,7 +830,7 @@ impl StaticAnalysisGraph {
         self.reverse_adj
             .get(&node_id.0)
             .map(|ids| ids.iter().map(|s| AnalysisEdgeId(s.clone())).collect())
-            .unwrap_or_default()
+            .unwrap()
     }
 
     /// Get direct dependencies for a node (nodes this node depends on).
@@ -909,7 +909,7 @@ impl StaticAnalysisGraph {
         for cycle in &new_cycles {
             self.emit_event(
                 AnalysisEventKind::CycleDetected,
-                &cycle.cycle.first().map(|c| c.0.clone()).unwrap_or_default(),
+                &cycle.cycle.first().map(|c| c.0.clone()).unwrap(),
                 &format!("{} components in cycle", cycle.cycle.len()),
             );
         }
@@ -993,7 +993,7 @@ impl StaticAnalysisGraph {
                         self.components
                             .get(&child_id.0)
                             .map(|c| c.capability_boundary.all_capabilities())
-                            .unwrap_or_default()
+                            .unwrap()
                     })
                     .collect()
             };
@@ -1116,7 +1116,7 @@ impl StaticAnalysisGraph {
             components: &self.components,
             cycles: &self.cycles,
         })
-        .unwrap_or_default();
+        .unwrap();
         ContentHash::compute(&canonical)
     }
 
@@ -1230,7 +1230,7 @@ impl StaticAnalysisGraph {
                     })
                     .collect()
             })
-            .unwrap_or_default()
+            .unwrap()
     }
 
     /// Compute the subgraph reachable from a given node (forward).

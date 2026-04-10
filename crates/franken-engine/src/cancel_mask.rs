@@ -581,16 +581,16 @@ mod tests {
     #[test]
     fn mask_justification_serialization_round_trip() {
         let just = checkpoint_justification();
-        let json = serde_json::to_string(&just).unwrap_or_default();
-        let restored: MaskJustification = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&just).unwrap();
+        let restored: MaskJustification = serde_json::from_str(&json).unwrap();
         assert_eq!(just, restored);
     }
 
     #[test]
     fn mask_policy_serialization_round_trip() {
         let policy = MaskPolicy::standard();
-        let json = serde_json::to_string(&policy).unwrap_or_default();
-        let restored: MaskPolicy = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&policy).unwrap();
+        let restored: MaskPolicy = serde_json::from_str(&json).unwrap();
         assert_eq!(policy, restored);
     }
 
@@ -604,8 +604,8 @@ mod tests {
             ops_executed: 10,
             outcome: MaskOutcome::CleanRelease,
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: MaskEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: MaskEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 

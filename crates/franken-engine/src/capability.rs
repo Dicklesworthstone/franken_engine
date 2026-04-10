@@ -520,8 +520,8 @@ mod tests {
     #[test]
     fn capability_profile_serialization_round_trip() {
         let full = CapabilityProfile::full();
-        let json = serde_json::to_string(&full).unwrap_or_default();
-        let restored: CapabilityProfile = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&full).unwrap();
+        let restored: CapabilityProfile = serde_json::from_str(&json).unwrap();
         assert_eq!(full, restored);
     }
 
@@ -535,8 +535,8 @@ mod tests {
             CapabilityProfile::compute_only(),
         ];
         for profile in &profiles {
-            let json1 = serde_json::to_string(profile).unwrap_or_default();
-            let json2 = serde_json::to_string(profile).unwrap_or_default();
+            let json1 = serde_json::to_string(profile).unwrap();
+            let json2 = serde_json::to_string(profile).unwrap();
             assert_eq!(
                 json1, json2,
                 "non-deterministic serialization for {}",
@@ -568,8 +568,8 @@ mod tests {
             RuntimeCapability::FsWrite,
         ];
         for cap in &all {
-            let json = serde_json::to_string(cap).unwrap_or_default();
-            let restored: RuntimeCapability = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(cap).unwrap();
+            let restored: RuntimeCapability = serde_json::from_str(&json).unwrap();
             assert_eq!(*cap, restored);
         }
     }
@@ -584,8 +584,8 @@ mod tests {
             ProfileKind::ComputeOnly,
         ];
         for kind in &all {
-            let json = serde_json::to_string(kind).unwrap_or_default();
-            let restored: ProfileKind = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(kind).unwrap();
+            let restored: ProfileKind = serde_json::from_str(&json).unwrap();
             assert_eq!(*kind, restored);
         }
     }
@@ -625,8 +625,8 @@ mod tests {
             held_profile: ProfileKind::EngineCore,
             component: "test".to_string(),
         };
-        let json = serde_json::to_string(&denied).unwrap_or_default();
-        let restored: CapabilityDenied = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&denied).unwrap();
+        let restored: CapabilityDenied = serde_json::from_str(&json).unwrap();
         assert_eq!(denied, restored);
     }
 

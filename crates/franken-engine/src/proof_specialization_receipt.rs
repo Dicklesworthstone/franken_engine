@@ -449,7 +449,7 @@ impl SignaturePreimage for SpecializationReceipt {
     fn unsigned_view(&self) -> CanonicalValue {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
-        CanonicalValue::Bytes(serde_json::to_vec(&copy).unwrap_or_default())
+        CanonicalValue::Bytes(serde_json::to_vec(&copy).unwrap())
     }
 }
 
@@ -715,7 +715,7 @@ impl ReceiptIndex {
             .iter()
             .find(|r| &r.receipt_id == receipt_id)
             .map(|r| r.proof_inputs.iter().collect())
-            .unwrap_or_default()
+            .unwrap()
     }
 
     /// Find all receipts for a given optimization class.

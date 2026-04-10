@@ -34,7 +34,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::hash_tiers::ContentHash;
 use crate::ir_contract::{
-    HostcallDecisionRecord, Ir3Instruction, Ir3Module, IteratorCloseReason, WitnessEvent,
+    HostcallDecisionRecord, Ir3Instruction, Ir3Module, IteratorCloseReason, RegRange, WitnessEvent,
     WitnessEventKind,
 };
 use crate::runtime_config::ExecutionConfig;
@@ -98,6 +98,12 @@ pub enum Value {
     Closure(u32),
     /// Internal iterator state handle used by dedicated iteration instructions.
     Iterator(u32),
+    /// Generator function reference (calling creates a suspended GeneratorObject).
+    GeneratorFunction(u32),
+    /// Live generator object reference (index into generator store).
+    Generator(u32),
+    /// Promise handle (index into the promise store).
+    Promise(u32),
 }
 
 impl Value {
@@ -108,7 +114,13 @@ impl Value {
             Self::Bool(b) => *b,
             Self::Int(n) => *n != 0,
             Self::Str(s) => !s.is_empty(),
-            Self::Object(_) | Self::Function(_) | Self::Closure(_) | Self::Iterator(_) => true,
+            Self::Object(_)
+            | Self::Function(_)
+            | Self::Closure(_)
+            | Self::Iterator(_)
+            | Self::GeneratorFunction(_)
+            | Self::Generator(_)
+            | Self::Promise(_) => true,
         }
     }
 
@@ -125,8 +137,8 @@ impl Value {
             Self::Int(_) => "number",
             Self::Str(_) => "string",
             Self::Object(_) => "object",
-            Self::Function(_) | Self::Closure(_) => "function",
-            Self::Iterator(_) => "iterator",
+            Self::Function(_) | Self::Closure(_) | Self::GeneratorFunction(_) => "function",
+            Self::Iterator(_) | Self::Generator(_) | Self::Promise(_) => "object",
         }
     }
 
@@ -137,8 +149,8 @@ impl Value {
             Self::Bool(_) => "boolean",
             Self::Int(_) => "number",
             Self::Str(_) => "string",
-            Self::Function(_) | Self::Closure(_) => "function",
-            Self::Iterator(_) => "object",
+            Self::Function(_) | Self::Closure(_) | Self::GeneratorFunction(_) => "function",
+            Self::Iterator(_) | Self::Generator(_) | Self::Promise(_) => "object",
         }
     }
 }
@@ -155,6 +167,9 @@ impl fmt::Display for Value {
             Self::Function(idx) => write!(f, "[function#{idx}]"),
             Self::Closure(idx) => write!(f, "[closure#{idx}]"),
             Self::Iterator(idx) => write!(f, "[iterator#{idx}]"),
+            Self::GeneratorFunction(idx) => write!(f, "[generatorfunction#{idx}]"),
+            Self::Generator(idx) => write!(f, "[generator#{idx}]"),
+            Self::Promise(idx) => write!(f, "[promise#{idx}]"),
         }
     }
 }
@@ -206,6 +221,40 @@ struct RuntimeForOfState {
 enum RuntimeIteratorState {
     ForIn(RuntimeForInState),
     ForOf(RuntimeForOfState),
+}
+
+// ---------------------------------------------------------------------------
+// GeneratorObject — suspended generator state
+// ---------------------------------------------------------------------------
+
+/// State of a generator object.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+enum GeneratorPhase {
+    /// Created but not yet started (initial .next() call).
+    SuspendedStart,
+    /// Suspended at a yield point.
+    SuspendedYield,
+    /// Currently executing.
+    Executing,
+    /// Completed (returned or threw).
+    Completed,
+}
+
+/// A generator object holds the suspended state of a generator function.
+#[derive(Debug, Clone)]
+struct GeneratorObject {
+    /// Function index in the function table.
+    function_index: u32,
+    /// Closure index (captures from the enclosing scope).
+    closure_index: Option<u32>,
+    /// Saved instruction pointer (resume point after yield).
+    saved_ip: usize,
+    /// Saved register file snapshot at the time of yield.
+    saved_registers: Vec<Value>,
+    /// Saved register base offset.
+    saved_register_base: usize,
+    /// Current phase of the generator.
+    phase: GeneratorPhase,
 }
 
 // ---------------------------------------------------------------------------
@@ -789,6 +838,12 @@ pub struct InterpreterCore {
     closures: Vec<ClosureValue>,
     /// Pending capture names for the next `CreateClosure` instruction.
     pending_captures: Vec<u32>,
+    /// Generator object store.
+    generators: Vec<GeneratorObject>,
+    /// Promise store for ES2020 Promise semantics.
+    promise_store: crate::promise_model::PromiseStore,
+    /// Microtask queue for deterministic promise reaction scheduling.
+    microtask_queue: crate::promise_model::MicrotaskQueue,
 }
 
 impl InterpreterCore {
@@ -821,6 +876,9 @@ impl InterpreterCore {
             scope_chain: ScopeChain::new(),
             closures: Vec::new(),
             pending_captures: Vec::new(),
+            generators: Vec::new(),
+            promise_store: crate::promise_model::PromiseStore::new(),
+            microtask_queue: crate::promise_model::MicrotaskQueue::new(),
         }
     }
 
@@ -864,6 +922,10 @@ impl InterpreterCore {
         self.push_event("execution_started", "ok", None);
 
         let result = self.run_loop(module);
+
+        // Drain any pending microtasks enqueued during execution
+        // (promise reactions, thenable resolutions, etc.).
+        self.drain_microtasks();
 
         match &result {
             Ok(_) => self.push_event("execution_completed", "ok", None),
@@ -1194,6 +1256,140 @@ impl InterpreterCore {
         self.enforce_hook_action(hook.pre_allocation(&ctx, kind, size_hint))
     }
 
+    /// Step a generator: resume from its saved state, run until Yield or
+    /// Return, then snapshot the state back. Returns the {value, done} object.
+    fn generator_next(
+        &mut self,
+        module: &Ir3Module,
+        gen_id: u32,
+        _arg: Value,
+    ) -> Result<Value, InterpreterError> {
+        let gobj = self.generators.get_mut(gen_id as usize).ok_or_else(|| {
+            InterpreterError::TypeError {
+                expected: "valid generator".into(),
+                got: format!("generator#{gen_id} not found"),
+            }
+        })?;
+
+        match gobj.phase {
+            GeneratorPhase::Completed => {
+                let result_id = self.alloc_object();
+                {
+                    let obj = &mut self.heap[result_id.0 as usize];
+                    obj.properties.insert("value".to_string(), Value::Undefined);
+                    obj.properties.insert("done".to_string(), Value::Bool(true));
+                }
+                return Ok(Value::Object(result_id));
+            }
+            GeneratorPhase::Executing => {
+                return Err(InterpreterError::TypeError {
+                    expected: "suspended generator".into(),
+                    got: "generator already executing".into(),
+                });
+            }
+            GeneratorPhase::SuspendedStart | GeneratorPhase::SuspendedYield => {}
+        }
+
+        let caller_ip = self.ip;
+        let caller_register_base = self.register_base;
+        let caller_scope = self.scope_chain.snapshot();
+
+        let gobj = &mut self.generators[gen_id as usize];
+        let is_start = gobj.phase == GeneratorPhase::SuspendedStart;
+        gobj.phase = GeneratorPhase::Executing;
+
+        if is_start {
+            let func_idx = gobj.function_index;
+            let closure_idx = gobj.closure_index;
+            let func = module.function_table.get(func_idx as usize).ok_or(
+                InterpreterError::FunctionNotFound {
+                    index: func_idx,
+                    table_size: module.function_table.len() as u32,
+                },
+            )?;
+
+            if let Some(cid) = closure_idx {
+                let closure =
+                    self.closures
+                        .get(cid as usize)
+                        .ok_or_else(|| InterpreterError::TypeError {
+                            expected: "valid closure".into(),
+                            got: format!("closure#{cid} not found"),
+                        })?;
+                self.scope_chain.frames = closure.captured_env.clone();
+            }
+            self.scope_chain.push();
+
+            self.register_base = self.registers.len();
+            let req_len = self.register_base + self.config.max_registers as usize;
+            self.registers.resize(req_len, Value::Undefined);
+
+            self.ip = func.entry as usize;
+        } else {
+            let saved_ip = gobj.saved_ip;
+            let saved_regs = std::mem::take(&mut gobj.saved_registers);
+            let saved_base = gobj.saved_register_base;
+
+            self.ip = saved_ip;
+            self.register_base = saved_base;
+            let req_len = saved_base + saved_regs.len();
+            if req_len > self.registers.len() {
+                self.registers.resize(req_len, Value::Undefined);
+            }
+            for (i, val) in saved_regs.into_iter().enumerate() {
+                self.registers[saved_base + i] = val;
+            }
+        }
+
+        let result = self.run_loop(module);
+
+        match &result {
+            Ok(yielded_val) => {
+                let max_regs = self.config.max_registers as usize;
+                let saved_regs: Vec<Value> =
+                    self.registers[self.register_base..self.register_base + max_regs].to_vec();
+
+                let gobj = &mut self.generators[gen_id as usize];
+                gobj.saved_ip = self.ip;
+                gobj.saved_registers = saved_regs;
+                gobj.saved_register_base = self.register_base;
+                gobj.phase = GeneratorPhase::SuspendedYield;
+
+                self.ip = caller_ip;
+                self.register_base = caller_register_base;
+                self.scope_chain.frames = caller_scope;
+
+                Ok(yielded_val.clone())
+            }
+            Err(InterpreterError::Halted) => {
+                let gobj = &mut self.generators[gen_id as usize];
+                gobj.phase = GeneratorPhase::Completed;
+
+                self.ip = caller_ip;
+                self.register_base = caller_register_base;
+                self.scope_chain.frames = caller_scope;
+
+                let result_id = self.alloc_object();
+                {
+                    let obj = &mut self.heap[result_id.0 as usize];
+                    obj.properties.insert("value".to_string(), Value::Undefined);
+                    obj.properties.insert("done".to_string(), Value::Bool(true));
+                }
+                Ok(Value::Object(result_id))
+            }
+            Err(_) => {
+                let gobj = &mut self.generators[gen_id as usize];
+                gobj.phase = GeneratorPhase::Completed;
+
+                self.ip = caller_ip;
+                self.register_base = caller_register_base;
+                self.scope_chain.frames = caller_scope;
+
+                result
+            }
+        }
+    }
+
     fn run_loop(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
         loop {
             if self.ip >= module.instructions.len() {
@@ -1344,10 +1540,24 @@ impl InterpreterCore {
                 Ir3Instruction::Call { callee, args, dst } => {
                     let callee_val = self.read_reg(callee)?;
 
+                    // Generator .next() call: step the generator.
+                    if let Value::Generator(gen_id) = &callee_val {
+                        let gen_id = *gen_id;
+                        let arg = if args.count > 0 {
+                            self.read_reg(args.start)?
+                        } else {
+                            Value::Undefined
+                        };
+                        let result = self.generator_next(module, gen_id, arg)?;
+                        self.write_reg(dst, result)?;
+                        self.ip += 1;
+                        continue;
+                    }
+
                     // Resolve function index and optional captured environment.
                     let (func_idx, captured_env) = match &callee_val {
                         Value::Function(idx) => (*idx, None),
-                        Value::Closure(closure_id) => {
+                        Value::Closure(closure_id) | Value::GeneratorFunction(closure_id) => {
                             let closure =
                                 self.closures.get(*closure_id as usize).ok_or_else(|| {
                                     InterpreterError::TypeError {
@@ -1364,6 +1574,27 @@ impl InterpreterCore {
                             });
                         }
                     };
+
+                    // Generator function call: create a suspended GeneratorObject.
+                    if let Value::GeneratorFunction(cid) = &callee_val {
+                        let gen_id = u32::try_from(self.generators.len()).map_err(|_| {
+                            InterpreterError::TypeError {
+                                expected: "generator table capacity".into(),
+                                got: format!("exceeded u32::MAX ({})", self.generators.len()),
+                            }
+                        })?;
+                        self.generators.push(GeneratorObject {
+                            function_index: func_idx,
+                            closure_index: Some(*cid),
+                            saved_ip: 0,
+                            saved_registers: Vec::new(),
+                            saved_register_base: 0,
+                            phase: GeneratorPhase::SuspendedStart,
+                        });
+                        self.write_reg(dst, Value::Generator(gen_id))?;
+                        self.ip += 1;
+                        continue;
+                    }
 
                     match &callee_val {
                         Value::Function(_) | Value::Closure(_) => {
@@ -1541,9 +1772,7 @@ impl InterpreterCore {
                         construct_this: None,
                         saved_pending_exception: self.pending_exception.take(),
                         saved_pending_return: self.pending_return.take(),
-                        saved_suspended_abrupt_depth: self
-                            .suspended_abrupt_completions
-                            .len(),
+                        saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
                         saved_finally_mode_depth: self.finally_modes.len(),
                         saved_scope_depth: scope_depth,
                         saved_scope_chain: saved_chain,
@@ -1591,23 +1820,28 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::HostCall {
                     capability,
-                    args: _,
+                    args,
                     dst,
                 } => {
-                    // Check capability.
-                    if !self
-                        .config
-                        .granted_capabilities
-                        .iter()
-                        .any(|c| c == &capability.0)
-                    {
-                        self.emit_witness(
-                            WitnessEventKind::CapabilityChecked,
-                            Some(&format!("denied:{}", capability.0)),
-                        );
-                        return Err(InterpreterError::CapabilityDenied {
-                            capability: capability.0.clone(),
-                        });
+                    // Promise hostcalls are always allowed (runtime-internal).
+                    let is_promise_cap = capability.0.starts_with("promise:");
+
+                    if !is_promise_cap {
+                        // Check capability for non-promise hostcalls.
+                        if !self
+                            .config
+                            .granted_capabilities
+                            .iter()
+                            .any(|c| c == &capability.0)
+                        {
+                            self.emit_witness(
+                                WitnessEventKind::CapabilityChecked,
+                                Some(&format!("denied:{}", capability.0)),
+                            );
+                            return Err(InterpreterError::CapabilityDenied {
+                                capability: capability.0.clone(),
+                            });
+                        }
                     }
 
                     self.emit_witness(
@@ -1626,8 +1860,14 @@ impl InterpreterCore {
                         instruction_index: self.ip as u32,
                     });
 
-                    // Hostcalls return undefined in baseline (no external dispatch).
-                    self.write_reg(dst, Value::Undefined)?;
+                    // Dispatch promise hostcalls to the promise subsystem.
+                    let result = if is_promise_cap {
+                        self.dispatch_promise_hostcall(&capability.0, args)?
+                    } else {
+                        // Non-promise hostcalls return undefined in baseline.
+                        Value::Undefined
+                    };
+                    self.write_reg(dst, result)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::GetProperty { obj, key, dst } => {
@@ -1966,8 +2206,13 @@ impl InterpreterCore {
                             Value::Bool(b) => (if b { "true" } else { "false" }).to_string(),
                             Value::Null => "null".to_string(),
                             Value::Undefined => "undefined".to_string(),
-                            Value::Object(_) | Value::Iterator(_) => "[object Object]".to_string(),
-                            Value::Function(_) | Value::Closure(_) => "function".to_string(),
+                            Value::Object(_) | Value::Iterator(_) | Value::Generator(_) => {
+                                "[object Object]".to_string()
+                            }
+                            Value::Promise(_) => "[object Promise]".to_string(),
+                            Value::Function(_)
+                            | Value::Closure(_)
+                            | Value::GeneratorFunction(_) => "function".to_string(),
                         };
                         self.check_string_limit(result.len().saturating_add(part_str.len()))?;
                         result.push_str(&part_str);
@@ -2131,6 +2376,48 @@ impl InterpreterCore {
                     self.write_reg(dst, Value::Closure(closure_id))?;
                     self.ip += 1;
                 }
+                Ir3Instruction::CreateGenerator {
+                    dst,
+                    function_index,
+                    capture_count,
+                } => {
+                    self.run_pre_allocation_hook(
+                        module,
+                        AllocKind::Closure,
+                        capture_count as usize,
+                    )?;
+                    let captured_env = self.scope_chain.snapshot();
+                    let closure_id = u32::try_from(self.closures.len()).map_err(|_| {
+                        InterpreterError::TypeError {
+                            expected: "closure table capacity".into(),
+                            got: format!("exceeded u32::MAX ({})", self.closures.len()),
+                        }
+                    })?;
+                    self.closures.push(ClosureValue {
+                        function_index,
+                        captured_env,
+                    });
+                    self.pending_captures.clear();
+                    self.write_reg(dst, Value::GeneratorFunction(closure_id))?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::Yield {
+                    value,
+                    delegate: _,
+                    resume_dst,
+                } => {
+                    let yielded = self.read_reg(value)?;
+                    let result_id = self.alloc_object();
+                    {
+                        let obj = &mut self.heap[result_id.0 as usize];
+                        obj.properties.insert("value".to_string(), yielded);
+                        obj.properties
+                            .insert("done".to_string(), Value::Bool(false));
+                    }
+                    self.ip += 1;
+                    self.write_reg(resume_dst, Value::Undefined)?;
+                    return Ok(Value::Object(result_id));
+                }
                 Ir3Instruction::PushCapture { name_pool_index } => {
                     self.pending_captures.push(name_pool_index);
                     self.ip += 1;
@@ -2247,8 +2534,13 @@ impl InterpreterCore {
             }
             (Value::Str(x), other) => {
                 let other_str = match other {
-                    Value::Object(_) | Value::Iterator(_) => "[object Object]".to_string(),
-                    Value::Function(_) | Value::Closure(_) => "function".to_string(),
+                    Value::Object(_) | Value::Iterator(_) | Value::Generator(_) => {
+                        "[object Object]".to_string()
+                    }
+                    Value::Promise(_) => "[object Promise]".to_string(),
+                    Value::Function(_) | Value::Closure(_) | Value::GeneratorFunction(_) => {
+                        "function".to_string()
+                    }
                     _ => other.to_string(),
                 };
                 self.check_string_limit(x.len().saturating_add(other_str.len()))?;
@@ -2256,8 +2548,13 @@ impl InterpreterCore {
             }
             (other, Value::Str(y)) => {
                 let other_str = match other {
-                    Value::Object(_) | Value::Iterator(_) => "[object Object]".to_string(),
-                    Value::Function(_) | Value::Closure(_) => "function".to_string(),
+                    Value::Object(_) | Value::Iterator(_) | Value::Generator(_) => {
+                        "[object Object]".to_string()
+                    }
+                    Value::Promise(_) => "[object Promise]".to_string(),
+                    Value::Function(_) | Value::Closure(_) | Value::GeneratorFunction(_) => {
+                        "function".to_string()
+                    }
                     _ => other.to_string(),
                 };
                 self.check_string_limit(other_str.len().saturating_add(y.len()))?;
@@ -2693,6 +2990,288 @@ impl InterpreterCore {
         Ok(false)
     }
 
+    // -- Promise hostcall dispatch ------------------------------------------
+
+    /// Convert a baseline `Value` to a `JsValue` from `object_model` for the
+    /// promise subsystem.
+    fn value_to_js_value(val: &Value) -> crate::object_model::JsValue {
+        match val {
+            Value::Undefined => crate::object_model::JsValue::Undefined,
+            Value::Null => crate::object_model::JsValue::Null,
+            Value::Bool(b) => crate::object_model::JsValue::Bool(*b),
+            Value::Int(n) => crate::object_model::JsValue::Int(*n),
+            Value::Str(s) => crate::object_model::JsValue::Str(s.clone()),
+            _ => crate::object_model::JsValue::Str(val.to_string()),
+        }
+    }
+
+    /// Convert a `JsValue` from `object_model` back to a baseline `Value`.
+    #[allow(dead_code)]
+    fn js_value_to_value(jv: &crate::object_model::JsValue) -> Value {
+        match jv {
+            crate::object_model::JsValue::Undefined => Value::Undefined,
+            crate::object_model::JsValue::Null => Value::Null,
+            crate::object_model::JsValue::Bool(b) => Value::Bool(*b),
+            crate::object_model::JsValue::Int(n) => Value::Int(*n),
+            crate::object_model::JsValue::Str(s) => Value::Str(s.clone()),
+            _ => Value::Str(format!("{jv:?}")),
+        }
+    }
+
+    /// Dispatch a `promise:*` hostcall to the internal promise subsystem.
+    ///
+    /// Supported capabilities:
+    /// - `promise:constructor` — create a pending promise, return its handle.
+    /// - `promise:resolve` — resolve a promise or create a pre-resolved one.
+    ///   arg0 = promise handle (or value to wrap), arg1 = value.
+    /// - `promise:reject` — reject a promise or create a pre-rejected one.
+    ///   arg0 = promise handle (or reason), arg1 = reason.
+    /// - `promise:then` — register .then(onFulfilled, onRejected).
+    ///   arg0 = promise handle value.
+    /// - `promise:catch` — sugar for .then(undefined, onRejected).
+    ///   arg0 = promise handle value.
+    /// - `promise:finally` — register a finally handler.
+    ///   arg0 = promise handle value.
+    /// - `promise:all` — create a Promise.all aggregate (simplified).
+    /// - `promise:race` — create a Promise.race aggregate (simplified).
+    fn dispatch_promise_hostcall(
+        &mut self,
+        cap: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let label = crate::ifc_artifacts::Label::Public;
+        match cap {
+            "promise:constructor" => {
+                // Create a new pending promise and return its handle.
+                let handle = self.promise_store.create();
+                Ok(Value::Promise(handle.0))
+            }
+            "promise:resolve" => {
+                // If arg0 is a Promise, resolve it with arg1.
+                // Otherwise create a pre-resolved promise with arg0 as the value.
+                let arg0 = if args.count > 0 {
+                    self.read_reg(args.start)?
+                } else {
+                    Value::Undefined
+                };
+                match arg0 {
+                    Value::Promise(h) => {
+                        // Resolve the existing promise with the given value.
+                        let val = if args.count > 1 {
+                            self.read_reg(args.start + 1)?
+                        } else {
+                            Value::Undefined
+                        };
+                        let js_val = Self::value_to_js_value(&val);
+                        let handle = crate::promise_model::PromiseHandle(h);
+                        self.promise_store
+                            .fulfill(handle, js_val, label, &mut self.microtask_queue)
+                            .map_err(|e| InterpreterError::TypeError {
+                                expected: "pending promise".to_string(),
+                                got: e.to_string(),
+                            })?;
+                        Ok(Value::Promise(h))
+                    }
+                    _ => {
+                        // Promise.resolve(value) — create a pre-resolved promise.
+                        let js_val = Self::value_to_js_value(&arg0);
+                        let handle = self.promise_store.resolve(
+                            js_val,
+                            label,
+                            &mut self.microtask_queue,
+                        );
+                        Ok(Value::Promise(handle.0))
+                    }
+                }
+            }
+            "promise:reject" => {
+                let arg0 = if args.count > 0 {
+                    self.read_reg(args.start)?
+                } else {
+                    Value::Undefined
+                };
+                match arg0 {
+                    Value::Promise(h) => {
+                        let reason = if args.count > 1 {
+                            self.read_reg(args.start + 1)?
+                        } else {
+                            Value::Undefined
+                        };
+                        let js_reason = Self::value_to_js_value(&reason);
+                        let handle = crate::promise_model::PromiseHandle(h);
+                        self.promise_store
+                            .reject(handle, js_reason, label, &mut self.microtask_queue)
+                            .map_err(|e| InterpreterError::TypeError {
+                                expected: "pending promise".to_string(),
+                                got: e.to_string(),
+                            })?;
+                        Ok(Value::Promise(h))
+                    }
+                    _ => {
+                        // Promise.reject(reason) — create a pre-rejected promise.
+                        let js_reason = Self::value_to_js_value(&arg0);
+                        let handle = self.promise_store.reject_with(
+                            js_reason,
+                            label,
+                            &mut self.microtask_queue,
+                        );
+                        Ok(Value::Promise(handle.0))
+                    }
+                }
+            }
+            "promise:then" => {
+                // arg0 = promise handle, arg1 = onFulfilled (optional),
+                // arg2 = onRejected (optional).
+                let arg0 = if args.count > 0 {
+                    self.read_reg(args.start)?
+                } else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "promise".to_string(),
+                        got: "undefined".to_string(),
+                    });
+                };
+                let handle = match arg0 {
+                    Value::Promise(h) => crate::promise_model::PromiseHandle(h),
+                    _ => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "promise".to_string(),
+                            got: arg0.type_name().to_string(),
+                        });
+                    }
+                };
+                // In the baseline interpreter, .then() callbacks are simplified:
+                // we register reactions with no closure handlers (identity propagation).
+                let result = self
+                    .promise_store
+                    .then(handle, None, None, label, &mut self.microtask_queue)
+                    .map_err(|e| InterpreterError::TypeError {
+                        expected: "valid promise handle".to_string(),
+                        got: e.to_string(),
+                    })?;
+                Ok(Value::Promise(result.0))
+            }
+            "promise:catch" => {
+                // Sugar for .then(undefined, onRejected).
+                let arg0 = if args.count > 0 {
+                    self.read_reg(args.start)?
+                } else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "promise".to_string(),
+                        got: "undefined".to_string(),
+                    });
+                };
+                let handle = match arg0 {
+                    Value::Promise(h) => crate::promise_model::PromiseHandle(h),
+                    _ => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "promise".to_string(),
+                            got: arg0.type_name().to_string(),
+                        });
+                    }
+                };
+                let result = self
+                    .promise_store
+                    .then(handle, None, None, label, &mut self.microtask_queue)
+                    .map_err(|e| InterpreterError::TypeError {
+                        expected: "valid promise handle".to_string(),
+                        got: e.to_string(),
+                    })?;
+                Ok(Value::Promise(result.0))
+            }
+            "promise:finally" => {
+                // Similar to .then(handler, handler) for finally semantics.
+                let arg0 = if args.count > 0 {
+                    self.read_reg(args.start)?
+                } else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "promise".to_string(),
+                        got: "undefined".to_string(),
+                    });
+                };
+                let handle = match arg0 {
+                    Value::Promise(h) => crate::promise_model::PromiseHandle(h),
+                    _ => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "promise".to_string(),
+                            got: arg0.type_name().to_string(),
+                        });
+                    }
+                };
+                let result = self
+                    .promise_store
+                    .then(handle, None, None, label, &mut self.microtask_queue)
+                    .map_err(|e| InterpreterError::TypeError {
+                        expected: "valid promise handle".to_string(),
+                        got: e.to_string(),
+                    })?;
+                Ok(Value::Promise(result.0))
+            }
+            "promise:all" | "promise:race" => {
+                // Simplified: create a pending promise that tracks the aggregate.
+                // Full semantics require iterating over the input promises and
+                // registering reactions — deferred to a follow-up bead.
+                let handle = self.promise_store.create();
+                Ok(Value::Promise(handle.0))
+            }
+            _ => {
+                // Unknown promise sub-capability — return undefined.
+                Ok(Value::Undefined)
+            }
+        }
+    }
+
+    /// Drain all pending microtasks from the queue.
+    ///
+    /// Each microtask may enqueue additional microtasks; the drain continues
+    /// until the queue is empty, matching ES2020 semantics (microtask checkpoint).
+    /// A safety bound prevents infinite loops from pathological promise chains.
+    fn drain_microtasks(&mut self) {
+        let max_drain = 10_000u32;
+        let mut drained = 0u32;
+        let label = crate::ifc_artifacts::Label::Public;
+
+        while let Some(task) = self.microtask_queue.dequeue() {
+            drained += 1;
+            if drained >= max_drain {
+                break;
+            }
+            match task {
+                crate::promise_model::Microtask::PromiseReaction {
+                    handler: _,
+                    argument,
+                    result_promise,
+                    label: _task_label,
+                } => {
+                    // With no closure handler, the identity transform propagates
+                    // the argument to the result promise as a fulfillment value.
+                    let _ = self.promise_store.fulfill(
+                        result_promise,
+                        argument,
+                        label.clone(),
+                        &mut self.microtask_queue,
+                    );
+                }
+                crate::promise_model::Microtask::ResolveThenable {
+                    promise,
+                    then_handler: _,
+                    thenable: _,
+                    label: _task_label,
+                } => {
+                    // Simplified: resolve with undefined (full thenable
+                    // unwrapping requires closure execution which is a
+                    // follow-up bead).
+                    let _ = self.promise_store.fulfill(
+                        promise,
+                        crate::object_model::JsValue::Undefined,
+                        label.clone(),
+                        &mut self.microtask_queue,
+                    );
+                }
+            }
+        }
+        self.microtask_queue.compact();
+    }
+
     fn property_key(value: &Value) -> String {
         match value {
             Value::Str(s) => s.clone(),
@@ -2718,7 +3297,10 @@ impl InterpreterCore {
             | Value::Object(_)
             | Value::Function(_)
             | Value::Closure(_)
-            | Value::Iterator(_) => None,
+            | Value::Iterator(_)
+            | Value::GeneratorFunction(_)
+            | Value::Generator(_)
+            | Value::Promise(_) => None,
         }
     }
 
@@ -2732,7 +3314,10 @@ impl InterpreterCore {
             | (Value::Object(_), Value::Object(_))
             | (Value::Function(_), Value::Function(_))
             | (Value::Closure(_), Value::Closure(_))
-            | (Value::Iterator(_), Value::Iterator(_)) => a == b,
+            | (Value::Iterator(_), Value::Iterator(_))
+            | (Value::GeneratorFunction(_), Value::GeneratorFunction(_))
+            | (Value::Generator(_), Value::Generator(_))
+            | (Value::Promise(_), Value::Promise(_)) => a == b,
             (Value::Null, Value::Undefined) | (Value::Undefined, Value::Null) => true,
             // ES2020 §7.2.14: null/undefined are only == to each other, never
             // to numbers, strings, or booleans via numeric coercion.
@@ -3066,12 +3651,12 @@ fn format_requested_hook_action(action: &str, reason: Option<&str>) -> String {
 fn requested_hook_action_from_error(action: &str, reason: Option<String>) -> Option<HookAction> {
     match action {
         "challenge" => Some(HookAction::Challenge(ChallengeToken {
-            token: reason.unwrap_or_default(),
+            token: reason.unwrap(),
         })),
         "sandbox" => Some(HookAction::Sandbox),
         "suspend" => Some(HookAction::Suspend),
-        "terminate" => Some(HookAction::Terminate(reason.unwrap_or_default())),
-        "quarantine" => Some(HookAction::Quarantine(reason.unwrap_or_default())),
+        "terminate" => Some(HookAction::Terminate(reason.unwrap())),
+        "quarantine" => Some(HookAction::Quarantine(reason.unwrap())),
         _ => None,
     }
 }
@@ -3516,6 +4101,7 @@ mod tests {
                     arity: 1,
                     frame_size: 2,
                     name: Some("identity".to_string()),
+                    is_generator: false,
                 }],
             ))
             .unwrap();
@@ -3589,6 +4175,7 @@ mod tests {
                     arity: 0,
                     frame_size: 1,
                     name: Some("closure_target".to_string()),
+                    is_generator: false,
                 }],
             ))
             .unwrap();
@@ -4037,6 +4624,7 @@ mod tests {
                 arity: 1,
                 frame_size: 3,
                 name: Some("add_ten".to_string()),
+                is_generator: false,
             }],
         );
 
@@ -4073,6 +4661,7 @@ mod tests {
                 arity: 1,
                 frame_size: 3,
                 name: Some("add_ten".to_string()),
+                is_generator: false,
             }],
         );
 
@@ -4106,6 +4695,7 @@ mod tests {
                 arity: 1,
                 frame_size: 1,
                 name: Some("recurse".to_string()),
+                is_generator: false,
             }],
         );
 
@@ -5877,6 +6467,7 @@ mod tests {
                 entry: 3,
                 arity: 2, // this + 1 arg
                 frame_size: 8,
+                is_generator: false,
             }],
         );
         let mut mod_with_pool = m;
@@ -5924,6 +6515,7 @@ mod tests {
                 entry: 2,
                 arity: 1,
                 frame_size: 8,
+                is_generator: false,
             }],
         );
         // Pre-load r0 with Function(0) via InterpreterCore
@@ -6048,6 +6640,7 @@ mod tests {
                 entry: 3,
                 arity: 1,
                 frame_size: 8,
+                is_generator: false,
             }],
         );
         let config = InterpreterConfig::quickjs_defaults();
@@ -6080,6 +6673,7 @@ mod tests {
                 entry: 3,
                 arity: 0,
                 frame_size: 4,
+                is_generator: false,
             }],
         );
 
@@ -6113,6 +6707,7 @@ mod tests {
                 entry: 2,
                 arity: 0,
                 frame_size: 4,
+                is_generator: false,
             }],
         );
         let config = InterpreterConfig::quickjs_defaults();
@@ -6143,6 +6738,7 @@ mod tests {
                 entry: 3,
                 arity: 0,
                 frame_size: 4,
+                is_generator: false,
             }],
         );
 
@@ -6632,6 +7228,7 @@ mod tests {
                 arity: 0,
                 frame_size: 4,
                 name: Some("return_inside_try".to_string()),
+                is_generator: false,
             }],
         );
 
@@ -6681,12 +7278,14 @@ mod tests {
                     arity: 0,
                     frame_size: 1,
                     name: Some("thrower".to_string()),
+                    is_generator: false,
                 },
                 Ir3FunctionDesc {
                     entry: 11,
                     arity: 0,
                     frame_size: 1,
                     name: Some("recovery".to_string()),
+                    is_generator: false,
                 },
             ],
         );
@@ -6735,12 +7334,14 @@ mod tests {
                     arity: 1,
                     frame_size: 3,
                     name: Some("outer".to_string()),
+                    is_generator: false,
                 },
                 Ir3FunctionDesc {
                     entry: 11,
                     arity: 0,
                     frame_size: 1,
                     name: Some("inner".to_string()),
+                    is_generator: false,
                 },
             ],
         );
@@ -6795,6 +7396,7 @@ mod tests {
                 arity: 0,
                 frame_size: 1,
                 name: Some("inner".to_string()),
+                is_generator: false,
             }],
         );
 
@@ -6840,6 +7442,7 @@ mod tests {
                 arity: 0,
                 frame_size: 1,
                 name: Some("helper_throw".to_string()),
+                is_generator: false,
             }],
         );
 
@@ -7125,6 +7728,7 @@ mod tests {
                 arity: 0,
                 frame_size: 4,
                 name: Some("closure".to_string()),
+                is_generator: false,
             });
             m
         };
@@ -7192,6 +7796,7 @@ mod tests {
                 arity: 0,
                 frame_size: 4,
                 name: Some("incrementer".to_string()),
+                is_generator: false,
             });
             m
         };

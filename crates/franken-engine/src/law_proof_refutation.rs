@@ -212,7 +212,7 @@ impl RefutationWitness {
         data.extend_from_slice(self.candidate_id.as_bytes());
         data.extend_from_slice(
             serde_json::to_string(&self.reason)
-                .unwrap_or_default()
+                .unwrap()
                 .as_bytes(),
         );
         data.extend_from_slice(self.description.as_bytes());
@@ -262,12 +262,12 @@ impl ProofAttempt {
         data.extend_from_slice(self.candidate_id.as_bytes());
         data.extend_from_slice(
             serde_json::to_string(&self.strategy)
-                .unwrap_or_default()
+                .unwrap()
                 .as_bytes(),
         );
         data.extend_from_slice(
             serde_json::to_string(&self.verdict)
-                .unwrap_or_default()
+                .unwrap()
                 .as_bytes(),
         );
         data.extend_from_slice(&self.confidence_millionths.to_le_bytes());
@@ -423,12 +423,12 @@ impl ProofCampaignResult {
         data.extend_from_slice(self.candidate_id.as_bytes());
         data.extend_from_slice(
             serde_json::to_string(&self.candidate_kind)
-                .unwrap_or_default()
+                .unwrap()
                 .as_bytes(),
         );
         data.extend_from_slice(
             serde_json::to_string(&self.final_verdict)
-                .unwrap_or_default()
+                .unwrap()
                 .as_bytes(),
         );
         data.extend_from_slice(&self.aggregate_confidence_millionths.to_le_bytes());

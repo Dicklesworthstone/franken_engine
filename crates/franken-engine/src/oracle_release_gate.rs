@@ -825,7 +825,7 @@ fn compute_report_hash(
         inconclusive_count,
         evaluations,
     };
-    let bytes = serde_json::to_vec(&payload).unwrap_or_default();
+    let bytes = serde_json::to_vec(&payload).unwrap();
     ContentHash::compute(&bytes)
 }
 
@@ -855,7 +855,7 @@ fn compute_triage_hash(
         info_count,
         entries,
     };
-    let bytes = serde_json::to_vec(&payload).unwrap_or_default();
+    let bytes = serde_json::to_vec(&payload).unwrap();
     ContentHash::compute(&bytes)
 }
 

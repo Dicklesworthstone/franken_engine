@@ -876,7 +876,7 @@ impl GovernanceMechanism {
             .policies
             .last()
             .map(|p| p.policy_id.clone())
-            .unwrap_or_default();
+            .unwrap();
 
         let mut canonical = Vec::new();
         canonical.extend_from_slice(b"mechanism-report|");

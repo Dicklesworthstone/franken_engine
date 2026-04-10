@@ -48,8 +48,8 @@ pub const COMPONENT: &str = "stdlib_workload_verification";
 /// Fixed-point millionths unit.
 const MILLIONTHS: u64 = 1_000_000;
 
-fn serialize_for_identity<T: Serialize>(value: &T, context: &str) -> String {
-    serde_json::to_string(value).unwrap_or_else(|error| panic!("{context}: {error}"))
+fn serialize_for_identity<T: Serialize>(value: &T, _context: &str) -> String {
+    serde_json::to_string(value).unwrap()
 }
 
 /// Minimum passing verification rate to consider a workload suite healthy.

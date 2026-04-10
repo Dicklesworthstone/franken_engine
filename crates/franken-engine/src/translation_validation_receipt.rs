@@ -1352,7 +1352,7 @@ impl ValidationReceiptEmitter {
                         .applied_rules
                         .first()
                         .map(|r| r.pack_id.clone())
-                        .unwrap_or_default(),
+                        .unwrap(),
                     input
                         .applied_rules
                         .first()
@@ -1406,7 +1406,7 @@ impl ValidationReceiptEmitter {
                         .applied_rules
                         .first()
                         .map(|r| r.pack_id.clone())
-                        .unwrap_or_default(),
+                        .unwrap(),
                     input
                         .applied_rules
                         .first()

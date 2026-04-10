@@ -1388,7 +1388,7 @@ fn write_stitching_bundle(
             "policy_id": &context.policy_id,
         }
     }))
-    .unwrap_or_default();
+    .unwrap();
 
     let mut primary_files = vec![
         BundleFileArtifact::json("evidence_ledger_stitching_bundle.json", &evaluated.bundle),
@@ -1424,9 +1424,9 @@ fn write_stitching_bundle(
                 "edge_count": evaluated.bundle.evidence_ledger_graph.edges.len(),
                 "artifact_count": evaluated.bundle.artifact_lineage_index.len(),
                 "boundary_count": evaluated.bundle.evidence_query_surface_snapshot.decisions.first().map_or(0, |d| d.boundary_correlation_keys.len()),
-                "bundle_hash": digest_json(&serde_json::to_value(&evaluated.bundle).unwrap_or_default()),
-                "graph_hash": digest_json(&serde_json::to_value(&evaluated.bundle.evidence_ledger_graph).unwrap_or_default()),
-                "query_snapshot_hash": digest_json(&serde_json::to_value(&evaluated.bundle.evidence_query_surface_snapshot).unwrap_or_default()),
+                "bundle_hash": digest_json(&serde_json::to_value(&evaluated.bundle).unwrap()),
+                "graph_hash": digest_json(&serde_json::to_value(&evaluated.bundle.evidence_ledger_graph).unwrap()),
+                "query_snapshot_hash": digest_json(&serde_json::to_value(&evaluated.bundle.evidence_query_surface_snapshot).unwrap()),
                 "artifacts": required_artifact_names(),
                 "operator_verification": commands.clone(),
             }),
@@ -1471,7 +1471,7 @@ fn write_stitching_bundle(
             "policy_id": &context.policy_id,
         }
     }))
-    .unwrap_or_default();
+    .unwrap();
     primary_files.push(BundleFileArtifact::text("repro.lock", &repro_lock));
     primary_files.sort_by(|left, right| left.path.cmp(&right.path));
 
@@ -1508,7 +1508,7 @@ fn write_stitching_bundle(
         },
         "artifacts": &manifest_artifacts,
     }))
-    .unwrap_or_default();
+    .unwrap();
     let manifest_artifact = BundleFileArtifact::text("manifest.json", &manifest_json);
 
     let _bundle_lock = acquire_bundle_write_lock(&context.artifact_dir)?;
@@ -1736,7 +1736,7 @@ fn unique_temp_path(path: &Path) -> PathBuf {
 }
 
 fn digest_json(value: &serde_json::Value) -> String {
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    let bytes = serde_json::to_vec(value).unwrap();
     sha256_hex(&bytes)
 }
 
@@ -1750,14 +1750,14 @@ impl BundleFileArtifact {
     fn json<T: Serialize>(path: &str, value: &T) -> Self {
         Self {
             path: path.to_string(),
-            contents: serde_json::to_vec_pretty(value).unwrap_or_default(),
+            contents: serde_json::to_vec_pretty(value).unwrap(),
         }
     }
 
     fn jsonl<T: Serialize>(path: &str, records: &[T]) -> Self {
         let mut contents = Vec::new();
         for record in records {
-            let mut line = serde_json::to_vec(record).unwrap_or_default();
+            let mut line = serde_json::to_vec(record).unwrap();
             line.push(b'\n');
             contents.extend_from_slice(&line);
         }
@@ -2046,16 +2046,16 @@ mod tests {
     #[test]
     fn evidence_entry_serialization_round_trip() {
         let entry = sample_entry();
-        let json = serde_json::to_string(&entry).unwrap_or_default();
-        let restored: EvidenceEntry = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&entry).unwrap();
+        let restored: EvidenceEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(entry, restored);
     }
 
     #[test]
     fn evidence_entry_deterministic_serialization() {
         let entry = sample_entry();
-        let json1 = serde_json::to_string(&entry).unwrap_or_default();
-        let json2 = serde_json::to_string(&entry).unwrap_or_default();
+        let json1 = serde_json::to_string(&entry).unwrap();
+        let json2 = serde_json::to_string(&entry).unwrap();
         assert_eq!(json1, json2);
     }
 
@@ -2075,8 +2075,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let restored: LedgerError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let restored: LedgerError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
     }
@@ -2084,16 +2084,16 @@ mod tests {
     #[test]
     fn candidate_action_serialization_round_trip() {
         let c = CandidateAction::filtered("sandbox", 100_000, "max-loss");
-        let json = serde_json::to_string(&c).unwrap_or_default();
-        let restored: CandidateAction = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&c).unwrap();
+        let restored: CandidateAction = serde_json::from_str(&json).unwrap();
         assert_eq!(c, restored);
     }
 
     #[test]
     fn schema_version_serialization_round_trip() {
         let v = current_schema_version();
-        let json = serde_json::to_string(&v).unwrap_or_default();
-        let restored: SchemaVersion = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&v).unwrap();
+        let restored: SchemaVersion = serde_json::from_str(&json).unwrap();
         assert_eq!(v, restored);
     }
 
@@ -2142,8 +2142,8 @@ mod tests {
             DecisionType::ContractEvaluation,
             DecisionType::RemoteAuthorization,
         ] {
-            let json = serde_json::to_string(&dt).unwrap_or_default();
-            let restored: DecisionType = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&dt).unwrap();
+            let restored: DecisionType = serde_json::from_str(&json).unwrap();
             assert_eq!(dt, restored);
         }
     }
@@ -2155,8 +2155,8 @@ mod tests {
             description: "rate limit".to_string(),
             active: true,
         };
-        let json = serde_json::to_string(&c).unwrap_or_default();
-        let restored: Constraint = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&c).unwrap();
+        let restored: Constraint = serde_json::from_str(&json).unwrap();
         assert_eq!(c, restored);
     }
 
@@ -2167,8 +2167,8 @@ mod tests {
             witness_type: "monotonicity".to_string(),
             value: "proof-hash".to_string(),
         };
-        let json = serde_json::to_string(&w).unwrap_or_default();
-        let restored: Witness = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&w).unwrap();
+        let restored: Witness = serde_json::from_str(&json).unwrap();
         assert_eq!(w, restored);
     }
 
@@ -2179,8 +2179,8 @@ mod tests {
             expected_loss_millionths: 100_000,
             rationale: "lowest loss".to_string(),
         };
-        let json = serde_json::to_string(&ca).unwrap_or_default();
-        let restored: ChosenAction = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&ca).unwrap();
+        let restored: ChosenAction = serde_json::from_str(&json).unwrap();
         assert_eq!(ca, restored);
     }
 

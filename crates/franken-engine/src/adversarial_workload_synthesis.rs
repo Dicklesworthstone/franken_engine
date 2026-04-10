@@ -1061,7 +1061,7 @@ impl SynthesisEngine {
                 .inputs_by_domain
                 .get(&domain_key)
                 .cloned()
-                .unwrap_or_default();
+                .unwrap();
 
             for strategy in &config.strategies {
                 for seed in &seeds {

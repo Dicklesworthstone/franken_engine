@@ -552,7 +552,7 @@ impl HarnessMigrationRegistry {
         let evidence_linked_scenarios = self.scenarios.iter().filter(|s| s.evidence_linked).count();
 
         let input_bytes =
-            serde_json::to_vec(&(&self.scenarios, &self.containment_tests)).unwrap_or_default();
+            serde_json::to_vec(&(&self.scenarios, &self.containment_tests)).unwrap();
         let content_hash = ContentHash::compute(&input_bytes);
 
         HarnessMigrationReport {

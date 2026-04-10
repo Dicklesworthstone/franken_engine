@@ -993,7 +993,7 @@ pub fn build_deopt_witness(
     };
 
     let witness_id = format!("dw_{}_{}", cert.site.site_id, transform_kind);
-    let triggers_str = serde_json::to_string(&triggers).unwrap_or_default();
+    let triggers_str = serde_json::to_string(&triggers).unwrap();
     let hash_input = format!(
         "witness:{}:{}:{}:{}",
         witness_id, transform_kind, triggers_str, cert.certificate_hash

@@ -1166,16 +1166,16 @@ mod tests {
     #[test]
     fn computation_name_serialization_round_trip() {
         let name = ComputationName::new("evidence_sync").unwrap();
-        let json = serde_json::to_string(&name).unwrap_or_default();
-        let restored: ComputationName = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&name).unwrap();
+        let restored: ComputationName = serde_json::from_str(&json).unwrap();
         assert_eq!(name, restored);
     }
 
     #[test]
     fn schema_version_serialization_round_trip() {
         let v = SchemaVersion::new(2, 5, 0);
-        let json = serde_json::to_string(&v).unwrap_or_default();
-        let restored: SchemaVersion = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&v).unwrap();
+        let restored: SchemaVersion = serde_json::from_str(&json).unwrap();
         assert_eq!(v, restored);
     }
 
@@ -1185,8 +1185,8 @@ mod tests {
             IdempotencyClass::NaturallyIdempotent,
             IdempotencyClass::RequiresKey,
         ] {
-            let json = serde_json::to_string(&class).unwrap_or_default();
-            let restored: IdempotencyClass = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&class).unwrap();
+            let restored: IdempotencyClass = serde_json::from_str(&json).unwrap();
             assert_eq!(class, restored);
         }
     }
@@ -1194,8 +1194,8 @@ mod tests {
     #[test]
     fn registration_serialization_round_trip() {
         let reg = test_registration("evidence_sync");
-        let json = serde_json::to_string(&reg).unwrap_or_default();
-        let restored: ComputationRegistration = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&reg).unwrap();
+        let restored: ComputationRegistration = serde_json::from_str(&json).unwrap();
         assert_eq!(reg, restored);
     }
 
@@ -1210,8 +1210,8 @@ mod tests {
             event: "schema_validation".to_string(),
             outcome: "success".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: RegistryEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: RegistryEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 
@@ -1233,8 +1233,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let restored: RegistryError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let restored: RegistryError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
     }
@@ -1247,8 +1247,8 @@ mod tests {
             local_version: SchemaVersion::new(1, 0, 0),
             remote_version: SchemaVersion::new(1, 2, 0),
         };
-        let json = serde_json::to_string(&result).unwrap_or_default();
-        let restored: VersionNegotiationResult = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&result).unwrap();
+        let restored: VersionNegotiationResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, restored);
     }
 

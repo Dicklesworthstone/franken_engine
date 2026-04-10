@@ -13,7 +13,8 @@ use frankenengine_engine::benchmark_denominator::{
     PublicationContext, PublicationGateInput, evaluate_publication_gate,
 };
 use frankenengine_engine::benchmark_e2e::{
-    BenchmarkFamily, BenchmarkSuiteConfig, ScaleProfile, run_benchmark_suite,
+    BenchmarkComparisonManifest, BenchmarkFamily, BenchmarkSuiteConfig, ScaleProfile,
+    run_benchmark_comparison_suite, run_benchmark_suite, write_benchmark_comparison_artifacts,
     write_evidence_artifacts,
 };
 use frankenengine_engine::deterministic_replay::{NondeterminismTrace, ReplayEngine, ReplayMode};
@@ -113,6 +114,7 @@ enum HelpTopic {
     VerifyReceipt,
     Benchmark,
     BenchmarkRun,
+    BenchmarkCompare,
     BenchmarkScore,
     BenchmarkVerify,
     Replay,
@@ -135,6 +137,7 @@ impl HelpTopic {
             Self::VerifyReceipt => verify_receipt_usage(),
             Self::Benchmark => benchmark_usage(),
             Self::BenchmarkRun => benchmark_run_usage(),
+            Self::BenchmarkCompare => benchmark_compare_usage(),
             Self::BenchmarkScore => benchmark_score_usage(),
             Self::BenchmarkVerify => benchmark_verify_usage(),
             Self::Replay => replay_usage(),
@@ -204,6 +207,7 @@ struct BenchmarkArgs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum BenchmarkMode {
     Run(BenchmarkRunArgs),
+    Compare(BenchmarkCompareArgs),
     Score(BenchmarkScoreArgs),
     Verify(BenchmarkVerifyArgs),
 }
@@ -216,6 +220,14 @@ struct BenchmarkRunArgs {
     out_dir: PathBuf,
     profiles: Vec<ScaleProfile>,
     families: Vec<BenchmarkFamily>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BenchmarkCompareArgs {
+    manifest: PathBuf,
+    out_dir: PathBuf,
+    run_id: String,
+    run_date: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -438,6 +450,17 @@ struct BenchmarkCommandOutput {
     invariant_violations: u64,
     profiles: Vec<String>,
     families: Vec<String>,
+    artifacts: BenchmarkArtifactPaths,
+    observability_mode: ObservabilityModeOutput,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BenchmarkCompareCommandOutput {
+    schema_version: String,
+    run_id: String,
+    run_date: String,
+    case_count: usize,
+    runtime_result_count: usize,
     artifacts: BenchmarkArtifactPaths,
     observability_mode: ObservabilityModeOutput,
 }
@@ -1374,15 +1397,16 @@ fn parse_verify_receipt_command(args: &[String]) -> Result<CommandSpec, String> 
 
 fn parse_benchmark_command(args: &[String]) -> Result<CommandSpec, String> {
     if args.is_empty() {
-        return Err("benchmark requires a subcommand: run | score | verify".to_string());
+        return Err("benchmark requires a subcommand: run | compare | score | verify".to_string());
     }
     match args[0].as_str() {
         "help" | "--help" | "-h" => Ok(CommandSpec::HelpTopic(HelpTopic::Benchmark)),
         "run" => parse_benchmark_run_command(&args[1..]),
+        "compare" => parse_benchmark_compare_command(&args[1..]),
         "score" => parse_benchmark_score_command(&args[1..]),
         "verify" => parse_benchmark_verify_command(&args[1..]),
         other => Err(format!(
-            "unknown benchmark subcommand `{other}` (expected run | score | verify)"
+            "unknown benchmark subcommand `{other}` (expected run | compare | score | verify)"
         )),
     }
 }
@@ -1437,6 +1461,44 @@ fn parse_benchmark_run_command(args: &[String]) -> Result<CommandSpec, String> {
             out_dir,
             profiles,
             families,
+        }),
+    }))
+}
+
+fn parse_benchmark_compare_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::BenchmarkCompare));
+    }
+
+    let mut manifest: Option<PathBuf> = None;
+    let mut out_dir: Option<PathBuf> = None;
+    let mut run_id = default_run_id("benchmark-compare");
+    let mut run_date = "1970-01-01".to_string();
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--manifest" => {
+                manifest = Some(PathBuf::from(next_arg(args, &mut index, "--manifest")?))
+            }
+            "--out-dir" => out_dir = Some(PathBuf::from(next_arg(args, &mut index, "--out-dir")?)),
+            "--run-id" => run_id = next_arg(args, &mut index, "--run-id")?,
+            "--run-date" => {
+                let value = next_arg(args, &mut index, "--run-date")?;
+                run_date = parse_real_yyyy_mm_dd(value.as_str(), "--run-date")?;
+            }
+            flag => return Err(format!("unknown benchmark compare flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    Ok(CommandSpec::Benchmark(BenchmarkArgs {
+        mode: BenchmarkMode::Compare(BenchmarkCompareArgs {
+            manifest: manifest
+                .ok_or_else(|| "benchmark compare requires --manifest <path>".to_string())?,
+            out_dir: out_dir.unwrap_or_else(|| default_benchmark_out_dir(&run_id)),
+            run_id,
+            run_date,
         }),
     }))
 }
@@ -2085,6 +2147,7 @@ fn execute_verify(args: VerifyArgs) -> Result<i32, String> {
 fn execute_benchmark(args: BenchmarkArgs) -> Result<i32, String> {
     match args.mode {
         BenchmarkMode::Run(run_args) => execute_benchmark_run(run_args),
+        BenchmarkMode::Compare(compare_args) => execute_benchmark_compare(compare_args),
         BenchmarkMode::Score(score_args) => execute_benchmark_score(score_args),
         BenchmarkMode::Verify(verify_args) => execute_benchmark_verify(verify_args),
     }
@@ -2141,6 +2204,48 @@ fn execute_benchmark_run(args: BenchmarkRunArgs) -> Result<i32, String> {
 
     print_json(&output)?;
     if result.blocked { Ok(25) } else { Ok(0) }
+}
+
+fn execute_benchmark_compare(args: BenchmarkCompareArgs) -> Result<i32, String> {
+    let manifest = load_json_file::<BenchmarkComparisonManifest>(&args.manifest)?;
+    let manifest_root = args
+        .manifest
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let result = run_benchmark_comparison_suite(
+        &manifest,
+        &manifest_root,
+        args.run_id.clone(),
+        args.run_date.clone(),
+    )
+    .map_err(|error| format!("benchmark compare execution failed: {error}"))?;
+    let artifacts =
+        write_benchmark_comparison_artifacts(&result, &args.out_dir).map_err(|error| {
+            format!(
+                "failed to write benchmark comparison artifacts to `{}`: {error}",
+                args.out_dir.display()
+            )
+        })?;
+    let output = BenchmarkCompareCommandOutput {
+        schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
+        run_id: args.run_id,
+        run_date: args.run_date,
+        case_count: result.manifest.cases.len(),
+        runtime_result_count: result.results.len(),
+        artifacts: BenchmarkArtifactPaths {
+            run_manifest: artifacts.run_manifest_path.display().to_string(),
+            evidence_jsonl: artifacts.evidence_path.display().to_string(),
+            events_jsonl: artifacts.events_path.display().to_string(),
+            commands_txt: artifacts.commands_path.display().to_string(),
+            benchmark_env_manifest: artifacts.benchmark_env_manifest_path.display().to_string(),
+            raw_results_archive: artifacts.raw_results_archive_path.display().to_string(),
+            summary: artifacts.summary_path.display().to_string(),
+        },
+        observability_mode: default_capture_observability_mode(),
+    };
+    print_json(&output)?;
+    Ok(0)
 }
 
 fn execute_benchmark_score(args: BenchmarkScoreArgs) -> Result<i32, String> {
@@ -4452,7 +4557,7 @@ fn rustc_verbose_field(verbose: Option<&str>, field: &str) -> Option<String> {
 fn current_unix_ns() -> u64 {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
+        .unwrap()
         .as_nanos();
     u64::try_from(nanos).unwrap_or(u64::MAX)
 }
@@ -4741,6 +4846,8 @@ fn benchmark_usage() -> String {
         "benchmark usage:",
         "  frankenctl benchmark run [--seed <u64>] [--run-id <id>] [--run-date <YYYY-MM-DD>]",
         "      [--profile small|medium|large]... [--family <name>]... [--out-dir <path>]",
+        "  frankenctl benchmark compare --manifest <comparison-manifest.json>",
+        "      [--run-id <id>] [--run-date <YYYY-MM-DD>] [--out-dir <path>]",
         "  frankenctl benchmark score --input <publication_gate_input.json>",
         "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>] [--output <path>]",
         "  frankenctl benchmark verify --bundle <dir> [--summary] [--output <report.json>]",
@@ -4753,6 +4860,15 @@ fn benchmark_run_usage() -> String {
         "benchmark run usage:",
         "  frankenctl benchmark run [--seed <u64>] [--run-id <id>] [--run-date <YYYY-MM-DD>]",
         "      [--profile small|medium|large]... [--family <name>]... [--out-dir <path>]",
+    ]
+    .join("\n")
+}
+
+fn benchmark_compare_usage() -> String {
+    [
+        "benchmark compare usage:",
+        "  frankenctl benchmark compare --manifest <comparison-manifest.json>",
+        "      [--run-id <id>] [--run-date <YYYY-MM-DD>] [--out-dir <path>]",
     ]
     .join("\n")
 }
@@ -5186,7 +5302,7 @@ mod tests {
                     .collect(),
             })
             .expect("catalog entry should be added");
-        write_json_file(&catalog_path, &catalog).unwrap_or_default();
+        write_json_file(&catalog_path, &catalog).unwrap();
 
         let exit_code = execute_react_doctor(ReactDoctorArgs {
             catalog: catalog_path.clone(),
@@ -5508,7 +5624,7 @@ mod tests {
             observability_mode: default_capture_observability_mode(),
         };
 
-        let json = serde_json::to_value(&output).unwrap_or_default();
+        let json = serde_json::to_value(&output).unwrap();
         assert_eq!(json["receipt_id"].as_str(), Some("rcpt-1"));
         assert_eq!(json["trace_id"].as_str(), Some("trace-verify-01"));
         assert_eq!(
@@ -5561,7 +5677,7 @@ mod tests {
             observability_mode: default_capture_observability_mode(),
         };
 
-        let json = serde_json::to_value(&output).unwrap_or_default();
+        let json = serde_json::to_value(&output).unwrap();
         assert_eq!(json["claim_type"].as_str(), Some("benchmark"));
         assert_eq!(
             json["report_path"].as_str(),
@@ -5698,6 +5814,37 @@ mod tests {
     }
 
     #[test]
+    fn parse_benchmark_compare_command() {
+        let args = vec![
+            "benchmark".to_string(),
+            "compare".to_string(),
+            "--manifest".to_string(),
+            "artifacts/compare_manifest.json".to_string(),
+            "--run-id".to_string(),
+            "compare-run".to_string(),
+            "--run-date".to_string(),
+            "2026-04-07".to_string(),
+            "--out-dir".to_string(),
+            "artifacts/compare".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("benchmark compare should parse");
+        match parsed {
+            CommandSpec::Benchmark(BenchmarkArgs {
+                mode: BenchmarkMode::Compare(spec),
+            }) => {
+                assert_eq!(
+                    spec.manifest,
+                    PathBuf::from("artifacts/compare_manifest.json")
+                );
+                assert_eq!(spec.run_id, "compare-run");
+                assert_eq!(spec.run_date, "2026-04-07");
+                assert_eq!(spec.out_dir, PathBuf::from("artifacts/compare"));
+            }
+            other => panic!("expected benchmark compare command, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn parse_benchmark_run_command_rejects_invalid_run_date() {
         let args = vec![
             "benchmark".to_string(),
@@ -5710,6 +5857,13 @@ mod tests {
             error,
             "invalid --run-date `2026-02-30` (expected a real YYYY-MM-DD date)"
         );
+    }
+
+    #[test]
+    fn benchmark_usage_mentions_compare_subcommand() {
+        let usage = benchmark_usage();
+        assert!(usage.contains("benchmark compare"));
+        assert!(benchmark_compare_usage().contains("--manifest <comparison-manifest.json>"));
     }
 
     #[test]

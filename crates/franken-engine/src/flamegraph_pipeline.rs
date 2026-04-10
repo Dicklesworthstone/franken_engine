@@ -767,7 +767,7 @@ fn parse_folded_stacks(
             });
         }
 
-        let count_token = tokens.last().copied().unwrap_or_default();
+        let count_token = tokens.last().copied().unwrap();
         let stack_token = tokens[..tokens.len() - 1].join(" ");
         let sample_count = count_token.parse::<u64>().map_err(|_| {
             FlamegraphPipelineError::InvalidFoldedStack {
@@ -1051,7 +1051,7 @@ fn build_svg(
             match diff_by_stack
                 .get(&sample.stack)
                 .copied()
-                .unwrap_or_default()
+                .unwrap()
                 .cmp(&0)
             {
                 std::cmp::Ordering::Greater => "#d9534f",
@@ -1148,7 +1148,7 @@ fn build_baseline_reference_id(
         metadata
             .baseline_benchmark_run_id
             .as_deref()
-            .unwrap_or_default()
+            .unwrap()
             .as_bytes(),
     );
     hasher.update(evidence_link.optimization_decision_id.as_bytes());
@@ -1178,7 +1178,7 @@ fn build_artifact_id(
         metadata
             .baseline_benchmark_run_id
             .as_deref()
-            .unwrap_or_default()
+            .unwrap()
             .as_bytes(),
     );
     hasher.update(metadata.workload_id.as_bytes());

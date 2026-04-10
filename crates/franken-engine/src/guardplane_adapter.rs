@@ -662,7 +662,7 @@ mod tests {
             HookAction::Suspend | HookAction::Terminate(_) | HookAction::Quarantine(_)
         ));
         let summary = adapter.summary();
-        assert!(summary.last_posterior_delta_millionths.unwrap_or_default() >= 500_000);
+        assert!(summary.last_posterior_delta_millionths.unwrap() >= 500_000);
     }
 
     #[test]

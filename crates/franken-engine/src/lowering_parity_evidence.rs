@@ -413,7 +413,7 @@ mod tests {
     fn unique_temp_dir(prefix: &str) -> PathBuf {
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
+            .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("{}-{}", prefix, ts))
     }
@@ -624,8 +624,8 @@ mod tests {
     #[test]
     fn inventory_serde_roundtrip() {
         let inventory = parity_evidence_inventory();
-        let json = serde_json::to_string(&inventory).unwrap_or_default();
-        let deserialized: ParityEvidenceInventory = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&inventory).unwrap();
+        let deserialized: ParityEvidenceInventory = serde_json::from_str(&json).unwrap();
         assert_eq!(inventory, deserialized);
     }
 
@@ -818,8 +818,8 @@ mod tests {
                 commands_txt: "commands.txt".to_string(),
             },
         };
-        let json = serde_json::to_string_pretty(&manifest).unwrap_or_default();
-        let back: ParityEvidenceRunManifest = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string_pretty(&manifest).unwrap();
+        let back: ParityEvidenceRunManifest = serde_json::from_str(&json).unwrap();
         assert_eq!(back.schema_version, manifest.schema_version);
         assert_eq!(back.finding_count, manifest.finding_count);
         assert_eq!(back.contract_satisfied, manifest.contract_satisfied);

@@ -1156,8 +1156,8 @@ mod tests {
     #[test]
     fn lease_id_serialization_round_trip() {
         let id = LeaseId::from_raw(42);
-        let json = serde_json::to_string(&id).unwrap_or_default();
-        let restored: LeaseId = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&id).unwrap();
+        let restored: LeaseId = serde_json::from_str(&json).unwrap();
         assert_eq!(id, restored);
     }
 
@@ -1174,8 +1174,8 @@ mod tests {
             renewal_count: 2,
             status: LeaseStatus::Active,
         };
-        let json = serde_json::to_string(&lease).unwrap_or_default();
-        let restored: Lease = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&lease).unwrap();
+        let restored: Lease = serde_json::from_str(&json).unwrap();
         assert_eq!(lease, restored);
     }
 
@@ -1192,8 +1192,8 @@ mod tests {
             event: "grant".to_string(),
             renewal_count: 0,
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: LeaseEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: LeaseEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 
@@ -1210,8 +1210,8 @@ mod tests {
             LeaseError::EmptyHolder,
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let restored: LeaseError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let restored: LeaseError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
     }
@@ -1230,8 +1230,8 @@ mod tests {
             },
         ];
         for action in &actions {
-            let json = serde_json::to_string(action).unwrap_or_default();
-            let restored: EscalationAction = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(action).unwrap();
+            let restored: EscalationAction = serde_json::from_str(&json).unwrap();
             assert_eq!(*action, restored);
         }
     }

@@ -817,8 +817,8 @@ mod tests {
             RegionState::Closed,
         ];
         for state in &states {
-            let json = serde_json::to_string(state).unwrap_or_default();
-            let restored: RegionState = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(state).unwrap();
+            let restored: RegionState = serde_json::from_str(&json).unwrap();
             assert_eq!(*state, restored);
         }
     }
@@ -831,8 +831,8 @@ mod tests {
             CancelReason::Custom("test".to_string()),
         ];
         for reason in &reasons {
-            let json = serde_json::to_string(reason).unwrap_or_default();
-            let restored: CancelReason = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(reason).unwrap();
+            let restored: CancelReason = serde_json::from_str(&json).unwrap();
             assert_eq!(*reason, restored);
         }
     }
@@ -846,8 +846,8 @@ mod tests {
             obligations_aborted: 1,
             drain_timeout_escalated: false,
         };
-        let json = serde_json::to_string(&result).unwrap_or_default();
-        let restored: FinalizeResult = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&result).unwrap();
+        let restored: FinalizeResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, restored);
     }
 
@@ -862,8 +862,8 @@ mod tests {
             obligations_pending: 0,
             drain_elapsed_ticks: 0,
         };
-        let json = serde_json::to_string(&event).unwrap_or_default();
-        let restored: RegionEvent = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: RegionEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, restored);
     }
 
@@ -876,8 +876,8 @@ mod tests {
             ObligationStatus::Committed,
             ObligationStatus::Aborted,
         ] {
-            let json = serde_json::to_string(&status).unwrap_or_default();
-            let restored: ObligationStatus = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&status).unwrap();
+            let restored: ObligationStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(status, restored);
         }
     }
@@ -889,16 +889,16 @@ mod tests {
             description: "must finalize".to_string(),
             status: ObligationStatus::Pending,
         };
-        let json = serde_json::to_string(&ob).unwrap_or_default();
-        let restored: Obligation = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&ob).unwrap();
+        let restored: Obligation = serde_json::from_str(&json).unwrap();
         assert_eq!(ob, restored);
     }
 
     #[test]
     fn drain_deadline_serde_roundtrip() {
         let dd = DrainDeadline { max_ticks: 5000 };
-        let json = serde_json::to_string(&dd).unwrap_or_default();
-        let restored: DrainDeadline = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&dd).unwrap();
+        let restored: DrainDeadline = serde_json::from_str(&json).unwrap();
         assert_eq!(dd, restored);
     }
 
@@ -989,8 +989,8 @@ mod tests {
             attempted_transition: "cancel".to_string(),
             region_id: "r-42".to_string(),
         };
-        let json = serde_json::to_string(&v).unwrap_or_default();
-        let restored: PhaseOrderViolation = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&v).unwrap();
+        let restored: PhaseOrderViolation = serde_json::from_str(&json).unwrap();
         assert_eq!(v, restored);
     }
 
@@ -1005,8 +1005,8 @@ mod tests {
             CancelReason::Custom("my_reason".to_string()),
         ];
         for reason in &reasons {
-            let json = serde_json::to_string(reason).unwrap_or_default();
-            let restored: CancelReason = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(reason).unwrap();
+            let restored: CancelReason = serde_json::from_str(&json).unwrap();
             assert_eq!(*reason, restored);
         }
     }
@@ -1084,8 +1084,8 @@ mod tests {
             obligations_aborted: 3,
             drain_timeout_escalated: true,
         };
-        let json = serde_json::to_string(&result).unwrap_or_default();
-        let restored: FinalizeResult = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&result).unwrap();
+        let restored: FinalizeResult = serde_json::from_str(&json).unwrap();
         assert_eq!(result, restored);
     }
 

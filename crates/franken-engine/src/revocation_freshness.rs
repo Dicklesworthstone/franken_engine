@@ -232,7 +232,7 @@ impl DegradedModeOverride {
             &override_schema_id(),
             &canonical_bytes,
         )
-        .unwrap_or_default();
+        .unwrap();
 
         let mut token = Self {
             override_id,

@@ -923,9 +923,9 @@ fn parse_pin_toml(content: &str) -> io::Result<Test262PinSet> {
         schema_version: values
             .remove("schema_version")
             .unwrap_or_else(|| TEST262_PIN_SCHEMA.to_string()),
-        source_repo: values.remove("source_repo").unwrap_or_default(),
-        es_profile: values.remove("es_profile").unwrap_or_default(),
-        test262_commit: values.remove("test262_commit").unwrap_or_default(),
+        source_repo: values.remove("source_repo").unwrap(),
+        es_profile: values.remove("es_profile").unwrap(),
+        test262_commit: values.remove("test262_commit").unwrap(),
     })
 }
 

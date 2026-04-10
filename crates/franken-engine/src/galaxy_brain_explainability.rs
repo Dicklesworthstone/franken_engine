@@ -529,7 +529,7 @@ impl ExplanationIndex {
         self.by_domain
             .get(&key)
             .map(|ids| ids.iter().filter_map(|id| self.entries.get(id)).collect())
-            .unwrap_or_default()
+            .unwrap()
     }
 
     /// Get all explanations for a given epoch.
@@ -537,7 +537,7 @@ impl ExplanationIndex {
         self.by_epoch
             .get(&epoch.as_u64())
             .map(|ids| ids.iter().filter_map(|id| self.entries.get(id)).collect())
-            .unwrap_or_default()
+            .unwrap()
     }
 
     /// Total number of explanations.

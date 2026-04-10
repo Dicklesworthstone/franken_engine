@@ -508,7 +508,7 @@ impl WasmFlushResult {
             self.updates_consumed,
             self.signals_evaluated,
             self.dom_ops_emitted,
-            serde_json::to_string(&self.mode_after).unwrap_or_default(),
+            serde_json::to_string(&self.mode_after).unwrap(),
         );
         derive_id(
             ObjectDomain::EvidenceRecord,
@@ -706,7 +706,7 @@ impl WasmRuntimeLane {
         let canonical = format!(
             "wasm_lane:signals={}:mode={}:flushes={}",
             self.graph.active_count(),
-            serde_json::to_string(&self.mode).unwrap_or_default(),
+            serde_json::to_string(&self.mode).unwrap(),
             self.flush_count,
         );
         derive_id(

@@ -944,8 +944,8 @@ mod tests {
     fn proof_serialization_round_trip() {
         let mmr = build_mmr(8);
         let proof = mmr.inclusion_proof(3).unwrap();
-        let json = serde_json::to_string(&proof).unwrap_or_default();
-        let restored: MmrProof = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&proof).unwrap();
+        let restored: MmrProof = serde_json::from_str(&json).unwrap();
         assert_eq!(proof, restored);
     }
 
@@ -962,8 +962,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let restored: ProofError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let restored: ProofError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
     }

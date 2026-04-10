@@ -843,12 +843,12 @@ impl BudgetedOptimizationStack {
             .campaigns
             .get(campaign_a)
             .map(|c| c.families())
-            .unwrap_or_default();
+            .unwrap();
         let families_b = self
             .campaigns
             .get(campaign_b)
             .map(|c| c.families())
-            .unwrap_or_default();
+            .unwrap();
 
         let overlapping: BTreeSet<_> = families_a.intersection(&families_b).cloned().collect();
 

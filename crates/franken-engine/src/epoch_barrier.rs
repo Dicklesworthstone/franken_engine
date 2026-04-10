@@ -887,8 +887,8 @@ mod tests {
             duration_ms: 0,
             trace_id: "test-trace".to_string(),
         };
-        let json = serde_json::to_string(&evidence).unwrap_or_default();
-        let restored: TransitionEvidence = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&evidence).unwrap();
+        let restored: TransitionEvidence = serde_json::from_str(&json).unwrap();
         assert_eq!(evidence, restored);
     }
 
@@ -914,8 +914,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let restored: BarrierError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let restored: BarrierError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
     }
@@ -928,8 +928,8 @@ mod tests {
             op_kind: CriticalOpKind::RemoteOperation,
             trace_id: "t-123".to_string(),
         };
-        let json = serde_json::to_string(&guard).unwrap_or_default();
-        let restored: EpochGuard = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&guard).unwrap();
+        let restored: EpochGuard = serde_json::from_str(&json).unwrap();
         assert_eq!(guard, restored);
     }
 
@@ -942,8 +942,8 @@ mod tests {
             BarrierState::Draining,
             BarrierState::Finalizing,
         ] {
-            let json = serde_json::to_string(&state).unwrap_or_default();
-            let restored: BarrierState = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&state).unwrap();
+            let restored: BarrierState = serde_json::from_str(&json).unwrap();
             assert_eq!(state, restored);
         }
     }
@@ -958,8 +958,8 @@ mod tests {
             CriticalOpKind::RevocationCheck,
             CriticalOpKind::RemoteOperation,
         ] {
-            let json = serde_json::to_string(&kind).unwrap_or_default();
-            let restored: CriticalOpKind = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(&kind).unwrap();
+            let restored: CriticalOpKind = serde_json::from_str(&json).unwrap();
             assert_eq!(kind, restored);
         }
     }
@@ -1002,8 +1002,8 @@ mod tests {
     #[test]
     fn barrier_config_serialization_round_trip() {
         let config = BarrierConfig::default();
-        let json = serde_json::to_string(&config).unwrap_or_default();
-        let restored: BarrierConfig = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: BarrierConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, restored);
     }
 
@@ -1179,8 +1179,8 @@ mod tests {
             duration_ms: 42,
             trace_id: "t-forced".to_string(),
         };
-        let json = serde_json::to_string(&evidence).unwrap_or_default();
-        let restored: TransitionEvidence = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&evidence).unwrap();
+        let restored: TransitionEvidence = serde_json::from_str(&json).unwrap();
         assert_eq!(evidence, restored);
     }
 

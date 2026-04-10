@@ -401,7 +401,7 @@ impl PolicyController {
                     .iter()
                     .find(|(a, _)| a == action)
                     .map(|(_, r)| format!("blocked by guardrail: {r}"))
-                    .unwrap_or_default();
+                    .unwrap();
                 builder = builder.candidate(CandidateAction::filtered(action, el, reason));
             } else {
                 builder = builder.candidate(CandidateAction::new(action, el));
@@ -752,8 +752,8 @@ mod tests {
         let mut m = LossMatrix::new();
         m.set("s1", "a1", 100);
         m.set("s2", "a2", 200);
-        let json = serde_json::to_string(&m).unwrap_or_default();
-        let restored: LossMatrix = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&m).unwrap();
+        let restored: LossMatrix = serde_json::from_str(&json).unwrap();
         assert_eq!(m, restored);
     }
 
@@ -766,8 +766,8 @@ mod tests {
             guardrail_rejections: vec![("low".to_string(), "cost-cap".to_string())],
             decision_id: "mon-ctrl-000001".to_string(),
         };
-        let json = serde_json::to_string(&sel).unwrap_or_default();
-        let restored: ActionSelection = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&sel).unwrap();
+        let restored: ActionSelection = serde_json::from_str(&json).unwrap();
         assert_eq!(sel, restored);
     }
 
@@ -780,8 +780,8 @@ mod tests {
             safe_default: "high".to_string(),
             policy_id: "p-1".to_string(),
         };
-        let json = serde_json::to_string(&config).unwrap_or_default();
-        let restored: ControllerConfig = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: ControllerConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config, restored);
     }
 
@@ -798,8 +798,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap_or_default();
-            let restored: PolicyControllerError = serde_json::from_str(&json).unwrap_or_default();
+            let json = serde_json::to_string(err).unwrap();
+            let restored: PolicyControllerError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
     }
@@ -813,16 +813,16 @@ mod tests {
             description: "limits spending".to_string(),
             blocked_actions: vec!["expensive".to_string(), "risky".to_string()],
         };
-        let json = serde_json::to_string(&g).unwrap_or_default();
-        let restored: Guardrail = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&g).unwrap();
+        let restored: Guardrail = serde_json::from_str(&json).unwrap();
         assert_eq!(g, restored);
     }
 
     #[test]
     fn posterior_serde_roundtrip() {
         let p = normal_posterior();
-        let json = serde_json::to_string(&p).unwrap_or_default();
-        let restored: Posterior = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&p).unwrap();
+        let restored: Posterior = serde_json::from_str(&json).unwrap();
         assert_eq!(p, restored);
     }
 

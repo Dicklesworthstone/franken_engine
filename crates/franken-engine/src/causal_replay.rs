@@ -2283,8 +2283,8 @@ mod tests {
         let mode = RecordingMode::Sampled {
             rate_millionths: 500_000,
         };
-        let json = serde_json::to_string(&mode).unwrap_or_default();
-        let deser: RecordingMode = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&mode).unwrap();
+        let deser: RecordingMode = serde_json::from_str(&json).unwrap();
         assert_eq!(mode, deser);
     }
 
@@ -2293,8 +2293,8 @@ mod tests {
     #[test]
     fn trace_record_serde_round_trip() {
         let trace = make_trace(&[("sandbox", 200_000), ("allow", 0)]);
-        let json = serde_json::to_string(&trace).unwrap_or_default();
-        let deser: TraceRecord = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&trace).unwrap();
+        let deser: TraceRecord = serde_json::from_str(&json).unwrap();
 
         assert_eq!(trace.trace_id, deser.trace_id);
         assert_eq!(trace.entries.len(), deser.entries.len());
@@ -2328,8 +2328,8 @@ mod tests {
             decisions_evaluated: 10,
         };
 
-        let json = serde_json::to_string(&report).unwrap_or_default();
-        let deser: ActionDeltaReport = serde_json::from_str(&json).unwrap_or_default();
+        let json = serde_json::to_string(&report).unwrap();
+        let deser: ActionDeltaReport = serde_json::from_str(&json).unwrap();
         assert_eq!(
             report.harm_prevented_delta_millionths,
             deser.harm_prevented_delta_millionths

@@ -1695,7 +1695,7 @@ struct MutableArtNode {
 }
 
 fn stable_fingerprint<T: Serialize>(value: &T) -> String {
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    let bytes = serde_json::to_vec(value).unwrap();
     ContentHash::compute(&bytes).to_hex()
 }
 

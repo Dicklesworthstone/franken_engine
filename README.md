@@ -2232,6 +2232,8 @@ through `rch`, and treats the standalone mode as the blocking gate:
 
 If the sibling `/dp` dependencies needed for full integration are unavailable, the script records
 that lane as skipped in the manifest instead of pretending the repo is fully integrated.
+The canonical dependency-isolation contract for this split lives in
+`docs/CROSS_REPO_DEPENDENCY_ISOLATION_V1.md` and `docs/cross_repo_dependency_isolation_v1.json`.
 
 ### 3. Can I run without frankentui?
 Yes for basic CLI workflows. Advanced operator views, replay dashboards, and policy explanation consoles use `/dp/frankentui`.

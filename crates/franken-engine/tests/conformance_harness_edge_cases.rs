@@ -785,8 +785,7 @@ fn conformance_minimized_failing_vector_serde_roundtrip() {
         expected_output: "expected".to_string(),
     };
     let json = serde_json::to_string(&vector).unwrap();
-    let restored: ConformanceMinimizedFailingVector =
-        serde_json::from_str(&json).unwrap();
+    let restored: ConformanceMinimizedFailingVector = serde_json::from_str(&json).unwrap();
     assert_eq!(vector, restored);
 }
 
@@ -1000,8 +999,7 @@ fn verify_replay_fails_on_wrong_digest() {
 fn repro_artifact_serde_roundtrip() {
     let artifact = build_test_repro_artifact("result: true", "result: false");
     let json = serde_json::to_string(&artifact).unwrap();
-    let restored: ConformanceMinimizedReproArtifact =
-        serde_json::from_str(&json).unwrap();
+    let restored: ConformanceMinimizedReproArtifact = serde_json::from_str(&json).unwrap();
     assert_eq!(artifact, restored);
 }
 

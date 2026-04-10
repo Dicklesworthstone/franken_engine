@@ -206,8 +206,7 @@ fn unsupported_semantics_trigger_serde_round_trip_all_variants() {
         UnsupportedSemanticsTrigger::TransformationProofMissing,
     ] {
         let json = serde_json::to_string(&trigger).unwrap();
-        let recovered: UnsupportedSemanticsTrigger =
-            serde_json::from_str(&json).unwrap();
+        let recovered: UnsupportedSemanticsTrigger = serde_json::from_str(&json).unwrap();
         assert_eq!(trigger, recovered);
     }
 }

@@ -1245,8 +1245,7 @@ fn enrichment_materialized_ast_is_deterministic_across_runs() {
 fn enrichment_parse_event_materialization_error_code_serde_roundtrip() {
     let code = ParseEventMaterializationErrorCode::ParseFailedEventStream;
     let json = serde_json::to_string(&code).unwrap();
-    let recovered: ParseEventMaterializationErrorCode =
-        serde_json::from_str(&json).unwrap();
+    let recovered: ParseEventMaterializationErrorCode = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, code);
     assert!(!code.as_str().is_empty());
 }

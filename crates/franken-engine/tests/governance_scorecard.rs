@@ -1344,8 +1344,7 @@ fn moonshot_governor_decision_summary_serde_roundtrip() {
         threshold_pass: true,
     };
     let json = serde_json::to_string(&summary).unwrap();
-    let recovered: MoonshotGovernorDecisionSummary =
-        serde_json::from_str(&json).unwrap();
+    let recovered: MoonshotGovernorDecisionSummary = serde_json::from_str(&json).unwrap();
     assert_eq!(summary, recovered);
 }
 
@@ -1369,8 +1368,7 @@ fn cross_repo_conformance_stability_summary_serde_roundtrip() {
         threshold_pass: true,
     };
     let json = serde_json::to_string(&summary).unwrap();
-    let recovered: CrossRepoConformanceStabilitySummary =
-        serde_json::from_str(&json).unwrap();
+    let recovered: CrossRepoConformanceStabilitySummary = serde_json::from_str(&json).unwrap();
     assert_eq!(summary, recovered);
 }
 

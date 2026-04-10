@@ -577,11 +577,9 @@ fn twin_phase_serializes_to_snake_case() {
 
 #[test]
 fn twin_transition_trigger_serializes_to_snake_case() {
-    let json =
-        serde_json::to_string(&TwinTransitionTrigger::GuardrailTriggered).unwrap();
+    let json = serde_json::to_string(&TwinTransitionTrigger::GuardrailTriggered).unwrap();
     assert_eq!(json, "\"guardrail_triggered\"");
-    let json2 =
-        serde_json::to_string(&TwinTransitionTrigger::ReplayCounterfactual).unwrap();
+    let json2 = serde_json::to_string(&TwinTransitionTrigger::ReplayCounterfactual).unwrap();
     assert_eq!(json2, "\"replay_counterfactual\"");
 }
 

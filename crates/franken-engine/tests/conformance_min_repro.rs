@@ -160,8 +160,7 @@ fn repro_artifact_round_trip_contains_required_metadata() {
     artifact.verify_replay().expect("replay verification");
 
     let round_trip: conformance_harness::ConformanceMinimizedReproArtifact =
-        serde_json::from_slice(&serde_json::to_vec(artifact).unwrap())
-            .unwrap();
+        serde_json::from_slice(&serde_json::to_vec(artifact).unwrap()).unwrap();
     assert_eq!(round_trip, *artifact);
 }
 

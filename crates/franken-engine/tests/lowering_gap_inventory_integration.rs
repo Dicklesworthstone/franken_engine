@@ -302,8 +302,7 @@ fn descriptor_serde_roundtrip() {
     for site in LoweringGapSiteId::ALL {
         let desc = LoweringGapSiteDescriptor::from_site(site);
         let json = serde_json::to_string(&desc).unwrap();
-        let deserialized: LoweringGapSiteDescriptor =
-            serde_json::from_str(&json).unwrap();
+        let deserialized: LoweringGapSiteDescriptor = serde_json::from_str(&json).unwrap();
         assert_eq!(desc, deserialized);
     }
 }

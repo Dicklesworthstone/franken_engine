@@ -277,6 +277,15 @@ fn json_compound_placeholder_closure_replay_wrapper_prints_required_artifacts() 
 }
 
 #[test]
+fn json_compound_placeholder_closure_replay_wrapper_uses_absolute_artifact_root_default() {
+    let script = read_repo_text("scripts/e2e/rgc_json_compound_placeholder_closure_replay.sh");
+    assert!(
+        script.contains("${root_dir}/artifacts/rgc_json_compound_placeholder_closure"),
+        "closure replay wrapper should default artifact_root under the repo root"
+    );
+}
+
+#[test]
 fn readme_mentions_compound_json_runtime_proof_lanes() {
     let readme = read_repo_text("README.md");
     for fragment in [
@@ -475,8 +484,7 @@ fn subsystem_summary_serde_round_trip() {
     let summaries = inventory.subsystem_summaries();
     for summary in &summaries {
         let json = serde_json::to_string(summary).unwrap();
-        let restored: ZeroPlaceholderSubsystemSummary =
-            serde_json::from_str(&json).unwrap();
+        let restored: ZeroPlaceholderSubsystemSummary = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.subsystem, summary.subsystem);
         assert_eq!(restored.finding_count, summary.finding_count);
     }

@@ -80,11 +80,8 @@ fn write_fixture_catalog(path: &Path) -> String {
         ]
     });
 
-    fs::write(
-        path,
-        serde_json::to_vec_pretty(&catalog).unwrap(),
-    )
-    .expect("fixture catalog should be written");
+    fs::write(path, serde_json::to_vec_pretty(&catalog).unwrap())
+        .expect("fixture catalog should be written");
 
     expected_hash
 }
@@ -225,9 +222,7 @@ fn expected_environment_fingerprint(locale: &str, timezone: &str) -> String {
     material.insert("timezone", timezone.to_string());
     format!(
         "sha256:{}",
-        hex::encode(Sha256::digest(
-            serde_json::to_vec(&material).unwrap()
-        ))
+        hex::encode(Sha256::digest(serde_json::to_vec(&material).unwrap()))
     )
 }
 
@@ -391,11 +386,8 @@ fn write_engine_specs(path: &Path) {
             "version_pin": "fixture-catalog@phase0-v1"
         }
     ]);
-    fs::write(
-        path,
-        serde_json::to_vec_pretty(&payload).unwrap(),
-    )
-    .expect("engine spec file should write");
+    fs::write(path, serde_json::to_vec_pretty(&payload).unwrap())
+        .expect("engine spec file should write");
 }
 
 fn read_jsonl(path: &Path) -> Vec<serde_json::Value> {

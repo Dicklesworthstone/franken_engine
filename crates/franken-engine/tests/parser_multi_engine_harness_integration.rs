@@ -59,11 +59,8 @@ fn write_empty_source_fixture_catalog() -> PathBuf {
             }
         ]
     });
-    fs::write(
-        &path,
-        serde_json::to_vec_pretty(&payload).unwrap(),
-    )
-    .expect("fixture catalog should write");
+    fs::write(&path, serde_json::to_vec_pretty(&payload).unwrap())
+        .expect("fixture catalog should write");
     path
 }
 

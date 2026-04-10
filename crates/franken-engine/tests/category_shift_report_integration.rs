@@ -710,8 +710,7 @@ fn log_entry_serde_roundtrip() {
     assert!(!logs.is_empty());
     for log in &logs {
         let json = serde_json::to_string(log).unwrap();
-        let recovered: CategoryShiftReportLogEntry =
-            serde_json::from_str(&json).unwrap();
+        let recovered: CategoryShiftReportLogEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(*log, recovered);
     }
 }
@@ -808,8 +807,7 @@ fn capability_ord_is_consistent() {
 
 #[test]
 fn capability_serde_rename_all_snake_case() {
-    let json = serde_json::to_string(&CategoryShiftCapability::ProofCarryingOptimization)
-        .unwrap();
+    let json = serde_json::to_string(&CategoryShiftCapability::ProofCarryingOptimization).unwrap();
     assert_eq!(json, "\"proof_carrying_optimization\"");
 
     let json2 =

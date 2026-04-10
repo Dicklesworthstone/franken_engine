@@ -10,12 +10,14 @@
 
 #![allow(clippy::needless_borrows_for_generic_args, clippy::too_many_arguments)]
 
-use frankenengine_engine::ast::{Expression, FunctionDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree};
+use frankenengine_engine::ast::{
+    Expression, FunctionDeclaration, ParseGoal, SourceSpan, Statement, SyntaxTree,
+};
 use frankenengine_engine::baseline_interpreter::Value;
 use frankenengine_engine::hash_tiers::ContentHash;
-use frankenengine_engine::ir_contract::{Ir3FunctionDesc, Ir3Instruction, Ir3Module, RegRange};
-use frankenengine_engine::lowering_pipeline::{lower_ir0_to_ir3, LoweringContext};
 use frankenengine_engine::ir_contract::Ir0Module;
+use frankenengine_engine::ir_contract::{Ir3FunctionDesc, Ir3Instruction, Ir3Module, RegRange};
+use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_engine::parser_api_stability::parse_script;
 
 // ---------------------------------------------------------------------------
@@ -41,7 +43,9 @@ fn run_ir3(module: &Ir3Module) -> Value {
     use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore};
     let config = InterpreterConfig::quickjs_defaults();
     let mut core = InterpreterCore::new(config, "gen-test");
-    core.execute(module).expect("execution should succeed").value
+    core.execute(module)
+        .expect("execution should succeed")
+        .value
 }
 
 // ---------------------------------------------------------------------------
@@ -68,7 +72,10 @@ fn parser_recognizes_yield_expression() {
     match &tree.body[0] {
         Statement::FunctionDeclaration(fd) => {
             assert!(fd.is_generator);
-            assert!(!fd.body.body.is_empty(), "generator body should have statements");
+            assert!(
+                !fd.body.body.is_empty(),
+                "generator body should have statements"
+            );
         }
         other => panic!("expected FunctionDeclaration, got {:?}", other),
     }

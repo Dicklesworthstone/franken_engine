@@ -774,8 +774,7 @@ fn coordination_validation_error_serde_round_trip_all_variants() {
     ];
     for err in &errors {
         let json = serde_json::to_string(err).unwrap();
-        let recovered: CoordinationValidationError =
-            serde_json::from_str(&json).unwrap();
+        let recovered: CoordinationValidationError = serde_json::from_str(&json).unwrap();
         assert_eq!(*err, recovered);
     }
 }

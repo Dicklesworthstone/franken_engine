@@ -642,8 +642,7 @@ fn rgc_056_expected_outcome_for_all_classes_is_not_unknown() {
 fn rgc_056_contract_pretty_json_serde_roundtrip_preserves_equality() {
     let contract = parse_contract();
     let pretty = serde_json::to_string_pretty(&contract).unwrap();
-    let recovered: ChaosVerificationPackContract =
-        serde_json::from_str(&pretty).unwrap();
+    let recovered: ChaosVerificationPackContract = serde_json::from_str(&pretty).unwrap();
     assert_eq!(contract, recovered);
 }
 

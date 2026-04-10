@@ -849,8 +849,7 @@ fn unsupported_semantics_trigger_serde_round_trip() {
         UnsupportedSemanticsTrigger::TransformationProofMissing,
     ] {
         let json = serde_json::to_string(&trigger).unwrap();
-        let recovered: UnsupportedSemanticsTrigger =
-            serde_json::from_str(&json).unwrap();
+        let recovered: UnsupportedSemanticsTrigger = serde_json::from_str(&json).unwrap();
         assert_eq!(trigger, recovered);
         assert!(!trigger.stable_error_code().is_empty());
         assert!(!trigger.rejection_reason().is_empty());

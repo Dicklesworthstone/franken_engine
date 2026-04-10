@@ -144,8 +144,7 @@ fn gc_object_serde_round_trip() {
     let id = heap.allocate(128);
     let obj = heap.get(id).unwrap().clone();
     let json = serde_json::to_string(&obj).unwrap();
-    let decoded: frankenengine_engine::gc::GcObject =
-        serde_json::from_str(&json).unwrap();
+    let decoded: frankenengine_engine::gc::GcObject = serde_json::from_str(&json).unwrap();
     assert_eq!(decoded.id, obj.id);
     assert_eq!(decoded.size_bytes, obj.size_bytes);
     assert_eq!(decoded.rooted, obj.rooted);

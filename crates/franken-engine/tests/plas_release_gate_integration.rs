@@ -585,8 +585,7 @@ fn decision_artifact_serde_round_trip() {
     let (input, trust_anchors) = base_gate_fixture();
     let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
     let json = serde_json::to_string_pretty(&artifact).unwrap();
-    let recovered: PlasReleaseGateDecisionArtifact =
-        serde_json::from_str(&json).unwrap();
+    let recovered: PlasReleaseGateDecisionArtifact = serde_json::from_str(&json).unwrap();
     assert_eq!(artifact.pass, recovered.pass);
     assert_eq!(artifact.decision_id, recovered.decision_id);
     assert_eq!(artifact.findings, recovered.findings);
@@ -1045,8 +1044,7 @@ fn test_decision_artifact_pass_true_serde_round_trip() {
     let artifact = evaluate_plas_release_gate(&input, &trust_anchors).expect("gate evaluation");
     assert!(artifact.pass, "base fixture must pass for this test");
     let json = serde_json::to_string(&artifact).unwrap();
-    let recovered: PlasReleaseGateDecisionArtifact =
-        serde_json::from_str(&json).unwrap();
+    let recovered: PlasReleaseGateDecisionArtifact = serde_json::from_str(&json).unwrap();
     assert_eq!(artifact, recovered);
     assert!(recovered.pass);
     assert!(recovered.findings.is_empty());

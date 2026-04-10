@@ -1588,8 +1588,7 @@ fn counterfactual_divergence_kind_serde_roundtrip_all_variants() {
     ];
     for kind in &variants {
         let json = serde_json::to_string(kind).unwrap();
-        let recovered: CounterfactualDivergenceKind =
-            serde_json::from_str(&json).unwrap();
+        let recovered: CounterfactualDivergenceKind = serde_json::from_str(&json).unwrap();
         assert_eq!(&recovered, kind);
     }
 }

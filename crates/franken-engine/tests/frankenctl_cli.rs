@@ -102,11 +102,8 @@ fn write_react_mismatch_catalog(path: &Path) {
             tags: BTreeSet::from(["react".to_string(), "ssr".to_string(), "doctor".to_string()]),
         })
         .expect("catalog entry should be added");
-    fs::write(
-        path,
-        serde_json::to_vec_pretty(&catalog).unwrap(),
-    )
-    .expect("catalog fixture should write");
+    fs::write(path, serde_json::to_vec_pretty(&catalog).unwrap())
+        .expect("catalog fixture should write");
 }
 
 fn parse_stdout_json(output: &std::process::Output) -> serde_json::Value {
@@ -468,11 +465,8 @@ fn write_benchmark_score_input(path: &Path) {
         ],
         "replacement_lineage_ids": ["lineage-a"]
     });
-    fs::write(
-        path,
-        serde_json::to_vec_pretty(&score_input).unwrap(),
-    )
-    .expect("score input should write");
+    fs::write(path, serde_json::to_vec_pretty(&score_input).unwrap())
+        .expect("score input should write");
 }
 
 #[test]
@@ -1590,11 +1584,8 @@ fn frankenctl_replay_run_replays_trace_without_divergence() {
     );
     trace.finalise(3);
 
-    fs::write(
-        &trace_path,
-        serde_json::to_vec_pretty(&trace).unwrap(),
-    )
-    .expect("trace file should write");
+    fs::write(&trace_path, serde_json::to_vec_pretty(&trace).unwrap())
+        .expect("trace file should write");
 
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([
@@ -3638,11 +3629,8 @@ fn frankenctl_replay_empty_trace_completes_immediately() {
     let mut trace = NondeterminismTrace::new("session-empty");
     trace.finalise(1);
 
-    fs::write(
-        &trace_path,
-        serde_json::to_vec_pretty(&trace).unwrap(),
-    )
-    .expect("trace file should write");
+    fs::write(&trace_path, serde_json::to_vec_pretty(&trace).unwrap())
+        .expect("trace file should write");
 
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([
@@ -3681,11 +3669,8 @@ fn frankenctl_replay_unfinished_trace_fails_closed() {
         "integration-test",
     );
 
-    fs::write(
-        &trace_path,
-        serde_json::to_vec_pretty(&trace).unwrap(),
-    )
-    .expect("trace file should write");
+    fs::write(&trace_path, serde_json::to_vec_pretty(&trace).unwrap())
+        .expect("trace file should write");
 
     let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
         .args([

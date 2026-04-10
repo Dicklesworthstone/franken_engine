@@ -746,8 +746,7 @@ fn conformance_run_result_serde_roundtrip() {
         .run(sample_manifest_path(), &waivers)
         .expect("conformance run");
     let json = serde_json::to_string(&run).unwrap();
-    let recovered: conformance_harness::ConformanceRunResult =
-        serde_json::from_str(&json).unwrap();
+    let recovered: conformance_harness::ConformanceRunResult = serde_json::from_str(&json).unwrap();
     assert_eq!(run.run_id, recovered.run_id);
     assert_eq!(run.asset_manifest_hash, recovered.asset_manifest_hash);
     assert_eq!(run.logs.len(), recovered.logs.len());
@@ -763,8 +762,7 @@ fn donor_fixture_serde_roundtrip() {
         observed_output: "1\n".to_string(),
     };
     let json = serde_json::to_string(&fixture).unwrap();
-    let recovered: conformance_harness::DonorFixture =
-        serde_json::from_str(&json).unwrap();
+    let recovered: conformance_harness::DonorFixture = serde_json::from_str(&json).unwrap();
     assert_eq!(fixture.donor_harness, recovered.donor_harness);
     assert_eq!(fixture.source, recovered.source);
     assert_eq!(fixture.observed_output, recovered.observed_output);
@@ -920,8 +918,7 @@ fn conformance_asset_record_serde_defaults_for_missing_optional_fields() {
         "expected_output_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "import_date": "2026-01-01"
     }"#;
-    let record: conformance_harness::ConformanceAssetRecord =
-        serde_json::from_str(json).unwrap();
+    let record: conformance_harness::ConformanceAssetRecord = serde_json::from_str(json).unwrap();
     assert!(record.category.is_none());
     assert!(record.source_labels.is_empty());
     assert!(record.sink_clearances.is_empty());

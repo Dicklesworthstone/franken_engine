@@ -315,8 +315,7 @@ fn proof_attribution_sample_serde_roundtrip() {
 fn request_serde_roundtrip() {
     let req = baseline_request();
     let json = serde_json::to_string(&req).unwrap();
-    let recovered: ConstrainedAmbientBenchmarkRequest =
-        serde_json::from_str(&json).unwrap();
+    let recovered: ConstrainedAmbientBenchmarkRequest = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.trace_id, "trace-cabl-test");
     assert_eq!(recovered.constrained_lane.len(), 2);
 }
@@ -395,8 +394,7 @@ use frankenengine_engine::constrained_ambient_benchmark_lane::{
 fn decision_serde_roundtrip() {
     let decision = run_constrained_ambient_benchmark_lane(&baseline_request());
     let json = serde_json::to_string(&decision).unwrap();
-    let recovered: ConstrainedAmbientBenchmarkDecision =
-        serde_json::from_str(&json).unwrap();
+    let recovered: ConstrainedAmbientBenchmarkDecision = serde_json::from_str(&json).unwrap();
     assert_eq!(decision.report_id, recovered.report_id);
     assert_eq!(decision.outcome, recovered.outcome);
     assert_eq!(decision.blocked, recovered.blocked);

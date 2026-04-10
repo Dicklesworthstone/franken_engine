@@ -2124,8 +2124,7 @@ fn s3fifo_baseline_contract_fixture_serde_roundtrip() {
     };
     let fixture = default_s3fifo_baseline_contract_fixture();
     let json = serde_json::to_string(&fixture).unwrap();
-    let recovered: S3FifoBaselineComparatorContractFixture =
-        serde_json::from_str(&json).unwrap();
+    let recovered: S3FifoBaselineComparatorContractFixture = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered, fixture);
 }
 

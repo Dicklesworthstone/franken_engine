@@ -772,8 +772,7 @@ fn materialization_error_code_serde_round_trip() {
     ];
     for code in &codes {
         let json = serde_json::to_string(code).unwrap();
-        let recovered: ParseEventMaterializationErrorCode =
-            serde_json::from_str(&json).unwrap();
+        let recovered: ParseEventMaterializationErrorCode = serde_json::from_str(&json).unwrap();
         assert_eq!(*code, recovered);
     }
 }

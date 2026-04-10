@@ -814,8 +814,7 @@ fn authorization_tampering_is_rejected() {
         .expect("authorization operations array")
         .push(serde_json::Value::String("admin_override".to_string()));
 
-    let tampered_verifier: PolicyPlaneVerifier =
-        serde_json::from_value(verifier_json).unwrap();
+    let tampered_verifier: PolicyPlaneVerifier = serde_json::from_value(verifier_json).unwrap();
     let err = tampered_verifier
         .check_authorization("cell-001", "admin_override", 2000)
         .expect_err("tampered authorization should be rejected");

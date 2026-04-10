@@ -366,8 +366,7 @@ fn frx_07_4_policy_toggle_defaults_are_consistent() {
 fn frx_07_4_serde_roundtrip_preserves_contract() {
     let contract = parse_contract();
     let serialized = serde_json::to_string(&contract).unwrap();
-    let deserialized: AdoptionControlsContract =
-        serde_json::from_str(&serialized).unwrap();
+    let deserialized: AdoptionControlsContract = serde_json::from_str(&serialized).unwrap();
     assert_eq!(contract, deserialized);
 }
 

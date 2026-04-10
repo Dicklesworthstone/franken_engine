@@ -439,8 +439,7 @@ fn artifact_bundle_validation_error_code_serde_round_trip() {
         ArtifactBundleValidationErrorCode::CorrelationMismatch,
     ] {
         let json = serde_json::to_string(&code).unwrap();
-        let recovered: ArtifactBundleValidationErrorCode =
-            serde_json::from_str(&json).unwrap();
+        let recovered: ArtifactBundleValidationErrorCode = serde_json::from_str(&json).unwrap();
         assert_eq!(code, recovered);
     }
 }
@@ -1301,8 +1300,7 @@ fn artifact_bundle_correlation_signature_serde_round_trip() {
         lanes: vec![HarnessLane::Parser, HarnessLane::Runtime],
     };
     let json = serde_json::to_string(&sig).unwrap();
-    let restored: ArtifactBundleCorrelationSignature =
-        serde_json::from_str(&json).unwrap();
+    let restored: ArtifactBundleCorrelationSignature = serde_json::from_str(&json).unwrap();
     assert_eq!(sig, restored);
 }
 

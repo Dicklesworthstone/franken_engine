@@ -123,8 +123,7 @@ fn semantic_signature(tree: &SyntaxTree) -> Vec<String> {
         .iter()
         .map(|statement| match statement {
             Statement::Expression(expr) => {
-                let payload =
-                    serde_json::to_string(&expr.expression.canonical_value()).unwrap();
+                let payload = serde_json::to_string(&expr.expression.canonical_value()).unwrap();
                 format!("expression:{payload}")
             }
             Statement::Import(import_decl) => {
@@ -133,8 +132,7 @@ fn semantic_signature(tree: &SyntaxTree) -> Vec<String> {
             }
             Statement::Export(export_decl) => match &export_decl.kind {
                 ExportKind::Default(expression) => {
-                    let payload =
-                        serde_json::to_string(&expression.canonical_value()).unwrap();
+                    let payload = serde_json::to_string(&expression.canonical_value()).unwrap();
                     format!("export_default:{payload}")
                 }
                 ExportKind::NamedClause(clause) => format!("export_named:{clause}"),

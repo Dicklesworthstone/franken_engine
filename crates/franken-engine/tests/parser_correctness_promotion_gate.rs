@@ -1083,8 +1083,7 @@ fn enrichment_gate_evaluation_no_failing_fixture_ids_when_all_resolved() {
 fn enrichment_fixture_serde_roundtrip_schema_version_preserved() {
     let fixture = make_fixture(vec![]);
     let json = serde_json::to_string(&fixture).unwrap();
-    let decoded: ParserCorrectnessPromotionGateFixture =
-        serde_json::from_str(&json).unwrap();
+    let decoded: ParserCorrectnessPromotionGateFixture = serde_json::from_str(&json).unwrap();
     assert_eq!(decoded.schema_version, fixture.schema_version);
     assert_eq!(decoded.gate_version, fixture.gate_version);
     assert_eq!(decoded.high_severity_levels, fixture.high_severity_levels);

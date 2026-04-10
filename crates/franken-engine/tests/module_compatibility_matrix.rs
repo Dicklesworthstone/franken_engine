@@ -754,8 +754,7 @@ fn error_code_serde_roundtrip() {
         CompatibilityMatrixErrorCode::ObservationMismatch,
     ] {
         let json = serde_json::to_string(&code).unwrap();
-        let recovered: CompatibilityMatrixErrorCode =
-            serde_json::from_str(&json).unwrap();
+        let recovered: CompatibilityMatrixErrorCode = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, code);
     }
 }
@@ -1263,8 +1262,7 @@ fn compatibility_observation_outcome_serde_roundtrip() {
         },
     };
     let json = serde_json::to_string(&outcome).unwrap();
-    let recovered: CompatibilityObservationOutcome =
-        serde_json::from_str(&json).unwrap();
+    let recovered: CompatibilityObservationOutcome = serde_json::from_str(&json).unwrap();
     assert_eq!(recovered.case_id, "case-outcome");
     assert!(recovered.matched);
     assert!(recovered.divergence.is_none());
@@ -1304,8 +1302,7 @@ fn compatibility_observation_outcome_with_divergence_serde_roundtrip() {
         },
     };
     let json = serde_json::to_string(&outcome).unwrap();
-    let recovered: CompatibilityObservationOutcome =
-        serde_json::from_str(&json).unwrap();
+    let recovered: CompatibilityObservationOutcome = serde_json::from_str(&json).unwrap();
     assert!(recovered.divergence.is_some());
     assert_eq!(
         recovered.divergence_category,

@@ -688,8 +688,7 @@ fn conformance_asset_record_serde_roundtrip_with_ifc_fields() {
         expected_evidence_type: Some("none".to_string()),
     };
     let json = serde_json::to_string(&record).unwrap();
-    let back: conformance_harness::ConformanceAssetRecord =
-        serde_json::from_str(&json).unwrap();
+    let back: conformance_harness::ConformanceAssetRecord = serde_json::from_str(&json).unwrap();
     assert_eq!(record, back);
 }
 
@@ -706,8 +705,7 @@ fn conformance_waiver_set_serde_roundtrip() {
         }],
     };
     let json = serde_json::to_string(&waiver_set).unwrap();
-    let back: conformance_harness::ConformanceWaiverSet =
-        serde_json::from_str(&json).unwrap();
+    let back: conformance_harness::ConformanceWaiverSet = serde_json::from_str(&json).unwrap();
     assert_eq!(waiver_set, back);
     assert_eq!(back.waivers.len(), 1);
 }
@@ -724,8 +722,7 @@ fn waiver_reason_code_serde_roundtrip_all_variants() {
     ];
     for variant in &variants {
         let json = serde_json::to_string(variant).unwrap();
-        let back: conformance_harness::WaiverReasonCode =
-            serde_json::from_str(&json).unwrap();
+        let back: conformance_harness::WaiverReasonCode = serde_json::from_str(&json).unwrap();
         assert_eq!(*variant, back);
     }
 }
@@ -736,8 +733,7 @@ fn waiver_reason_code_serde_roundtrip_all_variants() {
 fn conformance_runner_config_default_serde_roundtrip() {
     let config = conformance_harness::ConformanceRunnerConfig::default();
     let json = serde_json::to_string(&config).unwrap();
-    let back: conformance_harness::ConformanceRunnerConfig =
-        serde_json::from_str(&json).unwrap();
+    let back: conformance_harness::ConformanceRunnerConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(config, back);
     assert_eq!(back.locale, "C");
     assert_eq!(back.timezone, "UTC");
@@ -751,8 +747,7 @@ fn conformance_runner_config_default_serde_roundtrip() {
 fn conformance_repro_metadata_default_serde_roundtrip() {
     let meta = conformance_harness::ConformanceReproMetadata::default();
     let json = serde_json::to_string(&meta).unwrap();
-    let back: conformance_harness::ConformanceReproMetadata =
-        serde_json::from_str(&json).unwrap();
+    let back: conformance_harness::ConformanceReproMetadata = serde_json::from_str(&json).unwrap();
     assert_eq!(meta, back);
     assert!(meta.version_combination.contains_key("franken_engine"));
     assert_eq!(meta.first_seen_commit, "unknown");
@@ -811,8 +806,7 @@ fn conformance_delta_kind_serde_roundtrip_all_variants() {
     ];
     for variant in &variants {
         let json = serde_json::to_string(variant).unwrap();
-        let back: conformance_harness::ConformanceDeltaKind =
-            serde_json::from_str(&json).unwrap();
+        let back: conformance_harness::ConformanceDeltaKind = serde_json::from_str(&json).unwrap();
         assert_eq!(*variant, back);
     }
 }
@@ -858,8 +852,7 @@ fn conformance_log_event_serde_roundtrip() {
         error_detail: None,
     };
     let json = serde_json::to_string(&event).unwrap();
-    let back: conformance_harness::ConformanceLogEvent =
-        serde_json::from_str(&json).unwrap();
+    let back: conformance_harness::ConformanceLogEvent = serde_json::from_str(&json).unwrap();
     assert_eq!(event, back);
 }
 
@@ -878,8 +871,7 @@ fn conformance_run_summary_serde_roundtrip() {
         env_fingerprint: "fp-xyz".to_string(),
     };
     let json = serde_json::to_string(&summary).unwrap();
-    let back: conformance_harness::ConformanceRunSummary =
-        serde_json::from_str(&json).unwrap();
+    let back: conformance_harness::ConformanceRunSummary = serde_json::from_str(&json).unwrap();
     assert_eq!(summary, back);
 }
 
@@ -1219,8 +1211,7 @@ fn conformance_asset_record_optional_fields_default_when_absent() {
         "expected_output_hash": "ccdd",
         "import_date": "2026-01-01"
     }"#;
-    let record: conformance_harness::ConformanceAssetRecord =
-        serde_json::from_str(json).unwrap();
+    let record: conformance_harness::ConformanceAssetRecord = serde_json::from_str(json).unwrap();
     assert!(record.category.is_none());
     assert!(record.source_labels.is_empty());
     assert!(record.sink_clearances.is_empty());

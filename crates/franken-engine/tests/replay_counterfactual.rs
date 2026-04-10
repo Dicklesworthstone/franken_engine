@@ -594,8 +594,7 @@ fn replay_verification_serde_roundtrip() {
     let verification = verify_replay(&run_a, &run_b);
 
     let json = serde_json::to_string(&verification).unwrap();
-    let recovered: e2e_harness::ReplayVerification =
-        serde_json::from_str(&json).unwrap();
+    let recovered: e2e_harness::ReplayVerification = serde_json::from_str(&json).unwrap();
     assert_eq!(verification, recovered);
 }
 
@@ -665,8 +664,7 @@ fn counterfactual_delta_serde_roundtrip() {
 
     let delta = compare_counterfactual(&baseline, &cf_run);
     let json = serde_json::to_string(&delta).unwrap();
-    let recovered: e2e_harness::CounterfactualDelta =
-        serde_json::from_str(&json).unwrap();
+    let recovered: e2e_harness::CounterfactualDelta = serde_json::from_str(&json).unwrap();
     assert_eq!(delta, recovered);
 }
 

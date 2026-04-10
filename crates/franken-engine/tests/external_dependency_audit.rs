@@ -35,6 +35,17 @@ fn read_repo_text(path: &str) -> String {
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
 }
 
+fn load_dependency_isolation_contract() -> serde_json::Value {
+    serde_json::from_str(&read_repo_text(
+        "docs/cross_repo_dependency_isolation_v1.json",
+    ))
+    .expect("dependency isolation contract should parse")
+}
+
+fn engine_cargo_toml() -> String {
+    read_repo_text("crates/franken-engine/Cargo.toml")
+}
+
 #[test]
 fn dependency_audit_script_uses_rch_for_compile_checks() {
     let script = read_repo_text("scripts/audit_external_deps.sh");
@@ -133,4 +144,134 @@ fn dependency_audit_script_emits_manifest_in_skip_remote_mode() {
         commands.contains("rg -n 'path = \"/dp/' -g 'Cargo.toml' ."),
         "commands.txt should record the dependency scan"
     );
+}
+
+#[test]
+fn dependency_isolation_contract_documents_the_asupersync_tripod() {
+    let doc = read_repo_text("docs/CROSS_REPO_DEPENDENCY_ISOLATION_V1.md");
+    for section in [
+        "# Cross-Repo Dependency Isolation (`bd-6a61n.6`)",
+        "## Scope",
+        "## Dependency Manifest",
+        "## Feature Gate and Build Modes",
+        "## Verification Surfaces",
+        "## Artifacts",
+        "## RCH-Only Operator Commands",
+    ] {
+        assert!(
+            doc.contains(section),
+            "dependency isolation doc missing section: {section}"
+        );
+    }
+
+    let contract = load_dependency_isolation_contract();
+    assert_eq!(
+        contract["schema_version"].as_str(),
+        Some("franken-engine.cross-repo-dependency-isolation.contract.v1")
+    );
+    assert_eq!(contract["bead_id"].as_str(), Some("bd-6a61n.6"));
+
+    let feature_gates = contract["feature_gates"]
+        .as_array()
+        .expect("feature_gates should be an array");
+    assert!(
+        feature_gates.iter().any(|gate| {
+            gate["feature"] == "asupersync-integration" && gate["default_enabled"] == true
+        }),
+        "contract should document the default asupersync feature gate"
+    );
+
+    let dependencies = contract["dependencies"]
+        .as_array()
+        .expect("dependencies should be an array");
+    assert_eq!(dependencies.len(), 3, "expected the asupersync tripod only");
+
+    for dependency_key in ["franken-kernel", "franken-decision", "franken-evidence"] {
+        let dependency = dependencies
+            .iter()
+            .find(|entry| entry["dependency_key"] == dependency_key)
+            .unwrap_or_else(|| panic!("missing dependency {dependency_key}"));
+        assert_eq!(
+            dependency["feature_gate"].as_str(),
+            Some("asupersync-integration")
+        );
+        assert!(
+            dependency["repo_path"]
+                .as_str()
+                .is_some_and(|path| path.starts_with("/dp/asupersync/")),
+            "dependency should point at the canonical /dp/asupersync root"
+        );
+    }
+
+    assert_eq!(
+        contract["verification_surfaces"]["dependency_audit"]["script"].as_str(),
+        Some("./scripts/audit_external_deps.sh")
+    );
+    assert_eq!(
+        contract["verification_surfaces"]["dependency_audit"]["operator_command"].as_str(),
+        Some("./scripts/audit_external_deps.sh")
+    );
+    assert_eq!(
+        contract["verification_surfaces"]["dependency_audit"]["artifact_root"].as_str(),
+        Some("artifacts/dependency_audit")
+    );
+    assert_eq!(
+        contract["verification_surfaces"]["dependency_audit"]["manifest_schema_version"].as_str(),
+        Some("franken-engine.external-dependency-audit.v1")
+    );
+    let audit_artifacts = contract["verification_surfaces"]["dependency_audit"]["artifacts"]
+        .as_array()
+        .expect("dependency audit artifacts should be an array");
+    for artifact in ["manifest.json", "commands.txt", "logs/"] {
+        assert!(
+            audit_artifacts.iter().any(|entry| entry.as_str() == Some(artifact)),
+            "dependency audit contract should list artifact {artifact}"
+        );
+    }
+    assert_eq!(
+        contract["verification_surfaces"]["standalone_build_gate"]["script"].as_str(),
+        Some("./scripts/test_standalone_build.sh")
+    );
+}
+
+#[test]
+fn dependency_isolation_contract_matches_workspace_feature_gate() {
+    let cargo_toml = engine_cargo_toml();
+    assert!(
+        cargo_toml.contains("default = [\"asupersync-integration\"]"),
+        "engine Cargo.toml should default-enable the asupersync integration gate"
+    );
+    assert!(
+        cargo_toml.contains("asupersync-integration = ["),
+        "engine Cargo.toml should define the asupersync feature gate"
+    );
+
+    let contract = load_dependency_isolation_contract();
+    let feature_gate = contract["feature_gates"]
+        .as_array()
+        .expect("feature_gates should be an array")
+        .iter()
+        .find(|gate| gate["feature"] == "asupersync-integration")
+        .expect("contract should declare the asupersync feature gate");
+
+    let enabled_dependencies = feature_gate["enables_dependencies"]
+        .as_array()
+        .expect("enables_dependencies should be an array");
+
+    for dependency_key in ["franken-kernel", "franken-decision", "franken-evidence"] {
+        assert!(
+            cargo_toml.contains(&format!("\"dep:{dependency_key}\"")),
+            "engine Cargo.toml should route {dependency_key} through the feature gate"
+        );
+        assert!(
+            cargo_toml.contains(&format!("{dependency_key} = {{ path = \"/dp/asupersync/")),
+            "engine Cargo.toml should keep {dependency_key} on the canonical /dp/asupersync path"
+        );
+        assert!(
+            enabled_dependencies
+                .iter()
+                .any(|value| value.as_str() == Some(dependency_key)),
+            "contract should list {dependency_key} in the feature gate surface"
+        );
+    }
 }

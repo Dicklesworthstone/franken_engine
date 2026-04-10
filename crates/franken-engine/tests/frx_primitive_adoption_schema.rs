@@ -419,8 +419,7 @@ fn validation_error_serde_roundtrip() {
         },
     ] {
         let json = serde_json::to_string(&err).unwrap();
-        let recovered: PrimitiveAdoptionValidationError =
-            serde_json::from_str(&json).unwrap();
+        let recovered: PrimitiveAdoptionValidationError = serde_json::from_str(&json).unwrap();
         assert_eq!(recovered, err);
     }
 }

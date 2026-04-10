@@ -641,8 +641,7 @@ fn extension_result_serde_roundtrip() {
     let decision = build_plas_benchmark_bundle(&req).expect("build");
     for result in &decision.extension_results {
         let json = serde_json::to_string(result).unwrap();
-        let recovered: PlasBenchmarkExtensionResult =
-            serde_json::from_str(&json).unwrap();
+        let recovered: PlasBenchmarkExtensionResult = serde_json::from_str(&json).unwrap();
         assert_eq!(*result, recovered);
     }
 }

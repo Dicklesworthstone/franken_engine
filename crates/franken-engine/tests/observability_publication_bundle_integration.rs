@@ -276,8 +276,7 @@ fn workload_class_serde_roundtrip() {
     use frankenengine_engine::observability_publication_bundle::ObservabilityWorkloadClass;
     for variant in ObservabilityWorkloadClass::ALL {
         let json = serde_json::to_string(&variant).unwrap();
-        let deserialized: ObservabilityWorkloadClass =
-            serde_json::from_str(&json).unwrap();
+        let deserialized: ObservabilityWorkloadClass = serde_json::from_str(&json).unwrap();
         assert_eq!(variant, deserialized);
     }
 }

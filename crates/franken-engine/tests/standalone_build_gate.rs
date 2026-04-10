@@ -35,6 +35,13 @@ fn read_repo_text(path: &str) -> String {
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
 }
 
+fn load_dependency_isolation_contract() -> serde_json::Value {
+    serde_json::from_str(&read_repo_text(
+        "docs/cross_repo_dependency_isolation_v1.json",
+    ))
+    .expect("dependency isolation contract should parse")
+}
+
 fn single_run_dir(root: &PathBuf) -> PathBuf {
     let mut entries = fs::read_dir(root)
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", root.display()))
@@ -167,4 +174,79 @@ fn readme_documents_build_modes_and_gate_script() {
         readme.contains("artifacts/standalone_build_gate/"),
         "README should document the build-gate artifact root"
     );
+    assert!(
+        readme.contains("docs/CROSS_REPO_DEPENDENCY_ISOLATION_V1.md"),
+        "README should point at the canonical RC-6 dependency isolation doc"
+    );
+}
+
+#[test]
+fn dependency_isolation_contract_documents_standalone_and_full_integration_modes() {
+    let doc = read_repo_text("docs/CROSS_REPO_DEPENDENCY_ISOLATION_V1.md");
+    assert!(
+        doc.contains("./scripts/audit_external_deps.sh"),
+        "dependency isolation doc should point at the audit script"
+    );
+    assert!(
+        doc.contains("./scripts/test_standalone_build.sh ci"),
+        "dependency isolation doc should point at the build gate"
+    );
+    assert!(
+        doc.contains("cargo check -p frankenengine-engine --no-default-features"),
+        "dependency isolation doc should document the standalone check command"
+    );
+    assert!(
+        doc.contains("cargo check -p frankenengine-engine --all-features"),
+        "dependency isolation doc should document the full integration command"
+    );
+
+    let contract = load_dependency_isolation_contract();
+    assert_eq!(
+        contract["verification_surfaces"]["standalone_build_gate"]["artifact_root"].as_str(),
+        Some("artifacts/standalone_build_gate")
+    );
+    assert_eq!(
+        contract["verification_surfaces"]["standalone_build_gate"]["operator_command"].as_str(),
+        Some("./scripts/test_standalone_build.sh ci")
+    );
+    assert_eq!(
+        contract["verification_surfaces"]["standalone_build_gate"]["manifest_schema_version"]
+            .as_str(),
+        Some("franken-engine.standalone-build-gate.v1")
+    );
+    let build_gate_artifacts = contract["verification_surfaces"]["standalone_build_gate"]
+        ["artifacts"]
+        .as_array()
+        .expect("standalone build gate artifacts should be an array");
+    for artifact in [
+        "<timestamp>/manifest.json",
+        "<timestamp>/events.jsonl",
+        "<timestamp>/commands.txt",
+        "<timestamp>/step_logs/",
+    ] {
+        assert!(
+            build_gate_artifacts
+                .iter()
+                .any(|entry| entry.as_str() == Some(artifact)),
+            "standalone build gate contract should list artifact {artifact}"
+        );
+    }
+
+    let standalone_commands = contract["build_modes"]["standalone"]["commands"]
+        .as_array()
+        .expect("standalone commands should be an array");
+    assert!(standalone_commands.iter().any(|command| {
+        command
+            .as_str()
+            .is_some_and(|command| command.contains("--no-default-features"))
+    }));
+
+    let full_commands = contract["build_modes"]["full_integration"]["commands"]
+        .as_array()
+        .expect("full-integration commands should be an array");
+    assert!(full_commands.iter().any(|command| {
+        command
+            .as_str()
+            .is_some_and(|command| command.contains("--all-features"))
+    }));
 }

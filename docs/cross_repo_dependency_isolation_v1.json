@@ -1,0 +1,120 @@
+{
+  "schema_version": "franken-engine.cross-repo-dependency-isolation.contract.v1",
+  "bead_id": "bd-6a61n.6",
+  "component": "cross_repo_dependency_isolation",
+  "workspace_crate": "frankenengine-engine",
+  "cargo_toml": "crates/franken-engine/Cargo.toml",
+  "feature_gates": [
+    {
+      "feature": "asupersync-integration",
+      "default_enabled": true,
+      "enables_dependencies": [
+        "franken-kernel",
+        "franken-decision",
+        "franken-evidence"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "dependency_key": "franken-kernel",
+      "crate_module": "franken_kernel",
+      "repo_path": "/dp/asupersync/franken_kernel",
+      "feature_gate": "asupersync-integration",
+      "approved_boundary_files": [
+        "crates/franken-engine/src/control_plane/mod.rs"
+      ],
+      "imported_symbols": [
+        "Budget",
+        "CapabilitySet",
+        "Cx",
+        "DecisionId",
+        "NoCaps",
+        "PolicyId",
+        "SchemaVersion",
+        "TraceId"
+      ]
+    },
+    {
+      "dependency_key": "franken-decision",
+      "crate_module": "franken_decision",
+      "repo_path": "/dp/asupersync/franken_decision",
+      "feature_gate": "asupersync-integration",
+      "approved_boundary_files": [
+        "crates/franken-engine/src/control_plane/mod.rs",
+        "crates/franken-engine/src/safety_decision_router.rs"
+      ],
+      "imported_symbols": [
+        "DecisionContract",
+        "DecisionOutcome",
+        "EvalContext",
+        "FallbackPolicy",
+        "LossMatrix",
+        "Posterior",
+        "evaluate"
+      ]
+    },
+    {
+      "dependency_key": "franken-evidence",
+      "crate_module": "franken_evidence",
+      "repo_path": "/dp/asupersync/franken_evidence",
+      "feature_gate": "asupersync-integration",
+      "approved_boundary_files": [
+        "crates/franken-engine/src/control_plane/mod.rs"
+      ],
+      "imported_symbols": [
+        "EvidenceLedger",
+        "EvidenceLedgerBuilder"
+      ]
+    }
+  ],
+  "build_modes": {
+    "standalone": {
+      "commands": [
+        "cargo check -p frankenengine-engine --no-default-features",
+        "cargo test -p frankenengine-engine --no-default-features"
+      ],
+      "description": "Compile and test the engine without the default asupersync integration feature."
+    },
+    "full_integration": {
+      "commands": [
+        "cargo check -p frankenengine-engine --all-features"
+      ],
+      "description": "Verify the sibling-backed control-plane surface with the asupersync tripod present."
+    }
+  },
+  "verification_surfaces": {
+    "dependency_audit": {
+      "script": "./scripts/audit_external_deps.sh",
+      "operator_command": "./scripts/audit_external_deps.sh",
+      "artifact_root": "artifacts/dependency_audit",
+      "manifest_schema_version": "franken-engine.external-dependency-audit.v1",
+      "artifacts": [
+        "manifest.json",
+        "commands.txt",
+        "logs/"
+      ]
+    },
+    "standalone_build_gate": {
+      "script": "./scripts/test_standalone_build.sh",
+      "operator_command": "./scripts/test_standalone_build.sh ci",
+      "artifact_root": "artifacts/standalone_build_gate",
+      "manifest_schema_version": "franken-engine.standalone-build-gate.v1",
+      "artifacts": [
+        "<timestamp>/manifest.json",
+        "<timestamp>/events.jsonl",
+        "<timestamp>/commands.txt",
+        "<timestamp>/step_logs/"
+      ]
+    }
+  },
+  "operator_verification": [
+    "./scripts/audit_external_deps.sh",
+    "./scripts/test_standalone_build.sh ci",
+    "cat artifacts/dependency_audit/manifest.json",
+    "cat artifacts/dependency_audit/commands.txt",
+    "cat artifacts/standalone_build_gate/<timestamp>/manifest.json",
+    "cat artifacts/standalone_build_gate/<timestamp>/events.jsonl",
+    "cat artifacts/standalone_build_gate/<timestamp>/commands.txt"
+  ]
+}

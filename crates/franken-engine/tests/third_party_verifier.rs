@@ -51,8 +51,7 @@ fn temp_json_path(prefix: &str) -> PathBuf {
 
 fn write_json<T: serde::Serialize>(prefix: &str, value: &T) -> PathBuf {
     let path = temp_json_path(prefix);
-    fs::write(&path, serde_json::to_vec_pretty(value).unwrap())
-        .expect("json write should succeed");
+    fs::write(&path, serde_json::to_vec_pretty(value).unwrap()).expect("json write should succeed");
     path
 }
 

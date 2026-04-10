@@ -771,8 +771,7 @@ fn frx_09_2_prerequisite_statuses_are_in_allowed_set() {
 fn frx_09_2_serde_roundtrip_via_pretty_print_preserves_contract() {
     let contract = parse_contract();
     let pretty = serde_json::to_string_pretty(&contract).unwrap();
-    let deserialized: ReleaseOperationsGatebookContract =
-        serde_json::from_str(&pretty).unwrap();
+    let deserialized: ReleaseOperationsGatebookContract = serde_json::from_str(&pretty).unwrap();
     assert_eq!(contract, deserialized);
 }
 

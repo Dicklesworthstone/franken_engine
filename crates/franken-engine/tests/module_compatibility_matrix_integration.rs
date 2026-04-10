@@ -32,8 +32,8 @@ use frankenengine_engine::module_compatibility_matrix::{
 };
 use frankenengine_engine::module_resolver::{
     AllowAllPolicy, DeterministicModuleResolver, ExternalPackageDefinition,
-    ExternalPackageExportTarget, ImportStyle, ModuleDefinition, ModuleRequest, ModuleResolver,
-    ModuleSyntax, ResolutionContext, ResolutionErrorCode,
+    ExternalPackageExportTarget, ImportStyle, ModuleDefinition, ModuleDependency, ModuleRequest,
+    ModuleResolver, ModuleSyntax, ResolutionContext, ResolutionErrorCode,
 };
 
 // ---------------------------------------------------------------------------
@@ -147,6 +147,275 @@ fn export_target(
     target
 }
 
+fn observe_require_of_esm_behavior(mode: CompatibilityMode) -> String {
+    let mut resolver = DeterministicModuleResolver::new("/repo");
+    resolver
+        .register_workspace_module("pkg/index.js", esm_def("export default 'esm';"))
+        .unwrap();
+
+    match resolver.resolve(
+        &ModuleRequest::new("pkg", ImportStyle::Require).with_compatibility_mode(mode),
+        &resolver_ctx(),
+        &allow_all(),
+    ) {
+        Ok(outcome) => {
+            assert_eq!(mode, CompatibilityMode::BunCompat);
+            assert_eq!(outcome.module.record.syntax, ModuleSyntax::EsModule);
+            "allow_via_sync_bridge".to_string()
+        }
+        Err(error) => {
+            assert!(matches!(
+                mode,
+                CompatibilityMode::Native | CompatibilityMode::NodeCompat
+            ));
+            assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
+            assert!(error.message.contains("ERR_REQUIRE_ESM"));
+            "throw_err_require_esm".to_string()
+        }
+    }
+}
+
+fn observe_extensionless_relative_import_behavior(mode: CompatibilityMode) -> String {
+    let mut resolver = DeterministicModuleResolver::new("/app");
+    resolver
+        .register_workspace_module("main.mjs", esm_def("import './lib';"))
+        .unwrap();
+    resolver
+        .register_workspace_module("lib.mjs", esm_def("export const value = 1;"))
+        .unwrap();
+
+    match resolver.resolve(
+        &ModuleRequest::new("./lib", ImportStyle::Import)
+            .with_referrer("/app/main.mjs")
+            .with_compatibility_mode(mode),
+        &resolver_ctx(),
+        &allow_all(),
+    ) {
+        Ok(outcome) => {
+            assert_eq!(mode, CompatibilityMode::BunCompat);
+            assert_eq!(outcome.module.canonical_specifier, "/app/lib.mjs");
+            assert_eq!(
+                outcome.module.probe_sequence,
+                vec!["/app/lib", "/app/lib.mjs"]
+            );
+            "resolve_extensionless_relative".to_string()
+        }
+        Err(error) => {
+            assert!(matches!(
+                mode,
+                CompatibilityMode::Native | CompatibilityMode::NodeCompat
+            ));
+            assert_eq!(error.code, ResolutionErrorCode::ModuleNotFound);
+            assert_eq!(error.probe_sequence, vec!["/app/lib"]);
+            "reject_extensionless_relative".to_string()
+        }
+    }
+}
+
+fn observe_external_extensionless_relative_import_behavior(mode: CompatibilityMode) -> String {
+    let mut resolver = DeterministicModuleResolver::default();
+    resolver
+        .register_external_module("some-pkg", esm_def("import './sub';"))
+        .unwrap();
+    resolver
+        .register_external_module("some-pkg/sub.mjs", esm_def("export default 'sub';"))
+        .unwrap();
+
+    match resolver.resolve(
+        &ModuleRequest::new("./sub", ImportStyle::Import)
+            .with_referrer("external:some-pkg")
+            .with_compatibility_mode(mode),
+        &resolver_ctx(),
+        &allow_all(),
+    ) {
+        Ok(outcome) => {
+            assert_eq!(mode, CompatibilityMode::BunCompat);
+            assert_eq!(outcome.module.canonical_specifier, "some-pkg/sub.mjs");
+            assert_eq!(
+                outcome.module.probe_sequence,
+                vec!["some-pkg/sub", "some-pkg/sub.mjs"]
+            );
+            assert_eq!(outcome.module.record.id, "external:some-pkg/sub.mjs");
+            "resolve_extensionless_relative".to_string()
+        }
+        Err(error) => {
+            assert!(matches!(
+                mode,
+                CompatibilityMode::Native | CompatibilityMode::NodeCompat
+            ));
+            assert_eq!(error.code, ResolutionErrorCode::ModuleNotFound);
+            assert_eq!(error.probe_sequence, vec!["some-pkg/sub"]);
+            "reject_extensionless_relative".to_string()
+        }
+    }
+}
+
+fn observe_extensionless_relative_import_chain_behavior(mode: CompatibilityMode) -> String {
+    let mut resolver = DeterministicModuleResolver::new("/app");
+    resolver
+        .register_workspace_module(
+            "main.mjs",
+            esm_def("import './lib';")
+                .with_dependency(ModuleDependency::new("./lib", ImportStyle::Import)),
+        )
+        .unwrap();
+    resolver
+        .register_workspace_module("lib.mjs", esm_def("export const value = 1;"))
+        .unwrap();
+
+    match resolver.resolve_chain(
+        &ModuleRequest::new("/app/main.mjs", ImportStyle::Import).with_compatibility_mode(mode),
+        &resolver_ctx(),
+        &allow_all(),
+    ) {
+        Ok(outcomes) => {
+            assert_eq!(mode, CompatibilityMode::BunCompat);
+            let specifiers = outcomes
+                .iter()
+                .map(|outcome| outcome.module.canonical_specifier.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(specifiers, vec!["/app/main.mjs", "/app/lib.mjs"]);
+            assert_eq!(outcomes[1].module.record.syntax, ModuleSyntax::EsModule);
+            "resolve_extensionless_relative".to_string()
+        }
+        Err(error) => {
+            assert!(matches!(
+                mode,
+                CompatibilityMode::Native | CompatibilityMode::NodeCompat
+            ));
+            assert_eq!(error.code, ResolutionErrorCode::ModuleNotFound);
+            assert_eq!(error.probe_sequence, vec!["/app/lib"]);
+            assert!(error.message.contains("./lib"));
+            assert!(error.message.contains("/app/main.mjs"));
+            "reject_extensionless_relative".to_string()
+        }
+    }
+}
+
+fn observe_external_extensionless_relative_import_chain_behavior(
+    mode: CompatibilityMode,
+) -> String {
+    let mut resolver = DeterministicModuleResolver::default();
+    resolver
+        .register_external_module(
+            "some-pkg/index.mjs",
+            esm_def("import './sub';")
+                .with_dependency(ModuleDependency::new("./sub", ImportStyle::Import)),
+        )
+        .unwrap();
+    resolver
+        .register_external_module("some-pkg/sub.mjs", esm_def("export default 'sub';"))
+        .unwrap();
+
+    match resolver.resolve_chain(
+        &ModuleRequest::new("some-pkg", ImportStyle::Import).with_compatibility_mode(mode),
+        &resolver_ctx(),
+        &allow_all(),
+    ) {
+        Ok(outcomes) => {
+            assert_eq!(mode, CompatibilityMode::BunCompat);
+            let ids = outcomes
+                .iter()
+                .map(|outcome| outcome.module.record.id.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                ids,
+                vec!["external:some-pkg/index.mjs", "external:some-pkg/sub.mjs"]
+            );
+            assert_eq!(outcomes[1].module.record.syntax, ModuleSyntax::EsModule);
+            "resolve_extensionless_relative".to_string()
+        }
+        Err(error) => {
+            assert!(matches!(
+                mode,
+                CompatibilityMode::Native | CompatibilityMode::NodeCompat
+            ));
+            assert_eq!(error.code, ResolutionErrorCode::ModuleNotFound);
+            assert_eq!(error.probe_sequence, vec!["some-pkg/sub"]);
+            assert!(error.message.contains("./sub"));
+            assert!(error.message.contains("external:some-pkg/index.mjs"));
+            "reject_extensionless_relative".to_string()
+        }
+    }
+}
+
+fn observe_require_chain_of_esm_behavior(mode: CompatibilityMode) -> String {
+    let mut resolver = DeterministicModuleResolver::new("/repo");
+    resolver
+        .register_workspace_module(
+            "/repo/main.cjs",
+            cjs_def("const lib = require('./lib.mjs'); module.exports = lib;")
+                .with_dependency(ModuleDependency::new("./lib.mjs", ImportStyle::Require)),
+        )
+        .unwrap();
+    resolver
+        .register_workspace_module("/repo/lib.mjs", esm_def("export default 'esm';"))
+        .unwrap();
+
+    match resolver.resolve_chain(
+        &ModuleRequest::new("/repo/main.cjs", ImportStyle::Require).with_compatibility_mode(mode),
+        &resolver_ctx(),
+        &allow_all(),
+    ) {
+        Ok(outcomes) => {
+            assert_eq!(mode, CompatibilityMode::BunCompat);
+            assert_eq!(outcomes[1].module.record.syntax, ModuleSyntax::EsModule);
+            "allow_via_sync_bridge".to_string()
+        }
+        Err(error) => {
+            assert!(matches!(
+                mode,
+                CompatibilityMode::Native | CompatibilityMode::NodeCompat
+            ));
+            assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
+            assert!(error.message.contains("ERR_REQUIRE_ESM"));
+            assert!(error.message.contains("/repo/lib.mjs"));
+            "throw_err_require_esm".to_string()
+        }
+    }
+}
+
+fn observe_external_require_chain_of_esm_behavior(mode: CompatibilityMode) -> String {
+    let mut resolver = DeterministicModuleResolver::default();
+    resolver
+        .register_external_module(
+            "pkg/index.cjs",
+            cjs_def("const lib = require('./lib.mjs'); module.exports = lib;")
+                .with_dependency(ModuleDependency::new("./lib.mjs", ImportStyle::Require)),
+        )
+        .unwrap();
+    resolver
+        .register_external_module("pkg/lib.mjs", esm_def("export default 'esm';"))
+        .unwrap();
+
+    match resolver.resolve_chain(
+        &ModuleRequest::new("pkg", ImportStyle::Require).with_compatibility_mode(mode),
+        &resolver_ctx(),
+        &allow_all(),
+    ) {
+        Ok(outcomes) => {
+            assert_eq!(mode, CompatibilityMode::BunCompat);
+            let ids = outcomes
+                .iter()
+                .map(|outcome| outcome.module.record.id.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(ids, vec!["external:pkg/index.cjs", "external:pkg/lib.mjs"]);
+            assert_eq!(outcomes[1].module.record.syntax, ModuleSyntax::EsModule);
+            "allow_via_sync_bridge".to_string()
+        }
+        Err(error) => {
+            assert!(matches!(
+                mode,
+                CompatibilityMode::Native | CompatibilityMode::NodeCompat
+            ));
+            assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
+            assert!(error.message.contains("ERR_REQUIRE_ESM"));
+            assert!(error.message.contains("pkg/lib.mjs"));
+            "throw_err_require_esm".to_string()
+        }
+    }
+}
+
 fn observe_bare_require_index_mjs_behavior(mode: CompatibilityMode) -> String {
     let mut resolver = DeterministicModuleResolver::new("/repo");
     resolver
@@ -243,6 +512,108 @@ fn observe_scoped_bare_require_index_mjs_behavior(mode: CompatibilityMode) -> St
                     .all(|probe| !probe.ends_with(".mjs")),
                 "native/node_compat must stay fail-closed and avoid implicit scoped .mjs package-entry probes"
             );
+            "reject_mjs_package_entry_probe".to_string()
+        }
+    }
+}
+
+fn observe_bare_require_index_mjs_package_root_relative_import_behavior(
+    mode: CompatibilityMode,
+) -> String {
+    let mut resolver = DeterministicModuleResolver::default();
+    for (entry_specifier, sub_specifier) in [
+        ("pkg/index.mjs", "pkg/sub.mjs"),
+        ("@scope/pkg/index.mjs", "@scope/pkg/sub.mjs"),
+    ] {
+        resolver
+            .register_external_module(
+                entry_specifier,
+                esm_def("import './sub.mjs'; export default 'esm';")
+                    .with_dependency(ModuleDependency::new("./sub.mjs", ImportStyle::Import)),
+            )
+            .unwrap();
+        resolver
+            .register_external_module(sub_specifier, esm_def("export const value = 1;"))
+            .unwrap();
+    }
+
+    for (request_specifier, entry_specifier, sub_specifier, expected_entry_probes) in [
+        (
+            "pkg",
+            "pkg/index.mjs",
+            "pkg/sub.mjs",
+            vec![
+                "pkg",
+                "pkg.cjs",
+                "pkg.js",
+                "pkg/index.cjs",
+                "pkg/index.js",
+                "pkg.mjs",
+                "pkg/index.mjs",
+            ],
+        ),
+        (
+            "@scope/pkg",
+            "@scope/pkg/index.mjs",
+            "@scope/pkg/sub.mjs",
+            vec![
+                "@scope/pkg",
+                "@scope/pkg.cjs",
+                "@scope/pkg.js",
+                "@scope/pkg/index.cjs",
+                "@scope/pkg/index.js",
+                "@scope/pkg.mjs",
+                "@scope/pkg/index.mjs",
+            ],
+        ),
+    ] {
+        match resolver.resolve_chain(
+            &ModuleRequest::new(request_specifier, ImportStyle::Require)
+                .with_compatibility_mode(mode),
+            &resolver_ctx(),
+            &allow_all(),
+        ) {
+            Ok(outcomes) => {
+                assert_eq!(mode, CompatibilityMode::BunCompat);
+                let ids = outcomes
+                    .iter()
+                    .map(|outcome| outcome.module.record.id.as_str())
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    ids,
+                    vec![
+                        format!("external:{entry_specifier}"),
+                        format!("external:{sub_specifier}"),
+                    ]
+                );
+                assert_eq!(outcomes[0].module.canonical_specifier, entry_specifier);
+                assert_eq!(outcomes[0].module.probe_sequence, expected_entry_probes);
+                assert_eq!(outcomes[1].module.canonical_specifier, sub_specifier);
+                assert_eq!(outcomes[1].module.probe_sequence, vec![sub_specifier]);
+                assert_eq!(outcomes[1].module.record.syntax, ModuleSyntax::EsModule);
+            }
+            Err(error) => {
+                assert!(matches!(
+                    mode,
+                    CompatibilityMode::Native | CompatibilityMode::NodeCompat
+                ));
+                assert_eq!(error.code, ResolutionErrorCode::ModuleNotFound);
+                assert!(
+                    error
+                        .probe_sequence
+                        .iter()
+                        .all(|probe| !probe.ends_with(".mjs")),
+                    "native/node_compat must stay fail-closed and avoid implicit .mjs package-entry probes before any package-root relative import can resolve"
+                );
+            }
+        }
+    }
+
+    match mode {
+        CompatibilityMode::BunCompat => {
+            "resolve_relative_import_from_package_root_after_mjs_probe".to_string()
+        }
+        CompatibilityMode::Native | CompatibilityMode::NodeCompat => {
             "reject_mjs_package_entry_probe".to_string()
         }
     }
@@ -427,6 +798,267 @@ fn observe_dual_mode_exports_map_behavior(mode: CompatibilityMode) -> String {
     );
 
     "resolve_exports_by_import_style".to_string()
+}
+
+fn observe_exports_exact_over_wildcard_precedence_behavior(mode: CompatibilityMode) -> String {
+    let mut resolver = DeterministicModuleResolver::default();
+    resolver
+        .register_external_package(
+            ExternalPackageDefinition::new("wild-pkg")
+                .with_export(".", export_target(&[("default", "./root.js")], None))
+                .with_export(
+                    "./feature/*",
+                    export_target(&[("default", "./wild/*.js")], None),
+                )
+                .with_export(
+                    "./feature/exact",
+                    export_target(&[("default", "./exact/index.js")], None),
+                ),
+        )
+        .unwrap();
+    resolver
+        .register_external_module("wild-pkg/wild/other.js", esm_def("export default 'wild';"))
+        .unwrap();
+    resolver
+        .register_external_module(
+            "wild-pkg/exact/index.js",
+            esm_def("export default 'exact';"),
+        )
+        .unwrap();
+
+    let exact_outcome = resolver
+        .resolve(
+            &ModuleRequest::new("wild-pkg/feature/exact", ImportStyle::Import)
+                .with_compatibility_mode(mode),
+            &resolver_ctx(),
+            &allow_all(),
+        )
+        .expect("exact export entry should win over wildcard exports");
+    assert_eq!(
+        exact_outcome.module.canonical_specifier,
+        "wild-pkg/exact/index.js"
+    );
+    assert_eq!(
+        exact_outcome.module.probe_sequence,
+        vec!["wild-pkg/feature/exact", "wild-pkg/exact/index.js"]
+    );
+
+    let wildcard_outcome = resolver
+        .resolve(
+            &ModuleRequest::new("wild-pkg/feature/other", ImportStyle::Import)
+                .with_compatibility_mode(mode),
+            &resolver_ctx(),
+            &allow_all(),
+        )
+        .expect("wildcard export should still handle non-exact subpaths");
+    assert_eq!(
+        wildcard_outcome.module.canonical_specifier,
+        "wild-pkg/wild/other.js"
+    );
+    assert_eq!(
+        wildcard_outcome.module.probe_sequence,
+        vec!["wild-pkg/feature/other", "wild-pkg/wild/other.js"]
+    );
+
+    "prefer_exact_exports_over_wildcard".to_string()
+}
+
+fn observe_scoped_exports_more_specific_wildcard_precedence_behavior(
+    mode: CompatibilityMode,
+) -> String {
+    let mut resolver = DeterministicModuleResolver::default();
+    resolver
+        .register_external_package(
+            ExternalPackageDefinition::new("@scope/wild-pkg")
+                .with_export(
+                    "./feature/*",
+                    export_target(&[("default", "./general/*.js")], None),
+                )
+                .with_export(
+                    "./feature/internal/*",
+                    export_target(&[("default", "./internal/*.mjs")], None),
+                ),
+        )
+        .unwrap();
+    resolver
+        .register_external_module(
+            "@scope/wild-pkg/general/button.js",
+            esm_def("export default 'general';"),
+        )
+        .unwrap();
+    resolver
+        .register_external_module(
+            "@scope/wild-pkg/internal/secret.mjs",
+            esm_def("export default 'internal';"),
+        )
+        .unwrap();
+
+    let internal_outcome = resolver
+        .resolve(
+            &ModuleRequest::new(
+                "@scope/wild-pkg/feature/internal/secret",
+                ImportStyle::Import,
+            )
+            .with_compatibility_mode(mode),
+            &resolver_ctx(),
+            &allow_all(),
+        )
+        .expect("more specific scoped wildcard export should win");
+    assert_eq!(
+        internal_outcome.module.canonical_specifier,
+        "@scope/wild-pkg/internal/secret.mjs"
+    );
+    assert_eq!(
+        internal_outcome.module.probe_sequence,
+        vec![
+            "@scope/wild-pkg/feature/internal/secret",
+            "@scope/wild-pkg/internal/secret.mjs",
+        ]
+    );
+
+    let general_outcome = resolver
+        .resolve(
+            &ModuleRequest::new("@scope/wild-pkg/feature/button", ImportStyle::Import)
+                .with_compatibility_mode(mode),
+            &resolver_ctx(),
+            &allow_all(),
+        )
+        .expect("general scoped wildcard export should still resolve unmatched subpaths");
+    assert_eq!(
+        general_outcome.module.canonical_specifier,
+        "@scope/wild-pkg/general/button.js"
+    );
+    assert_eq!(
+        general_outcome.module.probe_sequence,
+        vec![
+            "@scope/wild-pkg/feature/button",
+            "@scope/wild-pkg/general/button.js",
+        ]
+    );
+
+    "prefer_more_specific_scoped_wildcard_export".to_string()
+}
+
+fn observe_exports_unexported_subpath_fail_closed_behavior(mode: CompatibilityMode) -> String {
+    let mut resolver = DeterministicModuleResolver::new("/repo");
+    resolver
+        .register_external_package(
+            ExternalPackageDefinition::new("locked-pkg")
+                .with_export(".", export_target(&[("default", "./index.js")], None)),
+        )
+        .unwrap();
+    resolver
+        .register_external_module("locked-pkg/index.js", cjs_def("module.exports = 1;"))
+        .unwrap();
+    resolver
+        .register_external_module(
+            "locked-pkg/private.js",
+            esm_def("export default 'private';"),
+        )
+        .unwrap();
+    resolver
+        .register_workspace_module(
+            "/repo/locked-pkg/private.js",
+            esm_def("export default 'workspace';"),
+        )
+        .unwrap();
+
+    for style in [ImportStyle::Import, ImportStyle::Require] {
+        let error = match resolver.resolve(
+            &ModuleRequest::new("locked-pkg/private", style).with_compatibility_mode(mode),
+            &resolver_ctx(),
+            &allow_all(),
+        ) {
+            Ok(_) => panic!("unexported subpath should fail closed for style {style:?}"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
+        assert_eq!(error.probe_sequence, vec!["locked-pkg/private"]);
+        assert!(error.message.contains("has no export entry"));
+    }
+
+    "reject_unexported_subpath_before_legacy_fallback".to_string()
+}
+
+fn observe_exports_target_escape_package_root_behavior(mode: CompatibilityMode) -> String {
+    let mut resolver = DeterministicModuleResolver::new("/repo");
+    resolver
+        .register_external_package(ExternalPackageDefinition::new("locked-pkg").with_export(
+            ".",
+            export_target(&[("default", "../other-pkg/private.js")], None),
+        ))
+        .unwrap();
+    resolver
+        .register_external_module("other-pkg/private.js", esm_def("export default 'secret';"))
+        .unwrap();
+
+    for style in [ImportStyle::Import, ImportStyle::Require] {
+        let error = match resolver.resolve(
+            &ModuleRequest::new("locked-pkg", style).with_compatibility_mode(mode),
+            &resolver_ctx(),
+            &allow_all(),
+        ) {
+            Ok(_) => panic!("exports target escape should fail closed for style {style:?}"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
+        assert_eq!(
+            error.probe_sequence,
+            vec!["locked-pkg", "other-pkg/private.js"]
+        );
+        assert!(error.message.contains("escapes the package root"));
+    }
+
+    "reject_exports_target_outside_package_root".to_string()
+}
+
+fn observe_external_package_relative_escape_behavior(mode: CompatibilityMode) -> String {
+    let mut resolver = DeterministicModuleResolver::default();
+    resolver
+        .register_external_module(
+            "some-pkg/entry.mjs",
+            esm_def("import '../other-pkg/private.mjs';"),
+        )
+        .unwrap();
+    resolver
+        .register_external_module(
+            "@scope/pkg.js",
+            cjs_def("module.exports = require('../other-pkg/private.mjs');"),
+        )
+        .unwrap();
+    resolver
+        .register_external_module("other-pkg/private.mjs", esm_def("export default 'secret';"))
+        .unwrap();
+
+    for (referrer, expected_root) in [
+        ("external:some-pkg/entry.mjs", "some-pkg"),
+        ("external:@scope/pkg.js", "@scope/pkg"),
+    ] {
+        let error = match resolver.resolve(
+            &ModuleRequest::new("../other-pkg/private.mjs", ImportStyle::Import)
+                .with_referrer(referrer)
+                .with_compatibility_mode(mode),
+            &resolver_ctx(),
+            &allow_all(),
+        ) {
+            Ok(_) => panic!(
+                "external relative traversal should fail closed before probes for referrer {referrer} in {mode:?}"
+            ),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, ResolutionErrorCode::UnsupportedSpecifier);
+        assert!(
+            error
+                .message
+                .contains(&format!("escapes external package root '{expected_root}'"))
+        );
+        assert!(
+            error.probe_sequence.is_empty(),
+            "external package root escapes must fail before any probe sequence begins"
+        );
+    }
+
+    "reject_external_relative_escape_before_probe".to_string()
 }
 
 #[test]
@@ -1791,6 +2423,68 @@ fn default_matrix_pins_scoped_bare_require_index_mjs_contract() {
 }
 
 #[test]
+fn default_matrix_pins_bare_require_index_mjs_package_root_relative_import_contract() {
+    let m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let entry = m
+        .entry("bare-require-package-index-mjs-relative-import-package-root")
+        .expect(
+            "default matrix should include bare require() index.mjs package-root relative import case",
+        );
+
+    assert_eq!(entry.feature, ModuleFeature::Cjs);
+    assert_eq!(entry.node_behavior, "reject_mjs_package_entry_probe");
+    assert_eq!(
+        entry.bun_behavior,
+        "resolve_relative_import_from_package_root_after_mjs_probe"
+    );
+    assert_eq!(
+        entry.franken_native_behavior,
+        "reject_mjs_package_entry_probe"
+    );
+    assert_eq!(
+        entry.franken_node_compat_behavior,
+        "reject_mjs_package_entry_probe"
+    );
+    assert_eq!(
+        entry.franken_bun_compat_behavior,
+        "resolve_relative_import_from_package_root_after_mjs_probe"
+    );
+    assert_eq!(entry.explicit_shims.len(), 1);
+    assert_eq!(
+        entry.explicit_shims[0].shim_id,
+        "shim-bun-bare-require-index-mjs-package-root-v1"
+    );
+    assert_eq!(entry.explicit_shims[0].mode, CompatibilityMode::BunCompat);
+    assert!(entry.lockstep_case_refs.contains(
+        &"lockstep/module/bare-require-package-index-mjs-relative-import-package-root".to_string()
+    ));
+    assert!(
+        entry.lockstep_case_refs.contains(
+            &"lockstep/module/scoped-bare-require-package-index-mjs-relative-import-package-root"
+                .to_string()
+        )
+    );
+    assert!(
+        entry.scenario.contains("package root"),
+        "package-root relative import case should describe package-root anchoring explicitly"
+    );
+
+    let divergence = entry.divergence.as_ref().expect(
+        "bare require() index.mjs package-root relative import case must record the Bun divergence explicitly",
+    );
+    assert_eq!(divergence.diverges_from, vec![ReferenceRuntime::Bun]);
+    assert_eq!(
+        divergence.waiver_id,
+        "waiver-modcomp-bare-require-index-mjs-package-root-bun"
+    );
+    assert!(
+        divergence.migration_guidance.contains("bun_compat")
+            && divergence.migration_guidance.contains("package root"),
+        "bare require() index.mjs package-root relative import divergence should carry actionable migration guidance"
+    );
+}
+
+#[test]
 fn default_matrix_pins_exports_map_contracts() {
     let m = ModuleCompatibilityMatrix::from_default_json().unwrap();
 
@@ -1831,6 +2525,98 @@ fn default_matrix_pins_exports_map_contracts() {
         dual_mode
             .lockstep_case_refs
             .contains(&"lockstep/module/dual-mode-exports-map".to_string())
+    );
+
+    let exact_precedence = m
+        .entry("exports-exact-over-wildcard-precedence")
+        .expect("default matrix should include exact-over-wildcard exports precedence case");
+    assert_eq!(exact_precedence.feature, ModuleFeature::ConditionalExports);
+    assert_eq!(
+        exact_precedence.node_behavior,
+        "prefer_exact_exports_over_wildcard"
+    );
+    assert_eq!(
+        exact_precedence.franken_native_behavior,
+        "prefer_exact_exports_over_wildcard"
+    );
+    assert_eq!(
+        exact_precedence.franken_bun_compat_behavior,
+        "prefer_exact_exports_over_wildcard"
+    );
+    assert!(exact_precedence.explicit_shims.is_empty());
+    assert!(
+        exact_precedence
+            .lockstep_case_refs
+            .contains(&"lockstep/module/exports-exact-over-wildcard-precedence".to_string())
+    );
+
+    let scoped_precedence = m
+        .entry("scoped-exports-more-specific-wildcard-precedence")
+        .expect("default matrix should include scoped wildcard exports precedence case");
+    assert_eq!(scoped_precedence.feature, ModuleFeature::ConditionalExports);
+    assert_eq!(
+        scoped_precedence.node_behavior,
+        "prefer_more_specific_scoped_wildcard_export"
+    );
+    assert_eq!(
+        scoped_precedence.franken_node_compat_behavior,
+        "prefer_more_specific_scoped_wildcard_export"
+    );
+    assert_eq!(
+        scoped_precedence.franken_bun_compat_behavior,
+        "prefer_more_specific_scoped_wildcard_export"
+    );
+    assert!(scoped_precedence.explicit_shims.is_empty());
+    assert!(
+        scoped_precedence.lockstep_case_refs.contains(
+            &"lockstep/module/scoped-exports-more-specific-wildcard-precedence".to_string()
+        )
+    );
+
+    let fail_closed = m
+        .entry("exports-unexported-subpath-fail-closed")
+        .expect("default matrix should include unexported-subpath fail-closed case");
+    assert_eq!(fail_closed.feature, ModuleFeature::ConditionalExports);
+    assert_eq!(
+        fail_closed.node_behavior,
+        "reject_unexported_subpath_before_legacy_fallback"
+    );
+    assert_eq!(
+        fail_closed.franken_native_behavior,
+        "reject_unexported_subpath_before_legacy_fallback"
+    );
+    assert_eq!(
+        fail_closed.franken_bun_compat_behavior,
+        "reject_unexported_subpath_before_legacy_fallback"
+    );
+    assert!(fail_closed.explicit_shims.is_empty());
+    assert!(
+        fail_closed
+            .lockstep_case_refs
+            .contains(&"lockstep/module/exports-unexported-subpath-fail-closed".to_string())
+    );
+
+    let escape_root = m
+        .entry("exports-target-must-not-escape-package-root")
+        .expect("default matrix should include exports target escape-package-root case");
+    assert_eq!(escape_root.feature, ModuleFeature::ConditionalExports);
+    assert_eq!(
+        escape_root.node_behavior,
+        "reject_exports_target_outside_package_root"
+    );
+    assert_eq!(
+        escape_root.franken_native_behavior,
+        "reject_exports_target_outside_package_root"
+    );
+    assert_eq!(
+        escape_root.franken_bun_compat_behavior,
+        "reject_exports_target_outside_package_root"
+    );
+    assert!(escape_root.explicit_shims.is_empty());
+    assert!(
+        escape_root
+            .lockstep_case_refs
+            .contains(&"lockstep/module/exports-target-must-not-escape-package-root".to_string())
     );
 }
 
@@ -1942,6 +2728,50 @@ fn default_matrix_pins_external_extension_probe_package_root_contract() {
 }
 
 #[test]
+fn default_matrix_pins_external_package_relative_escape_contract() {
+    let m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let entry = m
+        .entry("external-package-relative-traversal-fail-closed")
+        .expect("default matrix should include external package relative-escape fail-closed case");
+    assert_eq!(entry.feature, ModuleFeature::Esm);
+    assert_eq!(
+        entry.node_behavior,
+        "reject_external_relative_escape_before_probe"
+    );
+    assert_eq!(
+        entry.bun_behavior,
+        "reject_external_relative_escape_before_probe"
+    );
+    assert_eq!(
+        entry.franken_native_behavior,
+        "reject_external_relative_escape_before_probe"
+    );
+    assert_eq!(
+        entry.franken_node_compat_behavior,
+        "reject_external_relative_escape_before_probe"
+    );
+    assert_eq!(
+        entry.franken_bun_compat_behavior,
+        "reject_external_relative_escape_before_probe"
+    );
+    assert!(entry.explicit_shims.is_empty());
+    assert!(
+        entry.lockstep_case_refs.contains(
+            &"lockstep/module/external-package-relative-traversal-fail-closed".to_string()
+        )
+    );
+    assert!(entry.lockstep_case_refs.contains(
+        &"lockstep/module/scoped-external-package-relative-traversal-fail-closed".to_string()
+    ));
+    assert!(
+        entry
+            .scenario
+            .contains("before any probe sequence can reach sibling packages")
+    );
+    assert!(entry.divergence.is_none());
+}
+
+#[test]
 fn scenario_report_summarizes_divergence_categories_and_guidance() {
     let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
     let required = m.required_waiver_ids();
@@ -2023,6 +2853,54 @@ fn mixed_cycle_bun_compat_interop_evidence_matches_matrix_contract() {
         )
         .expect("mixed-cycle interop evidence should match the matrix contract");
     assert!(outcome.matched);
+}
+
+#[test]
+fn require_of_esm_observer_variants_match_matrix_contract_across_modes() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    for (variant_name, observer) in [
+        (
+            "workspace direct require",
+            observe_require_of_esm_behavior as fn(CompatibilityMode) -> String,
+        ),
+        (
+            "workspace require chain",
+            observe_require_chain_of_esm_behavior as fn(CompatibilityMode) -> String,
+        ),
+        (
+            "external require chain",
+            observe_external_require_chain_of_esm_behavior as fn(CompatibilityMode) -> String,
+        ),
+    ] {
+        for (mode, expected_behavior) in [
+            (CompatibilityMode::Native, "throw_err_require_esm"),
+            (CompatibilityMode::NodeCompat, "throw_err_require_esm"),
+            (CompatibilityMode::BunCompat, "allow_via_sync_bridge"),
+        ] {
+            let observed_behavior = observer(mode);
+            assert_eq!(observed_behavior, expected_behavior);
+
+            let outcome = m
+                .evaluate_observation(
+                    &CompatibilityObservation::new(
+                        "cjs-require-esm",
+                        CompatibilityRuntime::FrankenEngine,
+                        mode,
+                        observed_behavior,
+                    ),
+                    &ctx(),
+                )
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "cjs require() -> esm observer variant should match the matrix contract for {variant_name} in {mode:?}: {err}"
+                    )
+                });
+            assert!(outcome.matched);
+        }
+    }
 }
 
 #[test]
@@ -2117,6 +2995,66 @@ fn cjs_requires_esm_interop_evidence_matches_matrix_contract_across_modes() {
             outcome.matched,
             "cjs-requires-esm evidence should match the matrix contract for {specimen_id}"
         );
+    }
+}
+
+#[test]
+fn extensionless_relative_observer_variants_match_matrix_contract_across_modes() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    for (variant_name, observer) in [
+        (
+            "workspace direct import",
+            observe_extensionless_relative_import_behavior as fn(CompatibilityMode) -> String,
+        ),
+        (
+            "external direct import",
+            observe_external_extensionless_relative_import_behavior
+                as fn(CompatibilityMode) -> String,
+        ),
+        (
+            "workspace import chain",
+            observe_extensionless_relative_import_chain_behavior as fn(CompatibilityMode) -> String,
+        ),
+        (
+            "external import chain",
+            observe_external_extensionless_relative_import_chain_behavior
+                as fn(CompatibilityMode) -> String,
+        ),
+    ] {
+        for (mode, expected_behavior) in [
+            (CompatibilityMode::Native, "reject_extensionless_relative"),
+            (
+                CompatibilityMode::NodeCompat,
+                "reject_extensionless_relative",
+            ),
+            (
+                CompatibilityMode::BunCompat,
+                "resolve_extensionless_relative",
+            ),
+        ] {
+            let observed_behavior = observer(mode);
+            assert_eq!(observed_behavior, expected_behavior);
+
+            let outcome = m
+                .evaluate_observation(
+                    &CompatibilityObservation::new(
+                        "package-type-module-extensionless-relative",
+                        CompatibilityRuntime::FrankenEngine,
+                        mode,
+                        observed_behavior,
+                    ),
+                    &ctx(),
+                )
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "extensionless-relative observer variant should match the matrix contract for {variant_name} in {mode:?}: {err}"
+                    )
+                });
+            assert!(outcome.matched);
+        }
     }
 }
 
@@ -2466,6 +3404,203 @@ fn dual_mode_exports_map_behavior_matches_matrix_contract_across_modes() {
                 &ctx(),
             )
             .expect("dual-mode exports map behavior should match the matrix contract");
+        assert!(outcome.matched);
+    }
+}
+
+#[test]
+fn wildcard_exports_precedence_behavior_matches_matrix_contract_across_modes() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    for (case_id, observer, expected_behavior) in [
+        (
+            "exports-exact-over-wildcard-precedence",
+            observe_exports_exact_over_wildcard_precedence_behavior
+                as fn(CompatibilityMode) -> String,
+            "prefer_exact_exports_over_wildcard",
+        ),
+        (
+            "scoped-exports-more-specific-wildcard-precedence",
+            observe_scoped_exports_more_specific_wildcard_precedence_behavior
+                as fn(CompatibilityMode) -> String,
+            "prefer_more_specific_scoped_wildcard_export",
+        ),
+    ] {
+        for mode in [
+            CompatibilityMode::Native,
+            CompatibilityMode::NodeCompat,
+            CompatibilityMode::BunCompat,
+        ] {
+            let observed_behavior = observer(mode);
+            assert_eq!(observed_behavior, expected_behavior);
+
+            let outcome = m
+                .evaluate_observation(
+                    &CompatibilityObservation::new(
+                        case_id,
+                        CompatibilityRuntime::FrankenEngine,
+                        mode,
+                        observed_behavior,
+                    ),
+                    &ctx(),
+                )
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "wildcard exports precedence behavior should match the matrix contract for {case_id} in {mode:?}: {err}"
+                    )
+                });
+            assert!(outcome.matched);
+        }
+    }
+}
+
+#[test]
+fn exports_unexported_subpath_fail_closed_behavior_matches_matrix_contract_across_modes() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    for mode in [
+        CompatibilityMode::Native,
+        CompatibilityMode::NodeCompat,
+        CompatibilityMode::BunCompat,
+    ] {
+        let observed_behavior = observe_exports_unexported_subpath_fail_closed_behavior(mode);
+        assert_eq!(
+            observed_behavior,
+            "reject_unexported_subpath_before_legacy_fallback"
+        );
+
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "exports-unexported-subpath-fail-closed",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    observed_behavior,
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!(
+                    "unexported-subpath fail-closed behavior should match the matrix contract in {mode:?}: {err}"
+                )
+            });
+        assert!(outcome.matched);
+    }
+}
+
+#[test]
+fn exports_target_escape_package_root_behavior_matches_matrix_contract_across_modes() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    for mode in [
+        CompatibilityMode::Native,
+        CompatibilityMode::NodeCompat,
+        CompatibilityMode::BunCompat,
+    ] {
+        let observed_behavior = observe_exports_target_escape_package_root_behavior(mode);
+        assert_eq!(
+            observed_behavior,
+            "reject_exports_target_outside_package_root"
+        );
+
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "exports-target-must-not-escape-package-root",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    observed_behavior,
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!(
+                    "exports target escape-package-root behavior should match the matrix contract in {mode:?}: {err}"
+                )
+            });
+        assert!(outcome.matched);
+    }
+}
+
+#[test]
+fn external_package_relative_escape_behavior_matches_matrix_contract_across_modes() {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    for mode in [
+        CompatibilityMode::Native,
+        CompatibilityMode::NodeCompat,
+        CompatibilityMode::BunCompat,
+    ] {
+        let observed_behavior = observe_external_package_relative_escape_behavior(mode);
+        assert_eq!(
+            observed_behavior,
+            "reject_external_relative_escape_before_probe"
+        );
+
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "external-package-relative-traversal-fail-closed",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    observed_behavior,
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!(
+                    "external package relative-escape behavior should match the matrix contract in {mode:?}: {err}"
+                )
+            });
+        assert!(outcome.matched);
+    }
+}
+
+#[test]
+fn bare_require_index_mjs_package_root_relative_import_behavior_matches_matrix_contract_across_modes()
+ {
+    let mut m = ModuleCompatibilityMatrix::from_default_json().unwrap();
+    let required = m.required_waiver_ids();
+    m.validate_with_waivers(&required, &ctx()).unwrap();
+
+    for (mode, expected_behavior) in [
+        (CompatibilityMode::Native, "reject_mjs_package_entry_probe"),
+        (
+            CompatibilityMode::NodeCompat,
+            "reject_mjs_package_entry_probe",
+        ),
+        (
+            CompatibilityMode::BunCompat,
+            "resolve_relative_import_from_package_root_after_mjs_probe",
+        ),
+    ] {
+        let observed_behavior =
+            observe_bare_require_index_mjs_package_root_relative_import_behavior(mode);
+        assert_eq!(observed_behavior, expected_behavior);
+
+        let outcome = m
+            .evaluate_observation(
+                &CompatibilityObservation::new(
+                    "bare-require-package-index-mjs-relative-import-package-root",
+                    CompatibilityRuntime::FrankenEngine,
+                    mode,
+                    observed_behavior,
+                ),
+                &ctx(),
+            )
+            .unwrap_or_else(|err| {
+                panic!(
+                    "bare require() index.mjs package-root relative import behavior should match the matrix contract in {mode:?}: {err}"
+                )
+            });
         assert!(outcome.matched);
     }
 }

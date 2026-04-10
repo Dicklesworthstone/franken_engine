@@ -479,8 +479,7 @@ fn individual_entry_serde_roundtrip() {
     let regressions = parse_regressions();
     for entry in &regressions.entries {
         let serialized = serde_json::to_string(entry).unwrap();
-        let deserialized: ForbiddenRegressionEntry =
-            serde_json::from_str(&serialized).unwrap();
+        let deserialized: ForbiddenRegressionEntry = serde_json::from_str(&serialized).unwrap();
         assert_eq!(*entry, deserialized, "roundtrip mismatch for {}", entry.id);
     }
 }

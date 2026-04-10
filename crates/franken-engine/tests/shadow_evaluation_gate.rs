@@ -644,8 +644,7 @@ fn shadow_rollback_readiness_artifacts_default() {
 fn shadow_rollback_readiness_artifacts_serde_round_trip() {
     let arts = rollback_readiness();
     let json = serde_json::to_string(&arts).unwrap();
-    let recovered: ShadowRollbackReadinessArtifacts =
-        serde_json::from_str(&json).unwrap();
+    let recovered: ShadowRollbackReadinessArtifacts = serde_json::from_str(&json).unwrap();
     assert_eq!(arts, recovered);
 }
 

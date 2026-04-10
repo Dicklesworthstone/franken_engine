@@ -39,11 +39,7 @@ fn write_fixture_catalog(fixtures: serde_json::Value) -> std::path::PathBuf {
         "parser_mode": "scalar_reference",
         "fixtures": fixtures
     });
-    fs::write(
-        &path,
-        serde_json::to_vec_pretty(&payload).unwrap(),
-    )
-    .expect("write fixture catalog");
+    fs::write(&path, serde_json::to_vec_pretty(&payload).unwrap()).expect("write fixture catalog");
     path
 }
 

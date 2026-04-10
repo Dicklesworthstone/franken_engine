@@ -639,8 +639,7 @@ fn enrichment_required_declass_default_decision_contract_id() {
         "capability": null,
         "obligation_id": "ob-1"
     }"#;
-    let entry: RequiredDeclassificationArtifactEntry =
-        serde_json::from_str(json).unwrap();
+    let entry: RequiredDeclassificationArtifactEntry = serde_json::from_str(json).unwrap();
     assert_eq!(entry.decision_contract_id, "");
 }
 
@@ -653,8 +652,7 @@ fn enrichment_required_declass_default_requires_operator_approval() {
         "capability": null,
         "obligation_id": "ob-2"
     }"#;
-    let entry: RequiredDeclassificationArtifactEntry =
-        serde_json::from_str(json).unwrap();
+    let entry: RequiredDeclassificationArtifactEntry = serde_json::from_str(json).unwrap();
     assert!(!entry.requires_operator_approval);
 }
 
@@ -667,8 +665,7 @@ fn enrichment_required_declass_default_receipt_linkage_required() {
         "capability": null,
         "obligation_id": "ob-3"
     }"#;
-    let entry: RequiredDeclassificationArtifactEntry =
-        serde_json::from_str(json).unwrap();
+    let entry: RequiredDeclassificationArtifactEntry = serde_json::from_str(json).unwrap();
     assert!(!entry.receipt_linkage_required);
 }
 
@@ -681,8 +678,7 @@ fn enrichment_required_declass_default_replay_command_hint() {
         "capability": null,
         "obligation_id": "ob-4"
     }"#;
-    let entry: RequiredDeclassificationArtifactEntry =
-        serde_json::from_str(json).unwrap();
+    let entry: RequiredDeclassificationArtifactEntry = serde_json::from_str(json).unwrap();
     assert_eq!(entry.replay_command_hint, "");
 }
 

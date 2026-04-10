@@ -561,8 +561,7 @@ fn recommendation_reversibility_serde_round_trip() {
         RecommendationReversibility::Irreversible,
     ] {
         let json = serde_json::to_string(&rev).unwrap();
-        let recovered: RecommendationReversibility =
-            serde_json::from_str(&json).unwrap();
+        let recovered: RecommendationReversibility = serde_json::from_str(&json).unwrap();
         assert_eq!(rev, recovered);
     }
 }

@@ -123,6 +123,41 @@
       }
     },
     {
+      "case_id": "bare-require-package-index-mjs-relative-import-package-root",
+      "feature": "cjs",
+      "scenario": "After Bun-style bare CommonJS require probes an external package `index.mjs` entry, nested relative imports must stay anchored at the package root instead of a synthetic entry-file directory.",
+      "node_behavior": "reject_mjs_package_entry_probe",
+      "bun_behavior": "resolve_relative_import_from_package_root_after_mjs_probe",
+      "franken_native_behavior": "reject_mjs_package_entry_probe",
+      "franken_node_compat_behavior": "reject_mjs_package_entry_probe",
+      "franken_bun_compat_behavior": "resolve_relative_import_from_package_root_after_mjs_probe",
+      "explicit_shims": [
+        {
+          "shim_id": "shim-bun-bare-require-index-mjs-package-root-v1",
+          "mode": "bun_compat",
+          "description": "Explicit Bun-compatible `.mjs` package-entry probe that preserves package-root anchoring for nested relative imports after the sync bridge accepts the external entry.",
+          "removable": true,
+          "test_case_ref": "lockstep/module/bare-require-package-index-mjs-relative-import-package-root"
+        }
+      ],
+      "lockstep_case_refs": [
+        "lockstep/module/bare-require-package-index-mjs-relative-import-package-root",
+        "lockstep/module/scoped-bare-require-package-index-mjs-relative-import-package-root"
+      ],
+      "test262_refs": [
+        "language/module-code/instn-star-props-circular.js"
+      ],
+      "divergence": {
+        "diverges_from": [
+          "bun"
+        ],
+        "reason": "Native and node-compatible loaders fail closed on bare require() `.mjs` package-entry probing, so they never reach the nested relative-import chain that Bun-style bridging resolves from the package root.",
+        "impact": "Packages that rely on Bun's external `index.mjs` require bridge must preserve package-root-relative dependency anchoring once the bridge is enabled; other modes remain unresolved before that step.",
+        "waiver_id": "waiver-modcomp-bare-require-index-mjs-package-root-bun",
+        "migration_guidance": "Prefer explicit `.cjs` or `.js` require targets, or an exports map with a CommonJS branch; if bun_compat is required, pin tests that prove nested relative imports stay rooted at the package root."
+      }
+    },
+    {
       "case_id": "conditional-exports-condition-order",
       "feature": "conditional_exports",
       "scenario": "Package exports map has import/require/default branches and resolver must choose deterministic precedence.",
@@ -155,6 +190,78 @@
       ],
       "test262_refs": [
         "language/module-code/instn-iee-bndng-cls.js"
+      ],
+      "divergence": null
+    },
+    {
+      "case_id": "exports-exact-over-wildcard-precedence",
+      "feature": "conditional_exports",
+      "scenario": "An exact package exports entry must take precedence over a broader wildcard export for the same subpath.",
+      "node_behavior": "prefer_exact_exports_over_wildcard",
+      "bun_behavior": "prefer_exact_exports_over_wildcard",
+      "franken_native_behavior": "prefer_exact_exports_over_wildcard",
+      "franken_node_compat_behavior": "prefer_exact_exports_over_wildcard",
+      "franken_bun_compat_behavior": "prefer_exact_exports_over_wildcard",
+      "explicit_shims": [],
+      "lockstep_case_refs": [
+        "lockstep/module/exports-exact-over-wildcard-precedence"
+      ],
+      "test262_refs": [
+        "language/module-code/instn-resolve-empty-import.js"
+      ],
+      "divergence": null
+    },
+    {
+      "case_id": "scoped-exports-more-specific-wildcard-precedence",
+      "feature": "conditional_exports",
+      "scenario": "For scoped packages, a more specific wildcard exports entry must beat a broader scoped wildcard for overlapping subpaths.",
+      "node_behavior": "prefer_more_specific_scoped_wildcard_export",
+      "bun_behavior": "prefer_more_specific_scoped_wildcard_export",
+      "franken_native_behavior": "prefer_more_specific_scoped_wildcard_export",
+      "franken_node_compat_behavior": "prefer_more_specific_scoped_wildcard_export",
+      "franken_bun_compat_behavior": "prefer_more_specific_scoped_wildcard_export",
+      "explicit_shims": [],
+      "lockstep_case_refs": [
+        "lockstep/module/scoped-exports-more-specific-wildcard-precedence"
+      ],
+      "test262_refs": [
+        "language/module-code/instn-resolve-empty-import.js"
+      ],
+      "divergence": null
+    },
+    {
+      "case_id": "exports-unexported-subpath-fail-closed",
+      "feature": "conditional_exports",
+      "scenario": "A package exports map must reject an unexported subpath before any legacy filesystem fallback can reach workspace or private package files.",
+      "node_behavior": "reject_unexported_subpath_before_legacy_fallback",
+      "bun_behavior": "reject_unexported_subpath_before_legacy_fallback",
+      "franken_native_behavior": "reject_unexported_subpath_before_legacy_fallback",
+      "franken_node_compat_behavior": "reject_unexported_subpath_before_legacy_fallback",
+      "franken_bun_compat_behavior": "reject_unexported_subpath_before_legacy_fallback",
+      "explicit_shims": [],
+      "lockstep_case_refs": [
+        "lockstep/module/exports-unexported-subpath-fail-closed"
+      ],
+      "test262_refs": [
+        "language/module-code/instn-resolve-empty-import.js"
+      ],
+      "divergence": null
+    },
+    {
+      "case_id": "exports-target-must-not-escape-package-root",
+      "feature": "conditional_exports",
+      "scenario": "A package exports target must remain inside the package root; escape targets must be rejected before the resolver can reach sibling package files.",
+      "node_behavior": "reject_exports_target_outside_package_root",
+      "bun_behavior": "reject_exports_target_outside_package_root",
+      "franken_native_behavior": "reject_exports_target_outside_package_root",
+      "franken_node_compat_behavior": "reject_exports_target_outside_package_root",
+      "franken_bun_compat_behavior": "reject_exports_target_outside_package_root",
+      "explicit_shims": [],
+      "lockstep_case_refs": [
+        "lockstep/module/exports-target-must-not-escape-package-root"
+      ],
+      "test262_refs": [
+        "language/module-code/instn-resolve-empty-import.js"
       ],
       "divergence": null
     },
@@ -223,6 +330,25 @@
       "lockstep_case_refs": [
         "lockstep/module/external-extension-probe-package-root-relative-require",
         "lockstep/module/scoped-external-extension-probe-package-root-relative-require"
+      ],
+      "test262_refs": [
+        "language/module-code/instn-resolve-empty-import.js"
+      ],
+      "divergence": null
+    },
+    {
+      "case_id": "external-package-relative-traversal-fail-closed",
+      "feature": "esm",
+      "scenario": "A relative specifier from an external package referrer must not escape the package root; the resolver must reject traversal before any probe sequence can reach sibling packages.",
+      "node_behavior": "reject_external_relative_escape_before_probe",
+      "bun_behavior": "reject_external_relative_escape_before_probe",
+      "franken_native_behavior": "reject_external_relative_escape_before_probe",
+      "franken_node_compat_behavior": "reject_external_relative_escape_before_probe",
+      "franken_bun_compat_behavior": "reject_external_relative_escape_before_probe",
+      "explicit_shims": [],
+      "lockstep_case_refs": [
+        "lockstep/module/external-package-relative-traversal-fail-closed",
+        "lockstep/module/scoped-external-package-relative-traversal-fail-closed"
       ],
       "test262_refs": [
         "language/module-code/instn-resolve-empty-import.js"

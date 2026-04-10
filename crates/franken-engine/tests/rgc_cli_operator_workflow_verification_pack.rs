@@ -111,8 +111,7 @@ fn write_runtime_input(input: &RuntimeDiagnosticsCliInput) -> PathBuf {
 
 fn write_json_value(value: &Value) -> PathBuf {
     let path = unique_temp_path("rgc_061_signals", "json");
-    fs::write(&path, serde_json::to_vec_pretty(value).unwrap())
-        .expect("signals file should write");
+    fs::write(&path, serde_json::to_vec_pretty(value).unwrap()).expect("signals file should write");
     path
 }
 

@@ -443,10 +443,7 @@ fn parser_supremacy_gate_simulation_is_deterministic_and_log_complete() {
                 object.contains_key(key),
                 "gate event missing required key `{key}`"
             );
-            let text = object
-                .get(key)
-                .and_then(|raw| raw.as_str())
-                .unwrap();
+            let text = object.get(key).and_then(|raw| raw.as_str()).unwrap();
             assert!(
                 !text.trim().is_empty(),
                 "gate event key `{key}` must not be empty"

@@ -11,7 +11,7 @@
 
 use frankenengine_engine::ast::Expression;
 use frankenengine_engine::ir_contract::Ir0Module;
-use frankenengine_engine::lowering_pipeline::{lower_ir0_to_ir3, LoweringContext};
+use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_engine::parser_api_stability::parse_script;
 
 // ---------------------------------------------------------------------------

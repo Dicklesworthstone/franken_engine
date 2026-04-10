@@ -274,8 +274,7 @@ fn build_trace_artifact(vectors: &ExceptionDiagnosticsVectors) -> DiagnosticTrac
     });
     differential.sort_by(|left, right| left.scenario_id.cmp(&right.scenario_id));
 
-    let payload =
-        serde_json::to_vec(&(snapshots.clone(), differential.clone())).unwrap();
+    let payload = serde_json::to_vec(&(snapshots.clone(), differential.clone())).unwrap();
     let trace_hash = format!("sha256:{}", hex::encode(Sha256::digest(payload)));
 
     DiagnosticTraceArtifact {
@@ -599,8 +598,7 @@ fn rgc_305_emit_deterministic_diagnostic_trace_artifact_when_requested() {
     assert_eq!(artifact.differential.len(), vectors.vectors.len());
 
     let trace_payload =
-        serde_json::to_vec(&(artifact.snapshots.clone(), artifact.differential.clone()))
-            .unwrap();
+        serde_json::to_vec(&(artifact.snapshots.clone(), artifact.differential.clone())).unwrap();
     let recomputed_hash = format!("sha256:{}", hex::encode(Sha256::digest(&trace_payload)));
     assert_eq!(artifact.trace_hash, recomputed_hash);
 

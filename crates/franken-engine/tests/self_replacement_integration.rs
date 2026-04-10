@@ -547,12 +547,26 @@ fn manifest_derive_id_varies_by_type() {
     let envelope = test_envelope();
     let sandbox = test_sandbox();
     let hooks = test_monitoring_hooks();
-    let id1 =
-        DelegateCellManifest::derive_manifest_id(&slot_id, DelegateType::QuickJsBacked, &bh, &envelope, &sandbox, &hooks, "z")
-            .unwrap();
-    let id2 =
-        DelegateCellManifest::derive_manifest_id(&slot_id, DelegateType::WasmBacked, &bh, &envelope, &sandbox, &hooks, "z")
-            .unwrap();
+    let id1 = DelegateCellManifest::derive_manifest_id(
+        &slot_id,
+        DelegateType::QuickJsBacked,
+        &bh,
+        &envelope,
+        &sandbox,
+        &hooks,
+        "z",
+    )
+    .unwrap();
+    let id2 = DelegateCellManifest::derive_manifest_id(
+        &slot_id,
+        DelegateType::WasmBacked,
+        &bh,
+        &envelope,
+        &sandbox,
+        &hooks,
+        "z",
+    )
+    .unwrap();
     assert_ne!(id1, id2);
 }
 

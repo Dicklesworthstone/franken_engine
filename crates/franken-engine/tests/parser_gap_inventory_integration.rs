@@ -379,8 +379,7 @@ fn remediation_status_serde_roundtrip() {
     ];
     for status in statuses {
         let json = serde_json::to_string(&status).unwrap();
-        let deserialized: ParserGapRemediationStatus =
-            serde_json::from_str(&json).unwrap();
+        let deserialized: ParserGapRemediationStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(status, deserialized);
     }
 }

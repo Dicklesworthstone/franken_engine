@@ -1499,6 +1499,7 @@ impl InterpreterCore {
         let caller_ip = self.ip;
         let caller_register_base = self.register_base;
         let caller_scope = self.snapshot_scope_chain()?;
+        let caller_scope_bytes = Self::estimate_scope_chain_bytes(&caller_scope);
 
         let (is_start, func_idx, closure_idx) = {
             let gobj = &mut self.generators[gen_id as usize];
@@ -1525,8 +1526,10 @@ impl InterpreterCore {
                             got: format!("closure#{cid} not found"),
                         }
                     })?;
-                    self.scope_chain.frames =
-                        self.clone_scope_frames_with_budget(&closure.captured_env)?;
+                    self.scope_chain.frames = self.clone_scope_frames_with_temporary_budget(
+                        &closure.captured_env,
+                        caller_scope_bytes,
+                    )?;
                 }
                 self.scope_chain.push(self.config.max_scope_depth)?;
                 self.sync_estimated_memory_bytes()?;
@@ -1868,8 +1871,16 @@ impl InterpreterCore {
                             // restored on return (the closure replaces
                             // the chain with its captured environment).
                             let scope_depth = self.scope_chain.depth();
+                            let captured_env_bytes = captured_env
+                                .as_ref()
+                                .map(|env| Self::estimate_scope_chain_bytes(env))
+                                .unwrap_or(0);
                             let saved_chain = if captured_env.is_some() {
-                                Some(self.snapshot_scope_chain()?)
+                                Some(
+                                    self.snapshot_scope_chain_with_temporary_budget(
+                                        captured_env_bytes,
+                                    )?,
+                                )
                             } else {
                                 None
                             };
@@ -2006,8 +2017,14 @@ impl InterpreterCore {
                     self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
                     let scope_depth = self.scope_chain.depth();
+                    let captured_env_bytes = captured_env
+                        .as_ref()
+                        .map(|env| Self::estimate_scope_chain_bytes(env))
+                        .unwrap_or(0);
                     let saved_chain = if captured_env.is_some() {
-                        Some(self.snapshot_scope_chain()?)
+                        Some(self.snapshot_scope_chain_with_temporary_budget(
+                            captured_env_bytes,
+                        )?)
                     } else {
                         None
                     };
@@ -2118,6 +2135,8 @@ impl InterpreterCore {
                     // Dispatch promise hostcalls to the promise subsystem.
                     let result = if is_promise_cap {
                         self.dispatch_promise_hostcall(&capability.0, args)?
+                    } else if capability.0.starts_with("number:") {
+                        self.dispatch_number_hostcall(&capability.0, args)?
                     } else {
                         // Non-promise hostcalls return undefined in baseline.
                         Value::Undefined
@@ -2471,8 +2490,16 @@ impl InterpreterCore {
 
                             // Push constructor frame with `construct_this`.
                             let scope_depth = self.scope_chain.depth();
+                            let captured_env_bytes = captured_env
+                                .as_ref()
+                                .map(|env| Self::estimate_scope_chain_bytes(env))
+                                .unwrap_or(0);
                             let saved_chain = if captured_env.is_some() {
-                                Some(self.snapshot_scope_chain()?)
+                                Some(
+                                    self.snapshot_scope_chain_with_temporary_budget(
+                                        captured_env_bytes,
+                                    )?,
+                                )
                             } else {
                                 None
                             };
@@ -3997,6 +4024,92 @@ impl InterpreterCore {
         }
     }
 
+    /// Dispatch number-related hostcalls: isNaN, isFinite, Number.isNaN, Number.isFinite.
+    ///
+    /// Hostcall capabilities:
+    /// - `number:isNaN` — global isNaN() function (coerces to number first)
+    /// - `number:isFinite` — global isFinite() function (coerces to number first)
+    /// - `number:Number.isNaN` — Number.isNaN() (strict, no coercion)
+    /// - `number:Number.isFinite` — Number.isFinite() (strict, no coercion)
+    fn dispatch_number_hostcall(
+        &self,
+        cap: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let arg0 = if args.count > 0 {
+            self.read_reg(args.start)?
+        } else {
+            Value::Undefined
+        };
+
+        match cap {
+            "number:isNaN" => {
+                // Global isNaN: coerces argument to number, then checks NaN
+                // isNaN(undefined) = true, isNaN("hello") = true
+                let number = Self::coerce_to_float(&arg0).unwrap_or(f64::NAN);
+                Ok(Value::Bool(number.is_nan()))
+            }
+            "number:isFinite" => {
+                // Global isFinite: coerces argument to number, then checks finite
+                // isFinite(undefined) = false, isFinite("123") = true
+                let number = Self::coerce_to_float(&arg0).unwrap_or(f64::NAN);
+                Ok(Value::Bool(number.is_finite()))
+            }
+            "number:Number.isNaN" => {
+                // Number.isNaN: strict check, no coercion
+                // Number.isNaN(undefined) = false, Number.isNaN(NaN) = true
+                match arg0 {
+                    Value::Float(f) => Ok(Value::Bool(f.inner().is_nan())),
+                    _ => Ok(Value::Bool(false)),
+                }
+            }
+            "number:Number.isFinite" => {
+                // Number.isFinite: strict check, no coercion
+                // Number.isFinite(undefined) = false, Number.isFinite(42) = true
+                match arg0 {
+                    Value::Int(_) => Ok(Value::Bool(true)), // All integers are finite
+                    Value::Float(f) => Ok(Value::Bool(f.inner().is_finite())),
+                    _ => Ok(Value::Bool(false)),
+                }
+            }
+            "number:Number.isInteger" => {
+                // Number.isInteger: strict check for integer value
+                match arg0 {
+                    Value::Int(_) => Ok(Value::Bool(true)),
+                    Value::Float(f) => {
+                        let v = f.inner();
+                        Ok(Value::Bool(v.is_finite() && v.fract() == 0.0))
+                    }
+                    _ => Ok(Value::Bool(false)),
+                }
+            }
+            "number:Number.isSafeInteger" => {
+                // Number.isSafeInteger: integer in safe range
+                match arg0 {
+                    Value::Int(n) => {
+                        // Safe integer range: -(2^53 - 1) to (2^53 - 1)
+                        const MAX_SAFE: i64 = (1i64 << 53) - 1;
+                        const MIN_SAFE: i64 = -MAX_SAFE;
+                        Ok(Value::Bool(n >= MIN_SAFE && n <= MAX_SAFE))
+                    }
+                    Value::Float(f) => {
+                        let v = f.inner();
+                        if !v.is_finite() || v.fract() != 0.0 {
+                            return Ok(Value::Bool(false));
+                        }
+                        const MAX_SAFE: f64 = ((1i64 << 53) - 1) as f64;
+                        Ok(Value::Bool(v >= -MAX_SAFE && v <= MAX_SAFE))
+                    }
+                    _ => Ok(Value::Bool(false)),
+                }
+            }
+            _ => {
+                // Unknown number hostcall
+                Ok(Value::Undefined)
+            }
+        }
+    }
+
     // -- Register access ---------------------------------------------------
 
     fn read_reg(&self, reg: u32) -> Result<Value, InterpreterError> {
@@ -4210,26 +4323,44 @@ impl InterpreterCore {
         Ok(requested_bytes)
     }
 
+    fn check_temporary_memory_budget(&self, temporary_bytes: u64) -> Result<(), InterpreterError> {
+        let requested_bytes = self.estimated_memory_bytes.saturating_add(temporary_bytes);
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+        Ok(())
+    }
+
     fn clone_scope_frames_with_budget(
         &self,
         frames: &[ScopeFrame],
     ) -> Result<Vec<ScopeFrame>, InterpreterError> {
-        let requested_bytes = self
-            .estimated_memory_bytes
-            .saturating_add(Self::estimate_scope_chain_bytes(frames));
-        if requested_bytes > self.config.max_total_memory_bytes {
-            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
-        }
+        self.clone_scope_frames_with_temporary_budget(frames, 0)
+    }
+
+    fn clone_scope_frames_with_temporary_budget(
+        &self,
+        frames: &[ScopeFrame],
+        temporary_bytes: u64,
+    ) -> Result<Vec<ScopeFrame>, InterpreterError> {
+        self.check_temporary_memory_budget(
+            temporary_bytes.saturating_add(Self::estimate_scope_chain_bytes(frames)),
+        )?;
         Ok(frames.to_vec())
     }
 
     fn snapshot_scope_chain(&self) -> Result<Vec<ScopeFrame>, InterpreterError> {
-        let requested_bytes = self
-            .estimated_memory_bytes
-            .saturating_add(Self::estimate_scope_chain_bytes(&self.scope_chain.frames));
-        if requested_bytes > self.config.max_total_memory_bytes {
-            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
-        }
+        self.snapshot_scope_chain_with_temporary_budget(0)
+    }
+
+    fn snapshot_scope_chain_with_temporary_budget(
+        &self,
+        temporary_bytes: u64,
+    ) -> Result<Vec<ScopeFrame>, InterpreterError> {
+        self.check_temporary_memory_budget(
+            temporary_bytes
+                .saturating_add(Self::estimate_scope_chain_bytes(&self.scope_chain.frames)),
+        )?;
         Ok(self.scope_chain.snapshot())
     }
 
@@ -4876,6 +5007,10 @@ mod tests {
 
     fn v8_execute(module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
         V8Lane::new().execute(module, "test-trace")
+    }
+
+    fn quickjs_test_core() -> InterpreterCore {
+        InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test-trace")
     }
 
     fn assert_both_lanes_value(module: &Ir3Module, expected: Value) {
@@ -6673,6 +6808,32 @@ mod tests {
     }
 
     #[test]
+    fn temporary_scope_clone_budget_counts_existing_snapshot() {
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "temporary-scope-clone-budget");
+        core.scope_chain.current_mut().bindings.insert(
+            "payload".to_string(),
+            ScopeBinding {
+                value: Value::Str("x".repeat(128)),
+                kind: BindingKind::Var,
+                initialized: true,
+            },
+        );
+        core.sync_estimated_memory_bytes().unwrap();
+
+        let snapshot_bytes = InterpreterCore::estimate_scope_chain_bytes(&core.scope_chain.frames);
+        core.config.max_total_memory_bytes = core
+            .estimated_memory_bytes()
+            .saturating_add(snapshot_bytes.saturating_mul(2))
+            .saturating_sub(1);
+
+        let err = core
+            .snapshot_scope_chain_with_temporary_budget(snapshot_bytes)
+            .unwrap_err();
+        assert!(matches!(err, InterpreterError::MemoryBudgetExceeded { .. }));
+    }
+
+    #[test]
     fn generator_start_budget_failure_preserves_suspended_start_phase() {
         let payload = "x".repeat(128);
         let mut module = test_module_with_pool(
@@ -6881,7 +7042,7 @@ mod tests {
     #[test]
     fn eval_add_int_float_promotion() {
         // Int + Float should promote to Float
-        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        let mut core = quickjs_test_core();
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Int(1);
         core.registers[1] = Value::Float(Float64::new(0.5));
@@ -6892,7 +7053,7 @@ mod tests {
     #[test]
     fn eval_add_float_int_promotion() {
         // Float + Int should promote to Float
-        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        let mut core = quickjs_test_core();
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Float(Float64::new(2.5));
         core.registers[1] = Value::Int(3);
@@ -6903,7 +7064,7 @@ mod tests {
     #[test]
     fn eval_div_int_int_exact() {
         // 6 / 3 = 2 (exact integer result)
-        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        let mut core = quickjs_test_core();
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Int(6);
         core.registers[1] = Value::Int(3);
@@ -6914,7 +7075,7 @@ mod tests {
     #[test]
     fn eval_div_int_int_fractional() {
         // 7 / 3 = 2.333... (fractional result)
-        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        let mut core = quickjs_test_core();
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Int(7);
         core.registers[1] = Value::Int(3);
@@ -6930,7 +7091,7 @@ mod tests {
     #[test]
     fn eval_div_by_zero_infinity() {
         // 1 / 0 = Infinity
-        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        let mut core = quickjs_test_core();
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Int(1);
         core.registers[1] = Value::Int(0);
@@ -6945,7 +7106,7 @@ mod tests {
     #[test]
     fn eval_div_zero_zero_nan() {
         // 0 / 0 = NaN
-        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        let mut core = quickjs_test_core();
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Int(0);
         core.registers[1] = Value::Int(0);
@@ -6960,7 +7121,7 @@ mod tests {
     #[test]
     fn eval_arith_nan_propagation() {
         // NaN + 1 = NaN
-        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        let mut core = quickjs_test_core();
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Float(Float64::new(f64::NAN));
         core.registers[1] = Value::Int(1);
@@ -6975,7 +7136,7 @@ mod tests {
     #[test]
     fn eval_arith_infinity_mul_zero() {
         // Infinity * 0 = NaN
-        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        let mut core = quickjs_test_core();
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Float(Float64::new(f64::INFINITY));
         core.registers[1] = Value::Int(0);
@@ -6990,7 +7151,7 @@ mod tests {
     #[test]
     fn eval_mod_float_float() {
         // 5.5 % 2.0 = 1.5
-        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        let mut core = quickjs_test_core();
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Float(Float64::new(5.5));
         core.registers[1] = Value::Float(Float64::new(2.0));
@@ -7005,7 +7166,7 @@ mod tests {
     #[test]
     fn eval_unary_neg_float() {
         // -Float(1.5) = Float(-1.5)
-        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        let mut core = quickjs_test_core();
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Float(Float64::new(1.5));
         let result = core.eval_unary_neg(0).unwrap();
@@ -7015,7 +7176,7 @@ mod tests {
     #[test]
     fn eval_ieee754_classic() {
         // 0.1 + 0.2 = 0.30000000000000004 (classic IEEE 754 test)
-        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        let mut core = quickjs_test_core();
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Float(Float64::new(0.1));
         core.registers[1] = Value::Float(Float64::new(0.2));
@@ -7067,7 +7228,7 @@ mod tests {
     #[test]
     fn one_div_neg_zero_is_neg_infinity() {
         // 1 / -0 = -Infinity
-        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        let mut core = quickjs_test_core();
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Float(Float64::new(1.0));
         core.registers[1] = Value::Float(Float64::new(-0.0));
@@ -7082,7 +7243,7 @@ mod tests {
     #[test]
     fn neg_one_div_zero_is_neg_infinity() {
         // -1 / 0 = -Infinity
-        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        let mut core = quickjs_test_core();
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Float(Float64::new(-1.0));
         core.registers[1] = Value::Int(0);

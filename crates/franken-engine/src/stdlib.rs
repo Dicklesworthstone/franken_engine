@@ -969,19 +969,47 @@ pub fn exec_math(builtin: BuiltinId, args: &[JsValue]) -> Result<JsValue, Stdlib
 pub fn exec_global_function(builtin: BuiltinId, args: &[JsValue]) -> Result<JsValue, StdlibError> {
     match builtin {
         BuiltinId::GlobalIsNaN => {
-            // In our integer system, no value is NaN.
+            // isNaN(x) coerces x to number, then checks if NaN
             match args.first() {
-                Some(JsValue::Undefined) => Ok(JsValue::Bool(true)),
-                Some(JsValue::Str(s)) => Ok(JsValue::Bool(s.parse::<i64>().is_err())),
-                _ => Ok(JsValue::Bool(false)),
+                Some(JsValue::Undefined) => Ok(JsValue::Bool(true)), // undefined -> NaN
+                Some(JsValue::Float(bits)) => Ok(JsValue::Bool(f64::from_bits(*bits).is_nan())),
+                Some(JsValue::Int(_)) => Ok(JsValue::Bool(false)), // integers are never NaN
+                Some(JsValue::Str(s)) => {
+                    // Try to parse as number; if fails, it's NaN
+                    let trimmed = s.trim();
+                    if trimmed.is_empty() {
+                        Ok(JsValue::Bool(false)) // "" -> 0, not NaN
+                    } else {
+                        Ok(JsValue::Bool(trimmed.parse::<f64>().is_err()))
+                    }
+                }
+                Some(JsValue::Bool(_)) => Ok(JsValue::Bool(false)), // true->1, false->0
+                Some(JsValue::Null) => Ok(JsValue::Bool(false)), // null -> 0
+                _ => Ok(JsValue::Bool(true)), // objects/symbols -> NaN after ToNumber
             }
         }
         BuiltinId::GlobalIsFinite => {
-            // All i64 values are finite; undefined → NaN → false.
+            // isFinite(x) coerces x to number, then checks if finite
             match args.first() {
-                Some(JsValue::Undefined) => Ok(JsValue::Bool(false)),
-                Some(JsValue::Str(s)) => Ok(JsValue::Bool(s.parse::<i64>().is_ok())),
-                _ => Ok(JsValue::Bool(true)),
+                Some(JsValue::Undefined) => Ok(JsValue::Bool(false)), // undefined -> NaN
+                Some(JsValue::Float(bits)) => {
+                    let v = f64::from_bits(*bits);
+                    Ok(JsValue::Bool(!v.is_nan() && !v.is_infinite()))
+                }
+                Some(JsValue::Int(_)) => Ok(JsValue::Bool(true)), // integers are always finite
+                Some(JsValue::Str(s)) => {
+                    let trimmed = s.trim();
+                    if trimmed.is_empty() {
+                        Ok(JsValue::Bool(true)) // "" -> 0, which is finite
+                    } else if let Ok(v) = trimmed.parse::<f64>() {
+                        Ok(JsValue::Bool(!v.is_nan() && !v.is_infinite()))
+                    } else {
+                        Ok(JsValue::Bool(false)) // unparseable -> NaN
+                    }
+                }
+                Some(JsValue::Bool(_)) => Ok(JsValue::Bool(true)), // true->1, false->0
+                Some(JsValue::Null) => Ok(JsValue::Bool(true)), // null -> 0
+                _ => Ok(JsValue::Bool(false)), // objects/symbols -> NaN
             }
         }
         BuiltinId::GlobalParseInt => {
@@ -1081,6 +1109,53 @@ pub fn exec_boolean_method(builtin: BuiltinId, this_val: bool) -> Result<JsValue
         BuiltinId::BooleanPrototypeValueOf => Ok(JsValue::Bool(this_val)),
         _ => Err(StdlibError::TypeError(format!(
             "{} is not a Boolean method",
+            builtin.name()
+        ))),
+    }
+}
+
+/// Execute Number static methods (isNaN, isFinite, isInteger, isSafeInteger).
+/// These are stricter than the global versions - they don't coerce.
+pub fn exec_number_static(builtin: BuiltinId, args: &[JsValue]) -> Result<JsValue, StdlibError> {
+    let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+    match builtin {
+        BuiltinId::NumberIsNaN => {
+            // Number.isNaN only returns true for actual NaN, no coercion
+            Ok(JsValue::Bool(arg.is_nan()))
+        }
+        BuiltinId::NumberIsFinite => {
+            // Number.isFinite returns true only for finite numbers, no coercion
+            Ok(JsValue::Bool(arg.is_finite()))
+        }
+        BuiltinId::NumberIsInteger => {
+            match arg {
+                JsValue::Int(_) => Ok(JsValue::Bool(true)),
+                JsValue::Float(bits) => {
+                    let v = f64::from_bits(bits);
+                    Ok(JsValue::Bool(!v.is_nan() && !v.is_infinite() && v.fract() == 0.0))
+                }
+                _ => Ok(JsValue::Bool(false)),
+            }
+        }
+        BuiltinId::NumberIsSafeInteger => {
+            match arg {
+                JsValue::Int(n) => {
+                    // Safe integer range: -(2^53 - 1) to (2^53 - 1)
+                    Ok(JsValue::Bool(n.abs() <= 9_007_199_254_740_991))
+                }
+                JsValue::Float(bits) => {
+                    let v = f64::from_bits(bits);
+                    let is_safe = !v.is_nan()
+                        && !v.is_infinite()
+                        && v.fract() == 0.0
+                        && v.abs() <= 9_007_199_254_740_991.0;
+                    Ok(JsValue::Bool(is_safe))
+                }
+                _ => Ok(JsValue::Bool(false)),
+            }
+        }
+        _ => Err(StdlibError::TypeError(format!(
+            "{} is not a Number static method",
             builtin.name()
         ))),
     }
@@ -3076,6 +3151,16 @@ fn stringify_json_value(
         JsValue::Null => Ok(Some("null".to_string())),
         JsValue::Bool(value) => Ok(Some(if *value { "true" } else { "false" }.to_string())),
         JsValue::Int(value) => Ok(Some(format_json_number(*value))),
+        JsValue::Float(bits) => {
+            // JSON.stringify: NaN and Infinity serialize to "null"
+            let v = f64::from_bits(*bits);
+            if v.is_nan() || v.is_infinite() {
+                Ok(Some("null".to_string()))
+            } else {
+                // Format as number, avoiding scientific notation for small values
+                Ok(Some(format!("{v}")))
+            }
+        }
         JsValue::Str(value) => Ok(Some(format!("\"{}\"", escape_json_string(value)))),
         JsValue::Object(handle) => stringify_json_object(heap, *handle, active, depth).map(Some),
     }
@@ -3276,6 +3361,22 @@ fn coerce_to_string(value: &JsValue) -> String {
                 } else {
                     format!("{units}.{trimmed}")
                 }
+            }
+        }
+        JsValue::Float(bits) => {
+            let v = f64::from_bits(*bits);
+            if v.is_nan() {
+                "NaN".into()
+            } else if v.is_infinite() {
+                if v.is_sign_positive() {
+                    "Infinity".into()
+                } else {
+                    "-Infinity".into()
+                }
+            } else if v == 0.0 && v.is_sign_negative() {
+                "0".into() // -0 displays as "0"
+            } else {
+                format!("{v}")
             }
         }
         JsValue::Str(s) => s.clone(),
@@ -4633,11 +4734,15 @@ fn install_global_properties(
 
     // Global constants
     let _ = heap.set_property(global, PropertyKey::from("undefined"), JsValue::Undefined);
-    let _ = heap.set_property(global, PropertyKey::from("NaN"), JsValue::Int(0)); // No NaN in i64
+    let _ = heap.set_property(
+        global,
+        PropertyKey::from("NaN"),
+        JsValue::Float(f64::NAN.to_bits()),
+    );
     let _ = heap.set_property(
         global,
         PropertyKey::from("Infinity"),
-        JsValue::Int(i64::MAX),
+        JsValue::Float(f64::INFINITY.to_bits()),
     );
 
     // Global functions

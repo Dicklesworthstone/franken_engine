@@ -2128,11 +2128,47 @@ struct LogicalLine {
     end_line: u64,
 }
 
+fn merge_logical_lines_keyword_allows_regex(identifier: &str) -> bool {
+    matches!(
+        identifier,
+        "case"
+            | "delete"
+            | "in"
+            | "instanceof"
+            | "new"
+            | "of"
+            | "return"
+            | "throw"
+            | "typeof"
+            | "void"
+            | "yield"
+    )
+}
+
+fn merge_logical_lines_slash_starts_regex(
+    last_significant: Option<char>,
+    trailing_identifier: &str,
+    next_char: Option<char>,
+) -> bool {
+    if matches!(next_char, Some('=')) {
+        return false;
+    }
+
+    match last_significant {
+        None => true,
+        Some(
+            '(' | '{' | '[' | ',' | ';' | ':' | '=' | '!' | '?' | '&' | '|' | '^' | '~' | '*' | '%'
+            | '+' | '-' | '<' | '>' | '/',
+        ) => true,
+        Some(ch) if ch.is_ascii_alphabetic() || ch == '_' || ch == '$' => {
+            merge_logical_lines_keyword_allows_regex(trailing_identifier)
+        }
+        _ => false,
+    }
+}
+
 /// Merge physical lines into logical lines by tracking brace/paren/bracket depth.
 /// When a line ends with unbalanced delimiters, subsequent lines are merged until balance.
-///
-/// Known limitation: this helper still does not disambiguate regex literals
-/// from division, so braces inside `/.../` patterns may still affect balance.
 fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
     let mut result = Vec::new();
     let mut current_text = String::new();
@@ -2144,8 +2180,12 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
     let mut bracket_depth: i64 = 0;
     let mut in_quote: Option<char> = None;
     let mut in_block_comment = false;
+    let mut in_regex_literal = false;
+    let mut regex_in_char_class = false;
     let mut escaped = false;
     let mut accumulating = false;
+    let mut last_significant: Option<char> = None;
+    let mut trailing_identifier = String::new();
 
     for (line_idx, segment) in text.split_inclusive('\n').enumerate() {
         let line_no = (line_idx as u64).saturating_add(1);
@@ -2159,6 +2199,8 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             current_text.clear();
             current_byte_offset = byte_offset;
             current_start_line = line_no;
+            last_significant = None;
+            trailing_identifier.clear();
         } else {
             current_text.push(' ');
         }
@@ -2187,6 +2229,30 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                 }
                 continue;
             }
+            if in_regex_literal {
+                if escaped {
+                    escaped = false;
+                    continue;
+                }
+                match ch {
+                    '\\' => {
+                        escaped = true;
+                    }
+                    '[' if !regex_in_char_class => {
+                        regex_in_char_class = true;
+                    }
+                    ']' if regex_in_char_class => {
+                        regex_in_char_class = false;
+                    }
+                    '/' if !regex_in_char_class => {
+                        in_regex_literal = false;
+                        last_significant = Some('/');
+                        trailing_identifier.clear();
+                    }
+                    _ => {}
+                }
+                continue;
+            }
             match ch {
                 '/' => match chars.peek() {
                     Some('/') => break,
@@ -2194,16 +2260,72 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
                         chars.next();
                         in_block_comment = true;
                     }
+                    next_char
+                        if merge_logical_lines_slash_starts_regex(
+                            last_significant,
+                            trailing_identifier.as_str(),
+                            next_char.copied(),
+                        ) =>
+                    {
+                        in_regex_literal = true;
+                        regex_in_char_class = false;
+                        escaped = false;
+                        trailing_identifier.clear();
+                    }
                     _ => {}
                 },
-                '\'' | '"' | '`' => in_quote = Some(ch),
-                '{' => brace_depth += 1,
-                '}' => brace_depth -= 1,
-                '(' => paren_depth += 1,
-                ')' => paren_depth -= 1,
-                '[' => bracket_depth += 1,
-                ']' => bracket_depth -= 1,
-                _ => {}
+                '\'' | '"' | '`' => {
+                    in_quote = Some(ch);
+                    last_significant = Some(ch);
+                    trailing_identifier.clear();
+                }
+                '{' => {
+                    brace_depth += 1;
+                    last_significant = Some(ch);
+                    trailing_identifier.clear();
+                }
+                '}' => {
+                    brace_depth -= 1;
+                    last_significant = Some(ch);
+                    trailing_identifier.clear();
+                }
+                '(' => {
+                    paren_depth += 1;
+                    last_significant = Some(ch);
+                    trailing_identifier.clear();
+                }
+                ')' => {
+                    paren_depth -= 1;
+                    last_significant = Some(ch);
+                    trailing_identifier.clear();
+                }
+                '[' => {
+                    bracket_depth += 1;
+                    last_significant = Some(ch);
+                    trailing_identifier.clear();
+                }
+                ']' => {
+                    bracket_depth -= 1;
+                    last_significant = Some(ch);
+                    trailing_identifier.clear();
+                }
+                ch if ch.is_ascii_whitespace() => {}
+                ch if ch.is_ascii_alphabetic() || ch == '_' || ch == '$' => {
+                    trailing_identifier.push(ch);
+                    last_significant = Some(ch);
+                }
+                ch if ch.is_ascii_digit() => {
+                    if !trailing_identifier.is_empty() {
+                        trailing_identifier.push(ch);
+                    } else {
+                        trailing_identifier.clear();
+                    }
+                    last_significant = Some(ch);
+                }
+                ch => {
+                    last_significant = Some(ch);
+                    trailing_identifier.clear();
+                }
             }
         }
 
@@ -2214,6 +2336,7 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             && bracket_depth <= 0
             && in_quote.is_none()
             && !in_block_comment
+            && !in_regex_literal
         {
             let trimmed = current_text.trim();
             if !trimmed.is_empty() {
@@ -2227,6 +2350,11 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             brace_depth = 0;
             paren_depth = 0;
             bracket_depth = 0;
+            escaped = false;
+            in_regex_literal = false;
+            regex_in_char_class = false;
+            last_significant = None;
+            trailing_identifier.clear();
             accumulating = false;
         } else {
             accumulating = true;
@@ -3535,6 +3663,11 @@ fn parse_primary_expression(
 
     if let Some(value) = parse_i64_numeric_literal(expression) {
         return Ok(Expression::NumericLiteral(value));
+    }
+
+    // Try float literal (decimal, scientific notation)
+    if let Some(value) = parse_f64_numeric_literal(expression) {
+        return Ok(Expression::FloatLiteral(value.to_bits()));
     }
 
     if expression == "true" {
@@ -4986,6 +5119,7 @@ fn contains_optional_chain(expression: &Expression) -> bool {
         Expression::Identifier(_)
         | Expression::StringLiteral(_)
         | Expression::NumericLiteral(_)
+        | Expression::FloatLiteral(_)
         | Expression::BooleanLiteral(_)
         | Expression::NullLiteral
         | Expression::UndefinedLiteral
@@ -5513,6 +5647,43 @@ fn parse_i64_numeric_literal(input: &str) -> Option<i64> {
         }
         Some(value_u64 as i64)
     }
+}
+
+/// Parse a floating-point numeric literal: decimal (1.5), leading dot (.5),
+/// trailing dot (1.), or scientific notation (1e10, 1.5e-3).
+fn parse_f64_numeric_literal(input: &str) -> Option<f64> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // Handle special values
+    if trimmed == "Infinity" {
+        return Some(f64::INFINITY);
+    }
+    if trimmed == "-Infinity" {
+        return Some(f64::NEG_INFINITY);
+    }
+    if trimmed == "NaN" {
+        return Some(f64::NAN);
+    }
+
+    // Strip numeric separators
+    let cleaned: String;
+    let digits_ref = if trimmed.contains('_') {
+        cleaned = trimmed.replace('_', "");
+        cleaned.as_str()
+    } else {
+        trimmed
+    };
+
+    // Must contain a decimal point or exponent to be a float
+    if !digits_ref.contains('.') && !digits_ref.contains('e') && !digits_ref.contains('E') {
+        return None;
+    }
+
+    // Try to parse as f64
+    digits_ref.parse::<f64>().ok()
 }
 
 fn parse_quoted_string(input: &str) -> Option<String> {
@@ -10209,6 +10380,64 @@ mod tests {
         assert!(parse_i64_numeric_literal("0b23").is_none());
     }
 
+    // -- parse_f64_numeric_literal tests --
+
+    #[test]
+    fn parse_f64_numeric_literal_decimal() {
+        assert_eq!(parse_f64_numeric_literal("1.5"), Some(1.5));
+        assert_eq!(parse_f64_numeric_literal("3.14159"), Some(3.14159));
+        assert_eq!(parse_f64_numeric_literal("0.0"), Some(0.0));
+    }
+
+    #[test]
+    fn parse_f64_numeric_literal_leading_dot() {
+        assert_eq!(parse_f64_numeric_literal(".5"), Some(0.5));
+        assert_eq!(parse_f64_numeric_literal(".123"), Some(0.123));
+    }
+
+    #[test]
+    fn parse_f64_numeric_literal_trailing_dot() {
+        assert_eq!(parse_f64_numeric_literal("1."), Some(1.0));
+        assert_eq!(parse_f64_numeric_literal("42."), Some(42.0));
+    }
+
+    #[test]
+    fn parse_f64_numeric_literal_scientific() {
+        assert_eq!(parse_f64_numeric_literal("1e10"), Some(1e10));
+        assert_eq!(parse_f64_numeric_literal("1E10"), Some(1e10));
+        assert_eq!(parse_f64_numeric_literal("1.5e-3"), Some(1.5e-3));
+        assert_eq!(parse_f64_numeric_literal("2.5E+2"), Some(250.0));
+    }
+
+    #[test]
+    fn parse_f64_numeric_literal_special_values() {
+        assert_eq!(parse_f64_numeric_literal("Infinity"), Some(f64::INFINITY));
+        assert_eq!(
+            parse_f64_numeric_literal("-Infinity"),
+            Some(f64::NEG_INFINITY)
+        );
+        assert!(parse_f64_numeric_literal("NaN").unwrap().is_nan());
+    }
+
+    #[test]
+    fn parse_f64_numeric_literal_with_separators() {
+        assert_eq!(parse_f64_numeric_literal("1_000.5"), Some(1000.5));
+        assert_eq!(parse_f64_numeric_literal("1.5_00"), Some(1.5));
+    }
+
+    #[test]
+    fn parse_f64_numeric_literal_integer_without_dot_or_exp_returns_none() {
+        // Pure integers should be handled by parse_i64_numeric_literal
+        assert!(parse_f64_numeric_literal("42").is_none());
+        assert!(parse_f64_numeric_literal("0xFF").is_none());
+    }
+
+    #[test]
+    fn parse_f64_numeric_literal_empty_returns_none() {
+        assert!(parse_f64_numeric_literal("").is_none());
+        assert!(parse_f64_numeric_literal("   ").is_none());
+    }
+
     // -- split_statement_segments with nested delimiters --
 
     #[test]
@@ -11465,6 +11694,20 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].text, "var s = \"}\";");
         assert!(lines[1].text.starts_with("if (x) {"));
+    }
+
+    #[test]
+    fn merge_logical_lines_ignores_braces_in_regex_literals() {
+        let lines = merge_logical_lines("var r = /{/;\nif (x) {\n  y;\n}");
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].text, "var r = /{/;");
+        assert!(lines[1].text.starts_with("if (x) {"));
+    }
+
+    #[test]
+    fn parse_script_with_regex_brace_before_block_keeps_two_statements() {
+        let tree = parse_script("var r = /{/;\nif (x) {\n  y;\n}");
+        assert_eq!(tree.body.len(), 2);
     }
 
     // -----------------------------------------------------------------------

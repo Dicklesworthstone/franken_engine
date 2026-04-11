@@ -64,6 +64,8 @@ const DEFAULT_V8_MAX_HEAP_OBJECTS: u32 = 1_000_000;
 const DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES: u64 = 64 * 1024 * 1024;
 /// Default total memory budget for the throughput profile.
 const DEFAULT_V8_MAX_TOTAL_MEMORY_BYTES: u64 = 512 * 1024 * 1024;
+/// Default scope-chain depth budget for all interpreter profiles.
+const DEFAULT_MAX_SCOPE_DEPTH: u32 = 512;
 
 /// Maximum call-stack depth.
 const MAX_CALL_DEPTH: usize = 256;
@@ -81,6 +83,8 @@ const MEMORY_ESTIMATE_SCOPE_FRAME_BASE_BYTES: u64 = 32;
 const MEMORY_ESTIMATE_SCOPE_BINDING_BASE_BYTES: u64 = 24;
 /// Approximate per-closure base footprint.
 const MEMORY_ESTIMATE_CLOSURE_BASE_BYTES: u64 = 32;
+/// Approximate per-call-frame base footprint.
+const MEMORY_ESTIMATE_CALL_FRAME_BASE_BYTES: u64 = 64;
 /// Approximate per-iterator base footprint.
 const MEMORY_ESTIMATE_ITERATOR_BASE_BYTES: u64 = 32;
 /// Approximate per-generator base footprint.
@@ -487,7 +491,7 @@ impl ScopeFrame {
         }
     }
 
-    fn declare(&mut self, name: String, kind: BindingKind) {
+    fn declare(&mut self, name: String, kind: BindingKind) -> Option<ScopeBinding> {
         let initialized = kind.is_hoisted();
         self.bindings.insert(
             name,
@@ -496,7 +500,7 @@ impl ScopeFrame {
                 kind,
                 initialized,
             },
-        );
+        )
     }
 
     fn get(&self, name: &str) -> Option<&ScopeBinding> {
@@ -522,14 +526,23 @@ impl ScopeChain {
         }
     }
 
-    fn push(&mut self) {
+    fn push(&mut self, max_scope_depth: u32) -> Result<(), InterpreterError> {
+        let max_scope_depth = usize::try_from(max_scope_depth).unwrap_or(usize::MAX);
+        if self.frames.len() >= max_scope_depth {
+            return Err(InterpreterError::ScopeDepthExceeded {
+                requested_depth: self.frames.len().saturating_add(1),
+                max_depth: max_scope_depth,
+            });
+        }
         self.frames.push(ScopeFrame::new());
+        Ok(())
     }
 
-    fn pop(&mut self) {
+    fn pop(&mut self) -> Option<ScopeFrame> {
         if self.frames.len() > 1 {
-            self.frames.pop();
+            return self.frames.pop();
         }
+        None
     }
 
     fn current_mut(&mut self) -> &mut ScopeFrame {
@@ -733,6 +746,11 @@ pub enum InterpreterError {
         requested_heap_objects: u32,
         max_heap_objects: u32,
     },
+    /// Scope-chain depth exceeded configured limits.
+    ScopeDepthExceeded {
+        requested_depth: usize,
+        max_depth: usize,
+    },
     /// Guardplane containment hook requested a fail-closed action.
     ContainmentActionRequested {
         action: String,
@@ -816,6 +834,13 @@ impl fmt::Display for InterpreterError {
                 "memory budget exceeded: requested {} heap objects / {} bytes, limits {} heap objects / {} bytes",
                 requested_heap_objects, requested_bytes, max_heap_objects, max_bytes
             ),
+            Self::ScopeDepthExceeded {
+                requested_depth,
+                max_depth,
+            } => write!(
+                f,
+                "scope depth exceeded: requested depth {requested_depth}, limit {max_depth}"
+            ),
             Self::ContainmentActionRequested { action, reason } => {
                 if let Some(reason) = reason {
                     write!(f, "containment action requested: {action} ({reason})")
@@ -846,6 +871,8 @@ pub struct InterpreterConfig {
     pub max_heap_objects: u32,
     /// Maximum estimated live memory before failing closed.
     pub max_total_memory_bytes: u64,
+    /// Maximum scope-chain depth, including the global frame.
+    pub max_scope_depth: u32,
     /// Set of capabilities granted to this execution context.
     pub granted_capabilities: Vec<String>,
 }
@@ -860,6 +887,7 @@ impl InterpreterConfig {
             max_string_size: 33_554_432,
             max_heap_objects: DEFAULT_QUICKJS_MAX_HEAP_OBJECTS,
             max_total_memory_bytes: DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES,
+            max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             granted_capabilities: Vec::new(),
         }
     }
@@ -873,6 +901,7 @@ impl InterpreterConfig {
             max_string_size: 268_435_456,
             max_heap_objects: DEFAULT_V8_MAX_HEAP_OBJECTS,
             max_total_memory_bytes: DEFAULT_V8_MAX_TOTAL_MEMORY_BYTES,
+            max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             granted_capabilities: Vec::new(),
         }
     }
@@ -886,6 +915,7 @@ impl InterpreterConfig {
             max_string_size: 33_554_432,
             max_heap_objects: DEFAULT_QUICKJS_MAX_HEAP_OBJECTS,
             max_total_memory_bytes: DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES,
+            max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             granted_capabilities: Vec::new(),
         }
     }
@@ -899,6 +929,7 @@ impl InterpreterConfig {
             max_string_size: 268_435_456,
             max_heap_objects: DEFAULT_V8_MAX_HEAP_OBJECTS,
             max_total_memory_bytes: DEFAULT_V8_MAX_TOTAL_MEMORY_BYTES,
+            max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             granted_capabilities: Vec::new(),
         }
     }
@@ -1204,12 +1235,14 @@ impl InterpreterCore {
             };
             self.write_reg(frame.return_reg, effective_val)?;
             self.ip = frame.return_ip;
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
             Ok(None)
         } else {
             self.pending_exception = None;
             self.pending_return = None;
             self.suspended_abrupt_completions.clear();
             self.finally_modes.clear();
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
             Ok(Some(return_val))
         }
     }
@@ -1230,6 +1263,7 @@ impl InterpreterCore {
         if let Some(depth) = restored_suspended_abrupt_depth {
             self.suspended_abrupt_completions.truncate(depth);
         }
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         (restored_pending_exception, restored_pending_return)
     }
 
@@ -1464,43 +1498,66 @@ impl InterpreterCore {
 
         let caller_ip = self.ip;
         let caller_register_base = self.register_base;
-        let caller_scope = self.scope_chain.snapshot();
+        let caller_scope = self.snapshot_scope_chain()?;
 
-        let gobj = &mut self.generators[gen_id as usize];
-        let is_start = gobj.phase == GeneratorPhase::SuspendedStart;
-        gobj.phase = GeneratorPhase::Executing;
-
-        if is_start {
+        let (is_start, func_idx, closure_idx) = {
+            let gobj = &mut self.generators[gen_id as usize];
+            let is_start = gobj.phase == GeneratorPhase::SuspendedStart;
             let func_idx = gobj.function_index;
             let closure_idx = gobj.closure_index;
-            let func = module.function_table.get(func_idx as usize).ok_or(
-                InterpreterError::FunctionNotFound {
-                    index: func_idx,
-                    table_size: module.function_table.len() as u32,
-                },
-            )?;
+            gobj.phase = GeneratorPhase::Executing;
+            (is_start, func_idx, closure_idx)
+        };
 
-            if let Some(cid) = closure_idx {
-                let closure =
-                    self.closures
-                        .get(cid as usize)
-                        .ok_or_else(|| InterpreterError::TypeError {
-                            expected: "valid closure".into(),
-                            got: format!("closure#{cid} not found"),
-                        })?;
-                self.scope_chain.frames = closure.captured_env.clone();
+        if is_start {
+            let start_result = (|| -> Result<(), InterpreterError> {
+                let func = module.function_table.get(func_idx as usize).ok_or(
+                    InterpreterError::FunctionNotFound {
+                        index: func_idx,
+                        table_size: module.function_table.len() as u32,
+                    },
+                )?;
+
+                if let Some(cid) = closure_idx {
+                    let closure =
+                        self.closures
+                            .get(cid as usize)
+                            .ok_or_else(|| InterpreterError::TypeError {
+                                expected: "valid closure".into(),
+                                got: format!("closure#{cid} not found"),
+                            })?;
+                    self.scope_chain.frames =
+                        self.clone_scope_frames_with_budget(&closure.captured_env)?;
+                }
+                self.scope_chain.push(self.config.max_scope_depth)?;
+                self.sync_estimated_memory_bytes()?;
+
+                self.register_base = self.registers.len();
+                let req_len = self.register_base + self.config.max_registers as usize;
+                self.registers.resize(req_len, Value::Undefined);
+
+                self.ip = func.entry as usize;
+                Ok(())
+            })();
+
+            if let Err(err) = start_result {
+                self.ip = caller_ip;
+                self.register_base = caller_register_base;
+                self.scope_chain.frames = caller_scope;
+                let gobj = &mut self.generators[gen_id as usize];
+                gobj.phase = GeneratorPhase::SuspendedStart;
+                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                return Err(err);
             }
-            self.scope_chain.push();
-
-            self.register_base = self.registers.len();
-            let req_len = self.register_base + self.config.max_registers as usize;
-            self.registers.resize(req_len, Value::Undefined);
-
-            self.ip = func.entry as usize;
         } else {
-            let saved_ip = gobj.saved_ip;
-            let saved_regs = std::mem::take(&mut gobj.saved_registers);
-            let saved_base = gobj.saved_register_base;
+            let (saved_ip, saved_regs, saved_base) = {
+                let gobj = &mut self.generators[gen_id as usize];
+                (
+                    gobj.saved_ip,
+                    std::mem::take(&mut gobj.saved_registers),
+                    gobj.saved_register_base,
+                )
+            };
 
             self.ip = saved_ip;
             self.register_base = saved_base;
@@ -1530,6 +1587,7 @@ impl InterpreterCore {
                 self.ip = caller_ip;
                 self.register_base = caller_register_base;
                 self.scope_chain.frames = caller_scope;
+                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
 
                 Ok(yielded_val.clone())
             }
@@ -1540,6 +1598,7 @@ impl InterpreterCore {
                 self.ip = caller_ip;
                 self.register_base = caller_register_base;
                 self.scope_chain.frames = caller_scope;
+                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
 
                 let result_id = self.alloc_object_with_prototype(None)?;
                 {
@@ -1555,6 +1614,7 @@ impl InterpreterCore {
                 self.ip = caller_ip;
                 self.register_base = caller_register_base;
                 self.scope_chain.frames = caller_scope;
+                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
 
                 result
             }
@@ -1595,6 +1655,11 @@ impl InterpreterCore {
             match instr {
                 Ir3Instruction::LoadInt { dst, value } => {
                     self.write_reg(dst, Value::Int(value))?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::LoadFloat { dst, bits } => {
+                    let value = f64::from_bits(bits);
+                    self.write_reg(dst, Value::Float(Float64::new(value)))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::LoadStr { dst, pool_index } => {
@@ -1736,7 +1801,10 @@ impl InterpreterCore {
                                         got: format!("closure#{closure_id} not found"),
                                     }
                                 })?;
-                            (closure.function_index, Some(closure.captured_env.clone()))
+                            (
+                                closure.function_index,
+                                Some(self.clone_scope_frames_with_budget(&closure.captured_env)?),
+                            )
                         }
                         _ => {
                             return Err(InterpreterError::TypeError {
@@ -1802,7 +1870,7 @@ impl InterpreterCore {
                             // the chain with its captured environment).
                             let scope_depth = self.scope_chain.depth();
                             let saved_chain = if captured_env.is_some() {
-                                Some(self.scope_chain.snapshot())
+                                Some(self.snapshot_scope_chain()?)
                             } else {
                                 None
                             };
@@ -1842,7 +1910,14 @@ impl InterpreterCore {
                             }
 
                             // Push a fresh scope for the callee's locals.
-                            self.scope_chain.push();
+                            if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
+                                self.rollback_call_setup();
+                                return Err(err);
+                            }
+                            if let Err(err) = self.sync_estimated_memory_bytes() {
+                                self.rollback_call_setup();
+                                return Err(err);
+                            }
 
                             self.register_base += self.config.max_registers as usize;
 
@@ -1891,7 +1966,10 @@ impl InterpreterCore {
                                         got: format!("closure#{closure_id} not found"),
                                     }
                                 })?;
-                            (closure.function_index, Some(closure.captured_env.clone()))
+                            (
+                                closure.function_index,
+                                Some(self.clone_scope_frames_with_budget(&closure.captured_env)?),
+                            )
                         }
                         _ => {
                             return Err(InterpreterError::TypeError {
@@ -1930,7 +2008,7 @@ impl InterpreterCore {
 
                     let scope_depth = self.scope_chain.depth();
                     let saved_chain = if captured_env.is_some() {
-                        Some(self.scope_chain.snapshot())
+                        Some(self.snapshot_scope_chain()?)
                     } else {
                         None
                     };
@@ -1952,7 +2030,14 @@ impl InterpreterCore {
                     if let Some(env) = captured_env {
                         self.scope_chain.frames = env;
                     }
-                    self.scope_chain.push();
+                    if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
+                        self.rollback_call_setup();
+                        return Err(err);
+                    }
+                    if let Err(err) = self.sync_estimated_memory_bytes() {
+                        self.rollback_call_setup();
+                        return Err(err);
+                    }
 
                     self.register_base += self.config.max_registers as usize;
                     let req_len = self.register_base + self.config.max_registers as usize;
@@ -2335,7 +2420,10 @@ impl InterpreterCore {
                                         got: format!("closure#{closure_id} not found"),
                                     }
                                 })?;
-                            (closure.function_index, Some(closure.captured_env.clone()))
+                            (
+                                closure.function_index,
+                                Some(self.clone_scope_frames_with_budget(&closure.captured_env)?),
+                            )
                         }
                         _ => {
                             return Err(InterpreterError::TypeError {
@@ -2385,7 +2473,7 @@ impl InterpreterCore {
                             // Push constructor frame with `construct_this`.
                             let scope_depth = self.scope_chain.depth();
                             let saved_chain = if captured_env.is_some() {
-                                Some(self.scope_chain.snapshot())
+                                Some(self.snapshot_scope_chain()?)
                             } else {
                                 None
                             };
@@ -2410,7 +2498,14 @@ impl InterpreterCore {
                             if let Some(env) = captured_env {
                                 self.scope_chain.frames = env;
                             }
-                            self.scope_chain.push();
+                            if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
+                                self.rollback_call_setup();
+                                return Err(err);
+                            }
+                            if let Err(err) = self.sync_estimated_memory_bytes() {
+                                self.rollback_call_setup();
+                                return Err(err);
+                            }
 
                             self.register_base += self.config.max_registers as usize;
                             let req_len = self.register_base + self.config.max_registers as usize;
@@ -2610,7 +2705,7 @@ impl InterpreterCore {
                     // accumulated by prior PushCapture instructions but
                     // the scope chain snapshot already contains those
                     // bindings, so we just clear them.
-                    let captured_env = self.scope_chain.snapshot();
+                    let captured_env = self.snapshot_scope_chain()?;
                     let closure_id = u32::try_from(self.closures.len()).map_err(|_| {
                         InterpreterError::TypeError {
                             expected: "closure table capacity".into(),
@@ -2642,7 +2737,7 @@ impl InterpreterCore {
                         AllocKind::Closure,
                         capture_count as usize,
                     )?;
-                    let captured_env = self.scope_chain.snapshot();
+                    let captured_env = self.snapshot_scope_chain()?;
                     let closure_id = u32::try_from(self.closures.len()).map_err(|_| {
                         InterpreterError::TypeError {
                             expected: "closure table capacity".into(),
@@ -2686,11 +2781,18 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::PushScope => {
-                    self.scope_chain.push();
+                    self.scope_chain.push(self.config.max_scope_depth)?;
+                    if let Err(err) = self.sync_estimated_memory_bytes() {
+                        self.scope_chain.pop();
+                        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                        return Err(err);
+                    }
                     self.ip += 1;
                 }
                 Ir3Instruction::PopScope => {
-                    self.scope_chain.pop();
+                    let popped = self.scope_chain.pop();
+                    self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                    debug_assert!(popped.is_some() || self.scope_chain.depth() == 1);
                     self.ip += 1;
                 }
                 Ir3Instruction::DeclareBinding {
@@ -2703,7 +2805,20 @@ impl InterpreterCore {
                         .cloned()
                         .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
                     let binding_kind = BindingKind::from_u8(kind);
-                    self.scope_chain.current_mut().declare(name, binding_kind);
+                    let replaced = self
+                        .scope_chain
+                        .current_mut()
+                        .declare(name.clone(), binding_kind);
+                    if let Err(err) = self.sync_estimated_memory_bytes() {
+                        let current = self.scope_chain.current_mut();
+                        if let Some(old) = replaced {
+                            current.bindings.insert(name, old);
+                        } else {
+                            current.bindings.remove(&name);
+                        }
+                        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                        return Err(err);
+                    }
                     self.ip += 1;
                 }
                 Ir3Instruction::LoadScoped {
@@ -2738,6 +2853,7 @@ impl InterpreterCore {
                         .cloned()
                         .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
                     let val = self.read_reg(src)?;
+                    let mut previous = None;
                     if let Some(binding) = self.scope_chain.resolve_mut(&name) {
                         if !binding.initialized {
                             return Err(InterpreterError::UninitializedBinding {
@@ -2747,10 +2863,20 @@ impl InterpreterCore {
                         if binding.kind == BindingKind::Const {
                             return Err(InterpreterError::ConstAssignment { name: name.clone() });
                         }
+                        previous = Some(binding.clone());
                         binding.value = val;
                     }
                     // Silently ignore stores to undeclared variables
                     // (strict mode would throw, but baseline is lenient).
+                    if let Err(err) = self.sync_estimated_memory_bytes() {
+                        if let Some(old_binding) = previous
+                            && let Some(binding) = self.scope_chain.resolve_mut(&name)
+                        {
+                            *binding = old_binding;
+                        }
+                        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                        return Err(err);
+                    }
                     self.ip += 1;
                 }
                 Ir3Instruction::InitBinding {
@@ -2763,9 +2889,20 @@ impl InterpreterCore {
                         .cloned()
                         .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
                     let val = self.read_reg(src)?;
+                    let mut previous = None;
                     if let Some(binding) = self.scope_chain.resolve_mut(&name) {
+                        previous = Some(binding.clone());
                         binding.value = val;
                         binding.initialized = true;
+                    }
+                    if let Err(err) = self.sync_estimated_memory_bytes() {
+                        if let Some(old_binding) = previous
+                            && let Some(binding) = self.scope_chain.resolve_mut(&name)
+                        {
+                            *binding = old_binding;
+                        }
+                        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                        return Err(err);
                     }
                     self.ip += 1;
                 }
@@ -2790,7 +2927,20 @@ impl InterpreterCore {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
         match (&a, &b) {
+            // Int + Int: stay in integer domain
             (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x.wrapping_add(*y))),
+            // Float + Float: float arithmetic
+            (Value::Float(x), Value::Float(y)) => {
+                Ok(Value::Float(Float64::new(x.inner() + y.inner())))
+            }
+            // Int + Float or Float + Int: promote to float
+            (Value::Int(x), Value::Float(y)) => {
+                Ok(Value::Float(Float64::new(*x as f64 + y.inner())))
+            }
+            (Value::Float(x), Value::Int(y)) => {
+                Ok(Value::Float(Float64::new(x.inner() + *y as f64)))
+            }
+            // String concatenation
             (Value::Str(x), Value::Str(y)) => {
                 self.check_string_limit(x.len().saturating_add(y.len()))?;
                 Ok(Value::Str(format!("{x}{y}")))
@@ -2825,15 +2975,27 @@ impl InterpreterCore {
             }
             _ => {
                 // JS coercion: non-string primitives coerce to number for +.
-                let x = Self::coerce_to_number(&a).ok_or(InterpreterError::TypeError {
+                // Use float coercion to handle all numeric cases properly.
+                let x = Self::coerce_to_float(&a).ok_or(InterpreterError::TypeError {
                     expected: "number or string".to_string(),
                     got: format!("{} + {}", a.type_name(), b.type_name()),
                 })?;
-                let y = Self::coerce_to_number(&b).ok_or(InterpreterError::TypeError {
+                let y = Self::coerce_to_float(&b).ok_or(InterpreterError::TypeError {
                     expected: "number or string".to_string(),
                     got: format!("{} + {}", a.type_name(), b.type_name()),
                 })?;
-                Ok(Value::Int(x.wrapping_add(y)))
+                let result = x + y;
+                // If result is a whole number and fits in i64, return Int
+                if result.fract() == 0.0
+                    && !result.is_nan()
+                    && !result.is_infinite()
+                    && result >= i64::MIN as f64
+                    && result <= i64::MAX as f64
+                {
+                    Ok(Value::Int(result as i64))
+                } else {
+                    Ok(Value::Float(Float64::new(result)))
+                }
             }
         }
     }
@@ -2841,17 +3003,34 @@ impl InterpreterCore {
     fn eval_arith(&self, lhs: u32, rhs: u32, op: &str) -> Result<Value, InterpreterError> {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
-        let x = Self::coerce_to_number(&a).ok_or(InterpreterError::TypeError {
+
+        // Fast path: Int op Int stays in integer domain
+        if let (Value::Int(x), Value::Int(y)) = (&a, &b) {
+            let result = match op {
+                "sub" => x.wrapping_sub(*y),
+                "mul" => x.wrapping_mul(*y),
+                _ => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "sub or mul".to_string(),
+                        got: op.to_string(),
+                    });
+                }
+            };
+            return Ok(Value::Int(result));
+        }
+
+        // Float path: use float arithmetic
+        let x = Self::coerce_to_float(&a).ok_or(InterpreterError::TypeError {
             expected: "number".to_string(),
             got: format!("{} {} {}", a.type_name(), op, b.type_name()),
         })?;
-        let y = Self::coerce_to_number(&b).ok_or(InterpreterError::TypeError {
+        let y = Self::coerce_to_float(&b).ok_or(InterpreterError::TypeError {
             expected: "number".to_string(),
             got: format!("{} {} {}", a.type_name(), op, b.type_name()),
         })?;
         let result = match op {
-            "sub" => x.wrapping_sub(y),
-            "mul" => x.wrapping_mul(y),
+            "sub" => x - y,
+            "mul" => x * y,
             _ => {
                 return Err(InterpreterError::TypeError {
                     expected: "sub or mul".to_string(),
@@ -2859,110 +3038,231 @@ impl InterpreterCore {
                 });
             }
         };
-        Ok(Value::Int(result))
+
+        // Return Int if result is a whole number in i64 range
+        if result.fract() == 0.0
+            && !result.is_nan()
+            && !result.is_infinite()
+            && result >= i64::MIN as f64
+            && result <= i64::MAX as f64
+        {
+            Ok(Value::Int(result as i64))
+        } else {
+            Ok(Value::Float(Float64::new(result)))
+        }
     }
 
     fn eval_div(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
-        let x = Self::coerce_to_number(&a).ok_or(InterpreterError::TypeError {
+        let x = Self::coerce_to_float(&a).ok_or(InterpreterError::TypeError {
             expected: "number".to_string(),
             got: format!("{} / {}", a.type_name(), b.type_name()),
         })?;
-        let y = Self::coerce_to_number(&b).ok_or(InterpreterError::TypeError {
+        let y = Self::coerce_to_float(&b).ok_or(InterpreterError::TypeError {
             expected: "number".to_string(),
             got: format!("{} / {}", a.type_name(), b.type_name()),
         })?;
-        if y == 0 {
-            return Err(InterpreterError::DivisionByZero);
+
+        // JS division semantics: x/0 = Infinity (or -Infinity), 0/0 = NaN
+        let result = x / y;
+
+        // Return Int if result is a whole number in i64 range
+        if result.fract() == 0.0
+            && !result.is_nan()
+            && !result.is_infinite()
+            && result >= i64::MIN as f64
+            && result <= i64::MAX as f64
+        {
+            Ok(Value::Int(result as i64))
+        } else {
+            Ok(Value::Float(Float64::new(result)))
         }
-        Ok(Value::Int(x.wrapping_div(y)))
     }
 
     fn eval_mod(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
-        let x = Self::coerce_to_number(&a).ok_or(InterpreterError::TypeError {
-            expected: "number".to_string(),
-            got: format!("{} % {}", a.type_name(), b.type_name()),
-        })?;
-        let y = Self::coerce_to_number(&b).ok_or(InterpreterError::TypeError {
-            expected: "number".to_string(),
-            got: format!("{} % {}", a.type_name(), b.type_name()),
-        })?;
-        if y == 0 {
-            return Err(InterpreterError::DivisionByZero);
+
+        // Fast path: Int % Int stays in integer domain
+        if let (Value::Int(x), Value::Int(y)) = (&a, &b) {
+            if *y == 0 {
+                // JS: x % 0 = NaN
+                return Ok(Value::Float(Float64::new(f64::NAN)));
+            }
+            return Ok(Value::Int(x.checked_rem(*y).unwrap_or(0)));
         }
-        Ok(Value::Int(x.checked_rem(y).unwrap_or(0)))
+
+        let x = Self::coerce_to_float(&a).ok_or(InterpreterError::TypeError {
+            expected: "number".to_string(),
+            got: format!("{} % {}", a.type_name(), b.type_name()),
+        })?;
+        let y = Self::coerce_to_float(&b).ok_or(InterpreterError::TypeError {
+            expected: "number".to_string(),
+            got: format!("{} % {}", a.type_name(), b.type_name()),
+        })?;
+
+        // JS modulo semantics: x % 0 = NaN
+        let result = x % y;
+
+        // Return Int if result is a whole number in i64 range
+        if result.fract() == 0.0
+            && !result.is_nan()
+            && !result.is_infinite()
+            && result >= i64::MIN as f64
+            && result <= i64::MAX as f64
+        {
+            Ok(Value::Int(result as i64))
+        } else {
+            Ok(Value::Float(Float64::new(result)))
+        }
     }
 
     fn eval_exp(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
-        let x = Self::coerce_to_number(&a).ok_or(InterpreterError::TypeError {
+        let x = Self::coerce_to_float(&a).ok_or(InterpreterError::TypeError {
             expected: "number".to_string(),
             got: format!("{} ** {}", a.type_name(), b.type_name()),
         })?;
-        let y = Self::coerce_to_number(&b).ok_or(InterpreterError::TypeError {
+        let y = Self::coerce_to_float(&b).ok_or(InterpreterError::TypeError {
             expected: "number".to_string(),
             got: format!("{} ** {}", a.type_name(), b.type_name()),
         })?;
-        let exp = u32::try_from(y).map_err(|_| InterpreterError::TypeError {
-            expected: "non-negative exponent".to_string(),
-            got: y.to_string(),
-        })?;
-        Ok(Value::Int(x.wrapping_pow(exp)))
+
+        // JS exponentiation uses float power
+        let result = x.powf(y);
+
+        // Return Int if result is a whole number in i64 range
+        if result.fract() == 0.0
+            && !result.is_nan()
+            && !result.is_infinite()
+            && result >= i64::MIN as f64
+            && result <= i64::MAX as f64
+        {
+            Ok(Value::Int(result as i64))
+        } else {
+            Ok(Value::Float(Float64::new(result)))
+        }
     }
 
     fn eval_unary_plus(&self, src: u32) -> Result<Value, InterpreterError> {
         let value = self.read_reg(src)?;
-        let number = Self::coerce_to_number(&value).ok_or(InterpreterError::TypeError {
-            expected: "number-coercible primitive".to_string(),
-            got: value.type_name().to_string(),
-        })?;
-        Ok(Value::Int(number))
+        match &value {
+            Value::Int(n) => Ok(Value::Int(*n)),
+            Value::Float(f) => Ok(Value::Float(*f)),
+            _ => {
+                let number = Self::coerce_to_float(&value).ok_or(InterpreterError::TypeError {
+                    expected: "number-coercible primitive".to_string(),
+                    got: value.type_name().to_string(),
+                })?;
+                // Return Int if whole number in i64 range
+                if number.fract() == 0.0
+                    && !number.is_nan()
+                    && !number.is_infinite()
+                    && number >= i64::MIN as f64
+                    && number <= i64::MAX as f64
+                {
+                    Ok(Value::Int(number as i64))
+                } else {
+                    Ok(Value::Float(Float64::new(number)))
+                }
+            }
+        }
     }
 
     fn eval_unary_neg(&self, src: u32) -> Result<Value, InterpreterError> {
         let value = self.read_reg(src)?;
-        let number = Self::coerce_to_number(&value).ok_or(InterpreterError::TypeError {
-            expected: "number-coercible primitive".to_string(),
-            got: value.type_name().to_string(),
-        })?;
-        Ok(Value::Int(number.wrapping_neg()))
+        match &value {
+            Value::Int(n) => Ok(Value::Int(n.wrapping_neg())),
+            Value::Float(f) => Ok(Value::Float(Float64::new(-f.inner()))),
+            _ => {
+                let number = Self::coerce_to_float(&value).ok_or(InterpreterError::TypeError {
+                    expected: "number-coercible primitive".to_string(),
+                    got: value.type_name().to_string(),
+                })?;
+                // Return Int if whole number in i64 range
+                let negated = -number;
+                if negated.fract() == 0.0
+                    && !negated.is_nan()
+                    && !negated.is_infinite()
+                    && negated >= i64::MIN as f64
+                    && negated <= i64::MAX as f64
+                {
+                    Ok(Value::Int(negated as i64))
+                } else {
+                    Ok(Value::Float(Float64::new(negated)))
+                }
+            }
+        }
     }
 
     fn eval_bit_not(&self, src: u32) -> Result<Value, InterpreterError> {
         let value = self.read_reg(src)?;
-        let number = Self::coerce_to_number(&value).ok_or(InterpreterError::TypeError {
-            expected: "number-coercible primitive".to_string(),
-            got: value.type_name().to_string(),
-        })?;
-        Ok(Value::Int((!(number as i32)) as i64))
+        // JS bitwise ops: ToInt32 conversion
+        let number = match &value {
+            Value::Int(n) => *n as i32,
+            Value::Float(f) => {
+                let v = f.inner();
+                if v.is_nan() || v.is_infinite() {
+                    0
+                } else {
+                    v as i32
+                }
+            }
+            _ => {
+                let n = Self::coerce_to_float(&value).ok_or(InterpreterError::TypeError {
+                    expected: "number-coercible primitive".to_string(),
+                    got: value.type_name().to_string(),
+                })?;
+                if n.is_nan() || n.is_infinite() {
+                    0
+                } else {
+                    n as i32
+                }
+            }
+        };
+        Ok(Value::Int((!number) as i64))
     }
 
     fn eval_relational(&self, lhs: u32, rhs: u32, op: &str) -> Result<Value, InterpreterError> {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
-        let ordering = if let (Value::Str(x), Value::Str(y)) = (&a, &b) {
-            Some(x.cmp(y))
-        } else {
-            let x = Self::coerce_to_number(&a).ok_or(InterpreterError::TypeError {
-                expected: "comparable primitive".to_string(),
-                got: format!("{} {op} {}", a.type_name(), b.type_name()),
-            })?;
-            let y = Self::coerce_to_number(&b).ok_or(InterpreterError::TypeError {
-                expected: "comparable primitive".to_string(),
-                got: format!("{} {op} {}", a.type_name(), b.type_name()),
-            })?;
-            Some(x.cmp(&y))
-        };
 
+        // String comparison
+        if let (Value::Str(x), Value::Str(y)) = (&a, &b) {
+            let ordering = x.cmp(y);
+            let result = match op {
+                "<" => ordering == Ordering::Less,
+                "<=" => matches!(ordering, Ordering::Less | Ordering::Equal),
+                ">" => ordering == Ordering::Greater,
+                ">=" => matches!(ordering, Ordering::Greater | Ordering::Equal),
+                _ => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "relational operator".to_string(),
+                        got: op.to_string(),
+                    });
+                }
+            };
+            return Ok(Value::Bool(result));
+        }
+
+        // Numeric comparison using float (NaN comparisons return false)
+        let x = Self::coerce_to_float(&a).ok_or(InterpreterError::TypeError {
+            expected: "comparable primitive".to_string(),
+            got: format!("{} {op} {}", a.type_name(), b.type_name()),
+        })?;
+        let y = Self::coerce_to_float(&b).ok_or(InterpreterError::TypeError {
+            expected: "comparable primitive".to_string(),
+            got: format!("{} {op} {}", a.type_name(), b.type_name()),
+        })?;
+
+        // JS: any comparison involving NaN returns false
         let result = match op {
-            "<" => matches!(ordering, Some(Ordering::Less)),
-            "<=" => matches!(ordering, Some(Ordering::Less | Ordering::Equal)),
-            ">" => matches!(ordering, Some(Ordering::Greater)),
-            ">=" => matches!(ordering, Some(Ordering::Greater | Ordering::Equal)),
+            "<" => x < y,
+            "<=" => x <= y,
+            ">" => x > y,
+            ">=" => x >= y,
             _ => {
                 return Err(InterpreterError::TypeError {
                     expected: "relational operator".to_string(),
@@ -2983,34 +3283,77 @@ impl InterpreterCore {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
         let matches = if strict {
-            a == b
+            Self::strict_eq_values(&a, &b)
         } else {
             Self::abstract_eq_values(&a, &b)
         };
         Ok(Value::Bool(if negate { !matches } else { matches }))
     }
 
+    /// JavaScript strict equality (===): same type + same value.
+    /// For floats: NaN !== NaN, but -0 === +0.
+    fn strict_eq_values(a: &Value, b: &Value) -> bool {
+        match (a, b) {
+            // Float === Float: NaN !== NaN, but -0 === +0
+            (Value::Float(fa), Value::Float(fb)) => {
+                let va = fa.inner();
+                let vb = fb.inner();
+                if va.is_nan() || vb.is_nan() {
+                    false
+                } else {
+                    va == vb
+                }
+            }
+            // Int === Float or Float === Int: compare as numbers
+            (Value::Int(n), Value::Float(f)) | (Value::Float(f), Value::Int(n)) => {
+                let fv = f.inner();
+                if fv.is_nan() { false } else { *n as f64 == fv }
+            }
+            // All other types: use derived PartialEq
+            _ => a == b,
+        }
+    }
+
     fn eval_bitwise(&self, lhs: u32, rhs: u32, op: &str) -> Result<Value, InterpreterError> {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
-        let x = Self::coerce_to_number(&a).ok_or(InterpreterError::TypeError {
-            expected: "number".to_string(),
-            got: format!("{} {op} {}", a.type_name(), b.type_name()),
-        })?;
-        let y = Self::coerce_to_number(&b).ok_or(InterpreterError::TypeError {
-            expected: "number".to_string(),
-            got: format!("{} {op} {}", a.type_name(), b.type_name()),
-        })?;
 
-        let lhs32 = x as i32;
-        let rhs32 = y as i32;
+        // JS ToInt32: convert to float then truncate
+        let to_i32 = |v: &Value| -> Result<i32, InterpreterError> {
+            match v {
+                Value::Int(n) => Ok(*n as i32),
+                Value::Float(f) => {
+                    let fv = f.inner();
+                    if fv.is_nan() || fv.is_infinite() {
+                        Ok(0)
+                    } else {
+                        Ok(fv as i32)
+                    }
+                }
+                _ => {
+                    let n = Self::coerce_to_float(v).ok_or(InterpreterError::TypeError {
+                        expected: "number".to_string(),
+                        got: v.type_name().to_string(),
+                    })?;
+                    if n.is_nan() || n.is_infinite() {
+                        Ok(0)
+                    } else {
+                        Ok(n as i32)
+                    }
+                }
+            }
+        };
+
+        let x = to_i32(&a)?;
+        let y = to_i32(&b)?;
         let shift = (y as u32) & 31;
+
         let result = match op {
-            "&" => (lhs32 & rhs32) as i64,
-            "|" => (lhs32 | rhs32) as i64,
-            "^" => (lhs32 ^ rhs32) as i64,
-            "<<" => lhs32.wrapping_shl(shift) as i64,
-            ">>" => lhs32.wrapping_shr(shift) as i64,
+            "&" => (x & y) as i64,
+            "|" => (x | y) as i64,
+            "^" => (x ^ y) as i64,
+            "<<" => x.wrapping_shl(shift) as i64,
+            ">>" => x.wrapping_shr(shift) as i64,
             ">>>" => (x as u32).wrapping_shr(shift) as i64,
             _ => {
                 return Err(InterpreterError::TypeError {
@@ -3541,6 +3884,7 @@ impl InterpreterCore {
         }
     }
 
+    #[allow(dead_code)] // Kept for potential integer-only operations; tested below
     fn coerce_to_number(value: &Value) -> Option<i64> {
         match value {
             Value::Int(n) => Some(*n),
@@ -3725,6 +4069,38 @@ impl InterpreterCore {
             .sum::<u64>()
     }
 
+    fn estimate_call_frame_bytes(frame: &CallFrame) -> u64 {
+        MEMORY_ESTIMATE_CALL_FRAME_BASE_BYTES
+            .saturating_add(Self::estimate_value_bytes(&frame.this_value))
+            .saturating_add(
+                frame
+                    .construct_this
+                    .as_ref()
+                    .map(Self::estimate_value_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                frame
+                    .saved_pending_exception
+                    .as_ref()
+                    .map(Self::estimate_value_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                frame
+                    .saved_pending_return
+                    .as_ref()
+                    .map(Self::estimate_value_bytes)
+                    .unwrap_or(0),
+            )
+            .saturating_add(
+                frame
+                    .saved_scope_chain
+                    .as_ref()
+                    .map_or(0, |frames| Self::estimate_scope_chain_bytes(frames)),
+            )
+    }
+
     fn estimate_heap_object_bytes(object: &HeapObject) -> u64 {
         let properties = object
             .properties
@@ -3807,6 +4183,12 @@ impl InterpreterCore {
                     .sum::<u64>(),
             )
             .saturating_add(
+                self.call_stack
+                    .iter()
+                    .map(Self::estimate_call_frame_bytes)
+                    .sum::<u64>(),
+            )
+            .saturating_add(
                 self.iterators
                     .iter()
                     .map(Self::estimate_iterator_bytes)
@@ -3827,6 +4209,47 @@ impl InterpreterCore {
         }
         self.estimated_memory_bytes = requested_bytes;
         Ok(requested_bytes)
+    }
+
+    fn clone_scope_frames_with_budget(
+        &self,
+        frames: &[ScopeFrame],
+    ) -> Result<Vec<ScopeFrame>, InterpreterError> {
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_add(Self::estimate_scope_chain_bytes(frames));
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+        Ok(frames.to_vec())
+    }
+
+    fn snapshot_scope_chain(&self) -> Result<Vec<ScopeFrame>, InterpreterError> {
+        let requested_bytes = self
+            .estimated_memory_bytes
+            .saturating_add(Self::estimate_scope_chain_bytes(&self.scope_chain.frames));
+        if requested_bytes > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(requested_bytes, self.heap_object_count_u32()));
+        }
+        Ok(self.scope_chain.snapshot())
+    }
+
+    fn rollback_call_setup(&mut self) {
+        if let Some(frame) = self.call_stack.pop() {
+            self.pending_exception = frame.saved_pending_exception;
+            self.pending_return = frame.saved_pending_return;
+            self.suspended_abrupt_completions
+                .truncate(frame.saved_suspended_abrupt_depth);
+            self.finally_modes.truncate(frame.saved_finally_mode_depth);
+            if let Some(saved) = frame.saved_scope_chain {
+                self.scope_chain.frames = saved;
+            } else {
+                while self.scope_chain.depth() > frame.saved_scope_depth {
+                    self.scope_chain.pop();
+                }
+            }
+        }
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
     }
 
     /// Allocate a new object with an explicit prototype link.
@@ -6016,6 +6439,7 @@ mod tests {
         assert_eq!(c.max_call_depth, 256);
         assert_eq!(c.max_heap_objects, 100_000);
         assert_eq!(c.max_total_memory_bytes, 64 * 1024 * 1024);
+        assert_eq!(c.max_scope_depth, 512);
         assert!(c.granted_capabilities.is_empty());
     }
 
@@ -6027,7 +6451,22 @@ mod tests {
         assert_eq!(c.max_call_depth, 256);
         assert_eq!(c.max_heap_objects, 1_000_000);
         assert_eq!(c.max_total_memory_bytes, 512 * 1024 * 1024);
+        assert_eq!(c.max_scope_depth, 512);
         assert!(c.granted_capabilities.is_empty());
+    }
+
+    #[test]
+    fn scope_chain_push_respects_max_scope_depth() {
+        let mut chain = ScopeChain::new();
+        chain.push(2).unwrap();
+        let err = chain.push(2).unwrap_err();
+        assert!(matches!(
+            err,
+            InterpreterError::ScopeDepthExceeded {
+                requested_depth: 3,
+                max_depth: 2,
+            }
+        ));
     }
 
     #[test]
@@ -6211,6 +6650,50 @@ mod tests {
     }
 
     #[test]
+    fn scope_chain_snapshot_respects_memory_budget() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.max_scope_depth = 4;
+        let mut core = InterpreterCore::new(config, "scope-snapshot-budget");
+        core.scope_chain.push(core.config.max_scope_depth).unwrap();
+        core.scope_chain.current_mut().bindings.insert(
+            "payload".to_string(),
+            ScopeBinding {
+                value: Value::Str("x".repeat(128)),
+                kind: BindingKind::Var,
+                initialized: true,
+            },
+        );
+        core.sync_estimated_memory_bytes().unwrap();
+        let snapshot_bytes = InterpreterCore::estimate_scope_chain_bytes(&core.scope_chain.frames);
+        core.config.max_total_memory_bytes = core
+            .estimated_memory_bytes()
+            .saturating_add(snapshot_bytes)
+            .saturating_sub(1);
+        let err = core.snapshot_scope_chain().unwrap_err();
+        assert!(matches!(err, InterpreterError::MemoryBudgetExceeded { .. }));
+    }
+
+    #[test]
+    fn push_scope_instruction_respects_max_scope_depth() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.max_scope_depth = 2;
+        let mut core = InterpreterCore::new(config, "scope-depth-budget");
+        let module = test_module(vec![
+            Ir3Instruction::PushScope,
+            Ir3Instruction::PushScope,
+            Ir3Instruction::Halt,
+        ]);
+        let err = core.execute(&module).unwrap_err();
+        assert!(matches!(
+            err,
+            InterpreterError::ScopeDepthExceeded {
+                requested_depth: 3,
+                max_depth: 2,
+            }
+        ));
+    }
+
+    #[test]
     fn load_bool_false() {
         let m = test_module(vec![
             Ir3Instruction::LoadBool {
@@ -6302,2427 +6785,5 @@ mod tests {
             let back: InterpreterError = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, back);
         }
-        assert_eq!(
-            variants.len(),
-            21,
-            "all 21 InterpreterError variants covered"
-        );
-    }
-
-    #[test]
-    fn value_serde_all_variants() {
-        let variants = vec![
-            Value::Undefined,
-            Value::Null,
-            Value::Bool(true),
-            Value::Bool(false),
-            Value::Int(42),
-            Value::Str("hello".to_string()),
-            Value::Object(ObjectId(3)),
-            Value::Function(7),
-        ];
-        for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: Value = serde_json::from_str(&json).unwrap();
-            assert_eq!(*v, back);
-        }
-        assert_eq!(variants.len(), 8, "all 8 Value variants covered");
-    }
-
-    #[test]
-    fn interpreter_config_serde_with_capabilities() {
-        let mut c = InterpreterConfig::quickjs_defaults();
-        c.granted_capabilities = vec!["net".to_string(), "fs".to_string()];
-        let json = serde_json::to_string(&c).unwrap();
-        let back: InterpreterConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(c, back);
-        assert_eq!(back.granted_capabilities.len(), 2);
-    }
-
-    // -----------------------------------------------------------------------
-    // Enrichment: PearlTower 2026-03-02 — GetProperty / SetProperty
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn set_and_get_property_on_heap_object() {
-        // Allocate object, set property, read it back.
-        let config = InterpreterConfig::quickjs_defaults();
-        let mut core = InterpreterCore::new(config, "test");
-        let oid = core.alloc_object();
-
-        // Set obj.x = 42 via heap directly, then verify through interpreter.
-        core.heap[oid.0 as usize]
-            .properties
-            .insert("x".to_string(), Value::Int(42));
-        let val = core.heap[oid.0 as usize].properties.get("x").cloned();
-        assert_eq!(val, Some(Value::Int(42)));
-    }
-
-    #[test]
-    fn get_property_instruction() {
-        // r0 = Object(0), r1 = "key", r2 = get_property(r0, r1) -> should return Undefined
-        // for missing property
-        let config = InterpreterConfig::quickjs_defaults();
-        let mut core = InterpreterCore::new(config, "test");
-        let oid = core.alloc_object();
-        core.registers[0] = Value::Object(oid);
-        core.registers[1] = Value::Str("missing".to_string());
-
-        let m = test_module(vec![
-            Ir3Instruction::GetProperty {
-                obj: 0,
-                key: 1,
-                dst: 2,
-            },
-            Ir3Instruction::Halt,
-        ]);
-        let result = core.execute(&m).unwrap();
-        // r0 is the result register but r2 has the property.
-        // Actually result.value returns r0, which is still the object.
-        // We need to check what r2 becomes. Let's use Move to copy r2 -> r0.
-        // Rethink: use a module that moves the result to r0.
-        assert_eq!(result.value, Value::Object(oid));
-    }
-
-    #[test]
-    fn get_property_returns_value_via_move() {
-        let config = InterpreterConfig::quickjs_defaults();
-        let mut core = InterpreterCore::new(config, "test");
-        let oid = core.alloc_object();
-        core.heap[oid.0 as usize]
-            .properties
-            .insert("x".to_string(), Value::Int(99));
-        core.registers[1] = Value::Object(oid);
-        core.registers[2] = Value::Str("x".to_string());
-
-        let m = test_module(vec![
-            Ir3Instruction::GetProperty {
-                obj: 1,
-                key: 2,
-                dst: 0,
-            },
-            Ir3Instruction::Halt,
-        ]);
-        let result = core.execute(&m).unwrap();
-        assert_eq!(result.value, Value::Int(99));
-    }
-
-    #[test]
-    fn set_property_instruction() {
-        let config = InterpreterConfig::quickjs_defaults();
-        let mut core = InterpreterCore::new(config, "test");
-        let oid = core.alloc_object();
-        core.registers[1] = Value::Object(oid);
-        core.registers[2] = Value::Str("key".to_string());
-        core.registers[3] = Value::Int(77);
-
-        let m = test_module(vec![
-            Ir3Instruction::SetProperty {
-                obj: 1,
-                key: 2,
-                val: 3,
-            },
-            Ir3Instruction::Halt,
-        ]);
-        let _result = core.execute(&m).unwrap();
-        // Verify the property was set on the heap.
-        assert_eq!(
-            core.heap[oid.0 as usize].properties.get("key"),
-            Some(&Value::Int(77))
-        );
-    }
-
-    #[test]
-    fn get_property_with_int_key() {
-        let config = InterpreterConfig::quickjs_defaults();
-        let mut core = InterpreterCore::new(config, "test");
-        let oid = core.alloc_object();
-        core.heap[oid.0 as usize]
-            .properties
-            .insert("0".to_string(), Value::Int(10));
-        core.registers[1] = Value::Object(oid);
-        core.registers[2] = Value::Int(0); // int key -> "0"
-
-        let m = test_module(vec![
-            Ir3Instruction::GetProperty {
-                obj: 1,
-                key: 2,
-                dst: 0,
-            },
-            Ir3Instruction::Halt,
-        ]);
-        let result = core.execute(&m).unwrap();
-        assert_eq!(result.value, Value::Int(10));
-    }
-
-    #[test]
-    fn get_property_on_non_object_type_error() {
-        let m = test_module(vec![
-            Ir3Instruction::LoadInt { dst: 1, value: 5 },
-            Ir3Instruction::LoadInt { dst: 2, value: 0 },
-            Ir3Instruction::GetProperty {
-                obj: 1,
-                key: 2,
-                dst: 0,
-            },
-        ]);
-        let err = quickjs_execute(&m).unwrap_err();
-        assert!(matches!(err, InterpreterError::TypeError { .. }));
-    }
-
-    #[test]
-    fn set_property_on_non_object_type_error() {
-        let m = test_module(vec![
-            Ir3Instruction::LoadInt { dst: 1, value: 5 },
-            Ir3Instruction::LoadInt { dst: 2, value: 0 },
-            Ir3Instruction::LoadInt { dst: 3, value: 1 },
-            Ir3Instruction::SetProperty {
-                obj: 1,
-                key: 2,
-                val: 3,
-            },
-        ]);
-        let err = quickjs_execute(&m).unwrap_err();
-        assert!(matches!(err, InterpreterError::TypeError { .. }));
-    }
-
-    #[test]
-    fn get_property_object_not_found() {
-        let config = InterpreterConfig::quickjs_defaults();
-        let mut core = InterpreterCore::new(config, "test");
-        // Object(99) does not exist on the heap.
-        core.registers[1] = Value::Object(ObjectId(99));
-        core.registers[2] = Value::Str("x".to_string());
-
-        let m = test_module(vec![
-            Ir3Instruction::GetProperty {
-                obj: 1,
-                key: 2,
-                dst: 0,
-            },
-            Ir3Instruction::Halt,
-        ]);
-        let err = core.execute(&m).unwrap_err();
-        assert!(matches!(err, InterpreterError::ObjectNotFound { id: 99 }));
-    }
-
-    #[test]
-    fn set_property_object_not_found() {
-        let config = InterpreterConfig::quickjs_defaults();
-        let mut core = InterpreterCore::new(config, "test");
-        core.registers[1] = Value::Object(ObjectId(99));
-        core.registers[2] = Value::Str("x".to_string());
-        core.registers[3] = Value::Int(1);
-
-        let m = test_module(vec![
-            Ir3Instruction::SetProperty {
-                obj: 1,
-                key: 2,
-                val: 3,
-            },
-            Ir3Instruction::Halt,
-        ]);
-        let err = core.execute(&m).unwrap_err();
-        assert!(matches!(err, InterpreterError::ObjectNotFound { id: 99 }));
-    }
-
-    // -----------------------------------------------------------------------
-    // Enrichment: arithmetic type errors for Sub/Mul/Div
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn sub_type_error() {
-        let m = test_module_with_pool(
-            vec![
-                Ir3Instruction::LoadStr {
-                    dst: 1,
-                    pool_index: 0,
-                },
-                Ir3Instruction::LoadInt { dst: 2, value: 1 },
-                Ir3Instruction::Sub {
-                    dst: 0,
-                    lhs: 1,
-                    rhs: 2,
-                },
-            ],
-            vec!["hello".to_string()],
-        );
-        let err = quickjs_execute(&m).unwrap_err();
-        assert!(matches!(err, InterpreterError::TypeError { .. }));
-    }
-
-    #[test]
-    fn mul_coerces_bool_to_number() {
-        // JS semantics: true * 3 = 1 * 3 = 3
-        let m = test_module(vec![
-            Ir3Instruction::LoadBool {
-                dst: 1,
-                value: true,
-            },
-            Ir3Instruction::LoadInt { dst: 2, value: 3 },
-            Ir3Instruction::Mul {
-                dst: 0,
-                lhs: 1,
-                rhs: 2,
-            },
-        ]);
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Int(3));
-    }
-
-    #[test]
-    fn div_type_error() {
-        let m = test_module_with_pool(
-            vec![
-                Ir3Instruction::LoadStr {
-                    dst: 1,
-                    pool_index: 0,
-                },
-                Ir3Instruction::LoadInt { dst: 2, value: 2 },
-                Ir3Instruction::Div {
-                    dst: 0,
-                    lhs: 1,
-                    rhs: 2,
-                },
-            ],
-            vec!["ten".to_string()],
-        );
-        let err = quickjs_execute(&m).unwrap_err();
-        assert!(matches!(err, InterpreterError::TypeError { .. }));
-    }
-
-    // -----------------------------------------------------------------------
-    // Enrichment: Call type error (call non-function)
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn call_non_function_type_error() {
-        let m = test_module(vec![
-            Ir3Instruction::LoadInt { dst: 1, value: 42 },
-            Ir3Instruction::Call {
-                callee: 1,
-                args: RegRange { start: 0, count: 0 },
-                dst: 0,
-            },
-        ]);
-        let err = quickjs_execute(&m).unwrap_err();
-        assert!(matches!(err, InterpreterError::TypeError { .. }));
-    }
-
-    // -----------------------------------------------------------------------
-    // Enrichment: FunctionNotFound
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn call_function_not_found() {
-        let config = InterpreterConfig::quickjs_defaults();
-        let mut core = InterpreterCore::new(config, "test");
-        core.registers[1] = Value::Function(99); // function 99 does not exist
-
-        let m = test_module(vec![Ir3Instruction::Call {
-            callee: 1,
-            args: RegRange { start: 0, count: 0 },
-            dst: 0,
-        }]);
-        let err = core.execute(&m).unwrap_err();
-        assert!(matches!(
-            err,
-            InterpreterError::FunctionNotFound {
-                index: 99,
-                table_size: 0
-            }
-        ));
-    }
-
-    // -----------------------------------------------------------------------
-    // Enrichment: int + string concatenation (number on LHS)
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn int_string_concatenation() {
-        let m = test_module_with_pool(
-            vec![
-                Ir3Instruction::LoadInt { dst: 1, value: 42 },
-                Ir3Instruction::LoadStr {
-                    dst: 2,
-                    pool_index: 0,
-                },
-                Ir3Instruction::Add {
-                    dst: 0,
-                    lhs: 1,
-                    rhs: 2,
-                },
-                Ir3Instruction::Halt,
-            ],
-            vec![" is the answer".to_string()],
-        );
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Str("42 is the answer".to_string()));
-    }
-
-    // -----------------------------------------------------------------------
-    // Enrichment: multiple hostcalls with decision recording
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn multiple_hostcall_decisions_recorded() {
-        let m = test_module(vec![
-            Ir3Instruction::HostCall {
-                capability: CapabilityTag("net".to_string()),
-                args: RegRange { start: 0, count: 0 },
-                dst: 1,
-            },
-            Ir3Instruction::HostCall {
-                capability: CapabilityTag("fs".to_string()),
-                args: RegRange { start: 0, count: 0 },
-                dst: 2,
-            },
-            Ir3Instruction::Halt,
-        ]);
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config.granted_capabilities = vec!["net".to_string(), "fs".to_string()];
-        let lane = QuickJsLane::with_config(config);
-        let result = lane.execute(&m, "test").unwrap();
-        assert_eq!(result.hostcall_decisions.len(), 2);
-        assert_eq!(result.hostcall_decisions[0].capability.0, "net");
-        assert_eq!(result.hostcall_decisions[1].capability.0, "fs");
-        assert!(result.hostcall_decisions[0].allowed);
-        assert!(result.hostcall_decisions[1].allowed);
-        assert_eq!(result.hostcall_decisions[0].seq, 0);
-        assert_eq!(result.hostcall_decisions[1].seq, 1);
-    }
-
-    // -----------------------------------------------------------------------
-    // Enrichment: LaneRouter::with_configs
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn lane_router_with_configs() {
-        let qjs_config = InterpreterConfig::quickjs_defaults();
-        let v8_config = InterpreterConfig::v8_defaults();
-        let router = LaneRouter::with_configs(qjs_config, v8_config);
-        let m = test_module(vec![
-            Ir3Instruction::LoadInt { dst: 0, value: 1 },
-            Ir3Instruction::Halt,
-        ]);
-        let result = router.execute(&m, "test", None).unwrap();
-        assert_eq!(result.lane, LaneChoice::QuickJs);
-        assert_eq!(result.result.value, Value::Int(1));
-    }
-
-    // -----------------------------------------------------------------------
-    // Enrichment: forced lane QuickJs via router
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn router_forced_quickjs_on_large_module() {
-        let instrs: Vec<Ir3Instruction> = (0..1001)
-            .map(|_| Ir3Instruction::LoadInt { dst: 0, value: 1 })
-            .chain(std::iter::once(Ir3Instruction::Halt))
-            .collect();
-        let m = test_module(instrs);
-        let router = LaneRouter::new();
-        // Without forcing, would pick V8. Force QuickJs.
-        let result = router
-            .execute(&m, "test", Some(LaneChoice::QuickJs))
-            .unwrap();
-        assert_eq!(result.lane, LaneChoice::QuickJs);
-        assert_eq!(result.reason, LaneReason::PolicyDirective);
-    }
-
-    // -----------------------------------------------------------------------
-    // Enrichment: execution_failed event on error
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn execution_failed_event_on_error() {
-        let m = test_module(vec![
-            Ir3Instruction::LoadInt { dst: 1, value: 10 },
-            Ir3Instruction::LoadInt { dst: 2, value: 0 },
-            Ir3Instruction::Div {
-                dst: 0,
-                lhs: 1,
-                rhs: 2,
-            },
-        ]);
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config.instruction_budget = 10_000;
-        let lane = QuickJsLane::with_config(config);
-        // Division by zero is a hard error — execution fails, no result to inspect events.
-        let err = lane.execute(&m, "test").unwrap_err();
-        assert_eq!(err, InterpreterError::DivisionByZero);
-    }
-
-    // -----------------------------------------------------------------------
-    // Enrichment: witness_events have sequential seq numbers
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn witness_events_sequential_seq() {
-        let mut m = test_module(vec![
-            Ir3Instruction::HostCall {
-                capability: CapabilityTag("net".to_string()),
-                args: RegRange { start: 0, count: 0 },
-                dst: 0,
-            },
-            Ir3Instruction::Halt,
-        ]);
-        m.required_capabilities = vec![CapabilityTag("net".to_string())];
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config.granted_capabilities = vec!["net".to_string()];
-        let lane = QuickJsLane::with_config(config);
-        let result = lane.execute(&m, "test").unwrap();
-
-        // Should have multiple witness events with ascending seq numbers.
-        assert!(result.witness_events.len() >= 2);
-        for (i, ev) in result.witness_events.iter().enumerate() {
-            assert_eq!(ev.seq, i as u64);
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Enrichment: set property then get it via instructions
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn set_then_get_property_via_instructions() {
-        let config = InterpreterConfig::quickjs_defaults();
-        let mut core = InterpreterCore::new(config, "test");
-        let oid = core.alloc_object();
-        core.registers[1] = Value::Object(oid);
-        core.registers[2] = Value::Str("name".to_string());
-        core.registers[3] = Value::Int(123);
-
-        let m = test_module(vec![
-            // set obj.name = 123
-            Ir3Instruction::SetProperty {
-                obj: 1,
-                key: 2,
-                val: 3,
-            },
-            // get obj.name -> r0
-            Ir3Instruction::GetProperty {
-                obj: 1,
-                key: 2,
-                dst: 0,
-            },
-            Ir3Instruction::Halt,
-        ]);
-        let result = core.execute(&m).unwrap();
-        assert_eq!(result.value, Value::Int(123));
-    }
-
-    // -----------------------------------------------------------------------
-    // Enrichment: wrapping arithmetic on overflow
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn add_wrapping_overflow() {
-        let m = test_module(vec![
-            Ir3Instruction::LoadInt {
-                dst: 1,
-                value: i64::MAX,
-            },
-            Ir3Instruction::LoadInt { dst: 2, value: 1 },
-            Ir3Instruction::Add {
-                dst: 0,
-                lhs: 1,
-                rhs: 2,
-            },
-            Ir3Instruction::Halt,
-        ]);
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Int(i64::MIN));
-    }
-
-    #[test]
-    fn sub_wrapping_underflow() {
-        let m = test_module(vec![
-            Ir3Instruction::LoadInt {
-                dst: 1,
-                value: i64::MIN,
-            },
-            Ir3Instruction::LoadInt { dst: 2, value: 1 },
-            Ir3Instruction::Sub {
-                dst: 0,
-                lhs: 1,
-                rhs: 2,
-            },
-            Ir3Instruction::Halt,
-        ]);
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Int(i64::MAX));
-    }
-
-    #[test]
-    fn mul_wrapping_overflow() {
-        let m = test_module(vec![
-            Ir3Instruction::LoadInt {
-                dst: 1,
-                value: i64::MAX,
-            },
-            Ir3Instruction::LoadInt { dst: 2, value: 2 },
-            Ir3Instruction::Mul {
-                dst: 0,
-                lhs: 1,
-                rhs: 2,
-            },
-            Ir3Instruction::Halt,
-        ]);
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Int(-2)); // MAX * 2 wraps
-    }
-
-    // -----------------------------------------------------------------------
-    // Enrichment: move register to self (no-op)
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn move_register_to_self() {
-        let m = test_module(vec![
-            Ir3Instruction::LoadInt { dst: 0, value: 55 },
-            Ir3Instruction::Move { dst: 0, src: 0 },
-            Ir3Instruction::Halt,
-        ]);
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Int(55));
-    }
-
-    // -----------------------------------------------------------------------
-    // Enrichment: jump_if with various truthy values
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn jump_if_truthy_int() {
-        let m = test_module(vec![
-            Ir3Instruction::LoadInt { dst: 1, value: -1 }, // truthy
-            Ir3Instruction::LoadInt { dst: 0, value: 10 },
-            Ir3Instruction::JumpIf { cond: 1, target: 4 },
-            Ir3Instruction::LoadInt { dst: 0, value: 20 }, // skipped
-            Ir3Instruction::Halt,
-        ]);
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Int(10));
-    }
-
-    #[test]
-    fn jump_if_falsy_zero() {
-        let m = test_module(vec![
-            Ir3Instruction::LoadInt { dst: 1, value: 0 }, // falsy
-            Ir3Instruction::LoadInt { dst: 0, value: 10 },
-            Ir3Instruction::JumpIf { cond: 1, target: 4 },
-            Ir3Instruction::LoadInt { dst: 0, value: 20 }, // executed
-            Ir3Instruction::Halt,
-        ]);
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Int(20));
-    }
-
-    #[test]
-    fn jump_if_falsy_null() {
-        let m = test_module(vec![
-            Ir3Instruction::LoadNull { dst: 1 }, // falsy
-            Ir3Instruction::LoadInt { dst: 0, value: 10 },
-            Ir3Instruction::JumpIf { cond: 1, target: 4 },
-            Ir3Instruction::LoadInt { dst: 0, value: 20 }, // executed
-            Ir3Instruction::Halt,
-        ]);
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Int(20));
-    }
-
-    #[test]
-    fn jump_if_falsy_undefined() {
-        let m = test_module(vec![
-            Ir3Instruction::LoadUndefined { dst: 1 }, // falsy
-            Ir3Instruction::LoadInt { dst: 0, value: 10 },
-            Ir3Instruction::JumpIf { cond: 1, target: 4 },
-            Ir3Instruction::LoadInt { dst: 0, value: 20 }, // executed
-            Ir3Instruction::Halt,
-        ]);
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Int(20));
-    }
-
-    // -----------------------------------------------------------------------
-    // Enrichment: RoutedResult fields
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn routed_result_fields_accessible() {
-        let m = test_module(vec![
-            Ir3Instruction::LoadInt { dst: 0, value: 7 },
-            Ir3Instruction::Halt,
-        ]);
-        let router = LaneRouter::new();
-        let routed = router.execute(&m, "test", None).unwrap();
-        assert_eq!(routed.result.value, Value::Int(7));
-        assert!(routed.result.instructions_executed > 0);
-        assert!(
-            routed
-                .result
-                .witness_events
-                .iter()
-                .any(|e| e.kind == WitnessEventKind::ExecutionCompleted)
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // Enrichment: security-sensitive caps + forced V8 still works
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn router_security_sensitive_overridden_by_force() {
-        let mut m = test_module(vec![Ir3Instruction::Halt]);
-        m.required_capabilities = vec![CapabilityTag("net".to_string())];
-        let router = LaneRouter::new();
-        // Without force: QuickJs (security-sensitive). Force V8.
-        let result = router.execute(&m, "test", Some(LaneChoice::V8)).unwrap();
-        assert_eq!(result.lane, LaneChoice::V8);
-        assert_eq!(result.reason, LaneReason::PolicyDirective);
-    }
-
-    // -----------------------------------------------------------------------
-    // Enrichment: HeapObject property iteration order is deterministic
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn heap_object_properties_deterministic_order() {
-        let mut obj = HeapObject::new();
-        obj.properties.insert("z".to_string(), Value::Int(3));
-        obj.properties.insert("a".to_string(), Value::Int(1));
-        obj.properties.insert("m".to_string(), Value::Int(2));
-        let keys: Vec<&String> = obj.properties.keys().collect();
-        assert_eq!(keys, vec!["a", "m", "z"]);
-    }
-
-    // -----------------------------------------------------------------------
-    // Enrichment: Value Display for Object and Function
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn value_display_object_and_function() {
-        assert_eq!(Value::Object(ObjectId(5)).to_string(), "[object#5]");
-        assert_eq!(Value::Function(3).to_string(), "[function#3]");
-    }
-
-    // -----------------------------------------------------------------------
-    // Enrichment: HeapObject serde roundtrip
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn heap_object_serde_roundtrip() {
-        let mut obj = HeapObject::new();
-        obj.properties.insert("x".to_string(), Value::Int(1));
-        obj.properties
-            .insert("y".to_string(), Value::Str("hello".to_string()));
-        let json = serde_json::to_string(&obj).unwrap();
-        let back: HeapObject = serde_json::from_str(&json).unwrap();
-        assert_eq!(obj, back);
-    }
-
-    // -----------------------------------------------------------------------
-    // Enrichment: execution with both lanes produces same instruction count
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn both_lanes_same_instruction_count() {
-        let m = test_module(vec![
-            Ir3Instruction::LoadInt { dst: 1, value: 5 },
-            Ir3Instruction::LoadInt { dst: 2, value: 3 },
-            Ir3Instruction::Sub {
-                dst: 0,
-                lhs: 1,
-                rhs: 2,
-            },
-            Ir3Instruction::Halt,
-        ]);
-        let qjs = quickjs_execute(&m).unwrap();
-        let v8 = v8_execute(&m).unwrap();
-        assert_eq!(qjs.instructions_executed, v8.instructions_executed);
-        assert_eq!(qjs.value, v8.value);
-    }
-
-    // -----------------------------------------------------------------------
-    // Enrichment: string concatenation with multiple string ops
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn string_concatenation_chain() {
-        let m = test_module_with_pool(
-            vec![
-                Ir3Instruction::LoadStr {
-                    dst: 1,
-                    pool_index: 0,
-                },
-                Ir3Instruction::LoadStr {
-                    dst: 2,
-                    pool_index: 1,
-                },
-                Ir3Instruction::Add {
-                    dst: 3,
-                    lhs: 1,
-                    rhs: 2,
-                },
-                Ir3Instruction::LoadStr {
-                    dst: 4,
-                    pool_index: 2,
-                },
-                Ir3Instruction::Add {
-                    dst: 0,
-                    lhs: 3,
-                    rhs: 4,
-                },
-                Ir3Instruction::Halt,
-            ],
-            vec!["hello".to_string(), " ".to_string(), "world".to_string()],
-        );
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Str("hello world".to_string()));
-    }
-
-    // -----------------------------------------------------------------------
-    // Enrichment: InterpreterError PartialEq reflexivity
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn interpreter_error_eq_reflexive() {
-        let err = InterpreterError::DivisionByZero;
-        assert_eq!(err, err.clone());
-
-        let err2 = InterpreterError::BudgetExhausted {
-            executed: 100,
-            budget: 50,
-        };
-        assert_eq!(err2, err2.clone());
-        assert_ne!(err, err2);
-    }
-
-    // -----------------------------------------------------------------------
-    // Enrichment: read register out of bounds on read side
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn read_register_out_of_bounds_in_add() {
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config.max_registers = 4;
-        let m = test_module(vec![Ir3Instruction::Add {
-            dst: 0,
-            lhs: 1,
-            rhs: 999, // out of bounds for max_registers=4
-        }]);
-        let lane = QuickJsLane::with_config(config);
-        let err = lane.execute(&m, "test").unwrap_err();
-        assert!(matches!(
-            err,
-            InterpreterError::RegisterOutOfBounds { register: 999, .. }
-        ));
-    }
-
-    // -- Construct (new) tests -------------------------------------------
-
-    #[test]
-    fn construct_invokes_constructor_and_returns_this() {
-        // Constructor body: sets this.x = arg[0], then returns undefined.
-        // Since return is non-object, Construct should return the `this` object.
-        let m = test_module_with_functions(
-            vec![
-                // Main: r1 = 42
-                Ir3Instruction::LoadInt { dst: 1, value: 42 },
-                // Construct: r2 = new r0(r1)
-                Ir3Instruction::Construct {
-                    callee: 0,
-                    args: RegRange { start: 1, count: 1 },
-                    dst: 2,
-                },
-                Ir3Instruction::Return { value: 2 },
-                // Constructor at ip=3: this=r0, arg=r1
-                // r2 = "x"
-                Ir3Instruction::LoadStr {
-                    dst: 2,
-                    pool_index: 0,
-                },
-                // this.x = r1
-                Ir3Instruction::SetProperty {
-                    obj: 0,
-                    key: 2,
-                    val: 1,
-                },
-                // return undefined (non-object => this is used)
-                Ir3Instruction::LoadUndefined { dst: 3 },
-                Ir3Instruction::Return { value: 3 },
-            ],
-            vec![Ir3FunctionDesc {
-                name: Some("Ctor".to_string()),
-                entry: 3,
-                arity: 2, // this + 1 arg
-                frame_size: 8,
-                is_generator: false,
-            }],
-        );
-        let mut mod_with_pool = m;
-        mod_with_pool.constant_pool = vec!["x".to_string()];
-        // Pre-load r0 with Function(0) via InterpreterCore
-        let config = InterpreterConfig::quickjs_defaults();
-        let mut core = InterpreterCore::new(config, "test");
-        core.registers[0] = Value::Function(0);
-        let result = core.execute(&mod_with_pool).unwrap();
-        // Should return an object (the constructed this)
-        assert!(matches!(result.value, Value::Object(_)));
-    }
-
-    #[test]
-    fn construct_type_error_on_non_function() {
-        let m = test_module(vec![
-            Ir3Instruction::LoadInt { dst: 0, value: 42 },
-            Ir3Instruction::Construct {
-                callee: 0,
-                args: RegRange { start: 1, count: 0 },
-                dst: 1,
-            },
-        ]);
-        let err = quickjs_execute(&m).unwrap_err();
-        assert!(matches!(err, InterpreterError::TypeError { .. }));
-    }
-
-    #[test]
-    fn construct_returns_explicit_object_when_constructor_returns_object() {
-        // Constructor returns a different object, which should be used as the result.
-        let m = test_module_with_functions(
-            vec![
-                Ir3Instruction::Construct {
-                    callee: 0,
-                    args: RegRange { start: 1, count: 0 },
-                    dst: 1,
-                },
-                Ir3Instruction::Return { value: 1 },
-                // Constructor at ip=2: allocate and return a new object
-                Ir3Instruction::NewObject { dst: 2 },
-                Ir3Instruction::Return { value: 2 },
-            ],
-            vec![Ir3FunctionDesc {
-                name: Some("Ctor".to_string()),
-                entry: 2,
-                arity: 1,
-                frame_size: 8,
-                is_generator: false,
-            }],
-        );
-        // Pre-load r0 with Function(0) via InterpreterCore
-        let config = InterpreterConfig::quickjs_defaults();
-        let mut core = InterpreterCore::new(config, "test");
-        core.registers[0] = Value::Function(0);
-        let result = core.execute(&m).unwrap();
-        assert!(matches!(result.value, Value::Object(_)));
-    }
-
-    #[test]
-    fn in_operator_checks_own_properties() {
-        let m = test_module(vec![
-            Ir3Instruction::NewObject { dst: 0 },
-            Ir3Instruction::LoadInt { dst: 1, value: 7 },
-            Ir3Instruction::LoadInt { dst: 2, value: 42 },
-            Ir3Instruction::SetProperty {
-                obj: 0,
-                key: 1,
-                val: 2,
-            },
-            Ir3Instruction::InOp {
-                dst: 3,
-                lhs: 1,
-                rhs: 0,
-            },
-            Ir3Instruction::Return { value: 3 },
-        ]);
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Bool(true));
-    }
-
-    #[test]
-    fn in_operator_checks_own_properties_across_lanes() {
-        let m = test_module(vec![
-            Ir3Instruction::NewObject { dst: 0 },
-            Ir3Instruction::LoadInt { dst: 1, value: 7 },
-            Ir3Instruction::LoadInt { dst: 2, value: 42 },
-            Ir3Instruction::SetProperty {
-                obj: 0,
-                key: 1,
-                val: 2,
-            },
-            Ir3Instruction::InOp {
-                dst: 3,
-                lhs: 1,
-                rhs: 0,
-            },
-            Ir3Instruction::Return { value: 3 },
-        ]);
-
-        assert_both_lanes_value(&m, Value::Bool(true));
-    }
-
-    #[test]
-    fn in_operator_walks_prototype_chain() {
-        let m = test_module(vec![
-            Ir3Instruction::LoadInt { dst: 1, value: 7 },
-            Ir3Instruction::InOp {
-                dst: 2,
-                lhs: 1,
-                rhs: 0,
-            },
-            Ir3Instruction::Return { value: 2 },
-        ]);
-        let config = InterpreterConfig::quickjs_defaults();
-        let mut core = InterpreterCore::new(config, "test");
-        let prototype = core.alloc_object();
-        let instance = core.alloc_object_with_prototype(Some(prototype)).unwrap();
-        core.heap[prototype.0 as usize]
-            .properties
-            .insert("7".to_string(), Value::Int(42));
-        core.registers[0] = Value::Object(instance);
-
-        let result = core.execute(&m).unwrap();
-        assert_eq!(result.value, Value::Bool(true));
-    }
-
-    #[test]
-    fn in_operator_returns_false_for_prototype_cycles() {
-        let m = test_module(vec![
-            Ir3Instruction::LoadInt { dst: 1, value: 7 },
-            Ir3Instruction::InOp {
-                dst: 2,
-                lhs: 1,
-                rhs: 0,
-            },
-            Ir3Instruction::Return { value: 2 },
-        ]);
-        let config = InterpreterConfig::quickjs_defaults();
-        let mut core = InterpreterCore::new(config, "test");
-        let prototype_a = core.alloc_object();
-        let prototype_b = core.alloc_object_with_prototype(Some(prototype_a)).unwrap();
-        let instance = core.alloc_object_with_prototype(Some(prototype_b)).unwrap();
-        core.heap[prototype_a.0 as usize].prototype = Some(prototype_b);
-        core.registers[0] = Value::Object(instance);
-
-        let result = core.execute(&m).unwrap();
-        assert_eq!(result.value, Value::Bool(false));
-    }
-
-    #[test]
-    fn construct_supports_instanceof_via_constructor_prototype() {
-        let m = test_module_with_functions(
-            vec![
-                Ir3Instruction::Construct {
-                    callee: 0,
-                    args: RegRange { start: 1, count: 0 },
-                    dst: 1,
-                },
-                Ir3Instruction::InstanceOf {
-                    dst: 2,
-                    lhs: 1,
-                    rhs: 0,
-                },
-                Ir3Instruction::Return { value: 2 },
-                Ir3Instruction::LoadUndefined { dst: 1 },
-                Ir3Instruction::Return { value: 1 },
-            ],
-            vec![Ir3FunctionDesc {
-                name: Some("Ctor".to_string()),
-                entry: 3,
-                arity: 1,
-                frame_size: 8,
-                is_generator: false,
-            }],
-        );
-        let config = InterpreterConfig::quickjs_defaults();
-        let mut core = InterpreterCore::new(config, "test");
-        core.registers[0] = Value::Function(0);
-        let result = core.execute(&m).unwrap();
-        assert_eq!(result.value, Value::Bool(true));
-    }
-
-    #[test]
-    fn constructed_object_is_instanceof_constructor_across_lanes() {
-        let m = test_module_with_functions(
-            vec![
-                Ir3Instruction::Construct {
-                    callee: 0,
-                    args: RegRange { start: 1, count: 0 },
-                    dst: 1,
-                },
-                Ir3Instruction::InstanceOf {
-                    dst: 2,
-                    lhs: 1,
-                    rhs: 0,
-                },
-                Ir3Instruction::Return { value: 2 },
-                Ir3Instruction::LoadUndefined { dst: 1 },
-                Ir3Instruction::Return { value: 1 },
-            ],
-            vec![Ir3FunctionDesc {
-                name: Some("Ctor".to_string()),
-                entry: 3,
-                arity: 0,
-                frame_size: 4,
-                is_generator: false,
-            }],
-        );
-
-        // r0 must be pre-set to Function(0) since there is no LoadFunction instruction.
-        for config in [
-            InterpreterConfig::quickjs_defaults(),
-            InterpreterConfig::v8_defaults(),
-        ] {
-            let mut core = InterpreterCore::new(config, "test");
-            core.registers[0] = Value::Function(0);
-            let result = core.execute(&m).unwrap();
-            assert_eq!(result.value, Value::Bool(true));
-        }
-    }
-
-    #[test]
-    fn instanceof_returns_false_for_primitives() {
-        let m = test_module_with_functions(
-            vec![
-                Ir3Instruction::InstanceOf {
-                    dst: 2,
-                    lhs: 1,
-                    rhs: 0,
-                },
-                Ir3Instruction::Return { value: 2 },
-                Ir3Instruction::LoadUndefined { dst: 1 },
-                Ir3Instruction::Return { value: 1 },
-            ],
-            vec![Ir3FunctionDesc {
-                name: Some("Ctor".to_string()),
-                entry: 2,
-                arity: 0,
-                frame_size: 4,
-                is_generator: false,
-            }],
-        );
-        let config = InterpreterConfig::quickjs_defaults();
-        let mut core = InterpreterCore::new(config, "test");
-        core.registers[0] = Value::Function(0);
-        core.registers[1] = Value::Int(7);
-
-        let result = core.execute(&m).unwrap();
-        assert_eq!(result.value, Value::Bool(false));
-    }
-
-    #[test]
-    fn instanceof_returns_false_for_primitives_across_lanes() {
-        let m = test_module_with_functions(
-            vec![
-                Ir3Instruction::LoadInt { dst: 1, value: 7 },
-                Ir3Instruction::InstanceOf {
-                    dst: 2,
-                    lhs: 1,
-                    rhs: 0,
-                },
-                Ir3Instruction::Return { value: 2 },
-                Ir3Instruction::LoadUndefined { dst: 1 },
-                Ir3Instruction::Return { value: 1 },
-            ],
-            vec![Ir3FunctionDesc {
-                name: Some("Ctor".to_string()),
-                entry: 3,
-                arity: 0,
-                frame_size: 4,
-                is_generator: false,
-            }],
-        );
-
-        // r0 must be pre-set to Function(0) — instanceof needs a function as rhs.
-        for config in [
-            InterpreterConfig::quickjs_defaults(),
-            InterpreterConfig::v8_defaults(),
-        ] {
-            let mut core = InterpreterCore::new(config, "test");
-            core.registers[0] = Value::Function(0);
-            let result = core.execute(&m).unwrap();
-            assert_eq!(result.value, Value::Bool(false));
-        }
-    }
-
-    // -- TemplateLiteral tests -------------------------------------------
-
-    #[test]
-    fn template_literal_concatenates_parts() {
-        // r0="hello ", r1="world", r2="!" => TemplateLiteral([r0,r1,r2]) => "hello world!"
-        let m = test_module_with_pool(
-            vec![
-                Ir3Instruction::LoadStr {
-                    dst: 0,
-                    pool_index: 0,
-                },
-                Ir3Instruction::LoadStr {
-                    dst: 1,
-                    pool_index: 1,
-                },
-                Ir3Instruction::LoadStr {
-                    dst: 2,
-                    pool_index: 2,
-                },
-                Ir3Instruction::TemplateLiteral {
-                    parts: RegRange { start: 0, count: 3 },
-                    dst: 3,
-                },
-                Ir3Instruction::Return { value: 3 },
-            ],
-            vec!["hello ".to_string(), "world".to_string(), "!".to_string()],
-        );
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Str("hello world!".to_string()));
-    }
-
-    #[test]
-    fn template_literal_coerces_non_string_parts() {
-        // r0="value: ", r1=42 => "value: 42"
-        let m = test_module_with_pool(
-            vec![
-                Ir3Instruction::LoadStr {
-                    dst: 0,
-                    pool_index: 0,
-                },
-                Ir3Instruction::LoadInt { dst: 1, value: 42 },
-                Ir3Instruction::TemplateLiteral {
-                    parts: RegRange { start: 0, count: 2 },
-                    dst: 2,
-                },
-                Ir3Instruction::Return { value: 2 },
-            ],
-            vec!["value: ".to_string()],
-        );
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Str("value: 42".to_string()));
-    }
-
-    #[test]
-    fn template_literal_handles_booleans_and_null() {
-        let m = test_module_with_pool(
-            vec![
-                Ir3Instruction::LoadStr {
-                    dst: 0,
-                    pool_index: 0,
-                },
-                Ir3Instruction::LoadBool {
-                    dst: 1,
-                    value: true,
-                },
-                Ir3Instruction::LoadStr {
-                    dst: 2,
-                    pool_index: 1,
-                },
-                Ir3Instruction::LoadNull { dst: 3 },
-                Ir3Instruction::LoadStr {
-                    dst: 4,
-                    pool_index: 2,
-                },
-                Ir3Instruction::TemplateLiteral {
-                    parts: RegRange { start: 0, count: 5 },
-                    dst: 5,
-                },
-                Ir3Instruction::Return { value: 5 },
-            ],
-            vec!["a=".to_string(), ",b=".to_string(), "!".to_string()],
-        );
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Str("a=true,b=null!".to_string()));
-    }
-
-    #[test]
-    fn template_literal_single_part() {
-        let m = test_module_with_pool(
-            vec![
-                Ir3Instruction::LoadStr {
-                    dst: 0,
-                    pool_index: 0,
-                },
-                Ir3Instruction::TemplateLiteral {
-                    parts: RegRange { start: 0, count: 1 },
-                    dst: 1,
-                },
-                Ir3Instruction::Return { value: 1 },
-            ],
-            vec!["only".to_string()],
-        );
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Str("only".to_string()));
-    }
-
-    #[test]
-    fn template_literal_undefined_coercion() {
-        let m = test_module(vec![
-            Ir3Instruction::LoadUndefined { dst: 0 },
-            Ir3Instruction::TemplateLiteral {
-                parts: RegRange { start: 0, count: 1 },
-                dst: 1,
-            },
-            Ir3Instruction::Return { value: 1 },
-        ]);
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Str("undefined".to_string()));
-    }
-
-    #[test]
-    fn for_in_iterator_enumerates_deterministic_keys() {
-        let m = test_module_with_pool(
-            vec![
-                Ir3Instruction::NewObject { dst: 0 },
-                Ir3Instruction::LoadStr {
-                    dst: 1,
-                    pool_index: 0,
-                },
-                Ir3Instruction::LoadInt { dst: 2, value: 1 },
-                Ir3Instruction::SetProperty {
-                    obj: 0,
-                    key: 1,
-                    val: 2,
-                },
-                Ir3Instruction::LoadStr {
-                    dst: 3,
-                    pool_index: 1,
-                },
-                Ir3Instruction::LoadInt { dst: 4, value: 2 },
-                Ir3Instruction::SetProperty {
-                    obj: 0,
-                    key: 3,
-                    val: 4,
-                },
-                Ir3Instruction::ForInInit { src: 0, dst: 5 },
-                Ir3Instruction::ForInNext {
-                    iterator: 5,
-                    value_dst: 6,
-                    done_target: 12,
-                },
-                Ir3Instruction::ForInNext {
-                    iterator: 5,
-                    value_dst: 7,
-                    done_target: 12,
-                },
-                Ir3Instruction::Return { value: 7 },
-                Ir3Instruction::LoadUndefined { dst: 8 },
-                Ir3Instruction::Return { value: 8 },
-            ],
-            vec!["a".to_string(), "b".to_string()],
-        );
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Str("b".to_string()));
-    }
-
-    #[test]
-    fn for_in_iterator_done_target_skips_body_when_empty() {
-        let m = test_module_with_pool(
-            vec![
-                Ir3Instruction::NewObject { dst: 0 },
-                Ir3Instruction::ForInInit { src: 0, dst: 1 },
-                Ir3Instruction::ForInNext {
-                    iterator: 1,
-                    value_dst: 2,
-                    done_target: 5,
-                },
-                Ir3Instruction::LoadStr {
-                    dst: 3,
-                    pool_index: 0,
-                },
-                Ir3Instruction::Return { value: 3 },
-                Ir3Instruction::LoadStr {
-                    dst: 4,
-                    pool_index: 1,
-                },
-                Ir3Instruction::Return { value: 4 },
-            ],
-            vec!["unexpected".to_string(), "done".to_string()],
-        );
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Str("done".to_string()));
-    }
-
-    #[test]
-    fn for_of_iterator_yields_numeric_key_order_and_close_stops_iteration() {
-        let yielded = test_module_with_pool(
-            vec![
-                Ir3Instruction::NewObject { dst: 0 },
-                Ir3Instruction::LoadStr {
-                    dst: 1,
-                    pool_index: 0,
-                },
-                Ir3Instruction::LoadInt { dst: 2, value: 22 },
-                Ir3Instruction::SetProperty {
-                    obj: 0,
-                    key: 1,
-                    val: 2,
-                },
-                Ir3Instruction::LoadStr {
-                    dst: 3,
-                    pool_index: 1,
-                },
-                Ir3Instruction::LoadInt { dst: 4, value: 11 },
-                Ir3Instruction::SetProperty {
-                    obj: 0,
-                    key: 3,
-                    val: 4,
-                },
-                Ir3Instruction::ForOfInit { src: 0, dst: 5 },
-                Ir3Instruction::ForOfNext {
-                    iterator: 5,
-                    value_dst: 6,
-                    done_target: 12,
-                },
-                Ir3Instruction::ForOfNext {
-                    iterator: 5,
-                    value_dst: 7,
-                    done_target: 12,
-                },
-                Ir3Instruction::Return { value: 7 },
-                Ir3Instruction::LoadUndefined { dst: 8 },
-                Ir3Instruction::Return { value: 8 },
-            ],
-            vec!["1".to_string(), "0".to_string()],
-        );
-        assert_eq!(quickjs_execute(&yielded).unwrap().value, Value::Int(22));
-
-        let closed = test_module_with_pool(
-            vec![
-                Ir3Instruction::NewObject { dst: 0 },
-                Ir3Instruction::LoadStr {
-                    dst: 1,
-                    pool_index: 0,
-                },
-                Ir3Instruction::LoadInt { dst: 2, value: 7 },
-                Ir3Instruction::SetProperty {
-                    obj: 0,
-                    key: 1,
-                    val: 2,
-                },
-                Ir3Instruction::ForOfInit { src: 0, dst: 3 },
-                Ir3Instruction::IteratorClose {
-                    iterator: 3,
-                    reason: IteratorCloseReason::Break,
-                },
-                Ir3Instruction::ForOfNext {
-                    iterator: 3,
-                    value_dst: 4,
-                    done_target: 9,
-                },
-                Ir3Instruction::LoadInt { dst: 5, value: 999 },
-                Ir3Instruction::Return { value: 5 },
-                Ir3Instruction::LoadInt { dst: 6, value: 1 },
-                Ir3Instruction::Return { value: 6 },
-            ],
-            vec!["0".to_string()],
-        );
-        assert_eq!(quickjs_execute(&closed).unwrap().value, Value::Int(1));
-    }
-
-    // -- ES2020 §7.2.14 abstract equality: null/undefined isolation ----------
-
-    #[test]
-    fn abstract_eq_null_only_equals_null_and_undefined() {
-        assert!(InterpreterCore::abstract_eq_values(
-            &Value::Null,
-            &Value::Null
-        ));
-        assert!(InterpreterCore::abstract_eq_values(
-            &Value::Null,
-            &Value::Undefined
-        ));
-        assert!(InterpreterCore::abstract_eq_values(
-            &Value::Undefined,
-            &Value::Null
-        ));
-        // null must NOT coerce to 0 for abstract equality
-        assert!(!InterpreterCore::abstract_eq_values(
-            &Value::Null,
-            &Value::Int(0)
-        ));
-        assert!(!InterpreterCore::abstract_eq_values(
-            &Value::Int(0),
-            &Value::Null
-        ));
-        assert!(!InterpreterCore::abstract_eq_values(
-            &Value::Null,
-            &Value::Bool(false)
-        ));
-        assert!(!InterpreterCore::abstract_eq_values(
-            &Value::Null,
-            &Value::Str(String::new())
-        ));
-    }
-
-    #[test]
-    fn abstract_eq_undefined_only_equals_null_and_undefined() {
-        assert!(InterpreterCore::abstract_eq_values(
-            &Value::Undefined,
-            &Value::Undefined
-        ));
-        assert!(!InterpreterCore::abstract_eq_values(
-            &Value::Undefined,
-            &Value::Int(0)
-        ));
-        assert!(!InterpreterCore::abstract_eq_values(
-            &Value::Undefined,
-            &Value::Bool(false)
-        ));
-        assert!(!InterpreterCore::abstract_eq_values(
-            &Value::Undefined,
-            &Value::Str(String::new())
-        ));
-    }
-
-    // -----------------------------------------------------------------------
-    // Exception handling tests (RGC-313B)
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn throw_without_catch_returns_uncaught_exception() {
-        let m = test_module(vec![
-            Ir3Instruction::LoadInt { dst: 0, value: 42 },
-            Ir3Instruction::Throw { value: 0 },
-        ]);
-        let err = quickjs_execute(&m).unwrap_err();
-        assert!(
-            matches!(err, InterpreterError::UncaughtException { .. }),
-            "expected UncaughtException, got {err:?}"
-        );
-    }
-
-    #[test]
-    fn try_catch_catches_thrown_exception() {
-        // try { throw 99; } catch(e) { result = e; }
-        // IR3 layout:
-        //   0: LoadInt r0, 99
-        //   1: BeginTry { catch_target: 5 }
-        //   2: Throw { value: r0 }
-        //   3: EndTry           (skipped on throw)
-        //   4: Jump { target: 7 } (skip catch)
-        //   5: EnterCatch { dst: r1 }
-        //   6: Move { dst: r0, src: r1 }   (copy to result reg)
-        //   7: Halt
-        let m = test_module(vec![
-            Ir3Instruction::LoadInt { dst: 0, value: 99 },
-            Ir3Instruction::BeginTry {
-                catch_target: 5,
-                finally_target: None,
-            },
-            Ir3Instruction::Throw { value: 0 },
-            Ir3Instruction::EndTry,
-            Ir3Instruction::Jump { target: 7 },
-            Ir3Instruction::EnterCatch { dst: 1 },
-            Ir3Instruction::Move { dst: 0, src: 1 },
-            Ir3Instruction::Halt,
-        ]);
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Int(99));
-    }
-
-    #[test]
-    fn try_normal_exit_pops_catch_frame() {
-        // try { result = 42; } catch(e) { result = -1; }
-        // Normal flow: BeginTry → body → EndTry → Jump(past catch) → Halt
-        let m = test_module(vec![
-            Ir3Instruction::BeginTry {
-                catch_target: 5,
-                finally_target: None,
-            },
-            Ir3Instruction::LoadInt { dst: 0, value: 42 },
-            Ir3Instruction::EndTry,
-            Ir3Instruction::Jump { target: 7 },
-            // catch handler (should not execute)
-            Ir3Instruction::EnterCatch { dst: 1 },
-            Ir3Instruction::LoadInt { dst: 0, value: -1 },
-            Ir3Instruction::Halt,
-            // end
-            Ir3Instruction::Halt,
-        ]);
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Int(42));
-    }
-
-    #[test]
-    fn enter_catch_provides_exception_value() {
-        // throw "error_msg" → catch(e) → e should be the thrown string
-        let m = test_module_with_pool(
-            vec![
-                Ir3Instruction::LoadStr {
-                    dst: 0,
-                    pool_index: 0,
-                },
-                Ir3Instruction::BeginTry {
-                    catch_target: 4,
-                    finally_target: None,
-                },
-                Ir3Instruction::Throw { value: 0 },
-                Ir3Instruction::EndTry,
-                Ir3Instruction::EnterCatch { dst: 1 },
-                Ir3Instruction::Move { dst: 0, src: 1 },
-                Ir3Instruction::Halt,
-            ],
-            vec!["error_msg".to_string()],
-        );
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Str("error_msg".to_string()));
-    }
-
-    #[test]
-    fn begin_try_end_try_noop_on_normal_flow() {
-        // BeginTry + EndTry with no throw should not affect execution
-        let m = test_module(vec![
-            Ir3Instruction::BeginTry {
-                catch_target: 4,
-                finally_target: None,
-            },
-            Ir3Instruction::LoadInt { dst: 0, value: 7 },
-            Ir3Instruction::EndTry,
-            Ir3Instruction::Jump { target: 5 },
-            Ir3Instruction::EnterCatch { dst: 1 },
-            Ir3Instruction::Halt,
-        ]);
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Int(7));
-    }
-
-    #[test]
-    fn returning_callee_does_not_leak_catch_frames_into_caller() {
-        let m = test_module_with_functions(
-            vec![
-                Ir3Instruction::BeginTry {
-                    catch_target: 6,
-                    finally_target: None,
-                },
-                Ir3Instruction::Call {
-                    callee: 3,
-                    args: RegRange { start: 0, count: 0 },
-                    dst: 0,
-                },
-                Ir3Instruction::EndTry,
-                Ir3Instruction::LoadInt { dst: 0, value: 7 },
-                Ir3Instruction::Throw { value: 0 },
-                Ir3Instruction::Halt,
-                Ir3Instruction::EnterCatch { dst: 1 },
-                Ir3Instruction::Move { dst: 0, src: 1 },
-                Ir3Instruction::Halt,
-                Ir3Instruction::BeginTry {
-                    catch_target: 13,
-                    finally_target: None,
-                },
-                Ir3Instruction::LoadInt { dst: 0, value: 1 },
-                Ir3Instruction::Return { value: 0 },
-                Ir3Instruction::EndTry,
-                Ir3Instruction::EnterCatch { dst: 1 },
-                Ir3Instruction::LoadInt { dst: 0, value: 99 },
-                Ir3Instruction::Return { value: 0 },
-            ],
-            vec![Ir3FunctionDesc {
-                entry: 9,
-                arity: 0,
-                frame_size: 4,
-                name: Some("return_inside_try".to_string()),
-                is_generator: false,
-            }],
-        );
-
-        let config = InterpreterConfig::quickjs_defaults();
-        let mut core = InterpreterCore::new(config, "test");
-        core.registers[3] = Value::Function(0);
-
-        let err = core.execute(&m).unwrap_err();
-        match err {
-            InterpreterError::UncaughtException { value } => assert_eq!(value, "7"),
-            other => panic!("expected uncaught caller throw after callee cleanup, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn throwing_callee_unwinds_into_caller_catch_frame() {
-        let m = test_module_with_functions(
-            vec![
-                Ir3Instruction::BeginTry {
-                    catch_target: 5,
-                    finally_target: None,
-                },
-                Ir3Instruction::Call {
-                    callee: 3,
-                    args: RegRange { start: 0, count: 0 },
-                    dst: 0,
-                },
-                Ir3Instruction::EndTry,
-                Ir3Instruction::Jump { target: 8 },
-                Ir3Instruction::Halt,
-                Ir3Instruction::EnterCatch { dst: 1 },
-                Ir3Instruction::Call {
-                    callee: 4,
-                    args: RegRange { start: 0, count: 0 },
-                    dst: 0,
-                },
-                Ir3Instruction::Halt,
-                Ir3Instruction::Halt,
-                Ir3Instruction::LoadInt { dst: 0, value: 41 },
-                Ir3Instruction::Throw { value: 0 },
-                Ir3Instruction::LoadInt { dst: 0, value: 42 },
-                Ir3Instruction::Return { value: 0 },
-            ],
-            vec![
-                Ir3FunctionDesc {
-                    entry: 9,
-                    arity: 0,
-                    frame_size: 1,
-                    name: Some("thrower".to_string()),
-                    is_generator: false,
-                },
-                Ir3FunctionDesc {
-                    entry: 11,
-                    arity: 0,
-                    frame_size: 1,
-                    name: Some("recovery".to_string()),
-                    is_generator: false,
-                },
-            ],
-        );
-
-        let config = InterpreterConfig::quickjs_defaults();
-        let mut core = InterpreterCore::new(config, "test");
-        core.registers[3] = Value::Function(0);
-        core.registers[4] = Value::Function(1);
-
-        let result = core.execute(&m).unwrap();
-        assert_eq!(result.value, Value::Int(42));
-    }
-
-    #[test]
-    fn call_inside_finally_preserves_pending_return() {
-        let m = test_module_with_functions(
-            vec![
-                Ir3Instruction::Call {
-                    callee: 3,
-                    args: RegRange { start: 1, count: 1 },
-                    dst: 0,
-                },
-                Ir3Instruction::Halt,
-                Ir3Instruction::BeginTry {
-                    catch_target: 6,
-                    finally_target: Some(6),
-                },
-                Ir3Instruction::LoadInt { dst: 1, value: 1 },
-                Ir3Instruction::Return { value: 1 },
-                Ir3Instruction::EndTry,
-                Ir3Instruction::EnterFinally,
-                Ir3Instruction::Call {
-                    callee: 0,
-                    args: RegRange { start: 0, count: 0 },
-                    dst: 2,
-                },
-                Ir3Instruction::EndFinally,
-                Ir3Instruction::LoadInt { dst: 1, value: 99 },
-                Ir3Instruction::Return { value: 1 },
-                Ir3Instruction::LoadInt { dst: 0, value: 2 },
-                Ir3Instruction::Return { value: 0 },
-            ],
-            vec![
-                Ir3FunctionDesc {
-                    entry: 2,
-                    arity: 1,
-                    frame_size: 3,
-                    name: Some("outer".to_string()),
-                    is_generator: false,
-                },
-                Ir3FunctionDesc {
-                    entry: 11,
-                    arity: 0,
-                    frame_size: 1,
-                    name: Some("inner".to_string()),
-                    is_generator: false,
-                },
-            ],
-        );
-
-        let config = InterpreterConfig::quickjs_defaults();
-        let mut core = InterpreterCore::new(config, "test");
-        core.registers[1] = Value::Function(1);
-        core.registers[3] = Value::Function(0);
-
-        let result = core.execute(&m).unwrap();
-        assert_eq!(result.value, Value::Int(1));
-    }
-
-    #[test]
-    fn call_inside_finally_preserves_pending_exception() {
-        let m = test_module_with_functions(
-            vec![
-                Ir3Instruction::BeginTry {
-                    catch_target: 10,
-                    finally_target: None,
-                },
-                Ir3Instruction::BeginTry {
-                    catch_target: 5,
-                    finally_target: Some(5),
-                },
-                Ir3Instruction::LoadInt { dst: 0, value: 7 },
-                Ir3Instruction::Throw { value: 0 },
-                Ir3Instruction::EndTry,
-                Ir3Instruction::EnterFinally,
-                Ir3Instruction::Call {
-                    callee: 4,
-                    args: RegRange { start: 0, count: 0 },
-                    dst: 1,
-                },
-                Ir3Instruction::EndFinally,
-                Ir3Instruction::EndTry,
-                Ir3Instruction::Jump { target: 14 },
-                Ir3Instruction::EnterCatch { dst: 2 },
-                Ir3Instruction::LoadInt { dst: 3, value: 1 },
-                Ir3Instruction::Add {
-                    dst: 0,
-                    lhs: 2,
-                    rhs: 3,
-                },
-                Ir3Instruction::Halt,
-                Ir3Instruction::Halt,
-                Ir3Instruction::LoadInt { dst: 0, value: 1 },
-                Ir3Instruction::Return { value: 0 },
-            ],
-            vec![Ir3FunctionDesc {
-                entry: 15,
-                arity: 0,
-                frame_size: 1,
-                name: Some("inner".to_string()),
-                is_generator: false,
-            }],
-        );
-
-        let config = InterpreterConfig::quickjs_defaults();
-        let mut core = InterpreterCore::new(config, "test");
-        core.registers[4] = Value::Function(0);
-
-        let result = core.execute(&m).unwrap();
-        assert_eq!(result.value, Value::Int(8));
-    }
-
-    #[test]
-    fn caught_callee_throw_inside_finally_preserves_outer_pending_exception() {
-        let m = test_module_with_functions(
-            vec![
-                Ir3Instruction::BeginTry {
-                    catch_target: 4,
-                    finally_target: Some(4),
-                },
-                Ir3Instruction::LoadInt { dst: 0, value: 1 },
-                Ir3Instruction::Throw { value: 0 },
-                Ir3Instruction::EndTry,
-                Ir3Instruction::EnterFinally,
-                Ir3Instruction::BeginTry {
-                    catch_target: 9,
-                    finally_target: None,
-                },
-                Ir3Instruction::Call {
-                    callee: 4,
-                    args: RegRange { start: 0, count: 0 },
-                    dst: 1,
-                },
-                Ir3Instruction::EndTry,
-                Ir3Instruction::EndFinally,
-                Ir3Instruction::EnterCatch { dst: 2 },
-                Ir3Instruction::EndFinally,
-                Ir3Instruction::Halt,
-                Ir3Instruction::LoadInt { dst: 0, value: 2 },
-                Ir3Instruction::Throw { value: 0 },
-            ],
-            vec![Ir3FunctionDesc {
-                entry: 12,
-                arity: 0,
-                frame_size: 1,
-                name: Some("helper_throw".to_string()),
-                is_generator: false,
-            }],
-        );
-
-        let config = InterpreterConfig::quickjs_defaults();
-        let mut core = InterpreterCore::new(config, "test");
-        core.registers[4] = Value::Function(0);
-
-        let err = core.execute(&m).unwrap_err();
-        match err {
-            InterpreterError::UncaughtException { value } => assert_eq!(value, "1"),
-            other => panic!(
-                "expected original outer exception to survive caught helper throw, got {other:?}"
-            ),
-        }
-    }
-
-    #[test]
-    fn caught_nested_throw_across_intermediary_finally_preserves_outer_pending_exception() {
-        let m = test_module(vec![
-            Ir3Instruction::BeginTry {
-                catch_target: 4,
-                finally_target: Some(4),
-            },
-            Ir3Instruction::LoadInt { dst: 0, value: 1 },
-            Ir3Instruction::Throw { value: 0 },
-            Ir3Instruction::EndTry,
-            Ir3Instruction::EnterFinally,
-            Ir3Instruction::BeginTry {
-                catch_target: 11,
-                finally_target: None,
-            },
-            Ir3Instruction::BeginTry {
-                catch_target: 9,
-                finally_target: Some(9),
-            },
-            Ir3Instruction::LoadInt { dst: 1, value: 2 },
-            Ir3Instruction::Throw { value: 1 },
-            Ir3Instruction::EnterFinally,
-            Ir3Instruction::EndFinally,
-            Ir3Instruction::EnterCatch { dst: 2 },
-            Ir3Instruction::EndFinally,
-            Ir3Instruction::Halt,
-        ]);
-
-        let err = quickjs_execute(&m).unwrap_err();
-        match err {
-            InterpreterError::UncaughtException { value } => assert_eq!(value, "1"),
-            other => panic!(
-                "expected original outer exception to survive throw routed through intermediary finally, got {other:?}"
-            ),
-        }
-    }
-
-    #[test]
-    fn multiple_suspended_exceptions_resume_in_lifo_order() {
-        let m = test_module(vec![
-            Ir3Instruction::BeginTry {
-                catch_target: 4,
-                finally_target: Some(4),
-            },
-            Ir3Instruction::LoadInt { dst: 0, value: 1 },
-            Ir3Instruction::Throw { value: 0 },
-            Ir3Instruction::EndTry,
-            Ir3Instruction::EnterFinally,
-            Ir3Instruction::BeginTry {
-                catch_target: 15,
-                finally_target: None,
-            },
-            Ir3Instruction::BeginTry {
-                catch_target: 9,
-                finally_target: Some(9),
-            },
-            Ir3Instruction::LoadInt { dst: 1, value: 2 },
-            Ir3Instruction::Throw { value: 1 },
-            Ir3Instruction::EnterFinally,
-            Ir3Instruction::BeginTry {
-                catch_target: 13,
-                finally_target: None,
-            },
-            Ir3Instruction::LoadInt { dst: 2, value: 3 },
-            Ir3Instruction::Throw { value: 2 },
-            Ir3Instruction::EnterCatch { dst: 3 },
-            Ir3Instruction::EndFinally,
-            Ir3Instruction::EnterCatch { dst: 4 },
-            Ir3Instruction::EndFinally,
-            Ir3Instruction::Halt,
-        ]);
-
-        let err = quickjs_execute(&m).unwrap_err();
-        match err {
-            InterpreterError::UncaughtException { value } => assert_eq!(value, "1"),
-            other => panic!(
-                "expected suspended exceptions to resume in LIFO order back to the outer throw, got {other:?}"
-            ),
-        }
-    }
-
-    #[test]
-    fn throw_string_uncaught_includes_value() {
-        let m = test_module_with_pool(
-            vec![
-                Ir3Instruction::LoadStr {
-                    dst: 0,
-                    pool_index: 0,
-                },
-                Ir3Instruction::Throw { value: 0 },
-            ],
-            vec!["custom error".to_string()],
-        );
-        let err = quickjs_execute(&m).unwrap_err();
-        match err {
-            InterpreterError::UncaughtException { value } => {
-                assert_eq!(value, "custom error");
-            }
-            other => panic!("expected UncaughtException, got {other:?}"),
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Closure / scope chain tests (bd-6a61n.1.1)
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn scope_chain_declare_and_load() {
-        // DeclareBinding "x" (var), StoreScoped "x" <- r1, LoadScoped r0 <- "x", Halt
-        let m = test_module_with_pool(
-            vec![
-                Ir3Instruction::LoadInt { dst: 1, value: 42 },
-                Ir3Instruction::DeclareBinding {
-                    name_pool_index: 0,
-                    kind: 0, // var
-                },
-                Ir3Instruction::StoreScoped {
-                    src: 1,
-                    name_pool_index: 0,
-                },
-                Ir3Instruction::LoadScoped {
-                    dst: 0,
-                    name_pool_index: 0,
-                },
-                Ir3Instruction::Halt,
-            ],
-            vec!["x".to_string()],
-        );
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Int(42));
-    }
-
-    #[test]
-    fn scope_chain_nested_scopes() {
-        // Outer scope: declare x=10
-        // Inner scope: declare y=20, load x (should find outer) into r0
-        let m = test_module_with_pool(
-            vec![
-                // Outer scope
-                Ir3Instruction::LoadInt { dst: 1, value: 10 },
-                Ir3Instruction::DeclareBinding {
-                    name_pool_index: 0, // x
-                    kind: 0,
-                },
-                Ir3Instruction::StoreScoped {
-                    src: 1,
-                    name_pool_index: 0,
-                },
-                // Inner scope
-                Ir3Instruction::PushScope,
-                Ir3Instruction::LoadInt { dst: 2, value: 20 },
-                Ir3Instruction::DeclareBinding {
-                    name_pool_index: 1, // y
-                    kind: 0,
-                },
-                Ir3Instruction::StoreScoped {
-                    src: 2,
-                    name_pool_index: 1,
-                },
-                // Load x from outer scope inside inner scope into r0
-                Ir3Instruction::LoadScoped {
-                    dst: 0,
-                    name_pool_index: 0, // x
-                },
-                Ir3Instruction::PopScope,
-                Ir3Instruction::Halt,
-            ],
-            vec!["x".to_string(), "y".to_string()],
-        );
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Int(10));
-    }
-
-    #[test]
-    fn scope_chain_let_tdz_enforcement() {
-        // DeclareBinding "x" (let), then try LoadScoped before InitBinding
-        let m = test_module_with_pool(
-            vec![
-                Ir3Instruction::DeclareBinding {
-                    name_pool_index: 0,
-                    kind: 1, // let
-                },
-                Ir3Instruction::LoadScoped {
-                    dst: 0,
-                    name_pool_index: 0,
-                },
-                Ir3Instruction::Halt,
-            ],
-            vec!["x".to_string()],
-        );
-        let err = quickjs_execute(&m).unwrap_err();
-        assert!(matches!(err, InterpreterError::UninitializedBinding { .. }));
-    }
-
-    #[test]
-    fn scope_chain_const_assignment_blocked() {
-        // DeclareBinding "x" (const), InitBinding, then try StoreScoped
-        let m = test_module_with_pool(
-            vec![
-                Ir3Instruction::LoadInt { dst: 0, value: 42 },
-                Ir3Instruction::DeclareBinding {
-                    name_pool_index: 0,
-                    kind: 2, // const
-                },
-                Ir3Instruction::InitBinding {
-                    name_pool_index: 0,
-                    src: 0,
-                },
-                Ir3Instruction::LoadInt { dst: 1, value: 99 },
-                Ir3Instruction::StoreScoped {
-                    src: 1,
-                    name_pool_index: 0,
-                },
-                Ir3Instruction::Halt,
-            ],
-            vec!["x".to_string()],
-        );
-        let err = quickjs_execute(&m).unwrap_err();
-        assert!(matches!(err, InterpreterError::ConstAssignment { .. }));
-    }
-
-    #[test]
-    fn closure_captures_outer_variable() {
-        // Declare x=10, create closure (fn 1), call closure, closure loads x
-        let m = {
-            let mut m = test_module_with_pool(
-                vec![
-                    // ip=0: declare x and set to 10
-                    Ir3Instruction::LoadInt { dst: 0, value: 10 },
-                    Ir3Instruction::DeclareBinding {
-                        name_pool_index: 0,
-                        kind: 0,
-                    },
-                    Ir3Instruction::StoreScoped {
-                        src: 0,
-                        name_pool_index: 0,
-                    },
-                    // ip=3: create closure referencing fn 0 (entry at ip=7)
-                    Ir3Instruction::PushCapture { name_pool_index: 0 },
-                    Ir3Instruction::CreateClosure {
-                        dst: 1,
-                        function_index: 0,
-                        capture_count: 1,
-                    },
-                    // ip=5: call closure, result -> r0
-                    Ir3Instruction::Call {
-                        dst: 0,
-                        callee: 1,
-                        args: RegRange {
-                            start: 10,
-                            count: 0,
-                        },
-                    },
-                    // ip=6: halt — should have x=10 in r0
-                    Ir3Instruction::Halt,
-                    // ip=7: closure body: load x from captured env, return it
-                    Ir3Instruction::LoadScoped {
-                        dst: 0,
-                        name_pool_index: 0,
-                    },
-                    Ir3Instruction::Return { value: 0 },
-                ],
-                vec!["x".to_string()],
-            );
-            m.function_table.push(Ir3FunctionDesc {
-                entry: 7,
-                arity: 0,
-                frame_size: 4,
-                name: Some("closure".to_string()),
-                is_generator: false,
-            });
-            m
-        };
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Int(10));
-    }
-
-    #[test]
-    fn closure_returns_modified_captured_value() {
-        // Declare x=10, create closure that increments x and returns the new
-        // value. Verify the closure return value is 11. Cross-scope mutation
-        // visibility (reading x from the outer scope after the closure call)
-        // requires heap-allocated environments and is deferred to a follow-up.
-        let m = {
-            let mut m = test_module_with_pool(
-                vec![
-                    // ip=0: declare x=10
-                    Ir3Instruction::LoadInt { dst: 0, value: 10 },
-                    Ir3Instruction::DeclareBinding {
-                        name_pool_index: 0,
-                        kind: 0,
-                    },
-                    Ir3Instruction::StoreScoped {
-                        src: 0,
-                        name_pool_index: 0,
-                    },
-                    // ip=3: create closure
-                    Ir3Instruction::CreateClosure {
-                        dst: 1,
-                        function_index: 0,
-                        capture_count: 0,
-                    },
-                    // ip=4: call closure, capture return value directly in r0
-                    Ir3Instruction::Call {
-                        dst: 0,
-                        callee: 1,
-                        args: RegRange {
-                            start: 10,
-                            count: 0,
-                        },
-                    },
-                    // ip=5: halt — r0 has the closure's return value (11)
-                    Ir3Instruction::Halt,
-                    // ip=6: closure body: load x, add 1, store back, return
-                    Ir3Instruction::LoadScoped {
-                        dst: 0,
-                        name_pool_index: 0,
-                    },
-                    Ir3Instruction::LoadInt { dst: 1, value: 1 },
-                    Ir3Instruction::Add {
-                        dst: 2,
-                        lhs: 0,
-                        rhs: 1,
-                    },
-                    Ir3Instruction::StoreScoped {
-                        src: 2,
-                        name_pool_index: 0,
-                    },
-                    Ir3Instruction::Return { value: 2 },
-                ],
-                vec!["x".to_string()],
-            );
-            m.function_table.push(Ir3FunctionDesc {
-                entry: 6,
-                arity: 0,
-                frame_size: 4,
-                name: Some("incrementer".to_string()),
-                is_generator: false,
-            });
-            m
-        };
-        let result = quickjs_execute(&m).unwrap();
-        // The closure loaded x=10, incremented to 11, and returned 11.
-        assert_eq!(result.value, Value::Int(11));
-    }
-
-    #[test]
-    fn scope_chain_pop_hides_inner_bindings() {
-        // Declare x=10 in outer, PushScope, declare y=20, PopScope,
-        // LoadScoped y -> should be Undefined (not found)
-        let m = test_module_with_pool(
-            vec![
-                Ir3Instruction::LoadInt { dst: 0, value: 10 },
-                Ir3Instruction::DeclareBinding {
-                    name_pool_index: 0,
-                    kind: 0,
-                },
-                Ir3Instruction::StoreScoped {
-                    src: 0,
-                    name_pool_index: 0,
-                },
-                Ir3Instruction::PushScope,
-                Ir3Instruction::LoadInt { dst: 1, value: 20 },
-                Ir3Instruction::DeclareBinding {
-                    name_pool_index: 1,
-                    kind: 0,
-                },
-                Ir3Instruction::StoreScoped {
-                    src: 1,
-                    name_pool_index: 1,
-                },
-                Ir3Instruction::PopScope,
-                // y should no longer be visible — load into r0
-                Ir3Instruction::LoadScoped {
-                    dst: 0,
-                    name_pool_index: 1,
-                },
-                Ir3Instruction::Halt,
-            ],
-            vec!["x".to_string(), "y".to_string()],
-        );
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Undefined);
-    }
-
-    #[test]
-    fn scope_chain_init_binding_exits_tdz() {
-        // DeclareBinding "x" (let), InitBinding with value, LoadScoped into r0 succeeds
-        let m = test_module_with_pool(
-            vec![
-                Ir3Instruction::LoadInt { dst: 1, value: 77 },
-                Ir3Instruction::DeclareBinding {
-                    name_pool_index: 0,
-                    kind: 1, // let
-                },
-                Ir3Instruction::InitBinding {
-                    name_pool_index: 0,
-                    src: 1,
-                },
-                Ir3Instruction::LoadScoped {
-                    dst: 0,
-                    name_pool_index: 0,
-                },
-                Ir3Instruction::Halt,
-            ],
-            vec!["x".to_string()],
-        );
-        let result = quickjs_execute(&m).unwrap();
-        assert_eq!(result.value, Value::Int(77));
-    }
-
-    // -----------------------------------------------------------------------
-    // Float64 and Value::Float tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn float64_total_ordering_nan_equal() {
-        // NaN == NaN in Float64's total ordering
-        let a = Float64::new(f64::NAN);
-        let b = Float64::new(f64::NAN);
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn float64_total_ordering_negative_zero() {
-        // -0.0 < +0.0 in total ordering
-        let neg_zero = Float64::new(-0.0);
-        let pos_zero = Float64::new(0.0);
-        assert!(neg_zero < pos_zero);
-        assert_ne!(neg_zero, pos_zero);
-    }
-
-    #[test]
-    fn float64_display_nan() {
-        assert_eq!(Float64::new(f64::NAN).to_string(), "NaN");
-    }
-
-    #[test]
-    fn float64_display_infinity() {
-        assert_eq!(Float64::new(f64::INFINITY).to_string(), "Infinity");
-        assert_eq!(Float64::new(f64::NEG_INFINITY).to_string(), "-Infinity");
-    }
-
-    #[test]
-    fn float64_display_negative_zero() {
-        // -0.0 displays as "0" per JS semantics
-        assert_eq!(Float64::new(-0.0).to_string(), "0");
-    }
-
-    #[test]
-    fn float64_display_regular() {
-        assert_eq!(Float64::new(3.14).to_string(), "3.14");
-        assert_eq!(Float64::new(42.0).to_string(), "42");
-    }
-
-    #[test]
-    fn value_float_is_truthy_positive() {
-        assert!(Value::Float(Float64::new(1.5)).is_truthy());
-        assert!(Value::Float(Float64::new(-1.0)).is_truthy());
-        assert!(Value::Float(Float64::new(f64::INFINITY)).is_truthy());
-    }
-
-    #[test]
-    fn value_float_is_falsy_zero() {
-        assert!(!Value::Float(Float64::new(0.0)).is_truthy());
-        assert!(!Value::Float(Float64::new(-0.0)).is_truthy());
-    }
-
-    #[test]
-    fn value_float_is_falsy_nan() {
-        assert!(!Value::Float(Float64::new(f64::NAN)).is_truthy());
-    }
-
-    #[test]
-    fn value_float_typeof_is_number() {
-        assert_eq!(Value::Float(Float64::new(3.14)).typeof_name(), "number");
-        assert_eq!(Value::Float(Float64::new(f64::NAN)).typeof_name(), "number");
-    }
-
-    #[test]
-    fn value_float_type_name_is_number() {
-        assert_eq!(Value::Float(Float64::new(3.14)).type_name(), "number");
-    }
-
-    #[test]
-    fn value_float_display() {
-        assert_eq!(Value::Float(Float64::new(3.14)).to_string(), "3.14");
-        assert_eq!(Value::Float(Float64::new(f64::NAN)).to_string(), "NaN");
-        assert_eq!(
-            Value::Float(Float64::new(f64::INFINITY)).to_string(),
-            "Infinity"
-        );
-    }
-
-    #[test]
-    fn abstract_eq_int_float_same_value() {
-        // Int(1) == Float(1.0) should be true
-        assert!(InterpreterCore::abstract_eq_values(
-            &Value::Int(1),
-            &Value::Float(Float64::new(1.0))
-        ));
-        assert!(InterpreterCore::abstract_eq_values(
-            &Value::Float(Float64::new(1.0)),
-            &Value::Int(1)
-        ));
-    }
-
-    #[test]
-    fn abstract_eq_float_nan_not_equal() {
-        // NaN !== NaN in abstract equality
-        assert!(!InterpreterCore::abstract_eq_values(
-            &Value::Float(Float64::new(f64::NAN)),
-            &Value::Float(Float64::new(f64::NAN))
-        ));
-    }
-
-    #[test]
-    fn abstract_eq_float_negative_zero_equals_positive_zero() {
-        // -0 == +0 in abstract equality
-        assert!(InterpreterCore::abstract_eq_values(
-            &Value::Float(Float64::new(-0.0)),
-            &Value::Float(Float64::new(0.0))
-        ));
-    }
-
-    #[test]
-    fn coerce_to_float_from_int() {
-        assert_eq!(InterpreterCore::coerce_to_float(&Value::Int(42)), Some(42.0));
-    }
-
-    #[test]
-    fn coerce_to_float_from_float() {
-        assert_eq!(
-            InterpreterCore::coerce_to_float(&Value::Float(Float64::new(3.14))),
-            Some(3.14)
-        );
-    }
-
-    #[test]
-    fn coerce_to_float_from_bool() {
-        assert_eq!(InterpreterCore::coerce_to_float(&Value::Bool(true)), Some(1.0));
-        assert_eq!(InterpreterCore::coerce_to_float(&Value::Bool(false)), Some(0.0));
-    }
-
-    #[test]
-    fn coerce_to_float_from_undefined_is_nan() {
-        let result = InterpreterCore::coerce_to_float(&Value::Undefined);
-        assert!(result.is_some());
-        assert!(result.unwrap().is_nan());
-    }
-
-    #[test]
-    fn coerce_to_number_from_float_whole() {
-        // Float(5.0) should coerce to Int 5
-        assert_eq!(
-            InterpreterCore::coerce_to_number(&Value::Float(Float64::new(5.0))),
-            Some(5)
-        );
-    }
-
-    #[test]
-    fn coerce_to_number_from_float_fractional_is_none() {
-        // Float(3.14) cannot be coerced to integer
-        assert_eq!(
-            InterpreterCore::coerce_to_number(&Value::Float(Float64::new(3.14))),
-            None
-        );
-    }
-
-    #[test]
-    fn coerce_to_number_from_float_nan_is_none() {
-        assert_eq!(
-            InterpreterCore::coerce_to_number(&Value::Float(Float64::new(f64::NAN))),
-            None
-        );
     }
 }

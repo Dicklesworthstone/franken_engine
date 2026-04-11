@@ -56,7 +56,7 @@ use crate::optimal_stopping::{
     EscalationPolicy, Observation as StoppingObservation, OptimalStoppingCertificate,
     STOPPING_SCHEMA_VERSION, StoppingDecision,
 };
-use crate::parser::{CanonicalEs2020Parser, ParseError, ParserOptions};
+use crate::parser::{CanonicalEs2020Parser, ParseError, ParserOptions, ParserSource};
 use crate::region_lifecycle::{CancelReason, DrainDeadline, FinalizeResult};
 use crate::regret_bounded_router::{
     LaneArm as AdaptiveLaneArm, RegretBoundedRouter, RewardSignal as AdaptiveRewardSignal,
@@ -779,12 +779,21 @@ impl ExecutionOrchestrator {
         )?;
         let source_ingestion = prepared.source_ingestion.clone();
         let parse_source = prepared.prepared_source;
+        let parser_source = ParserSource {
+            label: effective_source_label.to_string(),
+            text: parse_source,
+        };
         let syntax_tree = self.parser.parse_with_options(
-            parse_source.as_str(),
+            parser_source,
             self.config.parse_goal,
             &self.config.parser_options,
         )?;
-        let ir0 = Ir0Module::from_syntax_tree(syntax_tree, &source_label);
+        let ir0_source_label = if self.config.parse_goal == ParseGoal::Module {
+            effective_source_label
+        } else {
+            &source_label
+        };
+        let ir0 = Ir0Module::from_syntax_tree(syntax_tree, ir0_source_label);
         let lowering_ctx = LoweringContext::new(trace_id, decision_id, &self.config.policy_id);
         let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_ctx)?;
         Ok(PreparedLoweringOutput {
@@ -830,9 +839,19 @@ impl ExecutionOrchestrator {
 
         let mut quickjs_config = InterpreterConfig::quickjs_defaults();
         quickjs_config.granted_capabilities = granted_capabilities.clone();
+        quickjs_config.module_root = package
+            .source_file
+            .as_deref()
+            .and_then(|path| std::path::Path::new(path).parent())
+            .map(|path| path.display().to_string());
 
         let mut v8_config = InterpreterConfig::v8_defaults();
         v8_config.granted_capabilities = granted_capabilities;
+        v8_config.module_root = package
+            .source_file
+            .as_deref()
+            .and_then(|path| std::path::Path::new(path).parent())
+            .map(|path| path.display().to_string());
 
         LaneRouter::with_configs(quickjs_config, v8_config)
     }
@@ -1499,6 +1518,8 @@ impl ExecutionOrchestrator {
             crate::ir_contract::Ir3Instruction::LoadScoped { .. } => "load_scoped",
             crate::ir_contract::Ir3Instruction::StoreScoped { .. } => "store_scoped",
             crate::ir_contract::Ir3Instruction::InitBinding { .. } => "init_binding",
+            crate::ir_contract::Ir3Instruction::ImportModule { .. } => "import_module",
+            crate::ir_contract::Ir3Instruction::ExportBinding { .. } => "export_binding",
             crate::ir_contract::Ir3Instruction::LoadThis { .. } => "load_this",
             crate::ir_contract::Ir3Instruction::CallMethod { .. } => "call_method",
             &crate::ir_contract::Ir3Instruction::CreateGenerator { .. }

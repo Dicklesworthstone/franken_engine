@@ -28,15 +28,20 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::hash_tiers::ContentHash;
 use crate::ir_contract::{
-    HostcallDecisionRecord, Ir3Instruction, Ir3Module, IteratorCloseReason, RegRange, WitnessEvent,
-    WitnessEventKind,
+    HostcallDecisionRecord, Ir0Module, Ir3Instruction, Ir3Module, IteratorCloseReason, RegRange,
+    WitnessEvent, WitnessEventKind,
 };
+use crate::lowering_pipeline::{lower_ir0_to_ir3, LoweringContext};
+use crate::ast::ParseGoal;
+use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 use crate::runtime_config::ExecutionConfig;
 
 // ---------------------------------------------------------------------------
@@ -367,6 +372,43 @@ enum RuntimeIteratorState {
 }
 
 // ---------------------------------------------------------------------------
+// Module runtime state (RC-1.13)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ModuleRuntimeStatus {
+    Evaluating,
+    Evaluated,
+    Failed(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ModuleRuntimeRecord {
+    status: ModuleRuntimeStatus,
+    namespace_object: ObjectId,
+    exports: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ModuleState {
+    modules: BTreeMap<String, ModuleRuntimeRecord>,
+}
+
+impl ModuleState {
+    fn new() -> Self {
+        Self {
+            modules: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CjsModuleContext {
+    module_object: ObjectId,
+    exports_object: ObjectId,
+}
+
+// ---------------------------------------------------------------------------
 // GeneratorObject — suspended generator state
 // ---------------------------------------------------------------------------
 
@@ -492,6 +534,11 @@ impl ScopeFrame {
     }
 
     fn declare(&mut self, name: String, kind: BindingKind) -> Option<ScopeBinding> {
+        if kind == BindingKind::Var {
+            if let Some(existing) = self.bindings.get(&name) {
+                return Some(existing.clone());
+            }
+        }
         let initialized = kind.is_hoisted();
         self.bindings.insert(
             name,
@@ -677,8 +724,8 @@ pub enum HookAction {
     Quarantine(String),
 }
 
-/// `pre_import` is part of the stable hook contract even though the current
-/// IR3 baseline interpreter does not yet execute an `ImportModule` instruction.
+/// `pre_import` is part of the stable hook contract and is invoked on
+/// `ImportModule` during module loading.
 pub trait InterpreterHook: Send + Sync {
     fn pre_property_access(
         &self,
@@ -723,6 +770,22 @@ pub enum InterpreterError {
     FunctionNotFound { index: u32, table_size: u32 },
     /// String pool index out of bounds.
     StringPoolOutOfBounds { index: u32, pool_size: u32 },
+    /// Import specifier register did not contain a string.
+    ImportSpecifierNotString { got: String },
+    /// Require specifier register did not contain a string.
+    RequireSpecifierNotString { got: String },
+    /// Module resolution failed.
+    ModuleResolutionFailed { specifier: String, reason: String },
+    /// Failed to read module source from disk.
+    ModuleReadFailed { specifier: String, error: String },
+    /// Failed to parse module source.
+    ModuleParseFailed { specifier: String, error: String },
+    /// Failed to lower module source to IR3.
+    ModuleLoweringFailed { specifier: String, error: String },
+    /// Module evaluation failed.
+    ModuleEvaluationFailed { specifier: String, reason: String },
+    /// Export encountered outside an active module evaluation.
+    ExportOutsideModule { name: String },
     /// Capability check failed for hostcall.
     CapabilityDenied { capability: String },
     /// The baseline heap cannot safely answer prototype-aware membership.
@@ -795,6 +858,30 @@ impl fmt::Display for InterpreterError {
                     f,
                     "string pool index {index} out of bounds (pool size {pool_size})"
                 )
+            }
+            Self::ImportSpecifierNotString { got } => {
+                write!(f, "import specifier must be string (got {got})")
+            }
+            Self::RequireSpecifierNotString { got } => {
+                write!(f, "require specifier must be string (got {got})")
+            }
+            Self::ModuleResolutionFailed { specifier, reason } => {
+                write!(f, "module resolution failed for '{specifier}': {reason}")
+            }
+            Self::ModuleReadFailed { specifier, error } => {
+                write!(f, "failed to read module '{specifier}': {error}")
+            }
+            Self::ModuleParseFailed { specifier, error } => {
+                write!(f, "failed to parse module '{specifier}': {error}")
+            }
+            Self::ModuleLoweringFailed { specifier, error } => {
+                write!(f, "failed to lower module '{specifier}': {error}")
+            }
+            Self::ModuleEvaluationFailed { specifier, reason } => {
+                write!(f, "module '{specifier}' evaluation failed: {reason}")
+            }
+            Self::ExportOutsideModule { name } => {
+                write!(f, "export '{name}' outside of module evaluation")
             }
             Self::CapabilityDenied { capability } => {
                 write!(f, "capability denied: {capability}")
@@ -873,6 +960,8 @@ pub struct InterpreterConfig {
     pub max_total_memory_bytes: u64,
     /// Maximum scope-chain depth, including the global frame.
     pub max_scope_depth: u32,
+    /// Optional module root used for resolving relative import specifiers.
+    pub module_root: Option<String>,
     /// Set of capabilities granted to this execution context.
     pub granted_capabilities: Vec<String>,
 }
@@ -888,6 +977,7 @@ impl InterpreterConfig {
             max_heap_objects: DEFAULT_QUICKJS_MAX_HEAP_OBJECTS,
             max_total_memory_bytes: DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
+            module_root: None,
             granted_capabilities: Vec::new(),
         }
     }
@@ -902,6 +992,7 @@ impl InterpreterConfig {
             max_heap_objects: DEFAULT_V8_MAX_HEAP_OBJECTS,
             max_total_memory_bytes: DEFAULT_V8_MAX_TOTAL_MEMORY_BYTES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
+            module_root: None,
             granted_capabilities: Vec::new(),
         }
     }
@@ -916,6 +1007,7 @@ impl InterpreterConfig {
             max_heap_objects: DEFAULT_QUICKJS_MAX_HEAP_OBJECTS,
             max_total_memory_bytes: DEFAULT_QUICKJS_MAX_TOTAL_MEMORY_BYTES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
+            module_root: None,
             granted_capabilities: Vec::new(),
         }
     }
@@ -930,6 +1022,7 @@ impl InterpreterConfig {
             max_heap_objects: DEFAULT_V8_MAX_HEAP_OBJECTS,
             max_total_memory_bytes: DEFAULT_V8_MAX_TOTAL_MEMORY_BYTES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
+            module_root: None,
             granted_capabilities: Vec::new(),
         }
     }
@@ -975,6 +1068,22 @@ struct ExecutionSeed {
     registers: Vec<Value>,
     heap: Vec<HeapObject>,
     function_prototypes: BTreeMap<u32, ObjectId>,
+}
+
+#[derive(Debug, Clone)]
+struct ModuleExecutionSnapshot {
+    registers: Vec<Value>,
+    call_stack: Vec<CallFrame>,
+    ip: usize,
+    register_base: usize,
+    catch_frames: Vec<CatchFrame>,
+    pending_exception: Option<Value>,
+    pending_return: Option<Value>,
+    suspended_abrupt_completions: Vec<AbruptCompletion>,
+    finally_modes: Vec<FinallyMode>,
+    scope_chain: ScopeChain,
+    pending_captures: Vec<u32>,
+    current_module_specifier: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1045,6 +1154,12 @@ pub struct InterpreterCore {
     promise_store: crate::promise_model::PromiseStore,
     /// Microtask queue for deterministic promise reaction scheduling.
     microtask_queue: crate::promise_model::MicrotaskQueue,
+    /// Module registry/cache for ImportModule execution.
+    module_state: ModuleState,
+    /// Active CommonJS module context, if currently evaluating a CJS module.
+    active_cjs_context: Option<CjsModuleContext>,
+    /// Current module specifier (used to resolve relative imports).
+    current_module_specifier: Option<String>,
 }
 
 impl InterpreterCore {
@@ -1081,6 +1196,9 @@ impl InterpreterCore {
             generators: Vec::new(),
             promise_store: crate::promise_model::PromiseStore::new(),
             microtask_queue: crate::promise_model::MicrotaskQueue::new(),
+            module_state: ModuleState::new(),
+            active_cjs_context: None,
+            current_module_specifier: None,
         }
     }
 
@@ -1121,6 +1239,9 @@ impl InterpreterCore {
         self.last_pre_run_seed = Some(seed.clone());
         self.reset_execution_state_from_seed(&seed);
         self.sync_estimated_memory_bytes()?;
+        let entry_specifier = module.header.source_label.clone();
+        self.current_module_specifier = Some(entry_specifier.clone());
+        self.ensure_module_record(module, &entry_specifier)?;
 
         self.push_event("execution_started", "ok", None);
 
@@ -1129,6 +1250,13 @@ impl InterpreterCore {
         // Drain any pending microtasks enqueued during execution
         // (promise reactions, thenable resolutions, etc.).
         self.drain_microtasks();
+
+        if let Some(record) = self.module_state.modules.get_mut(&entry_specifier) {
+            record.status = match &result {
+                Ok(_) | Err(InterpreterError::Halted) => ModuleRuntimeStatus::Evaluated,
+                Err(err) => ModuleRuntimeStatus::Failed(err.to_string()),
+            };
+        }
 
         match &result {
             Ok(_) => self.push_event("execution_completed", "ok", None),
@@ -1197,6 +1325,495 @@ impl InterpreterCore {
         self.suspended_abrupt_completions.clear();
         self.finally_modes.clear();
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+        self.module_state = ModuleState::new();
+        self.active_cjs_context = None;
+        self.current_module_specifier = None;
+    }
+
+    fn snapshot_module_execution(&self) -> ModuleExecutionSnapshot {
+        ModuleExecutionSnapshot {
+            registers: self.registers.clone(),
+            call_stack: self.call_stack.clone(),
+            ip: self.ip,
+            register_base: self.register_base,
+            catch_frames: self.catch_frames.clone(),
+            pending_exception: self.pending_exception.clone(),
+            pending_return: self.pending_return.clone(),
+            suspended_abrupt_completions: self.suspended_abrupt_completions.clone(),
+            finally_modes: self.finally_modes.clone(),
+            scope_chain: self.scope_chain.clone(),
+            pending_captures: self.pending_captures.clone(),
+            current_module_specifier: self.current_module_specifier.clone(),
+        }
+    }
+
+    fn restore_module_execution(&mut self, snapshot: ModuleExecutionSnapshot) {
+        self.registers = snapshot.registers;
+        self.call_stack = snapshot.call_stack;
+        self.ip = snapshot.ip;
+        self.register_base = snapshot.register_base;
+        self.catch_frames = snapshot.catch_frames;
+        self.pending_exception = snapshot.pending_exception;
+        self.pending_return = snapshot.pending_return;
+        self.suspended_abrupt_completions = snapshot.suspended_abrupt_completions;
+        self.finally_modes = snapshot.finally_modes;
+        self.scope_chain = snapshot.scope_chain;
+        self.pending_captures = snapshot.pending_captures;
+        self.current_module_specifier = snapshot.current_module_specifier;
+    }
+
+    fn prepare_module_execution(&mut self, module_specifier: &str) -> Result<(), InterpreterError> {
+        let max_regs = self.config.max_registers as usize;
+        self.registers.clear();
+        self.registers.resize(max_regs, Value::Undefined);
+        self.call_stack.clear();
+        self.ip = 0;
+        self.register_base = 0;
+        self.catch_frames.clear();
+        self.pending_exception = None;
+        self.pending_return = None;
+        self.suspended_abrupt_completions.clear();
+        self.finally_modes.clear();
+        self.scope_chain = ScopeChain::new();
+        self.pending_captures.clear();
+        self.current_module_specifier = Some(module_specifier.to_string());
+        self.sync_estimated_memory_bytes()?;
+        Ok(())
+    }
+
+    fn insert_cjs_bindings(
+        &mut self,
+        module_object: ObjectId,
+        exports_object: ObjectId,
+    ) -> Result<(), InterpreterError> {
+        let mut replaced = Vec::with_capacity(2);
+        {
+            let frame = self.scope_chain.current_mut();
+            for (name, value) in [
+                ("exports", Value::Object(exports_object)),
+                ("module", Value::Object(module_object)),
+            ] {
+                let name = name.to_string();
+                let replaced_binding = frame.declare(name.clone(), BindingKind::Var);
+                if let Some(binding) = frame.get_mut(&name) {
+                    binding.value = value;
+                    binding.initialized = true;
+                }
+                replaced.push((name, replaced_binding));
+            }
+        }
+        if let Err(err) = self.sync_estimated_memory_bytes() {
+            let current = self.scope_chain.current_mut();
+            for (name, old) in replaced {
+                if let Some(old_binding) = old {
+                    current.bindings.insert(name, old_binding);
+                } else {
+                    current.bindings.remove(&name);
+                }
+            }
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    fn inject_active_cjs_bindings(&mut self) -> Result<(), InterpreterError> {
+        let Some(context) = self.active_cjs_context.as_ref() else {
+            return Ok(());
+        };
+        self.insert_cjs_bindings(context.module_object, context.exports_object)
+    }
+
+    fn resolve_specifier_base(&self, specifier: &str) -> Result<PathBuf, InterpreterError> {
+        if specifier.starts_with("./") || specifier.starts_with("../") {
+            let base = self
+                .current_module_specifier
+                .as_deref()
+                .and_then(|label| Path::new(label).parent())
+                .filter(|path| !path.as_os_str().is_empty())
+                .map(PathBuf::from)
+                .or_else(|| self.config.module_root.as_ref().map(PathBuf::from))
+                .ok_or_else(|| InterpreterError::ModuleResolutionFailed {
+                    specifier: specifier.to_string(),
+                    reason: "no module root available for relative import".to_string(),
+                })?;
+            Ok(base.join(specifier))
+        } else if specifier.starts_with('/') {
+            Ok(PathBuf::from(specifier))
+        } else {
+            Err(InterpreterError::ModuleResolutionFailed {
+                specifier: specifier.to_string(),
+                reason: "bare specifiers not supported in baseline interpreter".to_string(),
+            })
+        }
+    }
+
+    fn resolve_module_specifier(&self, specifier: &str) -> Result<String, InterpreterError> {
+        let resolved = self.resolve_specifier_base(specifier)?;
+        let candidate = self
+            .resolve_module_candidate(&resolved)
+            .ok_or_else(|| InterpreterError::ModuleResolutionFailed {
+                specifier: specifier.to_string(),
+                reason: format!("module not found at {}", resolved.display()),
+            })?;
+        let canonical = candidate.canonicalize().map_err(|error| {
+            InterpreterError::ModuleResolutionFailed {
+                specifier: specifier.to_string(),
+                reason: format!("failed to canonicalize module path: {error}"),
+            }
+        })?;
+        Ok(canonical.display().to_string())
+    }
+
+    fn resolve_require_specifier(&self, specifier: &str) -> Result<String, InterpreterError> {
+        let resolved = self.resolve_specifier_base(specifier)?;
+        let candidate = self
+            .resolve_require_candidate(&resolved)
+            .ok_or_else(|| InterpreterError::ModuleResolutionFailed {
+                specifier: specifier.to_string(),
+                reason: format!("module not found at {}", resolved.display()),
+            })?;
+        let canonical = candidate.canonicalize().map_err(|error| {
+            InterpreterError::ModuleResolutionFailed {
+                specifier: specifier.to_string(),
+                reason: format!("failed to canonicalize module path: {error}"),
+            }
+        })?;
+        Ok(canonical.display().to_string())
+    }
+
+    fn resolve_module_candidate(&self, candidate: &Path) -> Option<PathBuf> {
+        if candidate.is_file() {
+            return Some(candidate.to_path_buf());
+        }
+        if candidate.extension().is_none() {
+            let mjs_path = candidate.with_extension("mjs");
+            if mjs_path.is_file() {
+                return Some(mjs_path);
+            }
+            let js_path = candidate.with_extension("js");
+            if js_path.is_file() {
+                return Some(js_path);
+            }
+        }
+        if candidate.is_dir() {
+            let index_mjs = candidate.join("index.mjs");
+            if index_mjs.is_file() {
+                return Some(index_mjs);
+            }
+            let index_js = candidate.join("index.js");
+            if index_js.is_file() {
+                return Some(index_js);
+            }
+        }
+        if candidate.extension().is_none() {
+            let index_mjs = candidate.join("index.mjs");
+            if index_mjs.is_file() {
+                return Some(index_mjs);
+            }
+            let index_js = candidate.join("index.js");
+            if index_js.is_file() {
+                return Some(index_js);
+            }
+        }
+        None
+    }
+
+    fn resolve_require_candidate(&self, candidate: &Path) -> Option<PathBuf> {
+        if candidate.is_file() {
+            return Some(candidate.to_path_buf());
+        }
+        if candidate.extension().is_none() {
+            let cjs_path = candidate.with_extension("cjs");
+            if cjs_path.is_file() {
+                return Some(cjs_path);
+            }
+            let js_path = candidate.with_extension("js");
+            if js_path.is_file() {
+                return Some(js_path);
+            }
+        }
+        if candidate.is_dir() {
+            let index_cjs = candidate.join("index.cjs");
+            if index_cjs.is_file() {
+                return Some(index_cjs);
+            }
+            let index_js = candidate.join("index.js");
+            if index_js.is_file() {
+                return Some(index_js);
+            }
+        }
+        if candidate.extension().is_none() {
+            let index_cjs = candidate.join("index.cjs");
+            if index_cjs.is_file() {
+                return Some(index_cjs);
+            }
+            let index_js = candidate.join("index.js");
+            if index_js.is_file() {
+                return Some(index_js);
+            }
+        }
+        None
+    }
+
+    fn ensure_module_record(
+        &mut self,
+        module: &Ir3Module,
+        specifier: &str,
+    ) -> Result<ObjectId, InterpreterError> {
+        if let Some(record) = self.module_state.modules.get(specifier) {
+            return Ok(record.namespace_object);
+        }
+        self.run_pre_allocation_hook(module, AllocKind::Object, 0)?;
+        let namespace_object = self.alloc_object_with_prototype(None)?;
+        self.module_state.modules.insert(
+            specifier.to_string(),
+            ModuleRuntimeRecord {
+                status: ModuleRuntimeStatus::Evaluating,
+                namespace_object,
+                exports: BTreeMap::new(),
+            },
+        );
+        Ok(namespace_object)
+    }
+
+    fn init_cjs_environment(
+        &mut self,
+        module: &Ir3Module,
+    ) -> Result<CjsModuleContext, InterpreterError> {
+        self.run_pre_allocation_hook(module, AllocKind::Object, 0)?;
+        let exports_object = self.alloc_object_with_prototype(None)?;
+        self.run_pre_allocation_hook(module, AllocKind::Object, 0)?;
+        let module_object = self.alloc_object_with_prototype(None)?;
+        self.set_object_property(
+            module_object,
+            "exports".to_string(),
+            Value::Object(exports_object),
+        )?;
+        let context = CjsModuleContext {
+            module_object,
+            exports_object,
+        };
+        self.insert_cjs_bindings(context.module_object, context.exports_object)?;
+        Ok(context)
+    }
+
+    fn finalize_cjs_exports(
+        &mut self,
+        context: &CjsModuleContext,
+    ) -> Result<(), InterpreterError> {
+        let export_value = self.prototype_chain_get(context.module_object, "exports")?;
+        self.register_module_export("default", export_value.clone())?;
+        if let Value::Object(object_id) = export_value {
+            let properties = self
+                .heap
+                .get(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
+                .properties
+                .clone();
+            for (key, value) in properties {
+                if key == "default" {
+                    continue;
+                }
+                self.register_module_export(&key, value)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn load_module_resolved(
+        &mut self,
+        module: &Ir3Module,
+        resolved: &str,
+        is_cjs: bool,
+    ) -> Result<Value, InterpreterError> {
+        if let Some(record) = self.module_state.modules.get(resolved) {
+            return match &record.status {
+                ModuleRuntimeStatus::Evaluating | ModuleRuntimeStatus::Evaluated => {
+                    Ok(Value::Object(record.namespace_object))
+                }
+                ModuleRuntimeStatus::Failed(reason) => Err(InterpreterError::ModuleEvaluationFailed {
+                    specifier: resolved.to_string(),
+                    reason: reason.clone(),
+                }),
+            };
+        }
+
+        let namespace_object = self.ensure_module_record(module, resolved)?;
+
+        let source = fs::read_to_string(resolved).map_err(|error| {
+            InterpreterError::ModuleReadFailed {
+                specifier: resolved.to_string(),
+                error: error.to_string(),
+            }
+        })?;
+        let parser_source = ParserSource {
+            label: resolved.to_string(),
+            text: source,
+        };
+        let parse_goal = if is_cjs {
+            ParseGoal::Script
+        } else {
+            ParseGoal::Module
+        };
+        let syntax_tree = CanonicalEs2020Parser
+            .parse_with_options(parser_source, parse_goal, &ParserOptions::default())
+            .map_err(|error| InterpreterError::ModuleParseFailed {
+                specifier: resolved.to_string(),
+                error: error.to_string(),
+            })?;
+        let ir0 = Ir0Module::from_syntax_tree(syntax_tree, resolved);
+        let lowering_ctx = LoweringContext::new(
+            &self.trace_id,
+            "module-import",
+            "baseline_interpreter",
+        );
+        let lowering_output = lower_ir0_to_ir3(&ir0, &lowering_ctx).map_err(|error| {
+            InterpreterError::ModuleLoweringFailed {
+                specifier: resolved.to_string(),
+                error: error.to_string(),
+            }
+        })?;
+        let eval_result = if is_cjs {
+            self.evaluate_cjs_ir3(&lowering_output.ir3, resolved)
+        } else {
+            self.evaluate_module_ir3(&lowering_output.ir3, resolved)
+        };
+        match eval_result {
+            Ok(()) => {
+                if let Some(record) = self.module_state.modules.get_mut(resolved) {
+                    record.status = ModuleRuntimeStatus::Evaluated;
+                }
+                Ok(Value::Object(namespace_object))
+            }
+            Err(err) => {
+                if let Some(record) = self.module_state.modules.get_mut(resolved) {
+                    record.status = ModuleRuntimeStatus::Failed(err.to_string());
+                }
+                Err(err)
+            }
+        }
+    }
+
+    fn import_module(
+        &mut self,
+        module: &Ir3Module,
+        specifier: &str,
+    ) -> Result<Value, InterpreterError> {
+        self.run_pre_import_hook(module, specifier)?;
+        let resolved = self.resolve_module_specifier(specifier)?;
+        let is_cjs = Path::new(&resolved)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("cjs"))
+            .unwrap_or(false);
+        self.load_module_resolved(module, &resolved, is_cjs)
+    }
+
+    fn require_module(
+        &mut self,
+        module: &Ir3Module,
+        specifier: &str,
+    ) -> Result<Value, InterpreterError> {
+        self.run_pre_import_hook(module, specifier)?;
+        let resolved = self.resolve_require_specifier(specifier)?;
+        let is_cjs = match Path::new(&resolved).extension().and_then(|ext| ext.to_str()) {
+            Some(ext) if ext.eq_ignore_ascii_case("mjs") => false,
+            Some(ext) if ext.eq_ignore_ascii_case("cjs") => true,
+            Some(ext) if ext.eq_ignore_ascii_case("js") => true,
+            _ => true,
+        };
+        let namespace = self.load_module_resolved(module, &resolved, is_cjs)?;
+        if !is_cjs {
+            return Ok(namespace);
+        }
+        let Value::Object(namespace_object) = namespace else {
+            return Ok(namespace);
+        };
+        let default_value = self.prototype_chain_get(namespace_object, "default")?;
+        Ok(default_value)
+    }
+
+    fn evaluate_module_ir3(
+        &mut self,
+        module: &Ir3Module,
+        specifier: &str,
+    ) -> Result<(), InterpreterError> {
+        let snapshot = self.snapshot_module_execution();
+        let previous_cjs_context = self.active_cjs_context.take();
+        if let Err(err) = self.prepare_module_execution(specifier) {
+            self.active_cjs_context = previous_cjs_context;
+            self.restore_module_execution(snapshot);
+            return Err(err);
+        }
+        let result = self.run_loop(module);
+        self.drain_microtasks();
+        self.restore_module_execution(snapshot);
+        self.active_cjs_context = previous_cjs_context;
+        match result {
+            Ok(_) => Ok(()),
+            Err(InterpreterError::Halted) => Ok(()),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn evaluate_cjs_ir3(
+        &mut self,
+        module: &Ir3Module,
+        specifier: &str,
+    ) -> Result<(), InterpreterError> {
+        let snapshot = self.snapshot_module_execution();
+        let previous_cjs_context = self.active_cjs_context.take();
+        if let Err(err) = self.prepare_module_execution(specifier) {
+            self.active_cjs_context = previous_cjs_context;
+            self.restore_module_execution(snapshot);
+            return Err(err);
+        }
+        let cjs_context = match self.init_cjs_environment(module) {
+            Ok(context) => context,
+            Err(err) => {
+                self.active_cjs_context = previous_cjs_context;
+                self.restore_module_execution(snapshot);
+                return Err(err);
+            }
+        };
+        self.active_cjs_context = Some(cjs_context.clone());
+        let result = self.run_loop(module);
+        self.drain_microtasks();
+        let eval_outcome = match result {
+            Ok(_) => Ok(()),
+            Err(InterpreterError::Halted) => Ok(()),
+            Err(err) => Err(err),
+        };
+        let finalize_outcome = if eval_outcome.is_ok() {
+            self.finalize_cjs_exports(&cjs_context)
+        } else {
+            Ok(())
+        };
+        self.restore_module_execution(snapshot);
+        self.active_cjs_context = previous_cjs_context;
+        eval_outcome.and_then(|_| finalize_outcome)
+    }
+
+    fn register_module_export(&mut self, name: &str, value: Value) -> Result<(), InterpreterError> {
+        let Some(specifier) = self.current_module_specifier.clone() else {
+            return Err(InterpreterError::ExportOutsideModule {
+                name: name.to_string(),
+            });
+        };
+        let namespace_object = {
+            let record = self
+                .module_state
+                .modules
+                .get_mut(&specifier)
+                .ok_or_else(|| InterpreterError::ExportOutsideModule {
+                    name: name.to_string(),
+                })?;
+            record.exports.insert(name.to_string(), value.clone());
+            record.namespace_object
+        };
+        self.set_object_property(namespace_object, name.to_string(), value)?;
+        Ok(())
     }
 
     fn complete_return(&mut self, return_val: Value) -> Result<Option<Value>, InterpreterError> {
@@ -1461,6 +2078,18 @@ impl InterpreterCore {
         };
         let ctx = self.hook_context(module);
         self.enforce_hook_action(hook.pre_allocation(&ctx, kind, size_hint))
+    }
+
+    fn run_pre_import_hook(
+        &self,
+        module: &Ir3Module,
+        specifier: &str,
+    ) -> Result<(), InterpreterError> {
+        let Some(hook) = self.hook.as_ref() else {
+            return Ok(());
+        };
+        let ctx = self.hook_context(module);
+        self.enforce_hook_action(hook.pre_import(&ctx, specifier))
     }
 
     /// Step a generator: resume from its saved state, run until Yield or
@@ -2131,6 +2760,21 @@ impl InterpreterCore {
                     // Dispatch promise hostcalls to the promise subsystem.
                     let result = if is_promise_cap {
                         self.dispatch_promise_hostcall(&capability.0, args)?
+                    } else if capability.0 == "module:require" {
+                        let spec_val = if args.count > 0 {
+                            self.read_reg(args.start)?
+                        } else {
+                            Value::Undefined
+                        };
+                        let specifier = match spec_val {
+                            Value::Str(s) => s,
+                            other => {
+                                return Err(InterpreterError::RequireSpecifierNotString {
+                                    got: other.type_name().to_string(),
+                                });
+                            }
+                        };
+                        self.require_module(module, &specifier)?
                     } else if capability.0.starts_with("number:") {
                         self.dispatch_number_hostcall(&capability.0, args)?
                     } else {
@@ -2138,6 +2782,33 @@ impl InterpreterCore {
                         Value::Undefined
                     };
                     self.write_reg(dst, result)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::ImportModule { specifier, dst } => {
+                    let spec_val = self.read_reg(specifier)?;
+                    let specifier_str = match spec_val {
+                        Value::Str(s) => s,
+                        other => {
+                            return Err(InterpreterError::ImportSpecifierNotString {
+                                got: other.type_name().to_string(),
+                            });
+                        }
+                    };
+                    let namespace = self.import_module(module, &specifier_str)?;
+                    self.write_reg(dst, namespace)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::ExportBinding {
+                    name_pool_index,
+                    src,
+                } => {
+                    let name = module
+                        .constant_pool
+                        .get(name_pool_index as usize)
+                        .cloned()
+                        .unwrap_or_else(|| format!("__export_{name_pool_index}"));
+                    let value = self.read_reg(src)?;
+                    self.register_module_export(&name, value)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::GetProperty { obj, key, dst } => {
@@ -2803,6 +3474,11 @@ impl InterpreterCore {
                 Ir3Instruction::PushScope => {
                     self.scope_chain.push(self.config.max_scope_depth)?;
                     if let Err(err) = self.sync_estimated_memory_bytes() {
+                        self.scope_chain.pop();
+                        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                        return Err(err);
+                    }
+                    if let Err(err) = self.inject_active_cjs_bindings() {
                         self.scope_chain.pop();
                         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
                         return Err(err);
@@ -5007,6 +5683,7 @@ mod tests {
         InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test-trace")
     }
 
+    #[allow(dead_code)]
     fn assert_both_lanes_value(module: &Ir3Module, expected: Value) {
         assert_eq!(quickjs_execute(module).unwrap().value, expected);
         assert_eq!(v8_execute(module).unwrap().value, expected);
@@ -6326,6 +7003,9 @@ mod tests {
             InterpreterError::CapabilityDenied {
                 capability: "net".to_string(),
             },
+            InterpreterError::RequireSpecifierNotString {
+                got: "undefined".to_string(),
+            },
             InterpreterError::TypeError {
                 expected: "number".to_string(),
                 got: "object".to_string(),
@@ -6991,6 +7671,9 @@ mod tests {
             InterpreterError::StringPoolOutOfBounds {
                 index: 10,
                 pool_size: 5,
+            },
+            InterpreterError::RequireSpecifierNotString {
+                got: "undefined".to_string(),
             },
             InterpreterError::CapabilityDenied {
                 capability: "net".to_string(),

@@ -22,8 +22,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
-    ExportKind, Expression, ImportClause, ImportDeclaration, ParseGoal, SourceSpan, Statement,
-    SyntaxTree, VariableDeclaration, VariableDeclarationKind,
+    ExportKind, Expression, ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration,
+    VariableDeclarationKind,
 };
 use crate::deterministic_serde::CanonicalValue;
 use crate::ir_contract::{BindingId, BindingKind, ResolvedBinding, ScopeId, ScopeKind, ScopeNode};
@@ -494,12 +494,13 @@ fn analyze_statement(
                 );
             }
 
-            // Register import binding if present
-            if let Some(ref binding_name) = import.binding {
-                check_reserved(state, binding_name, &import.span);
+            // Register import bindings (all local names in the clause).
+            for binding_name in import.clause.binding_names() {
+                let binding_name = binding_name.to_string();
+                check_reserved(state, &binding_name, &import.span);
 
                 // Check for duplicate import binding
-                if let Some(prev_span) = state.import_bindings.get(binding_name) {
+                if let Some(prev_span) = state.import_bindings.get(binding_name.as_str()) {
                     state.push_error(
                         StaticErrorKind::ImportRedeclaration,
                         format!(
@@ -515,7 +516,7 @@ fn analyze_statement(
                 }
 
                 // Check for collision with lexical bindings
-                if let Some(prev_span) = lexical_names.get(binding_name) {
+                if let Some(prev_span) = lexical_names.get(binding_name.as_str()) {
                     state.push_error(
                         StaticErrorKind::DuplicateBinding,
                         format!(
@@ -530,7 +531,7 @@ fn analyze_statement(
 
                 let bid = state.alloc_binding_id();
                 bindings.push(ResolvedBinding {
-                    name: binding_name.clone(),
+                    name: binding_name,
                     binding_id: bid,
                     scope: scope_id,
                     kind: BindingKind::Import,
@@ -1732,7 +1733,7 @@ impl StaticSemanticsEvent {
 mod tests {
     use super::*;
     use crate::ast::{
-        BindingPattern, ExportDeclaration, ExportKind, ExpressionStatement, ImportDeclaration,
+        BindingPattern, ExportDeclaration, ExportKind, ExpressionStatement, ImportClause, ImportDeclaration,
         ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration, VariableDeclarationKind,
         VariableDeclarator,
     };

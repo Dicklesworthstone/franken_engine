@@ -1923,7 +1923,7 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     let package = ExtensionPackage {
         extension_id: args.extension_id.clone(),
         source: prepared.prepared_source,
-        source_file: None,
+        source_file: Some(source_label.clone()),
         capabilities: Vec::new(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         metadata: {

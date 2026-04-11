@@ -2160,7 +2160,7 @@ mod tests {
                 let mut r = make_record(&format!("cx-{i}-{j}"), outcome);
                 r.test_class = *class;
                 r.surface = *surface;
-                r.determinism_satisfied = (i % 2 == 0);
+                r.determinism_satisfied = i % 2 == 0;
                 records.push(r);
             }
         }

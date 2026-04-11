@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -373,18 +374,18 @@ pub fn validate_ir0_static_semantics(ir0: &Ir0Module) -> SemanticValidationResul
     for statement in &ir0.tree.body {
         match statement {
             Statement::Import(import) => {
-                if let Some(binding_name) = &import.binding {
+                for binding_name in import.clause.binding_names() {
                     if let Some(existing_kind) = seen_bindings.get(binding_name) {
                         let conflict = check_binding_conflict(*existing_kind, BindingKind::Import);
                         if let BindingConflict::Error(code) = conflict {
                             result.add_error(SemanticError::new(
                                 code,
-                                Some(binding_name.clone()),
+                                Some(binding_name.to_string()),
                                 Some(import.span.clone()),
                             ));
                         }
                     }
-                    seen_bindings.insert(binding_name.clone(), BindingKind::Import);
+                    seen_bindings.insert(binding_name.to_string(), BindingKind::Import);
                 }
             }
             Statement::Export(export) => {
@@ -489,11 +490,15 @@ pub fn lower_ir0_to_ir1(
         match statement {
             Statement::Import(import) => {
                 let specifier = import.source.clone();
-                let mut alloc_import_binding = |name: &str| {
+                let alloc_import_binding = |name: &str,
+                                                bindings: &mut Vec<ResolvedBinding>,
+                                                binding_lookup: &mut BTreeMap<String, BindingId>,
+                                                binding_index: &mut u32|
+                 -> Result<BindingId, LoweringPipelineError> {
                     alloc_binding(
-                        &mut bindings,
-                        &mut binding_lookup,
-                        &mut binding_index,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
                         root_scope_id,
                         name,
                         BindingKind::Import,
@@ -501,16 +506,20 @@ pub fn lower_ir0_to_ir1(
                     .map_err(LoweringPipelineError::SemanticViolation)
                 };
 
-                let make_temp_binding = || {
+                let make_temp_binding = |synthetic_import_index: &mut u32,
+                                             bindings: &mut Vec<ResolvedBinding>,
+                                             binding_lookup: &mut BTreeMap<String, BindingId>,
+                                             binding_index: &mut u32|
+                 -> Result<BindingId, LoweringPipelineError> {
                     let temp_name = make_internal_binding_name(
                         "import_namespace",
-                        synthetic_import_index,
+                        *synthetic_import_index,
                     );
-                    synthetic_import_index = synthetic_import_index.saturating_add(1);
+                    *synthetic_import_index = synthetic_import_index.saturating_add(1);
                     alloc_binding(
-                        &mut bindings,
-                        &mut binding_lookup,
-                        &mut binding_index,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
                         root_scope_id,
                         &temp_name,
                         BindingKind::Const,
@@ -525,7 +534,12 @@ pub fn lower_ir0_to_ir1(
                     }
                     ImportClause::Namespace { local } => {
                         ir1.ops.push(Ir1Op::ImportModule { specifier });
-                        let binding_id = alloc_import_binding(local)?;
+                        let binding_id = alloc_import_binding(
+                            local,
+                            &mut bindings,
+                            &mut binding_lookup,
+                            &mut binding_index,
+                        )?;
                         ir1.ops.push(Ir1Op::StoreBinding { binding_id });
                         ir1.ops.push(Ir1Op::Pop);
                     }
@@ -534,12 +548,22 @@ pub fn lower_ir0_to_ir1(
                         ir1.ops.push(Ir1Op::GetProperty {
                             key: Ir1PropertyKey::Static("default".to_string()),
                         });
-                        let binding_id = alloc_import_binding(local)?;
+                        let binding_id = alloc_import_binding(
+                            local,
+                            &mut bindings,
+                            &mut binding_lookup,
+                            &mut binding_index,
+                        )?;
                         ir1.ops.push(Ir1Op::StoreBinding { binding_id });
                         ir1.ops.push(Ir1Op::Pop);
                     }
                     ImportClause::Named { specifiers } => {
-                        let temp_binding_id = make_temp_binding()?;
+                        let temp_binding_id = make_temp_binding(
+                            &mut synthetic_import_index,
+                            &mut bindings,
+                            &mut binding_lookup,
+                            &mut binding_index,
+                        )?;
                         ir1.ops.push(Ir1Op::ImportModule { specifier });
                         ir1.ops.push(Ir1Op::StoreBinding {
                             binding_id: temp_binding_id,
@@ -552,13 +576,23 @@ pub fn lower_ir0_to_ir1(
                             ir1.ops.push(Ir1Op::GetProperty {
                                 key: Ir1PropertyKey::Static(spec.import_name.clone()),
                             });
-                            let binding_id = alloc_import_binding(&spec.local_name)?;
+                            let binding_id = alloc_import_binding(
+                                &spec.local_name,
+                                &mut bindings,
+                                &mut binding_lookup,
+                                &mut binding_index,
+                            )?;
                             ir1.ops.push(Ir1Op::StoreBinding { binding_id });
                             ir1.ops.push(Ir1Op::Pop);
                         }
                     }
                     ImportClause::DefaultAndNamed { default, specifiers } => {
-                        let temp_binding_id = make_temp_binding()?;
+                        let temp_binding_id = make_temp_binding(
+                            &mut synthetic_import_index,
+                            &mut bindings,
+                            &mut binding_lookup,
+                            &mut binding_index,
+                        )?;
                         ir1.ops.push(Ir1Op::ImportModule { specifier });
                         ir1.ops.push(Ir1Op::StoreBinding {
                             binding_id: temp_binding_id,
@@ -571,7 +605,12 @@ pub fn lower_ir0_to_ir1(
                         ir1.ops.push(Ir1Op::GetProperty {
                             key: Ir1PropertyKey::Static("default".to_string()),
                         });
-                        let default_binding_id = alloc_import_binding(default)?;
+                        let default_binding_id = alloc_import_binding(
+                            default,
+                            &mut bindings,
+                            &mut binding_lookup,
+                            &mut binding_index,
+                        )?;
                         ir1.ops.push(Ir1Op::StoreBinding {
                             binding_id: default_binding_id,
                         });
@@ -584,13 +623,23 @@ pub fn lower_ir0_to_ir1(
                             ir1.ops.push(Ir1Op::GetProperty {
                                 key: Ir1PropertyKey::Static(spec.import_name.clone()),
                             });
-                            let binding_id = alloc_import_binding(&spec.local_name)?;
+                            let binding_id = alloc_import_binding(
+                                &spec.local_name,
+                                &mut bindings,
+                                &mut binding_lookup,
+                                &mut binding_index,
+                            )?;
                             ir1.ops.push(Ir1Op::StoreBinding { binding_id });
                             ir1.ops.push(Ir1Op::Pop);
                         }
                     }
                     ImportClause::DefaultAndNamespace { default, namespace } => {
-                        let temp_binding_id = make_temp_binding()?;
+                        let temp_binding_id = make_temp_binding(
+                            &mut synthetic_import_index,
+                            &mut bindings,
+                            &mut binding_lookup,
+                            &mut binding_index,
+                        )?;
                         ir1.ops.push(Ir1Op::ImportModule { specifier });
                         ir1.ops.push(Ir1Op::StoreBinding {
                             binding_id: temp_binding_id,
@@ -603,7 +652,12 @@ pub fn lower_ir0_to_ir1(
                         ir1.ops.push(Ir1Op::GetProperty {
                             key: Ir1PropertyKey::Static("default".to_string()),
                         });
-                        let default_binding_id = alloc_import_binding(default)?;
+                        let default_binding_id = alloc_import_binding(
+                            default,
+                            &mut bindings,
+                            &mut binding_lookup,
+                            &mut binding_index,
+                        )?;
                         ir1.ops.push(Ir1Op::StoreBinding {
                             binding_id: default_binding_id,
                         });
@@ -612,7 +666,12 @@ pub fn lower_ir0_to_ir1(
                         ir1.ops.push(Ir1Op::LoadBinding {
                             binding_id: temp_binding_id,
                         });
-                        let namespace_binding_id = alloc_import_binding(namespace)?;
+                        let namespace_binding_id = alloc_import_binding(
+                            namespace,
+                            &mut bindings,
+                            &mut binding_lookup,
+                            &mut binding_index,
+                        )?;
                         ir1.ops.push(Ir1Op::StoreBinding {
                             binding_id: namespace_binding_id,
                         });
@@ -958,7 +1017,7 @@ fn lower_destructuring_to_ir1(
                             binding_id: temp_binding,
                         });
                         ops.push(Ir1Op::Pop);
-                        assign_pattern_from_source(
+                        lower_destructuring_to_ir1(
                             &prop.value,
                             temp_binding,
                             ops,
@@ -1040,7 +1099,7 @@ fn lower_destructuring_to_ir1(
                             binding_id: temp_binding,
                         });
                         ops.push(Ir1Op::Pop);
-                        assign_pattern_from_source(
+                        lower_destructuring_to_ir1(
                             element,
                             temp_binding,
                             ops,
@@ -1077,16 +1136,31 @@ fn lower_destructuring_to_ir1(
                 label_id: default_label,
             });
 
-            assign_pattern_from_source(
-                left,
-                source_bid,
-                ops,
-                bindings,
-                binding_lookup,
-                binding_index,
-                scope_id,
-                label_counter,
-            )?;
+            match left.as_ref() {
+                BindingPattern::Identifier(name) => {
+                    if let Some(&target_bid) = binding_lookup.get(name.as_str()) {
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: source_bid,
+                        });
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: target_bid,
+                        });
+                        ops.push(Ir1Op::Pop);
+                    }
+                }
+                _ => {
+                    lower_destructuring_to_ir1(
+                        left,
+                        source_bid,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                    )?;
+                }
+            }
             ops.push(Ir1Op::Jump {
                 label_id: end_label,
             });
@@ -1105,16 +1179,31 @@ fn lower_destructuring_to_ir1(
                 binding_id: source_bid,
             });
             ops.push(Ir1Op::Pop);
-            assign_pattern_from_source(
-                left,
-                source_bid,
-                ops,
-                bindings,
-                binding_lookup,
-                binding_index,
-                scope_id,
-                label_counter,
-            )?;
+            match left.as_ref() {
+                BindingPattern::Identifier(name) => {
+                    if let Some(&target_bid) = binding_lookup.get(name.as_str()) {
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: source_bid,
+                        });
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: target_bid,
+                        });
+                        ops.push(Ir1Op::Pop);
+                    }
+                }
+                _ => {
+                    lower_destructuring_to_ir1(
+                        left,
+                        source_bid,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                    )?;
+                }
+            }
 
             ops.push(Ir1Op::Label { id: end_label });
         }
@@ -1122,44 +1211,6 @@ fn lower_destructuring_to_ir1(
             // Rest at top level (unusual but valid). Recurse into inner.
             lower_destructuring_to_ir1(
                 inner,
-                source_bid,
-                ops,
-                bindings,
-                binding_lookup,
-                binding_index,
-                scope_id,
-                label_counter,
-            )?;
-        }
-    }
-    Ok(())
-}
-
-fn assign_pattern_from_source(
-    pattern: &BindingPattern,
-    source_bid: BindingId,
-    ops: &mut Vec<Ir1Op>,
-    bindings: &mut Vec<ResolvedBinding>,
-    binding_lookup: &mut BTreeMap<String, BindingId>,
-    binding_index: &mut BindingId,
-    scope_id: ScopeId,
-    label_counter: &mut u32,
-) -> Result<(), LoweringPipelineError> {
-    match pattern {
-        BindingPattern::Identifier(name) => {
-            if let Some(&target_bid) = binding_lookup.get(name.as_str()) {
-                ops.push(Ir1Op::LoadBinding {
-                    binding_id: source_bid,
-                });
-                ops.push(Ir1Op::StoreBinding {
-                    binding_id: target_bid,
-                });
-                ops.push(Ir1Op::Pop);
-            }
-        }
-        _ => {
-            lower_destructuring_to_ir1(
-                pattern,
                 source_bid,
                 ops,
                 bindings,
@@ -2479,11 +2530,29 @@ pub fn lower_ir2_to_ir3(
     // Build name→BindingId lookup from the module's scope tree so the
     // IR3 lowering can resolve free-variable names to register indices.
     let mut name_to_binding_id = BTreeMap::<String, BindingId>::new();
+    let mut binding_id_to_name = BTreeMap::<BindingId, String>::new();
     for scope in &ir2.scopes {
         for binding in &scope.bindings {
             name_to_binding_id
                 .entry(binding.name.clone())
                 .or_insert(binding.binding_id);
+            binding_id_to_name
+                .entry(binding.binding_id)
+                .or_insert(binding.name.clone());
+        }
+    }
+    let is_commonjs = Path::new(&ir2.header.source_label)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("cjs"))
+        .unwrap_or(false);
+    let mut cjs_binding_ids = BTreeSet::<BindingId>::new();
+    if is_commonjs {
+        if let Some(binding_id) = name_to_binding_id.get("module") {
+            cjs_binding_ids.insert(*binding_id);
+        }
+        if let Some(binding_id) = name_to_binding_id.get("exports") {
+            cjs_binding_ids.insert(*binding_id);
         }
     }
 
@@ -2496,29 +2565,47 @@ pub fn lower_ir2_to_ir3(
 
             // Reconstruct logic for HostCall intercept
             // If it's a Call, we should pop args. If not, we just pop 1 as a fallback.
-            let (start_reg, arg_count) = if let Ir1Op::Call { arg_count } = &op.inner {
-                let count = *arg_count;
-                let mut args = Vec::new();
-                for _ in 0..count {
-                    args.push(value_stack.pop().unwrap_or(0));
+            let (start_reg, arg_count) = match &op.inner {
+                Ir1Op::Call { arg_count } => {
+                    let count = *arg_count;
+                    let mut args = Vec::new();
+                    for _ in 0..count {
+                        args.push(value_stack.pop().unwrap_or(0));
+                    }
+                    args.reverse();
+                    let _callee = value_stack.pop().unwrap_or(0); // Pop callee, not used for HostCall cap
+                    let start = register_cursor;
+                    for arg_reg in args {
+                        let dst = alloc_register(&mut register_cursor);
+                        ir3.instructions
+                            .push(Ir3Instruction::Move { dst, src: arg_reg });
+                    }
+                    (start, count)
                 }
-                args.reverse();
-                let _callee = value_stack.pop().unwrap_or(0); // Pop callee, not used for HostCall cap
-                let start = register_cursor;
-                for arg_reg in args {
-                    let dst = alloc_register(&mut register_cursor);
-                    ir3.instructions
-                        .push(Ir3Instruction::Move { dst, src: arg_reg });
+                Ir1Op::HostCall { arg_count, .. } => {
+                    let count = *arg_count;
+                    let mut args = Vec::new();
+                    for _ in 0..count {
+                        args.push(value_stack.pop().unwrap_or(0));
+                    }
+                    args.reverse();
+                    let start = register_cursor;
+                    for arg_reg in args {
+                        let dst = alloc_register(&mut register_cursor);
+                        ir3.instructions
+                            .push(Ir3Instruction::Move { dst, src: arg_reg });
+                    }
+                    (start, count)
                 }
-                (start, count)
-            } else {
-                let hostcall_arg = value_stack.pop().unwrap_or(0);
-                let start = alloc_register(&mut register_cursor);
-                ir3.instructions.push(Ir3Instruction::Move {
-                    dst: start,
-                    src: hostcall_arg,
-                });
-                (start, 1)
+                _ => {
+                    let hostcall_arg = value_stack.pop().unwrap_or(0);
+                    let start = alloc_register(&mut register_cursor);
+                    ir3.instructions.push(Ir3Instruction::Move {
+                        dst: start,
+                        src: hostcall_arg,
+                    });
+                    (start, 1)
+                }
             };
 
             if flow_requires_runtime_check(op.flow.as_ref(), &capability) {
@@ -2554,23 +2641,50 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(dst);
             }
             Ir1Op::LoadBinding { binding_id } => {
-                let source_reg = *binding_registers
-                    .entry(*binding_id)
-                    .or_insert_with(|| alloc_register(&mut register_cursor));
-                let dst = alloc_register(&mut register_cursor);
-                ir3.instructions.push(Ir3Instruction::Move {
-                    dst,
-                    src: source_reg,
-                });
-                value_stack.push(dst);
+                if cjs_binding_ids.contains(binding_id) {
+                    let name = binding_id_to_name
+                        .get(binding_id)
+                        .cloned()
+                        .unwrap_or_else(|| format!("__binding_{binding_id}"));
+                    let dst = alloc_register(&mut register_cursor);
+                    let pool_index = push_constant(&mut ir3.constant_pool, &name);
+                    ir3.instructions.push(Ir3Instruction::LoadScoped {
+                        dst,
+                        name_pool_index: pool_index,
+                    });
+                    value_stack.push(dst);
+                } else {
+                    let source_reg = *binding_registers
+                        .entry(*binding_id)
+                        .or_insert_with(|| alloc_register(&mut register_cursor));
+                    let dst = alloc_register(&mut register_cursor);
+                    ir3.instructions.push(Ir3Instruction::Move {
+                        dst,
+                        src: source_reg,
+                    });
+                    value_stack.push(dst);
+                }
             }
             Ir1Op::StoreBinding { binding_id } => {
-                let dst = *binding_registers
-                    .entry(*binding_id)
-                    .or_insert_with(|| alloc_register(&mut register_cursor));
                 let src = value_stack.pop().unwrap_or(0);
-                ir3.instructions.push(Ir3Instruction::Move { dst, src });
-                value_stack.push(dst);
+                if cjs_binding_ids.contains(binding_id) {
+                    let name = binding_id_to_name
+                        .get(binding_id)
+                        .cloned()
+                        .unwrap_or_else(|| format!("__binding_{binding_id}"));
+                    let pool_index = push_constant(&mut ir3.constant_pool, &name);
+                    ir3.instructions.push(Ir3Instruction::StoreScoped {
+                        src,
+                        name_pool_index: pool_index,
+                    });
+                    value_stack.push(src);
+                } else {
+                    let dst = *binding_registers
+                        .entry(*binding_id)
+                        .or_insert_with(|| alloc_register(&mut register_cursor));
+                    ir3.instructions.push(Ir3Instruction::Move { dst, src });
+                    value_stack.push(dst);
+                }
             }
             Ir1Op::Call { arg_count } => {
                 let count = *arg_count as usize;
@@ -5291,6 +5405,26 @@ fn lower_expression_to_ir1(
             });
         }
         Expression::Call { callee, arguments } => {
+            if let Expression::Identifier(name) = callee.as_ref() {
+                if name == "require" && !binding_lookup.contains_key(name.as_str()) {
+                    for arg in arguments {
+                        lower_expression_to_ir1(
+                            arg,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                        )?;
+                    }
+                    ops.push(Ir1Op::HostCall {
+                        capability: "module:require".to_string(),
+                        arg_count: arguments.len() as u32,
+                    });
+                    return Ok(());
+                }
+            }
             // Detect method calls: obj.method(args) → CallMethod with receiver
             let is_method = matches!(
                 callee.as_ref(),
@@ -6005,6 +6139,15 @@ fn classify_ir1_op(
                 declassification_required: false,
             }),
         ),
+        Ir1Op::HostCall { capability, .. } => (
+            EffectBoundary::HostcallEffect,
+            Some(CapabilityTag(capability.clone())),
+            Some(FlowAnnotation {
+                data_label: Label::Confidential,
+                sink_clearance: Label::Confidential,
+                declassification_required: false,
+            }),
+        ),
         Ir1Op::Call { .. } | Ir1Op::CallMethod { .. } => (
             // User-defined function calls are pure; they must reach the
             // regular Ir1Op::Call → Ir3Instruction::Call lowering path
@@ -6626,7 +6769,10 @@ mod tests {
         ir1.ops.push(Ir1Op::LoadLiteral {
             value: Ir1Literal::String("secret_token".to_string()),
         });
-        ir1.ops.push(Ir1Op::Call { arg_count: 1 });
+        ir1.ops.push(Ir1Op::HostCall {
+            capability: "hostcall.invoke".to_string(),
+            arg_count: 1,
+        });
         ir1.ops.push(Ir1Op::Return);
 
         let ir2 = lower_ir1_to_ir2(&ir1)
@@ -6635,8 +6781,8 @@ mod tests {
         let call_op = ir2
             .ops
             .iter()
-            .find(|op| matches!(op.inner, Ir1Op::Call { .. }))
-            .expect("call op");
+            .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
+            .expect("hostcall op");
         assert!(
             call_op
                 .flow
@@ -6753,7 +6899,10 @@ mod tests {
         ir1.ops.push(Ir1Op::LoadLiteral {
             value: Ir1Literal::String("secret_token".to_string()),
         });
-        ir1.ops.push(Ir1Op::Call { arg_count: 1 });
+        ir1.ops.push(Ir1Op::HostCall {
+            capability: "hostcall.invoke".to_string(),
+            arg_count: 1,
+        });
         ir1.ops.push(Ir1Op::Return);
 
         let ir2 = lower_ir1_to_ir2(&ir1)
@@ -6778,7 +6927,10 @@ mod tests {
     fn ir2_flow_proof_artifact_detects_required_declassification() {
         let mut ir2 = Ir2Module::new(ContentHash::compute(b"ir1"), "declass_fixture.js");
         ir2.ops.push(Ir2Op {
-            inner: Ir1Op::Call { arg_count: 1 },
+            inner: Ir1Op::HostCall {
+                capability: "declassify.audit".to_string(),
+                arg_count: 1,
+            },
             effect: EffectBoundary::HostcallEffect,
             required_capability: Some(CapabilityTag("declassify.audit".to_string())),
             flow: Some(FlowAnnotation {
@@ -6827,7 +6979,10 @@ mod tests {
         let mut ir2 = Ir2Module::new(ContentHash::compute(b"ir1"), "declass_repeat_fixture.js");
         for _ in 0..2 {
             ir2.ops.push(Ir2Op {
-                inner: Ir1Op::Call { arg_count: 1 },
+                inner: Ir1Op::HostCall {
+                    capability: "declassify.audit".to_string(),
+                    arg_count: 1,
+                },
                 effect: EffectBoundary::HostcallEffect,
                 required_capability: Some(CapabilityTag("declassify.audit".to_string())),
                 flow: Some(FlowAnnotation {
@@ -6861,7 +7016,10 @@ mod tests {
     fn ir2_flow_proof_artifact_rejects_unauthorized_static_flow() {
         let mut ir2 = Ir2Module::new(ContentHash::compute(b"ir1"), "denied_fixture.js");
         ir2.ops.push(Ir2Op {
-            inner: Ir1Op::Call { arg_count: 1 },
+            inner: Ir1Op::HostCall {
+                capability: "fs.write".to_string(),
+                arg_count: 1,
+            },
             effect: EffectBoundary::HostcallEffect,
             required_capability: Some(CapabilityTag("fs.write".to_string())),
             flow: Some(FlowAnnotation {
@@ -6895,7 +7053,10 @@ mod tests {
     fn ir2_flow_proof_artifact_is_deterministic() {
         let mut ir2 = Ir2Module::new(ContentHash::compute(b"ir1"), "deterministic_fixture.js");
         ir2.ops.push(Ir2Op {
-            inner: Ir1Op::Call { arg_count: 1 },
+            inner: Ir1Op::HostCall {
+                capability: "declassify.audit".to_string(),
+                arg_count: 1,
+            },
             effect: EffectBoundary::HostcallEffect,
             required_capability: Some(CapabilityTag("declassify.audit".to_string())),
             flow: Some(FlowAnnotation {
@@ -7277,10 +7438,9 @@ mod tests {
     #[test]
     fn classify_call() {
         let (effect, cap, flow) = classify_ir1_op(&Ir1Op::Call { arg_count: 1 });
-        assert_eq!(effect, EffectBoundary::HostcallEffect);
-        assert!(cap.is_some());
-        assert_eq!(cap.unwrap().0, "hostcall.invoke");
-        assert!(flow.is_some());
+        assert_eq!(effect, EffectBoundary::Pure);
+        assert!(cap.is_none());
+        assert!(flow.is_none());
     }
 
     #[test]
@@ -10125,10 +10285,11 @@ mod tests {
     }
 
     #[test]
-    fn classify_ir1_op_call_is_hostcall() {
-        let (boundary, cap, _flow) = classify_ir1_op(&Ir1Op::Call { arg_count: 1 });
-        assert_eq!(boundary, EffectBoundary::HostcallEffect);
-        assert!(cap.is_some());
+    fn classify_ir1_op_call_is_pure() {
+        let (boundary, cap, flow) = classify_ir1_op(&Ir1Op::Call { arg_count: 1 });
+        assert_eq!(boundary, EffectBoundary::Pure);
+        assert!(cap.is_none());
+        assert!(flow.is_none());
     }
 
     #[test]
@@ -10614,14 +10775,13 @@ mod tests {
                 .any(|i| matches!(i, Ir3Instruction::JumpIfNullish { .. })),
             "IR3 must contain JumpIfNullish for optional call"
         );
-        // Call ops are classified as HostcallEffect and lowered to HostCall
-        // at IR3 level, so check for either Call or HostCall.
+        // Optional calls must lower to a real call instruction at IR3.
         assert!(
-            ir3.module.instructions.iter().any(|i| matches!(
-                i,
-                Ir3Instruction::Call { .. } | Ir3Instruction::HostCall { .. }
-            )),
-            "IR3 must contain Call or HostCall for optional call"
+            ir3.module
+                .instructions
+                .iter()
+                .any(|i| matches!(i, Ir3Instruction::Call { .. })),
+            "IR3 must contain Call for optional call"
         );
     }
 

@@ -462,10 +462,19 @@ fn classify_divergence(
                     return DivergenceSeverity::Critical;
                 }
 
-                // Relative tolerance check: 1 ULP difference is Warning
-                let ulp_diff = (exp_bits as i64)
-                    .wrapping_sub(act_bits as i64)
-                    .unsigned_abs();
+                // Convert sign-magnitude IEEE 754 bit patterns to a linear
+                // integer ordering so that subtraction gives correct ULP
+                // distance even across the +0 / -0 boundary.
+                fn to_ordered(bits: u64) -> i64 {
+                    let signed = bits as i64;
+                    if signed < 0 {
+                        i64::MIN - signed
+                    } else {
+                        signed
+                    }
+                }
+                let ulp_diff =
+                    (to_ordered(exp_bits) - to_ordered(act_bits)).unsigned_abs();
                 if ulp_diff <= 1 {
                     DivergenceSeverity::Warning
                 } else if ulp_diff <= 4 {
@@ -3043,6 +3052,36 @@ mod tests {
             &neg_inf,
         );
         assert_eq!(severity, DivergenceSeverity::Critical);
+    }
+
+    #[test]
+    fn fp_divergence_pos_zero_vs_neg_zero_is_warning() {
+        // +0.0 and -0.0 differ only in the sign bit; they are 0 ULPs apart
+        // in ordered-float space. The old sign-magnitude-unaware subtraction
+        // produced ulp_diff ≈ 2^63 and incorrectly classified this as Critical.
+        let pos_zero = encode_fp_for_trace(0.0_f64);
+        let neg_zero = encode_fp_for_trace(-0.0_f64);
+        let severity = classify_divergence(
+            &NondeterminismSource::FloatingPointResult,
+            &pos_zero,
+            &neg_zero,
+        );
+        assert_eq!(severity, DivergenceSeverity::Warning);
+    }
+
+    #[test]
+    fn fp_divergence_small_negative_vs_small_positive_is_warning() {
+        // Values very close to zero but on opposite sides should still
+        // produce a small ULP distance with the ordered-float formula.
+        let tiny_pos = encode_fp_for_trace(5.0e-324_f64); // smallest positive subnormal
+        let tiny_neg = encode_fp_for_trace(-5.0e-324_f64); // smallest negative subnormal
+        let severity = classify_divergence(
+            &NondeterminismSource::FloatingPointResult,
+            &tiny_pos,
+            &tiny_neg,
+        );
+        // ULP distance is 2 (one step from +0 to +min, one from -0 to -min)
+        assert_eq!(severity, DivergenceSeverity::Warning);
     }
 
     #[test]

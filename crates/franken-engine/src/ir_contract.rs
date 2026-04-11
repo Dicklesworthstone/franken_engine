@@ -1503,6 +1503,10 @@ pub enum Ir3Instruction {
     StoreScoped { src: Reg, name_pool_index: u32 },
     /// Initialize a let/const binding (move it out of TDZ).
     InitBinding { name_pool_index: u32, src: Reg },
+    /// Load (and evaluate) an ES module; returns the namespace object.
+    ImportModule { specifier: Reg, dst: Reg },
+    /// Register an export binding for the current module.
+    ExportBinding { name_pool_index: u32, src: Reg },
 
     // ── Generator instructions ───────────────────────────────────────
     /// Create a generator object from the current function frame.
@@ -2187,6 +2191,31 @@ impl Ir3Instruction {
                 map.insert(
                     "op".to_string(),
                     CanonicalValue::String("init_binding".to_string()),
+                );
+                map.insert(
+                    "name_pool_index".to_string(),
+                    CanonicalValue::U64(u64::from(*name_pool_index)),
+                );
+                map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
+            }
+            Self::ImportModule { specifier, dst } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("import_module".to_string()),
+                );
+                map.insert(
+                    "specifier".to_string(),
+                    CanonicalValue::U64(u64::from(*specifier)),
+                );
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+            }
+            Self::ExportBinding {
+                name_pool_index,
+                src,
+            } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("export_binding".to_string()),
                 );
                 map.insert(
                     "name_pool_index".to_string(),
@@ -3257,7 +3286,10 @@ mod tests {
         let source_hash = ContentHash::compute(b"test");
         let mut ir2 = Ir2Module::new(source_hash, "test.js");
         ir2.ops.push(Ir2Op {
-            inner: Ir1Op::Call { arg_count: 1 },
+            inner: Ir1Op::HostCall {
+                capability: "fs:read".to_string(),
+                arg_count: 1,
+            },
             effect: EffectBoundary::HostcallEffect,
             required_capability: Some(CapabilityTag("fs:read".to_string())),
             flow: Some(FlowAnnotation {
@@ -3454,6 +3486,14 @@ mod tests {
                 obj: 0,
                 key: 1,
                 dst: 2,
+            },
+            Ir3Instruction::ImportModule {
+                specifier: 0,
+                dst: 1,
+            },
+            Ir3Instruction::ExportBinding {
+                name_pool_index: 0,
+                src: 1,
             },
             Ir3Instruction::Halt,
             Ir3Instruction::BeginTry {
@@ -4632,7 +4672,10 @@ mod tests {
     #[test]
     fn ir2_op_with_flow_serde_roundtrip() {
         let op = Ir2Op {
-            inner: Ir1Op::Call { arg_count: 1 },
+            inner: Ir1Op::HostCall {
+                capability: "net:fetch".to_string(),
+                arg_count: 1,
+            },
             effect: EffectBoundary::NetworkEffect,
             required_capability: Some(CapabilityTag("net:fetch".to_string())),
             flow: Some(FlowAnnotation {
@@ -5261,7 +5304,10 @@ mod tests {
     #[test]
     fn ir2_op_canonical_value_with_flow() {
         let op = Ir2Op {
-            inner: Ir1Op::Call { arg_count: 2 },
+            inner: Ir1Op::HostCall {
+                capability: "net:outbound".to_string(),
+                arg_count: 2,
+            },
             effect: EffectBoundary::NetworkEffect,
             required_capability: Some(CapabilityTag("net:outbound".to_string())),
             flow: Some(FlowAnnotation {

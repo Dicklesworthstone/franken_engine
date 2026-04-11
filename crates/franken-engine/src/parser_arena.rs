@@ -414,7 +414,7 @@ impl ParserArena {
                 let span = self.alloc_span(&import.span)?;
                 self.charge_bytes(NODE_BASE_ESTIMATED_BYTES)?;
                 self.charge_bytes(string_bytes(&import.source))?;
-                if let Some(binding) = &import.binding {
+                for binding in import.clause.binding_names() {
                     self.charge_bytes(string_bytes(binding))?;
                 }
                 ArenaNode::Import {

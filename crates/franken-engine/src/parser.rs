@@ -18,10 +18,11 @@ use crate::ast::{
     ExportKind, Expression, ExpressionStatement, ForInStatement, ForOfStatement, ForStatement,
     FunctionDeclaration, FunctionParam, IfStatement, ImportClause, ImportDeclaration,
     ImportSpecifier, MethodDefinition, MethodKind, ObjectPatternProperty, ObjectProperty,
-    ParseGoal, ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement, SyntaxTree,
+    ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement, SyntaxTree,
     ThrowStatement, TryCatchStatement, UnaryOperator, VariableDeclaration, VariableDeclarationKind,
     VariableDeclarator, WhileStatement,
 };
+pub use crate::ast::ParseGoal;
 use crate::deterministic_serde::{self, CanonicalValue};
 
 pub type ParseResult<T> = Result<T, ParseError>;
@@ -2983,7 +2984,7 @@ fn parse_named_import_specifiers(
 
         if !seen_local.insert(local_name.to_string()) {
             return Err(ParseError::new(
-                ParseErrorCode::DuplicateImportBinding,
+                ParseErrorCode::UnsupportedSyntax,
                 "import binding has already been declared",
                 source_label.to_string(),
                 Some(span.clone()),

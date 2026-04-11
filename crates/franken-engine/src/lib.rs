@@ -1350,6 +1350,7 @@ fn ir3_destination_register(instr: &Ir3Instruction) -> Option<u32> {
         | Ir3Instruction::Move { dst, .. }
         | Ir3Instruction::GetProperty { dst, .. }
         | Ir3Instruction::DeleteProperty { dst, .. }
+        | Ir3Instruction::ImportModule { dst, .. }
         | Ir3Instruction::NewObject { dst }
         | Ir3Instruction::NewArray { dst }
         | Ir3Instruction::Lt { dst, .. }

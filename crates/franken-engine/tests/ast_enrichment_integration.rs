@@ -1224,6 +1224,7 @@ fn enrichment_all_18_statement_canonical_kinds_unique() {
     use frankenengine_engine::deterministic_serde::CanonicalValue;
     let stmts = vec![
         Statement::Import(ImportDeclaration {
+            clause: ImportClause::SideEffect,
             binding: None,
             source: "m".to_string(),
             span: s0(),
@@ -1665,6 +1666,9 @@ fn enrichment_syntax_tree_with_all_statement_types_round_trips() {
         ParseGoal::Script,
         vec![
             Statement::Import(ImportDeclaration {
+                clause: ImportClause::Default {
+                    local: "x".to_string(),
+                },
                 binding: Some("x".to_string()),
                 source: "mod".to_string(),
                 span: s0(),

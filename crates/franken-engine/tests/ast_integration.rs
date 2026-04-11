@@ -1193,6 +1193,9 @@ fn expression_canonical_value_deterministic_all_variants() {
 #[test]
 fn import_declaration_canonical_value_deterministic() {
     let decl = ImportDeclaration {
+        clause: ImportClause::Default {
+            local: "x".to_string(),
+        },
         binding: Some("x".to_string()),
         source: "m".to_string(),
         span: span(0, 10),

@@ -994,6 +994,8 @@ impl Ir1Op {
 pub enum Ir1Literal {
     String(String),
     Integer(i64),
+    /// Floating-point literal stored as IEEE 754 bits for deterministic serde.
+    Float(u64),
     Boolean(bool),
     Null,
     Undefined,
@@ -1016,6 +1018,13 @@ impl Ir1Literal {
                     CanonicalValue::String("integer".to_string()),
                 );
                 map.insert("value".to_string(), CanonicalValue::I64(*value));
+            }
+            Self::Float(bits) => {
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String("float".to_string()),
+                );
+                map.insert("bits".to_string(), CanonicalValue::U64(*bits));
             }
             Self::Boolean(value) => {
                 map.insert(
@@ -1297,6 +1306,9 @@ impl RegRange {
 pub enum Ir3Instruction {
     /// Load an integer constant into a register.
     LoadInt { dst: Reg, value: i64 },
+    /// Load a floating-point constant into a register. The value is stored as
+    /// its IEEE 754 bit representation (u64) for deterministic serialization.
+    LoadFloat { dst: Reg, bits: u64 },
     /// Load a string constant from the constant pool.
     LoadStr { dst: Reg, pool_index: u32 },
     /// Load boolean constant.
@@ -1525,6 +1537,14 @@ impl Ir3Instruction {
                 );
                 map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
                 map.insert("value".to_string(), CanonicalValue::I64(*value));
+            }
+            Self::LoadFloat { dst, bits } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("load_float".to_string()),
+                );
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+                map.insert("bits".to_string(), CanonicalValue::U64(*bits));
             }
             Self::LoadStr { dst, pool_index } => {
                 map.insert(

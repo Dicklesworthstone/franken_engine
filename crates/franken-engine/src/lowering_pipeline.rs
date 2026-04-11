@@ -3473,6 +3473,10 @@ pub fn lower_ir2_to_ir3(
                             ir3.instructions
                                 .push(Ir3Instruction::LoadInt { dst, value: *n });
                         }
+                        Ir1Literal::Float(bits) => {
+                            ir3.instructions
+                                .push(Ir3Instruction::LoadFloat { dst, bits: *bits });
+                        }
                         Ir1Literal::String(s) => {
                             let pool_index = push_constant(&mut ir3.constant_pool, s);
                             ir3.instructions
@@ -4389,6 +4393,11 @@ fn lower_expression_to_ir1(
         Expression::NumericLiteral(value) => {
             ops.push(Ir1Op::LoadLiteral {
                 value: Ir1Literal::Integer(*value),
+            });
+        }
+        Expression::FloatLiteral(bits) => {
+            ops.push(Ir1Op::LoadLiteral {
+                value: Ir1Literal::Float(*bits),
             });
         }
         Expression::BooleanLiteral(value) => {
@@ -5968,6 +5977,9 @@ fn lower_literal_to_ir3(
         }
         Ir1Literal::Integer(value) => {
             instructions.push(Ir3Instruction::LoadInt { dst, value: *value })
+        }
+        Ir1Literal::Float(bits) => {
+            instructions.push(Ir3Instruction::LoadFloat { dst, bits: *bits })
         }
         Ir1Literal::Boolean(value) => {
             instructions.push(Ir3Instruction::LoadBool { dst, value: *value })

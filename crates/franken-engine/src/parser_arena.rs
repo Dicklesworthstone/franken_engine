@@ -241,6 +241,7 @@ pub enum ArenaExpression {
     Identifier(String),
     StringLiteral(String),
     NumericLiteral(i64),
+    FloatLiteral(u64),
     BooleanLiteral(bool),
     NullLiteral,
     UndefinedLiteral,
@@ -516,6 +517,10 @@ impl ParserArena {
                 self.charge_bytes(EXPR_BASE_ESTIMATED_BYTES)?;
                 ArenaExpression::NumericLiteral(*value)
             }
+            Expression::FloatLiteral(bits) => {
+                self.charge_bytes(EXPR_BASE_ESTIMATED_BYTES)?;
+                ArenaExpression::FloatLiteral(*bits)
+            }
             Expression::BooleanLiteral(value) => {
                 self.charge_bytes(EXPR_BASE_ESTIMATED_BYTES)?;
                 ArenaExpression::BooleanLiteral(*value)
@@ -695,6 +700,7 @@ impl ParserArena {
             ArenaExpression::Identifier(value) => Ok(Expression::Identifier(value)),
             ArenaExpression::StringLiteral(value) => Ok(Expression::StringLiteral(value)),
             ArenaExpression::NumericLiteral(value) => Ok(Expression::NumericLiteral(value)),
+            ArenaExpression::FloatLiteral(bits) => Ok(Expression::FloatLiteral(bits)),
             ArenaExpression::BooleanLiteral(value) => Ok(Expression::BooleanLiteral(value)),
             ArenaExpression::NullLiteral => Ok(Expression::NullLiteral),
             ArenaExpression::UndefinedLiteral => Ok(Expression::UndefinedLiteral),
@@ -751,6 +757,7 @@ fn expression_kind_name(expression: &Expression) -> &'static str {
         Expression::Identifier(_) => "identifier",
         Expression::StringLiteral(_) => "string",
         Expression::NumericLiteral(_) => "numeric",
+        Expression::FloatLiteral(_) => "float",
         Expression::BooleanLiteral(_) => "boolean",
         Expression::NullLiteral => "null",
         Expression::UndefinedLiteral => "undefined",
@@ -824,6 +831,7 @@ fn expression_audit_descriptor(expression: &ArenaExpression) -> String {
         ArenaExpression::Identifier(value) => format!("identifier {}", value),
         ArenaExpression::StringLiteral(value) => format!("string {}", value),
         ArenaExpression::NumericLiteral(value) => format!("number {}", value),
+        ArenaExpression::FloatLiteral(bits) => format!("float bits:{}", bits),
         ArenaExpression::BooleanLiteral(value) => format!("boolean {}", value),
         ArenaExpression::NullLiteral => "null".to_string(),
         ArenaExpression::UndefinedLiteral => "undefined".to_string(),

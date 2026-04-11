@@ -1355,6 +1355,9 @@ pub enum Expression {
     Identifier(String),
     StringLiteral(String),
     NumericLiteral(i64),
+    /// Floating-point literal stored as IEEE 754 bits (u64) for deterministic
+    /// replay and Eq derivation. Use `f64::from_bits()` to recover the value.
+    FloatLiteral(u64),
     BooleanLiteral(bool),
     NullLiteral,
     UndefinedLiteral,
@@ -1462,6 +1465,14 @@ impl Expression {
                     CanonicalValue::String("numeric".to_string()),
                 );
                 map.insert("value".to_string(), CanonicalValue::I64(*value));
+            }
+            Self::FloatLiteral(value) => {
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String("float".to_string()),
+                );
+                // FloatLiteral stores bits directly as u64
+                map.insert("bits".to_string(), CanonicalValue::U64(*value));
             }
             Self::BooleanLiteral(value) => {
                 map.insert(
@@ -1757,6 +1768,20 @@ impl std::fmt::Display for Expression {
             Self::Identifier(value) => write!(f, "{value}"),
             Self::StringLiteral(value) => write!(f, "\"{value}\""),
             Self::NumericLiteral(value) => write!(f, "{value}"),
+            Self::FloatLiteral(bits) => {
+                let value = f64::from_bits(*bits);
+                if value.is_nan() {
+                    write!(f, "NaN")
+                } else if value.is_infinite() {
+                    if value.is_sign_positive() {
+                        write!(f, "Infinity")
+                    } else {
+                        write!(f, "-Infinity")
+                    }
+                } else {
+                    write!(f, "{value}")
+                }
+            }
             Self::BooleanLiteral(value) => write!(f, "{value}"),
             Self::NullLiteral => write!(f, "null"),
             Self::UndefinedLiteral => write!(f, "undefined"),

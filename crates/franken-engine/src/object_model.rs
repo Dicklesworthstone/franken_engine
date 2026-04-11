@@ -158,6 +158,9 @@ pub enum JsValue {
     Null,
     Bool(bool),
     Int(i64),
+    /// IEEE 754 floating-point, stored as bits for Eq/Ord derivation.
+    /// Use `f64::from_bits()` to recover the value.
+    Float(u64),
     Str(String),
     Symbol(SymbolId),
     Object(ObjectHandle),
@@ -178,11 +181,42 @@ impl JsValue {
             Self::Undefined => "undefined",
             Self::Null => "null",
             Self::Bool(_) => "boolean",
-            Self::Int(_) => "number",
+            Self::Int(_) | Self::Float(_) => "number",
             Self::Str(_) => "string",
             Self::Symbol(_) => "symbol",
             Self::Object(_) => "object",
             Self::Function(_) => "function",
+        }
+    }
+
+    /// Check if this value is NaN.
+    pub fn is_nan(&self) -> bool {
+        matches!(self, Self::Float(bits) if f64::from_bits(*bits).is_nan())
+    }
+
+    /// Check if this value is finite (not NaN, not Infinity).
+    pub fn is_finite(&self) -> bool {
+        match self {
+            Self::Int(_) => true,
+            Self::Float(bits) => {
+                let v = f64::from_bits(*bits);
+                !v.is_nan() && !v.is_infinite()
+            }
+            _ => false,
+        }
+    }
+
+    /// Create a Float from an f64.
+    pub fn from_f64(v: f64) -> Self {
+        Self::Float(v.to_bits())
+    }
+
+    /// Get the f64 value if this is a Float.
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            Self::Float(bits) => Some(f64::from_bits(*bits)),
+            Self::Int(n) => Some(*n as f64),
+            _ => None,
         }
     }
 
@@ -199,6 +233,22 @@ impl fmt::Display for JsValue {
             Self::Null => write!(f, "null"),
             Self::Bool(b) => write!(f, "{b}"),
             Self::Int(n) => write!(f, "{n}"),
+            Self::Float(bits) => {
+                let v = f64::from_bits(*bits);
+                if v.is_nan() {
+                    write!(f, "NaN")
+                } else if v.is_infinite() {
+                    if v.is_sign_positive() {
+                        write!(f, "Infinity")
+                    } else {
+                        write!(f, "-Infinity")
+                    }
+                } else if v == 0.0 && v.is_sign_negative() {
+                    write!(f, "0") // -0 displays as "0"
+                } else {
+                    write!(f, "{v}")
+                }
+            }
             Self::Str(s) => write!(f, "{s}"),
             Self::Symbol(id) => write!(f, "Symbol({})", id.0),
             Self::Object(h) => write!(f, "[object#{}]", h.0),

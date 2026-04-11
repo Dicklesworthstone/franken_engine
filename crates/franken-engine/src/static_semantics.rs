@@ -1472,6 +1472,7 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
         Expression::Identifier(_)
         | Expression::StringLiteral(_)
         | Expression::NumericLiteral(_)
+        | Expression::FloatLiteral(_)
         | Expression::BooleanLiteral(_)
         | Expression::NullLiteral
         | Expression::UndefinedLiteral
@@ -1582,6 +1583,7 @@ fn collect_identifier_refs(expr: &Expression, out: &mut Vec<String>) {
         }
         Expression::StringLiteral(_)
         | Expression::NumericLiteral(_)
+        | Expression::FloatLiteral(_)
         | Expression::BooleanLiteral(_)
         | Expression::NullLiteral
         | Expression::UndefinedLiteral

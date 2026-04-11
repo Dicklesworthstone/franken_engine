@@ -1429,6 +1429,7 @@ impl ExecutionOrchestrator {
     fn instruction_mnemonic(instr: &crate::ir_contract::Ir3Instruction) -> &'static str {
         match instr {
             crate::ir_contract::Ir3Instruction::LoadInt { .. } => "load_int",
+            crate::ir_contract::Ir3Instruction::LoadFloat { .. } => "load_float",
             crate::ir_contract::Ir3Instruction::LoadStr { .. } => "load_str",
             crate::ir_contract::Ir3Instruction::LoadBool { .. } => "load_bool",
             crate::ir_contract::Ir3Instruction::LoadNull { .. } => "load_null",

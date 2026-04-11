@@ -1519,13 +1519,12 @@ impl InterpreterCore {
                 )?;
 
                 if let Some(cid) = closure_idx {
-                    let closure =
-                        self.closures
-                            .get(cid as usize)
-                            .ok_or_else(|| InterpreterError::TypeError {
-                                expected: "valid closure".into(),
-                                got: format!("closure#{cid} not found"),
-                            })?;
+                    let closure = self.closures.get(cid as usize).ok_or_else(|| {
+                        InterpreterError::TypeError {
+                            expected: "valid closure".into(),
+                            got: format!("closure#{cid} not found"),
+                        }
+                    })?;
                     self.scope_chain.frames =
                         self.clone_scope_frames_with_budget(&closure.captured_env)?;
                 }
@@ -6674,6 +6673,96 @@ mod tests {
     }
 
     #[test]
+    fn generator_start_budget_failure_preserves_suspended_start_phase() {
+        let payload = "x".repeat(128);
+        let mut module = test_module_with_pool(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 1,
+                },
+                Ir3Instruction::DeclareBinding {
+                    name_pool_index: 0,
+                    kind: 0,
+                },
+                Ir3Instruction::StoreScoped {
+                    src: 0,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::CreateGenerator {
+                    dst: 1,
+                    function_index: 0,
+                    capture_count: 0,
+                },
+                Ir3Instruction::Call {
+                    dst: 0,
+                    callee: 1,
+                    args: RegRange {
+                        start: 10,
+                        count: 0,
+                    },
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadScoped {
+                    dst: 0,
+                    name_pool_index: 0,
+                },
+                Ir3Instruction::Yield {
+                    value: 0,
+                    delegate: false,
+                    resume_dst: 1,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec!["payload".to_string(), payload.clone()],
+        );
+        module.function_table.push(Ir3FunctionDesc {
+            entry: 6,
+            arity: 0,
+            frame_size: 4,
+            name: Some("capturing_generator".to_string()),
+            is_generator: true,
+        });
+
+        let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "generator");
+        let result = core.execute(&module).unwrap();
+        assert_eq!(result.value, Value::Generator(0));
+
+        let clone_bytes =
+            InterpreterCore::estimate_scope_chain_bytes(&core.closures[0].captured_env);
+        core.scope_chain.frames = vec![ScopeFrame::new()];
+        core.sync_estimated_memory_bytes().unwrap();
+        let baseline_memory = core.estimated_memory_bytes();
+        core.config.max_total_memory_bytes = baseline_memory
+            .saturating_add(clone_bytes)
+            .saturating_sub(1);
+
+        let err = core
+            .generator_next(&module, 0, Value::Undefined)
+            .unwrap_err();
+        assert!(matches!(err, InterpreterError::MemoryBudgetExceeded { .. }));
+        assert_eq!(core.generators[0].phase, GeneratorPhase::SuspendedStart);
+        assert_eq!(core.estimated_memory_bytes(), baseline_memory);
+
+        core.config.max_total_memory_bytes = u64::MAX;
+        let yielded = core.generator_next(&module, 0, Value::Undefined).unwrap();
+        assert_eq!(core.generators[0].phase, GeneratorPhase::SuspendedYield);
+
+        let Value::Object(result_id) = yielded else {
+            panic!("expected generator.next() to return a result object");
+        };
+        let result_object = &core.heap[result_id.0 as usize];
+        assert_eq!(
+            result_object.properties.get("done"),
+            Some(&Value::Bool(false))
+        );
+        assert_eq!(
+            result_object.properties.get("value"),
+            Some(&Value::Str(payload))
+        );
+    }
+
+    #[test]
     fn push_scope_instruction_respects_max_scope_depth() {
         let mut config = InterpreterConfig::quickjs_defaults();
         config.max_scope_depth = 2;
@@ -6785,5 +6874,282 @@ mod tests {
             let back: InterpreterError = serde_json::from_str(&json).unwrap();
             assert_eq!(*v, back);
         }
+    }
+
+    // -- Mixed Int/Float arithmetic tests --
+
+    #[test]
+    fn eval_add_int_float_promotion() {
+        // Int + Float should promote to Float
+        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        core.registers.resize(4, Value::Undefined);
+        core.registers[0] = Value::Int(1);
+        core.registers[1] = Value::Float(Float64::new(0.5));
+        let result = core.eval_add(0, 1).unwrap();
+        assert_eq!(result, Value::Float(Float64::new(1.5)));
+    }
+
+    #[test]
+    fn eval_add_float_int_promotion() {
+        // Float + Int should promote to Float
+        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        core.registers.resize(4, Value::Undefined);
+        core.registers[0] = Value::Float(Float64::new(2.5));
+        core.registers[1] = Value::Int(3);
+        let result = core.eval_add(0, 1).unwrap();
+        assert_eq!(result, Value::Float(Float64::new(5.5)));
+    }
+
+    #[test]
+    fn eval_div_int_int_exact() {
+        // 6 / 3 = 2 (exact integer result)
+        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        core.registers.resize(4, Value::Undefined);
+        core.registers[0] = Value::Int(6);
+        core.registers[1] = Value::Int(3);
+        let result = core.eval_div(0, 1).unwrap();
+        assert_eq!(result, Value::Int(2));
+    }
+
+    #[test]
+    fn eval_div_int_int_fractional() {
+        // 7 / 3 = 2.333... (fractional result)
+        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        core.registers.resize(4, Value::Undefined);
+        core.registers[0] = Value::Int(7);
+        core.registers[1] = Value::Int(3);
+        let result = core.eval_div(0, 1).unwrap();
+        if let Value::Float(f) = result {
+            let v = f.inner();
+            assert!((v - 2.333333333333333).abs() < 1e-10);
+        } else {
+            panic!("Expected Float, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn eval_div_by_zero_infinity() {
+        // 1 / 0 = Infinity
+        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        core.registers.resize(4, Value::Undefined);
+        core.registers[0] = Value::Int(1);
+        core.registers[1] = Value::Int(0);
+        let result = core.eval_div(0, 1).unwrap();
+        if let Value::Float(f) = result {
+            assert!(f.inner().is_infinite() && f.inner() > 0.0);
+        } else {
+            panic!("Expected Float(Infinity), got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn eval_div_zero_zero_nan() {
+        // 0 / 0 = NaN
+        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        core.registers.resize(4, Value::Undefined);
+        core.registers[0] = Value::Int(0);
+        core.registers[1] = Value::Int(0);
+        let result = core.eval_div(0, 1).unwrap();
+        if let Value::Float(f) = result {
+            assert!(f.inner().is_nan());
+        } else {
+            panic!("Expected Float(NaN), got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn eval_arith_nan_propagation() {
+        // NaN + 1 = NaN
+        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        core.registers.resize(4, Value::Undefined);
+        core.registers[0] = Value::Float(Float64::new(f64::NAN));
+        core.registers[1] = Value::Int(1);
+        let result = core.eval_add(0, 1).unwrap();
+        if let Value::Float(f) = result {
+            assert!(f.inner().is_nan());
+        } else {
+            panic!("Expected Float(NaN), got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn eval_arith_infinity_mul_zero() {
+        // Infinity * 0 = NaN
+        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        core.registers.resize(4, Value::Undefined);
+        core.registers[0] = Value::Float(Float64::new(f64::INFINITY));
+        core.registers[1] = Value::Int(0);
+        let result = core.eval_arith(0, 1, "mul").unwrap();
+        if let Value::Float(f) = result {
+            assert!(f.inner().is_nan());
+        } else {
+            panic!("Expected Float(NaN), got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn eval_mod_float_float() {
+        // 5.5 % 2.0 = 1.5
+        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        core.registers.resize(4, Value::Undefined);
+        core.registers[0] = Value::Float(Float64::new(5.5));
+        core.registers[1] = Value::Float(Float64::new(2.0));
+        let result = core.eval_mod(0, 1).unwrap();
+        if let Value::Float(f) = result {
+            assert!((f.inner() - 1.5).abs() < 1e-10);
+        } else {
+            panic!("Expected Float(1.5), got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn eval_unary_neg_float() {
+        // -Float(1.5) = Float(-1.5)
+        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        core.registers.resize(4, Value::Undefined);
+        core.registers[0] = Value::Float(Float64::new(1.5));
+        let result = core.eval_unary_neg(0).unwrap();
+        assert_eq!(result, Value::Float(Float64::new(-1.5)));
+    }
+
+    #[test]
+    fn eval_ieee754_classic() {
+        // 0.1 + 0.2 = 0.30000000000000004 (classic IEEE 754 test)
+        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        core.registers.resize(4, Value::Undefined);
+        core.registers[0] = Value::Float(Float64::new(0.1));
+        core.registers[1] = Value::Float(Float64::new(0.2));
+        let result = core.eval_add(0, 1).unwrap();
+        if let Value::Float(f) = result {
+            // The exact value is 0.30000000000000004
+            assert!((f.inner() - 0.30000000000000004).abs() < 1e-16);
+        } else {
+            panic!("Expected Float, got {:?}", result);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Special values: NaN, Infinity, -Infinity, -0
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn nan_strict_not_equal_to_itself() {
+        // NaN !== NaN
+        let nan1 = Value::Float(Float64::new(f64::NAN));
+        let nan2 = Value::Float(Float64::new(f64::NAN));
+        assert!(!InterpreterCore::strict_eq_values(&nan1, &nan2));
+    }
+
+    #[test]
+    fn nan_loose_not_equal_to_itself() {
+        // NaN != NaN
+        let nan1 = Value::Float(Float64::new(f64::NAN));
+        let nan2 = Value::Float(Float64::new(f64::NAN));
+        assert!(!InterpreterCore::abstract_eq_values(&nan1, &nan2));
+    }
+
+    #[test]
+    fn negative_zero_strict_equals_positive_zero() {
+        // -0 === +0
+        let neg_zero = Value::Float(Float64::new(-0.0));
+        let pos_zero = Value::Float(Float64::new(0.0));
+        assert!(InterpreterCore::strict_eq_values(&neg_zero, &pos_zero));
+    }
+
+    #[test]
+    fn negative_zero_loose_equals_positive_zero() {
+        // -0 == +0
+        let neg_zero = Value::Float(Float64::new(-0.0));
+        let pos_zero = Value::Float(Float64::new(0.0));
+        assert!(InterpreterCore::abstract_eq_values(&neg_zero, &pos_zero));
+    }
+
+    #[test]
+    fn one_div_neg_zero_is_neg_infinity() {
+        // 1 / -0 = -Infinity
+        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        core.registers.resize(4, Value::Undefined);
+        core.registers[0] = Value::Float(Float64::new(1.0));
+        core.registers[1] = Value::Float(Float64::new(-0.0));
+        let result = core.eval_div(0, 1).unwrap();
+        if let Value::Float(f) = result {
+            assert!(f.inner().is_infinite() && f.inner() < 0.0);
+        } else {
+            panic!("Expected Float(-Infinity), got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn neg_one_div_zero_is_neg_infinity() {
+        // -1 / 0 = -Infinity
+        let mut core = InterpreterCore::new(InterpreterConfig::default());
+        core.registers.resize(4, Value::Undefined);
+        core.registers[0] = Value::Float(Float64::new(-1.0));
+        core.registers[1] = Value::Int(0);
+        let result = core.eval_div(0, 1).unwrap();
+        if let Value::Float(f) = result {
+            assert!(f.inner().is_infinite() && f.inner() < 0.0);
+        } else {
+            panic!("Expected Float(-Infinity), got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn float64_display_nan() {
+        let nan = Float64::new(f64::NAN);
+        assert_eq!(format!("{nan}"), "NaN");
+    }
+
+    #[test]
+    fn float64_display_infinity() {
+        let inf = Float64::new(f64::INFINITY);
+        assert_eq!(format!("{inf}"), "Infinity");
+    }
+
+    #[test]
+    fn float64_display_neg_infinity() {
+        let neg_inf = Float64::new(f64::NEG_INFINITY);
+        assert_eq!(format!("{neg_inf}"), "-Infinity");
+    }
+
+    #[test]
+    fn float64_display_neg_zero() {
+        // -0 displays as "0" (JS semantics)
+        let neg_zero = Float64::new(-0.0);
+        assert_eq!(format!("{neg_zero}"), "0");
+    }
+
+    #[test]
+    fn float64_is_negative_zero() {
+        assert!(Float64::new(-0.0).is_negative_zero());
+        assert!(!Float64::new(0.0).is_negative_zero());
+        assert!(!Float64::new(1.0).is_negative_zero());
+    }
+
+    #[test]
+    fn value_float_nan_is_falsy() {
+        assert!(!Value::Float(Float64::new(f64::NAN)).is_truthy());
+    }
+
+    #[test]
+    fn value_float_zero_is_falsy() {
+        assert!(!Value::Float(Float64::new(0.0)).is_truthy());
+        assert!(!Value::Float(Float64::new(-0.0)).is_truthy());
+    }
+
+    #[test]
+    fn value_float_infinity_is_truthy() {
+        assert!(Value::Float(Float64::new(f64::INFINITY)).is_truthy());
+        assert!(Value::Float(Float64::new(f64::NEG_INFINITY)).is_truthy());
+    }
+
+    #[test]
+    fn value_typeof_float_is_number() {
+        assert_eq!(Value::Float(Float64::new(1.5)).type_name(), "number");
+        assert_eq!(Value::Float(Float64::new(f64::NAN)).type_name(), "number");
+        assert_eq!(
+            Value::Float(Float64::new(f64::INFINITY)).type_name(),
+            "number"
+        );
     }
 }
